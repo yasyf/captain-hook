@@ -1,0 +1,251 @@
+from __future__ import annotations
+
+from captain_hook.prompt import Prompt, PromptMessage
+
+
+class TestPromptBasicConstruction:
+    def test_basic_system_and_ask(self) -> None:
+        p = Prompt().system("You are a code reviewer.").ask("Review this code.")
+        assert p is not None
+        rendered = str(p)
+        assert "You are a code reviewer." in rendered
+        assert "Review this code." in rendered
+
+    def test_prompt_is_prompt_message(self) -> None:
+        p = Prompt()
+        assert isinstance(p, PromptMessage)
+
+
+class TestPromptStrRendering:
+    def test_str_contains_system_and_ask(self) -> None:
+        p = Prompt().system("Be concise.").ask("What is 2+2?")
+        rendered = str(p)
+        assert "Be concise." in rendered
+        assert "What is 2+2?" in rendered
+
+    def test_system_before_ask_in_output(self) -> None:
+        p = Prompt().system("System text.").ask("User question.")
+        rendered = str(p)
+        sys_pos = rendered.index("System text.")
+        ask_pos = rendered.index("User question.")
+        assert sys_pos < ask_pos
+
+
+class TestPromptContext:
+    def test_context_wraps_in_xml_tags(self) -> None:
+        p = Prompt().system("Review.").context("files", "file1.py\nfile2.py").ask("Any issues?")
+        rendered = str(p)
+        assert "<files>" in rendered
+        assert "</files>" in rendered
+        assert "file1.py\nfile2.py" in rendered
+
+    def test_context_tag_wrapping_structure(self) -> None:
+        p = Prompt().context("code", "def foo(): pass")
+        rendered = str(p)
+        assert "<code>" in rendered
+        assert "def foo(): pass" in rendered
+        assert "</code>" in rendered
+        code_start = rendered.index("<code>")
+        content_start = rendered.index("def foo(): pass")
+        code_end = rendered.index("</code>")
+        assert code_start < content_start < code_end
+
+
+class TestPromptMultipleContexts:
+    def test_multiple_context_calls_accumulate(self) -> None:
+        p = (
+            Prompt()
+            .system("Review.")
+            .context("files", "a.py")
+            .context("diff", "- old\n+ new")
+            .context("instructions", "Be thorough.")
+            .ask("What do you think?")
+        )
+        rendered = str(p)
+        assert "<files>" in rendered
+        assert "<diff>" in rendered
+        assert "<instructions>" in rendered
+        assert "a.py" in rendered
+        assert "- old\n+ new" in rendered
+        assert "Be thorough." in rendered
+
+    def test_context_ordering_matches_insertion_order(self) -> None:
+        p = Prompt().context("alpha", "1").context("beta", "2").context("gamma", "3")
+        rendered = str(p)
+        alpha_pos = rendered.index("<alpha>")
+        beta_pos = rendered.index("<beta>")
+        gamma_pos = rendered.index("<gamma>")
+        assert alpha_pos < beta_pos < gamma_pos
+
+
+class TestPromptImmutability:
+    def test_fluent_system_returns_new_instance(self) -> None:
+        p1 = Prompt()
+        p2 = p1.system("hello")
+        assert p1 is not p2
+
+    def test_fluent_context_returns_new_instance(self) -> None:
+        p1 = Prompt().system("x")
+        p2 = p1.context("tag", "content")
+        assert p1 is not p2
+
+    def test_fluent_ask_returns_new_instance(self) -> None:
+        p1 = Prompt().system("x")
+        p2 = p1.ask("question")
+        assert p1 is not p2
+
+    def test_original_not_mutated_by_system(self) -> None:
+        p1 = Prompt()
+        p2 = p1.system("added system")
+        rendered1 = str(p1)
+        assert "added system" not in rendered1
+        rendered2 = str(p2)
+        assert "added system" in rendered2
+
+    def test_original_not_mutated_by_context(self) -> None:
+        p1 = Prompt().system("sys")
+        p2 = p1.context("tag", "content")
+        rendered1 = str(p1)
+        assert "<tag>" not in rendered1
+        assert "<tag>" in str(p2)
+
+    def test_original_not_mutated_by_ask(self) -> None:
+        p1 = Prompt().system("sys")
+        p2 = p1.ask("question")
+        rendered1 = str(p1)
+        assert "question" not in rendered1
+        rendered2 = str(p2)
+        assert "question" in rendered2
+
+
+class TestPromptContextNoOp:
+    def test_context_with_none_content_is_noop(self) -> None:
+        p = Prompt().system("sys").context("tag", None).ask("q")  # type: ignore[arg-type]
+        rendered = str(p)
+        assert "<tag>" not in rendered
+
+    def test_context_with_empty_string_is_noop(self) -> None:
+        p = Prompt().system("sys").context("tag", "").ask("q")
+        rendered = str(p)
+        assert "<tag>" not in rendered
+
+    def test_context_noop_does_not_accumulate(self) -> None:
+        p1 = Prompt().system("sys")
+        p2 = p1.context("tag", None)  # type: ignore[arg-type]
+        p3 = p2.context("real", "content")
+        rendered = str(p3)
+        assert "<tag>" not in rendered
+        assert "<real>" in rendered
+
+    def test_context_with_whitespace_only_is_noop(self) -> None:
+        p = Prompt().system("sys").context("tag", "   ").ask("q")
+        rendered = str(p)
+        assert "<tag>" not in rendered
+
+    def test_context_with_newlines_only_is_noop(self) -> None:
+        p = Prompt().system("sys").context("tag", "\n  \n  \n").ask("q")
+        rendered = str(p)
+        assert "<tag>" not in rendered
+
+    def test_context_with_tabs_only_is_noop(self) -> None:
+        p = Prompt().system("sys").context("tag", "\t\t\t").ask("q")
+        rendered = str(p)
+        assert "<tag>" not in rendered
+
+    def test_context_with_whitespace_padded_content_works(self) -> None:
+        p = Prompt().system("sys").context("tag", "  real content  ").ask("q")
+        rendered = str(p)
+        assert "<tag>" in rendered
+        assert "real content" in rendered
+
+
+class TestPromptCallLlmCompatibility:
+    def test_str_prompt_usable_as_template(self) -> None:
+        p = Prompt().system("You are helpful.").ask("Explain Python.")
+        template = str(p)
+        assert isinstance(template, str)
+        assert len(template) > 0
+
+
+class TestPromptSystemIdempotent:
+    def test_last_system_wins(self) -> None:
+        p = Prompt().system("First system.").system("Second system.").ask("Question?")
+        rendered = str(p)
+        assert "Second system." in rendered
+        assert "First system." not in rendered
+
+    def test_system_called_three_times(self) -> None:
+        p = Prompt().system("A").system("B").system("C")
+        rendered = str(p)
+        assert "C" in rendered
+        assert "A" not in rendered
+        assert "B" not in rendered
+
+
+class TestPromptAsk:
+    def test_ask_appears_at_end(self) -> None:
+        p = Prompt().system("System.").context("ctx", "data").ask("Final question?")
+        rendered = str(p)
+        assert rendered.index("Final question?") > rendered.index("data")
+        assert rendered.rstrip().endswith("Final question?")
+
+    def test_ask_content_present(self) -> None:
+        p = Prompt().ask("What is the meaning of life?")
+        rendered = str(p)
+        assert "What is the meaning of life?" in rendered
+
+
+class TestPromptEmpty:
+    def test_empty_prompt_produces_valid_output(self) -> None:
+        p = Prompt()
+        rendered = str(p)
+        assert isinstance(rendered, str)
+
+    def test_empty_prompt_is_empty_or_minimal(self) -> None:
+        p = Prompt()
+        rendered = str(p)
+        assert rendered.strip() == ""
+
+
+class TestPromptOnlySystem:
+    def test_system_only_no_crash(self) -> None:
+        p = Prompt().system("Just a system prompt.")
+        rendered = str(p)
+        assert "Just a system prompt." in rendered
+
+    def test_system_only_no_ask_required(self) -> None:
+        p = Prompt().system("System only.")
+        rendered = str(p)
+        assert isinstance(rendered, str)
+        assert len(rendered.strip()) > 0
+
+
+class TestPromptAutoDedent:
+    def test_auto_dedent_system(self) -> None:
+        p = Prompt().system("""
+            You are a helpful assistant.
+            Be concise.
+        """)
+        rendered = str(p)
+        assert "You are a helpful assistant." in rendered
+        assert "            You are a helpful assistant." not in rendered
+
+    def test_auto_dedent_context(self) -> None:
+        p = Prompt().context(
+            "code",
+            """
+            def foo():
+                return 42
+        """,
+        )
+        rendered = str(p)
+        assert "def foo():" in rendered
+        assert "            def foo():" not in rendered
+
+    def test_auto_dedent_ask(self) -> None:
+        p = Prompt().ask("""
+            What is the answer?
+        """)
+        rendered = str(p)
+        assert "What is the answer?" in rendered
+        assert "            What is the answer?" not in rendered

@@ -1,0 +1,1061 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
+
+from captain_hook.app import HookApp, _current_app
+from captain_hook.dispatch import dispatch
+from captain_hook.events import PostToolUseEvent, StopEvent, SubagentStopEvent
+from captain_hook.session import SessionStore
+from captain_hook.types import Action, Event, Signal
+
+
+def make_ctx(
+    tmp_path: Path | None = None,
+    transcript_len: int = 10,
+    call_llm_return: Any = None,
+) -> MagicMock:
+    ctx = MagicMock()
+    ctx.transcript = MagicMock()
+    ctx.transcript.__len__ = MagicMock(return_value=transcript_len)
+    ctx.transcript.has_skill = MagicMock(return_value=False)
+    ctx.transcript.has_read = MagicMock(return_value=False)
+    ctx.transcript.has_edit_to = MagicMock(return_value=False)
+    ctx.transcript.has_command = MagicMock(return_value=False)
+    ctx.transcript.count_tools = MagicMock(return_value=0)
+    ctx.t = ctx.transcript
+    store = SessionStore(tmp_path)
+    ctx.session = store
+    ctx.s = store
+    turn = MagicMock()
+    turn.start_idx = 5
+    ctx.turn = turn
+    ctx.call_llm = MagicMock(return_value=call_llm_return)
+    return ctx
+
+
+def make_recent_messages(texts: list[str]) -> MagicMock:
+    msgs = []
+    for t in texts:
+        m = MagicMock()
+        m.text = t
+        msgs.append(m)
+    result = MagicMock()
+    result.messages = msgs
+    result.assistant_text = MagicMock(return_value="")
+    return result
+
+
+def make_stop_event(ctx: Any = None) -> StopEvent:
+    return StopEvent(_raw={}, ctx=ctx or make_ctx())
+
+
+def make_subagent_stop_event(ctx: Any = None) -> SubagentStopEvent:
+    return SubagentStopEvent(_raw={}, ctx=ctx or make_ctx())
+
+
+def make_post_tool_event(
+    tool_name: str = "Bash",
+    tool_input: dict[str, Any] | None = None,
+    ctx: Any = None,
+) -> PostToolUseEvent:
+    raw: dict[str, Any] = {"tool_name": tool_name}
+    if tool_input is not None:
+        raw["tool_input"] = tool_input
+    return PostToolUseEvent(_raw=raw, ctx=ctx or make_ctx())
+
+
+def register_llm_gate(
+    app: HookApp,
+    prompt: str,
+    *,
+    message: str | Any = "BLOCKED",
+    response_model: Any = None,
+    verdict: Any = None,
+    signals: Any = None,
+    when: Any = None,
+    events: Event | None = None,
+    max_fires: int | None = None,
+    only_if: Any = (),
+    skip_if: Any = (),
+    max_context: int = 2000,
+    **kwargs: Any,
+) -> None:
+    from captain_hook.primitives.llm import llm_gate
+
+    kw: dict[str, Any] = {"message": message}
+    if response_model is not None:
+        kw["response_model"] = response_model
+    if verdict is not None:
+        kw["verdict"] = verdict
+    if signals is not None:
+        kw["signals"] = signals
+    if when is not None:
+        kw["when"] = when
+    if events is not None:
+        kw["events"] = events
+    if max_fires is not None:
+        kw["max_fires"] = max_fires
+    if only_if:
+        kw["only_if"] = only_if
+    if skip_if:
+        kw["skip_if"] = skip_if
+    if max_context != 2000:
+        kw["max_context"] = max_context
+    kw.update(kwargs)
+
+    token = _current_app.set(app)
+    try:
+        llm_gate(prompt, **kw)
+    finally:
+        _current_app.reset(token)
+
+
+def register_llm_nudge(
+    app: HookApp,
+    prompt: str,
+    *,
+    message: str | Any = "WARNING",
+    response_model: Any = None,
+    verdict: Any = None,
+    signals: Any = None,
+    when: Any = None,
+    events: Event | None = None,
+    max_fires: int | None = None,
+    async_: bool = False,
+    max_context: int = 2000,
+    **kwargs: Any,
+) -> None:
+    from captain_hook.primitives.llm import llm_nudge
+
+    kw: dict[str, Any] = {"message": message}
+    if response_model is not None:
+        kw["response_model"] = response_model
+    if verdict is not None:
+        kw["verdict"] = verdict
+    if signals is not None:
+        kw["signals"] = signals
+    if when is not None:
+        kw["when"] = when
+    if events is not None:
+        kw["events"] = events
+    if max_fires is not None:
+        kw["max_fires"] = max_fires
+    kw["async_"] = async_
+    if max_context != 2000:
+        kw["max_context"] = max_context
+    kw.update(kwargs)
+
+    token = _current_app.set(app)
+    try:
+        from captain_hook.primitives.llm import llm_nudge
+
+        llm_nudge(prompt, **kw)
+    finally:
+        _current_app.reset(token)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-001 — llm_gate blocks when verdict predicate returns True
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmGateBlocks:
+    def test_llm_gate_blocks_on_true_verdict(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=True, reasoning="bad"))
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+
+        register_llm_gate(app, "Check this", message="BLOCKED", when=lambda evt: True)
+        evt = make_stop_event(ctx=ctx)
+        result = dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        assert result is not None
+        assert result["decision"] == "block"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-002 — llm_gate allows when verdict predicate returns False
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmGateAllows:
+    def test_llm_gate_allows_on_false_verdict(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=False, reasoning="ok"))
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+
+        register_llm_gate(app, "Check this", message="BLOCKED", when=lambda evt: True)
+        evt = make_stop_event(ctx=ctx)
+        result = dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-003 — llm_gate allows when no signals match (LLM never called)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmGateNoSignalMatch:
+    def test_llm_gate_skips_when_signals_dont_match(self, tmp_path: Path) -> None:
+        app = HookApp()
+        ctx = make_ctx(tmp_path)
+        ctx.transcript.recent = MagicMock(
+            return_value=make_recent_messages(["unrelated text"]),
+        )
+
+        register_llm_gate(
+            app,
+            "Check this",
+            message="BLOCKED",
+            signals=[Signal(pattern=r"critical_error", weight=1)],
+        )
+        evt = make_stop_event(ctx=ctx)
+        result = dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        assert result is None
+        ctx.call_llm.assert_not_called()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-004 — llm_gate with callable message formats verdict
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmGateCallableMessage:
+    def test_llm_gate_callable_message(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+
+        verdict = GateVerdict(block=True, reasoning="very bad")
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=verdict)
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+
+        register_llm_gate(
+            app,
+            "Check this",
+            message=lambda r: f"BLOCKED: {r.reasoning}",
+            when=lambda evt: True,
+        )
+        evt = make_stop_event(ctx=ctx)
+        result = dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        assert result is not None
+        assert result["decision"] == "block"
+        assert "very bad" in result["reason"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-005 — llm_gate returns None on LLM failure (None response)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmGateNoneResponse:
+    def test_llm_gate_returns_none_on_llm_none(self, tmp_path: Path) -> None:
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=None)
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+
+        register_llm_gate(app, "Check this", message="BLOCKED", when=lambda evt: True)
+        evt = make_stop_event(ctx=ctx)
+        result = dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-006 — llm_gate custom verdict function
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmGateCustomVerdict:
+    def test_llm_gate_custom_verdict_inverts(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=False, reasoning="ok"))
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+
+        register_llm_gate(
+            app,
+            "Check this",
+            message="INVERTED BLOCK",
+            verdict=lambda r: not r.block,
+            when=lambda evt: True,
+        )
+        evt = make_stop_event(ctx=ctx)
+        result = dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        assert result is not None
+        assert result["decision"] == "block"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-007 — llm_gate custom response_model
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmGateCustomModel:
+    def test_llm_gate_custom_response_model(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+
+        class CustomGateVerdict(GateVerdict):
+            severity: str = "low"
+
+        verdict = CustomGateVerdict(block=True, reasoning="bad", severity="high")
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=verdict)
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+
+        register_llm_gate(
+            app,
+            "Check this",
+            message=lambda r: f"BLOCKED (severity={r.severity})",
+            response_model=CustomGateVerdict,
+            when=lambda evt: True,
+        )
+        evt = make_stop_event(ctx=ctx)
+        result = dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        assert result is not None
+        assert "severity=high" in result["reason"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-008 — llm_nudge warns when verdict.fire is True
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmNudgeWarns:
+    def test_llm_nudge_warns_on_fire_true(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import NudgeVerdict
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=NudgeVerdict(fire=True, reasoning="issue"))
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+
+        register_llm_nudge(app, "Check this", message="WARNING", when=lambda evt: True)
+        evt = make_post_tool_event(ctx=ctx)
+        result = dispatch(app, Event.PostToolUse, evt, session_dir=tmp_path)
+
+        assert result is not None
+        assert "additionalContext" in result["hookSpecificOutput"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-009 — llm_nudge allows when verdict.fire is False
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmNudgeAllows:
+    def test_llm_nudge_allows_on_fire_false(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import NudgeVerdict
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=NudgeVerdict(fire=False, reasoning="ok"))
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+
+        register_llm_nudge(app, "Check this", message="WARNING", when=lambda evt: True)
+        evt = make_post_tool_event(ctx=ctx)
+        result = dispatch(app, Event.PostToolUse, evt, session_dir=tmp_path)
+
+        assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-010 — llm_nudge with async_=True skipped in sync dispatch
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmNudgeAsyncSkippedInSync:
+    def test_llm_nudge_async_skipped_in_sync(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import NudgeVerdict
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=NudgeVerdict(fire=True, reasoning="issue"))
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+
+        register_llm_nudge(
+            app,
+            "Check this",
+            message="WARNING",
+            when=lambda evt: True,
+            async_=True,
+        )
+        evt = make_post_tool_event(ctx=ctx)
+        result = dispatch(app, Event.PostToolUse, evt, session_dir=tmp_path, async_=False)
+
+        assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-011 — llm_nudge with async_=True dispatched in async mode
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmNudgeAsyncDispatched:
+    def test_llm_nudge_async_dispatched_in_async_mode(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import NudgeVerdict
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=NudgeVerdict(fire=True, reasoning="issue"))
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+
+        register_llm_nudge(
+            app,
+            "Check this",
+            message="WARNING",
+            when=lambda evt: True,
+            async_=True,
+        )
+        evt = make_post_tool_event(ctx=ctx)
+        result = dispatch(app, Event.PostToolUse, evt, session_dir=tmp_path, async_=True)
+
+        assert result is not None
+        assert "additionalContext" in result["hookSpecificOutput"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-012 — llm_gate default events: Stop | SubagentStop
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmGateDefaultEvents:
+    def test_llm_gate_default_events(self, tmp_path: Path) -> None:
+        app = HookApp()
+        register_llm_gate(app, "Check this", message="BLOCKED", when=lambda evt: True)
+
+        assert len(app.hooks) == 1
+        assert app.hooks[0].spec.events == (Event.Stop | Event.SubagentStop)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-013 — llm_nudge default events: PostToolUse
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmNudgeDefaultEvents:
+    def test_llm_nudge_default_events(self, tmp_path: Path) -> None:
+        app = HookApp()
+        register_llm_nudge(app, "Check this", message="WARNING", when=lambda evt: True)
+
+        assert len(app.hooks) == 1
+        assert app.hooks[0].spec.events == Event.PostToolUse
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-014 — llm_gate default max_fires: 1
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmGateDefaultMaxFires:
+    def test_llm_gate_default_max_fires(self, tmp_path: Path) -> None:
+        app = HookApp()
+        register_llm_gate(app, "Check this", message="BLOCKED", when=lambda evt: True)
+
+        assert app.hooks[0].spec.max_fires == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-015 — llm_nudge default max_fires: 3
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmNudgeDefaultMaxFires:
+    def test_llm_nudge_default_max_fires(self, tmp_path: Path) -> None:
+        app = HookApp()
+        register_llm_nudge(app, "Check this", message="WARNING", when=lambda evt: True)
+
+        assert app.hooks[0].spec.max_fires == 3
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-016 — llm_evaluate skips when fired_this_turn is True
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmEvaluateFiredThisTurn:
+    def test_llm_evaluate_skips_when_fired_this_turn(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+
+        app = HookApp()
+        verdict = GateVerdict(block=True, reasoning="bad")
+        ctx = make_ctx(tmp_path, call_llm_return=verdict)
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+
+        register_llm_gate(app, "Check this", message="BLOCKED", when=lambda evt: True)
+
+        # First dispatch fires
+        evt1 = make_stop_event(ctx=ctx)
+        result1 = dispatch(app, Event.Stop, evt1, session_dir=tmp_path)
+        assert result1 is not None
+
+        # Second dispatch in same turn should skip (fired_this_turn=True)
+        ctx.call_llm.reset_mock()
+        evt2 = make_stop_event(ctx=ctx)
+        result2 = dispatch(app, Event.Stop, evt2, session_dir=tmp_path)
+        assert result2 is None
+        ctx.call_llm.assert_not_called()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-017 — llm_evaluate with when predicate instead of signals
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmEvaluateWhenPredicate:
+    def test_llm_evaluate_when_true_triggers_llm(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=True, reasoning="bad"))
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["context text"]))
+
+        register_llm_gate(app, "Check this", message="BLOCKED", when=lambda evt: True)
+        evt = make_stop_event(ctx=ctx)
+        result = dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        assert result is not None
+        ctx.call_llm.assert_called_once()
+
+    def test_llm_evaluate_when_false_skips_llm(self, tmp_path: Path) -> None:
+        app = HookApp()
+        ctx = make_ctx(tmp_path)
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["context text"]))
+
+        register_llm_gate(app, "Check this", message="BLOCKED", when=lambda evt: False)
+        evt = make_stop_event(ctx=ctx)
+        result = dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        assert result is None
+        ctx.call_llm.assert_not_called()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-018 — llm_evaluate context truncation via max_context
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmEvaluateMaxContext:
+    def test_llm_evaluate_truncates_context(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+
+        long_text = "x" * 5000
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=True, reasoning="bad"))
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages([long_text]))
+
+        register_llm_gate(
+            app,
+            "Check this",
+            message="BLOCKED",
+            when=lambda evt: True,
+            max_context=100,
+        )
+        evt = make_stop_event(ctx=ctx)
+        dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        ctx.call_llm.assert_called_once()
+        call_args = ctx.call_llm.call_args
+        prompt_arg = call_args[0][0] if call_args[0] else call_args[1].get("template", "")
+        prompt_str = str(prompt_arg)
+        assert len(prompt_str) <= 5000 + 200
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-019 — prompt_check returns block on "block" action
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestPromptCheckBlock:
+    def test_prompt_check_returns_block(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
+
+        ctx = make_ctx(tmp_path)
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages([]))
+        ctx.transcript.assistant_text = MagicMock(return_value="")
+        ctx.call_llm = MagicMock(return_value=PromptCheckVerdict(action="block", reason="stop that"))
+
+        evt = make_stop_event(ctx=ctx)
+        result = prompt_check(evt, "Check {item}", {"item": "things"}, prefix="STYLE")
+
+        assert result is not None
+        assert result.action is Action.block
+        assert "STYLE" in result.message
+        assert "stop that" in result.message
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-020 — prompt_check returns warn on "warning" action
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestPromptCheckWarn:
+    def test_prompt_check_returns_warn(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
+
+        ctx = make_ctx(tmp_path)
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages([]))
+        ctx.transcript.assistant_text = MagicMock(return_value="")
+        ctx.call_llm = MagicMock(return_value=PromptCheckVerdict(action="warning", reason="minor issue"))
+
+        evt = make_stop_event(ctx=ctx)
+        result = prompt_check(evt, "Check {item}", {"item": "things"}, prefix="STYLE")
+
+        assert result is not None
+        assert result.action is Action.warn
+        assert "STYLE" in result.message
+        assert "minor issue" in result.message
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-021 — prompt_check returns None on "ok" action
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestPromptCheckOk:
+    def test_prompt_check_returns_none_on_ok(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
+
+        ctx = make_ctx(tmp_path)
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages([]))
+        ctx.transcript.assistant_text = MagicMock(return_value="")
+        ctx.call_llm = MagicMock(return_value=PromptCheckVerdict(action="ok", reason="looks good"))
+
+        evt = make_stop_event(ctx=ctx)
+        result = prompt_check(evt, "Check {item}", {"item": "things"}, prefix="STYLE")
+
+        assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-022 — prompt_check returns None when LLM returns None
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestPromptCheckLlmNone:
+    def test_prompt_check_returns_none_when_llm_returns_none(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import prompt_check
+
+        ctx = make_ctx(tmp_path)
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages([]))
+        ctx.transcript.assistant_text = MagicMock(return_value="")
+        ctx.call_llm = MagicMock(return_value=None)
+
+        evt = make_stop_event(ctx=ctx)
+        result = prompt_check(evt, "Check {item}", {"item": "things"}, prefix="STYLE")
+
+        assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-023 — prompt_check includes reasoning when include_reasoning=True
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestPromptCheckReasoning:
+    def test_prompt_check_includes_reasoning(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
+        from captain_hook.prompt import PromptMessage
+
+        ctx = make_ctx(tmp_path)
+        recent = MagicMock()
+        recent.messages = []
+        recent.assistant_text = MagicMock(return_value="I decided to do X because Y")
+        ctx.transcript.recent = MagicMock(return_value=recent)
+        ctx.transcript.assistant_text = MagicMock(return_value="I decided to do X because Y")
+        ctx.call_llm = MagicMock(return_value=PromptCheckVerdict(action="block", reason="bad reasoning"))
+
+        evt = make_stop_event(ctx=ctx)
+        prompt_check(
+            evt,
+            "Check {item}",
+            {"item": "things"},
+            prefix="STYLE",
+            include_reasoning=True,
+        )
+
+        ctx.call_llm.assert_called_once()
+        call_args = ctx.call_llm.call_args
+        prompt_arg = call_args[0][0]
+        assert isinstance(prompt_arg, PromptMessage)
+        assert "agent_reasoning" in str(prompt_arg)
+        assert "I decided to do X because Y" in str(prompt_arg)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-024 — Prompt builder used for all LLM primitives
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestPromptBuilderUsed:
+    def test_llm_gate_uses_prompt_builder(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+        from captain_hook.prompt import PromptMessage
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=True, reasoning="bad"))
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+
+        register_llm_gate(app, "Check this", message="BLOCKED", when=lambda evt: True)
+        evt = make_stop_event(ctx=ctx)
+        dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        ctx.call_llm.assert_called_once()
+        call_args = ctx.call_llm.call_args
+        prompt_arg = call_args[0][0] if call_args[0] else ""
+        assert isinstance(prompt_arg, PromptMessage)
+        rendered = str(prompt_arg)
+        assert "Check this" in rendered
+        assert "<context>" in rendered
+
+    def test_prompt_check_uses_prompt_builder(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
+        from captain_hook.prompt import PromptMessage
+
+        ctx = make_ctx(tmp_path)
+        recent = MagicMock()
+        recent.messages = []
+        recent.assistant_text = MagicMock(return_value="")
+        ctx.transcript.recent = MagicMock(return_value=recent)
+        ctx.call_llm = MagicMock(return_value=PromptCheckVerdict(action="ok", reason="fine"))
+
+        evt = make_stop_event(ctx=ctx)
+        prompt_check(evt, "Check {item}", {"item": "things"}, prefix="STYLE")
+
+        ctx.call_llm.assert_called_once()
+        prompt_arg = ctx.call_llm.call_args[0][0]
+        assert isinstance(prompt_arg, PromptMessage)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-025 — llm_evaluate with both signals and when ignores when
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmEvaluateBothSignalsAndWhen:
+    def test_llm_evaluate_ignores_when_if_signals_present(self, tmp_path: Path) -> None:
+        app = HookApp()
+        ctx = make_ctx(tmp_path)
+        ctx.transcript.recent = MagicMock(
+            return_value=make_recent_messages(["no match"]),
+        )
+
+        register_llm_gate(
+            app,
+            "Check this",
+            message="BLOCKED",
+            signals=[Signal(pattern=r"zzz_nomatch", weight=1)],
+            when=lambda evt: 1 / 0,  # would raise if called
+        )
+        evt = make_stop_event(ctx=ctx)
+        result = dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        assert result is None  # signals don't match, when not called
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-026 — llm_evaluate returns None when call_llm returns None
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmEvaluateNoneCallLlm:
+    def test_llm_evaluate_returns_none_on_none_call_llm(self, tmp_path: Path) -> None:
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=None)
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+
+        register_llm_gate(app, "Check this", message="BLOCKED", when=lambda evt: True)
+        evt = make_stop_event(ctx=ctx)
+        result = dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-027 — llm_nudge defaults to async_=False
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmNudgeDefaultAsync:
+    def test_llm_nudge_defaults_async_false(self, tmp_path: Path) -> None:
+        app = HookApp()
+        register_llm_nudge(app, "Check this", message="WARNING", when=lambda evt: True)
+
+        assert app.hooks[0].spec.async_ is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Regression: braces in prompt context should not cause double-formatting
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmBracesInPrompt:
+    def test_llm_gate_passes_prompt_message_not_str(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+        from captain_hook.prompt import PromptMessage
+
+        app = HookApp()
+        verdict = GateVerdict(block=True, reasoning="bad")
+        ctx = make_ctx(tmp_path, call_llm_return=verdict)
+        ctx.transcript.recent = MagicMock(
+            return_value=make_recent_messages(['{"key": "value"}']),
+        )
+
+        register_llm_gate(app, "Check this code", message="BLOCKED", when=lambda evt: True)
+        evt = make_stop_event(ctx=ctx)
+        dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        ctx.call_llm.assert_called_once()
+        prompt_arg = ctx.call_llm.call_args[0][0]
+        assert isinstance(prompt_arg, PromptMessage)
+        assert '{"key": "value"}' in str(prompt_arg)
+
+    def test_llm_nudge_passes_prompt_message_not_str(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import NudgeVerdict
+        from captain_hook.prompt import PromptMessage
+
+        app = HookApp()
+        verdict = NudgeVerdict(fire=True, reasoning="issue")
+        ctx = make_ctx(tmp_path, call_llm_return=verdict)
+        ctx.transcript.recent = MagicMock(
+            return_value=make_recent_messages(["def foo(): return {x: 1}"]),
+        )
+
+        register_llm_nudge(app, "Check this", message="WARNING", when=lambda evt: True)
+        evt = make_post_tool_event(ctx=ctx)
+        dispatch(app, Event.PostToolUse, evt, session_dir=tmp_path)
+
+        ctx.call_llm.assert_called_once()
+        prompt_arg = ctx.call_llm.call_args[0][0]
+        assert isinstance(prompt_arg, PromptMessage)
+        assert "{x: 1}" in str(prompt_arg)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Regression: fire state should update only after verdict confirms action
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestFireStateTiming:
+    def test_llm_gate_no_fire_state_on_false_verdict_with_signals(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+        from captain_hook.state import PrimitiveState
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=False, reasoning="ok"))
+        ctx.transcript.recent = MagicMock(
+            return_value=make_recent_messages(["critical error found"]),
+        )
+
+        register_llm_gate(
+            app,
+            "Check this",
+            message="BLOCKED",
+            signals=[Signal(pattern=r"critical", weight=1)],
+            max_fires=5,
+        )
+        evt = make_stop_event(ctx=ctx)
+        dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        ps = ctx.s[PrimitiveState].get()
+        assert ps is None or ps.last_fired_at == 0
+
+    def test_llm_nudge_no_fire_state_on_false_verdict_with_signals(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import NudgeVerdict
+        from captain_hook.state import PrimitiveState
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=NudgeVerdict(fire=False, reasoning="ok"))
+        ctx.transcript.recent = MagicMock(
+            return_value=make_recent_messages(["critical error found"]),
+        )
+
+        register_llm_nudge(
+            app,
+            "Check this",
+            message="WARNING",
+            signals=[Signal(pattern=r"critical", weight=1)],
+            max_fires=5,
+        )
+        evt = make_post_tool_event(ctx=ctx)
+        dispatch(app, Event.PostToolUse, evt, session_dir=tmp_path)
+
+        ps = ctx.s[PrimitiveState].get()
+        assert ps is None or ps.last_fired_at == 0
+
+    def test_llm_gate_fire_state_on_true_verdict(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+        from captain_hook.state import PrimitiveState
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=True, reasoning="bad"))
+        ctx.transcript.recent = MagicMock(
+            return_value=make_recent_messages(["critical error found"]),
+        )
+
+        register_llm_gate(
+            app,
+            "Check this",
+            message="BLOCKED",
+            signals=[Signal(pattern=r"critical", weight=1)],
+            max_fires=5,
+        )
+        evt = make_stop_event(ctx=ctx)
+        dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        ps = ctx.s[PrimitiveState].get()
+        assert ps is not None
+        assert ps.last_fired_at > 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Regression: prompt_check should use Prompt builder for template construction
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestPromptCheckUsesPromptBuilder:
+    def test_prompt_check_passes_prompt_message_not_str(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
+        from captain_hook.prompt import PromptMessage
+
+        ctx = make_ctx(tmp_path)
+        recent = MagicMock()
+        recent.messages = []
+        recent.assistant_text = MagicMock(return_value="")
+        ctx.transcript.recent = MagicMock(return_value=recent)
+        ctx.call_llm = MagicMock(return_value=PromptCheckVerdict(action="ok", reason="fine"))
+
+        evt = make_stop_event(ctx=ctx)
+        prompt_check(evt, "Check {item}", {"item": "things"}, prefix="STYLE")
+
+        ctx.call_llm.assert_called_once()
+        call_args = ctx.call_llm.call_args
+        prompt_arg = call_args[0][0]
+        assert isinstance(prompt_arg, PromptMessage)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Regression: signal-driven LLM hook suppression bug
+# Two signal-driven LLM hooks in the same turn: first returns no-action,
+# second should still fire (consumed hashes should not suppress later hooks).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestSignalConsumptionNotSuppressLaterHooks:
+    def test_two_llm_gates_first_no_action_second_fires(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, transcript_len=10)
+        ctx.transcript.recent = MagicMock(
+            return_value=make_recent_messages(["critical error found in module"]),
+        )
+
+        call_count = 0
+
+        def mock_llm(*args: Any, **kwargs: Any) -> GateVerdict:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return GateVerdict(block=False, reasoning="not a real issue")
+            return GateVerdict(block=True, reasoning="actual problem")
+
+        ctx.call_llm = mock_llm
+
+        register_llm_gate(
+            app,
+            "First gate check",
+            message="GATE1",
+            signals=[Signal(pattern=r"critical", weight=1)],
+            max_fires=5,
+        )
+        register_llm_gate(
+            app,
+            "Second gate check",
+            message="GATE2",
+            signals=[Signal(pattern=r"critical", weight=1)],
+            max_fires=5,
+        )
+
+        evt = make_stop_event(ctx=ctx)
+        result = dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        assert call_count == 2, f"Expected both LLM hooks to be called, but only {call_count} were"
+        assert result is not None, "Second gate should have blocked"
+        assert result["decision"] == "block"
+        assert "GATE2" in result["reason"]
+
+    def test_two_llm_nudges_first_no_action_second_fires(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import NudgeVerdict
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, transcript_len=10)
+        ctx.transcript.recent = MagicMock(
+            return_value=make_recent_messages(["critical error found in module"]),
+        )
+
+        call_count = 0
+
+        def mock_llm(*args: Any, **kwargs: Any) -> NudgeVerdict:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return NudgeVerdict(fire=False, reasoning="not relevant")
+            return NudgeVerdict(fire=True, reasoning="needs attention")
+
+        ctx.call_llm = mock_llm
+
+        register_llm_nudge(
+            app,
+            "First nudge check",
+            message="NUDGE1",
+            signals=[Signal(pattern=r"critical", weight=1)],
+            max_fires=5,
+        )
+        register_llm_nudge(
+            app,
+            "Second nudge check",
+            message="NUDGE2",
+            signals=[Signal(pattern=r"critical", weight=1)],
+            max_fires=5,
+        )
+
+        evt = make_post_tool_event(ctx=ctx)
+        result = dispatch(app, Event.PostToolUse, evt, session_dir=tmp_path)
+
+        assert call_count == 2, f"Expected both LLM hooks to be called, but only {call_count} were"
+        assert result is not None, "Second nudge should have warned"
+        assert "NUDGE2" in result["hookSpecificOutput"]["additionalContext"]
+
+    def test_llm_gate_no_action_does_not_consume_hashes(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+        from captain_hook.state import PrimitiveState
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, transcript_len=10)
+        ctx.transcript.recent = MagicMock(
+            return_value=make_recent_messages(["critical error found"]),
+        )
+        ctx.call_llm = MagicMock(return_value=GateVerdict(block=False, reasoning="ok"))
+
+        register_llm_gate(
+            app,
+            "Gate check",
+            message="BLOCKED",
+            signals=[Signal(pattern=r"critical", weight=1)],
+            max_fires=5,
+        )
+
+        evt = make_stop_event(ctx=ctx)
+        dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+
+        ps = ctx.s[PrimitiveState].get()
+        consumed = ps.consumed if ps else set()
+        assert len(consumed) == 0, f"Consumed hashes should be empty after no-action verdict, got {consumed}"
