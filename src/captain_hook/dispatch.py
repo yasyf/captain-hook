@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from captain_hook.app import get_matching_hooks
 from captain_hook.session import SessionStore
 from captain_hook.state import HookState
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
@@ -11,7 +12,6 @@ from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHo
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from captain_hook.app import HookApp
     from captain_hook.events import BaseHookEvent
 
 
@@ -81,19 +81,14 @@ def format_output(event: Event, result: HookResult) -> dict[str, Any] | None:
 
 
 def dispatch(
-    app: HookApp,
     event: Event,
     evt: BaseHookEvent,
     session_dir: Path | None = None,
     *,
     async_: bool = False,
 ) -> dict[str, Any] | None:
-    """Run all matching hooks for an event and return the formatted output.
-
-    Hooks are evaluated in registration order. A block/allow result short-circuits;
-    warnings are accumulated and merged.
-    """
-    matching = [h for h in app.get_matching_hooks(evt) if h.spec.async_ == async_]
+    """Dispatch an event to all matching hooks and return the combined result."""
+    matching = [h for h in get_matching_hooks(evt) if h.spec.async_ == async_]
 
     warns: list[str] = []
     for entry in matching:

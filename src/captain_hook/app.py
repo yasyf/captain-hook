@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextvars
 import importlib
 import importlib.util
 import inspect
@@ -11,7 +10,9 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, get_args
+from typing import TYPE_CHECKING, get_args
+
+from pydantic_settings import BaseSettings
 
 from captain_hook.conditions import matches_conditions
 from captain_hook.types import (
@@ -24,6 +25,7 @@ from captain_hook.types import (
 )
 
 if TYPE_CHECKING:
+    from captain_hook.classifiers import MessageClassifier
     from captain_hook.events import BaseHookEvent
     from captain_hook.types import HookResult
 
@@ -33,6 +35,8 @@ VALID_CONDITION_TYPES = tuple(
     t for t in get_args(TCondition) if t is not CustomCondition
 )
 VALID_CONDITION_NAMES = ", ".join(t.__name__ for t in VALID_CONDITION_TYPES) + ", or a CustomCondition"
+
+CONF_MODULE = "conf"
 
 
 def validate_conditions(conditions: Sequence[TCondition], label: str) -> None:
@@ -66,25 +70,45 @@ def validate_handler_signature(fn: HookHandler) -> None:
             f"Hook handlers are called as handler(evt) — keyword-only parameters must have defaults."
         )
 
-CONF_MODULE = "conf"
 
-_current_app: contextvars.ContextVar[HookApp | None] = contextvars.ContextVar(
-    "_current_app",
-    default=None,
-)
+@dataclass
+class State:
+    hooks: list[RegisteredHook] = field(default_factory=list)
+    gitignore_patterns: list[str] = field(default_factory=list)
+    settings: BaseSettings | None = None
+    classifier: MessageClassifier | None = None
+    counter: int = field(default=0, repr=False)
 
 
-_app: HookApp | None = None
+_state = State()
 
 
-def get_current_app() -> HookApp:
-    """Return the active HookApp, falling back to the module-level singleton."""
-    global _app
-    if app := _current_app.get():
-        return app
-    if _app is None:
-        _app = HookApp()
-    return _app
+def reset() -> None:
+    _state.hooks.clear()
+    _state.gitignore_patterns.clear()
+    _state.counter = 0
+    _state.settings = None
+    _state.classifier = None
+
+
+def load_gitignore(root: Path) -> None:
+    _state.gitignore_patterns.clear()
+    if not (gitignore := root / ".gitignore").exists():
+        return
+    _state.gitignore_patterns.extend(
+        line.rstrip("/")
+        for raw in gitignore.read_text().splitlines()
+        if (line := raw.strip()) and not line.startswith("#")
+    )
+
+
+def is_gitignored(path_str: str) -> bool:
+    if not _state.gitignore_patterns:
+        return False
+    p = Path(path_str)
+    return any(
+        fnmatch(p.name, pat) or any(fnmatch(part, pat) for part in p.parts) for pat in _state.gitignore_patterns
+    )
 
 
 def hook(
@@ -92,24 +116,38 @@ def hook(
     *,
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
+
     message: str | None = None,
     block: bool = False,
     respect_gitignore: bool = True,
     max_fires: int | None = None,
     tests: TTest | None = None,
     async_: bool = False,
-) -> Callable[[HookHandler], HookHandler] | None:
-    """Register a hook on the current app — declarative (with message) or handler (as decorator)."""
-    return get_current_app().register(
-        events,
-        only_if=only_if,
-        skip_if=skip_if,
-        message=message,
-        block=block,
-        respect_gitignore=respect_gitignore,
-        max_fires=max_fires,
-        tests=tests,
-        async_=async_,
+) -> None:
+    """Register a declarative hook with a fixed message."""
+    if message is None:
+        raise TypeError(
+            "hook() requires message= for declarative hooks. "
+            "Provide message='...' or use @on() for handler-based hooks."
+        )
+    validate_conditions(only_if, "only_if")
+    validate_conditions(skip_if, "skip_if")
+    _state.counter += 1
+    _state.hooks.append(
+        RegisteredHook(
+            spec=HookSpec(
+                events=events,
+                only_if=tuple(only_if),
+                skip_if=tuple(skip_if),
+                message=message,
+                block=block,
+                respect_gitignore=respect_gitignore,
+                max_fires=max_fires,
+                tests=tests,
+                async_=async_,
+            ),
+            name=f"declarative_{_state.counter}",
+        )
     )
 
 
@@ -123,16 +161,32 @@ def on(
     tests: TTest | None = None,
     async_: bool = False,
 ) -> Callable[[HookHandler], HookHandler]:
-    """Decorator to register a handler hook on the current app."""
-    return get_current_app().on(
-        events,
-        only_if=only_if,
-        skip_if=skip_if,
+    """Decorator to register a handler-based hook."""
+    validate_conditions(only_if, "only_if")
+    validate_conditions(skip_if, "skip_if")
+    spec = HookSpec(
+        events=events,
+        only_if=tuple(only_if),
+        skip_if=tuple(skip_if),
         respect_gitignore=respect_gitignore,
         max_fires=max_fires,
         tests=tests,
         async_=async_,
     )
+
+    def decorator(fn: HookHandler) -> HookHandler:
+        validate_handler_signature(fn)
+        _state.hooks.append(
+            RegisteredHook(
+                spec=spec,
+                handler=fn,
+                name=fn.__name__,
+                source_file=fn.__code__.co_filename,
+            )
+        )
+        return fn
+
+    return decorator
 
 
 def register(
@@ -147,12 +201,35 @@ def register(
     tests: TTest | None = None,
     async_: bool = False,
 ) -> Callable[[HookHandler], HookHandler] | None:
-    """Register a declarative or handler hook on the current app."""
-    return get_current_app().register(
-        events,
-        only_if=only_if,
-        skip_if=skip_if,
-        message=message,
+    """Register a hook — declarative with ``message`` or as a decorator without."""
+    validate_conditions(only_if, "only_if")
+    validate_conditions(skip_if, "skip_if")
+
+    if message is not None:
+        hook(
+            events,
+            only_if=only_if,
+            skip_if=skip_if,
+            message=message,
+            block=block,
+            respect_gitignore=respect_gitignore,
+            max_fires=max_fires,
+            tests=tests,
+            async_=async_,
+        )
+        return None
+
+    if block:
+        raise TypeError(
+            "hook() called with block=True but no message= provided. "
+            "Declarative hooks require message= to specify the block reason. "
+            "Either provide message='...' or use @on() for handler-based hooks."
+        )
+
+    spec = HookSpec(
+        events=events,
+        only_if=tuple(only_if),
+        skip_if=tuple(skip_if),
         block=block,
         respect_gitignore=respect_gitignore,
         max_fires=max_fires,
@@ -160,253 +237,77 @@ def register(
         async_=async_,
     )
 
+    def decorator(fn: HookHandler) -> HookHandler:
+        validate_handler_signature(fn)
+        _state.hooks.append(
+            RegisteredHook(
+                spec=spec,
+                handler=fn,
+                name=fn.__name__,
+                source_file=fn.__code__.co_filename,
+            )
+        )
+        return fn
 
-def discover_hooks(hooks_dir: str | Path) -> None:
-    """Load hook modules from a directory into the current app."""
-    get_current_app().discover_hooks(hooks_dir)
+    return decorator
 
 
 def get_matching_hooks(evt: BaseHookEvent) -> list[RegisteredHook]:
-    """Return hooks from the current app that match the given event."""
-    return get_current_app().get_matching_hooks(evt)
-
-
-def reset() -> None:
-    """Clear all hooks and state from the current app."""
-    get_current_app().reset()
-
-
-@dataclass
-class HookApp:
-    """Central registry for hook definitions and discovery."""
-
-    hooks: list[RegisteredHook] = field(default_factory=lambda: [])
-    gitignore_patterns: list[str] = field(default_factory=lambda: [])
-    settings: Any = None
-    classifier: Any = None
-    counter: int = field(default=0, repr=False)
-
-    def reset(self) -> None:
-        self.hooks.clear()
-        self.gitignore_patterns.clear()
-        self.counter = 0
-        self.settings = None
-        self.classifier = None
-
-    def load_gitignore(self, root: Path) -> None:
-        self.gitignore_patterns.clear()
-        if not (gitignore := root / ".gitignore").exists():
-            return
-        self.gitignore_patterns.extend(
-            line.rstrip("/")
-            for raw in gitignore.read_text().splitlines()
-            if (line := raw.strip()) and not line.startswith("#")
+    return [
+        h
+        for h in _state.hooks
+        if evt.event in h.spec.events
+        and matches_conditions(h.spec, evt)
+        and (
+            not h.spec.respect_gitignore
+            or not _state.gitignore_patterns
+            or not evt.file
+            or not is_gitignored(str(evt.file))
         )
+    ]
 
-    def is_gitignored(self, path_str: str) -> bool:
-        if not self.gitignore_patterns:
-            return False
-        p = Path(path_str)
-        return any(
-            fnmatch(p.name, pat) or any(fnmatch(part, pat) for part in p.parts) for pat in self.gitignore_patterns
-        )
 
-    def hook(
-        self,
-        events: Event,
-        *,
-        only_if: Sequence[TCondition] = (),
-        skip_if: Sequence[TCondition] = (),
-        message: str | None = None,
-        block: bool = False,
-        respect_gitignore: bool = True,
-        max_fires: int | None = None,
-        tests: TTest | None = None,
-        async_: bool = False,
-    ) -> None:
-        if message is None:
-            raise TypeError(
-                "hook() requires message= for declarative hooks. "
-                "Provide message='...' or use @app.on() for handler-based hooks."
-            )
-        validate_conditions(only_if, "only_if")
-        validate_conditions(skip_if, "skip_if")
-        self.counter += 1
-        self.hooks.append(
-            RegisteredHook(
-                spec=HookSpec(
-                    events=events,
-                    only_if=tuple(only_if),
-                    skip_if=tuple(skip_if),
-                    message=message,
-                    block=block,
-                    respect_gitignore=respect_gitignore,
-                    max_fires=max_fires,
-                    tests=tests,
-                    async_=async_,
-                ),
-                name=f"declarative_{self.counter}",
-            )
-        )
+def build_hook_settings(module: ModuleType) -> BaseSettings:
+    if importlib.util.find_spec("captain_hook.settings"):
+        settings_mod = importlib.import_module("captain_hook.settings")
+        return settings_mod.build_settings(module)
+    return module  # type: ignore[return-value]
 
-    def on(
-        self,
-        events: Event,
-        *,
-        only_if: Sequence[TCondition] = (),
-        skip_if: Sequence[TCondition] = (),
-        respect_gitignore: bool = True,
-        max_fires: int | None = None,
-        tests: TTest | None = None,
-        async_: bool = False,
-    ) -> Callable[[HookHandler], HookHandler]:
-        validate_conditions(only_if, "only_if")
-        validate_conditions(skip_if, "skip_if")
-        spec = HookSpec(
-            events=events,
-            only_if=tuple(only_if),
-            skip_if=tuple(skip_if),
-            respect_gitignore=respect_gitignore,
-            max_fires=max_fires,
-            tests=tests,
-            async_=async_,
-        )
 
-        def decorator(fn: HookHandler) -> HookHandler:
-            validate_handler_signature(fn)
-            self.hooks.append(
-                RegisteredHook(
-                    spec=spec,
-                    handler=fn,
-                    name=fn.__name__,
-                    source_file=fn.__code__.co_filename,
-                )
-            )
-            return fn
+def import_or_reload(fqn: str, fresh_this_pass: set[str]) -> ModuleType:
+    if fqn in fresh_this_pass:
+        return sys.modules[fqn]
+    before = set(sys.modules)
+    if fqn in sys.modules:
+        mod = importlib.reload(sys.modules[fqn])
+    else:
+        mod = importlib.import_module(fqn)
+    fresh_this_pass.update(set(sys.modules) - before)
+    fresh_this_pass.add(fqn)
+    return mod
 
-        return decorator
 
-    def register(
-        self,
-        events: Event,
-        *,
-        only_if: Sequence[TCondition] = (),
-        skip_if: Sequence[TCondition] = (),
-        message: str | None = None,
-        block: bool = False,
-        respect_gitignore: bool = True,
-        max_fires: int | None = None,
-        tests: TTest | None = None,
-        async_: bool = False,
-    ) -> Callable[[HookHandler], HookHandler] | None:
-        validate_conditions(only_if, "only_if")
-        validate_conditions(skip_if, "skip_if")
+def discover_hooks(hooks_dir: str | Path) -> None:
+    hooks_path = Path(hooks_dir).resolve()
+    if str(hooks_path.parent) not in sys.path:
+        sys.path.insert(0, str(hooks_path.parent))
 
-        if message is not None:
-            self.hook(
-                events,
-                only_if=only_if,
-                skip_if=skip_if,
-                message=message,
-                block=block,
-                respect_gitignore=respect_gitignore,
-                max_fires=max_fires,
-                tests=tests,
-                async_=async_,
-            )
-            return None
+    pkg = hooks_path.name
+    fresh_this_pass: set[str] = set()
 
-        if block:
-            raise TypeError(
-                "hook() called with block=True but no message= provided. "
-                "Declarative hooks require message= to specify the block reason. "
-                "Either provide message='...' or use @app.on() for handler-based hooks."
-            )
+    top_level = {info.name for info in pkgutil.iter_modules([str(hooks_path)]) if not info.name.startswith("_")}
 
-        spec = HookSpec(
-            events=events,
-            only_if=tuple(only_if),
-            skip_if=tuple(skip_if),
-            block=block,
-            respect_gitignore=respect_gitignore,
-            max_fires=max_fires,
-            tests=tests,
-            async_=async_,
-        )
+    if CONF_MODULE in top_level:
+        conf_module = import_or_reload(f"{pkg}.{CONF_MODULE}", fresh_this_pass)
+        _state.settings = build_hook_settings(conf_module)
+        if classifier := getattr(conf_module, "classifier", None):
+            _state.classifier = classifier
 
-        def decorator(fn: HookHandler) -> HookHandler:
-            validate_handler_signature(fn)
-            self.hooks.append(
-                RegisteredHook(
-                    spec=spec,
-                    handler=fn,
-                    name=fn.__name__,
-                    source_file=fn.__code__.co_filename,
-                )
-            )
-            return fn
+    all_modules = {
+        info.name
+        for info in pkgutil.walk_packages([str(hooks_path)], prefix=f"{pkg}.")
+        if not info.name.rpartition(".")[2].startswith("_")
+    }
 
-        return decorator
-
-    def get_matching_hooks(self, evt: BaseHookEvent) -> list[RegisteredHook]:
-        return [
-            h
-            for h in self.hooks
-            if evt.event in h.spec.events
-            and matches_conditions(h.spec, evt)
-            and (
-                not h.spec.respect_gitignore
-                or not self.gitignore_patterns
-                or not evt.file
-                or not self.is_gitignored(str(evt.file))
-            )
-        ]
-
-    @staticmethod
-    def _build_settings(module: ModuleType) -> Any:
-        if importlib.util.find_spec("captain_hook.settings"):
-            settings_mod = importlib.import_module("captain_hook.settings")
-            return settings_mod.build_settings(module)  # type: ignore[no-any-return]
-        return module
-
-    @staticmethod
-    def _import_or_reload(fqn: str, fresh_this_pass: set[str]) -> ModuleType:
-        if fqn in fresh_this_pass:
-            return sys.modules[fqn]
-        before = set(sys.modules)
-        if fqn in sys.modules:
-            mod = importlib.reload(sys.modules[fqn])
-        else:
-            mod = importlib.import_module(fqn)
-        fresh_this_pass.update(set(sys.modules) - before)
-        fresh_this_pass.add(fqn)
-        return mod
-
-    def discover_hooks(self, hooks_dir: str | Path) -> None:
-        hooks_path = Path(hooks_dir).resolve()
-        if str(hooks_path.parent) not in sys.path:
-            sys.path.insert(0, str(hooks_path.parent))
-
-        pkg = hooks_path.name
-        fresh_this_pass: set[str] = set()
-        token = _current_app.set(self)
-        try:
-            top_level = {info.name for info in pkgutil.iter_modules([str(hooks_path)]) if not info.name.startswith("_")}
-
-            if CONF_MODULE in top_level:
-                conf_module = self._import_or_reload(f"{pkg}.{CONF_MODULE}", fresh_this_pass)
-                self.settings = self._build_settings(conf_module)
-                if classifier := getattr(conf_module, "classifier", None):
-                    self.classifier = classifier
-
-            all_modules = {
-                info.name
-                for info in pkgutil.walk_packages([str(hooks_path)], prefix=f"{pkg}.")
-                if not info.name.rpartition(".")[2].startswith("_")
-            }
-
-            for fqn in sorted(all_modules - {f"{pkg}.{CONF_MODULE}"}):
-                self._import_or_reload(fqn, fresh_this_pass)
-        finally:
-            _current_app.reset(token)
-
+    for fqn in sorted(all_modules - {f"{pkg}.{CONF_MODULE}"}):
+        import_or_reload(fqn, fresh_this_pass)

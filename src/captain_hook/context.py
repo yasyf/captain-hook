@@ -10,6 +10,7 @@ from functools import cached_property
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from pydantic import BaseModel
+from pydantic_settings import BaseSettings
 
 from captain_hook.prompt import PromptMessage
 from captain_hook.session import SessionStore
@@ -113,7 +114,7 @@ class HookContext:
 
     session: SessionStore
     transcript: Transcript
-    settings: Any
+    settings: BaseSettings | None
 
     @property
     def t(self) -> Transcript:
@@ -131,12 +132,12 @@ class HookContext:
         return self.session
 
     @property
-    def conf(self) -> Any:
+    def conf(self) -> BaseSettings | None:
         """Alias for ``settings``."""
         return self.settings
 
     @property
-    def c(self) -> Any:
+    def c(self) -> BaseSettings | None:
         """Alias for ``settings`` (shortest form)."""
         return self.conf
 

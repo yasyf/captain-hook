@@ -112,7 +112,7 @@ def consume_signals(evt: BaseHookEvent, sig: Signals | None) -> None:
     evt.ctx.s[PrimitiveState].set(ps)
 
 
-def _llm_primitive[M: BaseModel](
+def llm_primitive[M: BaseModel](
     prompt: str,
     *,
     action: Action,
@@ -201,7 +201,7 @@ def llm_gate(
         ...          message=lambda r: f"Excuse detected: {r.reasoning}",
         ...          signals=Signals([Signal(r"external.*service", weight=2)], threshold=2))
     """
-    _llm_primitive(
+    llm_primitive(
         prompt,
         action=Action.block,
         label="llm_gate",
@@ -252,7 +252,7 @@ def llm_nudge(
         ...           message="Observe, don't infer -- check traces first",
         ...           signals=Signals([Signal(r"should contain", weight=2)], threshold=3))
     """
-    _llm_primitive(
+    llm_primitive(
         prompt,
         action=Action.warn,
         label="llm_nudge",

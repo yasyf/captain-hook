@@ -7,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from captain_hook.app import HookApp, get_current_app
+from captain_hook.app import _state, discover_hooks, load_gitignore, reset
 from captain_hook.context import HookContext
 from captain_hook.dispatch import dispatch
 from captain_hook.log import setup_logging
@@ -16,10 +16,10 @@ from captain_hook.transcript import Transcript
 from captain_hook.types import Event
 
 
-def generate_settings(app: HookApp, run_command: str) -> dict[str, Any]:
-    """Generate a Claude Code settings dict mapping events to hook runner commands."""
+def generate_settings(run_command: str) -> dict[str, Any]:
+    """Build Claude Code hooks settings JSON from registered hooks."""
     events_by_async: defaultdict[bool, set[str]] = defaultdict(set)
-    for entry in app.hooks:
+    for entry in _state.hooks:
         for member in Event:
             if member in entry.spec.events and (name := member.name):
                 events_by_async[entry.spec.async_].add(name)
@@ -42,13 +42,13 @@ def generate_settings(app: HookApp, run_command: str) -> dict[str, Any]:
     }
 
 
-def generate_settings_json(app: HookApp, run_command: str) -> str:
-    """Generate Claude Code settings as a formatted JSON string."""
-    return json.dumps(generate_settings(app, run_command), indent=2)
+def generate_settings_json(run_command: str) -> str:
+    """Return ``generate_settings`` output as a JSON string."""
+    return json.dumps(generate_settings(run_command), indent=2)
 
 
-def merge_settings(app: HookApp, run_command: str, settings_path: Path) -> dict[str, Any]:
-    hook_settings = generate_settings(app, run_command)
+def merge_settings(run_command: str, settings_path: Path) -> dict[str, Any]:
+    hook_settings = generate_settings(run_command)
     if settings_path.exists():
         existing = json.loads(settings_path.read_text())
         existing["hooks"] = hook_settings["hooks"]
@@ -57,7 +57,6 @@ def merge_settings(app: HookApp, run_command: str, settings_path: Path) -> dict[
 
 
 def run_event(
-    app: HookApp,
     event_name: str,
     *,
     async_: bool = False,
@@ -92,11 +91,11 @@ def run_event(
     ctx = HookContext(
         session=SessionStore(session_dir),
         transcript=transcript,
-        settings=app.settings,
+        settings=_state.settings,
     )
     evt = event.event_class(_raw=raw, ctx=ctx)
 
-    if output := dispatch(app, event, evt, session_dir=session_dir, async_=async_):
+    if output := dispatch(event, evt, session_dir=session_dir, async_=async_):
         print(json.dumps(output))
 
 
@@ -142,10 +141,9 @@ def init_project(root: Path) -> None:
     print(f"  Created {bin_script.relative_to(root)} (executable)")
 
     settings_path = root / ".claude" / "settings.local.json"
-    app = get_current_app()
-    app.reset()
-    app.discover_hooks(str(hooks_dir))
-    merged = merge_settings(app, ".claude/bin/captain-hook", settings_path)
+    reset()
+    discover_hooks(str(hooks_dir))
+    merged = merge_settings(".claude/bin/captain-hook", settings_path)
     settings_path.write_text(json.dumps(merged, indent=2) + "\n")
     print(f"  Updated {settings_path.relative_to(root)}")
 
@@ -177,10 +175,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_tests(app: HookApp) -> None:
+def run_tests() -> None:
     from captain_hook.testing.helpers import run_inline_tests
 
-    results = run_inline_tests(app)
+    results = run_inline_tests()
     if not results:
         print("No inline tests found.")
         return
@@ -219,22 +217,21 @@ def main() -> None:
         init_project(root)
         return
 
-    app = get_current_app()
-    app.reset()
-    app.load_gitignore(root)
-    app.discover_hooks(args.hooks)
+    reset()
+    load_gitignore(root)
+    discover_hooks(args.hooks)
 
     match args.command:
         case "run":
-            run_event(app, args.event, async_=args.async_, root=root)
+            run_event(args.event, async_=args.async_, root=root)
         case "generate-settings":
             if args.no_merge:
-                print(generate_settings_json(app, args.run_command))
+                print(generate_settings_json(args.run_command))
             else:
                 settings_path = root / ".claude" / "settings.local.json"
-                merged = merge_settings(app, args.run_command, settings_path)
+                merged = merge_settings(args.run_command, settings_path)
                 print(json.dumps(merged, indent=2))
         case "test":
-            run_tests(app)
+            run_tests()
         case _:
             parser.error(f"Unknown command: {args.command}")

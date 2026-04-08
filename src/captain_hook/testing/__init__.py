@@ -8,9 +8,3 @@ __all__ = [
     "TTest",
     "Warn",
 ]
-
-
-def __getattr__(name: str):  # type: ignore[no-untyped-def]
-    from captain_hook.testing import helpers
-
-    return getattr(helpers, name)
