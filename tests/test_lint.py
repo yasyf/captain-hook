@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import logging
 import shutil
 import tempfile
 from collections.abc import Iterator
@@ -829,7 +830,7 @@ class TestAstLintEmptyFile:
 
 
 class TestCheckExceptionLogging:
-    def test_string_check_exception_is_logged(self, session_dir: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_string_check_exception_is_logged(self, session_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
         app = HookApp()
 
         def check(content: str) -> list[str]:
@@ -841,16 +842,16 @@ class TestCheckExceptionLogging:
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        with caplog.at_level(logging.WARNING, logger="captain_hook.primitives.lint"):
+            result = dispatch(app, Event.PostToolUse, evt, session_dir)
         assert result is None
-        captured = capsys.readouterr()
-        assert "intentional boom" in captured.err or "ValueError" in captured.err
+        assert any("check" in r.message and r.exc_info for r in caplog.records)
 
     def test_ast_check_exception_is_logged(
         self,
         work_dir: Path,
         session_dir: Path,
-        capsys: pytest.CaptureFixture[str],
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         app = HookApp()
         source = "x = 1\n"
@@ -866,7 +867,7 @@ class TestCheckExceptionLogging:
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "x = 1"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        with caplog.at_level(logging.WARNING, logger="captain_hook.primitives.lint"):
+            result = dispatch(app, Event.PostToolUse, evt, session_dir)
         assert result is None
-        captured = capsys.readouterr()
-        assert "ast boom" in captured.err or "TypeError" in captured.err
+        assert any("check" in r.message and r.exc_info for r in caplog.records)

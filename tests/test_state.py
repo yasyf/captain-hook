@@ -142,6 +142,39 @@ class TestStateStore:
         slot = store[MyModel]
         slot.delete()
 
+    # ── VAL-STATE-013: slot.get(default) returns default when empty ───────────
+
+    def test_get_default_when_empty(self, tmp_path: Path) -> None:
+        assert SessionStore(tmp_path)[MyModel].get(MyModel(name="default", value=99)) == MyModel(
+            name="default", value=99
+        )
+
+    # ── VAL-STATE-014: slot.get(default) returns stored value over default ────
+
+    def test_get_default_returns_stored_over_default(self, tmp_path: Path) -> None:
+        slot = SessionStore(tmp_path)[MyModel]
+        slot.set(MyModel(name="stored", value=1))
+        assert slot.get(MyModel(name="default", value=99)) == MyModel(name="stored", value=1)
+
+    # ── VAL-STATE-015: slot.get(default) returns default on corrupt JSON ──────
+
+    def test_get_default_on_corrupt_json(self, tmp_path: Path) -> None:
+        slot = SessionStore(tmp_path)[MyModel]
+        slot.path.write_text("not valid json {{{")
+        assert slot.get(MyModel(name="fallback", value=0)) == MyModel(name="fallback", value=0)
+
+    # ── VAL-STATE-016: slot.get() without default still returns None ──────────
+
+    def test_get_no_default_still_returns_none(self, tmp_path: Path) -> None:
+        assert SessionStore(tmp_path)[MyModel].get() is None
+
+    # ── VAL-STATE-017: slot.get(default) with None session_dir returns default ─
+
+    def test_get_default_with_none_session_dir(self) -> None:
+        assert SessionStore(None)[MyModel].get(MyModel(name="fallback", value=7)) == MyModel(
+            name="fallback", value=7
+        )
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # VAL-FIRE: Fire Counting

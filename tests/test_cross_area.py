@@ -22,6 +22,7 @@ from captain_hook.signals import score_signals
 from captain_hook.signals.nlp import Clause, NlpSignal, Phrase
 from captain_hook.state import HookState
 from captain_hook.testing.helpers import (
+    dispatch_test,
     mock_subagent_stop_event,
     mock_tool_event,
     run_inline_tests,
@@ -569,8 +570,7 @@ class TestWorkflowTranscript:
         app = HookApp()
         token = _current_app.set(app)
         try:
-            w = workflow(
-                app=app,
+            workflow(
                 label="TEST",
                 marker="DONE",
                 steps=[
@@ -578,12 +578,11 @@ class TestWorkflowTranscript:
                     Step(name="review", check=text_matches(r"review"), stopped_at="Stop", next_step="Do review"),
                 ],
             )
-            evt = mock_subagent_stop_event(transcript=transcript)
-            result = w.guard(evt)
+            result = dispatch_test(app, Event.SubagentStop, transcript=transcript)
             assert result is not None
-            assert result.action == Action.block
-            assert "TEST INCOMPLETE" in (result.message or "")
-            assert "Run mtest" in (result.message or "")
+            reason = result.get("reason", "")
+            assert "TEST INCOMPLETE" in reason
+            assert "Run mtest" in reason
         finally:
             _current_app.reset(token)
 
@@ -592,14 +591,13 @@ class TestWorkflowTranscript:
         app = HookApp()
         token = _current_app.set(app)
         try:
-            w = workflow(
-                app=app,
+            workflow(
                 label="TEST",
                 marker="DONE",
                 steps=[Step(name="run tests", check=text_matches(r"mtest"), stopped_at="S", next_step="N")],
             )
-            evt = mock_subagent_stop_event(transcript=transcript)
-            assert w.guard(evt) is None
+            result = dispatch_test(app, Event.SubagentStop, transcript=transcript)
+            assert result is None
         finally:
             _current_app.reset(token)
 
@@ -608,8 +606,7 @@ class TestWorkflowTranscript:
         app = HookApp()
         token = _current_app.set(app)
         try:
-            w = workflow(
-                app=app,
+            workflow(
                 label="TEST",
                 marker="DONE",
                 steps=[
@@ -617,10 +614,9 @@ class TestWorkflowTranscript:
                     Step(name="review", check=text_matches(r"review"), stopped_at="S2", next_step="Do review"),
                 ],
             )
-            evt = mock_subagent_stop_event(transcript=transcript)
-            result = w.guard(evt)
+            result = dispatch_test(app, Event.SubagentStop, transcript=transcript)
             assert result is not None
-            assert "Do review" in (result.message or "")
+            assert "Do review" in result.get("reason", "")
         finally:
             _current_app.reset(token)
 

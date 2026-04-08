@@ -293,19 +293,19 @@ class TestAgentCondition:
     def test_agent_matches_cleanup(self) -> None:
         from captain_hook.conditions import check_condition
 
-        evt = make_tool_event("Agent", {"subagent_type": "cleanup"})
+        evt = make_tool_event("Agent", {"subagent_type": "cleanup", "prompt": "run cleanup"})
         assert check_condition(Agent("cleanup|quality-gate"), evt) is True
 
     def test_agent_matches_quality_gate(self) -> None:
         from captain_hook.conditions import check_condition
 
-        evt = make_tool_event("Agent", {"subagent_type": "quality-gate"})
+        evt = make_tool_event("Agent", {"subagent_type": "quality-gate", "prompt": "review code"})
         assert check_condition(Agent("cleanup|quality-gate"), evt) is True
 
     def test_agent_rejects_non_matching(self) -> None:
         from captain_hook.conditions import check_condition
 
-        evt = make_tool_event("Agent", {"subagent_type": "worker"})
+        evt = make_tool_event("Agent", {"subagent_type": "worker", "prompt": "do work"})
         assert check_condition(Agent("cleanup|quality-gate"), evt) is False
 
     # --- VAL-COND-012: Agent condition returns False when no agent_type ---

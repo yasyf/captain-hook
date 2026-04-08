@@ -124,7 +124,9 @@ class TestSeedEchoWindow:
         ps.seed_echo_window(["This is a pre-existing issue"], "Fix the problem", transcript_len=10)
 
         assert len(ps.echo_lemmas) > 0
-        assert ps.echo_window_end == 10 + PrimitiveState().ECHO_WINDOW
+        from captain_hook.state import ECHO_WINDOW
+
+        assert ps.echo_window_end == 10 + ECHO_WINDOW
         assert "issue" in ps.echo_lemmas or "pre" in ps.echo_lemmas
 
 
