@@ -50,7 +50,7 @@ class FileInputBase(InputBase):
 
 @dataclass(frozen=True, kw_only=True)
 class BashInput(InputBase):
-    """Typed input for Bash/Execute tool uses."""
+    """Parsed Bash/Execute tool input."""
 
     command: str
     timeout: int | None = None
@@ -59,7 +59,7 @@ class BashInput(InputBase):
 
 @dataclass(frozen=True, kw_only=True)
 class EditInput(FileInputBase):
-    """Typed input for Edit tool uses, with old/new content and file path."""
+    """Parsed Edit tool input with old/new content for replacements."""
 
     old: str
     new: str
@@ -78,14 +78,14 @@ class EditInput(FileInputBase):
 
 @dataclass(frozen=True, kw_only=True)
 class WriteInput(FileInputBase):
-    """Typed input for Write/Create tool uses."""
+    """Parsed Write/Create tool input."""
 
     content: str
 
 
 @dataclass(frozen=True, kw_only=True)
 class ReadInput(FileInputBase):
-    """Typed input for Read tool uses, with optional limit and offset."""
+    """Parsed Read tool input."""
 
     limit: int | None = None
     offset: int | None = None
@@ -93,7 +93,7 @@ class ReadInput(FileInputBase):
 
 @dataclass(frozen=True, kw_only=True)
 class AgentInput(InputBase):
-    """Typed input for Agent/Task tool uses, with agent type and prompt."""
+    """Parsed Agent/Task tool input."""
 
     prompt: str
     agent_type: str | None = None
@@ -113,7 +113,7 @@ class AgentInput(InputBase):
 
 @dataclass(frozen=True, kw_only=True)
 class GrepInput(InputBase):
-    """Typed input for Grep tool uses."""
+    """Parsed Grep tool input."""
 
     pattern: str
     path: str | None = None
@@ -133,7 +133,7 @@ class GrepInput(InputBase):
 
 @dataclass(frozen=True, kw_only=True)
 class GlobInput(InputBase):
-    """Typed input for Glob tool uses."""
+    """Parsed Glob tool input."""
 
     pattern: str
     path: str | None = None
@@ -141,7 +141,7 @@ class GlobInput(InputBase):
 
 @dataclass(frozen=True, kw_only=True)
 class TaskCreateInput(InputBase):
-    """Typed input for TaskCreate tool uses."""
+    """Parsed TaskCreate tool input."""
 
     subject: str
     description: str | None = None
@@ -149,7 +149,7 @@ class TaskCreateInput(InputBase):
 
 @dataclass(frozen=True, kw_only=True)
 class TaskUpdateInput(InputBase):
-    """Typed input for TaskUpdate tool uses."""
+    """Parsed TaskUpdate tool input."""
 
     task_id: str
     status: str | None = None
@@ -167,7 +167,7 @@ class TaskUpdateInput(InputBase):
 
 @dataclass(frozen=True, kw_only=True)
 class SkillInput(InputBase):
-    """Typed input for Skill tool uses."""
+    """Parsed Skill tool input."""
 
     skill: str
     args: str | None = None
@@ -216,18 +216,7 @@ TOOL_PARSERS: dict[str, type[InputBase]] = {
 
 
 def parse_tool_input(name: str, raw: RawDict | Any) -> ToolInput:
-    """Parse raw tool input into a typed input dataclass based on tool name.
-
-    Dispatches to the appropriate input class (e.g. ``BashInput`` for ``"Bash"``/``"Execute"``).
-    Falls back to ``GenericInput`` for unknown tools or malformed input.
-
-    Args:
-        name: Tool name (supports aliases like ``"Execute"`` → ``BashInput``).
-        raw: Raw input dict from the tool use.
-
-    Returns:
-        A typed ``ToolInput`` instance.
-    """
+    """Parse raw tool input into a typed dataclass based on tool name."""
     normalized = cast(RawDict, raw) if isinstance(raw, dict) else cast(RawDict, {})
     if not (cls := TOOL_PARSERS.get(name)):
         return GenericInput(raw=normalized)

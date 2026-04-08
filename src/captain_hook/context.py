@@ -7,12 +7,15 @@ import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Any, ClassVar, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from pydantic import BaseModel
 
 from captain_hook.prompt import PromptMessage
 from captain_hook.session import SessionStore
+
+if TYPE_CHECKING:
+    from captain_hook.transcript import Transcript, TranscriptSlice, Turn
 
 TSpecialty = Literal["debugging", "review", "general"]
 TModel = Literal["small", "medium", "large"]
@@ -109,35 +112,42 @@ class HookContext:
     """Runtime context injected into every hook event, providing session state, transcript, settings, and LLM/CLI helpers."""
 
     session: SessionStore
-    transcript: Any
+    transcript: Transcript
     settings: Any
 
     @property
-    def t(self) -> Any:
+    def t(self) -> Transcript:
+        """Alias for ``transcript``."""
         return self.transcript
 
     @property
     def s(self) -> SessionStore:
+        """Alias for ``session``."""
         return self.session
 
     @property
     def state(self) -> SessionStore:
+        """Alias for ``session``."""
         return self.session
 
     @property
     def conf(self) -> Any:
+        """Alias for ``settings``."""
         return self.settings
 
     @property
     def c(self) -> Any:
+        """Alias for ``settings`` (shortest form)."""
         return self.conf
 
     @cached_property
-    def turn(self) -> Any:
+    def turn(self) -> Turn:
+        """The current transcript turn (cached)."""
         return self.transcript.current_turn
 
     @cached_property
-    def prior(self) -> Any:
+    def prior(self) -> TranscriptSlice:
+        """Transcript slice before the current turn (cached)."""
         return self.transcript.prior()
 
     def call_cli(

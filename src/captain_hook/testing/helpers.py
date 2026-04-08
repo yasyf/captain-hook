@@ -75,23 +75,7 @@ def mock_tool_event(
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> ToolHookEvent:
-    """Create a mock tool event for testing hook handlers.
-
-    Args:
-        tool: Tool name (default ``"Bash"``).
-        event: Event type (default ``PreToolUse``).
-        command: Bash command string.
-        file: File path for Edit/Write/Read tools.
-        content: New content for Edit/Write tools.
-        old: Old content for Edit tools.
-        agent_type: Agent type for Agent/Task tools.
-        transcript: Pre-built Transcript instance.
-        transcript_path: Path to load a transcript from.
-        session_dir: Session directory for state persistence.
-
-    Returns:
-        A ToolHookEvent subclass matching the event type.
-    """
+    """Create a mock tool event for testing hook handlers."""
     raw: dict[str, Any] = {"tool_name": tool, "tool_input": make_tool_input(tool, command, file, content, old)}
     if agent_type:
         raw["agent_type"] = agent_type
@@ -106,17 +90,7 @@ def mock_stop_event(
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> StopEvent:
-    """Create a mock Stop event for testing.
-
-    Args:
-        stop_hook_active: Whether the stop hook is active.
-        transcript: Pre-built Transcript instance.
-        transcript_path: Path to load a transcript from.
-        session_dir: Session directory for state persistence.
-
-    Returns:
-        A StopEvent with mock context.
-    """
+    """Create a mock Stop event for testing."""
     return StopEvent(
         _raw={"stop_hook_active": stop_hook_active},
         ctx=build_context(transcript, transcript_path, session_dir),
@@ -133,20 +107,7 @@ def mock_subagent_stop_event(
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> SubagentStopEvent:
-    """Create a mock SubagentStop event for testing.
-
-    Args:
-        agent_type: Type identifier of the subagent.
-        agent_id: Unique agent ID.
-        stop_hook_active: Whether the stop hook is active.
-        agent_transcript_path: Path to the subagent's transcript.
-        transcript: Pre-built Transcript instance.
-        transcript_path: Path to load a transcript from.
-        session_dir: Session directory for state persistence.
-
-    Returns:
-        A SubagentStopEvent with mock context.
-    """
+    """Create a mock SubagentStop event for testing."""
     return SubagentStopEvent(
         _raw={
             "stop_hook_active": stop_hook_active,
@@ -166,18 +127,7 @@ def mock_subagent_start_event(
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> SubagentStartEvent:
-    """Create a mock SubagentStart event for testing.
-
-    Args:
-        agent_type: Type identifier of the subagent.
-        agent_id: Unique agent ID.
-        transcript: Pre-built Transcript instance.
-        transcript_path: Path to load a transcript from.
-        session_dir: Session directory for state persistence.
-
-    Returns:
-        A SubagentStartEvent with mock context.
-    """
+    """Create a mock SubagentStart event for testing."""
     return SubagentStartEvent(
         _raw={"agent_type": agent_type, "agent_id": agent_id},
         ctx=build_context(transcript, transcript_path, session_dir),
@@ -191,17 +141,7 @@ def mock_user_prompt_event(
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> UserPromptSubmitEvent:
-    """Create a mock UserPromptSubmit event for testing.
-
-    Args:
-        prompt: The user's prompt text.
-        transcript: Pre-built Transcript instance.
-        transcript_path: Path to load a transcript from.
-        session_dir: Session directory for state persistence.
-
-    Returns:
-        A UserPromptSubmitEvent with mock context.
-    """
+    """Create a mock UserPromptSubmit event for testing."""
     return UserPromptSubmitEvent(
         _raw={"prompt": prompt},
         ctx=build_context(transcript, transcript_path, session_dir),
@@ -223,27 +163,7 @@ def mock_event(
     session_dir: Path | None = None,
     **extra: Any,
 ) -> BaseHookEvent:
-    """Create a mock event of any type for testing — universal factory.
-
-    Dispatches to the appropriate ``mock_*_event`` function based on the event type.
-
-    Args:
-        event: Event type name or flag (default ``"PreToolUse"``).
-        tool: Tool name for tool events.
-        command: Bash command for tool events.
-        file: File path for Edit/Write/Read events.
-        content: Content for Edit/Write events.
-        old: Old content for Edit events.
-        prompt: User prompt for UserPromptSubmit events.
-        transcript: Pre-built Transcript instance.
-        transcript_path: Path to load a transcript from.
-        stop_hook_active: Whether the stop hook is active.
-        session_dir: Session directory for state persistence.
-        **extra: Additional kwargs (e.g. ``agent_type``, ``agent_id``).
-
-    Returns:
-        A BaseHookEvent subclass matching the event type.
-    """
+    """Create a mock event of any type for testing -- universal factory dispatching to typed ``mock_*_event`` helpers."""
     ev = Event[event] if isinstance(event, str) else event
     ctx_kw: dict[str, Any] = {"transcript": transcript, "transcript_path": transcript_path, "session_dir": session_dir}
     match ev:
@@ -283,16 +203,7 @@ def input_to_event(
     inp: Input,
     spec_tool: str | None = None,
 ) -> BaseHookEvent:
-    """Convert an ``Input`` test descriptor into a mock event.
-
-    Args:
-        event: Event type name or flag.
-        inp: Test input with tool, command, file, transcript, etc.
-        spec_tool: Fallback tool name from the hook spec's conditions.
-
-    Returns:
-        A mock event suitable for dispatch testing.
-    """
+    """Convert an ``Input`` test descriptor into a mock event."""
     match inp.transcript:
         case TranscriptFixture() as tf:
             transcript, transcript_path = Transcript.from_messages(tf.messages), None
@@ -330,16 +241,7 @@ def assert_result(
     expected: Block | Warn | Allow,
     hook_name: str = "",
 ) -> None:
-    """Assert that a hook result matches an expected outcome.
-
-    Args:
-        result: The actual HookResult (or None for allow).
-        expected: Expected outcome — ``Block``, ``Warn``, or ``Allow``.
-        hook_name: Optional hook name for error message context.
-
-    Raises:
-        AssertionError: If the result doesn't match the expected outcome.
-    """
+    """Assert that a hook result matches an expected outcome."""
     prefix = f"[{hook_name}] " if hook_name else ""
     match expected:
         case Allow():
@@ -367,26 +269,7 @@ def dispatch_test(
     transcript: Transcript | None = None,
     async_: bool = False,
 ) -> dict[str, Any] | None:
-    """Dispatch a mock event through a HookApp and return the JSON output.
-
-    Convenience wrapper for testing that creates a mock event, dispatches it,
-    and returns the formatted output dict.
-
-    Args:
-        app: The HookApp to dispatch through.
-        event: Event type name or flag.
-        tool: Tool name for tool events.
-        command: Bash command.
-        file: File path.
-        content: Content for Edit/Write.
-        old: Old content for Edit.
-        prompt: User prompt for UserPromptSubmit.
-        transcript: Pre-built Transcript.
-        async_: If True, dispatch async hooks only.
-
-    Returns:
-        JSON-serializable output dict, or None.
-    """
+    """Dispatch a mock event through a HookApp and return the JSON output."""
     from captain_hook.app import HookApp
 
     ev = Event[event] if isinstance(event, str) else event
@@ -429,17 +312,7 @@ def stub_call_llm(
 
 
 def run_inline_tests(app: Any) -> list[tuple[str, str, bool, str]]:
-    """Discover and execute all inline tests from registered hooks.
-
-    Iterates hooks with ``tests`` dicts, creates mock events from ``Input`` keys,
-    dispatches through the hook, and validates results against expected outcomes.
-
-    Args:
-        app: The HookApp containing hooks with inline tests.
-
-    Returns:
-        List of ``(test_name, status, passed, detail)`` tuples.
-    """
+    """Discover and execute all inline tests from registered hooks."""
     from captain_hook.app import HookApp
 
     hook_app = cast(HookApp, app)

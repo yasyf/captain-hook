@@ -41,14 +41,7 @@ ContentBlock = TextBlock | ToolUseBlock | ToolResult
 
 
 def parse_content_block(b: Any) -> ContentBlock | str:
-    """Parse a raw content block dict into a typed ``ContentBlock`` (TextBlock, ToolUseBlock, or ToolResult).
-
-    Args:
-        b: Raw dict with a ``"type"`` key, or an already-parsed block.
-
-    Returns:
-        A typed content block, or an empty string for unrecognized input.
-    """
+    """Parse a raw content block dict into a typed ``ContentBlock``."""
     if isinstance(b, (TextBlock, ToolUseBlock, ToolResult, str)):
         return b
     if not isinstance(b, dict):

@@ -26,15 +26,6 @@ if TYPE_CHECKING:
 
 
 def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
-    """Evaluate a single condition against an event.
-
-    Args:
-        c: A condition instance (``Tool``, ``FilePath``, ``Command``, etc.).
-        evt: The hook event to test against.
-
-    Returns:
-        True if the condition matches the event.
-    """
     match c:
         case Tool(pattern):
             if not evt.tool_name:
@@ -68,17 +59,6 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
 
 
 def matches_conditions(spec: HookSpec, evt: BaseHookEvent) -> bool:
-    """Check whether an event satisfies a hook spec's ``only_if`` and ``skip_if`` conditions.
-
-    All ``only_if`` conditions must match (AND), and no ``skip_if`` condition may match.
-
-    Args:
-        spec: The hook specification containing conditions.
-        evt: The hook event to test.
-
-    Returns:
-        True if conditions are satisfied.
-    """
     if any(not check_condition(c, evt) for c in spec.only_if):
         return False
     if any(check_condition(c, evt) for c in spec.skip_if):

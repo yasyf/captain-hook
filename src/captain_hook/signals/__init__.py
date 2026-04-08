@@ -14,18 +14,7 @@ TSignalPattern = Signal | NlpSignal
 
 
 def score_signals(patterns: Sequence[TSignalPattern], text: str) -> int:
-    """Sum the weights of all signal patterns that match the given text.
-
-    Evaluates ``Signal`` patterns via ``re.search`` and ``NlpSignal`` patterns
-    via ``nlp_scan``. Negative weights reduce the total.
-
-    Args:
-        patterns: Signal and/or NlpSignal instances to evaluate.
-        text: Text to match against.
-
-    Returns:
-        Cumulative score (can be negative).
-    """
+    """Sum the weights of all signal patterns that match the given text."""
     from captain_hook.signals.nlp import nlp_scan
 
     total = 0
@@ -41,15 +30,7 @@ def score_signals(patterns: Sequence[TSignalPattern], text: str) -> int:
 
 
 def extract_signal_context(patterns: Sequence[TSignalPattern], text: str) -> list[str]:
-    """Extract matching lines (for regex) or sentences (for NLP) from text.
-
-    Args:
-        patterns: Signal and/or NlpSignal patterns.
-        text: Source text to extract context from.
-
-    Returns:
-        List of matching lines or sentences.
-    """
+    """Extract matching lines (for regex) or sentences (for NLP) from text."""
     from captain_hook.signals.nlp import nlp_scan
 
     result: list[str] = []
@@ -67,13 +48,6 @@ def transcript_texts(evt: BaseHookEvent, window: int) -> list[str]:
 
     For ``UserPromptSubmit`` events, returns just the user prompt.
     Otherwise returns ``.text`` from the last ``window`` messages.
-
-    Args:
-        evt: The current hook event.
-        window: Number of recent messages to include.
-
-    Returns:
-        List of non-empty text strings.
     """
     return (
         [evt.user_prompt]
@@ -83,16 +57,7 @@ def transcript_texts(evt: BaseHookEvent, window: int) -> list[str]:
 
 
 def cite_message(sig: Signals, triggering: list[str], message: str) -> str:
-    """Append trigger context to a message when signal matches are found.
-
-    Args:
-        sig: The Signals bundle whose patterns produced the match.
-        triggering: Transcript texts that triggered the signal.
-        message: Base message to augment.
-
-    Returns:
-        Message with ``"Triggered by: ..."`` appended, or the bare message.
-    """
+    """Append trigger context to a message when signal matches are found."""
     return (
         f"{message}\n\nTriggered by: {'; '.join(context)}"
         if (context := extract_signal_context(sig.patterns, "\n".join(triggering)))
@@ -103,14 +68,7 @@ def cite_message(sig: Signals, triggering: list[str], message: str) -> str:
 def resolve_signals(signals: Sequence[Signal | NlpSignal] | Signals | None) -> Signals | None:
     """Normalize signals input into a ``Signals`` bundle, or None.
 
-    Accepts a ``Signals`` instance, a bare sequence of patterns (wrapped with
-    threshold=1), or None.
-
-    Args:
-        signals: Raw signals input from a primitive registration.
-
-    Returns:
-        Normalized Signals bundle, or None.
+    A bare ``list[Signal]`` is wrapped with ``threshold=1`` (any single match triggers).
     """
     if signals is None:
         return None

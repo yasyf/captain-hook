@@ -10,10 +10,7 @@ INFERRABLE_PRIMITIVES = (str, int, float, bool)
 
 
 class HooksSettings(BaseSettings):
-    """Base settings class for hook configuration, backed by environment variables.
-
-    Subclass this in your ``conf.py`` to define typed settings with ``HOOKS_`` env prefix.
-    """
+    """Base settings class for hook configuration, backed by environment variables with ``HOOKS_`` prefix."""
 
     model_config = SettingsConfigDict(env_prefix="HOOKS_")
 
@@ -79,16 +76,5 @@ class AutoConf:
 
 
 def build_settings(module: types.ModuleType, prefix: str = "HOOKS_") -> BaseSettings:
-    """Build a settings instance from a conf module.
-
-    If the module defines a ``HooksSettings`` subclass, instantiates it directly.
-    Otherwise, auto-infers fields from module-level attributes.
-
-    Args:
-        module: The conf module to extract settings from.
-        prefix: Environment variable prefix (default ``"HOOKS_"``).
-
-    Returns:
-        A populated settings instance.
-    """
+    """Build a settings instance from a conf module, using an explicit ``HooksSettings`` subclass or auto-inferring fields."""
     return AutoConf.build_settings(module, prefix)

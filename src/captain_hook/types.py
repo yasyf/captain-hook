@@ -4,7 +4,7 @@ import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Flag, StrEnum, auto
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
@@ -210,12 +210,6 @@ class CustomCondition(Protocol):
     Implement ``check`` to create arbitrary matching logic beyond the
     built-in condition types.
 
-    Args:
-        evt: The hook event to evaluate.
-
-    Returns:
-        True if the condition is satisfied.
-
     Example:
         >>> class LargeFile(CustomCondition):
         ...     def check(self, evt: BaseHookEvent) -> bool:
@@ -251,11 +245,6 @@ class Signal:
     contributes ``weight`` to the cumulative score. Use negative weights to
     suppress false positives.
 
-    Args:
-        pattern: Regex pattern to search for in text.
-        weight: Score contribution when matched (default 1, can be negative).
-        flags: Regex flags passed to ``re.search`` (e.g. ``re.IGNORECASE``).
-
     Example:
         >>> Signal(pattern=r"retry", weight=2, flags=re.IGNORECASE)
     """
@@ -267,18 +256,11 @@ class Signal:
 
 @dataclass(frozen=True, slots=True)
 class Signals:
-    """A bundle of signal patterns with a threshold for triggering.
+    """Bundle of signal patterns with a scoring threshold.
 
-    The scoring pipeline sums weights from all matching ``Signal`` and
-    ``NlpSignal`` patterns against each transcript message in the window.
-    A message contributes when its cumulative score meets the threshold.
-    Content-hash deduplication via ``PrimitiveState`` prevents re-firing
-    on already-consumed text.
-
-    Args:
-        patterns: Signal and/or NlpSignal instances to evaluate.
-        threshold: Minimum cumulative score to trigger.
-        window: Number of recent transcript messages to scan (default 15).
+    When a bare ``list[Signal]`` is passed to a primitive, ``resolve_signals``
+    wraps it with ``threshold=1`` — meaning *any* single signal match triggers.
+    Pass a higher threshold to require multiple signals to fire together.
     """
 
     patterns: Sequence[Signal | NlpSignal]
@@ -294,7 +276,7 @@ class HookResult:
     message: str | None = None
 
 
-TTest = dict[Any, Any]
+from captain_hook.testing.types import TTest as TTest
 
 
 def tokens_to_regex(tokens: list[str]) -> str:
@@ -302,12 +284,6 @@ def tokens_to_regex(tokens: list[str]) -> str:
 
     ``"*"`` becomes ``\\S+`` (any non-whitespace word), ``"a|b"`` becomes an
     alternation group, and all other tokens are escaped.
-
-    Args:
-        tokens: List of token strings (literals, ``"*"`` wildcards, or ``"|"``-separated alternatives).
-
-    Returns:
-        Regex pattern string joining tokens with ``\\s+``.
 
     Example:
         >>> tokens_to_regex(["git", "stash", "*"])

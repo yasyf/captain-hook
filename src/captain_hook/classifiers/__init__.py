@@ -21,18 +21,7 @@ def detect(
     transcript_path: str | None = None,
     messages: list[TranscriptMessage] | None = None,
 ) -> MessageClassifier:
-    """Auto-detect the environment and return the appropriate message classifier.
-
-    Tries classifiers in priority order: droid → conductor → native.
-
-    Args:
-        cwd: Current working directory path.
-        transcript_path: Path to the transcript file.
-        messages: Transcript messages for heuristic detection.
-
-    Returns:
-        A classifier callable for filtering user messages.
-    """
+    """Auto-detect the environment and return the appropriate message classifier."""
     return next(
         mod.classifier
         for name in CLASSIFIER_MODULES

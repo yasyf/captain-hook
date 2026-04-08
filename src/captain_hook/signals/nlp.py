@@ -82,16 +82,7 @@ def ancestors(tok: Token, max_hops: int) -> set[Token]:
 
 
 def dep_related(a: Token, b: Token, max_hops: int = 3) -> bool:
-    """Check whether two spaCy tokens are related within ``max_hops`` in the dependency tree.
-
-    Args:
-        a: First token.
-        b: Second token.
-        max_hops: Maximum ancestor hops to traverse (default 3).
-
-    Returns:
-        True if the tokens share a common ancestor within the hop limit.
-    """
+    """Check whether two spaCy tokens share a common ancestor within ``max_hops`` in the dependency tree."""
     return bool(ancestors(a, max_hops) & ancestors(b, max_hops))
 
 
@@ -123,18 +114,7 @@ def match_clause(clause: Clause, sent: Span) -> bool:
 
 
 def nlp_scan(clauses: Sequence[Clause], text: str) -> list[str]:
-    """Scan text for sentences matching any of the given NLP clauses.
-
-    Uses spaCy dependency parsing to find sentences where noun-verb-adj
-    relationships match clause specifications. Multiple clauses use OR semantics.
-
-    Args:
-        clauses: Clause instances defining noun/verb/adj/negation patterns.
-        text: Text to scan (split into sentences by spaCy).
-
-    Returns:
-        List of matching sentence strings (empty for blank input).
-    """
+    """Scan text for sentences matching any of the given NLP clauses via spaCy dependency parsing."""
     if not text.strip():
         return []
     return [sent.text.strip() for sent in parse(text).sents if any(match_clause(clause, sent) for clause in clauses)]
