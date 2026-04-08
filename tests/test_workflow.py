@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from captain_hook.app import HookApp
+from captain_hook.app import HookApp, _current_app
 from captain_hook.context import HookContext
 from captain_hook.events import SubagentStopEvent
 from captain_hook.session import SessionStore
@@ -105,62 +105,71 @@ class TestArtifact:
 
 
 class TestWorkflowFunction:
-    def test_returns_workflow_and_registers_hook(self) -> None:
+    def test_registers_hook(self) -> None:
         from captain_hook.workflow import Step, workflow
 
         app = HookApp()
-        initial_count = len(app.hooks)
-        w = workflow(
-            app=app,
-            label="TEST",
-            marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
-        )
-        from captain_hook.workflow import Workflow
-
-        assert isinstance(w, Workflow)
-        assert len(app.hooks) == initial_count + 1
+        token = _current_app.set(app)
+        try:
+            initial_count = len(app.hooks)
+            workflow(
+                label="TEST",
+                marker="DONE",
+                steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+            )
+            assert len(app.hooks) == initial_count + 1
+        finally:
+            _current_app.reset(token)
 
     def test_registered_hook_is_subagent_stop(self) -> None:
         from captain_hook.workflow import Step, workflow
 
         app = HookApp()
-        workflow(
-            app=app,
-            label="TEST",
-            marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
-        )
-        hook = app.hooks[-1]
-        assert Event.SubagentStop in hook.spec.events
+        token = _current_app.set(app)
+        try:
+            workflow(
+                label="TEST",
+                marker="DONE",
+                steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+            )
+            hook = app.hooks[-1]
+            assert Event.SubagentStop in hook.spec.events
+        finally:
+            _current_app.reset(token)
 
     def test_registered_hook_has_max_fires_1(self) -> None:
         from captain_hook.workflow import Step, workflow
 
         app = HookApp()
-        workflow(
-            app=app,
-            label="TEST",
-            marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
-        )
-        hook = app.hooks[-1]
-        assert hook.spec.max_fires == 1
+        token = _current_app.set(app)
+        try:
+            workflow(
+                label="TEST",
+                marker="DONE",
+                steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+            )
+            hook = app.hooks[-1]
+            assert hook.spec.max_fires == 1
+        finally:
+            _current_app.reset(token)
 
     def test_passes_tests_to_hook_spec(self) -> None:
         from captain_hook.workflow import Step, workflow
 
         app = HookApp()
         tests: dict[str, Any] = {"input1": "block"}
-        workflow(
-            app=app,
-            label="TEST",
-            marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
-            tests=tests,
-        )
-        hook = app.hooks[-1]
-        assert hook.spec.tests is tests
+        token = _current_app.set(app)
+        try:
+            workflow(
+                label="TEST",
+                marker="DONE",
+                steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+                tests=tests,
+            )
+            hook = app.hooks[-1]
+            assert hook.spec.tests is tests
+        finally:
+            _current_app.reset(token)
 
 
 class TestWorkflowGuard:

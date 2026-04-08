@@ -11,7 +11,6 @@ from pydantic import BaseModel
 from captain_hook.types import Action, Event, HookResult, TTest
 
 if TYPE_CHECKING:
-    from captain_hook.app import HookApp
     from captain_hook.events import BaseHookEvent
     from captain_hook.transcript import Transcript
 
@@ -19,14 +18,7 @@ M = TypeVar("M", bound=BaseModel)
 
 
 def text_matches(pattern: str) -> Callable[[Transcript], bool]:
-    """Create a transcript predicate that checks ``full_text`` against a regex pattern.
-
-    Args:
-        pattern: Regex pattern to search for.
-
-    Returns:
-        Callable that returns True if the pattern is found in the transcript.
-    """
+    """Create a transcript predicate that checks ``full_text`` against a regex pattern."""
     return lambda t: bool(re.search(pattern, t.full_text))
 
 
@@ -91,41 +83,15 @@ class Workflow:
 
 def workflow(
     *,
-    app: HookApp | None = None,
     label: str,
     marker: str,
     steps: list[Step],
     artifacts: list[Artifact[BaseModel]] | None = None,
     post_complete: Callable[[BaseHookEvent], HookResult | None] | None = None,
     tests: TTest | None = None,
-) -> Workflow:
-    """Register a multi-step workflow guard on ``SubagentStop``.
-
-    The workflow blocks until all steps pass their ``check`` predicates,
-    the ``marker`` text appears in the transcript, and all artifacts exist
-    and validate. Fires at most once per session.
-
-    Args:
-        app: HookApp to register on (defaults to current app).
-        label: Display label for block messages (e.g. ``"CLEANUP"``).
-        marker: Text that must appear in ``full_text`` to indicate completion.
-        steps: Ordered list of ``Step`` objects with transcript predicates.
-        artifacts: Files that must exist and validate after completion.
-        post_complete: Optional handler called when the workflow passes.
-        tests: Inline test dict for ``run_inline_tests``.
-
-    Returns:
-        The constructed Workflow instance.
-
-    Example:
-        >>> workflow(label="CLEANUP", marker="CLEANUP COMPLETE",
-        ...          steps=[Step(name="run tests", check=text_matches(r"mtest"),
-        ...                      stopped_at="Stop here.", next_step="Run tests.")])
-    """
-    from captain_hook.app import get_current_app
-
-    if app is None:
-        app = get_current_app()
+) -> None:
+    """Register a multi-step workflow guard on SubagentStop."""
+    from captain_hook.app import on
 
     w = Workflow(
         label=label,
@@ -134,5 +100,10 @@ def workflow(
         artifacts=artifacts or [],
         post_complete=post_complete,
     )
-    app.on(Event.SubagentStop, max_fires=1, tests=tests)(w.guard)
-    return w
+
+    def guard(evt: BaseHookEvent) -> HookResult | None:
+        return w.guard(evt)
+
+    guard.__name__ = f"{label.lower().replace('-', '_')}_workflow_guard"
+    guard.__qualname__ = guard.__name__
+    on(Event.SubagentStop, max_fires=1, tests=tests)(guard)
