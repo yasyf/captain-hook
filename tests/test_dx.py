@@ -9,7 +9,13 @@ import pytest
 
 import captain_hook
 from captain_hook import __all__ as all_exports
-from captain_hook.app import HookApp
+from captain_hook.app import (
+    _state,
+    hook as register_hook,
+    on,
+    register,
+    reset,
+)
 from captain_hook.types import (
     Command,
     Event,
@@ -18,6 +24,13 @@ from captain_hook.types import (
 )
 
 SRC_ROOT = Path(__file__).parent.parent / "src" / "captain_hook"
+
+@pytest.fixture(autouse=True)
+def _clean_state():
+    reset()
+    yield
+    reset()
+
 
 
 class TestDocstrings:
@@ -72,53 +85,46 @@ class TestAllExportsImportable:
 
 class TestHookWithoutMessage:
     def test_hook_method_requires_message(self) -> None:
-        app = HookApp()
         with pytest.raises(TypeError, match="message="):
-            app.hook(Event.PreToolUse, block=True)
+            register_hook(Event.PreToolUse, block=True)
 
     def test_hook_method_without_any_args_requires_message(self) -> None:
-        app = HookApp()
         with pytest.raises(TypeError, match="message="):
-            app.hook(Event.PreToolUse)
+            register_hook(Event.PreToolUse)
 
     def test_register_declarative_without_message_warns(self) -> None:
-        app = HookApp()
         with pytest.raises(TypeError, match="message="):
-            app.register(Event.PreToolUse, block=True)
+            register(Event.PreToolUse, block=True)
 
 
 class TestInvalidConditionType:
     def test_non_tcondition_in_only_if_raises(self) -> None:
-        app = HookApp()
         with pytest.raises(TypeError, match="only_if"):
-            app.hook(
+            register_hook(
                 Event.PreToolUse,
                 only_if=["Bash"],  # type: ignore[list-item]
                 message="test",
             )
 
     def test_non_tcondition_in_skip_if_raises(self) -> None:
-        app = HookApp()
         with pytest.raises(TypeError, match="skip_if"):
-            app.hook(
+            register_hook(
                 Event.PreToolUse,
                 skip_if=[42],  # type: ignore[list-item]
                 message="test",
             )
 
     def test_valid_conditions_pass(self) -> None:
-        app = HookApp()
-        app.hook(
+        register_hook(
             Event.PreToolUse,
             only_if=[Tool("Bash"), FilePath("*.py"), Command(r"rm")],
             message="valid",
         )
-        assert len(app.hooks) == 1
+        assert len(_state.hooks) == 1
 
     def test_error_lists_valid_types(self) -> None:
-        app = HookApp()
         with pytest.raises(TypeError, match="Tool|FilePath|Command"):
-            app.hook(
+            register_hook(
                 Event.PreToolUse,
                 only_if=["invalid"],  # type: ignore[list-item]
                 message="test",
@@ -141,99 +147,89 @@ class TestInvalidEventNameInCLI:
 
 class TestWrongHandlerSignature:
     def test_no_params_raises(self) -> None:
-        app = HookApp()
         with pytest.raises(TypeError, match="signature"):
 
-            @app.on(Event.PreToolUse)
+            @on(Event.PreToolUse)
             def bad_handler():  # type: ignore[empty-body]
                 pass
 
     def test_too_many_params_raises(self) -> None:
-        app = HookApp()
         with pytest.raises(TypeError, match="signature"):
 
-            @app.on(Event.PreToolUse)
+            @on(Event.PreToolUse)
             def bad_handler(evt, extra, more):  # type: ignore[empty-body]
                 pass
 
     def test_required_keyword_only_raises(self) -> None:
-        app = HookApp()
         with pytest.raises(TypeError, match="required keyword-only"):
 
-            @app.on(Event.PreToolUse)
+            @on(Event.PreToolUse)
             def bad_handler(evt, *, mode: str):  # type: ignore[empty-body]
                 pass
 
     def test_required_keyword_only_via_register_raises(self) -> None:
-        app = HookApp()
 
         def bad_handler(evt, *, mode: str):  # type: ignore[empty-body]
             pass
 
-        deco = app.register(Event.PreToolUse)
+        deco = register(Event.PreToolUse)
         assert deco is not None
         with pytest.raises(TypeError, match="required keyword-only"):
             deco(bad_handler)
 
     def test_optional_keyword_only_passes(self) -> None:
-        app = HookApp()
 
-        @app.on(Event.PreToolUse)
+        @on(Event.PreToolUse)
         def handler_with_default(evt, *, mode: str = "default"):  # type: ignore[empty-body]
             pass
 
-        assert len(app.hooks) == 1
+        assert len(_state.hooks) == 1
 
     def test_valid_signature_passes(self) -> None:
-        app = HookApp()
 
-        @app.on(Event.PreToolUse)
+        @on(Event.PreToolUse)
         def good_handler(evt):  # type: ignore[empty-body]
             pass
 
-        assert len(app.hooks) == 1
+        assert len(_state.hooks) == 1
 
 
 class TestPrimitiveOutsideContext:
     def test_nudge_registers_on_singleton(self) -> None:
-        from captain_hook.app import get_current_app
+        from captain_hook.app import hook, on
         from captain_hook.primitives.nudge import nudge
 
-        app = get_current_app()
-        before = len(app.hooks)
+        before = len(_state.hooks)
         nudge("test message")
-        assert len(app.hooks) == before + 1
-        app.hooks.pop()
+        assert len(_state.hooks) == before + 1
+        _state.hooks.pop()
 
     def test_block_command_registers_on_singleton(self) -> None:
-        from captain_hook.app import get_current_app
+        from captain_hook.app import hook, on
         from captain_hook.primitives.commands import block_command
 
-        app = get_current_app()
-        before = len(app.hooks)
+        before = len(_state.hooks)
         block_command(["git", "stash"], reason="test")
-        assert len(app.hooks) == before + 1
-        app.hooks.pop()
+        assert len(_state.hooks) == before + 1
+        _state.hooks.pop()
 
     def test_lint_registers_on_singleton(self) -> None:
-        from captain_hook.app import get_current_app
+        from captain_hook.app import hook, on
         from captain_hook.primitives.lint import lint
 
         def check(content: str) -> list[str]:
             return []
 
-        app = get_current_app()
-        before = len(app.hooks)
+        before = len(_state.hooks)
         lint(check, message="test {violations}")
-        assert len(app.hooks) == before + 1
-        app.hooks.pop()
+        assert len(_state.hooks) == before + 1
+        _state.hooks.pop()
 
-    def test_get_current_app_returns_singleton(self) -> None:
-        from captain_hook.app import get_current_app
+    def test_state_is_singleton(self) -> None:
+        from captain_hook.app import _state as s1
+        from captain_hook.app import _state as s2
 
-        app1 = get_current_app()
-        app2 = get_current_app()
-        assert app1 is app2
+        assert s1 is s2
 
 
 class TestCLIHelp:

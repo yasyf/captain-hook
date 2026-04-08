@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import pytest
 import json
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
-from captain_hook.app import HookApp
+from captain_hook.app import (
+    _state,
+    hook as register_hook,
+    on,
+    register,
+    reset,
+)
 from captain_hook.types import Event
 
 PKG_DIR = Path(__file__).resolve().parent.parent
@@ -32,6 +39,13 @@ def run_cli(
         cwd=str(PKG_DIR),
     )
 
+@pytest.fixture(autouse=True)
+def _clean_state():
+    reset()
+    yield
+    reset()
+
+
 
 class TestRunSubcommand:
     def test_cli_001_run_entry_point(self, tmp_path: Path) -> None:
@@ -51,12 +65,11 @@ class TestRunSubcommand:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event
 
-            app = get_current_app()
-            app.hook(Event.PreToolUse, message="sync hook", async_=False)
-            app.hook(Event.PreToolUse, message="async hook", async_=True)
+            hook(Event.PreToolUse, message="sync hook", async_=False)
+            hook(Event.PreToolUse, message="async hook", async_=True)
         """)
         )
 
@@ -90,11 +103,10 @@ class TestGenerateSettings:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event
 
-            app = get_current_app()
-            app.hook(Event.PreToolUse, message="check tool use")
+            hook(Event.PreToolUse, message="check tool use")
         """)
         )
 
@@ -110,11 +122,10 @@ class TestGenerateSettings:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event
 
-            app = get_current_app()
-            app.hook(Event.PreToolUse, message="check tool use")
+            hook(Event.PreToolUse, message="check tool use")
         """)
         )
 
@@ -127,10 +138,9 @@ class TestGenerateSettings:
     def test_cli_008_settings_reflects_registered_events(self) -> None:
         from captain_hook.cli import generate_settings
 
-        app = HookApp()
-        app.hook(Event.PreToolUse, message="pre tool")
-        app.hook(Event.Stop, message="stop check")
-        settings = generate_settings(app, "bin/hooks")
+        register_hook(Event.PreToolUse, message="pre tool")
+        register_hook(Event.Stop, message="stop check")
+        settings = generate_settings("bin/hooks")
         assert "PreToolUse" in settings["hooks"]
         assert "Stop" in settings["hooks"]
         assert len(settings["hooks"]) == 2
@@ -138,19 +148,17 @@ class TestGenerateSettings:
     def test_cli_009_async_hooks_produce_async_entries(self) -> None:
         from captain_hook.cli import generate_settings
 
-        app = HookApp()
-        app.hook(Event.PreToolUse, message="async tool", async_=True)
-        settings = generate_settings(app, "bin/hooks")
+        register_hook(Event.PreToolUse, message="async tool", async_=True)
+        settings = generate_settings("bin/hooks")
         commands = settings["hooks"]["PreToolUse"][0]["hooks"]
         assert any(cmd.get("async") is True for cmd in commands)
 
     def test_cli_010_same_event_sync_async_two_commands(self) -> None:
         from captain_hook.cli import generate_settings
 
-        app = HookApp()
-        app.hook(Event.PreToolUse, message="sync tool", async_=False)
-        app.hook(Event.PreToolUse, message="async tool", async_=True)
-        settings = generate_settings(app, "bin/hooks")
+        register_hook(Event.PreToolUse, message="sync tool", async_=False)
+        register_hook(Event.PreToolUse, message="async tool", async_=True)
+        settings = generate_settings("bin/hooks")
         commands = settings["hooks"]["PreToolUse"][0]["hooks"]
         assert len(commands) == 2
         has_sync = any("async" not in cmd for cmd in commands)
@@ -190,12 +198,11 @@ class TestCLIWithContext:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event, Action, HookResult
 
-            app = get_current_app()
 
-            @app.on(Event.PreToolUse)
+            @on(Event.PreToolUse)
             def check_ctx(evt):
                 if evt.ctx is None:
                     return HookResult(action=Action.block, message="ctx is None!")
@@ -219,11 +226,10 @@ class TestCLIWithContext:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event
 
-            app = get_current_app()
-            app.hook(Event.PreToolUse, message="once only", max_fires=1)
+            hook(Event.PreToolUse, message="once only", max_fires=1)
         """)
         )
 
@@ -258,12 +264,11 @@ class TestCLIWithContext:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event, Action, HookResult
 
-            app = get_current_app()
 
-            @app.on(Event.PreToolUse)
+            @on(Event.PreToolUse)
             def check_session_store(evt):
                 try:
                     store = evt.ctx.s
@@ -291,12 +296,11 @@ class TestCLIWithContext:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event, Action, HookResult
 
-            app = get_current_app()
 
-            @app.on(Event.PreToolUse)
+            @on(Event.PreToolUse)
             def check_state_accessor(evt):
                 try:
                     state = evt.ctx.state
@@ -371,12 +375,11 @@ class TestTranscriptWiring:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event, Action, HookResult
 
-            app = get_current_app()
 
-            @app.on(Event.PreToolUse)
+            @on(Event.PreToolUse)
             def check_transcript(evt):
                 t = evt.ctx.t
                 if t is None:
@@ -412,12 +415,11 @@ class TestTranscriptWiring:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event, Action, HookResult
 
-            app = get_current_app()
 
-            @app.on(Event.PreToolUse)
+            @on(Event.PreToolUse)
             def check_turn(evt):
                 try:
                     turn = evt.ctx.turn
@@ -461,12 +463,11 @@ class TestTranscriptWiring:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event, Action, HookResult
 
-            app = get_current_app()
 
-            @app.on(Event.PreToolUse)
+            @on(Event.PreToolUse)
             def check_agent_transcript(evt):
                 t = evt.ctx.t
                 return HookResult(
@@ -502,11 +503,10 @@ class TestTranscriptWiring:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event
 
-            app = get_current_app()
-            app.hook(Event.PreToolUse, message="once only", max_fires=1)
+            hook(Event.PreToolUse, message="once only", max_fires=1)
         """)
         )
 
@@ -566,12 +566,11 @@ class TestTranscriptWiring:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event, Action, HookResult
 
-            app = get_current_app()
 
-            @app.on(Event.PreToolUse)
+            @on(Event.PreToolUse)
             def check_ctx(evt):
                 if evt.ctx is None:
                     return HookResult(action=Action.block, message="ctx is None")
@@ -597,11 +596,10 @@ class TestFlags:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event
 
-            app = get_current_app()
-            app.hook(Event.PreToolUse, message="custom hook activated", block=True)
+            hook(Event.PreToolUse, message="custom hook activated", block=True)
         """)
         )
 
@@ -625,11 +623,10 @@ class TestFlags:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event
 
-            app = get_current_app()
-            app.hook(Event.PreToolUse, message="should be gitignored", block=True)
+            hook(Event.PreToolUse, message="should be gitignored", block=True)
         """)
         )
 

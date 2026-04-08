@@ -7,6 +7,8 @@ from typing import Any
 import pytest
 from pydantic_settings import BaseSettings
 
+from captain_hook.app import _state, discover_hooks, reset
+
 
 def make_module(name: str, attrs: dict[str, Any], annotations: dict[str, type] | None = None) -> types.ModuleType:
     mod = types.ModuleType(name)
@@ -15,6 +17,13 @@ def make_module(name: str, attrs: dict[str, Any], annotations: dict[str, type] |
     if annotations:
         mod.__annotations__ = annotations
     return mod
+
+@pytest.fixture(autouse=True)
+def _clean_state():
+    reset()
+    yield
+    reset()
+
 
 
 class TestHooksSettingsBase:
@@ -252,27 +261,39 @@ class TestSettingsFromApp:
         sys.path[:] = snapshot_path
 
     def test_app_settings_accessible(self, tmp_path: Any) -> None:
-        from captain_hook.app import HookApp
+        from captain_hook.app import (
+    _state,
+    discover_hooks,
+    hook as register_hook,
+    on,
+    register,
+    reset,
+)
 
         d = tmp_path / "shooks_a"
         d.mkdir()
         (d / "__init__.py").write_text("")
         (d / "conf.py").write_text("my_setting = 42\n")
-        app = HookApp()
-        app.discover_hooks(d)
-        assert app.settings is not None
-        assert app.settings.my_setting == 42
+        discover_hooks(d)
+        assert _state.settings is not None
+        assert _state.settings.my_setting == 42
 
     def test_discover_hooks_loads_conf_and_builds_settings(self, tmp_path: Any) -> None:
-        from captain_hook.app import HookApp
+        from captain_hook.app import (
+    _state,
+    discover_hooks,
+    hook as register_hook,
+    on,
+    register,
+    reset,
+)
 
         d = tmp_path / "shooks_b"
         d.mkdir()
         (d / "__init__.py").write_text("")
         (d / "conf.py").write_text("test_command: str = 'uv run mtest'\nvcs = 'jj'\nmin_edits: int = 3\n")
-        app = HookApp()
-        app.discover_hooks(d)
-        settings = app.settings
+        discover_hooks(d)
+        settings = _state.settings
         assert settings is not None
         assert settings.test_command == "uv run mtest"
         assert settings.vcs == "jj"

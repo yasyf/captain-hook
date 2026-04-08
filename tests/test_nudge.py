@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import pytest
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
-from captain_hook.app import HookApp, _current_app
+from captain_hook.app import (
+    _state,
+    hook as register_hook,
+    on,
+    register,
+    reset,
+)
 from captain_hook.dispatch import dispatch
 from captain_hook.events import (
     PostToolUseEvent,
@@ -69,8 +76,7 @@ def make_subagent_stop_event(ctx: Any = None) -> SubagentStopEvent:
 
 
 def register_nudge(
-    app: HookApp,
-    message: str,
+        message: str,
     *,
     when: Any = None,
     signals: Any = None,
@@ -84,51 +90,44 @@ def register_nudge(
 ) -> None:
     from captain_hook.primitives.nudge import nudge
 
-    token = _current_app.set(app)
-    try:
-        nudge(
-            message,
-            when=when,
-            signals=signals,
-            only_if=only_if,
-            skip_if=skip_if,
-            block=block,
-            events=events,
-            max_fires=max_fires,
-            tests=tests,
-            async_=async_,
-        )
-    finally:
-        _current_app.reset(token)
-
-
+    nudge(
+        message,
+        when=when,
+        signals=signals,
+        only_if=only_if,
+        skip_if=skip_if,
+        block=block,
+        events=events,
+        max_fires=max_fires,
+        tests=tests,
+        async_=async_,
+    )
 def register_gate(
-    app: HookApp,
-    message: str,
+        message: str,
     **kwargs: Any,
 ) -> None:
     from captain_hook.primitives.nudge import gate
 
-    token = _current_app.set(app)
-    try:
-        gate(message, **kwargs)
-    finally:
-        _current_app.reset(token)
-
-
+    gate(message, **kwargs)
 # ═══════════════════════════════════════════════════════════════════════════════
 # VAL-NUDGE-001 — nudge() with when predicate fires warning when predicate True
 # ═══════════════════════════════════════════════════════════════════════════════
 
+@pytest.fixture(autouse=True)
+def _clean_state():
+    reset()
+    yield
+    reset()
+
+
 
 class TestNudgeWhenTrue:
     def test_nudge_when_true_produces_warn(self, tmp_path: Path) -> None:
-        app = HookApp()
-        register_nudge(app, "Watch out!", when=lambda evt: True)
+        register_nudge("Watch out!", when=lambda evt: True)
 
         ctx = make_ctx(tmp_path)
         evt = make_pre_tool_event(ctx=ctx)
-        result = dispatch(app, Event.PreToolUse, evt, session_dir=tmp_path)
+        result = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
 
         assert result is not None
         assert result["hookSpecificOutput"]["additionalContext"] == "Watch out!"
@@ -142,12 +141,11 @@ class TestNudgeWhenTrue:
 
 class TestNudgeWhenFalse:
     def test_nudge_when_false_returns_none(self, tmp_path: Path) -> None:
-        app = HookApp()
-        register_nudge(app, "Watch out!", when=lambda evt: False)
+        register_nudge("Watch out!", when=lambda evt: False)
 
         ctx = make_ctx(tmp_path)
         evt = make_pre_tool_event(ctx=ctx)
-        result = dispatch(app, Event.PreToolUse, evt, session_dir=tmp_path)
+        result = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
 
         assert result is None
 
@@ -161,9 +159,7 @@ class TestNudgeSignalsFire:
     def test_nudge_with_matching_signals_fires(self, tmp_path: Path) -> None:
         from captain_hook.types import Signal
 
-        app = HookApp()
         register_nudge(
-            app,
             "Detected risky pattern",
             signals=[Signal(pattern=r"git\s+push", weight=2)],
         )
@@ -175,7 +171,7 @@ class TestNudgeSignalsFire:
             )
         )
         evt = make_post_tool_event(ctx=ctx)
-        result = dispatch(app, Event.PostToolUse, evt, session_dir=tmp_path)
+        result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
 
         assert result is not None
         assert "Detected risky pattern" in result["hookSpecificOutput"]["additionalContext"]
@@ -190,9 +186,7 @@ class TestNudgeSignalsSkip:
     def test_nudge_with_below_threshold_signals_skips(self, tmp_path: Path) -> None:
         from captain_hook.types import Signal, Signals
 
-        app = HookApp()
         register_nudge(
-            app,
             "Detected risky pattern",
             signals=Signals(patterns=[Signal(pattern=r"git\s+push", weight=2)], threshold=3),
         )
@@ -204,7 +198,7 @@ class TestNudgeSignalsSkip:
             )
         )
         evt = make_post_tool_event(ctx=ctx)
-        result = dispatch(app, Event.PostToolUse, evt, session_dir=tmp_path)
+        result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
 
         assert result is None
 
@@ -216,12 +210,11 @@ class TestNudgeSignalsSkip:
 
 class TestGateBlock:
     def test_gate_produces_deny(self, tmp_path: Path) -> None:
-        app = HookApp()
-        register_gate(app, "You must stop!")
+        register_gate("You must stop!")
 
         ctx = make_ctx(tmp_path)
         evt = make_stop_event(ctx=ctx)
-        result = dispatch(app, Event.Stop, evt, session_dir=tmp_path)
+        result = dispatch(Event.Stop, evt, session_dir=tmp_path)
 
         assert result is not None
         assert result["decision"] == "block"
@@ -235,17 +228,16 @@ class TestGateBlock:
 
 class TestGateOncePerTurn:
     def test_gate_blocks_only_once_per_turn(self, tmp_path: Path) -> None:
-        app = HookApp()
-        register_gate(app, "Stop here!", max_fires=5)
+        register_gate("Stop here!", max_fires=5)
 
         ctx = make_ctx(tmp_path, transcript_len=10)
         evt1 = make_stop_event(ctx=ctx)
-        result1 = dispatch(app, Event.Stop, evt1, session_dir=tmp_path)
+        result1 = dispatch(Event.Stop, evt1, session_dir=tmp_path)
         assert result1 is not None
         assert result1["decision"] == "block"
 
         evt2 = make_stop_event(ctx=ctx)
-        result2 = dispatch(app, Event.Stop, evt2, session_dir=tmp_path)
+        result2 = dispatch(Event.Stop, evt2, session_dir=tmp_path)
         assert result2 is None
 
 
@@ -258,16 +250,14 @@ class TestGateOncePerTurn:
 class TestNudgeDefaultEvents:
     def test_nudge_without_signals_default_pretooluse(self) -> None:
 
-        app = HookApp()
-        register_nudge(app, "no signals nudge")
-        assert app.hooks[-1].spec.events == Event.PreToolUse
+        register_nudge("no signals nudge")
+        assert _state.hooks[-1].spec.events == Event.PreToolUse
 
     def test_nudge_with_signals_default_posttooluse(self) -> None:
         from captain_hook.types import Signal
 
-        app = HookApp()
-        register_nudge(app, "signals nudge", signals=[Signal(pattern=r"test", weight=1)])
-        assert app.hooks[-1].spec.events == Event.PostToolUse
+        register_nudge("signals nudge", signals=[Signal(pattern=r"test", weight=1)])
+        assert _state.hooks[-1].spec.events == Event.PostToolUse
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -277,9 +267,8 @@ class TestNudgeDefaultEvents:
 
 class TestGateDefaultEvents:
     def test_gate_default_stop_events(self) -> None:
-        app = HookApp()
-        register_gate(app, "gate message")
-        assert app.hooks[-1].spec.events == (Event.Stop | Event.SubagentStop)
+        register_gate("gate message")
+        assert _state.hooks[-1].spec.events == (Event.Stop | Event.SubagentStop)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -289,9 +278,7 @@ class TestGateDefaultEvents:
 
 class TestNudgeMessageDedent:
     def test_nudge_dedents_and_strips_message(self, tmp_path: Path) -> None:
-        app = HookApp()
         register_nudge(
-            app,
             """
             This is a multi-line
             indented message
@@ -301,7 +288,7 @@ class TestNudgeMessageDedent:
 
         ctx = make_ctx(tmp_path)
         evt = make_pre_tool_event(ctx=ctx)
-        result = dispatch(app, Event.PreToolUse, evt, session_dir=tmp_path)
+        result = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
 
         assert result is not None
         msg = result["hookSpecificOutput"]["additionalContext"]
@@ -317,9 +304,7 @@ class TestNudgeMessageDedent:
 
 class TestNudgeConditions:
     def test_nudge_only_if_matches(self, tmp_path: Path) -> None:
-        app = HookApp()
         register_nudge(
-            app,
             "Edit warning",
             only_if=[Tool("Edit")],
             when=lambda evt: True,
@@ -331,13 +316,11 @@ class TestNudgeConditions:
             _raw={"tool_name": "Edit", "tool_input": {"file_path": "a.py", "old_string": "x", "new_string": "y"}},
             ctx=ctx,
         )
-        result = dispatch(app, Event.PreToolUse, evt_match, session_dir=tmp_path)
+        result = dispatch(Event.PreToolUse, evt_match, session_dir=tmp_path)
         assert result is not None
 
     def test_nudge_only_if_no_match(self, tmp_path: Path) -> None:
-        app = HookApp()
         register_nudge(
-            app,
             "Edit warning",
             only_if=[Tool("Edit")],
             when=lambda evt: True,
@@ -346,13 +329,11 @@ class TestNudgeConditions:
 
         ctx = make_ctx(tmp_path)
         evt_no_match = make_pre_tool_event(tool_name="Bash", ctx=ctx)
-        result = dispatch(app, Event.PreToolUse, evt_no_match, session_dir=tmp_path)
+        result = dispatch(Event.PreToolUse, evt_no_match, session_dir=tmp_path)
         assert result is None
 
     def test_nudge_skip_if_skips(self, tmp_path: Path) -> None:
-        app = HookApp()
         register_nudge(
-            app,
             "Edit warning",
             skip_if=[Tool("Bash")],
             when=lambda evt: True,
@@ -361,7 +342,7 @@ class TestNudgeConditions:
 
         ctx = make_ctx(tmp_path)
         evt = make_pre_tool_event(tool_name="Bash", ctx=ctx)
-        result = dispatch(app, Event.PreToolUse, evt, session_dir=tmp_path)
+        result = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
         assert result is None
 
 
@@ -372,16 +353,14 @@ class TestNudgeConditions:
 
 class TestNudgeMaxFiresDefault:
     def test_nudge_without_signals_max_fires_1(self) -> None:
-        app = HookApp()
-        register_nudge(app, "plain nudge")
-        assert app.hooks[-1].spec.max_fires == 1
+        register_nudge("plain nudge")
+        assert _state.hooks[-1].spec.max_fires == 1
 
     def test_nudge_with_signals_max_fires_3(self) -> None:
         from captain_hook.types import Signal
 
-        app = HookApp()
-        register_nudge(app, "signal nudge", signals=[Signal(pattern=r"test", weight=1)])
-        assert app.hooks[-1].spec.max_fires == 3
+        register_nudge("signal nudge", signals=[Signal(pattern=r"test", weight=1)])
+        assert _state.hooks[-1].spec.max_fires == 3
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -393,9 +372,7 @@ class TestSignalCitation:
     def test_signal_triggered_nudge_cites_context(self, tmp_path: Path) -> None:
         from captain_hook.types import Signal
 
-        app = HookApp()
         register_nudge(
-            app,
             "Watch out for force push",
             signals=[Signal(pattern=r"force.push", weight=1)],
         )
@@ -407,7 +384,7 @@ class TestSignalCitation:
             )
         )
         evt = make_post_tool_event(ctx=ctx)
-        result = dispatch(app, Event.PostToolUse, evt, session_dir=tmp_path)
+        result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
 
         assert result is not None
         msg = result["hookSpecificOutput"]["additionalContext"]
@@ -422,9 +399,8 @@ class TestSignalCitation:
 
 class TestNudgeEventsOverride:
     def test_nudge_custom_events(self) -> None:
-        app = HookApp()
-        register_nudge(app, "custom events", events=Event.UserPromptSubmit)
-        assert app.hooks[-1].spec.events == Event.UserPromptSubmit
+        register_nudge("custom events", events=Event.UserPromptSubmit)
+        assert _state.hooks[-1].spec.events == Event.UserPromptSubmit
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -436,9 +412,7 @@ class TestNudgeSignalsPrecedence:
     def test_nudge_with_both_when_and_signals_ignores_when(self, tmp_path: Path) -> None:
         from captain_hook.types import Signal
 
-        app = HookApp()
         register_nudge(
-            app,
             "msg",
             when=lambda evt: 1 / 0,
             signals=[Signal(pattern=r"no_match_xyz", weight=1)],
@@ -452,7 +426,7 @@ class TestNudgeSignalsPrecedence:
         )
         evt = make_post_tool_event(ctx=ctx)
 
-        result = dispatch(app, Event.PostToolUse, evt, session_dir=tmp_path)
+        result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
         assert result is None
 
 
@@ -463,12 +437,11 @@ class TestNudgeSignalsPrecedence:
 
 class TestNudgeUnconditional:
     def test_nudge_bare_fires_unconditionally(self, tmp_path: Path) -> None:
-        app = HookApp()
-        register_nudge(app, "Always fires")
+        register_nudge("Always fires")
 
         ctx = make_ctx(tmp_path)
         evt = make_pre_tool_event(ctx=ctx)
-        result = dispatch(app, Event.PreToolUse, evt, session_dir=tmp_path)
+        result = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
 
         assert result is not None
         assert result["hookSpecificOutput"]["additionalContext"] == "Always fires"

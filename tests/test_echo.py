@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import pytest
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
-from captain_hook.app import HookApp, _current_app
+from captain_hook.app import (
+    _state,
+    hook as register_hook,
+    on,
+    register,
+    reset,
+)
 from captain_hook.dispatch import dispatch
 from captain_hook.events import PostToolUseEvent
 from captain_hook.session import SessionStore
@@ -43,8 +50,7 @@ def make_post_tool_event(
 
 
 def register_nudge(
-    app: HookApp,
-    message: str,
+        message: str,
     *,
     signals: list[Signal] | Signals | None = None,
     events: Event | None = None,
@@ -53,16 +59,17 @@ def register_nudge(
 ) -> None:
     from captain_hook.primitives.nudge import nudge
 
-    token = _current_app.set(app)
-    try:
-        nudge(message, signals=signals, events=events, max_fires=max_fires, **kwargs)
-    finally:
-        _current_app.reset(token)
-
-
+    nudge(message, signals=signals, events=events, max_fires=max_fires, **kwargs)
 # ═══════════════════════════════════════════════════════════════════════════════
 # VAL-ECHO-009 — content_lemmas extracts nouns, verbs, adjectives (not stop words)
 # ═══════════════════════════════════════════════════════════════════════════════
+
+@pytest.fixture(autouse=True)
+def _clean_state():
+    reset()
+    yield
+    reset()
+
 
 
 class TestContentLemmas:
@@ -201,9 +208,7 @@ class TestMatchSignals:
 
 class TestEchoIntegration:
     def test_echo_response_not_rescored(self, tmp_path: Path) -> None:
-        app = HookApp()
         register_nudge(
-            app,
             "Fix pre-existing issues.",
             signals=Signals(
                 patterns=[Signal(pattern=r"pre-existing", weight=2)],
@@ -221,7 +226,7 @@ class TestEchoIntegration:
             )
         )
         evt1 = make_post_tool_event(ctx=ctx1)
-        r1 = dispatch(app, Event.PostToolUse, evt1, session_dir=tmp_path)
+        r1 = dispatch(Event.PostToolUse, evt1, session_dir=tmp_path)
         assert r1 is not None
 
         ctx2 = make_ctx(tmp_path, transcript_len=12)
@@ -234,7 +239,7 @@ class TestEchoIntegration:
             )
         )
         evt2 = make_post_tool_event(ctx=ctx2)
-        r2 = dispatch(app, Event.PostToolUse, evt2, session_dir=tmp_path)
+        r2 = dispatch(Event.PostToolUse, evt2, session_dir=tmp_path)
         assert r2 is None
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -242,9 +247,7 @@ class TestEchoIntegration:
     # ═══════════════════════════════════════════════════════════════════════════
 
     def test_unrelated_text_still_fires_in_echo_window(self, tmp_path: Path) -> None:
-        app = HookApp()
         register_nudge(
-            app,
             "Fix pre-existing issues.",
             signals=Signals(
                 patterns=[
@@ -265,7 +268,7 @@ class TestEchoIntegration:
             )
         )
         evt1 = make_post_tool_event(ctx=ctx1)
-        r1 = dispatch(app, Event.PostToolUse, evt1, session_dir=tmp_path)
+        r1 = dispatch(Event.PostToolUse, evt1, session_dir=tmp_path)
         assert r1 is not None
 
         ctx2 = make_ctx(tmp_path, transcript_len=12)
@@ -279,7 +282,7 @@ class TestEchoIntegration:
             )
         )
         evt2 = make_post_tool_event(ctx=ctx2)
-        r2 = dispatch(app, Event.PostToolUse, evt2, session_dir=tmp_path)
+        r2 = dispatch(Event.PostToolUse, evt2, session_dir=tmp_path)
         assert r2 is not None
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -287,9 +290,7 @@ class TestEchoIntegration:
     # ═══════════════════════════════════════════════════════════════════════════
 
     def test_echo_window_expires(self, tmp_path: Path) -> None:
-        app = HookApp()
         register_nudge(
-            app,
             "Fix pre-existing issues.",
             signals=Signals(
                 patterns=[Signal(pattern=r"pre-existing", weight=2)],
@@ -307,7 +308,7 @@ class TestEchoIntegration:
             )
         )
         evt1 = make_post_tool_event(ctx=ctx1)
-        r1 = dispatch(app, Event.PostToolUse, evt1, session_dir=tmp_path)
+        r1 = dispatch(Event.PostToolUse, evt1, session_dir=tmp_path)
         assert r1 is not None
 
         ctx2 = make_ctx(tmp_path, transcript_len=25)
@@ -317,7 +318,7 @@ class TestEchoIntegration:
             )
         )
         evt2 = make_post_tool_event(ctx=ctx2)
-        r2 = dispatch(app, Event.PostToolUse, evt2, session_dir=tmp_path)
+        r2 = dispatch(Event.PostToolUse, evt2, session_dir=tmp_path)
         assert r2 is not None
 
 
@@ -376,9 +377,7 @@ class TestEchoWindowBoundary:
 
 class TestSignalNudgePrimitiveState:
     def test_signal_nudge_persists_echo_state(self, tmp_path: Path) -> None:
-        app = HookApp()
         register_nudge(
-            app,
             "Fix pre-existing issues.",
             signals=Signals(
                 patterns=[Signal(pattern=r"pre-existing", weight=2)],
@@ -396,7 +395,7 @@ class TestSignalNudgePrimitiveState:
             )
         )
         evt1 = make_post_tool_event(ctx=ctx1)
-        r1 = dispatch(app, Event.PostToolUse, evt1, session_dir=tmp_path)
+        r1 = dispatch(Event.PostToolUse, evt1, session_dir=tmp_path)
         assert r1 is not None
 
         state_file = tmp_path / "primitive_state.json"

@@ -11,7 +11,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from captain_hook.app import HookApp, _current_app
+from captain_hook.app import (
+    _state,
+    hook as register_hook,
+    on,
+    register,
+    reset,
+)
 from captain_hook.dispatch import dispatch
 from captain_hook.events import PostToolUseEvent
 from captain_hook.session import SessionStore
@@ -68,8 +74,7 @@ def make_post_tool_event(
 
 
 def register_lint(
-    app: HookApp,
-    check: Any,
+        check: Any,
     *,
     message: str = "Violations: {violations}",
     trigger: str | None = None,
@@ -81,55 +86,54 @@ def register_lint(
 ) -> None:
     from captain_hook.primitives.lint import lint
 
-    token = _current_app.set(app)
-    try:
-        lint(
-            check,
-            message=message,
-            trigger=trigger,
-            sep=sep,
-            block=block,
-            events=events,
-            tests=tests,
-            max_shown=max_shown,
-        )
-    finally:
-        _current_app.reset(token)
-
-
+    lint(
+        check,
+        message=message,
+        trigger=trigger,
+        sep=sep,
+        block=block,
+        events=events,
+        tests=tests,
+        max_shown=max_shown,
+    )
 # --- VAL-LINT-001: String-mode lint ---
+
+@pytest.fixture(autouse=True)
+def _clean_state():
+    reset()
+    yield
+    reset()
+
 
 
 class TestStringModeLint:
     def test_string_check_receives_content(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return ["found_issue"] if "bad_pattern" in content else []
 
-        register_lint(app, check, message="Issues: {violations}")
+        register_lint(check, message="Issues: {violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "bad_pattern here"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "found_issue" in result["hookSpecificOutput"]["additionalContext"]
 
     def test_string_check_no_violations_returns_none(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return []
 
-        register_lint(app, check, message="Issues: {violations}")
+        register_lint(check, message="Issues: {violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "clean content"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
 
 
@@ -138,7 +142,6 @@ class TestStringModeLint:
 
 class TestAstModeLint:
     def test_ast_check_receives_tree(self, work_dir: Path, session_dir: Path) -> None:
-        app = HookApp()
         source = "import pdb\nx = 1\n"
         py_file = work_dir / "code.py"
         py_file.write_text(source)
@@ -150,13 +153,13 @@ class TestAstModeLint:
                         if alias.name == "pdb":
                             yield "pdb import found"
 
-        register_lint(app, check, message="AST issues: {violations}", trigger="pdb")
+        register_lint(check, message="AST issues: {violations}", trigger="pdb")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "import pdb"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "pdb import found" in result["hookSpecificOutput"]["additionalContext"]
 
@@ -166,7 +169,6 @@ class TestAstModeLint:
 
 class TestModeDetection:
     def test_string_mode_detected_from_hint(self, session_dir: Path) -> None:
-        app = HookApp()
         called_with_str = False
 
         def check(content: str) -> list[str]:
@@ -174,17 +176,16 @@ class TestModeDetection:
             called_with_str = True
             return ["violation"]
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "something"},
             ctx=make_ctx(session_dir),
         )
-        dispatch(app, Event.PostToolUse, evt, session_dir)
+        dispatch(Event.PostToolUse, evt, session_dir)
         assert called_with_str
 
     def test_ast_mode_detected_from_hint(self, work_dir: Path, session_dir: Path) -> None:
-        app = HookApp()
         source = "x = 1\n"
         py_file = work_dir / "code.py"
         py_file.write_text(source)
@@ -195,13 +196,13 @@ class TestModeDetection:
             called_with_ast = True
             return iter([])
 
-        register_lint(app, check, message="{violations}", trigger="x")
+        register_lint(check, message="{violations}", trigger="x")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "x = 1"},
             ctx=make_ctx(session_dir),
         )
-        dispatch(app, Event.PostToolUse, evt, session_dir)
+        dispatch(Event.PostToolUse, evt, session_dir)
         assert called_with_ast
 
 
@@ -210,36 +211,34 @@ class TestModeDetection:
 
 class TestViolationFormatting:
     def test_violations_joined_with_sep(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return ["issue_a", "issue_b", "issue_c"]
 
-        register_lint(app, check, message="Found: {violations}", sep="; ")
+        register_lint(check, message="Found: {violations}", sep="; ")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         msg = result["hookSpecificOutput"]["additionalContext"]
         assert "issue_a; issue_b; issue_c" in msg
         assert "Found:" in msg
 
     def test_default_sep_is_comma_space(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return ["a", "b"]
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "a, b" in result["hookSpecificOutput"]["additionalContext"]
 
@@ -249,7 +248,6 @@ class TestViolationFormatting:
 
 class TestTriggerShortCircuit:
     def test_trigger_absent_skips_ast_check(self, work_dir: Path, session_dir: Path) -> None:
-        app = HookApp()
         source = "x = 1\n"
         py_file = work_dir / "code.py"
         py_file.write_text(source)
@@ -260,18 +258,17 @@ class TestTriggerShortCircuit:
             check_called = True
             yield "should not appear"
 
-        register_lint(app, check, message="{violations}", trigger="pdb")
+        register_lint(check, message="{violations}", trigger="pdb")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "x = 1"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
         assert not check_called
 
     def test_trigger_present_runs_ast_check(self, work_dir: Path, session_dir: Path) -> None:
-        app = HookApp()
         source = "import pdb\nx = 1\n"
         py_file = work_dir / "code.py"
         py_file.write_text(source)
@@ -282,13 +279,13 @@ class TestTriggerShortCircuit:
             check_called = True
             yield "pdb found"
 
-        register_lint(app, check, message="{violations}", trigger="pdb")
+        register_lint(check, message="{violations}", trigger="pdb")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "import pdb"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert check_called
 
@@ -298,18 +295,17 @@ class TestTriggerShortCircuit:
 
 class TestMaxShown:
     def test_max_shown_limits_violations(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return [f"v{i}" for i in range(10)]
 
-        register_lint(app, check, message="{violations}", max_shown=3)
+        register_lint(check, message="{violations}", max_shown=3)
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         msg = result["hookSpecificOutput"]["additionalContext"]
         assert "v0" in msg
@@ -318,18 +314,17 @@ class TestMaxShown:
         assert "v3" not in msg
 
     def test_default_max_shown_is_5(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return [f"v{i}" for i in range(10)]
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         msg = result["hookSpecificOutput"]["additionalContext"]
         assert "v4" in msg
@@ -341,34 +336,32 @@ class TestMaxShown:
 
 class TestBlockMode:
     def test_block_true_returns_deny(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return ["violation"]
 
-        register_lint(app, check, message="{violations}", block=True)
+        register_lint(check, message="{violations}", block=True)
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_default_warns(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return ["violation"]
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "additionalContext" in result["hookSpecificOutput"]
 
@@ -378,89 +371,83 @@ class TestBlockMode:
 
 class TestDefaultConditions:
     def test_non_python_file_skipped(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return ["violation"]
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "style.css", "old_string": "", "new_string": "content"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
 
     def test_test_file_skipped(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return ["violation"]
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "tests/test_foo.py", "old_string": "", "new_string": "content"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
 
     def test_bash_tool_skipped(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return ["violation"]
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Bash",
             tool_input={"command": "echo hello"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
 
     def test_python_edit_matches(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return ["violation"]
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
 
     def test_write_tool_matches(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return ["violation"]
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Write",
             tool_input={"file_path": "foo.py", "content": "content"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
 
     def test_spec_has_correct_defaults(self) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return []
 
-        register_lint(app, check, message="{violations}")
-        assert len(app.hooks) == 1
-        spec = app.hooks[0].spec
+        register_lint(check, message="{violations}")
+        assert len(_state.hooks) == 1
+        spec = _state.hooks[0].spec
         assert spec.events == Event.PostToolUse
         assert any(isinstance(c, Tool) and c.pattern == "Edit|Write" for c in spec.only_if)
         assert any(isinstance(c, FilePath) and "*.py" in c.patterns for c in spec.only_if)
@@ -472,7 +459,6 @@ class TestDefaultConditions:
 
 class TestFileVsContentRead:
     def test_string_mode_uses_evt_content(self, session_dir: Path) -> None:
-        app = HookApp()
         received_content = None
 
         def check(content: str) -> list[str]:
@@ -480,17 +466,16 @@ class TestFileVsContentRead:
             received_content = content
             return ["v"] if "target" in content else []
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "target code"},
             ctx=make_ctx(session_dir),
         )
-        dispatch(app, Event.PostToolUse, evt, session_dir)
+        dispatch(Event.PostToolUse, evt, session_dir)
         assert received_content == "target code"
 
     def test_ast_mode_reads_full_file_from_disk(self, work_dir: Path, session_dir: Path) -> None:
-        app = HookApp()
         full_source = "import pdb\ndef foo():\n    return 42\n"
         py_file = work_dir / "code.py"
         py_file.write_text(full_source)
@@ -505,13 +490,13 @@ class TestFileVsContentRead:
                 if isinstance(node, ast.FunctionDef):
                     tree_nodes_seen.append(node.name)
 
-        register_lint(app, check, message="{violations}", trigger="pdb")
+        register_lint(check, message="{violations}", trigger="pdb")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "import pdb"},
             ctx=make_ctx(session_dir),
         )
-        dispatch(app, Event.PostToolUse, evt, session_dir)
+        dispatch(Event.PostToolUse, evt, session_dir)
         assert "pdb" in tree_nodes_seen
         assert "foo" in tree_nodes_seen
 
@@ -521,7 +506,6 @@ class TestFileVsContentRead:
 
 class TestSyntaxError:
     def test_syntax_error_returns_none(self, work_dir: Path, session_dir: Path) -> None:
-        app = HookApp()
         source = "def foo(:\n    pass\n"
         py_file = work_dir / "bad.py"
         py_file.write_text(source)
@@ -529,13 +513,13 @@ class TestSyntaxError:
         def check(tree: ast.AST) -> Iterator[str]:
             yield "should not appear"
 
-        register_lint(app, check, message="{violations}", trigger="def")
+        register_lint(check, message="{violations}", trigger="def")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "def foo(:"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
 
 
@@ -544,22 +528,20 @@ class TestSyntaxError:
 
 class TestEmptyViolations:
     def test_empty_list_returns_none(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return []
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "clean"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
 
     def test_empty_iterator_returns_none(self, work_dir: Path, session_dir: Path) -> None:
-        app = HookApp()
         source = "x = 1\n"
         py_file = work_dir / "code.py"
         py_file.write_text(source)
@@ -567,13 +549,13 @@ class TestEmptyViolations:
         def check(tree: ast.AST) -> Iterator[str]:
             return iter([])
 
-        register_lint(app, check, message="{violations}", trigger="x")
+        register_lint(check, message="{violations}", trigger="x")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "x = 1"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
 
 
@@ -590,14 +572,9 @@ class TestOverloadTyping:
         def ast_check(tree: ast.AST) -> Iterator[str]:
             return iter([])
 
-        app = HookApp()
-        token = _current_app.set(app)
-        try:
-            lint(str_check, message="{violations}")
-            lint(ast_check, message="{violations}")
-        finally:
-            _current_app.reset(token)
-        assert len(app.hooks) == 2
+        lint(str_check, message="{violations}")
+        lint(ast_check, message="{violations}")
+        assert len(_state.hooks) == 2
 
 
 # --- VAL-LINT-013: trigger ignored in string mode ---
@@ -605,18 +582,17 @@ class TestOverloadTyping:
 
 class TestTriggerIgnoredInStringMode:
     def test_trigger_absent_still_runs_string_check(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return ["found"]
 
-        register_lint(app, check, message="{violations}", trigger="xyz")
+        register_lint(check, message="{violations}", trigger="xyz")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content without trigger"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "found" in result["hookSpecificOutput"]["additionalContext"]
 
@@ -626,22 +602,20 @@ class TestTriggerIgnoredInStringMode:
 
 class TestCheckRaises:
     def test_string_check_raises_returns_none(self, session_dir: Path) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             raise ValueError("boom")
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
 
     def test_ast_check_raises_returns_none(self, work_dir: Path, session_dir: Path) -> None:
-        app = HookApp()
         source = "x = 1\n"
         py_file = work_dir / "code.py"
         py_file.write_text(source)
@@ -649,13 +623,13 @@ class TestCheckRaises:
         def check(tree: ast.AST) -> Iterator[str]:
             raise TypeError("oops")
 
-        register_lint(app, check, message="{violations}", trigger="x")
+        register_lint(check, message="{violations}", trigger="x")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "x = 1"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
 
 
@@ -664,22 +638,20 @@ class TestCheckRaises:
 
 class TestDefaultEvents:
     def test_default_event_is_post_tool_use(self) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return []
 
-        register_lint(app, check, message="{violations}")
-        assert app.hooks[-1].spec.events == Event.PostToolUse
+        register_lint(check, message="{violations}")
+        assert _state.hooks[-1].spec.events == Event.PostToolUse
 
     def test_events_can_be_overridden(self) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             return []
 
-        register_lint(app, check, message="{violations}", events=Event.PreToolUse)
-        assert app.hooks[-1].spec.events == Event.PreToolUse
+        register_lint(check, message="{violations}", events=Event.PreToolUse)
+        assert _state.hooks[-1].spec.events == Event.PreToolUse
 
 
 # --- VAL-LINT-016: AST mode reads full file ---
@@ -687,7 +659,6 @@ class TestDefaultEvents:
 
 class TestAstFullFileRead:
     def test_ast_parses_full_file_not_just_content(self, work_dir: Path, session_dir: Path) -> None:
-        app = HookApp()
         full_source = "class Foo:\n    pass\n\ndef bar():\n    return 1\n"
         py_file = work_dir / "module.py"
         py_file.write_text(full_source)
@@ -701,13 +672,13 @@ class TestAstFullFileRead:
                 if isinstance(node, ast.FunctionDef):
                     found_nodes.append(f"func:{node.name}")
 
-        register_lint(app, check, message="{violations}", trigger="class")
+        register_lint(check, message="{violations}", trigger="class")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "class Foo"},
             ctx=make_ctx(session_dir),
         )
-        dispatch(app, Event.PostToolUse, evt, session_dir)
+        dispatch(Event.PostToolUse, evt, session_dir)
         assert "class:Foo" in found_nodes
         assert "func:bar" in found_nodes
 
@@ -719,26 +690,24 @@ class TestAstFullFileRead:
 
 class TestEmptyStringPassthrough:
     def test_empty_string_content_reaches_checker(self, session_dir: Path) -> None:
-        app = HookApp()
         received_content: list[str | None] = []
 
         def check(content: str) -> list[str]:
             received_content.append(content)
             return ["empty file edit"]
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "old", "new_string": ""},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert len(received_content) == 1
         assert received_content[0] == ""
         assert result is not None
 
     def test_none_content_still_skips(self, session_dir: Path) -> None:
-        app = HookApp()
         check_called = False
 
         def check(content: str) -> list[str]:
@@ -746,13 +715,13 @@ class TestEmptyStringPassthrough:
             check_called = True
             return ["should not fire"]
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Bash",
             tool_input={"command": "echo hi"},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert not check_called
         assert result is None
 
@@ -770,7 +739,6 @@ class TestEmptyStringPassthrough:
 
 class TestAstLintEmptyFile:
     def test_empty_py_file_runs_ast_check(self, work_dir: Path, session_dir: Path) -> None:
-        app = HookApp()
         py_file = work_dir / "empty.py"
         py_file.write_text("")
         received_tree: list[ast.AST] = []
@@ -779,18 +747,17 @@ class TestAstLintEmptyFile:
             received_tree.append(tree)
             return iter([])
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": ""},
             ctx=make_ctx(session_dir),
         )
-        dispatch(app, Event.PostToolUse, evt, session_dir)
+        dispatch(Event.PostToolUse, evt, session_dir)
         assert len(received_tree) == 1
         assert isinstance(received_tree[0], ast.Module)
 
     def test_empty_py_file_with_violations_fires(self, work_dir: Path, session_dir: Path) -> None:
-        app = HookApp()
         py_file = work_dir / "empty.py"
         py_file.write_text("")
 
@@ -799,13 +766,13 @@ class TestAstLintEmptyFile:
                 yield "empty module"
             yield "always fires"
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": ""},
             ctx=make_ctx(session_dir),
         )
-        result = dispatch(app, Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "always fires" in result["hookSpecificOutput"]["additionalContext"]
 
@@ -831,19 +798,18 @@ class TestAstLintEmptyFile:
 
 class TestCheckExceptionLogging:
     def test_string_check_exception_is_logged(self, session_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
-        app = HookApp()
 
         def check(content: str) -> list[str]:
             raise ValueError("intentional boom")
 
-        register_lint(app, check, message="{violations}")
+        register_lint(check, message="{violations}")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
             ctx=make_ctx(session_dir),
         )
         with caplog.at_level(logging.WARNING, logger="captain_hook.primitives.lint"):
-            result = dispatch(app, Event.PostToolUse, evt, session_dir)
+            result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
         assert any("check" in r.message and r.exc_info for r in caplog.records)
 
@@ -853,7 +819,6 @@ class TestCheckExceptionLogging:
         session_dir: Path,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        app = HookApp()
         source = "x = 1\n"
         py_file = work_dir / "code.py"
         py_file.write_text(source)
@@ -861,13 +826,13 @@ class TestCheckExceptionLogging:
         def check(tree: ast.AST) -> Iterator[str]:
             raise TypeError("ast boom")
 
-        register_lint(app, check, message="{violations}", trigger="x")
+        register_lint(check, message="{violations}", trigger="x")
         evt = make_post_tool_event(
             tool_name="Edit",
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "x = 1"},
             ctx=make_ctx(session_dir),
         )
         with caplog.at_level(logging.WARNING, logger="captain_hook.primitives.lint"):
-            result = dispatch(app, Event.PostToolUse, evt, session_dir)
+            result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
         assert any("check" in r.message and r.exc_info for r in caplog.records)

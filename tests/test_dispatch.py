@@ -6,7 +6,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from captain_hook.app import HookApp
+from captain_hook.app import (
+    _state,
+    hook as register_hook,
+    on,
+    register,
+    reset,
+)
 from captain_hook.dispatch import dispatch, execute_hook, format_output, run_declarative
 from captain_hook.events import (
     PostToolUseEvent,
@@ -57,6 +63,13 @@ def make_stop_event(ctx: Any = None) -> StopEvent:
 
 def make_subagent_stop_event(ctx: Any = None) -> SubagentStopEvent:
     return SubagentStopEvent(_raw={}, ctx=ctx or make_ctx())
+
+@pytest.fixture(autouse=True)
+def _clean_state():
+    reset()
+    yield
+    reset()
+
 
 
 class TestRunDeclarative:
@@ -294,89 +307,80 @@ class TestExecuteHook:
 
 class TestDispatch:
     def test_no_matching_hooks_returns_none(self) -> None:
-        app = HookApp()
         evt = make_pre_tool_event()
-        result = dispatch(app, Event.PreToolUse, evt)
+        result = dispatch(Event.PreToolUse, evt)
         assert result is None
 
     def test_declarative_warn(self) -> None:
-        app = HookApp()
-        app.hook(Event.PreToolUse, message="be careful")
+        register_hook(Event.PreToolUse, message="be careful")
         evt = make_pre_tool_event()
-        result = dispatch(app, Event.PreToolUse, evt)
+        result = dispatch(Event.PreToolUse, evt)
         assert result is not None
         assert result["hookSpecificOutput"]["additionalContext"] == "be careful"
 
     def test_declarative_block(self) -> None:
-        app = HookApp()
-        app.hook(Event.PreToolUse, message="denied", block=True)
+        register_hook(Event.PreToolUse, message="denied", block=True)
         evt = make_pre_tool_event()
-        result = dispatch(app, Event.PreToolUse, evt)
+        result = dispatch(Event.PreToolUse, evt)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_handler_warn(self) -> None:
-        app = HookApp()
 
-        @app.on(Event.PreToolUse)
+        @on(Event.PreToolUse)
         def my_handler(evt: Any) -> HookResult:
             return HookResult(action=Action.warn, message="from handler")
 
         evt = make_pre_tool_event()
-        result = dispatch(app, Event.PreToolUse, evt)
+        result = dispatch(Event.PreToolUse, evt)
         assert result is not None
         assert result["hookSpecificOutput"]["additionalContext"] == "from handler"
 
     def test_handler_block(self) -> None:
-        app = HookApp()
 
-        @app.on(Event.PreToolUse)
+        @on(Event.PreToolUse)
         def blocker(evt: Any) -> HookResult:
             return HookResult(action=Action.block, message="blocked")
 
-        result = dispatch(app, Event.PreToolUse, make_pre_tool_event())
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_handler_allow(self) -> None:
-        app = HookApp()
 
-        @app.on(Event.PreToolUse)
+        @on(Event.PreToolUse)
         def allower(evt: Any) -> HookResult:
             return HookResult(action=Action.allow)
 
-        result = dispatch(app, Event.PreToolUse, make_pre_tool_event())
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
 
     def test_handler_none_returns_none(self) -> None:
-        app = HookApp()
 
-        @app.on(Event.PreToolUse)
+        @on(Event.PreToolUse)
         def noop(evt: Any) -> None:
             return None
 
-        result = dispatch(app, Event.PreToolUse, make_pre_tool_event())
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is None
 
     def test_block_takes_priority_over_warn(self) -> None:
-        app = HookApp()
-        app.hook(Event.PreToolUse, message="warning first")
+        register_hook(Event.PreToolUse, message="warning first")
 
-        @app.on(Event.PreToolUse)
+        @on(Event.PreToolUse)
         def blocker(evt: Any) -> HookResult:
             return HookResult(action=Action.block, message="blocked")
 
-        result = dispatch(app, Event.PreToolUse, make_pre_tool_event())
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert result["hookSpecificOutput"]["permissionDecisionReason"] == "blocked"
 
     def test_warns_combined_with_newline(self) -> None:
-        app = HookApp()
-        app.hook(Event.PreToolUse, message="warn1")
-        app.hook(Event.PreToolUse, message="warn2")
-        result = dispatch(app, Event.PreToolUse, make_pre_tool_event())
+        register_hook(Event.PreToolUse, message="warn1")
+        register_hook(Event.PreToolUse, message="warn2")
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         context = result["hookSpecificOutput"]["additionalContext"]
         assert "warn1" in context
@@ -384,118 +388,107 @@ class TestDispatch:
         assert "\n\n" in context
 
     def test_allow_short_circuits(self) -> None:
-        app = HookApp()
         call_count = 0
 
-        @app.on(Event.PreToolUse)
+        @on(Event.PreToolUse)
         def allower(evt: Any) -> HookResult:
             return HookResult(action=Action.allow)
 
-        @app.on(Event.PreToolUse)
+        @on(Event.PreToolUse)
         def blocker(evt: Any) -> HookResult:
             nonlocal call_count
             call_count += 1
             return HookResult(action=Action.block, message="should not reach")
 
-        result = dispatch(app, Event.PreToolUse, make_pre_tool_event())
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
         assert call_count == 0
 
     def test_block_short_circuits_no_side_effects(self) -> None:
-        app = HookApp()
         counter = 0
 
-        @app.on(Event.PreToolUse)
+        @on(Event.PreToolUse)
         def blocker(evt: Any) -> HookResult:
             return HookResult(action=Action.block, message="stop here")
 
-        @app.on(Event.PreToolUse)
+        @on(Event.PreToolUse)
         def counter_handler(evt: Any) -> HookResult:
             nonlocal counter
             counter += 1
             return HookResult(action=Action.warn, message="counted")
 
-        result = dispatch(app, Event.PreToolUse, make_pre_tool_event())
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert counter == 0
 
     def test_handler_crash_returns_none(self) -> None:
-        app = HookApp()
 
-        @app.on(Event.PreToolUse)
+        @on(Event.PreToolUse)
         def crasher(evt: Any) -> HookResult:
             raise RuntimeError("kaboom")
 
-        result = dispatch(app, Event.PreToolUse, make_pre_tool_event())
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is None
 
     def test_async_flag_filters_hooks(self) -> None:
-        app = HookApp()
-        app.hook(Event.PreToolUse, message="sync warning", async_=False)
-        app.hook(Event.PreToolUse, message="async warning", async_=True)
+        register_hook(Event.PreToolUse, message="sync warning", async_=False)
+        register_hook(Event.PreToolUse, message="async warning", async_=True)
 
-        sync_result = dispatch(app, Event.PreToolUse, make_pre_tool_event(), async_=False)
+        sync_result = dispatch(Event.PreToolUse, make_pre_tool_event(), async_=False)
         assert sync_result is not None
         assert sync_result["hookSpecificOutput"]["additionalContext"] == "sync warning"
 
-        async_result = dispatch(app, Event.PreToolUse, make_pre_tool_event(), async_=True)
+        async_result = dispatch(Event.PreToolUse, make_pre_tool_event(), async_=True)
         assert async_result is not None
         assert async_result["hookSpecificOutput"]["additionalContext"] == "async warning"
 
     def test_stop_event_format(self) -> None:
-        app = HookApp()
-        app.hook(Event.Stop, message="cannot stop", block=True)
-        result = dispatch(app, Event.Stop, make_stop_event())
+        register_hook(Event.Stop, message="cannot stop", block=True)
+        result = dispatch(Event.Stop, make_stop_event())
         assert result is not None
         assert result == {"decision": "block", "reason": "cannot stop"}
 
     def test_stop_event_allow_returns_none(self) -> None:
-        app = HookApp()
 
-        @app.on(Event.Stop)
+        @on(Event.Stop)
         def allower(evt: Any) -> HookResult:
             return HookResult(action=Action.allow)
 
-        result = dispatch(app, Event.Stop, make_stop_event())
+        result = dispatch(Event.Stop, make_stop_event())
         assert result is None
 
     def test_dispatch_with_session_dir(self, tmp_path: Path) -> None:
-        app = HookApp()
 
-        @app.on(Event.PreToolUse)
+        @on(Event.PreToolUse)
         def handler(evt: Any) -> HookResult:
             return HookResult(action=Action.warn, message="with session")
 
-        result = dispatch(app, Event.PreToolUse, make_pre_tool_event(), session_dir=tmp_path)
+        result = dispatch(Event.PreToolUse, make_pre_tool_event(), session_dir=tmp_path)
         assert result is not None
         assert result["hookSpecificOutput"]["additionalContext"] == "with session"
 
     def test_max_fires_in_dispatch(self, tmp_path: Path) -> None:
-        app = HookApp()
-        app.hook(Event.PreToolUse, message="once only", max_fires=1)
+        register_hook(Event.PreToolUse, message="once only", max_fires=1)
 
-        r1 = dispatch(app, Event.PreToolUse, make_pre_tool_event(), session_dir=tmp_path)
+        r1 = dispatch(Event.PreToolUse, make_pre_tool_event(), session_dir=tmp_path)
         assert r1 is not None
 
-        r2 = dispatch(app, Event.PreToolUse, make_pre_tool_event(), session_dir=tmp_path)
+        r2 = dispatch(Event.PreToolUse, make_pre_tool_event(), session_dir=tmp_path)
         assert r2 is None
 
     def test_stop_warn_combined(self) -> None:
-        app = HookApp()
-        app.hook(Event.Stop, message="warn stop")
-        result = dispatch(app, Event.Stop, make_stop_event())
+        register_hook(Event.Stop, message="warn stop")
+        result = dispatch(Event.Stop, make_stop_event())
         assert result is None or "decision" in result
 
     def test_subagent_stop_block(self) -> None:
-        app = HookApp()
-        app.hook(Event.SubagentStop, message="stay", block=True)
-        result = dispatch(app, Event.SubagentStop, make_subagent_stop_event())
+        register_hook(Event.SubagentStop, message="stay", block=True)
+        result = dispatch(Event.SubagentStop, make_subagent_stop_event())
         assert result == {"decision": "block", "reason": "stay"}
 
     def test_empty_stdin_handling(self) -> None:
-        app = HookApp()
-        app.hook(Event.PreToolUse, message="test")
-        result = dispatch(app, Event.PreToolUse, make_pre_tool_event())
+        register_hook(Event.PreToolUse, message="test")
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None

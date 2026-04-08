@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from captain_hook.app import HookApp
+from captain_hook.app import _state, hook as register_hook, on, reset
 from captain_hook.events import (
     PreToolUseEvent,
     StopEvent,
@@ -144,14 +144,14 @@ class TestTTest:
 
 class TestMockEvent:
     def test_mock_event_bash_creates_correct_tool_input(self):
-        from captain_hook.testing.helpers import mock_event
+        from captain_hook.tests.helpers import mock_event
 
         evt = mock_event("PreToolUse", tool="Bash", command="ls -la")
         assert evt.tool_name == "Bash"
         assert evt._raw["tool_input"]["command"] == "ls -la"
 
     def test_mock_event_edit_creates_correct_tool_input(self):
-        from captain_hook.testing.helpers import mock_event
+        from captain_hook.tests.helpers import mock_event
 
         evt = mock_event("PreToolUse", tool="Edit", file="test.py", content="new", old="old")
         assert evt.tool_name == "Edit"
@@ -161,7 +161,7 @@ class TestMockEvent:
         assert ti["new_string"] == "new"
 
     def test_mock_event_write_creates_correct_tool_input(self):
-        from captain_hook.testing.helpers import mock_event
+        from captain_hook.tests.helpers import mock_event
 
         evt = mock_event("PreToolUse", tool="Write", file="test.py", content="content")
         assert evt.tool_name == "Write"
@@ -170,46 +170,46 @@ class TestMockEvent:
         assert ti["content"] == "content"
 
     def test_mock_event_read_creates_correct_tool_input(self):
-        from captain_hook.testing.helpers import mock_event
+        from captain_hook.tests.helpers import mock_event
 
         evt = mock_event("PreToolUse", tool="Read", file="test.py")
         assert evt.tool_name == "Read"
         assert evt._raw["tool_input"]["file_path"] == "test.py"
 
     def test_mock_event_agent_creates_correct_tool_input(self):
-        from captain_hook.testing.helpers import mock_event
+        from captain_hook.tests.helpers import mock_event
 
         evt = mock_event("SubagentStop", agent_type="worker")
         assert evt._raw.get("agent_type") == "worker"
 
     def test_mock_event_stop(self):
-        from captain_hook.testing.helpers import mock_event
+        from captain_hook.tests.helpers import mock_event
 
         evt = mock_event("Stop")
         assert isinstance(evt, StopEvent)
 
     def test_mock_event_subagent_stop(self):
-        from captain_hook.testing.helpers import mock_event
+        from captain_hook.tests.helpers import mock_event
 
         evt = mock_event("SubagentStop", agent_type="cleanup")
         assert isinstance(evt, SubagentStopEvent)
         assert evt._raw["agent_type"] == "cleanup"
 
     def test_mock_event_subagent_start(self):
-        from captain_hook.testing.helpers import mock_event
+        from captain_hook.tests.helpers import mock_event
 
         evt = mock_event("SubagentStart", agent_type="worker")
         assert isinstance(evt, SubagentStartEvent)
 
     def test_mock_event_user_prompt(self):
-        from captain_hook.testing.helpers import mock_event
+        from captain_hook.tests.helpers import mock_event
 
         evt = mock_event("UserPromptSubmit", prompt="do this")
         assert isinstance(evt, UserPromptSubmitEvent)
         assert evt._raw["prompt"] == "do this"
 
     def test_mock_event_with_transcript(self):
-        from captain_hook.testing.helpers import mock_event
+        from captain_hook.tests.helpers import mock_event
 
         transcript = Transcript.from_messages(
             [
@@ -220,13 +220,13 @@ class TestMockEvent:
         assert evt.ctx.transcript is transcript
 
     def test_mock_event_accepts_event_enum(self):
-        from captain_hook.testing.helpers import mock_event
+        from captain_hook.tests.helpers import mock_event
 
         evt = mock_event(Event.PreToolUse, tool="Bash", command="ls")
         assert isinstance(evt, PreToolUseEvent)
 
     def test_mock_event_defaults_to_bash(self):
-        from captain_hook.testing.helpers import mock_event
+        from captain_hook.tests.helpers import mock_event
 
         evt = mock_event("PreToolUse")
         assert evt.tool_name == "Bash"
@@ -234,7 +234,7 @@ class TestMockEvent:
 
 class TestInputToEvent:
     def test_input_to_event_basic(self):
-        from captain_hook.testing.helpers import input_to_event
+        from captain_hook.tests.helpers import input_to_event
         from captain_hook.testing.types import Input
 
         inp = Input(tool="Bash", command="ls")
@@ -243,7 +243,7 @@ class TestInputToEvent:
         assert evt._raw["tool_input"]["command"] == "ls"
 
     def test_input_to_event_with_transcript_fixture(self):
-        from captain_hook.testing.helpers import input_to_event
+        from captain_hook.tests.helpers import input_to_event
         from captain_hook.testing.types import Input, TranscriptFixture
 
         tf = TranscriptFixture(
@@ -256,7 +256,7 @@ class TestInputToEvent:
         assert len(evt.ctx.transcript) == 1
 
     def test_input_to_event_with_path(self, tmp_path: Path):
-        from captain_hook.testing.helpers import input_to_event
+        from captain_hook.tests.helpers import input_to_event
         from captain_hook.testing.types import Input
 
         p = tmp_path / "test.jsonl"
@@ -266,7 +266,7 @@ class TestInputToEvent:
         assert len(evt.ctx.transcript) == 1
 
     def test_input_to_event_none_transcript(self):
-        from captain_hook.testing.helpers import input_to_event
+        from captain_hook.tests.helpers import input_to_event
         from captain_hook.testing.types import Input
 
         inp = Input(tool="Edit", file="x.py", content="new", old="old")
@@ -274,14 +274,14 @@ class TestInputToEvent:
         assert len(evt.ctx.transcript) == 0
 
     def test_input_to_event_stop(self):
-        from captain_hook.testing.helpers import input_to_event
+        from captain_hook.tests.helpers import input_to_event
         from captain_hook.testing.types import Input
 
         evt = input_to_event(Event.Stop, Input())
         assert isinstance(evt, StopEvent)
 
     def test_input_to_event_subagent_stop(self):
-        from captain_hook.testing.helpers import input_to_event
+        from captain_hook.tests.helpers import input_to_event
         from captain_hook.testing.types import Input
 
         evt = input_to_event(Event.SubagentStop, Input(agent_type="cleanup"))
@@ -289,7 +289,7 @@ class TestInputToEvent:
         assert evt._raw["agent_type"] == "cleanup"
 
     def test_input_to_event_user_prompt(self):
-        from captain_hook.testing.helpers import input_to_event
+        from captain_hook.tests.helpers import input_to_event
         from captain_hook.testing.types import Input
 
         evt = input_to_event(Event.UserPromptSubmit, Input(prompt="do it"))
@@ -297,7 +297,7 @@ class TestInputToEvent:
         assert evt._raw["prompt"] == "do it"
 
     def test_input_to_event_spec_tool_fallback(self):
-        from captain_hook.testing.helpers import input_to_event
+        from captain_hook.tests.helpers import input_to_event
         from captain_hook.testing.types import Input
 
         evt = input_to_event(Event.PreToolUse, Input(command="ls"), spec_tool="Bash")
@@ -306,17 +306,16 @@ class TestInputToEvent:
 
 class TestDispatchTest:
     def test_dispatch_test_returns_result(self):
-        from captain_hook.testing.helpers import dispatch_test
+        from captain_hook.tests.helpers import dispatch_test
 
-        app = HookApp()
-        app.hook(
+        reset()
+        register_hook(
             Event.PreToolUse,
             only_if=[Tool("Bash")],
             message="blocked",
             block=True,
         )
         result = dispatch_test(
-            app,
             Event.PreToolUse,
             tool="Bash",
             command="ls",
@@ -326,35 +325,35 @@ class TestDispatchTest:
         assert out["permissionDecision"] == "deny"
 
     def test_dispatch_test_returns_none_for_no_match(self):
-        from captain_hook.testing.helpers import dispatch_test
+        from captain_hook.tests.helpers import dispatch_test
 
-        app = HookApp()
-        result = dispatch_test(app, Event.PreToolUse, tool="Bash", command="ls")
+        reset()
+        result = dispatch_test(Event.PreToolUse, tool="Bash", command="ls")
         assert result is None
 
 
 class TestAssertResult:
     def test_assert_result_allow_none(self):
-        from captain_hook.testing.helpers import assert_result
+        from captain_hook.tests.helpers import assert_result
         from captain_hook.testing.types import Allow
 
         assert_result(None, Allow())
 
     def test_assert_result_allow_action(self):
-        from captain_hook.testing.helpers import assert_result
+        from captain_hook.tests.helpers import assert_result
         from captain_hook.testing.types import Allow
 
         assert_result(HookResult(action=Action.allow), Allow())
 
     def test_assert_result_allow_fails_on_block(self):
-        from captain_hook.testing.helpers import assert_result
+        from captain_hook.tests.helpers import assert_result
         from captain_hook.testing.types import Allow
 
         with pytest.raises(AssertionError):
             assert_result(HookResult(action=Action.block, message="no"), Allow())
 
     def test_assert_result_block_matches(self):
-        from captain_hook.testing.helpers import assert_result
+        from captain_hook.tests.helpers import assert_result
         from captain_hook.testing.types import Block
 
         assert_result(
@@ -363,7 +362,7 @@ class TestAssertResult:
         )
 
     def test_assert_result_block_no_pattern(self):
-        from captain_hook.testing.helpers import assert_result
+        from captain_hook.tests.helpers import assert_result
         from captain_hook.testing.types import Block
 
         assert_result(
@@ -372,14 +371,14 @@ class TestAssertResult:
         )
 
     def test_assert_result_block_fails_on_none(self):
-        from captain_hook.testing.helpers import assert_result
+        from captain_hook.tests.helpers import assert_result
         from captain_hook.testing.types import Block
 
         with pytest.raises(AssertionError):
             assert_result(None, Block(pattern="x"))
 
     def test_assert_result_block_fails_on_wrong_pattern(self):
-        from captain_hook.testing.helpers import assert_result
+        from captain_hook.tests.helpers import assert_result
         from captain_hook.testing.types import Block
 
         with pytest.raises(AssertionError):
@@ -389,7 +388,7 @@ class TestAssertResult:
             )
 
     def test_assert_result_warn_matches(self):
-        from captain_hook.testing.helpers import assert_result
+        from captain_hook.tests.helpers import assert_result
         from captain_hook.testing.types import Warn
 
         assert_result(
@@ -398,7 +397,7 @@ class TestAssertResult:
         )
 
     def test_assert_result_warn_fails_on_allow(self):
-        from captain_hook.testing.helpers import assert_result
+        from captain_hook.tests.helpers import assert_result
         from captain_hook.testing.types import Warn
 
         with pytest.raises(AssertionError):
@@ -410,8 +409,8 @@ class TestRunInlineTests:
         from captain_hook.testing.helpers import run_inline_tests
         from captain_hook.testing.types import Allow, Block, Input
 
-        app = HookApp()
-        app.hook(
+        reset()
+        register_hook(
             Event.PreToolUse,
             only_if=[Tool("Bash")],
             message="blocked command",
@@ -421,29 +420,29 @@ class TestRunInlineTests:
                 Input(tool="Edit", file="x.py", content="new", old="old"): Allow(),
             },
         )
-        results = run_inline_tests(app)
+        results = run_inline_tests()
         assert len(results) == 2
         assert all(r[2] for r in results), f"Failed: {results}"
 
     def test_returns_empty_for_no_tests(self):
         from captain_hook.testing.helpers import run_inline_tests
 
-        app = HookApp()
-        app.hook(Event.PreToolUse, message="no tests", only_if=[Tool("Bash")])
-        results = run_inline_tests(app)
+        reset()
+        register_hook(Event.PreToolUse, message="no tests", only_if=[Tool("Bash")])
+        results = run_inline_tests()
         assert results == []
 
     def test_captures_failing_test(self):
         from captain_hook.testing.helpers import run_inline_tests
         from captain_hook.testing.types import Block, Input
 
-        app = HookApp()
-        app.hook(
+        reset()
+        register_hook(
             Event.PreToolUse,
             only_if=[Tool("Bash")],
             message="warned",
             tests={Input(tool="Bash", command="ls"): Block(pattern="wrong")},
         )
-        results = run_inline_tests(app)
+        results = run_inline_tests()
         assert len(results) == 1
         assert not results[0][2]

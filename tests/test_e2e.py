@@ -10,7 +10,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from captain_hook.app import HookApp
+from captain_hook.app import (
+    _state,
+    discover_hooks,
+    get_matching_hooks,
+    hook as register_hook,
+    on,
+    register,
+    reset,
+)
 from captain_hook.dispatch import format_output
 from captain_hook.events import (
     PostToolUseEvent,
@@ -63,6 +71,13 @@ def make_ctx(
         settings=settings,
     )
 
+@pytest.fixture(autouse=True)
+def _clean_state():
+    reset()
+    yield
+    reset()
+
+
 
 class TestEntryPointExecution:
     def test_e2e_001_bin_hooks_run_produces_valid_json(self, tmp_path: Path) -> None:
@@ -113,34 +128,29 @@ class TestHookDiscovery:
             sys.path.insert(0, str(CLIENT_DIR.parent))
 
     def test_e2e_010_all_client_files_discovered(self) -> None:
-        app = HookApp()
-        app.discover_hooks(str(CLIENT_DIR))
-        assert len(app.hooks) > 0
-        assert app.settings is not None
+        discover_hooks(str(CLIENT_DIR))
+        assert len(_state.hooks) > 0
+        assert _state.settings is not None
 
     def test_e2e_011_conf_loaded_first(self) -> None:
-        app = HookApp()
-        app.discover_hooks(str(CLIENT_DIR))
-        assert type(app.settings).__name__ == "BioqaSettings"
-        assert hasattr(app.settings, "test_command")
-        assert app.settings.test_command == "uv run mtest"
+        discover_hooks(str(CLIENT_DIR))
+        assert type(_state.settings).__name__ == "BioqaSettings"
+        assert hasattr(_state.settings, "test_command")
+        assert _state.settings.test_command == "uv run mtest"
 
     def test_e2e_012_subpackage_workflow_discovered(self) -> None:
-        app = HookApp()
-        app.discover_hooks(str(CLIENT_DIR))
-        hook_names = {h.name for h in app.hooks}
+        discover_hooks(str(CLIENT_DIR))
+        hook_names = {h.name for h in _state.hooks}
         assert any("task" in n for n in hook_names), f"No task hooks found in {hook_names}"
 
     def test_e2e_013_subpackage_testing_discovered(self) -> None:
-        app = HookApp()
-        app.discover_hooks(str(CLIENT_DIR))
-        hook_names = {h.name for h in app.hooks}
+        discover_hooks(str(CLIENT_DIR))
+        hook_names = {h.name for h in _state.hooks}
         assert "commit_test_gate" in hook_names, f"commit_test_gate not in {hook_names}"
         assert "verify_test_execution" in hook_names, f"verify_test_execution not in {hook_names}"
 
     def test_e2e_014_no_import_errors(self) -> None:
-        app = HookApp()
-        app.discover_hooks(str(CLIENT_DIR))
+        discover_hooks(str(CLIENT_DIR))
 
     def test_e2e_015_discovery_via_cli_subprocess(self, tmp_path: Path) -> None:
         stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
@@ -156,11 +166,10 @@ class TestHookDiscovery:
 
 class TestInlineTests:
     def test_e2e_020_inline_tests_pass(self) -> None:
-        app = HookApp()
-        app.discover_hooks(str(CLIENT_DIR))
+        discover_hooks(str(CLIENT_DIR))
         from captain_hook.testing.helpers import run_inline_tests
 
-        results = run_inline_tests(app)
+        results = run_inline_tests()
         assert len(results) > 0, "No inline tests found"
         failures = [(name, detail) for name, status, ok, detail in results if status == "fail"]
         errors = [(name, detail) for name, status, ok, detail in results if status == "error"]
@@ -174,12 +183,11 @@ class TestInlineTests:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event, Tool
             from captain_hook.testing import Input, Allow, Block
 
-            app = get_current_app()
-            app.hook(
+            hook(
                 Event.PreToolUse,
                 message="blocked cmd",
                 block=True,
@@ -201,12 +209,11 @@ class TestInlineTests:
         hook_file = hooks_dir / "my_hook.py"
         hook_file.write_text(
             textwrap.dedent("""\
-            from captain_hook.app import get_current_app
+            from captain_hook.app import hook, on
             from captain_hook.types import Event, Tool
             from captain_hook.testing import Input, Allow, Block
 
-            app = get_current_app()
-            app.hook(
+            hook(
                 Event.PreToolUse,
                 message="blocked cmd",
                 block=True,
@@ -407,8 +414,7 @@ class TestStateModelSerialization:
     def test_e2e_062_client_state_models_round_trip(self, tmp_path: Path) -> None:
         import sys
 
-        app = HookApp()
-        app.discover_hooks(str(CLIENT_DIR))
+        discover_hooks(str(CLIENT_DIR))
 
         agents_mod = sys.modules["hooks.agents"]
 
@@ -527,10 +533,9 @@ class TestEvtResultMethods:
 
 class TestConditionsWithNoneTranscript:
     def test_e2e_080_transcript_conditions_safe_with_none(self, tmp_path: Path) -> None:
-        app = HookApp()
         from captain_hook.types import ReadFile
 
-        app.hook(
+        register_hook(
             Event.PreToolUse,
             message="should not crash",
             skip_if=[ReadFile("STYLEGUIDE.md")],
@@ -540,7 +545,7 @@ class TestConditionsWithNoneTranscript:
             _raw={"tool_name": "Bash", "tool_input": {"command": "echo hi"}},
             ctx=ctx,
         )
-        matching = app.get_matching_hooks(evt)
+        matching = get_matching_hooks(evt)
         assert len(matching) == 1
 
     def test_e2e_081_ran_command_condition_safe_with_none(self, tmp_path: Path) -> None:

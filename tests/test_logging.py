@@ -7,7 +7,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from captain_hook.app import HookApp, _current_app
+from captain_hook.app import (
+    _state,
+    get_matching_hooks,
+    hook as register_hook,
+    on,
+    register,
+    reset,
+)
 from captain_hook.dispatch import execute_hook
 from captain_hook.events import PreToolUseEvent
 from captain_hook.session import SessionSlot
@@ -28,6 +35,13 @@ def make_ctx() -> Any:
 
 def make_pre_tool_event() -> PreToolUseEvent:
     return PreToolUseEvent(_raw={"tool_name": "Bash"}, ctx=make_ctx())
+
+@pytest.fixture(autouse=True)
+def _clean_state():
+    reset()
+    yield
+    reset()
+
 
 
 class TestDispatchLogging:
@@ -85,35 +99,28 @@ class TestLintLogging:
         def bad_check(content: str) -> list[str]:
             raise ValueError("check exploded")
 
-        app = HookApp()
-        token = _current_app.set(app)
-        try:
-            lint(bad_check, message="Violations: {violations}")
+        lint(bad_check, message="Violations: {violations}")
 
-            from captain_hook.events import PostToolUseEvent
+        from captain_hook.events import PostToolUseEvent
 
-            evt = PostToolUseEvent(
-                _raw={
-                    "tool_name": "Edit",
-                    "tool_input": {"file_path": "/tmp/test.py", "old_string": "a", "new_string": "b"},
-                },
-                ctx=make_ctx(),
-            )
+        evt = PostToolUseEvent(
+            _raw={
+                "tool_name": "Edit",
+                "tool_input": {"file_path": "/tmp/test.py", "old_string": "a", "new_string": "b"},
+            },
+            ctx=make_ctx(),
+        )
 
-            matching = app.get_matching_hooks(evt)
-            assert matching, "Expected lint hook to match"
+        matching = get_matching_hooks(evt)
+        assert matching, "Expected lint hook to match"
 
-            with caplog.at_level(logging.WARNING, logger="captain_hook.primitives.lint"):
-                result = matching[0].handler(evt) if matching[0].handler else None
+        with caplog.at_level(logging.WARNING, logger="captain_hook.primitives.lint"):
+            result = matching[0].handler(evt) if matching[0].handler else None
 
-            assert result is None
-            assert any(r.levelno >= logging.WARNING for r in caplog.records)
-            captured = capsys.readouterr()
-            assert "Traceback" not in captured.err
-        finally:
-            _current_app.reset(token)
-
-
+        assert result is None
+        assert any(r.levelno >= logging.WARNING for r in caplog.records)
+        captured = capsys.readouterr()
+        assert "Traceback" not in captured.err
 class TestLlmLogging:
     def test_llm_evaluate_logs_on_exception(self, caplog: pytest.LogCaptureFixture) -> None:
         ctx = make_ctx()
