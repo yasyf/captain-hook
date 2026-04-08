@@ -7,21 +7,9 @@
 
 import re
 
-from captain_hook import (
-    HookApp,
-    Signal,
-    Signals,
-    Transcript,
-    dispatch,
-    mock_tool_event,
-    nudge,
-)
-from captain_hook.app import _current_app
-from captain_hook.types import Event
+from captain_hook import Signal, Signals, nudge
 
-app = HookApp()
-token = _current_app.set(app)
-
+# Warn when the agent shows signs of blind retrying.
 nudge(
     "Stop retrying blindly — narrow the failing test case first.",
     signals=Signals(
@@ -34,28 +22,3 @@ nudge(
         window=5,
     ),
 )
-
-_current_app.reset(token)
-
-transcript = Transcript.from_messages([
-    {"type": "assistant", "message": {"content": [{"type": "text", "text": "Let me try again — I'll retry with a tweaked config."}]}},
-])
-
-evt = mock_tool_event(
-    "Edit", event=Event.PostToolUse, file="test.py", content="pass", transcript=transcript,
-)
-result = dispatch(app, Event.PostToolUse, evt)
-assert result is not None
-output = result["hookSpecificOutput"]
-assert "additionalContext" in output
-
-clean_transcript = Transcript.from_messages([
-    {"type": "assistant", "message": {"content": [{"type": "text", "text": "The fix looks correct."}]}},
-])
-evt_clean = mock_tool_event(
-    "Edit", event=Event.PostToolUse, file="test.py", content="pass", transcript=clean_transcript,
-)
-result_clean = dispatch(app, Event.PostToolUse, evt_clean)
-assert result_clean is None
-
-print("✓ Signal-driven nudge fired on retry language, silent on clean text")
