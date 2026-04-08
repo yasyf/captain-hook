@@ -3,94 +3,24 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from functools import cached_property
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from captain_hook.file import File
+from captain_hook.transcript.inputs import (
+    AgentInput,
+    BashInput,
+    EditInput,
+    FileInputBase,
+    ToolInput,
+    WriteInput,
+    parse_tool_input,
+)
 from captain_hook.types import Event
 
 if TYPE_CHECKING:
     from captain_hook.command import CommandLine as CommandLineType
+    from captain_hook.context import HookContext
     from captain_hook.types import HookResult
-
-
-@dataclass(frozen=True, kw_only=True)
-class EditInput:
-    file_path: str
-    old_string: str
-    new_string: str
-
-    @property
-    def file(self) -> File:
-        return File(path=Path(self.file_path))
-
-    @property
-    def old(self) -> str:
-        return self.old_string
-
-    @property
-    def new(self) -> str:
-        return self.new_string
-
-
-@dataclass(frozen=True, kw_only=True)
-class WriteInput:
-    file_path: str
-    content: str
-
-    @property
-    def file(self) -> File:
-        return File(path=Path(self.file_path))
-
-
-@dataclass(frozen=True, kw_only=True)
-class BashInput:
-    command: str
-
-
-@dataclass(frozen=True, kw_only=True)
-class ReadInput:
-    file_path: str
-
-    @property
-    def file(self) -> File:
-        return File(path=Path(self.file_path))
-
-
-@dataclass(frozen=True, kw_only=True)
-class AgentInput:
-    agent_type: str | None = None
-
-
-@dataclass(frozen=True, kw_only=True)
-class GenericInput:
-    pass
-
-
-ToolInput = EditInput | WriteInput | BashInput | ReadInput | AgentInput | GenericInput
-
-
-def parse_tool_input(tool_name: str, raw: dict[str, Any]) -> ToolInput:
-    match tool_name:
-        case "Edit" | "MultiEdit":
-            return EditInput(
-                file_path=raw.get("file_path", ""),
-                old_string=raw.get("old_string", raw.get("old_str", "")),
-                new_string=raw.get("new_string", raw.get("new_str", "")),
-            )
-        case "Write" | "Create":
-            return WriteInput(
-                file_path=raw.get("file_path", ""),
-                content=raw.get("content", ""),
-            )
-        case "Bash" | "Execute":
-            return BashInput(command=raw.get("command", ""))
-        case "Read":
-            return ReadInput(file_path=raw.get("file_path", ""))
-        case "Agent" | "Task":
-            return AgentInput(agent_type=raw.get("subagent_type"))
-        case _:
-            return GenericInput()
 
 
 @dataclass
@@ -100,7 +30,7 @@ class BaseHookEvent:
     event_name: ClassVar[Event]
 
     _raw: dict[str, Any]
-    ctx: Any
+    ctx: HookContext
 
     @property
     def event(self) -> Event:
@@ -144,15 +74,7 @@ class BaseHookEvent:
 
     @property
     def file(self) -> File | None:
-        match self.input:
-            case EditInput() as ti:
-                return ti.file
-            case WriteInput() as ti:
-                return ti.file
-            case ReadInput() as ti:
-                return ti.file
-            case _:
-                return None
+        return self.input.file if isinstance(self.input, FileInputBase) else None
 
     @property
     def content(self) -> str | None:
@@ -215,7 +137,7 @@ class ToolHookEvent(BaseHookEvent):
     @property
     def content(self) -> str | None:
         match self.input:
-            case EditInput(new_string=new):
+            case EditInput(new=new):
                 return new
             case WriteInput(content=c):
                 return c

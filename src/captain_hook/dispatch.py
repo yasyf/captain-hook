@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -7,21 +8,14 @@ from captain_hook.session import SessionStore
 from captain_hook.state import HookState
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from captain_hook.app import HookApp
     from captain_hook.events import BaseHookEvent
 
 
 def run_declarative(spec: HookSpec, evt: BaseHookEvent) -> HookResult | None:
-    """Execute a declarative hook spec, returning a block/warn result from its static message.
-
-    Args:
-        spec: The hook specification with ``message`` and ``block`` fields.
-        evt: The hook event (unused for declarative hooks).
-
-    Returns:
-        HookResult with the spec's message, or None if no message is set.
-    """
     return (
         HookResult(action=Action.block if spec.block else Action.warn, message=spec.message) if spec.message else None
     )
@@ -32,22 +26,13 @@ def execute_hook(
     evt: BaseHookEvent,
     session_dir: Path | None = None,
 ) -> HookResult | None:
-    """Execute a single registered hook, respecting ``max_fires`` and persisting fire count.
-
-    Args:
-        entry: The registered hook to execute.
-        evt: The hook event to pass to the handler.
-        session_dir: Session directory for state persistence.
-
-    Returns:
-        HookResult from the handler, or None if skipped/failed.
-    """
+    """Execute a single registered hook, respecting ``max_fires`` and persisting fire count."""
     hook_session_dir = (session_dir / entry.name) if session_dir else None
     if hook_session_dir:
         hook_session_dir.mkdir(parents=True, exist_ok=True)
 
     store = SessionStore(hook_session_dir)
-    hook_state = store[HookState].get() or HookState()
+    hook_state = store[HookState].get(HookState())
 
     if entry.spec.max_fires is not None and hook_state.fire_count >= entry.spec.max_fires:
         return None
@@ -55,6 +40,7 @@ def execute_hook(
     try:
         result = entry.handler(evt) if entry.handler else run_declarative(entry.spec, evt)
     except Exception:
+        logger.exception("Hook %s failed", entry.name)
         return None
 
     if result:
@@ -65,15 +51,6 @@ def execute_hook(
 
 
 def format_output(event: Event, result: HookResult) -> dict[str, Any] | None:
-    """Convert a HookResult into the JSON output format expected by Claude Code.
-
-    Args:
-        event: The event type that triggered the hook.
-        result: The hook result to format.
-
-    Returns:
-        JSON-serializable dict, or None for allow results on Stop events.
-    """
     if event in (Event.Stop | Event.SubagentStop):
         return {"decision": "block", "reason": result.message} if result.action is not Action.allow else None
 
@@ -115,16 +92,6 @@ def dispatch(
 
     Hooks are evaluated in registration order. A block/allow result short-circuits;
     warnings are accumulated and merged.
-
-    Args:
-        app: The HookApp containing registered hooks.
-        event: The event type being dispatched.
-        evt: The parsed hook event.
-        session_dir: Session directory for state persistence.
-        async_: If True, only runs hooks registered with ``async_=True``.
-
-    Returns:
-        JSON-serializable output dict, or None if no hooks matched/fired.
     """
     matching = [h for h in app.get_matching_hooks(evt) if h.spec.async_ == async_]
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -10,39 +11,23 @@ from typing import Generic, TypeVar
 
 from pydantic import BaseModel
 
+logger = logging.getLogger(__name__)
+
 M = TypeVar("M", bound=BaseModel)
 
 
 def state_root() -> Path:
-    """Return the root directory for hook state storage.
-
-    Returns:
-        Path from ``CLAUDE_HOOKS_STATE_DIR`` env var, or ``~/.claude/state``.
-    """
+    """Return the root directory for hook state storage."""
     return Path(os.environ.get("CLAUDE_HOOKS_STATE_DIR", Path.home() / ".claude" / "state"))
 
 
 def session_hash(transcript_path: str | Path) -> str:
-    """Compute a 12-char hex hash of a transcript path for session directory naming.
-
-    Args:
-        transcript_path: Path to the transcript file.
-
-    Returns:
-        First 12 characters of the SHA-256 hex digest.
-    """
+    """Compute a 12-char hex hash of a transcript path for session directory naming."""
     return sha256(str(transcript_path).encode()).hexdigest()[:12]
 
 
 def ensure_session(transcript_path: str | Path) -> Path:
-    """Create and return the session directory for a transcript, creating it if needed.
-
-    Args:
-        transcript_path: Path to the transcript file.
-
-    Returns:
-        Path to the session directory.
-    """
+    """Create and return the session directory for a transcript, creating it if needed."""
     sd = state_root() / "hooks" / "sessions" / session_hash(transcript_path)
     sd.mkdir(parents=True, exist_ok=True)
     marker = sd / ".transcript_path"
@@ -65,15 +50,7 @@ def cleanup_stale() -> None:
 
 
 class SessionSlot(Generic[M]):  # noqa: UP046
-    """A typed slot for reading/writing a single Pydantic model in a session directory.
-
-    Provides atomic file writes via ``set()`` and lazy deserialization via ``get()``.
-    The filename is derived from the model class name (e.g. ``HookState`` → ``hook_state.json``).
-
-    Args:
-        session_dir: Directory for session state files, or None to disable persistence.
-        model: Pydantic model class for serialization.
-    """
+    """A typed slot for reading/writing a single Pydantic model in a session directory."""
 
     def __init__(self, session_dir: Path | None, model: type[M]) -> None:
         self._model = model
@@ -87,13 +64,15 @@ class SessionSlot(Generic[M]):  # noqa: UP046
     def path(self) -> Path | None:
         return self._path
 
-    def get(self) -> M | None:
+    def get(self, default: M | None = None) -> M | None:
+        """Return the stored model, or *default* when the slot is empty, missing, or corrupt."""
         if not self._path or not self._path.exists():
-            return None
+            return default
         try:
             return self._model.model_validate_json(self._path.read_text())
         except Exception:
-            return None
+            logger.warning("Failed to read %s from %s", self._model.__name__, self._path, exc_info=True)
+            return default
 
     def set(self, obj: M) -> None:
         if not self._path:
@@ -113,7 +92,7 @@ class SessionSlot(Generic[M]):  # noqa: UP046
                 Path(tmp_name).unlink(missing_ok=True)
                 raise
         except OSError:
-            pass
+            logger.warning("Failed to persist %s", self._path, exc_info=True)
 
     def delete(self) -> None:
         if self._path:
@@ -121,11 +100,7 @@ class SessionSlot(Generic[M]):  # noqa: UP046
 
 
 class SessionStore:
-    """Class-keyed store providing typed ``SessionSlot`` access via ``store[ModelClass]``.
-
-    Args:
-        session_dir: Root directory for session state files.
-    """
+    """Class-keyed store providing typed ``SessionSlot`` access via ``store[ModelClass]``."""
 
     def __init__(self, session_dir: Path | None) -> None:
         self._dir = session_dir

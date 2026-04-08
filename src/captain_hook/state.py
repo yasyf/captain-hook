@@ -36,17 +36,13 @@ class HookState(BaseModel):
     fire_count: int = 0
 
 
+ECHO_WINDOW = 5
+ECHO_THRESHOLD = 0.4
+ECHO_MIN_OVERLAP = 2
+
+
 class PrimitiveState(BaseModel):
-    """Session state for nudge/gate primitives: signal deduplication and echo suppression.
-
-    Tracks consumed content hashes to prevent re-firing on the same text,
-    and maintains echo lemmas to suppress semantically similar messages
-    within a window.
-    """
-
-    ECHO_WINDOW: int = 5
-    ECHO_THRESHOLD: float = 0.4
-    ECHO_MIN_OVERLAP: int = 2
+    """Session state for nudge/gate primitives: signal deduplication and echo suppression."""
 
     last_fired_at: int = 0
     consumed: set[str] = Field(default_factory=set)
@@ -65,20 +61,21 @@ class PrimitiveState(BaseModel):
         return bool(
             self.echo_lemmas
             and (text_lemmas := self.content_lemmas(text))
-            and len(overlap := text_lemmas & self.echo_lemmas) >= self.ECHO_MIN_OVERLAP
-            and len(overlap) / len(text_lemmas) >= self.ECHO_THRESHOLD
+            and len(overlap := text_lemmas & self.echo_lemmas) >= ECHO_MIN_OVERLAP
+            and len(overlap) / len(text_lemmas) >= ECHO_THRESHOLD
         )
 
     def consume_echoes(self, texts: list[str], transcript_len: int) -> None:
         if not self.echo_lemmas or transcript_len >= self.echo_window_end:
             return
+
         for text in texts:
             if (h := text_hash(text)) not in self.consumed and self.is_echo(text):
                 self.consumed.add(h)
 
     def seed_echo_window(self, triggering_texts: list[str], message: str, transcript_len: int) -> None:
         self.echo_lemmas = self.content_lemmas(" ".join(triggering_texts)) | self.content_lemmas(message)
-        self.echo_window_end = transcript_len + self.ECHO_WINDOW
+        self.echo_window_end = transcript_len + ECHO_WINDOW
 
     def match_signals(self, sig: Signals, texts: list[str]) -> list[str] | None:
         from captain_hook.signals import score_signals
@@ -95,14 +92,7 @@ class PrimitiveState(BaseModel):
 
 
 def text_hash(text: str) -> str:
-    """Return a 16-char hex SHA-256 hash of text for content deduplication.
-
-    Args:
-        text: The text to hash.
-
-    Returns:
-        First 16 characters of the SHA-256 hex digest.
-    """
+    """Return a 16-char hex SHA-256 hash of text for content deduplication."""
     return sha256(text.encode()).hexdigest()[:16]
 
 
@@ -127,34 +117,18 @@ def caller_stem() -> str:
 
 
 def hook_name(prefix: str, label: str | None, message: str) -> str:
-    """Generate a deterministic hook name from the caller's module, prefix, and label/message.
-
-    Args:
-        prefix: Hook type prefix (e.g. ``"nudge"``, ``"gate"``, ``"lint"``).
-        label: Human-readable label, or None to use a message hash.
-        message: Fallback text hashed when no label is provided.
-
-    Returns:
-        Name in the form ``"module:prefix_suffix"``.
-    """
+    """Generate a deterministic hook name from the caller's module, prefix, and label/message."""
     suffix = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_") if label else sha256(message.encode()).hexdigest()[:8]
     return f"{caller_stem()}:{prefix}_{suffix}"
 
 
 def record_fire(evt: BaseHookEvent) -> None:
     """Record that a primitive fired during this event, updating ``PrimitiveState.last_fired_at``."""
-    ps = evt.ctx.s[PrimitiveState].get() or PrimitiveState()
+    ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
     ps.last_fired_at = len(evt.ctx.t)
     evt.ctx.s[PrimitiveState].set(ps)
 
 
 def fired_this_turn(evt: BaseHookEvent) -> bool:
-    """Check whether a primitive already fired during the current turn.
-
-    Args:
-        evt: The current hook event.
-
-    Returns:
-        True if ``PrimitiveState.last_fired_at`` exceeds the current turn's start index.
-    """
+    """Check whether a primitive already fired during the current turn."""
     return (ps := evt.ctx.s[PrimitiveState].get()) is not None and ps.last_fired_at > evt.ctx.turn.start_idx
