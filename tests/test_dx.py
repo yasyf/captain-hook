@@ -195,32 +195,45 @@ class TestWrongHandlerSignature:
 
 
 class TestPrimitiveOutsideContext:
-    def test_nudge_outside_context(self) -> None:
+    def test_nudge_registers_on_singleton(self) -> None:
+        from captain_hook.app import get_current_app
         from captain_hook.primitives.nudge import nudge
 
-        with pytest.raises(RuntimeError, match="HookApp"):
-            nudge("test message")
+        app = get_current_app()
+        before = len(app.hooks)
+        nudge("test message")
+        assert len(app.hooks) == before + 1
+        app.hooks.pop()
 
-    def test_block_command_outside_context(self) -> None:
+    def test_block_command_registers_on_singleton(self) -> None:
+        from captain_hook.app import get_current_app
         from captain_hook.primitives.commands import block_command
 
-        with pytest.raises(RuntimeError, match="HookApp"):
-            block_command(["git", "stash"], reason="test")
+        app = get_current_app()
+        before = len(app.hooks)
+        block_command(["git", "stash"], reason="test")
+        assert len(app.hooks) == before + 1
+        app.hooks.pop()
 
-    def test_lint_outside_context(self) -> None:
+    def test_lint_registers_on_singleton(self) -> None:
+        from captain_hook.app import get_current_app
         from captain_hook.primitives.lint import lint
 
         def check(content: str) -> list[str]:
             return []
 
-        with pytest.raises(RuntimeError, match="HookApp"):
-            lint(check, message="test {violations}")
+        app = get_current_app()
+        before = len(app.hooks)
+        lint(check, message="test {violations}")
+        assert len(app.hooks) == before + 1
+        app.hooks.pop()
 
-    def test_get_current_app_message(self) -> None:
+    def test_get_current_app_returns_singleton(self) -> None:
         from captain_hook.app import get_current_app
 
-        with pytest.raises(RuntimeError, match="HookApp"):
-            get_current_app()
+        app1 = get_current_app()
+        app2 = get_current_app()
+        assert app1 is app2
 
 
 class TestCLIHelp:

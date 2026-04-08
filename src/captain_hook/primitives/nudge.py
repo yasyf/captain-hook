@@ -4,7 +4,7 @@ from collections.abc import Callable, Sequence
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 
-from captain_hook.app import get_current_app
+from captain_hook.app import on
 from captain_hook.signals import cite_message, resolve_signals, transcript_texts
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import (
@@ -37,22 +37,6 @@ def nudge(
 ) -> None:
     """Register a nudge that warns (or blocks) when conditions or signals match.
 
-    Nudges are the primary primitive for advisory messages. With ``signals``,
-    the nudge scores recent transcript text and fires when the threshold is
-    met, with echo suppression and content-hash deduplication.
-
-    Args:
-        message: Warning text shown to the agent.
-        when: Predicate evaluated per event; nudge fires only when True.
-        signals: Signal patterns or a Signals bundle for transcript scoring.
-        only_if: Conditions that must all match.
-        skip_if: Conditions that suppress the nudge if any match.
-        block: If True, registers as a blocking gate instead of a warning.
-        events: Override default event targeting.
-        max_fires: Limit fires per session (default 3 with signals, 1 without).
-        tests: Inline test dict for ``run_inline_tests``.
-        async_: If True, runs in the async dispatch pass.
-
     Example:
         >>> nudge("Remember to run tests", only_if=[TouchedFile("**/*.py")])
 
@@ -68,7 +52,7 @@ def nudge(
             return None
 
         if sig:
-            ps = evt.ctx.s[PrimitiveState].get() or PrimitiveState()
+            ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
             texts = transcript_texts(evt, sig.window)
             ps.consume_echoes(texts, len(evt.ctx.t))
             if not (triggering := ps.match_signals(sig, texts)):
@@ -94,8 +78,7 @@ def nudge(
         message,
     )
 
-    app = get_current_app()
-    app.on(
+    on(
         events or ((Event.Stop | Event.SubagentStop) if block else Event.PostToolUse if sig else Event.PreToolUse),
         only_if=only_if,
         skip_if=skip_if,
@@ -107,12 +90,6 @@ def nudge(
 
 def gate(message: str, **kwargs: Any) -> None:
     """Register a blocking gate — shorthand for ``nudge(message, block=True, ...)``.
-
-    Accepts all the same keyword arguments as ``nudge``.
-
-    Args:
-        message: Block message shown to the agent.
-        **kwargs: Forwarded to ``nudge``.
 
     Example:
         >>> gate("Run tests before committing", when=lambda evt: not has_tests(evt))

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from captain_hook.app import HookApp, get_current_app, hook
+from captain_hook.app import HookApp, discover_hooks, get_current_app, get_matching_hooks, hook, on, register, reset
 from captain_hook.classifiers import MessageClassifier
 from captain_hook.classifiers import detect as detect_classifier
 from captain_hook.cli import generate_settings, generate_settings_json
 from captain_hook.utils import read_json
 from captain_hook.command import Command, CommandLine, Redirect
-from captain_hook.conditions import check_condition, matches_conditions
 from captain_hook.context import HookContext
-from captain_hook.dispatch import dispatch, execute_hook, format_output, run_declarative
+from captain_hook.dispatch import dispatch, execute_hook
 from captain_hook.events import (
     BaseHookEvent,
     NotificationEvent,
@@ -52,18 +51,6 @@ from captain_hook.state import (
 )
 from captain_hook.testing import Allow, Block, Input, TranscriptFixture, Warn
 from captain_hook.testing import TTest as TTest
-from captain_hook.testing.helpers import (
-    assert_result,
-    dispatch_test,
-    input_to_event,
-    mock_event,
-    mock_stop_event,
-    mock_subagent_start_event,
-    mock_subagent_stop_event,
-    mock_tool_event,
-    mock_user_prompt_event,
-    run_inline_tests,
-)
 from captain_hook.tools import EditOp, TaskOp, WriteOp
 from captain_hook.transcript import (
     ToolUse,
@@ -172,12 +159,10 @@ __all__ = [
     "hook_name",
     "record_fire",
     "text_hash",
-    "check_condition",
     "cite_message",
     "dispatch",
     "execute_hook",
     "extract_signal_context",
-    "format_output",
     "block_command",
     "gate",
     "GateVerdict",
@@ -186,13 +171,11 @@ __all__ = [
     "llm_evaluate",
     "llm_gate",
     "llm_nudge",
-    "matches_conditions",
     "nudge",
     "NudgeVerdict",
     "prompt_check",
     "PromptCheckVerdict",
     "resolve_signals",
-    "run_declarative",
     "score_signals",
     "tokens_to_regex",
     "transcript_texts",
@@ -244,23 +227,18 @@ __all__ = [
     "TranscriptFixture",
     "TTest",
     "Warn",
-    "assert_result",
     "detect_classifier",
-    "dispatch_test",
-    "input_to_event",
     "MessageClassifier",
-    "mock_event",
-    "mock_stop_event",
-    "mock_subagent_start_event",
-    "mock_subagent_stop_event",
-    "mock_tool_event",
-    "mock_user_prompt_event",
-    "run_inline_tests",
     "Artifact",
     "Step",
     "Workflow",
     "text_matches",
     "workflow",
     "hook",
+    "on",
+    "register",
+    "discover_hooks",
+    "get_matching_hooks",
+    "reset",
     "read_json",
 ]

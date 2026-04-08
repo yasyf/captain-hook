@@ -74,22 +74,17 @@ _current_app: contextvars.ContextVar[HookApp | None] = contextvars.ContextVar(
 )
 
 
+_app: HookApp | None = None
+
+
 def get_current_app() -> HookApp:
-    """Return the HookApp bound to the current context.
-
-    Raises:
-        RuntimeError: If no app is active (outside ``discover_hooks`` or manual context).
-
-    Returns:
-        The active HookApp instance.
-    """
+    """Return the active HookApp, falling back to the module-level singleton."""
+    global _app
     if app := _current_app.get():
         return app
-    raise RuntimeError(
-        "No active HookApp context. Primitives like nudge(), gate(), lint(), "
-        "block_command() must be called during HookApp.discover_hooks() or "
-        "inside a manually set HookApp context."
-    )
+    if _app is None:
+        _app = HookApp()
+    return _app
 
 
 def hook(
@@ -104,35 +99,7 @@ def hook(
     tests: TTest | None = None,
     async_: bool = False,
 ) -> Callable[[HookHandler], HookHandler] | None:
-    """Register a hook on the current app (module-level convenience).
-
-    Behaves identically to ``app.register()``: if ``message`` is provided,
-    registers a declarative hook and returns ``None``; otherwise returns a
-    decorator for a handler function.
-
-    Args:
-        events: Event flags to match (combinable with ``|``).
-        only_if: Conditions that must all match for the hook to fire.
-        skip_if: Conditions that suppress the hook if any match.
-        message: Static message for declarative mode. Omit for handler mode.
-        block: If True, the hook blocks instead of warning (declarative mode).
-        respect_gitignore: Skip gitignored files when True.
-        max_fires: Limit how many times this hook fires per session.
-        tests: Inline test dict mapping ``Input`` to ``Block``/``Warn``/``Allow``.
-        async_: If True, hook runs in the async dispatch pass.
-
-    Returns:
-        None for declarative hooks, or a decorator for handler hooks.
-
-    Example:
-        Declarative (static message):
-            >>> hook(Event.PreToolUse, only_if=[Tool("Bash")], message="blocked", block=True)
-
-        Handler (dynamic logic):
-            >>> @hook(Event.PreToolUse, only_if=[Tool("Edit")])
-            ... def check_edit(evt):
-            ...     return evt.block("not allowed") if evt.file_matches("*.lock") else None
-    """
+    """Register a hook on the current app — declarative (with message) or handler (as decorator)."""
     return get_current_app().register(
         events,
         only_if=only_if,
@@ -146,26 +113,72 @@ def hook(
     )
 
 
+def on(
+    events: Event,
+    *,
+    only_if: Sequence[TCondition] = (),
+    skip_if: Sequence[TCondition] = (),
+    respect_gitignore: bool = True,
+    max_fires: int | None = None,
+    tests: TTest | None = None,
+    async_: bool = False,
+) -> Callable[[HookHandler], HookHandler]:
+    """Decorator to register a handler hook on the current app."""
+    return get_current_app().on(
+        events,
+        only_if=only_if,
+        skip_if=skip_if,
+        respect_gitignore=respect_gitignore,
+        max_fires=max_fires,
+        tests=tests,
+        async_=async_,
+    )
+
+
+def register(
+    events: Event,
+    *,
+    only_if: Sequence[TCondition] = (),
+    skip_if: Sequence[TCondition] = (),
+    message: str | None = None,
+    block: bool = False,
+    respect_gitignore: bool = True,
+    max_fires: int | None = None,
+    tests: TTest | None = None,
+    async_: bool = False,
+) -> Callable[[HookHandler], HookHandler] | None:
+    """Register a declarative or handler hook on the current app."""
+    return get_current_app().register(
+        events,
+        only_if=only_if,
+        skip_if=skip_if,
+        message=message,
+        block=block,
+        respect_gitignore=respect_gitignore,
+        max_fires=max_fires,
+        tests=tests,
+        async_=async_,
+    )
+
+
+def discover_hooks(hooks_dir: str | Path) -> None:
+    """Load hook modules from a directory into the current app."""
+    get_current_app().discover_hooks(hooks_dir)
+
+
+def get_matching_hooks(evt: BaseHookEvent) -> list[RegisteredHook]:
+    """Return hooks from the current app that match the given event."""
+    return get_current_app().get_matching_hooks(evt)
+
+
+def reset() -> None:
+    """Clear all hooks and state from the current app."""
+    get_current_app().reset()
+
+
 @dataclass
 class HookApp:
-    """Central registry for hook definitions and discovery.
-
-    Provides two registration modes:
-
-    **Declarative** — static message, no handler function::
-
-        app.hook(Event.PreToolUse, only_if=[Tool("Bash"), Command(r"rm")],
-                 message="rm is blocked", block=True)
-
-    **Handler** — decorated function returning ``HookResult | None``::
-
-        @app.on(Event.PostToolUse, only_if=[Tool("Edit"), FilePath("*.py")])
-        def check_style(evt):
-            return evt.warn("check style") if "TODO" in (evt.content or "") else None
-
-    Use ``discover_hooks`` to load hook modules from a directory, or register
-    hooks manually via ``hook()`` / ``on()``.
-    """
+    """Central registry for hook definitions and discovery."""
 
     hooks: list[RegisteredHook] = field(default_factory=lambda: [])
     gitignore_patterns: list[str] = field(default_factory=lambda: [])
@@ -396,3 +409,4 @@ class HookApp:
                 self._import_or_reload(fqn, fresh_this_pass)
         finally:
             _current_app.reset(token)
+

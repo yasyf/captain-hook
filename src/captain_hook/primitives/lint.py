@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import ast
-import sys
-import traceback
+import logging
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, get_type_hints, overload
 
-from captain_hook.app import get_current_app
+from captain_hook.app import on
 from captain_hook.state import hook_name
 from captain_hook.types import (
     Action,
@@ -18,6 +17,8 @@ from captain_hook.types import (
     Tool,
     TTest,
 )
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
@@ -89,18 +90,6 @@ def lint(
     - **String mode**: receives the file content as ``str``, returns violation strings.
     - **AST mode**: receives each ``ast.AST`` node, yields violation strings.
 
-    Automatically targets ``PostToolUse`` on ``Edit|Write`` of ``*.py``, skipping test files.
-
-    Args:
-        check: Lint function (string→list or AST node→iterator of violations).
-        message: Format string for the result; use ``{violations}`` placeholder.
-        trigger: Fast-path string check — skip AST parsing if absent from source.
-        sep: Separator for joining violations (default ``", "``).
-        block: If True, violations block instead of warn.
-        events: Override default event targeting.
-        tests: Inline test dict for ``run_inline_tests``.
-        max_shown: Maximum violations to include in the message (default 5).
-
     Example:
         >>> def find_prints(content: str) -> list[str]:
         ...     return [line for line in content.splitlines() if "print(" in line]
@@ -114,13 +103,12 @@ def lint(
                 return run_ast_check(check, evt, message, trigger, sep, block, max_shown)  # type: ignore[arg-type]
             return run_string_check(check, evt, message, sep, block, max_shown)  # type: ignore[arg-type]
         except Exception:
-            traceback.print_exc(file=sys.stderr)
+            logger.warning("Lint check %s failed", check.__name__, exc_info=True)
             return None
 
     handler.__name__ = handler.__qualname__ = hook_name("lint", None, message)
 
-    app = get_current_app()
-    app.on(
+    on(
         events or Event.PostToolUse,
         only_if=DEFAULT_ONLY_IF,
         skip_if=DEFAULT_SKIP_IF,
