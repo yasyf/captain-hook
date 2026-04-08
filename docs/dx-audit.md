@@ -77,7 +77,7 @@ The `SessionSlot` intermediate is the main confusion point — `ctx.s[Model]` lo
 
 **Resolution:** Design decision — keep the current API. The `SessionSlot` indirection is necessary because get/set are separate operations (set requires an argument, get can return None). The alternative `ctx.s.get(Model)` / `ctx.s.set(Model, instance)` would lose the generic typing advantage (IDE knows `.get()` returns `PrimitiveState | None`, not `BaseModel | None`). Document the pattern clearly with a "Working with State" section showing the common `get-or-create` pattern:
 ```python
-state = evt.ctx.s[MyState].get() or MyState()
+state = evt.ctx.s[MyState].get(MyState())
 state.counter += 1
 evt.ctx.s[MyState].set(state)
 ```

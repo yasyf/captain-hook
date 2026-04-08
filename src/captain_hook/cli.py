@@ -7,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from captain_hook.app import HookApp
+from captain_hook.app import HookApp, get_current_app
 from captain_hook.context import HookContext
 from captain_hook.dispatch import dispatch
 from captain_hook.log import setup_logging
@@ -17,15 +17,7 @@ from captain_hook.types import Event
 
 
 def generate_settings(app: HookApp, run_command: str) -> dict[str, Any]:
-    """Generate a Claude Code settings dict mapping events to hook runner commands.
-
-    Args:
-        app: The HookApp with registered hooks.
-        run_command: Path to the hooks runner script.
-
-    Returns:
-        Settings dict suitable for ``.claude/settings.local.json``.
-    """
+    """Generate a Claude Code settings dict mapping events to hook runner commands."""
     events_by_async: defaultdict[bool, set[str]] = defaultdict(set)
     for entry in app.hooks:
         for member in Event:
@@ -51,16 +43,17 @@ def generate_settings(app: HookApp, run_command: str) -> dict[str, Any]:
 
 
 def generate_settings_json(app: HookApp, run_command: str) -> str:
-    """Generate Claude Code settings as a formatted JSON string.
-
-    Args:
-        app: The HookApp with registered hooks.
-        run_command: Path to the hooks runner script.
-
-    Returns:
-        Pretty-printed JSON string.
-    """
+    """Generate Claude Code settings as a formatted JSON string."""
     return json.dumps(generate_settings(app, run_command), indent=2)
+
+
+def merge_settings(app: HookApp, run_command: str, settings_path: Path) -> dict[str, Any]:
+    hook_settings = generate_settings(app, run_command)
+    if settings_path.exists():
+        existing = json.loads(settings_path.read_text())
+        existing["hooks"] = hook_settings["hooks"]
+        return existing
+    return hook_settings
 
 
 def run_event(
@@ -107,6 +100,58 @@ def run_event(
         print(json.dumps(output))
 
 
+EXAMPLE_HOOK = '''\
+from captain_hook import Event, Tool, nudge, block_command
+
+block_command(
+    r"rm\\s+-rf\\s+/",
+    message="Refusing to run rm -rf /",
+    events=Event.PreToolUse,
+)
+
+nudge(
+    "Remember to run tests before committing.",
+    only_if=[Tool("Bash")],
+    events=Event.PostToolUse,
+    max_fires=1,
+)
+'''
+
+BIN_SCRIPT = '''\
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+exec uv run captain-hook --hooks .claude/hooks "$@"
+'''
+
+
+def init_project(root: Path) -> None:
+    hooks_dir = root / ".claude" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    example = hooks_dir / "example.py"
+    if not example.exists():
+        example.write_text(EXAMPLE_HOOK)
+        print(f"  Created {example.relative_to(root)}")
+
+    bin_dir = root / ".claude" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    bin_script = bin_dir / "captain-hook"
+    bin_script.write_text(BIN_SCRIPT)
+    bin_script.chmod(0o755)
+    print(f"  Created {bin_script.relative_to(root)} (executable)")
+
+    settings_path = root / ".claude" / "settings.local.json"
+    app = get_current_app()
+    app.reset()
+    app.discover_hooks(str(hooks_dir))
+    merged = merge_settings(app, ".claude/bin/captain-hook", settings_path)
+    settings_path.write_text(json.dumps(merged, indent=2) + "\n")
+    print(f"  Updated {settings_path.relative_to(root)}")
+
+    print("\nDone! Write hooks in .claude/hooks/, then run: captain-hook test")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="captain-hook",
@@ -124,8 +169,10 @@ def build_parser() -> argparse.ArgumentParser:
         "generate-settings", help="Generate Claude Code settings JSON for .claude/settings.local.json"
     )
     settings_parser.add_argument("--run-command", default=".claude/bin/captain-hook", help="Path to hooks runner script")
+    settings_parser.add_argument("--no-merge", action="store_true", help="Output standalone JSON instead of merging")
 
     sub.add_parser("test", help="Run inline tests from all registered hooks")
+    sub.add_parser("init", help="Scaffold hooks directory, bin script, and settings")
 
     return parser
 
@@ -166,8 +213,14 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    app = HookApp()
     root = Path(args.root) if args.root else Path.cwd()
+
+    if args.command == "init":
+        init_project(root)
+        return
+
+    app = get_current_app()
+    app.reset()
     app.load_gitignore(root)
     app.discover_hooks(args.hooks)
 
@@ -175,7 +228,12 @@ def main() -> None:
         case "run":
             run_event(app, args.event, async_=args.async_, root=root)
         case "generate-settings":
-            print(generate_settings_json(app, args.run_command))
+            if args.no_merge:
+                print(generate_settings_json(app, args.run_command))
+            else:
+                settings_path = root / ".claude" / "settings.local.json"
+                merged = merge_settings(app, args.run_command, settings_path)
+                print(json.dumps(merged, indent=2))
         case "test":
             run_tests(app)
         case _:
