@@ -1059,3 +1059,59 @@ class TestSignalConsumptionNotSuppressLaterHooks:
         ps = ctx.s[PrimitiveState].get()
         consumed = ps.consumed if ps else set()
         assert len(consumed) == 0, f"Consumed hashes should be empty after no-action verdict, got {consumed}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VAL-LLM-032 — llm_gate and llm_nudge delegate to shared _llm_primitive helper
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLlmPrimitiveHelper:
+    def test_shared_helper_exists(self) -> None:
+        from captain_hook.primitives.llm import _llm_primitive
+
+        assert callable(_llm_primitive)
+
+    def test_gate_and_nudge_produce_identical_handler_structure(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict, NudgeVerdict
+
+        gate_dir = tmp_path / "gate"
+        gate_dir.mkdir()
+        gate_app = HookApp()
+        gate_verdict = GateVerdict(block=True, reasoning="bad")
+        gate_ctx = make_ctx(gate_dir, call_llm_return=gate_verdict)
+        gate_ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["trigger"]))
+        register_llm_gate(gate_app, "Gate prompt", message="BLOCKED", when=lambda evt: True)
+        gate_evt = make_stop_event(ctx=gate_ctx)
+        gate_result = dispatch(gate_app, Event.Stop, gate_evt, session_dir=gate_dir)
+        assert gate_result is not None
+        assert gate_result["decision"] == "block"
+
+        nudge_dir = tmp_path / "nudge"
+        nudge_dir.mkdir()
+        nudge_app = HookApp()
+        nudge_verdict = NudgeVerdict(fire=True, reasoning="issue")
+        nudge_ctx = make_ctx(nudge_dir, call_llm_return=nudge_verdict)
+        nudge_ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["trigger"]))
+        register_llm_nudge(nudge_app, "Nudge prompt", message="WARNING", when=lambda evt: True)
+        nudge_evt = make_post_tool_event(ctx=nudge_ctx)
+        nudge_result = dispatch(nudge_app, Event.PostToolUse, nudge_evt, session_dir=nudge_dir)
+        assert nudge_result is not None
+        assert "additionalContext" in nudge_result["hookSpecificOutput"]
+
+    def test_helper_respects_async_parameter(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import NudgeVerdict
+
+        app = HookApp()
+        ctx = make_ctx(tmp_path, call_llm_return=NudgeVerdict(fire=True, reasoning="issue"))
+        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["trigger"]))
+        register_llm_nudge(app, "Async nudge", message="WARNING", when=lambda evt: True, async_=True)
+
+        assert app.hooks[-1].spec.async_ is True
+
+        evt = make_post_tool_event(ctx=ctx)
+        sync_result = dispatch(app, Event.PostToolUse, evt, session_dir=tmp_path, async_=False)
+        assert sync_result is None
+
+        async_result = dispatch(app, Event.PostToolUse, evt, session_dir=tmp_path, async_=True)
+        assert async_result is not None

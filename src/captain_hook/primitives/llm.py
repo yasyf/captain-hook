@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
-from captain_hook.app import get_current_app
+from captain_hook.app import on
 from captain_hook.prompt import Prompt
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import (
@@ -17,6 +18,8 @@ from captain_hook.types import (
     TCondition,
     TTest,
 )
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from captain_hook.context import TModel, TSpecialty
@@ -60,31 +63,12 @@ def llm_evaluate[M: BaseModel](
     agent: bool = False,
     transcript: bool = False,
 ) -> M | None:
-    """Evaluate an LLM prompt against transcript context with signal pre-filtering.
-
-    Checks signals or ``when`` predicate first. If triggered, builds a prompt
-    with signal context and calls the LLM backend, returning a parsed response model.
-
-    Args:
-        evt: The current hook event.
-        prompt: System prompt for the LLM.
-        response_model: Pydantic model to parse the LLM response into.
-        signals: Signal patterns for pre-filtering transcript text.
-        when: Predicate fallback when no signals are provided.
-        max_context: Maximum characters of context to include.
-        specialty: LLM backend selection (``"review"``, ``"debugging"``, ``"general"``).
-        model: Model size (``"small"``, ``"medium"``, ``"large"``).
-        agent: If True, runs the LLM in agent mode.
-        transcript: If True, includes the full transcript in the prompt.
-
-    Returns:
-        Parsed response model instance, or None if signals don't match or LLM fails.
-    """
+    """Evaluate an LLM prompt against transcript context with signal pre-filtering."""
     if fired_this_turn(evt):
         return None
 
     if sig := resolve_signals(signals):
-        ps = evt.ctx.s[PrimitiveState].get() or PrimitiveState()
+        ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
         texts = transcript_texts(evt, sig.window)
         old_consumed = ps.consumed.copy()
         if not (contributing_texts := ps.match_signals(sig, texts)):
@@ -115,24 +99,29 @@ def llm_evaluate[M: BaseModel](
             response_model=response_model,
         )
     except Exception:
+        logger.warning("LLM evaluate failed for prompt: %.100s", prompt, exc_info=True)
         return None
 
 
 def consume_signals(evt: BaseHookEvent, sig: Signals | None) -> None:
     if not sig:
         return
-    ps = evt.ctx.s[PrimitiveState].get() or PrimitiveState()
+    ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
     texts = transcript_texts(evt, sig.window)
     ps.match_signals(sig, texts)
     evt.ctx.s[PrimitiveState].set(ps)
 
 
-def llm_gate(
+def _llm_primitive[M: BaseModel](
     prompt: str,
     *,
-    message: str | Callable[[GateVerdict], str],
-    response_model: type[GateVerdict] = GateVerdict,
-    verdict: Callable[[GateVerdict], bool] = lambda r: r.block,
+    action: Action,
+    label: str,
+    message: str | Callable[[M], str],
+    response_model: type[M],
+    verdict: Callable[[M], bool],
+    default_events: Event,
+    default_max_fires: int,
     signals: Sequence[Signal | NlpSignal] | Signals | None = None,
     when: Callable[[BaseHookEvent], bool] | None = None,
     only_if: Sequence[TCondition] = (),
@@ -140,40 +129,13 @@ def llm_gate(
     events: Event | None = None,
     max_fires: int | None = None,
     tests: TTest | None = None,
+    async_: bool = False,
     max_context: int = 2000,
     specialty: TSpecialty = "review",
     model: TModel = "small",
     agent: bool = False,
     transcript: bool = False,
 ) -> None:
-    """Register an LLM-powered blocking gate.
-
-    Pre-filters via signals, then asks the LLM for a ``GateVerdict``.
-    Blocks when ``verdict(result)`` returns True.
-
-    Args:
-        prompt: System prompt describing what the LLM should evaluate.
-        message: Block message string, or callable receiving the verdict.
-        response_model: Pydantic model for LLM response (default ``GateVerdict``).
-        verdict: Predicate on the response to decide whether to block.
-        signals: Signal patterns for transcript pre-filtering.
-        when: Predicate fallback when no signals are provided.
-        only_if: Conditions that must all match.
-        skip_if: Conditions that suppress the gate if any match.
-        events: Override default event targeting (default ``Stop | SubagentStop``).
-        max_fires: Limit fires per session (default 1).
-        tests: Inline test dict for ``run_inline_tests``.
-        max_context: Maximum characters of context for the LLM.
-        specialty: LLM backend (default ``"review"``).
-        model: Model size (default ``"small"``).
-        agent: If True, runs the LLM in agent mode.
-        transcript: If True, includes the full transcript.
-
-    Example:
-        >>> llm_gate("Is the agent making excuses?",
-        ...          message=lambda r: f"Excuse detected: {r.reasoning}",
-        ...          signals=Signals([Signal(r"external.*service", weight=2)], threshold=2))
-    """
     sig = resolve_signals(signals)
 
     def handler(evt: BaseHookEvent) -> HookResult | None:
@@ -197,20 +159,70 @@ def llm_gate(
         consume_signals(evt, sig)
         record_fire(evt)
         return HookResult(
-            action=Action.block,
+            action=action,
             message=message(result) if callable(message) else message,
         )
 
-    handler.__name__ = handler.__qualname__ = hook_name("llm_gate", None, prompt)
+    handler.__name__ = handler.__qualname__ = hook_name(label, None, prompt)
 
-    app = get_current_app()
-    app.on(
-        events or (Event.Stop | Event.SubagentStop),
+    on(
+        events or default_events,
         only_if=only_if,
         skip_if=skip_if,
-        max_fires=max_fires if max_fires is not None else 1,
+        max_fires=max_fires if max_fires is not None else default_max_fires,
         tests=tests,
+        async_=async_,
     )(handler)
+
+
+def llm_gate(
+    prompt: str,
+    *,
+    message: str | Callable[[GateVerdict], str],
+    response_model: type[GateVerdict] = GateVerdict,
+    verdict: Callable[[GateVerdict], bool] = lambda r: r.block,
+    signals: Sequence[Signal | NlpSignal] | Signals | None = None,
+    when: Callable[[BaseHookEvent], bool] | None = None,
+    only_if: Sequence[TCondition] = (),
+    skip_if: Sequence[TCondition] = (),
+    events: Event | None = None,
+    max_fires: int | None = None,
+    tests: TTest | None = None,
+    max_context: int = 2000,
+    specialty: TSpecialty = "review",
+    model: TModel = "small",
+    agent: bool = False,
+    transcript: bool = False,
+) -> None:
+    """Register an LLM-powered blocking gate.
+
+    Example:
+        >>> llm_gate("Is the agent making excuses?",
+        ...          message=lambda r: f"Excuse detected: {r.reasoning}",
+        ...          signals=Signals([Signal(r"external.*service", weight=2)], threshold=2))
+    """
+    _llm_primitive(
+        prompt,
+        action=Action.block,
+        label="llm_gate",
+        message=message,
+        response_model=response_model,
+        verdict=verdict,
+        default_events=Event.Stop | Event.SubagentStop,
+        default_max_fires=1,
+        signals=signals,
+        when=when,
+        only_if=only_if,
+        skip_if=skip_if,
+        events=events,
+        max_fires=max_fires,
+        tests=tests,
+        max_context=max_context,
+        specialty=specialty,
+        model=model,
+        agent=agent,
+        transcript=transcript,
+    )
 
 
 def llm_nudge(
@@ -235,71 +247,34 @@ def llm_nudge(
 ) -> None:
     """Register an LLM-powered advisory nudge.
 
-    Pre-filters via signals, then asks the LLM for a ``NudgeVerdict``.
-    Warns when ``verdict(result)`` returns True.
-
-    Args:
-        prompt: System prompt describing what the LLM should evaluate.
-        message: Warning message string, or callable receiving the verdict.
-        response_model: Pydantic model for LLM response (default ``NudgeVerdict``).
-        verdict: Predicate on the response to decide whether to warn.
-        signals: Signal patterns for transcript pre-filtering.
-        when: Predicate fallback when no signals are provided.
-        only_if: Conditions that must all match.
-        skip_if: Conditions that suppress the nudge if any match.
-        events: Override default event targeting (default ``PostToolUse``).
-        max_fires: Limit fires per session (default 3).
-        tests: Inline test dict for ``run_inline_tests``.
-        async_: If True, runs in the async dispatch pass.
-        max_context: Maximum characters of context for the LLM.
-        specialty: LLM backend (default ``"review"``).
-        model: Model size (default ``"small"``).
-        agent: If True, runs the LLM in agent mode.
-        transcript: If True, includes the full transcript.
-
     Example:
         >>> llm_nudge("Is the agent speculating instead of observing?",
-        ...           message="Observe, don't infer — check traces first",
+        ...           message="Observe, don't infer -- check traces first",
         ...           signals=Signals([Signal(r"should contain", weight=2)], threshold=3))
     """
-    sig = resolve_signals(signals)
-
-    def handler(evt: BaseHookEvent) -> HookResult | None:
-        if not (
-            result := llm_evaluate(
-                evt,
-                prompt,
-                response_model,
-                signals=signals,
-                when=when,
-                max_context=max_context,
-                specialty=specialty,
-                model=model,
-                agent=agent,
-                transcript=transcript,
-            )
-        ):
-            return None
-        if not verdict(result):
-            return None
-        consume_signals(evt, sig)
-        record_fire(evt)
-        return HookResult(
-            action=Action.warn,
-            message=message(result) if callable(message) else message,
-        )
-
-    handler.__name__ = handler.__qualname__ = hook_name("llm_nudge", None, prompt)
-
-    app = get_current_app()
-    app.on(
-        events or Event.PostToolUse,
+    _llm_primitive(
+        prompt,
+        action=Action.warn,
+        label="llm_nudge",
+        message=message,
+        response_model=response_model,
+        verdict=verdict,
+        default_events=Event.PostToolUse,
+        default_max_fires=3,
+        signals=signals,
+        when=when,
         only_if=only_if,
         skip_if=skip_if,
-        max_fires=max_fires if max_fires is not None else 3,
+        events=events,
+        max_fires=max_fires,
         tests=tests,
         async_=async_,
-    )(handler)
+        max_context=max_context,
+        specialty=specialty,
+        model=model,
+        agent=agent,
+        transcript=transcript,
+    )
 
 
 def prompt_check(
@@ -313,26 +288,7 @@ def prompt_check(
     include_reasoning: bool = True,
     response_model: type[PromptCheckVerdict] = PromptCheckVerdict,
 ) -> HookResult | None:
-    """Run an LLM check with a formatted prompt and return block/warn/None.
-
-    Used by handler hooks that need per-event LLM evaluation (e.g. test
-    integrity checks). The ``template`` is formatted with ``fmt``, recent
-    assistant reasoning is appended as context, and the LLM returns a
-    ``PromptCheckVerdict``.
-
-    Args:
-        evt: The current hook event.
-        template: Prompt template string with ``{key}`` placeholders.
-        fmt: Dict of values to format into the template.
-        prefix: Prefix prepended to the verdict message (e.g. ``"TEST QUALITY"``).
-        suffix: Suffix appended to the verdict message.
-        timeout: LLM call timeout in seconds.
-        include_reasoning: If True, includes recent assistant text as context.
-        response_model: Pydantic model for parsing the verdict.
-
-    Returns:
-        ``HookResult`` with block/warn action, or None if the LLM says ``"ok"``.
-    """
+    """Run an LLM check with a formatted prompt and return block/warn/None."""
     reasoning = ""
     if include_reasoning:
         reasoning = evt.ctx.t.recent(50).assistant_text() if hasattr(evt.ctx.t, "recent") else ""
@@ -346,6 +302,7 @@ def prompt_check(
             response_model=response_model,
         )
     except Exception:
+        logger.warning("prompt_check failed for %s", prefix, exc_info=True)
         return None
 
     if not verdict:
