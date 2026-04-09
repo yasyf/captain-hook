@@ -58,30 +58,6 @@ class TestConductorClassifier:
         msg = _msg("user", "Help me fix this bug")
         assert classifier(msg)
 
-    def test_filters_system_instruction(self):
-        from captain_hook.classifiers.conductor import classifier
-
-        msg = _msg("user", "<system_instruction>some content here")
-        assert not classifier(msg)
-
-    def test_filters_task_notification(self):
-        from captain_hook.classifiers.conductor import classifier
-
-        msg = _msg("user", "<task-notification>task info")
-        assert not classifier(msg)
-
-    def test_filters_local_command_caveat(self):
-        from captain_hook.classifiers.conductor import classifier
-
-        msg = _msg("user", "<local-command-caveat>caveat")
-        assert not classifier(msg)
-
-    def test_filters_command_name(self):
-        from captain_hook.classifiers.conductor import classifier
-
-        msg = _msg("user", "<command-name>cmd")
-        assert not classifier(msg)
-
     def test_all_four_prefixes_filtered(self):
         from captain_hook.classifiers.conductor import classifier
 

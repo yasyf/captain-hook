@@ -7,7 +7,6 @@ import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -20,32 +19,13 @@ from captain_hook.app import (
 )
 from captain_hook.dispatch import dispatch
 from captain_hook.events import PostToolUseEvent
-from captain_hook.session import SessionStore
 from captain_hook.types import (
     Event,
     FilePath,
     TestFile,
     Tool,
 )
-
-
-def make_ctx(session_dir: Path | None = None, transcript_len: int = 10) -> MagicMock:
-    ctx = MagicMock()
-    ctx.transcript = MagicMock()
-    ctx.transcript.__len__ = MagicMock(return_value=transcript_len)
-    ctx.transcript.has_skill = MagicMock(return_value=False)
-    ctx.transcript.has_read = MagicMock(return_value=False)
-    ctx.transcript.has_edit_to = MagicMock(return_value=False)
-    ctx.transcript.has_command = MagicMock(return_value=False)
-    ctx.transcript.count_tools = MagicMock(return_value=0)
-    ctx.t = ctx.transcript
-    store = SessionStore(session_dir)
-    ctx.session = store
-    ctx.s = store
-    turn = MagicMock()
-    turn.start_idx = 5
-    ctx.turn = turn
-    return ctx
+from helpers import make_ctx
 
 
 @pytest.fixture

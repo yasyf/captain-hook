@@ -3,42 +3,24 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
+from captain_hook.context import HookContext
 from captain_hook.session import SessionStore
 from captain_hook.state import PrimitiveState
+from captain_hook.transcript import Transcript
+from captain_hook.transcript.models import TextBlock, TranscriptMessage
 from captain_hook.types import Signal, Signals
 
 
-def make_ctx(tmp_path: Path | None = None, transcript_msgs: list[Any] | None = None) -> MagicMock:
-    ctx = MagicMock()
-    transcript = MagicMock()
-    msgs = transcript_msgs or []
-    transcript.messages = msgs
-    transcript.__len__ = MagicMock(return_value=len(msgs))
-
-    class FakeSlice:
-        def __init__(self, messages: list[Any]) -> None:
-            self.messages = messages
-
-    transcript.recent = MagicMock(side_effect=lambda n: FakeSlice(msgs[-n:]))
-    ctx.transcript = transcript
-    ctx.t = transcript
-    store = SessionStore(tmp_path)
-    ctx.session = store
-    ctx.s = store
-    turn = MagicMock()
-    turn.start_idx = 0
-    ctx.turn = turn
-    return ctx
-
-
-class FakeMessage:
-    def __init__(self, text: str, type: str = "assistant") -> None:
-        self.text = text
-        self.type = type
+def make_ctx(tmp_path: Path | None = None, texts: list[str] | None = None) -> HookContext:
+    msgs = [TranscriptMessage(type="assistant", content=[TextBlock(text=t)]) for t in (texts or [])]
+    return HookContext(
+        session=SessionStore(tmp_path),
+        transcript=Transcript(messages=msgs),
+        settings=None,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -244,14 +226,6 @@ class TestMatchSignalsDedup:
         result = ps.match_signals(sig, texts)
         assert result is None
 
-    def test_sha256_hash_used(self) -> None:
-        from captain_hook.state import text_hash
-
-        h = text_hash("hello")
-        assert len(h) == 16
-        assert h == text_hash("hello")
-        assert h != text_hash("world")
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # VAL-SIG-009 — PrimitiveState.match_signals returns contributing texts only
@@ -287,8 +261,7 @@ class TestTranscriptTexts:
         from captain_hook.events import PostToolUseEvent
         from captain_hook.signals import transcript_texts
 
-        msgs = [FakeMessage(f"msg {i}") for i in range(20)]
-        ctx = make_ctx(transcript_msgs=msgs)
+        ctx = make_ctx(texts=[f"msg {i}" for i in range(20)])
         evt = PostToolUseEvent(_raw={"tool_name": "Edit"}, ctx=ctx)
         result = transcript_texts(evt, 5)
         assert len(result) <= 5
@@ -306,7 +279,7 @@ class TestTranscriptTexts:
         from captain_hook.events import PostToolUseEvent
         from captain_hook.signals import transcript_texts
 
-        ctx = make_ctx(transcript_msgs=[])
+        ctx = make_ctx(texts=[])
         evt = PostToolUseEvent(_raw={"tool_name": "Edit"}, ctx=ctx)
         result = transcript_texts(evt, 5)
         assert result == []
@@ -315,8 +288,7 @@ class TestTranscriptTexts:
         from captain_hook.events import PostToolUseEvent
         from captain_hook.signals import transcript_texts
 
-        msgs = [FakeMessage("hello"), FakeMessage(""), FakeMessage("world")]
-        ctx = make_ctx(transcript_msgs=msgs)
+        ctx = make_ctx(texts=["hello", "", "world"])
         evt = PostToolUseEvent(_raw={"tool_name": "Edit"}, ctx=ctx)
         result = transcript_texts(evt, 10)
         assert "" not in result

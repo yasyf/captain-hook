@@ -3,46 +3,23 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
 from captain_hook.app import (
     _state,
     get_matching_hooks,
-    hook as register_hook,
-    on,
-    register,
     reset,
 )
 from captain_hook.dispatch import execute_hook
 from captain_hook.events import PostToolUseEvent, PreToolUseEvent
 from captain_hook.primitives.commands import block_command, warn_command
-from captain_hook.session import SessionStore
 from captain_hook.types import (
     Action,
     Event,
     tokens_to_regex,
 )
-
-
-def make_ctx(tmp_path: Path | None = None, transcript_len: int = 10) -> MagicMock:
-    ctx = MagicMock()
-    ctx.transcript = MagicMock()
-    ctx.transcript.__len__ = MagicMock(return_value=transcript_len)
-    ctx.transcript.has_skill = MagicMock(return_value=False)
-    ctx.transcript.has_read = MagicMock(return_value=False)
-    ctx.transcript.has_edit_to = MagicMock(return_value=False)
-    ctx.transcript.has_command = MagicMock(return_value=False)
-    ctx.transcript.count_tools = MagicMock(return_value=0)
-    ctx.t = ctx.transcript
-    store = SessionStore(tmp_path)
-    ctx.session = store
-    ctx.s = store
-    turn = MagicMock()
-    turn.start_idx = 5
-    ctx.turn = turn
-    return ctx
+from helpers import make_ctx
 
 
 def make_pre_tool_event(
@@ -227,20 +204,27 @@ class TestWarnCommandChainedCommands:
 
 
 class TestTestsDictPropagation:
-    def test_block_command_propagates_tests(self) -> None:
-        tests = {"input": "test", "expected": "block"}
-        block_command(r"git\s+stash", reason="No stashing", tests=tests)
+    @pytest.mark.parametrize(
+        ("register", "kwargs"),
+        [
+            (block_command, {"pattern": r"git\s+stash", "reason": "No stashing"}),
+            (warn_command, {"pattern": r"git\s+push", "message": "Warning"}),
+        ],
+        ids=["block_command", "warn_command"],
+    )
+    def test_propagates_tests(self, register, kwargs) -> None:
+        tests = {"input": "test", "expected": "result"}
+        register(**kwargs, tests=tests)
         assert _state.hooks[-1].spec.tests is tests
 
-    def test_warn_command_propagates_tests(self) -> None:
-        tests = {"input": "test", "expected": "warn"}
-        warn_command(r"git\s+push", message="Warning", tests=tests)
-        assert _state.hooks[-1].spec.tests is tests
-
-    def test_block_command_tests_none_by_default(self) -> None:
-        block_command(r"git\s+stash", reason="No stashing")
-        assert _state.hooks[-1].spec.tests is None
-
-    def test_warn_command_tests_none_by_default(self) -> None:
-        warn_command(r"git\s+push", message="Warning")
+    @pytest.mark.parametrize(
+        ("register", "kwargs"),
+        [
+            (block_command, {"pattern": r"git\s+stash", "reason": "No stashing"}),
+            (warn_command, {"pattern": r"git\s+push", "message": "Warning"}),
+        ],
+        ids=["block_command", "warn_command"],
+    )
+    def test_tests_none_by_default(self, register, kwargs) -> None:
+        register(**kwargs)
         assert _state.hooks[-1].spec.tests is None

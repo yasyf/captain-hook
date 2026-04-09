@@ -57,18 +57,6 @@ class TestFileHashing:
 
 
 class TestFileGetattr:
-    def test_suffix(self) -> None:
-        assert File(path=Path("bioqa/models/base.py")).suffix == ".py"
-
-    def test_name(self) -> None:
-        assert File(path=Path("bioqa/models/base.py")).name == "base.py"
-
-    def test_stem(self) -> None:
-        assert File(path=Path("bioqa/models/base.py")).stem == "base"
-
-    def test_parent(self) -> None:
-        assert File(path=Path("bioqa/models/base.py")).parent == Path("bioqa/models")
-
     def test_nonexistent_attr_raises(self) -> None:
         f = File(path=Path("a.py"))
         with pytest.raises(AttributeError):
@@ -114,12 +102,6 @@ class TestFileIsTest:
     def test_non_test_file(self) -> None:
         assert not File(path=Path("bioqa/main.py")).is_test
 
-    def test_is_test_returns_same_value_on_repeated_access(self) -> None:
-        f = File(path=Path("tests/test_query.py"))
-        first = f.is_test
-        second = f.is_test
-        assert first is second is True
-
 
 class TestFileFrozen:
     def test_immutable(self) -> None:
@@ -163,16 +145,6 @@ class TestFileContains:
         p = tmp_path / "binary"
         p.write_bytes(b"\x80\x81\x82\x83" * 100)
         assert not File(path=p).contains(r"anything")
-
-
-class TestFileNoMixins:
-    def test_all_query_methods_defined_directly(self) -> None:
-        f = File(path=Path("tests/test_query.py"))
-        assert f.matches("**/test_*.py")
-        assert f.under("tests/")
-        assert f.is_test
-        assert str(f) == "tests/test_query.py"
-        assert os.fspath(f) == "tests/test_query.py"
 
 
 class TestPathMatcher:

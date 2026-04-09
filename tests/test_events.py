@@ -84,45 +84,33 @@ class TestBaseHookEvent:
         evt = make_event(StopEvent, {})
         assert evt.parent_agent_type is None
 
-    def test_base_event_tool_name_is_none(self) -> None:
+    @pytest.mark.parametrize(
+        "attr,expected",
+        [
+            ("tool_name", None),
+            ("command", None),
+            ("command_line", None),
+            ("file", None),
+            ("content", None),
+            ("old", None),
+            ("agent_type", None),
+        ],
+    )
+    def test_base_event_property_defaults(self, attr: str, expected: object) -> None:
         evt = make_event(StopEvent, {})
-        assert evt.tool_name is None
+        assert getattr(evt, attr) == expected
 
-    def test_base_event_command_is_none(self) -> None:
+    @pytest.mark.parametrize(
+        "method,arg",
+        [
+            ("command_matches", r"git.*"),
+            ("file_matches", "*.py"),
+            ("content_matches", r"import.*"),
+        ],
+    )
+    def test_base_event_match_methods_return_false(self, method: str, arg: str) -> None:
         evt = make_event(StopEvent, {})
-        assert evt.command is None
-
-    def test_base_event_command_line_is_none(self) -> None:
-        evt = make_event(StopEvent, {})
-        assert evt.command_line is None
-
-    def test_base_event_file_is_none(self) -> None:
-        evt = make_event(StopEvent, {})
-        assert evt.file is None
-
-    def test_base_event_content_is_none(self) -> None:
-        evt = make_event(StopEvent, {})
-        assert evt.content is None
-
-    def test_base_event_old_is_none(self) -> None:
-        evt = make_event(StopEvent, {})
-        assert evt.old is None
-
-    def test_base_event_agent_type_is_none(self) -> None:
-        evt = make_event(StopEvent, {})
-        assert evt.agent_type is None
-
-    def test_base_event_command_matches_returns_false(self) -> None:
-        evt = make_event(StopEvent, {})
-        assert evt.command_matches(r"git.*") is False
-
-    def test_base_event_file_matches_returns_false(self) -> None:
-        evt = make_event(StopEvent, {})
-        assert evt.file_matches("*.py") is False
-
-    def test_base_event_content_matches_returns_false(self) -> None:
-        evt = make_event(StopEvent, {})
-        assert evt.content_matches(r"import.*") is False
+        assert getattr(evt, method)(arg) is False
 
 
 class TestToolHookEvent:

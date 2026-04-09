@@ -3,55 +3,14 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
-
 from captain_hook.app import (
     _state,
-    hook as register_hook,
-    on,
-    register,
     reset,
 )
 from captain_hook.dispatch import dispatch
 from captain_hook.events import PostToolUseEvent, StopEvent, SubagentStopEvent
-from captain_hook.session import SessionStore
 from captain_hook.types import Action, Event, Signal
-
-
-def make_ctx(
-    tmp_path: Path | None = None,
-    transcript_len: int = 10,
-    call_llm_return: Any = None,
-) -> MagicMock:
-    ctx = MagicMock()
-    ctx.transcript = MagicMock()
-    ctx.transcript.__len__ = MagicMock(return_value=transcript_len)
-    ctx.transcript.has_skill = MagicMock(return_value=False)
-    ctx.transcript.has_read = MagicMock(return_value=False)
-    ctx.transcript.has_edit_to = MagicMock(return_value=False)
-    ctx.transcript.has_command = MagicMock(return_value=False)
-    ctx.transcript.count_tools = MagicMock(return_value=0)
-    ctx.t = ctx.transcript
-    store = SessionStore(tmp_path)
-    ctx.session = store
-    ctx.s = store
-    turn = MagicMock()
-    turn.start_idx = 5
-    ctx.turn = turn
-    ctx.call_llm = MagicMock(return_value=call_llm_return)
-    return ctx
-
-
-def make_recent_messages(texts: list[str]) -> MagicMock:
-    msgs = []
-    for t in texts:
-        m = MagicMock()
-        m.text = t
-        msgs.append(m)
-    result = MagicMock()
-    result.messages = msgs
-    result.assistant_text = MagicMock(return_value="")
-    return result
+from helpers import make_ctx
 
 
 def make_stop_event(ctx: Any = None) -> StopEvent:
@@ -165,8 +124,7 @@ class TestLlmGateBlocks:
     def test_llm_gate_blocks_on_true_verdict(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import GateVerdict
 
-        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=True, reasoning="bad"))
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=GateVerdict(block=True, reasoning="bad"))
 
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True)
         evt = make_stop_event(ctx=ctx)
@@ -185,8 +143,7 @@ class TestLlmGateAllows:
     def test_llm_gate_allows_on_false_verdict(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import GateVerdict
 
-        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=False, reasoning="ok"))
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=GateVerdict(block=False, reasoning="ok"))
 
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True)
         evt = make_stop_event(ctx=ctx)
@@ -202,10 +159,7 @@ class TestLlmGateAllows:
 
 class TestLlmGateNoSignalMatch:
     def test_llm_gate_skips_when_signals_dont_match(self, tmp_path: Path) -> None:
-        ctx = make_ctx(tmp_path)
-        ctx.transcript.recent = MagicMock(
-            return_value=make_recent_messages(["unrelated text"]),
-        )
+        ctx = make_ctx(tmp_path, texts=["unrelated text"])
 
         register_llm_gate(
             "Check this",
@@ -229,8 +183,7 @@ class TestLlmGateCallableMessage:
         from captain_hook.primitives.llm import GateVerdict
 
         verdict = GateVerdict(block=True, reasoning="very bad")
-        ctx = make_ctx(tmp_path, call_llm_return=verdict)
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=verdict)
 
         register_llm_gate(
             "Check this",
@@ -252,8 +205,7 @@ class TestLlmGateCallableMessage:
 
 class TestLlmGateNoneResponse:
     def test_llm_gate_returns_none_on_llm_none(self, tmp_path: Path) -> None:
-        ctx = make_ctx(tmp_path, call_llm_return=None)
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=None)
 
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True)
         evt = make_stop_event(ctx=ctx)
@@ -271,8 +223,7 @@ class TestLlmGateCustomVerdict:
     def test_llm_gate_custom_verdict_inverts(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import GateVerdict
 
-        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=False, reasoning="ok"))
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=GateVerdict(block=False, reasoning="ok"))
 
         register_llm_gate(
             "Check this",
@@ -300,8 +251,7 @@ class TestLlmGateCustomModel:
             severity: str = "low"
 
         verdict = CustomGateVerdict(block=True, reasoning="bad", severity="high")
-        ctx = make_ctx(tmp_path, call_llm_return=verdict)
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=verdict)
 
         register_llm_gate(
             "Check this",
@@ -325,8 +275,7 @@ class TestLlmNudgeWarns:
     def test_llm_nudge_warns_on_fire_true(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import NudgeVerdict
 
-        ctx = make_ctx(tmp_path, call_llm_return=NudgeVerdict(fire=True, reasoning="issue"))
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=NudgeVerdict(fire=True, reasoning="issue"))
 
         register_llm_nudge("Check this", message="WARNING", when=lambda evt: True)
         evt = make_post_tool_event(ctx=ctx)
@@ -345,8 +294,7 @@ class TestLlmNudgeAllows:
     def test_llm_nudge_allows_on_fire_false(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import NudgeVerdict
 
-        ctx = make_ctx(tmp_path, call_llm_return=NudgeVerdict(fire=False, reasoning="ok"))
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=NudgeVerdict(fire=False, reasoning="ok"))
 
         register_llm_nudge("Check this", message="WARNING", when=lambda evt: True)
         evt = make_post_tool_event(ctx=ctx)
@@ -364,8 +312,7 @@ class TestLlmNudgeAsyncSkippedInSync:
     def test_llm_nudge_async_skipped_in_sync(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import NudgeVerdict
 
-        ctx = make_ctx(tmp_path, call_llm_return=NudgeVerdict(fire=True, reasoning="issue"))
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=NudgeVerdict(fire=True, reasoning="issue"))
 
         register_llm_nudge(
             "Check this",
@@ -388,8 +335,7 @@ class TestLlmNudgeAsyncDispatched:
     def test_llm_nudge_async_dispatched_in_async_mode(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import NudgeVerdict
 
-        ctx = make_ctx(tmp_path, call_llm_return=NudgeVerdict(fire=True, reasoning="issue"))
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=NudgeVerdict(fire=True, reasoning="issue"))
 
         register_llm_nudge(
             "Check this",
@@ -464,8 +410,7 @@ class TestLlmEvaluateFiredThisTurn:
         from captain_hook.primitives.llm import GateVerdict
 
         verdict = GateVerdict(block=True, reasoning="bad")
-        ctx = make_ctx(tmp_path, call_llm_return=verdict)
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=verdict)
 
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True)
 
@@ -491,8 +436,7 @@ class TestLlmEvaluateWhenPredicate:
     def test_llm_evaluate_when_true_triggers_llm(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import GateVerdict
 
-        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=True, reasoning="bad"))
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["context text"]))
+        ctx = make_ctx(tmp_path, texts=["context text"], call_llm_return=GateVerdict(block=True, reasoning="bad"))
 
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True)
         evt = make_stop_event(ctx=ctx)
@@ -502,8 +446,7 @@ class TestLlmEvaluateWhenPredicate:
         ctx.call_llm.assert_called_once()
 
     def test_llm_evaluate_when_false_skips_llm(self, tmp_path: Path) -> None:
-        ctx = make_ctx(tmp_path)
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["context text"]))
+        ctx = make_ctx(tmp_path, texts=["context text"])
 
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: False)
         evt = make_stop_event(ctx=ctx)
@@ -523,8 +466,7 @@ class TestLlmEvaluateMaxContext:
         from captain_hook.primitives.llm import GateVerdict
 
         long_text = "x" * 5000
-        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=True, reasoning="bad"))
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages([long_text]))
+        ctx = make_ctx(tmp_path, texts=[long_text], call_llm_return=GateVerdict(block=True, reasoning="bad"))
 
         register_llm_gate(
             "Check this",
@@ -551,10 +493,7 @@ class TestPromptCheckBlock:
     def test_prompt_check_returns_block(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
 
-        ctx = make_ctx(tmp_path)
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages([]))
-        ctx.transcript.assistant_text = MagicMock(return_value="")
-        ctx.call_llm = MagicMock(return_value=PromptCheckVerdict(action="block", reason="stop that"))
+        ctx = make_ctx(tmp_path, call_llm_return=PromptCheckVerdict(action="block", reason="stop that"))
 
         evt = make_stop_event(ctx=ctx)
         result = prompt_check(evt, "Check {item}", {"item": "things"}, prefix="STYLE")
@@ -574,10 +513,7 @@ class TestPromptCheckWarn:
     def test_prompt_check_returns_warn(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
 
-        ctx = make_ctx(tmp_path)
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages([]))
-        ctx.transcript.assistant_text = MagicMock(return_value="")
-        ctx.call_llm = MagicMock(return_value=PromptCheckVerdict(action="warning", reason="minor issue"))
+        ctx = make_ctx(tmp_path, call_llm_return=PromptCheckVerdict(action="warning", reason="minor issue"))
 
         evt = make_stop_event(ctx=ctx)
         result = prompt_check(evt, "Check {item}", {"item": "things"}, prefix="STYLE")
@@ -597,10 +533,7 @@ class TestPromptCheckOk:
     def test_prompt_check_returns_none_on_ok(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
 
-        ctx = make_ctx(tmp_path)
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages([]))
-        ctx.transcript.assistant_text = MagicMock(return_value="")
-        ctx.call_llm = MagicMock(return_value=PromptCheckVerdict(action="ok", reason="looks good"))
+        ctx = make_ctx(tmp_path, call_llm_return=PromptCheckVerdict(action="ok", reason="looks good"))
 
         evt = make_stop_event(ctx=ctx)
         result = prompt_check(evt, "Check {item}", {"item": "things"}, prefix="STYLE")
@@ -617,10 +550,7 @@ class TestPromptCheckLlmNone:
     def test_prompt_check_returns_none_when_llm_returns_none(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import prompt_check
 
-        ctx = make_ctx(tmp_path)
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages([]))
-        ctx.transcript.assistant_text = MagicMock(return_value="")
-        ctx.call_llm = MagicMock(return_value=None)
+        ctx = make_ctx(tmp_path, call_llm_return=None)
 
         evt = make_stop_event(ctx=ctx)
         result = prompt_check(evt, "Check {item}", {"item": "things"}, prefix="STYLE")
@@ -638,13 +568,7 @@ class TestPromptCheckReasoning:
         from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
         from captain_hook.prompt import PromptMessage
 
-        ctx = make_ctx(tmp_path)
-        recent = MagicMock()
-        recent.messages = []
-        recent.assistant_text = MagicMock(return_value="I decided to do X because Y")
-        ctx.transcript.recent = MagicMock(return_value=recent)
-        ctx.transcript.assistant_text = MagicMock(return_value="I decided to do X because Y")
-        ctx.call_llm = MagicMock(return_value=PromptCheckVerdict(action="block", reason="bad reasoning"))
+        ctx = make_ctx(tmp_path, texts=["I decided to do X because Y"], call_llm_return=PromptCheckVerdict(action="block", reason="bad reasoning"))
 
         evt = make_stop_event(ctx=ctx)
         prompt_check(
@@ -673,8 +597,7 @@ class TestPromptBuilderUsed:
         from captain_hook.primitives.llm import GateVerdict
         from captain_hook.prompt import PromptMessage
 
-        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=True, reasoning="bad"))
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=GateVerdict(block=True, reasoning="bad"))
 
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True)
         evt = make_stop_event(ctx=ctx)
@@ -692,12 +615,7 @@ class TestPromptBuilderUsed:
         from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
         from captain_hook.prompt import PromptMessage
 
-        ctx = make_ctx(tmp_path)
-        recent = MagicMock()
-        recent.messages = []
-        recent.assistant_text = MagicMock(return_value="")
-        ctx.transcript.recent = MagicMock(return_value=recent)
-        ctx.call_llm = MagicMock(return_value=PromptCheckVerdict(action="ok", reason="fine"))
+        ctx = make_ctx(tmp_path, call_llm_return=PromptCheckVerdict(action="ok", reason="fine"))
 
         evt = make_stop_event(ctx=ctx)
         prompt_check(evt, "Check {item}", {"item": "things"}, prefix="STYLE")
@@ -714,10 +632,7 @@ class TestPromptBuilderUsed:
 
 class TestLlmEvaluateBothSignalsAndWhen:
     def test_llm_evaluate_ignores_when_if_signals_present(self, tmp_path: Path) -> None:
-        ctx = make_ctx(tmp_path)
-        ctx.transcript.recent = MagicMock(
-            return_value=make_recent_messages(["no match"]),
-        )
+        ctx = make_ctx(tmp_path, texts=["no match"])
 
         register_llm_gate(
             "Check this",
@@ -729,23 +644,6 @@ class TestLlmEvaluateBothSignalsAndWhen:
         result = dispatch(Event.Stop, evt, session_dir=tmp_path)
 
         assert result is None  # signals don't match, when not called
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-026 — llm_evaluate returns None when call_llm returns None
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-class TestLlmEvaluateNoneCallLlm:
-    def test_llm_evaluate_returns_none_on_none_call_llm(self, tmp_path: Path) -> None:
-        ctx = make_ctx(tmp_path, call_llm_return=None)
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["some context"]))
-
-        register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True)
-        evt = make_stop_event(ctx=ctx)
-        result = dispatch(Event.Stop, evt, session_dir=tmp_path)
-
-        assert result is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -771,10 +669,7 @@ class TestLlmBracesInPrompt:
         from captain_hook.prompt import PromptMessage
 
         verdict = GateVerdict(block=True, reasoning="bad")
-        ctx = make_ctx(tmp_path, call_llm_return=verdict)
-        ctx.transcript.recent = MagicMock(
-            return_value=make_recent_messages(['{"key": "value"}']),
-        )
+        ctx = make_ctx(tmp_path, texts=['{"key": "value"}'], call_llm_return=verdict)
 
         register_llm_gate("Check this code", message="BLOCKED", when=lambda evt: True)
         evt = make_stop_event(ctx=ctx)
@@ -790,10 +685,7 @@ class TestLlmBracesInPrompt:
         from captain_hook.prompt import PromptMessage
 
         verdict = NudgeVerdict(fire=True, reasoning="issue")
-        ctx = make_ctx(tmp_path, call_llm_return=verdict)
-        ctx.transcript.recent = MagicMock(
-            return_value=make_recent_messages(["def foo(): return {x: 1}"]),
-        )
+        ctx = make_ctx(tmp_path, texts=["def foo(): return {x: 1}"], call_llm_return=verdict)
 
         register_llm_nudge("Check this", message="WARNING", when=lambda evt: True)
         evt = make_post_tool_event(ctx=ctx)
@@ -815,10 +707,7 @@ class TestFireStateTiming:
         from captain_hook.primitives.llm import GateVerdict
         from captain_hook.state import PrimitiveState
 
-        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=False, reasoning="ok"))
-        ctx.transcript.recent = MagicMock(
-            return_value=make_recent_messages(["critical error found"]),
-        )
+        ctx = make_ctx(tmp_path, texts=["critical error found"], call_llm_return=GateVerdict(block=False, reasoning="ok"))
 
         register_llm_gate(
             "Check this",
@@ -836,10 +725,7 @@ class TestFireStateTiming:
         from captain_hook.primitives.llm import NudgeVerdict
         from captain_hook.state import PrimitiveState
 
-        ctx = make_ctx(tmp_path, call_llm_return=NudgeVerdict(fire=False, reasoning="ok"))
-        ctx.transcript.recent = MagicMock(
-            return_value=make_recent_messages(["critical error found"]),
-        )
+        ctx = make_ctx(tmp_path, texts=["critical error found"], call_llm_return=NudgeVerdict(fire=False, reasoning="ok"))
 
         register_llm_nudge(
             "Check this",
@@ -857,10 +743,7 @@ class TestFireStateTiming:
         from captain_hook.primitives.llm import GateVerdict
         from captain_hook.state import PrimitiveState
 
-        ctx = make_ctx(tmp_path, call_llm_return=GateVerdict(block=True, reasoning="bad"))
-        ctx.transcript.recent = MagicMock(
-            return_value=make_recent_messages(["critical error found"]),
-        )
+        ctx = make_ctx(tmp_path, texts=["critical error found"], call_llm_return=GateVerdict(block=True, reasoning="bad"))
 
         register_llm_gate(
             "Check this",
@@ -877,32 +760,6 @@ class TestFireStateTiming:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Regression: prompt_check should use Prompt builder for template construction
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-class TestPromptCheckUsesPromptBuilder:
-    def test_prompt_check_passes_prompt_message_not_str(self, tmp_path: Path) -> None:
-        from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
-        from captain_hook.prompt import PromptMessage
-
-        ctx = make_ctx(tmp_path)
-        recent = MagicMock()
-        recent.messages = []
-        recent.assistant_text = MagicMock(return_value="")
-        ctx.transcript.recent = MagicMock(return_value=recent)
-        ctx.call_llm = MagicMock(return_value=PromptCheckVerdict(action="ok", reason="fine"))
-
-        evt = make_stop_event(ctx=ctx)
-        prompt_check(evt, "Check {item}", {"item": "things"}, prefix="STYLE")
-
-        ctx.call_llm.assert_called_once()
-        call_args = ctx.call_llm.call_args
-        prompt_arg = call_args[0][0]
-        assert isinstance(prompt_arg, PromptMessage)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # Regression: signal-driven LLM hook suppression bug
 # Two signal-driven LLM hooks in the same turn: first returns no-action,
 # second should still fire (consumed hashes should not suppress later hooks).
@@ -913,10 +770,7 @@ class TestSignalConsumptionNotSuppressLaterHooks:
     def test_two_llm_gates_first_no_action_second_fires(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import GateVerdict
 
-        ctx = make_ctx(tmp_path, transcript_len=10)
-        ctx.transcript.recent = MagicMock(
-            return_value=make_recent_messages(["critical error found in module"]),
-        )
+        ctx = make_ctx(tmp_path, texts=["critical error found in module"])
 
         call_count = 0
 
@@ -953,10 +807,7 @@ class TestSignalConsumptionNotSuppressLaterHooks:
     def test_two_llm_nudges_first_no_action_second_fires(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import NudgeVerdict
 
-        ctx = make_ctx(tmp_path, transcript_len=10)
-        ctx.transcript.recent = MagicMock(
-            return_value=make_recent_messages(["critical error found in module"]),
-        )
+        ctx = make_ctx(tmp_path, texts=["critical error found in module"])
 
         call_count = 0
 
@@ -993,11 +844,7 @@ class TestSignalConsumptionNotSuppressLaterHooks:
         from captain_hook.primitives.llm import GateVerdict
         from captain_hook.state import PrimitiveState
 
-        ctx = make_ctx(tmp_path, transcript_len=10)
-        ctx.transcript.recent = MagicMock(
-            return_value=make_recent_messages(["critical error found"]),
-        )
-        ctx.call_llm = MagicMock(return_value=GateVerdict(block=False, reasoning="ok"))
+        ctx = make_ctx(tmp_path, texts=["critical error found"], call_llm_return=GateVerdict(block=False, reasoning="ok"))
 
         register_llm_gate(
             "Gate check",
@@ -1020,19 +867,13 @@ class TestSignalConsumptionNotSuppressLaterHooks:
 
 
 class TestLlmPrimitiveHelper:
-    def test_shared_helper_exists(self) -> None:
-        from captain_hook.primitives.llm import llm_primitive
-
-        assert callable(llm_primitive)
-
     def test_gate_and_nudge_produce_identical_handler_structure(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import GateVerdict, NudgeVerdict
 
         gate_dir = tmp_path / "gate"
         gate_dir.mkdir()
         gate_verdict = GateVerdict(block=True, reasoning="bad")
-        gate_ctx = make_ctx(gate_dir, call_llm_return=gate_verdict)
-        gate_ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["trigger"]))
+        gate_ctx = make_ctx(gate_dir, texts=["trigger"], call_llm_return=gate_verdict)
         register_llm_gate("Gate prompt", message="BLOCKED", when=lambda evt: True)
         gate_evt = make_stop_event(ctx=gate_ctx)
         gate_result = dispatch(Event.Stop, gate_evt, session_dir=gate_dir)
@@ -1044,8 +885,7 @@ class TestLlmPrimitiveHelper:
         nudge_dir = tmp_path / "nudge"
         nudge_dir.mkdir()
         nudge_verdict = NudgeVerdict(fire=True, reasoning="issue")
-        nudge_ctx = make_ctx(nudge_dir, call_llm_return=nudge_verdict)
-        nudge_ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["trigger"]))
+        nudge_ctx = make_ctx(nudge_dir, texts=["trigger"], call_llm_return=nudge_verdict)
         register_llm_nudge("Nudge prompt", message="WARNING", when=lambda evt: True)
         nudge_evt = make_post_tool_event(ctx=nudge_ctx)
         nudge_result = dispatch(Event.PostToolUse, nudge_evt, session_dir=nudge_dir)
@@ -1055,8 +895,7 @@ class TestLlmPrimitiveHelper:
     def test_helper_respects_async_parameter(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import NudgeVerdict
 
-        ctx = make_ctx(tmp_path, call_llm_return=NudgeVerdict(fire=True, reasoning="issue"))
-        ctx.transcript.recent = MagicMock(return_value=make_recent_messages(["trigger"]))
+        ctx = make_ctx(tmp_path, texts=["trigger"], call_llm_return=NudgeVerdict(fire=True, reasoning="issue"))
         register_llm_nudge("Async nudge", message="WARNING", when=lambda evt: True, async_=True)
 
         assert _state.hooks[-1].spec.async_ is True

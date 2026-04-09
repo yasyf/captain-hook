@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 from captain_hook.app import (
     _state,
@@ -19,27 +18,8 @@ from captain_hook.events import (
     StopEvent,
     SubagentStopEvent,
 )
-from captain_hook.session import SessionStore
 from captain_hook.types import Event, Tool
-
-
-def make_ctx(tmp_path: Path | None = None, transcript_len: int = 10) -> MagicMock:
-    ctx = MagicMock()
-    ctx.transcript = MagicMock()
-    ctx.transcript.__len__ = MagicMock(return_value=transcript_len)
-    ctx.transcript.has_skill = MagicMock(return_value=False)
-    ctx.transcript.has_read = MagicMock(return_value=False)
-    ctx.transcript.has_edit_to = MagicMock(return_value=False)
-    ctx.transcript.has_command = MagicMock(return_value=False)
-    ctx.transcript.count_tools = MagicMock(return_value=0)
-    ctx.t = ctx.transcript
-    store = SessionStore(tmp_path)
-    ctx.session = store
-    ctx.s = store
-    turn = MagicMock()
-    turn.start_idx = 5
-    ctx.turn = turn
-    return ctx
+from helpers import make_ctx
 
 
 def make_pre_tool_event(
@@ -164,12 +144,7 @@ class TestNudgeSignalsFire:
             signals=[Signal(pattern=r"git\s+push", weight=2)],
         )
 
-        ctx = make_ctx(tmp_path)
-        ctx.transcript.recent = MagicMock(
-            return_value=MagicMock(
-                messages=[MagicMock(text="running git push --force")],
-            )
-        )
+        ctx = make_ctx(tmp_path, texts=["running git push --force"])
         evt = make_post_tool_event(ctx=ctx)
         result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
 
@@ -191,12 +166,7 @@ class TestNudgeSignalsSkip:
             signals=Signals(patterns=[Signal(pattern=r"git\s+push", weight=2)], threshold=3),
         )
 
-        ctx = make_ctx(tmp_path)
-        ctx.transcript.recent = MagicMock(
-            return_value=MagicMock(
-                messages=[MagicMock(text="running git push --force")],
-            )
-        )
+        ctx = make_ctx(tmp_path, texts=["running git push --force"])
         evt = make_post_tool_event(ctx=ctx)
         result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
 
@@ -230,7 +200,7 @@ class TestGateOncePerTurn:
     def test_gate_blocks_only_once_per_turn(self, tmp_path: Path) -> None:
         register_gate("Stop here!", max_fires=5)
 
-        ctx = make_ctx(tmp_path, transcript_len=10)
+        ctx = make_ctx(tmp_path, n_messages=10)
         evt1 = make_stop_event(ctx=ctx)
         result1 = dispatch(Event.Stop, evt1, session_dir=tmp_path)
         assert result1 is not None
@@ -377,12 +347,7 @@ class TestSignalCitation:
             signals=[Signal(pattern=r"force.push", weight=1)],
         )
 
-        ctx = make_ctx(tmp_path)
-        ctx.transcript.recent = MagicMock(
-            return_value=MagicMock(
-                messages=[MagicMock(text="about to force push to main branch")],
-            )
-        )
+        ctx = make_ctx(tmp_path, texts=["about to force push to main branch"])
         evt = make_post_tool_event(ctx=ctx)
         result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
 
@@ -418,12 +383,7 @@ class TestNudgeSignalsPrecedence:
             signals=[Signal(pattern=r"no_match_xyz", weight=1)],
         )
 
-        ctx = make_ctx(tmp_path)
-        ctx.transcript.recent = MagicMock(
-            return_value=MagicMock(
-                messages=[MagicMock(text="safe text without match")],
-            )
-        )
+        ctx = make_ctx(tmp_path, texts=["safe text without match"])
         evt = make_post_tool_event(ctx=ctx)
 
         result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)

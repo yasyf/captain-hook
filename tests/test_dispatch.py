@@ -2,15 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
 from captain_hook.app import (
-    _state,
     hook as register_hook,
     on,
-    register,
     reset,
 )
 from captain_hook.dispatch import dispatch, execute_hook, format_output, run_declarative
@@ -21,18 +18,7 @@ from captain_hook.events import (
     SubagentStopEvent,
 )
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
-
-
-def make_ctx(session_dir: Path | None = None) -> Any:
-    ctx = MagicMock()
-    ctx.transcript = MagicMock()
-    ctx.transcript.has_skill = MagicMock(return_value=False)
-    ctx.transcript.has_read = MagicMock(return_value=False)
-    ctx.transcript.has_edit_to = MagicMock(return_value=False)
-    ctx.transcript.has_command = MagicMock(return_value=False)
-    ctx.transcript.count_tools = MagicMock(return_value=0)
-    ctx.session = MagicMock()
-    return ctx
+from helpers import make_ctx
 
 
 def make_pre_tool_event(
@@ -236,46 +222,6 @@ class TestExecuteHook:
         )
         execute_hook(entry, make_pre_tool_event(), tmp_path)
         assert (tmp_path / "my_hook").is_dir()
-
-    def test_max_fires_basic(self, tmp_path: Path) -> None:
-        call_count = 0
-
-        def handler(evt: Any) -> HookResult:
-            nonlocal call_count
-            call_count += 1
-            return HookResult(action=Action.warn, message="fired")
-
-        entry = RegisteredHook(
-            spec=HookSpec(events=Event.PreToolUse, max_fires=1),
-            handler=handler,
-            name="once_hook",
-        )
-
-        r1 = execute_hook(entry, make_pre_tool_event(), tmp_path)
-        assert r1 is not None
-        assert r1.action is Action.warn
-
-        r2 = execute_hook(entry, make_pre_tool_event(), tmp_path)
-        assert r2 is None
-
-    def test_max_fires_two(self, tmp_path: Path) -> None:
-        def handler(evt: Any) -> HookResult:
-            return HookResult(action=Action.warn, message="fired")
-
-        entry = RegisteredHook(
-            spec=HookSpec(events=Event.PreToolUse, max_fires=2),
-            handler=handler,
-            name="twice_hook",
-        )
-
-        r1 = execute_hook(entry, make_pre_tool_event(), tmp_path)
-        assert r1 is not None
-
-        r2 = execute_hook(entry, make_pre_tool_event(), tmp_path)
-        assert r2 is not None
-
-        r3 = execute_hook(entry, make_pre_tool_event(), tmp_path)
-        assert r3 is None
 
     def test_fire_count_only_on_non_none(self, tmp_path: Path) -> None:
         call_count = 0

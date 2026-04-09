@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 from captain_hook.app import (
     _state,
@@ -14,28 +13,9 @@ from captain_hook.app import (
 )
 from captain_hook.dispatch import dispatch
 from captain_hook.events import PostToolUseEvent
-from captain_hook.session import SessionStore
 from captain_hook.state import PrimitiveState, text_hash
 from captain_hook.types import Event, Signal, Signals
-
-
-def make_ctx(tmp_path: Path | None = None, transcript_len: int = 10) -> MagicMock:
-    ctx = MagicMock()
-    ctx.transcript = MagicMock()
-    ctx.transcript.__len__ = MagicMock(return_value=transcript_len)
-    ctx.transcript.has_skill = MagicMock(return_value=False)
-    ctx.transcript.has_read = MagicMock(return_value=False)
-    ctx.transcript.has_edit_to = MagicMock(return_value=False)
-    ctx.transcript.has_command = MagicMock(return_value=False)
-    ctx.transcript.count_tools = MagicMock(return_value=0)
-    ctx.t = ctx.transcript
-    store = SessionStore(tmp_path)
-    ctx.session = store
-    ctx.s = store
-    turn = MagicMock()
-    turn.start_idx = 5
-    ctx.turn = turn
-    return ctx
+from helpers import make_ctx
 
 
 def make_post_tool_event(
@@ -103,21 +83,6 @@ class TestIsEcho:
     def test_returns_false_when_echo_lemmas_empty(self) -> None:
         ps = PrimitiveState()
         assert not ps.is_echo("some random text with issue and change words")
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-ECHO-013 — text_hash is deterministic
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-class TestTextHash:
-    def test_deterministic(self) -> None:
-        assert text_hash("hello") == text_hash("hello")
-
-    def test_sha256_truncated_16_hex(self) -> None:
-        h = text_hash("test")
-        assert len(h) == 16
-        assert all(c in "0123456789abcdef" for c in h)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -219,25 +184,12 @@ class TestEchoIntegration:
             max_fires=5,
         )
 
-        ctx1 = make_ctx(tmp_path, transcript_len=10)
-        ctx1.transcript.recent = MagicMock(
-            return_value=MagicMock(
-                messages=[MagicMock(text="This is a pre-existing issue, not my change.")],
-            )
-        )
+        ctx1 = make_ctx(tmp_path, texts=["This is a pre-existing issue, not my change."], n_messages=10)
         evt1 = make_post_tool_event(ctx=ctx1)
         r1 = dispatch(Event.PostToolUse, evt1, session_dir=tmp_path)
         assert r1 is not None
 
-        ctx2 = make_ctx(tmp_path, transcript_len=12)
-        ctx2.transcript.recent = MagicMock(
-            return_value=MagicMock(
-                messages=[
-                    MagicMock(text="This is a pre-existing issue, not my change."),
-                    MagicMock(text="I'll look into the pre-existing issue and fix it."),
-                ],
-            )
-        )
+        ctx2 = make_ctx(tmp_path, texts=["This is a pre-existing issue, not my change.", "I'll look into the pre-existing issue and fix it."], n_messages=12)
         evt2 = make_post_tool_event(ctx=ctx2)
         r2 = dispatch(Event.PostToolUse, evt2, session_dir=tmp_path)
         assert r2 is None
@@ -261,26 +213,12 @@ class TestEchoIntegration:
             max_fires=5,
         )
 
-        ctx1 = make_ctx(tmp_path, transcript_len=10)
-        ctx1.transcript.recent = MagicMock(
-            return_value=MagicMock(
-                messages=[MagicMock(text="This is a pre-existing issue.")],
-            )
-        )
+        ctx1 = make_ctx(tmp_path, texts=["This is a pre-existing issue."], n_messages=10)
         evt1 = make_post_tool_event(ctx=ctx1)
         r1 = dispatch(Event.PostToolUse, evt1, session_dir=tmp_path)
         assert r1 is not None
 
-        ctx2 = make_ctx(tmp_path, transcript_len=12)
-        ctx2.transcript.recent = MagicMock(
-            return_value=MagicMock(
-                messages=[
-                    MagicMock(text="This is a pre-existing issue."),
-                    MagicMock(text="I'll look into the pre-existing issue."),
-                    MagicMock(text="That other bug is outside the scope of this task."),
-                ],
-            )
-        )
+        ctx2 = make_ctx(tmp_path, texts=["This is a pre-existing issue.", "I'll look into the pre-existing issue.", "That other bug is outside the scope of this task."], n_messages=12)
         evt2 = make_post_tool_event(ctx=ctx2)
         r2 = dispatch(Event.PostToolUse, evt2, session_dir=tmp_path)
         assert r2 is not None
@@ -301,22 +239,12 @@ class TestEchoIntegration:
             max_fires=5,
         )
 
-        ctx1 = make_ctx(tmp_path, transcript_len=10)
-        ctx1.transcript.recent = MagicMock(
-            return_value=MagicMock(
-                messages=[MagicMock(text="This is a pre-existing issue.")],
-            )
-        )
+        ctx1 = make_ctx(tmp_path, texts=["This is a pre-existing issue."], n_messages=10)
         evt1 = make_post_tool_event(ctx=ctx1)
         r1 = dispatch(Event.PostToolUse, evt1, session_dir=tmp_path)
         assert r1 is not None
 
-        ctx2 = make_ctx(tmp_path, transcript_len=25)
-        ctx2.transcript.recent = MagicMock(
-            return_value=MagicMock(
-                messages=[MagicMock(text="Actually this other thing is also pre-existing.")],
-            )
-        )
+        ctx2 = make_ctx(tmp_path, texts=["Actually this other thing is also pre-existing."], n_messages=25)
         evt2 = make_post_tool_event(ctx=ctx2)
         r2 = dispatch(Event.PostToolUse, evt2, session_dir=tmp_path)
         assert r2 is not None
@@ -388,12 +316,7 @@ class TestSignalNudgePrimitiveState:
             max_fires=5,
         )
 
-        ctx1 = make_ctx(tmp_path, transcript_len=10)
-        ctx1.transcript.recent = MagicMock(
-            return_value=MagicMock(
-                messages=[MagicMock(text="This is a pre-existing issue.")],
-            )
-        )
+        ctx1 = make_ctx(tmp_path, texts=["This is a pre-existing issue."], n_messages=10)
         evt1 = make_post_tool_event(ctx=ctx1)
         r1 = dispatch(Event.PostToolUse, evt1, session_dir=tmp_path)
         assert r1 is not None

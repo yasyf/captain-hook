@@ -19,18 +19,7 @@ from captain_hook.dispatch import execute_hook
 from captain_hook.events import PreToolUseEvent
 from captain_hook.session import SessionSlot
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
-
-
-def make_ctx() -> Any:
-    ctx = MagicMock()
-    ctx.transcript = MagicMock()
-    ctx.transcript.has_skill = MagicMock(return_value=False)
-    ctx.transcript.has_read = MagicMock(return_value=False)
-    ctx.transcript.has_edit_to = MagicMock(return_value=False)
-    ctx.transcript.has_command = MagicMock(return_value=False)
-    ctx.transcript.count_tools = MagicMock(return_value=0)
-    ctx.session = MagicMock()
-    return ctx
+from helpers import make_ctx
 
 
 def make_pre_tool_event() -> PreToolUseEvent:
@@ -146,11 +135,8 @@ class TestLlmLogging:
         assert any(r.levelno >= logging.WARNING for r in caplog.records)
 
     def test_prompt_check_logs_on_exception(self, caplog: pytest.LogCaptureFixture) -> None:
-        ctx = make_ctx()
+        ctx = make_ctx(texts=["some reasoning"])
         ctx.call_llm = MagicMock(side_effect=RuntimeError("LLM timeout"))
-        ctx.t = MagicMock()
-        ctx.t.recent.return_value = MagicMock()
-        ctx.t.recent.return_value.assistant_text.return_value = "some reasoning"
 
         from captain_hook.primitives.llm import prompt_check
 

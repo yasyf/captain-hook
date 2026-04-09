@@ -9,7 +9,6 @@ import pytest
 from pydantic import BaseModel
 
 from captain_hook.session import (
-    SessionSlot,
     SessionStore,
     cleanup_stale,
     ensure_session,
@@ -23,14 +22,6 @@ from captain_hook.session import (
 class MyModel(BaseModel):
     name: str
     value: int
-
-
-class MyCustomModel(BaseModel):
-    score: float
-
-
-class AnotherModel(BaseModel):
-    label: str
 
 
 # ── VAL-SESS-001: ensure_session creates session directory ───────────────────
@@ -125,90 +116,6 @@ def test_session_slot_creates_parent_dirs(tmp_path: Path) -> None:
     slot = store[MyModel]
     slot.set(MyModel(name="test", value=1))
     assert slot.get() == MyModel(name="test", value=1)
-
-
-# ── VAL-STATE (SessionSlot/SessionStore basics needed for context) ───────────
-
-
-def test_session_slot_get_returns_none_when_empty(tmp_path: Path) -> None:
-    store = SessionStore(tmp_path)
-    assert store[MyModel].get() is None
-
-
-def test_session_slot_set_get_roundtrip(tmp_path: Path) -> None:
-    store = SessionStore(tmp_path)
-    slot = store[MyModel]
-    obj = MyModel(name="hello", value=99)
-    slot.set(obj)
-    assert slot.get() == obj
-
-
-def test_session_slot_snake_case_filename(tmp_path: Path) -> None:
-    store = SessionStore(tmp_path)
-    slot = store[MyCustomModel]
-    assert slot.path.name == "my_custom_model.json"
-
-
-def test_session_slot_delete(tmp_path: Path) -> None:
-    store = SessionStore(tmp_path)
-    slot = store[MyModel]
-    slot.set(MyModel(name="x", value=1))
-    assert slot.get() is not None
-    slot.delete()
-    assert slot.get() is None
-
-
-def test_session_store_none_dir() -> None:
-    store = SessionStore(None)
-    slot = store[MyModel]
-    assert slot.get() is None
-    slot.set(MyModel(name="x", value=1))
-    assert slot.get() is None
-
-
-def test_multiple_models_share_dir(tmp_path: Path) -> None:
-    store = SessionStore(tmp_path)
-    store[MyModel].set(MyModel(name="a", value=1))
-    store[AnotherModel].set(AnotherModel(label="b"))
-    assert (tmp_path / "my_model.json").exists()
-    assert (tmp_path / "another_model.json").exists()
-
-
-def test_corrupted_json_returns_none(tmp_path: Path) -> None:
-    store = SessionStore(tmp_path)
-    slot = store[MyModel]
-    slot.path.write_text("not valid json {{{")
-    assert slot.get() is None
-
-
-def test_session_slot_generic_type(tmp_path: Path) -> None:
-    store = SessionStore(tmp_path)
-    slot = store[MyModel]
-    assert isinstance(slot, SessionSlot)
-    slot.set(MyModel(name="test", value=1))
-    result = slot.get()
-    assert isinstance(result, MyModel)
-
-
-def test_session_slot_set_creates_parents(tmp_path: Path) -> None:
-    nested = tmp_path / "a" / "b" / "c"
-    store = SessionStore(nested)
-    slot = store[MyModel]
-    slot.set(MyModel(name="deep", value=42))
-    assert slot.get() == MyModel(name="deep", value=42)
-
-
-def test_session_slot_set_oserror_caught(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    store = SessionStore(tmp_path)
-    slot = store[MyModel]
-    monkeypatch.setattr(Path, "write_text", lambda *a, **kw: (_ for _ in ()).throw(OSError("no perms")))
-    slot.set(MyModel(name="fail", value=0))
-
-
-def test_session_slot_delete_nonexistent(tmp_path: Path) -> None:
-    store = SessionStore(tmp_path)
-    slot = store[MyModel]
-    slot.delete()
 
 
 # ── VAL-CTX: HookContext ─────────────────────────────────────────────────────

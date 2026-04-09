@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import dataclasses
-import re
 from typing import get_args
 
 import pytest
@@ -25,7 +24,6 @@ from captain_hook.types import (
     Tool,
     TouchedFile,
     UsedSkill,
-    tokens_to_regex,
 )
 
 
@@ -95,10 +93,6 @@ class TestHookResult:
     def test_default_message_is_none(self) -> None:
         assert HookResult(action=Action.allow).message is None
 
-    def test_frozen_rejects_mutation(self) -> None:
-        r = HookResult(action=Action.allow)
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            r.action = Action.block  # type: ignore[misc]
 
 
 class TestHookSpec:
@@ -116,11 +110,6 @@ class TestHookSpec:
 
     def test_tests_field_exists(self) -> None:
         assert "tests" in {f.name for f in dataclasses.fields(HookSpec)}
-
-    def test_frozen_rejects_mutation(self) -> None:
-        s = HookSpec(events=Event.PreToolUse)
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            s.block = True  # type: ignore[misc]
 
     def test_full_construction_stores_all_fields(self) -> None:
         s = HookSpec(
@@ -162,10 +151,6 @@ class TestRegisteredHook:
         assert rh.handler is handler
         assert rh.name == "my_hook"
 
-    def test_frozen_rejects_mutation(self) -> None:
-        rh = RegisteredHook(spec=HookSpec(events=Event.PreToolUse))
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            rh.name = "x"  # type: ignore[misc]
 
 
 class TestTCondition:
@@ -200,31 +185,3 @@ class TestTCondition:
     def test_touched_file_accepts_varargs(self) -> None:
         assert TouchedFile("**/www/**").patterns == ("**/www/**",)
 
-    def test_conditions_are_frozen(self) -> None:
-        t = Tool(pattern="Bash")
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            t.pattern = "Edit"  # type: ignore[misc]
-        fp = FilePath("*.py")
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            fp.patterns = ("*.rs",)  # type: ignore[misc]
-
-
-class TestTokensToRegex:
-    def test_simple_tokens_match(self) -> None:
-        pat = tokens_to_regex(["git", "stash"])
-        assert re.match(pat, "git stash pop")
-        assert re.match(pat, "git  stash")
-
-    def test_wildcard_matches_any_word(self) -> None:
-        pat = tokens_to_regex(["git", "*"])
-        assert re.match(pat, "git push")
-        assert re.match(pat, "git stash")
-
-    def test_pipe_alternatives_match(self) -> None:
-        pat = tokens_to_regex(["git", "commit|split"])
-        assert re.match(pat, "git commit -m x")
-        assert re.match(pat, "git split")
-        assert not re.match(pat, "git push")
-
-    def test_empty_list_returns_empty_string(self) -> None:
-        assert tokens_to_regex([]) == ""

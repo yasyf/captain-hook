@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from captain_hook.prompt import Prompt, PromptMessage
 
 
@@ -137,18 +139,9 @@ class TestPromptContextNoOp:
         assert "<tag>" not in rendered
         assert "<real>" in rendered
 
-    def test_context_with_whitespace_only_is_noop(self) -> None:
-        p = Prompt().system("sys").context("tag", "   ").ask("q")
-        rendered = str(p)
-        assert "<tag>" not in rendered
-
-    def test_context_with_newlines_only_is_noop(self) -> None:
-        p = Prompt().system("sys").context("tag", "\n  \n  \n").ask("q")
-        rendered = str(p)
-        assert "<tag>" not in rendered
-
-    def test_context_with_tabs_only_is_noop(self) -> None:
-        p = Prompt().system("sys").context("tag", "\t\t\t").ask("q")
+    @pytest.mark.parametrize("content", ["   ", "\n  \n  \n", "\t\t\t"])
+    def test_context_with_whitespace_only_is_noop(self, content: str) -> None:
+        p = Prompt().system("sys").context("tag", content).ask("q")
         rendered = str(p)
         assert "<tag>" not in rendered
 
@@ -157,14 +150,6 @@ class TestPromptContextNoOp:
         rendered = str(p)
         assert "<tag>" in rendered
         assert "real content" in rendered
-
-
-class TestPromptCallLlmCompatibility:
-    def test_str_prompt_usable_as_template(self) -> None:
-        p = Prompt().system("You are helpful.").ask("Explain Python.")
-        template = str(p)
-        assert isinstance(template, str)
-        assert len(template) > 0
 
 
 class TestPromptSystemIdempotent:
@@ -196,11 +181,6 @@ class TestPromptAsk:
 
 
 class TestPromptEmpty:
-    def test_empty_prompt_produces_valid_output(self) -> None:
-        p = Prompt()
-        rendered = str(p)
-        assert isinstance(rendered, str)
-
     def test_empty_prompt_is_empty_or_minimal(self) -> None:
         p = Prompt()
         rendered = str(p)

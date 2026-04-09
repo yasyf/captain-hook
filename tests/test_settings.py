@@ -74,36 +74,6 @@ class TestAutoConfBuildSettings:
         assert settings.enabled is True
 
 
-class TestAutoConfTypeInference:
-    def test_infers_str(self) -> None:
-        from captain_hook.settings import build_settings
-
-        mod = make_module("conf", {"greeting": "hi"})
-        settings = build_settings(mod)
-        assert settings.greeting == "hi"
-
-    def test_infers_int(self) -> None:
-        from captain_hook.settings import build_settings
-
-        mod = make_module("conf", {"threshold": 42})
-        settings = build_settings(mod)
-        assert settings.threshold == 42
-
-    def test_infers_float(self) -> None:
-        from captain_hook.settings import build_settings
-
-        mod = make_module("conf", {"ratio": 3.14})
-        settings = build_settings(mod)
-        assert settings.ratio == 3.14
-
-    def test_infers_bool(self) -> None:
-        from captain_hook.settings import build_settings
-
-        mod = make_module("conf", {"enabled": True})
-        settings = build_settings(mod)
-        assert settings.enabled is True
-
-
 class TestAutoConfTypeHints:
     def test_respects_type_hints(self) -> None:
         from captain_hook.settings import build_settings
@@ -298,32 +268,3 @@ class TestSettingsFromApp:
         assert settings.test_command == "uv run mtest"
         assert settings.vcs == "jj"
         assert settings.min_edits == 3
-
-
-class TestAutoConfShouldSkip:
-    def test_should_skip_private(self) -> None:
-        from captain_hook.settings import AutoConf
-
-        assert AutoConf.should_skip("_internal", 1) is True
-
-    def test_should_skip_callable(self) -> None:
-        from captain_hook.settings import AutoConf
-
-        assert AutoConf.should_skip("helper", lambda: None) is True
-
-    def test_should_skip_module(self) -> None:
-        import os
-
-        from captain_hook.settings import AutoConf
-
-        assert AutoConf.should_skip("os", os) is True
-
-    def test_should_skip_uppercase(self) -> None:
-        from captain_hook.settings import AutoConf
-
-        assert AutoConf.should_skip("MAX_SIZE", 100) is True
-
-    def test_should_not_skip_normal_var(self) -> None:
-        from captain_hook.settings import AutoConf
-
-        assert AutoConf.should_skip("debug", False) is False

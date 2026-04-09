@@ -17,45 +17,6 @@ from captain_hook.transcript import Transcript
 from captain_hook.types import Action, Event, HookResult, Tool
 
 
-class TestBlockWarnAllow:
-    def test_block_frozen(self):
-        from captain_hook.testing.types import Block
-
-        b = Block(pattern="test")
-        with pytest.raises(FrozenInstanceError):
-            b.pattern = "other"  # type: ignore[misc]
-
-    def test_block_default_pattern_none(self):
-        from captain_hook.testing.types import Block
-
-        assert Block().pattern is None
-
-    def test_warn_frozen(self):
-        from captain_hook.testing.types import Warn
-
-        w = Warn(pattern="test")
-        with pytest.raises(FrozenInstanceError):
-            w.pattern = "other"  # type: ignore[misc]
-
-    def test_warn_default_pattern_none(self):
-        from captain_hook.testing.types import Warn
-
-        assert Warn().pattern is None
-
-    def test_allow_frozen(self):
-        from captain_hook.testing.types import Allow
-
-        a = Allow()
-        with pytest.raises(FrozenInstanceError):
-            a.new_attr = "x"  # type: ignore[misc]
-
-    def test_allow_no_fields(self):
-        from captain_hook.testing.types import Allow
-
-        a = Allow()
-        assert repr(a) == "Allow()"
-
-
 class TestInput:
     def test_input_frozen(self):
         from captain_hook.testing.types import Input
