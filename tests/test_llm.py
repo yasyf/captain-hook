@@ -10,7 +10,7 @@ from captain_hook.app import (
 from captain_hook.dispatch import dispatch
 from captain_hook.events import PostToolUseEvent, StopEvent, SubagentStopEvent
 from captain_hook.types import Action, Event, Signal
-from helpers import make_ctx
+from captain_hook.tests.helpers import make_ctx
 
 
 def make_stop_event(ctx: Any = None) -> StopEvent:

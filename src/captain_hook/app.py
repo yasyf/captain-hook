@@ -124,7 +124,6 @@ def hook(
     tests: TTest | None = None,
     async_: bool = False,
 ) -> None:
-    """Register a declarative hook with a fixed message."""
     if message is None:
         raise TypeError(
             "hook() requires message= for declarative hooks. "
@@ -161,7 +160,6 @@ def on(
     tests: TTest | None = None,
     async_: bool = False,
 ) -> Callable[[HookHandler], HookHandler]:
-    """Decorator to register a handler-based hook."""
     validate_conditions(only_if, "only_if")
     validate_conditions(skip_if, "skip_if")
     spec = HookSpec(
@@ -201,7 +199,6 @@ def register(
     tests: TTest | None = None,
     async_: bool = False,
 ) -> Callable[[HookHandler], HookHandler] | None:
-    """Register a hook — declarative with ``message`` or as a decorator without."""
     validate_conditions(only_if, "only_if")
     validate_conditions(skip_if, "skip_if")
 

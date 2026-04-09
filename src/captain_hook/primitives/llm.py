@@ -63,7 +63,6 @@ def llm_evaluate[M: BaseModel](
     agent: bool = False,
     transcript: bool = False,
 ) -> M | None:
-    """Evaluate an LLM prompt against transcript context with signal pre-filtering."""
     if fired_this_turn(evt):
         return None
 

@@ -18,14 +18,11 @@ M = TypeVar("M", bound=BaseModel)
 
 
 def text_matches(pattern: str) -> Callable[[Transcript], bool]:
-    """Create a transcript predicate that checks ``full_text`` against a regex pattern."""
     return lambda t: bool(re.search(pattern, t.full_text))
 
 
 @dataclass(frozen=True, kw_only=True)
 class Step:
-    """A single step in a workflow: a transcript predicate with gate message when incomplete."""
-
     name: str
     check: Callable[[Transcript], bool]
     stopped_at: str
@@ -34,8 +31,6 @@ class Step:
 
 @dataclass(frozen=True, kw_only=True)
 class Artifact(Generic[M]):  # noqa: UP046
-    """A file artifact that must exist and validate after workflow completion."""
-
     path: str
     model: type[M]
     validate: Callable[[M], str | None] = lambda _: None
@@ -43,8 +38,6 @@ class Artifact(Generic[M]):  # noqa: UP046
 
 @dataclass(frozen=True, kw_only=True)
 class Workflow:
-    """A multi-step guard that blocks until all steps pass, a marker appears, and artifacts validate."""
-
     label: str
     marker: str
     steps: list[Step]
@@ -90,7 +83,6 @@ def workflow(
     post_complete: Callable[[BaseHookEvent], HookResult | None] | None = None,
     tests: TTest | None = None,
 ) -> None:
-    """Register a multi-step workflow guard on SubagentStop."""
     from captain_hook.app import on
 
     w = Workflow(

@@ -15,7 +15,7 @@ from captain_hook.dispatch import dispatch
 from captain_hook.events import PostToolUseEvent
 from captain_hook.state import PrimitiveState, text_hash
 from captain_hook.types import Event, Signal, Signals
-from helpers import make_ctx
+from captain_hook.tests.helpers import make_ctx
 
 
 def make_post_tool_event(

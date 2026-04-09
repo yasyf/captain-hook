@@ -18,7 +18,7 @@ from captain_hook.events import (
     SubagentStopEvent,
 )
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
-from helpers import make_ctx
+from captain_hook.tests.helpers import make_ctx
 
 
 def make_pre_tool_event(

@@ -25,7 +25,7 @@ from captain_hook.types import (
     TestFile,
     Tool,
 )
-from helpers import make_ctx
+from captain_hook.tests.helpers import make_ctx
 
 
 @pytest.fixture

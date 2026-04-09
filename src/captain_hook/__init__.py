@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 from captain_hook.app import hook, on, register
-from captain_hook.classifiers import MessageClassifier
-from captain_hook.classifiers import detect as detect_classifier
 from captain_hook.cli import generate_settings, generate_settings_json
 from captain_hook.utils import read_json
 from captain_hook.command import Command, CommandLine, Redirect
 from captain_hook.context import HookContext
-from captain_hook.dispatch import dispatch
 from captain_hook.events import (
     BaseHookEvent,
     NotificationEvent,
@@ -37,18 +34,11 @@ from captain_hook.primitives import (
 )
 from captain_hook.primitives.llm import llm_evaluate
 from captain_hook.prompt import Prompt, PromptMessage
-from captain_hook.session import SessionSlot, SessionStore, cleanup_stale, ensure_session, session_hash, state_root
+from captain_hook.session import SessionSlot, SessionStore
 from captain_hook.settings import AutoConf, HooksSettings, build_settings
 from captain_hook.signals import cite_message, extract_signal_context, resolve_signals, score_signals, transcript_texts
-from captain_hook.signals.nlp import Clause, NlpSignal, Phrase, dep_related, nlp_scan
-from captain_hook.state import (
-    HookState,
-    PrimitiveState,
-    fired_this_turn,
-    hook_name,
-    record_fire,
-    text_hash,
-)
+from captain_hook.signals.nlp import Clause, NlpSignal, Phrase
+from captain_hook.state import HookState, PrimitiveState
 from captain_hook.testing import Allow, Block, Input, TranscriptFixture, Warn
 from captain_hook.testing import TTest as TTest
 from captain_hook.tools import EditOp, TaskOp, WriteOp
@@ -110,14 +100,14 @@ from captain_hook.workflow import Artifact, Step, Workflow, text_matches
 from captain_hook.workflow import workflow as workflow
 
 __all__ = [
-    "CommandLine",
-    "File",
-    "PathMatcher",
-    "Redirect",
+    # registration
+    "hook",
+    "on",
+    "register",
+    # events
     "Action",
     "Agent",
     "BaseHookEvent",
-    "Command",
     "Content",
     "CustomCondition",
     "Event",
@@ -145,22 +135,13 @@ __all__ = [
     "TouchedFile",
     "UsedSkill",
     "UserPromptSubmitEvent",
+    # context
     "HookContext",
     "SessionSlot",
     "SessionStore",
-    "cleanup_stale",
-    "ensure_session",
-    "session_hash",
-    "state_root",
     "HookState",
     "PrimitiveState",
-    "fired_this_turn",
-    "hook_name",
-    "record_fire",
-    "text_hash",
-    "cite_message",
-    "dispatch",
-    "extract_signal_context",
+    # primitives
     "block_command",
     "gate",
     "GateVerdict",
@@ -172,20 +153,38 @@ __all__ = [
     "NudgeVerdict",
     "prompt_check",
     "PromptCheckVerdict",
+    "warn_command",
+    # signals
+    "cite_message",
+    "extract_signal_context",
     "resolve_signals",
     "score_signals",
     "tokens_to_regex",
     "transcript_texts",
-    "warn_command",
+    "Clause",
+    "NlpSignal",
+    "Phrase",
+    # commands / files
+    "Command",
+    "CommandLine",
+    "File",
+    "PathMatcher",
+    "Redirect",
+    # prompts
     "Prompt",
     "PromptMessage",
+    # settings / CLI
     "AutoConf",
     "HooksSettings",
     "build_settings",
     "generate_settings",
     "generate_settings_json",
+    "read_json",
+    # tools
     "EditOp",
     "TaskOp",
+    "WriteOp",
+    # transcript
     "Transcript",
     "TranscriptMessage",
     "TranscriptSlice",
@@ -193,7 +192,6 @@ __all__ = [
     "ToolUseQuery",
     "ToolUseSequence",
     "Turn",
-    "WriteOp",
     "AgentInput",
     "BashInput",
     "ContentBlock",
@@ -213,26 +211,17 @@ __all__ = [
     "WriteInput",
     "parse_content_block",
     "parse_tool_input",
-    "Clause",
-    "NlpSignal",
-    "Phrase",
-    "dep_related",
-    "nlp_scan",
+    # workflow
+    "Artifact",
+    "Step",
+    "Workflow",
+    "text_matches",
+    "workflow",
+    # testing
     "Allow",
     "Block",
     "Input",
     "TranscriptFixture",
     "TTest",
     "Warn",
-    "detect_classifier",
-    "MessageClassifier",
-    "Artifact",
-    "Step",
-    "Workflow",
-    "text_matches",
-    "workflow",
-    "hook",
-    "on",
-    "register",
-    "read_json",
 ]

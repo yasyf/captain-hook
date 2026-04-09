@@ -14,7 +14,6 @@ TSignalPattern = Signal | NlpSignal
 
 
 def score_signals(patterns: Sequence[TSignalPattern], text: str) -> int:
-    """Sum the weights of all signal patterns that match the given text."""
     from captain_hook.signals.nlp import nlp_scan
 
     total = 0
@@ -30,7 +29,6 @@ def score_signals(patterns: Sequence[TSignalPattern], text: str) -> int:
 
 
 def extract_signal_context(patterns: Sequence[TSignalPattern], text: str) -> list[str]:
-    """Extract matching lines (for regex) or sentences (for NLP) from text."""
     from captain_hook.signals.nlp import nlp_scan
 
     result: list[str] = []

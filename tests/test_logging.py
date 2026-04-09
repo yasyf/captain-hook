@@ -19,7 +19,7 @@ from captain_hook.dispatch import execute_hook
 from captain_hook.events import PreToolUseEvent
 from captain_hook.session import SessionSlot
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
-from helpers import make_ctx
+from captain_hook.tests.helpers import make_ctx
 
 
 def make_pre_tool_event() -> PreToolUseEvent:
