@@ -1,0 +1,242 @@
+# Workflows
+
+Workflows enforce multi-step checklists before an agent is allowed to stop. They are the right choice when you need to guarantee that a sequence of actions has been completed -- running linters, executing tests, generating artifacts -- before work is considered done.
+
+## When to use workflows
+
+Use a workflow when:
+
+- Multiple steps must be completed in a session (not just one gate condition)
+- You need to validate that files were created on disk
+- You want to run a callback after all steps pass
+- The agent should receive specific "next step" instructions when blocked
+
+For single-condition gates, use `gate()` instead. Workflows are for ordered checklists.
+
+## Registration
+
+Register a workflow with `workflow()`. It creates a blocking hook on `SubagentStop` with `max_fires=1`.
+
+```python
+from captain_hook import workflow, Step, text_matches
+
+workflow(
+    label="QA-GATE",
+    marker="QA COMPLETE",
+    steps=[
+        Step(
+            name="run linter",
+            check=text_matches(r"ruff check"),
+            stopped_at="Linter has not been run.",
+            next_step="Run: ruff check src/",
+        ),
+        Step(
+            name="run tests",
+            check=text_matches(r"pytest.*passed"),
+            stopped_at="Tests have not been run.",
+            next_step="Run: pytest tests/ -x",
+        ),
+    ],
+)
+```
+
+**Parameters:**
+
+:   `label` -- prefix for all messages from this workflow (e.g., `"QA-GATE"`)
+:   `marker` -- text that must appear in the transcript to indicate completion
+:   `steps` -- ordered list of `Step` objects to validate
+:   `artifacts` -- list of `Artifact` objects for file validation (optional)
+:   `post_complete` -- callback `(evt) -> HookResult | None` invoked after all checks pass (optional)
+:   `tests` -- inline test dict (optional)
+
+## How workflows resolve
+
+When a subagent attempts to stop, the workflow guard runs this evaluation pipeline:
+
+```mermaid
+flowchart TD
+    A[SubagentStop event] --> B{Marker in transcript?}
+    B -->|No| C[Find first incomplete step]
+    C --> D[Block: label INCOMPLETE - stopped_at + next_step]
+    B -->|Yes| E{All artifacts valid?}
+    E -->|No| F[Block: label INCOMPLETE - artifact error]
+    E -->|Yes| G{post_complete defined?}
+    G -->|No| H[Allow stop]
+    G -->|Yes| I[Run post_complete callback]
+    I --> H
+```
+
+### Step 1: Marker check
+
+The guard first checks whether the `marker` string appears anywhere in the transcript's full text. If found, the workflow skips step evaluation and proceeds directly to artifact validation.
+
+The marker is a string the agent is expected to output (or that appears in tool output) when the workflow is complete. Choose a distinctive marker that won't appear accidentally.
+
+### Step 2: Step evaluation
+
+If the marker is absent, the guard iterates through steps in order. The first step whose `check` predicate returns `False` gates the agent with a message combining `stopped_at` and `next_step`:
+
+```
+QA-GATE INCOMPLETE: Linter has not been run. Run: ruff check src/
+```
+
+### Step 3: Artifact validation
+
+After the marker is found, each `Artifact` is validated:
+
+1. The file at `artifact.path` must exist on disk
+2. The file must parse as valid JSON matching the artifact's Pydantic `model`
+3. The optional `validate` callback must return `None` (any string return is treated as an error message)
+
+### Step 4: Post-complete callback
+
+If all steps and artifacts pass, the optional `post_complete` callback runs. It receives the event and can return a `HookResult` for a final gate or warning, or `None` to allow the stop.
+
+## Step objects
+
+Each `Step` represents one checkpoint in the workflow.
+
+```python
+from captain_hook import Step, text_matches
+
+Step(
+    name="run tests",
+    check=text_matches(r"pytest.*\d+ passed"),
+    stopped_at="Tests have not been run.",
+    next_step="Run: pytest tests/ -x",
+)
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | `str` | Human-readable name for the step (used in logging) |
+| `check` | `(Transcript) -> bool` | Predicate that returns `True` when the step is complete |
+| `stopped_at` | `str` | Message explaining what is incomplete |
+| `next_step` | `str` | Instruction telling the agent what to do next |
+
+The `check` function receives the full `Transcript` object. Use `text_matches()` for simple regex checks against the transcript text, or write a custom predicate for more complex logic:
+
+```python
+from captain_hook import Step, Transcript
+
+def has_enough_tests(t: Transcript) -> bool:
+    return t.tool_uses.where(name="Edit", file="test_*.py").count() >= 3
+
+Step(
+    name="write tests",
+    check=has_enough_tests,
+    stopped_at="Not enough test files have been written.",
+    next_step="Write at least 3 test files before stopping.",
+)
+```
+
+## text_matches
+
+A convenience factory that creates a check predicate from a regex pattern. It searches the transcript's `full_text` property.
+
+```python
+from captain_hook import text_matches
+
+# Matches if "ruff check" appears anywhere in the transcript
+check = text_matches(r"ruff check")
+
+# Matches if pytest reports passing tests
+check = text_matches(r"pytest.*\d+ passed")
+
+# Matches if a specific command was run
+check = text_matches(r"uv run mtest.*ok")
+```
+
+## Artifacts
+
+`Artifact` objects validate that files exist on disk and contain valid data. They are checked after the marker is found in the transcript.
+
+```python
+from pydantic import BaseModel
+from captain_hook import workflow, Step, Artifact, text_matches
+
+class LintReport(BaseModel):
+    errors: int
+    warnings: int
+
+workflow(
+    label="QUALITY",
+    marker="QUALITY CHECK DONE",
+    steps=[
+        Step(
+            name="run linter",
+            check=text_matches(r"ruff check"),
+            stopped_at="Run the linter.",
+            next_step="Run: ruff check src/ --output-format json > reports/lint.json",
+        ),
+    ],
+    artifacts=[
+        Artifact(
+            path="reports/lint.json",
+            model=LintReport,
+            validate=lambda r: "Too many errors" if r.errors > 0 else None,
+        ),
+    ],
+)
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `path` | `str` | File path to check (relative to the project root) |
+| `model` | `type[BaseModel]` | Pydantic model to validate the file's JSON content |
+| `validate` | `(M) -> str \| None` | Optional validator; return a string to block, `None` to pass |
+
+**Validation sequence:**
+
+1. File must exist at `path`
+2. File content must parse as JSON and validate against `model`
+3. If `validate` is provided, it must return `None`
+
+Any failure produces a block message: `QUALITY INCOMPLETE: reports/lint.json not found.`
+
+## post_complete callback
+
+Run a final check or side effect after all steps and artifacts pass:
+
+```python
+from captain_hook import workflow, Step, text_matches, HookResult, Action
+
+def final_review(evt):
+    edit_count = evt.ctx.t.tool_uses.where(name="Edit").count()
+    if edit_count > 20:
+        return HookResult(
+            action=Action.warn,
+            message=f"Large changeset ({edit_count} edits) -- consider splitting the PR.",
+        )
+    return None
+
+workflow(
+    label="REVIEW",
+    marker="REVIEW COMPLETE",
+    steps=[
+        Step(
+            name="self-review",
+            check=text_matches(r"self.review|code review"),
+            stopped_at="Perform a self-review.",
+            next_step="Review your changes against the style guide.",
+        ),
+    ],
+    post_complete=final_review,
+)
+```
+
+The callback receives the event and returns `HookResult | None`. A block result prevents the stop; a warn result adds advisory context; `None` allows the stop.
+
+## Tips
+
+**Naming conventions.** Use uppercase labels like `"QA-GATE"`, `"REVIEW"`, `"DEPLOY-CHECK"` so the block messages stand out in the transcript. The label is prepended to all messages: `QA-GATE INCOMPLETE: ...`.
+
+**Marker placement.** The marker should be something the agent explicitly outputs after completing the workflow, not something that appears incidentally. `"QA COMPLETE"` is better than `"done"`.
+
+**Debugging workflows.** When a workflow unexpectedly blocks, check:
+
+1. Is the marker text exactly as specified (case-sensitive)?
+2. Does the `check` predicate match the actual transcript text? Use `text_matches()` with a regex that accounts for formatting variation.
+3. For artifacts, does the file exist at the exact `path` and does its content validate against the `model`?
+
+**Single fire.** Workflows register with `max_fires=1` on `SubagentStop`. Once the workflow allows the stop, it will not fire again in the same session.

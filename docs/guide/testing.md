@@ -1,4 +1,4 @@
-# Testing Guide
+# Testing
 
 ## Inline tests
 
@@ -21,7 +21,7 @@ block_command(
 Run all inline tests:
 
 ```bash
-python -m captain_hook test --hooks src/
+captain-hook test --hooks src/
 ```
 
 ### Input fields

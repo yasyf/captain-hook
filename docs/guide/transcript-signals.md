@@ -1,4 +1,4 @@
-# Transcript & Signals Guide
+# Transcript & Signals
 
 ## Transcript
 

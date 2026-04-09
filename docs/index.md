@@ -1,25 +1,80 @@
 # captain-hook
 
-A declarative hook framework for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+**Declarative hooks for Claude Code.** Define rules that intercept tool calls, enforce policies, and guide agent behavior — in pure Python.
 
-Build hooks that intercept Claude Code lifecycle events — tool use, stop, prompt submit — and produce actions (block, warn, allow) using composable conditions, signal scoring, and LLM-powered evaluation.
+```python
+from captain_hook import block_command
 
-## Features
+block_command(["git", "stash"], reason="Use jj instead", hint="Run `jj shelve`")
+```
 
-- **Declarative registration** — define hooks in one line with `hook()`, or use primitives like `nudge()`, `gate()`, `lint()`, and `block_command()`
-- **Composable conditions** — filter hooks with `only_if` / `skip_if` using typed condition objects (`Tool`, `FilePath`, `Command`, `TouchedFile`, etc.)
-- **Signal scoring** — score transcript text with regex and NLP patterns, with echo suppression and content-hash deduplication
-- **LLM evaluation** — gate or nudge with LLM-powered verdicts via `llm_gate()` and `llm_nudge()`
-- **Transcript querying** — rich, typed API for querying tool uses, commands, edits, and user messages
-- **Inline testing** — test hooks declaratively with `Input(...)` / `Block(...)` / `Warn(...)` / `Allow()`
-- **Strongly typed** — zero `Any` in the public API, full IDE autocomplete support
+That's it. One line blocks `git stash` across your entire project.
 
-## Quick links
+---
 
-- [Installation](installation.md) — get started in 30 seconds
-- [Quickstart](quickstart.md) — write your first hook in under 20 lines
-- [Core Concepts](core-concepts.md) — events, conditions, registration, dispatch
-- [Primitives Guide](primitives.md) — nudge, gate, lint, block_command, LLM hooks, workflow
-- [Transcript & Signals Guide](transcript-signals.md) — querying transcripts and scoring text
-- [Testing Guide](testing.md) — inline tests, mock_event, dispatch_test
-- [API Reference](api-reference.md) — auto-generated from docstrings
+<div class="grid cards" markdown>
+
+-   :material-shield-check:{ .lg .middle } **Declarative by default**
+
+    ---
+
+    Most hooks are a single function call. No classes, no boilerplate, no YAML. Define what to block, warn, or enforce — captain-hook handles the rest.
+
+-   :material-filter:{ .lg .middle } **Composable conditions**
+
+    ---
+
+    Filter hooks with typed conditions: match tools, file paths, commands, transcript history, and more. Combine with `only_if` / `skip_if` for precise targeting.
+
+-   :material-brain:{ .lg .middle } **LLM-powered evaluation**
+
+    ---
+
+    Gate or nudge with LLM verdicts. Signal scoring detects patterns in transcript text, then an LLM decides whether to intervene.
+
+-   :material-test-tube:{ .lg .middle } **Inline testing**
+
+    ---
+
+    Test hooks where you define them. `Input(command="git stash")` / `Block("jj")` — run with `captain-hook test`.
+
+-   :material-format-list-checks:{ .lg .middle } **Multi-step workflows**
+
+    ---
+
+    Enforce checklists before the agent stops. Tests, linting, artifacts — each step must pass before the agent can proceed.
+
+-   :material-message-text:{ .lg .middle } **Rich transcript API**
+
+    ---
+
+    Query conversation history with a typed API. Filter tool uses, extract commands, check what files were edited or read.
+
+</div>
+
+---
+
+## Get started
+
+=== "Install"
+
+    ```bash
+    uv add captain-hook
+    ```
+
+=== "Scaffold"
+
+    ```bash
+    captain-hook init
+    ```
+
+=== "Write a hook"
+
+    ```python
+    from captain_hook import gate, RanCommand
+
+    gate("Run tests before stopping", skip_if=[RanCommand(r"pytest")])
+    ```
+
+[:octicons-arrow-right-24: Installation](getting-started/installation.md){ .md-button .md-button--primary }
+[:octicons-arrow-right-24: Quickstart](getting-started/quickstart.md){ .md-button }

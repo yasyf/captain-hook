@@ -20,24 +20,56 @@ theme:
   features:
     - content.code.copy
     - content.code.annotate
+    - content.tabs.link
+    - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.sections
-    - navigation.expand
+    - navigation.indexes
     - navigation.top
+    - navigation.footer
     - search.suggest
     - search.highlight
+    - toc.follow
 
 nav:
   - Home: index.md
-  - Installation: installation.md
-  - Quickstart: quickstart.md
-  - Core Concepts: core-concepts.md
-  - Primitives Guide: primitives.md
-  - Transcript & Signals Guide: transcript-signals.md
-  - Testing Guide: testing.md
-  - API Reference: api-reference.md
+  - Getting Started:
+    - getting-started/index.md
+    - Installation: getting-started/installation.md
+    - Quickstart: getting-started/quickstart.md
+    - How It Works: getting-started/how-it-works.md
+  - Guide:
+    - guide/index.md
+    - Hooks & Events: guide/hooks-and-events.md
+    - Conditions: guide/conditions.md
+    - Primitives: guide/primitives.md
+    - Transcript & Signals: guide/transcript-signals.md
+    - LLM Hooks: guide/llm-hooks.md
+    - Workflows: guide/workflows.md
+    - State & Sessions: guide/state.md
+    - Testing: guide/testing.md
+  - Examples:
+    - examples/index.md
+    - Guard Rails: examples/guard-rails.md
+    - Code Quality: examples/code-quality.md
+    - Agent Behavior: examples/agent-behavior.md
+    - LLM-Powered Review: examples/llm-review.md
+    - Multi-Step Workflows: examples/workflows.md
+  - Reference:
+    - reference/index.md
+    - CLI: reference/cli.md
+    - Conditions Cheatsheet: reference/conditions.md
+    - API: reference/api/
+    - Changelog: reference/changelog.md
 
 plugins:
   - search
+  - gen-files:
+      scripts:
+        - docs/gen_ref_pages.py
+  - literate-nav:
+      nav_file: SUMMARY.md
+  - section-index
   - mkdocstrings:
       handlers:
         python:
@@ -60,13 +92,21 @@ plugins:
 markdown_extensions:
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
   - pymdownx.tabbed:
       alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - toc:
       permalink: true
   - attr_list
   - def_list
+  - md_in_html

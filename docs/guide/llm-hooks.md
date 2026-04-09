@@ -1,0 +1,282 @@
+# LLM Hooks
+
+LLM hooks use a language model to evaluate transcript context and make decisions that static pattern matching cannot. They are the right choice when the behavior you want to detect requires understanding intent, tone, or reasoning quality.
+
+## When to use LLM hooks vs static hooks
+
+| Use static hooks when... | Use LLM hooks when... |
+|--------------------------|----------------------|
+| The pattern is a literal string or regex | The pattern requires semantic understanding |
+| You need deterministic, instant evaluation | You can tolerate 2-5s latency per evaluation |
+| The condition is about structure (tool name, file path) | The condition is about meaning (excuses, speculation) |
+| Cost is a concern | Accuracy on nuanced behavior is worth the cost |
+
+!!! tip "Combine signals with LLM evaluation"
+    LLM hooks accept `signals` as a pre-filter. Signals run first (free, instant) and the LLM is only invoked when the signal score meets the threshold. This keeps cost low while enabling semantic evaluation where it matters.
+
+## llm_gate
+
+`llm_gate` registers a **blocking** hook powered by LLM evaluation. When the LLM determines the condition is met, the agent is blocked from proceeding.
+
+```python
+from captain_hook import llm_gate, Signal, Signals
+
+llm_gate(
+    "Is the agent making excuses for not completing the task? "
+    "Look for blame-shifting to external services, claiming something is impossible "
+    "without evidence, or declaring success without verification.",
+    message=lambda r: f"Excuse detected: {r.reasoning}",
+    signals=Signals(
+        patterns=[
+            Signal(r"external.*service", weight=2),
+            Signal(r"impossible|cannot be done", weight=2),
+            Signal(r"investigating", weight=-3),
+        ],
+        threshold=2,
+        window=15,
+    ),
+    max_fires=1,
+)
+```
+
+**How it works:**
+
+1. On each matching event, signals score the recent transcript text
+2. If the score meets the threshold, the prompt is sent to an LLM
+3. The LLM returns a `GateVerdict(block: bool, reasoning: str)`
+4. If `block=True`, the hook fires with the configured message
+
+**Defaults:**
+
+- **Events:** `Stop | SubagentStop`
+- **max_fires:** 1
+
+**Parameters:**
+
+:   `prompt` -- the evaluation prompt sent to the LLM (string)
+:   `message` -- text shown to the agent on block; can be a string or a callable `(GateVerdict) -> str`
+:   `signals` -- signal patterns for pre-filtering (optional)
+:   `when` -- predicate `(evt) -> bool` for additional filtering; used instead of signals when no signals are provided
+:   `only_if` / `skip_if` -- condition lists
+:   `events` -- override default event targeting
+:   `max_fires` -- limit fires per session (default: 1)
+:   `max_context` -- maximum characters of context sent to the LLM (default: 2000)
+:   `model` -- LLM model size: `"small"`, `"medium"`, or `"large"` (default: `"small"`)
+:   `specialty` -- backend selection: `"review"`, `"debugging"`, or `"general"` (default: `"review"`)
+:   `agent` -- run the LLM in agent mode with tool access (default: `False`)
+:   `transcript` -- include the full transcript in the LLM prompt (default: `False`)
+:   `tests` -- inline test dict
+
+## llm_nudge
+
+`llm_nudge` registers an **advisory** hook powered by LLM evaluation. It warns the agent without blocking.
+
+```python
+from captain_hook import llm_nudge, Signal, Signals, RanCommand
+
+llm_nudge(
+    "Is the agent speculating about what the code does instead of reading it? "
+    "Look for phrases like 'should contain', 'probably has', 'I think it would'.",
+    message="Observe, don't infer -- read the actual code or check traces before making claims.",
+    signals=Signals(
+        patterns=[
+            Signal(r"should contain", weight=2),
+            Signal(r"probably|I think", weight=1),
+            Signal(r"let me (read|check|look)", weight=-2),
+        ],
+        threshold=3,
+        window=10,
+    ),
+    skip_if=[RanCommand(r"uv\s+run\s+lf")],
+)
+```
+
+**Defaults:**
+
+- **Events:** `PostToolUse`
+- **max_fires:** 3
+
+All other parameters are identical to `llm_gate`. The only difference is that `llm_nudge` produces a warning (`Action.warn`) instead of a block (`Action.block`), and the LLM returns a `NudgeVerdict(fire: bool, reasoning: str)` instead of `GateVerdict`.
+
+### Dynamic messages
+
+Both `llm_gate` and `llm_nudge` accept a callable for `message` that receives the verdict object:
+
+```python
+from captain_hook import llm_gate
+
+llm_gate(
+    "Is the agent retrying the same approach without changing anything?",
+    message=lambda r: f"Retry loop detected: {r.reasoning}. Try a different approach.",
+)
+```
+
+## prompt_check
+
+`prompt_check` is a lower-level function designed for use inside handler functions. It sends a formatted prompt to an LLM and returns a `HookResult` based on the verdict.
+
+```python
+from captain_hook import on, Event, Tool, prompt_check
+
+@on(Event.PostToolUse, only_if=[Tool("Edit")])
+def review_test_quality(evt):
+    content = evt.tool_input.get("new_string", "")
+    if "def test_" not in content:
+        return None
+
+    return prompt_check(
+        evt,
+        template="Evaluate this test code:\n{code}\n\nIs it testing behavior or just structure?",
+        fmt={"code": content},
+        prefix="Test quality",
+        suffix=". Write assertions that verify behavior, not just that code exists.",
+    )
+```
+
+**How it works:**
+
+1. The `template` is formatted with the `fmt` dict
+2. Recent assistant reasoning is automatically included as context
+3. The LLM returns a `PromptCheckVerdict(action, reason)` where action is `"ok"`, `"warning"`, or `"block"`
+4. The function returns a `HookResult` for `"warning"` and `"block"`, or `None` for `"ok"`
+
+**Parameters:**
+
+:   `evt` -- the hook event (passed through from the handler)
+:   `template` -- prompt template with `{placeholders}` for `fmt` values
+:   `fmt` -- dict of values to format into the template
+:   `prefix` -- label prepended to the LLM's reason in the output message
+:   `suffix` -- text appended to the output message (default: `""`)
+:   `timeout` -- LLM call timeout in seconds (default: 45)
+:   `include_reasoning` -- include recent assistant text as context (default: `True`)
+
+## llm_evaluate
+
+`llm_evaluate` is the lowest-level LLM primitive. It handles signal pre-filtering, context extraction, prompt building, and LLM invocation, returning the raw response model. Use it when you need a custom verdict model or non-standard post-processing.
+
+```python
+from pydantic import BaseModel
+from captain_hook import on, Event, Signal, Signals, llm_evaluate, HookResult, Action
+
+class SecurityVerdict(BaseModel):
+    risk_level: str
+    explanation: str
+    block: bool
+
+@on(Event.PreToolUse)
+def security_review(evt):
+    verdict = llm_evaluate(
+        evt,
+        "Evaluate this action for security risks. Consider file access, "
+        "network calls, and credential exposure.",
+        SecurityVerdict,
+        signals=Signals(
+            patterns=[Signal(r"\.env|credentials|secret", weight=3)],
+            threshold=2,
+        ),
+    )
+    if not verdict or not verdict.block:
+        return None
+    return HookResult(
+        action=Action.block,
+        message=f"Security risk ({verdict.risk_level}): {verdict.explanation}",
+    )
+```
+
+**Parameters:**
+
+:   `evt` -- the hook event
+:   `prompt` -- the evaluation prompt (string)
+:   `response_model` -- Pydantic model class for structured LLM output
+:   `signals` -- signal pre-filter (optional)
+:   `when` -- predicate for filtering when signals are not used (optional)
+:   `max_context` -- maximum characters of context (default: 2000)
+:   `specialty` / `model` / `agent` / `transcript` -- LLM configuration
+
+**Returns:** an instance of `response_model`, or `None` if signals did not match, the `when` predicate returned `False`, or the LLM call failed.
+
+!!! note "One fire per turn"
+    `llm_evaluate` checks whether a primitive has already fired during the current turn and returns `None` if so. This prevents multiple LLM hooks from stacking expensive calls in the same dispatch cycle.
+
+## Prompt builder
+
+The `Prompt` class (aliased from `PromptMessage`) provides a fluent API for constructing structured prompts with system text, XML-wrapped context sections, and questions.
+
+```python
+from captain_hook import Prompt
+
+prompt = (
+    Prompt()
+    .system("You are a code review assistant. Evaluate the following for quality issues.")
+    .context("code", "def foo():\n    print('hello')")
+    .context("style_guide", "Use logging instead of print statements.")
+    .ask("Does this code follow the style guide? Respond with block=true or block=false.")
+)
+```
+
+**Methods:**
+
+- `.system(text)` -- sets the system/instruction text
+- `.context(tag, content)` -- adds an XML-wrapped context section (`<tag>content</tag>`); skipped if content is `None` or empty
+- `.ask(text)` -- sets the closing question/instruction
+
+When rendered via `str(prompt)`, the output is:
+
+```
+You are a code review assistant. Evaluate the following for quality issues.
+
+<code>
+def foo():
+    print('hello')
+</code>
+
+<style_guide>
+Use logging instead of print statements.
+</style_guide>
+
+Does this code follow the style guide? Respond with block=true or block=false.
+```
+
+All text is automatically dedented and stripped.
+
+## Verdict types
+
+### GateVerdict
+
+Returned by `llm_gate`. The LLM populates both fields.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `block` | `bool` | `True` to block the agent |
+| `reasoning` | `str` | Explanation of the decision |
+
+### NudgeVerdict
+
+Returned by `llm_nudge`. The LLM populates both fields.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `fire` | `bool` | `True` to fire the nudge |
+| `reasoning` | `str` | Explanation of the decision |
+
+### PromptCheckVerdict
+
+Returned by `prompt_check`. The LLM selects an action.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `action` | `"ok" \| "warning" \| "block"` | The evaluation result |
+| `reason` | `str` | Explanation of the decision |
+
+## Cost control
+
+LLM hooks call an external LLM on every qualifying event. Use these techniques to manage cost:
+
+- **`signals`** -- pre-filter with cheap regex/NLP scoring so the LLM is only called when patterns suggest a real issue
+- **`max_fires`** -- cap how many times a hook can fire per session (default is 1 for gates, 3 for nudges)
+- **`max_context`** -- limit the transcript context sent to the LLM (default: 2000 characters)
+- **`model="small"`** -- use the smallest model that gives acceptable accuracy (the default)
+- **`only_if` / `skip_if`** -- add static conditions to avoid LLM evaluation on irrelevant events
+
+!!! warning "Latency"
+    LLM hooks add 2-10 seconds of latency per invocation. For hooks that fire on `PreToolUse` (which blocks the tool), keep prompts short and use `model="small"` to minimize delay.
