@@ -1,32 +1,13 @@
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
 from typing import Any
 
-from captain_hook.app import (
-    _state,
-    hook as register_hook,
-    on,
-    register,
-    reset,
-)
 from captain_hook.dispatch import dispatch
-from captain_hook.events import PostToolUseEvent
 from captain_hook.state import PrimitiveState, text_hash
 from captain_hook.types import Event, Signal, Signals
 from captain_hook.tests.helpers import make_ctx
-
-
-def make_post_tool_event(
-    tool_name: str = "Bash",
-    tool_input: dict[str, Any] | None = None,
-    ctx: Any = None,
-) -> PostToolUseEvent:
-    raw: dict[str, Any] = {"tool_name": tool_name}
-    if tool_input is not None:
-        raw["tool_input"] = tool_input
-    return PostToolUseEvent(_raw=raw, ctx=ctx or make_ctx())
+from conftest import make_post_tool_event
 
 
 def register_nudge(
@@ -40,16 +21,6 @@ def register_nudge(
     from captain_hook.primitives.nudge import nudge
 
     nudge(message, signals=signals, events=events, max_fires=max_fires, **kwargs)
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-ECHO-009 — content_lemmas extracts nouns, verbs, adjectives (not stop words)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-@pytest.fixture(autouse=True)
-def _clean_state():
-    reset()
-    yield
-    reset()
-
 
 
 class TestContentLemmas:
@@ -66,11 +37,6 @@ class TestContentLemmas:
         assert PrimitiveState.content_lemmas("") == set()
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-ECHO-001 — Echo detection via content lemma overlap
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestIsEcho:
     def test_detects_overlap(self) -> None:
         ps = PrimitiveState(echo_lemmas={"issue", "pre-existing", "cause", "change", "fix", "codebase", "bug"})
@@ -85,11 +51,6 @@ class TestIsEcho:
         assert not ps.is_echo("some random text with issue and change words")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-ECHO-003 — Echo window seeding after nudge fires
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestSeedEchoWindow:
     def test_sets_echo_lemmas_and_window_end(self) -> None:
         ps = PrimitiveState()
@@ -100,11 +61,6 @@ class TestSeedEchoWindow:
 
         assert ps.echo_window_end == 10 + ECHO_WINDOW
         assert "issue" in ps.echo_lemmas or "pre" in ps.echo_lemmas
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-ECHO-008 — consume_echoes marks echoed texts as consumed
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestConsumeEchoes:
@@ -131,11 +87,6 @@ class TestConsumeEchoes:
         text = "some random text"
         ps.consume_echoes([text], transcript_len=10)
         assert text_hash(text) not in ps.consumed
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-ECHO-007 — Content hashing prevents double-scoring the same text
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestMatchSignals:
@@ -166,11 +117,6 @@ class TestMatchSignals:
         assert "pre-existing" in result[0]
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-ECHO-004 — Echo suppression prevents re-fire on paraphrased responses
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestEchoIntegration:
     def test_echo_response_not_rescored(self, tmp_path: Path) -> None:
         register_nudge(
@@ -194,9 +140,6 @@ class TestEchoIntegration:
         r2 = dispatch(Event.PostToolUse, evt2, session_dir=tmp_path)
         assert r2 is None
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # VAL-ECHO-005 — Unrelated text still fires within echo window
-    # ═══════════════════════════════════════════════════════════════════════════
 
     def test_unrelated_text_still_fires_in_echo_window(self, tmp_path: Path) -> None:
         register_nudge(
@@ -223,9 +166,6 @@ class TestEchoIntegration:
         r2 = dispatch(Event.PostToolUse, evt2, session_dir=tmp_path)
         assert r2 is not None
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # VAL-ECHO-006 — Echo window expires after ECHO_WINDOW messages
-    # ═══════════════════════════════════════════════════════════════════════════
 
     def test_echo_window_expires(self, tmp_path: Path) -> None:
         register_nudge(
@@ -250,9 +190,7 @@ class TestEchoIntegration:
         assert r2 is not None
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Regression: spaCy model loaded lazily (not at import time)
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestSpacyLazyLoading:
@@ -273,9 +211,7 @@ class TestSpacyLazyLoading:
         assert "fox" in result or "jump" in result
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Regression: Echo window expiry boundary uses >= (not >)
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestEchoWindowBoundary:
@@ -298,9 +234,7 @@ class TestEchoWindowBoundary:
         assert text_hash(echo_text) in ps.consumed
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Regression: Signal-triggered nudge reads/updates PrimitiveState across calls
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestSignalNudgePrimitiveState:

@@ -4,10 +4,6 @@ import pytest
 
 from captain_hook.signals.nlp import Clause, NlpSignal, Phrase, dep_related, nlp_scan
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NLP-001 — Phrase stores lowercased lemmas
-# ═══════════════════════════════════════════════════════════════════════════════
-
 
 class TestPhrase:
     def test_single_word_lowercased(self) -> None:
@@ -31,11 +27,6 @@ class TestPhrase:
     def test_preserves_spaces_in_compound(self) -> None:
         p = Phrase("rate limit")
         assert p.lemmas == ("rate limit",)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NLP-002 — Phrase.expand uses WordNet synonyms
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestPhraseExpand:
@@ -67,11 +58,6 @@ class TestPhraseExpand:
         assert p.lemmas == ("xyzzyplugh",)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NLP-003 — Clause validates required components
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestClauseValidation:
     def test_bare_single_noun_rejected(self) -> None:
         with pytest.raises(ValueError, match="verb, adj, negated, or a compound"):
@@ -98,11 +84,6 @@ class TestClauseValidation:
             Clause(noun=Phrase("api", "service"))
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NLP-004 — NlpSignal bundles clauses with weight
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestNlpSignal:
     def test_default_weight(self) -> None:
         sig = NlpSignal(clauses=[Clause(noun=Phrase("quota"), verb=Phrase("exceed"))])
@@ -116,11 +97,6 @@ class TestNlpSignal:
         sig = NlpSignal(clauses=[Clause(noun=Phrase("quota"), verb=Phrase("exceed"))])
         with pytest.raises(AttributeError):
             sig.weight = 5  # type: ignore[misc]
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NLP-005 — nlp_scan sentence-level clause matching
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestNlpScan:
@@ -159,22 +135,12 @@ class TestNlpScan:
         assert len(result) == 2
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NLP-006 — nlp_scan empty text returns empty list
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestNlpScanEmpty:
     def test_empty_string(self) -> None:
         assert nlp_scan([Clause(noun=Phrase("quota"), verb=Phrase("exceed"))], "") == []
 
     def test_whitespace_only(self) -> None:
         assert nlp_scan([Clause(noun=Phrase("quota"), verb=Phrase("exceed"))], "   \n\t  ") == []
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NLP-007 — nlp_scan negation detection
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestNlpScanNegation:
@@ -193,11 +159,6 @@ class TestNlpScanNegation:
         assert result == []
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NLP-008 — nlp_scan compound noun matching
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestNlpScanCompound:
     def test_compound_noun_match(self) -> None:
         result = nlp_scan(
@@ -212,11 +173,6 @@ class TestNlpScanCompound:
             "There was a service outage",
         )
         assert len(result) == 1
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NLP-009 — dep_related dependency tree proximity
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestDepRelated:
@@ -247,11 +203,6 @@ class TestDepRelated:
         assert dep_related(hello, hello, max_hops=1)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NLP-010 — Multiple clauses use OR semantics
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestNlpScanMultipleClauses:
     def test_or_semantics(self) -> None:
         clauses = [
@@ -272,9 +223,7 @@ class TestNlpScanMultipleClauses:
         assert len(result) == 1
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Additional behavioral tests from expectedBehavior
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestActivePassiveVoice:

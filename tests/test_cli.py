@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 import json
 import subprocess
 import sys
@@ -12,7 +11,6 @@ from captain_hook.app import (
     hook as register_hook,
     on,
     register,
-    reset,
 )
 from captain_hook.types import Event
 
@@ -38,13 +36,6 @@ def run_cli(
         text=True,
         cwd=str(PKG_DIR),
     )
-
-@pytest.fixture(autouse=True)
-def _clean_state():
-    reset()
-    yield
-    reset()
-
 
 
 class TestRunSubcommand:

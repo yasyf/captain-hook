@@ -9,10 +9,8 @@ import pytest
 from captain_hook.app import (
     _state,
     get_matching_hooks,
-    reset,
 )
 from captain_hook.dispatch import execute_hook
-from captain_hook.events import PostToolUseEvent, PreToolUseEvent
 from captain_hook.primitives.commands import block_command, warn_command
 from captain_hook.types import (
     Action,
@@ -20,35 +18,7 @@ from captain_hook.types import (
     tokens_to_regex,
 )
 from captain_hook.tests.helpers import make_ctx
-
-
-def make_pre_tool_event(
-    tool_name: str = "Bash",
-    tool_input: dict[str, Any] | None = None,
-    ctx: Any = None,
-) -> PreToolUseEvent:
-    raw: dict[str, Any] = {"tool_name": tool_name}
-    if tool_input is not None:
-        raw["tool_input"] = tool_input
-    return PreToolUseEvent(_raw=raw, ctx=ctx or make_ctx())
-
-
-def make_post_tool_event(
-    tool_name: str = "Bash",
-    tool_input: dict[str, Any] | None = None,
-    ctx: Any = None,
-) -> PostToolUseEvent:
-    raw: dict[str, Any] = {"tool_name": tool_name}
-    if tool_input is not None:
-        raw["tool_input"] = tool_input
-    return PostToolUseEvent(_raw=raw, ctx=ctx or make_ctx())
-
-
-@pytest.fixture(autouse=True)
-def _clean_state():
-    reset()
-    yield
-    reset()
+from conftest import make_post_tool_event, make_pre_tool_event
 
 
 

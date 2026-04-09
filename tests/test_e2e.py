@@ -15,9 +15,6 @@ from captain_hook.app import (
     discover_hooks,
     get_matching_hooks,
     hook as register_hook,
-    on,
-    register,
-    reset,
 )
 from captain_hook.dispatch import format_output
 from captain_hook.events import (
@@ -58,24 +55,7 @@ def run_cli(
     )
 
 
-def make_ctx(
-    transcript: Any = None,
-    session_dir: Path | None = None,
-    settings: Any = None,
-) -> Any:
-    from captain_hook.context import HookContext
-
-    return HookContext(
-        session=SessionStore(session_dir),
-        transcript=transcript,
-        settings=settings,
-    )
-
-@pytest.fixture(autouse=True)
-def _clean_state():
-    reset()
-    yield
-    reset()
+from conftest import build_ctx
 
 
 
@@ -540,7 +520,7 @@ class TestConditionsWithNoneTranscript:
             message="should not crash",
             skip_if=[ReadFile("STYLEGUIDE.md")],
         )
-        ctx = make_ctx(transcript=None, session_dir=tmp_path)
+        ctx = build_ctx(transcript=None, session_dir=tmp_path)
         evt = PreToolUseEvent(
             _raw={"tool_name": "Bash", "tool_input": {"command": "echo hi"}},
             ctx=ctx,
@@ -554,7 +534,7 @@ class TestConditionsWithNoneTranscript:
 
         evt = PreToolUseEvent(
             _raw={"tool_name": "Bash", "tool_input": {"command": "echo"}},
-            ctx=make_ctx(transcript=None, session_dir=tmp_path),
+            ctx=build_ctx(transcript=None, session_dir=tmp_path),
         )
         assert check_condition(RanCommand(r"uv run mtest"), evt) is False
 
@@ -564,7 +544,7 @@ class TestConditionsWithNoneTranscript:
 
         evt = PreToolUseEvent(
             _raw={"tool_name": "Bash", "tool_input": {"command": "echo"}},
-            ctx=make_ctx(transcript=None, session_dir=tmp_path),
+            ctx=build_ctx(transcript=None, session_dir=tmp_path),
         )
         assert check_condition(UsedSkill("codex"), evt) is False
 
@@ -574,6 +554,6 @@ class TestConditionsWithNoneTranscript:
 
         evt = PreToolUseEvent(
             _raw={"tool_name": "Bash", "tool_input": {"command": "echo"}},
-            ctx=make_ctx(transcript=None, session_dir=tmp_path),
+            ctx=build_ctx(transcript=None, session_dir=tmp_path),
         )
         assert check_condition(InPlanMode(), evt) is False

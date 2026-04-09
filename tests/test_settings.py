@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import sys
 import types
 from typing import Any
 
 import pytest
 from pydantic_settings import BaseSettings
 
-from captain_hook.app import _state, discover_hooks, reset
+from captain_hook.app import _state, discover_hooks
 
 
 def make_module(name: str, attrs: dict[str, Any], annotations: dict[str, type] | None = None) -> types.ModuleType:
@@ -17,12 +16,6 @@ def make_module(name: str, attrs: dict[str, Any], annotations: dict[str, type] |
     if annotations:
         mod.__annotations__ = annotations
     return mod
-
-@pytest.fixture(autouse=True)
-def _clean_state():
-    reset()
-    yield
-    reset()
 
 
 
@@ -220,16 +213,8 @@ class TestAutoConfEnvPrefix:
         assert settings.port == 9090
 
 
+@pytest.mark.usefixtures("isolate_modules")
 class TestSettingsFromApp:
-    @pytest.fixture(autouse=True)
-    def _clean_imports(self) -> Any:
-        snapshot_modules = set(sys.modules.keys())
-        snapshot_path = sys.path[:]
-        yield
-        for key in set(sys.modules.keys()) - snapshot_modules:
-            del sys.modules[key]
-        sys.path[:] = snapshot_path
-
     def test_app_settings_accessible(self, tmp_path: Any) -> None:
         from captain_hook.app import (
     _state,

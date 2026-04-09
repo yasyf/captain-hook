@@ -7,24 +7,12 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from captain_hook.app import (
-    _state,
-    hook as register_hook,
-    on,
-    register,
-    reset,
-)
+from captain_hook.app import _state
 from captain_hook.context import HookContext
 from captain_hook.events import SubagentStopEvent
 from captain_hook.session import SessionStore
 from captain_hook.transcript import Transcript
 from captain_hook.types import Action, Event, HookResult
-
-@pytest.fixture(autouse=True)
-def _clean_state():
-    reset()
-    yield
-    reset()
 
 
 

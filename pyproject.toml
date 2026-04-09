@@ -39,7 +39,13 @@ packages = ["src/captain_hook"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]
 asyncio_mode = "auto"
+addopts = ["-ra", "--strict-markers", "--tb=short", "-q"]
+markers = [
+    "unit: Pure unit tests",
+    "integration: Integration tests",
+]
 
 [tool.pyright]
 pythonVersion = "3.12"

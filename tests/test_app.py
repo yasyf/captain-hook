@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -24,20 +23,10 @@ from captain_hook.types import (
     Tool,
 )
 
-
-@pytest.fixture(autouse=True)
-def _clean_state():
-    reset()
-    snapshot_modules = set(sys.modules.keys())
-    snapshot_path = sys.path[:]
-    yield
-    reset()
-    for key in set(sys.modules.keys()) - snapshot_modules:
-        del sys.modules[key]
-    sys.path[:] = snapshot_path
+pytestmark = pytest.mark.usefixtures("isolate_modules")
 
 
-def _pre_tool_event(
+def pre_tool_event(
     tool_name: str = "Edit",
     tool_input: dict[str, Any] | None = None,
     ctx: Any = None,
@@ -48,7 +37,7 @@ def _pre_tool_event(
     )
 
 
-def _stop_event(ctx: Any = None) -> StopEvent:
+def stop_event(ctx: Any = None) -> StopEvent:
     return StopEvent(_raw={}, ctx=ctx)
 
 
@@ -181,7 +170,7 @@ class TestGetMatchingHooks:
     def test_filters_by_event(self) -> None:
         register_hook(Event.PreToolUse, message="pre_tool")
         register_hook(Event.Stop, message="stop")
-        matching = get_matching_hooks(_pre_tool_event())
+        matching = get_matching_hooks(pre_tool_event())
         assert len(matching) == 1
         assert matching[0].spec.message == "pre_tool"
 
@@ -221,7 +210,7 @@ class TestGitignore:
         (tmp_path / ".gitignore").write_text("node_modules\n")
         load_gitignore(tmp_path)
         register_hook(Event.PreToolUse, message="check", respect_gitignore=True)
-        evt = _pre_tool_event(
+        evt = pre_tool_event(
             tool_name="Edit",
             tool_input={
                 "file_path": "node_modules/pkg/index.js",
@@ -235,7 +224,7 @@ class TestGitignore:
         (tmp_path / ".gitignore").write_text("node_modules\n")
         load_gitignore(tmp_path)
         register_hook(Event.PreToolUse, message="check", respect_gitignore=False)
-        evt = _pre_tool_event(
+        evt = pre_tool_event(
             tool_name="Edit",
             tool_input={
                 "file_path": "node_modules/pkg/index.js",

@@ -17,17 +17,14 @@ M = TypeVar("M", bound=BaseModel)
 
 
 def state_root() -> Path:
-    """Return the root directory for hook state storage."""
     return Path(os.environ.get("CLAUDE_HOOKS_STATE_DIR", Path.home() / ".claude" / "state"))
 
 
 def session_hash(transcript_path: str | Path) -> str:
-    """Compute a 12-char hex hash of a transcript path for session directory naming."""
     return sha256(str(transcript_path).encode()).hexdigest()[:12]
 
 
 def ensure_session(transcript_path: str | Path) -> Path:
-    """Create and return the session directory for a transcript, creating it if needed."""
     sd = state_root() / "hooks" / "sessions" / session_hash(transcript_path)
     sd.mkdir(parents=True, exist_ok=True)
     marker = sd / ".transcript_path"
@@ -37,7 +34,6 @@ def ensure_session(transcript_path: str | Path) -> Path:
 
 
 def cleanup_stale() -> None:
-    """Remove session directories whose transcript files no longer exist."""
     sessions = state_root() / "hooks" / "sessions"
     if not sessions.exists():
         return
@@ -65,7 +61,6 @@ class SessionSlot(Generic[M]):  # noqa: UP046
         return self._path
 
     def get(self, default: M | None = None) -> M | None:
-        """Return the stored model, or *default* when the slot is empty, missing, or corrupt."""
         if not self._path or not self._path.exists():
             return default
         try:

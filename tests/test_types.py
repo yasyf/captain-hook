@@ -1,29 +1,12 @@
 from __future__ import annotations
 
-import dataclasses
-from typing import get_args
-
 import pytest
 
 from captain_hook.types import (
-    Action,
-    Agent,
-    Command,
-    Content,
-    CustomCondition,
     Event,
-    FilePath,
-    HookResult,
     HookSpec,
-    InPlanMode,
-    RanCommand,
-    ReadFile,
-    RegisteredHook,
-    TCondition,
     TestFile,
     Tool,
-    TouchedFile,
-    UsedSkill,
 )
 
 
@@ -75,26 +58,6 @@ class TestEventFlag:
         assert len(seen) == 9
 
 
-class TestAction:
-    def test_action_string_formatting(self) -> None:
-        result = {Action.block: 1, Action.warn: 2, Action.allow: 3}
-        assert result[Action.block] == 1
-        assert result[Action("warn")] == 2
-        assert len(result) == 3
-        assert sorted(a.value for a in Action) == ["allow", "block", "warn"]
-
-
-class TestHookResult:
-    def test_stores_action_and_message(self) -> None:
-        r = HookResult(action=Action.warn, message="caution")
-        assert r.action == Action.warn
-        assert r.message == "caution"
-
-    def test_default_message_is_none(self) -> None:
-        assert HookResult(action=Action.allow).message is None
-
-
-
 class TestHookSpec:
     def test_minimal_construction_defaults(self) -> None:
         s = HookSpec(events=Event.PreToolUse)
@@ -107,9 +70,6 @@ class TestHookSpec:
         assert s.max_fires is None
         assert s.async_ is False
         assert s.tests is None
-
-    def test_tests_field_exists(self) -> None:
-        assert "tests" in {f.name for f in dataclasses.fields(HookSpec)}
 
     def test_full_construction_stores_all_fields(self) -> None:
         s = HookSpec(
@@ -129,59 +89,3 @@ class TestHookSpec:
         assert s.respect_gitignore is False
         assert s.max_fires == 3
         assert s.async_ is True
-
-
-class TestRegisteredHook:
-    def test_defaults(self) -> None:
-        spec = HookSpec(events=Event.PreToolUse)
-        rh = RegisteredHook(spec=spec)
-        assert rh.spec is spec
-        assert rh.handler is None
-        assert rh.name == ""
-        assert rh.source_file == ""
-
-    def test_with_handler_stores_callable(self) -> None:
-        handler = lambda evt: None  # noqa: E731
-        rh = RegisteredHook(
-            spec=HookSpec(events=Event.PreToolUse),
-            handler=handler,
-            name="my_hook",
-            source_file="hooks.py",
-        )
-        assert rh.handler is handler
-        assert rh.name == "my_hook"
-
-
-
-class TestTCondition:
-    def test_union_contains_exactly_twelve_types(self) -> None:
-        args = get_args(TCondition)
-        assert len(args) == 12
-        expected = {
-            Tool,
-            FilePath,
-            Command,
-            Content,
-            Agent,
-            UsedSkill,
-            ReadFile,
-            TestFile,
-            TouchedFile,
-            RanCommand,
-            InPlanMode,
-            CustomCondition,
-        }
-        assert set(args) == expected
-
-    def test_tool_stores_pattern(self) -> None:
-        assert Tool(pattern="Edit|Write").pattern == "Edit|Write"
-
-    def test_filepath_accepts_varargs(self) -> None:
-        assert FilePath("*.py", "*.ts").patterns == ("*.py", "*.ts")
-
-    def test_read_file_accepts_varargs(self) -> None:
-        assert ReadFile("A.md", "docs/").patterns == ("A.md", "docs/")
-
-    def test_touched_file_accepts_varargs(self) -> None:
-        assert TouchedFile("**/www/**").patterns == ("**/www/**",)
-

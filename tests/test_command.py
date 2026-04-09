@@ -3,7 +3,7 @@ from __future__ import annotations
 from captain_hook.command import Command, CommandLine
 
 
-class TestCommandParseSimple:
+class TestCommand:
     def test_simple_command(self) -> None:
         cmd = Command.parse("cat file.py")
         assert cmd.executable == "cat"
@@ -29,25 +29,21 @@ class TestCommandParseSimple:
         assert cmd.executable == "jj"
         assert cmd.args[0] == "commit"
 
-
-class TestCommandProgram:
-    def test_uv_run(self) -> None:
+    def test_program_uv_run(self) -> None:
         assert Command.parse("uv run mtest run tests/").program == "mtest"
 
-    def test_uv_run_pytest(self) -> None:
+    def test_program_uv_run_pytest(self) -> None:
         assert Command.parse("uv run pytest tests/").program == "pytest"
 
-    def test_python_m(self) -> None:
+    def test_program_python_m(self) -> None:
         assert Command.parse("python -m module arg").program == "module"
 
-    def test_python3_m(self) -> None:
+    def test_program_python3_m(self) -> None:
         assert Command.parse("python3 -m module arg").program == "module"
 
-    def test_plain_executable(self) -> None:
+    def test_program_plain_executable(self) -> None:
         assert Command.parse("jj commit").program == "jj"
 
-
-class TestCommandArgv:
     def test_argv_includes_executable_and_args(self) -> None:
         cmd = Command.parse("cat file.py")
         assert cmd.argv == ("cat", "file.py")
@@ -56,8 +52,6 @@ class TestCommandArgv:
         cmd = Command.parse("")
         assert cmd.argv == ()
 
-
-class TestCommandMatches:
     def test_matches_regex(self) -> None:
         cmd = Command.parse("jj commit -m x")
         assert cmd.matches(r"jj\s+(commit|split)")
@@ -66,8 +60,6 @@ class TestCommandMatches:
         cmd = Command.parse("jj log")
         assert not cmd.matches(r"jj\s+(commit|split)")
 
-
-class TestCommandHasArg:
     def test_has_arg(self) -> None:
         cmd = Command.parse("uv run mtest run tests/ --last-failed")
         assert cmd.has_arg(r"--last-failed")
@@ -80,16 +72,12 @@ class TestCommandHasArg:
         cmd = Command.parse("uv run mtest run tests/")
         assert not cmd.has_arg(r"--last-failed")
 
-
-class TestCommandContains:
     def test_contains(self) -> None:
         assert ".py" in Command.parse("uv run mtest run tests/test_foo.py")
 
     def test_not_contains(self) -> None:
         assert ".py" not in Command.parse("jj commit -m msg")
 
-
-class TestCommandStr:
     def test_str_strips_env(self) -> None:
         cmd = Command.parse("ENV=val uv run mtest")
         assert str(cmd) == "uv run mtest"
@@ -97,16 +85,12 @@ class TestCommandStr:
     def test_str_simple(self) -> None:
         assert str(Command.parse("jj commit")) == "jj commit"
 
-
-class TestCommandBool:
     def test_empty_is_falsy(self) -> None:
         assert not Command.parse("")
 
     def test_non_empty_is_truthy(self) -> None:
         assert Command.parse("cat")
 
-
-class TestCommandRedirects:
     def test_append_redirect(self) -> None:
         cmd = Command.parse("echo hello >> out.txt")
         assert len(cmd.redirects) == 1
@@ -125,7 +109,7 @@ class TestCommandRedirects:
         assert len(cmd.redirects) == 2
 
 
-class TestCommandLineParseSimple:
+class TestCommandLine:
     def test_simple(self) -> None:
         cl = CommandLine.parse("jj commit")
         assert len(cl) == 1
@@ -160,8 +144,6 @@ class TestCommandLineParseSimple:
         assert len(cl) == 3
         assert cl.primary.executable == "cmd3"
 
-
-class TestCommandLinePrimary:
     def test_primary_is_last(self) -> None:
         cl = CommandLine.parse("cd /dir && ./setup.sh")
         assert cl.primary.executable == "./setup.sh"
@@ -170,34 +152,24 @@ class TestCommandLinePrimary:
         cl = CommandLine.parse("jj commit")
         assert cl.primary.executable == "jj"
 
-
-class TestCommandLineCommands:
     def test_commands_tuple(self) -> None:
         cl = CommandLine.parse("a && b")
         assert len(cl.commands) == 2
         assert cl.commands[0].executable == "a"
         assert cl.commands[1].executable == "b"
 
-
-class TestCommandLineIterable:
     def test_iter(self) -> None:
         cl = CommandLine.parse("cmd1 && cmd2 && cmd3")
         execs = [cmd.executable for cmd in cl]
         assert execs == ["cmd1", "cmd2", "cmd3"]
 
-
-class TestCommandLineLen:
     def test_len(self) -> None:
         assert len(CommandLine.parse("a && b && c")) == 3
 
-
-class TestCommandLineStr:
     def test_str_returns_raw(self) -> None:
         raw = "a && b"
         assert str(CommandLine.parse(raw)) == raw
 
-
-class TestCommandLineContains:
     def test_contains_raw(self) -> None:
         cl = CommandLine.parse('eval "$(direnv)" && uv run')
         assert "direnv" in cl
@@ -205,13 +177,9 @@ class TestCommandLineContains:
     def test_not_contains(self) -> None:
         assert "direnv" not in CommandLine.parse("jj commit")
 
-
-class TestCommandLineBool:
     def test_truthy(self) -> None:
         assert bool(CommandLine.parse("cmd"))
 
-
-class TestCommandLineTreeSitter:
     def test_pipe_heredoc_not_treated_as_command(self) -> None:
         cl = CommandLine.parse("cat <<EOF\ngit push --force\nEOF")
         assert cl.primary.executable == "cat"
@@ -222,7 +190,7 @@ class TestCommandLineTreeSitter:
         assert len(cl) >= 1
 
 
-class TestMalformedInput:
+class TestEdgeCases:
     def test_malformed_quote(self) -> None:
         cmd = Command.parse('echo "unterminated')
         assert cmd.executable == "echo"
@@ -231,14 +199,10 @@ class TestMalformedInput:
         cl = CommandLine.parse("")
         assert isinstance(cl, CommandLine)
 
-
-class TestPytestPaths:
     def test_colons_preserved(self) -> None:
         cmd = Command.parse("uv run mtest run tests/test_foo.py::TestClass::test_method")
         assert any("::TestClass::test_method" in a for a in cmd.args)
 
-
-class TestRealWorld:
     def test_complex_direnv(self) -> None:
         cl = CommandLine.parse(
             'eval "$(direnv export bash)" && ENV=prod uv run mtest run tests/test_foo.py -k test_name 2>&1 | head -50'

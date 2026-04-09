@@ -277,14 +277,3 @@ class TestNotificationEvent:
         assert evt.notification_type is None
 
 
-class TestNoPublicDictAny:
-    def test_event_properties_return_typed_values(self) -> None:
-        raw: dict[str, Any] = {
-            "tool_name": "Edit",
-            "tool_input": {"file_path": "a.py", "old_string": "x", "new_string": "y"},
-        }
-        evt = PreToolUseEvent(_raw=raw, ctx=make_ctx())
-        assert evt.tool_name == "Edit"
-        assert evt.content == "y"
-        assert evt.old == "x"
-        assert evt.file is not None

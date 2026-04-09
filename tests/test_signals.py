@@ -23,11 +23,6 @@ def make_ctx(tmp_path: Path | None = None, texts: list[str] | None = None) -> Ho
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-SIG-001 — Signal frozen dataclass with defaults
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestSignalDataclass:
     def test_defaults(self) -> None:
         s = Signal(pattern=r"test")
@@ -44,11 +39,6 @@ class TestSignalDataclass:
         s = Signal(pattern=r"retry", weight=3, flags=re.IGNORECASE)
         assert s.weight == 3
         assert s.flags == re.IGNORECASE
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-SIG-002 — Signals bundle with threshold and window
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestSignalsBundle:
@@ -73,11 +63,6 @@ class TestSignalsBundle:
             threshold=1,
         )
         assert len(sig.patterns) == 1
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-SIG-003 — score_signals regex matching sums weights
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestScoreSignals:
@@ -112,11 +97,6 @@ class TestScoreSignals:
         assert score_signals(patterns, "let me retry") == 2
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-SIG-004 — score_signals respects Signal.flags
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestScoreSignalsFlags:
     def test_case_insensitive_flag(self) -> None:
         from captain_hook.signals import score_signals
@@ -129,11 +109,6 @@ class TestScoreSignalsFlags:
 
         patterns = [Signal(pattern=r"RETRY", weight=2)]
         assert score_signals(patterns, "let me retry") == 0
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-SIG-005 — score_signals negative weights reduce score
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestScoreSignalsNegativeWeights:
@@ -156,11 +131,6 @@ class TestScoreSignalsNegativeWeights:
         assert score_signals(patterns, "retry with evidence") == -4
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-SIG-006 — score_signals mixed Signal and NlpSignal
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestScoreSignalsMixed:
     def test_regex_only(self) -> None:
         from captain_hook.signals import score_signals
@@ -170,11 +140,6 @@ class TestScoreSignalsMixed:
             Signal(pattern=r"again", weight=1),
         ]
         assert score_signals(patterns, "retry again") == 3
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-SIG-007 — extract_signal_context returns matching lines
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestExtractSignalContext:
@@ -204,11 +169,6 @@ class TestExtractSignalContext:
         assert len(result) == 1
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-SIG-008 — PrimitiveState.match_signals deduplicates by content hash
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestMatchSignalsDedup:
     def test_first_call_returns_matches(self) -> None:
         ps = PrimitiveState()
@@ -225,11 +185,6 @@ class TestMatchSignalsDedup:
         ps.match_signals(sig, texts)
         result = ps.match_signals(sig, texts)
         assert result is None
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-SIG-009 — PrimitiveState.match_signals returns contributing texts only
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestMatchSignalsContributing:
@@ -249,11 +204,6 @@ class TestMatchSignalsContributing:
         result = ps.match_signals(sig, texts)
         assert result is not None
         assert len(result) == 2
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-SIG-010 — transcript_texts window-based extraction
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestTranscriptTexts:
@@ -293,11 +243,6 @@ class TestTranscriptTexts:
         result = transcript_texts(evt, 10)
         assert "" not in result
         assert len(result) == 2
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-SIG-011 — cite_message formats trigger context
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestCiteMessage:

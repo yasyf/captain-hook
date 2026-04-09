@@ -7,29 +7,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from captain_hook.app import (
-    _state,
-    get_matching_hooks,
-    hook as register_hook,
-    on,
-    register,
-    reset,
-)
+from captain_hook.app import get_matching_hooks
 from captain_hook.dispatch import execute_hook
-from captain_hook.events import PreToolUseEvent
 from captain_hook.session import SessionSlot
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from captain_hook.tests.helpers import make_ctx
 
 
-def make_pre_tool_event() -> PreToolUseEvent:
-    return PreToolUseEvent(_raw={"tool_name": "Bash"}, ctx=make_ctx())
-
-@pytest.fixture(autouse=True)
-def _clean_state():
-    reset()
-    yield
-    reset()
+from conftest import make_pre_tool_event
 
 
 

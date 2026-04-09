@@ -10,15 +10,8 @@ from typing import Any
 
 import pytest
 
-from captain_hook.app import (
-    _state,
-    hook as register_hook,
-    on,
-    register,
-    reset,
-)
+from captain_hook.app import _state
 from captain_hook.dispatch import dispatch
-from captain_hook.events import PostToolUseEvent
 from captain_hook.types import (
     Event,
     FilePath,
@@ -42,15 +35,7 @@ def session_dir():
     shutil.rmtree(d, ignore_errors=True)
 
 
-def make_post_tool_event(
-    tool_name: str = "Edit",
-    tool_input: dict[str, Any] | None = None,
-    ctx: Any = None,
-) -> PostToolUseEvent:
-    raw: dict[str, Any] = {"tool_name": tool_name}
-    if tool_input is not None:
-        raw["tool_input"] = tool_input
-    return PostToolUseEvent(_raw=raw, ctx=ctx or make_ctx())
+from conftest import make_post_tool_event
 
 
 def register_lint(
@@ -76,14 +61,6 @@ def register_lint(
         tests=tests,
         max_shown=max_shown,
     )
-# --- VAL-LINT-001: String-mode lint ---
-
-@pytest.fixture(autouse=True)
-def _clean_state():
-    reset()
-    yield
-    reset()
-
 
 
 class TestStringModeLint:
@@ -117,9 +94,6 @@ class TestStringModeLint:
         assert result is None
 
 
-# --- VAL-LINT-002: AST-mode lint ---
-
-
 class TestAstModeLint:
     def test_ast_check_receives_tree(self, work_dir: Path, session_dir: Path) -> None:
         source = "import pdb\nx = 1\n"
@@ -142,9 +116,6 @@ class TestAstModeLint:
         result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "pdb import found" in result["hookSpecificOutput"]["additionalContext"]
-
-
-# --- VAL-LINT-003: Mode detection via type hints ---
 
 
 class TestModeDetection:
@@ -186,9 +157,6 @@ class TestModeDetection:
         assert called_with_ast
 
 
-# --- VAL-LINT-004: Violations formatted with template and sep ---
-
-
 class TestViolationFormatting:
     def test_violations_joined_with_sep(self, session_dir: Path) -> None:
 
@@ -221,9 +189,6 @@ class TestViolationFormatting:
         result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "a, b" in result["hookSpecificOutput"]["additionalContext"]
-
-
-# --- VAL-LINT-005: trigger short-circuits AST parsing ---
 
 
 class TestTriggerShortCircuit:
@@ -270,9 +235,6 @@ class TestTriggerShortCircuit:
         assert check_called
 
 
-# --- VAL-LINT-006: max_shown limits ---
-
-
 class TestMaxShown:
     def test_max_shown_limits_violations(self, session_dir: Path) -> None:
 
@@ -311,9 +273,6 @@ class TestMaxShown:
         assert "v5" not in msg
 
 
-# --- VAL-LINT-007: block=True ---
-
-
 class TestBlockMode:
     def test_block_true_returns_deny(self, session_dir: Path) -> None:
 
@@ -344,9 +303,6 @@ class TestBlockMode:
         result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "additionalContext" in result["hookSpecificOutput"]
-
-
-# --- VAL-LINT-008: Default conditions ---
 
 
 class TestDefaultConditions:
@@ -434,9 +390,6 @@ class TestDefaultConditions:
         assert any(isinstance(c, TestFile) for c in spec.skip_if)
 
 
-# --- VAL-LINT-009: Reads from file or content ---
-
-
 class TestFileVsContentRead:
     def test_string_mode_uses_evt_content(self, session_dir: Path) -> None:
         received_content = None
@@ -481,9 +434,6 @@ class TestFileVsContentRead:
         assert "foo" in tree_nodes_seen
 
 
-# --- VAL-LINT-010: SyntaxError returns None ---
-
-
 class TestSyntaxError:
     def test_syntax_error_returns_none(self, work_dir: Path, session_dir: Path) -> None:
         source = "def foo(:\n    pass\n"
@@ -501,9 +451,6 @@ class TestSyntaxError:
         )
         result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
-
-
-# --- VAL-LINT-011: Empty violations don't fire ---
 
 
 class TestEmptyViolations:
@@ -539,9 +486,6 @@ class TestEmptyViolations:
         assert result is None
 
 
-# --- VAL-LINT-012: @overload typing ---
-
-
 class TestOverloadTyping:
     def test_both_modes_accepted(self) -> None:
         from captain_hook.primitives.lint import lint
@@ -555,9 +499,6 @@ class TestOverloadTyping:
         lint(str_check, message="{violations}")
         lint(ast_check, message="{violations}")
         assert len(_state.hooks) == 2
-
-
-# --- VAL-LINT-013: trigger ignored in string mode ---
 
 
 class TestTriggerIgnoredInStringMode:
@@ -575,9 +516,6 @@ class TestTriggerIgnoredInStringMode:
         result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "found" in result["hookSpecificOutput"]["additionalContext"]
-
-
-# --- VAL-LINT-014: check function raises returns None ---
 
 
 class TestCheckRaises:
@@ -613,9 +551,6 @@ class TestCheckRaises:
         assert result is None
 
 
-# --- VAL-LINT-015: default events is PostToolUse ---
-
-
 class TestDefaultEvents:
     def test_default_event_is_post_tool_use(self) -> None:
 
@@ -632,9 +567,6 @@ class TestDefaultEvents:
 
         register_lint(check, message="{violations}", events=Event.PreToolUse)
         assert _state.hooks[-1].spec.events == Event.PreToolUse
-
-
-# --- VAL-LINT-016: AST mode reads full file ---
 
 
 class TestAstFullFileRead:
@@ -663,9 +595,7 @@ class TestAstFullFileRead:
         assert "func:bar" in found_nodes
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Regression: lint() passes empty string through to checker (only skips None)
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestEmptyStringPassthrough:
@@ -706,15 +636,11 @@ class TestEmptyStringPassthrough:
         assert result is None
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Regression: lint() logs check function exceptions instead of silently swallowing
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Regression: AST lint passes empty .py file through ast.parse('') instead of
 # skipping it. Only None (missing source) should be skipped.
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestAstLintEmptyFile:

@@ -1,58 +1,14 @@
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
 from typing import Any
 
-from captain_hook.app import (
-    _state,
-    hook as register_hook,
-    on,
-    register,
-    reset,
-)
+from captain_hook.app import _state
 from captain_hook.dispatch import dispatch
-from captain_hook.events import (
-    PostToolUseEvent,
-    PreToolUseEvent,
-    StopEvent,
-    SubagentStopEvent,
-)
+from captain_hook.events import PreToolUseEvent
 from captain_hook.types import Event, Tool
 from captain_hook.tests.helpers import make_ctx
-
-
-def make_pre_tool_event(
-    tool_name: str = "Bash",
-    tool_input: dict[str, Any] | None = None,
-    ctx: Any = None,
-) -> PreToolUseEvent:
-    raw: dict[str, Any] = {"tool_name": tool_name}
-    if tool_input is not None:
-        raw["tool_input"] = tool_input
-    return PreToolUseEvent(_raw=raw, ctx=ctx or make_ctx())
-
-
-def make_post_tool_event(
-    tool_name: str = "Bash",
-    tool_input: dict[str, Any] | None = None,
-    tool_response: str | None = None,
-    ctx: Any = None,
-) -> PostToolUseEvent:
-    raw: dict[str, Any] = {"tool_name": tool_name}
-    if tool_input is not None:
-        raw["tool_input"] = tool_input
-    if tool_response is not None:
-        raw["tool_response"] = tool_response
-    return PostToolUseEvent(_raw=raw, ctx=ctx or make_ctx())
-
-
-def make_stop_event(ctx: Any = None) -> StopEvent:
-    return StopEvent(_raw={}, ctx=ctx or make_ctx())
-
-
-def make_subagent_stop_event(ctx: Any = None) -> SubagentStopEvent:
-    return SubagentStopEvent(_raw={}, ctx=ctx or make_ctx())
+from conftest import make_post_tool_event, make_pre_tool_event, make_stop_event, make_subagent_stop_event
 
 
 def register_nudge(
@@ -89,16 +45,6 @@ def register_gate(
     from captain_hook.primitives.nudge import gate
 
     gate(message, **kwargs)
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NUDGE-001 — nudge() with when predicate fires warning when predicate True
-# ═══════════════════════════════════════════════════════════════════════════════
-
-@pytest.fixture(autouse=True)
-def _clean_state():
-    reset()
-    yield
-    reset()
-
 
 
 class TestNudgeWhenTrue:
@@ -114,11 +60,6 @@ class TestNudgeWhenTrue:
         assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NUDGE-002 — nudge() with when predicate skips when predicate is False
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestNudgeWhenFalse:
     def test_nudge_when_false_returns_none(self, tmp_path: Path) -> None:
         register_nudge("Watch out!", when=lambda evt: False)
@@ -128,11 +69,6 @@ class TestNudgeWhenFalse:
         result = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
 
         assert result is None
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NUDGE-003 — nudge() with signals fires when score meets threshold
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestNudgeSignalsFire:
@@ -152,11 +88,6 @@ class TestNudgeSignalsFire:
         assert "Detected risky pattern" in result["hookSpecificOutput"]["additionalContext"]
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NUDGE-004 — nudge() with signals skips when score < threshold
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestNudgeSignalsSkip:
     def test_nudge_with_below_threshold_signals_skips(self, tmp_path: Path) -> None:
         from captain_hook.types import Signal, Signals
@@ -173,11 +104,6 @@ class TestNudgeSignalsSkip:
         assert result is None
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NUDGE-005 — gate() produces block action
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestGateBlock:
     def test_gate_produces_deny(self, tmp_path: Path) -> None:
         register_gate("You must stop!")
@@ -189,11 +115,6 @@ class TestGateBlock:
         assert result is not None
         assert result["decision"] == "block"
         assert result["reason"] == "You must stop!"
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NUDGE-006 — gate() blocks only once per turn
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestGateOncePerTurn:
@@ -211,10 +132,7 @@ class TestGateOncePerTurn:
         assert result2 is None
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NUDGE-007 — nudge() default events: PreToolUse without signals,
 #                 PostToolUse with signals
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestNudgeDefaultEvents:
@@ -230,20 +148,10 @@ class TestNudgeDefaultEvents:
         assert _state.hooks[-1].spec.events == Event.PostToolUse
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NUDGE-008 — gate() default events: Stop | SubagentStop
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestGateDefaultEvents:
     def test_gate_default_stop_events(self) -> None:
         register_gate("gate message")
         assert _state.hooks[-1].spec.events == (Event.Stop | Event.SubagentStop)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NUDGE-009 — nudge() message is dedented and stripped
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestNudgeMessageDedent:
@@ -265,11 +173,6 @@ class TestNudgeMessageDedent:
         assert not msg.startswith("\n")
         assert not msg.startswith(" ")
         assert msg == "This is a multi-line\nindented message"
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NUDGE-010 — nudge() with only_if / skip_if conditions
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestNudgeConditions:
@@ -316,11 +219,6 @@ class TestNudgeConditions:
         assert result is None
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NUDGE-011 — nudge() max_fires default: 1 without signals, 3 with signals
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestNudgeMaxFiresDefault:
     def test_nudge_without_signals_max_fires_1(self) -> None:
         register_nudge("plain nudge")
@@ -331,11 +229,6 @@ class TestNudgeMaxFiresDefault:
 
         register_nudge("signal nudge", signals=[Signal(pattern=r"test", weight=1)])
         assert _state.hooks[-1].spec.max_fires == 3
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NUDGE-012 — Signal-triggered nudge cites triggering context
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestSignalCitation:
@@ -357,20 +250,10 @@ class TestSignalCitation:
         assert "force push" in msg
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NUDGE-013 — nudge() with events parameter overrides defaults
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestNudgeEventsOverride:
     def test_nudge_custom_events(self) -> None:
         register_nudge("custom events", events=Event.UserPromptSubmit)
         assert _state.hooks[-1].spec.events == Event.UserPromptSubmit
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NUDGE-014 — nudge() with both when AND signals ignores when
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestNudgeSignalsPrecedence:
@@ -388,11 +271,6 @@ class TestNudgeSignalsPrecedence:
 
         result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
         assert result is None
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-NUDGE-015 — nudge() with when=None and signals=None fires unconditionally
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestNudgeUnconditional:

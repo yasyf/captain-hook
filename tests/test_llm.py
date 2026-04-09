@@ -108,16 +108,6 @@ def register_llm_nudge(
     from captain_hook.primitives.llm import llm_nudge
 
     llm_nudge(prompt, **kw)
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-001 — llm_gate blocks when verdict predicate returns True
-# ═══════════════════════════════════════════════════════════════════════════════
-
-@pytest.fixture(autouse=True)
-def _clean_state():
-    reset()
-    yield
-    reset()
-
 
 
 class TestLlmGateBlocks:
@@ -134,11 +124,6 @@ class TestLlmGateBlocks:
         assert result["decision"] == "block"
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-002 — llm_gate allows when verdict predicate returns False
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestLlmGateAllows:
     def test_llm_gate_allows_on_false_verdict(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import GateVerdict
@@ -150,11 +135,6 @@ class TestLlmGateAllows:
         result = dispatch(Event.Stop, evt, session_dir=tmp_path)
 
         assert result is None
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-003 — llm_gate allows when no signals match (LLM never called)
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestLlmGateNoSignalMatch:
@@ -171,11 +151,6 @@ class TestLlmGateNoSignalMatch:
 
         assert result is None
         ctx.call_llm.assert_not_called()
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-004 — llm_gate with callable message formats verdict
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestLlmGateCallableMessage:
@@ -198,11 +173,6 @@ class TestLlmGateCallableMessage:
         assert "very bad" in result["reason"]
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-005 — llm_gate returns None on LLM failure (None response)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestLlmGateNoneResponse:
     def test_llm_gate_returns_none_on_llm_none(self, tmp_path: Path) -> None:
         ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=None)
@@ -212,11 +182,6 @@ class TestLlmGateNoneResponse:
         result = dispatch(Event.Stop, evt, session_dir=tmp_path)
 
         assert result is None
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-006 — llm_gate custom verdict function
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestLlmGateCustomVerdict:
@@ -236,11 +201,6 @@ class TestLlmGateCustomVerdict:
 
         assert result is not None
         assert result["decision"] == "block"
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-007 — llm_gate custom response_model
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestLlmGateCustomModel:
@@ -266,11 +226,6 @@ class TestLlmGateCustomModel:
         assert "severity=high" in result["reason"]
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-008 — llm_nudge warns when verdict.fire is True
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestLlmNudgeWarns:
     def test_llm_nudge_warns_on_fire_true(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import NudgeVerdict
@@ -285,11 +240,6 @@ class TestLlmNudgeWarns:
         assert "additionalContext" in result["hookSpecificOutput"]
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-009 — llm_nudge allows when verdict.fire is False
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestLlmNudgeAllows:
     def test_llm_nudge_allows_on_fire_false(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import NudgeVerdict
@@ -301,11 +251,6 @@ class TestLlmNudgeAllows:
         result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
 
         assert result is None
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-010 — llm_nudge with async_=True skipped in sync dispatch
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestLlmNudgeAsyncSkippedInSync:
@@ -324,11 +269,6 @@ class TestLlmNudgeAsyncSkippedInSync:
         result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path, async_=False)
 
         assert result is None
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-011 — llm_nudge with async_=True dispatched in async mode
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestLlmNudgeAsyncDispatched:
@@ -350,22 +290,12 @@ class TestLlmNudgeAsyncDispatched:
         assert "additionalContext" in result["hookSpecificOutput"]
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-012 — llm_gate default events: Stop | SubagentStop
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestLlmGateDefaultEvents:
     def test_llm_gate_default_events(self, tmp_path: Path) -> None:
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True)
 
         assert len(_state.hooks) == 1
         assert _state.hooks[0].spec.events == (Event.Stop | Event.SubagentStop)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-013 — llm_nudge default events: PostToolUse
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestLlmNudgeDefaultEvents:
@@ -376,11 +306,6 @@ class TestLlmNudgeDefaultEvents:
         assert _state.hooks[0].spec.events == Event.PostToolUse
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-014 — llm_gate default max_fires: 1
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestLlmGateDefaultMaxFires:
     def test_llm_gate_default_max_fires(self, tmp_path: Path) -> None:
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True)
@@ -388,21 +313,11 @@ class TestLlmGateDefaultMaxFires:
         assert _state.hooks[0].spec.max_fires == 1
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-015 — llm_nudge default max_fires: 3
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestLlmNudgeDefaultMaxFires:
     def test_llm_nudge_default_max_fires(self, tmp_path: Path) -> None:
         register_llm_nudge("Check this", message="WARNING", when=lambda evt: True)
 
         assert _state.hooks[0].spec.max_fires == 3
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-016 — llm_evaluate skips when fired_this_turn is True
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestLlmEvaluateFiredThisTurn:
@@ -425,11 +340,6 @@ class TestLlmEvaluateFiredThisTurn:
         result2 = dispatch(Event.Stop, evt2, session_dir=tmp_path)
         assert result2 is None
         ctx.call_llm.assert_not_called()
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-017 — llm_evaluate with when predicate instead of signals
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestLlmEvaluateWhenPredicate:
@@ -456,11 +366,6 @@ class TestLlmEvaluateWhenPredicate:
         ctx.call_llm.assert_not_called()
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-018 — llm_evaluate context truncation via max_context
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestLlmEvaluateMaxContext:
     def test_llm_evaluate_truncates_context(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import GateVerdict
@@ -484,11 +389,6 @@ class TestLlmEvaluateMaxContext:
         assert len(prompt_str) <= 5000 + 200
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-019 — prompt_check returns block on "block" action
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestPromptCheckBlock:
     def test_prompt_check_returns_block(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
@@ -502,11 +402,6 @@ class TestPromptCheckBlock:
         assert result.action is Action.block
         assert "STYLE" in result.message
         assert "stop that" in result.message
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-020 — prompt_check returns warn on "warning" action
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestPromptCheckWarn:
@@ -524,11 +419,6 @@ class TestPromptCheckWarn:
         assert "minor issue" in result.message
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-021 — prompt_check returns None on "ok" action
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestPromptCheckOk:
     def test_prompt_check_returns_none_on_ok(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
@@ -541,11 +431,6 @@ class TestPromptCheckOk:
         assert result is None
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-022 — prompt_check returns None when LLM returns None
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestPromptCheckLlmNone:
     def test_prompt_check_returns_none_when_llm_returns_none(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import prompt_check
@@ -556,11 +441,6 @@ class TestPromptCheckLlmNone:
         result = prompt_check(evt, "Check {item}", {"item": "things"}, prefix="STYLE")
 
         assert result is None
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-023 — prompt_check includes reasoning when include_reasoning=True
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestPromptCheckReasoning:
@@ -585,11 +465,6 @@ class TestPromptCheckReasoning:
         assert isinstance(prompt_arg, PromptMessage)
         assert "agent_reasoning" in str(prompt_arg)
         assert "I decided to do X because Y" in str(prompt_arg)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-024 — Prompt builder used for all LLM primitives
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestPromptBuilderUsed:
@@ -625,11 +500,6 @@ class TestPromptBuilderUsed:
         assert isinstance(prompt_arg, PromptMessage)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-025 — llm_evaluate with both signals and when ignores when
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestLlmEvaluateBothSignalsAndWhen:
     def test_llm_evaluate_ignores_when_if_signals_present(self, tmp_path: Path) -> None:
         ctx = make_ctx(tmp_path, texts=["no match"])
@@ -646,11 +516,6 @@ class TestLlmEvaluateBothSignalsAndWhen:
         assert result is None  # signals don't match, when not called
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-027 — llm_nudge defaults to async_=False
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class TestLlmNudgeDefaultAsync:
     def test_llm_nudge_defaults_async_false(self, tmp_path: Path) -> None:
         register_llm_nudge("Check this", message="WARNING", when=lambda evt: True)
@@ -658,9 +523,7 @@ class TestLlmNudgeDefaultAsync:
         assert _state.hooks[0].spec.async_ is False
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Regression: braces in prompt context should not cause double-formatting
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestLlmBracesInPrompt:
@@ -697,9 +560,7 @@ class TestLlmBracesInPrompt:
         assert "{x: 1}" in str(prompt_arg)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Regression: fire state should update only after verdict confirms action
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestFireStateTiming:
@@ -759,11 +620,9 @@ class TestFireStateTiming:
         assert ps.last_fired_at > 0
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # Regression: signal-driven LLM hook suppression bug
 # Two signal-driven LLM hooks in the same turn: first returns no-action,
 # second should still fire (consumed hashes should not suppress later hooks).
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestSignalConsumptionNotSuppressLaterHooks:
@@ -859,11 +718,6 @@ class TestSignalConsumptionNotSuppressLaterHooks:
         ps = ctx.s[PrimitiveState].get()
         consumed = ps.consumed if ps else set()
         assert len(consumed) == 0, f"Consumed hashes should be empty after no-action verdict, got {consumed}"
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VAL-LLM-032 — llm_gate and llm_nudge delegate to shared llm_primitive helper
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestLlmPrimitiveHelper:

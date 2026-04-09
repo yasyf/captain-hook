@@ -17,7 +17,6 @@ from captain_hook.types import Event
 
 
 def generate_settings(run_command: str) -> dict[str, Any]:
-    """Build Claude Code hooks settings JSON from registered hooks."""
     events_by_async: defaultdict[bool, set[str]] = defaultdict(set)
     for entry in _state.hooks:
         for member in Event:
@@ -43,7 +42,6 @@ def generate_settings(run_command: str) -> dict[str, Any]:
 
 
 def generate_settings_json(run_command: str) -> str:
-    """Return ``generate_settings`` output as a JSON string."""
     return json.dumps(generate_settings(run_command), indent=2)
 
 
@@ -104,8 +102,7 @@ from captain_hook import Event, Tool, nudge, block_command
 
 block_command(
     r"rm\\s+-rf\\s+/",
-    message="Refusing to run rm -rf /",
-    events=Event.PreToolUse,
+    reason="Refusing to run rm -rf /",
 )
 
 nudge(
