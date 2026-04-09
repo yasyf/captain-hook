@@ -18,7 +18,7 @@ from captain_hook.types import (
     TestFile,
     Tool,
 )
-from captain_hook.tests.helpers import make_ctx
+from captain_hook.tests.helpers import make_ctx, make_post_tool_event
 
 
 @pytest.fixture
@@ -33,9 +33,6 @@ def session_dir():
     d = Path(tempfile.mkdtemp(prefix="session_"))
     yield d
     shutil.rmtree(d, ignore_errors=True)
-
-
-from conftest import make_post_tool_event
 
 
 def register_lint(

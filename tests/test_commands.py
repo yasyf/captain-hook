@@ -17,8 +17,7 @@ from captain_hook.types import (
     Event,
     tokens_to_regex,
 )
-from captain_hook.tests.helpers import make_ctx
-from conftest import make_post_tool_event, make_pre_tool_event
+from captain_hook.tests.helpers import make_ctx, make_post_tool_event, make_pre_tool_event
 
 
 

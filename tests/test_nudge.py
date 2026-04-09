@@ -7,8 +7,7 @@ from captain_hook.app import _state
 from captain_hook.dispatch import dispatch
 from captain_hook.events import PreToolUseEvent
 from captain_hook.types import Event, Tool
-from captain_hook.tests.helpers import make_ctx
-from conftest import make_post_tool_event, make_pre_tool_event, make_stop_event, make_subagent_stop_event
+from captain_hook.tests.helpers import make_ctx, make_post_tool_event, make_pre_tool_event, make_stop_event, make_subagent_stop_event
 
 
 def register_nudge(

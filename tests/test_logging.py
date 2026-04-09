@@ -11,10 +11,7 @@ from captain_hook.app import get_matching_hooks
 from captain_hook.dispatch import execute_hook
 from captain_hook.session import SessionSlot
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
-from captain_hook.tests.helpers import make_ctx
-
-
-from conftest import make_pre_tool_event
+from captain_hook.tests.helpers import make_ctx, make_pre_tool_event
 
 
 

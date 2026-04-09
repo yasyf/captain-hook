@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -27,35 +25,11 @@ from captain_hook.events import (
 )
 from captain_hook.session import SessionStore
 from captain_hook.state import HookState, PrimitiveState
+from captain_hook.tests.helpers import PKG_DIR, build_ctx, run_cli
 from captain_hook.types import Action, Event, HookResult
 
-PKG_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = PKG_DIR.parent.parent
 CLIENT_DIR = PROJECT_ROOT / ".claude" / "hooks"
-
-
-def run_cli(
-    *args: str,
-    stdin_data: str = "",
-    hooks_dir: str | None = None,
-    root_dir: str | None = None,
-) -> subprocess.CompletedProcess[str]:
-    cmd = [sys.executable, "-m", "captain_hook"]
-    if hooks_dir:
-        cmd.extend(["--hooks", hooks_dir])
-    if root_dir:
-        cmd.extend(["--root", root_dir])
-    cmd.extend(args)
-    return subprocess.run(
-        cmd,
-        input=stdin_data,
-        capture_output=True,
-        text=True,
-        cwd=str(PKG_DIR),
-    )
-
-
-from conftest import build_ctx
 
 
 

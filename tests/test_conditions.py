@@ -27,7 +27,7 @@ from captain_hook.types import (
 )
 
 from captain_hook.conditions import check_condition, matches_conditions
-from conftest import make_event, make_transcript_ctx
+from captain_hook.tests.helpers import make_event, make_transcript_ctx
 
 def make_tool_event(
     tool_name: str,

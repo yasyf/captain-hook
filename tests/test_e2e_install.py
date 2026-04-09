@@ -1,33 +1,16 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from captain_hook.app import _state, discover_hooks, get_matching_hooks, reset
+from captain_hook.app import _state, discover_hooks, get_matching_hooks
 from captain_hook.dispatch import dispatch
 from captain_hook.testing.helpers import mock_tool_event
+from captain_hook.tests.helpers import run_cli
 from captain_hook.types import Event
-
-PKG_DIR = Path(__file__).resolve().parent.parent
-
-
-def run_cli(
-    *args: str,
-    stdin_data: str = "",
-    hooks_dir: str | None = None,
-    root_dir: str | None = None,
-) -> subprocess.CompletedProcess[str]:
-    cmd = [sys.executable, "-m", "captain_hook"]
-    if hooks_dir:
-        cmd.extend(["--hooks", hooks_dir])
-    if root_dir:
-        cmd.extend(["--root", root_dir])
-    cmd.extend(args)
-    return subprocess.run(cmd, input=stdin_data, capture_output=True, text=True, cwd=str(PKG_DIR))
 
 
 def purge_hooks_modules() -> None:
@@ -37,11 +20,9 @@ def purge_hooks_modules() -> None:
 
 
 @pytest.fixture(autouse=True)
-def clean_state():
-    reset()
+def purge_hooks():
     purge_hooks_modules()
     yield
-    reset()
     purge_hooks_modules()
 
 
