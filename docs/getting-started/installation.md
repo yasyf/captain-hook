@@ -49,11 +49,8 @@ Or create the structure manually:
 my-project/
 ├── .claude/
 │   └── hooks/
-│       ├── src/
-│       │   ├── conf.py       # Settings (optional)
-│       │   └── my_hooks.py   # Your hooks
-│       └── bin/
-│           └── hooks         # Entrypoint script (chmod +x)
+│       ├── conf.py       # Settings (optional)
+│       └── my_hooks.py   # Your hooks
 ```
 
 ## Dependencies

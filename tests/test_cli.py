@@ -106,7 +106,7 @@ class TestGenerateSettings:
         data = json.loads(result.stdout)
         assert "hooks" in data
 
-    def test_cli_004_generate_settings_run_command(self, tmp_path: Path) -> None:
+    def test_cli_004_generate_settings_hooks_dir(self, tmp_path: Path) -> None:
         hooks_dir = tmp_path / "hooks"
         hooks_dir.mkdir()
         (hooks_dir / "__init__.py").write_text("")
@@ -120,18 +120,18 @@ class TestGenerateSettings:
         """)
         )
 
-        result = run_cli("generate-settings", "--run-command", "path/to/hooks", hooks_dir=str(hooks_dir))
+        result = run_cli("generate-settings", "--hooks-dir", "custom/hooks", hooks_dir=str(hooks_dir))
         assert result.returncode == 0
         data = json.loads(result.stdout)
         raw = json.dumps(data)
-        assert "path/to/hooks run PreToolUse" in raw
+        assert "$CLAUDE_PROJECT_DIR/custom/hooks" in raw
 
     def test_cli_008_settings_reflects_registered_events(self) -> None:
         from captain_hook.cli import generate_settings
 
         register_hook(Event.PreToolUse, message="pre tool")
         register_hook(Event.Stop, message="stop check")
-        settings = generate_settings("bin/hooks")
+        settings = generate_settings()
         assert "PreToolUse" in settings["hooks"]
         assert "Stop" in settings["hooks"]
         assert len(settings["hooks"]) == 2
@@ -140,7 +140,7 @@ class TestGenerateSettings:
         from captain_hook.cli import generate_settings
 
         register_hook(Event.PreToolUse, message="async tool", async_=True)
-        settings = generate_settings("bin/hooks")
+        settings = generate_settings()
         commands = settings["hooks"]["PreToolUse"][0]["hooks"]
         assert any(cmd.get("async") is True for cmd in commands)
 
@@ -149,7 +149,7 @@ class TestGenerateSettings:
 
         register_hook(Event.PreToolUse, message="sync tool", async_=False)
         register_hook(Event.PreToolUse, message="async tool", async_=True)
-        settings = generate_settings("bin/hooks")
+        settings = generate_settings()
         commands = settings["hooks"]["PreToolUse"][0]["hooks"]
         assert len(commands) == 2
         has_sync = any("async" not in cmd for cmd in commands)

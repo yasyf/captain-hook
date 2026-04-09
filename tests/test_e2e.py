@@ -326,18 +326,19 @@ class TestGenerateSettings:
         assert "PreToolUse" in events
         assert "Stop" in events
 
-    def test_e2e_052_generate_settings_commands_have_run(self, tmp_path: Path) -> None:
+    def test_e2e_052_generate_settings_commands_have_uv_run(self, tmp_path: Path) -> None:
         result = run_cli(
             "generate-settings",
-            "--run-command",
-            "bin/hooks",
+            "--hooks-dir",
+            "custom/hooks",
             hooks_dir=str(CLIENT_DIR),
             root_dir=str(tmp_path),
         )
         assert result.returncode == 0
         data = json.loads(result.stdout)
         raw = json.dumps(data)
-        assert "bin/hooks run" in raw
+        assert "uv run --directory $CLAUDE_PROJECT_DIR captain-hook" in raw
+        assert "$CLAUDE_PROJECT_DIR/custom/hooks" in raw
 
 
 class TestStateModelSerialization:

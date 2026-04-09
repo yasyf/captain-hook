@@ -16,7 +16,7 @@ from captain_hook.transcript import Transcript
 from captain_hook.types import Event
 
 
-def generate_settings(run_command: str) -> dict[str, Any]:
+def generate_settings(hooks_dir: str = ".claude/hooks") -> dict[str, Any]:
     events_by_async: defaultdict[bool, set[str]] = defaultdict(set)
     for entry in _state.hooks:
         for member in Event:
@@ -27,7 +27,13 @@ def generate_settings(run_command: str) -> dict[str, Any]:
         return [
             {
                 "type": "command",
-                "command": f"$CLAUDE_PROJECT_DIR/{run_command} run {event}{' --async' if is_async else ''}",
+                "command": (
+                    f"uv run --directory $CLAUDE_PROJECT_DIR captain-hook"
+                    f" --hooks $CLAUDE_PROJECT_DIR/{hooks_dir}"
+                    f" --root $CLAUDE_PROJECT_DIR"
+                    f" run {event}"
+                    f"{' --async' if is_async else ''}"
+                ),
             }
             | ({"async": True} if is_async else {})
             for is_async, events in sorted(events_by_async.items())
@@ -41,12 +47,12 @@ def generate_settings(run_command: str) -> dict[str, Any]:
     }
 
 
-def generate_settings_json(run_command: str) -> str:
-    return json.dumps(generate_settings(run_command), indent=2)
+def generate_settings_json(hooks_dir: str = ".claude/hooks") -> str:
+    return json.dumps(generate_settings(hooks_dir), indent=2)
 
 
-def merge_settings(run_command: str, settings_path: Path) -> dict[str, Any]:
-    hook_settings = generate_settings(run_command)
+def merge_settings(hooks_dir: str, settings_path: Path) -> dict[str, Any]:
+    hook_settings = generate_settings(hooks_dir)
     if settings_path.exists():
         existing = json.loads(settings_path.read_text())
         existing["hooks"] = hook_settings["hooks"]
@@ -113,14 +119,6 @@ nudge(
 )
 '''
 
-BIN_SCRIPT = '''\
-#!/usr/bin/env bash
-set -euo pipefail
-cd "$(dirname "$0")/../.."
-exec uv run captain-hook --hooks .claude/hooks "$@"
-'''
-
-
 def init_project(root: Path) -> None:
     hooks_dir = root / ".claude" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
@@ -130,17 +128,10 @@ def init_project(root: Path) -> None:
         example.write_text(EXAMPLE_HOOK)
         print(f"  Created {example.relative_to(root)}")
 
-    bin_dir = root / ".claude" / "bin"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    bin_script = bin_dir / "captain-hook"
-    bin_script.write_text(BIN_SCRIPT)
-    bin_script.chmod(0o755)
-    print(f"  Created {bin_script.relative_to(root)} (executable)")
-
     settings_path = root / ".claude" / "settings.local.json"
     reset()
     discover_hooks(str(hooks_dir))
-    merged = merge_settings(".claude/bin/captain-hook", settings_path)
+    merged = merge_settings(".claude/hooks", settings_path)
     settings_path.write_text(json.dumps(merged, indent=2) + "\n")
     print(f"  Updated {settings_path.relative_to(root)}")
 
@@ -163,7 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
     settings_parser = sub.add_parser(
         "generate-settings", help="Generate Claude Code settings JSON for .claude/settings.local.json"
     )
-    settings_parser.add_argument("--run-command", default=".claude/bin/captain-hook", help="Path to hooks runner script")
+    settings_parser.add_argument("--hooks-dir", default=".claude/hooks", help="Hooks directory relative to project root")
     settings_parser.add_argument("--no-merge", action="store_true", help="Output standalone JSON instead of merging")
 
     sub.add_parser("test", help="Run inline tests from all registered hooks")
@@ -223,10 +214,10 @@ def main() -> None:
             run_event(args.event, async_=args.async_, root=root)
         case "generate-settings":
             if args.no_merge:
-                print(generate_settings_json(args.run_command))
+                print(generate_settings_json(args.hooks_dir))
             else:
                 settings_path = root / ".claude" / "settings.local.json"
-                merged = merge_settings(args.run_command, settings_path)
+                merged = merge_settings(args.hooks_dir, settings_path)
                 print(json.dumps(merged, indent=2))
         case "test":
             run_tests()

@@ -42,12 +42,6 @@ class TestInit:
         assert "block_command" in text
         assert "nudge" in text
 
-    def test_creates_bin_script(self, project_dir: Path) -> None:
-        script = project_dir / ".claude" / "bin" / "captain-hook"
-        assert script.exists()
-        import os
-        assert os.access(script, os.X_OK)
-
     def test_creates_settings_json(self, project_dir: Path) -> None:
         settings = project_dir / ".claude" / "settings.local.json"
         assert settings.exists()
@@ -61,10 +55,10 @@ class TestInit:
         data = json.loads(settings.read_text())
         assert "PreToolUse" in data["hooks"]
 
-    def test_settings_commands_reference_bin(self, project_dir: Path) -> None:
+    def test_settings_commands_use_uv_run(self, project_dir: Path) -> None:
         settings = project_dir / ".claude" / "settings.local.json"
         raw = settings.read_text()
-        assert ".claude/bin/captain-hook" in raw
+        assert "uv run --directory $CLAUDE_PROJECT_DIR captain-hook" in raw
 
 
 class TestDiscoverAndDispatch:

@@ -17,7 +17,7 @@ captain-hook [-h] [--hooks HOOKS] [--root ROOT] {init,run,test,generate-settings
 
 ## `init`
 
-Scaffold a hooks directory with an example hook, entrypoint script, and Claude Code settings.
+Scaffold a hooks directory with an example hook and Claude Code settings.
 
 ```bash
 captain-hook init
@@ -26,15 +26,13 @@ captain-hook init
 Creates:
 
 ```
-.claude/hooks/
-├── src/
-│   └── hooks.py          # Example hook file
-├── bin/
-│   └── hooks             # Entrypoint script (chmod +x)
-└── pyproject.toml        # Package config
+.claude/
+├── hooks/
+│   └── example.py        # Example hook file
+└── settings.local.json   # Claude Code hook settings
 ```
 
-The entrypoint script is what Claude Code calls. It invokes `captain-hook run` with the right paths.
+The generated settings wire Claude Code to call `uv run captain-hook` for each registered event.
 
 !!! tip
     After running `init`, run `captain-hook generate-settings` to wire up the hooks in Claude Code's settings.
@@ -112,6 +110,13 @@ Generate Claude Code settings JSON for `.claude/settings.local.json`.
 captain-hook generate-settings --hooks src/ --root .
 ```
 
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--hooks-dir` | `.claude/hooks` | Hooks directory relative to project root |
+| `--no-merge` | | Output standalone JSON instead of merging |
+
 **Output** (stdout):
 
 ```json
@@ -120,13 +125,7 @@ captain-hook generate-settings --hooks src/ --root .
     "PreToolUse": [
       {
         "type": "command",
-        "command": ".claude/hooks/bin/hooks PreToolUse"
-      }
-    ],
-    "PostToolUse": [
-      {
-        "type": "command",
-        "command": ".claude/hooks/bin/hooks PostToolUse"
+        "command": "uv run --directory $CLAUDE_PROJECT_DIR captain-hook --hooks $CLAUDE_PROJECT_DIR/.claude/hooks --root $CLAUDE_PROJECT_DIR run PreToolUse"
       }
     ]
   }
@@ -146,12 +145,13 @@ captain-hook generate-settings --hooks src/ > .claude/settings.local.json
 The typical setup flow:
 
 ```bash
+uv add captain-hook                         # add as dependency
 captain-hook init                           # scaffold project
-# edit .claude/hooks/src/hooks.py           # write your hooks
-captain-hook test --hooks .claude/hooks/src  # verify
+# edit .claude/hooks/my_hooks.py            # write your hooks
+captain-hook test --hooks .claude/hooks      # verify
 captain-hook generate-settings \
-  --hooks .claude/hooks/src \
-  --root . > .claude/settings.local.json    # wire up
+  --hooks .claude/hooks \
+  --root .                                  # regenerate settings
 ```
 
-Claude Code reads `.claude/settings.local.json` on startup and calls the entrypoint script for each registered event type.
+Claude Code reads `.claude/settings.local.json` on startup and calls `uv run captain-hook` for each registered event type.
