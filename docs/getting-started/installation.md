@@ -5,6 +5,16 @@
 - Python 3.12 or later
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
 
+## Run without installing
+
+The fastest way to use captain-hook — no project dependency needed:
+
+```bash
+uvx captain-hook init
+```
+
+This uses [uv's tool runner](https://docs.astral.sh/uv/concepts/tools/) to install captain-hook in an isolated environment and run it directly.
+
 ## Install with uv
 
 ```bash

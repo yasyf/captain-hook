@@ -55,10 +55,10 @@ class TestInit:
         data = json.loads(settings.read_text())
         assert "PreToolUse" in data["hooks"]
 
-    def test_settings_commands_use_uv_run(self, project_dir: Path) -> None:
+    def test_settings_commands_use_uvx(self, project_dir: Path) -> None:
         settings = project_dir / ".claude" / "settings.local.json"
         raw = settings.read_text()
-        assert "uv run --directory $CLAUDE_PROJECT_DIR captain-hook" in raw
+        assert "uvx captain-hook" in raw
 
 
 class TestDiscoverAndDispatch:

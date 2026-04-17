@@ -32,7 +32,7 @@ Creates:
 └── settings.local.json   # Claude Code hook settings
 ```
 
-The generated settings wire Claude Code to call `uv run captain-hook` for each registered event.
+The generated settings wire Claude Code to call `uvx captain-hook` for each registered event.
 
 !!! tip
     After running `init`, run `captain-hook generate-settings` to wire up the hooks in Claude Code's settings.
@@ -116,6 +116,7 @@ captain-hook generate-settings --hooks src/ --root .
 |--------|---------|-------------|
 | `--hooks-dir` | `.claude/hooks` | Hooks directory relative to project root |
 | `--no-merge` | | Output standalone JSON instead of merging |
+| `--from` | | Package source for `uvx --from` (local path or PyPI spec) |
 
 **Output** (stdout):
 
@@ -125,11 +126,17 @@ captain-hook generate-settings --hooks src/ --root .
     "PreToolUse": [
       {
         "type": "command",
-        "command": "uv run --directory $CLAUDE_PROJECT_DIR captain-hook --hooks $CLAUDE_PROJECT_DIR/.claude/hooks --root $CLAUDE_PROJECT_DIR run PreToolUse"
+        "command": "uvx captain-hook --hooks $CLAUDE_PROJECT_DIR/.claude/hooks --root $CLAUDE_PROJECT_DIR run PreToolUse"
       }
     ]
   }
 }
+```
+
+Use `--from` to point at a local checkout before the package is published:
+
+```bash
+captain-hook generate-settings --from ./packages/captain-hook
 ```
 
 Only includes event types that have at least one registered hook. Pipe to a file or merge into your existing settings:
@@ -154,4 +161,4 @@ captain-hook generate-settings \
   --root .                                  # regenerate settings
 ```
 
-Claude Code reads `.claude/settings.local.json` on startup and calls `uv run captain-hook` for each registered event type.
+Claude Code reads `.claude/settings.local.json` on startup and calls `uvx captain-hook` for each registered event type.

@@ -10,14 +10,10 @@ dependencies = [
     "tree-sitter-bash>=0.23",
     "funcy>=2.0",
     "spacy>=3.7",
-    "en-core-web-sm>=3.8",
     "orjsonl>=1.0",
     "wn>=1.1.0",
     "lazy-object-proxy>=1.12.0",
 ]
-
-[tool.uv.sources]
-en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
 
 [project.optional-dependencies]
 dev = [

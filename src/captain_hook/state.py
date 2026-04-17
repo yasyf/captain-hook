@@ -22,11 +22,15 @@ NLP: spacy.language.Language | None = None
 
 
 def get_nlp() -> spacy.language.Language:
+    import spacy as _spacy
+
     global NLP  # noqa: PLW0603
     if NLP is None:
-        import spacy as _spacy
-
-        NLP = _spacy.load("en_core_web_sm")  # pyright: ignore[reportConstantRedefinition]
+        try:
+            NLP = _spacy.load("en_core_web_sm")  # pyright: ignore[reportConstantRedefinition]
+        except OSError:
+            _spacy.cli.download("en_core_web_sm")
+            NLP = _spacy.load("en_core_web_sm")  # pyright: ignore[reportConstantRedefinition]
     return NLP
 
 
