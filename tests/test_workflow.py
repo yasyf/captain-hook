@@ -146,6 +146,16 @@ class TestWorkflowFunction:
         )
         hook = _state.hooks[-1]
         assert hook.spec.tests is tests
+
+    def test_registered_hook_skips_planning_agents_by_default(self) -> None:
+        from captain_hook.workflow import Step, workflow
+
+        workflow(
+            label="TEST",
+            marker="DONE",
+            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+        )
+        assert _state.hooks[-1].spec.skip_planning_agents is True
 class TestWorkflowGuard:
     def test_blocks_when_marker_absent(self) -> None:
         from captain_hook.workflow import Step, Workflow

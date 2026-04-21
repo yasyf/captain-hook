@@ -36,6 +36,20 @@ class TestHooksSettingsBase:
         s = MySettings()
         assert s.debug is False
 
+    def test_planning_agents_default_includes_explore_and_plan(self) -> None:
+        from captain_hook.settings import HooksSettings
+
+        names = HooksSettings().planning_agents
+        assert "Explore" in names
+        assert "Plan" in names
+        assert "web-analyzer" in names
+
+    def test_planning_agents_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from captain_hook.settings import HooksSettings
+
+        monkeypatch.setenv("HOOKS_PLANNING_AGENTS", '["only-one"]')
+        assert HooksSettings().planning_agents == ["only-one"]
+
 
 class TestAutoConfBuildSettings:
     def test_builds_from_module_vars(self) -> None:

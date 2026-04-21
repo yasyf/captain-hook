@@ -123,6 +123,7 @@ def hook(
     max_fires: int | None = None,
     tests: TTest | None = None,
     async_: bool = False,
+    skip_planning_agents: bool = True,
 ) -> None:
     if message is None:
         raise TypeError(
@@ -144,6 +145,7 @@ def hook(
                 max_fires=max_fires,
                 tests=tests,
                 async_=async_,
+                skip_planning_agents=skip_planning_agents,
             ),
             name=f"declarative_{_state.counter}",
         )
@@ -159,6 +161,7 @@ def on(
     max_fires: int | None = None,
     tests: TTest | None = None,
     async_: bool = False,
+    skip_planning_agents: bool = True,
 ) -> Callable[[HookHandler], HookHandler]:
     validate_conditions(only_if, "only_if")
     validate_conditions(skip_if, "skip_if")
@@ -170,6 +173,7 @@ def on(
         max_fires=max_fires,
         tests=tests,
         async_=async_,
+        skip_planning_agents=skip_planning_agents,
     )
 
     def decorator(fn: HookHandler) -> HookHandler:
@@ -198,6 +202,7 @@ def register(
     max_fires: int | None = None,
     tests: TTest | None = None,
     async_: bool = False,
+    skip_planning_agents: bool = True,
 ) -> Callable[[HookHandler], HookHandler] | None:
     validate_conditions(only_if, "only_if")
     validate_conditions(skip_if, "skip_if")
@@ -213,6 +218,7 @@ def register(
             max_fires=max_fires,
             tests=tests,
             async_=async_,
+            skip_planning_agents=skip_planning_agents,
         )
         return None
 
@@ -232,6 +238,7 @@ def register(
         max_fires=max_fires,
         tests=tests,
         async_=async_,
+        skip_planning_agents=skip_planning_agents,
     )
 
     def decorator(fn: HookHandler) -> HookHandler:
@@ -249,11 +256,23 @@ def register(
     return decorator
 
 
+def is_planning_agent_skip(spec: HookSpec, evt: BaseHookEvent) -> bool:
+    from captain_hook.settings import DEFAULT_PLANNING_AGENTS
+
+    if not spec.skip_planning_agents:
+        return False
+    if evt.event not in (Event.SubagentStop | Event.SubagentStart):
+        return False
+    names = getattr(_state.settings, "planning_agents", DEFAULT_PLANNING_AGENTS)
+    return bool(evt.agent_type and evt.agent_type in names)
+
+
 def get_matching_hooks(evt: BaseHookEvent) -> list[RegisteredHook]:
     return [
         h
         for h in _state.hooks
         if evt.event in h.spec.events
+        and not is_planning_agent_skip(h.spec, evt)
         and matches_conditions(h.spec, evt)
         and (
             not h.spec.respect_gitignore

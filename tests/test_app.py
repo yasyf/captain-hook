@@ -166,6 +166,77 @@ class TestMultipleHooks:
         assert len(_state.hooks) == 3
 
 
+class TestPlanningAgentSkip:
+    def test_subagent_stop_default_skips_planning_agent(self) -> None:
+        from captain_hook.testing.helpers import mock_subagent_stop_event
+
+        register_hook(Event.SubagentStop, message="workflow check")
+        evt = mock_subagent_stop_event(agent_type="Explore")
+        assert get_matching_hooks(evt) == []
+
+    def test_subagent_stop_opt_out_runs_on_planning_agent(self) -> None:
+        from captain_hook.testing.helpers import mock_subagent_stop_event
+
+        register_hook(Event.SubagentStop, message="runs anyway", skip_planning_agents=False)
+        evt = mock_subagent_stop_event(agent_type="Explore")
+        assert len(get_matching_hooks(evt)) == 1
+
+    def test_subagent_stop_runs_on_non_planning_agent(self) -> None:
+        from captain_hook.testing.helpers import mock_subagent_stop_event
+
+        register_hook(Event.SubagentStop, message="workflow check")
+        evt = mock_subagent_stop_event(agent_type="cleanup")
+        assert len(get_matching_hooks(evt)) == 1
+
+    def test_subagent_start_default_skips_planning_agent(self) -> None:
+        from captain_hook.testing.helpers import mock_subagent_start_event
+
+        register_hook(Event.SubagentStart, message="start check")
+        evt = mock_subagent_start_event(agent_type="Plan")
+        assert get_matching_hooks(evt) == []
+
+    def test_on_decorator_threads_skip_planning_agents(self) -> None:
+        @on(Event.SubagentStop, skip_planning_agents=False)
+        def handler(evt: Any) -> None:
+            return None
+
+        assert _state.hooks[0].spec.skip_planning_agents is False
+
+    def test_default_spec_has_skip_planning_agents_true(self) -> None:
+        register_hook(Event.SubagentStop, message="default")
+        assert _state.hooks[0].spec.skip_planning_agents is True
+
+    def test_pre_tool_use_never_skipped(self) -> None:
+        register_hook(Event.PreToolUse, message="tool check")
+        evt = pre_tool_event(
+            tool_name="Task",
+            tool_input={"subagent_type": "Explore", "prompt": "go"},
+        )
+        assert len(get_matching_hooks(evt)) == 1
+
+    def test_settings_override_planning_agents(self, tmp_path: Path) -> None:
+        from captain_hook.testing.helpers import mock_subagent_stop_event
+
+        d = tmp_path / "dhooks_planning"
+        d.mkdir()
+        (d / "__init__.py").write_text("")
+        (d / "conf.py").write_text(
+            "from captain_hook.settings import HooksSettings\n"
+            "class CustomSettings(HooksSettings):\n"
+            "    pass\n"
+        )
+        (d / "h.py").write_text(
+            "from captain_hook.app import hook\n"
+            "from captain_hook.types import Event\n"
+            "hook(Event.SubagentStop, message='default')\n"
+        )
+        discover_hooks(d)
+        assert _state.settings is not None
+        _state.settings.planning_agents = ["my-agent"]  # type: ignore[attr-defined]
+        assert get_matching_hooks(mock_subagent_stop_event(agent_type="my-agent")) == []
+        assert len(get_matching_hooks(mock_subagent_stop_event(agent_type="Explore"))) == 1
+
+
 class TestGetMatchingHooks:
     def test_filters_by_event(self) -> None:
         register_hook(Event.PreToolUse, message="pre_tool")

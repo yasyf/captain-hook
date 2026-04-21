@@ -8,11 +8,28 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 INFERRABLE_PRIMITIVES = (str, int, float, bool)
 
+DEFAULT_PLANNING_AGENTS = [
+    "Explore",
+    "Plan",
+    "general-purpose",
+    "explore",
+    "plan",
+    "web-analyzer",
+    "search-specialist",
+    "claude-code-guide",
+    "context-manager",
+    "sentry-error-debugger",
+    "logfire-trace-debugger",
+    "sentry:issue-summarizer",
+]
+
 
 class HooksSettings(BaseSettings):
     """Base settings class for hook configuration, backed by environment variables with ``HOOKS_`` prefix."""
 
     model_config = SettingsConfigDict(env_prefix="HOOKS_")
+
+    planning_agents: list[str] = Field(default_factory=lambda: list(DEFAULT_PLANNING_AGENTS))
 
 
 class AutoConf:

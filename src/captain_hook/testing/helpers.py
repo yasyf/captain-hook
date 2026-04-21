@@ -294,8 +294,14 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
                     results.append((test_name, "skip", True, "Session keys not supported"))
                     continue
 
+                from captain_hook.app import is_planning_agent_skip
+
                 evt.ctx.call_llm = stub_call_llm  # type: ignore[assignment]
-                hook_result = execute_hook(entry, evt) if matches_conditions(entry.spec, evt) else None
+                hook_result = (
+                    execute_hook(entry, evt)
+                    if matches_conditions(entry.spec, evt) and not is_planning_agent_skip(entry.spec, evt)
+                    else None
+                )
                 assert_result(hook_result, expected, entry.name)
                 results.append((test_name, "pass", True, ""))
             except AssertionError as e:

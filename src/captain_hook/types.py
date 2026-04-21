@@ -303,8 +303,6 @@ def tokens_to_regex(tokens: list[str]) -> str:
 
 @dataclass(frozen=True, kw_only=True)
 class HookSpec:
-    """Internal specification for a registered hook: events, conditions, and behavior flags."""
-
     events: Event
     only_if: tuple[TCondition, ...] = ()
     skip_if: tuple[TCondition, ...] = ()
@@ -314,6 +312,7 @@ class HookSpec:
     max_fires: int | None = None
     tests: TTest | None = None
     async_: bool = False
+    skip_planning_agents: bool = True
 
 
 @dataclass(frozen=True, kw_only=True)
