@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import re
+from functools import cached_property
 from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -9,7 +10,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
-    from types import FrameType
+    from types import FrameType, ModuleType
 
     import spacy
 
@@ -17,26 +18,44 @@ if TYPE_CHECKING:
     from captain_hook.types import Signals
 
 FRAMEWORK_DIR = str(Path(__file__).resolve().parent)
+SPACY_CACHE = Path.home() / ".cache" / "spacy"
 
-NLP: spacy.language.Language | None = None
 
+class NlpResources:
+    @cached_property
+    def spacy(self) -> spacy.language.Language:
+        import sys
 
-def get_nlp() -> spacy.language.Language:
-    import spacy as _spacy
+        import spacy
 
-    global NLP  # noqa: PLW0603
-    if NLP is None:
+        SPACY_CACHE.mkdir(parents=True, exist_ok=True)
+        if (cache := str(SPACY_CACHE)) not in sys.path:
+            sys.path.insert(0, cache)
         try:
-            NLP = _spacy.load("en_core_web_sm")  # pyright: ignore[reportConstantRedefinition]
+            return spacy.load("en_core_web_sm")
         except OSError:
-            _spacy.cli.download("en_core_web_sm")
-            NLP = _spacy.load("en_core_web_sm")  # pyright: ignore[reportConstantRedefinition]
-    return NLP
+            self.install_spacy_model("en_core_web_sm")
+            return spacy.load("en_core_web_sm")
+
+    @cached_property
+    def wn(self) -> ModuleType:
+        import wn
+
+        if not wn.lexicons(lexicon="oewn:2025"):
+            wn.download("oewn:2025", progress_handler=None)
+        return wn
+
+    @staticmethod
+    def install_spacy_model(name: str) -> None:
+        from spacy.cli.download import download
+
+        download(name, False, False, None, "--target", str(SPACY_CACHE))
+
+
+RESOURCES = NlpResources()
 
 
 class HookState(BaseModel):
-    """Per-hook session state tracking the number of times a hook has fired."""
-
     fire_count: int = 0
 
 
@@ -46,8 +65,6 @@ ECHO_MIN_OVERLAP = 2
 
 
 class PrimitiveState(BaseModel):
-    """Session state for nudge/gate primitives: signal deduplication and echo suppression."""
-
     last_fired_at: int = 0
     consumed: set[str] = Field(default_factory=set)
     echo_lemmas: set[str] = Field(default_factory=set)
@@ -57,7 +74,7 @@ class PrimitiveState(BaseModel):
     def content_lemmas(text: str) -> set[str]:
         return {
             tok.lemma_.lower()
-            for tok in get_nlp()(text)
+            for tok in RESOURCES.spacy(text)
             if tok.pos_ in {"NOUN", "VERB", "ADJ"} and not tok.is_stop and len(tok.lemma_) > 2
         }
 
@@ -96,7 +113,6 @@ class PrimitiveState(BaseModel):
 
 
 def text_hash(text: str) -> str:
-    """Return a 16-char hex SHA-256 hash of text for content deduplication."""
     return sha256(text.encode()).hexdigest()[:16]
 
 
@@ -121,18 +137,15 @@ def caller_stem() -> str:
 
 
 def hook_name(prefix: str, label: str | None, message: str) -> str:
-    """Generate a deterministic hook name from the caller's module, prefix, and label/message."""
     suffix = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_") if label else sha256(message.encode()).hexdigest()[:8]
     return f"{caller_stem()}:{prefix}_{suffix}"
 
 
 def record_fire(evt: BaseHookEvent) -> None:
-    """Record that a primitive fired during this event, updating ``PrimitiveState.last_fired_at``."""
     ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
     ps.last_fired_at = len(evt.ctx.t)
     evt.ctx.s[PrimitiveState].set(ps)
 
 
 def fired_this_turn(evt: BaseHookEvent) -> bool:
-    """Check whether a primitive already fired during the current turn."""
     return (ps := evt.ctx.s[PrimitiveState].get()) is not None and ps.last_fired_at > evt.ctx.turn.start_idx

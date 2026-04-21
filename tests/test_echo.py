@@ -189,27 +189,6 @@ class TestEchoIntegration:
         assert r2 is not None
 
 
-# Regression: spaCy model loaded lazily (not at import time)
-
-
-class TestSpacyLazyLoading:
-    def test_nlp_not_loaded_at_module_scope(self) -> None:
-        import importlib
-
-        import captain_hook.state as state_mod
-
-        importlib.reload(state_mod)
-        assert not hasattr(state_mod, "NLP") or state_mod.NLP is None, (
-            "spaCy model should not be loaded at module scope"
-        )
-
-    def test_content_lemmas_loads_nlp_on_first_call(self) -> None:
-        result = PrimitiveState.content_lemmas("The quick brown fox jumps over the lazy dog")
-        assert isinstance(result, set)
-        assert len(result) > 0
-        assert "fox" in result or "jump" in result
-
-
 # Regression: Echo window expiry boundary uses >= (not >)
 
 

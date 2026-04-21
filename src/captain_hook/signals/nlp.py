@@ -10,22 +10,9 @@ if TYPE_CHECKING:
 
 __all__ = ["Clause", "NlpSignal", "Phrase", "dep_related", "nlp_scan"]
 
-WN_LOADED = False
-
-
-def ensure_wn() -> None:
-    import wn
-
-    global WN_LOADED  # noqa: PLW0603
-    if not WN_LOADED:
-        wn.download("oewn:2025", progress_handler=None)
-        WN_LOADED = True  # pyright: ignore[reportConstantRedefinition]
-
 
 @dataclass(frozen=True, slots=True, init=False)
 class Phrase:
-    """A set of lowercased lemmas for NLP matching. Use ``Phrase.expand()`` to add WordNet synonyms."""
-
     lemmas: tuple[str, ...]
 
     def __init__(self, *terms: str) -> None:
@@ -33,19 +20,21 @@ class Phrase:
 
     @classmethod
     def expand(cls, *terms: str, pos: str = "n") -> Phrase:
-        import wn
+        from captain_hook.state import RESOURCES
 
-        ensure_wn()
         return cls(
-            *{lemma.replace("_", " ") for term in terms for ss in wn.synsets(term, pos=pos) for lemma in ss.lemmas()}
+            *{
+                lemma.replace("_", " ")
+                for term in terms
+                for ss in RESOURCES.wn.synsets(term, pos=pos)
+                for lemma in ss.lemmas()
+            }
             | {t.lower() for t in terms}
         )
 
 
 @dataclass(frozen=True, slots=True)
 class Clause:
-    """An NLP clause matching a noun with optional verb, adjective, or negation via spaCy dependency parsing."""
-
     noun: Phrase
     verb: Phrase | None = None
     adj: Phrase | None = None
@@ -58,17 +47,15 @@ class Clause:
 
 @dataclass(frozen=True, kw_only=True)
 class NlpSignal:
-    """An NLP-based signal pattern: a set of clauses matched via spaCy, contributing ``weight`` to the score."""
-
     clauses: Sequence[Clause]
     weight: int = 1
 
 
 @functools.lru_cache
 def parse(text: str) -> Doc:
-    from captain_hook.state import get_nlp
+    from captain_hook.state import RESOURCES
 
-    return get_nlp()(text)
+    return RESOURCES.spacy(text)
 
 
 def ancestors(tok: Token, max_hops: int) -> set[Token]:
@@ -82,7 +69,6 @@ def ancestors(tok: Token, max_hops: int) -> set[Token]:
 
 
 def dep_related(a: Token, b: Token, max_hops: int = 3) -> bool:
-    """Check whether two spaCy tokens share a common ancestor within ``max_hops`` in the dependency tree."""
     return bool(ancestors(a, max_hops) & ancestors(b, max_hops))
 
 
@@ -114,7 +100,6 @@ def match_clause(clause: Clause, sent: Span) -> bool:
 
 
 def nlp_scan(clauses: Sequence[Clause], text: str) -> list[str]:
-    """Scan text for sentences matching any of the given NLP clauses via spaCy dependency parsing."""
     if not text.strip():
         return []
     return [sent.text.strip() for sent in parse(text).sents if any(match_clause(clause, sent) for clause in clauses)]
