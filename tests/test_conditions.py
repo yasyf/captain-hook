@@ -145,10 +145,10 @@ class TestCommandCondition:
         evt = make_tool_event("Bash", {"command": "git push --force origin"})
         assert check_condition(Command(r"git\s+push\s+--force"), evt) is True
 
-    def test_command_rejects_echo_git_push(self) -> None:
+    def test_command_matches_inside_echo(self) -> None:
 
         evt = make_tool_event("Bash", {"command": 'echo "git push --force"'})
-        assert check_condition(Command(r"git\s+push\s+--force"), evt) is False
+        assert check_condition(Command(r"git\s+push\s+--force"), evt) is True
 
     def test_command_returns_false_for_edit_event(self) -> None:
 
@@ -160,11 +160,11 @@ class TestCommandCondition:
         evt = make_event(StopEvent)
         assert check_condition(Command(r"git"), evt) is False
 
-    def test_command_uses_match_not_search(self) -> None:
+    def test_command_uses_search_not_match(self) -> None:
 
-        evt = make_tool_event("Bash", {"command": "git push"})
-        assert check_condition(Command(r"push"), evt) is False
-        assert check_condition(Command(r"git\s+push"), evt) is True
+        evt = make_tool_event("Bash", {"command": "uv run mtest run bioqa/"})
+        assert check_condition(Command(r"mtest\s+run"), evt) is True
+        assert check_condition(Command(r"git"), evt) is False
 
 class TestContentCondition:
     def test_content_matches_import_pdb(self) -> None:

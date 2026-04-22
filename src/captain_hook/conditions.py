@@ -34,7 +34,7 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
         case FilePath(patterns):
             return bool(evt.file and evt.file.matches(*patterns))
         case Command(pattern):
-            return bool((cl := evt.command_line) and any(re.match(pattern, str(cmd)) for cmd in cl.commands))
+            return bool((cl := evt.command_line) and any(re.search(pattern, str(cmd)) for cmd in cl.commands))
         case Content(pattern):
             return bool(evt.content and re.search(pattern, evt.content, re.MULTILINE))
         case Agent(name):

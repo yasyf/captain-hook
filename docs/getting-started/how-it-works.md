@@ -106,7 +106,7 @@ evt.command_line # CommandLine(primary=Command("git"), args=["stash", "pop"])
 The dispatch pipeline calls `get_matching_hooks(evt)`, which evaluates each registered hook's conditions:
 
 1. **Event match** --- `Event.PreToolUse` is in the hook's event set. Pass.
-2. **`only_if` conditions** --- `Tool("Bash")` checks `evt.tool_name == "Bash"`. Pass. `Command(r"git\s+stash")` checks `re.match(r"git\s+stash", "git stash pop")`. Pass.
+2. **`only_if` conditions** --- `Tool("Bash")` checks `evt.tool_name == "Bash"`. Pass. `Command(r"git\s+stash")` checks `re.search(r"git\s+stash", "git stash pop")`. Pass.
 3. **`skip_if` conditions** --- none registered. Pass.
 4. **Gitignore check** --- no file path involved. Pass.
 

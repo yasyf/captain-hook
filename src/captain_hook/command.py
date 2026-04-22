@@ -60,7 +60,7 @@ class Command:
         return dict(self.env)
 
     def matches(self, pattern: str) -> bool:
-        return bool(re.match(pattern, str(self)))
+        return bool(re.search(pattern, str(self)))
 
     def has_arg(self, *patterns: str) -> bool:
         return any(re.search(p, a) for p in patterns for a in self.args)
