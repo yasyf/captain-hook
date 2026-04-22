@@ -169,12 +169,15 @@ class HookContext:
             cwd=os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR"),
         )
         if result.returncode != 0:
-            raise subprocess.CalledProcessError(
+            err = subprocess.CalledProcessError(
                 result.returncode,
                 args,
                 output=result.stdout,
                 stderr=result.stderr,
             )
+            err.add_note(f"stderr: {result.stderr[:2000]}")
+            err.add_note(f"stdout: {result.stdout[:2000]}")
+            raise err
         return result.stdout
 
     def call_llm(

@@ -123,6 +123,21 @@ class TestCallCli:
             ctx.call_cli(["false"])
         assert exc_info.value.returncode != 0
 
+    def test_failure_attaches_stderr_as_note(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            ctx.call_cli(["sh", "-c", "echo Invalid API key >&2; exit 1"])
+        assert "Invalid API key" in exc_info.value.stderr
+        assert any("Invalid API key" in note for note in getattr(exc_info.value, "__notes__", []))
+
+    def test_failure_attaches_stdout_as_note(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            ctx.call_cli(["sh", "-c", "echo partial-output; exit 2"])
+        assert any("partial-output" in note for note in getattr(exc_info.value, "__notes__", []))
+
     def test_uses_project_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
         monkeypatch.delenv("FACTORY_PROJECT_DIR", raising=False)

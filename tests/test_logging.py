@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -135,3 +136,45 @@ class TestLlmLogging:
 
         assert result is None
         assert any(r.levelno >= logging.WARNING for r in caplog.records)
+
+    def test_prompt_check_log_renders_stderr_note(self, caplog: pytest.LogCaptureFixture) -> None:
+        err = subprocess.CalledProcessError(1, ["claude"], output="", stderr="Invalid API key")
+        err.add_note("stderr: Invalid API key")
+        ctx = make_ctx(texts=["some reasoning"])
+        ctx.call_llm = MagicMock(side_effect=err)
+
+        from captain_hook.primitives.llm import prompt_check
+
+        evt = MagicMock()
+        evt.ctx = ctx
+
+        with caplog.at_level(logging.WARNING, logger="captain_hook.primitives.llm"):
+            result = prompt_check(evt, "Check {thing}", {"thing": "quality"}, prefix="TEST")
+
+        assert result is None
+        assert "Invalid API key" in caplog.text
+
+    def test_prompt_check_log_surfaces_subprocess_stderr(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from captain_hook.context import HookContext
+        from captain_hook.primitives.llm import prompt_check
+        from captain_hook.session import SessionStore
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(spec=[]), settings=None)
+        marker = "stderr-marker-7f3a9c"
+        monkeypatch.setenv("STDERR_MARKER", marker)
+        ctx.call_llm = lambda *a, **kw: ctx.call_cli(
+            ["sh", "-c", '>&2 printf "%s" "$STDERR_MARKER"; exit 1'],
+        )
+
+        evt = MagicMock()
+        evt.ctx = ctx
+
+        with caplog.at_level(logging.WARNING, logger="captain_hook.primitives.llm"):
+            result = prompt_check(evt, "Check {thing}", {"thing": "quality"}, prefix="TEST")
+
+        assert result is None
+        assert isinstance(caplog.records[-1].exc_info[1], subprocess.CalledProcessError)
+        assert marker in caplog.text
