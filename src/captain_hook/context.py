@@ -39,7 +39,7 @@ class CodexBackend(LlmBackend):
     models: ClassVar[dict[TModel, str]] = {
         "small": "gpt-5.3-codex-spark",
         "medium": "gpt-5.4-mini",
-        "large": "gpt-5.4",
+        "large": "gpt-5.5",
     }
 
     def build_command(self, model: str, schema_path: str | None, agent: bool) -> list[str]:
