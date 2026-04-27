@@ -5,9 +5,10 @@ import os
 import re
 import shutil
 import tempfile
+from collections.abc import Sequence
 from hashlib import sha256
 from pathlib import Path
-from typing import Generic, TypeVar
+from typing import ClassVar, Generic, TypeVar
 
 from pydantic import BaseModel
 
@@ -97,8 +98,43 @@ class SessionSlot(Generic[M]):  # noqa: UP046
 class SessionStore:
     """Class-keyed store providing typed ``SessionSlot`` access via ``store[ModelClass]``."""
 
+    TRACKED: ClassVar[list[type[BaseModel]]] = []
+
     def __init__(self, session_dir: Path | None) -> None:
         self._dir = session_dir
 
     def __getitem__(self, model: type[M]) -> SessionSlot[M]:
         return SessionSlot(self._dir, model)
+
+    @classmethod
+    def track(cls, model: type[BaseModel]) -> None:
+        """Register ``model`` so it appears in ``tracked_models()`` and ``tracked_paths()``."""
+        if model not in cls.TRACKED:
+            cls.TRACKED.append(model)
+
+    @classmethod
+    def untrack(cls, model: type[BaseModel]) -> None:
+        """Reverse ``track`` — primarily for test isolation."""
+        if model in cls.TRACKED:
+            cls.TRACKED.remove(model)
+
+    @classmethod
+    def tracked_models(cls) -> Sequence[type[BaseModel]]:
+        """Return the registered tracked-state models as an immutable tuple."""
+        return tuple(cls.TRACKED)
+
+    def tracked_paths(self) -> dict[str, Path]:
+        """Return ``{ModelClass.__name__: Path}`` for every tracked model whose slot has a path."""
+        return {m.__name__: p for m in type(self).TRACKED if (p := self[m].path)}
+
+
+def session_state[T: BaseModel](cls: type[T]) -> type[T]:
+    """Decorator that registers a Pydantic model for collective ``SessionStore`` introspection.
+
+    Example:
+        >>> @session_state
+        ... class Snapshot(BaseModel):
+        ...     op_id: str
+    """
+    SessionStore.track(cls)
+    return cls

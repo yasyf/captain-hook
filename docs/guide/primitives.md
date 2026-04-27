@@ -116,6 +116,42 @@ warn_command(
 )
 ```
 
+## audit
+
+Append a JSONL record per matching event for offline analysis:
+
+```python
+from captain_hook import audit, Event
+
+audit(Event.PreToolUse | Event.PostToolUse | Event.Stop)
+```
+
+By default, each line contains `ts`, `event`, `tool`, `file`, and a
+session id derived from the transcript path. Records are written to
+`$CLAUDE_PROJECT_DIR/.context/hook-logs/<YYYY-MM-DD>.jsonl`.
+
+Customize the destination or record shape:
+
+```python
+from datetime import datetime
+from captain_hook import audit, Event
+
+audit(
+    Event.PostToolUse,
+    log_dir="logs/hooks",
+    filename=lambda d: f"{d:%Y-%m-%dT%H}.jsonl",
+    fields=lambda evt: {"event": evt.event_name.name, "tool": evt.tool_name},
+)
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `events` | Event mask (default: `PreToolUse \| PostToolUse \| Stop`) |
+| `log_dir` | Output directory (default: `$CLAUDE_PROJECT_DIR/.context/hook-logs`) |
+| `filename` | `(datetime) -> str` mapping a timestamp to a filename |
+| `fields` | `(evt) -> dict` for the per-record payload |
+| `only_if` / `skip_if` | Condition lists |
+
 ---
 
 !!! note "More primitives"

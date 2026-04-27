@@ -190,10 +190,14 @@ def llm_gate(
     max_context: int = 2000,
     specialty: TSpecialty = "review",
     model: TModel = "small",
-    agent: bool = False,
-    transcript: bool = False,
+    agent: bool = True,
+    transcript: bool = True,
 ) -> None:
     """Register an LLM-powered blocking gate.
+
+    Defaults are tuned for the common case: ``agent=True`` and ``transcript=True``
+    so the gate has tool access and full transcript context. Pass
+    ``agent=False, transcript=False`` for cheap, stateless yes/no checks.
 
     Example:
         >>> llm_gate("Is the agent making excuses?",
@@ -241,10 +245,14 @@ def llm_nudge(
     max_context: int = 2000,
     specialty: TSpecialty = "review",
     model: TModel = "small",
-    agent: bool = False,
-    transcript: bool = False,
+    agent: bool = True,
+    transcript: bool = True,
 ) -> None:
     """Register an LLM-powered advisory nudge.
+
+    Defaults are tuned for the common case: ``agent=True`` and ``transcript=True``
+    so the nudge has tool access and full transcript context. Pass
+    ``agent=False, transcript=False`` for cheap, stateless yes/no checks.
 
     Example:
         >>> llm_nudge("Is the agent speculating instead of observing?",

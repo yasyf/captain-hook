@@ -120,7 +120,40 @@ def review_gate(evt):
 
 State is serialized as JSON and stored in the session directory at `~/.claude/state/hooks/sessions/<hash>/<model_key>.json`. The model key is derived from the class name (`ReviewState` becomes `review_state.json`).
 
+## Tracked state models
+
+When you have multiple state models that should be visible together — for
+example, to surface their on-disk paths in a sub-agent's setup context —
+register them with `@session_state`:
+
+```python
+from pydantic import BaseModel, Field
+from captain_hook import session_state
+
+@session_state
+class Snapshot(BaseModel):
+    op_id: str
+
+@session_state
+class CleanupScope(BaseModel):
+    files: list[str] = Field(default_factory=list)
+```
+
+`SessionStore` then exposes:
+
+- `evt.ctx.s.tracked_models()` -- read-only sequence of registered classes
+- `evt.ctx.s.tracked_paths()` -- `{class_name: Path}` for every tracked
+  model whose slot has a path
+
+This is purely a registration helper — `@session_state` does not change
+how individual slots are accessed (`evt.ctx.s[Snapshot]` still works the
+same way).
+
 ## Built-in state models
+
+`HookState` and `PrimitiveState` are automatically tracked — the framework
+calls `SessionStore.track()` on them at import time, so they appear in
+`tracked_models()` and `tracked_paths()` without any explicit registration.
 
 ### HookState
 

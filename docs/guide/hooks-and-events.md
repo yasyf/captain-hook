@@ -43,6 +43,12 @@ Each `Event` flag maps to a strongly-typed event class:
 
 All events provide a `ctx` property returning a `HookContext` with access to transcript, settings, session state, CLI helpers, and LLM invocation.
 
+Every event also exposes:
+
+- `evt.transcript_path` — `Path | None` to the active transcript file (from the raw payload)
+- `evt.user_prompt` — the user's prompt text (set on `UserPromptSubmit`, otherwise `None`)
+- `evt.stop_hook_active` — whether the stop hook is currently active
+
 ## Registration
 
 There are three ways to register hooks, from simplest to most flexible.

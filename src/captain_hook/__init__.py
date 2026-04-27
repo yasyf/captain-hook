@@ -23,6 +23,7 @@ from captain_hook.primitives import (
     GateVerdict,
     NudgeVerdict,
     PromptCheckVerdict,
+    audit,
     block_command,
     gate,
     lint,
@@ -30,11 +31,12 @@ from captain_hook.primitives import (
     llm_nudge,
     nudge,
     prompt_check,
+    session_id_for,
     warn_command,
 )
 from captain_hook.primitives.llm import llm_evaluate
 from captain_hook.prompt import Prompt, PromptMessage
-from captain_hook.session import SessionSlot, SessionStore
+from captain_hook.session import SessionSlot, SessionStore, session_state
 from captain_hook.settings import AutoConf, HooksSettings, build_settings
 from captain_hook.signals import cite_message, extract_signal_context, resolve_signals, score_signals, transcript_texts
 from captain_hook.signals.nlp import Clause, NlpSignal, Phrase
@@ -139,9 +141,11 @@ __all__ = [
     "HookContext",
     "SessionSlot",
     "SessionStore",
+    "session_state",
     "HookState",
     "PrimitiveState",
     # primitives
+    "audit",
     "block_command",
     "gate",
     "GateVerdict",
@@ -153,6 +157,7 @@ __all__ = [
     "NudgeVerdict",
     "prompt_check",
     "PromptCheckVerdict",
+    "session_id_for",
     "warn_command",
     # signals
     "cite_message",

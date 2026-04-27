@@ -63,9 +63,14 @@ llm_gate(
 :   `max_context` -- maximum characters of context sent to the LLM (default: 2000)
 :   `model` -- LLM model size: `"small"`, `"medium"`, or `"large"` (default: `"small"`)
 :   `specialty` -- backend selection: `"review"`, `"debugging"`, or `"general"` (default: `"review"`)
-:   `agent` -- run the LLM in agent mode with tool access (default: `False`)
-:   `transcript` -- include the full transcript in the LLM prompt (default: `False`)
+:   `agent` -- run the LLM in agent mode with tool access (default: `True`)
+:   `transcript` -- include the full transcript in the LLM prompt (default: `True`)
 :   `tests` -- inline test dict
+
+!!! note "Defaults reflect the common case"
+    `agent=True` and `transcript=True` are defaults because most LLM hooks
+    benefit from agent-mode tool access and full transcript context. Pass
+    `agent=False, transcript=False` for cheap, stateless yes/no checks.
 
 ## llm_nudge
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from captain_hook.primitives.audit import audit as audit
+from captain_hook.primitives.audit import session_id_for as session_id_for
 from captain_hook.primitives.commands import block_command as block_command
 from captain_hook.primitives.commands import warn_command as warn_command
 from captain_hook.primitives.lint import lint as lint
@@ -31,6 +33,7 @@ __all__ = [
     "GateVerdict",
     "NudgeVerdict",
     "PromptCheckVerdict",
+    "audit",
     "block_command",
     "gate",
     "lint",
@@ -39,5 +42,6 @@ __all__ = [
     "llm_nudge",
     "nudge",
     "prompt_check",
+    "session_id_for",
     "warn_command",
 ]

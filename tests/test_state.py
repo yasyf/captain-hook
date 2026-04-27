@@ -7,7 +7,7 @@ import pytest
 from pydantic import BaseModel
 
 from captain_hook.dispatch import HookState, execute_hook
-from captain_hook.session import SessionSlot, SessionStore
+from captain_hook.session import SessionSlot, SessionStore, session_state
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 
@@ -338,3 +338,57 @@ class TestHookName:
         name = hook_name("gate", None, "some long message text")
         assert "gate" in name
         assert len(name) > 5
+
+
+class TestSessionStateTracking:
+    def test_decorator_registers_class_and_returns_unchanged(self) -> None:
+        before = set(SessionStore.tracked_models())
+
+        @session_state
+        class Tracked(BaseModel):
+            x: int = 0
+
+        assert Tracked in SessionStore.tracked_models()
+        assert Tracked not in before
+        assert Tracked.model_validate({"x": 1}).x == 1
+        SessionStore.untrack(Tracked)
+
+    def test_tracked_models_returns_immutable_view(self) -> None:
+        snapshot = SessionStore.tracked_models()
+        assert isinstance(snapshot, tuple)
+        with pytest.raises((TypeError, AttributeError)):
+            snapshot.append(MyModel)  # type: ignore[attr-defined]
+
+    def test_builtin_models_auto_tracked(self) -> None:
+        models = SessionStore.tracked_models()
+        assert HookState in models
+        assert PrimitiveState in models
+
+    def test_tracked_paths_returns_paths_for_session_dir(self, tmp_path: Path) -> None:
+        @session_state
+        class Tracked(BaseModel):
+            v: int = 0
+
+        store = SessionStore(tmp_path)
+        paths = store.tracked_paths()
+        assert "Tracked" in paths
+        assert paths["Tracked"] == store[Tracked].path
+        SessionStore.untrack(Tracked)
+
+    def test_tracked_paths_omits_models_without_session_dir(self) -> None:
+        @session_state
+        class Tracked(BaseModel):
+            v: int = 0
+
+        assert "Tracked" not in SessionStore(None).tracked_paths()
+        SessionStore.untrack(Tracked)
+
+    def test_tracked_paths_keyed_by_class_name(self, tmp_path: Path) -> None:
+        @session_state
+        class CustomScope(BaseModel):
+            n: int = 0
+
+        paths = SessionStore(tmp_path).tracked_paths()
+        assert "CustomScope" in paths
+        assert paths["CustomScope"].name == "custom_scope.json"
+        SessionStore.untrack(CustomScope)

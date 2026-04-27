@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -277,3 +278,19 @@ class TestNotificationEvent:
         assert evt.notification_type is None
 
 
+
+
+class TestTranscriptPath:
+    def test_returns_path_when_present(self) -> None:
+        from captain_hook.events import StopEvent
+        from captain_hook.tests.helpers import make_ctx
+
+        evt = StopEvent(_raw={"transcript_path": "/tmp/x.jsonl"}, ctx=make_ctx())
+        assert evt.transcript_path == Path("/tmp/x.jsonl")
+
+    def test_returns_none_when_absent(self) -> None:
+        from captain_hook.events import StopEvent
+        from captain_hook.tests.helpers import make_ctx
+
+        evt = StopEvent(_raw={}, ctx=make_ctx())
+        assert evt.transcript_path is None

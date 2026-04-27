@@ -760,3 +760,29 @@ class TestLlmPrimitiveHelper:
 
         async_result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path, async_=True)
         assert async_result is not None
+
+
+class TestDefaultAgentTranscript:
+    def test_llm_gate_defaults_agent_and_transcript_to_true(self) -> None:
+        from inspect import signature
+        from captain_hook.primitives.llm import llm_gate
+
+        params = signature(llm_gate).parameters
+        assert params["agent"].default is True
+        assert params["transcript"].default is True
+
+    def test_llm_nudge_defaults_agent_and_transcript_to_true(self) -> None:
+        from inspect import signature
+        from captain_hook.primitives.llm import llm_nudge
+
+        params = signature(llm_nudge).parameters
+        assert params["agent"].default is True
+        assert params["transcript"].default is True
+
+    def test_llm_evaluate_keeps_old_defaults(self) -> None:
+        from inspect import signature
+        from captain_hook.primitives.llm import llm_evaluate
+
+        params = signature(llm_evaluate).parameters
+        assert params["agent"].default is False
+        assert params["transcript"].default is False

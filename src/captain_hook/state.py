@@ -149,3 +149,9 @@ def record_fire(evt: BaseHookEvent) -> None:
 
 def fired_this_turn(evt: BaseHookEvent) -> bool:
     return (ps := evt.ctx.s[PrimitiveState].get()) is not None and ps.last_fired_at > evt.ctx.turn.start_idx
+
+
+from captain_hook.session import SessionStore  # noqa: E402
+
+SessionStore.track(HookState)
+SessionStore.track(PrimitiveState)

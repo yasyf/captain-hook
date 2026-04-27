@@ -55,6 +55,7 @@ nav:
     - Agent Behavior: examples/agent-behavior.md
     - LLM-Powered Review: examples/llm-review.md
     - Multi-Step Workflows: examples/workflows.md
+    - Audit Logging: examples/audit.md
   - Reference:
     - reference/index.md
     - CLI: reference/cli.md

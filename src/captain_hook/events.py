@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from functools import cached_property
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from captain_hook.file import File
@@ -47,6 +48,10 @@ class BaseHookEvent:
     @property
     def stop_hook_active(self) -> bool:
         return self._raw.get("stop_hook_active", False)
+
+    @property
+    def transcript_path(self) -> Path | None:
+        return Path(p) if (p := self._raw.get("transcript_path")) else None
 
     @property
     def parent_agent_type(self) -> str | None:
