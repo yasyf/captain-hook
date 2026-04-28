@@ -386,7 +386,7 @@ class TestStateModelSerialization:
 
         discover_hooks(str(CLIENT_DIR))
 
-        agents_mod = sys.modules["hooks.agents"]
+        agents_mod = sys.modules["hooks.agents.cleanup_state"]
 
         Snapshot = agents_mod.Snapshot
         RunStatus = agents_mod.RunStatus
