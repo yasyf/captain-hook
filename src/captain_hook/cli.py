@@ -15,6 +15,22 @@ from captain_hook.session import SessionStore, ensure_session
 from captain_hook.transcript import Transcript
 from captain_hook.types import Event
 
+EXAMPLE_HOOK = '''\
+from captain_hook import Event, Tool, nudge, block_command
+
+block_command(
+    r"rm\\s+-rf\\s+/",
+    reason="Refusing to run rm -rf /",
+)
+
+nudge(
+    "Remember to run tests before committing.",
+    only_if=[Tool("Bash")],
+    events=Event.PostToolUse,
+    max_fires=1,
+)
+'''
+
 
 def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str | None = None) -> dict[str, Any]:
     events_by_async: defaultdict[bool, set[str]] = defaultdict(set)
@@ -91,12 +107,11 @@ def run_event(
     transcript_path = raw.get("transcript_path")
     setup_logging(transcript_path)
     resolved_path = raw.get("agent_transcript_path") or transcript_path
-    transcript = Transcript.from_path(resolved_path) if resolved_path else None
 
     session_dir = ensure_session(transcript_path) if transcript_path else ensure_session(root or Path.cwd())
     ctx = HookContext(
         session=SessionStore(session_dir),
-        transcript=transcript,
+        transcript=Transcript.from_path(resolved_path),
         settings=_state.settings,
     )
     evt = event.event_class(_raw=raw, ctx=ctx)
@@ -104,22 +119,6 @@ def run_event(
     if output := dispatch(event, evt, session_dir=session_dir, async_=async_):
         print(json.dumps(output))
 
-
-EXAMPLE_HOOK = '''\
-from captain_hook import Event, Tool, nudge, block_command
-
-block_command(
-    r"rm\\s+-rf\\s+/",
-    reason="Refusing to run rm -rf /",
-)
-
-nudge(
-    "Remember to run tests before committing.",
-    only_if=[Tool("Bash")],
-    events=Event.PostToolUse,
-    max_fires=1,
-)
-'''
 
 def init_project(root: Path) -> None:
     hooks_dir = root / ".claude" / "hooks"
