@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -18,9 +19,16 @@ from captain_hook.events import (
     UserPromptSubmitEvent,
 )
 from captain_hook.session import SessionStore
+from captain_hook.testing.session_cache import SessionCache
 from captain_hook.testing.types import Allow, Block, Input, TranscriptFixture, Warn
 from captain_hook.transcript import Transcript
 from captain_hook.types import Event, HookResult, Tool
+
+STUB_FIELD_VALUES: dict[str, Any] = {
+    "block": True, "fire": True,
+    "action": "block",
+    "reasoning": "inline test stub", "reason": "inline test stub",
+}
 
 
 def build_context(
@@ -231,6 +239,65 @@ def input_to_event(
             )
 
 
+def replay_session(entry: Any, jsonl: Path) -> Iterator[HookResult | None]:
+    transcript = Transcript.from_path(jsonl)
+    ctx = HookContext(session=SessionStore(None), transcript=transcript, settings=None)
+    ctx.call_llm = stub_call_llm  # type: ignore[method-assign]
+    transcript_path = str(jsonl)
+
+    for ev_type in entry.spec.events:
+        for raw in transcript_event_payloads(ev_type, transcript, transcript_path):
+            yield execute_hook(entry, ev_type.event_class(_raw=raw, ctx=ctx))
+
+
+def transcript_event_payloads(
+    ev_type: Event,
+    transcript: Transcript,
+    transcript_path: str,
+) -> Iterator[dict[str, Any]]:
+    base = {"transcript_path": transcript_path}
+    match ev_type:
+        case Event.PreToolUse:
+            yield from (
+                base | {"tool_name": tu.name, "tool_input": tu.raw_input}
+                for tu in transcript.tool_uses
+            )
+        case Event.PostToolUse:
+            yield from (
+                base | {"tool_name": tu.name, "tool_input": tu.raw_input}
+                | ({"tool_response": str(tu.result.content)} if tu.result and not tu.result.is_error else {})
+                for tu in transcript.tool_uses
+            )
+        case Event.PostToolUseFailure:
+            yield from (
+                base | {"tool_name": tu.name, "tool_input": tu.raw_input, "error": str(tu.result.content)}
+                for tu in transcript.tool_uses.with_errors
+                if tu.result and tu.result.is_error
+            )
+        case Event.UserPromptSubmit:
+            yield from (
+                base | {"prompt": msg.text}
+                for msg in transcript.messages
+                if transcript.is_user_message(msg) and msg.text
+            )
+        case Event.Stop | Event.SubagentStop | Event.SubagentStart | Event.Notification | Event.PreCompact:
+            yield base
+
+
+def matches_expected(result: HookResult | None, expected: Block | Warn | Allow) -> bool:
+    match expected:
+        case Allow():
+            return result is None or result.action == "allow"
+        case Block(pattern=pat):
+            return result is not None and result.action == "block" and (
+                not pat or not result.message or bool(re.search(pat, result.message))
+            )
+        case Warn(pattern=pat):
+            return result is not None and result.action == "warn" and (
+                not pat or not result.message or bool(re.search(pat, result.message))
+            )
+
+
 def assert_result(
     result: HookResult | None,
     expected: Block | Warn | Allow,
@@ -248,13 +315,6 @@ def assert_result(
             assert result is not None and result.action == "warn", f"{prefix}Expected Warn, got {result}"
             if pat and result.message:
                 assert re.search(pat, result.message), f"{prefix}Warn message doesn't match '{pat}'"
-
-
-STUB_FIELD_VALUES: dict[str, Any] = {
-    "block": True, "fire": True,
-    "action": "block",
-    "reasoning": "inline test stub", "reason": "inline test stub",
-}
 
 
 def stub_call_llm(
@@ -286,23 +346,26 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
                 if isinstance(key, Input):
                     spec_tools = [p for c in entry.spec.only_if if isinstance(c, Tool) for p in c.pattern.split("|")]
                     evt = input_to_event(
-                        entry.spec.events,
+                        next(iter(entry.spec.events)),
                         key,
                         spec_tools[0] if spec_tools else None,
                     )
+                    from captain_hook.app import is_planning_agent_skip
+
+                    evt.ctx.call_llm = stub_call_llm  # type: ignore[assignment]
+                    hook_result = (
+                        execute_hook(entry, evt)
+                        if matches_conditions(entry.spec, evt) and not is_planning_agent_skip(entry.spec, evt)
+                        else None
+                    )
+                    assert_result(hook_result, expected, entry.name)
+                elif jsonl := SessionCache.for_root().load(key):
+                    replays = list(replay_session(entry, jsonl))
+                    if not any(matches_expected(r, expected) for r in replays):
+                        assert_result(replays[-1] if replays else None, expected, entry.name)
                 else:
-                    results.append((test_name, "skip", True, "Session keys not supported"))
+                    results.append((test_name, "skip", True, f"no fixture or local Claude session for {key}"))
                     continue
-
-                from captain_hook.app import is_planning_agent_skip
-
-                evt.ctx.call_llm = stub_call_llm  # type: ignore[assignment]
-                hook_result = (
-                    execute_hook(entry, evt)
-                    if matches_conditions(entry.spec, evt) and not is_planning_agent_skip(entry.spec, evt)
-                    else None
-                )
-                assert_result(hook_result, expected, entry.name)
                 results.append((test_name, "pass", True, ""))
             except AssertionError as e:
                 results.append((test_name, "fail", False, str(e)))
