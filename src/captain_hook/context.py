@@ -7,6 +7,7 @@ import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import cached_property
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from pydantic import BaseModel
@@ -179,6 +180,26 @@ class HookContext:
             err.add_note(f"stdout: {result.stdout[:2000]}")
             raise err
         return result.stdout
+
+    def _git(self, *args: str) -> str | None:
+        try:
+            return self.call_cli(["git", *args], timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    @cached_property
+    def changed_paths(self) -> frozenset[Path] | None:
+        if (out := self._git("diff", "--name-only", "HEAD", "--no-renames")) is None or (root := self.repo_root) is None:
+            return None
+        return frozenset((root / line).resolve() for line in out.splitlines() if line)
+
+    @cached_property
+    def repo_root(self) -> Path | None:
+        return Path(out.strip()) if (out := self._git("rev-parse", "--show-toplevel")) else None
+
+    @cached_property
+    def current_branch(self) -> str | None:
+        return out.strip() if (out := self._git("symbolic-ref", "--short", "HEAD")) else None
 
     def call_llm(
         self,

@@ -228,3 +228,85 @@ class TestStateRoot:
         monkeypatch.delenv("CLAUDE_HOOKS_STATE_DIR", raising=False)
         result = state_root()
         assert result == Path.home() / ".claude" / "state"
+
+
+def git_in(path: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True)
+
+
+def make_repo(path: Path, *, branch: str = "test-branch") -> None:
+    git_in(path, "init", "--initial-branch", branch)
+    git_in(path, "config", "user.email", "test@example.com")
+    git_in(path, "config", "user.name", "Test")
+    (path / "README.md").write_text("hi\n")
+    git_in(path, "add", "README.md")
+    git_in(path, "commit", "-m", "init")
+
+
+def make_ctx_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> HookContext:
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    monkeypatch.delenv("FACTORY_PROJECT_DIR", raising=False)
+    return HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+
+
+class TestChangedPaths:
+    def test_returns_paths_with_net_diff(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        make_repo(tmp_path)
+        (tmp_path / "README.md").write_text("changed\n")
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        assert ctx.changed_paths == frozenset({(tmp_path / "README.md").resolve()})
+
+    def test_empty_when_clean(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        make_repo(tmp_path)
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        assert ctx.changed_paths == frozenset()
+
+    def test_none_outside_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        assert ctx.changed_paths is None
+
+    def test_cached_no_reshell_on_second_access(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        make_repo(tmp_path)
+        (tmp_path / "README.md").write_text("changed\n")
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        with patch("captain_hook.context.subprocess.run", wraps=subprocess.run) as spy:
+            assert ctx.changed_paths is not None
+            count_after_first = spy.call_count
+            assert ctx.changed_paths is not None
+            assert spy.call_count == count_after_first
+
+
+class TestRepoRoot:
+    def test_from_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        make_repo(tmp_path)
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        assert ctx.repo_root == tmp_path.resolve()
+
+    def test_from_subdir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        make_repo(tmp_path)
+        (subdir := tmp_path / "sub").mkdir()
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(subdir))
+        monkeypatch.delenv("FACTORY_PROJECT_DIR", raising=False)
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        assert ctx.repo_root == tmp_path.resolve()
+
+    def test_none_outside_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        assert ctx.repo_root is None
+
+
+class TestCurrentBranch:
+    def test_returns_branch_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        make_repo(tmp_path, branch="test-branch")
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        assert ctx.current_branch == "test-branch"
+
+    def test_none_on_detached_head(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        make_repo(tmp_path)
+        git_in(tmp_path, "checkout", "--detach")
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        assert ctx.current_branch is None
+
+    def test_none_outside_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        assert ctx.current_branch is None
