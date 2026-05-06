@@ -911,3 +911,60 @@ class TestCommandAliases:
             ),
         )
         assert not t.has_command(r"uv\s+run")
+
+
+class TestMcpToolNameMatching:
+    def test_bare_query_matches_mcp_variant(self):
+        t = _make_transcript(
+            _msg("assistant", [_tool_use("mcp__conductor__AskUserQuestion", {"q": "?"}, "tu_1")]),
+        )
+        assert t.has_tool("AskUserQuestion")
+
+    def test_bare_query_matches_arbitrary_mcp_server(self):
+        t = _make_transcript(
+            _msg("assistant", [_tool_use("mcp__plugin_sentry_sentry__search_issues", {}, "tu_1")]),
+        )
+        assert t.has_tool("search_issues")
+
+    def test_bare_query_matches_both_native_and_mcp(self):
+        t = _make_transcript(
+            _msg(
+                "assistant",
+                [
+                    _tool_use("AskUserQuestion", {}, "tu_1"),
+                    _tool_use("mcp__conductor__AskUserQuestion", {}, "tu_2"),
+                    _tool_use("mcp__factory__AskUserQuestion", {}, "tu_3"),
+                ],
+            ),
+        )
+        assert t.tool_uses.where(name="AskUserQuestion").count() == 3
+
+    def test_qualified_mcp_query_only_matches_exact(self):
+        t = _make_transcript(
+            _msg(
+                "assistant",
+                [
+                    _tool_use("AskUserQuestion", {}, "tu_1"),
+                    _tool_use("mcp__conductor__AskUserQuestion", {}, "tu_2"),
+                    _tool_use("mcp__factory__AskUserQuestion", {}, "tu_3"),
+                ],
+            ),
+        )
+        q = t.tool_uses.where(name="mcp__conductor__AskUserQuestion")
+        assert q.count() == 1
+        assert q.first().name == "mcp__conductor__AskUserQuestion"
+
+    def test_no_false_positive_on_unrelated_mcp(self):
+        t = _make_transcript(
+            _msg("assistant", [_tool_use("mcp__conductor__GetTerminalOutput", {}, "tu_1")]),
+        )
+        assert not t.has_tool("AskUserQuestion")
+
+    def test_after_works_with_mcp_variant(self):
+        t = _make_transcript(
+            _msg("assistant", [_tool_use("Read", {"file_path": "a.py"}, "tu_1")]),
+            _msg("assistant", [_tool_use("mcp__conductor__AskUserQuestion", {}, "tu_2")]),
+            _msg("assistant", [_tool_use("Edit", {"file_path": "a.py", "old_string": "", "new_string": ""}, "tu_3")]),
+        )
+        sliced = t.after("AskUserQuestion")
+        assert sliced.tool_uses.where(name="Edit").count() == 1

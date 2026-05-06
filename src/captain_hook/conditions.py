@@ -17,7 +17,7 @@ from captain_hook.types import (
     Tool,
     TouchedFile,
     UsedSkill,
-    expand_tool_names,
+    tool_name_matches,
 )
 
 if TYPE_CHECKING:
@@ -30,7 +30,7 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
         case Tool(pattern):
             if not evt.tool_name:
                 return False
-            return evt.tool_name in expand_tool_names(pattern)
+            return any(tool_name_matches(evt.tool_name, p) for p in pattern.split("|"))
         case FilePath(patterns):
             return bool(evt.file and evt.file.matches(*patterns))
         case Command(pattern):

@@ -11,6 +11,31 @@ if TYPE_CHECKING:
     from captain_hook.signals.nlp import NlpSignal
 
 
+TOOL_ALIASES: dict[str, str] = {
+    "Bash": "Execute",
+    "Write": "Create",
+    "Agent": "Task",
+    "WebFetch": "FetchUrl",
+    "ExitPlanMode": "ExitSpecMode",
+}
+
+TOOL_ALIASES_REVERSE: dict[str, str] = {v: k for k, v in TOOL_ALIASES.items()}
+
+
+def expand_tool_names(name: str) -> set[str]:
+    return (base := set(name.split("|"))) | {
+        alias for n in base for alias in (TOOL_ALIASES.get(n), TOOL_ALIASES_REVERSE.get(n)) if alias
+    }
+
+
+def tool_name_matches(actual: str, query: str) -> bool:
+    return actual in (candidates := expand_tool_names(query)) or (
+        actual.startswith("mcp__")
+        and len(parts := actual.split("__", 2)) == 3
+        and parts[2] in candidates
+    )
+
+
 class Event(Flag):
     """Hook lifecycle events that can trigger registered hooks.
 
@@ -84,23 +109,6 @@ class Tool:
     """
 
     pattern: str
-
-
-TOOL_ALIASES: dict[str, str] = {
-    "Bash": "Execute",
-    "Write": "Create",
-    "Agent": "Task",
-    "WebFetch": "FetchUrl",
-    "ExitPlanMode": "ExitSpecMode",
-}
-
-TOOL_ALIASES_REVERSE: dict[str, str] = {v: k for k, v in TOOL_ALIASES.items()}
-
-
-def expand_tool_names(name: str) -> set[str]:
-    return (base := set(name.split("|"))) | {
-        alias for n in base for alias in (TOOL_ALIASES.get(n), TOOL_ALIASES_REVERSE.get(n)) if alias
-    }
 
 
 @dataclass(frozen=True, slots=True, init=False)

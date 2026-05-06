@@ -26,27 +26,7 @@ if TYPE_CHECKING:
     from captain_hook.file import File
     from captain_hook.tools import EditOp, TaskOp, WriteOp
 
-TOOL_ALIASES: dict[str, str] = {
-    "Execute": "Bash",
-    "Bash": "Execute",
-    "Create": "Write",
-    "Write": "Create",
-    "Task": "Agent",
-    "Agent": "Task",
-    "FetchUrl": "WebFetch",
-    "WebFetch": "FetchUrl",
-    "ExitSpecMode": "ExitPlanMode",
-    "ExitPlanMode": "ExitSpecMode",
-}
-
-
-def expand_tool_names(name: str) -> set[str]:
-    names: set[str] = set()
-    for n in name.split("|"):
-        names.add(n)
-        if alias := TOOL_ALIASES.get(n):
-            names.add(alias)
-    return names
+from captain_hook.types import TOOL_ALIASES, expand_tool_names, tool_name_matches
 
 
 @dataclass(frozen=True)
@@ -69,7 +49,7 @@ class ToolUseQuery:
         input_has: dict[str, Any] | None = None,
     ) -> ToolUseQuery:
         def _match(tu: ToolUse) -> bool:
-            if name and tu.name not in expand_tool_names(name):
+            if name and not any(tool_name_matches(tu.name, n) for n in name.split("|")):
                 return False
             if file and not (
                 tu.file
@@ -359,7 +339,8 @@ class Transcript:
             (
                 tu.message_index
                 for tu in self.tool_uses.with_errors
-                if tu.name in expand_tool_names(tool) and (file is None or (tu.file and file in str(tu.file)))
+                if any(tool_name_matches(tu.name, t) for t in tool.split("|"))
+                and (file is None or (tu.file and file in str(tu.file)))
             ),
             default=-1,
         )
@@ -367,7 +348,11 @@ class Transcript:
 
     def before(self, tool: str) -> TranscriptSlice:
         last_idx = max(
-            (tu.message_index for tu in self.tool_uses.with_errors if tu.name in expand_tool_names(tool)),
+            (
+                tu.message_index
+                for tu in self.tool_uses.with_errors
+                if any(tool_name_matches(tu.name, t) for t in tool.split("|"))
+            ),
             default=len(self),
         )
         return self[:last_idx]
