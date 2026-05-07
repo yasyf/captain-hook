@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import ast
 import logging
-from collections.abc import Callable, Iterator
+import textwrap
+from collections.abc import Callable, Iterator, Sequence
 from typing import TYPE_CHECKING, get_type_hints, overload
 
 from captain_hook.app import on
@@ -25,9 +26,11 @@ if TYPE_CHECKING:
 
 StringCheck = Callable[[str], list[str]]
 AstCheck = Callable[[ast.AST], Iterator[str]]
+DiffCheck = Callable[[ast.AST, ast.AST], list[str]]
 
 DEFAULT_ONLY_IF: tuple[TCondition, ...] = (Tool("Edit|Write"), FilePath("*.py"))
 DEFAULT_SKIP_IF: tuple[TCondition, ...] = (TestFile(),)
+DIFF_DEFAULT_ONLY_IF: tuple[TCondition, ...] = (Tool("Edit"), FilePath("*.py"))
 
 
 def detect_ast_mode(check: StringCheck | AstCheck) -> bool:
@@ -116,6 +119,35 @@ def lint(
     )(handler)
 
 
+def diff_lint(
+    check: DiffCheck,
+    *,
+    message: str,
+    sep: str = ", ",
+    block: bool = False,
+    events: Event | None = None,
+    tests: TTest | None = None,
+    max_shown: int = 5,
+    only_if: Sequence[TCondition] = DIFF_DEFAULT_ONLY_IF,
+    skip_if: Sequence[TCondition] = DEFAULT_SKIP_IF,
+) -> None:
+    def handler(evt: BaseHookEvent) -> HookResult | None:
+        try:
+            return run_diff_check(check, evt, message, sep, block, max_shown)
+        except Exception:
+            logger.warning("Diff lint %s failed", check.__name__, exc_info=True)
+            return None
+
+    handler.__name__ = handler.__qualname__ = hook_name("diff_lint", None, message)
+
+    on(
+        events or Event.PostToolUse,
+        only_if=only_if,
+        skip_if=skip_if,
+        tests=tests,
+    )(handler)
+
+
 def run_string_check(
     check: StringCheck,
     evt: BaseHookEvent,
@@ -126,8 +158,25 @@ def run_string_check(
 ) -> HookResult | None:
     if (content := evt.content) is None:
         return None
-    violations = check(content)
-    return format_result(violations, message, sep, block, max_shown)
+    return format_result(check(content), message, sep, block, max_shown)
+
+
+def run_diff_check(
+    check: DiffCheck,
+    evt: BaseHookEvent,
+    message: str,
+    sep: str,
+    block: bool,
+    max_shown: int,
+) -> HookResult | None:
+    if (old := evt.old) is None or (new := evt.content) is None:
+        return None
+    try:
+        old_tree = ast.parse(textwrap.dedent(old))
+        new_tree = ast.parse(textwrap.dedent(new))
+    except SyntaxError:
+        return None
+    return format_result(check(old_tree, new_tree), message, sep, block, max_shown)
 
 
 def run_ast_check(

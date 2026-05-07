@@ -25,6 +25,7 @@ from captain_hook.primitives import (
     PromptCheckVerdict,
     audit,
     block_command,
+    diff_lint,
     gate,
     lint,
     llm_gate,
@@ -147,6 +148,7 @@ __all__ = [
     # primitives
     "audit",
     "block_command",
+    "diff_lint",
     "gate",
     "GateVerdict",
     "lint",
