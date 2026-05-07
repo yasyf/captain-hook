@@ -50,8 +50,10 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
         case RanCommand(pattern):
             return bool(evt.ctx.transcript) and evt.ctx.transcript.has_command(pattern)
         case InPlanMode():
-            t = evt.ctx.transcript
-            return bool(t) and t.count_tools("EnterPlanMode") > t.count_tools("ExitPlanMode")
+            return evt.permission_mode == "plan" or (
+                bool(t := evt.ctx.transcript)
+                and t.count_tools("EnterPlanMode") > t.count_tools("ExitPlanMode")
+            )
         case CustomCondition():
             return c.check(evt)
         case _:

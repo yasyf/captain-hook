@@ -206,7 +206,12 @@ class RanCommand:
 
 @dataclass(frozen=True, slots=True)
 class InPlanMode:
-    """Transcript-history condition: true when more ``EnterPlanMode`` than ``ExitPlanMode`` tool uses exist."""
+    """Matches when the agent is in plan mode.
+
+    Reads ``permission_mode`` from the current event payload; falls back to
+    counting ``EnterPlanMode`` vs ``ExitPlanMode`` tool uses in the transcript
+    when the payload omits the field.
+    """
 
     pass
 

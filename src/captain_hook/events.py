@@ -54,6 +54,10 @@ class BaseHookEvent:
         return Path(p) if (p := self._raw.get("transcript_path")) else None
 
     @property
+    def permission_mode(self) -> str | None:
+        return self._raw.get("permission_mode")
+
+    @property
     def parent_agent_type(self) -> str | None:
         return self._raw.get("agent_type")
 

@@ -28,25 +28,24 @@ Conditions fall into two groups based on what they inspect:
 
 ## Which condition do I need?
 
-- **Filtering by tool name** -- use `Tool("Bash")` or `Tool("Edit|Write")`
-- **Filtering by file path** -- use `FilePath("*.py", "*.pyi")` for the current event's file
-- **Filtering by bash command text** -- use `Command(r"git\s+push")` for the current command
-- **Filtering by file content being written** -- use `Content(r"print\(")` for Edit/Write content
-- **Filtering by subagent type** -- use `Agent("cleanup")` for SubagentStart/SubagentStop events
-- **Only on test files** -- use `TestFile()`
-- **Only if a file was previously read** -- use `ReadFile("TESTING.md")`
-- **Only if a file was previously edited** -- use `TouchedFile("**/*.py")`
-- **Only if a command was previously run** -- use `RanCommand(r"uv\s+run\s+mtest")`
-- **Only if a skill was invoked** -- use `UsedSkill("codex")`
-- **Only during plan mode** -- use `InPlanMode()`
-- **Custom logic** -- implement `CustomCondition`
+| Need | Use |
+|---|---|
+| Filter by tool name | `Tool("Bash")` or `Tool("Edit|Write")` |
+| Filter by file path | `FilePath("*.py", "*.pyi")` |
+| Filter by bash command text | `Command(r"git\s+push")` |
+| Filter by file content being written | `Content(r"print\(")` |
+| Filter by subagent type | `Agent("cleanup")` |
+| Match only test files | `TestFile()` |
+| Match only if a file was previously read | `ReadFile("TESTING.md")` |
+| Match only if a file was previously edited | `TouchedFile("**/*.py")` |
+| Match only if a command was previously run | `RanCommand(r"uv\s+run\s+mtest")` |
+| Match only if a skill was invoked | `UsedSkill("codex")` |
+| Match only during plan mode | `InPlanMode()` |
+| Custom logic | implement `CustomCondition` |
 
 ## `only_if` vs `skip_if`
 
-The two lists use different logical operators:
-
-- **`only_if`** -- **AND** logic. Every condition in the list must match for the hook to fire.
-- **`skip_if`** -- **OR** logic. If any condition in the list matches, the hook is skipped.
+The two lists use different logical operators. `only_if` is **AND** -- every condition in the list must match for the hook to fire. `skip_if` is **OR** -- if any condition in the list matches, the hook is skipped.
 
 `skip_if` is evaluated first. If any skip condition matches, the hook is skipped regardless of `only_if`.
 
@@ -68,7 +67,7 @@ hook(
 
 ### Tool
 
-Matches the current event's tool name. The pattern is matched against the tool name directly (not regex). Pipe-separated names match any of the listed tools. Tool aliases are expanded automatically (`Bash` matches `Execute`, `Write` matches `Create`, `Agent` matches `Task`).
+Matches the current event's tool name. The pattern is matched against the tool name directly, not as a regex. Pipe-separated names match any of the listed tools, and tool aliases are expanded automatically -- `Bash` matches `Execute`, `Write` matches `Create`, and `Agent` matches `Task`.
 
 ```python
 from captain_hook import hook, Event, Tool
@@ -149,7 +148,7 @@ hook(Event.SubagentStop, message="Check work", skip_if=[Agent("feature-implement
 
 ### TestFile
 
-Matches when the current event targets a test file (`test_*.py` or `conftest.py`). Takes no arguments.
+Matches when the current event targets a test file -- a file named `test_*.py` or `conftest.py`. Takes no arguments.
 
 ```python
 from captain_hook import hook, Event, TestFile
@@ -224,7 +223,7 @@ hook(Event.Stop, message="Run /review before stopping", skip_if=[UsedSkill("revi
 
 ### InPlanMode
 
-True when more `EnterPlanMode` tool uses than `ExitPlanMode` tool uses exist in the transcript -- meaning the agent is currently in plan/spec mode.
+True when the current event payload's `permission_mode` is `"plan"` -- the canonical signal Claude Code emits while plan/spec mode is active, regardless of whether plan mode was entered via `EnterPlanMode` tool use or toggled by the user with shift+tab. When the payload omits `permission_mode`, falls back to comparing `EnterPlanMode > ExitPlanMode` tool-use counts in the transcript.
 
 ```python
 from captain_hook import hook, Event, InPlanMode

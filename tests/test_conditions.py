@@ -33,8 +33,11 @@ def make_tool_event(
     tool_name: str,
     tool_input: dict[str, Any] | None = None,
     ctx: Any = None,
+    permission_mode: str | None = None,
 ) -> PreToolUseEvent:
     raw: dict[str, Any] = {"tool_name": tool_name, "tool_input": tool_input or {}}
+    if permission_mode is not None:
+        raw["permission_mode"] = permission_mode
     return PreToolUseEvent(_raw=raw, ctx=ctx)
 
 class TestToolCondition:
@@ -335,6 +338,24 @@ class TestInPlanModeCondition:
         ctx = make_transcript_ctx(count_tools_map={})
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(InPlanMode(), evt) is False
+
+    def test_inplanmode_matches_when_permission_mode_plan(self) -> None:
+
+        ctx = make_transcript_ctx(count_tools_map={})
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx, permission_mode="plan")
+        assert check_condition(InPlanMode(), evt) is True
+
+    def test_inplanmode_rejects_when_permission_mode_default(self) -> None:
+
+        ctx = make_transcript_ctx(count_tools_map={})
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx, permission_mode="default")
+        assert check_condition(InPlanMode(), evt) is False
+
+    def test_inplanmode_falls_back_to_tool_count_when_permission_mode_unset(self) -> None:
+
+        ctx = make_transcript_ctx(count_tools_map={"EnterPlanMode": 1, "ExitPlanMode": 0})
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(InPlanMode(), evt) is True
 
 class TestOnlyIfSemantics:
     def test_only_if_all_must_match(self) -> None:
