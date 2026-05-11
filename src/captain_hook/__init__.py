@@ -98,6 +98,7 @@ from captain_hook.types import TestFile as TestFile
 from captain_hook.types import Tool as Tool
 from captain_hook.types import TouchedFile as TouchedFile
 from captain_hook.types import UsedSkill as UsedSkill
+from captain_hook.types import Waiting as Waiting
 from captain_hook.types import tokens_to_regex as tokens_to_regex
 from captain_hook.workflow import Artifact, Step, Workflow, text_matches
 from captain_hook.workflow import workflow as workflow
@@ -138,6 +139,7 @@ __all__ = [
     "TouchedFile",
     "UsedSkill",
     "UserPromptSubmitEvent",
+    "Waiting",
     # context
     "HookContext",
     "SessionSlot",

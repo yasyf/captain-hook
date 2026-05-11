@@ -17,12 +17,29 @@ from captain_hook.types import (
     Tool,
     TouchedFile,
     UsedSkill,
+    Waiting,
     tool_name_matches,
 )
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
     from captain_hook.types import HookSpec
+
+
+ALWAYS_ASYNC_TOOLS = frozenset({"Monitor", "TeamCreate", "ScheduleWakeup", "SendMessage"})
+BG_FLAGGED_TOOLS = frozenset({"Agent", "Task", "Bash"})
+
+
+def is_waiting(evt: BaseHookEvent) -> bool:
+    return bool(
+        (t := evt.ctx.transcript)
+        and (last := next((m for m in reversed(t.messages) if m.type == "assistant" and m.tool_uses), None))
+        and any(
+            tu.name in ALWAYS_ASYNC_TOOLS
+            or (tu.name in BG_FLAGGED_TOOLS and tu.raw_input.get("run_in_background"))
+            for tu in last.tool_uses
+        )
+    )
 
 
 def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
@@ -54,6 +71,8 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
                 bool(t := evt.ctx.transcript)
                 and t.count_tools("EnterPlanMode") > t.count_tools("ExitPlanMode")
             )
+        case Waiting():
+            return is_waiting(evt)
         case CustomCondition():
             return c.check(evt)
         case _:

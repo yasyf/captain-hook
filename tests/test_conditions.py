@@ -8,6 +8,8 @@ from typing import Any
 
 import pytest
 
+import pytest
+
 from captain_hook.events import (
     BaseHookEvent,
     PreToolUseEvent,
@@ -30,11 +32,13 @@ from captain_hook.types import (
     Tool,
     TouchedFile,
     UsedSkill,
+    Waiting,
     tokens_to_regex,
 )
 
 from captain_hook.conditions import check_condition, matches_conditions
-from captain_hook.tests.helpers import build_ctx, make_event, make_transcript_ctx
+from captain_hook.tests.helpers import build_ctx, make_event, make_messages_ctx, make_transcript_ctx
+from captain_hook.transcript.models import TextBlock, ToolUseBlock, TranscriptMessage
 
 def make_tool_event(
     tool_name: str,
@@ -363,6 +367,76 @@ class TestInPlanModeCondition:
         ctx = make_transcript_ctx(count_tools_map={"EnterPlanMode": 1, "ExitPlanMode": 0})
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(InPlanMode(), evt) is True
+
+
+def assistant_msg(*tools: tuple[str, dict[str, Any]]) -> TranscriptMessage:
+    return TranscriptMessage(
+        type="assistant",
+        content=[ToolUseBlock(name=name, input=inp, id=f"tu_{i}") for i, (name, inp) in enumerate(tools)],
+    )
+
+
+def summary_msg(text: str = "done") -> TranscriptMessage:
+    return TranscriptMessage(type="assistant", content=[TextBlock(text=text)])
+
+
+class TestWaitingCondition:
+    @pytest.mark.parametrize(
+        ("tool", "tool_input", "expected"),
+        [
+            ("Agent", {"prompt": "x", "run_in_background": True}, True),
+            ("Agent", {"prompt": "x"}, False),
+            ("Task", {"prompt": "x", "run_in_background": True}, True),
+            ("Bash", {"command": "build", "run_in_background": True}, True),
+            ("Bash", {"command": "ls"}, False),
+            ("Monitor", {"name": "build"}, True),
+            ("TeamCreate", {"members": []}, True),
+            ("ScheduleWakeup", {"delaySeconds": 600}, True),
+            ("SendMessage", {"to": "agent-1", "message": "go"}, True),
+        ],
+    )
+    def test_single_tool_matches(self, tool: str, tool_input: dict[str, Any], expected: bool) -> None:
+
+        ctx = make_messages_ctx([assistant_msg((tool, tool_input))])
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(Waiting(), evt) is expected
+
+    def test_only_sync_tools_rejects(self) -> None:
+
+        ctx = make_messages_ctx(
+            [
+                assistant_msg(
+                    ("Edit", {"file_path": "a.py", "old_string": "", "new_string": ""}),
+                    ("Read", {"file_path": "a.py"}),
+                    ("Grep", {"pattern": "foo"}),
+                )
+            ]
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(Waiting(), evt) is False
+
+    def test_walks_past_trailing_text_message(self) -> None:
+
+        ctx = make_messages_ctx(
+            [
+                assistant_msg(("Agent", {"prompt": "x", "run_in_background": True})),
+                summary_msg("Spawned 4 background agents, waiting for them to report back."),
+            ]
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(Waiting(), evt) is True
+
+    def test_empty_transcript_rejects(self) -> None:
+
+        ctx = make_messages_ctx([])
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(Waiting(), evt) is False
+
+    def test_no_transcript_rejects(self) -> None:
+
+        ctx = make_messages_ctx(None)
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(Waiting(), evt) is False
 
 class TestOnlyIfSemantics:
     def test_only_if_all_must_match(self) -> None:

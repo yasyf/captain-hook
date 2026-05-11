@@ -22,6 +22,7 @@ from captain_hook.testing.helpers import (
     mock_user_prompt_event,
 )
 from captain_hook.transcript import Transcript
+from captain_hook.transcript.models import TranscriptMessage
 from captain_hook.types import Event
 
 PKG_DIR = Path(__file__).resolve().parents[3]
@@ -35,6 +36,7 @@ __all__ = [
     "input_to_event",
     "make_ctx",
     "make_event",
+    "make_messages_ctx",
     "make_post_tool_event",
     "make_pre_tool_event",
     "make_stop_event",
@@ -155,6 +157,10 @@ def make_transcript_ctx(
     transcript.has_command = MagicMock(return_value=has_command_result)
     transcript.count_tools = MagicMock(side_effect=lambda t: (count_tools_map or {}).get(t, 0))
     return ctx
+
+
+def make_messages_ctx(messages: list[TranscriptMessage] | None) -> Any:
+    return MagicMock(transcript=None if messages is None else Transcript(messages=messages))
 
 
 def run_cli(

@@ -218,6 +218,11 @@ class InPlanMode:
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class Waiting:
+    pass
+
+
 @runtime_checkable
 class CustomCondition(Protocol):
     """Protocol for user-defined hook conditions.
@@ -248,6 +253,7 @@ TCondition = (
     | TouchedFile
     | RanCommand
     | InPlanMode
+    | Waiting
     | CustomCondition
 )
 
