@@ -158,7 +158,7 @@ class UsedSkill:
     subagents: bool = True
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class PatternsCondition:
     patterns: tuple[str, ...]
     subagents: bool
@@ -169,8 +169,6 @@ class ReadFile(PatternsCondition):
 
     Accepts one or more glob patterns as positional arguments.
     """
-
-    __slots__ = ()
 
     def __init__(self, *patterns: str, **kwargs: bool) -> None:
         super().__init__(patterns=patterns, subagents=kwargs.pop("subagents", True))
@@ -195,8 +193,6 @@ class TouchedFile(PatternsCondition):
 
     Accepts one or more glob patterns as positional arguments.
     """
-
-    __slots__ = ()
 
     def __init__(self, *patterns: str, **kwargs: bool) -> None:
         super().__init__(patterns=patterns, subagents=kwargs.pop("subagents", False))
