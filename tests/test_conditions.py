@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
+
+import pytest
 
 from captain_hook.events import (
     BaseHookEvent,
@@ -9,6 +14,7 @@ from captain_hook.events import (
     StopEvent,
     UserPromptSubmitEvent,
 )
+from captain_hook.transcript import Transcript
 from captain_hook.types import (
     Agent,
     Command,
@@ -19,6 +25,7 @@ from captain_hook.types import (
     InPlanMode,
     RanCommand,
     ReadFile,
+    TCondition,
     TestFile,
     Tool,
     TouchedFile,
@@ -27,7 +34,7 @@ from captain_hook.types import (
 )
 
 from captain_hook.conditions import check_condition, matches_conditions
-from captain_hook.tests.helpers import make_event, make_transcript_ctx
+from captain_hook.tests.helpers import build_ctx, make_event, make_transcript_ctx
 
 def make_tool_event(
     tool_name: str,
@@ -271,7 +278,7 @@ class TestUsedSkillCondition:
         ctx = make_transcript_ctx(has_skill_result=True)
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(UsedSkill("codex|agent-browser"), evt) is True
-        ctx.transcript.has_skill.assert_called_once_with("codex", "agent-browser")
+        ctx.transcript.has_skill.assert_called_once_with("codex", "agent-browser", subagents=True)
 
     def test_usedskill_rejects_non_matching(self) -> None:
 
@@ -298,7 +305,7 @@ class TestTouchedFileCondition:
         ctx = make_transcript_ctx(has_edit_to_result=True)
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(TouchedFile("**/www/src/**"), evt) is True
-        ctx.transcript.has_edit_to.assert_called_once_with("**/www/src/**")
+        ctx.transcript.has_edit_to.assert_called_once_with("**/www/src/**", subagents=False)
 
     def test_touchedfile_rejects_non_matching(self) -> None:
 
@@ -312,7 +319,7 @@ class TestRanCommandCondition:
         ctx = make_transcript_ctx(has_command_result=True)
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(RanCommand(r"codex exec"), evt) is True
-        ctx.transcript.has_command.assert_called_once_with("codex exec")
+        ctx.transcript.has_command.assert_called_once_with("codex exec", subagents=True)
 
     def test_rancommand_rejects(self) -> None:
 
@@ -581,6 +588,84 @@ class TestCustomCondition:
 
         evt = make_tool_event("Bash", {"command": "echo"})
         assert check_condition(NotACondition(42), evt) is False  # type: ignore[arg-type]
+
+@pytest.fixture
+def event_with_subagent_tool_use(tmp_path: Path) -> Callable[[dict[str, Any]], BaseHookEvent]:
+    def make(tool_use: dict[str, Any]) -> BaseHookEvent:
+        session_dir = tmp_path / "session"
+        subagents_dir = session_dir / "session" / "subagents"
+        subagents_dir.mkdir(parents=True)
+
+        session_file = session_dir / "session.jsonl"
+        session_file.write_text(
+            json.dumps({"type": "user", "message": {"content": [{"type": "text", "text": "hi"}]}}) + "\n"
+        )
+
+        sub1 = subagents_dir / "sub1.jsonl"
+        sub1.write_text(
+            json.dumps({"type": "assistant", "message": {"content": [tool_use]}}) + "\n"
+        )
+
+        return make_event(
+            PreToolUseEvent,
+            raw={"tool_name": "Bash", "tool_input": {"command": "echo"}},
+            ctx=build_ctx(transcript=Transcript.from_path(session_file)),
+        )
+
+    return make
+
+
+class TestSubagentFlags:
+    @pytest.mark.parametrize(
+        ("tool_use", "default_cond", "explicit_cond", "default_expected", "explicit_expected"),
+        [
+            pytest.param(
+                {"type": "tool_use", "name": "Skill", "input": {"skill": "codex"}, "id": "tu_a"},
+                UsedSkill("codex"),
+                UsedSkill("codex", subagents=False),
+                True,
+                False,
+                id="UsedSkill",
+            ),
+            pytest.param(
+                {"type": "tool_use", "name": "Bash", "input": {"command": "codex exec -p 'hi'"}, "id": "tu_b"},
+                RanCommand(r"codex exec"),
+                RanCommand(r"codex exec", subagents=False),
+                True,
+                False,
+                id="RanCommand",
+            ),
+            pytest.param(
+                {"type": "tool_use", "name": "Edit", "input": {"file_path": "src/foo.py", "old_string": "", "new_string": ""}, "id": "tu_c"},
+                TouchedFile("**/foo.py"),
+                TouchedFile("**/foo.py", subagents=True),
+                False,
+                True,
+                id="TouchedFile",
+            ),
+            pytest.param(
+                {"type": "tool_use", "name": "Read", "input": {"file_path": "docs/TESTING.md"}, "id": "tu_d"},
+                ReadFile("TESTING.md"),
+                ReadFile("TESTING.md", subagents=False),
+                True,
+                False,
+                id="ReadFile",
+            ),
+        ],
+    )
+    def test_condition_subagent_flag(
+        self,
+        event_with_subagent_tool_use: Callable[[dict[str, Any]], BaseHookEvent],
+        tool_use: dict[str, Any],
+        default_cond: TCondition,
+        explicit_cond: TCondition,
+        default_expected: bool,
+        explicit_expected: bool,
+    ) -> None:
+        evt = event_with_subagent_tool_use(tool_use)
+        assert check_condition(default_cond, evt) is default_expected
+        assert check_condition(explicit_cond, evt) is explicit_expected
+
 
 class TestCustomConditionFilesystem:
     def test_settings_based_condition(self, tmp_path: Any) -> None:

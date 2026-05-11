@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -20,7 +22,7 @@ from captain_hook.transcript.models import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Iterator
 
     from captain_hook.command import Command
     from captain_hook.file import File
@@ -160,6 +162,16 @@ def extract_content(data: RawDict) -> list[Any]:
         content = cast(RawDict, msg).get("content")
         return cast(list[Any], content) if isinstance(content, list) else []
     return []
+
+
+def subagents(method: Callable[..., bool]) -> Callable[..., bool]:
+    @functools.wraps(method)
+    def wrapper(self: Transcript, *args: Any, subagents: bool = True, **kwargs: Any) -> bool:
+        if (own := method(self, *args, **kwargs)) or not subagents:
+            return own
+        return any(getattr(sub, method.__name__)(*args, subagents=True, **kwargs) for sub in self.subagents)
+
+    return wrapper
 
 
 @dataclass
@@ -304,6 +316,7 @@ class Transcript:
     def count_tools(self, *names: str) -> int:
         return self.tool_uses.where(name="|".join(names)).count()
 
+    @subagents
     def has_tool(self, name: str) -> bool:
         return self.tool_uses.where(name=name).any()
 
@@ -314,9 +327,11 @@ class Transcript:
             cmd for tu in self.tool_uses if tu.name in bash_names and (cl := tu.command_line) for cmd in cl.commands
         ]
 
+    @subagents
     def has_command(self, pattern: str) -> bool:
         return any(re.search(pattern, str(cmd)) for cmd in self.commands)
 
+    @subagents
     def has_edit_to(self, *globs: str) -> bool:
         return any(f.matches(*globs) for f in self.tool_uses.where(name="Edit|Write").files())
 
@@ -381,19 +396,19 @@ class Transcript:
     def extract_files(self, tools: list[str] | None = None) -> list[File]:
         return (self.tool_uses.where(name="|".join(tools)) if tools else ToolUseQuery(list(self.tool_uses))).files()
 
+    @subagents
+    def has_read(self, pattern: str) -> bool:
+        return any(pattern in str(f) for f in self.extract_files(["Read"]))
+
+    @subagents
+    def has_skill(self, *names: str) -> bool:
+        return any(tu.raw_input.get("skill") in names for tu in self.tool_uses.where(name="Skill"))
+
     @cached_property
     def subagents(self) -> list[Transcript]:
         if not self.path or not (d := self.path.parent / self.path.stem / "subagents").is_dir():
             return []
         return [Transcript.from_path(p) for p in sorted(d.glob("*.jsonl"))]
-
-    def has_read(self, pattern: str) -> bool:
-        return any(pattern in str(f) for f in self.extract_files(["Read"])) or any(
-            sub.has_read(pattern) for sub in self.subagents
-        )
-
-    def has_skill(self, *names: str) -> bool:
-        return any(tu.raw_input.get("skill") in names for tu in self.tool_uses.where(name="Skill"))
 
     def count_failures(self) -> int:
         return sum(1 for msg in self.messages for tr in msg.tool_results if tr.is_error)

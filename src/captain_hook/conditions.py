@@ -41,14 +41,14 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
             return bool(evt.agent_type and evt.agent_type in name.split("|"))
         case TestFile():
             return bool(evt.file and evt.file.is_test)
-        case UsedSkill(name):
-            return bool(evt.ctx.transcript) and evt.ctx.transcript.has_skill(*name.split("|"))
-        case ReadFile(patterns):
-            return bool(evt.ctx.transcript) and any(evt.ctx.transcript.has_read(p) for p in patterns)
-        case TouchedFile(patterns):
-            return bool(evt.ctx.transcript) and evt.ctx.transcript.has_edit_to(*patterns)
-        case RanCommand(pattern):
-            return bool(evt.ctx.transcript) and evt.ctx.transcript.has_command(pattern)
+        case UsedSkill(name, subagents):
+            return bool(evt.ctx.transcript) and evt.ctx.transcript.has_skill(*name.split("|"), subagents=subagents)
+        case ReadFile(patterns, subagents):
+            return bool(evt.ctx.transcript) and any(evt.ctx.transcript.has_read(p, subagents=subagents) for p in patterns)
+        case TouchedFile(patterns, subagents):
+            return bool(evt.ctx.transcript) and evt.ctx.transcript.has_edit_to(*patterns, subagents=subagents)
+        case RanCommand(pattern, subagents):
+            return bool(evt.ctx.transcript) and evt.ctx.transcript.has_command(pattern, subagents=subagents)
         case InPlanMode():
             return evt.permission_mode == "plan" or (
                 bool(t := evt.ctx.transcript)

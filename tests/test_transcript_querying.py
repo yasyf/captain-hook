@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from captain_hook.file import File
 from captain_hook.transcript import (
@@ -12,20 +16,20 @@ from captain_hook.transcript import (
 )
 
 
-def _msg(type: str, content: list | str = "", raw: dict | None = None) -> dict:
-    blocks = content if isinstance(content, list) else [{"type": "text", "text": content}]
+def _msg(type: str, content: list[dict[str, Any]] | str = "", raw: dict[str, Any] | None = None) -> dict[str, Any]:
+    blocks: list[dict[str, Any]] = content if isinstance(content, list) else [{"type": "text", "text": content}]
     return {"type": type, "message": {"content": blocks}, **(raw or {})}
 
 
-def _tool_use(name: str, inp: dict | None = None, id: str = "") -> dict:
+def _tool_use(name: str, inp: dict[str, Any] | None = None, id: str = "") -> dict[str, Any]:
     return {"type": "tool_use", "name": name, "input": inp or {}, "id": id}
 
 
-def _tool_result(tool_use_id: str, is_error: bool = False) -> dict:
+def _tool_result(tool_use_id: str, is_error: bool = False) -> dict[str, Any]:
     return {"type": "tool_result", "tool_use_id": tool_use_id, "content": "ok", "is_error": is_error}
 
 
-def _make_transcript(*raw_messages: dict) -> Transcript:
+def _make_transcript(*raw_messages: dict[str, Any]) -> Transcript:
     return Transcript.from_messages(list(raw_messages))
 
 
@@ -420,38 +424,104 @@ class TestTurn:
         assert turn.start_idx == 3
 
 
-class TestSubagents:
-    def test_loads_from_filesystem(self, tmp_path: Path):
+TranscriptQuery = Callable[..., bool]
+SubagentTranscriptFactory = Callable[..., Transcript]
+
+
+@pytest.fixture
+def transcript_with_subagent_tool_use(tmp_path: Path) -> SubagentTranscriptFactory:
+    def make(
+        sub_tool_use: dict[str, Any],
+        main_tool_uses: list[dict[str, Any]] | None = None,
+    ) -> Transcript:
         session_dir = tmp_path / "session"
         subagents_dir = session_dir / "session" / "subagents"
         subagents_dir.mkdir(parents=True)
 
         session_file = session_dir / "session.jsonl"
-        session_file.write_text(json.dumps(_msg("user", "hello")) + "\n")
+        if main_tool_uses:
+            session_file.write_text(json.dumps(_msg("assistant", main_tool_uses)) + "\n")
+        else:
+            session_file.write_text(json.dumps(_msg("user", "hello")) + "\n")
 
         sub1 = subagents_dir / "sub1.jsonl"
-        read_tu = _tool_use("Read", {"file_path": "docs/TESTING.md"}, "tu_sub")
-        sub1.write_text(json.dumps(_msg("assistant", [read_tu])) + "\n")
+        sub1.write_text(json.dumps(_msg("assistant", [sub_tool_use])) + "\n")
 
-        t = Transcript.from_path(session_file)
+        return Transcript.from_path(session_file)
+
+    return make
+
+
+def _has_skill_codex(t: Transcript, **kw: bool) -> bool:
+    return t.has_skill("codex", **kw)
+
+
+def _has_command_codex_exec(t: Transcript, **kw: bool) -> bool:
+    return t.has_command(r"codex exec", **kw)
+
+
+def _has_edit_to_foo(t: Transcript, **kw: bool) -> bool:
+    return t.has_edit_to("**/foo.py", **kw)
+
+
+def _has_read_testing(t: Transcript, **kw: bool) -> bool:
+    return t.has_read("TESTING.md", **kw)
+
+
+def _has_tool_skill(t: Transcript, **kw: bool) -> bool:
+    return t.has_tool("Skill", **kw)
+
+
+class TestSubagents:
+    def test_loads_from_filesystem(
+        self,
+        transcript_with_subagent_tool_use: SubagentTranscriptFactory,
+    ) -> None:
+        t = transcript_with_subagent_tool_use(_tool_use("Read", {"file_path": "docs/TESTING.md"}, "tu_sub"))
         assert len(t.subagents) == 1
 
-    def test_has_read_recurses_into_subagents(self, tmp_path: Path):
-        session_dir = tmp_path / "session"
-        subagents_dir = session_dir / "session" / "subagents"
-        subagents_dir.mkdir(parents=True)
+    @pytest.mark.parametrize(
+        ("tool_use", "query"),
+        [
+            pytest.param(_tool_use("Skill", {"skill": "codex"}, "tu_a"), _has_skill_codex, id="has_skill"),
+            pytest.param(_tool_use("Bash", {"command": "codex exec -p 'hi'"}, "tu_b"), _has_command_codex_exec, id="has_command"),
+            pytest.param(_tool_use("Edit", {"file_path": "src/foo.py", "old_string": "", "new_string": ""}, "tu_c"), _has_edit_to_foo, id="has_edit_to"),
+            pytest.param(_tool_use("Read", {"file_path": "docs/TESTING.md"}, "tu_d"), _has_read_testing, id="has_read"),
+            pytest.param(_tool_use("Skill", {"skill": "codex"}, "tu_e"), _has_tool_skill, id="has_tool"),
+        ],
+    )
+    def test_query_recurses_into_subagents(
+        self,
+        transcript_with_subagent_tool_use: SubagentTranscriptFactory,
+        tool_use: dict[str, Any],
+        query: TranscriptQuery,
+    ) -> None:
+        t = transcript_with_subagent_tool_use(tool_use)
+        assert query(t) is True
+        assert query(t, subagents=False) is False
 
-        session_file = session_dir / "session.jsonl"
-        session_file.write_text(json.dumps(_msg("user", "hello")) + "\n")
+    def test_count_tools_ignores_subagents(
+        self,
+        transcript_with_subagent_tool_use: SubagentTranscriptFactory,
+    ) -> None:
+        main_uses: list[dict[str, Any]] = [_tool_use("EnterPlanMode", {}, f"tu_main_{i}") for i in range(2)]
+        t = transcript_with_subagent_tool_use(_tool_use("EnterPlanMode", {}, "tu_sub_0"), main_uses)
+        assert t.count_tools("EnterPlanMode") == 2
 
-        sub1 = subagents_dir / "sub1.jsonl"
-        read_tu = _tool_use("Read", {"file_path": "docs/TESTING.md"}, "tu_sub")
-        sub1.write_text(json.dumps(_msg("assistant", [read_tu])) + "\n")
+    def test_all_edits_under_ignores_subagents(
+        self,
+        transcript_with_subagent_tool_use: SubagentTranscriptFactory,
+    ) -> None:
+        main_uses: list[dict[str, Any]] = [
+            _tool_use("Edit", {"file_path": "src/a.py", "old_string": "", "new_string": ""}, "tu_main"),
+        ]
+        t = transcript_with_subagent_tool_use(
+            _tool_use("Edit", {"file_path": "tests/b.py", "old_string": "", "new_string": ""}, "tu_sub"),
+            main_uses,
+        )
+        assert t.all_edits_under("src/") is True
 
-        t = Transcript.from_path(session_file)
-        assert t.has_read("TESTING.md") is True
-
-    def test_has_read_no_subagents(self):
+    def test_has_read_no_subagents(self) -> None:
         t = _make_transcript(
             _msg("assistant", [_tool_use("Read", {"file_path": "README.md"}, "tu_1")]),
         )

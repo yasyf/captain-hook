@@ -155,19 +155,25 @@ class UsedSkill:
     """Transcript-history condition: true when a Skill tool use with a matching name exists."""
 
     name: str
+    subagents: bool = True
 
 
-@dataclass(frozen=True, slots=True, init=False)
-class ReadFile:
+@dataclass(frozen=True, slots=True)
+class PatternsCondition:
+    patterns: tuple[str, ...]
+    subagents: bool
+
+
+class ReadFile(PatternsCondition):
     """Transcript-history condition: true when a Read tool use targeted a matching file.
 
     Accepts one or more glob patterns as positional arguments.
     """
 
-    patterns: tuple[str, ...]
+    __slots__ = ()
 
-    def __init__(self, *patterns: str) -> None:
-        object.__setattr__(self, "patterns", patterns)
+    def __init__(self, *patterns: str, **kwargs: bool) -> None:
+        super().__init__(patterns=patterns, subagents=kwargs.pop("subagents", True))
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,17 +190,16 @@ class Agent:
     name: str
 
 
-@dataclass(frozen=True, slots=True, init=False)
-class TouchedFile:
+class TouchedFile(PatternsCondition):
     """Transcript-history condition: true when an Edit/Write targeted a file matching the glob.
 
     Accepts one or more glob patterns as positional arguments.
     """
 
-    patterns: tuple[str, ...]
+    __slots__ = ()
 
-    def __init__(self, *patterns: str) -> None:
-        object.__setattr__(self, "patterns", patterns)
+    def __init__(self, *patterns: str, **kwargs: bool) -> None:
+        super().__init__(patterns=patterns, subagents=kwargs.pop("subagents", False))
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +207,7 @@ class RanCommand:
     """Transcript-history condition: true when a Bash tool use with a matching command exists."""
 
     pattern: str
+    subagents: bool = True
 
 
 @dataclass(frozen=True, slots=True)
