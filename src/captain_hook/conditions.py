@@ -26,17 +26,13 @@ if TYPE_CHECKING:
     from captain_hook.types import HookSpec
 
 
-ALWAYS_ASYNC_TOOLS = frozenset({"Monitor", "TeamCreate", "ScheduleWakeup", "SendMessage"})
-BG_FLAGGED_TOOLS = frozenset({"Agent", "Task", "Bash"})
-
-
 def is_waiting(evt: BaseHookEvent) -> bool:
     return bool(
         (t := evt.ctx.transcript)
         and (last := next((m for m in reversed(t.messages) if m.type == "assistant" and m.tool_uses), None))
         and any(
-            tu.name in ALWAYS_ASYNC_TOOLS
-            or (tu.name in BG_FLAGGED_TOOLS and tu.raw_input.get("run_in_background"))
+            tu.name in {"Monitor", "TeamCreate", "ScheduleWakeup", "SendMessage"}
+            or (tu.name in {"Agent", "Task", "Bash"} and tu.raw_input.get("run_in_background"))
             for tu in last.tool_uses
         )
     )
