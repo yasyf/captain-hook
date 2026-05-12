@@ -75,9 +75,6 @@ class Command:
         return bool(self.executable)
 
 
-EMPTY = Command(raw="", executable="", args=())
-
-
 @dataclass(frozen=True)
 class CommandLine:
     """A full parsed bash command line, potentially containing multiple commands joined by operators.
@@ -101,7 +98,11 @@ class CommandLine:
 
     @cached_property
     def primary(self) -> Command:
-        return self.parts[-1][0] if self.parts else EMPTY
+        return self.parts[-1][0] if self.parts else Command(raw="", executable="", args=())
+
+    @cached_property
+    def head(self) -> Command:
+        return self.parts[0][0] if self.parts else Command(raw="", executable="", args=())
 
     def __iter__(self) -> Iterator[Command]:
         return iter(self.commands)
