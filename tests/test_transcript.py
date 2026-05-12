@@ -18,7 +18,9 @@ from captain_hook.transcript.inputs import (
     WriteInput,
     parse_tool_input,
 )
+from captain_hook.transcript import Transcript
 from captain_hook.transcript.models import (
+    TaskNotification,
     TextBlock,
     ToolResult,
     ToolUse,
@@ -86,6 +88,21 @@ class TestToolResult:
         tr = ToolResult(tool_use_id="x")
         with pytest.raises(AttributeError):
             tr.is_error = True  # type: ignore[misc]
+
+    def test_is_async_from_toolUseResult(self):
+        t = Transcript.from_messages([
+            {"type": "user", "toolUseResult": {"isAsync": True, "status": "async_launched"},
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_a", "content": []}]}},
+        ])
+        [tr] = t.messages[0].tool_results
+        assert tr.is_async is True
+
+    def test_is_async_false_without_field(self):
+        t = Transcript.from_messages([
+            {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_a", "content": []}]}},
+        ])
+        [tr] = t.messages[0].tool_results
+        assert tr.is_async is False
 
 
 class TestParseContentBlock:
@@ -173,6 +190,51 @@ class TestTranscriptMessage:
     def test_tool_results_empty_for_string_content(self):
         msg = TranscriptMessage.from_raw(type="user", content="hello")
         assert msg.tool_results == []
+
+    def test_notification_on_queue_operation(self):
+        t = Transcript.from_messages([
+            {
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "content": "<task-notification><tool-use-id>tu_z</tool-use-id></task-notification>",
+            },
+        ])
+        n = t.messages[0].notification
+        assert n is not None
+        assert n.tool_use_id == "tu_z"
+
+    def test_notification_none_for_non_queue_operation(self):
+        t = Transcript.from_messages([
+            {"type": "user", "message": {"content": [{"type": "text", "text": "hi"}]}},
+        ])
+        assert t.messages[0].notification is None
+
+    def test_notification_none_when_content_missing_id(self):
+        t = Transcript.from_messages([
+            {
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "content": "<task-notification></task-notification>",
+            },
+        ])
+        assert t.messages[0].notification is None
+
+
+class TestTaskNotification:
+    def test_from_content_extracts_tool_use_id(self):
+        n = TaskNotification.from_content(
+            "<task-notification><tool-use-id>tu_abc</tool-use-id></task-notification>"
+        )
+        assert n is not None
+        assert n.tool_use_id == "tu_abc"
+
+    def test_from_content_missing_tag_returns_none(self):
+        assert (
+            TaskNotification.from_content("<task-notification>no id here</task-notification>") is None
+        )
+
+    def test_from_content_empty_string_returns_none(self):
+        assert TaskNotification.from_content("") is None
 
 
 class TestToolUse:

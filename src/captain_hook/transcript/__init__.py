@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 
 from captain_hook.transcript.models import (
     ContentBlock,
+    TaskNotification,
     TextBlock,
     ToolResult,
     ToolUse,
@@ -440,7 +441,7 @@ class Transcript:
     @cached_property
     def turn_start(self) -> int:
         return max(
-            (i + 1 for i, msg in enumerate(self.messages) if msg.type == "user"),
+            (i + 1 for i, msg in enumerate(self.messages) if self.is_user_message(msg)),
             default=0,
         )
 
@@ -483,6 +484,7 @@ class Turn(TranscriptSlice):
 
 __all__ = [
     "ContentBlock",
+    "TaskNotification",
     "TextBlock",
     "ToolResult",
     "ToolUse",

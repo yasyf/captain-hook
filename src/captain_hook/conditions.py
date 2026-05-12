@@ -23,20 +23,36 @@ from captain_hook.types import (
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
+    from captain_hook.transcript import Transcript
+    from captain_hook.transcript.models import ToolUse
     from captain_hook.types import HookSpec
 
 
-def is_waiting(evt: BaseHookEvent) -> bool:
-    return bool(
-        (t := evt.ctx.transcript)
-        and (last := next((m for m in reversed(t.messages) if m.type == "assistant" and m.tool_uses), None))
-        and any(
-            tu.name in {"Monitor", "TeamCreate", "ScheduleWakeup", "SendMessage"}
-            or (tu.name in {"Agent", "Task", "Bash"} and tu.raw_input.get("run_in_background"))
-            or (tu.name in {"Agent", "Task"} and "subagent_type" not in tu.raw_input)
-            for tu in last.tool_uses
-        )
+def has_completion_notification(t: Transcript, tool_use_id: str, after_idx: int) -> bool:
+    return any(
+        (n := m.notification) and n.tool_use_id == tool_use_id
+        for m in t.messages[after_idx + 1 :]
     )
+
+
+def tool_use_waiting(tu: ToolUse, t: Transcript) -> bool:
+    match tu.name:
+        case "Monitor" | "TeamCreate" | "ScheduleWakeup" | "SendMessage":
+            return True
+        case "Agent" | "Task" | "Bash" if tu.raw_input.get("run_in_background"):
+            return True
+        case "Agent" | "Task" if "subagent_type" not in tu.raw_input:
+            return True
+        case "Agent" | "Task" if tu.result and tu.result.is_async:
+            return not has_completion_notification(t, tu.id or "", tu.message_index)
+    return False
+
+
+def is_waiting(evt: BaseHookEvent) -> bool:
+    if not (t := evt.ctx.transcript):
+        return False
+    turn = t.current_turn
+    return any(tool_use_waiting(tu, turn) for tu in turn.tool_uses)
 
 
 def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:

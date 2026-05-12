@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, cast
@@ -35,12 +36,25 @@ class ToolResult:
     tool_use_id: str
     content: list[Any] | str = field(default_factory=lambda: [])
     is_error: bool = False
+    is_async: bool = False
+
+
+@dataclass(frozen=True, kw_only=True)
+class TaskNotification:
+    """A parsed ``<task-notification>`` payload from a queue-operation message."""
+
+    tool_use_id: str
+
+    @classmethod
+    def from_content(cls, content: str) -> TaskNotification | None:
+        m = re.search(r"<tool-use-id>([^<]+)</tool-use-id>", content)
+        return cls(tool_use_id=m.group(1)) if m else None
 
 
 ContentBlock = TextBlock | ToolUseBlock | ToolResult
 
 
-def parse_content_block(b: Any) -> ContentBlock | str:
+def parse_content_block(b: Any, *, is_async: bool = False) -> ContentBlock | str:
     """Parse a raw content block dict into a typed ``ContentBlock``."""
     if isinstance(b, (TextBlock, ToolUseBlock, ToolResult, str)):
         return b
@@ -59,15 +73,16 @@ def parse_content_block(b: Any) -> ContentBlock | str:
                 tool_use_id=str(raw["tool_use_id"]),
                 content=raw.get("content", []),
                 is_error=bool(raw.get("is_error", False)),
+                is_async=is_async,
             )
         case _:
             return TextBlock(text=str(raw.get("text", "")))
 
 
-def parse_content(raw: list[Any] | str) -> list[ContentBlock | str] | str:
+def parse_content(raw: list[Any] | str, *, is_async: bool = False) -> list[ContentBlock | str] | str:
     if isinstance(raw, str):
         return raw
-    return [parse_content_block(b) for b in raw]
+    return [parse_content_block(b, is_async=is_async) for b in raw]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -131,7 +146,16 @@ class TranscriptMessage:
         content: list[Any] | str,
         raw: RawDict | None = None,
     ) -> TranscriptMessage:
-        return cls(type=type, content=parse_content(content), raw=raw or {})
+        tur = (raw or {}).get("toolUseResult")
+        is_async = isinstance(tur, dict) and tur.get("isAsync") is True
+        return cls(type=type, content=parse_content(content, is_async=is_async), raw=raw or {})
+
+    @cached_property
+    def notification(self) -> TaskNotification | None:
+        if self.type != "queue-operation":
+            return None
+        content = self.raw.get("content")
+        return TaskNotification.from_content(content) if isinstance(content, str) else None
 
     @property
     def tool_uses(self) -> list[ToolUse]:
