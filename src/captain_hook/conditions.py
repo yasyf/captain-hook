@@ -33,6 +33,7 @@ def is_waiting(evt: BaseHookEvent) -> bool:
         and any(
             tu.name in {"Monitor", "TeamCreate", "ScheduleWakeup", "SendMessage"}
             or (tu.name in {"Agent", "Task", "Bash"} and tu.raw_input.get("run_in_background"))
+            or (tu.name in {"Agent", "Task"} and "subagent_type" not in tu.raw_input)
             for tu in last.tool_uses
         )
     )

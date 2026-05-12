@@ -384,15 +384,19 @@ class TestWaitingCondition:
     @pytest.mark.parametrize(
         ("tool", "tool_input", "expected"),
         [
-            ("Agent", {"prompt": "x", "run_in_background": True}, True),
-            ("Agent", {"prompt": "x"}, False),
-            ("Task", {"prompt": "x", "run_in_background": True}, True),
-            ("Bash", {"command": "build", "run_in_background": True}, True),
-            ("Bash", {"command": "ls"}, False),
-            ("Monitor", {"name": "build"}, True),
-            ("TeamCreate", {"members": []}, True),
-            ("ScheduleWakeup", {"delaySeconds": 600}, True),
-            ("SendMessage", {"to": "agent-1", "message": "go"}, True),
+            pytest.param("Agent", {"prompt": "x", "run_in_background": True}, True, id="agent_run_in_background"),
+            pytest.param("Agent", {"prompt": "x"}, True, id="fork_minimal_agent"),
+            pytest.param("Agent", {"name": "x", "prompt": "y"}, True, id="fork_bare_agent"),
+            pytest.param("Agent", {"subagent_type": "test-runner", "prompt": "y"}, False, id="typed_subagent"),
+            pytest.param("Task", {"prompt": "x", "run_in_background": True}, True, id="task_run_in_background"),
+            pytest.param("Task", {"name": "x", "prompt": "y"}, True, id="fork_bare_task"),
+            pytest.param("Task", {"subagent_type": "general-purpose", "prompt": "y"}, False, id="typed_task"),
+            pytest.param("Bash", {"command": "build", "run_in_background": True}, True, id="bash_run_in_background"),
+            pytest.param("Bash", {"command": "ls"}, False, id="bash_sync"),
+            pytest.param("Monitor", {"name": "build"}, True, id="monitor"),
+            pytest.param("TeamCreate", {"members": []}, True, id="team_create"),
+            pytest.param("ScheduleWakeup", {"delaySeconds": 600}, True, id="schedule_wakeup"),
+            pytest.param("SendMessage", {"to": "agent-1", "message": "go"}, True, id="send_message"),
         ],
     )
     def test_single_tool_matches(self, tool: str, tool_input: dict[str, Any], expected: bool) -> None:
