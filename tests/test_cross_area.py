@@ -492,17 +492,19 @@ class TestClassifierTranscript:
     def test_conductor_filters_synthetic_messages(self) -> None:
         from captain_hook.classifiers.conductor import classifier
 
-        synthetic = [{"type": "text", "text": "<system_instruction>setup"}]
+        synthetic: list[str | dict[str, Any]] = [{"type": "text", "text": "<system_instruction>setup"}]
         transcript = Transcript(
             messages=[
-                TranscriptMessage.from_raw(type="user", content=synthetic),
+                TranscriptMessage.from_raw(type="user", content=synthetic, raw={}),
                 TranscriptMessage.from_raw(
                     type="user",
                     content=[{"type": "text", "text": "please help me debug"}],
+                    raw={},
                 ),
                 TranscriptMessage.from_raw(
                     type="assistant",
                     content=[{"type": "text", "text": "I will help"}],
+                    raw={},
                 ),
             ],
             classifier=classifier,
@@ -513,13 +515,14 @@ class TestClassifierTranscript:
     def test_native_includes_all_user_messages(self) -> None:
         from captain_hook.classifiers.native import classifier
 
-        synthetic = [{"type": "text", "text": "<system_instruction>setup"}]
+        synthetic: list[str | dict[str, Any]] = [{"type": "text", "text": "<system_instruction>setup"}]
         transcript = Transcript(
             messages=[
-                TranscriptMessage.from_raw(type="user", content=synthetic),
+                TranscriptMessage.from_raw(type="user", content=synthetic, raw={}),
                 TranscriptMessage.from_raw(
                     type="user",
                     content=[{"type": "text", "text": "help me debug"}],
+                    raw={},
                 ),
             ],
             classifier=classifier,

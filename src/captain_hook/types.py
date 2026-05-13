@@ -4,6 +4,7 @@ import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Flag, StrEnum, auto
+from textwrap import dedent
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -223,6 +224,20 @@ class Waiting:
     pass
 
 
+@dataclass(frozen=True)
+class ConditionList:
+    """Container for a tuple of conditions; base class for combinators like ``Or``."""
+
+    conditions: tuple[TCondition, ...]
+
+
+class Or(ConditionList):
+    """Match if any of the inner conditions matches."""
+
+    def __init__(self, *conditions: TCondition) -> None:
+        super().__init__(conditions=tuple(conditions))
+
+
 @runtime_checkable
 class CustomCondition(Protocol):
     """Protocol for user-defined hook conditions.
@@ -254,6 +269,7 @@ TCondition = (
     | RanCommand
     | InPlanMode
     | Waiting
+    | Or
     | CustomCondition
 )
 
@@ -295,6 +311,11 @@ class HookResult:
 
     action: Action
     message: str | None = None
+
+    @classmethod
+    def of(cls, action: Action, message: str | None = None) -> HookResult:
+        """Build a ``HookResult``, dedenting and stripping ``message`` for readable triple-quoted handler returns."""
+        return cls(action=action, message=dedent(message).strip() if message else None)
 
 
 from captain_hook.testing.types import TTest as TTest

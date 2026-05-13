@@ -10,6 +10,7 @@ from captain_hook.types import (
     CustomCondition,
     FilePath,
     InPlanMode,
+    Or,
     RanCommand,
     ReadFile,
     TCondition,
@@ -44,15 +45,14 @@ def tool_use_waiting(tu: ToolUse, t: Transcript) -> bool:
         case "Agent" | "Task" if "subagent_type" not in tu.raw_input:
             return True
         case "Agent" | "Task" if tu.result and tu.result.is_async:
-            return not has_completion_notification(t, tu.id or "", tu.message_index)
+            return not has_completion_notification(t, tu.id, tu.message_index)
     return False
 
 
 def is_waiting(evt: BaseHookEvent) -> bool:
     if not (t := evt.ctx.transcript):
         return False
-    turn = t.current_turn
-    return any(tool_use_waiting(tu, turn) for tu in turn.tool_uses)
+    return any(tool_use_waiting(tu, t.current_turn) for tu in t.current_turn.tool_uses)
 
 
 def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
@@ -68,7 +68,7 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
         case Content(pattern):
             return bool(evt.content and re.search(pattern, evt.content, re.MULTILINE))
         case Agent(name):
-            return bool(evt.agent_type and evt.agent_type in name.split("|"))
+            return bool(evt.agent_type) and evt.agent_type in name.split("|")
         case TestFile():
             return bool(evt.file and evt.file.is_test)
         case UsedSkill(name, subagents):
@@ -86,6 +86,8 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
             )
         case Waiting():
             return is_waiting(evt)
+        case Or(conditions):
+            return any(check_condition(sub, evt) for sub in conditions)
         case CustomCondition():
             return c.check(evt)
         case _:

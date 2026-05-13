@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from captain_hook.command import CommandLine
@@ -18,6 +18,7 @@ class TextBlock:
 
 
 RawDict = dict[str, Any]
+RawBlock = str | RawDict
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -26,7 +27,7 @@ class ToolUseBlock:
 
     name: str
     input: RawDict = field(default_factory=lambda: {})
-    id: str = ""
+    id: str
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -54,35 +55,35 @@ class TaskNotification:
 ContentBlock = TextBlock | ToolUseBlock | ToolResult
 
 
-def parse_content_block(b: Any, *, is_async: bool = False) -> ContentBlock | str:
-    """Parse a raw content block dict into a typed ``ContentBlock``."""
-    if isinstance(b, (TextBlock, ToolUseBlock, ToolResult, str)):
-        return b
-    if not isinstance(b, dict):
-        return ""
-    raw = cast(RawDict, b)
-    match raw.get("type"):
-        case "tool_use":
-            return ToolUseBlock(
-                name=str(raw["name"]),
-                input=raw.get("input", {}),
-                id=str(raw.get("id", "")),
-            )
-        case "tool_result":
-            return ToolResult(
-                tool_use_id=str(raw["tool_use_id"]),
-                content=raw.get("content", []),
-                is_error=bool(raw.get("is_error", False)),
-                is_async=is_async,
-            )
+def parse_content_block(b: RawBlock, *, is_async: bool = False) -> ContentBlock:
+    match b:
+        case str(s):
+            return TextBlock(text=s)
+        case dict() as raw:
+            match raw.get("type"):
+                case "tool_use":
+                    return ToolUseBlock(
+                        name=str(raw["name"]),
+                        input=raw.get("input", {}),
+                        id=str(raw["id"]),
+                    )
+                case "tool_result":
+                    return ToolResult(
+                        tool_use_id=str(raw["tool_use_id"]),
+                        content=raw.get("content", []),
+                        is_error=bool(raw.get("is_error", False)),
+                        is_async=is_async,
+                    )
+                case _:
+                    return TextBlock(text=str(raw.get("text", "")))
+
+
+def parse_content(raw: list[RawBlock] | str, *, is_async: bool = False) -> list[ContentBlock]:
+    match raw:
+        case str(s):
+            return [TextBlock(text=s)]
         case _:
-            return TextBlock(text=str(raw.get("text", "")))
-
-
-def parse_content(raw: list[Any] | str, *, is_async: bool = False) -> list[ContentBlock | str] | str:
-    if isinstance(raw, str):
-        return raw
-    return [parse_content_block(b, is_async=is_async) for b in raw]
+            return [parse_content_block(b, is_async=is_async) for b in raw]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -91,7 +92,7 @@ class ToolUse:
 
     name: str
     raw_input: RawDict = field(default_factory=lambda: {})
-    id: str | None = None
+    id: str
     result: ToolResult | None = None
     message_index: int = -1
 
@@ -135,7 +136,7 @@ class TranscriptMessage:
     """A single message in a transcript with parsed content blocks, tool-use extraction, and text access."""
 
     type: str
-    content: list[Any] | str
+    content: list[ContentBlock]
     raw: RawDict = field(default_factory=lambda: {})
 
     @classmethod
@@ -143,40 +144,38 @@ class TranscriptMessage:
         cls,
         *,
         type: str,
-        content: list[Any] | str,
-        raw: RawDict | None = None,
+        content: list[RawBlock] | str,
+        raw: RawDict,
     ) -> TranscriptMessage:
-        tur = (raw or {}).get("toolUseResult")
-        is_async = isinstance(tur, dict) and tur.get("isAsync") is True
-        return cls(type=type, content=parse_content(content, is_async=is_async), raw=raw or {})
+        return cls(
+            type=type,
+            content=parse_content(
+                content,
+                is_async=(raw.get("toolUseResult") or {}).get("isAsync") is True,
+            ),
+            raw=raw,
+        )
 
     @cached_property
     def notification(self) -> TaskNotification | None:
-        if self.type != "queue-operation":
-            return None
-        content = self.raw.get("content")
-        return TaskNotification.from_content(content) if isinstance(content, str) else None
+        match (self.type, self.raw.get("content")):
+            case ("queue-operation", str(s)):
+                return TaskNotification.from_content(s)
+            case _:
+                return None
 
     @property
     def tool_uses(self) -> list[ToolUse]:
-        if not isinstance(self.content, list):
-            return []
         return [
-            ToolUse(name=b.name, raw_input=b.input, id=b.id or None)
+            ToolUse(name=b.name, raw_input=b.input, id=b.id)
             for b in self.content
             if isinstance(b, ToolUseBlock)
         ]
 
     @property
     def tool_results(self) -> list[ToolResult]:
-        if not isinstance(self.content, list):
-            return []
         return [b for b in self.content if isinstance(b, ToolResult)]
 
     @property
     def text(self) -> str:
-        match self.content:
-            case str(s):
-                return s
-            case list(blocks):
-                return "\n".join(b if isinstance(b, str) else b.text for b in blocks if isinstance(b, (str, TextBlock)))
+        return "\n".join(b.text for b in self.content if isinstance(b, TextBlock))

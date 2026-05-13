@@ -449,6 +449,7 @@ class Transcript:
     def current_turn(self) -> Turn:
         return Turn(
             self.messages[(i := self.turn_start) :],
+            path=self.path,
             start_idx=i,
             user_message=self.messages[i - 1] if i > 0 else None,
         )
@@ -461,6 +462,42 @@ class TranscriptSlice(Transcript):
     """A contiguous slice of a Transcript, returned by slicing operations like ``recent``, ``after``, ``before``."""
 
     pass
+
+
+@dataclass(frozen=True)
+class SubagentAccessor:
+    id: str
+    type: str
+    transcript: Transcript
+    parent_tool_use: ToolUse
+
+    @property
+    def tool_uses(self) -> ToolUseSequence:
+        return self.transcript.tool_uses
+
+    @property
+    def failed(self) -> bool:
+        return bool((r := self.parent_tool_use.result) and r.is_error) or any(
+            tu.is_error for tu in self.transcript.tool_uses.with_errors
+        )
+
+
+@dataclass(frozen=True)
+class SubagentRegistry:
+    items: list[SubagentAccessor]
+
+    def with_type(self, pattern: str) -> list[SubagentAccessor]:
+        names = pattern.split("|")
+        return [s for s in self.items if s.type in names]
+
+    def __iter__(self) -> Iterator[SubagentAccessor]:
+        return iter(self.items)
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __bool__(self) -> bool:
+        return bool(self.items)
 
 
 @dataclass
@@ -481,11 +518,30 @@ class Turn(TranscriptSlice):
     def has_edit_under(self, *patterns: str) -> bool:
         return any(f.matches(*patterns) for f in self.edited_files)
 
+    @cached_property
+    def subagents(self) -> SubagentRegistry:
+        if not self.path:
+            return SubagentRegistry([])
+        return SubagentRegistry([
+            SubagentAccessor(
+                id=tu.id,
+                type=tu.agent_type or "",
+                transcript=Transcript.from_path(
+                    self.path.parent / self.path.stem / "subagents" / f"agent-{tu.id}.jsonl"
+                ),
+                parent_tool_use=tu,
+            )
+            for tu in self.tool_uses
+            if tu.name in {"Agent", "Task"} and tu.agent_type and tu.id
+        ])
+
 
 __all__ = [
     "ContentBlock",
     "TaskNotification",
     "TextBlock",
+    "SubagentAccessor",
+    "SubagentRegistry",
     "ToolResult",
     "ToolUse",
     "ToolUseBlock",

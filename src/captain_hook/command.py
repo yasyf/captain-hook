@@ -43,6 +43,10 @@ class Command:
     def parse(cls, raw: str) -> Command:
         return CommandLine.parse(raw).primary
 
+    @classmethod
+    def empty(cls) -> Command:
+        return cls(raw="", executable="", args=())
+
     @cached_property
     def argv(self) -> tuple[str, ...]:
         return (self.executable, *self.args) if self.executable else ()
@@ -98,11 +102,11 @@ class CommandLine:
 
     @cached_property
     def primary(self) -> Command:
-        return self.parts[-1][0] if self.parts else Command(raw="", executable="", args=())
+        return self.parts[-1][0] if self.parts else Command.empty()
 
     @cached_property
     def head(self) -> Command:
-        return self.parts[0][0] if self.parts else Command(raw="", executable="", args=())
+        return self.parts[0][0] if self.parts else Command.empty()
 
     def __iter__(self) -> Iterator[Command]:
         return iter(self.commands)

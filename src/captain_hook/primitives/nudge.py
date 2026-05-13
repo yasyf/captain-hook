@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 
 from captain_hook.app import on
@@ -44,7 +43,6 @@ def nudge(
             >>> nudge("Stop retrying",
             ...       signals=Signals([Signal(r"retry", weight=2)], threshold=2, window=5))
     """
-    message = dedent(message).strip()
     sig = resolve_signals(signals)
 
     def handler(evt: BaseHookEvent) -> HookResult | None:
@@ -69,8 +67,8 @@ def nudge(
 
         if block:
             record_fire(evt)
-            return HookResult(action=Action.block, message=cited)
-        return HookResult(action=Action.warn, message=cited)
+            return HookResult.of(Action.block, cited)
+        return HookResult.of(Action.warn, cited)
 
     handler.__name__ = handler.__qualname__ = hook_name(
         "gate" if block else "nudge",

@@ -306,7 +306,7 @@ class TestTranscriptConstruction:
         assert "world" in t.full_text
 
     def test_from_parsed(self):
-        msgs = [TranscriptMessage.from_raw(type="user", content="hi")]
+        msgs = [TranscriptMessage.from_raw(type="user", content="hi", raw={})]
         t = Transcript.from_parsed(msgs)
         assert len(t) == 1
         assert t.messages[0].type == "user"

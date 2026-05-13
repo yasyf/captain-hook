@@ -56,13 +56,6 @@ class TestToolUseBlock:
         assert result.input == {"file_path": "foo.py"}
         assert result.id == "tu_123"
 
-    def test_defaults(self):
-        raw = {"type": "tool_use", "name": "Bash"}
-        result = parse_content_block(raw)
-        assert isinstance(result, ToolUseBlock)
-        assert result.input == {}
-        assert result.id == ""
-
     def test_frozen(self):
         block = ToolUseBlock(name="Edit", input={}, id="x")
         with pytest.raises(AttributeError):
@@ -106,24 +99,8 @@ class TestToolResult:
 
 
 class TestParseContentBlock:
-    def test_already_parsed_text_block(self):
-        block = TextBlock(text="hi")
-        assert parse_content_block(block) is block
-
-    def test_already_parsed_tool_use_block(self):
-        block = ToolUseBlock(name="Edit", input={}, id="x")
-        assert parse_content_block(block) is block
-
-    def test_already_parsed_tool_result(self):
-        block = ToolResult(tool_use_id="x")
-        assert parse_content_block(block) is block
-
-    def test_string_passthrough(self):
-        assert parse_content_block("hello") == "hello"
-
-    def test_non_dict_returns_empty_string(self):
-        assert parse_content_block(42) == ""
-        assert parse_content_block(None) == ""
+    def test_string_wraps_as_text_block(self):
+        assert parse_content_block("hello") == TextBlock(text="hello")
 
     def test_unknown_type_returns_text_block(self):
         result = parse_content_block({"type": "unknown", "text": "fallback"})
@@ -139,6 +116,7 @@ class TestTranscriptMessage:
                 {"type": "text", "text": "hello"},
                 {"type": "tool_use", "name": "Edit", "input": {}, "id": "tu_1"},
             ],
+            raw={},
         )
         assert isinstance(msg.content[0], TextBlock)
         assert isinstance(msg.content[1], ToolUseBlock)
@@ -151,11 +129,12 @@ class TestTranscriptMessage:
                 {"type": "tool_use", "name": "Edit", "input": {}, "id": "tu_1"},
                 {"type": "text", "text": "b"},
             ],
+            raw={},
         )
         assert msg.text == "a\nb"
 
     def test_text_for_string_content(self):
-        msg = TranscriptMessage.from_raw(type="user", content="plain")
+        msg = TranscriptMessage.from_raw(type="user", content="plain", raw={})
         assert msg.text == "plain"
 
     def test_tool_uses_extracts_tool_use_blocks(self):
@@ -166,6 +145,7 @@ class TestTranscriptMessage:
                 {"type": "tool_use", "name": "Edit", "input": {"file_path": "foo.py"}, "id": "tu_1"},
                 {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}, "id": "tu_2"},
             ],
+            raw={},
         )
         tool_uses = msg.tool_uses
         assert len(tool_uses) == 2
@@ -178,17 +158,18 @@ class TestTranscriptMessage:
             content=[
                 {"type": "tool_result", "tool_use_id": "tu_1", "content": "ok", "is_error": False},
             ],
+            raw={},
         )
         results = msg.tool_results
         assert len(results) == 1
         assert results[0].tool_use_id == "tu_1"
 
     def test_tool_uses_empty_for_string_content(self):
-        msg = TranscriptMessage.from_raw(type="user", content="hello")
+        msg = TranscriptMessage.from_raw(type="user", content="hello", raw={})
         assert msg.tool_uses == []
 
     def test_tool_results_empty_for_string_content(self):
-        msg = TranscriptMessage.from_raw(type="user", content="hello")
+        msg = TranscriptMessage.from_raw(type="user", content="hello", raw={})
         assert msg.tool_results == []
 
     def test_notification_on_queue_operation(self):
@@ -218,6 +199,37 @@ class TestTranscriptMessage:
             },
         ])
         assert t.messages[0].notification is None
+
+
+class TestTurnStart:
+    def test_skips_tool_result_user_wrappers(self):
+        from captain_hook.classifiers.conductor import classifier as conductor_classifier
+
+        messages = [
+            TranscriptMessage.from_raw(type="user", content=[{"type": "text", "text": "real user prompt"}], raw={}),
+            TranscriptMessage.from_raw(
+                type="assistant",
+                content=[{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}, "id": "tu_1"}],
+                raw={},
+            ),
+            TranscriptMessage.from_raw(
+                type="user",
+                content=[{"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}],
+                raw={},
+            ),
+            TranscriptMessage.from_raw(
+                type="assistant",
+                content=[{"type": "tool_use", "name": "Bash", "input": {"command": "pwd"}, "id": "tu_2"}],
+                raw={},
+            ),
+            TranscriptMessage.from_raw(
+                type="user",
+                content=[{"type": "tool_result", "tool_use_id": "tu_2", "content": "/"}],
+                raw={},
+            ),
+        ]
+        t = Transcript(messages, classifier=conductor_classifier)
+        assert t.turn_start == 1
 
 
 class TestTaskNotification:
@@ -259,11 +271,11 @@ class TestToolUse:
         assert tu.is_error is False
 
     def test_is_error_none_when_no_result(self):
-        tu = ToolUse(name="Edit", raw_input={})
+        tu = ToolUse(name="Edit", raw_input={}, id="tu_1")
         assert tu.is_error is None
 
     def test_input_lazy_parses_bash(self):
-        tu = ToolUse(name="Bash", raw_input={"command": "ls -la", "timeout": 30})
+        tu = ToolUse(name="Bash", raw_input={"command": "ls -la", "timeout": 30}, id="tu_1")
         inp = tu.input
         assert isinstance(inp, BashInput)
         assert inp.command == "ls -la"
@@ -272,6 +284,7 @@ class TestToolUse:
         tu = ToolUse(
             name="Edit",
             raw_input={"file_path": "foo.py", "old_string": "old", "new_string": "new"},
+            id="tu_1",
         )
         inp = tu.input
         assert isinstance(inp, EditInput)
@@ -280,42 +293,42 @@ class TestToolUse:
         assert inp.new == "new"
 
     def test_file_delegates_to_file_input_base(self):
-        tu = ToolUse(name="Edit", raw_input={"file_path": "/tmp/foo.py", "old_string": "", "new_string": ""})
+        tu = ToolUse(name="Edit", raw_input={"file_path": "/tmp/foo.py", "old_string": "", "new_string": ""}, id="tu_1")
         assert tu.file is not None
         assert isinstance(tu.file, File)
         assert str(tu.file) == "/tmp/foo.py"
 
     def test_file_none_for_non_file_tool(self):
-        tu = ToolUse(name="Bash", raw_input={"command": "ls"})
+        tu = ToolUse(name="Bash", raw_input={"command": "ls"}, id="tu_1")
         assert tu.file is None
 
     def test_command_from_bash_input(self):
-        tu = ToolUse(name="Bash", raw_input={"command": "echo hello"})
+        tu = ToolUse(name="Bash", raw_input={"command": "echo hello"}, id="tu_1")
         assert tu.command == "echo hello"
 
     def test_command_none_for_non_bash(self):
-        tu = ToolUse(name="Edit", raw_input={"file_path": "x", "old_string": "", "new_string": ""})
+        tu = ToolUse(name="Edit", raw_input={"file_path": "x", "old_string": "", "new_string": ""}, id="tu_1")
         assert tu.command is None
 
     def test_command_line_parses_bash(self):
-        tu = ToolUse(name="Bash", raw_input={"command": "echo hello"})
+        tu = ToolUse(name="Bash", raw_input={"command": "echo hello"}, id="tu_1")
         cl = tu.command_line
         assert cl is not None
 
     def test_command_line_none_for_non_bash(self):
-        tu = ToolUse(name="Edit", raw_input={"file_path": "x", "old_string": "", "new_string": ""})
+        tu = ToolUse(name="Edit", raw_input={"file_path": "x", "old_string": "", "new_string": ""}, id="tu_1")
         assert tu.command_line is None
 
     def test_agent_type_from_agent_input(self):
-        tu = ToolUse(name="Agent", raw_input={"prompt": "do stuff", "subagent_type": "worker"})
+        tu = ToolUse(name="Agent", raw_input={"prompt": "do stuff", "subagent_type": "worker"}, id="tu_1")
         assert tu.agent_type == "worker"
 
     def test_agent_type_none_for_non_agent(self):
-        tu = ToolUse(name="Bash", raw_input={"command": "ls"})
+        tu = ToolUse(name="Bash", raw_input={"command": "ls"}, id="tu_1")
         assert tu.agent_type is None
 
     def test_frozen(self):
-        tu = ToolUse(name="Edit", raw_input={})
+        tu = ToolUse(name="Edit", raw_input={}, id="tu_1")
         with pytest.raises(AttributeError):
             tu.name = "Write"  # type: ignore[misc]
 
@@ -532,6 +545,6 @@ class TestMultiEditInput:
         assert str(result.file.path) == "/tmp/test.py"
 
     def test_multi_edit_tool_use_file(self):
-        tu = ToolUse(name="MultiEdit", raw_input={"file_path": "/src/main.py", "old_string": "x", "new_string": "y"})
+        tu = ToolUse(name="MultiEdit", raw_input={"file_path": "/src/main.py", "old_string": "x", "new_string": "y"}, id="tu_1")
         assert tu.file is not None
         assert str(tu.file.path) == "/src/main.py"

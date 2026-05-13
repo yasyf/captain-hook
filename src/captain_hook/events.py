@@ -110,19 +110,19 @@ class BaseHookEvent:
         from captain_hook.types import Action
         from captain_hook.types import HookResult as HR
 
-        return HR(action=Action.allow)
+        return HR.of(Action.allow)
 
     def warn(self, message: str) -> HookResult:
         from captain_hook.types import Action
         from captain_hook.types import HookResult as HR
 
-        return HR(action=Action.warn, message=message)
+        return HR.of(Action.warn, message)
 
     def block(self, message: str) -> HookResult:
         from captain_hook.types import Action
         from captain_hook.types import HookResult as HR
 
-        return HR(action=Action.block, message=message)
+        return HR.of(Action.block, message)
 
 
 @dataclass
