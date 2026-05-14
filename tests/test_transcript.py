@@ -97,6 +97,14 @@ class TestToolResult:
         [tr] = t.messages[0].tool_results
         assert tr.is_async is False
 
+    def test_is_async_false_when_toolUseResult_is_string(self):
+        t = Transcript.from_messages([
+            {"type": "user", "toolUseResult": "Error: BLOCKED: ...",
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_a", "content": []}]}},
+        ])
+        [tr] = t.messages[0].tool_results
+        assert tr.is_async is False
+
 
 class TestParseContentBlock:
     def test_string_wraps_as_text_block(self):

@@ -149,12 +149,17 @@ class TranscriptMessage:
     ) -> TranscriptMessage:
         return cls(
             type=type,
-            content=parse_content(
-                content,
-                is_async=(raw.get("toolUseResult") or {}).get("isAsync") is True,
-            ),
+            content=parse_content(content, is_async=cls.is_async_tool_use(raw)),
             raw=raw,
         )
+
+    @staticmethod
+    def is_async_tool_use(raw: RawDict) -> bool:
+        match raw.get("toolUseResult"):
+            case {"isAsync": True}:
+                return True
+            case _:
+                return False
 
     @cached_property
     def notification(self) -> TaskNotification | None:
