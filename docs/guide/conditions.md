@@ -82,6 +82,8 @@ hook(Event.PostToolUse, message="Review output", skip_if=[Tool("Read|Glob")])
 ### FilePath
 
 Matches the current event's file path against one or more glob patterns. Accepts multiple patterns as positional arguments.
+By default, absolute paths outside the project root do not match; pass `project_only=False` for hooks that
+intentionally inspect external scratch files, attachments, or logs.
 
 ```python
 from captain_hook import hook, Event, FilePath
@@ -121,6 +123,7 @@ hook(
 ### Content
 
 Matches the current event's file content against a regex pattern. Applies to Edit (the new content) and Write (the file content) tool events. The regex uses `re.MULTILINE` mode.
+Like `FilePath`, it only matches project files by default; pass `project_only=False` for external files.
 
 ```python
 from captain_hook import hook, Event, Content
@@ -149,6 +152,7 @@ hook(Event.SubagentStop, message="Check work", skip_if=[Agent("feature-implement
 ### TestFile
 
 Matches when the current event targets a test file -- a file named `test_*.py` or `conftest.py`. Takes no arguments.
+Like `FilePath`, it only matches project files by default; use `TestFile(project_only=False)` for external paths.
 
 ```python
 from captain_hook import hook, Event, TestFile

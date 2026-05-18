@@ -95,9 +95,13 @@ class TestDefaultLogDir:
 class TestConditionFiltering:
     def test_only_if_filters_events(self, tmp_path: Path) -> None:
         audit(Event.PreToolUse, log_dir=tmp_path, only_if=[FilePath("*.py")])
-        ctx = make_ctx(tmp_path)
+        ctx = make_ctx(tmp_path, project_root=tmp_path)
         bash = make_pre_tool_event("Bash", {"command": "ls"}, ctx)
-        edit = make_pre_tool_event("Edit", {"file_path": "/x/y.py", "old_string": "a", "new_string": "b"}, ctx)
+        edit = make_pre_tool_event(
+            "Edit",
+            {"file_path": str(tmp_path / "y.py"), "old_string": "a", "new_string": "b"},
+            ctx,
+        )
         for evt in (bash, edit):
             for entry in get_matching_hooks(evt):
                 execute_hook(entry, evt, tmp_path)
@@ -106,9 +110,13 @@ class TestConditionFiltering:
 
     def test_skip_if_excludes_events(self, tmp_path: Path) -> None:
         audit(Event.PreToolUse, log_dir=tmp_path, skip_if=[FilePath("*.py")])
-        ctx = make_ctx(tmp_path)
+        ctx = make_ctx(tmp_path, project_root=tmp_path)
         bash = make_pre_tool_event("Bash", {"command": "ls"}, ctx)
-        edit = make_pre_tool_event("Edit", {"file_path": "/x/y.py", "old_string": "a", "new_string": "b"}, ctx)
+        edit = make_pre_tool_event(
+            "Edit",
+            {"file_path": str(tmp_path / "y.py"), "old_string": "a", "new_string": "b"},
+            ctx,
+        )
         for evt in (bash, edit):
             for entry in get_matching_hooks(evt):
                 execute_hook(entry, evt, tmp_path)

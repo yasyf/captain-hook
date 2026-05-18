@@ -35,11 +35,13 @@ def build_context(
     transcript: Transcript | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
+    project_root: Path | None = None,
 ) -> HookContext:
     return HookContext(
         session=SessionStore(session_dir),
         transcript=transcript or Transcript.from_path(transcript_path),
         settings=None,
+        project_root=project_root,
     )
 
 
@@ -82,6 +84,7 @@ def mock_tool_event(
     transcript: Transcript | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
+    project_root: Path | None = None,
 ) -> ToolHookEvent:
     return cast(
         ToolHookEvent,
@@ -89,7 +92,7 @@ def mock_tool_event(
             _raw={"tool_name": tool, "tool_input": make_tool_input(tool, command, file, content, old)}
             | ({"agent_type": agent_type} if agent_type else {})
             | ({"permission_mode": permission_mode} if permission_mode else {}),
-            ctx=build_context(transcript, transcript_path, session_dir),
+            ctx=build_context(transcript, transcript_path, session_dir, project_root),
         ),
     )
 

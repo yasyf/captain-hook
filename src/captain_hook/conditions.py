@@ -55,22 +55,36 @@ def is_waiting(evt: BaseHookEvent) -> bool:
     return any(tool_use_waiting(tu, t.current_turn) for tu in t.current_turn.tool_uses)
 
 
+def is_project_file(evt: BaseHookEvent) -> bool:
+    if not (file := evt.file):
+        return False
+    if not file.path.is_absolute():
+        return True
+    if not (root := evt.ctx.repo_root):
+        return True
+    return file.path.resolve().is_relative_to(root.resolve())
+
+
 def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
     match c:
         case Tool(pattern):
             if not evt.tool_name:
                 return False
             return any(tool_name_matches(evt.tool_name, p) for p in pattern.split("|"))
-        case FilePath(patterns):
-            return bool(evt.file and evt.file.matches(*patterns))
+        case FilePath(patterns, project_only):
+            return bool(evt.file and (not project_only or is_project_file(evt)) and evt.file.matches(*patterns))
         case Command(pattern):
             return bool((cl := evt.command_line) and any(re.search(pattern, str(cmd)) for cmd in cl.commands))
-        case Content(pattern):
-            return bool(evt.content and re.search(pattern, evt.content, re.MULTILINE))
+        case Content(pattern, project_only):
+            return bool(
+                (not project_only or is_project_file(evt))
+                and evt.content
+                and re.search(pattern, evt.content, re.MULTILINE)
+            )
         case Agent(name):
             return bool(evt.agent_type) and evt.agent_type in name.split("|")
-        case TestFile():
-            return bool(evt.file and evt.file.is_test)
+        case TestFile(project_only):
+            return bool(evt.file and (not project_only or is_project_file(evt)) and evt.file.is_test)
         case UsedSkill(name, subagents):
             return bool(evt.ctx.transcript) and evt.ctx.transcript.has_skill(*name.split("|"), subagents=subagents)
         case ReadFile(patterns, subagents):

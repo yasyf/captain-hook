@@ -116,6 +116,7 @@ class HookContext:
     session: SessionStore
     transcript: Transcript
     settings: BaseSettings | None
+    project_root: Path | None = None
 
     @property
     def t(self) -> Transcript:
@@ -195,6 +196,8 @@ class HookContext:
 
     @cached_property
     def repo_root(self) -> Path | None:
+        if self.project_root is not None:
+            return self.project_root.resolve()
         return Path(out.strip()) if (out := self._git("rev-parse", "--show-toplevel")) else None
 
     @cached_property

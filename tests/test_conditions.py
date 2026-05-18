@@ -49,7 +49,7 @@ def make_tool_event(
     raw: dict[str, Any] = {"tool_name": tool_name, "tool_input": tool_input or {}}
     if permission_mode is not None:
         raw["permission_mode"] = permission_mode
-    return PreToolUseEvent(_raw=raw, ctx=ctx)
+    return PreToolUseEvent(_raw=raw, ctx=ctx or build_ctx())
 
 class TestToolCondition:
     def test_tool_matches_edit(self) -> None:
@@ -153,6 +153,33 @@ class TestFilePathCondition:
         evt = make_event(StopEvent)
         assert check_condition(FilePath("*.py"), evt) is False
 
+    def test_filepath_matches_absolute_inside_project(self, tmp_path: Path) -> None:
+
+        evt = make_tool_event(
+            "Edit",
+            {"file_path": str(tmp_path / "a.py"), "old_string": "", "new_string": ""},
+            ctx=build_ctx(project_root=tmp_path),
+        )
+        assert check_condition(FilePath("*.py"), evt) is True
+
+    def test_filepath_rejects_absolute_outside_project(self, tmp_path: Path) -> None:
+
+        evt = make_tool_event(
+            "Edit",
+            {"file_path": "/tmp/regex_check.py", "old_string": "", "new_string": ""},
+            ctx=build_ctx(project_root=tmp_path),
+        )
+        assert check_condition(FilePath("*.py"), evt) is False
+
+    def test_filepath_opt_out_matches_absolute_outside_project(self, tmp_path: Path) -> None:
+
+        evt = make_tool_event(
+            "Edit",
+            {"file_path": "/tmp/regex_check.py", "old_string": "", "new_string": ""},
+            ctx=build_ctx(project_root=tmp_path),
+        )
+        assert check_condition(FilePath("*.py", project_only=False), evt) is True
+
 class TestCommandCondition:
     def test_command_matches_git_push_force(self) -> None:
 
@@ -215,6 +242,24 @@ class TestContentCondition:
         evt = make_event(StopEvent)
         assert check_condition(Content(r"import"), evt) is False
 
+    def test_content_rejects_absolute_outside_project(self, tmp_path: Path) -> None:
+
+        evt = make_tool_event(
+            "Write",
+            {"file_path": "/tmp/regex_check.py", "content": "import re"},
+            ctx=build_ctx(project_root=tmp_path),
+        )
+        assert check_condition(Content(r"import\s+re"), evt) is False
+
+    def test_content_opt_out_matches_absolute_outside_project(self, tmp_path: Path) -> None:
+
+        evt = make_tool_event(
+            "Write",
+            {"file_path": "/tmp/regex_check.py", "content": "import re"},
+            ctx=build_ctx(project_root=tmp_path),
+        )
+        assert check_condition(Content(r"import\s+re", project_only=False), evt) is True
+
 class TestAgentCondition:
     def test_agent_matches_cleanup(self) -> None:
 
@@ -275,6 +320,24 @@ class TestTestFileCondition:
 
         evt = make_event(StopEvent)
         assert check_condition(TestFile(), evt) is False
+
+    def test_testfile_rejects_absolute_outside_project(self, tmp_path: Path) -> None:
+
+        evt = make_tool_event(
+            "Edit",
+            {"file_path": "/tmp/test_regex_check.py", "old_string": "", "new_string": ""},
+            ctx=build_ctx(project_root=tmp_path),
+        )
+        assert check_condition(TestFile(), evt) is False
+
+    def test_testfile_opt_out_matches_absolute_outside_project(self, tmp_path: Path) -> None:
+
+        evt = make_tool_event(
+            "Edit",
+            {"file_path": "/tmp/test_regex_check.py", "old_string": "", "new_string": ""},
+            ctx=build_ctx(project_root=tmp_path),
+        )
+        assert check_condition(TestFile(project_only=False), evt) is True
 
 class TestUsedSkillCondition:
     def test_usedskill_matches_codex(self) -> None:

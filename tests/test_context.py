@@ -277,6 +277,15 @@ class TestChangedPaths:
 
 
 class TestRepoRoot:
+    def test_uses_configured_project_root(self, tmp_path: Path) -> None:
+        ctx = HookContext(
+            session=SessionStore(None),
+            transcript=MagicMock(),
+            settings=None,
+            project_root=tmp_path,
+        )
+        assert ctx.repo_root == tmp_path.resolve()
+
     def test_from_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         make_repo(tmp_path)
         ctx = make_ctx_in(tmp_path, monkeypatch)

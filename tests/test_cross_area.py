@@ -148,6 +148,32 @@ class TestHandlerHookE2E:
         ctx = build_ctx()
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         assert dispatch(Event.PreToolUse, evt) is None
+
+    def test_external_absolute_file_passes_by_default(self, tmp_path: Path) -> None:
+
+        @on(Event.PreToolUse, only_if=[Tool("Write"), FilePath("*.py")])
+        def check_style(evt: BaseHookEvent) -> HookResult | None:
+            return HookResult(action=Action.warn, message="check style")
+
+        raw = {"tool_name": "Write", "tool_input": {"file_path": "/tmp/regex_check.py", "content": "x"}}
+        ctx = build_ctx(project_root=tmp_path)
+        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
+        assert dispatch(Event.PreToolUse, evt) is None
+
+    def test_in_project_absolute_file_matches_default(self, tmp_path: Path) -> None:
+
+        @on(Event.PreToolUse, only_if=[Tool("Write"), FilePath("*.py")])
+        def check_style(evt: BaseHookEvent) -> HookResult | None:
+            return HookResult(action=Action.warn, message="check style")
+
+        raw = {"tool_name": "Write", "tool_input": {"file_path": str(tmp_path / "regex_check.py"), "content": "x"}}
+        ctx = build_ctx(project_root=tmp_path)
+        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
+        output = dispatch(Event.PreToolUse, evt)
+
+        assert output is not None
+        assert output["hookSpecificOutput"]["additionalContext"] == "check style"
+        assert output["hookSpecificOutput"]["permissionDecision"] == "allow"
 class TestInPlanModeCondition:
     """VAL-CROSS-003"""
 

@@ -78,6 +78,7 @@ def make_ctx(
     n_messages: int = 10,
     settings: Any = None,
     call_llm_return: Any = None,
+    project_root: Path | None = None,
 ) -> HookContext:
     from captain_hook.transcript.models import TextBlock, TranscriptMessage
 
@@ -87,6 +88,7 @@ def make_ctx(
         session=SessionStore(session_dir),
         transcript=Transcript(messages=padding + text_msgs),
         settings=settings,
+        project_root=project_root,
     )
     ctx.call_llm = MagicMock(return_value=call_llm_return)  # type: ignore[method-assign]
     return ctx
@@ -96,11 +98,13 @@ def build_ctx(
     transcript: Transcript | None = None,
     session_dir: Any = None,
     settings: Any = None,
+    project_root: Path | None = None,
 ) -> HookContext:
     return HookContext(
         session=SessionStore(session_dir),
         transcript=transcript or Transcript(messages=[]),
         settings=settings,
+        project_root=project_root,
     )
 
 

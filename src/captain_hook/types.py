@@ -112,8 +112,17 @@ class Tool:
     pattern: str
 
 
-@dataclass(frozen=True, slots=True, init=False)
-class FilePath:
+@dataclass(frozen=True)
+class PatternsCondition:
+    patterns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FilePathFields(PatternsCondition):
+    project_only: bool
+
+
+class FilePath(FilePathFields):
     """Condition matching the current event's file path against glob patterns.
 
     Accepts one or more glob patterns as positional arguments.
@@ -122,10 +131,8 @@ class FilePath:
         >>> hook(Event.PostToolUse, only_if=[FilePath("*.py", "*.pyi")], message="Python file edited")
     """
 
-    patterns: tuple[str, ...]
-
-    def __init__(self, *patterns: str) -> None:
-        object.__setattr__(self, "patterns", patterns)
+    def __init__(self, *patterns: str, **kwargs: bool) -> None:
+        super().__init__(patterns=patterns, project_only=kwargs.pop("project_only", True))
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +156,7 @@ class Content:
     """
 
     pattern: str
+    project_only: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,12 +168,11 @@ class UsedSkill:
 
 
 @dataclass(frozen=True)
-class PatternsCondition:
-    patterns: tuple[str, ...]
+class ReadFileFields(PatternsCondition):
     subagents: bool
 
 
-class ReadFile(PatternsCondition):
+class ReadFile(ReadFileFields):
     """Transcript-history condition: true when a Read tool use targeted a matching file.
 
     Accepts one or more glob patterns as positional arguments.
@@ -179,7 +186,7 @@ class ReadFile(PatternsCondition):
 class TestFile:
     """Condition that matches when the current event targets a test file (``test_*.py``, ``conftest.py``)."""
 
-    pass
+    project_only: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,7 +196,12 @@ class Agent:
     name: str
 
 
-class TouchedFile(PatternsCondition):
+@dataclass(frozen=True)
+class TouchedFileFields(PatternsCondition):
+    subagents: bool
+
+
+class TouchedFile(TouchedFileFields):
     """Transcript-history condition: true when an Edit/Write targeted a file matching the glob.
 
     Accepts one or more glob patterns as positional arguments.

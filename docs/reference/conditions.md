@@ -15,6 +15,10 @@ These match properties of the event being processed right now.
 | `Agent(p)` | Subagent type | Regex | `Agent("cleanup-.*")` |
 | `TestFile()` | File is a test file | -- | `TestFile()` |
 
+`FilePath`, `Content`, and `TestFile` match project files only by default. Absolute paths outside the hook
+root are ignored. Use `project_only=False` when a hook intentionally targets external scratch files,
+attachments, or logs.
+
 ## Transcript History
 
 These check what happened earlier in the session.

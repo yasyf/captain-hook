@@ -113,6 +113,7 @@ def run_event(
         session=SessionStore(session_dir),
         transcript=Transcript.from_path(resolved_path),
         settings=_state.settings,
+        project_root=root,
     )
     evt = event.event_class(_raw=raw, ctx=ctx)
 
