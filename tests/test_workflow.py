@@ -156,6 +156,41 @@ class TestWorkflowFunction:
             steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
         )
         assert _state.hooks[-1].spec.skip_planning_agents is True
+
+    def test_passes_only_if_to_hook_spec(self) -> None:
+        from captain_hook.types import Agent
+        from captain_hook.workflow import Step, workflow
+
+        workflow(
+            label="TEST",
+            marker="DONE",
+            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+            only_if=[Agent("cleanup")],
+        )
+        assert _state.hooks[-1].spec.only_if == (Agent("cleanup"),)
+
+    def test_passes_skip_if_to_hook_spec(self) -> None:
+        from captain_hook.types import Agent
+        from captain_hook.workflow import Step, workflow
+
+        workflow(
+            label="TEST",
+            marker="DONE",
+            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+            skip_if=[Agent("Explore")],
+        )
+        assert _state.hooks[-1].spec.skip_if == (Agent("Explore"),)
+
+    def test_only_if_and_skip_if_default_to_empty(self) -> None:
+        from captain_hook.workflow import Step, workflow
+
+        workflow(
+            label="TEST",
+            marker="DONE",
+            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+        )
+        assert _state.hooks[-1].spec.only_if == ()
+        assert _state.hooks[-1].spec.skip_if == ()
 class TestWorkflowGuard:
     def test_blocks_when_marker_absent(self) -> None:
         from captain_hook.workflow import Step, Workflow

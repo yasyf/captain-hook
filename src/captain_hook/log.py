@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import logging
 import sys
-from pathlib import Path
 
+from captain_hook import state
 from captain_hook.session import session_hash
 
-LOG_ROOT = Path.home() / ".cache" / "captain-hook" / "logs"
+LOG_ROOT = state.CACHE_ROOT / "logs"
 
 
 def setup_logging(transcript_path: str | None) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 import re
 from functools import cached_property
 from hashlib import sha256
@@ -18,24 +19,17 @@ if TYPE_CHECKING:
     from captain_hook.types import Signals
 
 FRAMEWORK_DIR = str(Path(__file__).resolve().parent)
-SPACY_CACHE = Path.home() / ".cache" / "spacy"
+CACHE_ROOT = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "captain-hook"
 
 
 class NlpResources:
     @cached_property
     def spacy(self) -> spacy.language.Language:
-        import sys
-
         import spacy
 
-        SPACY_CACHE.mkdir(parents=True, exist_ok=True)
-        if (cache := str(SPACY_CACHE)) not in sys.path:
-            sys.path.insert(0, cache)
-        try:
-            return spacy.load("en_core_web_sm")
-        except OSError:
-            self.install_spacy_model("en_core_web_sm")
-            return spacy.load("en_core_web_sm")
+        from captain_hook.util.model_cache import ensure_spacy_model
+
+        return spacy.load(ensure_spacy_model())
 
     @cached_property
     def wn(self) -> ModuleType:
@@ -44,12 +38,6 @@ class NlpResources:
         if not wn.lexicons(lexicon="oewn:2025"):
             wn.download("oewn:2025", progress_handler=None)
         return wn
-
-    @staticmethod
-    def install_spacy_model(name: str) -> None:
-        from spacy.cli.download import download
-
-        download(name, False, False, None, "--target", str(SPACY_CACHE))
 
 
 RESOURCES = NlpResources()

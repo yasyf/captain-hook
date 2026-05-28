@@ -685,7 +685,11 @@ class TestCallLlm:
         backend = ClaudeBackend()
         cmd = backend.build_command(backend.models["small"], None, agent=False)
         assert cmd[0] == "claude"
-        assert "--bare" in cmd
+        assert "--bare" not in cmd
+        assert "--system-prompt" in cmd and cmd[cmd.index("--system-prompt") + 1] == ""
+        assert "--setting-sources" in cmd and cmd[cmd.index("--setting-sources") + 1] == ""
+        assert "--strict-mcp-config" in cmd
+        assert "--tools" not in cmd
         assert backend.parse_response("raw text", None) == "raw text"
 
     def test_codex_backend_parses_model_response(self) -> None:

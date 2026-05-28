@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import json
 import logging
+import subprocess
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
+from captain_hook import state
 from captain_hook.app import on
+from captain_hook.primitives.audit import session_id_for
 from captain_hook.prompt import Prompt
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import (
@@ -20,6 +26,8 @@ from captain_hook.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+FAILURE_ROOT = state.CACHE_ROOT / "failures"
 
 if TYPE_CHECKING:
     from captain_hook.context import TModel, TSpecialty
@@ -284,6 +292,58 @@ def llm_nudge(
     )
 
 
+def record_prompt_check_failure(
+    evt: BaseHookEvent,
+    prefix: str,
+    prompt: str,
+    exc: BaseException,
+) -> None:
+    timestamp = datetime.now(UTC).isoformat().replace(":", "-")
+    match exc:
+        case subprocess.CalledProcessError(cmd=cmd, returncode=rc, output=out, stderr=err):
+            argv = list(cmd) if isinstance(cmd, list | tuple) else str(cmd)
+            exit_code, stdout, stderr = rc, out or "", err or ""
+        case _:
+            argv, exit_code, stdout, stderr = None, None, "", ""
+
+    failure_path = FAILURE_ROOT / (session_id_for(evt) or "unknown") / f"{timestamp}.json"
+    failure_path.parent.mkdir(parents=True, exist_ok=True)
+    failure_path.write_text(
+        json.dumps(
+            {
+                "timestamp": timestamp,
+                "prefix": prefix,
+                "argv": argv,
+                "exit_code": exit_code,
+                "stdout": stdout,
+                "stderr": stderr,
+                "prompt": prompt,
+                "exception_type": type(exc).__name__,
+                "exception_str": str(exc),
+            },
+            indent=2,
+        )
+    )
+
+    logger.warning(
+        "prompt_check failed for %s\n"
+        "  argv: %s\n"
+        "  exit_code: %s\n"
+        "  stderr: %s\n"
+        "  stdout (tail 4KB): %s\n"
+        "  prompt (tail 1KB): %s\n"
+        "  failure_record: %s",
+        prefix,
+        argv,
+        exit_code,
+        stderr,
+        stdout[-4096:],
+        prompt[-1024:],
+        failure_path,
+        exc_info=True,
+    )
+
+
 def prompt_check(
     evt: BaseHookEvent,
     template: str,
@@ -301,6 +361,7 @@ def prompt_check(
         reasoning = evt.ctx.t.recent(50).assistant_text() if hasattr(evt.ctx.t, "recent") else ""
 
     built = Prompt().system(template.format(**fmt)).context("agent_reasoning", reasoning or None)
+    prompt_str = str(built)
 
     try:
         verdict = evt.ctx.call_llm(
@@ -308,8 +369,8 @@ def prompt_check(
             timeout=timeout,
             response_model=response_model,
         )
-    except Exception:
-        logger.warning("prompt_check failed for %s", prefix, exc_info=True)
+    except Exception as exc:
+        record_prompt_check_failure(evt, prefix, prompt_str, exc)
         return None
 
     if not verdict:

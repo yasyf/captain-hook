@@ -177,28 +177,25 @@ class TestNlpScanCompound:
 
 class TestDepRelated:
     def test_related_verb_object(self) -> None:
-        import spacy
+        from captain_hook.state import RESOURCES
 
-        nlp = spacy.load("en_core_web_sm")
-        doc = nlp("The quota exceeded the threshold")
+        doc = RESOURCES.spacy("The quota exceeded the threshold")
         quota = [t for t in doc if t.text == "quota"][0]
         exceeded = [t for t in doc if t.text == "exceeded"][0]
         assert dep_related(quota, exceeded, max_hops=3)
 
     def test_unrelated_distant_tokens(self) -> None:
-        import spacy
+        from captain_hook.state import RESOURCES
 
-        nlp = spacy.load("en_core_web_sm")
-        doc = nlp("The big red house on the hill near the old river was beautiful in the evening")
+        doc = RESOURCES.spacy("The big red house on the hill near the old river was beautiful in the evening")
         big = [t for t in doc if t.text == "big"][0]
         evening = [t for t in doc if t.text == "evening"][0]
         assert not dep_related(big, evening, max_hops=1)
 
     def test_self_related(self) -> None:
-        import spacy
+        from captain_hook.state import RESOURCES
 
-        nlp = spacy.load("en_core_web_sm")
-        doc = nlp("Hello world")
+        doc = RESOURCES.spacy("Hello world")
         hello = doc[0]
         assert dep_related(hello, hello, max_hops=1)
 

@@ -15,6 +15,12 @@ from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHo
 from captain_hook.tests.helpers import make_ctx, make_pre_tool_event
 
 
+@pytest.fixture(autouse=True)
+def isolate_failure_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from captain_hook.primitives import llm as llm_mod
+
+    monkeypatch.setattr(llm_mod, "FAILURE_ROOT", tmp_path / "captain-hook-failures")
+
 
 class TestDispatchLogging:
     def test_execute_hook_logs_on_handler_crash(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -78,9 +84,9 @@ class TestLintLogging:
         evt = PostToolUseEvent(
             _raw={
                 "tool_name": "Edit",
-                "tool_input": {"file_path": "/tmp/test.py", "old_string": "a", "new_string": "b"},
+                "tool_input": {"file_path": "/tmp/example.py", "old_string": "a", "new_string": "b"},
             },
-            ctx=make_ctx(),
+            ctx=make_ctx(project_root=Path("/tmp")),
         )
 
         matching = get_matching_hooks(evt)
@@ -162,7 +168,7 @@ class TestLlmLogging:
         from captain_hook.session import SessionStore
 
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
-        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(spec=[]), settings=None)
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(spec=["path"], path=None), settings=None)
         marker = "stderr-marker-7f3a9c"
         monkeypatch.setenv("STDERR_MARKER", marker)
         ctx.call_llm = lambda *a, **kw: ctx.call_cli(
@@ -178,3 +184,74 @@ class TestLlmLogging:
         assert result is None
         assert isinstance(caplog.records[-1].exc_info[1], subprocess.CalledProcessError)
         assert marker in caplog.text
+
+
+class TestPromptCheckDiagnostics:
+    def test_called_process_error_writes_record_and_logs_fields(
+        self, caplog: pytest.LogCaptureFixture, tmp_path: Path,
+    ) -> None:
+        import json as _json
+
+        from captain_hook.primitives.llm import prompt_check
+
+        argv = ["claude", "-p", "--model", "haiku", "--bare"]
+        stdout_payload = ("S" * 5000) + "_TAIL_MARKER_"
+        stderr_payload = "auth failed: bad key"
+        err = subprocess.CalledProcessError(2, argv, output=stdout_payload, stderr=stderr_payload)
+        ctx = make_ctx(texts=["agent did thing"])
+        ctx.call_llm = MagicMock(side_effect=err)
+
+        evt = MagicMock()
+        evt.ctx = ctx
+
+        long_template = "Check {thing}: " + ("P" * 1500) + "_PROMPT_TAIL_"
+        with caplog.at_level(logging.WARNING, logger="captain_hook.primitives.llm"):
+            result = prompt_check(evt, long_template, {"thing": "quality"}, prefix="TEST INTEGRITY")
+
+        assert result is None
+
+        log_text = caplog.text
+        assert "TEST INTEGRITY" in log_text
+        assert "argv:" in log_text and "claude" in log_text and "--bare" in log_text
+        assert "exit_code: 2" in log_text
+        assert "stderr: auth failed: bad key" in log_text
+        assert "_TAIL_MARKER_" in log_text
+        assert "stdout (tail 4KB):" in log_text
+        assert "_PROMPT_TAIL_" in log_text
+        assert "prompt (tail 1KB):" in log_text
+
+        failure_files = list((tmp_path / "captain-hook-failures").rglob("*.json"))
+        assert len(failure_files) == 1
+        payload = _json.loads(failure_files[0].read_text())
+        assert payload["argv"] == argv
+        assert payload["exit_code"] == 2
+        assert payload["stdout"] == stdout_payload
+        assert payload["stderr"] == stderr_payload
+        assert "_PROMPT_TAIL_" in payload["prompt"]
+        assert payload["exception_type"] == "CalledProcessError"
+        assert payload["prefix"] == "TEST INTEGRITY"
+
+    def test_non_called_process_error_still_writes_record(
+        self, caplog: pytest.LogCaptureFixture, tmp_path: Path,
+    ) -> None:
+        import json as _json
+
+        from captain_hook.primitives.llm import prompt_check
+
+        ctx = make_ctx()
+        ctx.call_llm = MagicMock(side_effect=RuntimeError("schema validation blew up"))
+
+        evt = MagicMock()
+        evt.ctx = ctx
+
+        with caplog.at_level(logging.WARNING, logger="captain_hook.primitives.llm"):
+            result = prompt_check(evt, "Check {thing}", {"thing": "quality"}, prefix="TEST QUALITY")
+
+        assert result is None
+        failure_files = list((tmp_path / "captain-hook-failures").rglob("*.json"))
+        assert len(failure_files) == 1
+        payload = _json.loads(failure_files[0].read_text())
+        assert payload["exception_type"] == "RuntimeError"
+        assert payload["argv"] is None
+        assert payload["exit_code"] is None
+        assert "schema validation blew up" in payload["exception_str"]

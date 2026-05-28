@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Generic, TypeVar
 
 from pydantic import BaseModel
 
-from captain_hook.types import Action, Event, HookResult, TTest
+from captain_hook.types import Action, Event, HookResult, TCondition, TTest
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
@@ -81,6 +81,8 @@ def workflow(
     steps: list[Step],
     artifacts: list[Artifact[BaseModel]] | None = None,
     post_complete: Callable[[BaseHookEvent], HookResult | None] | None = None,
+    only_if: Sequence[TCondition] = (),
+    skip_if: Sequence[TCondition] = (),
     tests: TTest | None = None,
 ) -> None:
     from captain_hook.app import on
@@ -98,4 +100,4 @@ def workflow(
 
     guard.__name__ = f"{label.lower().replace('-', '_')}_workflow_guard"
     guard.__qualname__ = guard.__name__
-    on(Event.SubagentStop, max_fires=1, tests=tests)(guard)
+    on(Event.SubagentStop, only_if=only_if, skip_if=skip_if, max_fires=1, tests=tests)(guard)

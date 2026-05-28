@@ -77,7 +77,15 @@ class ClaudeBackend(LlmBackend):
             "--no-session-persistence",
             "--model",
             model,
-            *(["--permission-mode", "auto", "--max-budget-usd", "1"] if agent else ["--bare"]),
+            *(
+                ["--permission-mode", "auto", "--max-budget-usd", "1"]
+                if agent
+                else [
+                    "--system-prompt", "",
+                    "--setting-sources", "",
+                    "--strict-mcp-config",
+                ]
+            ),
             *(["--json-schema", schema_path, "--output-format", "json"] if schema_path else []),
         ]
 
@@ -177,8 +185,10 @@ class HookContext:
                 output=result.stdout,
                 stderr=result.stderr,
             )
-            err.add_note(f"stderr: {result.stderr[:2000]}")
-            err.add_note(f"stdout: {result.stdout[:2000]}")
+            err.add_note(f"argv: {args}")
+            err.add_note(f"exit_code: {result.returncode}")
+            err.add_note(f"stderr: {result.stderr[-4096:]}")
+            err.add_note(f"stdout: {result.stdout[-4096:]}")
             raise err
         return result.stdout
 
