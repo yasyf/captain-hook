@@ -18,7 +18,9 @@ M = TypeVar("M", bound=BaseModel)
 
 
 def state_root() -> Path:
-    return Path(os.environ.get("CLAUDE_HOOKS_STATE_DIR", Path.home() / ".claude" / "state"))
+    from captain_hook.settings import resolve_state_dir
+
+    return resolve_state_dir()
 
 
 def session_hash(transcript_path: str | Path) -> str:

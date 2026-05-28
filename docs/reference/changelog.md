@@ -1,31 +1,26 @@
 # Changelog
 
-## 0.2.0
-
-- **`audit()` primitive** -- declarative JSONL event logging with
-  customizable destination and record fields.
-- **`@session_state` decorator** + `SessionStore.tracked_models()` /
-  `tracked_paths()` -- register Pydantic state models for collective
-  introspection. `HookState` and `PrimitiveState` are auto-tracked.
-- **Default flip** for `llm_gate` / `llm_nudge`: `agent=True` and
-  `transcript=True` are now defaults. *Migration:* if you were relying on
-  the old non-agentic, no-transcript behavior, pass `agent=False,
-  transcript=False` explicitly.
-- **`BaseHookEvent.transcript_path`** -- public accessor for the current
-  transcript file path.
-
 ## 0.1.0
 
-Initial release.
+Initial public release, extracted from an internal monorepo where the framework was battle-tested across dozens of hooks.
 
-- Declarative hook registration with `hook()`, `@on()`, and primitives
-- 9 event types: PreToolUse, PostToolUse, PostToolUseFailure, Stop, SubagentStop, SubagentStart, UserPromptSubmit, Notification, PreCompact
-- 12 condition types (6 current-event, 5 transcript-history, plus CustomCondition)
-- Primitives: `nudge`, `gate`, `lint`, `block_command`, `warn_command`
-- LLM-powered hooks: `llm_gate`, `llm_nudge`, `prompt_check`, `llm_evaluate`
-- Signal scoring with regex and NLP patterns
-- Multi-step workflows with artifact validation
-- Typed transcript API with tool use querying
-- Inline testing with `Input` / `Block` / `Warn` / `Allow`
-- Session-persisted state via `SessionStore` / `SessionSlot`
-- CLI: `init`, `run`, `test`, `generate-settings`
+Supported runtimes:
+
+- Python 3.12+
+- Claude Code as the hook host
+
+Public APIs:
+
+- **Registration** — `hook()`, `@on()`, plus primitives `nudge()`, `gate()`, `lint()`, `block_command()`, `warn_command()`, `audit()`, `diff_lint()`, `prompt_check()`.
+- **LLM hooks** — `llm_gate()`, `llm_nudge()`, `llm_evaluate()`, `Prompt` / `Prompt.from_template()`.
+- **Events** — 9 event types (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `SubagentStop`, `SubagentStart`, `UserPromptSubmit`, `PreCompact`, `Notification`).
+- **Conditions** — 12 condition types covering current-event (`Tool`, `FilePath`, `Command`, `Content`, `Agent`, `TestFile`, `SourceEdits`) and transcript-history (`ReadFile`, `TouchedFile`, `RanCommand`, `UsedSkill`, `InPlanMode`, `Waiting`) plus `CustomCondition`.
+- **Transcript API** — `Transcript`, `Turn`, `ToolUse`, `ToolUseSequence`, `ToolUseQuery.where(name=..., raw_input=...)`.
+- **CommandLine** — `cl.q.runs(...)`, `cl.q.has_subcommand(...)`, `cl.q.uses_redirect()`, `cl.q.any_command(...)`, `cl.q.contains_token(...)`.
+- **State** — `@session_state`, `@workflow_state`, `SessionStore` / `SessionSlot`, `HookState`, `EchoTracker`.
+- **Workflows** — `Workflow`, `Step`, `Artifact`, `text_matches`.
+- **Settings** — `HooksSettings` with `planning_agents`, `waiting_tools`, `state_dir`, `log_dir`; subclassable with a custom env prefix.
+- **Inline tests** — `Input`, `Block`, `Warn`, `Allow`, `InlineTests` (type alias for the test mapping).
+- **CLI** — `init`, `run`, `test` (`--json` / `--verbose`), `generate-settings`.
+
+Ships with 9 curated examples under `packages/captain-hook/examples/` and matching narrative pages under `docs/examples/`.

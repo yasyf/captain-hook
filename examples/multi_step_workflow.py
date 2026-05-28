@@ -1,17 +1,17 @@
-# Example: Multi-step workflow
-#
-# Demonstrates how to use `workflow`, `Step`, and `text_matches` to
-# enforce a multi-step process.  The workflow blocks SubagentStop
-# until each step's check predicate passes against the transcript
-# and a completion marker is found.
+from __future__ import annotations
 
-from captain_hook import Step, text_matches, workflow
+from captain_hook import Artifact, Step, text_matches, workflow
+from pydantic import BaseModel
 
-# Register a 3-step deployment workflow.  The workflow guard
-# fires on SubagentStop and blocks until all steps pass.
+
+class TestReport(BaseModel):
+    passed: int
+    failed: int
+
+
 workflow(
-    label="DEPLOY",
-    marker="DEPLOY COMPLETE",
+    label="VERIFY",
+    marker="VERIFY COMPLETE",
     steps=[
         Step(
             name="run tests",
@@ -20,16 +20,23 @@ workflow(
             next_step="Run the test suite with pytest.",
         ),
         Step(
-            name="build artifacts",
-            check=text_matches(r"build\s+succeeded"),
-            stopped_at="Stop: build not completed.",
-            next_step="Run the build step.",
+            name="run linter",
+            check=text_matches(r"ruff check.*passed|no issues found"),
+            stopped_at="Stop: linter not run.",
+            next_step="Run: ruff check .",
         ),
         Step(
-            name="deploy",
-            check=text_matches(r"deployed\s+to\s+production"),
-            stopped_at="Stop: not deployed.",
-            next_step="Deploy to production.",
+            name="confirm coverage",
+            check=text_matches(r"coverage:\s*\d+%"),
+            stopped_at="Stop: coverage not checked.",
+            next_step="Check coverage and print `coverage: NN%`.",
+        ),
+    ],
+    artifacts=[
+        Artifact(
+            path=".reports/tests.json",
+            model=TestReport,
+            validate=lambda r: f"{r.failed} tests failed" if r.failed else None,
         ),
     ],
 )

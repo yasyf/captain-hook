@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Flag, StrEnum, auto
@@ -21,6 +20,17 @@ TOOL_ALIASES: dict[str, str] = {
 }
 
 TOOL_ALIASES_REVERSE: dict[str, str] = {v: k for k, v in TOOL_ALIASES.items()}
+
+LANG_GLOBS: dict[str, tuple[str, ...]] = {
+    "py": ("*.py", "*.pyi"),
+    "ts": ("*.ts",),
+    "tsx": ("*.tsx",),
+    "js": ("*.js", "*.mjs", "*.cjs"),
+    "jsx": ("*.jsx",),
+    "go": ("*.go",),
+    "rs": ("*.rs",),
+    "java": ("*.java",),
+}
 
 
 def expand_tool_names(name: str) -> set[str]:
@@ -190,6 +200,17 @@ class TestFile:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceEdits:
+    lang: str = "py"
+    include_tests: bool = False
+    paths: str | None = None
+
+    @property
+    def globs(self) -> tuple[str, ...]:
+        return LANG_GLOBS.get(self.lang, (f"*.{self.lang}",))
+
+
+@dataclass(frozen=True, slots=True)
 class Agent:
     """Condition matching the current event's subagent type against a name pattern."""
 
@@ -277,6 +298,7 @@ TCondition = (
     | UsedSkill
     | ReadFile
     | TestFile
+    | SourceEdits
     | TouchedFile
     | RanCommand
     | InPlanMode
@@ -330,29 +352,7 @@ class HookResult:
         return cls(action=action, message=dedent(message).strip() if message else None)
 
 
-from captain_hook.testing.types import TTest as TTest
-
-
-def tokens_to_regex(tokens: list[str]) -> str:
-    """Convert a token list into a whitespace-flexible regex pattern.
-
-    ``"*"`` becomes ``\\S+`` (any non-whitespace word), ``"a|b"`` becomes an
-    alternation group, and all other tokens are escaped.
-
-    Example:
-        >>> tokens_to_regex(["git", "stash", "*"])
-        'git\\\\s+stash\\\\s+\\\\S+'
-    """
-    def convert(token: str) -> str:
-        match token:
-            case "*":
-                return r"\S+"
-            case t if "|" in t:
-                return f"(?:{'|'.join(re.escape(a) for a in t.split('|'))})"
-            case t:
-                return re.escape(t)
-
-    return r"\s+".join(convert(t) for t in tokens)
+from captain_hook.testing.types import InlineTests as InlineTests
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -364,15 +364,13 @@ class HookSpec:
     block: bool = False
     respect_gitignore: bool = True
     max_fires: int | None = None
-    tests: TTest | None = None
+    tests: InlineTests | None = None
     async_: bool = False
     skip_planning_agents: bool = True
 
 
 @dataclass(frozen=True, kw_only=True)
 class RegisteredHook:
-    """A registered hook pairing a ``HookSpec`` with an optional handler callable."""
-
     spec: HookSpec
     handler: Callable[[BaseHookEvent], HookResult | None] | None = None
     name: str = ""

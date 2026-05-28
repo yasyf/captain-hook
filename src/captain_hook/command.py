@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from functools import cached_property
@@ -9,7 +10,9 @@ import tree_sitter_bash as tsbash  # type: ignore[import-untyped]
 from tree_sitter import Language, Node, Parser
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
+
+logger = logging.getLogger(__name__)
 
 BASH_LANGUAGE = Language(tsbash.language())  # pyright: ignore[reportDeprecated]
 BASH_PARSER = Parser(BASH_LANGUAGE)
@@ -93,8 +96,10 @@ class CommandLine:
     @classmethod
     def parse(cls, raw: str) -> CommandLine:
         tree = BASH_PARSER.parse(raw.encode())
-        parts = cls.walk_node(tree.root_node)
-        return cls(raw=raw, parts=tuple(parts)) if parts else cls(raw=raw, parts=((cls.fallback(raw), None),))
+        if parts := cls.walk_node(tree.root_node):
+            return cls(raw=raw, parts=tuple(parts))
+        logger.warning("tree-sitter bash parse produced no commands for %r; falling back to naive split", raw[:200])
+        return cls(raw=raw, parts=((cls.fallback(raw), None),))
 
     @cached_property
     def commands(self) -> tuple[Command, ...]:
@@ -122,6 +127,10 @@ class CommandLine:
 
     def __bool__(self) -> bool:
         return bool(self.parts)
+
+    @cached_property
+    def q(self) -> CommandLineQuery:
+        return CommandLineQuery(self)
 
     @staticmethod
     def node_text(node: Node) -> str:
@@ -276,3 +285,25 @@ class CommandLine:
     @staticmethod
     def fallback(raw: str) -> Command:
         return Command(raw=raw, executable=raw.split()[0] if raw.split() else raw, args=())
+
+
+@dataclass(frozen=True)
+class CommandLineQuery:
+    line: CommandLine
+
+    def runs(self, *argv: str) -> bool:
+        return bool(argv) and self.line.primary.argv[: len(argv)] == argv
+
+    def has_subcommand(self, name: str) -> bool:
+        return any(name in cmd.args for cmd in self.line.commands)
+
+    def any_command(self, pred: Callable[[Command], bool]) -> bool:
+        return any(pred(cmd) for cmd in self.line.commands)
+
+    def uses_redirect(self) -> bool:
+        return any(cmd.redirects for cmd in self.line.commands) or any(
+            op == "|" for _, op in self.line.parts if op
+        )
+
+    def contains_token(self, token: str) -> bool:
+        return any(token == a for cmd in self.line.commands for a in cmd.argv)

@@ -1,3 +1,4 @@
+"""Hook dispatch: select matching hooks, run their handlers, and translate ``HookResult`` into the Claude Code stdout envelope."""
 from __future__ import annotations
 
 import logging
@@ -51,6 +52,7 @@ def execute_hook(
 
 
 def format_output(event: Event, result: HookResult) -> dict[str, Any] | None:
+    """Render a ``HookResult`` as the JSON envelope Claude Code expects on stdout for *event*."""
     if event in (Event.Stop | Event.SubagentStop):
         return {"decision": "block", "reason": result.message} if result.action is not Action.allow else None
 

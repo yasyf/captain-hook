@@ -43,6 +43,13 @@ class PromptMessage:
             ask_text=dedent_text(text),
         )
 
+    @classmethod
+    def from_template(cls, text: str, **vars: object) -> PromptMessage:
+        try:
+            return cls(system_text=textwrap.dedent(text).strip().format_map(vars))
+        except KeyError as exc:
+            raise KeyError(f"template variable {exc.args[0]!r} not supplied") from exc
+
     def __str__(self) -> str:
         parts: list[str] = []
         if self.system_text:

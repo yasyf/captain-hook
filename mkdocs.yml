@@ -48,14 +48,20 @@ nav:
     - Workflows: guide/workflows.md
     - State & Sessions: guide/state.md
     - Testing: guide/testing.md
+    - Configuration: guide/configuration.md
+    - Patterns: guide/patterns.md
+    - Troubleshooting: guide/troubleshooting.md
   - Examples:
     - examples/index.md
-    - Guard Rails: examples/guard-rails.md
-    - Code Quality: examples/code-quality.md
-    - Agent Behavior: examples/agent-behavior.md
-    - LLM-Powered Review: examples/llm-review.md
-    - Multi-Step Workflows: examples/workflows.md
     - Audit Logging: examples/audit.md
+    - Code Quality: examples/code-quality.md
+    - Command Safety: examples/command-safety.md
+    - Custom Condition: examples/custom-condition.md
+    - Failure Recovery: examples/failure-recovery.md
+    - Multi-Step Workflow: examples/multi-step-workflow.md
+    - Session Workflow: examples/session-workflow.md
+    - Settings Config: examples/settings-config.md
+    - Test Integrity: examples/test-integrity.md
   - Reference:
     - reference/index.md
     - CLI: reference/cli.md

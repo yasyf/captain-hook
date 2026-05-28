@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
+
+logger = logging.getLogger(__name__)
 
 from captain_hook.transcript.models import (
     ContentBlock,
@@ -32,6 +35,16 @@ if TYPE_CHECKING:
 from captain_hook.types import TOOL_ALIASES, expand_tool_names, tool_name_matches
 
 
+def raw_input_matches(rule: Any, value: Any) -> bool:
+    match rule:
+        case re.Pattern():
+            return bool(rule.search(str(value)))
+        case _ if callable(rule):
+            return bool(rule(value))
+        case _:
+            return rule == value
+
+
 @dataclass(frozen=True)
 class ToolUseQuery:
     """Chainable query builder for filtering and inspecting transcript tool uses.
@@ -50,6 +63,7 @@ class ToolUseQuery:
         file_under: str | list[str] | None = None,
         is_error: bool | None = None,
         input_has: dict[str, Any] | None = None,
+        raw_input: Mapping[str, Any] | None = None,
     ) -> ToolUseQuery:
         def _match(tu: ToolUse) -> bool:
             if name and not any(tool_name_matches(tu.name, n) for n in name.split("|")):
@@ -71,6 +85,10 @@ class ToolUseQuery:
             if is_error is not None and tu.is_error != is_error:
                 return False
             if input_has and not all(tu.raw_input.get(k) == v for k, v in input_has.items()):
+                return False
+            if raw_input and not all(
+                k in tu.raw_input and raw_input_matches(rule, tu.raw_input[k]) for k, rule in raw_input.items()
+            ):
                 return False
             return True
 
@@ -153,7 +171,8 @@ def try_json(text: str) -> RawDict | None:
     try:
         result: object = json.loads(text)
         return cast(RawDict, result) if isinstance(result, dict) else None
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.debug("transcript json parse failed (%s); skipping line", exc)
         return None
 
 
@@ -540,8 +559,6 @@ __all__ = [
     "ContentBlock",
     "TaskNotification",
     "TextBlock",
-    "SubagentAccessor",
-    "SubagentRegistry",
     "ToolResult",
     "ToolUse",
     "ToolUseBlock",
@@ -553,5 +570,4 @@ __all__ = [
     "Turn",
     "parse_content",
     "parse_content_block",
-    "TOOL_ALIASES",
 ]

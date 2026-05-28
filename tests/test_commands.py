@@ -11,11 +11,10 @@ from captain_hook.app import (
     get_matching_hooks,
 )
 from captain_hook.dispatch import execute_hook
-from captain_hook.primitives.commands import block_command, warn_command
+from captain_hook.primitives.commands import block_command, block_command_pattern, warn_command
 from captain_hook.types import (
     Action,
     Event,
-    tokens_to_regex,
 )
 from captain_hook.tests.helpers import make_ctx, make_post_tool_event, make_pre_tool_event
 
@@ -117,18 +116,18 @@ class TestBlockCommandOnlyBashExecute:
 
 class TestTokensToRegexWildcardAlternation:
     def test_wildcard_becomes_non_whitespace(self) -> None:
-        regex = tokens_to_regex(["git", "push|pull", "*"])
+        regex = block_command_pattern(["git", "push|pull", "*"])
         assert re.match(regex, "git push origin")
         assert re.match(regex, "git pull remote")
         assert not re.match(regex, "git commit message")
 
     def test_alternation_with_special_chars(self) -> None:
-        regex = tokens_to_regex(["git", "push|pull"])
+        regex = block_command_pattern(["git", "push|pull"])
         assert re.match(regex, "git push")
         assert re.match(regex, "git pull")
 
     def test_plain_tokens_escaped(self) -> None:
-        regex = tokens_to_regex(["git", "stash"])
+        regex = block_command_pattern(["git", "stash"])
         assert re.match(regex, "git stash pop")
         assert not re.match(regex, "git  commit")
 

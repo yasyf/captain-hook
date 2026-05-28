@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from captain_hook.app import _state, discover_hooks, get_matching_hooks
+from captain_hook._loader import discover_hooks
+from captain_hook.app import _state, get_matching_hooks
 from captain_hook.dispatch import dispatch
 from captain_hook.testing.helpers import mock_stop_event, mock_tool_event, mock_user_prompt_event
 from captain_hook.tests.helpers import run_cli
@@ -41,6 +42,58 @@ class TestInit:
         text = example.read_text()
         assert "block_command" in text
         assert "nudge" in text
+
+    def test_example_hook_covers_four_primitives(self, project_dir: Path) -> None:
+        text = (project_dir / ".claude" / "hooks" / "example.py").read_text()
+        assert "block_command(" in text
+        assert "nudge(" in text
+        assert "audit(" in text
+        assert "prompt_check(" in text
+        assert "Prompt.from_template" in text
+        assert "InlineTests" in text
+
+    def test_init_prints_next_steps(self, tmp_path: Path) -> None:
+        result = run_cli("init", root_dir=str(tmp_path))
+        assert result.returncode == 0
+        assert "Next:" in result.stdout
+        assert "quickstart.md" in result.stdout
+        assert "captain-hook test" in result.stdout
+        assert "captain-hook generate-settings" in result.stdout
+        assert "Scaffolded" in result.stdout
+
+    def test_init_merge_preserves_existing_hook_entries(self, tmp_path: Path) -> None:
+        settings_dir = tmp_path / ".claude"
+        settings_dir.mkdir()
+        settings_path = settings_dir / "settings.local.json"
+        settings_path.write_text(json.dumps({
+            "permissions": {"allow": ["foo"]},
+            "hooks": {
+                "PreToolUse": [{"matcher": "custom", "hooks": [{"type": "command", "command": "echo legacy"}]}],
+            },
+        }))
+
+        result = run_cli("init", root_dir=str(tmp_path))
+        assert result.returncode == 0
+        data = json.loads(settings_path.read_text())
+        assert data["permissions"] == {"allow": ["foo"]}
+
+        pre = data["hooks"]["PreToolUse"]
+        assert any(
+            any(h.get("command") == "echo legacy" for h in g.get("hooks", []))
+            for g in pre
+        )
+        assert any(
+            any("captain-hook" in (h.get("command") or "") for h in g.get("hooks", []))
+            for g in pre
+        )
+
+    def test_init_merge_reports_unchanged_when_already_present(self, tmp_path: Path) -> None:
+        first = run_cli("init", root_dir=str(tmp_path))
+        assert first.returncode == 0
+        second = run_cli("init", root_dir=str(tmp_path))
+        assert second.returncode == 0
+        assert "unchanged:" in second.stdout
+        assert "PreToolUse" in second.stdout
 
     def test_creates_settings_json(self, project_dir: Path) -> None:
         settings = project_dir / ".claude" / "settings.local.json"
@@ -110,11 +163,12 @@ class TestCliDispatch:
 
 
 class TestCliTest:
-    def test_test_subcommand_no_inline_tests(self, project_dir: Path) -> None:
+    def test_scaffold_inline_tests_pass(self, project_dir: Path) -> None:
         hooks_dir = project_dir / ".claude" / "hooks"
         result = run_cli("test", hooks_dir=str(hooks_dir))
         assert result.returncode == 0
-        assert "No inline tests" in result.stdout
+        assert "PASS" in result.stdout
+        assert "0 failed" in result.stdout
 
     def test_test_subcommand_with_inline_tests(self, tmp_path: Path) -> None:
         hooks_dir = tmp_path / "hooks"
@@ -136,6 +190,55 @@ class TestCliTest:
         assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
         assert "PASS" in result.stdout
         assert "1 tests" in result.stdout
+
+    def test_test_json_mode_emits_one_record_per_line(self, tmp_path: Path) -> None:
+        hooks_dir = tmp_path / "hooks"
+        hooks_dir.mkdir()
+        (hooks_dir / "__init__.py").write_text("")
+        (hooks_dir / "my_hook.py").write_text(
+            'from captain_hook import block_command\n'
+            'from captain_hook.testing import Input, Block, Allow\n'
+            '\n'
+            'block_command(\n'
+            '    r"rm\\s+-rf",\n'
+            '    reason="No rm -rf allowed",\n'
+            '    tests={\n'
+            '        Input(tool="Bash", command="rm -rf /"): Block(pattern="rm -rf"),\n'
+            '        Input(tool="Bash", command="echo hi"): Allow(),\n'
+            '    },\n'
+            ')\n'
+        )
+        result = run_cli("test", "--json", hooks_dir=str(hooks_dir))
+        assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+        lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+        assert len(lines) == 2
+        records = [json.loads(ln) for ln in lines]
+        for record in records:
+            assert set(record) >= {"id", "status", "expected", "reason"}
+            assert record["status"] == "pass"
+        kinds = {r["expected"] for r in records}
+        assert kinds == {"block", "allow"}
+
+    def test_test_json_mode_nonzero_exit_on_failure(self, tmp_path: Path) -> None:
+        hooks_dir = tmp_path / "hooks"
+        hooks_dir.mkdir()
+        (hooks_dir / "__init__.py").write_text("")
+        (hooks_dir / "my_hook.py").write_text(
+            'from captain_hook import block_command\n'
+            'from captain_hook.testing import Input, Block\n'
+            '\n'
+            'block_command(\n'
+            '    r"never-matches",\n'
+            '    reason="No",\n'
+            '    tests={\n'
+            '        Input(tool="Bash", command="ls"): Block(),\n'
+            '    },\n'
+            ')\n'
+        )
+        result = run_cli("test", "--json", hooks_dir=str(hooks_dir))
+        assert result.returncode != 0
+        records = [json.loads(ln) for ln in result.stdout.splitlines() if ln.strip()]
+        assert any(r["status"] == "fail" for r in records)
 
 
 class TestGenerateSettings:

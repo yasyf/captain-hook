@@ -1,24 +1,29 @@
-# Example: Settings and configuration via conf.py
-#
-# Demonstrates how to define project-level settings using
-# `HooksSettings` and how `build_settings` constructs a typed,
-# environment-variable-backed configuration object.
-#
-# In practice, settings are loaded from a conf.py module
-# discovered alongside your hooks directory.
+from __future__ import annotations
 
-from captain_hook import HooksSettings
+from typing import cast
+
+from captain_hook import (
+    BaseHookEvent,
+    Event,
+    HookResult,
+    HooksSettings,
+    Tool,
+    on,
+)
 
 
 class ProjectSettings(HooksSettings):
-    """Project-specific hook configuration."""
-
     test_command: str = "pytest"
-    max_retries: int = 3
-    enforce_style: bool = True
-    excluded_dirs: list[str] = ["vendor", "node_modules"]
+    require_tests_after_edit: bool = True
+    excluded_dirs: tuple[str, ...] = ("vendor", "node_modules")
 
 
-# Access settings via HookContext.settings (or ctx.conf / ctx.c)
-# at dispatch time.  The settings object merges defaults from the
-# class with overrides from environment variables.
+@on(Event.PreToolUse, only_if=[Tool("Bash")])
+def enforce_test_command(evt: BaseHookEvent) -> HookResult | None:
+    settings = cast(ProjectSettings, evt.ctx.c)
+    if (cl := evt.command_line) and cl.q.runs("pytest") and settings.test_command != "pytest":
+        return evt.block(
+            f"BLOCKED: use the project's configured test runner instead. "
+            f"Run: {settings.test_command}"
+        )
+    return None

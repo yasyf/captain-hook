@@ -61,30 +61,4 @@ class Input:
             object.__setattr__(self, "transcript", TranscriptFixture(self.transcript))
 
 
-class TTest(dict[str | Input, Block | Warn | Allow]):
-    """Inline test specification mapping inputs to expected outcomes.
-
-    A dict whose keys are ``Input`` descriptors (or legacy ``str`` session
-    keys) and whose values are the expected hook result — ``Block``,
-    ``Warn``, or ``Allow``.
-
-    Keys:
-        Input: Structured test-input descriptor specifying tool, command,
-            file, content, and/or transcript context.
-        str: Legacy session-key format (skipped during ``run_inline_tests``).
-
-    Values:
-        Block: The hook must block, optionally matching a regex ``pattern``.
-        Warn: The hook must warn, optionally matching a regex ``pattern``.
-        Allow: The hook must allow (return ``None`` or action ``"allow"``).
-
-    Optionally include a ``"description"`` string key for documentation
-    purposes.
-
-    Example::
-
-        tests: TTest = {
-            Input(command="rm -rf /"): Block(pattern="dangerous"),
-            Input(command="ls"): Allow(),
-        }
-    """
+type InlineTests = dict[str | Input, Block | Warn | Allow]

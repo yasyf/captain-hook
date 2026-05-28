@@ -5,15 +5,15 @@ from typing import TYPE_CHECKING, Any
 
 from captain_hook.app import on
 from captain_hook.signals import cite_message, resolve_signals, transcript_texts
-from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
+from captain_hook.state import EchoTracker, PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import (
     Action,
     Event,
     HookResult,
+    InlineTests,
     Signal,
     Signals,
     TCondition,
-    TTest,
 )
 
 if TYPE_CHECKING:
@@ -31,7 +31,7 @@ def nudge(
     block: bool = False,
     events: Event | None = None,
     max_fires: int | None = None,
-    tests: TTest | None = None,
+    tests: InlineTests | None = None,
     async_: bool = False,
 ) -> None:
     """Register a nudge that warns (or blocks) when conditions or signals match.
@@ -51,14 +51,14 @@ def nudge(
 
         if sig:
             ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
-            texts = transcript_texts(evt, sig.window)
-            ps.consume_echoes(texts, len(evt.ctx.t))
-            if not (triggering := ps.match_signals(sig, texts)):
+            tracker = EchoTracker()
+            candidates = [t for t in transcript_texts(evt, sig.window) if not tracker.saw(t, evt=evt)]
+            if not (triggering := ps.match_signals(sig, candidates)):
                 evt.ctx.s[PrimitiveState].set(ps)
                 return None
             ps.last_fired_at = len(evt.ctx.t)
-            ps.seed_echo_window(triggering, message, len(evt.ctx.t))
             evt.ctx.s[PrimitiveState].set(ps)
+            tracker.record(message, triggering=triggering, evt=evt)
             cited = cite_message(sig, triggering, message)
         elif when is not None and not when(evt):
             return None

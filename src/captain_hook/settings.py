@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import types
+from pathlib import Path
 from typing import Any, get_type_hints
 
 from pydantic import Field
@@ -23,6 +25,24 @@ DEFAULT_PLANNING_AGENTS = [
     "sentry:issue-summarizer",
 ]
 
+DEFAULT_WAITING_TOOLS = [
+    "Monitor",
+    "TeamCreate",
+    "ScheduleWakeup",
+    "SendMessage",
+]
+
+DEFAULT_STATE_DIR = Path.home() / ".claude" / "state"
+DEFAULT_LOG_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "captain-hook" / "logs"
+
+
+def resolve_state_dir() -> Path:
+    return Path(os.environ.get("CAPTAIN_HOOK_STATE_DIR") or os.environ.get("CLAUDE_HOOKS_STATE_DIR") or DEFAULT_STATE_DIR)
+
+
+def resolve_log_dir() -> Path:
+    return Path(os.environ.get("CAPTAIN_HOOK_LOG_DIR") or DEFAULT_LOG_DIR)
+
 
 class HooksSettings(BaseSettings):
     """Base settings class for hook configuration, backed by environment variables with ``HOOKS_`` prefix."""
@@ -30,6 +50,9 @@ class HooksSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="HOOKS_")
 
     planning_agents: list[str] = Field(default_factory=lambda: list(DEFAULT_PLANNING_AGENTS))
+    waiting_tools: list[str] = Field(default_factory=lambda: list(DEFAULT_WAITING_TOOLS))
+    state_dir: Path = Field(default_factory=resolve_state_dir)
+    log_dir: Path = Field(default_factory=resolve_log_dir)
 
 
 class AutoConf:

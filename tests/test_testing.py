@@ -91,11 +91,11 @@ class TestTranscriptFixture:
         assert "TranscriptFixture" in repr(tf)
 
 
-class TestTTest:
-    def test_ttest_dict_type(self):
-        from captain_hook.testing.types import Allow, Block, Input, TTest, Warn
+class TestInlineTests:
+    def test_inline_tests_dict_type(self):
+        from captain_hook.testing.types import Allow, Block, InlineTests, Input, Warn
 
-        t: TTest = {
+        t: InlineTests = {
             Input(command="ls"): Allow(),
             Input(command="rm -rf /"): Block(pattern="danger"),
             "session-uuid": Warn(),

@@ -1,17 +1,17 @@
+"""Per-session captain-hook logging: writes one log file per session under the configured log dir."""
 from __future__ import annotations
 
 import logging
 import sys
 
-from captain_hook import state
 from captain_hook.session import session_hash
-
-LOG_ROOT = state.CACHE_ROOT / "logs"
+from captain_hook.settings import resolve_log_dir
 
 
 def setup_logging(transcript_path: str | None) -> None:
+    """Attach a per-session file handler plus a stderr WARNING handler to the captain_hook logger."""
     session_id = session_hash(transcript_path) if transcript_path else "unknown"
-    log_dir = LOG_ROOT
+    log_dir = resolve_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"{session_id}.log"
 

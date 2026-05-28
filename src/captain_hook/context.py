@@ -4,117 +4,20 @@ import json
 import os
 import subprocess
 import tempfile
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 
+from captain_hook._backends import CodexBackend, LlmBackend, LlmBackends, TModel, TSpecialty
 from captain_hook.prompt import PromptMessage
 from captain_hook.session import SessionStore
 
 if TYPE_CHECKING:
     from captain_hook.transcript import Transcript, TranscriptSlice, Turn
-
-TSpecialty = Literal["debugging", "review", "general"]
-TModel = Literal["small", "medium", "large"]
-
-
-class LlmBackend(ABC):
-    models: ClassVar[dict[TModel, str]]
-
-    @abstractmethod
-    def build_command(self, model: str, schema_path: str | None, agent: bool) -> list[str]: ...
-
-    @abstractmethod
-    def parse_response(self, raw: str, response_model: type[BaseModel] | None) -> str | BaseModel: ...
-
-    @abstractmethod
-    def env(self) -> dict[str, str]: ...
-
-
-class CodexBackend(LlmBackend):
-    models: ClassVar[dict[TModel, str]] = {
-        "small": "gpt-5.3-codex-spark",
-        "medium": "gpt-5.4-mini",
-        "large": "gpt-5.5",
-    }
-
-    def build_command(self, model: str, schema_path: str | None, agent: bool) -> list[str]:
-        return [
-            "codex",
-            "exec",
-            "--ephemeral",
-            "--sandbox",
-            "read-only",
-            "--model",
-            model,
-            *([] if agent else ["-c", "features.codex_hooks=false", "-c", "features.mcp_servers=false"]),
-            *(["--output-schema", schema_path] if schema_path else []),
-        ]
-
-    def parse_response(self, raw: str, response_model: type[BaseModel] | None) -> str | BaseModel:
-        return raw if not response_model else response_model.model_validate_json(raw)
-
-    def env(self) -> dict[str, str]:
-        return {}
-
-
-class ClaudeBackend(LlmBackend):
-    models: ClassVar[dict[TModel, str]] = {
-        "small": "haiku",
-        "medium": "sonnet",
-        "large": "opus",
-    }
-
-    def build_command(self, model: str, schema_path: str | None, agent: bool) -> list[str]:
-        return [
-            "claude",
-            "-p",
-            "--no-session-persistence",
-            "--model",
-            model,
-            *(
-                ["--permission-mode", "auto", "--max-budget-usd", "1"]
-                if agent
-                else [
-                    "--system-prompt", "",
-                    "--setting-sources", "",
-                    "--strict-mcp-config",
-                ]
-            ),
-            *(["--json-schema", schema_path, "--output-format", "json"] if schema_path else []),
-        ]
-
-    def parse_response(self, raw: str, response_model: type[BaseModel] | None) -> str | BaseModel:
-        if not response_model:
-            return raw
-        data: Any = json.loads(raw)
-        if isinstance(data, list) and data:
-            return self._extract_structured(
-                cast(list[dict[str, Any]], data), response_model
-            ) or response_model.model_validate_json(raw)
-        return response_model.model_validate_json(raw)
-
-    @staticmethod
-    def _extract_structured(events: list[dict[str, Any]], model: type[BaseModel]) -> BaseModel | None:
-        for e in events:
-            if e.get("type") == "result" and "structured_output" in e:
-                return model.model_validate(e["structured_output"])
-        return None
-
-    def env(self) -> dict[str, str]:
-        return {"CLAUDE_CODE_SIMPLE": "1"}
-
-
-BACKENDS: dict[TSpecialty, LlmBackend] = {
-    "debugging": CodexBackend(),
-    "review": CodexBackend(),
-    "general": ClaudeBackend(),
-}
 
 
 @dataclass
@@ -192,15 +95,15 @@ class HookContext:
             raise err
         return result.stdout
 
-    def _git(self, *args: str) -> str | None:
+    def git(self, *args: str) -> str | None:
         try:
             return self.call_cli(["git", *args], timeout=5)
-        except (OSError, subprocess.SubprocessError):
+        except (subprocess.CalledProcessError, FileNotFoundError):
             return None
 
     @cached_property
     def changed_paths(self) -> frozenset[Path] | None:
-        if (out := self._git("diff", "--name-only", "HEAD", "--no-renames")) is None or (root := self.repo_root) is None:
+        if (out := self.git("diff", "--name-only", "HEAD", "--no-renames")) is None or (root := self.repo_root) is None:
             return None
         return frozenset((root / line).resolve() for line in out.splitlines() if line)
 
@@ -208,11 +111,11 @@ class HookContext:
     def repo_root(self) -> Path | None:
         if self.project_root is not None:
             return self.project_root.resolve()
-        return Path(out.strip()) if (out := self._git("rev-parse", "--show-toplevel")) else None
+        return Path(out.strip()) if (out := self.git("rev-parse", "--show-toplevel")) else None
 
     @cached_property
     def current_branch(self) -> str | None:
-        return out.strip() if (out := self._git("symbolic-ref", "--short", "HEAD")) else None
+        return out.strip() if (out := self.git("symbolic-ref", "--short", "HEAD")) else None
 
     def call_llm(
         self,
@@ -234,18 +137,20 @@ class HookContext:
             if transcript:
                 template = f"{{transcript}}\n\n<task>\n{template}\n</task>"
             prompt = template.format(*args, **kwargs, transcript=self.transcript)
-        schema = response_model and json.dumps(
-            response_model.model_json_schema() | {"additionalProperties": False},
+        schema = (
+            json.dumps(response_model.model_json_schema() | {"additionalProperties": False})
+            if response_model
+            else None
         )
-        backend = BACKENDS[specialty]
-        schema_path = self._resolve_schema_path(backend, schema)
+        backend = LlmBackends.for_specialty(specialty)
+        schema_path = self.resolve_schema_path(backend, schema)
 
         cmd = backend.build_command(backend.models[model], schema_path, agent)
         raw = self.call_cli(cmd, input=prompt, timeout=timeout, env=backend.env())
         return backend.parse_response(raw, response_model)
 
     @staticmethod
-    def _resolve_schema_path(backend: LlmBackend, schema: str | None) -> str | None:
+    def resolve_schema_path(backend: LlmBackend, schema: str | None) -> str | None:
         if not schema:
             return None
         if isinstance(backend, CodexBackend):

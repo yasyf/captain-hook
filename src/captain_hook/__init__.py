@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from captain_hook.app import hook, on, register
 from captain_hook.cli import generate_settings, generate_settings_json
-from captain_hook.utils import read_json
 from captain_hook.command import Command, CommandLine, Redirect
 from captain_hook.context import HookContext
 from captain_hook.events import (
@@ -41,9 +40,8 @@ from captain_hook.session import SessionSlot, SessionStore, session_state
 from captain_hook.settings import AutoConf, HooksSettings, build_settings
 from captain_hook.signals import cite_message, extract_signal_context, resolve_signals, score_signals, transcript_texts
 from captain_hook.signals.nlp import Clause, NlpSignal, Phrase
-from captain_hook.state import HookState, PrimitiveState
-from captain_hook.testing import Allow, Block, Input, TranscriptFixture, Warn
-from captain_hook.testing import TTest as TTest
+from captain_hook.state import EchoTracker, HookState, PrimitiveState, workflow_state
+from captain_hook.testing import Allow, Block, InlineTests, Input, TranscriptFixture, Warn
 from captain_hook.tools import EditOp, TaskOp, WriteOp
 from captain_hook.transcript import (
     ToolUse,
@@ -89,17 +87,17 @@ from captain_hook.types import (
     InPlanMode,
     RanCommand,
     ReadFile,
+    Signal,
+    Signals,
+    SourceEdits,
+    TCondition,
+    TestFile,
+    Tool,
+    TouchedFile,
+    UsedSkill,
+    Waiting,
 )
-from captain_hook.types import RegisteredHook as RegisteredHook
-from captain_hook.types import Signal as Signal
-from captain_hook.types import Signals as Signals
-from captain_hook.types import TCondition as TCondition
-from captain_hook.types import TestFile as TestFile
-from captain_hook.types import Tool as Tool
-from captain_hook.types import TouchedFile as TouchedFile
-from captain_hook.types import UsedSkill as UsedSkill
-from captain_hook.types import Waiting as Waiting
-from captain_hook.types import tokens_to_regex as tokens_to_regex
+from captain_hook.utils import read_json
 from captain_hook.workflow import Artifact, Step, Workflow, text_matches
 from captain_hook.workflow import workflow as workflow
 
@@ -126,7 +124,6 @@ __all__ = [
     "PreToolUseEvent",
     "RanCommand",
     "ReadFile",
-    "RegisteredHook",
     "Signal",
     "Signals",
     "StopEvent",
@@ -145,8 +142,11 @@ __all__ = [
     "SessionSlot",
     "SessionStore",
     "session_state",
+    "workflow_state",
+    "EchoTracker",
     "HookState",
     "PrimitiveState",
+    "SourceEdits",
     # primitives
     "audit",
     "block_command",
@@ -168,7 +168,6 @@ __all__ = [
     "extract_signal_context",
     "resolve_signals",
     "score_signals",
-    "tokens_to_regex",
     "transcript_texts",
     "Clause",
     "NlpSignal",
@@ -229,8 +228,8 @@ __all__ = [
     # testing
     "Allow",
     "Block",
+    "InlineTests",
     "Input",
     "TranscriptFixture",
-    "TTest",
     "Warn",
 ]

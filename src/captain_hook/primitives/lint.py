@@ -13,10 +13,10 @@ from captain_hook.types import (
     Event,
     FilePath,
     HookResult,
+    InlineTests,
     TCondition,
     TestFile,
     Tool,
-    TTest,
 )
 
 logger = logging.getLogger(__name__)
@@ -28,9 +28,9 @@ StringCheck = Callable[[str], list[str]]
 AstCheck = Callable[[ast.AST], Iterator[str]]
 DiffCheck = Callable[[ast.AST, ast.AST], list[str]]
 
-DEFAULT_ONLY_IF: tuple[TCondition, ...] = (Tool("Edit|Write"), FilePath("*.py"))
+DEFAULT_ONLY_IF: tuple[TCondition, ...] = (Tool("Edit|Write"), FilePath("*.py", project_only=False))
 DEFAULT_SKIP_IF: tuple[TCondition, ...] = (TestFile(),)
-DIFF_DEFAULT_ONLY_IF: tuple[TCondition, ...] = (Tool("Edit"), FilePath("*.py"))
+DIFF_DEFAULT_ONLY_IF: tuple[TCondition, ...] = (Tool("Edit"), FilePath("*.py", project_only=False))
 
 
 def detect_ast_mode(check: StringCheck | AstCheck) -> bool:
@@ -57,7 +57,7 @@ def lint(
     sep: str = ...,
     block: bool = ...,
     events: Event | None = ...,
-    tests: TTest | None = ...,
+    tests: InlineTests | None = ...,
     max_shown: int = ...,
 ) -> None: ...
 
@@ -71,7 +71,7 @@ def lint(
     sep: str = ...,
     block: bool = ...,
     events: Event | None = ...,
-    tests: TTest | None = ...,
+    tests: InlineTests | None = ...,
     max_shown: int = ...,
 ) -> None: ...
 
@@ -84,7 +84,7 @@ def lint(
     sep: str = ", ",
     block: bool = False,
     events: Event | None = None,
-    tests: TTest | None = None,
+    tests: InlineTests | None = None,
     max_shown: int = 5,
 ) -> None:
     """Register a lint check that runs on Python file edits/writes.
@@ -126,7 +126,7 @@ def diff_lint(
     sep: str = ", ",
     block: bool = False,
     events: Event | None = None,
-    tests: TTest | None = None,
+    tests: InlineTests | None = None,
     max_shown: int = 5,
     only_if: Sequence[TCondition] = DIFF_DEFAULT_ONLY_IF,
     skip_if: Sequence[TCondition] = DEFAULT_SKIP_IF,

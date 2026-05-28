@@ -33,10 +33,10 @@ from captain_hook.types import (
     TouchedFile,
     UsedSkill,
     Waiting,
-    tokens_to_regex,
 )
 
 from captain_hook.conditions import check_condition, matches_conditions
+from captain_hook.primitives.commands import block_command_pattern
 from captain_hook.tests.helpers import build_ctx, make_event, make_messages_ctx, make_transcript_ctx
 from captain_hook.transcript.models import TextBlock, ToolResult, ToolUseBlock, TranscriptMessage
 
@@ -803,23 +803,23 @@ class TestNonToolEventConditions:
 
 class TestTokensToRegex:
     def test_simple_tokens(self) -> None:
-        result = tokens_to_regex(["git", "stash"])
+        result = block_command_pattern(["git", "stash"])
         assert re.match(result, "git stash pop")
         assert re.match(result, "git  stash")
 
     def test_wildcard(self) -> None:
-        result = tokens_to_regex(["git", "*"])
+        result = block_command_pattern(["git", "*"])
         assert re.match(result, "git commit -m x")
         assert re.match(result, "git push")
 
     def test_pipe_alternation(self) -> None:
-        result = tokens_to_regex(["git", "commit|split"])
+        result = block_command_pattern(["git", "commit|split"])
         assert re.match(result, "git commit -m x")
         assert re.match(result, "git split")
         assert not re.match(result, "git push")
 
     def test_empty_list_returns_empty_string(self) -> None:
-        assert tokens_to_regex([]) == ""
+        assert block_command_pattern([]) == ""
 
 class TestEmptyConditions:
     def test_empty_only_if_always_matches(self) -> None:

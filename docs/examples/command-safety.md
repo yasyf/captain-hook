@@ -1,0 +1,9 @@
+# Command Safety
+
+The agent will happily run `git stash`, force-push, or pipe `curl` into a shell unless something stops it. A single file collects every command-shaped guard rail: VCS workflow rules, dangerous flags, and inspection-driven blocks for things a regex alone cannot catch.
+
+```python
+--8<-- "examples/command_safety.py"
+```
+
+**What to learn:** Three flavors of command blocking. `block_command(["git", "stash"], ...)` covers prefix-style blocks with whitespace-flexible token lists. A raw regex with a negative lookahead (`--force(?!-)`) handles flag-level precision. For decisions that need the parsed AST of the command line (subcommands, pipes, redirects), drop into `@on(Event.PreToolUse, only_if=[Tool("Bash")])` and use `evt.command_line.q.runs(...)`, `.q.has_subcommand(...)`, and `.q.uses_redirect()`.

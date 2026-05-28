@@ -1,12 +1,15 @@
+"""Hook fire-count and primitive echo-suppression state, plus shared NLP resources (spaCy, WordNet)."""
 from __future__ import annotations
 
 import inspect
 import os
 import re
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from functools import cached_property
 from hashlib import sha256
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -20,6 +23,7 @@ if TYPE_CHECKING:
 
 FRAMEWORK_DIR = str(Path(__file__).resolve().parent)
 CACHE_ROOT = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "captain-hook"
+SPACY_MODEL = "en_core_web_sm"
 
 
 class NlpResources:
@@ -27,9 +31,22 @@ class NlpResources:
     def spacy(self) -> spacy.language.Language:
         import spacy
 
-        from captain_hook.util.model_cache import ensure_spacy_model
+        from captain_hook.util.model_cache import MODEL_NAME, MODEL_VERSION, cache_root
 
-        return spacy.load(ensure_spacy_model())
+        if spacy.util.is_package(SPACY_MODEL):
+            return spacy.load(SPACY_MODEL)
+        # We refuse to auto-download from a live hook: it's a ~100MB silent fetch behind
+        # the agent's back. If a previous run / explicit install already populated the
+        # cache, use that; otherwise, raise with an actionable install hint.
+        cached = cache_root() / f"{MODEL_NAME}-{MODEL_VERSION}" / MODEL_NAME / f"{MODEL_NAME}-{MODEL_VERSION}"
+        if cached.is_dir():
+            return spacy.load(cached)
+        raise RuntimeError(
+            f"spaCy model {SPACY_MODEL!r} is not installed. "
+            f"Install it explicitly before running hooks that use NLP signals: "
+            f"`python -m spacy download {SPACY_MODEL}` "
+            f"or `python -c \"from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()\"`."
+        )
 
     @cached_property
     def wn(self) -> ModuleType:
@@ -44,15 +61,27 @@ RESOURCES = NlpResources()
 
 
 class HookState(BaseModel):
+    """Per-hook persistent state tracked across events in a session (currently just ``fire_count`` for ``max_fires``)."""
+
     fire_count: int = 0
 
 
+# ECHO_WINDOW: number of subsequent transcript messages after a nudge fires during which we
+# suppress restating the same idea. Tuned for "the agent reads our nudge and the next ~5
+# assistant messages reference the same concept".
+# ECHO_THRESHOLD: fraction of content lemmas in a candidate text that must overlap with the
+# nudge's lemmas to count as an echo. 0.4 = "if 40%+ of the meaningful words match, the
+# agent is parroting".
+# ECHO_MIN_OVERLAP: absolute minimum overlap to count, so short messages don't pass the
+# fractional threshold trivially (e.g. a 2-token message would otherwise hit 0.5).
 ECHO_WINDOW = 5
 ECHO_THRESHOLD = 0.4
 ECHO_MIN_OVERLAP = 2
 
 
 class PrimitiveState(BaseModel):
+    """Per-primitive state for nudges/gates: last fire index, consumed-signal hashes, and echo-window lemmas."""
+
     last_fired_at: int = 0
     consumed: set[str] = Field(default_factory=set)
     echo_lemmas: set[str] = Field(default_factory=set)
@@ -140,6 +169,54 @@ def fired_this_turn(evt: BaseHookEvent) -> bool:
 
 
 from captain_hook.session import SessionStore  # noqa: E402
+
+
+@dataclass
+class EchoTracker:
+    window: int = ECHO_WINDOW
+    threshold: float = ECHO_THRESHOLD
+    min_overlap: int = ECHO_MIN_OVERLAP
+
+    def saw(self, text: str, *, evt: BaseHookEvent) -> bool:
+        ps = evt.ctx.s[PrimitiveState].get()
+        return (
+            ps is not None
+            and bool(ps.echo_lemmas)
+            and len(evt.ctx.t) < ps.echo_window_end
+            and ps.is_echo(text)
+        )
+
+    def record(self, text: str, triggering: Iterable[str], *, evt: BaseHookEvent) -> None:
+        ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
+        ps.echo_lemmas = PrimitiveState.content_lemmas(" ".join(triggering)) | PrimitiveState.content_lemmas(text)
+        ps.echo_window_end = len(evt.ctx.t) + self.window
+        evt.ctx.s[PrimitiveState].set(ps)
+
+
+T = TypeVar("T", bound=BaseModel)
+
+
+def workflow_state(name: str) -> Callable[[type[T]], type[T]]:
+    def wrap(cls: type[T]) -> type[T]:
+        cls.__workflow_name__ = name  # type: ignore[attr-defined]
+        SessionStore.track(cls)
+
+        def load(inner_cls: type[T], evt: BaseHookEvent) -> T:
+            return evt.ctx.s[inner_cls].get(inner_cls())
+
+        def save(self: T, evt: BaseHookEvent) -> None:
+            evt.ctx.s[type(self)].set(self)
+
+        def reset(inner_cls: type[T], evt: BaseHookEvent) -> None:
+            evt.ctx.s[inner_cls].delete()
+
+        cls.load = classmethod(load)  # type: ignore[attr-defined]
+        cls.save = save  # type: ignore[attr-defined]
+        cls.reset = classmethod(reset)  # type: ignore[attr-defined]
+        return cls
+
+    return wrap
+
 
 SessionStore.track(HookState)
 SessionStore.track(PrimitiveState)

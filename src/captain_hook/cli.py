@@ -7,7 +7,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from captain_hook.app import _state, discover_hooks, load_gitignore, reset
+from captain_hook._loader import discover_hooks
+from captain_hook.app import _state, load_gitignore, reset
 from captain_hook.context import HookContext
 from captain_hook.dispatch import dispatch
 from captain_hook.log import setup_logging
@@ -16,19 +17,91 @@ from captain_hook.transcript import Transcript
 from captain_hook.types import Event
 
 EXAMPLE_HOOK = '''\
-from captain_hook import Event, Tool, nudge, block_command
+from __future__ import annotations
 
-block_command(
-    r"rm\\s+-rf\\s+/",
-    reason="Refusing to run rm -rf /",
+import re
+
+from captain_hook import (
+    Allow,
+    BaseHookEvent,
+    Block,
+    Event,
+    HookResult,
+    InlineTests,
+    Input,
+    Prompt,
+    Signal,
+    Signals,
+    SourceEdits,
+    audit,
+    block_command,
+    nudge,
+    on,
+    prompt_check,
 )
 
+# 1. block_command — refuse a dangerous shell command before it runs.
+# see docs/guide/primitives.md
+RM_RF_TESTS: InlineTests = {
+    Input(tool="Bash", command="rm -rf /"): Block(pattern="unrecoverable"),
+    Input(tool="Bash", command="rm -rf build/"): Block(pattern="unrecoverable"),
+    Input(tool="Bash", command="rm notes.txt"): Allow(),
+}
+block_command(
+    ["rm", "-rf", "*"],
+    reason="rm -rf is unrecoverable on this machine",
+    hint="Delete files individually or move them to a trash dir",
+    tests=RM_RF_TESTS,
+)
+
+# 2. nudge — fire on Stop when retry-language piles up in the transcript.
+# see docs/guide/primitives.md and docs/examples/failure-recovery.md
+RETRY_SIGNALS = Signals(
+    patterns=[
+        Signal(pattern=r"let me try again", weight=2, flags=re.IGNORECASE),
+        Signal(pattern=r"same (error|failure|issue)", weight=2, flags=re.IGNORECASE),
+        Signal(pattern=r"\\bretry(ing)?\\b", weight=1, flags=re.IGNORECASE),
+    ],
+    threshold=3,
+    window=10,
+)
 nudge(
-    "Remember to run tests before committing.",
-    only_if=[Tool("Bash")],
-    events=Event.PostToolUse,
+    "Repeated retries detected. Read DEBUGGING.md or invoke /codex before the next attempt.",
+    signals=RETRY_SIGNALS,
+    events=Event.Stop,
     max_fires=1,
 )
+
+# 3. audit — append one JSONL record per matching tool call into .context/.
+# see docs/guide/primitives.md
+audit(
+    Event.PreToolUse | Event.PostToolUse | Event.Stop,
+    log_dir=".context/hook-audit",
+)
+
+# 4. prompt_check — LLM gate on Python edits that smell like unfinished work.
+# see docs/guide/primitives.md and docs/examples/test-integrity.md
+PLACEHOLDER_TEMPLATE = """
+The agent just edited {fp}. Flag the change if the new content contains
+placeholder text the agent forgot to replace — `TODO: replace`, `FILLME`,
+`<your-...-here>`, `pass  # implement`, etc.
+
+--- new ---
+{new}
+"""
+
+
+@on(Event.PostToolUse, only_if=[SourceEdits(lang="py")])
+def warn_on_placeholder(evt: BaseHookEvent) -> HookResult | None:
+    if not (fp := evt.file) or not (new := evt.content):
+        return None
+    if not re.search(r"TODO:?\\s*replace|FILLME|<your-.+?-here>", new, re.IGNORECASE):
+        return None
+    return prompt_check(
+        evt,
+        Prompt.from_template(PLACEHOLDER_TEMPLATE, fp=fp.path, new=new),
+        prefix="PLACEHOLDER LEFT IN CODE",
+    )
 '''
 
 
@@ -76,6 +149,34 @@ def merge_settings(hooks_dir: str, settings_path: Path, from_source: str | None 
         existing["hooks"] = hook_settings["hooks"]
         return existing
     return hook_settings
+
+
+def is_captain_hook_group(group: dict[str, Any]) -> bool:
+    return any("captain-hook" in (h.get("command") or "") for h in group.get("hooks") or [])
+
+
+def merge_init_settings(
+    hooks_dir: str, settings_path: Path, from_source: str | None = None
+) -> tuple[dict[str, Any], dict[str, str]]:
+    hook_settings = generate_settings(hooks_dir, from_source=from_source)
+    new_hooks: dict[str, list[dict[str, Any]]] = hook_settings["hooks"]
+
+    if not settings_path.exists():
+        return hook_settings, {event: "added" for event in new_hooks}
+
+    existing = json.loads(settings_path.read_text())
+    existing_hooks = existing.setdefault("hooks", {})
+    summary: dict[str, str] = {}
+
+    for event, new_entries in new_hooks.items():
+        existing_entries = existing_hooks.get(event, [])
+        if any(is_captain_hook_group(g) for g in existing_entries):
+            summary[event] = "unchanged"
+        else:
+            existing_hooks[event] = existing_entries + new_entries
+            summary[event] = "added"
+
+    return existing, summary
 
 
 def run_event(
@@ -126,18 +227,33 @@ def init_project(root: Path) -> None:
     hooks_dir.mkdir(parents=True, exist_ok=True)
 
     example = hooks_dir / "example.py"
-    if not example.exists():
+    example_created = not example.exists()
+    if example_created:
         example.write_text(EXAMPLE_HOOK)
-        print(f"  Created {example.relative_to(root)}")
 
     settings_path = root / ".claude" / "settings.local.json"
     reset()
     discover_hooks(str(hooks_dir))
-    merged = merge_settings(".claude/hooks", settings_path)
+    merged, summary = merge_init_settings(".claude/hooks", settings_path)
     settings_path.write_text(json.dumps(merged, indent=2) + "\n")
-    print(f"  Updated {settings_path.relative_to(root)}")
 
-    print("\nDone! Write hooks in .claude/hooks/, then run: captain-hook test")
+    print(f"Scaffolded {example.relative_to(root)} + {settings_path.relative_to(root)}.")
+    print()
+    print(f"{settings_path.relative_to(root)}:")
+    added = [e for e, status in summary.items() if status == "added"]
+    unchanged = [e for e, status in summary.items() if status == "unchanged"]
+    if not added and not unchanged:
+        print("  no hook entries to add")
+    for event in added:
+        print(f"  + added {event} hook entry")
+    if unchanged:
+        print(f"  unchanged: {', '.join(unchanged)} (already present)")
+    print()
+    print("Next:")
+    print("  1. Read the quickstart: docs/getting-started/quickstart.md")
+    print("  2. Edit example.py or add new files under .claude/hooks/")
+    print("  3. captain-hook test --hooks .claude/hooks       # verify inline tests")
+    print("  4. captain-hook generate-settings --hooks ...    # rewire after adding events")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -160,40 +276,67 @@ def build_parser() -> argparse.ArgumentParser:
     settings_parser.add_argument("--no-merge", action="store_true", help="Output standalone JSON instead of merging")
     settings_parser.add_argument("--from", dest="from_source", default=None, help="Package source for uvx --from (local path or PyPI spec)")
 
-    sub.add_parser("test", help="Run inline tests from all registered hooks")
+    test_parser = sub.add_parser("test", help="Run inline tests from all registered hooks")
+    test_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit one JSON record per test (CI mode)")
     sub.add_parser("init", help="Scaffold hooks directory, bin script, and settings")
 
     return parser
 
 
-def run_tests() -> None:
+def expected_kinds_from_state() -> dict[str, str]:
+    out: dict[str, str] = {}
+    for entry in _state.hooks:
+        if not entry.spec.tests:
+            continue
+        for key, expected in entry.spec.tests.items():
+            out[f"{entry.name}:{key!r}"] = type(expected).__name__.lower()
+    return out
+
+
+def run_tests(json_output: bool = False) -> None:
     from captain_hook.testing.helpers import run_inline_tests
 
     results = run_inline_tests()
     if not results:
-        print("No inline tests found.")
+        if json_output:
+            print(json.dumps({"status": "empty", "reason": "no inline tests"}))
+        else:
+            print("No inline tests found.")
         return
 
+    expected_by_id = expected_kinds_from_state()
     passed = failed = errors = skipped = 0
     for name, status, _ok, detail in results:
+        if json_output:
+            print(json.dumps({
+                "id": name,
+                "status": status,
+                "expected": expected_by_id.get(name, ""),
+                "reason": detail,
+            }))
         match status:
             case "pass":
                 passed += 1
-                print(f"  PASS  {name}")
+                if not json_output:
+                    print(f"  PASS  {name}")
             case "skip":
                 skipped += 1
-                print(f"  SKIP  {name}: {detail}")
+                if not json_output:
+                    print(f"  SKIP  {name}: {detail}")
             case "fail":
                 failed += 1
-                print(f"  FAIL  {name}: {detail}")
+                if not json_output:
+                    print(f"  FAIL  {name}: {detail}")
             case "error":
                 errors += 1
-                print(f"  ERROR {name}: {detail}")
+                if not json_output:
+                    print(f"  ERROR {name}: {detail}")
             case _:
                 pass
 
-    total = passed + failed + errors + skipped
-    print(f"\n{total} tests: {passed} passed, {failed} failed, {errors} errors, {skipped} skipped")
+    if not json_output:
+        total = passed + failed + errors + skipped
+        print(f"\n{total} tests: {passed} passed, {failed} failed, {errors} errors, {skipped} skipped")
     if failed or errors:
         sys.exit(1)
 
@@ -223,6 +366,6 @@ def main() -> None:
                 merged = merge_settings(args.hooks_dir, settings_path, from_source=args.from_source)
                 print(json.dumps(merged, indent=2))
         case "test":
-            run_tests()
+            run_tests(json_output=args.json_output)
         case _:
             parser.error(f"Unknown command: {args.command}")

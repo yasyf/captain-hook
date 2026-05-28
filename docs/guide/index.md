@@ -36,4 +36,16 @@ Deep dives into every part of the framework.
 
     [:octicons-arrow-right-24: Testing](testing.md)
 
+-   **Configuration** — `HooksSettings` knobs, env prefix, state and log directories
+
+    [:octicons-arrow-right-24: Configuration](configuration.md)
+
+-   **Patterns** — Real-world hooks distilled from a production hooks directory
+
+    [:octicons-arrow-right-24: Patterns](patterns.md)
+
+-   **Troubleshooting** — Common errors and diagnostic commands
+
+    [:octicons-arrow-right-24: Troubleshooting](troubleshooting.md)
+
 </div>

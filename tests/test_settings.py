@@ -6,7 +6,8 @@ from typing import Any
 import pytest
 from pydantic_settings import BaseSettings
 
-from captain_hook.app import _state, discover_hooks
+from captain_hook._loader import discover_hooks
+from captain_hook.app import _state
 
 
 def make_module(name: str, attrs: dict[str, Any], annotations: dict[str, type] | None = None) -> types.ModuleType:
@@ -230,14 +231,14 @@ class TestAutoConfEnvPrefix:
 @pytest.mark.usefixtures("isolate_modules")
 class TestSettingsFromApp:
     def test_app_settings_accessible(self, tmp_path: Any) -> None:
+        from captain_hook._loader import discover_hooks
         from captain_hook.app import (
-    _state,
-    discover_hooks,
-    hook as register_hook,
-    on,
-    register,
-    reset,
-)
+            _state,
+            hook as register_hook,
+            on,
+            register,
+            reset,
+        )
 
         d = tmp_path / "shooks_a"
         d.mkdir()
@@ -248,14 +249,14 @@ class TestSettingsFromApp:
         assert _state.settings.my_setting == 42
 
     def test_discover_hooks_loads_conf_and_builds_settings(self, tmp_path: Any) -> None:
+        from captain_hook._loader import discover_hooks
         from captain_hook.app import (
-    _state,
-    discover_hooks,
-    hook as register_hook,
-    on,
-    register,
-    reset,
-)
+            _state,
+            hook as register_hook,
+            on,
+            register,
+            reset,
+        )
 
         d = tmp_path / "shooks_b"
         d.mkdir()

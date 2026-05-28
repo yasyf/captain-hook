@@ -1,3 +1,4 @@
+"""Condition evaluation: checks ``TCondition`` instances against the current event."""
 from __future__ import annotations
 
 import re
@@ -13,6 +14,7 @@ from captain_hook.types import (
     Or,
     RanCommand,
     ReadFile,
+    SourceEdits,
     TCondition,
     TestFile,
     Tool,
@@ -36,10 +38,17 @@ def has_completion_notification(t: Transcript, tool_use_id: str, after_idx: int)
     )
 
 
-def tool_use_waiting(tu: ToolUse, t: Transcript) -> bool:
+def waiting_tool_names(evt: BaseHookEvent) -> set[str]:
+    from captain_hook.settings import DEFAULT_WAITING_TOOLS
+
+    custom: object = getattr(evt.ctx.settings, "waiting_tools", None)
+    return {str(x) for x in custom} if isinstance(custom, list) else set(DEFAULT_WAITING_TOOLS)
+
+
+def tool_use_waiting(tu: ToolUse, t: Transcript, waiting_names: set[str]) -> bool:
+    if tu.name in waiting_names:
+        return True
     match tu.name:
-        case "Monitor" | "TeamCreate" | "ScheduleWakeup" | "SendMessage":
-            return True
         case "Agent" | "Task" | "Bash" if tu.raw_input.get("run_in_background"):
             return True
         case "Agent" | "Task" if "subagent_type" not in tu.raw_input:
@@ -52,7 +61,8 @@ def tool_use_waiting(tu: ToolUse, t: Transcript) -> bool:
 def is_waiting(evt: BaseHookEvent) -> bool:
     if not (t := evt.ctx.transcript):
         return False
-    return any(tool_use_waiting(tu, t.current_turn) for tu in t.current_turn.tool_uses)
+    waiting_names = waiting_tool_names(evt)
+    return any(tool_use_waiting(tu, t.current_turn, waiting_names) for tu in t.current_turn.tool_uses)
 
 
 def is_project_file(evt: BaseHookEvent) -> bool:
@@ -85,6 +95,15 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
             return bool(evt.agent_type) and evt.agent_type in name.split("|")
         case TestFile(project_only):
             return bool(evt.file and (not project_only or is_project_file(evt)) and evt.file.is_test)
+        case SourceEdits(lang, include_tests, paths):
+            return bool(
+                evt.tool_name
+                and any(tool_name_matches(evt.tool_name, n) for n in ("Edit", "Write"))
+                and (f := evt.file)
+                and f.matches(*SourceEdits(lang=lang).globs)
+                and (include_tests or not f.is_test)
+                and (paths is None or f.matches(paths))
+            )
         case UsedSkill(name, subagents):
             return bool(evt.ctx.transcript) and evt.ctx.transcript.has_skill(*name.split("|"), subagents=subagents)
         case ReadFile(patterns, subagents):
@@ -104,8 +123,7 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
             return any(check_condition(sub, evt) for sub in conditions)
         case CustomCondition():
             return c.check(evt)
-        case _:
-            return False
+    return False
 
 
 def matches_conditions(spec: HookSpec, evt: BaseHookEvent) -> bool:

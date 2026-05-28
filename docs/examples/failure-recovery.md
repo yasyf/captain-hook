@@ -1,0 +1,9 @@
+# Failure Recovery
+
+After two or three back-to-back failures the agent often spirals: retries the same approach, restates the same error, never reaches for a debug tool. You want a Stop-event nudge that fires only when the recent transcript looks like a retry loop, and a separate per-failure nudge that points at the project's debugging playbook.
+
+```python
+--8<-- "examples/failure_recovery.py"
+```
+
+**What to learn:** `nudge(... signals=Signals(patterns=..., threshold=N, window=N))` matches against the *agent's narration*, not tool inputs. Each regex hit adds its `weight` to a rolling score over the last `window` transcript messages, and the nudge fires when the cumulative score crosses `threshold`. Combine `skip_if=[UsedSkill("codex"), ReadFile("DEBUGGING.md")]` so the nudge silences itself once the agent has already done the thing you'd suggest.

@@ -4,15 +4,19 @@ Write your first hook in under 5 minutes.
 
 ## Your first hook: block a dangerous command
 
-Create a file in your hooks directory:
+Create `.claude/hooks/my_first.py`:
 
 ```python
-from captain_hook import block_command
+from captain_hook import Allow, Block, Input, block_command
 
 block_command(
     ["rm", "-rf", "*"],
     reason="Recursive force-delete is forbidden",
     hint="Delete files individually or use a safer alternative",
+    tests={
+        Input(command="rm -rf build/"): Block(),
+        Input(command="rm file.txt"): Allow(),
+    },
 )
 ```
 
@@ -81,14 +85,26 @@ block_command(
 Run them:
 
 ```bash
-captain-hook test --hooks src/
+captain-hook test --hooks .claude/hooks
 ```
+
+Sample output for the hook above:
+
+```
+.claude/hooks/my_first.py
+  PASS  Input(command='rm -rf build/')   expected Block, got Block
+  PASS  Input(command='rm file.txt')     expected Allow, got Allow
+
+2 passed, 0 failed
+```
+
+If a test fails, the line shows the expected vs. actual `Action` and exits non-zero — drop the same command into CI and a regressed hook fails the build.
 
 ## Run from the CLI
 
 ```bash
 echo '{"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}}' \
-  | captain-hook run PreToolUse --hooks src/
+  | captain-hook run PreToolUse --hooks .claude/hooks
 ```
 
 Output:
@@ -99,6 +115,7 @@ Output:
 
 ## Next steps
 
+- [Patterns](../guide/patterns.md) — real-world hooks from a production hooks directory
 - [How It Works](how-it-works.md) — understand the lifecycle and dispatch pipeline
 - [Primitives](../guide/primitives.md) — explore all built-in hook primitives
 - [Conditions](../guide/conditions.md) — filter when hooks fire

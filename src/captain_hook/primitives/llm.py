@@ -13,16 +13,16 @@ from pydantic import BaseModel
 from captain_hook import state
 from captain_hook.app import on
 from captain_hook.primitives.audit import session_id_for
-from captain_hook.prompt import Prompt
+from captain_hook.prompt import Prompt, PromptMessage
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import (
     Action,
     Event,
     HookResult,
+    InlineTests,
     Signal,
     Signals,
     TCondition,
-    TTest,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 FAILURE_ROOT = state.CACHE_ROOT / "failures"
 
 if TYPE_CHECKING:
-    from captain_hook.context import TModel, TSpecialty
+    from captain_hook._backends import TModel, TSpecialty
     from captain_hook.events import BaseHookEvent
     from captain_hook.signals.nlp import NlpSignal
 
@@ -135,7 +135,7 @@ def llm_primitive[M: BaseModel](
     skip_if: Sequence[TCondition] = (),
     events: Event | None = None,
     max_fires: int | None = None,
-    tests: TTest | None = None,
+    tests: InlineTests | None = None,
     async_: bool = False,
     max_context: int = 2000,
     specialty: TSpecialty = "review",
@@ -194,7 +194,7 @@ def llm_gate(
     skip_if: Sequence[TCondition] = (),
     events: Event | None = None,
     max_fires: int | None = None,
-    tests: TTest | None = None,
+    tests: InlineTests | None = None,
     max_context: int = 2000,
     specialty: TSpecialty = "review",
     model: TModel = "small",
@@ -248,7 +248,7 @@ def llm_nudge(
     skip_if: Sequence[TCondition] = (),
     events: Event | None = None,
     max_fires: int | None = None,
-    tests: TTest | None = None,
+    tests: InlineTests | None = None,
     async_: bool = False,
     max_context: int = 2000,
     specialty: TSpecialty = "review",
@@ -346,8 +346,8 @@ def record_prompt_check_failure(
 
 def prompt_check(
     evt: BaseHookEvent,
-    template: str,
-    fmt: dict[str, Any],
+    template: str | PromptMessage,
+    fmt: dict[str, Any] | None = None,
     *,
     prefix: str,
     suffix: str = "",
@@ -360,7 +360,8 @@ def prompt_check(
     if include_reasoning:
         reasoning = evt.ctx.t.recent(50).assistant_text() if hasattr(evt.ctx.t, "recent") else ""
 
-    built = Prompt().system(template.format(**fmt)).context("agent_reasoning", reasoning or None)
+    base = template if isinstance(template, PromptMessage) else Prompt().system(template.format(**(fmt or {})))
+    built = base.context("agent_reasoning", reasoning or None)
     prompt_str = str(built)
 
     try:

@@ -1,0 +1,9 @@
+# Session Workflow
+
+You want state that survives across events in one session: capture the user's intent at prompt submit, accumulate the files the agent edits, mark whether tests have run, and block `Stop` if the agent tries to wrap up without running tests. Six standalone `@session_state` Pydantic models would work but you'd repeat load/save plumbing six times.
+
+```python
+--8<-- "examples/session_workflow.py"
+```
+
+**What to learn:** `@workflow_state("review")` decorates a single Pydantic model and exposes `MyState.load(evt)` / `state.save(evt)` for any handler. One namespace key, one atomic shape, and any number of hooks across `PreToolUse`, `UserPromptSubmit`, and `Stop` can read and mutate it. The `Waiting()` condition on the `Stop` handler skips wake-up stops where there's nothing new to assert.

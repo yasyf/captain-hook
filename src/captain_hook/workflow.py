@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 
 from pydantic import BaseModel
 
-from captain_hook.types import Action, Event, HookResult, TCondition, TTest
+from captain_hook.types import Action, Event, HookResult, InlineTests, TCondition
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
@@ -63,7 +63,7 @@ class Workflow:
                 )
             try:
                 parsed = art.model.model_validate_json(p.read_text())
-            except Exception as exc:
+            except (ValueError, OSError) as exc:
                 return HookResult(
                     action=Action.block,
                     message=f"{self.label} INCOMPLETE: {art.path} invalid: {exc}",
@@ -83,7 +83,7 @@ def workflow(
     post_complete: Callable[[BaseHookEvent], HookResult | None] | None = None,
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
-    tests: TTest | None = None,
+    tests: InlineTests | None = None,
 ) -> None:
     from captain_hook.app import on
 
