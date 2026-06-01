@@ -371,6 +371,8 @@ class HookSpec:
 
 @dataclass(frozen=True, kw_only=True)
 class RegisteredHook:
+    """A registered hook pairing a ``HookSpec`` with an optional handler callable."""
+
     spec: HookSpec
     handler: Callable[[BaseHookEvent], HookResult | None] | None = None
     name: str = ""

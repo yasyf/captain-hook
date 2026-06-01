@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
+
+import pytest
 
 from captain_hook.app import (
     _state,
@@ -634,3 +637,87 @@ class TestFlags:
         result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), root_dir=str(root_dir), stdin_data=stdin)
         assert result.returncode == 0
         assert result.stdout.strip() == ""
+
+
+class TestLogsSubcommand:
+    @staticmethod
+    def seed_logs(log_dir: Path) -> None:
+        (log_dir / "old.log").write_text("OLD-A\nOLD-B")
+        (log_dir / "new.log").write_text("NEW-1\nNEW-2\nNEW-3")
+        os.utime(log_dir / "old.log", (1000, 1000))
+        os.utime(log_dir / "new.log", (2000, 2000))
+
+    def test_no_arg_prints_newest(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from captain_hook.cli import show_logs
+
+        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path))
+        self.seed_logs(tmp_path)
+        show_logs()
+        assert capsys.readouterr().out == "NEW-1\nNEW-2\nNEW-3\n"
+
+    def test_tail_limits_to_last_n_lines(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from captain_hook.cli import show_logs
+
+        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path))
+        self.seed_logs(tmp_path)
+        show_logs(tail=2)
+        assert capsys.readouterr().out == "NEW-2\nNEW-3\n"
+
+    def test_session_id_selects_that_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from captain_hook.cli import show_logs
+
+        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path))
+        self.seed_logs(tmp_path)
+        show_logs(session="old")
+        assert capsys.readouterr().out == "OLD-A\nOLD-B\n"
+
+    def test_session_transcript_path_resolves_via_hash(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from captain_hook.cli import show_logs
+        from captain_hook.session import session_hash
+
+        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path))
+        (tmp_path / f"{session_hash('/tmp/t.jsonl')}.log").write_text("BY-HASH")
+        show_logs(session="/tmp/t.jsonl")
+        assert capsys.readouterr().out == "BY-HASH\n"
+
+    def test_missing_dir_prints_to_stderr(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from captain_hook.cli import show_logs
+
+        missing = tmp_path / "nope"
+        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(missing))
+        show_logs()
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert str(missing) in captured.err
+
+    def test_empty_dir_prints_to_stderr(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from captain_hook.cli import show_logs
+
+        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path))
+        show_logs()
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert str(tmp_path) in captured.err
+
+    def test_missing_file_prints_to_stderr(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from captain_hook.cli import show_logs
+
+        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path))
+        show_logs(session="absent")
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "absent" in captured.err

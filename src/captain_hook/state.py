@@ -202,7 +202,7 @@ def workflow_state(name: str) -> Callable[[type[T]], type[T]]:
         SessionStore.track(cls)
 
         def load(inner_cls: type[T], evt: BaseHookEvent) -> T:
-            return evt.ctx.s[inner_cls].get(inner_cls())
+            return evt.ctx.s.load(inner_cls)
 
         def save(self: T, evt: BaseHookEvent) -> None:
             evt.ctx.s[type(self)].set(self)

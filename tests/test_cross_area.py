@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from captain_hook._loader import discover_hooks
+from captain_hook.loader import discover_hooks
 from captain_hook.app import (
     _state,
     hook as register_hook,
@@ -671,7 +671,7 @@ class TestCallLlm:
     """VAL-CROSS-018"""
 
     def test_codex_backend_builds_command_and_parses(self) -> None:
-        from captain_hook._backends import CodexBackend
+        from captain_hook.llm import CodexBackend
 
         backend = CodexBackend()
         cmd = backend.build_command(backend.models["small"], None, agent=True)
@@ -680,7 +680,7 @@ class TestCallLlm:
         assert backend.parse_response("raw output", None) == "raw output"
 
     def test_claude_backend_builds_command_and_parses(self) -> None:
-        from captain_hook._backends import ClaudeBackend
+        from captain_hook.llm import ClaudeBackend
 
         backend = ClaudeBackend()
         cmd = backend.build_command(backend.models["small"], None, agent=False)
@@ -695,7 +695,7 @@ class TestCallLlm:
     def test_codex_backend_parses_model_response(self) -> None:
         from pydantic import BaseModel
 
-        from captain_hook._backends import CodexBackend
+        from captain_hook.llm import CodexBackend
 
         class Verdict(BaseModel):
             block: bool

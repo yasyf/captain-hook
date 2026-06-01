@@ -4,11 +4,12 @@ Common errors and how to diagnose them.
 
 ## "My hook didn't fire"
 
-Three things to check, in order:
+Four things to check, in order:
 
 1. Run `captain-hook test --hooks <dir>` with the inline tests in place. If the test fails, the hook's conditions aren't matching the input you expect — fix the condition before debugging dispatch.
 2. Confirm the `--hooks` argument points at the directory that actually contains your hook file. Captain-hook loads `.py` files under that root and nothing else.
 3. Inspect the `events=` argument. A primitive defaults to one event (`block_command` → `PreToolUse`, `nudge` → `PostToolUse`); if you want a different event, pass it explicitly.
+4. View the recent dispatch logs with `captain-hook logs`. By default it prints the most recent session's per-event log file, written under the cache log dir (default `~/.cache/captain-hook/logs`, [see Configuration](configuration.md#log-directory)). Pass `--tail N` to limit lines, or `--session <id-or-transcript-path>` to target a specific session. If your hook never appears in the log, dispatch never reached it — recheck steps 1–3.
 
 ## Settings not picked up
 

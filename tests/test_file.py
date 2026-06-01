@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from captain_hook.file import File, PathMatcher
+from captain_hook.file import File, PathMatcher, categorize_files
 
 
 class TestFileWrapsPath:
@@ -169,3 +169,35 @@ class TestPathMatcher:
     def test_empty_patterns_matches_nothing(self) -> None:
         pm = PathMatcher(patterns=[])
         assert not pm.matches("test.py")
+
+
+class TestCategorizeFiles:
+    def test_splits_source_test_skipped(self) -> None:
+        assert categorize_files(["a/test_x.py", "b/foo.py", "c/notes.md"]) == (
+            ["b/foo.py"],
+            ["a/test_x.py"],
+            ["c/notes.md"],
+        )
+
+    def test_conftest_is_test(self) -> None:
+        source, test, _ = categorize_files(["pkg/conftest.py", "pkg/foo.py"])
+        assert source == ["pkg/foo.py"]
+        assert test == ["pkg/conftest.py"]
+
+    def test_files_under_tests_dir_are_test(self) -> None:
+        source, test, _ = categorize_files(["pkg/tests/util/helper.py", "pkg/core.py"])
+        assert source == ["pkg/core.py"]
+        assert test == ["pkg/tests/util/helper.py"]
+
+    def test_output_sorted_and_deduplicated(self) -> None:
+        source, _, _ = categorize_files(["z.py", "z.py", "a.py", "b.py"])
+        assert source == ["a.py", "b.py", "z.py"]
+
+    def test_non_py_file_skipped(self) -> None:
+        source, test, skipped = categorize_files(["notes.md", "ok.py"])
+        assert source == ["ok.py"]
+        assert test == []
+        assert skipped == ["notes.md"]
+
+    def test_blank_entries_ignored(self) -> None:
+        assert categorize_files(["  ", "ok.py"]) == (["ok.py"], [], [])

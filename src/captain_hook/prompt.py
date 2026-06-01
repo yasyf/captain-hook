@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import inspect
 import textwrap
 from dataclasses import dataclass
+from pathlib import Path
 
 
 def dedent_text(text: str) -> str:
     return textwrap.dedent(text).strip()
+
+
+_FRAMEWORK_DIR = Path(__file__).resolve().parent
+
+
+def _caller_dir() -> Path:
+    frame = inspect.currentframe()
+    while frame and Path(frame.f_code.co_filename).resolve().is_relative_to(_FRAMEWORK_DIR):
+        frame = frame.f_back
+    return Path(frame.f_code.co_filename).resolve().parent if frame else Path.cwd()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -49,6 +61,33 @@ class PromptMessage:
             return cls(system_text=textwrap.dedent(text).strip().format_map(vars))
         except KeyError as exc:
             raise KeyError(f"template variable {exc.args[0]!r} not supplied") from exc
+
+    @classmethod
+    def load(cls, name: str, *, base: str | Path | None = None, **vars: object) -> PromptMessage:
+        """Load a prompt from a ``.md`` file and render it via :meth:`from_template`.
+
+        Resolution searches directories in order, returning the first existing file:
+        the ``base`` directory if given (otherwise a ``prompts/`` directory beside the
+        calling module), then the framework's bundled ``captain_hook/prompts/``. The
+        file path is ``<dir>/<name>.md``; ``name`` may contain ``/`` to nest.
+
+        Args:
+            name: Prompt name without the ``.md`` suffix; may include ``/`` for nesting.
+            base: Optional directory to search instead of the caller-relative ``prompts/``.
+            **vars: Template variables substituted into the file via ``str.format_map``.
+
+        Returns:
+            A :class:`PromptMessage` whose system text is the rendered file contents.
+
+        Raises:
+            FileNotFoundError: If no matching file exists in any searched directory.
+            KeyError: If the file references a placeholder not supplied in ``**vars``.
+        """
+        dirs = [Path(base) if base else _caller_dir() / "prompts", _FRAMEWORK_DIR / "prompts"]
+        for path in (d / f"{name}.md" for d in dirs):
+            if path.is_file():
+                return cls.from_template(path.read_text(), **vars)
+        raise FileNotFoundError(f"prompt {name!r} not found; searched: {', '.join(str(d) for d in dirs)}")
 
     def __str__(self) -> str:
         parts: list[str] = []

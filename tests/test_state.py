@@ -21,6 +21,10 @@ class MyCustomModel(BaseModel):
 class AnotherModel(BaseModel):
     label: str
 
+class DefaultModel(BaseModel):
+    name: str = "default"
+    value: int = 0
+
 def make_pre_tool_event(ctx: MagicMock | None = None) -> MagicMock:
     from captain_hook.events import PreToolUseEvent
 
@@ -130,6 +134,14 @@ class TestStateStore:
         assert SessionStore(None)[MyModel].get(MyModel(name="fallback", value=7)) == MyModel(
             name="fallback", value=7
         )
+
+    def test_load_returns_fresh_default_when_empty(self, tmp_path: Path) -> None:
+        assert SessionStore(tmp_path).load(DefaultModel) == DefaultModel()
+
+    def test_load_returns_stored_instance(self, tmp_path: Path) -> None:
+        store = SessionStore(tmp_path)
+        store[DefaultModel].set(DefaultModel(name="x", value=5))
+        assert store.load(DefaultModel) == DefaultModel(name="x", value=5)
 
 class TestFireCounting:
 

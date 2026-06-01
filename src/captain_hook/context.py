@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 
-from captain_hook._backends import CodexBackend, LlmBackend, LlmBackends, TModel, TSpecialty
+from captain_hook.llm import CodexBackend, LlmBackend, LlmBackends, TModel, TSpecialty
 from captain_hook.prompt import PromptMessage
 from captain_hook.session import SessionStore
 

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+
 import pytest
 
+import captain_hook.prompt as prompt_module
 from captain_hook.prompt import Prompt, PromptMessage
 
 
@@ -229,3 +233,58 @@ class TestPromptAutoDedent:
         rendered = str(p)
         assert "What is the answer?" in rendered
         assert "            What is the answer?" not in rendered
+
+
+class TestPromptLoad:
+    def test_caller_relative_resolution_cross_package(self, tmp_path: Path) -> None:
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "prompts" / "greet.md").write_text("Hello {who}")
+        caller = tmp_path / "caller_mod.py"
+        caller.write_text(
+            "from captain_hook.prompt import Prompt\n"
+            "def greet(who):\n"
+            "    return str(Prompt.load('greet', who=who))\n"
+        )
+        spec = importlib.util.spec_from_file_location("ch_caller_relative_mod", caller)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert module.greet("World") == "Hello World"
+
+    def test_base_override_resolves_from_explicit_dir(self, tmp_path: Path) -> None:
+        (tmp_path / "hi.md").write_text("Hi {who}")
+        assert str(Prompt.load("hi", base=tmp_path, who="Bob")) == "Hi Bob"
+
+    def test_load_returns_prompt_message(self, tmp_path: Path) -> None:
+        (tmp_path / "p.md").write_text("body")
+        assert isinstance(Prompt.load("p", base=tmp_path), PromptMessage)
+
+    def test_framework_fallback_when_first_dir_misses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        framework = tmp_path / "framework"
+        (framework / "prompts").mkdir(parents=True)
+        (framework / "prompts" / "sp.md").write_text("FW {x}")
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        monkeypatch.setattr(prompt_module, "_FRAMEWORK_DIR", framework)
+        assert str(Prompt.load("sp", base=empty, x="Y")) == "FW Y"
+
+    def test_missing_name_raises_file_not_found_listing_both_dirs(self, tmp_path: Path) -> None:
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        with pytest.raises(FileNotFoundError) as exc:
+            Prompt.load("does_not_exist", base=empty)
+        msg = str(exc.value)
+        assert str(empty) in msg
+        assert str(prompt_module._FRAMEWORK_DIR / "prompts") in msg
+
+    def test_vars_formatting(self, tmp_path: Path) -> None:
+        (tmp_path / "v.md").write_text("A={a} B={b}")
+        assert str(Prompt.load("v", base=tmp_path, a="1", b="2")) == "A=1 B=2"
+
+    def test_missing_placeholder_raises_key_error(self, tmp_path: Path) -> None:
+        (tmp_path / "k.md").write_text("Hello {who}")
+        with pytest.raises(KeyError) as exc:
+            Prompt.load("k", base=tmp_path)
+        assert "who" in exc.value.args[0]

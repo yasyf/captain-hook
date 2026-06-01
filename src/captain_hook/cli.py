@@ -1,108 +1,26 @@
 from __future__ import annotations
 
 import argparse
+import importlib.resources
 import json
 import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from captain_hook._loader import discover_hooks
 from captain_hook.app import _state, load_gitignore, reset
 from captain_hook.context import HookContext
 from captain_hook.dispatch import dispatch
+from captain_hook.loader import discover_hooks
 from captain_hook.log import setup_logging
 from captain_hook.session import SessionStore, ensure_session
 from captain_hook.transcript import Transcript
 from captain_hook.types import Event
 
-EXAMPLE_HOOK = '''\
-from __future__ import annotations
 
-import re
-
-from captain_hook import (
-    Allow,
-    BaseHookEvent,
-    Block,
-    Event,
-    HookResult,
-    InlineTests,
-    Input,
-    Prompt,
-    Signal,
-    Signals,
-    SourceEdits,
-    audit,
-    block_command,
-    nudge,
-    on,
-    prompt_check,
-)
-
-# 1. block_command — refuse a dangerous shell command before it runs.
-# see docs/guide/primitives.md
-RM_RF_TESTS: InlineTests = {
-    Input(tool="Bash", command="rm -rf /"): Block(pattern="unrecoverable"),
-    Input(tool="Bash", command="rm -rf build/"): Block(pattern="unrecoverable"),
-    Input(tool="Bash", command="rm notes.txt"): Allow(),
-}
-block_command(
-    ["rm", "-rf", "*"],
-    reason="rm -rf is unrecoverable on this machine",
-    hint="Delete files individually or move them to a trash dir",
-    tests=RM_RF_TESTS,
-)
-
-# 2. nudge — fire on Stop when retry-language piles up in the transcript.
-# see docs/guide/primitives.md and docs/examples/failure-recovery.md
-RETRY_SIGNALS = Signals(
-    patterns=[
-        Signal(pattern=r"let me try again", weight=2, flags=re.IGNORECASE),
-        Signal(pattern=r"same (error|failure|issue)", weight=2, flags=re.IGNORECASE),
-        Signal(pattern=r"\\bretry(ing)?\\b", weight=1, flags=re.IGNORECASE),
-    ],
-    threshold=3,
-    window=10,
-)
-nudge(
-    "Repeated retries detected. Read DEBUGGING.md or invoke /codex before the next attempt.",
-    signals=RETRY_SIGNALS,
-    events=Event.Stop,
-    max_fires=1,
-)
-
-# 3. audit — append one JSONL record per matching tool call into .context/.
-# see docs/guide/primitives.md
-audit(
-    Event.PreToolUse | Event.PostToolUse | Event.Stop,
-    log_dir=".context/hook-audit",
-)
-
-# 4. prompt_check — LLM gate on Python edits that smell like unfinished work.
-# see docs/guide/primitives.md and docs/examples/test-integrity.md
-PLACEHOLDER_TEMPLATE = """
-The agent just edited {fp}. Flag the change if the new content contains
-placeholder text the agent forgot to replace — `TODO: replace`, `FILLME`,
-`<your-...-here>`, `pass  # implement`, etc.
-
---- new ---
-{new}
-"""
-
-
-@on(Event.PostToolUse, only_if=[SourceEdits(lang="py")])
-def warn_on_placeholder(evt: BaseHookEvent) -> HookResult | None:
-    if not (fp := evt.file) or not (new := evt.content):
-        return None
-    if not re.search(r"TODO:?\\s*replace|FILLME|<your-.+?-here>", new, re.IGNORECASE):
-        return None
-    return prompt_check(
-        evt,
-        Prompt.from_template(PLACEHOLDER_TEMPLATE, fp=fp.path, new=new),
-        prefix="PLACEHOLDER LEFT IN CODE",
-    )
-'''
+def example_hook_source() -> str:
+    """Read the bundled ``example.py`` scaffold from ``templates/example_hook.py.tmpl``."""
+    return (importlib.resources.files("captain_hook") / "templates" / "example_hook.py.tmpl").read_text()
 
 
 def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str | None = None) -> dict[str, Any]:
@@ -229,7 +147,7 @@ def init_project(root: Path) -> None:
     example = hooks_dir / "example.py"
     example_created = not example.exists()
     if example_created:
-        example.write_text(EXAMPLE_HOOK)
+        example.write_text(example_hook_source())
 
     settings_path = root / ".claude" / "settings.local.json"
     reset()
@@ -256,6 +174,41 @@ def init_project(root: Path) -> None:
     print("  4. captain-hook generate-settings --hooks ...    # rewire after adding events")
 
 
+def show_logs(session: str | None = None, tail: int | None = None) -> None:
+    """Print a captain-hook session log.
+
+    Args:
+        session: A session id, or a transcript path (hashed via ``session_hash``)
+            to locate its log file. When ``None``, the most recently modified log
+            is shown.
+        tail: When set, print only the last ``tail`` lines.
+    """
+    from captain_hook.session import session_hash
+    from captain_hook.settings import resolve_log_dir
+
+    log_dir = resolve_log_dir()
+    if not log_dir.exists():
+        print(f"No captain-hook log directory at {log_dir}", file=sys.stderr)
+        return
+
+    if session is None:
+        logs = sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime)
+        if not logs:
+            print(f"No log files in {log_dir}", file=sys.stderr)
+            return
+        log_file = logs[-1]
+    else:
+        session_id = session_hash(session) if ("/" in session or session.endswith(".jsonl")) else session
+        log_file = log_dir / f"{session_id}.log"
+
+    if not log_file.exists():
+        print(f"No log file at {log_file}", file=sys.stderr)
+        return
+
+    lines = log_file.read_text().splitlines()
+    print("\n".join(lines[-tail:] if tail else lines))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="captain-hook",
@@ -279,6 +232,10 @@ def build_parser() -> argparse.ArgumentParser:
     test_parser = sub.add_parser("test", help="Run inline tests from all registered hooks")
     test_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit one JSON record per test (CI mode)")
     sub.add_parser("init", help="Scaffold hooks directory, bin script, and settings")
+
+    logs_parser = sub.add_parser("logs", help="View a recent captain-hook session log")
+    logs_parser.add_argument("--session", default=None, help="Session id or transcript path (hashed) to view")
+    logs_parser.add_argument("--tail", type=int, default=None, help="Show only the last N lines")
 
     return parser
 
@@ -349,6 +306,10 @@ def main() -> None:
 
     if args.command == "init":
         init_project(root)
+        return
+
+    if args.command == "logs":
+        show_logs(session=args.session, tail=args.tail)
         return
 
     reset()

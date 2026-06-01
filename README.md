@@ -6,9 +6,13 @@ Declarative hook framework for Claude Code. Write hooks as data, test them inlin
 
 ## Install
 
+No install needed — run everything through [uvx](https://docs.astral.sh/uv/):
+
 ```bash
-pip install captain-hook
+uvx captain-hook init
 ```
+
+`uvx` fetches captain-hook into a throwaway environment and runs it, so you never add it to `pyproject.toml`. Every command below works the same way: prefix it with `uvx`.
 
 ## First hook
 

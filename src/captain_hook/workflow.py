@@ -43,6 +43,11 @@ class Workflow:
     steps: list[Step]
     artifacts: list[Artifact[BaseModel]] = field(default_factory=lambda: [])
     post_complete: Callable[[BaseHookEvent], HookResult | None] | None = None
+    on_start: Callable[[BaseHookEvent], HookResult | None] | None = None
+
+    def setup(self, evt: BaseHookEvent) -> HookResult | None:
+        """Run the ``on_start`` callback when the workflow's subagent launches."""
+        return self.on_start(evt) if self.on_start else None
 
     def guard(self, evt: BaseHookEvent) -> HookResult | None:
         if self.marker not in evt.ctx.t.full_text:
@@ -81,6 +86,7 @@ def workflow(
     steps: list[Step],
     artifacts: list[Artifact[BaseModel]] | None = None,
     post_complete: Callable[[BaseHookEvent], HookResult | None] | None = None,
+    on_start: Callable[[BaseHookEvent], HookResult | None] | None = None,
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     tests: InlineTests | None = None,
@@ -93,6 +99,7 @@ def workflow(
         steps=steps,
         artifacts=artifacts or [],
         post_complete=post_complete,
+        on_start=on_start,
     )
 
     def guard(evt: BaseHookEvent) -> HookResult | None:
@@ -101,3 +108,12 @@ def workflow(
     guard.__name__ = f"{label.lower().replace('-', '_')}_workflow_guard"
     guard.__qualname__ = guard.__name__
     on(Event.SubagentStop, only_if=only_if, skip_if=skip_if, max_fires=1, tests=tests)(guard)
+
+    if on_start is not None:
+
+        def setup(evt: BaseHookEvent) -> HookResult | None:
+            return w.setup(evt)
+
+        setup.__name__ = f"{label.lower().replace('-', '_')}_workflow_setup"
+        setup.__qualname__ = setup.__name__
+        on(Event.SubagentStart, only_if=only_if, skip_if=skip_if)(setup)

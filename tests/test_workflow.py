@@ -191,6 +191,68 @@ class TestWorkflowFunction:
         )
         assert _state.hooks[-1].spec.only_if == ()
         assert _state.hooks[-1].spec.skip_if == ()
+class TestWorkflowOnStart:
+    def test_on_start_registers_both_subagent_start_and_stop(self) -> None:
+        from captain_hook.types import Agent
+        from captain_hook.workflow import Step, workflow
+
+        before = len(_state.hooks)
+        workflow(
+            label="CLEANUP",
+            marker="DONE",
+            steps=[Step(name="s1", check=lambda _: True, stopped_at="S:", next_step="N")],
+            on_start=lambda _: HookResult(action=Action.warn, message="setup ran"),
+            only_if=[Agent("cleanup")],
+        )
+        assert len(_state.hooks) == before + 2
+
+        stop_hooks = [h for h in _state.hooks if Event.SubagentStop in h.spec.events]
+        start_hooks = [h for h in _state.hooks if Event.SubagentStart in h.spec.events]
+        assert len(stop_hooks) == 1
+        assert len(start_hooks) == 1
+
+        assert stop_hooks[0].spec.max_fires == 1
+        assert stop_hooks[0].spec.only_if == (Agent("cleanup"),)
+        assert start_hooks[0].spec.max_fires is None
+        assert start_hooks[0].spec.only_if == (Agent("cleanup"),)
+
+    def test_on_start_handler_invokes_callback(self) -> None:
+        from captain_hook.types import Agent
+        from captain_hook.workflow import Step, workflow
+
+        captured: list[Any] = []
+
+        def starter(evt: Any) -> HookResult:
+            captured.append(evt)
+            return HookResult(action=Action.warn, message="setup ran")
+
+        workflow(
+            label="CLEANUP",
+            marker="DONE",
+            steps=[Step(name="s1", check=lambda _: True, stopped_at="S:", next_step="N")],
+            on_start=starter,
+            only_if=[Agent("cleanup")],
+        )
+        setup = next(h for h in _state.hooks if Event.SubagentStart in h.spec.events)
+        evt = make_evt()
+        result = setup.handler(evt)
+        assert result is not None
+        assert result.message == "setup ran"
+        assert captured == [evt]
+
+    def test_no_on_start_registers_only_stop_guard(self) -> None:
+        from captain_hook.workflow import Step, workflow
+
+        before = len(_state.hooks)
+        workflow(
+            label="PLAIN",
+            marker="DONE",
+            steps=[Step(name="s1", check=lambda _: True, stopped_at="S:", next_step="N")],
+        )
+        assert len(_state.hooks) == before + 1
+        assert [h for h in _state.hooks if Event.SubagentStart in h.spec.events] == []
+
+
 class TestWorkflowGuard:
     def test_blocks_when_marker_absent(self) -> None:
         from captain_hook.workflow import Step, Workflow

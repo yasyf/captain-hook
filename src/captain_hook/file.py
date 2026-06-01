@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from functools import cached_property
@@ -81,3 +82,39 @@ class PathMatcher:
 
     def __contains__(self, path: str | Path | File) -> bool:
         return self.matches(path)
+
+
+def categorize_files(
+    paths: Iterable[str | Path], *, lang: str = "py"
+) -> tuple[list[str], list[str], list[str]]:
+    """Split paths into source, test, and skipped buckets for a language.
+
+    A path that does not match the ``lang`` globs is skipped; otherwise it is
+    classified as a test file (via :attr:`File.is_test`, which treats ``conftest.py``
+    and anything under a ``tests/`` directory as tests) or as source.
+
+    Args:
+        paths: File paths to categorize; blank entries are ignored.
+        lang: Language key into ``LANG_GLOBS`` (defaults to ``"py"``); unknown keys
+            fall back to ``*.<lang>``.
+
+    Returns:
+        A ``(source, test, skipped)`` tuple, each a sorted, de-duplicated list of
+        path strings.
+    """
+    from captain_hook.types import LANG_GLOBS
+
+    matcher = PathMatcher(patterns=list(LANG_GLOBS.get(lang, (f"*.{lang}",))))
+    source: set[str] = set()
+    test: set[str] = set()
+    skipped: set[str] = set()
+    for raw in paths:
+        if not (p := str(raw).strip()):
+            continue
+        if (f := File(path=Path(p))) not in matcher:
+            skipped.add(p)
+        elif f.is_test:
+            test.add(p)
+        else:
+            source.add(p)
+    return sorted(source), sorted(test), sorted(skipped)

@@ -18,7 +18,7 @@ from captain_hook.events import (
     SubagentStopEvent,
     UserPromptSubmitEvent,
 )
-from captain_hook.types import Event
+from captain_hook.types import Action, Event
 
 
 def make_ctx() -> MagicMock:
@@ -278,6 +278,29 @@ class TestNotificationEvent:
         assert evt.notification_type is None
 
 
+
+
+class TestWarnParts:
+    def test_single_str_part_verbatim(self) -> None:
+        assert make_event(StopEvent, {}).warn("plain message").message == "plain message"
+
+    def test_warn_action_is_warn(self) -> None:
+        assert make_event(StopEvent, {}).warn("x").action is Action.warn
+
+    def test_label_value_tuple_renders_label_and_json(self) -> None:
+        assert make_event(StopEvent, {}).warn(("files", ["a.py", "b.py"])).message == 'files: ["a.py", "b.py"]'
+
+    def test_label_value_tuple_uses_default_str_for_non_serializable(self) -> None:
+        assert make_event(StopEvent, {}).warn(("path", Path("/tmp/x"))).message == 'path: "/tmp/x"'
+
+    def test_bare_dict_renders_json(self) -> None:
+        assert make_event(StopEvent, {}).warn({"k": 1}).message == '{"k": 1}'
+
+    def test_multiple_parts_join_with_newline(self) -> None:
+        assert make_event(StopEvent, {}).warn("line1", ("n", 3), {"x": 1}).message == 'line1\nn: 3\n{"x": 1}'
+
+    def test_legacy_pre_joined_string_still_works(self) -> None:
+        assert make_event(StopEvent, {}).warn("a\nb\nc").message == "a\nb\nc"
 
 
 class TestTranscriptPath:

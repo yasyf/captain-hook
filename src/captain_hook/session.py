@@ -8,7 +8,7 @@ import tempfile
 from collections.abc import Sequence
 from hashlib import sha256
 from pathlib import Path
-from typing import ClassVar, Generic, TypeVar
+from typing import ClassVar, Generic, TypeVar, overload
 
 from pydantic import BaseModel
 
@@ -63,6 +63,10 @@ class SessionSlot(Generic[M]):  # noqa: UP046
     def path(self) -> Path | None:
         return self._path
 
+    @overload
+    def get(self) -> M | None: ...
+    @overload
+    def get(self, default: M) -> M: ...
     def get(self, default: M | None = None) -> M | None:
         if not self._path or not self._path.exists():
             return default
@@ -107,6 +111,18 @@ class SessionStore:
 
     def __getitem__(self, model: type[M]) -> SessionSlot[M]:
         return SessionSlot(self._dir, model)
+
+    def load(self, model: type[M]) -> M:
+        """Read ``model`` from its session slot, defaulting to a fresh ``model()``.
+
+        Args:
+            model: The Pydantic model class to read.
+
+        Returns:
+            The persisted instance, or a newly constructed ``model()`` when no
+            stored state exists for this session.
+        """
+        return self[model].get(model())
 
     @classmethod
     def track(cls, model: type[BaseModel]) -> None:

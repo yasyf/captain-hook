@@ -62,3 +62,27 @@ class Input:
 
 
 type InlineTests = dict[str | Input, Block | Warn | Allow]
+"""Inline test specification mapping inputs to expected outcomes.
+
+A mapping whose keys are ``Input`` descriptors (or legacy ``str`` session
+keys) and whose values are the expected hook result — ``Block``, ``Warn``,
+or ``Allow``.
+
+Keys:
+    Input: Structured test-input descriptor specifying tool, command, file,
+        content, and/or transcript context.
+    str: Legacy session-key format — replayed from a recorded session
+        during ``run_inline_tests`` when a fixture exists, else skipped.
+
+Values:
+    Block: The hook must block, optionally matching a regex ``pattern``.
+    Warn: The hook must warn, optionally matching a regex ``pattern``.
+    Allow: The hook must allow (return ``None`` or action ``"allow"``).
+
+Example::
+
+    tests: InlineTests = {
+        Input(command="rm -rf /"): Block(pattern="dangerous"),
+        Input(command="ls"): Allow(),
+    }
+"""

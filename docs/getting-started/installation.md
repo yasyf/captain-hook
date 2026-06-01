@@ -3,37 +3,40 @@
 ## Requirements
 
 - Python 3.12 or later
-- [uv](https://docs.astral.sh/uv/) is recommended but not required.
+- [uv](https://docs.astral.sh/uv/) is required. The `uvx` runner ships with uv and is how every captain-hook command is invoked.
 
-## Three install modes
+## Run without installing (default)
 
-### 1. Install (default)
-
-For most projects: add captain-hook as a dependency.
-
-```bash
-pip install captain-hook
-# or
-uv add captain-hook
-```
-
-Then scaffold:
-
-```bash
-captain-hook init
-```
-
-### 2. Run without installing (uvx)
-
-For one-shot scaffolding or trying things out, no project dependency:
+The fastest way to use captain-hook — no project dependency needed:
 
 ```bash
 uvx captain-hook init
 ```
 
-`uvx` builds a throwaway venv, runs the CLI, and discards it. Good for repos where you don't want captain-hook in `pyproject.toml` yet.
+`uvx` fetches captain-hook into a throwaway environment, runs the CLI, and discards it. Every command works the same way — just prefix it with `uvx`:
 
-### 3. Monorepo / local checkout
+```bash
+uvx captain-hook test --hooks .claude/hooks
+uvx captain-hook generate-settings --hooks .claude/hooks
+```
+
+This is the headline path: you never add captain-hook to `pyproject.toml` and never manage a venv yourself.
+
+## Add as a project dependency
+
+Only if you want captain-hook pinned in your project's lockfile (e.g. to vendor it for offline CI):
+
+```bash
+uv add captain-hook
+```
+
+Then the commands drop the `uvx` prefix:
+
+```bash
+captain-hook init
+```
+
+## Monorepo / local checkout
 
 When captain-hook lives inside a larger repo (or you've cloned it for local development), point `uv run --project` at the local checkout:
 
@@ -41,9 +44,15 @@ When captain-hook lives inside a larger repo (or you've cloned it for local deve
 uv run --project packages/captain-hook captain-hook test --hooks .claude/hooks
 ```
 
-This is the right shape for any consumer project that vendors captain-hook rather than installs it from PyPI.
+This is the right shape for any consumer project that vendors captain-hook rather than pulling it from PyPI.
 
 ## Verify installation
+
+```bash
+uvx captain-hook test --hooks .claude/hooks
+```
+
+This runs the inline tests on the scaffolded example hook. If you added captain-hook as a dependency, you can also check the import directly:
 
 ```bash
 python -c "import captain_hook; print(captain_hook.__name__)"
@@ -95,11 +104,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install captain-hook
-      - run: captain-hook test --hooks .claude/hooks
+      - uses: astral-sh/setup-uv@v5
+      - run: uvx captain-hook test --hooks .claude/hooks
 ```
 
-Drop `--json` in if a downstream reporter consumes the output. For the monorepo install mode, swap the install/run lines for `uv run --project packages/captain-hook captain-hook test --hooks .claude/hooks`.
+`setup-uv` installs uv (which provides Python 3.12+ and `uvx`), so there's no separate Python or install step. Drop `--json` in if a downstream reporter consumes the output. For the monorepo install mode, swap the run line for `uv run --project packages/captain-hook captain-hook test --hooks .claude/hooks`.

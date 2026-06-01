@@ -17,7 +17,7 @@ from captain_hook.events import (
     ToolHookEvent,
     UserPromptSubmitEvent,
 )
-from captain_hook.file import File, PathMatcher
+from captain_hook.file import File, PathMatcher, categorize_files
 from captain_hook.primitives import (
     GateVerdict,
     NudgeVerdict,
@@ -177,6 +177,7 @@ __all__ = [
     "CommandLine",
     "File",
     "PathMatcher",
+    "categorize_files",
     "Redirect",
     # prompts
     "Prompt",

@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from pydantic_settings import BaseSettings
 
-from captain_hook._loader import discover_hooks
+from captain_hook.loader import discover_hooks
 from captain_hook.app import _state
 
 
@@ -231,7 +231,7 @@ class TestAutoConfEnvPrefix:
 @pytest.mark.usefixtures("isolate_modules")
 class TestSettingsFromApp:
     def test_app_settings_accessible(self, tmp_path: Any) -> None:
-        from captain_hook._loader import discover_hooks
+        from captain_hook.loader import discover_hooks
         from captain_hook.app import (
             _state,
             hook as register_hook,
@@ -249,7 +249,7 @@ class TestSettingsFromApp:
         assert _state.settings.my_setting == 42
 
     def test_discover_hooks_loads_conf_and_builds_settings(self, tmp_path: Any) -> None:
-        from captain_hook._loader import discover_hooks
+        from captain_hook.loader import discover_hooks
         from captain_hook.app import (
             _state,
             hook as register_hook,

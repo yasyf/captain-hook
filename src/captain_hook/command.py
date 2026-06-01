@@ -289,21 +289,70 @@ class CommandLine:
 
 @dataclass(frozen=True)
 class CommandLineQuery:
+    """Predicate helpers for inspecting a parsed ``CommandLine``.
+
+    Wraps a ``CommandLine`` to answer common yes/no questions a hook condition
+    needs — which executable runs, whether a subcommand or token appears, or
+    whether the line redirects/pipes. Obtain one via ``CommandLine.q``.
+    """
+
     line: CommandLine
 
     def runs(self, *argv: str) -> bool:
+        """Return whether the primary command's argv starts with ``argv``.
+
+        Args:
+            *argv: Leading argv tokens to match, e.g. ``("git", "push")``.
+
+        Returns:
+            ``True`` if ``argv`` is non-empty and is a prefix of the primary
+            command's ``argv``.
+        """
         return bool(argv) and self.line.primary.argv[: len(argv)] == argv
 
     def has_subcommand(self, name: str) -> bool:
+        """Return whether any command in the line carries ``name`` as an argument.
+
+        Args:
+            name: The subcommand/argument token to look for (e.g. ``"push"``).
+
+        Returns:
+            ``True`` if ``name`` appears in the arguments of any parsed command.
+        """
         return any(name in cmd.args for cmd in self.line.commands)
 
     def any_command(self, pred: Callable[[Command], bool]) -> bool:
+        """Return whether any command in the line satisfies ``pred``.
+
+        Args:
+            pred: Predicate applied to each parsed ``Command``.
+
+        Returns:
+            ``True`` if ``pred`` returns truthy for at least one command.
+        """
         return any(pred(cmd) for cmd in self.line.commands)
 
     def uses_redirect(self) -> bool:
+        """Return whether the line redirects output or pipes between commands.
+
+        Returns:
+            ``True`` if any command has a file redirect or the parts are joined
+            by a pipe (``|``) operator.
+        """
         return any(cmd.redirects for cmd in self.line.commands) or any(
             op == "|" for _, op in self.line.parts if op
         )
 
     def contains_token(self, token: str) -> bool:
+        """Return whether ``token`` appears as a whole argv element in any command.
+
+        Unlike ``has_subcommand`` this matches the executable as well as the
+        arguments and requires an exact element match, not a substring.
+
+        Args:
+            token: The exact argv token to look for.
+
+        Returns:
+            ``True`` if ``token`` equals an argv element of any parsed command.
+        """
         return any(token == a for cmd in self.line.commands for a in cmd.argv)

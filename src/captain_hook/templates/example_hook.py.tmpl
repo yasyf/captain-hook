@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+import re
+
+from captain_hook import (
+    Allow,
+    BaseHookEvent,
+    Block,
+    Event,
+    HookResult,
+    InlineTests,
+    Input,
+    Prompt,
+    Signal,
+    Signals,
+    SourceEdits,
+    audit,
+    block_command,
+    nudge,
+    on,
+    prompt_check,
+)
+
+# 1. block_command — refuse a dangerous shell command before it runs.
+# see docs/guide/primitives.md
+RM_RF_TESTS: InlineTests = {
+    Input(tool="Bash", command="rm -rf /"): Block(pattern="unrecoverable"),
+    Input(tool="Bash", command="rm -rf build/"): Block(pattern="unrecoverable"),
+    Input(tool="Bash", command="rm notes.txt"): Allow(),
+}
+block_command(
+    ["rm", "-rf", "*"],
+    reason="rm -rf is unrecoverable on this machine",
+    hint="Delete files individually or move them to a trash dir",
+    tests=RM_RF_TESTS,
+)
+
+# 2. nudge — fire on Stop when retry-language piles up in the transcript.
+# see docs/guide/primitives.md and docs/examples/failure-recovery.md
+RETRY_SIGNALS = Signals(
+    patterns=[
+        Signal(pattern=r"let me try again", weight=2, flags=re.IGNORECASE),
+        Signal(pattern=r"same (error|failure|issue)", weight=2, flags=re.IGNORECASE),
+        Signal(pattern=r"\bretry(ing)?\b", weight=1, flags=re.IGNORECASE),
+    ],
+    threshold=3,
+    window=10,
+)
+nudge(
+    "Repeated retries detected. Read DEBUGGING.md or invoke /codex before the next attempt.",
+    signals=RETRY_SIGNALS,
+    events=Event.Stop,
+    max_fires=1,
+)
+
+# 3. audit — append one JSONL record per matching tool call into .context/.
+# see docs/guide/primitives.md
+audit(
+    Event.PreToolUse | Event.PostToolUse | Event.Stop,
+    log_dir=".context/hook-audit",
+)
+
+# 4. prompt_check — LLM gate on Python edits that smell like unfinished work.
+# see docs/guide/primitives.md and docs/examples/test-integrity.md
+PLACEHOLDER_TEMPLATE = """
+The agent just edited {fp}. Flag the change if the new content contains
+placeholder text the agent forgot to replace — `TODO: replace`, `FILLME`,
+`<your-...-here>`, `pass  # implement`, etc.
+
+--- new ---
+{new}
+"""
+
+
+@on(Event.PostToolUse, only_if=[SourceEdits(lang="py")])
+def warn_on_placeholder(evt: BaseHookEvent) -> HookResult | None:
+    if not (fp := evt.file) or not (new := evt.content):
+        return None
+    if not re.search(r"TODO:?\s*replace|FILLME|<your-.+?-here>", new, re.IGNORECASE):
+        return None
+    return prompt_check(
+        evt,
+        Prompt.from_template(PLACEHOLDER_TEMPLATE, fp=fp.path, new=new),
+        prefix="PLACEHOLDER LEFT IN CODE",
+    )

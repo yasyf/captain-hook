@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from functools import cached_property
@@ -112,11 +113,35 @@ class BaseHookEvent:
 
         return HR.of(Action.allow)
 
-    def warn(self, message: str) -> HookResult:
+    @staticmethod
+    def _render_part(part: str | tuple[str, object] | object) -> str:
+        match part:
+            case str():
+                return part
+            case (str() as label, value):
+                return f"{label}: " + json.dumps(value, default=str)
+            case _:
+                return json.dumps(part, default=str)
+
+    def warn(self, *parts: str | tuple[str, object] | object) -> HookResult:
+        r"""Emit a warning whose parts are auto-rendered and joined with newlines.
+
+        Each part is rendered by form: a plain ``str`` passes through verbatim; a
+        ``(label, value)`` tuple becomes ``"{label}: {json}"`` with ``value``
+        JSON-encoded; any other object is JSON-encoded directly. Rendered parts are
+        joined with ``"\n"``.
+
+        Args:
+            *parts: Warning fragments, each a ``str``, a ``(label, value)`` tuple, or
+                any JSON-serializable object.
+
+        Returns:
+            A warn :class:`HookResult` carrying the joined message.
+        """
         from captain_hook.types import Action
         from captain_hook.types import HookResult as HR
 
-        return HR.of(Action.warn, message)
+        return HR.of(Action.warn, "\n".join(self._render_part(p) for p in parts))
 
     def block(self, message: str) -> HookResult:
         from captain_hook.types import Action

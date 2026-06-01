@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from captain_hook._loader import discover_hooks
+from captain_hook.loader import discover_hooks
 from captain_hook.app import (
     _state,
     get_matching_hooks,
