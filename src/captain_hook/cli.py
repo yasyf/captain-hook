@@ -170,8 +170,8 @@ def init_project(root: Path) -> None:
     print("Next:")
     print("  1. Read the quickstart: docs/getting-started/quickstart.md")
     print("  2. Edit example.py or add new files under .claude/hooks/")
-    print("  3. captain-hook test --hooks .claude/hooks       # verify inline tests")
-    print("  4. captain-hook generate-settings --hooks ...    # rewire after adding events")
+    print("  3. captain-hook --hooks .claude/hooks test       # verify inline tests")
+    print("  4. captain-hook --hooks .claude/hooks generate-settings    # rewire after adding events")
 
 
 def show_logs(session: str | None = None, tail: int | None = None) -> None:

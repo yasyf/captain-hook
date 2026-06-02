@@ -16,8 +16,8 @@ uvx captain-hook init
 `uvx` fetches captain-hook into a throwaway environment, runs the CLI, and discards it. Every command works the same way — just prefix it with `uvx`:
 
 ```bash
-uvx captain-hook test --hooks .claude/hooks
-uvx captain-hook generate-settings --hooks .claude/hooks
+uvx captain-hook --hooks .claude/hooks test
+uvx captain-hook --hooks .claude/hooks generate-settings
 ```
 
 This is the headline path: you never add captain-hook to `pyproject.toml` and never manage a venv yourself.
@@ -41,7 +41,7 @@ captain-hook init
 When captain-hook lives inside a larger repo (or you've cloned it for local development), point `uv run --project` at the local checkout:
 
 ```bash
-uv run --project packages/captain-hook captain-hook test --hooks .claude/hooks
+uv run --project packages/captain-hook captain-hook --hooks .claude/hooks test
 ```
 
 This is the right shape for any consumer project that vendors captain-hook rather than pulling it from PyPI.
@@ -49,7 +49,7 @@ This is the right shape for any consumer project that vendors captain-hook rathe
 ## Verify installation
 
 ```bash
-uvx captain-hook test --hooks .claude/hooks
+uvx captain-hook --hooks .claude/hooks test
 ```
 
 This runs the inline tests on the scaffolded example hook. If you added captain-hook as a dependency, you can also check the import directly:
@@ -71,7 +71,7 @@ my-project/
 │   └── settings.local.json   # Captain-hook wires itself in here
 ```
 
-You don't need this exact layout — `captain-hook test --hooks <any-dir>` works on any directory of hooks. The default just lines up with what Claude Code looks for.
+You don't need this exact layout — `captain-hook --hooks <any-dir> test` works on any directory of hooks. The default just lines up with what Claude Code looks for.
 
 ## Dependencies
 
@@ -105,7 +105,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uvx captain-hook test --hooks .claude/hooks
+      - run: uvx captain-hook --hooks .claude/hooks test
 ```
 
-`setup-uv` installs uv (which provides Python 3.12+ and `uvx`), so there's no separate Python or install step. Drop `--json` in if a downstream reporter consumes the output. For the monorepo install mode, swap the run line for `uv run --project packages/captain-hook captain-hook test --hooks .claude/hooks`.
+`setup-uv` installs uv (which provides Python 3.12+ and `uvx`), so there's no separate Python or install step. Drop `--json` in if a downstream reporter consumes the output. For the monorepo install mode, swap the run line for `uv run --project packages/captain-hook captain-hook --hooks .claude/hooks test`.

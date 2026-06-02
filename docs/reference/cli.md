@@ -3,7 +3,7 @@
 captain-hook provides a CLI for scaffolding, dispatching, testing, and generating settings.
 
 ```
-captain-hook [-h] [--hooks HOOKS] [--root ROOT] {init,run,test,generate-settings} ...
+captain-hook [-h] [--hooks HOOKS] [--root ROOT] {run,generate-settings,test,init,logs} ...
 ```
 
 ## Global options
@@ -45,7 +45,7 @@ Dispatch a hook event. Reads a JSON event payload from stdin, runs it through al
 
 ```bash
 echo '{"tool_name": "Bash", "tool_input": {"command": "git stash"}}' \
-  | captain-hook run PreToolUse --hooks src/
+  | captain-hook --hooks src/ run PreToolUse
 ```
 
 **Arguments:**
@@ -81,7 +81,7 @@ For no match (allow):
 Run all inline tests defined in registered hooks.
 
 ```bash
-captain-hook test --hooks src/
+captain-hook --hooks src/ test
 ```
 
 Discovers all hooks, collects their `tests` dicts, and runs each `Input` through the dispatch pipeline, comparing results against `Block`, `Warn`, or `Allow` expectations.
@@ -107,7 +107,7 @@ Discovers all hooks, collects their `tests` dicts, and runs each `Input` through
 Generate Claude Code settings JSON for `.claude/settings.local.json`.
 
 ```bash
-captain-hook generate-settings --hooks src/ --root .
+captain-hook --hooks src/ --root . generate-settings
 ```
 
 **Options:**
@@ -142,8 +142,27 @@ captain-hook generate-settings --from ./packages/captain-hook
 Only includes event types that have at least one registered hook. Pipe to a file or merge into your existing settings:
 
 ```bash
-captain-hook generate-settings --hooks src/ > .claude/settings.local.json
+captain-hook --hooks src/ generate-settings > .claude/settings.local.json
 ```
+
+---
+
+## `logs`
+
+View a recent captain-hook session log written under the cache log directory.
+
+```bash
+captain-hook logs
+```
+
+With no options it prints the most recently modified session log.
+
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--session` | Most recent session | Session id, or transcript path (hashed) to locate its log file |
+| `--tail` | All lines | Show only the last N lines |
 
 ---
 
@@ -155,10 +174,8 @@ The typical setup flow:
 uv add captain-hook                         # add as dependency
 captain-hook init                           # scaffold project
 # edit .claude/hooks/my_hooks.py            # write your hooks
-captain-hook test --hooks .claude/hooks      # verify
-captain-hook generate-settings \
-  --hooks .claude/hooks \
-  --root .                                  # regenerate settings
+captain-hook --hooks .claude/hooks test      # verify
+captain-hook --hooks .claude/hooks --root . generate-settings   # regenerate settings
 ```
 
 Claude Code reads `.claude/settings.local.json` on startup and calls `uvx captain-hook` for each registered event type.

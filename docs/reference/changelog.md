@@ -21,6 +21,6 @@ Public APIs:
 - **Workflows** — `Workflow`, `Step`, `Artifact`, `text_matches`.
 - **Settings** — `HooksSettings` with `planning_agents`, `waiting_tools`, `state_dir`, `log_dir`; subclassable with a custom env prefix.
 - **Inline tests** — `Input`, `Block`, `Warn`, `Allow`, `InlineTests` (type alias for the test mapping).
-- **CLI** — `init`, `run`, `test` (`--json` / `--verbose`), `generate-settings`.
+- **CLI** — `init`, `run`, `test` (`--json`), `generate-settings`.
 
 Ships with 9 curated examples under `packages/captain-hook/examples/` and matching narrative pages under `docs/examples/`.

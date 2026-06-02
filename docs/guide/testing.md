@@ -21,7 +21,7 @@ block_command(
 Run all inline tests:
 
 ```bash
-captain-hook test --hooks src/
+captain-hook --hooks src/ test
 ```
 
 ### Input fields

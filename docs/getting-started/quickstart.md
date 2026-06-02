@@ -85,7 +85,7 @@ block_command(
 Run them:
 
 ```bash
-captain-hook test --hooks .claude/hooks
+captain-hook --hooks .claude/hooks test
 ```
 
 Sample output for the hook above:
@@ -104,7 +104,7 @@ If a test fails, the line shows the expected vs. actual `Action` and exits non-z
 
 ```bash
 echo '{"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}}' \
-  | captain-hook run PreToolUse --hooks .claude/hooks
+  | captain-hook --hooks .claude/hooks run PreToolUse
 ```
 
 Output:
