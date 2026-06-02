@@ -2,6 +2,24 @@
 name = "captain-hook"
 version = "0.1.0"
 description = "Declarative hook framework for Claude Code"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Yasyf Mohamedali", email = "yasyfm@gmail.com" }]
+keywords = ["claude", "claude-code", "hooks", "llm", "agents", "guardrails", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.0",
@@ -28,12 +46,16 @@ dev = [
 [project.scripts]
 captain-hook = "captain_hook.cli:main"
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+[project.urls]
+Homepage = "https://github.com/yasyf/captain-hook"
+Documentation = "https://captain-hook.readthedocs.io"
+Repository = "https://github.com/yasyf/captain-hook"
+Issues = "https://github.com/yasyf/captain-hook/issues"
+Changelog = "https://github.com/yasyf/captain-hook/blob/main/CHANGELOG.md"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/captain_hook"]
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

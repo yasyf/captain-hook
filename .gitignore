@@ -1,1 +1,35 @@
+# MkDocs
 site/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtualenv / uv
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# captain-hook runtime audit output
+.context/
+.wheel-smoke/
