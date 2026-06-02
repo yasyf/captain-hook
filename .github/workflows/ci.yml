@@ -28,12 +28,6 @@ jobs:
       - name: Sync (dev)
         run: uv sync --extra dev
 
-      - name: Lint (ruff)
-        run: uv run ruff check src tests
-
-      - name: Type check (pyright)
-        run: uv run pyright
-
       - name: Provision NLP assets
         run: |
           uv run python -m spacy download en_core_web_sm

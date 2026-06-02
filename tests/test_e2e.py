@@ -28,90 +28,91 @@ from captain_hook.state import HookState, PrimitiveState
 from captain_hook.tests.helpers import PKG_DIR, build_ctx, run_cli
 from captain_hook.types import Action, Event, HookResult
 
-PROJECT_ROOT = PKG_DIR.parent.parent
-CLIENT_DIR = PROJECT_ROOT / ".claude" / "hooks"
-
+FIXTURES_DIR = Path(__file__).parent / "fixtures" / "client_hooks"
 
 
 class TestEntryPointExecution:
-    def test_e2e_001_bin_hooks_run_produces_valid_json(self, tmp_path: Path) -> None:
+    def test_e2e_001_bin_hooks_run_blocks_git_stash(self, tmp_path: Path) -> None:
         stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git stash"}})
         result = run_cli(
             "run",
             "PreToolUse",
-            hooks_dir=str(CLIENT_DIR),
+            hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
             stdin_data=stdin,
         )
-        assert result.returncode == 0
+        assert result.returncode == 0, f"stderr: {result.stderr}"
         output = json.loads(result.stdout)
         assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "git stash" in output["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "use the team VCS workflow" in output["hookSpecificOutput"]["permissionDecisionReason"]
 
     def test_e2e_002_bin_hooks_run_allows_safe_command(self, tmp_path: Path) -> None:
         stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
         result = run_cli(
             "run",
             "PreToolUse",
-            hooks_dir=str(CLIENT_DIR),
+            hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
             stdin_data=stdin,
         )
-        assert result.returncode == 0
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert result.stdout.strip() in ("", "{}")
 
     def test_e2e_003_bin_hooks_run_stop_event(self, tmp_path: Path) -> None:
         stdin = json.dumps({"stop_hook_active": False})
         result = run_cli(
             "run",
             "Stop",
-            hooks_dir=str(CLIENT_DIR),
+            hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
             stdin_data=stdin,
         )
-        assert result.returncode == 0
+        assert result.returncode == 0, f"stderr: {result.stderr}"
 
 
 class TestHookDiscovery:
     @pytest.fixture(autouse=True)
     def clean_hooks_modules(self) -> None:
-        stale = [k for k in sys.modules if k == "hooks" or k.startswith("hooks.")]
+        stale = [k for k in sys.modules if k == "client_hooks" or k.startswith("client_hooks.")]
         for k in stale:
             del sys.modules[k]
-        sys.path[:] = [p for p in sys.path if not (Path(p) / "hooks").is_dir() or p == str(CLIENT_DIR.parent)]
-        if str(CLIENT_DIR.parent) not in sys.path:
-            sys.path.insert(0, str(CLIENT_DIR.parent))
+        if str(FIXTURES_DIR.parent) not in sys.path:
+            sys.path.insert(0, str(FIXTURES_DIR.parent))
 
-    def test_e2e_010_all_client_files_discovered(self) -> None:
-        discover_hooks(str(CLIENT_DIR))
+    def test_e2e_010_all_fixture_files_discovered(self) -> None:
+        discover_hooks(str(FIXTURES_DIR))
         assert len(_state.hooks) > 0
         assert _state.settings is not None
 
-    def test_e2e_011_conf_loaded_first(self) -> None:
-        discover_hooks(str(CLIENT_DIR))
-        assert type(_state.settings).__name__ == "BioqaSettings"
-        assert hasattr(_state.settings, "test_command")
-        assert _state.settings.test_command == "uv run mtest"
+    def test_e2e_011_conf_settings_subclass_loaded(self) -> None:
+        discover_hooks(str(FIXTURES_DIR))
+        assert type(_state.settings).__name__ == "Settings"
+        assert _state.settings.test_command == "pytest -q"
+        assert _state.settings.require_review_before_stop is True
 
-    def test_e2e_012_subpackage_workflow_discovered(self) -> None:
-        discover_hooks(str(CLIENT_DIR))
+    def test_e2e_012_command_hook_discovered(self) -> None:
+        discover_hooks(str(FIXTURES_DIR))
         hook_names = {h.name for h in _state.hooks}
-        assert any("task" in n for n in hook_names), f"No task hooks found in {hook_names}"
+        assert any(n.startswith("declarative_") for n in hook_names), (
+            f"No declarative block_command hook found in {hook_names}"
+        )
 
-    def test_e2e_013_subpackage_testing_discovered(self) -> None:
-        discover_hooks(str(CLIENT_DIR))
+    def test_e2e_013_named_workflow_hook_discovered(self) -> None:
+        discover_hooks(str(FIXTURES_DIR))
         hook_names = {h.name for h in _state.hooks}
-        assert "commit_test_gate" in hook_names, f"commit_test_gate not in {hook_names}"
-        assert "verify_test_execution" in hook_names, f"verify_test_execution not in {hook_names}"
+        assert "require_review_before_stop" in hook_names, (
+            f"require_review_before_stop not in {hook_names}"
+        )
 
     def test_e2e_014_no_import_errors(self) -> None:
-        discover_hooks(str(CLIENT_DIR))
+        discover_hooks(str(FIXTURES_DIR))
 
     def test_e2e_015_discovery_via_cli_subprocess(self, tmp_path: Path) -> None:
         stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
         result = run_cli(
             "run",
             "PreToolUse",
-            hooks_dir=str(CLIENT_DIR),
+            hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
             stdin_data=stdin,
         )
@@ -120,7 +121,7 @@ class TestHookDiscovery:
 
 class TestInlineTests:
     def test_e2e_020_inline_tests_pass(self) -> None:
-        discover_hooks(str(CLIENT_DIR))
+        discover_hooks(str(FIXTURES_DIR))
         from captain_hook.testing.helpers import run_inline_tests
 
         results = run_inline_tests()
@@ -184,84 +185,72 @@ class TestInlineTests:
 
 
 class TestEventDispatchRoundTrip:
-    def test_e2e_030_pretooluse_block_json(self, tmp_path: Path) -> None:
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git stash"}})
-        result = run_cli(
-            "run",
-            "PreToolUse",
-            hooks_dir=str(CLIENT_DIR),
-            root_dir=str(tmp_path),
-            stdin_data=stdin,
-        )
-        assert result.returncode == 0
-        output = json.loads(result.stdout)
-        assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
-
     def test_e2e_031_pretooluse_allow_no_output(self, tmp_path: Path) -> None:
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hello"}})
+        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git status"}})
         result = run_cli(
             "run",
             "PreToolUse",
-            hooks_dir=str(CLIENT_DIR),
+            hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
             stdin_data=stdin,
         )
-        assert result.returncode == 0
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert result.stdout.strip() in ("", "{}")
 
     def test_e2e_032_stop_event_dispatch(self, tmp_path: Path) -> None:
         stdin = json.dumps({})
         result = run_cli(
             "run",
             "Stop",
-            hooks_dir=str(CLIENT_DIR),
+            hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
             stdin_data=stdin,
         )
-        assert result.returncode == 0
+        assert result.returncode == 0, f"stderr: {result.stderr}"
 
     def test_e2e_033_user_prompt_submit_dispatch(self, tmp_path: Path) -> None:
         stdin = json.dumps({"prompt": "hello world"})
         result = run_cli(
             "run",
             "UserPromptSubmit",
-            hooks_dir=str(CLIENT_DIR),
+            hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
             stdin_data=stdin,
         )
-        assert result.returncode == 0
+        assert result.returncode == 0, f"stderr: {result.stderr}"
 
     def test_e2e_034_subagent_stop_dispatch(self, tmp_path: Path) -> None:
         stdin = json.dumps({"agent_type": "worker", "agent_id": "abc"})
         result = run_cli(
             "run",
             "SubagentStop",
-            hooks_dir=str(CLIENT_DIR),
+            hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
             stdin_data=stdin,
         )
-        assert result.returncode == 0
+        assert result.returncode == 0, f"stderr: {result.stderr}"
 
     def test_e2e_035_subagent_start_dispatch(self, tmp_path: Path) -> None:
         stdin = json.dumps({"agent_type": "cleanup", "agent_id": "abc"})
         result = run_cli(
             "run",
             "SubagentStart",
-            hooks_dir=str(CLIENT_DIR),
+            hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
             stdin_data=stdin,
         )
-        assert result.returncode == 0
+        assert result.returncode == 0, f"stderr: {result.stderr}"
 
     def test_e2e_036_post_tool_use_dispatch(self, tmp_path: Path) -> None:
         stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}, "tool_response": "hi"})
         result = run_cli(
             "run",
             "PostToolUse",
-            hooks_dir=str(CLIENT_DIR),
+            hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
             stdin_data=stdin,
         )
-        assert result.returncode == 0
+        assert result.returncode == 0, f"stderr: {result.stderr}"
 
     def test_e2e_037_post_tool_use_failure_dispatch(self, tmp_path: Path) -> None:
         stdin = json.dumps(
@@ -274,11 +263,11 @@ class TestEventDispatchRoundTrip:
         result = run_cli(
             "run",
             "PostToolUseFailure",
-            hooks_dir=str(CLIENT_DIR),
+            hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
             stdin_data=stdin,
         )
-        assert result.returncode == 0
+        assert result.returncode == 0, f"stderr: {result.stderr}"
 
     def test_e2e_038_format_output_pretooluse_block(self) -> None:
         result = HookResult(action=Action.block, message="not allowed")
@@ -306,7 +295,7 @@ class TestGenerateSettings:
     def test_e2e_050_generate_settings_valid_json(self, tmp_path: Path) -> None:
         result = run_cli(
             "generate-settings",
-            hooks_dir=str(CLIENT_DIR),
+            hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
         )
         assert result.returncode == 0, f"stderr: {result.stderr}"
@@ -317,7 +306,7 @@ class TestGenerateSettings:
     def test_e2e_051_generate_settings_has_expected_events(self, tmp_path: Path) -> None:
         result = run_cli(
             "generate-settings",
-            hooks_dir=str(CLIENT_DIR),
+            hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
         )
         assert result.returncode == 0
@@ -331,7 +320,7 @@ class TestGenerateSettings:
             "generate-settings",
             "--hooks-dir",
             "custom/hooks",
-            hooks_dir=str(CLIENT_DIR),
+            hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
         )
         assert result.returncode == 0
@@ -347,7 +336,7 @@ class TestGenerateSettings:
             "custom/hooks",
             "--from",
             "./local/path",
-            hooks_dir=str(CLIENT_DIR),
+            hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
         )
         assert result.returncode == 0
@@ -384,40 +373,16 @@ class TestStateModelSerialization:
     def test_e2e_062_client_state_models_round_trip(self, tmp_path: Path) -> None:
         import sys
 
-        discover_hooks(str(CLIENT_DIR))
+        discover_hooks(str(FIXTURES_DIR))
 
-        agents_mod = sys.modules["hooks.agents.cleanup_state"]
-
-        Snapshot = agents_mod.Snapshot
-        RunStatus = agents_mod.RunStatus
-        CleanupScope = agents_mod.CleanupScope
-        ReviewerOutput = agents_mod.ReviewerOutput
+        ReviewLedger = sys.modules["client_hooks.workflow"].ReviewLedger
 
         store = SessionStore(tmp_path)
-
-        store[Snapshot].set(Snapshot(op_id="op123"))
-        assert store[Snapshot].get() is not None
-        assert store[Snapshot].get().op_id == "op123"  # type: ignore[union-attr]
-
-        store[RunStatus].set(RunStatus(status="running"))
-        assert store[RunStatus].get() is not None
-        assert store[RunStatus].get().status == "running"  # type: ignore[union-attr]
-
-        store[CleanupScope].set(
-            CleanupScope(
-                source_files=["a.py", "b.py"],
-                test_files=["test_a.py"],
-                skipped=[],
-            )
-        )
-        loaded_scope = store[CleanupScope].get()
-        assert loaded_scope is not None
-        assert loaded_scope.source_files == ["a.py", "b.py"]
-
-        store[ReviewerOutput].set(ReviewerOutput(tracks={"code", "test"}))
-        loaded_ro = store[ReviewerOutput].get()
-        assert loaded_ro is not None
-        assert loaded_ro.tracks == {"code", "test"}
+        store[ReviewLedger].set(ReviewLedger(reviewed_files=["a.py", "b.py"], pending=False))
+        loaded = store[ReviewLedger].get()
+        assert loaded is not None
+        assert loaded.reviewed_files == ["a.py", "b.py"]
+        assert loaded.pending is False
 
 
 class TestEvtResultMethods:
