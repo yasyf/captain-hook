@@ -1,7 +1,7 @@
 # captain-hook
 
-[![PyPI](https://img.shields.io/pypi/v/captain-hook.svg)](https://pypi.org/project/captain-hook/)
-[![Python](https://img.shields.io/pypi/pyversions/captain-hook.svg)](https://pypi.org/project/captain-hook/)
+[![PyPI](https://img.shields.io/pypi/v/cc-captain-hook.svg)](https://pypi.org/project/cc-captain-hook/)
+[![Python](https://img.shields.io/pypi/pyversions/cc-captain-hook.svg)](https://pypi.org/project/cc-captain-hook/)
 [![Docs](https://readthedocs.org/projects/captain-hook/badge/?version=latest)](https://captain-hook.readthedocs.io)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/yasyf/captain-hook/blob/main/LICENSE)
 
@@ -12,17 +12,19 @@ Declarative hook framework for Claude Code. Write hooks as data, test them inlin
 No install needed — run everything through [uvx](https://docs.astral.sh/uv/):
 
 ```bash
-uvx captain-hook init
+uvx --from cc-captain-hook captain-hook init
 ```
 
-`uvx` fetches captain-hook into a throwaway environment and runs it, so you never add it to `pyproject.toml`. Every command below works the same way: prefix it with `uvx`.
+> The PyPI distribution is `cc-captain-hook` while the command stays `captain-hook`, hence `uvx --from cc-captain-hook captain-hook`.
+
+`uvx` fetches captain-hook into a throwaway environment and runs it, so you never add it to `pyproject.toml`. Every command below works the same way: prefix it with `uvx --from cc-captain-hook`.
 
 ## First hook
 
 Scaffold a project and drop a hook into `.claude/hooks/`:
 
 ```bash
-uvx captain-hook init
+uvx --from cc-captain-hook captain-hook init
 ```
 
 ```python

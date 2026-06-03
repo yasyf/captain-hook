@@ -32,7 +32,7 @@ Creates:
 └── settings.local.json   # Claude Code hook settings
 ```
 
-The generated settings wire Claude Code to call `uvx captain-hook` for each registered event.
+The generated settings wire Claude Code to call `uvx --from cc-captain-hook captain-hook` for each registered event.
 
 !!! tip
     After running `init`, run `captain-hook generate-settings` to wire up the hooks in Claude Code's settings.
@@ -116,7 +116,7 @@ captain-hook --hooks src/ --root . generate-settings
 |--------|---------|-------------|
 | `--hooks-dir` | `.claude/hooks` | Hooks directory relative to project root |
 | `--no-merge` | | Output standalone JSON instead of merging |
-| `--from` | | Package source for `uvx --from` (local path or PyPI spec) |
+| `--from` | `cc-captain-hook` | Package source for `uvx --from` (local path or PyPI spec). The PyPI distribution is `cc-captain-hook` while the command stays `captain-hook`. |
 
 **Output** (stdout):
 
@@ -126,7 +126,7 @@ captain-hook --hooks src/ --root . generate-settings
     "PreToolUse": [
       {
         "type": "command",
-        "command": "uvx captain-hook --hooks $CLAUDE_PROJECT_DIR/.claude/hooks --root $CLAUDE_PROJECT_DIR run PreToolUse"
+        "command": "uvx --from cc-captain-hook captain-hook --hooks $CLAUDE_PROJECT_DIR/.claude/hooks --root $CLAUDE_PROJECT_DIR run PreToolUse"
       }
     ]
   }
@@ -171,11 +171,11 @@ With no options it prints the most recently modified session log.
 The typical setup flow:
 
 ```bash
-uv add captain-hook                         # add as dependency
+uv add cc-captain-hook                      # add as dependency (command stays captain-hook)
 captain-hook init                           # scaffold project
 # edit .claude/hooks/my_hooks.py            # write your hooks
 captain-hook --hooks .claude/hooks test      # verify
 captain-hook --hooks .claude/hooks --root . generate-settings   # regenerate settings
 ```
 
-Claude Code reads `.claude/settings.local.json` on startup and calls `uvx captain-hook` for each registered event type.
+Claude Code reads `.claude/settings.local.json` on startup and calls `uvx --from cc-captain-hook captain-hook` for each registered event type.

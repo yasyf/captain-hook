@@ -1,5 +1,5 @@
 [project]
-name = "captain-hook"
+name = "cc-captain-hook"
 version = "0.1.0"
 description = "Declarative hook framework for Claude Code"
 readme = "README.md"
@@ -56,6 +56,9 @@ Changelog = "https://github.com/yasyf/captain-hook/blob/main/CHANGELOG.md"
 [build-system]
 requires = ["uv_build>=0.11,<0.12"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "captain_hook"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

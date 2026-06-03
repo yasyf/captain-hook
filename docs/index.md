@@ -59,7 +59,7 @@ That's it. One line blocks `git stash` across your entire project.
 === "Install"
 
     ```bash
-    uv add captain-hook
+    uv add cc-captain-hook
     ```
 
 === "Scaffold"

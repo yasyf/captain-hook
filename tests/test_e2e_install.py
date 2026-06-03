@@ -111,7 +111,7 @@ class TestInit:
     def test_settings_commands_use_uvx(self, project_dir: Path) -> None:
         settings = project_dir / ".claude" / "settings.local.json"
         raw = settings.read_text()
-        assert "uvx captain-hook" in raw
+        assert "uvx --from cc-captain-hook captain-hook" in raw
 
 
 class TestDiscoverAndDispatch:

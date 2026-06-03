@@ -17,20 +17,22 @@ from captain_hook.session import SessionStore, ensure_session
 from captain_hook.transcript import Transcript
 from captain_hook.types import Event
 
+DIST_NAME = "cc-captain-hook"
+
 
 def example_hook_source() -> str:
     """Read the bundled ``example.py`` scaffold from ``templates/example_hook.py.tmpl``."""
     return (importlib.resources.files("captain_hook") / "templates" / "example_hook.py.tmpl").read_text()
 
 
-def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str | None = None) -> dict[str, Any]:
+def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str = DIST_NAME) -> dict[str, Any]:
     events_by_async: defaultdict[bool, set[str]] = defaultdict(set)
     for entry in _state.hooks:
         for member in Event:
             if member in entry.spec.events and (name := member.name):
                 events_by_async[entry.spec.async_].add(name)
 
-    from_flag = f" --from {from_source}" if from_source else ""
+    from_flag = f" --from {from_source}"
 
     def commands(event: str) -> list[dict[str, Any]]:
         return [
@@ -56,11 +58,11 @@ def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str | None 
     }
 
 
-def generate_settings_json(hooks_dir: str = ".claude/hooks", from_source: str | None = None) -> str:
+def generate_settings_json(hooks_dir: str = ".claude/hooks", from_source: str = DIST_NAME) -> str:
     return json.dumps(generate_settings(hooks_dir, from_source=from_source), indent=2)
 
 
-def merge_settings(hooks_dir: str, settings_path: Path, from_source: str | None = None) -> dict[str, Any]:
+def merge_settings(hooks_dir: str, settings_path: Path, from_source: str = DIST_NAME) -> dict[str, Any]:
     hook_settings = generate_settings(hooks_dir, from_source=from_source)
     if settings_path.exists():
         existing = json.loads(settings_path.read_text())
@@ -74,7 +76,7 @@ def is_captain_hook_group(group: dict[str, Any]) -> bool:
 
 
 def merge_init_settings(
-    hooks_dir: str, settings_path: Path, from_source: str | None = None
+    hooks_dir: str, settings_path: Path, from_source: str = DIST_NAME
 ) -> tuple[dict[str, Any], dict[str, str]]:
     hook_settings = generate_settings(hooks_dir, from_source=from_source)
     new_hooks: dict[str, list[dict[str, Any]]] = hook_settings["hooks"]
@@ -227,7 +229,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     settings_parser.add_argument("--hooks-dir", default=".claude/hooks", help="Hooks directory relative to project root")
     settings_parser.add_argument("--no-merge", action="store_true", help="Output standalone JSON instead of merging")
-    settings_parser.add_argument("--from", dest="from_source", default=None, help="Package source for uvx --from (local path or PyPI spec)")
+    settings_parser.add_argument("--from", dest="from_source", default=DIST_NAME, help=f"Package source for uvx --from (local path or PyPI spec, default: {DIST_NAME})")
 
     test_parser = sub.add_parser("test", help="Run inline tests from all registered hooks")
     test_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit one JSON record per test (CI mode)")
