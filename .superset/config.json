@@ -1,0 +1,13 @@
+{
+  "setup": [
+    "cp -R $SUPERSET_ROOT_PATH/.env*",
+    "echo 'DEBUG=1' >> .env.local",
+    "direnv allow",
+    "uv sync --group dev --inexact",
+    "jj git init --git-repo .",
+    "jj config set --user user.name \"Yasyf Mohamedali\"",
+    "jj config set --user user.email \"yasyfm@gmail.com\""
+  ],
+  "teardown": [],
+  "run": []
+}

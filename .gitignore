@@ -33,3 +33,4 @@ coverage.xml
 # captain-hook runtime audit output
 .context/
 .wheel-smoke/
+.env*
