@@ -57,8 +57,8 @@ class TestInit:
         assert result.returncode == 0
         assert "Next:" in result.stdout
         assert "quickstart.md" in result.stdout
-        assert "captain-hook --hooks .claude/hooks test" in result.stdout
-        assert "captain-hook --hooks .claude/hooks generate-settings" in result.stdout
+        assert "captain-hook test" in result.stdout
+        assert "captain-hook generate-settings" in result.stdout
         assert "Scaffolded" in result.stdout
 
     def test_init_merge_preserves_existing_hook_entries(self, tmp_path: Path) -> None:

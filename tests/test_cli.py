@@ -25,6 +25,8 @@ def run_cli(
     stdin_data: str = "",
     hooks_dir: str | None = None,
     root_dir: str | None = None,
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     cmd = [sys.executable, "-m", "captain_hook"]
     if hooks_dir:
@@ -37,7 +39,8 @@ def run_cli(
         input=stdin_data,
         capture_output=True,
         text=True,
-        cwd=str(PKG_DIR),
+        cwd=cwd or str(PKG_DIR),
+        env={**os.environ, **env} if env else None,
     )
 
 
@@ -108,6 +111,10 @@ class TestGenerateSettings:
         assert result.returncode == 0
         data = json.loads(result.stdout)
         assert "hooks" in data
+        raw = json.dumps(data)
+        assert "uvx --from cc-captain-hook captain-hook run PreToolUse" in raw
+        assert "--hooks" not in raw
+        assert "--root" not in raw
 
     def test_cli_004_generate_settings_hooks_dir(self, tmp_path: Path) -> None:
         hooks_dir = tmp_path / "hooks"
@@ -159,6 +166,20 @@ class TestGenerateSettings:
         has_async = any(cmd.get("async") is True for cmd in commands)
         assert has_sync
         assert has_async
+
+    def test_cli_012_default_command_omits_path_flags(self) -> None:
+        from captain_hook.cli import generate_settings
+
+        register_hook(Event.PreToolUse, message="pre tool")
+        command = generate_settings()["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        assert command == "uvx --from cc-captain-hook captain-hook run PreToolUse"
+
+    def test_cli_013_custom_hooks_dir_keeps_hooks_flag(self) -> None:
+        from captain_hook.cli import generate_settings
+
+        register_hook(Event.PreToolUse, message="pre tool")
+        command = generate_settings(hooks_dir="custom/hooks")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        assert command == "uvx --from cc-captain-hook captain-hook --hooks $CLAUDE_PROJECT_DIR/custom/hooks run PreToolUse"
 
 
 class TestErrorHandling:
@@ -721,3 +742,59 @@ class TestLogsSubcommand:
         captured = capsys.readouterr()
         assert captured.out == ""
         assert "absent" in captured.err
+
+
+class TestDefaultResolution:
+    BLOCK_STDIN = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
+
+    @staticmethod
+    def scaffold_project(root: Path) -> None:
+        hooks_dir = root / ".claude" / "hooks"
+        hooks_dir.mkdir(parents=True)
+        (hooks_dir / "__init__.py").write_text("")
+        (hooks_dir / "my_hook.py").write_text(
+            textwrap.dedent("""\
+            from captain_hook.app import hook
+            from captain_hook.types import Event
+
+            hook(Event.PreToolUse, message="default hooks dir resolved", block=True)
+        """)
+        )
+
+    def test_cli_014_default_hooks_dir_from_claude_project_dir(self, tmp_path: Path) -> None:
+        self.scaffold_project(tmp_path)
+        result = run_cli(
+            "run",
+            "PreToolUse",
+            stdin_data=self.BLOCK_STDIN,
+            env={"CLAUDE_PROJECT_DIR": str(tmp_path)},
+        )
+        assert result.returncode == 0
+        assert "default hooks dir resolved" in result.stdout
+
+    def test_cli_015_default_hooks_dir_falls_back_to_cwd(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.scaffold_project(tmp_path)
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        result = run_cli(
+            "run",
+            "PreToolUse",
+            stdin_data=self.BLOCK_STDIN,
+            cwd=str(tmp_path),
+        )
+        assert result.returncode == 0
+        assert "default hooks dir resolved" in result.stdout
+
+    def test_cli_016_explicit_hooks_flag_overrides_default(self, tmp_path: Path) -> None:
+        self.scaffold_project(tmp_path)
+        empty_hooks = tmp_path / "empty"
+        empty_hooks.mkdir()
+        (empty_hooks / "__init__.py").write_text("")
+        result = run_cli(
+            "run",
+            "PreToolUse",
+            hooks_dir=str(empty_hooks),
+            stdin_data=self.BLOCK_STDIN,
+            env={"CLAUDE_PROJECT_DIR": str(tmp_path)},
+        )
+        assert result.returncode == 0
+        assert "default hooks dir resolved" not in result.stdout

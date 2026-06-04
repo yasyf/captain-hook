@@ -44,7 +44,7 @@ If a primitive emits the same nudge / block twice for one event:
 ## "Inline test failed but I can't tell why"
 
 ```bash
-captain-hook --hooks .claude/hooks test
+captain-hook test
 ```
 
 The default output prints the `Input` it built and a PASS/FAIL for each test. Add `--json` to emit one record per test (`id`, `status`, `expected`, `reason`) for structured inspection. If the test still looks correct, dump the `Input` you're constructing — the most common mistake is leaving a field off (e.g. `file=` for an Edit test) so the hook's condition can't match.

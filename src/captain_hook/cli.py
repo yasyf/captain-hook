@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.resources
 import json
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -33,6 +34,7 @@ def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str = DIST_
                 events_by_async[entry.spec.async_].add(name)
 
     from_flag = f" --from {from_source}"
+    hooks_flag = "" if hooks_dir == ".claude/hooks" else f" --hooks $CLAUDE_PROJECT_DIR/{hooks_dir}"
 
     def commands(event: str) -> list[dict[str, Any]]:
         return [
@@ -40,8 +42,7 @@ def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str = DIST_
                 "type": "command",
                 "command": (
                     f"uvx{from_flag} captain-hook"
-                    f" --hooks $CLAUDE_PROJECT_DIR/{hooks_dir}"
-                    f" --root $CLAUDE_PROJECT_DIR"
+                    f"{hooks_flag}"
                     f" run {event}"
                     f"{' --async' if is_async else ''}"
                 ),
@@ -172,8 +173,8 @@ def init_project(root: Path) -> None:
     print("Next:")
     print("  1. Read the quickstart: docs/getting-started/quickstart.md")
     print("  2. Edit example.py or add new files under .claude/hooks/")
-    print("  3. captain-hook --hooks .claude/hooks test       # verify inline tests")
-    print("  4. captain-hook --hooks .claude/hooks generate-settings    # rewire after adding events")
+    print("  3. captain-hook test       # verify inline tests")
+    print("  4. captain-hook generate-settings    # rewire after adding events")
 
 
 def show_logs(session: str | None = None, tail: int | None = None) -> None:
@@ -216,7 +217,11 @@ def build_parser() -> argparse.ArgumentParser:
         prog="captain-hook",
         description="Captain Hook — declarative hook framework for Claude Code lifecycle events.",
     )
-    parser.add_argument("--hooks", default="src", help="Path to hooks package directory (default: src)")
+    parser.add_argument(
+        "--hooks",
+        default=None,
+        help="Path to hooks package directory (default: $CLAUDE_PROJECT_DIR/.claude/hooks)",
+    )
     parser.add_argument("--root", default=None, help="Project root for gitignore and session resolution")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -304,7 +309,9 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    root = Path(args.root) if args.root else Path.cwd()
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+    root = Path(args.root) if args.root else Path(project_dir) if project_dir else Path.cwd()
+    hooks = args.hooks or str(root / ".claude" / "hooks")
 
     if args.command == "init":
         init_project(root)
@@ -316,7 +323,7 @@ def main() -> None:
 
     reset()
     load_gitignore(root)
-    discover_hooks(args.hooks)
+    discover_hooks(hooks)
 
     match args.command:
         case "run":

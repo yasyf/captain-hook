@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -172,6 +173,8 @@ def run_cli(
     stdin_data: str = "",
     hooks_dir: str | None = None,
     root_dir: str | None = None,
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "captain_hook"]
@@ -181,5 +184,6 @@ def run_cli(
         input=stdin_data,
         capture_output=True,
         text=True,
-        cwd=str(PKG_DIR),
+        cwd=cwd or str(PKG_DIR),
+        env={**os.environ, **env} if env else None,
     )

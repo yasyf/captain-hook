@@ -43,16 +43,16 @@ block_command(
 )
 ```
 
-Run the inline tests:
+Run the inline tests (from your project root, `--hooks` defaults to `.claude/hooks`):
 
 ```bash
-captain-hook --hooks .claude/hooks test
+captain-hook test
 ```
 
 Wire the hook into Claude Code's settings:
 
 ```bash
-captain-hook --hooks .claude/hooks generate-settings > .claude/settings.local.json
+captain-hook generate-settings > .claude/settings.local.json
 ```
 
 The next time Claude tries `git stash`, captain-hook returns a deny with your reason and hint.

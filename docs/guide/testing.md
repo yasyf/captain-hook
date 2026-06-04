@@ -18,10 +18,10 @@ block_command(
 )
 ```
 
-Run all inline tests:
+Run all inline tests (from your project root, `--hooks` defaults to `.claude/hooks`):
 
 ```bash
-captain-hook --hooks src/ test
+captain-hook test
 ```
 
 ### Input fields

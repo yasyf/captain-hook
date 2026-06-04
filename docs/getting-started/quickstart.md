@@ -82,10 +82,10 @@ block_command(
 )
 ```
 
-Run them:
+Run them (from your project root, `--hooks` defaults to `.claude/hooks`):
 
 ```bash
-captain-hook --hooks .claude/hooks test
+captain-hook test
 ```
 
 Sample output for the hook above:
@@ -104,7 +104,7 @@ If a test fails, the line shows the expected vs. actual `Action` and exits non-z
 
 ```bash
 echo '{"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}}' \
-  | captain-hook --hooks .claude/hooks run PreToolUse
+  | captain-hook run PreToolUse
 ```
 
 Output:

@@ -10,8 +10,8 @@ captain-hook [-h] [--hooks HOOKS] [--root ROOT] {run,generate-settings,test,init
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--hooks HOOKS` | `src` | Path to the hooks package directory |
-| `--root ROOT` | Current directory | Project root for gitignore and session resolution |
+| `--hooks HOOKS` | `$CLAUDE_PROJECT_DIR/.claude/hooks` (cwd-relative when unset) | Path to the hooks package directory |
+| `--root ROOT` | `$CLAUDE_PROJECT_DIR` (current directory when unset) | Project root for gitignore and session resolution |
 
 ---
 
@@ -126,7 +126,7 @@ captain-hook --hooks src/ --root . generate-settings
     "PreToolUse": [
       {
         "type": "command",
-        "command": "uvx --from cc-captain-hook captain-hook --hooks $CLAUDE_PROJECT_DIR/.claude/hooks --root $CLAUDE_PROJECT_DIR run PreToolUse"
+        "command": "uvx --from cc-captain-hook captain-hook run PreToolUse"
       }
     ]
   }
@@ -174,8 +174,8 @@ The typical setup flow:
 uv add cc-captain-hook                      # add as dependency (command stays captain-hook)
 captain-hook init                           # scaffold project
 # edit .claude/hooks/my_hooks.py            # write your hooks
-captain-hook --hooks .claude/hooks test      # verify
-captain-hook --hooks .claude/hooks --root . generate-settings   # regenerate settings
+captain-hook test                           # verify (--hooks defaults to .claude/hooks)
+captain-hook generate-settings              # regenerate settings
 ```
 
 Claude Code reads `.claude/settings.local.json` on startup and calls `uvx --from cc-captain-hook captain-hook` for each registered event type.
