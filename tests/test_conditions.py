@@ -626,6 +626,149 @@ class TestWaitingCondition:
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(Waiting(), evt) is True
 
+    def test_workflow_launched_is_waiting(self) -> None:
+
+        raw_messages = [
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_015oujmnr8xnacVe7GnmmLEa",
+                            "name": "Workflow",
+                            "input": {"script": "export const meta = {name: 'transcript-probe'}\nlog('probe')\nreturn 1"},
+                            "caller": {"type": "direct"},
+                        }
+                    ]
+                },
+            },
+            {
+                "type": "user",
+                "toolUseResult": {
+                    "status": "async_launched",
+                    "taskId": "waux9o41y",
+                    "runId": "wf_a327db8a-07d",
+                    "summary": "capture Workflow transcript shape",
+                    "transcriptDir": "/tmp/transcripts",
+                    "scriptPath": "/tmp/script.ts",
+                },
+                "message": {
+                    "content": [
+                        {
+                            "tool_use_id": "toolu_015oujmnr8xnacVe7GnmmLEa",
+                            "type": "tool_result",
+                            "content": "Workflow launched in background. Task ID: waux9o41y\nSummary: capture Workflow transcript shape\nRun ID: wf_a327db8a-07d",
+                            "is_error": False,
+                        }
+                    ]
+                },
+            },
+        ]
+        ctx = build_ctx(transcript=Transcript.from_messages(raw_messages))
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(Waiting(), evt) is True
+
+    def test_workflow_then_notified_is_not_waiting(self) -> None:
+
+        raw_messages = [
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_015oujmnr8xnacVe7GnmmLEa",
+                            "name": "Workflow",
+                            "input": {"script": "export const meta = {name: 'transcript-probe'}\nlog('probe')\nreturn 1"},
+                            "caller": {"type": "direct"},
+                        }
+                    ]
+                },
+            },
+            {
+                "type": "user",
+                "toolUseResult": {
+                    "status": "async_launched",
+                    "taskId": "waux9o41y",
+                    "runId": "wf_a327db8a-07d",
+                    "summary": "capture Workflow transcript shape",
+                    "transcriptDir": "/tmp/transcripts",
+                    "scriptPath": "/tmp/script.ts",
+                },
+                "message": {
+                    "content": [
+                        {
+                            "tool_use_id": "toolu_015oujmnr8xnacVe7GnmmLEa",
+                            "type": "tool_result",
+                            "content": "Workflow launched in background. Task ID: waux9o41y\nSummary: capture Workflow transcript shape\nRun ID: wf_a327db8a-07d",
+                            "is_error": False,
+                        }
+                    ]
+                },
+            },
+            {
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "timestamp": "2026-06-04T23:34:51.775Z",
+                "sessionId": "fd155109-6114-4a20-8cf2-2d412eebe925",
+                "content": "<task-notification>\n<task-id>waux9o41y</task-id>\n<tool-use-id>toolu_015oujmnr8xnacVe7GnmmLEa</tool-use-id>\n<output-file>/private/tmp/waux9o41y.output</output-file>\n<status>completed</status>\n<summary>Dynamic workflow \"capture Workflow transcript shape\" completed</summary>\n<result>1</result>\n<usage>...</usage>\n</task-notification>",
+            },
+        ]
+        ctx = build_ctx(transcript=Transcript.from_messages(raw_messages))
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(Waiting(), evt) is False
+
+    def test_workflow_then_unrelated_notification_still_waiting(self) -> None:
+
+        raw_messages = [
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_015oujmnr8xnacVe7GnmmLEa",
+                            "name": "Workflow",
+                            "input": {"script": "export const meta = {name: 'transcript-probe'}\nlog('probe')\nreturn 1"},
+                            "caller": {"type": "direct"},
+                        }
+                    ]
+                },
+            },
+            {
+                "type": "user",
+                "toolUseResult": {
+                    "status": "async_launched",
+                    "taskId": "waux9o41y",
+                    "runId": "wf_a327db8a-07d",
+                    "summary": "capture Workflow transcript shape",
+                    "transcriptDir": "/tmp/transcripts",
+                    "scriptPath": "/tmp/script.ts",
+                },
+                "message": {
+                    "content": [
+                        {
+                            "tool_use_id": "toolu_015oujmnr8xnacVe7GnmmLEa",
+                            "type": "tool_result",
+                            "content": "Workflow launched in background. Task ID: waux9o41y\nSummary: capture Workflow transcript shape\nRun ID: wf_a327db8a-07d",
+                            "is_error": False,
+                        }
+                    ]
+                },
+            },
+            {
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "timestamp": "2026-06-04T23:34:51.775Z",
+                "sessionId": "fd155109-6114-4a20-8cf2-2d412eebe925",
+                "content": "<task-notification>\n<task-id>other-task</task-id>\n<tool-use-id>toolu_other</tool-use-id>\n<output-file>/private/tmp/other-task.output</output-file>\n<status>completed</status>\n<summary>Dynamic workflow \"something else\" completed</summary>\n<result>1</result>\n<usage>...</usage>\n</task-notification>",
+            },
+        ]
+        ctx = build_ctx(transcript=Transcript.from_messages(raw_messages))
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(Waiting(), evt) is True
+
     def test_async_in_progress_with_sync_followup_still_waiting(self) -> None:
 
         raw_messages = [
