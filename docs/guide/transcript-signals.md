@@ -117,7 +117,7 @@ Tool uses have typed input objects accessible via `tu.input`:
 | Grep | `GrepInput` | `pattern`, `file_type`, `path` |
 | Glob | `GlobInput` | `patterns` |
 | Skill | `SkillInput` | `skill` |
-| TaskCreate | `TaskCreateInput` | `description` |
+| TaskCreate | `TaskCreateInput` | `subject`, `description` |
 | TaskUpdate | `TaskUpdateInput` | `task_id`, `status` |
 | (other) | `GenericInput` | `raw` (the raw dict) |
 
@@ -127,6 +127,28 @@ Use `.as_()` for safe type narrowing:
 if bash := tu.input.as_(BashInput):
     print(bash.command)
 ```
+
+## The live task list
+
+For task-completion gates (e.g. a Stop hook that blocks until work is done), read
+the live task list via `evt.tasks` instead of replaying `TaskCreate`/`TaskUpdate`
+tool uses from the transcript:
+
+```python
+@on(Event.Stop)
+def task_gate(evt: BaseHookEvent) -> HookResult | None:
+    if open_tasks := evt.tasks.open:
+        return evt.block(f"{len(open_tasks)} of {len(evt.tasks)} tasks still open")
+    return None
+```
+
+`evt.tasks` reads Claude Code's native task store (`~/.claude/tasks/<session-id>/`)
+keyed by the event's `session_id`, so it stays in sync with what `TaskList` actually
+shows. A session with no task store has no tasks — it never falls back to another
+session's. Transcript-derived `task_ops()` is still useful for analyzing *behavior*
+(did the agent create tasks this turn?), but it drifts from the real list: it misses
+updates made by subagents and teammates, deleted tasks, and lists carried across
+resumed sessions.
 
 ## Signals
 

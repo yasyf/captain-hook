@@ -41,6 +41,7 @@ from captain_hook.settings import AutoConf, HooksSettings, build_settings
 from captain_hook.signals import cite_message, extract_signal_context, resolve_signals, score_signals, transcript_texts
 from captain_hook.signals.nlp import Clause, NlpSignal, Phrase
 from captain_hook.state import EchoTracker, HookState, PrimitiveState, workflow_state
+from captain_hook.tasks import Task, Tasks
 from captain_hook.testing import Allow, Block, InlineTests, Input, TranscriptFixture, Warn
 from captain_hook.tools import EditOp, TaskOp, WriteOp
 from captain_hook.transcript import (
@@ -193,6 +194,9 @@ __all__ = [
     "EditOp",
     "TaskOp",
     "WriteOp",
+    # tasks (native task store)
+    "Task",
+    "Tasks",
     # transcript
     "Transcript",
     "TranscriptMessage",

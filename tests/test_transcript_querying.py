@@ -657,11 +657,14 @@ class TestEditOpsWriteOpsTaskOps:
                 [
                     _tool_use("TaskCreate", {"subject": "fix bug"}, "tu_1"),
                     _tool_use("TaskUpdate", {"taskId": "T-1", "status": "done"}, "tu_2"),
+                    _tool_use("TaskGet", {"taskId": "T-1"}, "tu_3"),
                 ],
             ),
         )
         ops = t.task_ops()
-        assert len(ops) == 2
+        assert len(ops) == 3
+        assert ops[1].task_id == "T-1"
+        assert ops[2].task_id == "T-1"
 
 
 class TestCountFailuresLegacy:
