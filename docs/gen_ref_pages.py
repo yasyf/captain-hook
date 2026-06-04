@@ -3,7 +3,7 @@ from pathlib import Path
 import mkdocs_gen_files
 
 nav = mkdocs_gen_files.Nav()
-root = Path(__file__).resolve().parent.parent / "src"
+root = Path(__file__).resolve().parent.parent
 package = root / "captain_hook"
 
 for path in sorted(package.rglob("*.py")):

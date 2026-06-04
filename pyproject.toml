@@ -59,6 +59,7 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-name = "captain_hook"
+module-root = ""
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -72,14 +73,14 @@ markers = [
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
-include = ["src"]
+include = ["captain_hook"]
 venvPath = "."
 venv = ".venv"
 
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-src = ["src", "tests"]
+src = [".", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

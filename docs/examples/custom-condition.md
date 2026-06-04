@@ -3,7 +3,7 @@
 The built-in conditions (`Tool`, `FilePath`, `Content`, `SourceEdits`, ...) cover the common cases, but you'll eventually want a predicate that depends on something specific to your project — a line-count threshold, a project-specific file shape, or a computed property of the event.
 
 ```python
---8<-- "examples/custom_condition.py"
+--8<-- "docs/examples/custom_condition.py"
 ```
 
 **What to learn:** Any frozen dataclass that implements `check(self, evt: BaseHookEvent) -> bool` satisfies the `CustomCondition` protocol and slots straight into `only_if=` / `skip_if=` alongside built-in conditions. Keep them stateless; put any parameters on the dataclass fields so they participate in `__hash__` and read cleanly at the call site.
