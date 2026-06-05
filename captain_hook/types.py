@@ -196,6 +196,8 @@ class ReadFile(ReadFileFields):
 class TestFile:
     """Condition that matches when the current event targets a test file (``test_*.py``, ``conftest.py``)."""
 
+    __test__ = False
+
     project_only: bool = True
 
 
