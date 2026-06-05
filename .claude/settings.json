@@ -1,0 +1,67 @@
+{
+  "effortLevel": "max",
+  "ultracode": true,
+  "alwaysThinkingEnabled": true,
+  "showThinkingSummaries": true,
+  "includeGitInstructions": false,
+  "env": {
+    "ENABLE_TOOL_SEARCH": "true",
+    "ENABLE_LSP_TOOL": "1",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
+    "TY_OUTPUT_FORMAT": "concise",
+    "JJ_CONFIG": ".claude/jj-config.toml"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python:*)",
+      "Bash(uv run:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv build:*)",
+      "Bash(uv lock:*)"
+    ],
+    "defaultMode": "auto"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx --from cc-captain-hook captain-hook run PreToolUse"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx --from cc-captain-hook captain-hook run PostToolUse"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx --from cc-captain-hook captain-hook run PostToolUseFailure"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx --from cc-captain-hook captain-hook run Stop"
+          }
+        ]
+      }
+    ]
+  }
+}

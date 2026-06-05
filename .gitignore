@@ -34,3 +34,6 @@ coverage.xml
 .context/
 .wheel-smoke/
 .env*
+
+# Claude Code local settings
+.claude/settings.local.json

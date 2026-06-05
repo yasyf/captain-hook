@@ -1,0 +1,13 @@
+[user]
+name = "Yasyf Mohamedali"
+email = "yasyfm@gmail.com"
+
+[ui]
+editor = "cat"
+diff-formatter = "difft"
+merge-editor = "mergiraf"
+diff-editor = ":builtin"
+pager = "cat"
+
+[fsmonitor.watchman]
+register-snapshot-trigger = false
