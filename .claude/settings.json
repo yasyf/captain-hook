@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uvx --from cc-captain-hook captain-hook run PreToolUse"
+            "command": "uv run --project \"$CLAUDE_PROJECT_DIR\" captain-hook run PreToolUse"
           }
         ]
       }
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uvx --from cc-captain-hook captain-hook run PostToolUse"
+            "command": "uv run --project \"$CLAUDE_PROJECT_DIR\" captain-hook run PostToolUse"
           }
         ]
       }
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uvx --from cc-captain-hook captain-hook run PostToolUseFailure"
+            "command": "uv run --project \"$CLAUDE_PROJECT_DIR\" captain-hook run PostToolUseFailure"
           }
         ]
       }
@@ -58,7 +58,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uvx --from cc-captain-hook captain-hook run Stop"
+            "command": "uv run --project \"$CLAUDE_PROJECT_DIR\" captain-hook run Stop"
           }
         ]
       }

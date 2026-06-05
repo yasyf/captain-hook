@@ -43,6 +43,7 @@ nav:
     - Hooks & Events: guide/hooks-and-events.md
     - Conditions: guide/conditions.md
     - Primitives: guide/primitives.md
+    - Style Rules: guide/styleguide.md
     - Transcript & Signals: guide/transcript-signals.md
     - LLM Hooks: guide/llm-hooks.md
     - Workflows: guide/workflows.md
@@ -61,6 +62,7 @@ nav:
     - Multi-Step Workflow: examples/multi-step-workflow.md
     - Session Workflow: examples/session-workflow.md
     - Settings Config: examples/settings-config.md
+    - Style Guide: examples/styleguide.md
     - Test Integrity: examples/test-integrity.md
   - Reference:
     - reference/index.md

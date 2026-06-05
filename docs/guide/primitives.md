@@ -62,12 +62,16 @@ gate("Run tests before stopping",
 
 ## lint
 
-Check file content with regex or AST patterns:
+Check file content with a string- or AST-mode check function. The mode is inferred from the
+check's first parameter type; both return the violation strings spliced into `{violations}`:
 
 ```python
 from captain_hook import lint
 
-lint("no_print", r"print\(", message="Use logger.info() instead of print()")
+def find_prints(content: str) -> list[str]:
+    return [line for line in content.splitlines() if "print(" in line]
+
+lint(find_prints, message="Use logger.info() instead of print(): {violations}")
 ```
 
 ```python
@@ -76,15 +80,43 @@ from captain_hook import lint
 
 def find_bare_except(tree: ast.AST) -> list[str]:
     return [
-        f"Line {node.lineno}: bare except"
+        f"line {node.lineno}"
         for node in ast.walk(tree)
         if isinstance(node, ast.ExceptHandler) and node.type is None
     ]
 
-lint("no_bare_except", find_bare_except, message="Avoid bare except clauses")
+lint(find_bare_except, message="Avoid bare except clauses: {violations}")
 ```
 
 Lints fire on `PostToolUse` for Edit/Write of `.py` files. Test files are skipped by default.
+
+## styleguide
+
+Apply AST-based style rules to Python edits, reporting only what the edit changed. A rule is a
+[`StyleRule`][captain_hook.StyleRule] subclass whose docstring is the message:
+
+```python
+import ast
+from captain_hook import styleguide, StyleRule, Violation
+
+class NoPrint(StyleRule):
+    """
+    print() calls don't belong in committed code:
+      - {violations}
+    """
+    def check(self, tree: ast.Module):
+        for node in ast.walk(tree):
+            match node:
+                case ast.Call(func=ast.Name(id="print")):
+                    yield Violation(node.lineno, "print() call")
+
+styleguide(NoPrint)
+```
+
+captain-hook ships no rules of its own — `styleguide()` is the substrate (parsing,
+change-scoping, formatting, test wiring). Each call registers one hook; scope it with
+`only_if` / `skip_if` / `events` / `block`. See [Style Rules](styleguide.md) for the full guide,
+including `StyleDiffRule` and change scoping.
 
 ## block_command
 
