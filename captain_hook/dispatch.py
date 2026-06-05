@@ -1,16 +1,15 @@
 """Hook dispatch: select matching hooks, run their handlers, and translate ``HookResult`` into the Claude Code stdout envelope."""
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from loguru import logger
 
 from captain_hook.app import get_matching_hooks
 from captain_hook.session import SessionStore
 from captain_hook.state import HookState
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
-
-logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
@@ -41,7 +40,7 @@ def execute_hook(
     try:
         result = entry.handler(evt) if entry.handler else run_declarative(entry.spec, evt)
     except Exception:
-        logger.exception("Hook %s failed", entry.name)
+        logger.bind(hook=entry.name).exception("hook handler failed")
         return None
 
     if result:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import logging
 import shutil
 import tempfile
 from collections.abc import Iterator
@@ -12,13 +11,13 @@ import pytest
 
 from captain_hook.app import _state
 from captain_hook.dispatch import dispatch
+from captain_hook.tests.helpers import make_ctx, make_post_tool_event
 from captain_hook.types import (
     Event,
     FilePath,
     TestFile,
     Tool,
 )
-from captain_hook.tests.helpers import make_ctx, make_post_tool_event
 
 
 @pytest.fixture
@@ -700,8 +699,7 @@ class TestAstLintEmptyFile:
 
 
 class TestCheckExceptionLogging:
-    def test_string_check_exception_is_logged(self, session_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
-
+    def test_string_check_exception_is_logged(self, session_dir: Path, logcap: Any) -> None:
         def check(content: str) -> list[str]:
             raise ValueError("intentional boom")
 
@@ -711,16 +709,15 @@ class TestCheckExceptionLogging:
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
             ctx=make_ctx(session_dir),
         )
-        with caplog.at_level(logging.WARNING, logger="captain_hook.primitives.lint"):
-            result = dispatch(Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
-        assert any("check" in r.message and r.exc_info for r in caplog.records)
+        assert any("check" in r.message and r.exc_info for r in logcap.records)
 
     def test_ast_check_exception_is_logged(
         self,
         work_dir: Path,
         session_dir: Path,
-        caplog: pytest.LogCaptureFixture,
+        logcap: Any,
     ) -> None:
         source = "x = 1\n"
         py_file = work_dir / "code.py"
@@ -735,7 +732,6 @@ class TestCheckExceptionLogging:
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "x = 1"},
             ctx=make_ctx(session_dir),
         )
-        with caplog.at_level(logging.WARNING, logger="captain_hook.primitives.lint"):
-            result = dispatch(Event.PostToolUse, evt, session_dir)
+        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
-        assert any("check" in r.message and r.exc_info for r in caplog.records)
+        assert any("check" in r.message and r.exc_info for r in logcap.records)

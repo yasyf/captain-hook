@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, overload
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -73,7 +72,7 @@ class Tasks(Sequence[Task]):
             try:
                 tasks.append(Task.from_raw(json.loads(path.read_text())))
             except (OSError, ValueError):
-                logger.warning("Failed to read task from %s", path, exc_info=True)
+                logger.bind(path=str(path)).opt(exception=True).warning("failed to read task file")
         return cls(tuple(sorted(tasks, key=lambda t: (not t.id.isdigit(), int(t.id) if t.id.isdigit() else 0, t.id))))
 
     @overload
