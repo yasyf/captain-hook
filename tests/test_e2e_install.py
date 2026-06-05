@@ -31,7 +31,7 @@ def purge_hooks():
 @pytest.fixture()
 def project_dir(tmp_path: Path) -> Path:
     result = run_cli("init", root_dir=str(tmp_path))
-    assert result.returncode == 0, f"captain-hook init failed: {result.stderr}"
+    assert result.returncode == 0, f"capt-hook init failed: {result.stderr}"
     return tmp_path
 
 
@@ -57,8 +57,8 @@ class TestInit:
         assert result.returncode == 0
         assert "Next:" in result.stdout
         assert "quickstart.md" in result.stdout
-        assert "captain-hook test" in result.stdout
-        assert "captain-hook generate-settings" in result.stdout
+        assert "capt-hook test" in result.stdout
+        assert "capt-hook generate-settings" in result.stdout
         assert "Scaffolded" in result.stdout
 
     def test_init_merge_preserves_existing_hook_entries(self, tmp_path: Path) -> None:
@@ -83,7 +83,7 @@ class TestInit:
             for g in pre
         )
         assert any(
-            any("captain-hook" in (h.get("command") or "") for h in g.get("hooks", []))
+            any("capt-hook" in (h.get("command") or "") for h in g.get("hooks", []))
             for g in pre
         )
 
@@ -111,7 +111,7 @@ class TestInit:
     def test_settings_commands_use_uvx(self, project_dir: Path) -> None:
         settings = project_dir / ".claude" / "settings.local.json"
         raw = settings.read_text()
-        assert "uvx --from cc-captain-hook captain-hook" in raw
+        assert "uvx capt-hook" in raw
 
 
 class TestDiscoverAndDispatch:

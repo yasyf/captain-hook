@@ -92,7 +92,7 @@ class TestGenerateSettings:
         data = json.loads(result.stdout)
         assert "hooks" in data
         raw = json.dumps(data)
-        assert "uvx --from cc-captain-hook captain-hook run PreToolUse" in raw
+        assert "uvx capt-hook run PreToolUse" in raw
         assert "--hooks" not in raw
         assert "--root" not in raw
 
@@ -152,14 +152,14 @@ class TestGenerateSettings:
 
         register_hook(Event.PreToolUse, message="pre tool")
         command = generate_settings()["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-        assert command == "uvx --from cc-captain-hook captain-hook run PreToolUse"
+        assert command == "uvx capt-hook run PreToolUse"
 
     def test_cli_013_custom_hooks_dir_keeps_hooks_flag(self) -> None:
         from captain_hook.cli import generate_settings
 
         register_hook(Event.PreToolUse, message="pre tool")
         command = generate_settings(hooks_dir="custom/hooks")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-        assert command == "uvx --from cc-captain-hook captain-hook --hooks $CLAUDE_PROJECT_DIR/custom/hooks run PreToolUse"
+        assert command == "uvx capt-hook --hooks $CLAUDE_PROJECT_DIR/custom/hooks run PreToolUse"
 
 
 class TestErrorHandling:

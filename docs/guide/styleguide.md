@@ -172,7 +172,7 @@ def check(self, pre, post):
 
 ## Testing rules
 
-Attach inline `tests` to each rule and run them with `captain-hook test`:
+Attach inline `tests` to each rule and run them with `capt-hook test`:
 
 ```python
 tests = {

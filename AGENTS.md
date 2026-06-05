@@ -1,6 +1,6 @@
 # captain-hook Development Guide
 
-Declarative hook framework for Claude Code. Published to PyPI as `cc-captain-hook`; the CLI stays `captain-hook`, run as `uvx --from cc-captain-hook captain-hook`.
+Declarative hook framework for Claude Code. Published to PyPI as `capt-hook`; the CLI is `capt-hook`, run as `uvx capt-hook`.
 
 ## Repository Structure
 
@@ -15,7 +15,7 @@ captain-hook/
 └── README.md         # Project overview
 ```
 
-mkdocstrings generates the docs API reference from docstrings via `docs/gen_ref_pages.py`. Example hooks in `docs/examples/*.py` embed into doc pages via `pymdownx.snippets` and carry inline `tests = {...}` runnable with `captain-hook --hooks docs/examples test`.
+mkdocstrings generates the docs API reference from docstrings via `docs/gen_ref_pages.py`. Example hooks in `docs/examples/*.py` embed into doc pages via `pymdownx.snippets` and carry inline `tests = {...}` runnable with `capt-hook --hooks docs/examples test`.
 
 ## Python Style
 

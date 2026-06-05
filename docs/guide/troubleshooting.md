@@ -6,10 +6,10 @@ Common errors and how to diagnose them.
 
 Four things to check, in order:
 
-1. Run `captain-hook --hooks <dir> test` with the inline tests in place. If the test fails, the hook's conditions aren't matching the input you expect — fix the condition before debugging dispatch.
+1. Run `capt-hook --hooks <dir> test` with the inline tests in place. If the test fails, the hook's conditions aren't matching the input you expect — fix the condition before debugging dispatch.
 2. Confirm the `--hooks` argument points at the directory that actually contains your hook file. Captain-hook loads `.py` files under that root and nothing else.
 3. Inspect the `events=` argument. A primitive defaults to one event (`block_command` → `PreToolUse`, `nudge` → `PostToolUse`); if you want a different event, pass it explicitly.
-4. View the recent dispatch logs with `captain-hook logs`. By default it prints the most recent session's per-event log file, written under the cache log dir (default `~/.cache/captain-hook/logs`, [see Configuration](configuration.md#log-directory)). Pass `--tail N` to limit lines, or `--session <id-or-transcript-path>` to target a specific session. If your hook never appears in the log, dispatch never reached it — recheck steps 1–3.
+4. View the recent dispatch logs with `capt-hook logs`. By default it prints the most recent session's per-event log file, written under the cache log dir (default `~/.cache/captain-hook/logs`, [see Configuration](configuration.md#log-directory)). Pass `--tail N` to limit lines, or `--session <id-or-transcript-path>` to target a specific session. If your hook never appears in the log, dispatch never reached it — recheck steps 1–3.
 
 ## Settings not picked up
 
@@ -39,12 +39,12 @@ If a primitive emits the same nudge / block twice for one event:
 
 - Inspect `events=` on every registration. A hook registered with `Event.Stop | Event.SubagentStop` fires on both — confirm that's what you want.
 - For `nudge`, add `max_fires=N` to cap how many times it can emit in a session.
-- For signal-driven nudges, the same trigger phrase may live in multiple `Signal` patterns. Run `captain-hook --hooks <dir> test` — each test prints the `Input` it built and a PASS/FAIL, so you can confirm whether the phrase matched.
+- For signal-driven nudges, the same trigger phrase may live in multiple `Signal` patterns. Run `capt-hook --hooks <dir> test` — each test prints the `Input` it built and a PASS/FAIL, so you can confirm whether the phrase matched.
 
 ## "Inline test failed but I can't tell why"
 
 ```bash
-captain-hook test
+capt-hook test
 ```
 
 The default output prints the `Input` it built and a PASS/FAIL for each test. Add `--json` to emit one record per test (`id`, `status`, `expected`, `reason`) for structured inspection. If the test still looks correct, dump the `Input` you're constructing — the most common mistake is leaving a field off (e.g. `file=` for an Edit test) so the hook's condition can't match.
@@ -64,8 +64,8 @@ It writes one JSONL line per event under the log directory ([see Configuration](
 ## Diagnostic commands
 
 ```bash
-captain-hook --hooks <dir> test                   # Run inline tests
-captain-hook --hooks <dir> test --json            # Machine-readable output for CI
-captain-hook --hooks <dir> run <Event> < event.json   # Replay an event JSON payload
-captain-hook --hooks <dir> generate-settings      # Emit the .claude/settings.local.json fragment
+capt-hook --hooks <dir> test                   # Run inline tests
+capt-hook --hooks <dir> test --json            # Machine-readable output for CI
+capt-hook --hooks <dir> run <Event> < event.json   # Replay an event JSON payload
+capt-hook --hooks <dir> generate-settings      # Emit the .claude/settings.local.json fragment
 ```
