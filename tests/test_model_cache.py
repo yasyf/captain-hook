@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -9,12 +10,15 @@ import pytest
 
 from captain_hook.util import model_cache
 
+MODEL_VERSION = "3.9.5"
+
 
 @pytest.fixture
-def cache_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def cache_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     model_cache.cache_root.cache_clear()
-    return tmp_path / "spacy" / "models"
+    yield tmp_path / "spacy" / "models"
+    model_cache.cache_root.cache_clear()
 
 
 @pytest.fixture
@@ -23,9 +27,16 @@ def fake_wheel_bytes() -> bytes:
 
 
 @pytest.fixture
+def pinned_version(monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setattr(model_cache, "spacy_minor", lambda: "3.9")
+    monkeypatch.setattr(model_cache, "model_version", lambda: MODEL_VERSION)
+    return MODEL_VERSION
+
+
+@pytest.fixture
 def pinned_sha(fake_wheel_bytes: bytes, monkeypatch: pytest.MonkeyPatch) -> str:
     digest = hashlib.sha256(fake_wheel_bytes).hexdigest()
-    monkeypatch.setattr(model_cache, "MODEL_SHA256", digest)
+    monkeypatch.setattr(model_cache, "model_sha256", lambda _version: digest)
     return digest
 
 
@@ -64,7 +75,7 @@ def fake_zipfile(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
         def extractall(self, target: str | Path) -> None:
             spy(target)
-            pipeline = Path(target) / model_cache.MODEL_NAME / f"{model_cache.MODEL_NAME}-{model_cache.MODEL_VERSION}"
+            pipeline = Path(target) / model_cache.MODEL_NAME / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}"
             pipeline.mkdir(parents=True, exist_ok=True)
             (pipeline / "config.cfg").write_text("[paths]\n")
 
@@ -72,8 +83,18 @@ def fake_zipfile(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return spy
 
 
+def seed_cache(cache_dir: Path, version: str, sentinel: str | None = "aa" * 32) -> Path:
+    extract = cache_dir / f"{model_cache.MODEL_NAME}-{version}"
+    pipeline = extract / model_cache.MODEL_NAME / f"{model_cache.MODEL_NAME}-{version}"
+    pipeline.mkdir(parents=True)
+    if sentinel is not None:
+        (extract / ".sha256").write_text(sentinel)
+    return pipeline
+
+
 def test_downloads_when_cache_empty(
     cache_dir: Path,
+    pinned_version: str,
     pinned_sha: str,
     urlretrieve_spy: MagicMock,
     fake_zipfile: MagicMock,
@@ -83,21 +104,24 @@ def test_downloads_when_cache_empty(
     assert urlretrieve_spy.call_count == 1
     assert fake_zipfile.call_count == 1
     assert path.exists()
-    assert path == cache_dir / f"{model_cache.MODEL_NAME}-{model_cache.MODEL_VERSION}" / model_cache.MODEL_NAME / f"{model_cache.MODEL_NAME}-{model_cache.MODEL_VERSION}"
-    sentinel = cache_dir / f"{model_cache.MODEL_NAME}-{model_cache.MODEL_VERSION}" / ".sha256"
+    assert path == cache_dir / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}" / model_cache.MODEL_NAME / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}"
+    sentinel = cache_dir / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}" / ".sha256"
     assert sentinel.read_text() == pinned_sha
 
 
-def test_skips_download_when_sentinel_matches(
+def test_cached_model_skips_all_network(
     cache_dir: Path,
-    pinned_sha: str,
+    pinned_version: str,
     urlretrieve_spy: MagicMock,
     fake_zipfile: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    extract = cache_dir / f"{model_cache.MODEL_NAME}-{model_cache.MODEL_VERSION}"
-    pipeline = extract / model_cache.MODEL_NAME / f"{model_cache.MODEL_NAME}-{model_cache.MODEL_VERSION}"
-    pipeline.mkdir(parents=True)
-    (extract / ".sha256").write_text(pinned_sha)
+    pipeline = seed_cache(cache_dir, MODEL_VERSION)
+
+    def no_network() -> str:
+        raise AssertionError("model_version must not be resolved when the cache is warm")
+
+    monkeypatch.setattr(model_cache, "model_version", no_network)
 
     path = model_cache.ensure_spacy_model()
 
@@ -106,32 +130,92 @@ def test_skips_download_when_sentinel_matches(
     assert path == pipeline
 
 
-def test_redownloads_on_sha_mismatch(
+def test_prefers_newest_cached_patch_for_minor(
     cache_dir: Path,
+    pinned_version: str,
+) -> None:
+    seed_cache(cache_dir, "3.9.2")
+    newest = seed_cache(cache_dir, "3.9.10")
+    seed_cache(cache_dir, "3.8.0")
+
+    assert model_cache.cached_pipeline() == newest
+
+
+def test_ignores_cache_from_other_spacy_minor(
+    cache_dir: Path,
+    pinned_version: str,
     pinned_sha: str,
     urlretrieve_spy: MagicMock,
     fake_zipfile: MagicMock,
 ) -> None:
-    extract = cache_dir / f"{model_cache.MODEL_NAME}-{model_cache.MODEL_VERSION}"
-    pipeline = extract / model_cache.MODEL_NAME / f"{model_cache.MODEL_NAME}-{model_cache.MODEL_VERSION}"
-    pipeline.mkdir(parents=True)
-    (extract / ".sha256").write_text("00" * 32)
+    seed_cache(cache_dir, "3.8.0")
+
+    path = model_cache.ensure_spacy_model()
+
+    assert urlretrieve_spy.call_count == 1
+    assert path == cache_dir / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}" / model_cache.MODEL_NAME / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}"
+
+
+def test_redownloads_when_sentinel_missing(
+    cache_dir: Path,
+    pinned_version: str,
+    pinned_sha: str,
+    urlretrieve_spy: MagicMock,
+    fake_zipfile: MagicMock,
+) -> None:
+    pipeline = seed_cache(cache_dir, MODEL_VERSION, sentinel=None)
 
     path = model_cache.ensure_spacy_model()
 
     assert urlretrieve_spy.call_count == 1
     assert fake_zipfile.call_count == 1
-    assert (extract / ".sha256").read_text() == pinned_sha
+    assert (cache_dir / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}" / ".sha256").read_text() == pinned_sha
     assert path == pipeline
 
 
 def test_raises_on_post_download_digest_mismatch(
     cache_dir: Path,
+    pinned_version: str,
     urlretrieve_spy: MagicMock,
     fake_zipfile: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(model_cache, "MODEL_SHA256", "ff" * 32)
+    monkeypatch.setattr(model_cache, "model_sha256", lambda _version: "ff" * 32)
 
     with pytest.raises(RuntimeError, match="sha256 mismatch"):
         model_cache.ensure_spacy_model()
+
+
+def test_model_version_resolves_from_compatibility_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(model_cache, "spacy_minor", lambda: "3.9")
+    monkeypatch.setattr(
+        model_cache,
+        "fetch_json",
+        lambda _url: {"spacy": {"3.9": {model_cache.MODEL_NAME: ["3.9.5", "3.9.4"]}}},
+    )
+    model_cache.model_version.cache_clear()
+
+    assert model_cache.model_version() == "3.9.5"
+
+    model_cache.model_version.cache_clear()
+
+
+def test_model_sha256_parses_release_notes(monkeypatch: pytest.MonkeyPatch) -> None:
+    sha = "ab" * 32
+    body = f"> **Checksum .tar.gz:** `{'cd' * 32}`<br />**Checksum .whl:** `{sha}`"
+    monkeypatch.setattr(model_cache, "fetch_json", lambda _url: {"body": body})
+    model_cache.model_sha256.cache_clear()
+
+    assert model_cache.model_sha256("3.9.5") == sha
+
+    model_cache.model_sha256.cache_clear()
+
+
+def test_model_sha256_raises_when_checksum_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(model_cache, "fetch_json", lambda _url: {"body": "no checksums here"})
+    model_cache.model_sha256.cache_clear()
+
+    with pytest.raises(RuntimeError, match="no wheel checksum"):
+        model_cache.model_sha256("3.9.5")
+
+    model_cache.model_sha256.cache_clear()

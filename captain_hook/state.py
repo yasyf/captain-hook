@@ -31,15 +31,14 @@ class NlpResources:
     def spacy(self) -> spacy.language.Language:
         import spacy
 
-        from captain_hook.util.model_cache import MODEL_NAME, MODEL_VERSION, cache_root
+        from captain_hook.util.model_cache import cached_pipeline
 
         if spacy.util.is_package(SPACY_MODEL):
             return spacy.load(SPACY_MODEL)
         # We refuse to auto-download from a live hook: it's a ~100MB silent fetch behind
         # the agent's back. If a previous run / explicit install already populated the
         # cache, use that; otherwise, raise with an actionable install hint.
-        cached = cache_root() / f"{MODEL_NAME}-{MODEL_VERSION}" / MODEL_NAME / f"{MODEL_NAME}-{MODEL_VERSION}"
-        if cached.is_dir():
+        if cached := cached_pipeline():
             return spacy.load(cached)
         raise RuntimeError(
             f"spaCy model {SPACY_MODEL!r} is not installed. "
