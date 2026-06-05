@@ -3,6 +3,16 @@ from __future__ import annotations
 import pytest
 
 from captain_hook.file import File
+from captain_hook.tests.helpers import (
+    make_transcript,
+    raw_msg,
+    raw_notification,
+    raw_text,
+    raw_text_block,
+    raw_tool_result,
+    raw_tool_result_block,
+    raw_tool_use,
+)
 from captain_hook.transcript.inputs import (
     AgentInput,
     BashInput,
@@ -83,25 +93,21 @@ class TestToolResult:
             tr.is_error = True  # type: ignore[misc]
 
     def test_is_async_from_toolUseResult(self):
-        t = Transcript.from_messages([
-            {"type": "user", "toolUseResult": {"isAsync": True, "status": "async_launched"},
-                "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_a", "content": []}]}},
-        ])
+        t = make_transcript(
+            raw_tool_result("tu_a", content=[], tool_use_result={"isAsync": True, "status": "async_launched"}),
+        )
         [tr] = t.messages[0].tool_results
         assert tr.is_async is True
 
     def test_is_async_false_without_field(self):
-        t = Transcript.from_messages([
-            {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_a", "content": []}]}},
-        ])
+        t = make_transcript(raw_tool_result("tu_a", content=[]))
         [tr] = t.messages[0].tool_results
         assert tr.is_async is False
 
     def test_is_async_false_when_toolUseResult_is_string(self):
-        t = Transcript.from_messages([
-            {"type": "user", "toolUseResult": "Error: BLOCKED: ...",
-                "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_a", "content": []}]}},
-        ])
+        t = make_transcript(
+            raw_msg("user", [raw_tool_result_block("tu_a", [])], toolUseResult="Error: BLOCKED: ..."),
+        )
         [tr] = t.messages[0].tool_results
         assert tr.is_async is False
 
@@ -181,21 +187,13 @@ class TestTranscriptMessage:
         assert msg.tool_results == []
 
     def test_notification_on_queue_operation(self):
-        t = Transcript.from_messages([
-            {
-                "type": "queue-operation",
-                "operation": "enqueue",
-                "content": "<task-notification><tool-use-id>tu_z</tool-use-id></task-notification>",
-            },
-        ])
+        t = make_transcript(raw_notification("tu_z"))
         n = t.messages[0].notification
         assert n is not None
         assert n.tool_use_id == "tu_z"
 
     def test_notification_none_for_non_queue_operation(self):
-        t = Transcript.from_messages([
-            {"type": "user", "message": {"content": [{"type": "text", "text": "hi"}]}},
-        ])
+        t = make_transcript(raw_text("user", "hi"))
         assert t.messages[0].notification is None
 
     def test_notification_none_when_content_missing_id(self):
@@ -214,25 +212,25 @@ class TestTurnStart:
         from captain_hook.classifiers.conductor import classifier as conductor_classifier
 
         messages = [
-            TranscriptMessage.from_raw(type="user", content=[{"type": "text", "text": "real user prompt"}], raw={}),
+            TranscriptMessage.from_raw(type="user", content=[raw_text_block("real user prompt")], raw={}),
             TranscriptMessage.from_raw(
                 type="assistant",
-                content=[{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}, "id": "tu_1"}],
+                content=[raw_tool_use("Bash", {"command": "ls"}, "tu_1")],
                 raw={},
             ),
             TranscriptMessage.from_raw(
                 type="user",
-                content=[{"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}],
+                content=[raw_tool_result_block("tu_1", "ok")],
                 raw={},
             ),
             TranscriptMessage.from_raw(
                 type="assistant",
-                content=[{"type": "tool_use", "name": "Bash", "input": {"command": "pwd"}, "id": "tu_2"}],
+                content=[raw_tool_use("Bash", {"command": "pwd"}, "tu_2")],
                 raw={},
             ),
             TranscriptMessage.from_raw(
                 type="user",
-                content=[{"type": "tool_result", "tool_use_id": "tu_2", "content": "/"}],
+                content=[raw_tool_result_block("tu_2", "/")],
                 raw={},
             ),
         ]

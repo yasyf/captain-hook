@@ -8,28 +8,12 @@ from captain_hook.app import (
     reset,
 )
 from captain_hook.dispatch import dispatch
-from captain_hook.events import PostToolUseEvent, StopEvent, SubagentStopEvent
 from captain_hook.types import Action, Event, Signal
-from captain_hook.tests.helpers import make_ctx
-
-
-def make_stop_event(ctx: Any = None) -> StopEvent:
-    return StopEvent(_raw={}, ctx=ctx or make_ctx())
-
-
-def make_subagent_stop_event(ctx: Any = None) -> SubagentStopEvent:
-    return SubagentStopEvent(_raw={}, ctx=ctx or make_ctx())
-
-
-def make_post_tool_event(
-    tool_name: str = "Bash",
-    tool_input: dict[str, Any] | None = None,
-    ctx: Any = None,
-) -> PostToolUseEvent:
-    raw: dict[str, Any] = {"tool_name": tool_name}
-    if tool_input is not None:
-        raw["tool_input"] = tool_input
-    return PostToolUseEvent(_raw=raw, ctx=ctx or make_ctx())
+from captain_hook.tests.helpers import (
+    make_ctx,
+    make_post_tool_event,
+    make_stop_event,
+)
 
 
 def register_llm_gate(

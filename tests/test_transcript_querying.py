@@ -8,29 +8,24 @@ from typing import Any
 import pytest
 
 from captain_hook.file import File
+from captain_hook.tests.helpers import (
+    make_transcript as _make_transcript,
+)
+from captain_hook.tests.helpers import (
+    raw_msg as _msg,
+)
+from captain_hook.tests.helpers import (
+    raw_tool_result_block as _tool_result,
+)
+from captain_hook.tests.helpers import (
+    raw_tool_use as _tool_use,
+)
 from captain_hook.transcript import (
     Transcript,
     TranscriptMessage,
     TranscriptSlice,
     Turn,
 )
-
-
-def _msg(type: str, content: list[dict[str, Any]] | str = "", raw: dict[str, Any] | None = None) -> dict[str, Any]:
-    blocks: list[dict[str, Any]] = content if isinstance(content, list) else [{"type": "text", "text": content}]
-    return {"type": type, "message": {"content": blocks}, **(raw or {})}
-
-
-def _tool_use(name: str, inp: dict[str, Any] | None = None, id: str = "") -> dict[str, Any]:
-    return {"type": "tool_use", "name": name, "input": inp or {}, "id": id}
-
-
-def _tool_result(tool_use_id: str, is_error: bool = False) -> dict[str, Any]:
-    return {"type": "tool_result", "tool_use_id": tool_use_id, "content": "ok", "is_error": is_error}
-
-
-def _make_transcript(*raw_messages: dict[str, Any]) -> Transcript:
-    return Transcript.from_messages(list(raw_messages))
 
 
 class TestToolUseSequence:

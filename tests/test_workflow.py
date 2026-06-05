@@ -8,12 +8,10 @@ import pytest
 from pydantic import BaseModel
 
 from captain_hook.app import _state
-from captain_hook.context import HookContext
 from captain_hook.events import SubagentStopEvent
-from captain_hook.session import SessionStore
+from captain_hook.tests.helpers import build_ctx, make_subagent_stop_event, make_transcript, raw_text
 from captain_hook.transcript import Transcript
 from captain_hook.types import Action, Event, HookResult
-
 
 
 class ArtifactModel(BaseModel):
@@ -26,15 +24,8 @@ def make_evt(
     *,
     session_dir: Path | None = None,
 ) -> SubagentStopEvent:
-    msgs = [{"type": "assistant", "message": {"content": [{"type": "text", "text": full_text}]}}]
-    t = Transcript.from_messages(msgs)
-    store = SessionStore(session_dir)
-    ctx = HookContext(
-        session=store,
-        transcript=t,
-        settings=None,
-    )
-    return SubagentStopEvent(_raw={}, ctx=ctx)
+    ctx = build_ctx(transcript=make_transcript(raw_text("assistant", full_text)), session_dir=session_dir)
+    return make_subagent_stop_event(ctx)
 
 
 class TestTextMatches:
@@ -47,15 +38,13 @@ class TestTextMatches:
     def test_matches_when_pattern_found(self) -> None:
         from captain_hook.workflow import text_matches
 
-        msgs = [{"type": "assistant", "message": {"content": [{"type": "text", "text": "ALL_TESTS_PASS done"}]}}]
-        t = Transcript.from_messages(msgs)
+        t = make_transcript(raw_text("assistant", "ALL_TESTS_PASS done"))
         assert text_matches(r"ALL_TESTS_PASS")(t) is True
 
     def test_no_match_when_pattern_absent(self) -> None:
         from captain_hook.workflow import text_matches
 
-        msgs = [{"type": "assistant", "message": {"content": [{"type": "text", "text": "nothing here"}]}}]
-        t = Transcript.from_messages(msgs)
+        t = make_transcript(raw_text("assistant", "nothing here"))
         assert text_matches(r"ALL_TESTS_PASS")(t) is False
 
 
@@ -80,8 +69,7 @@ class TestStep:
             return True
 
         s = Step(name="test", check=checker, stopped_at="Stop", next_step="Next")
-        msgs = [{"type": "assistant", "message": {"content": [{"type": "text", "text": "hello"}]}}]
-        t = Transcript.from_messages(msgs)
+        t = make_transcript(raw_text("assistant", "hello"))
         assert s.check(t) is True
         assert len(called_with) == 1
 

@@ -8,13 +8,28 @@ from typing import Any
 
 import pytest
 
-import pytest
-
+from captain_hook.conditions import check_condition, matches_conditions
 from captain_hook.events import (
     BaseHookEvent,
     PreToolUseEvent,
     StopEvent,
     UserPromptSubmitEvent,
+)
+from captain_hook.primitives.commands import block_command_pattern
+from captain_hook.tests.helpers import (
+    assistant_msg,
+    async_agent_launch,
+    build_ctx,
+    make_event,
+    make_messages_ctx,
+    make_transcript_ctx,
+    raw_assistant,
+    raw_notification,
+    raw_tool_result,
+    raw_tool_use,
+    text_msg,
+    waiting_evt,
+    workflow_launch,
 )
 from captain_hook.transcript import Transcript
 from captain_hook.types import (
@@ -35,10 +50,6 @@ from captain_hook.types import (
     Waiting,
 )
 
-from captain_hook.conditions import check_condition, matches_conditions
-from captain_hook.primitives.commands import block_command_pattern
-from captain_hook.tests.helpers import build_ctx, make_event, make_messages_ctx, make_transcript_ctx
-from captain_hook.transcript.models import TextBlock, ToolResult, ToolUseBlock, TranscriptMessage
 
 def make_tool_event(
     tool_name: str,
@@ -432,24 +443,6 @@ class TestInPlanModeCondition:
         assert check_condition(InPlanMode(), evt) is True
 
 
-def assistant_msg(*tools: tuple[str, dict[str, Any]]) -> TranscriptMessage:
-    return TranscriptMessage(
-        type="assistant",
-        content=[ToolUseBlock(name=name, input=inp, id=f"tu_{i}") for i, (name, inp) in enumerate(tools)],
-    )
-
-
-def summary_msg(text: str = "done") -> TranscriptMessage:
-    return TranscriptMessage(type="assistant", content=[TextBlock(text=text)])
-
-
-def user_tool_result(tool_use_id: str, text: str) -> TranscriptMessage:
-    return TranscriptMessage(
-        type="user",
-        content=[ToolResult(tool_use_id=tool_use_id, content=[{"type": "text", "text": text}])],
-    )
-
-
 class TestWaitingCondition:
     @pytest.mark.parametrize(
         ("tool", "tool_input", "expected"),
@@ -494,7 +487,7 @@ class TestWaitingCondition:
         ctx = make_messages_ctx(
             [
                 assistant_msg(("Agent", {"prompt": "x", "run_in_background": True})),
-                summary_msg("Spawned 4 background agents, waiting for them to report back."),
+                text_msg("Spawned 4 background agents, waiting for them to report back."),
             ]
         )
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
@@ -502,311 +495,51 @@ class TestWaitingCondition:
 
     def test_async_launched_tool_result(self) -> None:
 
-        raw_messages = [
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "name": "Agent",
-                            "id": "tu_x",
-                            "input": {"subagent_type": "general-purpose", "name": "ed", "prompt": "y"},
-                        }
-                    ]
-                },
-            },
-            {
-                "type": "user",
-                "toolUseResult": {"isAsync": True, "status": "async_launched", "agentId": "a"},
-                "message": {
-                    "content": [
-                        {"type": "tool_result", "tool_use_id": "tu_x", "content": [{"type": "text", "text": "ok"}]}
-                    ]
-                },
-            },
-        ]
-        ctx = build_ctx(transcript=Transcript.from_messages(raw_messages))
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(Waiting(), evt) is True
+        raw = async_agent_launch(id="tu_x", input={"subagent_type": "general-purpose", "name": "ed", "prompt": "y"})
+        assert check_condition(Waiting(), waiting_evt(raw)) is True
 
     def test_completed_tool_result_is_not_waiting(self) -> None:
 
-        raw_messages = [
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "name": "Agent",
-                            "id": "tu_x",
-                            "input": {"subagent_type": "web-analyzer", "prompt": "y"},
-                        }
-                    ]
-                },
-            },
-            {
-                "type": "user",
-                "toolUseResult": {"status": "completed"},
-                "message": {
-                    "content": [
-                        {"type": "tool_result", "tool_use_id": "tu_x", "content": [{"type": "text", "text": "done"}]}
-                    ]
-                },
-            },
+        raw = [
+            raw_assistant(raw_tool_use("Agent", {"subagent_type": "web-analyzer", "prompt": "y"}, "tu_x")),
+            raw_tool_result(
+                "tu_x", content=[{"type": "text", "text": "done"}], tool_use_result={"status": "completed"}
+            ),
         ]
-        ctx = build_ctx(transcript=Transcript.from_messages(raw_messages))
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(Waiting(), evt) is False
+        assert check_condition(Waiting(), waiting_evt(raw)) is False
 
     def test_async_launched_then_notified_is_not_waiting(self) -> None:
 
-        raw_messages = [
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "name": "Agent",
-                            "id": "tu_x",
-                            "input": {"subagent_type": "general-purpose", "prompt": "y"},
-                        }
-                    ]
-                },
-            },
-            {
-                "type": "user",
-                "toolUseResult": {"isAsync": True, "status": "async_launched", "agentId": "a"},
-                "message": {
-                    "content": [{"type": "tool_result", "tool_use_id": "tu_x", "content": []}]
-                },
-            },
-            {
-                "type": "queue-operation",
-                "operation": "enqueue",
-                "content": "<task-notification><tool-use-id>tu_x</tool-use-id><status>completed</status></task-notification>",
-            },
-        ]
-        ctx = build_ctx(transcript=Transcript.from_messages(raw_messages))
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(Waiting(), evt) is False
+        raw = [*async_agent_launch(id="tu_x"), raw_notification("tu_x")]
+        assert check_condition(Waiting(), waiting_evt(raw)) is False
 
     def test_async_launched_then_unrelated_notification_still_waiting(self) -> None:
 
-        raw_messages = [
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "name": "Agent",
-                            "id": "tu_x",
-                            "input": {"subagent_type": "general-purpose", "prompt": "y"},
-                        }
-                    ]
-                },
-            },
-            {
-                "type": "user",
-                "toolUseResult": {"isAsync": True, "status": "async_launched", "agentId": "a"},
-                "message": {
-                    "content": [{"type": "tool_result", "tool_use_id": "tu_x", "content": []}]
-                },
-            },
-            {
-                "type": "queue-operation",
-                "operation": "enqueue",
-                "content": "<task-notification><tool-use-id>tu_other</tool-use-id><status>completed</status></task-notification>",
-            },
-        ]
-        ctx = build_ctx(transcript=Transcript.from_messages(raw_messages))
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(Waiting(), evt) is True
+        raw = [*async_agent_launch(id="tu_x"), raw_notification("tu_other")]
+        assert check_condition(Waiting(), waiting_evt(raw)) is True
 
     def test_workflow_launched_is_waiting(self) -> None:
 
-        raw_messages = [
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "id": "toolu_015oujmnr8xnacVe7GnmmLEa",
-                            "name": "Workflow",
-                            "input": {"script": "export const meta = {name: 'transcript-probe'}\nlog('probe')\nreturn 1"},
-                            "caller": {"type": "direct"},
-                        }
-                    ]
-                },
-            },
-            {
-                "type": "user",
-                "toolUseResult": {
-                    "status": "async_launched",
-                    "taskId": "waux9o41y",
-                    "runId": "wf_a327db8a-07d",
-                    "summary": "capture Workflow transcript shape",
-                    "transcriptDir": "/tmp/transcripts",
-                    "scriptPath": "/tmp/script.ts",
-                },
-                "message": {
-                    "content": [
-                        {
-                            "tool_use_id": "toolu_015oujmnr8xnacVe7GnmmLEa",
-                            "type": "tool_result",
-                            "content": "Workflow launched in background. Task ID: waux9o41y\nSummary: capture Workflow transcript shape\nRun ID: wf_a327db8a-07d",
-                            "is_error": False,
-                        }
-                    ]
-                },
-            },
-        ]
-        ctx = build_ctx(transcript=Transcript.from_messages(raw_messages))
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(Waiting(), evt) is True
+        assert check_condition(Waiting(), waiting_evt(workflow_launch(id="toolu_wf"))) is True
 
     def test_workflow_then_notified_is_not_waiting(self) -> None:
 
-        raw_messages = [
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "id": "toolu_015oujmnr8xnacVe7GnmmLEa",
-                            "name": "Workflow",
-                            "input": {"script": "export const meta = {name: 'transcript-probe'}\nlog('probe')\nreturn 1"},
-                            "caller": {"type": "direct"},
-                        }
-                    ]
-                },
-            },
-            {
-                "type": "user",
-                "toolUseResult": {
-                    "status": "async_launched",
-                    "taskId": "waux9o41y",
-                    "runId": "wf_a327db8a-07d",
-                    "summary": "capture Workflow transcript shape",
-                    "transcriptDir": "/tmp/transcripts",
-                    "scriptPath": "/tmp/script.ts",
-                },
-                "message": {
-                    "content": [
-                        {
-                            "tool_use_id": "toolu_015oujmnr8xnacVe7GnmmLEa",
-                            "type": "tool_result",
-                            "content": "Workflow launched in background. Task ID: waux9o41y\nSummary: capture Workflow transcript shape\nRun ID: wf_a327db8a-07d",
-                            "is_error": False,
-                        }
-                    ]
-                },
-            },
-            {
-                "type": "queue-operation",
-                "operation": "enqueue",
-                "timestamp": "2026-06-04T23:34:51.775Z",
-                "sessionId": "fd155109-6114-4a20-8cf2-2d412eebe925",
-                "content": "<task-notification>\n<task-id>waux9o41y</task-id>\n<tool-use-id>toolu_015oujmnr8xnacVe7GnmmLEa</tool-use-id>\n<output-file>/private/tmp/waux9o41y.output</output-file>\n<status>completed</status>\n<summary>Dynamic workflow \"capture Workflow transcript shape\" completed</summary>\n<result>1</result>\n<usage>...</usage>\n</task-notification>",
-            },
-        ]
-        ctx = build_ctx(transcript=Transcript.from_messages(raw_messages))
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(Waiting(), evt) is False
+        raw = [*workflow_launch(id="toolu_wf"), raw_notification("toolu_wf", task_id="waux9o41y")]
+        assert check_condition(Waiting(), waiting_evt(raw)) is False
 
     def test_workflow_then_unrelated_notification_still_waiting(self) -> None:
 
-        raw_messages = [
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "id": "toolu_015oujmnr8xnacVe7GnmmLEa",
-                            "name": "Workflow",
-                            "input": {"script": "export const meta = {name: 'transcript-probe'}\nlog('probe')\nreturn 1"},
-                            "caller": {"type": "direct"},
-                        }
-                    ]
-                },
-            },
-            {
-                "type": "user",
-                "toolUseResult": {
-                    "status": "async_launched",
-                    "taskId": "waux9o41y",
-                    "runId": "wf_a327db8a-07d",
-                    "summary": "capture Workflow transcript shape",
-                    "transcriptDir": "/tmp/transcripts",
-                    "scriptPath": "/tmp/script.ts",
-                },
-                "message": {
-                    "content": [
-                        {
-                            "tool_use_id": "toolu_015oujmnr8xnacVe7GnmmLEa",
-                            "type": "tool_result",
-                            "content": "Workflow launched in background. Task ID: waux9o41y\nSummary: capture Workflow transcript shape\nRun ID: wf_a327db8a-07d",
-                            "is_error": False,
-                        }
-                    ]
-                },
-            },
-            {
-                "type": "queue-operation",
-                "operation": "enqueue",
-                "timestamp": "2026-06-04T23:34:51.775Z",
-                "sessionId": "fd155109-6114-4a20-8cf2-2d412eebe925",
-                "content": "<task-notification>\n<task-id>other-task</task-id>\n<tool-use-id>toolu_other</tool-use-id>\n<output-file>/private/tmp/other-task.output</output-file>\n<status>completed</status>\n<summary>Dynamic workflow \"something else\" completed</summary>\n<result>1</result>\n<usage>...</usage>\n</task-notification>",
-            },
-        ]
-        ctx = build_ctx(transcript=Transcript.from_messages(raw_messages))
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(Waiting(), evt) is True
+        raw = [*workflow_launch(id="toolu_wf"), raw_notification("toolu_other", task_id="other-task")]
+        assert check_condition(Waiting(), waiting_evt(raw)) is True
 
     def test_async_in_progress_with_sync_followup_still_waiting(self) -> None:
 
-        raw_messages = [
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "name": "Agent",
-                            "id": "tu_x",
-                            "input": {"subagent_type": "general-purpose", "prompt": "y"},
-                        }
-                    ]
-                },
-            },
-            {
-                "type": "user",
-                "toolUseResult": {"isAsync": True, "status": "async_launched", "agentId": "a"},
-                "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_x", "content": []}]},
-            },
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {"type": "tool_use", "name": "Bash", "id": "tu_y", "input": {"command": "ls"}}
-                    ]
-                },
-            },
-            {
-                "type": "user",
-                "toolUseResult": {"status": "completed"},
-                "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_y", "content": []}]},
-            },
+        raw = [
+            *async_agent_launch(id="tu_x"),
+            raw_assistant(raw_tool_use("Bash", {"command": "ls"}, "tu_y")),
+            raw_tool_result("tu_y", content=[], tool_use_result={"status": "completed"}),
         ]
-        ctx = build_ctx(transcript=Transcript.from_messages(raw_messages))
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(Waiting(), evt) is True
+        assert check_condition(Waiting(), waiting_evt(raw)) is True
 
     def test_empty_transcript_rejects(self) -> None:
 

@@ -23,7 +23,7 @@ from captain_hook.testing.helpers import (
     mock_user_prompt_event,
 )
 from captain_hook.transcript import Transcript
-from captain_hook.transcript.models import TranscriptMessage
+from captain_hook.transcript.models import TextBlock, ToolResult, ToolUseBlock, TranscriptMessage
 from captain_hook.types import Event
 
 PKG_DIR = Path(__file__).resolve().parents[3]
@@ -31,6 +31,8 @@ PKG_DIR = Path(__file__).resolve().parents[3]
 __all__ = [
     "PKG_DIR",
     "assert_result",
+    "assistant_msg",
+    "async_agent_launch",
     "build_context",
     "build_ctx",
     "dispatch_test",
@@ -42,6 +44,7 @@ __all__ = [
     "make_pre_tool_event",
     "make_stop_event",
     "make_subagent_stop_event",
+    "make_transcript",
     "make_transcript_ctx",
     "mock_event",
     "mock_stop_event",
@@ -49,7 +52,20 @@ __all__ = [
     "mock_subagent_stop_event",
     "mock_tool_event",
     "mock_user_prompt_event",
+    "raw_assistant",
+    "raw_msg",
+    "raw_notification",
+    "raw_text",
+    "raw_text_block",
+    "raw_tool_result",
+    "raw_tool_msg",
+    "raw_tool_result_block",
+    "raw_tool_use",
     "run_cli",
+    "text_msg",
+    "tool_result_msg",
+    "waiting_evt",
+    "workflow_launch",
 ]
 
 
@@ -186,4 +202,160 @@ def run_cli(
         text=True,
         cwd=cwd or str(PKG_DIR),
         env={**os.environ, **env} if env else None,
+    )
+
+
+# --- Raw JSONL-line builders ------------------------------------------------
+# These return plain dicts in the shape Claude Code writes to transcript JSONL,
+# ready for ``Transcript.from_messages([...])``.
+
+
+def raw_text_block(text: str) -> dict[str, Any]:
+    """A raw ``text`` content-block dict."""
+    return {"type": "text", "text": text}
+
+
+def raw_tool_use(
+    name: str,
+    input: dict[str, Any] | None = None,
+    id: str = "tu_x",
+    **extra: Any,
+) -> dict[str, Any]:
+    """A raw ``tool_use`` content-block dict."""
+    return {"type": "tool_use", "name": name, "input": input or {}, "id": id, **extra}
+
+
+def raw_tool_result_block(
+    tool_use_id: str = "tu_x",
+    content: list[Any] | str = "ok",
+    is_error: bool = False,
+) -> dict[str, Any]:
+    """A raw ``tool_result`` content-block dict."""
+    return {"type": "tool_result", "tool_use_id": tool_use_id, "content": content, "is_error": is_error}
+
+
+def raw_msg(role: str, content: list[dict[str, Any]] | str = "", **raw: Any) -> dict[str, Any]:
+    """A raw transcript line wrapping ``content`` (a block list or plain text) under ``message``."""
+    blocks = content if isinstance(content, list) else [raw_text_block(content)]
+    return {"type": role, "message": {"content": blocks}, **raw}
+
+
+def raw_text(role: str, text: str) -> dict[str, Any]:
+    """A raw transcript line carrying a single text block."""
+    return raw_msg(role, text)
+
+
+def raw_assistant(*blocks: dict[str, Any]) -> dict[str, Any]:
+    """A raw assistant line wrapping the given content blocks (e.g. ``raw_tool_use(...)``)."""
+    return raw_msg("assistant", list(blocks))
+
+
+def raw_tool_msg(
+    name: str,
+    input: dict[str, Any] | None = None,
+    id: str = "tu_x",
+    **extra: Any,
+) -> dict[str, Any]:
+    """A raw assistant line carrying a single tool_use block (the common single-tool case)."""
+    return raw_assistant(raw_tool_use(name, input, id, **extra))
+
+
+def raw_tool_result(
+    tool_use_id: str = "tu_x",
+    content: list[Any] | str = "ok",
+    tool_use_result: dict[str, Any] | None = None,
+    is_error: bool = False,
+) -> dict[str, Any]:
+    """A raw user line carrying one tool_result block, with optional top-level ``toolUseResult``."""
+    extra = {"toolUseResult": tool_use_result} if tool_use_result is not None else {}
+    return raw_msg("user", [raw_tool_result_block(tool_use_id, content, is_error)], **extra)
+
+
+def raw_notification(
+    tool_use_id: str,
+    task_id: str = "task-1",
+    status: str = "completed",
+    **extra: Any,
+) -> dict[str, Any]:
+    """A raw ``queue-operation`` line carrying a ``<task-notification>`` for ``tool_use_id``."""
+    content = (
+        "<task-notification>"
+        f"<task-id>{task_id}</task-id>"
+        f"<tool-use-id>{tool_use_id}</tool-use-id>"
+        f"<status>{status}</status>"
+        "</task-notification>"
+    )
+    return {"type": "queue-operation", "operation": "enqueue", "content": content, **extra}
+
+
+def async_agent_launch(id: str = "tu_x", input: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """A two-line async Agent launch: tool_use + tool_result with ``isAsync`` toolUseResult."""
+    return [
+        raw_assistant(raw_tool_use("Agent", input or {"subagent_type": "general-purpose", "prompt": "y"}, id)),
+        raw_tool_result(id, content=[], tool_use_result={"isAsync": True, "status": "async_launched", "agentId": "a"}),
+    ]
+
+
+def workflow_launch(id: str = "tu_x") -> list[dict[str, Any]]:
+    """A two-line Workflow launch: tool_use + tool_result whose toolUseResult has no ``isAsync``."""
+    return [
+        raw_assistant(
+            raw_tool_use(
+                "Workflow",
+                {"script": "export const meta = {name: 'transcript-probe'}\nlog('probe')\nreturn 1"},
+                id,
+                caller={"type": "direct"},
+            )
+        ),
+        raw_tool_result(
+            id,
+            content=(
+                "Workflow launched in background. Task ID: waux9o41y\n"
+                "Summary: capture Workflow transcript shape\nRun ID: wf_a327db8a-07d"
+            ),
+            tool_use_result={
+                "status": "async_launched",
+                "taskId": "waux9o41y",
+                "runId": "wf_a327db8a-07d",
+                "summary": "capture Workflow transcript shape",
+                "transcriptDir": "/tmp/transcripts",
+                "scriptPath": "/tmp/script.ts",
+            },
+        ),
+    ]
+
+
+def make_transcript(*messages: dict[str, Any] | list[dict[str, Any]]) -> Transcript:
+    """Build a ``Transcript`` from raw message dicts, given either as varargs or a single list."""
+    items = messages[0] if len(messages) == 1 and isinstance(messages[0], list) else list(messages)
+    return Transcript.from_messages(list(items))
+
+
+def waiting_evt(raw_messages: list[dict[str, Any]]) -> PreToolUseEvent:
+    """A Bash ``echo`` PreToolUse event over the given raw transcript, ready for ``check_condition``."""
+    ctx = build_ctx(transcript=Transcript.from_messages(raw_messages))
+    return make_pre_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+
+
+# --- TranscriptMessage-level factories --------------------------------------
+
+
+def assistant_msg(*tools: tuple[str, dict[str, Any]]) -> TranscriptMessage:
+    """An assistant ``TranscriptMessage`` whose content is a ToolUseBlock per ``(name, input)`` tuple."""
+    return TranscriptMessage(
+        type="assistant",
+        content=[ToolUseBlock(name=name, input=inp, id=f"tu_{i}") for i, (name, inp) in enumerate(tools)],
+    )
+
+
+def text_msg(text: str = "done") -> TranscriptMessage:
+    """An assistant ``TranscriptMessage`` carrying a single text block."""
+    return TranscriptMessage(type="assistant", content=[TextBlock(text=text)])
+
+
+def tool_result_msg(tool_use_id: str, text: str) -> TranscriptMessage:
+    """A user ``TranscriptMessage`` carrying a single tool_result block."""
+    return TranscriptMessage(
+        type="user",
+        content=[ToolResult(tool_use_id=tool_use_id, content=[{"type": "text", "text": text}])],
     )

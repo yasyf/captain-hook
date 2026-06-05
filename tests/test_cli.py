@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import sys
 import textwrap
 from pathlib import Path
 
@@ -15,33 +13,15 @@ from captain_hook.app import (
     on,
     register,
 )
+from captain_hook.tests.helpers import (
+    raw_assistant,
+    raw_text,
+    raw_text_block,
+    raw_tool_msg,
+    raw_tool_use,
+    run_cli,
+)
 from captain_hook.types import Event
-
-PKG_DIR = Path(__file__).resolve().parent.parent
-
-
-def run_cli(
-    *args: str,
-    stdin_data: str = "",
-    hooks_dir: str | None = None,
-    root_dir: str | None = None,
-    env: dict[str, str] | None = None,
-    cwd: str | None = None,
-) -> subprocess.CompletedProcess[str]:
-    cmd = [sys.executable, "-m", "captain_hook"]
-    if hooks_dir:
-        cmd.extend(["--hooks", hooks_dir])
-    if root_dir:
-        cmd.extend(["--root", root_dir])
-    cmd.extend(args)
-    return subprocess.run(
-        cmd,
-        input=stdin_data,
-        capture_output=True,
-        text=True,
-        cwd=cwd or str(PKG_DIR),
-        env={**os.environ, **env} if env else None,
-    )
 
 
 class TestRunSubcommand:
@@ -341,41 +321,17 @@ class TestTranscriptWiring:
     @staticmethod
     def _make_transcript_jsonl(path: Path) -> None:
         messages = [
-            {"type": "user", "message": {"content": [{"type": "text", "text": "fix the bug"}]}},
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {"type": "text", "text": "I'll look at the code."},
-                        {"type": "tool_use", "name": "Read", "id": "tu1", "input": {"file_path": "src/main.py"}},
-                    ]
-                },
-            },
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {"type": "tool_use", "name": "Bash", "id": "tu2", "input": {"command": "uv run pytest"}},
-                    ]
-                },
-            },
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "name": "Edit",
-                            "id": "tu3",
-                            "input": {
-                                "file_path": "src/main.py",
-                                "old_string": "old",
-                                "new_string": "new",
-                            },
-                        },
-                    ]
-                },
-            },
+            raw_text("user", "fix the bug"),
+            raw_assistant(
+                raw_text_block("I'll look at the code."),
+                raw_tool_use("Read", {"file_path": "src/main.py"}, "tu1"),
+            ),
+            raw_tool_msg("Bash", {"command": "uv run pytest"}, "tu2"),
+            raw_tool_msg(
+                "Edit",
+                {"file_path": "src/main.py", "old_string": "old", "new_string": "new"},
+                "tu3",
+            ),
         ]
         path.write_text("\n".join(json.dumps(m) for m in messages) + "\n")
 
@@ -468,9 +424,7 @@ class TestTranscriptWiring:
         (hooks_dir / "__init__.py").write_text("")
 
         parent_transcript = tmp_path / "parent.jsonl"
-        parent_transcript.write_text(
-            json.dumps({"type": "user", "message": {"content": [{"type": "text", "text": "parent"}]}}) + "\n"
-        )
+        parent_transcript.write_text(json.dumps(raw_text("user", "parent")) + "\n")
 
         agent_transcript = tmp_path / "agent.jsonl"
         self._make_transcript_jsonl(agent_transcript)
