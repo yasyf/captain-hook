@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import ast
-import logging
 import textwrap
 from collections.abc import Callable, Iterator, Sequence
 from typing import TYPE_CHECKING, get_type_hints, overload
+
+from loguru import logger
 
 from captain_hook.app import on
 from captain_hook.state import hook_name
@@ -18,8 +19,6 @@ from captain_hook.types import (
     TestFile,
     Tool,
 )
-
-logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
@@ -106,7 +105,7 @@ def lint(
                 return run_ast_check(check, evt, message, trigger, sep, block, max_shown)  # type: ignore[arg-type]
             return run_string_check(check, evt, message, sep, block, max_shown)  # type: ignore[arg-type]
         except Exception:
-            logger.warning("Lint check %s failed", check.__name__, exc_info=True)
+            logger.bind(check=check.__name__).opt(exception=True).warning("lint check failed")
             return None
 
     handler.__name__ = handler.__qualname__ = hook_name("lint", None, message)
@@ -135,7 +134,7 @@ def diff_lint(
         try:
             return run_diff_check(check, evt, message, sep, block, max_shown)
         except Exception:
-            logger.warning("Diff lint %s failed", check.__name__, exc_info=True)
+            logger.bind(check=check.__name__).opt(exception=True).warning("diff lint check failed")
             return None
 
     handler.__name__ = handler.__qualname__ = hook_name("diff_lint", None, message)

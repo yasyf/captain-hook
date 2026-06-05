@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-import logging
 import subprocess
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from loguru import logger
 from pydantic import BaseModel
 
 from captain_hook import state
@@ -25,13 +24,11 @@ from captain_hook.types import (
     TCondition,
 )
 
-logger = logging.getLogger(__name__)
-
 FAILURE_ROOT = state.CACHE_ROOT / "failures"
 
 if TYPE_CHECKING:
-    from captain_hook.llm import TModel, TSpecialty
     from captain_hook.events import BaseHookEvent
+    from captain_hook.llm import TModel, TSpecialty
     from captain_hook.signals.nlp import NlpSignal
 
 from captain_hook.signals import extract_signal_context, resolve_signals, transcript_texts
@@ -106,7 +103,7 @@ def llm_evaluate[M: BaseModel](
             response_model=response_model,
         )
     except Exception:
-        logger.warning("LLM evaluate failed for prompt: %.100s", prompt, exc_info=True)
+        logger.bind(prompt=prompt).opt(exception=True).warning("llm evaluate failed")
         return None
 
 
@@ -325,22 +322,14 @@ def record_prompt_check_failure(
         )
     )
 
-    logger.warning(
-        "prompt_check failed for %s\n"
-        "  argv: %s\n"
-        "  exit_code: %s\n"
-        "  stderr: %s\n"
-        "  stdout (tail 4KB): %s\n"
-        "  prompt (tail 1KB): %s\n"
-        "  failure_record: %s",
-        prefix,
-        argv,
-        exit_code,
-        stderr,
-        stdout[-4096:],
-        prompt[-1024:],
-        failure_path,
-        exc_info=True,
+    logger.opt(exception=exc).warning(
+        f"prompt_check failed for {prefix}\n"
+        f"  argv: {argv}\n"
+        f"  exit_code: {exit_code}\n"
+        f"  stderr: {stderr}\n"
+        f"  stdout (tail 4KB): {stdout[-4096:]}\n"
+        f"  prompt (tail 1KB): {prompt[-1024:]}\n"
+        f"  failure_record: {failure_path}",
     )
 
 

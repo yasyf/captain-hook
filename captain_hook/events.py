@@ -22,6 +22,7 @@ from captain_hook.types import Event
 if TYPE_CHECKING:
     from captain_hook.command import CommandLine as CommandLineType
     from captain_hook.context import HookContext
+    from captain_hook.tasks import Tasks
     from captain_hook.types import HookResult
 
 
@@ -41,6 +42,22 @@ class BaseHookEvent:
     @property
     def is_subagent(self) -> bool:
         return "agent_id" in self._raw
+
+    @property
+    def session_id(self) -> str:
+        return self._raw["session_id"]
+
+    @cached_property
+    def tasks(self) -> Tasks:
+        """The live task list for this session, read from Claude Code's native task store.
+
+        Unlike transcript-derived ``task_ops()``, this reflects updates made by
+        subagents, teammates, or resumed sessions, and is empty when the session
+        has no task store — it never falls back to another session's tasks.
+        """
+        from captain_hook.tasks import Tasks as T
+
+        return T.for_session(self.session_id)
 
     @property
     def user_prompt(self) -> str | None:

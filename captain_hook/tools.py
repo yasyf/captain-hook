@@ -52,7 +52,7 @@ class TaskOp:
             case TaskUpdateInput() as ti:
                 return cls("update", ti.task_id or None, ti.status or None)
             case _ if tu.name == "TaskGet":
-                return cls("get", tu.raw_input.get("id"))
+                return cls("get", tu.raw_input["taskId"])
             case _ if tu.name == "TaskList":
                 return cls("list")
             case _:

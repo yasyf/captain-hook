@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import functools
 import json
-import logging
 import os
 import re
 from collections.abc import Callable, Mapping
@@ -11,7 +10,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 from captain_hook.transcript.models import (
     ContentBlock,
@@ -172,7 +171,7 @@ def try_json(text: str) -> RawDict | None:
         result: object = json.loads(text)
         return cast(RawDict, result) if isinstance(result, dict) else None
     except (json.JSONDecodeError, ValueError) as exc:
-        logger.debug("transcript json parse failed (%s); skipping line", exc)
+        logger.bind(error=str(exc)).debug("transcript json parse failed; skipping line")
         return None
 
 

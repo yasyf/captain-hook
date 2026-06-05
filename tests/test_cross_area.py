@@ -9,12 +9,12 @@ from typing import Any
 
 import pytest
 
-from captain_hook.loader import discover_hooks
 from captain_hook.app import (
     _state,
-    hook as register_hook,
     on,
-    register,
+)
+from captain_hook.app import (
+    hook as register_hook,
 )
 from captain_hook.command import CommandLine
 from captain_hook.context import HookContext
@@ -23,18 +23,28 @@ from captain_hook.events import (
     BaseHookEvent,
     PreToolUseEvent,
 )
+from captain_hook.loader import discover_hooks
 from captain_hook.session import SessionStore
 from captain_hook.signals import score_signals
 from captain_hook.signals.nlp import Clause, NlpSignal, Phrase
 from captain_hook.state import HookState
 from captain_hook.testing.helpers import run_inline_tests
+from captain_hook.testing.types import Allow, Block, Input
 from captain_hook.tests.helpers import (
     build_ctx,
     dispatch_test,
-    mock_subagent_stop_event,
+    make_transcript,
     mock_tool_event,
 )
-from captain_hook.testing.types import Allow, Block, Input
+from captain_hook.tests.helpers import (
+    raw_text as msg,
+)
+from captain_hook.tests.helpers import (
+    raw_tool_msg as toolmsg,
+)
+from captain_hook.tests.helpers import (
+    raw_tool_result as tool_resultmsg,
+)
 from captain_hook.transcript import Transcript
 from captain_hook.transcript.models import TranscriptMessage
 from captain_hook.types import (
@@ -53,42 +63,6 @@ from captain_hook.types import (
     UsedSkill,
 )
 from captain_hook.workflow import Step, text_matches, workflow
-
-
-def make_transcript(messages: list[dict[str, Any]]) -> Transcript:
-    return Transcript.from_messages(messages)
-
-
-
-
-def msg(role: str, text: str) -> dict[str, Any]:
-    return {
-        "type": role,
-        "message": {"content": [{"type": "text", "text": text}]},
-    }
-
-
-def toolmsg(tool_name: str, tool_input: dict[str, Any], tool_use_id: str = "tu1") -> dict[str, Any]:
-    return {
-        "type": "assistant",
-        "message": {
-            "content": [
-                {"type": "tool_use", "name": tool_name, "input": tool_input, "id": tool_use_id},
-            ],
-        },
-    }
-
-
-def tool_resultmsg(tool_use_id: str = "tu1", is_error: bool = False) -> dict[str, Any]:
-    return {
-        "type": "user",
-        "message": {
-            "content": [
-                {"type": "tool_result", "tool_use_id": tool_use_id, "content": "ok", "is_error": is_error},
-            ],
-        },
-    }
-
 
 
 class TestDeclarativeHookE2E:
@@ -470,8 +444,8 @@ class TestInlineTestsPipeline:
         )
         results = run_inline_tests()
         assert len(results) >= 2
-        for name, status, passed, msg in results:
-            assert passed, f"{name} failed: {msg}"
+        for name, status, passed, detail in results:
+            assert passed, f"{name} failed: {detail}"
 class TestWorkflowTranscript:
     """VAL-CROSS-012"""
 

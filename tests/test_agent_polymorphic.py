@@ -6,18 +6,9 @@ from typing import Any
 
 from captain_hook.conditions import check_condition
 from captain_hook.events import PreToolUseEvent, SubagentStopEvent
-from captain_hook.tests.helpers import build_ctx, make_event
+from captain_hook.tests.helpers import build_ctx, make_event, make_pre_tool_event
 from captain_hook.transcript import Transcript
 from captain_hook.types import Agent, Or, Tool
-
-
-def make_pre_tool_event(
-    tool_name: str,
-    tool_input: dict[str, Any] | None = None,
-    ctx: Any = None,
-) -> PreToolUseEvent:
-    raw: dict[str, Any] = {"tool_name": tool_name, "tool_input": tool_input or {}}
-    return PreToolUseEvent(_raw=raw, ctx=ctx)
 
 
 class TestAgentPolymorphicMatch:

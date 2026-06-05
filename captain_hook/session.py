@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 import re
 import shutil
@@ -10,9 +9,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import ClassVar, Generic, TypeVar, overload
 
+from loguru import logger
 from pydantic import BaseModel
-
-logger = logging.getLogger(__name__)
 
 M = TypeVar("M", bound=BaseModel)
 
@@ -73,7 +71,9 @@ class SessionSlot(Generic[M]):  # noqa: UP046
         try:
             return self._model.model_validate_json(self._path.read_text())
         except Exception:
-            logger.warning("Failed to read %s from %s", self._model.__name__, self._path, exc_info=True)
+            logger.bind(model=self._model.__name__, path=str(self._path)).opt(exception=True).warning(
+                "failed to read session state",
+            )
             return default
 
     def set(self, obj: M) -> None:
@@ -94,7 +94,7 @@ class SessionSlot(Generic[M]):  # noqa: UP046
                 Path(tmp_name).unlink(missing_ok=True)
                 raise
         except OSError:
-            logger.warning("Failed to persist %s", self._path, exc_info=True)
+            logger.bind(path=str(self._path)).opt(exception=True).warning("failed to persist session state")
 
     def delete(self) -> None:
         if self._path:

@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import logging
 import re
 from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING
 
 import tree_sitter_bash as tsbash  # type: ignore[import-untyped]
+from loguru import logger
 from tree_sitter import Language, Node, Parser
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
-
-logger = logging.getLogger(__name__)
 
 BASH_LANGUAGE = Language(tsbash.language())  # pyright: ignore[reportDeprecated]
 BASH_PARSER = Parser(BASH_LANGUAGE)
@@ -98,7 +96,7 @@ class CommandLine:
         tree = BASH_PARSER.parse(raw.encode())
         if parts := cls.walk_node(tree.root_node):
             return cls(raw=raw, parts=tuple(parts))
-        logger.warning("tree-sitter bash parse produced no commands for %r; falling back to naive split", raw[:200])
+        logger.bind(raw=raw).warning("tree-sitter bash parse produced no commands; falling back to naive split")
         return cls(raw=raw, parts=((cls.fallback(raw), None),))
 
     @cached_property

@@ -55,6 +55,8 @@ def tool_use_waiting(tu: ToolUse, t: Transcript, waiting_names: set[str]) -> boo
             return True
         case "Agent" | "Task" if tu.result and tu.result.is_async:
             return not has_completion_notification(t, tu.id, tu.message_index)
+        case "Workflow":
+            return not has_completion_notification(t, tu.id, tu.message_index)
     return False
 
 

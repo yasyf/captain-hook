@@ -3,11 +3,12 @@ from __future__ import annotations
 import os
 from unittest.mock import patch
 
+from captain_hook.tests.helpers import raw_text, raw_text_block
 from captain_hook.transcript.models import TranscriptMessage
 
 
 def _msg(type: str, text: str) -> TranscriptMessage:
-    return TranscriptMessage.from_raw(type=type, content=[{"type": "text", "text": text}], raw={})
+    return TranscriptMessage.from_raw(type=type, content=[raw_text_block(text)], raw={})
 
 
 class TestConductorDetect:
@@ -270,8 +271,8 @@ class TestClassifierAutoWiring:
         from captain_hook.transcript import Transcript
 
         raw = [
-            {"type": "user", "message": {"content": [{"type": "text", "text": "<system_instruction>You are helpful"}]}},
-            {"type": "user", "message": {"content": [{"type": "text", "text": "Fix the bug"}]}},
+            raw_text("user", "<system_instruction>You are helpful"),
+            raw_text("user", "Fix the bug"),
         ]
         transcript = Transcript.from_messages(raw)
         assert transcript.classifier is not None
@@ -282,8 +283,8 @@ class TestClassifierAutoWiring:
         from captain_hook.transcript import Transcript
 
         raw = [
-            {"type": "user", "message": {"content": [{"type": "text", "text": "<system_instruction>setup"}]}},
-            {"type": "user", "message": {"content": [{"type": "text", "text": "Real user message"}]}},
+            raw_text("user", "<system_instruction>setup"),
+            raw_text("user", "Real user message"),
         ]
         transcript = Transcript.from_messages(raw)
         assert transcript.first_user_message() == "Real user message"
@@ -295,11 +296,9 @@ class TestClassifierAutoWiring:
 
         transcript_path = tmp_path / "conductor-workspaces" / "test.jsonl"
         transcript_path.parent.mkdir(parents=True)
-        sys_msg = {"type": "text", "text": "<system_instruction>setup"}
-        fix_msg = {"type": "text", "text": "Fix bug"}
         lines = [
-            json.dumps({"type": "user", "message": {"content": [sys_msg]}}),
-            json.dumps({"type": "user", "message": {"content": [fix_msg]}}),
+            json.dumps(raw_text("user", "<system_instruction>setup")),
+            json.dumps(raw_text("user", "Fix bug")),
         ]
         transcript_path.write_text("\n".join(lines))
         transcript = Transcript.from_path(transcript_path)
@@ -312,7 +311,7 @@ class TestClassifierAutoWiring:
         monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
         monkeypatch.delenv("FACTORY_PROJECT_DIR", raising=False)
         raw = [
-            {"type": "user", "message": {"content": [{"type": "text", "text": "normal message"}]}},
+            raw_text("user", "normal message"),
         ]
         transcript = Transcript.from_messages(raw)
         assert transcript.classifier is not None
