@@ -326,7 +326,7 @@ class TestGenerateSettings:
         assert result.returncode == 0
         data = json.loads(result.stdout)
         raw = json.dumps(data)
-        assert "uvx --from cc-captain-hook captain-hook" in raw
+        assert "uvx capt-hook" in raw
         assert "$CLAUDE_PROJECT_DIR/custom/hooks" in raw
 
     def test_e2e_053_generate_settings_with_from_source(self, tmp_path: Path) -> None:
@@ -342,7 +342,7 @@ class TestGenerateSettings:
         assert result.returncode == 0
         data = json.loads(result.stdout)
         raw = json.dumps(data)
-        assert "uvx --from ./local/path captain-hook" in raw
+        assert "uvx --from ./local/path capt-hook" in raw
 
 
 class TestStateModelSerialization:

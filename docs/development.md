@@ -30,7 +30,7 @@ uv run pytest
 The example hooks in `docs/examples/` carry inline tests too:
 
 ```bash
-uv run captain-hook --hooks docs/examples test
+uv run capt-hook --hooks docs/examples test
 ```
 
 ## Docs
@@ -48,7 +48,7 @@ uv run mkdocs serve
 uv build
 uv venv --seed .wheel-smoke
 uv pip install --python .wheel-smoke/bin/python dist/*.whl
-.wheel-smoke/bin/captain-hook --help
+.wheel-smoke/bin/capt-hook --help
 ```
 
 ## Using a local checkout
@@ -56,13 +56,13 @@ uv pip install --python .wheel-smoke/bin/python dist/*.whl
 From a consumer project, point `uv run --project` at your clone:
 
 ```bash
-uv run --project path/to/captain-hook captain-hook test
+uv run --project path/to/captain-hook capt-hook test
 ```
 
 Or generate settings whose hook commands invoke your checkout instead of PyPI:
 
 ```bash
-captain-hook generate-settings --from path/to/captain-hook
+capt-hook generate-settings --from path/to/captain-hook
 ```
 
 ## Releasing

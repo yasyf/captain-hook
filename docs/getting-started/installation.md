@@ -10,16 +10,14 @@
 The fastest way to use captain-hook — no project dependency needed:
 
 ```bash
-uvx --from cc-captain-hook captain-hook init
+uvx capt-hook init
 ```
 
-The PyPI distribution is `cc-captain-hook` while the command stays `captain-hook` — that's why the invocation is `uvx --from cc-captain-hook captain-hook`.
-
-`uvx` fetches captain-hook into a throwaway environment, runs the CLI, and discards it. Every command works the same way — just prefix it with `uvx --from cc-captain-hook`:
+`uvx` fetches capt-hook into a throwaway environment, runs the CLI, and discards it. Every command works the same way — just prefix it with `uvx`:
 
 ```bash
-uvx --from cc-captain-hook captain-hook test
-uvx --from cc-captain-hook captain-hook generate-settings
+uvx capt-hook test
+uvx capt-hook generate-settings
 ```
 
 Run from your project root and `--hooks` defaults to `.claude/hooks`. This is the headline path: you never add captain-hook to `pyproject.toml` and never manage a venv yourself.
@@ -29,19 +27,19 @@ Run from your project root and `--hooks` defaults to `.claude/hooks`. This is th
 Only if you want captain-hook pinned in your project's lockfile (e.g. to vendor it for offline CI):
 
 ```bash
-uv add cc-captain-hook
+uv add capt-hook
 ```
 
 Then the commands drop the `uvx` prefix:
 
 ```bash
-captain-hook init
+capt-hook init
 ```
 
 ## Verify installation
 
 ```bash
-uvx --from cc-captain-hook captain-hook test
+uvx capt-hook test
 ```
 
 This runs the inline tests on the scaffolded example hook. If you added captain-hook as a dependency, you can also check the import directly:
@@ -52,7 +50,7 @@ python -c "import captain_hook; print(captain_hook.__name__)"
 
 ## Project layout
 
-`captain-hook init` produces:
+`capt-hook init` produces:
 
 ```
 my-project/
@@ -63,11 +61,11 @@ my-project/
 │   └── settings.local.json   # Captain-hook wires itself in here
 ```
 
-You don't need this exact layout — `captain-hook --hooks <any-dir> test` works on any directory of hooks. The default just lines up with what Claude Code looks for.
+You don't need this exact layout — `capt-hook --hooks <any-dir> test` works on any directory of hooks. The default just lines up with what Claude Code looks for.
 
 ## Dependencies
 
-`captain-hook` bundles:
+`capt-hook` bundles:
 
 - **pydantic** / **pydantic-settings** — typed settings and data models
 - **tree-sitter** / **tree-sitter-bash** — bash command parsing for `CommandLine`
@@ -80,7 +78,7 @@ The spaCy English model is **not** auto-downloaded — see [Troubleshooting](../
 
 ## CI integration
 
-Run inline hook tests in CI so scaffold edits cannot ship broken expectations. `captain-hook test --json` emits one JSON object per test (`id`, `status`, `expected`, `reason`) and exits non-zero on the first failure.
+Run inline hook tests in CI so scaffold edits cannot ship broken expectations. `capt-hook test --json` emits one JSON object per test (`id`, `status`, `expected`, `reason`) and exits non-zero on the first failure.
 
 ```yaml
 # .github/workflows/hooks.yml
@@ -97,7 +95,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uvx --from cc-captain-hook captain-hook test
+      - run: uvx capt-hook test
 ```
 
 `setup-uv` installs uv (which provides Python 3.12+ and `uvx`), so there's no separate Python or install step. Drop `--json` in if a downstream reporter consumes the output.

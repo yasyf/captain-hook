@@ -214,7 +214,7 @@ def version_key(dirname: str) -> tuple[int, ...]:
 ## Testing
 
 Tests live in `tests/`; run them with `uv run pytest`. Hook authors also write
-inline `tests = {...}` on each hook, runnable with `captain-hook test`.
+inline `tests = {...}` on each hook, runnable with `capt-hook test`.
 
 Write strict assertions against specific expected values; a test that can't fail
 uncovers nothing. Mock the boundaries your code talks to, such as the network,

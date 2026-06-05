@@ -42,4 +42,4 @@ jobs:
           rm -rf .wheel-smoke
           uv venv --seed .wheel-smoke
           uv pip install --python .wheel-smoke/bin/python dist/*.whl
-          .wheel-smoke/bin/captain-hook --help
+          .wheel-smoke/bin/capt-hook --help

@@ -1,6 +1,6 @@
 # Examples
 
-Each page picks one capability of the framework, frames it as a problem you've actually hit, and links to a self-contained `docs/examples/*.py` file you can drop into your hooks directory. Every example file ships with inline `tests = {...}` you can run via `captain-hook --hooks docs/examples test`.
+Each page picks one capability of the framework, frames it as a problem you've actually hit, and links to a self-contained `docs/examples/*.py` file you can drop into your hooks directory. Every example file ships with inline `tests = {...}` you can run via `capt-hook --hooks docs/examples test`.
 
 | Example | Teaches |
 |---|---|

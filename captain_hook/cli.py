@@ -18,7 +18,7 @@ from captain_hook.session import SessionStore, ensure_session
 from captain_hook.transcript import Transcript
 from captain_hook.types import Event
 
-DIST_NAME = "cc-captain-hook"
+DIST_NAME = "capt-hook"
 
 
 def example_hook_source() -> str:
@@ -33,7 +33,7 @@ def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str = DIST_
             if member in entry.spec.events and (name := member.name):
                 events_by_async[entry.spec.async_].add(name)
 
-    from_flag = f" --from {from_source}"
+    from_flag = "" if from_source == DIST_NAME else f" --from {from_source}"
     hooks_flag = "" if hooks_dir == ".claude/hooks" else f" --hooks $CLAUDE_PROJECT_DIR/{hooks_dir}"
 
     def commands(event: str) -> list[dict[str, Any]]:
@@ -41,7 +41,7 @@ def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str = DIST_
             {
                 "type": "command",
                 "command": (
-                    f"uvx{from_flag} captain-hook"
+                    f"uvx{from_flag} capt-hook"
                     f"{hooks_flag}"
                     f" run {event}"
                     f"{' --async' if is_async else ''}"
@@ -73,7 +73,7 @@ def merge_settings(hooks_dir: str, settings_path: Path, from_source: str = DIST_
 
 
 def is_captain_hook_group(group: dict[str, Any]) -> bool:
-    return any("captain-hook" in (h.get("command") or "") for h in group.get("hooks") or [])
+    return any("capt-hook" in (h.get("command") or "") for h in group.get("hooks") or [])
 
 
 def merge_init_settings(
@@ -173,8 +173,8 @@ def init_project(root: Path) -> None:
     print("Next:")
     print("  1. Read the quickstart: docs/getting-started/quickstart.md")
     print("  2. Edit example.py or add new files under .claude/hooks/")
-    print("  3. captain-hook test       # verify inline tests")
-    print("  4. captain-hook generate-settings    # rewire after adding events")
+    print("  3. capt-hook test       # verify inline tests")
+    print("  4. capt-hook generate-settings    # rewire after adding events")
 
 
 def show_logs(session: str | None = None, tail: int | None = None) -> None:
@@ -214,7 +214,7 @@ def show_logs(session: str | None = None, tail: int | None = None) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="captain-hook",
+        prog="capt-hook",
         description="Captain Hook — declarative hook framework for Claude Code lifecycle events.",
     )
     parser.add_argument(

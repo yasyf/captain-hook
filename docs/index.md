@@ -36,7 +36,7 @@ That's it. One line blocks `git stash` across your entire project.
 
     ---
 
-    Test hooks where you define them. `Input(command="git stash")` / `Block("jj")` — run with `captain-hook test`.
+    Test hooks where you define them. `Input(command="git stash")` / `Block("jj")` — run with `capt-hook test`.
 
 -   :material-format-list-checks:{ .lg .middle } **Multi-step workflows**
 
@@ -59,13 +59,13 @@ That's it. One line blocks `git stash` across your entire project.
 === "Install"
 
     ```bash
-    uv add cc-captain-hook
+    uv add capt-hook
     ```
 
 === "Scaffold"
 
     ```bash
-    captain-hook init
+    capt-hook init
     ```
 
 === "Write a hook"

@@ -1,5 +1,5 @@
 [project]
-name = "cc-captain-hook"
+name = "capt-hook"
 version = "0.1.0"
 description = "Declarative hook framework for Claude Code"
 readme = "README.md"
@@ -43,7 +43,7 @@ dev = [
 ]
 
 [project.scripts]
-captain-hook = "captain_hook.cli:main"
+capt-hook = "captain_hook.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/yasyf/captain-hook"

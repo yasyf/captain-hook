@@ -21,7 +21,7 @@ block_command(
 Run all inline tests (from your project root, `--hooks` defaults to `.claude/hooks`):
 
 ```bash
-captain-hook test
+capt-hook test
 ```
 
 ### Input fields
