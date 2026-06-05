@@ -67,3 +67,5 @@ The next time Claude tries `git stash`, captain-hook returns a deny with your re
 ## Docs
 
 [Read the docs](https://captain-hook.readthedocs.io) for the full guide: conditions, primitives, LLM hooks, workflows, state, and real-world patterns.
+
+Working on captain-hook itself? See the [development guide](https://captain-hook.readthedocs.io/en/latest/development/).

@@ -68,6 +68,7 @@ nav:
     - Conditions Cheatsheet: reference/conditions.md
     - API: reference/api/
     - Changelog: reference/changelog.md
+  - Development: development.md
 
 plugins:
   - search

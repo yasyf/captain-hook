@@ -38,16 +38,6 @@ Then the commands drop the `uvx` prefix:
 captain-hook init
 ```
 
-## Monorepo / local checkout
-
-When captain-hook lives inside a larger repo (or you've cloned it for local development), point `uv run --project` at the local checkout:
-
-```bash
-uv run --project packages/captain-hook captain-hook test
-```
-
-This is the right shape for any consumer project that vendors captain-hook rather than pulling it from PyPI.
-
 ## Verify installation
 
 ```bash
@@ -110,4 +100,4 @@ jobs:
       - run: uvx --from cc-captain-hook captain-hook test
 ```
 
-`setup-uv` installs uv (which provides Python 3.12+ and `uvx`), so there's no separate Python or install step. Drop `--json` in if a downstream reporter consumes the output. For the monorepo install mode, swap the run line for `uv run --project packages/captain-hook captain-hook test`.
+`setup-uv` installs uv (which provides Python 3.12+ and `uvx`), so there's no separate Python or install step. Drop `--json` in if a downstream reporter consumes the output.

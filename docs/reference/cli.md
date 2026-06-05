@@ -136,7 +136,7 @@ captain-hook --hooks src/ --root . generate-settings
 Use `--from` to point at a local checkout before the package is published:
 
 ```bash
-captain-hook generate-settings --from ./packages/captain-hook
+captain-hook generate-settings --from path/to/captain-hook
 ```
 
 Only includes event types that have at least one registered hook. Pipe to a file or merge into your existing settings:

@@ -23,4 +23,4 @@ Public APIs:
 - **Inline tests** — `Input`, `Block`, `Warn`, `Allow`, `InlineTests` (type alias for the test mapping).
 - **CLI** — `init`, `run`, `test` (`--json`), `generate-settings`.
 
-Ships with 9 curated examples under `packages/captain-hook/examples/` and matching narrative pages under `docs/examples/`.
+Ships with 9 curated examples under `docs/examples/`, each with a matching narrative page.
