@@ -3,7 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/cc-captain-hook.svg)](https://pypi.org/project/cc-captain-hook/)
 [![Python](https://img.shields.io/pypi/pyversions/cc-captain-hook.svg)](https://pypi.org/project/cc-captain-hook/)
 [![Docs](https://readthedocs.org/projects/captain-hook/badge/?version=latest)](https://captain-hook.readthedocs.io)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/yasyf/captain-hook/blob/main/LICENSE)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-blue.svg)](https://github.com/yasyf/captain-hook/blob/main/LICENSE)
 
 Declarative hook framework for Claude Code. Write hooks as data, test them inline, and ship them to CI in the same shape they run in production.
 
