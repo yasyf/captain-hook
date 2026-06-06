@@ -1,0 +1,18 @@
+---
+title: "Examples"
+---
+
+Each page picks one capability of the framework, frames it as a problem you've actually hit, and links to a self-contained `docs/examples/*.py` file you can drop into your hooks directory. Every example file ships with inline `tests = {...}` you can run via `capt-hook --hooks docs/examples test`.
+
+| Example | Teaches |
+|---|---|
+| [Audit Logging](audit.qmd) | JSONL audit log with custom fields and hourly rotation. |
+| [Code Quality](code-quality.qmd) | Layered detection: regex `hook` → AST `lint` → signal `nudge` → `llm_gate`. |
+| [Command Safety](command-safety.qmd) | `block_command` plus `evt.command_line.q.*` for AST-level command predicates. |
+| [Custom Condition](custom-condition.qmd) | The `CustomCondition` protocol for project-specific predicates. |
+| [Failure Recovery](failure-recovery.qmd) | Signal-driven `Stop` nudge that points at debug tools when failures repeat. |
+| [Multi-Step Workflow](multi-step-workflow.qmd) | `workflow` / `Step` / `Artifact` enforcing a checklist before `SubagentStop`. |
+| [Session Workflow](session-workflow.qmd) | `@workflow_state` group spanning `PreToolUse`, `UserPromptSubmit`, and `Stop`. |
+| [Settings Config](settings-config.qmd) | `HooksSettings` subclass plus a sibling hook that reads `evt.ctx.c.*`. |
+| [Style Guide](styleguide.qmd) | `styleguide` running `StyleRule` matchers that flag only the lines your edit touched. |
+| [Test Integrity](test-integrity.qmd) | `prompt_check` with `Prompt.from_template` detecting weakened tests. |

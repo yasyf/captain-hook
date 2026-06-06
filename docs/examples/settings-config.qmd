@@ -1,9 +1,9 @@
-# Settings & Configuration
+---
+title: "Settings & Configuration"
+---
 
 Different projects have different test runners, different lint allowlists, different VCS conventions. You want a single typed configuration object available in every hook handler, with sensible defaults and `HOOKS_*` environment-variable overrides.
 
-```python
---8<-- "docs/examples/settings_config.py"
-```
+{{< include _includes/settings_config.qmd >}}
 
 **What to learn:** Subclass `HooksSettings` (a `pydantic_settings.BaseSettings`) to declare your project's knobs. Defaults live on the class; overrides come from the environment via the pydantic-settings machinery. At dispatch time, every handler can read the resolved settings as `evt.ctx.c` (also exposed as `evt.ctx.conf` and `evt.ctx.settings`) — no global imports, no module-level config singleton.

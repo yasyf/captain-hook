@@ -1,9 +1,9 @@
-# Audit Logging
+---
+title: "Audit Logging"
+---
 
 You want a per-day record of every tool the agent invoked, what file it touched, and which session it came from, so you can investigate incidents after the fact, build a usage dashboard, or just spot-check what the agent has been doing.
 
-```python
---8<-- "docs/examples/audit.py"
-```
+{{< include _includes/audit.qmd >}}
 
 **What to learn:** `audit()` is the no-result primitive that drops one JSONL line per matching event under `$CLAUDE_PROJECT_DIR/.context/hook-logs/`. Customize the destination with `log_dir` / `filename`, and the record shape with `fields`. Combine `only_if=[FilePath(...)]` to scope the audit to one slice of activity.
