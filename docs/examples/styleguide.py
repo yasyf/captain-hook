@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import ast
 
-from captain_hook import Allow, Input, StyleDiffRule, StyleRule, Warn, styleguide
-from captain_hook.primitives.styleguide import Matcher
+from captain_hook import Allow, Input, Warn
+from captain_hook.style import StyleDiffRule, StyleRule, matchers as M, styleguide
 
 
 class NoPrint(StyleRule):
@@ -14,12 +14,11 @@ class NoPrint(StyleRule):
     Use a logger (logger.info(...)) instead.
     """
 
-    trigger = "print"
     tests = {
         Input(file="app.py", content="def f():\n    print('debug')\n"): Warn(),
         Input(file="app.py", content="def f():\n    logger.info('ok')\n"): Allow(),
     }
-    match = Matcher.calls("print")
+    match = M.calls("print")
     label = "print() call"
 
 
@@ -31,12 +30,11 @@ class NoBareExcept(StyleRule):
     Catch a specific exception type instead.
     """
 
-    trigger = "except"
     tests = {
         Input(file="app.py", content="try:\n    f()\nexcept:\n    pass\n"): Warn(),
         Input(file="app.py", content="try:\n    f()\nexcept ValueError:\n    pass\n"): Allow(),
     }
-    match = Matcher.kind(ast.ExceptHandler).where(lambda n: n.type is None)
+    match = M.kind(ast.ExceptHandler).where(lambda n: n.type is None)
     label = "bare except"
 
 
@@ -52,7 +50,7 @@ class NoNewWildcardImport(StyleDiffRule):
         Input(file="m.py", old="import os\n", content="from os import *\n"): Warn(),
         Input(file="m.py", old="from os import *\n", content="from os import *\nx = 1\n"): Allow(),
     }
-    match = Matcher.imports.where(lambda n: any(alias.name == "*" for alias in n.names))
+    match = M.imports.where(lambda n: any(alias.name == "*" for alias in n.names))
 
 
 styleguide(NoPrint, NoBareExcept, NoNewWildcardImport)

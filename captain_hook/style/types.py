@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import ast
 from abc import ABC
-from collections.abc import Callable, Hashable, Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
 from captain_hook.utils import kebab
 
 if TYPE_CHECKING:
-    from captain_hook.primitives.styleguide.matcher import Matcher
+    from captain_hook.style.matchers import Matcher
     from captain_hook.testing import InlineTests
 
 
@@ -31,20 +31,21 @@ class StyleRule(ABC):
 
     Subclass it and write the rule's message as the class **docstring** (``{violations}`` is
     substituted at fire time). Declare the rule as data by setting ``match`` to a
-    [`Matcher`][captain_hook.primitives.styleguide.Matcher] (and optionally ``label``); override ``check``
+    [`Matcher`][captain_hook.style.matchers.Matcher] (and optionally ``label``); override ``check``
     only for logic a matcher can't express. The class name is the rule's identity —
     ``NoNestedImports`` becomes ``"no-nested-imports"``.
 
     Example:
         ```python
+        from captain_hook.style import matchers as M
+
         class NoNestedImports(StyleRule):
             \"\"\"Lazy imports belong at the top of the function body: {violations}\"\"\"
 
-            match = Matcher.imports & Matcher.child_of(Matcher.control_flow) & ~Matcher.under(Matcher.type_checking)
+            match = M.imports & M.child_of(M.control_flow) & ~M.under(M.type_checking)
         ```
     """
 
-    trigger: ClassVar[str | None] = None
     sep: ClassVar[str] = "\n  - "
     tests: ClassVar[InlineTests] = {}
     match: ClassVar[Matcher | None] = None
@@ -62,22 +63,22 @@ class StyleRule(ABC):
 class StyleDiffRule(StyleRule):
     """Base class for a diff rule: flags constructs newly introduced by the change.
 
-    Like [`StyleRule`][captain_hook.primitives.styleguide.StyleRule], but it compares the pre-edit and
-    post-edit trees. The declarative form flags nodes matching ``match`` in the new tree whose
-    ``key`` (default ``ast.unparse``) was absent from the old tree; override ``check`` when the
+    Like [`StyleRule`][captain_hook.style.StyleRule], but it compares the pre-edit and
+    post-edit trees. The declarative form flags nodes matching ``match`` in the new tree
+    that were absent from the old tree (by unparsed source); override ``check`` when the
     "newly introduced" identity needs custom logic.
 
     Example:
         ```python
+        from captain_hook.style import matchers as M
+
         class NoNewWildcardImport(StyleDiffRule):
             \"\"\"Wildcard import added by this edit: {violations}\"\"\"
 
-            match = Matcher.imports.where(lambda n: any(a.name == "*" for a in n.names))
+            match = M.imports.where(lambda n: any(a.name == "*" for a in n.names))
         ```
     """
 
-    key: ClassVar[Callable[[ast.AST], Hashable] | None] = None
-
     def check(self, pre: ast.Module, post: ast.Module) -> Iterator[Violation]:  # type: ignore[override]
         if (matcher := type(self).match) is not None:
-            yield from matcher.diff(pre, post, type(self).key or ast.unparse, type(self).label)
+            yield from matcher.diff(pre, post, label=type(self).label)

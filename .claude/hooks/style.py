@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator
 
-from captain_hook import Allow, Input, StyleDiffRule, StyleRule, Warn, gate, styleguide
-from captain_hook.primitives.styleguide import Matcher as M
+from captain_hook import Allow, Input, Warn, gate
+from captain_hook.style import StyleDiffRule, StyleRule, Violation, matchers as M, styleguide
 
 
 def any_label(node: ast.AST) -> str:
@@ -56,7 +57,6 @@ class ZipStrict(StyleRule):
     Always use zip(..., strict=True) to catch length mismatches early.
     """
 
-    trigger = "zip"
     tests = {
         Input(file="m.py", content="pairs = list(zip(a, b))\n"): Warn(),
         Input(file="m.py", content="pairs = list(zip(a, b, strict=True))\n"): Allow(),
@@ -103,7 +103,6 @@ class NoQuotedAnnotations(StyleRule):
     them (e.g. `x: "MyType"` → `x: MyType`). See STYLEGUIDE.md § Type Annotations.
     """
 
-    trigger = "from __future__ import annotations"
     tests = {
         Input(file="m.py", content='from __future__ import annotations\n\nx: "Foo" = None\n'): Warn(),
         Input(file="m.py", content="from __future__ import annotations\n\nx: Foo = None\n"): Allow(),
@@ -131,9 +130,8 @@ class NoWeakeningToAny(StyleDiffRule):
             file="x.py", old="def f() -> dict[str, Foo]:\n    ...", content="def f() -> dict[str, Any]:\n    ..."
         ): Allow(),
     }
-    match = M.annotated(M.ref("Any"))
-    key = any_label
-    label = any_label
+    def check(self, pre: ast.Module, post: ast.Module) -> Iterator[Violation]:
+        yield from M.annotated(M.ref("Any")).diff(pre, post, key=any_label, label=any_label)
 
 
 gate(

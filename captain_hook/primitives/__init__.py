@@ -29,7 +29,6 @@ from captain_hook.primitives.llm import (
 )
 from captain_hook.primitives.nudge import gate as gate
 from captain_hook.primitives.nudge import nudge as nudge
-from captain_hook.primitives.styleguide import styleguide as styleguide
 
 __all__ = [
     "GateVerdict",
@@ -46,6 +45,5 @@ __all__ = [
     "nudge",
     "prompt_check",
     "session_id_for",
-    "styleguide",
     "warn_command",
 ]

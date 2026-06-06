@@ -8,9 +8,10 @@ from typing import TYPE_CHECKING
 
 from captain_hook.app import on
 from captain_hook.state import hook_name
-from captain_hook.primitives.styleguide.matcher import Matcher
-from captain_hook.primitives.styleguide.scope import changed_lines, read_source, reconstruct_pre
-from captain_hook.primitives.styleguide.types import StyleDiffRule, StyleRule, Violation
+from captain_hook.style import matchers
+from captain_hook.style.matchers import Matcher
+from captain_hook.style.scope import changed_lines, read_source, reconstruct_pre
+from captain_hook.style.types import StyleDiffRule, StyleRule, Violation
 from captain_hook.types import Action, Event, FilePath, HookResult, TCondition, TestFile, Tool
 
 if TYPE_CHECKING:
@@ -26,6 +27,7 @@ __all__ = [
     "StyleDiffRule",
     "StyleRule",
     "Violation",
+    "matchers",
     "styleguide",
 ]
 
@@ -40,8 +42,8 @@ def styleguide(
 ) -> None:
     """Register one change-scoped hook applying the given style rules to Python edits and writes.
 
-    Each rule is a [`StyleRule`][captain_hook.primitives.styleguide.StyleRule] (or
-    [`StyleDiffRule`][captain_hook.primitives.styleguide.StyleDiffRule]) subclass whose docstring is its
+    Each rule is a [`StyleRule`][captain_hook.style.StyleRule] (or
+    [`StyleDiffRule`][captain_hook.style.StyleDiffRule]) subclass whose docstring is its
     message. The single registered hook parses the edited file once, runs every rule against the
     post-edit tree, scopes each violation to the changed lines, and emits one aggregated warning
     (or block, when ``block`` is set). Call again with different ``only_if`` / ``skip_if`` /
@@ -104,7 +106,7 @@ def run_rules(rules: list[StyleRule], evt: BaseHookEvent, *, block: bool, max_sh
         sections := [
             section
             for rule in rules
-            if (section := run_one(rule, tree, pre_tree, source, changed, max_shown)) is not None
+            if (section := run_one(rule, tree, pre_tree, changed, max_shown)) is not None
         ]
     ):
         return None
@@ -115,12 +117,9 @@ def run_one(
     rule: StyleRule,
     tree: ast.Module,
     pre_tree: ast.Module | None,
-    source: str,
     changed: set[int],
     max_shown: int,
 ) -> str | None:
-    if rule.trigger and rule.trigger not in source:
-        return None
     match rule:
         case StyleDiffRule() if pre_tree is not None:
             violations = rule.check(pre_tree, tree)

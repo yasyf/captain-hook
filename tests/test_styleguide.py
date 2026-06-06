@@ -10,13 +10,7 @@ import pytest
 
 from captain_hook.app import _state
 from captain_hook.dispatch import dispatch
-from captain_hook.primitives.styleguide import (
-    Matcher,
-    StyleDiffRule,
-    StyleRule,
-    Violation,
-    styleguide,
-)
+from captain_hook.style import StyleDiffRule, StyleRule, Violation, matchers as M, styleguide
 from captain_hook.tests.helpers import make_ctx, make_post_tool_event
 from captain_hook.types import Event, FilePath
 from captain_hook.utils import kebab
@@ -43,8 +37,6 @@ class NoPrint(StyleRule):
 
     Use a logger instead.
     """
-
-    trigger = "print"
 
     def check(self, tree: ast.Module) -> Iterator[Violation]:
         for node in ast.walk(tree):
@@ -173,12 +165,7 @@ class TestChangeScoping:
         assert dispatch(Event.PostToolUse, evt, session_dir) is not None
 
 
-class TestTriggerAndMaxShown:
-    def test_trigger_fast_exit(self, session_dir: Path) -> None:
-        styleguide(NoPrint)
-        evt = edit_event(session_dir, file="a.py", old="", new="value = printer\n")
-        assert dispatch(Event.PostToolUse, evt, session_dir) is None
-
+class TestMaxShown:
     def test_max_shown_caps_violations(self, session_dir: Path) -> None:
         styleguide(NoPrint, max_shown=2)
         content = "print(1)\nprint(2)\nprint(3)\nprint(4)\n"
@@ -304,43 +291,43 @@ class TestHelpers:
 class TestMatcher:
     def test_child_of(self) -> None:
         tree = ast.parse("def f(c):\n    if c:\n        import os\n")
-        assert len(list((Matcher.imports & Matcher.child_of(Matcher.control_flow)).over(tree))) == 1
+        assert len(list((M.imports & M.child_of(M.control_flow)).over(tree))) == 1
 
     def test_negated_under_type_checking(self) -> None:
         tree = ast.parse("from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\n")
-        match = Matcher.imports & Matcher.child_of(Matcher.control_flow) & ~Matcher.under(Matcher.type_checking)
+        match = M.imports & M.child_of(M.control_flow) & ~M.under(M.type_checking)
         assert list(match.over(tree)) == []
 
     def test_following_boundary(self) -> None:
         late = ast.parse("def f():\n    pass\nMAX = 3\n")
         early = ast.parse("MAX = 3\ndef f():\n    pass\n")
-        match = Matcher.assignment & Matcher.child_of(Matcher.module) & Matcher.following(Matcher.definition)
+        match = M.assignment & M.child_of(M.module) & M.following(M.definition)
         assert len(list(match.over(late))) == 1
         assert list(match.over(early)) == []
 
     def test_union(self) -> None:
         tree = ast.parse("class C:\n    pass\ndef f():\n    pass\n")
-        assert sum((Matcher.cls | Matcher.func).matches(n) for n in ast.walk(tree)) == 2
+        assert sum((M.cls | M.func).matches(n) for n in ast.walk(tree)) == 2
 
     def test_intersection_and_negation(self) -> None:
         tree = ast.parse("pairs = list(zip(a, b))\nok = zip(a, b, strict=True)\n")
-        assert len(list((Matcher.calls("zip") & ~Matcher.kwarg("strict")).over(tree))) == 1
+        assert len(list((M.calls("zip") & ~M.kwarg("strict")).over(tree))) == 1
 
     def test_named_presets(self) -> None:
         tree = ast.parse("class _P:\n    pass\nMAX_RETRIES = 3\n")
         cls = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef))
         const = next(n for n in ast.walk(tree) if isinstance(n, ast.Assign))
-        assert Matcher.private.matches(cls)
-        assert Matcher.constant.matches(const)
-        assert not Matcher.dunder.matches(cls)
+        assert M.private.matches(cls)
+        assert M.constant.matches(const)
+        assert not M.dunder.matches(cls)
 
     def test_violations_label(self) -> None:
         tree = ast.parse("import os\n")
-        assert list(Matcher.imports.violations(tree, "import")) == [Violation(1, "import")]
+        assert list(M.imports.violations(tree, "import")) == [Violation(1, "import")]
 
     def test_matches_raises_on_structural(self) -> None:
         with pytest.raises(ValueError, match="structural"):
-            Matcher.under(Matcher.module).matches(ast.parse("x = 1\n"))
+            M.under(M.module).matches(ast.parse("x = 1\n"))
 
 
 class TestDeclarative:
@@ -348,7 +335,7 @@ class TestDeclarative:
         class NoBareZip(StyleRule):
             """No bare zip(): {violations}"""
 
-            match = Matcher.calls("zip") & ~Matcher.kwarg("strict")
+            match = M.calls("zip") & ~M.kwarg("strict")
             label = "zip()"
 
         styleguide(NoBareZip)
@@ -361,7 +348,7 @@ class TestDeclarative:
         class NoBareZip(StyleRule):
             """No bare zip(): {violations}"""
 
-            match = Matcher.calls("zip") & ~Matcher.kwarg("strict")
+            match = M.calls("zip") & ~M.kwarg("strict")
 
         styleguide(NoBareZip)
         evt = edit_event(session_dir, file="a.py", old="", new="zip(a, b, strict=True)\n")
@@ -371,7 +358,7 @@ class TestDeclarative:
         class NoNewAny(StyleDiffRule):
             """New Any annotation: {violations}"""
 
-            match = Matcher.annotated(Matcher.ref("Any"))
+            match = M.annotated(M.ref("Any"))
 
         styleguide(NoNewAny)
         evt = edit_event(session_dir, file="d.py", old="x: int\n", new="x: Any\n")

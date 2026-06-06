@@ -1,20 +1,20 @@
 # Style Rules
 
 `styleguide()` turns AST-based style checks into a hook. It is a *substrate*: captain-hook
-ships **no rules of its own** — you author them as [`StyleRule`][captain_hook.StyleRule]
+ships **no rules of its own** — you author them as [`StyleRule`][captain_hook.style.StyleRule]
 subclasses and register them. The framework owns the plumbing — parsing, change-scoping,
 message formatting, and test wiring — so a rule is usually just **data**: a docstring and a
-[`Matcher`][captain_hook.primitives.styleguide.Matcher].
+matcher built from the [`matchers`][captain_hook.style.matchers] module.
 
 ## Your first rule
 
 A rule is a subclass. Write the message as the class **docstring** (`{violations}` is
-substituted at fire time), set `match` to a [`Matcher`][captain_hook.primitives.styleguide.Matcher], and
+substituted at fire time), set `match` to a [`Matcher`][captain_hook.style.matchers.Matcher], and
 hand the class to `styleguide()`:
 
 ```python
-from captain_hook import styleguide, StyleRule, Input, Warn, Allow
-from captain_hook.primitives.styleguide import Matcher
+from captain_hook import Allow, Input, Warn
+from captain_hook.style import StyleRule, matchers as M, styleguide
 
 class ZipStrict(StyleRule):
     """
@@ -24,12 +24,11 @@ class ZipStrict(StyleRule):
     Pass strict=True so length mismatches raise.
     """
 
-    trigger = "zip"                         # fast-exit if "zip" isn't in the source
     tests = {
         Input(file="app.py", content="zip(a, b)\n"): Warn(),
         Input(file="app.py", content="zip(a, b, strict=True)\n"): Allow(),
     }
-    match = Matcher.calls("zip") & ~Matcher.kwarg("strict")
+    match = M.calls("zip") & ~M.kwarg("strict")
     label = "zip()"
 
 styleguide(ZipStrict)
@@ -39,12 +38,10 @@ styleguide(ZipStrict)
 - The **docstring is the message**. Open it with a newline after `"""`; the runner normalizes
   it with `inspect.cleandoc`, so your indentation never leaks into the output. `{violations}`
   is replaced with the rule's findings joined by `sep` (default a bulleted list).
-- `match` selects the offending nodes; each becomes a [`Violation`][captain_hook.Violation]
+- `match` selects the offending nodes; each becomes a [`Violation`][captain_hook.style.Violation]
   rendered as `label (line N)`. `label` may be a fixed string (as here), a `node -> str`
   callable, or omitted — the default labels a node by its bound name, falling back to
   `ast.unparse`.
-- `trigger` is an optional substring fast-exit: if it isn't present in the source, the rule is
-  skipped without parsing the AST.
 
 ## Change scoping
 
@@ -57,12 +54,11 @@ for correctness and edit-scoped reporting for signal.
 ## Diff rules
 
 When a rule must compare *before and after* — "did this edit **introduce** something?" —
-subclass [`StyleDiffRule`][captain_hook.StyleDiffRule]. It flags nodes matching `match` in the
-new tree whose identity (`key`, default `ast.unparse`) was absent from the old tree:
+subclass [`StyleDiffRule`][captain_hook.style.StyleDiffRule]. It flags nodes matching `match` in
+the new tree that were absent from the old tree (by unparsed source):
 
 ```python
-from captain_hook import StyleDiffRule
-from captain_hook.primitives.styleguide import Matcher
+from captain_hook.style import StyleDiffRule, matchers as M
 
 class NoNewWildcardImport(StyleDiffRule):
     """
@@ -70,43 +66,44 @@ class NoNewWildcardImport(StyleDiffRule):
       - {violations}
     """
 
-    match = Matcher.imports.where(lambda n: any(a.name == "*" for a in n.names))
+    match = M.imports.where(lambda n: any(a.name == "*" for a in n.names))
 ```
 
 The pre-edit tree is reconstructed from the edit, so the rule fires only on a *newly added*
-wildcard, not one already there. Set `key` to a custom `node -> Hashable` when `ast.unparse`
-isn't the right notion of "the same construct" (e.g. comparing annotated slots by name).
+wildcard, not one already there. Override `check()` when `ast.unparse` isn't the right notion
+of "the same construct" (e.g. comparing annotated slots by name).
 
-## The Matcher
+## The matchers module
 
-A [`Matcher`][captain_hook.primitives.styleguide.Matcher] is one composable thing: a node predicate that
+Import [`matchers`][captain_hook.style.matchers] as `M`. A
+[`Matcher`][captain_hook.style.matchers.Matcher] is one composable thing: a node predicate that
 is also a tree selector. Build rules by **combining matchers**, not by reaching for a framework
 helper. Compose with a boolean algebra and refine with `.where(...)`:
 
 ```python
-from captain_hook.primitives.styleguide import Matcher
+from captain_hook.style import matchers as M
 
-Matcher.imports & Matcher.child_of(Matcher.control_flow) & ~Matcher.under(Matcher.type_checking)
-Matcher.cls & Matcher.private                         # private-named class
-Matcher.kind(ast.Lambda)                              # a node type with no shipped name
-Matcher.call.where(lambda n: len(n.args) > 5)         # bespoke one-off predicate
+M.imports & M.child_of(M.control_flow) & ~M.under(M.type_checking)
+M.cls & M.private                               # private-named class
+M.kind(ast.Lambda)                              # a node type with no shipped name
+M.call.where(lambda n: len(n.args) > 5)         # bespoke one-off predicate
 ```
 
 | Group | Members |
 |-------|---------|
 | Operators | `&` (both), `\|` (either), `~` (negate) |
-| Node categories | `Matcher.module`, `.cls`, `.func`, `.definition` (`cls \| func`), `.imports`, `.call`, `.assignment`, `.control_flow`, `.type_checking`, `.any` |
-| Predicates | `Matcher.calls(name)`, `.kwarg(name)`, `.ref(name)`, `.named(pattern)`, `.kind(*types)` |
-| Name conventions | `Matcher.private` (leading single underscore), `.dunder`, `.constant` (`SCREAMING_SNAKE`) |
-| Annotations | `Matcher.annotated(inner=None)` (annotated var/param/return), `.forward_ref` (quoted type ref), `.future_annotations` (a module with `from __future__ import annotations`) |
-| Structure | `Matcher.under(m)` (any ancestor), `.child_of(m)` (immediate parent), `.following(m)` (sibling after the first match) |
-| Terminals | `.over(tree)`, `.violations(tree, label=None)`, `.exists(tree)`, `.matches(node)`, `.diff(pre, post, key, label=None)` |
+| Node categories | `M.module`, `M.cls`, `M.func`, `M.definition` (`cls \| func`), `M.imports`, `M.call`, `M.assignment`, `M.control_flow`, `M.type_checking` |
+| Predicates | `M.calls(name)`, `M.kwarg(name)`, `M.ref(name)`, `M.named(pattern)`, `M.kind(*types)` |
+| Name conventions | `M.private` (leading single underscore), `M.dunder`, `M.constant` (`SCREAMING_SNAKE`) |
+| Annotations | `M.annotated(inner=None)` (annotated var/param/return), `M.forward_ref` (quoted type ref), `M.future_annotations` (a module with `from __future__ import annotations`) |
+| Structure | `M.under(m)` (any ancestor), `M.child_of(m)` (immediate parent), `M.following(m)` (sibling after the first match) |
+| Terminals | `.over(tree)`, `.violations(tree, label=None)`, `.exists(tree)`, `.matches(node)`, `.diff(pre, post, key=ast.unparse, label=None)` |
 
-`~Matcher.under(x)` is "not inside `x`" — a single negation operator, not a separate method.
+`~M.under(x)` is "not inside `x`" — a single negation operator, not a separate method.
 The name-convention matchers mean rule files never re-declare `UPPER_SNAKE` / underscore
-regexes; reach for `Matcher.named(r"...")` only for a one-off pattern. Annotations compose like
+regexes; reach for `M.named(r"...")` only for a one-off pattern. Annotations compose like
 everything else — a "no quoted annotations under PEP 563" rule is just
-`Matcher.forward_ref & Matcher.under(Matcher.future_annotations)`.
+`M.forward_ref & M.under(M.future_annotations)`.
 
 ## Custom logic with check()
 
@@ -120,7 +117,7 @@ class NoStructuralOnlyTests(StyleRule):
     """Tests that only assert with builtins exercise nothing: {violations}"""
 
     def check(self, tree):
-        for fn in Matcher.func.over(tree):
+        for fn in M.func.over(tree):
             if fn.name.startswith("test_") and only_builtin_calls(fn):
                 yield Violation(fn.lineno, fn.name)
 ```
