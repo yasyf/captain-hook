@@ -25,26 +25,29 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache-dependency-glob: uv.lock
 
-      # The spacy model lives in .venv (outside the lockfile) and the wordnet
-      # lexicon in ~/.wn_data; cache both keyed on the lock so provisioning
-      # only runs when the environment actually changes. The sync must be
-      # --inexact or it would prune the cached model from the venv.
+      # The spacy pipeline (~/.cache/spacy/models, via ensure_spacy_model) and
+      # the wordnet lexicon (~/.wn_data) live outside the venv, so the restored
+      # cache survives uv recreating .venv between runs. Caching .venv instead
+      # poisoned the key: a sync that rebuilt the venv silently dropped the
+      # model while the hit still skipped provisioning. Both assets are
+      # interpreter-independent, so the key is shared across the matrix and
+      # with the docs workflow.
       - name: Cache NLP assets
         id: nlp-cache
         uses: actions/cache@v5
         with:
           path: |
-            .venv
+            ~/.cache/spacy/models
             ~/.wn_data
-          key: nlp-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('uv.lock') }}
+          key: nlp-v2-${{ runner.os }}-${{ hashFiles('uv.lock') }}
 
       - name: Sync (dev)
-        run: uv sync --inexact --extra dev
+        run: uv sync --extra dev
 
       - name: Provision NLP assets
         if: steps.nlp-cache.outputs.cache-hit != 'true'
         run: |
-          uv run python -m spacy download en_core_web_sm
+          uv run python -c "from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()"
           uv run python -c "import wn; wn.download('oewn:2025')"
 
       - name: Test (pytest)
