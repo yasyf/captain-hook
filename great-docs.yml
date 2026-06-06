@@ -46,6 +46,10 @@ sections:
     dir: docs/development
     navbar_after: Reference
 
+pre_render:
+  - docs/scripts/embed_examples.py
+  - docs/scripts/plain_reference_titles.py
+
 cli:
   enabled: true
   module: captain_hook.cli
@@ -82,10 +86,11 @@ reference:
       - llm_nudge
       - llm_evaluate
       - prompt_check
-      - styleguide
-      - StyleRule
-      - StyleDiffRule
-      - Violation
+      - style.styleguide
+      - style.matchers
+      - style.StyleRule
+      - style.StyleDiffRule
+      - style.Violation
       - GateVerdict
       - NudgeVerdict
       - PromptCheckVerdict
