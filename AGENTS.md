@@ -31,6 +31,8 @@ Target Python 3.12+. Run `uv sync --extra dev`, `uv run pytest`, and `uv build`.
 
 **Match surrounding code.** Follow the conventions of the file you're in, then the module.
 
+**No defensive coding.** No fallbacks, shims, or backwards-compat layers; no guards against impossible states. If unused, delete it. Crash on the unexpected.
+
 **Code stewardship.** When you touch a file, fix nearby bugs, style violations, and broken tests; don't wave them off as pre-existing or out of scope. Trivial type-checker noise is the exception (see § Python Style).
 
 **Mechanical linting.** CI and hooks handle formatting and import order. Leave `ruff` to them and fix only what needs human judgment.

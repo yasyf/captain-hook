@@ -11,8 +11,9 @@ The concrete style rules for `captain_hook/`. Target Python 3.12+.
    multi-factor decisions. Use `if/elif` only for meaningful boolean flags.
 3. **Type everything.** `from __future__ import annotations` in every module.
    Never widen a typed slot to `Any` to quiet the checker.
-4. **Fail fast, fail loud.** No fallbacks, shims, or backwards-compat layers. No
-   sentinel values, no silent defaults. Crash on the unexpected.
+4. **Fail fast, fail loud.** No defensive coding: no fallbacks, shims, or
+   backwards-compat layers, and no guards against impossible states. No sentinel
+   values, no silent defaults. If unused, delete it. Crash on the unexpected.
 5. **Make invalid states unrepresentable.** `NewType` for branded primitives,
    frozen dataclasses for immutable data, required fields over optionals.
 6. **Minimal changes.** Stay within scope. Make the test pass, then stop. Improve
