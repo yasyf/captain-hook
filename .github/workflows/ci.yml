@@ -31,7 +31,7 @@ jobs:
       # --inexact or it would prune the cached model from the venv.
       - name: Cache NLP assets
         id: nlp-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .venv
