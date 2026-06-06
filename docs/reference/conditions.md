@@ -28,7 +28,7 @@ These check what happened earlier in the session.
 | `ReadFile(p)` | A file was read | Glob | `ReadFile("TESTING.md")` |
 | `TouchedFile(p)` | A file was edited | Glob | `TouchedFile("**/*.py")` |
 | `RanCommand(p)` | A command was run | Regex | `RanCommand(r"uv\s+run\s+mtest")` |
-| `UsedSkill(p)` | A skill was invoked | Regex | `UsedSkill("codex")` |
+| `UsedSkill(p)` | A skill was invoked | Exact (`\|`-alternation) | `UsedSkill("codex\|codex:codex")` |
 | `InPlanMode()` | Agent is in plan mode | -- | `InPlanMode()` |
 
 ## Logic

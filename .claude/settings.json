@@ -22,6 +22,18 @@
     ],
     "defaultMode": "auto"
   },
+  "extraKnownMarketplaces": {
+    "skills": {
+      "source": {
+        "source": "github",
+        "repo": "yasyf/skills"
+      },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": {
+    "codex@skills": true
+  },
   "hooks": {
     "PreToolUse": [
       {

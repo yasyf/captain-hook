@@ -88,7 +88,7 @@ nudge(
     approaches, get a second opinion from `/codex` before attempting a 3rd —
     Codex catches errors that Claude may miss.
     """,
-    skip_if=[UsedSkill("codex")],
+    skip_if=[UsedSkill("codex|codex:codex")],
     events=Event.PostToolUseFailure,
     when=lambda evt: evt.ctx.turn.count_failures() >= 2 and not evt.ctx.t.has_command(r"codex"),
 )
