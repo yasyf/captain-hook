@@ -25,10 +25,24 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache-dependency-glob: uv.lock
 
+      # The spacy model lives in .venv (outside the lockfile) and the wordnet
+      # lexicon in ~/.wn_data; cache both keyed on the lock so provisioning
+      # only runs when the environment actually changes. The sync must be
+      # --inexact or it would prune the cached model from the venv.
+      - name: Cache NLP assets
+        id: nlp-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .venv
+            ~/.wn_data
+          key: nlp-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('uv.lock') }}
+
       - name: Sync (dev)
-        run: uv sync --extra dev
+        run: uv sync --inexact --extra dev
 
       - name: Provision NLP assets
+        if: steps.nlp-cache.outputs.cache-hit != 'true'
         run: |
           uv run python -m spacy download en_core_web_sm
           uv run python -c "import wn; wn.download('oewn:2025')"
