@@ -12,15 +12,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 
 from loguru import logger
 
-from captain_hook.transcript.models import (
-    ToolResult,
-)
-from captain_hook.transcript.models import (
-    ToolUse as ToolUse,
-)
-from captain_hook.transcript.models import (
-    TranscriptMessage as TranscriptMessage,
-)
+from captain_hook.transcript.models import ToolResult
+from captain_hook.transcript.models import ToolUse as ToolUse
+from captain_hook.transcript.models import TranscriptMessage as TranscriptMessage
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -270,13 +264,15 @@ class Transcript:
 
     @classmethod
     def from_simple_messages(cls, messages: list[dict[str, str]]) -> Transcript:
-        return cls.from_messages([
-            {
-                "type": m["role"],
-                "message": {"content": [{"type": "text", "text": m["content"]}]},
-            }
-            for m in messages
-        ])
+        return cls.from_messages(
+            [
+                {
+                    "type": m["role"],
+                    "message": {"content": [{"type": "text", "text": m["content"]}]},
+                }
+                for m in messages
+            ]
+        )
 
     @classmethod
     def from_messages(cls, messages: list[dict[str, Any]]) -> Transcript:
@@ -538,17 +534,17 @@ class Turn(TranscriptSlice):
     def subagents(self) -> SubagentRegistry:
         if not self.path:
             return SubagentRegistry([])
-        return SubagentRegistry([
-            SubagentAccessor(
-                id=tu.id,
-                type=tu.agent_type or "",
-                transcript=Transcript.from_path(
-                    self.path.parent / self.path.stem / "subagents" / f"agent-{tu.id}.jsonl"
-                ),
-                parent_tool_use=tu,
-            )
-            for tu in self.tool_uses
-            if tu.name in {"Agent", "Task"} and tu.agent_type and tu.id
-        ])
-
-
+        return SubagentRegistry(
+            [
+                SubagentAccessor(
+                    id=tu.id,
+                    type=tu.agent_type or "",
+                    transcript=Transcript.from_path(
+                        self.path.parent / self.path.stem / "subagents" / f"agent-{tu.id}.jsonl"
+                    ),
+                    parent_tool_use=tu,
+                )
+                for tu in self.tool_uses
+                if tu.name in {"Agent", "Task"} and tu.agent_type and tu.id
+            ]
+        )

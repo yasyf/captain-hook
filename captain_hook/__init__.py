@@ -8,70 +8,28 @@ from captain_hook.command import Command as Command
 from captain_hook.command import CommandLine as CommandLine
 from captain_hook.command import Redirect as Redirect
 from captain_hook.context import HookContext as HookContext
-from captain_hook.events import (
-    BaseHookEvent as BaseHookEvent,
-)
-from captain_hook.events import (
-    NotificationEvent as NotificationEvent,
-)
-from captain_hook.events import (
-    PostToolUseEvent as PostToolUseEvent,
-)
-from captain_hook.events import (
-    PostToolUseFailureEvent as PostToolUseFailureEvent,
-)
-from captain_hook.events import (
-    PreCompactEvent as PreCompactEvent,
-)
-from captain_hook.events import (
-    PreToolUseEvent as PreToolUseEvent,
-)
-from captain_hook.events import (
-    StopEvent as StopEvent,
-)
-from captain_hook.events import (
-    SubagentStartEvent as SubagentStartEvent,
-)
-from captain_hook.events import (
-    SubagentStopEvent as SubagentStopEvent,
-)
-from captain_hook.events import (
-    ToolHookEvent as ToolHookEvent,
-)
-from captain_hook.events import (
-    UserPromptSubmitEvent as UserPromptSubmitEvent,
-)
+from captain_hook.events import BaseHookEvent as BaseHookEvent
+from captain_hook.events import NotificationEvent as NotificationEvent
+from captain_hook.events import PostToolUseEvent as PostToolUseEvent
+from captain_hook.events import PostToolUseFailureEvent as PostToolUseFailureEvent
+from captain_hook.events import PreCompactEvent as PreCompactEvent
+from captain_hook.events import PreToolUseEvent as PreToolUseEvent
+from captain_hook.events import StopEvent as StopEvent
+from captain_hook.events import SubagentStartEvent as SubagentStartEvent
+from captain_hook.events import SubagentStopEvent as SubagentStopEvent
+from captain_hook.events import ToolHookEvent as ToolHookEvent
+from captain_hook.events import UserPromptSubmitEvent as UserPromptSubmitEvent
 from captain_hook.file import File as File
-from captain_hook.primitives import (
-    GateVerdict as GateVerdict,
-)
-from captain_hook.primitives import (
-    NudgeVerdict as NudgeVerdict,
-)
-from captain_hook.primitives import (
-    PromptCheckVerdict as PromptCheckVerdict,
-)
-from captain_hook.primitives import (
-    block_command as block_command,
-)
-from captain_hook.primitives import (
-    gate as gate,
-)
-from captain_hook.primitives import (
-    llm_evaluate as llm_evaluate,
-)
-from captain_hook.primitives import (
-    llm_gate as llm_gate,
-)
-from captain_hook.primitives import (
-    llm_nudge as llm_nudge,
-)
-from captain_hook.primitives import (
-    prompt_check as prompt_check,
-)
-from captain_hook.primitives import (
-    warn_command as warn_command,
-)
+from captain_hook.primitives import GateVerdict as GateVerdict
+from captain_hook.primitives import NudgeVerdict as NudgeVerdict
+from captain_hook.primitives import PromptCheckVerdict as PromptCheckVerdict
+from captain_hook.primitives import block_command as block_command
+from captain_hook.primitives import gate as gate
+from captain_hook.primitives import llm_evaluate as llm_evaluate
+from captain_hook.primitives import llm_gate as llm_gate
+from captain_hook.primitives import llm_nudge as llm_nudge
+from captain_hook.primitives import prompt_check as prompt_check
+from captain_hook.primitives import warn_command as warn_command
 
 # audit/lint/nudge are imported from their defining modules, not the
 # primitives package: the package attribute and the submodule share a name,
@@ -80,21 +38,11 @@ from captain_hook.primitives import (
 from captain_hook.primitives.audit import audit as audit
 from captain_hook.primitives.lint import lint as lint
 from captain_hook.primitives.nudge import nudge as nudge
-from captain_hook.primitives.workflow import (
-    Artifact as Artifact,
-)
-from captain_hook.primitives.workflow import (
-    Step as Step,
-)
-from captain_hook.primitives.workflow import (
-    Workflow as Workflow,
-)
-from captain_hook.primitives.workflow import (
-    text_matches as text_matches,
-)
-from captain_hook.primitives.workflow import (
-    workflow as workflow,
-)
+from captain_hook.primitives.workflow import Artifact as Artifact
+from captain_hook.primitives.workflow import Step as Step
+from captain_hook.primitives.workflow import Workflow as Workflow
+from captain_hook.primitives.workflow import text_matches as text_matches
+from captain_hook.primitives.workflow import workflow as workflow
 from captain_hook.prompt import Prompt as Prompt
 from captain_hook.session import SessionSlot as SessionSlot
 from captain_hook.session import SessionStore as SessionStore
@@ -104,154 +52,58 @@ from captain_hook.settings import build_settings as build_settings
 from captain_hook.signals.nlp import Clause as Clause
 from captain_hook.signals.nlp import NlpSignal as NlpSignal
 from captain_hook.signals.nlp import Phrase as Phrase
-from captain_hook.state import (
-    HookState as HookState,
-)
-from captain_hook.state import (
-    PrimitiveState as PrimitiveState,
-)
-from captain_hook.state import (
-    workflow_state as workflow_state,
-)
+from captain_hook.state import HookState as HookState
+from captain_hook.state import PrimitiveState as PrimitiveState
+from captain_hook.state import workflow_state as workflow_state
 from captain_hook.tasks import Task as Task
 from captain_hook.tasks import Tasks as Tasks
-from captain_hook.testing import (
-    Allow as Allow,
-)
-from captain_hook.testing import (
-    Block as Block,
-)
-from captain_hook.testing import (
-    InlineTests as InlineTests,
-)
-from captain_hook.testing import (
-    Input as Input,
-)
-from captain_hook.testing import (
-    TranscriptFixture as TranscriptFixture,
-)
-from captain_hook.testing import (
-    Warn as Warn,
-)
+from captain_hook.testing import Allow as Allow
+from captain_hook.testing import Block as Block
+from captain_hook.testing import InlineTests as InlineTests
+from captain_hook.testing import Input as Input
+from captain_hook.testing import TranscriptFixture as TranscriptFixture
+from captain_hook.testing import Warn as Warn
 from captain_hook.tools import EditOp as EditOp
 from captain_hook.tools import TaskOp as TaskOp
 from captain_hook.tools import WriteOp as WriteOp
-from captain_hook.transcript import (
-    ToolUse as ToolUse,
-)
-from captain_hook.transcript import (
-    ToolUseQuery as ToolUseQuery,
-)
-from captain_hook.transcript import (
-    ToolUseSequence as ToolUseSequence,
-)
-from captain_hook.transcript import (
-    Transcript as Transcript,
-)
-from captain_hook.transcript import (
-    TranscriptMessage as TranscriptMessage,
-)
-from captain_hook.transcript import (
-    TranscriptSlice as TranscriptSlice,
-)
-from captain_hook.transcript import (
-    Turn as Turn,
-)
-from captain_hook.transcript.inputs import (
-    AgentInput as AgentInput,
-)
-from captain_hook.transcript.inputs import (
-    BashInput as BashInput,
-)
-from captain_hook.transcript.inputs import (
-    EditInput as EditInput,
-)
-from captain_hook.transcript.inputs import (
-    FileInputBase as FileInputBase,
-)
-from captain_hook.transcript.inputs import (
-    GenericInput as GenericInput,
-)
-from captain_hook.transcript.inputs import (
-    GlobInput as GlobInput,
-)
-from captain_hook.transcript.inputs import (
-    GrepInput as GrepInput,
-)
-from captain_hook.transcript.inputs import (
-    InputBase as InputBase,
-)
-from captain_hook.transcript.inputs import (
-    ReadInput as ReadInput,
-)
-from captain_hook.transcript.inputs import (
-    SkillInput as SkillInput,
-)
-from captain_hook.transcript.inputs import (
-    TaskCreateInput as TaskCreateInput,
-)
-from captain_hook.transcript.inputs import (
-    TaskUpdateInput as TaskUpdateInput,
-)
-from captain_hook.transcript.inputs import (
-    WriteInput as WriteInput,
-)
+from captain_hook.transcript import ToolUse as ToolUse
+from captain_hook.transcript import ToolUseQuery as ToolUseQuery
+from captain_hook.transcript import ToolUseSequence as ToolUseSequence
+from captain_hook.transcript import Transcript as Transcript
+from captain_hook.transcript import TranscriptMessage as TranscriptMessage
+from captain_hook.transcript import TranscriptSlice as TranscriptSlice
+from captain_hook.transcript import Turn as Turn
+from captain_hook.transcript.inputs import AgentInput as AgentInput
+from captain_hook.transcript.inputs import BashInput as BashInput
+from captain_hook.transcript.inputs import EditInput as EditInput
+from captain_hook.transcript.inputs import FileInputBase as FileInputBase
+from captain_hook.transcript.inputs import GenericInput as GenericInput
+from captain_hook.transcript.inputs import GlobInput as GlobInput
+from captain_hook.transcript.inputs import GrepInput as GrepInput
+from captain_hook.transcript.inputs import InputBase as InputBase
+from captain_hook.transcript.inputs import ReadInput as ReadInput
+from captain_hook.transcript.inputs import SkillInput as SkillInput
+from captain_hook.transcript.inputs import TaskCreateInput as TaskCreateInput
+from captain_hook.transcript.inputs import TaskUpdateInput as TaskUpdateInput
+from captain_hook.transcript.inputs import WriteInput as WriteInput
 from captain_hook.transcript.models import ContentBlock as ContentBlock
 from captain_hook.transcript.models import ToolResult as ToolResult
-from captain_hook.types import (
-    Action as Action,
-)
-from captain_hook.types import (
-    Agent as Agent,
-)
-from captain_hook.types import (
-    Content as Content,
-)
-from captain_hook.types import (
-    CustomCondition as CustomCondition,
-)
-from captain_hook.types import (
-    Event as Event,
-)
-from captain_hook.types import (
-    FilePath as FilePath,
-)
-from captain_hook.types import (
-    HookResult as HookResult,
-)
-from captain_hook.types import (
-    InPlanMode as InPlanMode,
-)
-from captain_hook.types import (
-    RanCommand as RanCommand,
-)
-from captain_hook.types import (
-    ReadFile as ReadFile,
-)
-from captain_hook.types import (
-    Signal as Signal,
-)
-from captain_hook.types import (
-    Signals as Signals,
-)
-from captain_hook.types import (
-    SourceEdits as SourceEdits,
-)
-from captain_hook.types import (
-    TCondition as TCondition,
-)
-from captain_hook.types import (
-    TestFile as TestFile,
-)
-from captain_hook.types import (
-    Tool as Tool,
-)
-from captain_hook.types import (
-    TouchedFile as TouchedFile,
-)
-from captain_hook.types import (
-    UsedSkill as UsedSkill,
-)
-from captain_hook.types import (
-    Waiting as Waiting,
-)
+from captain_hook.types import Action as Action
+from captain_hook.types import Agent as Agent
+from captain_hook.types import Content as Content
+from captain_hook.types import CustomCondition as CustomCondition
+from captain_hook.types import Event as Event
+from captain_hook.types import FilePath as FilePath
+from captain_hook.types import HookResult as HookResult
+from captain_hook.types import InPlanMode as InPlanMode
+from captain_hook.types import RanCommand as RanCommand
+from captain_hook.types import ReadFile as ReadFile
+from captain_hook.types import Signal as Signal
+from captain_hook.types import Signals as Signals
+from captain_hook.types import SourceEdits as SourceEdits
+from captain_hook.types import TCondition as TCondition
+from captain_hook.types import TestFile as TestFile
+from captain_hook.types import Tool as Tool
+from captain_hook.types import TouchedFile as TouchedFile
+from captain_hook.types import UsedSkill as UsedSkill
+from captain_hook.types import Waiting as Waiting
