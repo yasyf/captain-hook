@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-import argparse
 import importlib.resources
 import json
 import os
 import sys
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import click
 
 from captain_hook.app import _state, load_gitignore, reset
 from captain_hook.context import HookContext
@@ -19,6 +21,18 @@ from captain_hook.transcript import Transcript
 from captain_hook.types import Event
 
 DIST_NAME = "capt-hook"
+EVENT_NAMES = ", ".join(n for e in Event if (n := e.name))
+
+
+@dataclass(frozen=True, slots=True)
+class CliState:
+    root: Path
+    hooks: str
+
+    def discover(self) -> None:
+        reset()
+        load_gitignore(self.root)
+        discover_hooks(self.hooks)
 
 
 def example_hook_source() -> str:
@@ -212,41 +226,6 @@ def show_logs(session: str | None = None, tail: int | None = None) -> None:
     print("\n".join(lines[-tail:] if tail else lines))
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="capt-hook",
-        description="Captain Hook — declarative hook framework for Claude Code lifecycle events.",
-    )
-    parser.add_argument(
-        "--hooks",
-        default=None,
-        help="Path to hooks package directory (default: $CLAUDE_PROJECT_DIR/.claude/hooks)",
-    )
-    parser.add_argument("--root", default=None, help="Project root for gitignore and session resolution")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    run_parser = sub.add_parser("run", help="Dispatch a hook event (reads JSON from stdin, writes JSON to stdout)")
-    run_parser.add_argument("event", help=f"Event type: {', '.join(n for e in Event if (n := e.name))}")
-    run_parser.add_argument("--async", dest="async_", action="store_true", default=False, help="Run async hooks only")
-
-    settings_parser = sub.add_parser(
-        "generate-settings", help="Generate Claude Code settings JSON for .claude/settings.local.json"
-    )
-    settings_parser.add_argument("--hooks-dir", default=".claude/hooks", help="Hooks directory relative to project root")
-    settings_parser.add_argument("--no-merge", action="store_true", help="Output standalone JSON instead of merging")
-    settings_parser.add_argument("--from", dest="from_source", default=DIST_NAME, help=f"Package source for uvx --from (local path or PyPI spec, default: {DIST_NAME})")
-
-    test_parser = sub.add_parser("test", help="Run inline tests from all registered hooks")
-    test_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit one JSON record per test (CI mode)")
-    sub.add_parser("init", help="Scaffold hooks directory, bin script, and settings")
-
-    logs_parser = sub.add_parser("logs", help="View a recent captain-hook session log")
-    logs_parser.add_argument("--session", default=None, help="Session id or transcript path (hashed) to view")
-    logs_parser.add_argument("--tail", type=int, default=None, help="Show only the last N lines")
-
-    return parser
-
-
 def expected_kinds_from_state() -> dict[str, str]:
     out: dict[str, str] = {}
     for entry in _state.hooks:
@@ -305,37 +284,77 @@ def run_tests(json_output: bool = False) -> None:
         sys.exit(1)
 
 
-def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.option(
+    "--hooks",
+    default=None,
+    help="Path to hooks package directory (default: $CLAUDE_PROJECT_DIR/.claude/hooks)",
+)
+@click.option("--root", "root_path", default=None, help="Project root for gitignore and session resolution")
+@click.pass_context
+def cli(ctx: click.Context, hooks: str | None, root_path: str | None) -> None:
+    """Captain Hook — declarative hook framework for Claude Code lifecycle events."""
+    root = Path(root_path) if root_path else Path(env) if (env := os.environ.get("CLAUDE_PROJECT_DIR")) else Path.cwd()
+    ctx.obj = CliState(root=root, hooks=hooks or str(root / ".claude" / "hooks"))
 
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
-    root = Path(args.root) if args.root else Path(project_dir) if project_dir else Path.cwd()
-    hooks = args.hooks or str(root / ".claude" / "hooks")
 
-    if args.command == "init":
-        init_project(root)
-        return
+@cli.command(
+    short_help="Dispatch a hook event (reads JSON from stdin, writes JSON to stdout)",
+    help=(
+        "Dispatch a hook event (reads JSON from stdin, writes JSON to stdout).\n\n"
+        f"EVENT is one of: {EVENT_NAMES}."
+    ),
+)
+@click.argument("event")
+@click.option("--async", "async_", is_flag=True, default=False, help="Run async hooks only")
+@click.pass_obj
+def run(state: CliState, event: str, async_: bool) -> None:
+    state.discover()
+    run_event(event, async_=async_, root=state.root)
 
-    if args.command == "logs":
-        show_logs(session=args.session, tail=args.tail)
-        return
 
-    reset()
-    load_gitignore(root)
-    discover_hooks(hooks)
+@cli.command(name="generate-settings")
+@click.option("--hooks-dir", default=".claude/hooks", help="Hooks directory relative to project root")
+@click.option("--no-merge", is_flag=True, default=False, help="Output standalone JSON instead of merging")
+@click.option(
+    "--from",
+    "from_source",
+    default=DIST_NAME,
+    help=f"Package source for uvx --from (local path or PyPI spec, default: {DIST_NAME})",
+)
+@click.pass_obj
+def generate_settings_cmd(state: CliState, hooks_dir: str, no_merge: bool, from_source: str) -> None:
+    """Generate Claude Code settings JSON for .claude/settings.local.json."""
+    state.discover()
+    if no_merge:
+        click.echo(generate_settings_json(hooks_dir, from_source=from_source))
+    else:
+        settings_path = state.root / ".claude" / "settings.local.json"
+        click.echo(json.dumps(merge_settings(hooks_dir, settings_path, from_source=from_source), indent=2))
 
-    match args.command:
-        case "run":
-            run_event(args.event, async_=args.async_, root=root)
-        case "generate-settings":
-            if args.no_merge:
-                print(generate_settings_json(args.hooks_dir, from_source=args.from_source))
-            else:
-                settings_path = root / ".claude" / "settings.local.json"
-                merged = merge_settings(args.hooks_dir, settings_path, from_source=args.from_source)
-                print(json.dumps(merged, indent=2))
-        case "test":
-            run_tests(json_output=args.json_output)
-        case _:
-            parser.error(f"Unknown command: {args.command}")
+
+@cli.command()
+@click.option("--json", "json_output", is_flag=True, default=False, help="Emit one JSON record per test (CI mode)")
+@click.pass_obj
+def test(state: CliState, json_output: bool) -> None:
+    """Run inline tests from all registered hooks."""
+    state.discover()
+    run_tests(json_output=json_output)
+
+
+@cli.command()
+@click.pass_obj
+def init(state: CliState) -> None:
+    """Scaffold hooks directory, bin script, and settings."""
+    init_project(state.root)
+
+
+@cli.command()
+@click.option("--session", default=None, help="Session id or transcript path (hashed) to view")
+@click.option("--tail", type=int, default=None, help="Show only the last N lines")
+def logs(session: str | None, tail: int | None) -> None:
+    """View a recent captain-hook session log."""
+    show_logs(session=session, tail=tail)
+
+
+main = cli
