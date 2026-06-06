@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run PreToolUse"
+            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run PreToolUse"
           }
         ]
       }
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run PostToolUse"
+            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run PostToolUse"
           }
         ]
       }
@@ -60,7 +60,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run PostToolUseFailure"
+            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run PostToolUseFailure"
           }
         ]
       }
@@ -70,7 +70,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run Stop"
+            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run Stop"
           }
         ]
       }
