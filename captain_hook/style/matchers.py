@@ -19,33 +19,6 @@ from typing import Protocol, runtime_checkable
 
 from captain_hook.style.types import Violation
 
-__all__ = [
-    "Matcher",
-    "annotated",
-    "assignment",
-    "call",
-    "calls",
-    "child_of",
-    "cls",
-    "constant",
-    "control_flow",
-    "definition",
-    "dunder",
-    "following",
-    "forward_ref",
-    "func",
-    "future_annotations",
-    "imports",
-    "kind",
-    "kwarg",
-    "module",
-    "named",
-    "private",
-    "ref",
-    "type_checking",
-    "under",
-]
-
 Parents = Mapping[ast.AST, ast.AST]
 Predicate = Callable[[ast.AST, Parents], bool]
 

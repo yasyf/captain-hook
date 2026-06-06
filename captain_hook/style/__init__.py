@@ -8,10 +8,11 @@ from typing import TYPE_CHECKING
 
 from captain_hook.app import on
 from captain_hook.state import hook_name
-from captain_hook.style import matchers
-from captain_hook.style.matchers import Matcher
+from captain_hook.style import matchers as matchers
 from captain_hook.style.scope import changed_lines, read_source, reconstruct_pre
-from captain_hook.style.types import StyleDiffRule, StyleRule, Violation
+from captain_hook.style.types import StyleDiffRule as StyleDiffRule
+from captain_hook.style.types import StyleRule as StyleRule
+from captain_hook.style.types import Violation as Violation
 from captain_hook.types import Action, Event, FilePath, HookResult, TCondition, TestFile, Tool
 
 if TYPE_CHECKING:
@@ -21,16 +22,6 @@ logger = logging.getLogger(__name__)
 
 GUARD_ONLY_IF: tuple[TCondition, ...] = (Tool("Edit|Write"), FilePath("*.py", project_only=False))
 GUARD_SKIP_IF: tuple[TCondition, ...] = (TestFile(),)
-
-__all__ = [
-    "Matcher",
-    "StyleDiffRule",
-    "StyleRule",
-    "Violation",
-    "matchers",
-    "styleguide",
-]
-
 
 def styleguide(
     *rules: type[StyleRule],

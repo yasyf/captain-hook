@@ -1,5 +1,5 @@
 ---
-title: "captain-hook"
+title: "Declarative hooks for Claude Code"
 toc: false
 body-classes: "gd-homepage"
 ---

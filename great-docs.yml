@@ -4,7 +4,6 @@
 module: captain_hook
 display_name: captain-hook
 parser: google
-dynamic: true
 repo: https://github.com/yasyf/captain-hook
 site_url: "https://yasyf.github.io/captain-hook/"
 pypi: true
@@ -61,9 +60,10 @@ authors:
     github: yasyf
     email: yasyfm@gmail.com
 
-# Curated symbol reference from captain_hook.__all__ (public API only).
-# ContentBlock, InlineTests, and TCondition are excluded automatically
-# (cyclic aliases under dynamic introspection).
+# Curated symbol reference (public API only) — the root __init__ re-exports
+# define the API; there is no __all__. ContentBlock, InlineTests, and
+# TCondition are excluded automatically (cyclic aliases under dynamic
+# introspection).
 reference:
   - title: Registration
     desc: Declaring and registering hooks.
@@ -79,7 +79,6 @@ reference:
       - gate
       - nudge
       - lint
-      - diff_lint
       - block_command
       - warn_command
       - llm_gate
@@ -94,7 +93,6 @@ reference:
       - GateVerdict
       - NudgeVerdict
       - PromptCheckVerdict
-      - session_id_for
 
   - title: Conditions
     desc: Typed filters that decide when hooks fire.
@@ -129,7 +127,6 @@ reference:
       - NotificationEvent
       - HookContext
       - HookResult
-      - HookSpec
       - Action
       - Agent
       - Content
@@ -138,8 +135,6 @@ reference:
     desc: Path matching and AST-level command inspection.
     contents:
       - File
-      - PathMatcher
-      - categorize_files
       - Command
       - CommandLine
       - Redirect
@@ -159,8 +154,6 @@ reference:
       - Turn
       - Task
       - Tasks
-      - parse_tool_input
-      - parse_content_block
 
   - title: Tool Inputs
     desc: Parsed tool-input models.
@@ -178,18 +171,11 @@ reference:
       - TaskCreateInput
       - TaskUpdateInput
       - WriteInput
-      - TextBlock
       - ToolResult
-      - ToolUseBlock
 
   - title: Signals
     desc: NLP signal scoring over transcript text.
     contents:
-      - cite_message
-      - score_signals
-      - resolve_signals
-      - extract_signal_context
-      - transcript_texts
       - Clause
       - NlpSignal
       - Phrase
@@ -199,7 +185,6 @@ reference:
     contents:
       - HookState
       - PrimitiveState
-      - EchoTracker
       - SourceEdits
       - workflow_state
       - SessionSlot
@@ -223,11 +208,6 @@ reference:
   - title: Configuration & Prompts
     desc: Settings, scaffolding, and LLM prompt helpers.
     contents:
-      - AutoConf
       - HooksSettings
       - build_settings
-      - generate_settings
-      - generate_settings_json
-      - read_json
       - Prompt
-      - PromptMessage
