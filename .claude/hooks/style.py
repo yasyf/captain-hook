@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 
 from captain_hook import Allow, Input, StyleDiffRule, StyleRule, Warn, gate, styleguide
-from captain_hook.styleguide import Matcher as M
+from captain_hook.primitives.styleguide import Matcher as M
 
 
 def any_label(node: ast.AST) -> str:

@@ -6,7 +6,7 @@ from collections.abc import Callable, Hashable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import ClassVar, Protocol, runtime_checkable
 
-from captain_hook.styleguide.types import Violation
+from captain_hook.primitives.styleguide.types import Violation
 
 __all__ = ["Matcher"]
 
@@ -143,13 +143,13 @@ class Matcher:
     """A composable, immutable AST matcher: a node predicate that is also a tree selector.
 
     A `Matcher` wraps a single ``(node, parents) -> bool`` test. *Node-local* matchers
-    (e.g. [`calls`][captain_hook.styleguide.Matcher.calls]) ignore ``parents``; *structural*
-    matchers (e.g. [`under`][captain_hook.styleguide.Matcher.under]) consult it. Compose with
+    (e.g. [`calls`][captain_hook.primitives.styleguide.Matcher.calls]) ignore ``parents``; *structural*
+    matchers (e.g. [`under`][captain_hook.primitives.styleguide.Matcher.under]) consult it. Compose with
     the boolean algebra ``&`` (intersection), ``|`` (union), and ``~`` (negation), refine with
-    [`where`][captain_hook.styleguide.Matcher.where], and finish with a terminal —
-    [`over`][captain_hook.styleguide.Matcher.over],
-    [`violations`][captain_hook.styleguide.Matcher.violations], or
-    [`exists`][captain_hook.styleguide.Matcher.exists].
+    [`where`][captain_hook.primitives.styleguide.Matcher.where], and finish with a terminal —
+    [`over`][captain_hook.primitives.styleguide.Matcher.over],
+    [`violations`][captain_hook.primitives.styleguide.Matcher.violations], or
+    [`exists`][captain_hook.primitives.styleguide.Matcher.exists].
 
     The class-attribute vocabulary (``Matcher.imports``, ``Matcher.control_flow``, ...) and the
     factories below are the whole surface — author a new rule by combining them, not by reaching
@@ -300,7 +300,7 @@ class Matcher:
         return (node for node in ast.walk(tree) if self.test(node, parents))
 
     def violations(self, tree: ast.AST, label: str | Callable[[ast.AST], str] | None = None) -> Iterator[Violation]:
-        """Yield a [`Violation`][captain_hook.styleguide.Violation] for each match, located at its line."""
+        """Yield a [`Violation`][captain_hook.primitives.styleguide.Violation] for each match, located at its line."""
         return (Violation(line_of(node), label_for(label, node)) for node in self.over(tree))
 
     def diff(

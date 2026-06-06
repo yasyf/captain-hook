@@ -62,7 +62,7 @@ from captain_hook.types import (
     TouchedFile,
     UsedSkill,
 )
-from captain_hook.workflow import Step, text_matches, workflow
+from captain_hook.primitives.workflow import Step, text_matches, workflow
 
 
 class TestDeclarativeHookE2E:

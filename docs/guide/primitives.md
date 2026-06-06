@@ -94,11 +94,11 @@ Lints fire on `PostToolUse` for Edit/Write of `.py` files. Test files are skippe
 
 Apply AST-based style rules to Python edits, reporting only what the edit changed. A rule is a
 [`StyleRule`][captain_hook.StyleRule] subclass whose docstring is the message and whose `match`
-is a composable [`Matcher`][captain_hook.styleguide.Matcher]:
+is a composable [`Matcher`][captain_hook.primitives.styleguide.Matcher]:
 
 ```python
 from captain_hook import styleguide, StyleRule
-from captain_hook.styleguide import Matcher
+from captain_hook.primitives.styleguide import Matcher
 
 class NoPrint(StyleRule):
     """

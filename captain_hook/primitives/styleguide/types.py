@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, ClassVar
 from captain_hook.utils import kebab
 
 if TYPE_CHECKING:
-    from captain_hook.styleguide.matcher import Matcher
+    from captain_hook.primitives.styleguide.matcher import Matcher
     from captain_hook.testing import InlineTests
 
 
@@ -31,7 +31,7 @@ class StyleRule(ABC):
 
     Subclass it and write the rule's message as the class **docstring** (``{violations}`` is
     substituted at fire time). Declare the rule as data by setting ``match`` to a
-    [`Matcher`][captain_hook.styleguide.Matcher] (and optionally ``label``); override ``check``
+    [`Matcher`][captain_hook.primitives.styleguide.Matcher] (and optionally ``label``); override ``check``
     only for logic a matcher can't express. The class name is the rule's identity —
     ``NoNestedImports`` becomes ``"no-nested-imports"``.
 
@@ -62,7 +62,7 @@ class StyleRule(ABC):
 class StyleDiffRule(StyleRule):
     """Base class for a diff rule: flags constructs newly introduced by the change.
 
-    Like [`StyleRule`][captain_hook.styleguide.StyleRule], but it compares the pre-edit and
+    Like [`StyleRule`][captain_hook.primitives.styleguide.StyleRule], but it compares the pre-edit and
     post-edit trees. The declarative form flags nodes matching ``match`` in the new tree whose
     ``key`` (default ``ast.unparse``) was absent from the old tree; override ``check`` when the
     "newly introduced" identity needs custom logic.

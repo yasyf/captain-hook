@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING
 
 from captain_hook.app import on
 from captain_hook.state import hook_name
-from captain_hook.styleguide.matcher import Matcher
-from captain_hook.styleguide.scope import changed_lines, read_source, reconstruct_pre
-from captain_hook.styleguide.types import StyleDiffRule, StyleRule, Violation
+from captain_hook.primitives.styleguide.matcher import Matcher
+from captain_hook.primitives.styleguide.scope import changed_lines, read_source, reconstruct_pre
+from captain_hook.primitives.styleguide.types import StyleDiffRule, StyleRule, Violation
 from captain_hook.types import Action, Event, FilePath, HookResult, TCondition, TestFile, Tool
 
 if TYPE_CHECKING:
@@ -40,8 +40,8 @@ def styleguide(
 ) -> None:
     """Register one change-scoped hook applying the given style rules to Python edits and writes.
 
-    Each rule is a [`StyleRule`][captain_hook.styleguide.StyleRule] (or
-    [`StyleDiffRule`][captain_hook.styleguide.StyleDiffRule]) subclass whose docstring is its
+    Each rule is a [`StyleRule`][captain_hook.primitives.styleguide.StyleRule] (or
+    [`StyleDiffRule`][captain_hook.primitives.styleguide.StyleDiffRule]) subclass whose docstring is its
     message. The single registered hook parses the edited file once, runs every rule against the
     post-edit tree, scopes each violation to the changed lines, and emits one aggregated warning
     (or block, when ``block`` is set). Call again with different ``only_if`` / ``skip_if`` /

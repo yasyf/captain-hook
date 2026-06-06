@@ -29,7 +29,7 @@ from captain_hook.primitives.llm import (
 )
 from captain_hook.primitives.nudge import gate as gate
 from captain_hook.primitives.nudge import nudge as nudge
-from captain_hook.styleguide import styleguide as styleguide
+from captain_hook.primitives.styleguide import styleguide as styleguide
 
 __all__ = [
     "GateVerdict",

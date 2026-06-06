@@ -30,19 +30,19 @@ def make_evt(
 
 class TestTextMatches:
     def test_returns_callable_predicate(self) -> None:
-        from captain_hook.workflow import text_matches
+        from captain_hook.primitives.workflow import text_matches
 
         pred = text_matches(r"ALL_TESTS_PASS")
         assert callable(pred)
 
     def test_matches_when_pattern_found(self) -> None:
-        from captain_hook.workflow import text_matches
+        from captain_hook.primitives.workflow import text_matches
 
         t = make_transcript(raw_text("assistant", "ALL_TESTS_PASS done"))
         assert text_matches(r"ALL_TESTS_PASS")(t) is True
 
     def test_no_match_when_pattern_absent(self) -> None:
-        from captain_hook.workflow import text_matches
+        from captain_hook.primitives.workflow import text_matches
 
         t = make_transcript(raw_text("assistant", "nothing here"))
         assert text_matches(r"ALL_TESTS_PASS")(t) is False
@@ -50,7 +50,7 @@ class TestTextMatches:
 
 class TestStep:
     def test_frozen_dataclass(self) -> None:
-        from captain_hook.workflow import Step
+        from captain_hook.primitives.workflow import Step
 
         s = Step(name="test", check=lambda _: True, stopped_at="Step 1:", next_step="Write tests.")
         assert s.name == "test"
@@ -60,7 +60,7 @@ class TestStep:
             s.name = "other"  # type: ignore[misc]
 
     def test_check_is_transcript_predicate(self) -> None:
-        from captain_hook.workflow import Step
+        from captain_hook.primitives.workflow import Step
 
         called_with: list[Any] = []
 
@@ -76,7 +76,7 @@ class TestStep:
 
 class TestArtifact:
     def test_frozen_generic_dataclass(self) -> None:
-        from captain_hook.workflow import Artifact
+        from captain_hook.primitives.workflow import Artifact
 
         a: Artifact[ArtifactModel] = Artifact(path="/tmp/out.json", model=ArtifactModel)
         assert a.path == "/tmp/out.json"
@@ -85,7 +85,7 @@ class TestArtifact:
             a.path = "/other"  # type: ignore[misc]
 
     def test_validate_defaults_to_none_returning(self) -> None:
-        from captain_hook.workflow import Artifact
+        from captain_hook.primitives.workflow import Artifact
 
         a: Artifact[ArtifactModel] = Artifact(path="/tmp/out.json", model=ArtifactModel)
         assert a.validate(ArtifactModel(name="x", count=1)) is None
@@ -93,7 +93,7 @@ class TestArtifact:
 
 class TestWorkflowFunction:
     def test_registers_hook(self) -> None:
-        from captain_hook.workflow import Step, workflow
+        from captain_hook.primitives.workflow import Step, workflow
 
         initial_count = len(_state.hooks)
         workflow(
@@ -103,7 +103,7 @@ class TestWorkflowFunction:
         )
         assert len(_state.hooks) == initial_count + 1
     def test_registered_hook_is_subagent_stop(self) -> None:
-        from captain_hook.workflow import Step, workflow
+        from captain_hook.primitives.workflow import Step, workflow
 
         workflow(
             label="TEST",
@@ -113,7 +113,7 @@ class TestWorkflowFunction:
         hook = _state.hooks[-1]
         assert Event.SubagentStop in hook.spec.events
     def test_registered_hook_has_max_fires_1(self) -> None:
-        from captain_hook.workflow import Step, workflow
+        from captain_hook.primitives.workflow import Step, workflow
 
         workflow(
             label="TEST",
@@ -123,7 +123,7 @@ class TestWorkflowFunction:
         hook = _state.hooks[-1]
         assert hook.spec.max_fires == 1
     def test_passes_tests_to_hook_spec(self) -> None:
-        from captain_hook.workflow import Step, workflow
+        from captain_hook.primitives.workflow import Step, workflow
 
         tests: dict[str, Any] = {"input1": "block"}
         workflow(
@@ -136,7 +136,7 @@ class TestWorkflowFunction:
         assert hook.spec.tests is tests
 
     def test_registered_hook_skips_planning_agents_by_default(self) -> None:
-        from captain_hook.workflow import Step, workflow
+        from captain_hook.primitives.workflow import Step, workflow
 
         workflow(
             label="TEST",
@@ -147,7 +147,7 @@ class TestWorkflowFunction:
 
     def test_passes_only_if_to_hook_spec(self) -> None:
         from captain_hook.types import Agent
-        from captain_hook.workflow import Step, workflow
+        from captain_hook.primitives.workflow import Step, workflow
 
         workflow(
             label="TEST",
@@ -159,7 +159,7 @@ class TestWorkflowFunction:
 
     def test_passes_skip_if_to_hook_spec(self) -> None:
         from captain_hook.types import Agent
-        from captain_hook.workflow import Step, workflow
+        from captain_hook.primitives.workflow import Step, workflow
 
         workflow(
             label="TEST",
@@ -170,7 +170,7 @@ class TestWorkflowFunction:
         assert _state.hooks[-1].spec.skip_if == (Agent("Explore"),)
 
     def test_only_if_and_skip_if_default_to_empty(self) -> None:
-        from captain_hook.workflow import Step, workflow
+        from captain_hook.primitives.workflow import Step, workflow
 
         workflow(
             label="TEST",
@@ -182,7 +182,7 @@ class TestWorkflowFunction:
 class TestWorkflowOnStart:
     def test_on_start_registers_both_subagent_start_and_stop(self) -> None:
         from captain_hook.types import Agent
-        from captain_hook.workflow import Step, workflow
+        from captain_hook.primitives.workflow import Step, workflow
 
         before = len(_state.hooks)
         workflow(
@@ -206,7 +206,7 @@ class TestWorkflowOnStart:
 
     def test_on_start_handler_invokes_callback(self) -> None:
         from captain_hook.types import Agent
-        from captain_hook.workflow import Step, workflow
+        from captain_hook.primitives.workflow import Step, workflow
 
         captured: list[Any] = []
 
@@ -229,7 +229,7 @@ class TestWorkflowOnStart:
         assert captured == [evt]
 
     def test_no_on_start_registers_only_stop_guard(self) -> None:
-        from captain_hook.workflow import Step, workflow
+        from captain_hook.primitives.workflow import Step, workflow
 
         before = len(_state.hooks)
         workflow(
@@ -243,7 +243,7 @@ class TestWorkflowOnStart:
 
 class TestWorkflowGuard:
     def test_blocks_when_marker_absent(self) -> None:
-        from captain_hook.workflow import Step, Workflow
+        from captain_hook.primitives.workflow import Step, Workflow
 
         w = Workflow(
             label="TDD",
@@ -257,7 +257,7 @@ class TestWorkflowGuard:
         assert "TDD" in result.message  # type: ignore[operator]
 
     def test_evaluates_steps_in_order_finds_first_uncompleted(self) -> None:
-        from captain_hook.workflow import Step, Workflow
+        from captain_hook.primitives.workflow import Step, Workflow
 
         w = Workflow(
             label="BUILD",
@@ -276,7 +276,7 @@ class TestWorkflowGuard:
         assert "Do step 3." in result.message  # type: ignore[operator]
 
     def test_guard_message_includes_stopped_at_and_next_step(self) -> None:
-        from captain_hook.workflow import Step, Workflow
+        from captain_hook.primitives.workflow import Step, Workflow
 
         w = Workflow(
             label="FLOW",
@@ -290,7 +290,7 @@ class TestWorkflowGuard:
         assert "Then do this" in result.message  # type: ignore[operator]
 
     def test_guard_invokes_post_complete_when_all_pass(self) -> None:
-        from captain_hook.workflow import Step, Workflow
+        from captain_hook.primitives.workflow import Step, Workflow
 
         expected_result = HookResult(action=Action.warn, message="post complete done")
         post_called: list[Any] = []
@@ -311,7 +311,7 @@ class TestWorkflowGuard:
         assert result is expected_result
 
     def test_guard_returns_none_when_no_post_complete(self) -> None:
-        from captain_hook.workflow import Step, Workflow
+        from captain_hook.primitives.workflow import Step, Workflow
 
         w = Workflow(
             label="X",
@@ -323,7 +323,7 @@ class TestWorkflowGuard:
         assert result is None
 
     def test_guard_blocks_on_missing_artifact_file(self) -> None:
-        from captain_hook.workflow import Artifact, Step, Workflow
+        from captain_hook.primitives.workflow import Artifact, Step, Workflow
 
         w = Workflow(
             label="ART",
@@ -339,7 +339,7 @@ class TestWorkflowGuard:
         assert "not found" in result.message  # type: ignore[operator]
 
     def test_guard_blocks_on_artifact_validation_failure(self, tmp_path: Path) -> None:
-        from captain_hook.workflow import Artifact, Step, Workflow
+        from captain_hook.primitives.workflow import Artifact, Step, Workflow
 
         artifact_path = tmp_path / "out.json"
         artifact_path.write_text(json.dumps({"name": "test", "count": 5}))
@@ -360,7 +360,7 @@ class TestWorkflowGuard:
         assert "count must be > 10" in result.message  # type: ignore[operator]
 
     def test_guard_all_steps_complete_but_artifacts_fail(self, tmp_path: Path) -> None:
-        from captain_hook.workflow import Artifact, Step, Workflow
+        from captain_hook.primitives.workflow import Artifact, Step, Workflow
 
         w = Workflow(
             label="MIX",
@@ -377,7 +377,7 @@ class TestWorkflowGuard:
         assert result.action == Action.block
 
     def test_guard_blocks_on_malformed_artifact_json(self, tmp_path: Path) -> None:
-        from captain_hook.workflow import Artifact, Step, Workflow
+        from captain_hook.primitives.workflow import Artifact, Step, Workflow
 
         artifact_path = tmp_path / "bad.json"
         artifact_path.write_text("{not valid json")
@@ -394,7 +394,7 @@ class TestWorkflowGuard:
         assert result.action == Action.block
 
     def test_guard_blocks_on_artifact_schema_mismatch(self, tmp_path: Path) -> None:
-        from captain_hook.workflow import Artifact, Step, Workflow
+        from captain_hook.primitives.workflow import Artifact, Step, Workflow
 
         artifact_path = tmp_path / "mismatch.json"
         artifact_path.write_text(json.dumps({"wrong": "fields"}))
@@ -411,7 +411,7 @@ class TestWorkflowGuard:
         assert result.action == Action.block
 
     def test_label_prefix_in_all_block_messages(self) -> None:
-        from captain_hook.workflow import Step, Workflow
+        from captain_hook.primitives.workflow import Step, Workflow
 
         w = Workflow(
             label="MYWORKFLOW",
@@ -425,7 +425,7 @@ class TestWorkflowGuard:
         assert result.message.startswith("MYWORKFLOW")
 
     def test_guard_valid_artifact_passes(self, tmp_path: Path) -> None:
-        from captain_hook.workflow import Artifact, Step, Workflow
+        from captain_hook.primitives.workflow import Artifact, Step, Workflow
 
         artifact_path = tmp_path / "good.json"
         artifact_path.write_text(json.dumps({"name": "ok", "count": 42}))
@@ -441,7 +441,7 @@ class TestWorkflowGuard:
         assert result is None
 
     def test_no_completed_steps_reports_first(self) -> None:
-        from captain_hook.workflow import Step, Workflow
+        from captain_hook.primitives.workflow import Step, Workflow
 
         w = Workflow(
             label="CHAIN",
@@ -458,7 +458,7 @@ class TestWorkflowGuard:
         assert "Do step 1." in result.message  # type: ignore[operator]
 
     def test_sequential_finds_first_uncompleted_step(self) -> None:
-        from captain_hook.workflow import Step, Workflow
+        from captain_hook.primitives.workflow import Step, Workflow
 
         w = Workflow(
             label="SEQ",
@@ -477,7 +477,7 @@ class TestWorkflowGuard:
         assert "S3:" not in result.message  # type: ignore[operator]
 
     def test_sequential_does_not_skip_to_later_completed(self) -> None:
-        from captain_hook.workflow import Step, Workflow
+        from captain_hook.primitives.workflow import Step, Workflow
 
         w = Workflow(
             label="SEQ",

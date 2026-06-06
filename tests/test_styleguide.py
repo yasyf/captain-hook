@@ -10,7 +10,7 @@ import pytest
 
 from captain_hook.app import _state
 from captain_hook.dispatch import dispatch
-from captain_hook.styleguide import (
+from captain_hook.primitives.styleguide import (
     Matcher,
     StyleDiffRule,
     StyleRule,

@@ -4,17 +4,17 @@
 ships **no rules of its own** — you author them as [`StyleRule`][captain_hook.StyleRule]
 subclasses and register them. The framework owns the plumbing — parsing, change-scoping,
 message formatting, and test wiring — so a rule is usually just **data**: a docstring and a
-[`Matcher`][captain_hook.styleguide.Matcher].
+[`Matcher`][captain_hook.primitives.styleguide.Matcher].
 
 ## Your first rule
 
 A rule is a subclass. Write the message as the class **docstring** (`{violations}` is
-substituted at fire time), set `match` to a [`Matcher`][captain_hook.styleguide.Matcher], and
+substituted at fire time), set `match` to a [`Matcher`][captain_hook.primitives.styleguide.Matcher], and
 hand the class to `styleguide()`:
 
 ```python
 from captain_hook import styleguide, StyleRule, Input, Warn, Allow
-from captain_hook.styleguide import Matcher
+from captain_hook.primitives.styleguide import Matcher
 
 class ZipStrict(StyleRule):
     """
@@ -62,7 +62,7 @@ new tree whose identity (`key`, default `ast.unparse`) was absent from the old t
 
 ```python
 from captain_hook import StyleDiffRule
-from captain_hook.styleguide import Matcher
+from captain_hook.primitives.styleguide import Matcher
 
 class NoNewWildcardImport(StyleDiffRule):
     """
@@ -79,12 +79,12 @@ isn't the right notion of "the same construct" (e.g. comparing annotated slots b
 
 ## The Matcher
 
-A [`Matcher`][captain_hook.styleguide.Matcher] is one composable thing: a node predicate that
+A [`Matcher`][captain_hook.primitives.styleguide.Matcher] is one composable thing: a node predicate that
 is also a tree selector. Build rules by **combining matchers**, not by reaching for a framework
 helper. Compose with a boolean algebra and refine with `.where(...)`:
 
 ```python
-from captain_hook.styleguide import Matcher
+from captain_hook.primitives.styleguide import Matcher
 
 Matcher.imports & Matcher.child_of(Matcher.control_flow) & ~Matcher.under(Matcher.type_checking)
 Matcher.cls & Matcher.private                         # private-named class

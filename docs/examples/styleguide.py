@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 
 from captain_hook import Allow, Input, StyleDiffRule, StyleRule, Warn, styleguide
-from captain_hook.styleguide import Matcher
+from captain_hook.primitives.styleguide import Matcher
 
 
 class NoPrint(StyleRule):
