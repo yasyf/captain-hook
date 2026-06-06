@@ -1,4 +1,6 @@
-# Real-World Patterns
+---
+title: "Real-World Patterns"
+---
 
 Patterns harvested from a production hooks directory. Each is one concrete answer to a recurring problem, with enough surrounding code to copy and adapt.
 

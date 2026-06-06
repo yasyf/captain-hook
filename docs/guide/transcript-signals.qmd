@@ -1,4 +1,6 @@
-# Transcript & Signals
+---
+title: "Transcript & Signals"
+---
 
 ## Transcript
 

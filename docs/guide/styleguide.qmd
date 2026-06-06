@@ -1,15 +1,17 @@
-# Style Rules
+---
+title: "Style Rules"
+---
 
 `styleguide()` turns AST-based style checks into a hook. It is a *substrate*: captain-hook
-ships **no rules of its own** — you author them as [`StyleRule`][captain_hook.style.StyleRule]
+ships **no rules of its own** — you author them as [`StyleRule`](../../reference/style.StyleRule.qmd)
 subclasses and register them. The framework owns the plumbing — parsing, change-scoping,
 message formatting, and test wiring — so a rule is usually just **data**: a docstring and a
-matcher built from the [`matchers`][captain_hook.style.matchers] module.
+matcher built from the [`matchers`](../../reference/style.matchers.qmd) module.
 
 ## Your first rule
 
 A rule is a subclass. Write the message as the class **docstring** (`{violations}` is
-substituted at fire time), set `match` to a [`Matcher`][captain_hook.style.matchers.Matcher], and
+substituted at fire time), set `match` to a [`Matcher`](../../reference/style.matchers.qmd#matcher), and
 hand the class to `styleguide()`:
 
 ```python
@@ -38,7 +40,7 @@ styleguide(ZipStrict)
 - The **docstring is the message**. Open it with a newline after `"""`; the runner normalizes
   it with `inspect.cleandoc`, so your indentation never leaks into the output. `{violations}`
   is replaced with the rule's findings joined by `sep` (default a bulleted list).
-- `match` selects the offending nodes; each becomes a [`Violation`][captain_hook.style.Violation]
+- `match` selects the offending nodes; each becomes a [`Violation`](../../reference/style.Violation.qmd)
   rendered as `label (line N)`. `label` may be a fixed string (as here), a `node -> str`
   callable, or omitted — the default labels a node by its bound name, falling back to
   `ast.unparse`.
@@ -54,7 +56,7 @@ for correctness and edit-scoped reporting for signal.
 ## Diff rules
 
 When a rule must compare *before and after* — "did this edit **introduce** something?" —
-subclass [`StyleDiffRule`][captain_hook.style.StyleDiffRule]. It flags nodes matching `match` in
+subclass [`StyleDiffRule`](../../reference/style.StyleDiffRule.qmd). It flags nodes matching `match` in
 the new tree that were absent from the old tree (by unparsed source):
 
 ```python
@@ -75,8 +77,8 @@ of "the same construct" (e.g. comparing annotated slots by name).
 
 ## The matchers module
 
-Import [`matchers`][captain_hook.style.matchers] as `M`. A
-[`Matcher`][captain_hook.style.matchers.Matcher] is one composable thing: a node predicate that
+Import [`matchers`](../../reference/style.matchers.qmd) as `M`. A
+[`Matcher`](../../reference/style.matchers.qmd#matcher) is one composable thing: a node predicate that
 is also a tree selector. Build rules by **combining matchers**, not by reaching for a framework
 helper. Compose with a boolean algebra and refine with `.where(...)`:
 

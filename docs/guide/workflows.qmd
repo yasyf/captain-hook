@@ -1,4 +1,6 @@
-# Workflows
+---
+title: "Workflows"
+---
 
 Workflows enforce multi-step checklists before an agent is allowed to stop. They are the right choice when you need to guarantee that a sequence of actions has been completed -- running linters, executing tests, generating artifacts -- before work is considered done.
 
@@ -53,7 +55,7 @@ workflow(
 
 When a subagent attempts to stop, the workflow guard runs this evaluation pipeline:
 
-```mermaid
+```{mermaid}
 flowchart TD
     A[SubagentStop event] --> B{Marker in transcript?}
     B -->|No| C[Find first incomplete step]

@@ -1,4 +1,6 @@
-# Hooks & Events
+---
+title: "Hooks & Events"
+---
 
 ## Events
 
@@ -75,7 +77,7 @@ Parameters:
 | `events` | Which events to match (required) |
 | `message` | Text shown to Claude (required for declarative hooks) |
 | `block` | `True` to block, `False` to warn (default: `False`) |
-| `only_if` / `skip_if` | Condition lists — see [Conditions](conditions.md) |
+| `only_if` / `skip_if` | Condition lists — see [Conditions](conditions.qmd) |
 | `max_fires` | Limit how many times this hook fires per session |
 
 ### Primitives
@@ -91,7 +93,7 @@ gate("Run tests before stopping", skip_if=[RanCommand(r"pytest")])
 lint("no_print", r"print\(", message="Use logger instead")
 ```
 
-See the [Primitives Guide](primitives.md) for the full list.
+See the [Primitives Guide](primitives.qmd) for the full list.
 
 ### Handler: `@on()`
 
@@ -116,12 +118,13 @@ The handler receives the event and returns `HookResult | None`:
 | `evt.allow()` | Explicitly allow |
 | `None` | Skip (no action) |
 
-!!! tip "Which pattern should I use?"
-    Start with **primitives** — they cover most hooks in one line. Use **declarative `hook()`** when you need custom condition combinations. Use **handlers** only when you need runtime logic (conditionals, state access, dynamic messages).
+::: {.callout-tip title="Which pattern should I use?"}
+Start with **primitives** — they cover most hooks in one line. Use **declarative `hook()`** when you need custom condition combinations. Use **handlers** only when you need runtime logic (conditionals, state access, dynamic messages).
+:::
 
 ## Conditions
 
-Conditions filter *when* a hook fires. See the dedicated [Conditions guide](conditions.md) for the full reference, or the [Conditions Cheatsheet](../reference/conditions.md) for a quick-reference card.
+Conditions filter *when* a hook fires. See the dedicated [Conditions guide](conditions.qmd) for the full reference, or the [Conditions Cheatsheet](../reference/conditions.qmd) for a quick-reference card.
 
 ```python
 from captain_hook import hook, Event, Tool, Command, RanCommand
@@ -145,4 +148,4 @@ When Claude Code fires an event, the dispatch pipeline processes it:
 4. **Collect** — first block wins; warnings accumulate
 5. **Format** — results are formatted as JSON and written to stdout
 
-See [How It Works](../getting-started/how-it-works.md) for a detailed step-by-step walkthrough with actual JSON input/output.
+See [How It Works](../getting-started/how-it-works.qmd) for a detailed step-by-step walkthrough with actual JSON input/output.

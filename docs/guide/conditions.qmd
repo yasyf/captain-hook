@@ -1,4 +1,6 @@
-# Conditions
+---
+title: "Conditions"
+---
 
 Conditions filter **when** a hook fires. Every hook registration accepts two condition lists -- `only_if` and `skip_if` -- that narrow the hook's scope beyond just the event type.
 
@@ -23,8 +25,9 @@ Conditions fall into two groups based on what they inspect:
 | **Current Event** | Properties of the event being processed right now | `Tool`, `FilePath`, `Command`, `Content`, `Agent`, `TestFile` |
 | **Transcript History** | What has happened earlier in the session | `ReadFile`, `TouchedFile`, `RanCommand`, `UsedSkill`, `InPlanMode` |
 
-!!! tip "Rule of thumb"
-    Use current-event conditions to match *what* is happening. Use transcript-history conditions to match *what has already happened*.
+::: {.callout-tip title="Rule of thumb"}
+Use current-event conditions to match *what* is happening. Use transcript-history conditions to match *what has already happened*.
+:::
 
 ## Which condition do I need?
 
@@ -269,8 +272,9 @@ class MinEdits(CustomCondition):
 hook(Event.Stop, message="Many edits -- run a review", only_if=[MinEdits(threshold=10)])
 ```
 
-!!! note "Protocol, not base class"
-    `CustomCondition` is a `runtime_checkable` Protocol. Any object with a `check(self, evt: BaseHookEvent) -> bool` method satisfies it -- no inheritance required.
+::: {.callout-note title="Protocol, not base class"}
+`CustomCondition` is a `runtime_checkable` Protocol. Any object with a `check(self, evt: BaseHookEvent) -> bool` method satisfies it -- no inheritance required.
+:::
 
 ## Combining conditions
 
@@ -317,5 +321,6 @@ hook(
 )
 ```
 
-!!! tip "Regex patterns"
-    `Tool`, `Command`, `Content`, and `RanCommand` use regex matching. Remember to escape special characters and use raw strings (`r"..."`) to avoid backslash issues.
+::: {.callout-tip title="Regex patterns"}
+`Tool`, `Command`, `Content`, and `RanCommand` use regex matching. Remember to escape special characters and use raw strings (`r"..."`) to avoid backslash issues.
+:::

@@ -1,4 +1,6 @@
-# State & Sessions
+---
+title: "State & Sessions"
+---
 
 Hooks are stateless by default -- each invocation is independent. Session state lets you persist data across hook invocations within a single Claude Code session, enabling patterns like counting events, tracking what has been seen, and accumulating context.
 
@@ -83,8 +85,9 @@ def count_edits(evt):
     evt.ctx.s[EditCounter].set(state)
 ```
 
-!!! note "Mutable defaults"
-    Use `Field(default_factory=list)` for mutable defaults on Pydantic models. The example above uses `list[str] = []` for brevity, but in production code prefer `files: list[str] = Field(default_factory=list)`.
+::: {.callout-note title="Mutable defaults"}
+Use `Field(default_factory=list)` for mutable defaults on Pydantic models. The example above uses `list[str] = []` for brevity, but in production code prefer `files: list[str] = Field(default_factory=list)`.
+:::
 
 ## Custom state models
 
@@ -209,8 +212,9 @@ Both state and transcript-history conditions can answer "has something happened?
 | **Flexibility** | Fixed set of checks (file read, command run, etc.) | Arbitrary computed values |
 | **Use case** | "Was `mtest` run?" "Was this file read?" | "How many times has X happened?" "What was the last computed score?" |
 
-!!! tip "Choose conditions first"
-    If your question can be answered by inspecting the transcript ("did the agent run tests?"), use a condition like `RanCommand`. Reserve state for values that cannot be derived from the transcript alone.
+::: {.callout-tip title="Choose conditions first"}
+If your question can be answered by inspecting the transcript ("did the agent run tests?"), use a condition like `RanCommand`. Reserve state for values that cannot be derived from the transcript alone.
+:::
 
 ## Session lifecycle
 

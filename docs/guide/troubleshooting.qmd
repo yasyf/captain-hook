@@ -1,4 +1,6 @@
-# Troubleshooting
+---
+title: "Troubleshooting"
+---
 
 Common errors and how to diagnose them.
 
@@ -9,7 +11,7 @@ Four things to check, in order:
 1. Run `capt-hook --hooks <dir> test` with the inline tests in place. If the test fails, the hook's conditions aren't matching the input you expect — fix the condition before debugging dispatch.
 2. Confirm the `--hooks` argument points at the directory that actually contains your hook file. Captain-hook loads `.py` files under that root and nothing else.
 3. Inspect the `events=` argument. A primitive defaults to one event (`block_command` → `PreToolUse`, `nudge` → `PostToolUse`); if you want a different event, pass it explicitly.
-4. View the recent dispatch logs with `capt-hook logs`. By default it prints the most recent session's per-event log file, written under the cache log dir (default `~/.cache/captain-hook/logs`, [see Configuration](configuration.md#log-directory)). Pass `--tail N` to limit lines, or `--session <id-or-transcript-path>` to target a specific session. If your hook never appears in the log, dispatch never reached it — recheck steps 1–3.
+4. View the recent dispatch logs with `capt-hook logs`. By default it prints the most recent session's per-event log file, written under the cache log dir (default `~/.cache/captain-hook/logs`, [see Configuration](configuration.qmd#log-directory)). Pass `--tail N` to limit lines, or `--session <id-or-transcript-path>` to target a specific session. If your hook never appears in the log, dispatch never reached it — recheck steps 1–3.
 
 ## Settings not picked up
 
@@ -17,7 +19,7 @@ Captain-hook reads settings from environment variables with the `HOOKS_` prefix.
 
 - Run `printenv | rg HOOKS_` to confirm the variable is set.
 - If you changed the prefix via `model_config = SettingsConfigDict(env_prefix="MYAPP_")`, double-check that nothing else still expects `HOOKS_`.
-- See [Configuration](configuration.md) for the full settings surface.
+- See [Configuration](configuration.qmd) for the full settings surface.
 
 ## `RuntimeError: spaCy model is not installed`
 
@@ -59,7 +61,7 @@ from captain_hook import Event, audit
 audit(Event.PreToolUse | Event.PostToolUse | Event.Stop)
 ```
 
-It writes one JSONL line per event under the log directory ([see Configuration](configuration.md#log-directory)). Tail the file while the agent runs to see the exact `tool_input`, `tool_name`, and metadata your hooks will receive.
+It writes one JSONL line per event under the log directory ([see Configuration](configuration.qmd#log-directory)). Tail the file while the agent runs to see the exact `tool_input`, `tool_name`, and metadata your hooks will receive.
 
 ## Diagnostic commands
 

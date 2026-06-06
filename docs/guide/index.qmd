@@ -1,0 +1,75 @@
+---
+title: "Guide"
+---
+
+Deep dives into every part of the framework.
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+**Hooks & Events** — Registration patterns and the 9 event types
+
+[{{< icon arrow-right >}} Hooks & Events](hooks-and-events.qmd)
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+**Conditions** — Filter when hooks fire with typed condition objects
+
+[{{< icon arrow-right >}} Conditions](conditions.qmd)
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+**Primitives** — One-line hooks: `nudge`, `gate`, `lint`, `block_command`
+
+[{{< icon arrow-right >}} Primitives](primitives.qmd)
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+**Transcript & Signals** — Query conversation history and score patterns
+
+[{{< icon arrow-right >}} Transcript & Signals](transcript-signals.qmd)
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+**LLM Hooks** — Gate or nudge with LLM-powered evaluation
+
+[{{< icon arrow-right >}} LLM Hooks](llm-hooks.qmd)
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+**Workflows** — Enforce multi-step checklists before the agent can stop
+
+[{{< icon arrow-right >}} Workflows](workflows.qmd)
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+**State & Sessions** — Persist data across hook invocations
+
+[{{< icon arrow-right >}} State & Sessions](state.qmd)
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+**Testing** — Inline tests, mock events, and dispatch testing
+
+[{{< icon arrow-right >}} Testing](testing.qmd)
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+**Configuration** — `HooksSettings` knobs, env prefix, state and log directories
+
+[{{< icon arrow-right >}} Configuration](configuration.qmd)
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+**Patterns** — Real-world hooks distilled from a production hooks directory
+
+[{{< icon arrow-right >}} Patterns](patterns.qmd)
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+**Troubleshooting** — Common errors and diagnostic commands
+
+[{{< icon arrow-right >}} Troubleshooting](troubleshooting.qmd)
+:::
+
+:::

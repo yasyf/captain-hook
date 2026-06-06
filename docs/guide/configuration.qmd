@@ -1,4 +1,6 @@
-# Configuration
+---
+title: "Configuration"
+---
 
 `HooksSettings` is the typed surface for tuning captain-hook from the outside. Every field is overridable via environment variable (default prefix `HOOKS_`) or in code on a subclass.
 

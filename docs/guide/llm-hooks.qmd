@@ -1,4 +1,6 @@
-# LLM Hooks
+---
+title: "LLM Hooks"
+---
 
 LLM hooks use a language model to evaluate transcript context and make decisions that static pattern matching cannot. They are the right choice when the behavior you want to detect requires understanding intent, tone, or reasoning quality.
 
@@ -11,8 +13,9 @@ LLM hooks use a language model to evaluate transcript context and make decisions
 | The condition is about structure (tool name, file path) | The condition is about meaning (excuses, speculation) |
 | Cost is a concern | Accuracy on nuanced behavior is worth the cost |
 
-!!! tip "Combine signals with LLM evaluation"
-    LLM hooks accept `signals` as a pre-filter. Signals run first (free, instant) and the LLM is only invoked when the signal score meets the threshold. This keeps cost low while enabling semantic evaluation where it matters.
+::: {.callout-tip title="Combine signals with LLM evaluation"}
+LLM hooks accept `signals` as a pre-filter. Signals run first (free, instant) and the LLM is only invoked when the signal score meets the threshold. This keeps cost low while enabling semantic evaluation where it matters.
+:::
 
 ## llm_gate
 
@@ -67,10 +70,11 @@ llm_gate(
 :   `transcript` -- include the full transcript in the LLM prompt (default: `True`)
 :   `tests` -- inline test dict
 
-!!! note "Defaults reflect the common case"
-    `agent=True` and `transcript=True` are defaults because most LLM hooks
-    benefit from agent-mode tool access and full transcript context. Pass
-    `agent=False, transcript=False` for cheap, stateless yes/no checks.
+::: {.callout-note title="Defaults reflect the common case"}
+`agent=True` and `transcript=True` are defaults because most LLM hooks
+benefit from agent-mode tool access and full transcript context. Pass
+`agent=False, transcript=False` for cheap, stateless yes/no checks.
+:::
 
 ## llm_nudge
 
@@ -200,8 +204,9 @@ def security_review(evt):
 
 **Returns:** an instance of `response_model`, or `None` if signals did not match, the `when` predicate returned `False`, or the LLM call failed.
 
-!!! note "One fire per turn"
-    `llm_evaluate` checks whether a primitive has already fired during the current turn and returns `None` if so. This prevents multiple LLM hooks from stacking expensive calls in the same dispatch cycle.
+::: {.callout-note title="One fire per turn"}
+`llm_evaluate` checks whether a primitive has already fired during the current turn and returns `None` if so. This prevents multiple LLM hooks from stacking expensive calls in the same dispatch cycle.
+:::
 
 ## Prompt builder
 
@@ -283,5 +288,6 @@ LLM hooks call an external LLM on every qualifying event. Use these techniques t
 - **`model="small"`** -- use the smallest model that gives acceptable accuracy (the default)
 - **`only_if` / `skip_if`** -- add static conditions to avoid LLM evaluation on irrelevant events
 
-!!! warning "Latency"
-    LLM hooks add 2-10 seconds of latency per invocation. For hooks that fire on `PreToolUse` (which blocks the tool), keep prompts short and use `model="small"` to minimize delay.
+::: {.callout-warning title="Latency"}
+LLM hooks add 2-10 seconds of latency per invocation. For hooks that fire on `PreToolUse` (which blocks the tool), keep prompts short and use `model="small"` to minimize delay.
+:::

@@ -1,4 +1,6 @@
-# Primitives
+---
+title: "Primitives"
+---
 
 Primitives are convenience wrappers that register hooks for common patterns.
 They handle event targeting, fire counting, and echo suppression automatically.
@@ -93,8 +95,8 @@ Lints fire on `PostToolUse` for Edit/Write of `.py` files. Test files are skippe
 ## styleguide
 
 Apply AST-based style rules to Python edits, reporting only what the edit changed. A rule is a
-[`StyleRule`][captain_hook.style.StyleRule] subclass whose docstring is the message and whose
-`match` is built from the [`matchers`][captain_hook.style.matchers] module:
+[`StyleRule`](../../reference/style.StyleRule.qmd) subclass whose docstring is the message and whose
+`match` is built from the [`matchers`](../../reference/style.matchers.qmd) module:
 
 ```python
 from captain_hook.style import StyleRule, matchers as M, styleguide
@@ -112,7 +114,7 @@ styleguide(NoPrint)
 
 captain-hook ships no rules of its own — `styleguide()` is the substrate (parsing,
 change-scoping, formatting, test wiring). Each call registers one hook; scope it with
-`only_if` / `skip_if` / `events` / `block`. See [Style Rules](styleguide.md) for the full guide,
+`only_if` / `skip_if` / `events` / `block`. See [Style Rules](styleguide.qmd) for the full guide,
 including the matcher algebra, `StyleDiffRule`, and change scoping.
 
 ## block_command
@@ -183,6 +185,7 @@ audit(
 
 ---
 
-!!! note "More primitives"
-    For LLM-powered hooks (`llm_gate`, `llm_nudge`, `prompt_check`), see [LLM Hooks](llm-hooks.md).
-    For multi-step enforcement, see [Workflows](workflows.md).
+::: {.callout-note title="More primitives"}
+For LLM-powered hooks (`llm_gate`, `llm_nudge`, `prompt_check`), see [LLM Hooks](llm-hooks.qmd).
+For multi-step enforcement, see [Workflows](workflows.qmd).
+:::
