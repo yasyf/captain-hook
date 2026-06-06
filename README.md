@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/capt-hook.svg)](https://pypi.org/project/capt-hook/)
 [![Python](https://img.shields.io/pypi/pyversions/capt-hook.svg)](https://pypi.org/project/capt-hook/)
-[![Docs](https://readthedocs.org/projects/captain-hook/badge/?version=latest)](https://captain-hook.readthedocs.io)
+[![Docs](https://github.com/yasyf/captain-hook/actions/workflows/docs.yml/badge.svg)](https://yasyf.github.io/captain-hook/)
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-blue.svg)](https://github.com/yasyf/captain-hook/blob/main/LICENSE)
 
 Declarative hook framework for Claude Code. Write hooks as data, test them inline, and ship them to CI in the same shape they run in production.
@@ -64,6 +64,6 @@ The next time Claude tries `git stash`, captain-hook returns a deny with your re
 
 ## Docs
 
-[Read the docs](https://captain-hook.readthedocs.io) for the full guide: conditions, primitives, LLM hooks, workflows, state, and real-world patterns.
+[Read the docs](https://yasyf.github.io/captain-hook/) for the full guide: conditions, primitives, LLM hooks, workflows, state, and real-world patterns.
 
-Working on captain-hook itself? See the [development guide](https://captain-hook.readthedocs.io/en/latest/development/).
+Working on captain-hook itself? See the [development guide](https://yasyf.github.io/captain-hook/docs/development/).

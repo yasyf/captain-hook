@@ -37,11 +37,11 @@ uv run capt-hook --hooks docs/examples test
 
 ## Docs
 
-The docs are MkDocs (Material), published to Read the Docs. API reference pages are generated from docstrings at build time by `docs/gen_ref_pages.py`.
+The docs are Great Docs (Quarto), published to GitHub Pages. The API reference is generated from docstrings at build time; the CLI reference comes from the Click app.
 
 ```bash
 uv sync --group docs
-uv run mkdocs serve
+uv run great-docs preview
 ```
 
 ## Build and smoke-test the wheel
