@@ -57,6 +57,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
+      - name: Fix color-swatch loader (upstream great-docs bug)
+        run: uv run python docs/scripts/fix_color_swatch.py
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
