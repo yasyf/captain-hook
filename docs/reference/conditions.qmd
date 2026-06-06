@@ -1,4 +1,6 @@
-# Conditions Cheatsheet
+---
+title: "Conditions Cheatsheet"
+---
 
 Quick reference for all condition types. Use in `only_if` (all must match) or `skip_if` (any skips the hook).
 

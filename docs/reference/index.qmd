@@ -1,0 +1,10 @@
+---
+title: "Reference"
+---
+
+Technical reference for the CLI, conditions, and full API surface.
+
+- [CLI](../../reference/cli/index.qmd) — All subcommands and options
+- [Conditions Cheatsheet](conditions.qmd) — Quick-reference card for all 12 condition types
+- [API Reference](../../reference/index.qmd) — Auto-generated from source
+- [Changelog](../../changelog.qmd) — Release history
