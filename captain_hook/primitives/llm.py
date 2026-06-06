@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from captain_hook import state
 from captain_hook.app import on
 from captain_hook.primitives.audit import session_id_for
-from captain_hook.prompt import Prompt, Prompt
+from captain_hook.prompt import Prompt
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import (
     Action,
