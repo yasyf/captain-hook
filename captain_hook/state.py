@@ -60,7 +60,7 @@ RESOURCES = NlpResources()
 
 
 class HookState(BaseModel):
-    """Per-hook persistent state tracked across events in a session (currently just ``fire_count`` for ``max_fires``)."""
+    """Per-hook persistent state tracked across events in a session (``fire_count`` for ``max_fires``)."""
 
     fire_count: int = 0
 

@@ -88,7 +88,7 @@ def parse_content(raw: list[RawBlock] | str, *, is_async: bool = False) -> list[
 
 @dataclass(frozen=True, kw_only=True)
 class ToolUse:
-    """A tool invocation extracted from the transcript, with typed input parsing, file/command access, and result linkage."""
+    """A transcript tool invocation with typed input parsing, file/command access, and result linkage."""
 
     name: str
     raw_input: RawDict = field(default_factory=lambda: {})

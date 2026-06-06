@@ -354,7 +354,7 @@ class HookResult:
         return cls(action=action, message=dedent(message).strip() if message else None)
 
 
-from captain_hook.testing.types import InlineTests as InlineTests
+from captain_hook.testing.types import InlineTests as InlineTests  # noqa: E402
 
 
 @dataclass(frozen=True, kw_only=True)

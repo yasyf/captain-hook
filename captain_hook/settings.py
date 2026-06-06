@@ -37,7 +37,9 @@ DEFAULT_LOG_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
 
 
 def resolve_state_dir() -> Path:
-    return Path(os.environ.get("CAPTAIN_HOOK_STATE_DIR") or os.environ.get("CLAUDE_HOOKS_STATE_DIR") or DEFAULT_STATE_DIR)
+    return Path(
+        os.environ.get("CAPTAIN_HOOK_STATE_DIR") or os.environ.get("CLAUDE_HOOKS_STATE_DIR") or DEFAULT_STATE_DIR
+    )
 
 
 def resolve_log_dir() -> Path:
@@ -116,5 +118,5 @@ class AutoConf:
 
 
 def build_settings(module: types.ModuleType, prefix: str = "HOOKS_") -> BaseSettings:
-    """Build a settings instance from a conf module, using an explicit ``HooksSettings`` subclass or auto-inferring fields."""
+    """Build settings from a conf module via an explicit ``HooksSettings`` subclass or auto-inferred fields."""
     return AutoConf.build_settings(module, prefix)

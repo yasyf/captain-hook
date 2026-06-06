@@ -13,6 +13,7 @@ from captain_hook import state
 from captain_hook.app import on
 from captain_hook.primitives.audit import session_id_for
 from captain_hook.prompt import Prompt
+from captain_hook.signals import extract_signal_context, resolve_signals, transcript_texts
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import (
     Action,
@@ -30,8 +31,6 @@ if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
     from captain_hook.llm import TModel, TSpecialty
     from captain_hook.signals.nlp import NlpSignal
-
-from captain_hook.signals import extract_signal_context, resolve_signals, transcript_texts
 
 
 class GateVerdict(BaseModel):

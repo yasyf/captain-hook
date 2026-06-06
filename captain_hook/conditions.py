@@ -109,7 +109,9 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
         case UsedSkill(name, subagents):
             return bool(evt.ctx.transcript) and evt.ctx.transcript.has_skill(*name.split("|"), subagents=subagents)
         case ReadFile(patterns, subagents):
-            return bool(evt.ctx.transcript) and any(evt.ctx.transcript.has_read(p, subagents=subagents) for p in patterns)
+            return bool(evt.ctx.transcript) and any(
+                evt.ctx.transcript.has_read(p, subagents=subagents) for p in patterns
+            )
         case TouchedFile(patterns, subagents):
             return bool(evt.ctx.transcript) and evt.ctx.transcript.has_edit_to(*patterns, subagents=subagents)
         case RanCommand(pattern, subagents):

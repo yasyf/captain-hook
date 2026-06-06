@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class HookContext:
-    """Runtime context injected into every hook event, providing session state, transcript, settings, and LLM/CLI helpers."""
+    """Runtime context injected into every hook event: session state, transcript, settings, and LLM/CLI helpers."""
 
     session: SessionStore
     transcript: Transcript
