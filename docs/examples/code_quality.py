@@ -8,7 +8,6 @@ from captain_hook import (
     Allow,
     Content,
     Event,
-    InlineTests,
     Input,
     Signal,
     Signals,
@@ -21,17 +20,15 @@ from captain_hook import (
     nudge,
 )
 
-PRINT_TESTS: InlineTests = {
-    Input(tool="Edit", file="src/app.py", content='import sys\nprint("debug")\n'): Warn(pattern="logger"),
-    Input(tool="Edit", file="src/app.py", content="logger.info('ok')\n"): Allow(),
-}
-
 hook(
     Event.PostToolUse,
     only_if=[SourceEdits(lang="py"), Content(r"^\s*print\(")],
     skip_if=[TestFile()],
     message="Use the project logger instead of print(). See docs/logging.md.",
-    tests=PRINT_TESTS,
+    tests={
+        Input(tool="Edit", file="src/app.py", content='import sys\nprint("debug")\n'): Warn(pattern="logger"),
+        Input(tool="Edit", file="src/app.py", content="logger.info('ok')\n"): Allow(),
+    },
 )
 
 
