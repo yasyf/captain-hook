@@ -80,6 +80,7 @@ reference:
       - gate
       - nudge
       - lint
+      - diff_lint
       - block_command
       - warn_command
       - llm_gate
@@ -136,6 +137,9 @@ reference:
     desc: Path matching and AST-level command inspection.
     contents:
       - File
+      - file.PathMatcher
+      - file.categorize_files
+      - utils.read_json
       - Command
       - CommandLine
       - Redirect

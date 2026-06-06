@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from captain_hook import file as file
 from captain_hook import style as style
+from captain_hook import utils as utils
 from captain_hook.app import hook as hook
 from captain_hook.app import on as on
 from captain_hook.app import register as register
@@ -36,6 +38,7 @@ from captain_hook.primitives import warn_command as warn_command
 # and an alias targeting captain_hook.primitives.<name> resolves to the
 # module under static analysis (griffe), shadowing the function.
 from captain_hook.primitives.audit import audit as audit
+from captain_hook.primitives.lint import diff_lint as diff_lint
 from captain_hook.primitives.lint import lint as lint
 from captain_hook.primitives.nudge import nudge as nudge
 from captain_hook.primitives.workflow import Artifact as Artifact
