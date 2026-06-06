@@ -430,7 +430,7 @@ class TestPromptCheckLlmNone:
 class TestPromptCheckReasoning:
     def test_prompt_check_includes_reasoning(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
-        from captain_hook.prompt import PromptMessage
+        from captain_hook.prompt import Prompt
 
         ctx = make_ctx(tmp_path, texts=["I decided to do X because Y"], call_llm_return=PromptCheckVerdict(action="block", reason="bad reasoning"))
 
@@ -446,7 +446,7 @@ class TestPromptCheckReasoning:
         ctx.call_llm.assert_called_once()
         call_args = ctx.call_llm.call_args
         prompt_arg = call_args[0][0]
-        assert isinstance(prompt_arg, PromptMessage)
+        assert isinstance(prompt_arg, Prompt)
         assert "agent_reasoning" in str(prompt_arg)
         assert "I decided to do X because Y" in str(prompt_arg)
 
@@ -454,7 +454,7 @@ class TestPromptCheckReasoning:
 class TestPromptBuilderUsed:
     def test_llm_gate_uses_prompt_builder(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import GateVerdict
-        from captain_hook.prompt import PromptMessage
+        from captain_hook.prompt import Prompt
 
         ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=GateVerdict(block=True, reasoning="bad"))
 
@@ -465,14 +465,14 @@ class TestPromptBuilderUsed:
         ctx.call_llm.assert_called_once()
         call_args = ctx.call_llm.call_args
         prompt_arg = call_args[0][0] if call_args[0] else ""
-        assert isinstance(prompt_arg, PromptMessage)
+        assert isinstance(prompt_arg, Prompt)
         rendered = str(prompt_arg)
         assert "Check this" in rendered
         assert "<context>" in rendered
 
     def test_prompt_check_uses_prompt_builder(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
-        from captain_hook.prompt import PromptMessage
+        from captain_hook.prompt import Prompt
 
         ctx = make_ctx(tmp_path, call_llm_return=PromptCheckVerdict(action="ok", reason="fine"))
 
@@ -481,7 +481,7 @@ class TestPromptBuilderUsed:
 
         ctx.call_llm.assert_called_once()
         prompt_arg = ctx.call_llm.call_args[0][0]
-        assert isinstance(prompt_arg, PromptMessage)
+        assert isinstance(prompt_arg, Prompt)
 
 
 class TestLlmEvaluateBothSignalsAndWhen:
@@ -513,7 +513,7 @@ class TestLlmNudgeDefaultAsync:
 class TestLlmBracesInPrompt:
     def test_llm_gate_passes_prompt_message_not_str(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import GateVerdict
-        from captain_hook.prompt import PromptMessage
+        from captain_hook.prompt import Prompt
 
         verdict = GateVerdict(block=True, reasoning="bad")
         ctx = make_ctx(tmp_path, texts=['{"key": "value"}'], call_llm_return=verdict)
@@ -524,12 +524,12 @@ class TestLlmBracesInPrompt:
 
         ctx.call_llm.assert_called_once()
         prompt_arg = ctx.call_llm.call_args[0][0]
-        assert isinstance(prompt_arg, PromptMessage)
+        assert isinstance(prompt_arg, Prompt)
         assert '{"key": "value"}' in str(prompt_arg)
 
     def test_llm_nudge_passes_prompt_message_not_str(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import NudgeVerdict
-        from captain_hook.prompt import PromptMessage
+        from captain_hook.prompt import Prompt
 
         verdict = NudgeVerdict(fire=True, reasoning="issue")
         ctx = make_ctx(tmp_path, texts=["def foo(): return {x: 1}"], call_llm_return=verdict)
@@ -540,7 +540,7 @@ class TestLlmBracesInPrompt:
 
         ctx.call_llm.assert_called_once()
         prompt_arg = ctx.call_llm.call_args[0][0]
-        assert isinstance(prompt_arg, PromptMessage)
+        assert isinstance(prompt_arg, Prompt)
         assert "{x: 1}" in str(prompt_arg)
 
 

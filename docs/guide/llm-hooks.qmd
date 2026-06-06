@@ -210,7 +210,7 @@ def security_review(evt):
 
 ## Prompt builder
 
-The `Prompt` class (aliased from `PromptMessage`) provides a fluent API for constructing structured prompts with system text, XML-wrapped context sections, and questions.
+The `Prompt` class (aliased from `Prompt`) provides a fluent API for constructing structured prompts with system text, XML-wrapped context sections, and questions.
 
 ```python
 from captain_hook import Prompt

@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from captain_hook import state
 from captain_hook.app import on
 from captain_hook.primitives.audit import session_id_for
-from captain_hook.prompt import Prompt, PromptMessage
+from captain_hook.prompt import Prompt, Prompt
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import (
     Action,
@@ -335,7 +335,7 @@ def record_prompt_check_failure(
 
 def prompt_check(
     evt: BaseHookEvent,
-    template: str | PromptMessage,
+    template: str | Prompt,
     fmt: dict[str, Any] | None = None,
     *,
     prefix: str,
@@ -349,7 +349,7 @@ def prompt_check(
     if include_reasoning:
         reasoning = evt.ctx.t.recent(50).assistant_text() if hasattr(evt.ctx.t, "recent") else ""
 
-    base = template if isinstance(template, PromptMessage) else Prompt().system(template.format(**(fmt or {})))
+    base = template if isinstance(template, Prompt) else Prompt().system(template.format(**(fmt or {})))
     built = base.context("agent_reasoning", reasoning or None)
     prompt_str = str(built)
 

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 
 from captain_hook.llm import CodexBackend, LlmBackend, LlmBackends, TModel, TSpecialty
-from captain_hook.prompt import PromptMessage
+from captain_hook.prompt import Prompt
 from captain_hook.session import SessionStore
 
 if TYPE_CHECKING:
@@ -119,7 +119,7 @@ class HookContext:
 
     def call_llm(
         self,
-        template: str | PromptMessage,
+        template: str | Prompt,
         *args: Any,
         specialty: TSpecialty = "general",
         model: TModel = "small",
@@ -129,7 +129,7 @@ class HookContext:
         response_model: type[BaseModel] | None = None,
         **kwargs: Any,
     ) -> str | BaseModel:
-        if isinstance(template, PromptMessage):
+        if isinstance(template, Prompt):
             prompt = str(template)
             if transcript:
                 prompt = f"{self.transcript}\n\n<task>\n{prompt}\n</task>"

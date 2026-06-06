@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import captain_hook.prompt as prompt_module
-from captain_hook.prompt import Prompt, PromptMessage
+from captain_hook.prompt import Prompt, Prompt
 
 
 class TestPromptBasicConstruction:
@@ -19,7 +19,7 @@ class TestPromptBasicConstruction:
 
     def test_prompt_is_prompt_message(self) -> None:
         p = Prompt()
-        assert isinstance(p, PromptMessage)
+        assert isinstance(p, Prompt)
 
 
 class TestPromptStrRendering:
@@ -257,7 +257,7 @@ class TestPromptLoad:
 
     def test_load_returns_prompt_message(self, tmp_path: Path) -> None:
         (tmp_path / "p.md").write_text("body")
-        assert isinstance(Prompt.load("p", base=tmp_path), PromptMessage)
+        assert isinstance(Prompt.load("p", base=tmp_path), Prompt)
 
     def test_framework_fallback_when_first_dir_misses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -21,7 +21,7 @@ def _caller_dir() -> Path:
 
 
 @dataclass(frozen=True, kw_only=True)
-class PromptMessage:
+class Prompt:
     """Fluent builder for structured LLM prompts with system text, XML context sections, and a question.
 
     Chain ``.system()``, ``.context(tag, content)``, and ``.ask()`` to build prompts.
@@ -32,38 +32,38 @@ class PromptMessage:
     contexts: tuple[tuple[str, str], ...] = ()
     ask_text: str = ""
 
-    def system(self, text: str) -> PromptMessage:
-        return PromptMessage(
+    def system(self, text: str) -> Prompt:
+        return Prompt(
             system_text=dedent_text(text),
             contexts=self.contexts,
             ask_text=self.ask_text,
         )
 
-    def context(self, tag: str, content: str | None) -> PromptMessage:
+    def context(self, tag: str, content: str | None) -> Prompt:
         if content is None or not (normalized := dedent_text(content)):
             return self
-        return PromptMessage(
+        return Prompt(
             system_text=self.system_text,
             contexts=(*self.contexts, (tag, normalized)),
             ask_text=self.ask_text,
         )
 
-    def ask(self, text: str) -> PromptMessage:
-        return PromptMessage(
+    def ask(self, text: str) -> Prompt:
+        return Prompt(
             system_text=self.system_text,
             contexts=self.contexts,
             ask_text=dedent_text(text),
         )
 
     @classmethod
-    def from_template(cls, text: str, **vars: object) -> PromptMessage:
+    def from_template(cls, text: str, **vars: object) -> Prompt:
         try:
             return cls(system_text=textwrap.dedent(text).strip().format_map(vars))
         except KeyError as exc:
             raise KeyError(f"template variable {exc.args[0]!r} not supplied") from exc
 
     @classmethod
-    def load(cls, name: str, *, base: str | Path | None = None, **vars: object) -> PromptMessage:
+    def load(cls, name: str, *, base: str | Path | None = None, **vars: object) -> Prompt:
         """Load a prompt from a ``.md`` file and render it via :meth:`from_template`.
 
         Resolution searches directories in order, returning the first existing file:
@@ -77,7 +77,7 @@ class PromptMessage:
             **vars: Template variables substituted into the file via ``str.format_map``.
 
         Returns:
-            A :class:`PromptMessage` whose system text is the rendered file contents.
+            A :class:`Prompt` whose system text is the rendered file contents.
 
         Raises:
             FileNotFoundError: If no matching file exists in any searched directory.
@@ -100,4 +100,3 @@ class PromptMessage:
         return "\n\n".join(parts)
 
 
-Prompt = PromptMessage
