@@ -1,4 +1,6 @@
-# Installation
+---
+title: "Installation"
+---
 
 ## Requirements
 
@@ -74,7 +76,7 @@ You don't need this exact layout — `capt-hook --hooks <any-dir> test` works on
 - **funcy** — functional utilities
 - **orjsonl** — fast JSONL reading for transcripts
 
-The spaCy English model is **not** auto-downloaded — see [Troubleshooting](../guide/troubleshooting.md#runtimeerror-spacy-model-is-not-installed).
+The spaCy English model is **not** auto-downloaded — see [Troubleshooting](../guide/troubleshooting.qmd#runtimeerror-spacy-model-is-not-installed).
 
 ## CI integration
 

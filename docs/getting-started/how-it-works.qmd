@@ -1,4 +1,6 @@
-# How It Works
+---
+title: "How It Works"
+---
 
 This page explains the full lifecycle of a captain-hook hook --- from the moment Claude Code fires an event to the JSON response that controls its behavior.
 
@@ -6,7 +8,7 @@ This page explains the full lifecycle of a captain-hook hook --- from the moment
 
 Claude Code processes user input in a loop: parse the prompt, call tools, read results, decide whether to continue or stop. Hooks intercept this loop at specific points.
 
-```mermaid
+```{mermaid}
 flowchart TD
     A[User submits prompt] -->|UserPromptSubmit| B[Agent processes prompt]
     B --> C{Needs a tool?}
@@ -138,8 +140,9 @@ The result is formatted as JSON that Claude Code understands:
 
 Claude Code reads the JSON from stdout. The `permissionDecision: "deny"` tells it to skip the tool call. Claude sees the reason message and adjusts its plan accordingly.
 
-!!! note "Block vs. Warn"
-    If `block=False`, the action would be `Action.warn` instead. The output would use `additionalContext` instead of `permissionDecision: "deny"`, and Claude would see the message as advice rather than a hard stop.
+::: {.callout-note title="Block vs. Warn"}
+If `block=False`, the action would be `Action.warn` instead. The output would use `additionalContext` instead of `permissionDecision: "deny"`, and Claude would see the message as advice rather than a hard stop.
+:::
 
 ## Event Quick Reference
 
@@ -155,11 +158,12 @@ Claude Code reads the JSON from stdout. The `permissionDecision: "deny"` tells i
 | `PreCompact` | Before context compaction | `PreCompactEvent` | `trigger`, `custom_instructions` | Add compaction instructions |
 | `Notification` | System notification | `NotificationEvent` | `message`, `title`, `notification_type` | Custom notification handling |
 
-!!! tip "Combining events"
-    Events are flags --- combine them with `|` to register one hook for multiple events:
-    ```python
-    hook(Event.Stop | Event.SubagentStop, message="Review before finishing", block=True)
-    ```
+::: {.callout-tip title="Combining events"}
+Events are flags --- combine them with `|` to register one hook for multiple events:
+```python
+hook(Event.Stop | Event.SubagentStop, message="Review before finishing", block=True)
+```
+:::
 
 ## Three Registration Patterns
 
@@ -203,5 +207,6 @@ def check_sudo(evt):
 
 Best for: dynamic logic, conditional messages, state inspection, or anything the declarative API cannot express.
 
-!!! warning "Choose the simplest pattern"
-    If `hook()` or a primitive can express your intent, prefer it over `@on()`. Declarative hooks are easier to test, easier to read, and less likely to break.
+::: {.callout-warning title="Choose the simplest pattern"}
+If `hook()` or a primitive can express your intent, prefer it over `@on()`. Declarative hooks are easier to test, easier to read, and less likely to break.
+:::

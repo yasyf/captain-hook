@@ -1,0 +1,33 @@
+---
+title: "Getting Started"
+---
+
+New to captain-hook? Start here.
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+{{< icon download >}} **Installation**
+
+Install captain-hook and set up your project in under a minute.
+
+[{{< icon arrow-right >}} Install](installation.qmd)
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+{{< icon rocket >}} **Quickstart**
+
+Write your first hook in 5 minutes — block a dangerous command, lint code, or nudge the agent.
+
+[{{< icon arrow-right >}} Quickstart](quickstart.qmd)
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+{{< icon cog >}} **How It Works**
+
+Understand the hook lifecycle, dispatch pipeline, and how hooks produce actions.
+
+[{{< icon arrow-right >}} How It Works](how-it-works.qmd)
+:::
+
+:::

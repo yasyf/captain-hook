@@ -1,4 +1,6 @@
-# Quickstart
+---
+title: "Quickstart"
+---
 
 Write your first hook in under 5 minutes.
 
@@ -115,8 +117,8 @@ Output:
 
 ## Next steps
 
-- [Patterns](../guide/patterns.md) — real-world hooks from a production hooks directory
-- [How It Works](how-it-works.md) — understand the lifecycle and dispatch pipeline
-- [Primitives](../guide/primitives.md) — explore all built-in hook primitives
-- [Conditions](../guide/conditions.md) — filter when hooks fire
-- [Testing](../guide/testing.md) — test your hooks with inline tests and mock events
+- [Patterns](../guide/patterns.qmd) — real-world hooks from a production hooks directory
+- [How It Works](how-it-works.qmd) — understand the lifecycle and dispatch pipeline
+- [Primitives](../guide/primitives.qmd) — explore all built-in hook primitives
+- [Conditions](../guide/conditions.qmd) — filter when hooks fire
+- [Testing](../guide/testing.qmd) — test your hooks with inline tests and mock events
