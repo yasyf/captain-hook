@@ -4,6 +4,6 @@ title: "Code Quality"
 
 The agent keeps slipping `print()` into production modules instead of using your logger, and bare `except:` clauses show up under deadline pressure. You want layered feedback: a fast advisory on every edit, a structural lint that finds patterns regex cannot, a behavioral nudge when the agent's narration starts repeating the antipattern, and a final LLM gate for ambiguous cases.
 
-{{< include _includes/code_quality.qmd >}}
+<!-- gd-embed: code_quality.py -->
 
 **What to learn:** The same problem expressed at four escalating tiers. `hook(... Content(...))` is a fast regex check on the edit; `lint(...)` parses the file's AST so you can flag structures (bare except) that don't show up as plain text; `nudge(... signals=...)` watches transcript narration to catch the agent talking about the antipattern; `llm_gate(...)` lets a model adjudicate the ambiguous "is this really a prod print?" cases. Combine tiers when speed-vs-precision tradeoffs matter.
