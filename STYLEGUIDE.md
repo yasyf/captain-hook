@@ -20,6 +20,8 @@ The concrete style rules for `captain_hook/`. Target Python 3.12+.
    only the code you touch.
 7. **Match surrounding code.** Follow this guide first, then the file you're in,
    then the module. If surrounding code violates this guide, fix it.
+8. **Flat over nested.** Early returns and flat control flow. Nesting deeper than
+   three levels is a smell.
 
 ## Functional Style
 
@@ -140,6 +142,60 @@ match Status(is_fresh, scores.get(id(tc))):
 Use `if/elif` when the branches turn on meaningful boolean flags with their own
 names. Don't build a tuple just to pattern-match on it.
 
+## Functions & Methods
+
+Options and flags go keyword-only, after `*`.
+
+```python
+def run(self, events: Sequence[Event], *, timeout: int = 30, strict: bool = True) -> Result: ...
+```
+
+Use `@overload` when the return type depends on the argument shape.
+
+```python
+@overload
+def __getitem__(self, index: int) -> Task: ...
+@overload
+def __getitem__(self, index: slice) -> tuple[Task, ...]: ...
+def __getitem__(self, index: int | slice) -> Task | tuple[Task, ...]:
+    return self.tasks[index]
+```
+
+Mutable defaults are forbidden in function signatures too: take `list[T] | None = None`
+and normalize with `items = items or []` at the top of the body.
+
+Access typed attributes directly instead of routing through helpers that may return
+None; a helper that can fail forces every caller into a guard.
+
+```python
+# Good
+await tracker.update(self.request.id, stage)
+
+# Bad — helper that may return None forces a guard
+if rid := report_id():
+    await tracker.update(rid, stage)
+```
+
+## API Design
+
+Accept what callers naturally have. If callers must extract or transform data
+before calling, take the parent object and extract internally.
+
+```python
+# Good — caller passes what it holds
+def record_usage(request_id: RequestId, usage: Usage) -> None: ...
+
+# Bad — caller dismembers the object first
+def record_usage(request_id: str, total_tokens: int, total_cost: float) -> None: ...
+```
+
+Keep parameters minimal. No speculative flags; add a parameter when there is a
+demonstrated need, not just in case.
+
+Types reflect user concepts, not implementation internals. A public signature built
+from internal metadata types leaks the implementation; expose the objects users
+think in.
+
 ## Error Handling
 
 Keep `try` blocks minimal. Only the line that can throw belongs inside.
@@ -183,6 +239,25 @@ attribute.
 
 Frozen dataclasses for immutable and config data. Every mutable default needs a
 factory such as `field(default_factory=list)`; a bare `[]` or `{}` is a bug.
+
+Each persistence operation gets exactly one codepath; two call sites writing the
+same record will diverge. Side-effects such as tracking, logging, and metrics react
+to events in listeners instead of interleaving with business logic.
+
+```python
+# Bad — two codepaths write the same record, tracking inlined
+async def event_loop(self):
+    await self.tracker.update(self.id, stage)
+    await store.put(self.id, response)
+
+async def drain_queue(self):
+    await store.put(self.id, response)
+
+# Good — one write location; a listener reacts to the event
+async def persist(self, response):
+    await store.put(self.id, response)
+    self.emit(ResponsePersisted(self.id, response))
+```
 
 ## Comments & Docstrings
 
