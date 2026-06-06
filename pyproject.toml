@@ -48,7 +48,7 @@ capt-hook = "captain_hook.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/yasyf/captain-hook"
-Documentation = "https://captain-hook.readthedocs.io"
+Documentation = "https://yasyf.github.io/captain-hook/"
 Repository = "https://github.com/yasyf/captain-hook"
 Issues = "https://github.com/yasyf/captain-hook/issues"
 Changelog = "https://github.com/yasyf/captain-hook/blob/main/CHANGELOG.md"
