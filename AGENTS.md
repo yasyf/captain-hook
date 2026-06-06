@@ -54,6 +54,26 @@ Independent tasks dispatch concurrently. Two agents that could run at the same t
 
 Single-step exception: one task, no parallel sibling, no follow-on → one subagent call is fine.
 
+## Code Search
+
+`semble` is wired up via `.mcp.json` (project-scoped MCP server, runs via `uvx` — nothing to install). It's the default tool for any "find code by intent or symbol" question:
+
+1. **"How do we do X?" / "Where is the code that does Y?"** → `semble.search("...")`
+2. **"Where is `Foo` defined?"** → `semble.search("Foo")` (or `search("class Foo")` for a relevance boost)
+3. **"Show me other code like this"** → `semble.find_related` on a prior hit
+4. **Cross-repo lookup** → pass an `https://...git` URL as `repo`
+
+`repo` defaults to the current project root for local searches. Semble is purely semantic — it ranks by meaning, not substring, so it won't find literal strings that don't appear in nearby code.
+
+Reach for your **LSP** when the answer must be *exhaustive* or *structural*:
+
+1. **"Who calls X?" / "find every reference"** → `findReferences` / `incomingCalls`
+2. **"Rename X → Y"** → `findReferences` first to enumerate every call site
+3. **"What's the type of X?"** → `hover`
+4. **"What implements Protocol P?"** → `goToImplementation`
+
+Reach for **`Grep`** only for material neither tool indexes: literal *content* of strings/comments/docstrings (error messages, hard-coded URLs, env-var names, TODOs) and non-source files (logs, JSON, YAML, fixtures). File-pattern questions ("all `*.json` under `src/`") go through `Glob`.
+
 ## Python Style
 
 Target Python 3.12+. Run `uv sync --extra dev`, `uv run pytest`, and `uv build`.
@@ -69,6 +89,8 @@ Target Python 3.12+. Run `uv sync --extra dev`, `uv run pytest`, and `uv build`.
 **Match surrounding code.** Follow the conventions of the file you're in, then the module.
 
 **No defensive coding.** No fallbacks, shims, or backwards-compat layers; no guards against impossible states. If unused, delete it. Crash on the unexpected.
+
+**Search before writing.** Before creating a helper, query the codebase via `semble.search` (intent or symbol queries both work). Sibling modules and base classes win over re-implementation.
 
 **Code stewardship.** When you touch a file, fix nearby bugs, style violations, and broken tests; don't wave them off as pre-existing or out of scope. Trivial type-checker noise is the exception (see § Python Style).
 
