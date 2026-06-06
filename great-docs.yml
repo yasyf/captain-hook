@@ -47,6 +47,7 @@ sections:
 
 pre_render:
   - docs/scripts/embed_examples.py
+  - docs/scripts/embed_skills.py
   - docs/scripts/plain_reference_titles.py
 
 cli:

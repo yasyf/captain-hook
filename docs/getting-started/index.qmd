@@ -30,4 +30,12 @@ Understand the hook lifecycle, dispatch pipeline, and how hooks produce actions.
 [{{< icon arrow-right >}} How It Works](how-it-works.qmd)
 :::
 
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+{{< icon stars >}} **Agent Skills**
+
+Let Claude set up capt-hook for you — bootstrap hooks from your repo's conventions or translate a style guide into enforced rules.
+
+[{{< icon arrow-right >}} Agent Skills](skills.qmd)
+:::
+
 :::

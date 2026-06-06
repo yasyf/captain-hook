@@ -55,6 +55,15 @@ capt-hook generate-settings > .claude/settings.local.json
 
 The next time Claude tries `git stash`, captain-hook returns a deny with your reason and hint.
 
+## Agent skills & plugin
+
+Don't want to write hooks by hand? capt-hook ships two [Agent Skills](https://yasyf.github.io/captain-hook/docs/getting-started/skills.html) — `bootstrapping-hooks` mines your repo's docs, CI, and git history into proposed gates and nudges; `translating-styleguides` turns a STYLEGUIDE.md into enforced rules. `uvx capt-hook init` installs them into `.claude/skills/`, or get them as a plugin:
+
+```
+/plugin marketplace add yasyf/captain-hook
+/plugin install captain-hook@captain-hook
+```
+
 ## What problems does this solve?
 
 - **Block dangerous tool calls** before they execute (`PreToolUse`) — force-push, package-manager footguns, raw `rm -rf`.

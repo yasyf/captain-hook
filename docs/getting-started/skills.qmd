@@ -1,0 +1,46 @@
+---
+title: "Agent Skills"
+---
+
+capt-hook bundles two Claude Code [Agent Skills](https://code.claude.com/docs/en/skills) that automate adoption: one surveys a repository and sets up hooks from its conventions, the other translates a prose style guide into enforced rules. Both ship in the PyPI wheel and as a Claude Code plugin, from the same source under `captain_hook/skills/`.
+
+- **`bootstrapping-hooks`** — surveys your repo's docs, CI workflows, lint configs, and git history; proposes categorized gates and nudges for your approval; then writes `.claude/hooks/*.py` with inline tests, verifies them with `capt-hook test`, and wires `.claude/settings.local.json`.
+- **`translating-styleguides`** — turns a STYLEGUIDE.md (or the style sections of CONTRIBUTING/AGENTS/CLAUDE.md) into `StyleRule` classes, custom `check()` logic, or LLM hooks — tiered by what each rule needs — and reports anything it can't enforce.
+
+## Install as project skills
+
+```bash
+uvx capt-hook init                  # scaffolds hooks AND installs the skills
+uvx capt-hook skills install        # skills only; --force refreshes existing copies
+```
+
+Either command copies the skills into `.claude/skills/`, where Claude Code picks them up after you accept workspace trust. Invoke them as `/bootstrapping-hooks` and `/translating-styleguides`, or just ask ("set up hooks for this repo", "enforce our style guide").
+
+In an interactive terminal, `init` finishes by offering to launch Claude with `/bootstrapping-hooks` right away — accept and the survey-propose-write loop starts immediately in your repo. Accepting also registers the captain-hook plugin marketplace in `.claude/settings.local.json`, so the skills track the repository and update automatically.
+
+Existing skill directories are never overwritten on re-run; use `capt-hook skills install --force` to replace them wholesale after upgrading capt-hook.
+
+## Install as a plugin
+
+```
+/plugin marketplace add yasyf/captain-hook
+/plugin install captain-hook@captain-hook
+```
+
+Plugin skills are namespaced (`/captain-hook:bootstrapping-hooks`) and track the repository — each commit is treated as a new version, so updates arrive without a PyPI release.
+
+## What's inside
+
+::: {.callout-note collapse="true"}
+## bootstrapping-hooks/SKILL.md
+
+<!-- gd-embed-skill: bootstrapping-hooks -->
+:::
+
+::: {.callout-note collapse="true"}
+## translating-styleguides/SKILL.md
+
+<!-- gd-embed-skill: translating-styleguides -->
+:::
+
+Each skill directory also carries `references/` files (API tables, a pattern catalog, the matcher reference, and a tier-classification rubric) that the skill loads on demand.
