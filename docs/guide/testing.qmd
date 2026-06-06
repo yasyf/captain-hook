@@ -14,7 +14,7 @@ block_command(
     ["git", "stash"],
     reason="Use jj instead",
     tests={
-        Input(command="git stash"): Block("jj"),
+        Input(command="git stash"): Block(pattern="jj"),
         Input(command="git status"): Allow(),
     },
 )
@@ -130,7 +130,8 @@ def test_ls_allowed():
 
 ## TranscriptFixture
 
-For hooks that depend on transcript context, use `TranscriptFixture`:
+For hooks that depend on transcript context, use `TranscriptFixture`. The message shape is
+Claude Code JSONL: `{"type": "assistant", "message": {"content": [<tool_use blocks>]}}`:
 
 ```python
 from captain_hook import Input, Block, Allow, Warn, TranscriptFixture, nudge, TouchedFile, RanCommand
@@ -141,10 +142,10 @@ nudge(
     skip_if=[RanCommand(r"pytest")],
     tests={
         Input(command="echo hi", transcript=TranscriptFixture(messages=[
-            {"role": "assistant", "content": [
+            {"type": "assistant", "message": {"content": [
                 {"type": "tool_use", "name": "Edit", "id": "t1",
                  "input": {"file_path": "src/main.py", "old_string": "a", "new_string": "b"}},
-            ]},
+            ]}},
         ])): Warn(),
     },
 )

@@ -31,9 +31,9 @@ llm_gate(
     message=lambda r: f"Excuse detected: {r.reasoning}",
     signals=Signals(
         patterns=[
-            Signal(r"external.*service", weight=2),
-            Signal(r"impossible|cannot be done", weight=2),
-            Signal(r"investigating", weight=-3),
+            Signal(pattern=r"external.*service", weight=2),
+            Signal(pattern=r"impossible|cannot be done", weight=2),
+            Signal(pattern=r"investigating", weight=-3),
         ],
         threshold=2,
         window=15,
@@ -89,9 +89,9 @@ llm_nudge(
     message="Observe, don't infer -- read the actual code or check traces before making claims.",
     signals=Signals(
         patterns=[
-            Signal(r"should contain", weight=2),
-            Signal(r"probably|I think", weight=1),
-            Signal(r"let me (read|check|look)", weight=-2),
+            Signal(pattern=r"should contain", weight=2),
+            Signal(pattern=r"probably|I think", weight=1),
+            Signal(pattern=r"let me (read|check|look)", weight=-2),
         ],
         threshold=3,
         window=10,
@@ -180,7 +180,7 @@ def security_review(evt):
         "network calls, and credential exposure.",
         SecurityVerdict,
         signals=Signals(
-            patterns=[Signal(r"\.env|credentials|secret", weight=3)],
+            patterns=[Signal(pattern=r"\.env|credentials|secret", weight=3)],
             threshold=2,
         ),
     )
