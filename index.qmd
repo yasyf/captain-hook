@@ -1,0 +1,86 @@
+---
+title: "captain-hook"
+toc: false
+body-classes: "gd-homepage"
+---
+
+```python
+from captain_hook import block_command
+
+block_command(["git", "stash"], reason="Use jj instead", hint="Run `jj shelve`")
+```
+
+That's it. One line blocks `git stash` across your entire project.
+
+---
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+{{< icon shield-check >}} **Declarative by default**
+
+Most hooks are a single function call. No classes, no boilerplate, no YAML. Define what to block, warn, or enforce — captain-hook handles the rest.
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+{{< icon filter >}} **Composable conditions**
+
+Filter hooks with typed conditions: match tools, file paths, commands, transcript history, and more. Combine with `only_if` / `skip_if` for precise targeting.
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+{{< icon brain >}} **LLM-powered evaluation**
+
+Gate or nudge with LLM verdicts. Signal scoring detects patterns in transcript text, then an LLM decides whether to intervene.
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+{{< icon test-tube >}} **Inline testing**
+
+Test hooks where you define them. `Input(command="git stash")` / `Block("jj")` — run with `capt-hook test`.
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+{{< icon list-checks >}} **Multi-step workflows**
+
+Enforce checklists before the agent stops. Tests, linting, artifacts — each step must pass before the agent can proceed.
+:::
+
+::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
+{{< icon message-square-text >}} **Rich transcript API**
+
+Query conversation history with a typed API. Filter tool uses, extract commands, check what files were edited or read.
+:::
+
+:::
+
+---
+
+## Get started
+
+::: {.panel-tabset}
+
+## Install
+
+```bash
+uv add capt-hook
+```
+
+## Scaffold
+
+```bash
+capt-hook init
+```
+
+## Write a hook
+
+```python
+from captain_hook import gate, RanCommand
+
+gate("Run tests before stopping", skip_if=[RanCommand(r"pytest")])
+```
+
+:::
+
+[{{< icon arrow-right >}} Installation](docs/getting-started/installation.qmd){.btn .btn-primary}
+[{{< icon arrow-right >}} Quickstart](docs/getting-started/quickstart.qmd){.btn .btn-outline-primary}
