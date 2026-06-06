@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from captain_hook.loader import discover_hooks
 from captain_hook.app import _state, get_matching_hooks
 from captain_hook.dispatch import dispatch
+from captain_hook.loader import discover_hooks
 from captain_hook.testing.helpers import mock_stop_event, mock_tool_event, mock_user_prompt_event
 from captain_hook.tests.helpers import run_cli
 from captain_hook.types import Event
@@ -50,13 +50,13 @@ class TestInit:
         assert "audit(" in text
         assert "prompt_check(" in text
         assert "Prompt.from_template" in text
-        assert "InlineTests" in text
+        assert "tests={" in text
 
     def test_init_prints_next_steps(self, tmp_path: Path) -> None:
         result = run_cli("init", root_dir=str(tmp_path))
         assert result.returncode == 0
         assert "Next:" in result.stdout
-        assert "quickstart.md" in result.stdout
+        assert "https://yasyf.github.io/captain-hook/" in result.stdout
         assert "capt-hook test" in result.stdout
         assert "capt-hook generate-settings" in result.stdout
         assert "Scaffolded" in result.stdout
@@ -728,3 +728,40 @@ class TestGenerateSettingsMultiEvent:
         data = json.loads(result.stdout)
         assert "PreToolUse" in data["hooks"]
         assert "PostToolUse" in data["hooks"]
+
+
+class TestSkillsInstall:
+    def test_init_installs_skills(self, project_dir: Path) -> None:
+        for name in ("bootstrapping-hooks", "translating-styleguides"):
+            assert (project_dir / ".claude" / "skills" / name / "SKILL.md").is_file()
+
+    def test_init_reports_skills(self, tmp_path: Path) -> None:
+        result = run_cli("init", root_dir=str(tmp_path))
+        assert result.returncode == 0
+        assert "+ installed bootstrapping-hooks" in result.stdout
+        assert "+ installed translating-styleguides" in result.stdout
+
+    def test_init_rerun_preserves_user_edits(self, project_dir: Path) -> None:
+        skill = project_dir / ".claude" / "skills" / "bootstrapping-hooks" / "SKILL.md"
+        skill.write_text("# sentinel\n")
+        result = run_cli("init", root_dir=str(project_dir))
+        assert result.returncode == 0
+        assert "unchanged: bootstrapping-hooks, translating-styleguides" in result.stdout
+        assert skill.read_text() == "# sentinel\n"
+
+    def test_skills_install_standalone(self, tmp_path: Path) -> None:
+        result = run_cli("skills", "install", root_dir=str(tmp_path))
+        assert result.returncode == 0
+        assert "installed bootstrapping-hooks" in result.stdout
+        assert (tmp_path / ".claude" / "skills" / "translating-styleguides" / "SKILL.md").is_file()
+
+    def test_skills_install_force_overwrites(self, project_dir: Path) -> None:
+        skill_dir = project_dir / ".claude" / "skills" / "translating-styleguides"
+        (skill_dir / "SKILL.md").write_text("# sentinel\n")
+        stray = skill_dir / "stray.md"
+        stray.write_text("stray\n")
+        result = run_cli("skills", "install", "--force", root_dir=str(project_dir))
+        assert result.returncode == 0
+        assert "replaced translating-styleguides" in result.stdout
+        assert not stray.exists()
+        assert "# sentinel" not in (skill_dir / "SKILL.md").read_text()

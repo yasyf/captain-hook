@@ -1,0 +1,10 @@
+{
+  "name": "captain-hook",
+  "displayName": "Captain Hook",
+  "description": "Skills for the capt-hook declarative hook framework: bootstrap gates and nudges from a repo's conventions, and translate style guides into enforced StyleRules.",
+  "author": { "name": "Yasyf Mohamedali", "email": "yasyfm@gmail.com" },
+  "homepage": "https://yasyf.github.io/captain-hook/",
+  "repository": "https://github.com/yasyf/captain-hook",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "keywords": ["claude-code", "hooks", "guardrails", "styleguide"]
+}

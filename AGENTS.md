@@ -7,6 +7,7 @@ Declarative hook framework for Claude Code. Published to PyPI as `capt-hook`; th
 ```
 captain-hook/
 ├── captain_hook/     # The package — events, conditions, primitives, transcript, CLI
+│   └── skills/       # Bundled Claude Code skills — single source for wheel + plugin
 ├── tests/            # Pytest suite (unit, integration, e2e install)
 ├── docs/             # Great Docs content (Quarto .qmd) — published to GitHub Pages
 │   └── examples/     # Self-contained example hooks (*.py) + their doc pages (*.qmd)

@@ -8,7 +8,6 @@ from captain_hook import (
     Block,
     Event,
     HookResult,
-    InlineTests,
     Input,
     Prompt,
     Signal,
@@ -22,21 +21,20 @@ from captain_hook import (
 )
 
 # 1. block_command — refuse a dangerous shell command before it runs.
-# see docs/guide/primitives.md
-RM_RF_TESTS: InlineTests = {
-    Input(tool="Bash", command="rm -rf /"): Block(pattern="unrecoverable"),
-    Input(tool="Bash", command="rm -rf build/"): Block(pattern="unrecoverable"),
-    Input(tool="Bash", command="rm notes.txt"): Allow(),
-}
+# see https://yasyf.github.io/captain-hook/docs/guide/primitives.html
 block_command(
     ["rm", "-rf", "*"],
     reason="rm -rf is unrecoverable on this machine",
     hint="Delete files individually or move them to a trash dir",
-    tests=RM_RF_TESTS,
+    tests={
+        Input(tool="Bash", command="rm -rf /"): Block(pattern="unrecoverable"),
+        Input(tool="Bash", command="rm -rf build/"): Block(pattern="unrecoverable"),
+        Input(tool="Bash", command="rm notes.txt"): Allow(),
+    },
 )
 
 # 2. nudge — fire on Stop when retry-language piles up in the transcript.
-# see docs/guide/primitives.md and docs/examples/failure-recovery.md
+# see https://yasyf.github.io/captain-hook/docs/examples/failure-recovery.html
 RETRY_SIGNALS = Signals(
     patterns=[
         Signal(pattern=r"let me try again", weight=2, flags=re.IGNORECASE),
@@ -54,14 +52,14 @@ nudge(
 )
 
 # 3. audit — append one JSONL record per matching tool call into .context/.
-# see docs/guide/primitives.md
+# see https://yasyf.github.io/captain-hook/docs/guide/primitives.html
 audit(
     Event.PreToolUse | Event.PostToolUse | Event.Stop,
     log_dir=".context/hook-audit",
 )
 
 # 4. prompt_check — LLM gate on Python edits that smell like unfinished work.
-# see docs/guide/primitives.md and docs/examples/test-integrity.md
+# see https://yasyf.github.io/captain-hook/docs/examples/test-integrity.html
 PLACEHOLDER_TEMPLATE = """
 The agent just edited {fp}. Flag the change if the new content contains
 placeholder text the agent forgot to replace — `TODO: replace`, `FILLME`,

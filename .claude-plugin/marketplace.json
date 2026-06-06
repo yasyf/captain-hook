@@ -1,0 +1,13 @@
+{
+  "name": "captain-hook",
+  "owner": { "name": "Yasyf Mohamedali", "email": "yasyfm@gmail.com" },
+  "description": "Plugins for capt-hook, the declarative hook framework for Claude Code",
+  "plugins": [
+    {
+      "name": "captain-hook",
+      "source": "./captain_hook",
+      "description": "Skills for bootstrapping capt-hook hooks and translating style guides into enforced rules",
+      "category": "productivity"
+    }
+  ]
+}

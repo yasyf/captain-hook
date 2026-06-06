@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.resources
 import json
 import os
+import shutil
+import subprocess
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -22,6 +24,8 @@ from captain_hook.types import Event
 
 DIST_NAME = "capt-hook"
 EVENT_NAMES = ", ".join(n for e in Event if (n := e.name))
+MARKETPLACE = {"captain-hook": {"source": {"source": "github", "repo": "yasyf/captain-hook"}}}
+PLUGIN_ID = "captain-hook@captain-hook"
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +42,68 @@ class CliState:
 def example_hook_source() -> str:
     """Read the bundled ``example.py`` scaffold from ``templates/example_hook.py.tmpl``."""
     return (importlib.resources.files("captain_hook") / "templates" / "example_hook.py.tmpl").read_text()
+
+
+def install_skills(root: Path, *, force: bool = False) -> dict[str, str]:
+    """Copy the bundled Claude Code skills into ``root/.claude/skills``.
+
+    Args:
+        root: Project root receiving the skills.
+        force: Replace existing skill directories wholesale instead of skipping them.
+
+    Returns:
+        Per-skill status of ``"installed"``, ``"replaced"``, or ``"skipped"``.
+    """
+    dest_root = root / ".claude" / "skills"
+    summary: dict[str, str] = {}
+    with importlib.resources.as_file(importlib.resources.files("captain_hook") / "skills") as src_root:
+        for skill in sorted(p for p in src_root.iterdir() if p.is_dir()):
+            dest = dest_root / skill.name
+            if dest.exists() and not force:
+                summary[skill.name] = "skipped"
+                continue
+            if dest.exists():
+                shutil.rmtree(dest)
+                summary[skill.name] = "replaced"
+            else:
+                summary[skill.name] = "installed"
+            shutil.copytree(skill, dest)
+    return summary
+
+
+def register_marketplace(root: Path) -> None:
+    """Enable the captain-hook plugin marketplace in ``root/.claude/settings.local.json``.
+
+    Merges ``extraKnownMarketplaces`` and ``enabledPlugins`` entries into the
+    existing settings so the bundled skills track the repository as a plugin.
+    """
+    settings_path = root / ".claude" / "settings.local.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    merged = existing | {
+        "extraKnownMarketplaces": existing.get("extraKnownMarketplaces", {}) | MARKETPLACE,
+        "enabledPlugins": existing.get("enabledPlugins", {}) | {PLUGIN_ID: True},
+    }
+    settings_path.write_text(json.dumps(merged, indent=2) + "\n")
+
+
+def maybe_launch_bootstrap(root: Path) -> bool:
+    """Offer to launch Claude with the ``bootstrapping-hooks`` skill after ``init``.
+
+    Only fires in an interactive session with the ``claude`` CLI on PATH; CI and
+    scripted runs skip the prompt entirely. On acceptance, the captain-hook plugin
+    marketplace is registered in ``.claude/settings.local.json`` before launching.
+
+    Returns:
+        Whether Claude was launched.
+    """
+    if not (sys.stdin.isatty() and shutil.which("claude")):
+        return False
+    if not click.confirm("Bootstrap hooks now? (launches Claude with the bootstrapping-hooks skill)", default=True):
+        return False
+    register_marketplace(root)
+    subprocess.run(["claude", "/bootstrapping-hooks"], cwd=root, check=False)
+    return True
 
 
 def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str = DIST_NAME) -> dict[str, Any]:
@@ -172,6 +238,8 @@ def init_project(root: Path) -> None:
     merged, summary = merge_init_settings(".claude/hooks", settings_path)
     settings_path.write_text(json.dumps(merged, indent=2) + "\n")
 
+    skills_summary = install_skills(root)
+
     print(f"Scaffolded {example.relative_to(root)} + {settings_path.relative_to(root)}.")
     print()
     print(f"{settings_path.relative_to(root)}:")
@@ -184,11 +252,20 @@ def init_project(root: Path) -> None:
     if unchanged:
         print(f"  unchanged: {', '.join(unchanged)} (already present)")
     print()
+    print(".claude/skills/:")
+    for name in (n for n, status in skills_summary.items() if status == "installed"):
+        print(f"  + installed {name}")
+    if skipped := [n for n, status in skills_summary.items() if status == "skipped"]:
+        print(f"  unchanged: {', '.join(skipped)} (already present; capt-hook skills install --force to refresh)")
+    print()
     print("Next:")
-    print("  1. Read the quickstart: docs/getting-started/quickstart.md")
+    print("  1. Read the quickstart: https://yasyf.github.io/captain-hook/")
     print("  2. Edit example.py or add new files under .claude/hooks/")
     print("  3. capt-hook test       # verify inline tests")
     print("  4. capt-hook generate-settings    # rewire after adding events")
+    print("  5. /bootstrapping-hooks in Claude  # mine hooks from this repo's conventions")
+    print()
+    maybe_launch_bootstrap(root)
 
 
 def show_logs(session: str | None = None, tail: int | None = None) -> None:
@@ -345,7 +422,7 @@ def test(state: CliState, json_output: bool) -> None:
 @cli.command()
 @click.pass_obj
 def init(state: CliState) -> None:
-    """Scaffold hooks directory, bin script, and settings."""
+    """Scaffold the hooks directory, install bundled skills, and wire settings."""
     init_project(state.root)
 
 
@@ -355,6 +432,20 @@ def init(state: CliState) -> None:
 def logs(session: str | None, tail: int | None) -> None:
     """View a recent captain-hook session log."""
     show_logs(session=session, tail=tail)
+
+
+@cli.group()
+def skills() -> None:
+    """Manage the bundled Claude Code skills."""
+
+
+@skills.command(name="install")
+@click.option("--force", is_flag=True, default=False, help="Replace skills that already exist in .claude/skills")
+@click.pass_obj
+def skills_install(state: CliState, force: bool) -> None:
+    """Copy the bundled skills into .claude/skills/."""
+    for name, status in install_skills(state.root, force=force).items():
+        click.echo(f"  {status} {name}")
 
 
 main = cli

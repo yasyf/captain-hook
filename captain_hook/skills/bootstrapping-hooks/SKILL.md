@@ -1,0 +1,229 @@
+---
+name: bootstrapping-hooks
+description: Surveys a repository and sets up captain-hook (capt-hook) guardrails for Claude Code — blocking gates, advisory nudges, command blocks, and test-integrity checks mined from the repo's own docs, CI workflows, lint configs, and git history. Proposes categorized candidates for user approval before writing anything, then writes .claude/hooks/*.py with inline tests, verifies with capt-hook test, and wires .claude/settings.local.json. Use when the user asks to "set up hooks", "bootstrap capt-hook", "add guardrails", "enforce our conventions with hooks", "protect this repo", or "make Claude follow CONTRIBUTING.md".
+argument-hint: "[repo path] (defaults to current project)"
+allowed-tools: Read, Grep, Glob, AskUserQuestion, Write, Edit, Bash(uvx capt-hook:*, capt-hook:*, git log:*, git diff:*, ls:*, find:*)
+---
+
+# Bootstrapping capt-hook Guardrails
+
+capt-hook is a declarative hook framework for Claude Code. Hooks are Python files in
+`.claude/hooks/`, dispatched by `uvx capt-hook run <Event>` entries in
+`.claude/settings.local.json`. Each hook carries inline tests —
+`tests={Input(...): Block() | Warn() | Allow()}` — run with `uvx capt-hook test`. Hooks are
+always Python regardless of the target repo's language: conditions like `Command` and
+`FilePath` are language-agnostic; only AST `lint` rules are Python-specific. Full API:
+[capt-hook API reference](references/capt-hook-api.md).
+
+## Hard Rules
+
+- **Never write a hook the user has not approved in Step 4.** Survey and propose first; write only what was selected.
+- **Every deterministic hook ships inline tests** — at least one firing `Input` and one `Allow()` — and `uvx capt-hook test` must be green before Step 8. LLM hooks (`llm_gate`, `llm_nudge`, `prompt_check`) and signal-scored `nudge`s ship without `tests=`: their inline tests would only exercise a stubbed model.
+- **Propose `block` only for irreversible or destructive actions** (history rewrites, data deletion, deploys, secret leaks). Default everything else to warn. The user picks final severity in Step 4.
+- **Never write style rules here.** A style guide found during the survey is delegated whole to the `translating-styleguides` skill (category E below).
+
+## Workflow
+
+Copy this checklist into your response and check off steps as you complete them:
+
+```
+Bootstrap Progress:
+- [ ] Step 1: Locate + pre-flight (.claude/hooks, settings)
+- [ ] Step 2: Survey the repo (docs, CI, lint configs, git log)
+- [ ] Step 3: Mine candidates onto the taxonomy
+- [ ] Step 4: Propose via AskUserQuestion — nothing written before approval
+- [ ] Step 5: Scaffold (uvx capt-hook init)
+- [ ] Step 6: Write approved hooks, one file per category
+- [ ] Step 7: Verify (uvx capt-hook test, fix until green)
+- [ ] Step 8: Wire settings (generate-settings if new events)
+- [ ] Step 9: Final report (table + declined list)
+```
+
+### 1. Locate + pre-flight
+
+Resolve the target repo (argument path, else current project). Run:
+
+```bash
+ls .claude/hooks/ 2>/dev/null
+```
+
+Read `.claude/settings.local.json` and `.claude/settings.json` if present. If capt-hook hooks
+already exist, switch to **additive mode**: never overwrite existing hook files; new categories
+go in new files, and the Step 4 menu only offers candidates not already covered.
+
+### 2. Survey the repo
+
+Read, in order of signal density:
+
+1. `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `STYLEGUIDE.md` (and `docs/` equivalents), `README.md` — explicit rules ("never X", "always Y before Z", "use A not B").
+2. `.github/workflows/*.yml` — the exact test/lint job commands become gate skip-conditions.
+3. Lint configs — `pyproject.toml [tool.ruff]`, `.ruff.toml`, `.eslintrc*`, `biome.json`, `.golangci.yml`, `.pre-commit-config.yaml`.
+4. Task runners — `Makefile`, `justfile`, `package.json` scripts — to learn the *exact* test/lint commands the repo uses.
+5. Incident archaeology. Run:
+
+```bash
+git log --oneline -50
+git log -i --grep="revert\|undo\|accidentally" --oneline -20
+```
+
+Repeated "fix lint" commits suggest a lint gate; a revert of a force-push suggests a command block.
+
+### 3. Mine candidates
+
+Map every signal onto the taxonomy below. Record per candidate: the **source quote**
+("CONTRIBUTING.md: never force-push to main"), the **category**, the **primitive**, and a
+**proposed severity**. Drop nothing silently — weak candidates go in the menu marked as such.
+
+| Category | Repo signals | Primitive |
+|---|---|---|
+| A. Command safety | "never run X", destructive ops (`rm -rf`, db reset, deploy, force-push), tool substitutions ("use uv not pip") in docs; reverts in git log | `block_command` / `warn_command`; `@on` + `evt.command_line.q` for compound commands (curl-pipe-sh) |
+| B. Code quality | lint configs, "use logger not print", banned imports/idioms in docs | `hook(only_if=[Content(...)])`, `lint()`, `nudge(signals=...)`, `llm_gate` escalation |
+| C. Test integrity | `tests/` dir + CI test job; "never skip tests", coverage rules | `gate(only_if=[TouchedFile], skip_if=[RanCommand])`; `prompt_check` on test-file edits |
+| D. Workflow rituals | CONTRIBUTING rituals ("run make lint before pushing", "update CHANGELOG"), multi-step done-criteria | `gate` on `PreToolUse` + `Command(r"git\s+push")`; `workflow()` for ordered checklists |
+| E. Styleguide rules | `STYLEGUIDE.md`, style sections in CONTRIBUTING/AGENTS/CLAUDE | **delegate to `translating-styleguides`** |
+| F. Audit (opt-in extra) | compliance/ops-flavored repos | `audit()` |
+
+Worked code per category: [pattern catalog](references/pattern-catalog.md).
+
+### 4. Propose via AskUserQuestion
+
+One question per non-empty category (batch up to 4 per AskUserQuestion call), with
+`multiSelect: true`. Each option is one concrete hook; its description carries the source quote
+and the proposed primitive + severity. Then one final severity question:
+
+- "Block all approved gates"
+- "Warn-only everywhere"
+- "Decide per hook (use the proposed severities)"
+
+If a styleguide-like markdown was found, category E is a single option: **"Translate `<file>`
+into enforced style rules (runs the translating-styleguides skill)"**.
+
+### 5. Scaffold
+
+Run:
+
+```bash
+uvx capt-hook init
+```
+
+This creates `.claude/hooks/example.py` (only when absent) and merges capt-hook entries into
+`.claude/settings.local.json`. If this run created the demo `example.py`, delete it after
+writing the real hooks — the approved hooks replace it.
+
+### 6. Write hooks
+
+One file per approved category: `safety.py`, `quality.py`, `testing.py`, `workflow.py`,
+`audit.py` (+ `style.py`, owned end-to-end by `translating-styleguides`). Every hook file gets:
+
+- `from __future__ import annotations` at the top.
+- Inline tests with at least one firing `Input` and one `Allow()` (deterministic hooks only).
+- The source-doc citation inside the message text — the agent being blocked learns *why*
+  ("CONTRIBUTING.md: force-push rewrites remote history").
+- The surveyed repo's *exact* commands substituted into both messages and `RanCommand`
+  regexes (e.g. `make test` vs `uv run pytest` vs `npm test`).
+
+Import gotcha: the `Command` regex *condition* is `from captain_hook.types import Command` —
+top-level `captain_hook.Command` is the parsed-command class, not the condition. Copy code
+from the [pattern catalog](references/pattern-catalog.md); every snippet there passes
+`capt-hook test` verbatim.
+
+### 7. Verify
+
+Run:
+
+```bash
+uvx capt-hook test
+```
+
+Add `--json` when parsing results (one JSON record per test). Fix failures until green —
+debugging recipes in [testing hooks](references/testing-hooks.md). Never weaken a test to
+pass; fix the hook.
+
+### 8. Wire settings
+
+Required whenever hooks target events `init` didn't know about (e.g. a new `Stop` gate added
+after scaffolding). Run:
+
+```bash
+uvx capt-hook generate-settings > /tmp/capt-hook-settings.json
+mv /tmp/capt-hook-settings.json .claude/settings.local.json
+```
+
+`generate-settings` prints the merged JSON to stdout (it reads and merges the existing
+`.claude/settings.local.json`). Never redirect straight into the settings file — the shell
+truncates it before the command reads it.
+
+### 9. Final report
+
+Output a markdown table plus a declined list:
+
+```
+| hook                    | file        | primitive     | severity | source                       | tests |
+|-------------------------|-------------|---------------|----------|------------------------------|-------|
+| no-force-push           | safety.py   | block_command | block    | CONTRIBUTING.md "never ..."  | 3     |
+| tests-before-stop       | testing.py  | gate          | block    | CI: uv run pytest            | 3     |
+
+Declined: <candidates the user rejected, with their source quotes>
+```
+
+Close with next steps: `uvx capt-hook logs --tail 50` to inspect live firings, and tune
+`max_fires` on any hook that nags.
+
+## Worked mini-example
+
+Survey of a fictional repo finds two signals:
+
+- CONTRIBUTING.md: "always run `make lint` before pushing"
+- README.md, Setup: "this repo uses uv, not pip"
+
+Step 4 proposes two options — category D: *lint-before-push gate (block)*, category A:
+*warn on pip install (warn)*. The user approves both. The pip warning goes in `safety.py`
+(pattern catalog, category A). The gate goes in `.claude/hooks/workflow.py`:
+
+```python
+from __future__ import annotations
+
+from captain_hook import Allow, Block, Event, Input, RanCommand, Tool, gate
+from captain_hook.types import Command
+
+gate(
+    "CONTRIBUTING.md requires `make lint` before pushing.",
+    events=Event.PreToolUse,
+    only_if=[Tool("Bash"), Command(r"git\s+push")],
+    skip_if=[RanCommand(r"make\s+lint")],
+    tests={
+        Input(command="git push origin main"): Block(pattern="make lint"),
+        Input(command="git status"): Allow(),
+    },
+)
+```
+
+`uvx capt-hook test` confirms:
+
+```
+  PASS  workflow:gate_50b992e3:Input(command='git push origin main', ...)
+  PASS  workflow:gate_50b992e3:Input(command='git status', ...)
+
+2 tests: 2 passed, 0 failed, 0 errors, 0 skipped
+```
+
+Report row:
+
+```
+| lint-before-push | workflow.py | gate | block | CONTRIBUTING.md "always run make lint before pushing" | 2 |
+```
+
+## Delegating style guides
+
+When the survey finds a style guide (`STYLEGUIDE.md`, a "Code style" section in
+CONTRIBUTING/AGENTS/CLAUDE, `docs/style*.md`), this skill **never** writes `StyleRule`s
+itself. If the user approves the category E option, invoke the `translating-styleguides`
+skill via the Skill tool with the markdown path as args; it owns `style.py` end-to-end and
+its enforcement report is appended to this skill's final report. If the Skill tool is
+unavailable, read that skill's `SKILL.md` directly and follow it — both skills ship together.
+
+## References
+
+- [capt-hook API reference](references/capt-hook-api.md) — events, primitives, conditions, event object, CLI.
+- [Pattern catalog](references/pattern-catalog.md) — one validated hook file per taxonomy category.
+- [Testing hooks](references/testing-hooks.md) — inline test format, fixtures, debugging recipes.
