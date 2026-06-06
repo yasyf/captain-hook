@@ -8,30 +8,7 @@ from typing import TYPE_CHECKING
 
 from captain_hook.app import on
 from captain_hook.state import hook_name
-from captain_hook.styleguide.query import (
-    Assignment,
-    Call,
-    Class,
-    ControlFlow,
-    Definition,
-    Function,
-    Import,
-    Kind,
-    Module,
-    Query,
-    Slot,
-    TypeChecking,
-    annotated_slots,
-    annotations,
-    calls,
-    has_future_annotations,
-    has_keyword,
-    is_name,
-    name_of,
-    named,
-    parent_map,
-    string_literals,
-)
+from captain_hook.styleguide.matcher import Matcher
 from captain_hook.styleguide.scope import changed_lines, read_source, reconstruct_pre
 from captain_hook.styleguide.types import StyleDiffRule, StyleRule, Violation
 from captain_hook.types import Action, Event, FilePath, HookResult, TCondition, TestFile, Tool
@@ -45,31 +22,10 @@ GUARD_ONLY_IF: tuple[TCondition, ...] = (Tool("Edit|Write"), FilePath("*.py", pr
 GUARD_SKIP_IF: tuple[TCondition, ...] = (TestFile(),)
 
 __all__ = [
-    "Assignment",
-    "Call",
-    "Class",
-    "ControlFlow",
-    "Definition",
-    "Function",
-    "Import",
-    "Kind",
-    "Module",
-    "Query",
-    "Slot",
+    "Matcher",
     "StyleDiffRule",
     "StyleRule",
-    "TypeChecking",
     "Violation",
-    "annotated_slots",
-    "annotations",
-    "calls",
-    "has_future_annotations",
-    "has_keyword",
-    "is_name",
-    "name_of",
-    "named",
-    "parent_map",
-    "string_literals",
     "styleguide",
 ]
 
@@ -123,11 +79,14 @@ def styleguide(
     )(handler)
 
 
-def validate(rule: type[StyleRule]) -> type[StyleRule]:
+def validate(rule: object) -> type[StyleRule]:
     if not (isinstance(rule, type) and issubclass(rule, StyleRule)):
         raise TypeError(f"styleguide() expects StyleRule subclasses, got {rule!r}")
     if rule.__doc__ is None:
         raise ValueError(f"{rule.__name__} must define a docstring — it is the rule's message")
+    base = StyleDiffRule if issubclass(rule, StyleDiffRule) else StyleRule
+    if rule.match is None and rule.check is base.check:
+        raise TypeError(f"{rule.__name__} must define `match` or override `check`")
     return rule
 
 

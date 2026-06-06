@@ -1,46 +1,24 @@
 from __future__ import annotations
 
 import ast
-import re
-from collections.abc import Iterator
 
-from captain_hook import Allow, Input, StyleDiffRule, StyleRule, Violation, Warn, gate, styleguide
-from captain_hook.styleguide import (
-    Assignment,
-    Class,
-    ControlFlow,
-    Definition,
-    Function,
-    Import,
-    Module,
-    Query,
-    Slot,
-    TypeChecking,
-    annotated_slots,
-    annotations,
-    calls,
-    has_future_annotations,
-    has_keyword,
-    is_name,
-    name_of,
-    string_literals,
-)
-
-CONST_UNDERSCORE = re.compile(r"^_[A-Z][A-Z_0-9]*$")
-UPPER_SNAKE = re.compile(r"^[A-Z][A-Z0-9_]+$")
+from captain_hook import Allow, Input, StyleDiffRule, StyleRule, Warn, gate, styleguide
+from captain_hook.styleguide import Matcher as M
 
 
-def underscored(name: str) -> bool:
-    return name.startswith("_") and not name.startswith("__")
-
-
-def any_label(slot: Slot) -> str:
-    return f"{slot.name}() -> Any" if slot.is_return else f"{slot.name}: Any"
+def any_label(node: ast.AST) -> str:
+    match node:
+        case ast.FunctionDef(name=name) | ast.AsyncFunctionDef(name=name):
+            return f"{name}() -> Any"
+        case ast.AnnAssign(target=ast.Name(id=name)) | ast.arg(arg=name):
+            return f"{name}: Any"
+        case _:
+            return "Any"
 
 
 class NoUnderscorePrefixes(StyleRule):
     """
-    This edit introduces underscore-prefixed class(es) or constant(s).
+    This edit introduces underscore-prefixed class(es) or constant(s): {violations}
 
     captain-hook never uses leading underscores on classes, constants, or module-level
     helpers — use `__all__` for export control instead. See STYLEGUIDE.md § Code Organization.
@@ -52,11 +30,7 @@ class NoUnderscorePrefixes(StyleRule):
         Input(file="m.py", content="class Helper:\n    pass\n"): Allow(),
         Input(file="m.py", content="__all__ = ['Helper']\n"): Allow(),
     }
-
-    def check(self, tree: ast.Module) -> Iterator[Violation]:
-        q = Query.of(tree)
-        yield from q.matching(Class).where(lambda n: underscored(n.name)).violations(lambda n: f"class {n.name}")
-        yield from q.matching(Assignment).where(lambda n: bool(CONST_UNDERSCORE.match(name_of(n) or ""))).violations(lambda n: name_of(n) or "")
+    match = M.private & (M.cls | (M.assignment & M.constant))
 
 
 class NoNestedImports(StyleRule):
@@ -72,9 +46,7 @@ class NoNestedImports(StyleRule):
         Input(file="m.py", content="def f(cond):\n    import os\n\n    return os if cond else None\n"): Allow(),
         Input(file="m.py", content="from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    import os\n"): Allow(),
     }
-
-    def check(self, tree: ast.Module) -> Iterator[Violation]:
-        yield from Query.of(tree).matching(Import).directly_inside(ControlFlow).not_inside(TypeChecking).violations(ast.unparse)
+    match = M.imports & M.child_of(M.control_flow) & ~M.under(M.type_checking)
 
 
 class ZipStrict(StyleRule):
@@ -89,9 +61,8 @@ class ZipStrict(StyleRule):
         Input(file="m.py", content="pairs = list(zip(a, b))\n"): Warn(),
         Input(file="m.py", content="pairs = list(zip(a, b, strict=True))\n"): Allow(),
     }
-
-    def check(self, tree: ast.Module) -> Iterator[Violation]:
-        yield from Query.of(tree).matching(calls("zip")).where(lambda c: not has_keyword(c, "strict")).violations("zip()")
+    match = M.calls("zip") & ~M.kwarg("strict")
+    label = "zip()"
 
 
 class LateModuleConstants(StyleRule):
@@ -106,16 +77,7 @@ class LateModuleConstants(StyleRule):
         Input(file="m.py", content="def f():\n    pass\n\n\nMAX = 3\n"): Warn(),
         Input(file="m.py", content="MAX = 3\n\n\ndef f():\n    pass\n"): Allow(),
     }
-
-    def check(self, tree: ast.Module) -> Iterator[Violation]:
-        yield from (
-            Query.of(tree)
-            .matching(Assignment)
-            .directly_inside(Module)
-            .after_first(Definition)
-            .where(lambda n: bool(UPPER_SNAKE.match(name_of(n) or "")))
-            .violations(lambda n: name_of(n) or "")
-        )
+    match = M.assignment & M.child_of(M.module) & M.following(M.definition) & M.constant
 
 
 class LateClassConstants(StyleRule):
@@ -130,11 +92,7 @@ class LateClassConstants(StyleRule):
         Input(file="m.py", content="class C:\n    def m(self):\n        pass\n\n    X = 3\n"): Warn(),
         Input(file="m.py", content="class C:\n    X = 3\n\n    def m(self):\n        pass\n"): Allow(),
     }
-
-    def check(self, tree: ast.Module) -> Iterator[Violation]:
-        yield from (
-            Query.of(tree).matching(Assignment).directly_inside(Class).after_first(Function).violations(lambda n: name_of(n) or "")
-        )
+    match = M.assignment & M.child_of(M.cls) & M.following(M.func)
 
 
 class NoQuotedAnnotations(StyleRule):
@@ -150,13 +108,7 @@ class NoQuotedAnnotations(StyleRule):
         Input(file="m.py", content='from __future__ import annotations\n\nx: "Foo" = None\n'): Warn(),
         Input(file="m.py", content="from __future__ import annotations\n\nx: Foo = None\n"): Allow(),
     }
-
-    def check(self, tree: ast.Module) -> Iterator[Violation]:
-        if not has_future_annotations(tree):
-            return
-        yield from (
-            Violation(const.lineno, repr(const.value)) for ann in annotations(tree) for const in string_literals(ann)
-        )
+    match = M.forward_ref & M.under(M.future_annotations)
 
 
 class NoWeakeningToAny(StyleDiffRule):
@@ -175,14 +127,13 @@ class NoWeakeningToAny(StyleDiffRule):
         Input(file="x.py", old="x: Any", content="x: Any"): Allow(),
         Input(file="x.py", old="", content="def f(*args: Any, **kwargs: Any) -> None:\n    ..."): Allow(),
         Input(file="x.py", old="", content="JsonDict = dict[str, Any]"): Allow(),
-        Input(file="x.py", old="def f() -> dict[str, Foo]:\n    ...", content="def f() -> dict[str, Any]:\n    ..."): Allow(),
+        Input(
+            file="x.py", old="def f() -> dict[str, Foo]:\n    ...", content="def f() -> dict[str, Any]:\n    ..."
+        ): Allow(),
     }
-
-    def check(self, pre: ast.Module, post: ast.Module) -> Iterator[Violation]:
-        old = {any_label(s) for s in annotated_slots(pre) if is_name(s.annotation, "Any")}
-        yield from (
-            Violation(s.line, any_label(s)) for s in annotated_slots(post) if is_name(s.annotation, "Any") and any_label(s) not in old
-        )
+    match = M.annotated(M.ref("Any"))
+    key = any_label
+    label = any_label
 
 
 gate(

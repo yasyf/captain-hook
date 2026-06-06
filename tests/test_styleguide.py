@@ -11,25 +11,15 @@ import pytest
 from captain_hook.app import _state
 from captain_hook.dispatch import dispatch
 from captain_hook.styleguide import (
-    Assignment,
-    Class,
-    ControlFlow,
-    Definition,
-    Function,
-    Import,
-    Module,
-    Query,
+    Matcher,
     StyleDiffRule,
     StyleRule,
-    TypeChecking,
     Violation,
-    name_of,
-    parent_map,
     styleguide,
 )
 from captain_hook.tests.helpers import make_ctx, make_post_tool_event
-from captain_hook.utils import kebab
 from captain_hook.types import Event, FilePath
+from captain_hook.utils import kebab
 
 
 @pytest.fixture
@@ -110,7 +100,9 @@ def warn_text(result: dict | None) -> str:
 class TestBasics:
     def test_warns_with_line_number(self, session_dir: Path) -> None:
         styleguide(NoPrint)
-        result = dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new='print("hi")\n'), session_dir)
+        result = dispatch(
+            Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new='print("hi")\n'), session_dir
+        )
         assert "print() call (line 1)" in warn_text(result)
 
     def test_clean_code_passes(self, session_dir: Path) -> None:
@@ -124,7 +116,9 @@ class TestBasics:
 
     def test_block_mode_denies(self, session_dir: Path) -> None:
         styleguide(NoPrint, block=True)
-        result = dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new='print("x")\n'), session_dir)
+        result = dispatch(
+            Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new='print("x")\n'), session_dir
+        )
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -134,7 +128,7 @@ class TestAggregation:
         styleguide(NoPrint, NoLambda)
         result = dispatch(
             Event.PostToolUse,
-            edit_event(session_dir, file="a.py", old="", new='f = lambda: print(1)\n'),
+            edit_event(session_dir, file="a.py", old="", new="f = lambda: print(1)\n"),
             session_dir,
         )
         msg = warn_text(result)
@@ -143,7 +137,9 @@ class TestAggregation:
 
     def test_only_firing_rules_appear(self, session_dir: Path) -> None:
         styleguide(NoPrint, NoLambda)
-        msg = warn_text(dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new='print(1)\n'), session_dir))
+        msg = warn_text(
+            dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new="print(1)\n"), session_dir)
+        )
         assert "print() call" in msg and "lambda" not in msg
 
 
@@ -164,7 +160,9 @@ class TestChangeScoping:
         path = work_dir / "m.py"
         path.write_text(self.EDITED)
         styleguide(NoPrint)
-        msg = warn_text(dispatch(Event.PostToolUse, write_event(session_dir, file=str(path), content=self.EDITED), session_dir))
+        msg = warn_text(
+            dispatch(Event.PostToolUse, write_event(session_dir, file=str(path), content=self.EDITED), session_dir)
+        )
         assert "line 2" in msg and "line 5" in msg
 
     def test_partial_fragment_never_raises(self, work_dir: Path, session_dir: Path) -> None:
@@ -184,14 +182,18 @@ class TestTriggerAndMaxShown:
     def test_max_shown_caps_violations(self, session_dir: Path) -> None:
         styleguide(NoPrint, max_shown=2)
         content = "print(1)\nprint(2)\nprint(3)\nprint(4)\n"
-        msg = warn_text(dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new=content), session_dir))
+        msg = warn_text(
+            dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new=content), session_dir)
+        )
         assert msg.count("(line ") == 2
 
 
 class TestDiffRule:
     def test_newly_introduced_flagged(self, session_dir: Path) -> None:
         styleguide(NoNewGlobal)
-        evt = edit_event(session_dir, file="d.py", old="def f():\n    return 1\n", new="def f():\n    global x\n    return x\n")
+        evt = edit_event(
+            session_dir, file="d.py", old="def f():\n    return 1\n", new="def f():\n    global x\n    return x\n"
+        )
         assert "global x" in warn_text(dispatch(Event.PostToolUse, evt, session_dir))
 
     def test_preexisting_not_flagged(self, session_dir: Path) -> None:
@@ -209,13 +211,17 @@ class TestDiffRule:
         content = "def f():\n    global y\n    return y\n"
         path.write_text(content)
         styleguide(NoNewGlobal)
-        assert "global y" in warn_text(dispatch(Event.PostToolUse, write_event(session_dir, file=str(path), content=content), session_dir))
+        assert "global y" in warn_text(
+            dispatch(Event.PostToolUse, write_event(session_dir, file=str(path), content=content), session_dir)
+        )
 
 
 class TestDocstringMessage:
     def test_cleandoc_strips_leading_newline(self, session_dir: Path) -> None:
         styleguide(NoPrint)
-        msg = warn_text(dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new="print(1)\n"), session_dir))
+        msg = warn_text(
+            dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new="print(1)\n"), session_dir)
+        )
         assert msg.startswith("print() calls don't belong")
 
     def test_appends_violations_when_no_placeholder(self, session_dir: Path) -> None:
@@ -228,7 +234,9 @@ class TestDocstringMessage:
                 yield from (Violation(n.lineno, "call") for n in ast.walk(tree) if isinstance(n, ast.Call))
 
         styleguide(NoCall)
-        msg = warn_text(dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new="f()\n"), session_dir))
+        msg = warn_text(
+            dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new="f()\n"), session_dir)
+        )
         assert "Calls are not allowed in this file." in msg
         assert "call (line 1)" in msg
 
@@ -292,37 +300,79 @@ class TestHelpers:
         assert kebab("NoNestedImports") == "no-nested-imports"
         assert kebab("ZipStrict") == "zip-strict"
 
-    def test_parent_map(self) -> None:
-        tree = ast.parse("def f():\n    x = 1\n")
-        pmap = parent_map(tree)
-        assign = next(n for n in ast.walk(tree) if isinstance(n, ast.Assign))
-        func = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
-        assert pmap[assign] is func
 
-    def test_name_of(self) -> None:
-        tree = ast.parse("class C:\n    pass\nx = 1\ny: int = 2\n")
-        assert {name_of(n) for n in ast.walk(tree)} >= {"C", "x", "y"}
-
-
-class TestQuery:
-    def test_matching_directly_inside(self) -> None:
+class TestMatcher:
+    def test_child_of(self) -> None:
         tree = ast.parse("def f(c):\n    if c:\n        import os\n")
-        assert len(list(Query.of(tree).matching(Import).directly_inside(ControlFlow))) == 1
+        assert len(list((Matcher.imports & Matcher.child_of(Matcher.control_flow)).over(tree))) == 1
 
-    def test_not_inside_type_checking(self) -> None:
+    def test_negated_under_type_checking(self) -> None:
         tree = ast.parse("from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\n")
-        assert list(Query.of(tree).matching(Import).directly_inside(ControlFlow).not_inside(TypeChecking)) == []
+        match = Matcher.imports & Matcher.child_of(Matcher.control_flow) & ~Matcher.under(Matcher.type_checking)
+        assert list(match.over(tree)) == []
 
-    def test_after_first_boundary(self) -> None:
+    def test_following_boundary(self) -> None:
         late = ast.parse("def f():\n    pass\nMAX = 3\n")
         early = ast.parse("MAX = 3\ndef f():\n    pass\n")
-        assert len(list(Query.of(late).matching(Assignment).directly_inside(Module).after_first(Definition))) == 1
-        assert list(Query.of(early).matching(Assignment).directly_inside(Module).after_first(Definition)) == []
+        match = Matcher.assignment & Matcher.child_of(Matcher.module) & Matcher.following(Matcher.definition)
+        assert len(list(match.over(late))) == 1
+        assert list(match.over(early)) == []
 
-    def test_kind_union(self) -> None:
+    def test_union(self) -> None:
         tree = ast.parse("class C:\n    pass\ndef f():\n    pass\n")
-        assert sum((Class | Function).matches(n) for n in ast.walk(tree)) == 2
+        assert sum((Matcher.cls | Matcher.func).matches(n) for n in ast.walk(tree)) == 2
+
+    def test_intersection_and_negation(self) -> None:
+        tree = ast.parse("pairs = list(zip(a, b))\nok = zip(a, b, strict=True)\n")
+        assert len(list((Matcher.calls("zip") & ~Matcher.kwarg("strict")).over(tree))) == 1
+
+    def test_named_presets(self) -> None:
+        tree = ast.parse("class _P:\n    pass\nMAX_RETRIES = 3\n")
+        cls = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef))
+        const = next(n for n in ast.walk(tree) if isinstance(n, ast.Assign))
+        assert Matcher.private.matches(cls)
+        assert Matcher.constant.matches(const)
+        assert not Matcher.dunder.matches(cls)
 
     def test_violations_label(self) -> None:
         tree = ast.parse("import os\n")
-        assert list(Query.of(tree).matching(Import).violations("import")) == [Violation(1, "import")]
+        assert list(Matcher.imports.violations(tree, "import")) == [Violation(1, "import")]
+
+    def test_matches_raises_on_structural(self) -> None:
+        with pytest.raises(ValueError, match="structural"):
+            Matcher.under(Matcher.module).matches(ast.parse("x = 1\n"))
+
+
+class TestDeclarative:
+    def test_match_only_rule_warns(self, session_dir: Path) -> None:
+        class NoBareZip(StyleRule):
+            """No bare zip(): {violations}"""
+
+            match = Matcher.calls("zip") & ~Matcher.kwarg("strict")
+            label = "zip()"
+
+        styleguide(NoBareZip)
+        msg = warn_text(
+            dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new="zip(a, b)\n"), session_dir)
+        )
+        assert "zip() (line 1)" in msg
+
+    def test_match_only_rule_passes_clean(self, session_dir: Path) -> None:
+        class NoBareZip(StyleRule):
+            """No bare zip(): {violations}"""
+
+            match = Matcher.calls("zip") & ~Matcher.kwarg("strict")
+
+        styleguide(NoBareZip)
+        evt = edit_event(session_dir, file="a.py", old="", new="zip(a, b, strict=True)\n")
+        assert dispatch(Event.PostToolUse, evt, session_dir) is None
+
+    def test_diff_match_rule_flags_new(self, session_dir: Path) -> None:
+        class NoNewAny(StyleDiffRule):
+            """New Any annotation: {violations}"""
+
+            match = Matcher.annotated(Matcher.ref("Any"))
+
+        styleguide(NoNewAny)
+        evt = edit_event(session_dir, file="d.py", old="x: int\n", new="x: Any\n")
+        assert "x (line 1)" in warn_text(dispatch(Event.PostToolUse, evt, session_dir))

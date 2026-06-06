@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator
 
-from captain_hook import Allow, Input, StyleDiffRule, StyleRule, Violation, Warn, styleguide
+from captain_hook import Allow, Input, StyleDiffRule, StyleRule, Warn, styleguide
+from captain_hook.styleguide import Matcher
 
 
 class NoPrint(StyleRule):
@@ -19,12 +19,8 @@ class NoPrint(StyleRule):
         Input(file="app.py", content="def f():\n    print('debug')\n"): Warn(),
         Input(file="app.py", content="def f():\n    logger.info('ok')\n"): Allow(),
     }
-
-    def check(self, tree: ast.Module) -> Iterator[Violation]:
-        for node in ast.walk(tree):
-            match node:
-                case ast.Call(func=ast.Name(id="print")):
-                    yield Violation(node.lineno, "print() call")
+    match = Matcher.calls("print")
+    label = "print() call"
 
 
 class NoBareExcept(StyleRule):
@@ -40,13 +36,8 @@ class NoBareExcept(StyleRule):
         Input(file="app.py", content="try:\n    f()\nexcept:\n    pass\n"): Warn(),
         Input(file="app.py", content="try:\n    f()\nexcept ValueError:\n    pass\n"): Allow(),
     }
-
-    def check(self, tree: ast.Module) -> Iterator[Violation]:
-        yield from (
-            Violation(node.lineno, "bare except")
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ExceptHandler) and node.type is None
-        )
+    match = Matcher.kind(ast.ExceptHandler).where(lambda n: n.type is None)
+    label = "bare except"
 
 
 class NoNewWildcardImport(StyleDiffRule):
@@ -61,14 +52,7 @@ class NoNewWildcardImport(StyleDiffRule):
         Input(file="m.py", old="import os\n", content="from os import *\n"): Warn(),
         Input(file="m.py", old="from os import *\n", content="from os import *\nx = 1\n"): Allow(),
     }
-
-    def check(self, pre: ast.Module, post: ast.Module) -> Iterator[Violation]:
-        old = {node.module for node in ast.walk(pre) if isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names)}
-        yield from (
-            Violation(node.lineno, f"from {node.module} import *")
-            for node in ast.walk(post)
-            if isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names) and node.module not in old
-        )
+    match = Matcher.imports.where(lambda n: any(alias.name == "*" for alias in n.names))
 
 
 styleguide(NoPrint, NoBareExcept, NoNewWildcardImport)

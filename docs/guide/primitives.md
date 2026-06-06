@@ -93,22 +93,20 @@ Lints fire on `PostToolUse` for Edit/Write of `.py` files. Test files are skippe
 ## styleguide
 
 Apply AST-based style rules to Python edits, reporting only what the edit changed. A rule is a
-[`StyleRule`][captain_hook.StyleRule] subclass whose docstring is the message:
+[`StyleRule`][captain_hook.StyleRule] subclass whose docstring is the message and whose `match`
+is a composable [`Matcher`][captain_hook.styleguide.Matcher]:
 
 ```python
-import ast
-from captain_hook import styleguide, StyleRule, Violation
+from captain_hook import styleguide, StyleRule
+from captain_hook.styleguide import Matcher
 
 class NoPrint(StyleRule):
     """
     print() calls don't belong in committed code:
       - {violations}
     """
-    def check(self, tree: ast.Module):
-        for node in ast.walk(tree):
-            match node:
-                case ast.Call(func=ast.Name(id="print")):
-                    yield Violation(node.lineno, "print() call")
+    match = Matcher.calls("print")
+    label = "print() call"
 
 styleguide(NoPrint)
 ```
@@ -116,7 +114,7 @@ styleguide(NoPrint)
 captain-hook ships no rules of its own — `styleguide()` is the substrate (parsing,
 change-scoping, formatting, test wiring). Each call registers one hook; scope it with
 `only_if` / `skip_if` / `events` / `block`. See [Style Rules](styleguide.md) for the full guide,
-including `StyleDiffRule` and change scoping.
+including the `Matcher` algebra, `StyleDiffRule`, and change scoping.
 
 ## block_command
 

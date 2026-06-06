@@ -3,46 +3,46 @@
 `styleguide()` turns AST-based style checks into a hook. It is a *substrate*: captain-hook
 ships **no rules of its own** — you author them as [`StyleRule`][captain_hook.StyleRule]
 subclasses and register them. The framework owns the plumbing — parsing, change-scoping,
-message formatting, and test wiring — so a rule is just a short `check` method.
+message formatting, and test wiring — so a rule is usually just **data**: a docstring and a
+[`Matcher`][captain_hook.styleguide.Matcher].
 
 ## Your first rule
 
 A rule is a subclass. Write the message as the class **docstring** (`{violations}` is
-substituted at fire time), implement `check`, and hand the class to `styleguide()`:
+substituted at fire time), set `match` to a [`Matcher`][captain_hook.styleguide.Matcher], and
+hand the class to `styleguide()`:
 
 ```python
-import ast
-from captain_hook import styleguide, StyleRule, Violation, Input, Warn, Allow
+from captain_hook import styleguide, StyleRule, Input, Warn, Allow
+from captain_hook.styleguide import Matcher
 
-class NoPrint(StyleRule):
+class ZipStrict(StyleRule):
     """
-    print() calls don't belong in committed code:
+    zip() without strict=True can silently drop items:
       - {violations}
 
-    Use a logger (logger.info(...)) instead.
+    Pass strict=True so length mismatches raise.
     """
 
-    trigger = "print"                       # fast-exit if "print" isn't in the source
+    trigger = "zip"                         # fast-exit if "zip" isn't in the source
     tests = {
-        Input(file="app.py", content="def f():\n    print('hi')\n"): Warn(),
-        Input(file="app.py", content="def f():\n    logger.info('hi')\n"): Allow(),
+        Input(file="app.py", content="zip(a, b)\n"): Warn(),
+        Input(file="app.py", content="zip(a, b, strict=True)\n"): Allow(),
     }
+    match = Matcher.calls("zip") & ~Matcher.kwarg("strict")
+    label = "zip()"
 
-    def check(self, tree: ast.Module):
-        for node in ast.walk(tree):
-            match node:
-                case ast.Call(func=ast.Name(id="print")):
-                    yield Violation(node.lineno, "print() call")
-
-styleguide(NoPrint)
+styleguide(ZipStrict)
 ```
 
-- The **class name is the identity** — `NoPrint` becomes `no-print` (kebab-case).
+- The **class name is the identity** — `ZipStrict` becomes `zip-strict` (kebab-case).
 - The **docstring is the message**. Open it with a newline after `"""`; the runner normalizes
   it with `inspect.cleandoc`, so your indentation never leaks into the output. `{violations}`
   is replaced with the rule's findings joined by `sep` (default a bulleted list).
-- `check` walks the post-edit AST and yields [`Violation(line, label)`][captain_hook.Violation].
-  The runner renders each as `label (line N)`.
+- `match` selects the offending nodes; each becomes a [`Violation`][captain_hook.Violation]
+  rendered as `label (line N)`. `label` may be a fixed string (as here), a `node -> str`
+  callable, or omitted — the default labels a node by its bound name, falling back to
+  `ast.unparse`.
 - `trigger` is an optional substring fast-exit: if it isn't present in the source, the rule is
   skipped without parsing the AST.
 
@@ -50,24 +50,19 @@ styleguide(NoPrint)
 
 A rule sees the **whole post-edit file** (so a check never fails to parse a partial edit
 fragment) but reports **only violations on the lines your edit changed**. Editing one function
-does not surface a pre-existing `print()` in another function of the same file:
-
-```python
-# file already contains print() in two functions; you edit only the second.
-# -> only the print() on the line you touched is reported.
-```
-
-A `Write` (whole new file) counts as fully changed, so every violation is reported. This is the
-"see the changes, but parse enough context not to error" contract — you get full-module context
+does not surface a pre-existing `zip()` in another function of the same file. A `Write` (whole
+new file) counts as fully changed, so every violation is reported. You get full-module context
 for correctness and edit-scoped reporting for signal.
 
 ## Diff rules
 
 When a rule must compare *before and after* — "did this edit **introduce** something?" —
-subclass [`StyleDiffRule`][captain_hook.StyleDiffRule]. Its `check` receives both trees:
+subclass [`StyleDiffRule`][captain_hook.StyleDiffRule]. It flags nodes matching `match` in the
+new tree whose identity (`key`, default `ast.unparse`) was absent from the old tree:
 
 ```python
-from captain_hook import StyleDiffRule, Violation
+from captain_hook import StyleDiffRule
+from captain_hook.styleguide import Matcher
 
 class NoNewWildcardImport(StyleDiffRule):
     """
@@ -75,17 +70,60 @@ class NoNewWildcardImport(StyleDiffRule):
       - {violations}
     """
 
-    def check(self, pre: ast.Module, post: ast.Module):
-        old = {n.module for n in ast.walk(pre)
-               if isinstance(n, ast.ImportFrom) and any(a.name == "*" for a in n.names)}
-        for node in ast.walk(post):
-            if isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names) \
-               and node.module not in old:
-                yield Violation(node.lineno, f"from {node.module} import *")
+    match = Matcher.imports.where(lambda n: any(a.name == "*" for a in n.names))
 ```
 
 The pre-edit tree is reconstructed from the edit, so the rule fires only on a *newly added*
-wildcard, not one that was already there.
+wildcard, not one already there. Set `key` to a custom `node -> Hashable` when `ast.unparse`
+isn't the right notion of "the same construct" (e.g. comparing annotated slots by name).
+
+## The Matcher
+
+A [`Matcher`][captain_hook.styleguide.Matcher] is one composable thing: a node predicate that
+is also a tree selector. Build rules by **combining matchers**, not by reaching for a framework
+helper. Compose with a boolean algebra and refine with `.where(...)`:
+
+```python
+from captain_hook.styleguide import Matcher
+
+Matcher.imports & Matcher.child_of(Matcher.control_flow) & ~Matcher.under(Matcher.type_checking)
+Matcher.cls & Matcher.private                         # private-named class
+Matcher.kind(ast.Lambda)                              # a node type with no shipped name
+Matcher.call.where(lambda n: len(n.args) > 5)         # bespoke one-off predicate
+```
+
+| Group | Members |
+|-------|---------|
+| Operators | `&` (both), `\|` (either), `~` (negate) |
+| Node categories | `Matcher.module`, `.cls`, `.func`, `.definition` (`cls \| func`), `.imports`, `.call`, `.assignment`, `.control_flow`, `.type_checking`, `.any` |
+| Predicates | `Matcher.calls(name)`, `.kwarg(name)`, `.ref(name)`, `.named(pattern)`, `.kind(*types)` |
+| Name conventions | `Matcher.private` (leading single underscore), `.dunder`, `.constant` (`SCREAMING_SNAKE`) |
+| Annotations | `Matcher.annotated(inner=None)` (annotated var/param/return), `.forward_ref` (quoted type ref), `.future_annotations` (a module with `from __future__ import annotations`) |
+| Structure | `Matcher.under(m)` (any ancestor), `.child_of(m)` (immediate parent), `.following(m)` (sibling after the first match) |
+| Terminals | `.over(tree)`, `.violations(tree, label=None)`, `.exists(tree)`, `.matches(node)`, `.diff(pre, post, key, label=None)` |
+
+`~Matcher.under(x)` is "not inside `x`" — a single negation operator, not a separate method.
+The name-convention matchers mean rule files never re-declare `UPPER_SNAKE` / underscore
+regexes; reach for `Matcher.named(r"...")` only for a one-off pattern. Annotations compose like
+everything else — a "no quoted annotations under PEP 563" rule is just
+`Matcher.forward_ref & Matcher.under(Matcher.future_annotations)`.
+
+## Custom logic with check()
+
+When a rule's logic genuinely can't be expressed as a matcher — cross-node aggregation, body
+normalization, anything stateful — override `check()` instead of setting `match`. It receives
+the post-edit `ast.Module` (or both trees for a `StyleDiffRule`) and yields `Violation`s. A
+matcher is still useful inside it as a selector via `.over(tree)`:
+
+```python
+class NoStructuralOnlyTests(StyleRule):
+    """Tests that only assert with builtins exercise nothing: {violations}"""
+
+    def check(self, tree):
+        for fn in Matcher.func.over(tree):
+            if fn.name.startswith("test_") and only_builtin_calls(fn):
+                yield Violation(fn.lineno, fn.name)
+```
 
 ## Scope and severity — one hook per call
 
@@ -93,8 +131,8 @@ Each `styleguide(...)` call registers **exactly one hook**, scoped by that call.
 including block-vs-warn — is per call, so split concerns into separate calls:
 
 ```python
-styleguide(NoPrint, NoBareExcept)                                  # warn, all *.py
-styleguide(NoSqlInjection, block=True, only_if=[FilePath("api/**/*.py")])  # block, api only
+styleguide(NoPrint, NoBareExcept)                                         # warn, all *.py
+styleguide(NoSqlInjection, block=True, only_if=[FilePath("api/**/*.py")]) # block, api only
 ```
 
 The built-in `Tool("Edit|Write")` and `FilePath("*.py")` guards always apply (and test files
@@ -109,75 +147,14 @@ returns one block listing every violation at once.
 | `events` | Override the default `PostToolUse` targeting |
 | `max_shown` | Maximum violations shown per rule (default 5) |
 
-## The query API
-
-Rather than hand-walking the tree, compose a `Query`. It is a fluent, immutable filter over the
-AST: start with `Query.of(tree)`, chain refinements, and finish with `violations(label)` (or
-iterate it / call `exists()`):
-
-```python
-from captain_hook.styleguide import Query, Import, ControlFlow, TypeChecking
-
-def check(self, tree):
-    yield from (
-        Query.of(tree)
-        .matching(Import)                 # Import / ImportFrom nodes
-        .directly_inside(ControlFlow)     # whose immediate parent is an if/for/try/with/...
-        .not_inside(TypeChecking)         # but not under `if TYPE_CHECKING:`
-        .violations(ast.unparse)          # -> Violation(line, ast.unparse(node))
-    )
-```
-
-Refinements: `matching(kind)`, `where(predicate)`, `inside(kind)`, `directly_inside(kind)`,
-`not_inside(kind)`, and `after_first(kind)` (keep body-statements following the first sibling of
-a kind — the anchor for "declarations before code" rules).
-
-### Kinds
-
-A `Kind` is a matchable category of node — a set of node types and/or a predicate. The built-in
-kinds cover the common cases and compose with `|`:
-
-```python
-from captain_hook.styleguide import (
-    Kind, Module, Class, Function, Definition, Import, Call, Assignment, ControlFlow, TypeChecking,
-)
-
-Definition            # Class | Function
-Decorated = Kind(test=lambda n: bool(getattr(n, "decorator_list", None)))   # roll your own
-```
-
-Factories build parameterized kinds: `calls("zip")` matches calls to a named function, `named("x", "y")`
-matches a class/function/assignment/argument bound to one of those names. Because you compose
-kinds and drop into `where(...)` for anything bespoke, new rules rarely need a new framework
-helper.
-
-### Annotation & node helpers
-
-For checks that inspect annotations or names, `captain_hook.styleguide` also exports
-`name_of(node)`, `is_name(expr, "Any")`, `has_keyword(call, "strict")`, `has_future_annotations(tree)`,
-`annotations(tree)`, `string_literals(expr)`, and `annotated_slots(tree)` (each annotated
-variable/return/param as a `Slot`). For example, a "no widening to `Any`" diff rule is just:
-
-```python
-from captain_hook.styleguide import annotated_slots, is_name
-
-def check(self, pre, post):
-    before = {s.name for s in annotated_slots(pre) if is_name(s.annotation, "Any")}
-    yield from (
-        Violation(s.line, f"{s.name}: Any")
-        for s in annotated_slots(post)
-        if is_name(s.annotation, "Any") and s.name not in before
-    )
-```
-
 ## Testing rules
 
 Attach inline `tests` to each rule and run them with `capt-hook test`:
 
 ```python
 tests = {
-    Input(file="app.py", content="print('x')\n"): Warn(),
-    Input(file="app.py", content="x = 1\n"): Allow(),
+    Input(file="app.py", content="zip(a, b)\n"): Warn(),
+    Input(file="app.py", content="zip(a, b, strict=True)\n"): Allow(),
 }
 ```
 
