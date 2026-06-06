@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from spacy.tokens import Doc, Span, Token
 
+
 @dataclass(frozen=True, slots=True, init=False)
 class Phrase:
     lemmas: tuple[str, ...]

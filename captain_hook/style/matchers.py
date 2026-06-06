@@ -238,9 +238,7 @@ def kind(*types: type[ast.AST], label: str | None = None) -> Matcher:
 def calls(name: str) -> Matcher:
     """Match a call to the bare-name function ``name`` (e.g. ``calls("zip")``)."""
     return Matcher(
-        lambda node, _parents: (
-            isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == name
-        ),
+        lambda node, _parents: isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == name,
         f"calls({name})",
     )
 

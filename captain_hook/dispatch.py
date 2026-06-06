@@ -1,4 +1,5 @@
 """Select matching hooks, run their handlers, and translate ``HookResult`` into the Claude Code stdout envelope."""
+
 from __future__ import annotations
 
 from pathlib import Path

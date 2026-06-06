@@ -120,12 +120,7 @@ def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str = DIST_
         return [
             {
                 "type": "command",
-                "command": (
-                    f"uvx{from_flag} capt-hook"
-                    f"{hooks_flag}"
-                    f" run {event}"
-                    f"{' --async' if is_async else ''}"
-                ),
+                "command": (f"uvx{from_flag} capt-hook{hooks_flag} run {event}{' --async' if is_async else ''}"),
             }
             | ({"async": True} if is_async else {})
             for is_async, events in sorted(events_by_async.items())
@@ -328,12 +323,16 @@ def run_tests(json_output: bool = False) -> None:
     passed = failed = errors = skipped = 0
     for name, status, _ok, detail in results:
         if json_output:
-            print(json.dumps({
-                "id": name,
-                "status": status,
-                "expected": expected_by_id.get(name, ""),
-                "reason": detail,
-            }))
+            print(
+                json.dumps(
+                    {
+                        "id": name,
+                        "status": status,
+                        "expected": expected_by_id.get(name, ""),
+                        "reason": detail,
+                    }
+                )
+            )
         match status:
             case "pass":
                 passed += 1
@@ -377,10 +376,7 @@ def cli(ctx: click.Context, hooks: str | None, root_path: str | None) -> None:
 
 @cli.command(
     short_help="Dispatch a hook event (reads JSON from stdin, writes JSON to stdout)",
-    help=(
-        "Dispatch a hook event (reads JSON from stdin, writes JSON to stdout).\n\n"
-        f"EVENT is one of: {EVENT_NAMES}."
-    ),
+    help=(f"Dispatch a hook event (reads JSON from stdin, writes JSON to stdout).\n\nEVENT is one of: {EVENT_NAMES}."),
 )
 @click.argument("event")
 @click.option("--async", "async_", is_flag=True, default=False, help="Run async hooks only")

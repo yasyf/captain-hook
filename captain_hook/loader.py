@@ -1,4 +1,5 @@
 """Hook discovery: imports a hooks package, loads its ``conf`` module, and registers every hook module."""
+
 from __future__ import annotations
 
 import importlib

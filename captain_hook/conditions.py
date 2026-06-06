@@ -1,4 +1,5 @@
 """Condition evaluation: checks ``TCondition`` instances against the current event."""
+
 from __future__ import annotations
 
 import re
@@ -32,10 +33,7 @@ if TYPE_CHECKING:
 
 
 def has_completion_notification(t: Transcript, tool_use_id: str, after_idx: int) -> bool:
-    return any(
-        (n := m.notification) and n.tool_use_id == tool_use_id
-        for m in t.messages[after_idx + 1 :]
-    )
+    return any((n := m.notification) and n.tool_use_id == tool_use_id for m in t.messages[after_idx + 1 :])
 
 
 def waiting_tool_names(evt: BaseHookEvent) -> set[str]:
@@ -118,8 +116,7 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
             return bool(evt.ctx.transcript) and evt.ctx.transcript.has_command(pattern, subagents=subagents)
         case InPlanMode():
             return evt.permission_mode == "plan" or (
-                bool(t := evt.ctx.transcript)
-                and t.count_tools("EnterPlanMode") > t.count_tools("ExitPlanMode")
+                bool(t := evt.ctx.transcript) and t.count_tools("EnterPlanMode") > t.count_tools("ExitPlanMode")
             )
         case Waiting():
             return is_waiting(evt)

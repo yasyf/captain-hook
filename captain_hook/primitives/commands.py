@@ -16,6 +16,7 @@ def block_command_pattern(tokens: list[str]) -> str:
         >>> block_command_pattern(["git", "stash", "*"])
         'git\\\\s+stash\\\\s+\\\\S+'
     """
+
     def convert(token: str) -> str:
         match token:
             case "*":

@@ -15,9 +15,7 @@ class SessionCache:
     runs are self-contained.
     """
 
-    UUID_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-    )
+    UUID_RE: ClassVar[re.Pattern[str]] = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     DEFAULT_CLAUDE_PROJECTS: ClassVar[Path] = Path.home() / ".claude" / "projects"
 
     def __init__(self, root: Path, claude_projects: Path = DEFAULT_CLAUDE_PROJECTS) -> None:

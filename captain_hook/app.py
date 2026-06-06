@@ -26,9 +26,7 @@ if TYPE_CHECKING:
 
 HookHandler = Callable[["BaseHookEvent"], "HookResult | None"]
 
-VALID_CONDITION_TYPES = tuple(
-    t for t in get_args(TCondition) if t is not CustomCondition
-)
+VALID_CONDITION_TYPES = tuple(t for t in get_args(TCondition) if t is not CustomCondition)
 VALID_CONDITION_NAMES = ", ".join(t.__name__ for t in VALID_CONDITION_TYPES) + ", or a CustomCondition"
 
 
@@ -44,7 +42,8 @@ def validate_conditions(conditions: Sequence[TCondition], label: str) -> None:
 def validate_handler_signature(fn: HookHandler) -> None:
     sig = inspect.signature(fn)
     params = [
-        p for p in sig.parameters.values()
+        p
+        for p in sig.parameters.values()
         if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
     ]
     if len(params) != 1:
@@ -53,7 +52,8 @@ def validate_handler_signature(fn: HookHandler) -> None:
             f"got {sig}. Hook handlers must accept exactly one positional parameter (the event)."
         )
     required_kw = [
-        p for p in sig.parameters.values()
+        p
+        for p in sig.parameters.values()
         if p.kind == inspect.Parameter.KEYWORD_ONLY and p.default is inspect.Parameter.empty
     ]
     if required_kw:
@@ -99,9 +99,7 @@ def is_gitignored(path_str: str) -> bool:
     if not _state.gitignore_patterns:
         return False
     p = Path(path_str)
-    return any(
-        fnmatch(p.name, pat) or any(fnmatch(part, pat) for part in p.parts) for pat in _state.gitignore_patterns
-    )
+    return any(fnmatch(p.name, pat) or any(fnmatch(part, pat) for part in p.parts) for pat in _state.gitignore_patterns)
 
 
 def hook(
@@ -109,7 +107,6 @@ def hook(
     *,
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
-
     message: str | None = None,
     block: bool = False,
     respect_gitignore: bool = True,
@@ -274,5 +271,3 @@ def get_matching_hooks(evt: BaseHookEvent) -> list[RegisteredHook]:
             or not is_gitignored(str(evt.file))
         )
     ]
-
-

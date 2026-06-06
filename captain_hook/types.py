@@ -41,9 +41,7 @@ def expand_tool_names(name: str) -> set[str]:
 
 def tool_name_matches(actual: str, query: str) -> bool:
     return actual in (candidates := expand_tool_names(query)) or (
-        actual.startswith("mcp__")
-        and len(parts := actual.split("__", 2)) == 3
-        and parts[2] in candidates
+        actual.startswith("mcp__") and len(parts := actual.split("__", 2)) == 3 and parts[2] in candidates
     )
 
 

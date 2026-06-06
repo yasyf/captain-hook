@@ -3,6 +3,7 @@
 Each backend maps the framework's abstract :data:`TModel` sizes to provider
 model names and knows how to build the CLI invocation and parse its response.
 """
+
 from __future__ import annotations
 
 import json
@@ -107,8 +108,10 @@ class ClaudeBackend(LlmBackend):
                 ["--permission-mode", "auto", "--max-budget-usd", "1"]
                 if agent
                 else [
-                    "--system-prompt", "",
-                    "--setting-sources", "",
+                    "--system-prompt",
+                    "",
+                    "--setting-sources",
+                    "",
                     "--strict-mcp-config",
                 ]
             ),

@@ -171,11 +171,7 @@ class TranscriptMessage:
 
     @property
     def tool_uses(self) -> list[ToolUse]:
-        return [
-            ToolUse(name=b.name, raw_input=b.input, id=b.id)
-            for b in self.content
-            if isinstance(b, ToolUseBlock)
-        ]
+        return [ToolUse(name=b.name, raw_input=b.input, id=b.id) for b in self.content if isinstance(b, ToolUseBlock)]
 
     @property
     def tool_results(self) -> list[ToolResult]:

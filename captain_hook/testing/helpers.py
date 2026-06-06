@@ -25,9 +25,11 @@ from captain_hook.transcript import Transcript
 from captain_hook.types import Event, HookResult, Tool
 
 STUB_FIELD_VALUES: dict[str, Any] = {
-    "block": True, "fire": True,
+    "block": True,
+    "fire": True,
     "action": "block",
-    "reasoning": "inline test stub", "reason": "inline test stub",
+    "reasoning": "inline test stub",
+    "reason": "inline test stub",
 }
 
 
@@ -106,8 +108,7 @@ def mock_stop_event(
     session_dir: Path | None = None,
 ) -> StopEvent:
     return StopEvent(
-        _raw={"stop_hook_active": stop_hook_active}
-        | ({"permission_mode": permission_mode} if permission_mode else {}),
+        _raw={"stop_hook_active": stop_hook_active} | ({"permission_mode": permission_mode} if permission_mode else {}),
         ctx=build_context(transcript, transcript_path, session_dir),
     )
 
@@ -160,8 +161,7 @@ def mock_user_prompt_event(
     session_dir: Path | None = None,
 ) -> UserPromptSubmitEvent:
     return UserPromptSubmitEvent(
-        _raw={"prompt": prompt}
-        | ({"permission_mode": permission_mode} if permission_mode else {}),
+        _raw={"prompt": prompt} | ({"permission_mode": permission_mode} if permission_mode else {}),
         ctx=build_context(transcript, transcript_path, session_dir),
     )
 
@@ -275,13 +275,11 @@ def transcript_event_payloads(
     base = {"transcript_path": transcript_path}
     match ev_type:
         case Event.PreToolUse:
-            yield from (
-                base | {"tool_name": tu.name, "tool_input": tu.raw_input}
-                for tu in transcript.tool_uses
-            )
+            yield from (base | {"tool_name": tu.name, "tool_input": tu.raw_input} for tu in transcript.tool_uses)
         case Event.PostToolUse:
             yield from (
-                base | {"tool_name": tu.name, "tool_input": tu.raw_input}
+                base
+                | {"tool_name": tu.name, "tool_input": tu.raw_input}
                 | ({"tool_response": str(tu.result.content)} if tu.result and not tu.result.is_error else {})
                 for tu in transcript.tool_uses
             )
@@ -306,12 +304,16 @@ def matches_expected(result: HookResult | None, expected: Block | Warn | Allow) 
         case Allow():
             return result is None or result.action == "allow"
         case Block(pattern=pat):
-            return result is not None and result.action == "block" and (
-                not pat or not result.message or bool(re.search(pat, result.message))
+            return (
+                result is not None
+                and result.action == "block"
+                and (not pat or not result.message or bool(re.search(pat, result.message)))
             )
         case Warn(pattern=pat):
-            return result is not None and result.action == "warn" and (
-                not pat or not result.message or bool(re.search(pat, result.message))
+            return (
+                result is not None
+                and result.action == "warn"
+                and (not pat or not result.message or bool(re.search(pat, result.message)))
             )
 
 
@@ -342,11 +344,13 @@ def stub_call_llm(
 ) -> str | BaseModel:
     if response_model is None:
         return "stubbed"
-    return response_model(**{
-        name: STUB_FIELD_VALUES.get(name, "")
-        for name, info in response_model.model_fields.items()
-        if name in STUB_FIELD_VALUES or info.default is None
-    })
+    return response_model(
+        **{
+            name: STUB_FIELD_VALUES.get(name, "")
+            for name, info in response_model.model_fields.items()
+            if name in STUB_FIELD_VALUES or info.default is None
+        }
+    )
 
 
 def run_inline_tests() -> list[tuple[str, str, bool, str]]:

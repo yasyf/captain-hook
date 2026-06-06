@@ -13,6 +13,7 @@ class MessageClassifier(Protocol):
 
     def __call__(self, msg: TranscriptMessage) -> bool: ...
 
+
 CLASSIFIER_MODULES = ("droid", "conductor", "native")
 
 

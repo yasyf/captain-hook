@@ -98,5 +98,3 @@ class Prompt:
         if self.ask_text:
             parts.append(self.ask_text)
         return "\n\n".join(parts)
-
-

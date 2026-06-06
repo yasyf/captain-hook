@@ -1,4 +1,5 @@
 """Hook fire-count and primitive echo-suppression state, plus shared NLP resources (spaCy, WordNet)."""
+
 from __future__ import annotations
 
 import inspect
@@ -44,7 +45,7 @@ class NlpResources:
             f"spaCy model {SPACY_MODEL!r} is not installed. "
             f"Install it explicitly before running hooks that use NLP signals: "
             f"`python -m spacy download {SPACY_MODEL}` "
-            f"or `python -c \"from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()\"`."
+            f'or `python -c "from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()"`.'
         )
 
     @cached_property
@@ -178,12 +179,7 @@ class EchoTracker:
 
     def saw(self, text: str, *, evt: BaseHookEvent) -> bool:
         ps = evt.ctx.s[PrimitiveState].get()
-        return (
-            ps is not None
-            and bool(ps.echo_lemmas)
-            and len(evt.ctx.t) < ps.echo_window_end
-            and ps.is_echo(text)
-        )
+        return ps is not None and bool(ps.echo_lemmas) and len(evt.ctx.t) < ps.echo_window_end and ps.is_echo(text)
 
     def record(self, text: str, triggering: Iterable[str], *, evt: BaseHookEvent) -> None:
         ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())

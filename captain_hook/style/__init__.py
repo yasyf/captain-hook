@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 GUARD_ONLY_IF: tuple[TCondition, ...] = (Tool("Edit|Write"), FilePath("*.py", project_only=False))
 GUARD_SKIP_IF: tuple[TCondition, ...] = (TestFile(),)
 
+
 def styleguide(
     *rules: type[StyleRule],
     block: bool = False,
@@ -95,9 +96,7 @@ def run_rules(rules: list[StyleRule], evt: BaseHookEvent, *, block: bool, max_sh
     pre_tree = parse_quietly(pre) if any(isinstance(r, StyleDiffRule) for r in rules) else None
     if not (
         sections := [
-            section
-            for rule in rules
-            if (section := run_one(rule, tree, pre_tree, changed, max_shown)) is not None
+            section for rule in rules if (section := run_one(rule, tree, pre_tree, changed, max_shown)) is not None
         ]
     ):
         return None

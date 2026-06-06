@@ -18,8 +18,7 @@ MODEL_NAME = "en_core_web_sm"
 COMPATIBILITY_URL = "https://raw.githubusercontent.com/explosion/spacy-models/master/compatibility.json"
 RELEASE_URL = "https://api.github.com/repos/explosion/spacy-models/releases/tags/{model}-{version}"
 MODEL_URL = (
-    "https://github.com/explosion/spacy-models/releases/download/"
-    "{model}-{version}/{model}-{version}-py3-none-any.whl"
+    "https://github.com/explosion/spacy-models/releases/download/{model}-{version}/{model}-{version}-py3-none-any.whl"
 )
 WHEEL_CHECKSUM = re.compile(r"Checksum \.whl:\*\*\s*`([0-9a-f]{64})`")
 

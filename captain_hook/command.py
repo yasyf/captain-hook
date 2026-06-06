@@ -337,9 +337,7 @@ class CommandLineQuery:
             ``True`` if any command has a file redirect or the parts are joined
             by a pipe (``|``) operator.
         """
-        return any(cmd.redirects for cmd in self.line.commands) or any(
-            op == "|" for _, op in self.line.parts if op
-        )
+        return any(cmd.redirects for cmd in self.line.commands) or any(op == "|" for _, op in self.line.parts if op)
 
     def contains_token(self, token: str) -> bool:
         """Return whether ``token`` appears as a whole argv element in any command.

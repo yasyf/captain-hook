@@ -138,9 +138,7 @@ class HookContext:
                 template = f"{{transcript}}\n\n<task>\n{template}\n</task>"
             prompt = template.format(*args, **kwargs, transcript=self.transcript)
         schema = (
-            json.dumps(response_model.model_json_schema() | {"additionalProperties": False})
-            if response_model
-            else None
+            json.dumps(response_model.model_json_schema() | {"additionalProperties": False}) if response_model else None
         )
         backend = LlmBackends.for_specialty(specialty)
         schema_path = self.resolve_schema_path(backend, schema)

@@ -84,9 +84,7 @@ class PathMatcher:
         return self.matches(path)
 
 
-def categorize_files(
-    paths: Iterable[str | Path], *, lang: str = "py"
-) -> tuple[list[str], list[str], list[str]]:
+def categorize_files(paths: Iterable[str | Path], *, lang: str = "py") -> tuple[list[str], list[str], list[str]]:
     """Split paths into source, test, and skipped buckets for a language.
 
     A path that does not match the ``lang`` globs is skipped; otherwise it is
