@@ -103,7 +103,7 @@ Target Python 3.12+. Run `uv sync --extra dev`, `uv run pytest`, and `uv build`.
 
 **Testing.** The suite lives in `tests/`; run it with `uv run pytest`. Use strict assertions and mock external dependencies while leaving the code under test real. NLP-dependent tests need the `en_core_web_sm` spaCy model and the `oewn:2025` wn lexicon provisioned, as in `.github/workflows/ci.yml`.
 
-**Docs.** Any public API change must keep `uv run great-docs build` green; run `uv sync --group docs` first. New example hooks need both the `.py` in `docs/examples/` and a sibling `.qmd` page embedding it via a `<!-- gd-embed: name.py -->` marker; the Examples section picks pages up automatically.
+**Docs.** Any public API change must keep `uv run great-docs build` green; run `uv sync --group docs` first. Build with `GITHUB_TOKEN=$(gh auth token)` locally or the GitHub-Releases changelog page silently skips on rate limits. New example hooks need both the `.py` in `docs/examples/` and a sibling `.qmd` page embedding it via a `<!-- gd-embed: name.py -->` marker; the Examples section picks pages up automatically.
 
 **Git.** Commits should be atomic and scoped. One logical change per commit.
 
