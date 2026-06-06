@@ -10,11 +10,8 @@ pypi: true
 github_style: widget
 jupyter: python3
 
-navbar_style: lilac
-content_style: lilac
-accent_color:
-  light: "#ffb300"
-  dark: "#ffca28"
+navbar_color: "#1e293b"
+accent_color: "#3b82f6"
 dark_mode_toggle: true
 back_to_top: true
 keyboard_nav: true
@@ -22,7 +19,6 @@ keyboard_nav: true
 hero:
   name: captain-hook
   tagline: "Declarative hooks for Claude Code — rules as data, tested inline."
-  starfield: true
 
 sections:
   - title: Getting Started
