@@ -1,0 +1,228 @@
+# Great Docs configuration — https://posit-dev.github.io/great-docs/
+# Build: uv run great-docs build · Preview: uv run great-docs preview
+
+module: captain_hook
+display_name: captain-hook
+parser: google
+dynamic: true
+repo: https://github.com/yasyf/captain-hook
+site_url: "https://yasyf.github.io/captain-hook/"
+pypi: true
+github_style: widget
+jupyter: python3
+
+navbar_style: lilac
+content_style: lilac
+accent_color:
+  light: "#ffb300"
+  dark: "#ffca28"
+dark_mode_toggle: true
+back_to_top: true
+keyboard_nav: true
+
+hero:
+  name: captain-hook
+  tagline: "Declarative hooks for Claude Code — rules as data, tested inline."
+  starfield: true
+
+sections:
+  - title: Getting Started
+    dir: docs/getting-started
+    index: true
+    index_columns: 2
+  - title: Guide
+    dir: docs/guide
+    navbar_after: Getting Started
+    index: true
+    index_columns: 2
+  - title: Examples
+    dir: docs/examples
+    navbar_after: Guide
+    index: true
+  - title: Reference
+    dir: docs/reference
+    navbar_after: Examples
+  - title: Development
+    dir: docs/development
+    navbar_after: Reference
+
+cli:
+  enabled: true
+  module: captain_hook.cli
+  name: cli
+
+authors:
+  - name: Yasyf Mohamedali
+    role: Maintainer
+    github: yasyf
+    email: yasyfm@gmail.com
+
+# Curated symbol reference from captain_hook.__all__ (public API only).
+# ContentBlock, InlineTests, and TCondition are excluded automatically
+# (cyclic aliases under dynamic introspection).
+reference:
+  - title: Registration
+    desc: Declaring and registering hooks.
+    contents:
+      - hook
+      - on
+      - register
+
+  - title: Primitives
+    desc: One-line hooks for the common cases.
+    contents:
+      - audit
+      - gate
+      - nudge
+      - lint
+      - diff_lint
+      - block_command
+      - warn_command
+      - llm_gate
+      - llm_nudge
+      - llm_evaluate
+      - prompt_check
+      - styleguide
+      - StyleRule
+      - StyleDiffRule
+      - Violation
+      - GateVerdict
+      - NudgeVerdict
+      - PromptCheckVerdict
+      - session_id_for
+
+  - title: Conditions
+    desc: Typed filters that decide when hooks fire.
+    contents:
+      - Tool
+      - FilePath
+      - TouchedFile
+      - TestFile
+      - ReadFile
+      - RanCommand
+      - UsedSkill
+      - InPlanMode
+      - Waiting
+      - Signal
+      - Signals
+      - CustomCondition
+
+  - title: Events & Results
+    desc: Typed lifecycle events and hook outcomes.
+    contents:
+      - Event
+      - BaseHookEvent
+      - ToolHookEvent
+      - PreToolUseEvent
+      - PostToolUseEvent
+      - PostToolUseFailureEvent
+      - UserPromptSubmitEvent
+      - StopEvent
+      - SubagentStartEvent
+      - SubagentStopEvent
+      - PreCompactEvent
+      - NotificationEvent
+      - HookContext
+      - HookResult
+      - HookSpec
+      - Action
+      - Agent
+      - Content
+
+  - title: Files & Commands
+    desc: Path matching and AST-level command inspection.
+    contents:
+      - File
+      - PathMatcher
+      - categorize_files
+      - Command
+      - CommandLine
+      - Redirect
+      - EditOp
+      - WriteOp
+      - TaskOp
+
+  - title: Transcript
+    desc: Typed access to conversation history.
+    contents:
+      - Transcript
+      - TranscriptMessage
+      - TranscriptSlice
+      - ToolUse
+      - ToolUseQuery
+      - ToolUseSequence
+      - Turn
+      - Task
+      - Tasks
+      - parse_tool_input
+      - parse_content_block
+
+  - title: Tool Inputs
+    desc: Parsed tool-input models.
+    contents:
+      - InputBase
+      - FileInputBase
+      - AgentInput
+      - BashInput
+      - EditInput
+      - GenericInput
+      - GlobInput
+      - GrepInput
+      - ReadInput
+      - SkillInput
+      - TaskCreateInput
+      - TaskUpdateInput
+      - WriteInput
+      - TextBlock
+      - ToolResult
+      - ToolUseBlock
+
+  - title: Signals
+    desc: NLP signal scoring over transcript text.
+    contents:
+      - cite_message
+      - score_signals
+      - resolve_signals
+      - extract_signal_context
+      - transcript_texts
+      - Clause
+      - NlpSignal
+      - Phrase
+
+  - title: State & Sessions
+    desc: Session state, workflow state, and multi-step workflows.
+    contents:
+      - HookState
+      - PrimitiveState
+      - EchoTracker
+      - SourceEdits
+      - workflow_state
+      - SessionSlot
+      - SessionStore
+      - session_state
+      - Workflow
+      - Step
+      - Artifact
+      - text_matches
+      - workflow
+
+  - title: Testing
+    desc: Inline tests for hooks.
+    contents:
+      - Input
+      - Allow
+      - Block
+      - Warn
+      - TranscriptFixture
+
+  - title: Configuration & Prompts
+    desc: Settings, scaffolding, and LLM prompt helpers.
+    contents:
+      - AutoConf
+      - HooksSettings
+      - build_settings
+      - generate_settings
+      - generate_settings_json
+      - read_json
+      - Prompt
+      - PromptMessage
