@@ -2,17 +2,48 @@
 title: "Examples"
 ---
 
-Each page picks one capability of the framework, frames it as a problem you've actually hit, and links to a self-contained `docs/examples/*.py` file you can drop into your hooks directory. Every example file ships with inline `tests = {...}` you can run via `capt-hook --hooks docs/examples test`.
+Each page picks one capability, frames it as a problem you've hit, and links to a self-contained `docs/examples/*.py` file you can drop into your hooks directory. Every example ships with inline `tests = {...}` you can run with `uvx capt-hook --hooks docs/examples test`. The pages read thin in source because the code is injected from the `.py` file at build time.
+
+Work through them by job, from guarding against mistakes to composing a full hooks file.
+
+## Threat modeling
+
+Stop dangerous actions before they run.
 
 | Example | Teaches |
 |---|---|
-| [Audit Logging](audit.qmd) | JSONL audit log with custom fields and hourly rotation. |
-| [Code Quality](code-quality.qmd) | Layered detection: regex `hook` → AST `lint` → signal `nudge` → `llm_gate`. |
-| [Command Safety](command-safety.qmd) | `block_command` plus `evt.command_line.q.*` for AST-level command predicates. |
-| [Custom Condition](custom-condition.qmd) | The `CustomCondition` protocol for project-specific predicates. |
-| [Failure Recovery](failure-recovery.qmd) | Signal-driven `Stop` nudge that points at debug tools when failures repeat. |
-| [Multi-Step Workflow](multi-step-workflow.qmd) | `workflow` / `Step` / `Artifact` enforcing a checklist before `SubagentStop`. |
-| [Session Workflow](session-workflow.qmd) | `@workflow_state` group spanning `PreToolUse`, `UserPromptSubmit`, and `Stop`. |
-| [Settings Config](settings-config.qmd) | `HooksSettings` subclass plus a sibling hook that reads `evt.ctx.c.*`. |
-| [Style Guide](styleguide.qmd) | `styleguide` running `StyleRule` matchers that flag only the lines your edit touched. |
-| [Test Integrity](test-integrity.qmd) | `prompt_check` with `Prompt.from_template` detecting weakened tests. |
+| [Command Safety](command-safety.qmd) | `block_command` plus command-line AST predicates |
+| [Deploy & Secret Guard](deploy-secret-guard.qmd) | block infra-destroying commands and secret leaks |
+| [Audit Logging](audit.qmd) | a JSONL trail of every tool call |
+
+## Feedback
+
+Drive the agent with the right nudge at the right time.
+
+| Example | Teaches |
+|---|---|
+| [Code Quality](code-quality.qmd) | layered detection: regex `hook`, AST `lint`, signal `nudge`, `llm_gate` |
+| [Failure Recovery](failure-recovery.qmd) | a signal-driven `Stop` nudge when failures repeat |
+| [LLM Cost Control](llm-cost-control.qmd) | bound an LLM hook's token spend |
+
+## Workflow
+
+Enforce process across a session.
+
+| Example | Teaches |
+|---|---|
+| [Settings Config](settings-config.qmd) | a `HooksSettings` subclass read by a sibling hook |
+| [Session Workflow](session-workflow.qmd) | `@workflow_state` spanning several events |
+| [Multi-Step Workflow](multi-step-workflow.qmd) | `workflow` / `Step` / `Artifact` before `SubagentStop` |
+
+## Reusable & advanced
+
+Build rules you compose and reuse.
+
+| Example | Teaches |
+|---|---|
+| [Conditions Composition](conditions-composition.qmd) | stack `only_if` and `skip_if` to target one edit |
+| [Custom Condition](custom-condition.qmd) | the `CustomCondition` protocol |
+| [Style Guide](styleguide.qmd) | `styleguide` running `StyleRule` matchers on changed lines |
+| [Test Integrity](test-integrity.qmd) | `prompt_check` detecting weakened tests |
+| [A Complete Hooks File](capstone.qmd) | several primitives composing in one file |
