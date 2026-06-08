@@ -4,17 +4,9 @@ toc: false
 body-classes: "gd-homepage"
 ---
 
-```python
-from captain_hook import gate, TouchedFile, UsedSkill
+<!-- gd-embed-fragment: canonical_hook -->
 
-gate(
-    "You edited UI files — verify them with agent-browser before finishing.",
-    only_if=[TouchedFile("**/src/routes/**", "**/src/components/**")],
-    skip_if=[UsedSkill("agent-browser")],
-)
-```
-
-Four lines stop your agent from calling a UI change done before it looked at it. A hook is declarative Python — an event, conditions, and an action.
+A few lines stop your agent from calling a UI change done before it looked at it. A hook is declarative Python — an event, conditions, and an action.
 
 ::: {.callout-note}
 No install step. Every command runs through [uvx](https://docs.astral.sh/uv/): `uvx capt-hook …` fetches captain-hook into a throwaway environment and runs it, so it never enters your `pyproject.toml`.
