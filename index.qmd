@@ -5,12 +5,20 @@ body-classes: "gd-homepage"
 ---
 
 ```python
-from captain_hook import block_command
+from captain_hook import gate, TouchedFile, UsedSkill
 
-block_command(["git", "stash"], reason="Use jj instead", hint="Run `jj shelve`")
+gate(
+    "You edited UI files — verify them with agent-browser before finishing.",
+    only_if=[TouchedFile("**/src/routes/**", "**/src/components/**")],
+    skip_if=[UsedSkill("agent-browser")],
+)
 ```
 
-That's it. One line blocks `git stash` across your entire project.
+Four lines stop your agent from calling a UI change done before it looked at it. A hook is declarative Python — an event, conditions, and an action.
+
+::: {.callout-note}
+No install step. Every command runs through [uvx](https://docs.astral.sh/uv/): `uvx capt-hook …` fetches captain-hook into a throwaway environment and runs it, so it never enters your `pyproject.toml`.
+:::
 
 ---
 
@@ -37,7 +45,7 @@ Gate or nudge with LLM verdicts. Signal scoring detects patterns in transcript t
 ::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
 {{< icon test-tube >}} **Inline testing**
 
-Test hooks where you define them. `Input(command="git stash")` / `Block("jj")` — run with `capt-hook test`.
+Test hooks where you define them. `Input(command="git stash")` / `Block("jj")` — run with `uvx capt-hook test`.
 :::
 
 ::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
@@ -58,29 +66,38 @@ Query conversation history with a typed API. Filter tool uses, extract commands,
 
 ## Get started
 
-::: {.panel-tabset}
+Four steps from nothing to a hook firing in Claude Code.
 
-## Install
-
-```bash
-uv add capt-hook
-```
-
-## Scaffold
+**1. Scaffold and wire it.** One command creates `.claude/hooks/`, wires Claude Code's settings, and installs the skills:
 
 ```bash
-capt-hook init
+uvx capt-hook init
 ```
 
-## Write a hook
+**2. Write your first hook.** Drop the gate above into `.claude/hooks/visual_review.py`, or block a command outright:
 
 ```python
-from captain_hook import gate, RanCommand
+# .claude/hooks/safety.py
+from captain_hook import Allow, Block, Input, block_command
 
-gate("Run tests before stopping", skip_if=[RanCommand(r"pytest")])
+block_command(
+    ["git", "stash"],
+    reason="Use jj instead",
+    hint="Run `jj shelve`",
+    tests={
+        Input(command="git stash"): Block(),
+        Input(command="git status"): Allow(),
+    },
+)
 ```
 
-:::
+**3. Test it.** Every deterministic hook carries inline tests, so a broken hook fails like broken code:
+
+```bash
+uvx capt-hook test
+```
+
+**4. It's already live.** `init` wired the settings — each event runs `uvx capt-hook run <Event>`, with the event JSON on stdin and the verdict on stdout. Reload the project and the hook fires.
 
 [{{< icon arrow-right >}} Installation](docs/getting-started/installation.qmd){.btn .btn-primary}
 [{{< icon arrow-right >}} Quickstart](docs/getting-started/quickstart.qmd){.btn .btn-outline-primary}
