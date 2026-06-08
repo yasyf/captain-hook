@@ -1,8 +1,10 @@
 ---
-title: "Conditions"
+title: "Filter hooks with conditions"
 ---
 
-Conditions filter **when** a hook fires. Every hook registration accepts two condition lists -- `only_if` and `skip_if` -- that narrow the hook's scope beyond just the event type.
+Conditions decide when a hook fires. You pass them in two lists on every
+registration. `only_if` requires every condition to match. `skip_if` skips the hook
+when any condition matches.
 
 ```python
 from captain_hook import hook, Event, Tool, Command, RanCommand
@@ -16,285 +18,126 @@ hook(
 )
 ```
 
-## Two categories
+## Combine conditions
 
-Conditions fall into two groups based on what they inspect:
+`skip_if` runs first. If any skip condition matches, the hook is skipped and
+`only_if` is never checked. So the hook above fires when the tool is Bash **and** the
+command matches `git stash`, unless the agent already ran `jj shelve`.
 
-| Category | What it checks | Conditions |
-|----------|---------------|------------|
-| **Current Event** | Properties of the event being processed right now | `Tool`, `FilePath`, `Command`, `Content`, `Agent`, `TestFile` |
-| **Transcript History** | What has happened earlier in the session | `ReadFile`, `TouchedFile`, `RanCommand`, `UsedSkill`, `InPlanMode` |
+```python
+only_if=[A, B, C]   # A and B and C must all match
+skip_if=[X, Y]      # X or Y, either match skips the hook
+```
 
-::: {.callout-tip title="Rule of thumb"}
-Use current-event conditions to match *what* is happening. Use transcript-history conditions to match *what has already happened*.
-:::
+For an "or" inside one condition, use pipe-alternation instead of separate entries.
+`Tool("Edit|Write")` matches either tool. `Tool("Edit"), Tool("Write")` requires both,
+which no event satisfies.
 
-## Which condition do I need?
+## Pick a condition
 
-| Need | Use |
+Start from what you want to match.
+
+| You want to match | Use |
 |---|---|
-| Filter by tool name | `Tool("Bash")` or `Tool("Edit|Write")` |
-| Filter by file path | `FilePath("*.py", "*.pyi")` |
-| Filter by bash command text | `Command(r"git\s+push")` |
-| Filter by file content being written | `Content(r"print\(")` |
-| Filter by subagent type | `Agent("cleanup")` |
-| Match only test files | `TestFile()` |
-| Match only if a file was previously read | `ReadFile("TESTING.md")` |
-| Match only if a file was previously edited | `TouchedFile("**/*.py")` |
-| Match only if a command was previously run | `RanCommand(r"uv\s+run\s+mtest")` |
-| Match only if a skill was invoked | `UsedSkill("codex")` |
-| Match only during plan mode | `InPlanMode()` |
-| Custom logic | implement `CustomCondition` |
+| A file path | `FilePath("*.py", "*.pyi")` |
+| A bash command | `Command(r"git\s+push")` |
+| An edit to a source file in a language | `SourceEdits(lang="ts")` |
+| A test file | `TestFile()` |
+| Written or edited file content | `Content(r"print\(")` |
+| The current tool | `Tool("Bash")` |
+| A subagent type | `Agent("cleanup")` |
+| A file edited earlier this session | `TouchedFile("**/*.py")` |
+| A command run earlier this session | `RanCommand(r"uv\s+run\s+mtest")` |
+| A skill used earlier this session | `UsedSkill("codex")` |
+| Plan mode | `InPlanMode()` |
 
-## `only_if` vs `skip_if`
+The first group inspects the current event. The last group inspects the session
+transcript, so it tells you whether something already happened earlier in the
+session. For the full table with every pattern type and default, see
+[Conditions Cheatsheet](../reference/conditions.qmd).
 
-The two lists use different logical operators. `only_if` is **AND** -- every condition in the list must match for the hook to fire. `skip_if` is **OR** -- if any condition in the list matches, the hook is skipped.
+## Match the current event
 
-`skip_if` is evaluated first. If any skip condition matches, the hook is skipped regardless of `only_if`.
-
-```python
-from captain_hook import hook, Event, Tool, Command, RanCommand
-
-# Fires only when: tool is Bash AND command matches git push
-# Skipped when: the agent already ran tests
-hook(
-    Event.PreToolUse,
-    message="Run tests before pushing",
-    block=True,
-    only_if=[Tool("Bash"), Command(r"git\s+push")],
-    skip_if=[RanCommand(r"uv\s+run\s+mtest")],
-)
-```
-
-## Current-event conditions
-
-### Tool
-
-Matches the current event's tool name. The pattern is matched against the tool name directly, not as a regex. Pipe-separated names match any of the listed tools, and tool aliases are expanded automatically -- `Bash` matches `Execute`, `Write` matches `Create`, and `Agent` matches `Task`.
+`FilePath`, `Content`, `TestFile`, and `SourceEdits` match project files only by
+default. Pass `project_only=False` to target external scratch files, attachments, or
+logs.
 
 ```python
-from captain_hook import hook, Event, Tool
+from captain_hook import hook, Event, FilePath, Command, SourceEdits
 
-# only_if: fire only for Bash tool uses
-hook(Event.PreToolUse, message="Be careful", only_if=[Tool("Bash")])
-
-# skip_if: skip Read and Glob tools
-hook(Event.PostToolUse, message="Review output", skip_if=[Tool("Read|Glob")])
-```
-
-### FilePath
-
-Matches the current event's file path against one or more glob patterns. Accepts multiple patterns as positional arguments.
-By default, absolute paths outside the project root do not match; pass `project_only=False` for hooks that
-intentionally inspect external scratch files, attachments, or logs.
-
-```python
-from captain_hook import hook, Event, FilePath
-
-# only_if: fire only for Python files
+# Fire only for Python files
 hook(Event.PostToolUse, message="Check imports", only_if=[FilePath("*.py", "*.pyi")])
 
-# skip_if: skip config files
-hook(Event.PostToolUse, message="Review edit", skip_if=[FilePath("*.toml", "*.yaml")])
+# Fire only for git push commands
+hook(Event.PreToolUse, message="Run tests before pushing", block=True,
+     only_if=[Command(r"git\s+push")])
+
+# Fire only for TypeScript source edits under src/
+hook(Event.PostToolUse, message="Check types", only_if=[SourceEdits(lang="ts", paths="src/**")])
 ```
 
-### Command
+`SourceEdits` skips test files unless you pass `include_tests=True`, so it pairs a
+language with a source-only scope in one condition.
 
-Matches the current event's bash command text against a regex pattern. Only meaningful for `PreToolUse` events targeting the Bash/Execute tool.
+## Match the session history
 
-```python
-from captain_hook import hook, Event, Tool, Command
-
-# only_if: fire only for git stash commands
-hook(
-    Event.PreToolUse,
-    message="Use jj shelve instead of git stash",
-    block=True,
-    only_if=[Tool("Bash"), Command(r"git\s+stash")],
-)
-
-# skip_if: skip harmless read-only commands
-hook(
-    Event.PreToolUse,
-    message="Dangerous command",
-    block=True,
-    only_if=[Tool("Bash")],
-    skip_if=[Command(r"^(ls|cat|echo|pwd)")],
-)
-```
-
-### Content
-
-Matches the current event's file content against a regex pattern. Applies to Edit (the new content) and Write (the file content) tool events. The regex uses `re.MULTILINE` mode.
-Like `FilePath`, it only matches project files by default; pass `project_only=False` for external files.
+Transcript conditions gate on prior actions. Use them to require a step or to skip a
+hook once a step has happened.
 
 ```python
-from captain_hook import hook, Event, Content
+from captain_hook import hook, Event, TouchedFile, RanCommand, UsedSkill
 
-# only_if: fire when print() is being written
-hook(Event.PostToolUse, message="Use logger instead of print()", only_if=[Content(r"print\(")])
+# Fire only if Python files were edited this session
+hook(Event.Stop, message="Run tests before stopping", block=True,
+     only_if=[TouchedFile("**/*.py")])
 
-# skip_if: skip if content contains a noqa comment
-hook(Event.PostToolUse, message="Check formatting", skip_if=[Content(r"#\s*noqa")])
-```
-
-### Agent
-
-Matches the current event's subagent type against a pipe-separated name list. Only meaningful for `SubagentStart` and `SubagentStop` events.
-
-```python
-from captain_hook import hook, Event, Agent
-
-# only_if: fire only for cleanup subagents
-hook(Event.SubagentStop, message="Review cleanup output", only_if=[Agent("cleanup")])
-
-# skip_if: skip feature-implementer subagents
-hook(Event.SubagentStop, message="Check work", skip_if=[Agent("feature-implementer")])
-```
-
-### TestFile
-
-Matches when the current event targets a test file -- a file named `test_*.py` or `conftest.py`. Takes no arguments.
-Like `FilePath`, it only matches project files by default; use `TestFile(project_only=False)` for external paths.
-
-```python
-from captain_hook import hook, Event, TestFile
-
-# only_if: fire only on test files
-hook(Event.PostToolUse, message="Check test quality", only_if=[TestFile()])
-
-# skip_if: skip test files (common for linting hooks)
-hook(Event.PostToolUse, message="Check code style", skip_if=[TestFile()])
-```
-
-## Transcript-history conditions
-
-These conditions inspect the conversation transcript to determine whether specific actions have occurred earlier in the session.
-
-### ReadFile
-
-True when a Read tool use targeted a file matching the given glob pattern(s). Accepts multiple patterns as positional arguments.
-
-```python
-from captain_hook import hook, Event, ReadFile
-
-# only_if: fire only if the agent read the testing guide
-hook(Event.Stop, message="Follow the testing guide", only_if=[ReadFile("TESTING.md")])
-
-# skip_if: skip if docs were already consulted
-hook(Event.PostToolUse, message="Read the docs first", skip_if=[ReadFile("docs/*.md")])
-```
-
-### TouchedFile
-
-True when an Edit or Write tool use targeted a file matching the given glob pattern(s). Accepts multiple patterns as positional arguments.
-
-```python
-from captain_hook import hook, Event, TouchedFile
-
-# only_if: fire only if Python files were edited
-hook(Event.Stop, message="Run tests before stopping", only_if=[TouchedFile("**/*.py")])
-
-# skip_if: skip if no source files were modified
-hook(Event.Stop, message="Commit your changes", skip_if=[TouchedFile("tests/**")])
-```
-
-### RanCommand
-
-True when a Bash tool use with a command matching the regex pattern exists in the transcript.
-
-```python
-from captain_hook import hook, Event, RanCommand
-
-# only_if: fire only if tests have been run
-hook(Event.Stop, message="Tests passed -- safe to stop", only_if=[RanCommand(r"pytest")])
-
-# skip_if: skip the gate if tests were already run
+# Skip the gate once the agent ran the test suite
 hook(Event.Stop, message="Run tests before stopping", block=True,
      skip_if=[RanCommand(r"uv\s+run\s+mtest")])
+
+# Fire only if the codex skill was consulted
+hook(Event.Stop, message="codex was consulted", only_if=[UsedSkill("codex")])
 ```
 
-### UsedSkill
+## Write a custom condition
 
-True when a Skill tool use with a matching name exists in the transcript. Pipe-separated names match any of the listed skills.
-
-```python
-from captain_hook import hook, Event, UsedSkill
-
-# only_if: fire only if codex was used
-hook(Event.Stop, message="Good -- codex was consulted", only_if=[UsedSkill("codex")])
-
-# skip_if: skip if the agent already used the review skill
-hook(Event.Stop, message="Run /review before stopping", skip_if=[UsedSkill("review")])
-```
-
-### InPlanMode
-
-True when the current event payload's `permission_mode` is `"plan"` -- the canonical signal Claude Code emits while plan/spec mode is active, regardless of whether plan mode was entered via `EnterPlanMode` tool use or toggled by the user with shift+tab. When the payload omits `permission_mode`, falls back to comparing `EnterPlanMode > ExitPlanMode` tool-use counts in the transcript.
+When no built-in fits, implement `CustomCondition`. It is a `runtime_checkable`
+Protocol, so any frozen dataclass with a `check(self, evt) -> bool` method satisfies
+it without inheritance. Carry configuration as fields.
 
 ```python
-from captain_hook import hook, Event, InPlanMode
-
-# only_if: fire only during plan mode
-hook(Event.PreToolUse, message="Read-only during planning", block=True,
-     only_if=[InPlanMode()])
-
-# skip_if: skip enforcement during plan mode
-hook(Event.PreToolUse, message="Check before editing", skip_if=[InPlanMode()])
-```
-
-## Custom conditions
-
-For logic that the built-in conditions cannot express, implement the `CustomCondition` protocol. The protocol requires a single `check` method that receives the event and returns a boolean.
-
-```python
+from dataclasses import dataclass
 from captain_hook import CustomCondition, BaseHookEvent, hook, Event
 
-class LargeFile(CustomCondition):
-    def check(self, evt: BaseHookEvent) -> bool:
-        return bool(evt.file and evt.file.path.stat().st_size > 1_000_000)
-
-hook(Event.PreToolUse, message="Large file -- be careful", only_if=[LargeFile()])
-```
-
-Custom conditions can carry configuration as instance attributes:
-
-```python
-from captain_hook import CustomCondition, BaseHookEvent, hook, Event
-
+@dataclass(frozen=True)
 class MinEdits(CustomCondition):
-    def __init__(self, threshold: int = 5):
-        self.threshold = threshold
+    threshold: int = 5
 
     def check(self, evt: BaseHookEvent) -> bool:
         return evt.ctx.t.tool_uses.where(name="Edit").count() >= self.threshold
 
-hook(Event.Stop, message="Many edits -- run a review", only_if=[MinEdits(threshold=10)])
+hook(Event.Stop, message="Many edits, run a review", only_if=[MinEdits(threshold=10)])
 ```
 
-::: {.callout-note title="Protocol, not base class"}
-`CustomCondition` is a `runtime_checkable` Protocol. Any object with a `check(self, evt: BaseHookEvent) -> bool` method satisfies it -- no inheritance required.
-:::
+Use a custom condition like any built-in in either list.
 
-## Combining conditions
+## Worked patterns
 
-A few patterns for effective condition composition:
-
-**Gate that requires tests after editing source files:**
+Require tests after editing source files, and skip the gate once they pass.
 
 ```python
 from captain_hook import hook, Event, TouchedFile, RanCommand
 
 hook(
     Event.Stop,
-    message="Run tests before stopping -- source files were edited",
+    message="Source files changed; run tests before stopping",
     block=True,
     only_if=[TouchedFile("src/**/*.py")],
     skip_if=[RanCommand(r"uv\s+run\s+mtest")],
 )
 ```
 
-**Warn about dangerous commands, except in plan mode:**
+Warn about history-rewriting commands, except during plan mode.
 
 ```python
 from captain_hook import hook, Event, Tool, Command, InPlanMode
@@ -308,7 +151,7 @@ hook(
 )
 ```
 
-**Lint only non-test Python files:**
+Lint Python files but leave test files alone.
 
 ```python
 from captain_hook import hook, Event, FilePath, TestFile
@@ -322,5 +165,6 @@ hook(
 ```
 
 ::: {.callout-tip title="Regex patterns"}
-`Tool`, `Command`, `Content`, and `RanCommand` use regex matching. Remember to escape special characters and use raw strings (`r"..."`) to avoid backslash issues.
+`Tool`, `Command`, `Content`, and `RanCommand` match with regex. Escape special
+characters and use raw strings (`r"..."`) to avoid backslash issues.
 :::

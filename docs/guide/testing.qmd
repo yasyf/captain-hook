@@ -1,18 +1,25 @@
 ---
-title: "Testing"
+title: "Test hooks inline"
 ---
 
-## Inline tests
+Captain Hook ships the test next to the hook. You attach a `tests` dict to any
+deterministic primitive, mapping an `Input` to the outcome you expect, then run them all
+with one command. No separate test file, no fixtures to wire up. This page walks one hook
+from empty file to a passing run, shows you how a broken expectation fails, and sets up the
+same command in CI.
 
-Every primitive supports a `tests` parameter — a dict mapping `Input` to
-expected outcomes (`Block`, `Warn`, or `Allow`):
+## Write a hook with inline tests
+
+Create `.claude/hooks/no_stash.py` in your project. The `tests` dict maps each `Input` to
+the result you expect, one of `Block`, `Warn`, or `Allow`.
 
 ```python
+# .claude/hooks/no_stash.py
 from captain_hook import block_command, Input, Block, Allow
 
 block_command(
     ["git", "stash"],
-    reason="Use jj instead",
+    reason="Use jj instead of git stash",
     tests={
         Input(command="git stash"): Block(pattern="jj"),
         Input(command="git status"): Allow(),
@@ -20,133 +27,123 @@ block_command(
 )
 ```
 
-Run all inline tests (from your project root, `--hooks` defaults to `.claude/hooks`):
+The first case says "a `git stash` command must block, and the block message must mention
+`jj`." The second says "a `git status` command must pass through." `Input` carries one
+field per event payload; see the [Input fields](#input-fields) section below for the full
+list.
+
+## Run the tests
+
+From your project root, run the test command. With no `--hooks` flag it discovers
+`.claude/hooks`.
 
 ```bash
-capt-hook test
+uvx capt-hook test
 ```
 
-### Input fields
+Each test prints one line, then a summary:
 
-`Input` models the event payload. Which fields you set depends on the event:
+```
+  PASS  block_command:Input(command='git stash')
+  PASS  block_command:Input(command='git status')
 
-| Field | Event type | Example |
-|-------|-----------|---------|
-| `command` | Bash/Execute tool | `Input(command="git stash")` |
-| `file` | Edit/Write file path | `Input(file="src/main.py")` |
-| `content` | Write content / Edit new | `Input(file="x.py", content="print('hi')")` |
-| `old` | Edit old content | `Input(file="x.py", old="foo", content="bar")` |
-| `tool` | Override tool name | `Input(tool="Grep")` |
-| `prompt` | UserPromptSubmit | `Input(prompt="Fix the bug")` |
-| `agent_type` | Subagent type | `Input(agent_type="cleanup")` |
-| `transcript` | Session transcript | `Input(transcript=Path("fixture.jsonl"))` |
+2 tests: 2 passed, 0 failed, 0 errors, 0 skipped
+```
 
-### Expected outcomes
+The id on each line is the hook function name, a colon, then the `Input` that produced the
+case. The command exits `0` when every test passes and `1` when any test fails or errors.
 
-- **`Block(pattern?)`** — expects the hook to block. Optional regex pattern matches the block message.
-- **`Warn(pattern?)`** — expects the hook to warn. Optional regex pattern matches the warning.
-- **`Allow()`** — expects the hook to allow (return `None` or action `"allow"`).
+## Read a failure
 
-## mock_event
-
-Create mock events for unit tests:
+Break the first expectation to see what a failure looks like. Change the pattern so it
+demands a word the message does not contain:
 
 ```python
-from captain_hook import mock_event, mock_tool_event, mock_stop_event
-
-# Generic mock — infers event type from tool name
-evt = mock_event(tool="Bash", command="ls -la")
-
-# Specific factories
-evt = mock_tool_event("Edit", file_path="src/main.py", old_string="foo", new_string="bar")
-evt = mock_stop_event()
-evt = mock_subagent_stop_event(agent_type="cleanup")
-evt = mock_user_prompt_event(prompt="Fix the tests")
+Input(command="git stash"): Block(pattern="mercurial"),
 ```
 
-## dispatch_test
+Run `uvx capt-hook test` again:
 
-Round-trip test through the full dispatch pipeline:
+```
+  FAIL  block_command:Input(command='git stash'): [block_command] Block message doesn't match 'mercurial'
+  PASS  block_command:Input(command='git status')
+
+2 tests: 1 passed, 1 failed, 0 errors, 0 skipped
+```
+
+The `FAIL` line names the test and the assertion that broke. The hook still blocked, so the
+outcome was right, but the message read `BLOCKED: Use jj instead of git stash.` and the
+regex `mercurial` did not appear in it. Restore the pattern to `jj` and the run goes green.
+
+## What `Block(pattern=...)` matches
+
+`block_command` renders its block message as `BLOCKED: {reason}.` plus the `hint` when you
+pass one. The `pattern` you give `Block` is a regex, and the runner searches it against that
+rendered message with `re.search`. So `Block(pattern="jj")` passes here because `jj` appears
+in `Use jj instead of git stash`. Pick a word that survives rendering, or omit the pattern
+to assert only that the hook blocked at all:
 
 ```python
-from captain_hook import dispatch_test, HookApp, Event, hook, Command, Input
-
-app = HookApp()
-with app:
-    hook(Event.PreToolUse, message="blocked", block=True, only_if=[Command(r"rm")])
-
-result = dispatch_test(app, Input(command="rm -rf /"))
-assert result is not None
-assert result["permissionDecision"] == "deny"
+Input(command="git stash"): Block(),   # any block message passes
 ```
 
-## assert_result
+`Warn(pattern=...)` works the same way against a warning message. `Allow()` takes no
+pattern; it asserts the hook returned nothing or an explicit allow. The full result-type
+contract lives in the [Primitives reference](../reference/primitives.qmd).
 
-Validate dispatch results against expected outcomes:
+## Input fields {#input-fields}
 
-```python
-from captain_hook import assert_result, Block, Warn, Allow
+`Input` models the event payload, and which fields you set depends on the event the hook
+listens to. A `block_command` hook fires on `PreToolUse` for a Bash command, so you set
+`command`. An `Edit` hook needs `file` and `content`. A `Stop` gate needs a `transcript`
+fixture. The complete field list, including `file`, `content`, `old`, `tool`, `prompt`,
+`agent_type`, and `transcript`, lives in the [Primitives reference](../reference/primitives.qmd),
+alongside which primitives carry inline tests.
 
-# Passes — result is a block with matching message
-assert_result({"permissionDecision": "deny", "permissionDecisionReason": "blocked"}, Block("blocked"))
+When a hook depends on session history, pass a `transcript` fixture so the
+[transcript conditions](../reference/conditions.qmd) have something to read. The
+[Query the transcript](transcript.qmd) guide shows how to build one.
 
-# Passes — result is None (allowed)
-assert_result(None, Allow())
+## Run the same tests in CI
 
-# Raises AssertionError — expected block but got allow
-assert_result(None, Block("should have blocked"))
+`uvx capt-hook test` is the whole CI step. Add it to a GitHub Actions workflow and the job
+fails when any hook test fails:
+
+```yaml
+# .github/workflows/hooks.yml
+name: hooks
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Test hooks
+        run: uvx capt-hook test --json
 ```
 
-## pytest integration
+`--json` prints one JSON record per test instead of the human summary. Each record is a
+single line you can pipe into `jq` or read in another tool:
 
-Write standard pytest tests using the mock helpers:
-
-```python
-import pytest
-from captain_hook import HookApp, Event, hook, mock_event, Command
-
-def test_rm_blocked():
-    app = HookApp()
-    with app:
-        hook(Event.PreToolUse, message="not allowed", block=True,
-             only_if=[Command(r"rm\s+-rf")])
-
-    evt = mock_event(tool="Bash", command="rm -rf /")
-    from captain_hook import dispatch
-    results = dispatch(app, evt)
-    assert any(r.action.value == "block" for r in results)
-
-def test_ls_allowed():
-    app = HookApp()
-    with app:
-        hook(Event.PreToolUse, message="not allowed", block=True,
-             only_if=[Command(r"rm\s+-rf")])
-
-    evt = mock_event(tool="Bash", command="ls -la")
-    from captain_hook import dispatch
-    results = dispatch(app, evt)
-    assert not any(r.action.value == "block" for r in results)
+```json
+{"id": "block_command:Input(command='git stash')", "status": "pass", "expected": "block", "reason": ""}
+{"id": "block_command:Input(command='git status')", "status": "pass", "expected": "allow", "reason": ""}
 ```
 
-## TranscriptFixture
+The fields are the test `id`, its `status` of `pass`, `fail`, `error`, or `skip`, the
+`expected` outcome kind, and a `reason` string that carries the failure detail when a test
+breaks. The exit code is the same as the plain run, so the CI step goes red on any `fail` or
+`error` without you parsing a thing. Parse the records when you want a report; rely on the
+exit code when you want a gate.
 
-For hooks that depend on transcript context, use `TranscriptFixture`. The message shape is
-Claude Code JSONL: `{"type": "assistant", "message": {"content": [<tool_use blocks>]}}`:
+## Why some tests report SKIP
 
-```python
-from captain_hook import Input, Block, Allow, Warn, TranscriptFixture, nudge, TouchedFile, RanCommand
-
-nudge(
-    "Run tests after editing",
-    only_if=[TouchedFile("**/*.py")],
-    skip_if=[RanCommand(r"pytest")],
-    tests={
-        Input(command="echo hi", transcript=TranscriptFixture(messages=[
-            {"type": "assistant", "message": {"content": [
-                {"type": "tool_use", "name": "Edit", "id": "t1",
-                 "input": {"file_path": "src/main.py", "old_string": "a", "new_string": "b"}},
-            ]}},
-        ])): Warn(),
-    },
-)
-```
+A test reports `SKIP` when the runner has nothing real to run it against. Two cases hit
+this. Legacy string-key tests replay a recorded session, so they skip when no fixture or
+local Claude session exists for that key. LLM-backed and signal-scored primitives such as
+`llm_gate`, `llm_nudge`, and `prompt_check` skip because they need a real model to produce a
+verdict, and `uvx capt-hook test` does not call one. The
+[Primitives reference](../reference/primitives.qmd) marks which primitives skip. Test the
+deterministic narrowing on those hooks, the `only_if` and `skip_if` conditions, on a sibling
+hook you can assert against; see [LLM Hooks](llm-hooks.qmd) for that split.

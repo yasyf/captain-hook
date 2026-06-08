@@ -1,171 +1,211 @@
 ---
-title: "Primitives"
+title: "Deterministic Primitives"
 ---
 
-Primitives are convenience wrappers that register hooks for common patterns.
-They handle event targeting, fire counting, and echo suppression automatically.
+Primitives are one-call helpers that register a hook for a common pattern. They
+target the right events, count fires, and suppress echo for you. This page covers the
+deterministic ones, where a regex, an AST walk, or a predicate decides the outcome with
+no model call. For the LLM-backed primitives, see [LLM Hooks](llm-hooks.qmd).
 
-## nudge
+## Pick a primitive
 
-Warn the agent when conditions or signals match:
+Start from what you want to enforce.
+
+- Deny a Bash command outright, go to [`block_command`](#block_command).
+- Flag a command without stopping it, go to [`warn_command`](#warn_command).
+- Advise the agent when conditions or accumulating signals fire, go to [`nudge`](#nudge).
+- Require something done before the agent finishes, go to [`gate`](#gate).
+- Check a Python edit against a rule, go to [`lint`](#lint).
+- Flag only what an edit changed, go to [`diff_lint`](#diff_lint).
+- Append a record of activity for later, go to [`audit`](#audit).
+
+Each primitive accepts `tests={...}` mapping an `Input` to a `Block`, `Warn`, or
+`Allow` expectation. Run them with `uvx capt-hook test`. The
+[primitives reference](../reference/primitives.qmd) holds every full signature.
+
+## block_command {#block_command}
+
+Block a Bash command before it runs. Pass a token list and captain-hook builds a
+whitespace-tolerant regex, so `["git", "stash"]` matches `git stash` and `git stash pop`.
 
 ```python
-from captain_hook import nudge, TouchedFile
+from captain_hook import Allow, Block, Input, block_command
 
-nudge("Remember to run tests after editing Python files",
-      only_if=[TouchedFile("**/*.py")])
+block_command(
+    ["git", "stash"],
+    reason="Use the team's VCS workflow for shelving changes",
+    hint="Commit a WIP change instead",
+    tests={
+        Input(command="git stash"): Block(),
+        Input(command="git stash pop"): Block(),
+        Input(command="git status"): Allow(),
+    },
+)
 ```
 
-With signal scoring (fires when transcript text matches patterns):
+Pass a raw string when you need a precise pattern, such as
+`r"git\s+push\s+--force(?!-)"` to block a force-push while allowing `--force-with-lease`.
+
+## warn_command {#warn_command}
+
+Warn on a command without blocking it. The agent sees the message and keeps going.
 
 ```python
-from captain_hook import nudge, Signal, Signals
+from captain_hook import Allow, Input, Warn, warn_command
+
+warn_command(
+    ["python", "-c"],
+    message="Prefer `uv run mtest` over raw `python -c`",
+    tests={
+        Input(command="python -c 'print(1)'"): Warn(),
+        Input(command="uv run mtest"): Allow(),
+    },
+)
+```
+
+## nudge {#nudge}
+
+Advise the agent when a condition holds or when signals accumulate. A plain nudge with
+`only_if` fires once on the next matching tool use. Add `signals` to fire only after the
+transcript crosses a weighted threshold, which catches a pattern like repeated retries.
+
+```python
+from captain_hook import Allow, Input, Signal, Signals, Warn, nudge
 
 nudge(
-    "Stop retrying — narrow the failing test first",
+    "You keep retrying. Narrow the failing test before running it again.",
     signals=Signals(
         patterns=[
-            Signal(r"let me try again", weight=2),
-            Signal(r"retry", weight=1),
+            Signal(pattern=r"let me try again", weight=2),
+            Signal(pattern=r"retry", weight=1),
         ],
         threshold=3,
         window=10,
     ),
+    tests={
+        Input(transcript=[
+            {"role": "assistant", "content": "let me try again"},
+            {"role": "assistant", "content": "retry the suite"},
+        ]): Warn(pattern="failing test"),
+        Input(transcript=[{"role": "assistant", "content": "all green"}]): Allow(),
+    },
 )
 ```
 
-**Default events:** `PostToolUse` (with signals) or `PreToolUse` (without).
-**Default max_fires:** 3 (with signals) or 1 (without).
+A nudge with `signals` defaults to `PostToolUse`; without them it defaults to
+`PreToolUse`. See [Signals](signals.qmd) for the scoring model.
 
-| Parameter | Description |
-|-----------|-------------|
-| `message` | Warning text shown to the agent |
-| `when` | Predicate `(evt) -> bool` for additional filtering |
-| `signals` | Signal patterns for transcript text scoring |
-| `only_if` / `skip_if` | Condition lists |
-| `events` | Override default event targeting |
-| `max_fires` | Limit fires per session |
-| `tests` | Inline test dict |
+## gate {#gate}
 
-## gate
-
-A blocking nudge — prevents the agent from proceeding:
+Require something done before the agent stops. A gate is a blocking nudge on the
+`Stop | SubagentStop` events, so it holds the turn open until the work is complete.
 
 ```python
-from captain_hook import gate, RanCommand
+from captain_hook import Allow, Block, Input, RanCommand, gate
 
-gate("Run tests before stopping",
-     skip_if=[RanCommand(r"uv\s+run\s+mtest")])
+gate(
+    "Run the tests before stopping.",
+    skip_if=[RanCommand(r"uv\s+run\s+mtest")],
+    tests={
+        Input(transcript=[
+            {"role": "assistant", "content": "edited the parser"},
+        ]): Block(pattern="Run the tests"),
+        Input(transcript=[
+            {"role": "assistant", "content": "ran `uv run mtest`, all green"},
+        ]): Allow(),
+    },
+)
 ```
 
-`gate()` is equivalent to `nudge(..., block=True)`.
+A gate is the same as `nudge(message, block=True, ...)`.
 
-**Default events:** `Stop | SubagentStop`.
+## lint {#lint}
 
-## lint
-
-Check file content with a string- or AST-mode check function. The mode is inferred from the
-check's first parameter type; both return the violation strings spliced into `{violations}`:
-
-```python
-from captain_hook import lint
-
-def find_prints(content: str) -> list[str]:
-    return [line for line in content.splitlines() if "print(" in line]
-
-lint(find_prints, message="Use logger.info() instead of print(): {violations}")
-```
+Check a Python edit against a rule. captain-hook infers the mode from the check's first
+parameter. A `str` parameter receives the file content; an `ast.AST` parameter receives
+each walked node. The check returns violation strings spliced into `{violations}`.
 
 ```python
 import ast
-from captain_hook import lint
+from collections.abc import Iterator
 
-def find_bare_except(tree: ast.AST) -> list[str]:
-    return [
-        f"line {node.lineno}"
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ExceptHandler) and node.type is None
-    ]
+from captain_hook import Allow, Input, Warn, lint
 
-lint(find_bare_except, message="Avoid bare except clauses: {violations}")
-```
 
-Lints fire on `PostToolUse` for Edit/Write of `.py` files. Test files are skipped by default.
+def bare_excepts(node: ast.AST) -> Iterator[str]:
+    if isinstance(node, ast.ExceptHandler) and node.type is None:
+        yield f"line {node.lineno}: bare except"
 
-## styleguide
 
-Apply AST-based style rules to Python edits, reporting only what the edit changed. A rule is a
-[`StyleRule`](../../reference/style.StyleRule.qmd) subclass whose docstring is the message and whose
-`match` is built from the [`matchers`](../../reference/style.matchers.qmd) module:
-
-```python
-from captain_hook.style import StyleRule, matchers as M, styleguide
-
-class NoPrint(StyleRule):
-    """
-    print() calls don't belong in committed code:
-      - {violations}
-    """
-    match = M.calls("print")
-    label = "print() call"
-
-styleguide(NoPrint)
-```
-
-captain-hook ships no rules of its own — `styleguide()` is the substrate (parsing,
-change-scoping, formatting, test wiring). Each call registers one hook; scope it with
-`only_if` / `skip_if` / `events` / `block`. See [Style Rules](styleguide.qmd) for the full guide,
-including the matcher algebra, `StyleDiffRule`, and change scoping.
-
-## block_command
-
-Block specific bash commands:
-
-```python
-from captain_hook import block_command
-
-block_command(
-    ["git", "stash"],
-    reason="git stash is not allowed; use jj",
-    hint="Run `jj shelve` instead",
+lint(
+    bare_excepts,
+    message="Bare except clauses silently swallow errors: {violations}",
+    trigger="except",
+    tests={
+        Input(tool="Edit", file="app.py", content="try:\n    f()\nexcept:\n    pass\n"): Warn(pattern="bare except"),
+        Input(tool="Edit", file="app.py", content="try:\n    f()\nexcept OSError:\n    pass\n"): Allow(),
+    },
 )
 ```
 
-The token list is converted to a regex: `["git", "stash"]` becomes `r"git\s+stash"`.
-Use `"*"` for wildcards: `["git", "stash", "*"]` matches `git stash pop`, `git stash drop`, etc.
+Lints fire on `PostToolUse` for `Edit` and `Write` of `.py` files, and skip test files.
+The `trigger` substring is a cheap pre-filter, so captain-hook parses only when the
+source contains it.
 
-## warn_command
+## diff_lint {#diff_lint}
 
-Warn (but don't block) on specific commands:
+Flag only what an edit changed. The check takes the pre-edit and post-edit AST and
+returns violations for the delta, so a rule fires on a newly added construct without
+nagging about code the edit left alone.
 
 ```python
-from captain_hook import warn_command
+import ast
 
-warn_command(
-    ["python", "-c"],
-    message="Consider using mtest instead of raw python",
+from captain_hook import Allow, Input, Warn, diff_lint
+
+
+def added_prints(pre: ast.AST, post: ast.AST) -> list[str]:
+    def prints(tree: ast.AST) -> set[int]:
+        return {
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "print"
+        }
+
+    return [f"line {n}" for n in sorted(prints(post) - prints(pre))]
+
+
+diff_lint(
+    added_prints,
+    message="This edit added a print() call: {violations}",
+    tests={
+        Input(tool="Edit", old="x = 1\n", content="x = 1\nprint(x)\n"): Warn(pattern="added a print"),
+        Input(tool="Edit", old="print(1)\n", content="print(1)\nx = 2\n"): Allow(),
+    },
 )
 ```
 
-## audit
+`diff_lint` fires on `Edit` of `.py` files by default. For declarative AST rules scoped
+to the change, see [Style Rules](styleguide.qmd).
 
-Append a JSONL record per matching event for offline analysis:
+## audit {#audit}
+
+Append a JSONL record per matching event for later analysis. Each default line carries
+`ts`, `event`, `tool`, `file`, and a session id derived from the transcript path.
 
 ```python
-from captain_hook import audit, Event
+from captain_hook import Event, audit
 
 audit(Event.PreToolUse | Event.PostToolUse | Event.Stop)
 ```
 
-By default, each line contains `ts`, `event`, `tool`, `file`, and a
-session id derived from the transcript path. Records are written to
-`$CLAUDE_PROJECT_DIR/.context/hook-logs/<YYYY-MM-DD>.jsonl`.
-
-Customize the destination or record shape:
+Records land in `$CLAUDE_PROJECT_DIR/.context/hook-logs/<YYYY-MM-DD>.jsonl`. Override
+the destination and the record shape with `log_dir`, `filename`, and `fields`.
 
 ```python
-from datetime import datetime
-from captain_hook import audit, Event
+from captain_hook import Event, audit
 
 audit(
     Event.PostToolUse,
@@ -175,17 +215,11 @@ audit(
 )
 ```
 
-| Parameter | Description |
-|-----------|-------------|
-| `events` | Event mask (default: `PreToolUse \| PostToolUse \| Stop`) |
-| `log_dir` | Output directory (default: `$CLAUDE_PROJECT_DIR/.context/hook-logs`) |
-| `filename` | `(datetime) -> str` mapping a timestamp to a filename |
-| `fields` | `(evt) -> dict` for the per-record payload |
-| `only_if` / `skip_if` | Condition lists |
+`audit` is a side-effect, so it carries no inline tests.
 
 ---
 
-::: {.callout-note title="More primitives"}
-For LLM-powered hooks (`llm_gate`, `llm_nudge`, `prompt_check`), see [LLM Hooks](llm-hooks.qmd).
-For multi-step enforcement, see [Workflows](workflows.qmd).
+::: {.callout-note title="Related"}
+For the model-backed primitives `llm_gate`, `llm_nudge`, and `prompt_check`, see
+[LLM Hooks](llm-hooks.qmd). For multi-step enforcement, see [Workflows](workflows.qmd).
 :::

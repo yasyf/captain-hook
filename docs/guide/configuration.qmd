@@ -1,87 +1,125 @@
 ---
-title: "Configuration"
+title: "Configure settings"
 ---
 
-`HooksSettings` is the typed surface for tuning captain-hook from the outside. Every field is overridable via environment variable (default prefix `HOOKS_`) or in code on a subclass.
+This page shows you how to wire typed settings into your hooks. You define a
+`HooksSettings` subclass in `.claude/hooks/conf.py`, override its fields from
+code or environment variables, and read the values inside a handler through
+`evt.ctx.c`.
 
-## Planning agents
+## Define a settings class
 
-```python
-HooksSettings.planning_agents: list[str]
-```
-
-Agents whose `Event.SubagentStart` shouldn't trigger normal `PreToolUse`-style gates — they're scratch / planning, not real work. Defaults match Claude Code's built-in planning agents (`Explore`, `Plan`, `general-purpose`, and the lowercase aliases).
-
-Override when your team adds custom planning agent types (e.g. Droid's `spec`, Conductor's `research`):
+Create `.claude/hooks/conf.py` and subclass `HooksSettings`. Add your own
+fields with type annotations and defaults:
 
 ```python
+from captain_hook import HooksSettings
+
+
 class ProjectSettings(HooksSettings):
-    planning_agents: list[str] = ["Explore", "Plan", "general-purpose", "research"]
+    test_command: str = "pytest"
+    require_tests_after_edit: bool = True
 ```
 
-Or via env: `HOOKS_PLANNING_AGENTS='["Explore","Plan","research"]'`.
+The loader discovers `conf.py` when it imports your hooks package, finds the
+`HooksSettings` subclass, and instantiates it for every event. You do not call
+any builder yourself. Put exactly one subclass in `conf.py` so the loader has a
+single class to pick.
 
-## Waiting tools
+## Read settings in a handler
+
+Every event carries the active settings on `evt.ctx.c`. Cast it to your
+subclass to get typed field access:
 
 ```python
-HooksSettings.waiting_tools: list[str]
+from typing import cast
+
+from captain_hook import Event, Tool, on
+
+
+@on(Event.PreToolUse, only_if=[Tool("Bash")])
+def enforce_test_command(evt):
+    settings = cast(ProjectSettings, evt.ctx.c)
+    if settings.require_tests_after_edit and settings.test_command != "pytest":
+        return evt.block(f"Run the project test command: {settings.test_command}")
+    return None
 ```
 
-Tool names whose presence in the recent transcript means the agent is **waiting on something external**, not actively working. The `Waiting()` condition uses this list to suppress nudges/gates that would otherwise fire while a subagent or a scheduled job is in flight.
+## Override fields from the environment
 
-Defaults: `Monitor`, `TeamCreate`, `ScheduleWakeup`, `SendMessage`. Add your own if you have custom long-running tools:
+`HooksSettings` reads environment variables with the `HOOKS_` prefix, so each
+field maps to one variable. Set `HOOKS_TEST_COMMAND=mtest` to override
+`test_command` without touching `conf.py`. List and tuple fields take JSON:
 
-```python
-class ProjectSettings(HooksSettings):
-    waiting_tools: list[str] = [*HooksSettings.model_fields["waiting_tools"].default, "MyAsyncTask"]
+```bash
+HOOKS_PLANNING_AGENTS='["Explore","Plan","research"]'
 ```
 
-## State directory
-
-```python
-HooksSettings.state_dir: Path     # env: CAPTAIN_HOOK_STATE_DIR
-```
-
-Where `@session_state` / `@workflow_state` models persist their JSON. Defaults to `~/.claude/state`. Set `CAPTAIN_HOOK_STATE_DIR` (or the older `CLAUDE_HOOKS_STATE_DIR`) to relocate — useful in CI sandboxes that disallow writes outside the workspace.
-
-## Log directory
-
-```python
-HooksSettings.log_dir: Path       # env: CAPTAIN_HOOK_LOG_DIR
-```
-
-Default destination for `audit()` JSONL files and internal hook logs. Defaults to `$XDG_CACHE_HOME/captain-hook/logs` (or `~/.cache/captain-hook/logs`). Per-hook `audit(log_dir=...)` overrides this for that hook only.
-
-## Env-variable prefix
-
-`HooksSettings` extends `pydantic_settings.BaseSettings` with `env_prefix="HOOKS_"`. Override on your subclass to namespace project-specific settings:
+To namespace project settings under a different prefix, set `model_config` on
+your subclass:
 
 ```python
 from pydantic_settings import SettingsConfigDict
+
+from captain_hook import HooksSettings
+
 
 class ProjectSettings(HooksSettings):
     model_config = SettingsConfigDict(env_prefix="MYAPP_")
     require_tests_after_edit: bool = True
 ```
 
-Now `MYAPP_REQUIRE_TESTS_AFTER_EDIT=false` flips the field. Inherited fields (`planning_agents` etc.) move under the new prefix too — pick the prefix once at the project root and keep it stable.
+Now `MYAPP_REQUIRE_TESTS_AFTER_EDIT=false` flips the field, and every inherited
+field moves under the new prefix too. Pick the prefix once at the project root
+and keep it stable.
 
-## Wiring settings into hooks
+## Tune the built-in fields
 
-Register the settings class via `build_settings()` so dispatch hands it to every event:
+`HooksSettings` ships four fields you can override the same way.
+
+### planning_agents
+
+A list of subagent names that the framework treats as scratch work, not real
+edits. When a hook sets `skip_planning_agents`, it ignores `Event.SubagentStart`
+and `Event.SubagentStop` for any agent on this list, so planning runs do not
+trip your gates. The defaults cover Claude Code's built-in planning agents, such
+as `Explore` and `Plan`. Add your own when your team uses custom planning agent
+types:
 
 ```python
-from captain_hook import build_settings
-
-settings = build_settings(ProjectSettings)
+class ProjectSettings(HooksSettings):
+    planning_agents: list[str] = ["Explore", "Plan", "research"]
 ```
 
-Inside a handler:
+### waiting_tools
+
+A list of tool names that mean the agent is waiting on something external, not
+working. The `Waiting()` condition reads this list to suppress nudges and
+gates while a background tool is still running. The defaults cover the
+framework's own long-running tools, such as `Monitor` and `TeamCreate`. Append
+your custom async tools to the defaults:
 
 ```python
-@on(Event.PreToolUse, only_if=[Tool("Bash")])
-def enforce_test_command(evt):
-    s = cast(ProjectSettings, evt.ctx.c)
-    if s.require_tests_after_edit and ...:
-        return evt.block(...)
+class ProjectSettings(HooksSettings):
+    waiting_tools: list[str] = [
+        *HooksSettings.model_fields["waiting_tools"].default_factory(),
+        "MyAsyncTask",
+    ]
 ```
+
+### state_dir
+
+Where `@session_state` and `@workflow_state` models persist their JSON. The
+field reads `CAPTAIN_HOOK_STATE_DIR` first, then the legacy
+`CLAUDE_HOOKS_STATE_DIR`, and falls back to `~/.claude/state`. Set
+`CAPTAIN_HOOK_STATE_DIR` to relocate state, which helps in CI sandboxes that
+block writes outside the workspace. See [State and sessions](state.qmd) for how
+state directories are laid out.
+
+### log_dir
+
+Where `audit()` writes its JSONL files and where the framework writes its own
+session logs. The field reads `CAPTAIN_HOOK_LOG_DIR` and otherwise falls back to
+`~/.cache/captain-hook/logs`, or to `$XDG_CACHE_HOME/captain-hook/logs` when you
+set `XDG_CACHE_HOME`. A per-hook `audit(log_dir=...)` overrides this for that
+hook only.

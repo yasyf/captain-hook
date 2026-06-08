@@ -2,72 +2,117 @@
 title: "Troubleshooting"
 ---
 
-Common errors and how to diagnose them.
+A hook misbehaved. There is no `doctor` command. You diagnose with two tools, the dispatch logs and a re-run of your inline tests. This page gives you the diagnostic commands first, then three flows for the failures you hit most.
 
-## "My hook didn't fire"
+## Diagnostic commands
 
-Four things to check, in order:
+Reach for these first. The logs show what dispatch actually saw; the tests show what your conditions match.
 
-1. Run `capt-hook --hooks <dir> test` with the inline tests in place. If the test fails, the hook's conditions aren't matching the input you expect — fix the condition before debugging dispatch.
-2. Confirm the `--hooks` argument points at the directory that actually contains your hook file. Captain-hook loads `.py` files under that root and nothing else.
-3. Inspect the `events=` argument. A primitive defaults to one event (`block_command` → `PreToolUse`, `nudge` → `PostToolUse`); if you want a different event, pass it explicitly.
-4. View the recent dispatch logs with `capt-hook logs`. By default it prints the most recent session's per-event log file, written under the cache log dir (default `~/.cache/captain-hook/logs`, [see Configuration](configuration.qmd#log-directory)). Pass `--tail N` to limit lines, or `--session <id-or-transcript-path>` to target a specific session. If your hook never appears in the log, dispatch never reached it — recheck steps 1–3.
+```bash
+uvx capt-hook logs                          # Print the most recent session's log
+uvx capt-hook logs --tail 40                # Show only the last 40 lines
+uvx capt-hook logs --session <id-or-path>   # Target a specific session (id, or transcript path)
+uvx capt-hook --hooks <dir> test            # Re-run inline tests; prints the Input and PASS/FAIL
+uvx capt-hook --hooks <dir> test --json     # One record per test: id, status, expected, reason
+```
 
-## Settings not picked up
+`logs` reads from the log directory, which defaults to `~/.cache/captain-hook/logs`. Each session writes one log file there. To target a past session, pass its id, or pass the transcript path and `logs` hashes it for you. See [Configuration](configuration.qmd#log-directory) to relocate the directory.
 
-Captain-hook reads settings from environment variables with the `HOOKS_` prefix. A `HooksSettings` subclass only auto-loads if you build it through `build_settings(YourSettings)` or expose it from your `conf.py` so the dispatch CLI can discover it.
+If a hook never appears in the log, dispatch never reached it. Work through "It never fires" below.
 
-- Run `printenv | rg HOOKS_` to confirm the variable is set.
-- If you changed the prefix via `model_config = SettingsConfigDict(env_prefix="MYAPP_")`, double-check that nothing else still expects `HOOKS_`.
-- See [Configuration](configuration.qmd) for the full settings surface.
+## Is my hook firing?
 
-## `RuntimeError: spaCy model is not installed`
+Confirm three things, in order.
 
-NLP signals refuse to auto-download the spaCy model at hook execution time (it's a ~100MB silent fetch). Install it once, explicitly:
+First, re-run the inline tests.
+
+```bash
+uvx capt-hook --hooks <dir> test
+```
+
+Each test prints the `Input` it built and a PASS or FAIL. A FAIL means your conditions don't match the input you expect, so fix the condition before you touch dispatch. If the test passes but the hook still seems dead, move on.
+
+Second, check that `--hooks` points at the directory holding your hook file. Captain-hook loads `.py` files under that root and nothing else.
+
+Third, read the session log.
+
+```bash
+uvx capt-hook logs --tail 40
+```
+
+A firing hook leaves a dispatch line here. If you see the event arrive but no line for your hook, a condition skipped it. If you see no event at all, the hook is wired to the wrong event or the settings never reached Claude Code.
+
+## It fires too often
+
+A hook that fires on every event, or twice per event, is matching too broadly. Tighten it three ways.
+
+Narrow the conditions. Add a `skip_if` for the cases you want to spare, or a tighter `only_if` glob. A `FilePath("**/*.py")` matches every Python file in the project; `FilePath("src/**/*.py")` matches only your source tree. See the [conditions cheatsheet](../reference/conditions.qmd) for every condition and the [conditions guide](conditions.qmd) for how to combine them.
+
+Cap the count. For `nudge`, pass `max_fires=N` so it emits at most `N` times per session. The LLM primitives already default to a low cap, with `llm_gate` at 1 and `llm_nudge` at 3. See the [primitives reference](../reference/primitives.qmd).
+
+Check the event set. A hook registered with `Event.Stop | Event.SubagentStop` fires on both. Confirm that both belong by reading the [events reference](../reference/events.qmd).
+
+## It never fires
+
+The hook is silent because dispatch never matched it. Check four causes.
+
+Wrong event. Each primitive defaults to one event, so `block_command` targets `PreToolUse` and `nudge` targets `PostToolUse`. If you need a different one, pass `events=` explicitly. The [events reference](../reference/events.qmd) lists which event fires when.
+
+Unsatisfiable conditions. An `only_if` is AND, so every condition must match at once. A hook with `only_if=[Tool("Bash"), FilePath("**/*.py")]` never fires, because a Bash command carries no file path. Run `uvx capt-hook --hooks <dir> test` and read the `Input` each test built against your conditions.
+
+Settings not re-wired. After you add or change events, regenerate the settings fragment so Claude Code knows to call your hook.
+
+```bash
+uvx capt-hook --hooks <dir> generate-settings
+```
+
+Merge the output into `.claude/settings.local.json`.
+
+Project not reloaded. Claude Code reads hook settings at session start. After you rewire settings, start a fresh session so the new wiring loads.
+
+## Case study, a block that caught a safe command
+
+You add a hook that blocks `git stash`, because your team uses `jj` instead.
+
+```python
+from captain_hook import hook, Event, Tool, Command
+
+hook(
+    Event.PreToolUse,
+    message="Use jj shelve instead of git stash",
+    block=True,
+    only_if=[Tool("Bash"), Command(r"git\s+stash")],
+)
+```
+
+The block works. It also blocks `git stash pop`, because `git\s+stash` is a substring of `git stash pop` and `Command` matches anywhere in the command text. Popping a stash is safe, so the hook now blocks a command you want to allow.
+
+Fix it with a `skip_if`, which is checked first and skips the hook on any match. List the safe subcommands there.
+
+```python
+hook(
+    Event.PreToolUse,
+    message="Use jj shelve instead of git stash",
+    block=True,
+    only_if=[Tool("Bash"), Command(r"git\s+stash")],
+    skip_if=[Command(r"git\s+stash\s+(pop|apply|list|show)")],
+)
+```
+
+Now the safe subcommands pass through while a bare `git stash` still blocks. A re-run of `uvx capt-hook --hooks <dir> test` with a test for each subcommand confirms the split.
+
+## NlpSignal hooks need the spaCy model
+
+Hooks that use `NlpSignal` need the `en_core_web_sm` spaCy model. Captain-hook does not auto-download it at hook execution time, because that would trigger a silent fetch of around 100MB mid-session. Install it once with one command.
 
 ```bash
 python -m spacy download en_core_web_sm
 ```
 
-Or, if you want the model cached at the location captain-hook expects:
+The form below caches it where captain-hook looks for it.
 
 ```bash
 python -c "from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()"
 ```
 
-## Hook fired twice
-
-If a primitive emits the same nudge / block twice for one event:
-
-- Inspect `events=` on every registration. A hook registered with `Event.Stop | Event.SubagentStop` fires on both — confirm that's what you want.
-- For `nudge`, add `max_fires=N` to cap how many times it can emit in a session.
-- For signal-driven nudges, the same trigger phrase may live in multiple `Signal` patterns. Run `capt-hook --hooks <dir> test` — each test prints the `Input` it built and a PASS/FAIL, so you can confirm whether the phrase matched.
-
-## "Inline test failed but I can't tell why"
-
-```bash
-capt-hook test
-```
-
-The default output prints the `Input` it built and a PASS/FAIL for each test. Add `--json` to emit one record per test (`id`, `status`, `expected`, `reason`) for structured inspection. If the test still looks correct, dump the `Input` you're constructing — the most common mistake is leaving a field off (e.g. `file=` for an Edit test) so the hook's condition can't match.
-
-## "How do I see what events look like?"
-
-Drop an `audit()` into your hooks directory for one session:
-
-```python
-from captain_hook import Event, audit
-
-audit(Event.PreToolUse | Event.PostToolUse | Event.Stop)
-```
-
-It writes one JSONL line per event under the log directory ([see Configuration](configuration.qmd#log-directory)). Tail the file while the agent runs to see the exact `tool_input`, `tool_name`, and metadata your hooks will receive.
-
-## Diagnostic commands
-
-```bash
-capt-hook --hooks <dir> test                   # Run inline tests
-capt-hook --hooks <dir> test --json            # Machine-readable output for CI
-capt-hook --hooks <dir> run <Event> < event.json   # Replay an event JSON payload
-capt-hook --hooks <dir> generate-settings      # Emit the .claude/settings.local.json fragment
-```
+A missing model raises `RuntimeError: spaCy model 'en_core_web_sm' is not installed` when the hook runs.
