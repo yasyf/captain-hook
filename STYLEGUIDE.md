@@ -233,9 +233,8 @@ class HookSpec:
     def matches(self, evt: BaseHookEvent) -> bool: ...
 ```
 
-No leading underscores on classes, constants, or module-level helpers. Use
-`__all__` for export control. Reserve a leading underscore for a private instance
-attribute.
+No leading underscores on classes, constants, or module-level helpers. Reserve a
+leading underscore for a private instance attribute.
 
 Frozen dataclasses for immutable and config data. Every mutable default needs a
 factory such as `field(default_factory=list)`; a bare `[]` or `{}` is a bug.
