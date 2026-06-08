@@ -6,4 +6,4 @@ Different projects have different test runners, different lint allowlists, diffe
 
 <!-- gd-embed: settings_config.py -->
 
-**What to learn:** Subclass `HooksSettings` (a `pydantic_settings.BaseSettings`) to declare your project's knobs. Defaults live on the class; overrides come from the environment via the pydantic-settings machinery. At dispatch time, every handler can read the resolved settings as `evt.ctx.c` (also exposed as `evt.ctx.conf` and `evt.ctx.settings`) — no global imports, no module-level config singleton.
+**What to learn.** Subclass `HooksSettings`, a `pydantic_settings.BaseSettings`, to declare your project's knobs. Defaults live on the class, and the environment overrides them through the pydantic-settings machinery. This `enforce_test_command` handler fires on `Event.PreToolUse` and reads the resolved settings as `evt.ctx.c`, also exposed as `evt.ctx.conf` and `evt.ctx.settings`, so each handler gets typed configuration without a global import or a module-level config singleton. See also [Configuration](../guide/configuration.qmd) for how settings resolve across the environment and project files.
