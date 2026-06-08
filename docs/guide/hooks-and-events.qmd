@@ -90,7 +90,12 @@ from captain_hook import block_command, nudge, gate, lint, TouchedFile, RanComma
 block_command(["git", "stash"], reason="Use jj instead")
 nudge("Remember to run tests", only_if=[TouchedFile("**/*.py")])
 gate("Run tests before stopping", skip_if=[RanCommand(r"pytest")])
-lint("no_print", r"print\(", message="Use logger instead")
+
+# lint takes a check function (string- or AST-mode), not a name + regex
+def no_print(content: str) -> list[str]:
+    return [ln for ln in content.splitlines() if "print(" in ln]
+
+lint(no_print, message="Use logger instead: {violations}")
 ```
 
 See the [Primitives Guide](primitives.qmd) for the full list.
