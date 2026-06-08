@@ -24,9 +24,12 @@ Matchers compose with boolean algebra (`&`, `|`, `~`) and refine with `.where(..
 build a rule by combining matchers instead of reaching for a framework helper:
 
 ```python
-M.imports & M.child_of(M.control_flow) & ~M.under(M.type_checking)  # lazy import nested in control flow
-M.cls & M.private                                                   # a private-named class
-M.call.where(lambda n: len(n.args) > 5)                             # a bespoke one-off predicate
+# lazy import nested in control flow
+M.imports & M.child_of(M.control_flow) & ~M.under(M.type_checking)
+# a private-named class
+M.cls & M.private
+# a bespoke one-off predicate
+M.call.where(lambda n: len(n.args) > 5)
 ```
 
 The full catalog, every node category, name convention, position matcher, and terminal,
@@ -117,8 +120,10 @@ Each `styleguide(...)` call registers exactly one hook, scoped by that call. Eve
 including block versus warn, is per call, so split concerns into separate calls:
 
 ```python
-styleguide(NoPrint, NoBareExcept)                                         # warn, all *.py
-styleguide(NoSqlInjection, block=True, only_if=[FilePath("api/**/*.py")]) # block, api only
+# warn, all *.py
+styleguide(NoPrint, NoBareExcept)
+# block, api only
+styleguide(NoSqlInjection, block=True, only_if=[FilePath("api/**/*.py")])
 ```
 
 The built-in `Tool("Edit|Write")` and `FilePath("*.py")` guards always apply, and test files
