@@ -2,72 +2,81 @@
 title: "Conditions Cheatsheet"
 ---
 
-Quick reference for all condition types. Use in `only_if` (all must match) or `skip_if` (any skips the hook).
+Every condition type, in one place. Use conditions in `only_if` (all must match) or `skip_if`
+(any match skips the hook). This card is the single source of truth — the
+[Filter hooks with conditions](../guide/conditions.qmd) guide teaches how to pick and combine them.
 
-## Current Event
+## Current event
 
-These match properties of the event being processed right now.
+These match the event being processed right now.
 
-| Condition | Matches | Pattern type | Example |
-|-----------|---------|-------------|---------|
-| `Tool(p)` | Tool name | Regex | `Tool("Bash\|Execute")` |
-| `FilePath(p)` | File path in event | Glob | `FilePath("**/*.py")` |
-| `Command(p)` | Bash command text | Regex | `Command(r"git\s+stash")` |
-| `Content(p)` | File content (Write/Edit) | Regex | `Content(r"print\(")` |
-| `Agent(p)` | Subagent type | Regex | `Agent("cleanup-.*")` |
-| `TestFile()` | File is a test file | -- | `TestFile()` |
+| Condition | Matches when | Pattern | Example |
+|-----------|--------------|---------|---------|
+| `Tool(p)` | The tool name matches | Pipe-separated names (aliases auto-expand) | `Tool("Bash\|Execute")` |
+| `FilePath(*p, project_only=True)` | The event's file path matches any glob | Glob | `FilePath("**/*.py")` |
+| `Command(p)` | The Bash command text matches | Regex | `Command(r"git\s+stash")` |
+| `Content(p, project_only=True)` | The written/edited file content matches | Regex (multiline) | `Content(r"print\(")` |
+| `Agent(p)` | The subagent type matches | Pipe-separated names | `Agent("cleanup\|refactor")` |
+| `TestFile(project_only=True)` | The file is a test file (`test_*.py`, `conftest.py`) | — | `TestFile()` |
+| `SourceEdits(lang="py", include_tests=False, paths=None)` | The event edits/writes a source file in `lang` (and not a test, unless `include_tests`) | Language glob | `SourceEdits(lang="ts", paths="src/**")` |
 
-`FilePath`, `Content`, and `TestFile` match project files only by default. Absolute paths outside the hook
-root are ignored. Use `project_only=False` when a hook intentionally targets external scratch files,
-attachments, or logs.
+`FilePath`, `Content`, `TestFile`, and `SourceEdits` match project files only by default. Pass
+`project_only=False` to target external scratch files, attachments, or logs.
 
-## Transcript History
+## Session state
 
-These check what happened earlier in the session.
+These check what happened earlier in the session, from the transcript.
 
-| Condition | Matches | Pattern type | Example |
-|-----------|---------|-------------|---------|
-| `ReadFile(p)` | A file was read | Glob | `ReadFile("TESTING.md")` |
-| `TouchedFile(p)` | A file was edited | Glob | `TouchedFile("**/*.py")` |
-| `RanCommand(p)` | A command was run | Regex | `RanCommand(r"uv\s+run\s+mtest")` |
-| `UsedSkill(p)` | A skill was invoked | Exact (`\|`-alternation) | `UsedSkill("codex\|codex:codex")` |
-| `InPlanMode()` | Agent is in plan mode | -- | `InPlanMode()` |
+| Condition | Matches when | Pattern | Example |
+|-----------|--------------|---------|---------|
+| `ReadFile(*p, subagents=True)` | A file matching the glob was read | Glob | `ReadFile("TESTING.md")` |
+| `TouchedFile(*p, subagents=False)` | A file matching the glob was edited or written | Glob | `TouchedFile("**/*.py")` |
+| `RanCommand(p, subagents=True)` | A Bash command matching the regex ran | Regex | `RanCommand(r"uv\s+run\s+pytest")` |
+| `UsedSkill(p, subagents=True)` | A skill with a matching name was invoked | Pipe-separated names | `UsedSkill("codex\|codex:codex")` |
+| `InPlanMode()` | The agent is in plan mode | — | `InPlanMode()` |
+| `Waiting()` | The current turn has a tool still running (background/async) | — | `Waiting()` |
 
-## Logic
+`subagents=True` also searches subagent transcripts; `TouchedFile` defaults to `False` (the
+main agent's edits only).
+
+## Combining conditions
 
 ```python
 only_if=[A, B, C]   # A AND B AND C must all match
 skip_if=[X, Y]      # X OR Y — any match skips the hook
 ```
 
-Both lists can be used together. `skip_if` is checked first.
+`skip_if` is checked first. For OR within a single condition, use pipe-alternation
+(`Tool("Bash|Execute")`) rather than separate entries.
 
-## Naming Convention
+## Custom conditions
 
-| Scope | Pattern | Examples |
-|-------|---------|---------|
-| Current event | Bare noun | `Tool`, `FilePath`, `Command`, `Content`, `TestFile` |
-| Transcript history | Past-tense / compound | `ReadFile`, `TouchedFile`, `RanCommand`, `UsedSkill`, `InPlanMode` |
-
-## Custom Conditions
-
-Implement the `CustomCondition` protocol:
+When a built-in condition can't express the check, implement `CustomCondition` — any frozen
+dataclass with a `check(self, evt) -> bool` method:
 
 ```python
 from dataclasses import dataclass
 from captain_hook import CustomCondition
 from captain_hook.events import BaseHookEvent
 
-@dataclass
+@dataclass(frozen=True)
 class MinEdits(CustomCondition):
     threshold: int = 5
 
     def check(self, evt: BaseHookEvent) -> bool:
         return evt.ctx.t.tool_uses.where(name="Edit").count() >= self.threshold
-```
 
-Use like any built-in condition:
-
-```python
+# Use it like any built-in:
 hook(Event.Stop, message="Too many edits", block=True, only_if=[MinEdits(threshold=10)])
 ```
+
+## Signals (scoring)
+
+`Signal` and `Signals` aren't `only_if`/`skip_if` filters — they pass to a primitive's
+`signals=` parameter to score patterns across a rolling transcript window. A hook fires when the
+cumulative score crosses the threshold. See [Transcript & Signals](../guide/transcript-signals.qmd).
+
+| Type | Purpose | Example |
+|------|---------|---------|
+| `Signal(pattern, weight=1, flags=0)` | A regex worth `weight` points per match | `Signal(r"\bretry\b", weight=2)` |
+| `Signals(patterns, threshold, window=15)` | A bundle that fires at `threshold` over the last `window` messages | `Signals([Signal(r"retry")], threshold=3)` |

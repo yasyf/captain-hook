@@ -1,0 +1,39 @@
+---
+title: "Events"
+---
+
+The nine lifecycle events Claude Code fires. This table is the single source of truth; the
+[How It Works](../getting-started/how-it-works.qmd) guide explains the lifecycle narrative and links here.
+
+A hook targets one event, or several combined with `|`:
+
+```python
+from captain_hook import hook, Event
+
+hook(Event.Stop | Event.SubagentStop, message="Review before finishing", block=True)
+```
+
+`Event` is a `Flag` enum, so `|` registers one hook for every named event at once.
+
+## Event reference
+
+| Event | Event class | Fires | Key properties | Can block? |
+|-------|-------------|-------|----------------|------------|
+| `PreToolUse` | `PreToolUseEvent` | Before a tool runs | `tool_name`, `command`, `command_line`, `file`, `content`, `old`, `agent_type` | **Yes** — deny the tool |
+| `PostToolUse` | `PostToolUseEvent` | After a tool succeeds | `tool_name`, `command`, `file`, `content`, `tool_response` | No — advisory |
+| `PostToolUseFailure` | `PostToolUseFailureEvent` | After a tool fails | `tool_name`, `error`, `is_interrupt` | No — advisory |
+| `UserPromptSubmit` | `UserPromptSubmitEvent` | When the user submits a prompt | `user_prompt` | No — advisory |
+| `Stop` | `StopEvent` | When the agent is about to stop | `stop_hook_active` | **Yes** — force-continue |
+| `SubagentStop` | `SubagentStopEvent` | When a subagent finishes | `agent_type` | **Yes** — force-continue |
+| `SubagentStart` | `SubagentStartEvent` | When a subagent launches | `agent_type` | No — advisory |
+| `PreCompact` | `PreCompactEvent` | Before context compaction | `trigger`, `custom_instructions` | No — advisory |
+| `Notification` | `NotificationEvent` | On a system notification | `message`, `title`, `notification_type` | No — advisory |
+
+`PreToolUse` is the only event that prevents an action. `Stop` and `SubagentStop` force the
+agent to keep going. Every other event is advisory — a hook injects context but cannot block.
+
+## Shared properties
+
+Every event also exposes the base accessors: `event`, `session_id`, `is_subagent`,
+`transcript_path`, `permission_mode`, `stop_hook_active`, `tasks` (the live Claude Code task
+list), and `ctx` (the hook context — transcript, settings, and the current turn).

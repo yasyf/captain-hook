@@ -1,0 +1,111 @@
+---
+title: "Primitives & Verdicts"
+---
+
+Every built-in primitive, its signature, and the verdict types the LLM primitives use. This is
+the facts tier; the [Guide](../guide/index.qmd) how-tos teach which one to reach for.
+
+## At a glance
+
+| Primitive | Action | Default events | Inline tests? | Reach for it when |
+|-----------|--------|----------------|:-------------:|-------------------|
+| `block_command` | block | `PreToolUse` | ✓ | Deny a Bash command outright |
+| `warn_command` | warn | `PostToolUse` | ✓ | Flag a command without blocking |
+| `gate` | block | `Stop \| SubagentStop` | ✓ | Require something done before the agent finishes |
+| `nudge` | warn (or block) | see below | ✓ | Advise when conditions or signals fire |
+| `lint` | warn (or block) | `PostToolUse` | ✓ | Check Python edits (string- or AST-mode) |
+| `diff_lint` | warn (or block) | `PostToolUse` | ✓ | Flag only what an edit changed |
+| `audit` | log | `PreToolUse \| PostToolUse \| Stop` | — | Append JSONL records of activity |
+| `llm_gate` | block | `Stop \| SubagentStop` | SKIP | Block on a judgment a regex can't make |
+| `llm_nudge` | warn | `PostToolUse` | SKIP | Advise on a judgment a regex can't make |
+| `prompt_check` | warn/block | called in a handler | SKIP | Judge an edit inside a custom handler |
+| `workflow` | block | `SubagentStop` | ✓ | Enforce an ordered, artifact-gated checklist |
+
+Deterministic primitives carry inline `tests={...}`; LLM-backed ones show **SKIP** under
+`uvx capt-hook test` (they need a real model). `nudge` defaults to `PreToolUse` with a `when=`
+predicate, `PostToolUse` with `signals=`, and `Stop | SubagentStop` when `block=True`.
+
+## Commands
+
+```python
+block_command(pattern: str | list[str], *, reason: str, hint: str | None = None,
+              tests: InlineTests | None = None) -> None
+
+warn_command(pattern: str | list[str], *, message: str, tests: InlineTests | None = None,
+             events: Event = Event.PostToolUse) -> None
+```
+
+A token list (`["git", "stash"]`) becomes a whitespace-tolerant regex; a string is used as-is.
+
+## Nudges & gates
+
+```python
+nudge(message: str, *, when=None, signals=None, only_if=(), skip_if=(), block=False,
+      events=None, max_fires=None, tests=None, async_=False) -> None
+
+gate(message: str, **kwargs) -> None   # == nudge(message, block=True, ...)
+```
+
+## Linting
+
+```python
+lint(check: Callable[[str], list[str]] | Callable[[ast.AST], Iterator[str]], *, message: str,
+     trigger=None, sep=", ", block=False, events=None, tests=None, max_shown=5) -> None
+
+diff_lint(check: Callable[[ast.AST, ast.AST], list[str]], *, message: str, sep=", ",
+          block=False, events=None, tests=None, max_shown=5, only_if=..., skip_if=...) -> None
+```
+
+`lint` infers string- vs AST-mode from the check's first parameter type. `{violations}` in the
+message is replaced with the joined results. Both fire on `.py` edits and skip test files.
+
+## Audit
+
+```python
+audit(events=Event.PreToolUse | Event.PostToolUse | Event.Stop, *, log_dir=None,
+      filename=lambda d: f"{d:%Y-%m-%d}.jsonl", fields=default_fields,
+      only_if=(), skip_if=()) -> None
+```
+
+Default record fields: `ts`, `event`, `tool`, `file`, `session_id`.
+
+## LLM primitives
+
+```python
+llm_gate(prompt: str, *, message: str | Callable[[GateVerdict], str], verdict=lambda r: r.block,
+         response_model=GateVerdict, only_if=(), skip_if=(), events=None, max_fires=None,
+         model="small", agent=True, transcript=True, ...) -> None
+
+llm_nudge(prompt: str, *, message: str | Callable[[NudgeVerdict], str], verdict=lambda r: r.fire,
+          response_model=NudgeVerdict, max_fires=None, model="small", ...) -> None
+
+prompt_check(evt, template: str | Prompt, fmt=None, *, prefix: str, suffix="", timeout=45,
+             include_reasoning=True, response_model=PromptCheckVerdict) -> HookResult | None
+```
+
+`llm_gate` defaults to `max_fires=1`, `llm_nudge` to `max_fires=3`. `prompt_check` is called
+from a handler and returns a `HookResult` (or `None`). Bound cost with `max_fires`, a narrow
+`only_if`, and `model="small"`.
+
+## Verdict types
+
+| Type | Fields | Returned by |
+|------|--------|-------------|
+| `GateVerdict` | `block: bool`, `reasoning: str` | `llm_gate` |
+| `NudgeVerdict` | `fire: bool`, `reasoning: str` | `llm_nudge` |
+| `PromptCheckVerdict` | `action: "ok" \| "warning" \| "block"`, `reason: str` | `prompt_check` |
+
+## Prompt builder
+
+`Prompt` assembles a system prompt, XML-tagged context blocks, and an ask, then renders via
+`str(prompt)`.
+
+```python
+Prompt().system("...").context("diff", diff_text).ask("Is this a real bug?")
+
+Prompt.from_template("Review {file} for {issue}", file="x.py", issue="leaks")
+Prompt.load("review/bug", base=None, **vars)   # renders captain_hook prompts/review/bug.md
+```
+
+`from_template` and `load` raise `KeyError` on a missing placeholder; `load` raises
+`FileNotFoundError` when the `.md` file isn't found.

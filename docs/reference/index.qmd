@@ -2,9 +2,22 @@
 title: "Reference"
 ---
 
-Technical reference for the CLI, conditions, and full API surface.
+The facts tier: accurate, complete, and neutral. Every tutorial and how-to links here rather
+than restating signatures. For tasks ("how do I gate a command?"), start in the
+[Guide](../guide/index.qmd); this section is for looking things up.
 
-- [CLI](../../reference/cli/index.qmd) — All subcommands and options
-- [Conditions Cheatsheet](conditions.qmd) — Quick-reference card for all 12 condition types
-- [API Reference](../../reference/index.qmd) — Auto-generated from source
-- [Changelog](../../changelog.qmd) — Release history
+Hand-written cheatsheets give you scannable tables the auto-generated API can't; the symbol and
+CLI references give you exhaustive signatures.
+
+## Cheatsheets
+
+- [Events](events.qmd) — the nine lifecycle events and what each can block
+- [Conditions](conditions.qmd) — every condition type, grouped and scannable
+- [Primitives & Verdicts](primitives.qmd) — every primitive's signature, plus the LLM verdict types
+- [AST Matchers](matchers.qmd) — the matcher catalog for styleguide rules
+
+## Generated
+
+- [CLI](../../reference/cli/index.qmd) — every `uvx capt-hook` subcommand and its options
+- [API Reference](../../reference/index.qmd) — the full symbol reference, generated from source
+- [Changelog](../../changelog.qmd) — release history
