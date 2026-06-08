@@ -13,11 +13,25 @@ from captain_hook import (
     Signal,
     Signals,
     SourceEdits,
+    TouchedFile,
+    UsedSkill,
     audit,
     block_command,
+    gate,
     nudge,
     on,
     prompt_check,
+)
+
+# This file is an example. Replace these hooks with rules that fit your project.
+
+# 0. gate — block the agent from finishing a UI change it never reviewed.
+#    Adapt the globs and the skill name to your repo.
+# see https://yasyf.github.io/captain-hook/docs/guide/primitives.html
+gate(
+    "You edited UI files. Open them with agent-browser and verify they render before finishing.",
+    only_if=[TouchedFile("**/src/routes/**", "**/src/components/**")],
+    skip_if=[UsedSkill("agent-browser")],
 )
 
 # 1. block_command — refuse a dangerous shell command before it runs.
