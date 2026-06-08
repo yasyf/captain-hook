@@ -1,0 +1,130 @@
+---
+title: "Score patterns with signals"
+---
+
+Signals score recent transcript text so a hook fires only when a pattern repeats
+hard enough to matter. You pass a `Signals` bundle to a primitive's `signals=`
+parameter, set a `threshold`, and let the cumulative score decide. Use this when a
+single match is noise but a run of matches is a real behavior, like a retry loop or
+a wave of blame-shifting.
+
+For the full signal type list and field defaults, see the
+[Conditions Cheatsheet](../reference/conditions.qmd) signals section. To query the
+text these signals score, see [Query the transcript](transcript.qmd).
+
+## Match a literal phrase with a regex Signal
+
+A `Signal` is a regex worth `weight` points. Every match against a window message
+adds `weight` to the running score. Positive weights push toward the threshold;
+negative weights suppress false positives.
+
+```python
+from captain_hook import Signal
+
+Signal(pattern=r"let me try again", weight=2)
+Signal(pattern=r"retry|retrying", weight=1)
+Signal(pattern=r"investigating", weight=-3)  # pulls the score back down
+```
+
+Set `flags` when you need case-insensitive or multiline matching:
+
+```python
+import re
+from captain_hook import Signal
+
+Signal(pattern=r"external.*service", weight=2, flags=re.IGNORECASE)
+```
+
+## Match meaning with an NlpSignal
+
+An `NlpSignal` matches a grammatical relationship instead of a fixed string. It
+parses each message with spaCy and checks whether a `Clause` you describe appears in
+the dependency tree. This catches paraphrases that a regex would miss.
+
+A `Clause(noun=..., verb=...)` means "this noun is the subject or object of this
+verb." So `Clause(noun=Phrase("test"), verb=Phrase("run"))` matches "run the test,"
+"the tests ran," and "running a test," because spaCy links `test` to `run` in each.
+A `Phrase` holds one or more lemmas, so `Phrase("run", "rerun")` matches either verb.
+
+```python
+from captain_hook import NlpSignal, Clause, Phrase
+
+NlpSignal(
+    clauses=[
+        Clause(noun=Phrase("test"), verb=Phrase("run")),
+    ],
+    weight=3,
+)
+```
+
+A `Clause` accepts more than a noun and verb. Add `adj=` to match an adjective on
+the noun, set `negated=True` to require a negation, or pass a compound noun phrase on
+its own:
+
+```python
+Clause(noun=Phrase.expand("issue"), adj=Phrase("existing", "previous"))
+Clause(noun=Phrase.expand("change"), verb=Phrase("cause", "introduce"), negated=True)
+```
+
+`Phrase.expand("issue")` pulls in WordNet synonyms of "issue" so the clause matches
+"problem," "bug," and other near-synonyms without you listing each one. The bare
+`Phrase("existing", "present")` stays exact.
+
+## Bundle signals with a threshold and window
+
+A `Signals` bundle groups patterns, sets the score `threshold` that triggers the
+hook, and bounds the `window` of recent messages to score. The window is a rolling
+slice of the last N transcript messages, so old matches age out as the conversation
+moves on.
+
+```python
+from captain_hook import Signals, Signal
+
+Signals(
+    patterns=[
+        Signal(r"retry", weight=2),
+        Signal(r"investigating", weight=-3),
+    ],
+    threshold=3,  # fire once the summed weight reaches 3
+    window=10,    # score only the last 10 messages
+)
+```
+
+The threshold is a sum, not a count. With `window=10` above, three "retry" matches
+score 6 and fire, but a single "investigating" inside the window subtracts 3 and can
+hold the hook back.
+
+You can also pass a bare `list[Signal]` to a primitive. The framework wraps it with
+`threshold=1`, so any single match triggers.
+
+## Wire a bundle into nudge
+
+Pass the bundle to `nudge(signals=...)`. The primitive extracts text from the last
+`window` messages, scores it against every pattern, and warns when the total crosses
+the threshold. It also deduplicates by content, so the same triggering text will not
+fire the nudge twice in a row.
+
+```python
+import re
+from captain_hook import nudge, Signals, Signal
+
+nudge(
+    "Stop retrying. Narrow the failing test first, then rerun it once.",
+    signals=Signals(
+        patterns=[
+            Signal(r"let me try again", weight=2, flags=re.IGNORECASE),
+            Signal(r"retry|retrying", weight=1, flags=re.IGNORECASE),
+            Signal(r"investigating", weight=-3, flags=re.IGNORECASE),
+        ],
+        threshold=3,
+        window=10,
+    ),
+)
+```
+
+When the score crosses 3, the nudge warns and appends a "Triggered by: ..." line
+naming the text that set it off, so the agent sees why it fired.
+
+The same `signals=` parameter works on `gate()`, `llm_gate()`, and `llm_nudge()`.
+Use `gate()` instead of `nudge()` when crossing the threshold should block the turn
+instead of warning.

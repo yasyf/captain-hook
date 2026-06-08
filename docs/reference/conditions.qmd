@@ -74,7 +74,7 @@ hook(Event.Stop, message="Too many edits", block=True, only_if=[MinEdits(thresho
 
 `Signal` and `Signals` aren't `only_if`/`skip_if` filters — they pass to a primitive's
 `signals=` parameter to score patterns across a rolling transcript window. A hook fires when the
-cumulative score crosses the threshold. See [Transcript & Signals](../guide/transcript-signals.qmd).
+cumulative score crosses the threshold. See [Score patterns with signals](../guide/signals.qmd).
 
 | Type | Purpose | Example |
 |------|---------|---------|

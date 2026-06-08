@@ -1,0 +1,151 @@
+---
+title: "How Hooks Work"
+---
+
+A captain-hook hook is a rule that runs at one moment in Claude Code's loop and returns a verdict. This page explains that lifecycle. You learn when an event fires, how the dispatch pipeline turns it into a verdict, and how that verdict reaches Claude Code.
+
+## A hook firing
+
+You ban `git stash` in three lines:
+
+```python
+from captain_hook import block_command
+
+block_command(r"git\s+stash", reason="git stash is not allowed; use jj shelve")
+```
+
+When Claude tries to run `git stash pop`, Claude Code pauses the tool call and runs your hooks first. The hook matches the command, returns a deny verdict, and Claude Code skips the call. Claude reads the reason and reaches for `jj shelve` instead.
+
+That is the whole shape of a hook. The rest of this page traces each stage so you can predict what any hook does before you ship it.
+
+## The lifecycle
+
+Claude Code processes a turn in a loop. It reads the prompt, calls a tool, reads the result, then decides whether to continue or stop. Each labeled point in that loop is an event, and a hook registered for that event runs when Claude Code reaches it.
+
+```{mermaid}
+flowchart TD
+    A[User submits prompt] -->|UserPromptSubmit| B[Agent processes prompt]
+    B --> C{Needs a tool?}
+    C -->|Yes| D[PreToolUse]
+    D --> E{Hook blocks?}
+    E -->|Yes| F[Tool skipped]
+    E -->|No| G[Tool executes]
+    G --> H{Tool succeeded?}
+    H -->|Yes| I[PostToolUse]
+    H -->|No| J[PostToolUseFailure]
+    I --> C
+    J --> C
+    F --> C
+    C -->|No| K{Agent stopping?}
+    K -->|Yes| L[Stop]
+    L --> M{Hook blocks stop?}
+    M -->|Yes| B
+    M -->|No| N[Done]
+
+    B -->|Launches subagent| O[SubagentStart]
+    O --> P[Subagent runs]
+    P --> Q[SubagentStop]
+    Q --> R{Hook blocks stop?}
+    R -->|Yes| P
+    R -->|No| C
+
+    B -->|Context too large| S[PreCompact]
+    S --> T[Context compacted]
+    T --> B
+
+    B -.->|System notification| U[Notification]
+
+    style D fill:#f9f,stroke:#333
+    style I fill:#9f9,stroke:#333
+    style J fill:#f99,stroke:#333
+    style L fill:#99f,stroke:#333
+    style Q fill:#99f,stroke:#333
+    style A fill:#ff9,stroke:#333
+    style S fill:#9ff,stroke:#333
+    style U fill:#ddd,stroke:#333
+```
+
+Three of these events let a hook change the agent's course. `PreToolUse` is the one event where a hook prevents an action, denying the tool so Claude Code skips the call. `Stop` and `SubagentStop` run the loop the other way, forcing the agent to keep going when it tries to finish early. Every other event is advisory. The hook injects a message into Claude's context but cannot block.
+
+Claude Code fires nine events in total. For when each one fires, the event class it carries, and whether it can block, see [the events reference](../reference/events.qmd).
+
+## The dispatch pipeline
+
+One captain-hook process handles every event the same way, in four stages.
+
+1. **Parse the event.** Claude Code writes a JSON payload to stdin. The CLI reads it and builds a typed event object, so a `PreToolUse` payload becomes a `PreToolUseEvent` with accessors like `tool_name` and `command`.
+2. **Match conditions.** Each registered hook is checked against the event. The event must be in the hook's event set, every `only_if` condition must pass, and no `skip_if` condition may pass. Hooks whose conditions all hold are matched. Conditions are covered in [the conditions reference](../reference/conditions.qmd).
+3. **Execute matching hooks.** Each matched hook produces a verdict. A handler hook runs its function; a declarative hook returns its configured message. The first hook to block or allow wins and short-circuits the rest; warnings from every hook accumulate.
+4. **Format the verdict.** The winning verdict is rendered as the JSON envelope Claude Code expects and written to stdout. A block becomes a deny, a warning becomes injected context, and no verdict means an empty response that leaves the action untouched.
+
+The trace below walks one event through all four stages.
+
+## Tracing a blocked `git stash`
+
+Start with the same hook, written in its full declarative form so every part is visible:
+
+```python
+from captain_hook import hook, Event, Tool, Command
+
+hook(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), Command(r"git\s+stash")],
+    message="git stash is not allowed; use jj shelve",
+    block=True,
+)
+```
+
+`block_command` is a primitive that expands to this same call, and the [primitives reference](../reference/primitives.qmd) lists the rest.
+
+### Parse the event
+
+Claude tries to run `git stash pop`. Claude Code pauses the tool call and sends this payload to the hook process on stdin:
+
+```json
+{
+  "tool_name": "Bash",
+  "tool_input": { "command": "git stash pop" },
+  "transcript_path": "/tmp/claude/session/transcript.jsonl"
+}
+```
+
+The CLI parses that JSON into a typed `PreToolUseEvent`:
+
+```python
+evt.tool_name  # "Bash"
+evt.command    # "git stash pop"
+```
+
+### Match conditions
+
+The pipeline checks the hook against the event. `Event.PreToolUse` is in the hook's event set, so the event matches. Then each `only_if` condition runs. `Tool("Bash")` reads `evt.tool_name` and matches, and `Command(r"git\s+stash")` searches `evt.command` and matches. No `skip_if` conditions are registered, so nothing skips the hook. Every condition holds, so this hook is matched.
+
+### Execute matching hooks
+
+This is a declarative hook with no handler function, so it returns its configured message as a blocking verdict:
+
+```python
+HookResult(action=Action.block, message="git stash is not allowed; use jj shelve")
+```
+
+A block is final, so the pipeline stops checking further hooks and carries this verdict forward.
+
+### Format the verdict
+
+The block becomes the deny envelope for a `PreToolUse` event, written to stdout:
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "git stash is not allowed; use jj shelve"
+  }
+}
+```
+
+Claude Code reads `permissionDecision: "deny"` and skips the tool call. Claude sees the reason and adjusts, reaching for `jj shelve`.
+
+::: {.callout-note title="Block versus warn"}
+Set `block=False` and the verdict becomes a warning. The envelope swaps `permissionDecision: "deny"` for `additionalContext`, so Claude reads the message as advice and the tool still runs.
+:::

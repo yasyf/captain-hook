@@ -1,0 +1,103 @@
+---
+title: "Design Philosophy & When NOT to Use This"
+---
+
+captain-hook treats a hook as typed, declarative data you can test inline and check with a type
+checker, not a shell snippet you hand-write in `settings.json`. This page explains why that trade
+is worth making, and when it is not.
+
+## A hook is data, not a script
+
+A native Claude Code hook is a command string in `settings.json`. Claude Code pipes the event to
+that command's stdin and reads a verdict from its stdout. The matcher, the event filter, and the
+verdict all live as text inside a JSON file. Nothing reads that text until Claude Code fires the
+event, so a typo, a wrong field name, or a broken regex stays invisible until the moment it
+should have fired.
+
+captain-hook moves the same description into Python objects. You register a hook by calling a
+typed function:
+
+```python
+from captain_hook import block_command
+
+block_command(
+    ["git", "stash"],
+    reason="Use jj instead of git stash",
+)
+```
+
+The event target, the conditions, and the verdict are now values with types. The
+[primitives reference](../reference/primitives.qmd) lists every builder and the verdict each one
+produces; the [conditions reference](../reference/conditions.qmd) lists every filter; the
+[events reference](../reference/events.qmd) lists every lifecycle moment you can target. Because
+these are objects and not strings, three properties follow.
+
+### You can test a hook before it ships
+
+Each primitive carries inline `tests`, mapping a sample event to the verdict you expect.
+
+```python
+from captain_hook import block_command, Input, Block, Allow
+
+block_command(
+    ["git", "stash"],
+    reason="Use jj instead of git stash",
+    tests={
+        Input(command="git stash"): Block(pattern="jj"),
+        Input(command="git status"): Allow(),
+    },
+)
+```
+
+`uvx capt-hook test` runs every inline case and exits non-zero on the first failure, so a broken
+matcher fails in your terminal or in CI instead of in a live session. A shell hook in
+`settings.json` has nowhere to put this. You discover a regex mistake when the hook either blocks
+the wrong command or stays silent on the right one, mid-conversation, with no record of why.
+
+### The type checker reads your hook
+
+The arguments to `block_command`, `hook`, and the condition builders are typed. Pass a condition
+where an event flag belongs, or misname a verdict field, and pyright flags it before the hook
+ever runs. A regex inside a JSON string is opaque to every tool you own. A condition object is a
+value the type checker, your editor, and the test runner all read.
+
+### The wiring is mechanical
+
+You do not hand-edit the matcher block in `settings.json`. captain-hook reads your hook
+definitions and generates the wiring for you, so the `settings.json` entry and the hook it points
+at cannot drift apart. The JSON becomes generated output, not a file you maintain by hand. One
+description of the hook lives in your Python; the JSON follows from it.
+
+## What you give up by hand-writing shell hooks
+
+A `settings.json` hook is a string. It is invisible to the type checker, untestable without a
+live session, and wired by hand, so the matcher and the script it invokes drift apart over time.
+You read the regex, guess what it matches, and find out when it fires. As a directory of these
+grows, the cost of each compounds, because none of them composes, none carries a test, and none
+fails loudly when it breaks.
+
+captain-hook spends a dependency and a Python file to buy back that visibility. The hook becomes
+a value you can read, test, type-check, and compose. For a directory you maintain over months,
+that is the trade worth making.
+
+## When plain settings.json hooks suffice
+
+The trade is not always worth it. Reach for a native `settings.json` hook, and skip captain-hook,
+when:
+
+- The hook is a one-liner you will not change. A single `echo` on `Notification`, or a formatter
+  that always runs after every edit, has nothing to test and nothing to type-check. A JSON string
+  is the lighter tool.
+- The logic already lives in a script you trust. If you run an existing linter or a vetted shell
+  script, wrapping it in a Python hook adds a layer without adding a check.
+- You cannot take the dependency. captain-hook runs through `uvx`, which needs
+  [uv](https://docs.astral.sh/uv/) on the machine. An environment without uv, or one that forbids
+  fetching a tool at runtime, rules it out. A native hook needs only the shell.
+- You are wiring a handful of hooks, once. The payoff comes from testability and mechanical wiring
+  across many hooks over time. For two or three hooks you will never touch again, the JSON is
+  enough.
+
+captain-hook earns its place when a hook directory grows, changes, and needs to stay correct
+across edits. When the hook is small, static, and trusted, the native mechanism is the right
+amount of machinery. Choose by how much the hook will change and how badly a silent break would
+cost you.

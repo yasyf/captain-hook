@@ -3,7 +3,7 @@ title: "Events"
 ---
 
 The nine lifecycle events Claude Code fires. This table is the single source of truth; the
-[How It Works](../getting-started/how-it-works.qmd) guide explains the lifecycle narrative and links here.
+[How It Works](../guide/how-it-works.qmd) guide explains the lifecycle narrative and links here.
 
 A hook targets one event, or several combined with `|`:
 

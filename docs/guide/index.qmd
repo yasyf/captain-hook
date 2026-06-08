@@ -2,74 +2,44 @@
 title: "Guide"
 ---
 
-Deep dives into every part of the framework.
+The guide is split into two kinds of page. Concepts explain how the framework
+thinks, so you build the right mental model. How-to pages walk you through one task
+at a time, from your first primitive to multi-step workflows. When you want
+exhaustive facts, full signatures, the complete event, condition, primitive, and
+matcher tables, and every verdict type, read the
+[Reference](../reference/index.qmd); the guide links there instead of restating it.
 
-::: {.grid}
+## Concepts (understand)
 
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-**Hooks & Events** — Registration patterns and the 9 event types
+Read these to learn how captain-hook fits together before you write a rule.
 
-[{{< icon arrow-right >}} Hooks & Events](hooks-and-events.qmd)
-:::
+- [How It Works](how-it-works.qmd) traces the full path from a Claude Code event to the JSON response that controls it, covering registration and the lifecycle.
+- [Design Philosophy](philosophy.qmd) explains why a hook is data instead of a script, and when plain settings.json hooks are enough.
+- [Security & Trust](security.qmd) covers the trust boundary, where LLM credentials come from, and why uvx never touches your project.
 
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-**Conditions** — Filter when hooks fire with typed condition objects
+## How-to (get a task done)
 
-[{{< icon arrow-right >}} Conditions](conditions.qmd)
-:::
+Each page is one task with the shortest correct path. Start in Foundation, then
+reach for Intermediate and Advanced as you need them.
 
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-**Primitives** — One-line hooks: `nudge`, `gate`, `lint`, `block_command`
+### Foundation
 
-[{{< icon arrow-right >}} Primitives](primitives.qmd)
-:::
+Start here. [Primitives](primitives.qmd) writes a one-line hook with `nudge`,
+`gate`, `lint`, or `block_command`. [Conditions](conditions.qmd) fires a hook only
+when typed condition objects match. [Testing](testing.qmd) proves a hook with
+inline tests and mock events.
 
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-**Transcript & Signals** — Query conversation history and score patterns
+### Intermediate
 
-[{{< icon arrow-right >}} Transcript & Signals](transcript-signals.qmd)
-:::
+- [Style Rules](styleguide.qmd) authors AST-based style checks as data and registers them.
+- [LLM Hooks](llm-hooks.qmd) gates or nudges with an LLM evaluating the event.
+- [Query the Transcript](transcript.qmd) reads the conversation history inside a handler.
+- [Signals](signals.qmd) scores patterns across the transcript to drive a nudge.
+- [Real-World Patterns](patterns.qmd) collects hooks distilled from a production hooks directory, ready to copy and adapt.
 
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-**LLM Hooks** — Gate or nudge with LLM-powered evaluation
+### Advanced
 
-[{{< icon arrow-right >}} LLM Hooks](llm-hooks.qmd)
-:::
-
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-**Workflows** — Enforce multi-step checklists before the agent can stop
-
-[{{< icon arrow-right >}} Workflows](workflows.qmd)
-:::
-
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-**State & Sessions** — Persist data across hook invocations
-
-[{{< icon arrow-right >}} State & Sessions](state.qmd)
-:::
-
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-**Testing** — Inline tests, mock events, and dispatch testing
-
-[{{< icon arrow-right >}} Testing](testing.qmd)
-:::
-
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-**Configuration** — `HooksSettings` knobs, env prefix, state and log directories
-
-[{{< icon arrow-right >}} Configuration](configuration.qmd)
-:::
-
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-**Patterns** — Real-world hooks distilled from a production hooks directory
-
-[{{< icon arrow-right >}} Patterns](patterns.qmd)
-:::
-
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-**Troubleshooting** — Common errors and diagnostic commands
-
-[{{< icon arrow-right >}} Troubleshooting](troubleshooting.qmd)
-:::
-
-:::
+- [State & Sessions](state.qmd) persists data across hook invocations.
+- [Workflows](workflows.qmd) enforces a multi-step checklist before the agent can stop.
+- [Configuration](configuration.qmd) tunes `HooksSettings`, the env prefix, and the state and log directories.
+- [Troubleshooting](troubleshooting.qmd) diagnoses common errors with the right command.
