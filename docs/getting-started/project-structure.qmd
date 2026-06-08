@@ -1,0 +1,78 @@
+---
+title: "Project Structure & Wiring"
+---
+
+`uvx capt-hook init` already wired your project. This page shows what it produced and how Claude
+Code actually runs your hooks, so the wiring stops being a black box.
+
+## What init creates
+
+```
+your-project/
+├── .claude/
+│   ├── hooks/
+│   │   ├── conf.py              # optional settings (planning agents, state dir, ...)
+│   │   └── example.py           # the starter hook
+│   ├── skills/                  # bootstrapping-hooks + translating-styleguides
+│   └── settings.local.json      # the wiring (below)
+```
+
+Hooks are just Python files under `.claude/hooks/`. `uvx capt-hook test` and
+`uvx capt-hook run` both default `--hooks` to that directory; pass `--hooks <dir>` to point
+elsewhere.
+
+## The wiring contract
+
+`init` writes the `hooks` block of `.claude/settings.local.json`, and `generate-settings`
+regenerates it. Each event maps to the one command Claude Code runs:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "hooks": [ { "type": "command", "command": "uvx capt-hook run PreToolUse" } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "uvx capt-hook run Stop" } ] }
+    ]
+  }
+}
+```
+
+Only the events your hooks listen on appear. `uvx capt-hook run <Event>` is the one
+place the `uvx` convention is baked into a file instead of typed by you.
+
+## How a hook runs
+
+When an event fires, Claude Code runs `uvx capt-hook run <Event>` and talks to it over a pipe:
+
+1. Claude Code writes the event as JSON to the process's **stdin**:
+
+   ```json
+   {"tool_name": "Bash", "tool_input": {"command": "git stash"}}
+   ```
+
+2. captain-hook loads every hook in `.claude/hooks/`, runs the ones that match, and writes the
+   verdict to **stdout**:
+
+   ```json
+   {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+     "permissionDecision": "deny", "permissionDecisionReason": "..."}}
+   ```
+
+3. Claude Code reads the verdict. `deny` blocks the tool, `allow` lets it through, and an
+   advisory hook injects `additionalContext` instead.
+
+## When to re-wire
+
+Editing a hook's body needs nothing. The same `uvx capt-hook run` command picks it up. Re-run
+`generate-settings` only when you add a hook on a **new event**, so that event gets its own
+entry:
+
+```bash
+uvx capt-hook generate-settings           # merges into settings.local.json
+uvx capt-hook generate-settings --no-merge # print standalone JSON instead
+```
+
+Then reload the project so Claude Code reads the updated settings. `.claude/hooks/` is code, so
+commit it, and review hook changes in pull requests like anything else.
