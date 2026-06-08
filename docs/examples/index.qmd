@@ -43,7 +43,7 @@ Build rules you compose and reuse.
 | Example | Teaches |
 |---|---|
 | [Conditions Composition](conditions-composition.qmd) | stack `only_if` and `skip_if` to target one edit |
-| [Custom Condition](custom-condition.qmd) | the `CustomCondition` protocol |
+| [Custom Condition](custom-condition.qmd) | a `CustomCondition` predicate fed to a `nudge` |
 | [Style Guide](styleguide.qmd) | `styleguide` running `StyleRule` matchers on changed lines |
 | [Test Integrity](test-integrity.qmd) | `prompt_check` detecting weakened tests |
 | [A Complete Hooks File](capstone.qmd) | several primitives composing in one file |

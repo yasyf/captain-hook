@@ -76,3 +76,8 @@ uvx capt-hook generate-settings --no-merge # print standalone JSON instead
 
 Then reload the project so Claude Code reads the updated settings. `.claude/hooks/` is code, so
 commit it, and review hook changes in pull requests like anything else.
+
+The wired event set is derived from your registered hooks, not a fixed list, so a hook on an event
+no entry covers never fires. captain-hook catches this. On the next synchronous event it warns the
+agent through `additionalContext` to re-run `uvx capt-hook generate-settings`, so a forgotten re-wire
+surfaces instead of silently swallowing the hook.

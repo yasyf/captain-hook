@@ -106,12 +106,18 @@ def maybe_launch_bootstrap(root: Path) -> bool:
     return True
 
 
+def event_names(events: Event) -> set[str]:
+    return {name for member in Event if member in events and (name := member.name)}
+
+
+def subscribed_events() -> set[str]:
+    return {name for entry in _state.hooks for name in event_names(entry.spec.events)}
+
+
 def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str = DIST_NAME) -> dict[str, Any]:
     events_by_async: defaultdict[bool, set[str]] = defaultdict(set)
     for entry in _state.hooks:
-        for member in Event:
-            if member in entry.spec.events and (name := member.name):
-                events_by_async[entry.spec.async_].add(name)
+        events_by_async[entry.spec.async_] |= event_names(entry.spec.events)
 
     from_flag = "" if from_source == DIST_NAME else f" --from {from_source}"
     hooks_flag = "" if hooks_dir == ".claude/hooks" else f" --hooks $CLAUDE_PROJECT_DIR/{hooks_dir}"
@@ -175,6 +181,43 @@ def merge_init_settings(
     return existing, summary
 
 
+def settings_drift(root: Path) -> set[str]:
+    settings = [p for name in ("settings.json", "settings.local.json") if (p := root / ".claude" / name).exists()]
+    if not settings:
+        return set()
+    wired = {
+        event
+        for path in settings
+        for event, groups in (json.loads(path.read_text()).get("hooks") or {}).items()
+        if any(is_captain_hook_group(g) for g in groups)
+    }
+    return subscribed_events() - wired
+
+
+def warn_settings_drift(
+    output: dict[str, Any] | None, event: Event, root: Path | None, session_dir: Path, *, async_: bool
+) -> dict[str, Any] | None:
+    if async_ or root is None or event in (Event.Stop | Event.SubagentStop):
+        return output
+    marker = session_dir / ".drift_surfaced"
+    if marker.exists():
+        return output
+    if not (drift := settings_drift(root)):
+        return output
+    marker.write_text("")
+    message = (
+        "captain-hook: these events have registered hooks but are not wired in .claude/settings, "
+        f"so the hooks never fire: {', '.join(sorted(drift))}. "
+        "Run `uvx capt-hook generate-settings` to wire them."
+    )
+    base = output or {"hookSpecificOutput": {"hookEventName": event.name}}
+    hso = base["hookSpecificOutput"]
+    hso["additionalContext"] = f"{prev}\n\n{message}" if (prev := hso.get("additionalContext")) else message
+    if event is Event.PreToolUse:
+        hso.setdefault("permissionDecision", "allow")
+    return base
+
+
 def run_event(
     event_name: str,
     *,
@@ -214,7 +257,13 @@ def run_event(
     )
     evt = event.event_class(_raw=raw, ctx=ctx)
 
-    if output := dispatch(event, evt, session_dir=session_dir, async_=async_):
+    if output := warn_settings_drift(
+        dispatch(event, evt, session_dir=session_dir, async_=async_),
+        event,
+        root,
+        session_dir,
+        async_=async_,
+    ):
         print(json.dumps(output))
 
 

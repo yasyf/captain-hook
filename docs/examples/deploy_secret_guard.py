@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from captain_hook import (
     Allow,
     BaseHookEvent,
     Block,
+    CustomCondition,
     Event,
-    HookResult,
     Input,
     Tool,
     block_command,
-    on,
+    hook,
 )
 
 # Block irreversible infrastructure commands before they run.
@@ -35,20 +37,22 @@ block_command(
 )
 
 
+@dataclass(frozen=True)
+class SecretsExfil(CustomCondition):
+    def check(self, evt: BaseHookEvent) -> bool:
+        cmd = evt.command or ""
+        return "get-secret-value" in cmd or "AWS_SECRET" in cmd or "PRIVATE_KEY" in cmd
+
+
 # Block commands that would copy a secret into the transcript or a log.
-@on(
+hook(
     Event.PreToolUse,
-    only_if=[Tool("Bash")],
+    message="BLOCKED: this prints a secret into the transcript. Read it from your secret store at runtime.",
+    block=True,
+    only_if=[Tool("Bash"), SecretsExfil()],
     tests={
         Input(command="aws secretsmanager get-secret-value --secret-id db"): Block(pattern="secret"),
         Input(command="env | grep AWS_SECRET_ACCESS_KEY"): Block(pattern="secret"),
         Input(command="aws s3 ls"): Allow(),
     },
 )
-def block_secret_exfil(evt: BaseHookEvent) -> HookResult | None:
-    cmd = evt.command or ""
-    if "get-secret-value" in cmd or "AWS_SECRET" in cmd or "PRIVATE_KEY" in cmd:
-        return evt.block(
-            "BLOCKED: this prints a secret into the transcript. Read it from your secret store at runtime."
-        )
-    return None

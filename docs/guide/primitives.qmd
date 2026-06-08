@@ -23,6 +23,13 @@ Each primitive accepts `tests={...}` mapping an `Input` to a `Block`, `Warn`, or
 `Allow` expectation. Run them with `uvx capt-hook test`. The
 [primitives reference](../reference/primitives.qmd) holds every full signature.
 
+::: {.callout-tip title="Prefer declarative"}
+A custom predicate belongs in a [`CustomCondition.check()`](conditions.qmd#write-a-custom-condition)
+and fires through a declarative `nudge`, `gate`, or `hook`. Reach for an `@on` handler only when you
+need threaded session state, a per-event message computed at runtime, an LLM evaluation, or
+command-line AST queries.
+:::
+
 ## block_command {#block_command}
 
 Block a Bash command before it runs. Pass a token list and captain-hook builds a

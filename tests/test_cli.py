@@ -8,10 +8,7 @@ from pathlib import Path
 import pytest
 
 from captain_hook.app import (
-    _state,
     hook as register_hook,
-    on,
-    register,
 )
 from captain_hook.tests.helpers import (
     raw_assistant,
@@ -160,6 +157,71 @@ class TestGenerateSettings:
         register_hook(Event.PreToolUse, message="pre tool")
         command = generate_settings(hooks_dir="custom/hooks")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
         assert command == "uvx capt-hook --hooks $CLAUDE_PROJECT_DIR/custom/hooks run PreToolUse"
+
+
+class TestSettingsDrift:
+    @staticmethod
+    def write_settings(root: Path, *wired_events: str) -> None:
+        claude = root / ".claude"
+        claude.mkdir(parents=True, exist_ok=True)
+        (claude / "settings.json").write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        event: [{"hooks": [{"type": "command", "command": f"uvx capt-hook run {event}"}]}]
+                        for event in wired_events
+                    }
+                }
+            )
+        )
+
+    def test_cli_017_drift_flags_unwired_event(self, tmp_path: Path) -> None:
+        from captain_hook.cli import settings_drift
+
+        register_hook(Event.PreToolUse, message="pre")
+        register_hook(Event.UserPromptSubmit, message="ups")
+        self.write_settings(tmp_path, "PreToolUse")
+        assert settings_drift(tmp_path) == {"UserPromptSubmit"}
+
+    def test_cli_018_no_drift_when_all_wired(self, tmp_path: Path) -> None:
+        from captain_hook.cli import settings_drift
+
+        register_hook(Event.PreToolUse, message="pre")
+        self.write_settings(tmp_path, "PreToolUse")
+        assert settings_drift(tmp_path) == set()
+
+    def test_cli_019_no_drift_without_settings_file(self, tmp_path: Path) -> None:
+        from captain_hook.cli import settings_drift
+
+        register_hook(Event.UserPromptSubmit, message="ups")
+        assert settings_drift(tmp_path) == set()
+
+    def test_cli_020_run_surfaces_drift_to_agent_once(self, tmp_path: Path) -> None:
+        hooks_dir = tmp_path / "hooks"
+        hooks_dir.mkdir()
+        (hooks_dir / "__init__.py").write_text("")
+        (hooks_dir / "my_hook.py").write_text(
+            textwrap.dedent("""\
+            from captain_hook.app import hook
+            from captain_hook.types import Event
+
+            hook(Event.PreToolUse, message="pre tool fired")
+            hook(Event.UserPromptSubmit, message="prompt hook")
+        """)
+        )
+        root_dir = tmp_path / "project"
+        self.write_settings(root_dir, "PreToolUse")
+
+        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
+        first = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), root_dir=str(root_dir), stdin_data=stdin)
+        assert first.returncode == 0
+        assert "UserPromptSubmit" in first.stdout
+        assert "generate-settings" in first.stdout
+
+        second = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), root_dir=str(root_dir), stdin_data=stdin)
+        assert second.returncode == 0
+        assert "pre tool fired" in second.stdout
+        assert "UserPromptSubmit" not in second.stdout
 
 
 class TestErrorHandling:

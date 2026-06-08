@@ -119,7 +119,8 @@ class MinEdits(CustomCondition):
 hook(Event.Stop, message="Many edits, run a review", only_if=[MinEdits(threshold=10)])
 ```
 
-Use a custom condition like any built-in in either list.
+Use a custom condition like any built-in in either list. The predicate goes in `check()`; the
+firing goes through a primitive, never an `@on` body.
 
 ## Worked patterns
 

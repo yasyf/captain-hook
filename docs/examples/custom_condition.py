@@ -7,10 +7,9 @@ from captain_hook import (
     BaseHookEvent,
     CustomCondition,
     Event,
-    HookResult,
     Input,
     Warn,
-    on,
+    nudge,
 )
 
 
@@ -22,14 +21,12 @@ class LargeEdit(CustomCondition):
         return evt.content is not None and evt.content.count("\n") > self.max_lines
 
 
-@on(
-    Event.PreToolUse,
+nudge(
+    "Large edit detected — consider splitting into smaller changes.",
     only_if=[LargeEdit(max_lines=10)],
+    events=Event.PreToolUse,
     tests={
         Input(tool="Edit", content="\n".join(str(i) for i in range(20))): Warn(),
         Input(tool="Edit", content="one\ntwo\n"): Allow(),
     },
 )
-def warn_large_edit(evt: BaseHookEvent) -> HookResult | None:
-    lines = evt.content.count("\n") if evt.content else 0
-    return evt.warn(f"Large edit detected ({lines} lines) — consider splitting into smaller changes.")

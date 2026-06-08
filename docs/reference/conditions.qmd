@@ -70,6 +70,9 @@ class MinEdits(CustomCondition):
 hook(Event.Stop, message="Too many edits", block=True, only_if=[MinEdits(threshold=10)])
 ```
 
+The predicate goes in `check()`; the firing goes through a primitive. Don't reach for an `@on` body
+to run the same test.
+
 ## Signals (scoring)
 
 `Signal` and `Signals` aren't `only_if`/`skip_if` filters — they pass to a primitive's
