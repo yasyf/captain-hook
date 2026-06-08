@@ -19,7 +19,7 @@ def embed(match: re.Match[str]) -> str:
 
 
 def main() -> None:
-    for qmd in (BUILD_DIR / "docs" / "getting-started").glob("*.qmd"):
+    for qmd in (BUILD_DIR / "docs").rglob("*.qmd"):
         text = qmd.read_text()
         if (new := MARKER.sub(embed, text)) != text:
             qmd.write_text(new)

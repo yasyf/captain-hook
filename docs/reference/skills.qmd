@@ -1,0 +1,15 @@
+---
+title: "Agent Skills"
+---
+
+The full source of the two bundled skills. For what they do and how to invoke them, see
+[Agent Skills](../getting-started/skills.qmd) in Getting Started; this page is the reference
+copy of each `SKILL.md`, rendered from `captain_hook/skills/` so it never drifts from the wheel.
+
+## bootstrapping-hooks
+
+<!-- gd-embed-skill: bootstrapping-hooks -->
+
+## translating-styleguides
+
+<!-- gd-embed-skill: translating-styleguides -->

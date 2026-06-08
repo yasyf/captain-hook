@@ -15,6 +15,7 @@ CLI references give you exhaustive signatures.
 - [Conditions](conditions.qmd) — every condition type, grouped and scannable
 - [Primitives & Verdicts](primitives.qmd) — every primitive's signature, plus the LLM verdict types
 - [AST Matchers](matchers.qmd) — the matcher catalog for styleguide rules
+- [Agent Skills](skills.qmd) — the full source of the two bundled skills
 
 ## Generated
 
