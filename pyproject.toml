@@ -92,7 +92,8 @@ docs = [
     # `griffe` module layout that great-docs imports, overriding the legacy
     # griffe<2 pin great-docs itself declares.
     "griffelib>=2.0",
-    # TODO: revert to PyPI when 0.14 releases — the git pin picks up build-time
-    # GitHub stats (802a5c9d), which removes the widget's client-side API calls.
-    "great-docs @ git+https://github.com/posit-dev/great-docs@fa76ac87",
+    # Tracking great-docs main until they cut a release newer than 0.13.0: the
+    # pinned commit carries build-time GitHub stats (802a5c9d), which drop the
+    # widget's client-side API calls (the source of the navbar 403s).
+    "great-docs @ git+https://github.com/posit-dev/great-docs@d8540ae2",
 ]

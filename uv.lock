@@ -305,7 +305,7 @@ provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 docs = [
-    { name = "great-docs", git = "https://github.com/posit-dev/great-docs?rev=fa76ac87" },
+    { name = "great-docs", git = "https://github.com/posit-dev/great-docs?rev=d8540ae2" },
     { name = "griffelib", specifier = ">=2.0" },
 ]
 
@@ -639,8 +639,8 @@ wheels = [
 
 [[package]]
 name = "great-docs"
-version = "0.13.1.dev8+gfa76ac875"
-source = { git = "https://github.com/posit-dev/great-docs?rev=fa76ac87#fa76ac8758e3640ab3f45ae93589e8a8e14bec1c" }
+version = "0.13.1.dev10+gd8540ae24"
+source = { git = "https://github.com/posit-dev/great-docs?rev=d8540ae2#d8540ae249c367f467851a95cbf02453f8464d65" }
 dependencies = [
     { name = "click" },
     { name = "griffe" },
