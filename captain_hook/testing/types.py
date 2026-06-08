@@ -55,6 +55,7 @@ class Input:
     agent_type: str | None = None
     permission_mode: str | None = None
     transcript: Path | TranscriptFixture | list[dict[str, Any]] | None = None
+    tasks: list[dict[str, Any]] | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.transcript, list):

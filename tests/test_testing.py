@@ -234,6 +234,37 @@ class TestInputToEvent:
         evt = input_to_event(Event.PreToolUse, inp)
         assert len(evt.ctx.transcript) == 0
 
+    def test_input_to_event_injects_tasks(self):
+        from captain_hook.tests.helpers import input_to_event
+        from captain_hook.testing.types import Input
+
+        inp = Input(
+            tasks=[
+                {"id": "1", "subject": "a", "status": "completed"},
+                {"id": "2", "subject": "b", "status": "pending"},
+            ]
+        )
+        evt = input_to_event(Event.Stop, inp)
+        assert len(evt.tasks) == 2
+        assert not evt.tasks.all_completed
+        assert [t.id for t in evt.tasks.open] == ["2"]
+
+    def test_input_to_event_empty_tasks_all_completed(self):
+        from captain_hook.tests.helpers import input_to_event
+        from captain_hook.testing.types import Input
+
+        evt = input_to_event(Event.Stop, Input(tasks=[]))
+        assert len(evt.tasks) == 0
+        assert evt.tasks.all_completed
+
+    def test_input_to_event_tasks_on_tool_event(self):
+        from captain_hook.tests.helpers import input_to_event
+        from captain_hook.testing.types import Input
+
+        inp = Input(tool="Edit", file="x.py", content="y", tasks=[{"id": "1", "subject": "a", "status": "in_progress"}])
+        evt = input_to_event(Event.PostToolUse, inp)
+        assert not evt.tasks.all_completed
+
     def test_input_to_event_stop(self):
         from captain_hook.tests.helpers import input_to_event
         from captain_hook.testing.types import Input

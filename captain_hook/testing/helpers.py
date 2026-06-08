@@ -236,15 +236,15 @@ def input_to_event(
     }
     match ev:
         case Event.SubagentStop:
-            return mock_subagent_stop_event(agent_type=inp.agent_type or "", **ctx_kw)
+            evt = mock_subagent_stop_event(agent_type=inp.agent_type or "", **ctx_kw)
         case Event.SubagentStart:
-            return mock_subagent_start_event(agent_type=inp.agent_type or "", **ctx_kw)
+            evt = mock_subagent_start_event(agent_type=inp.agent_type or "", **ctx_kw)
         case Event.UserPromptSubmit:
-            return mock_user_prompt_event(prompt=inp.prompt or "", **ctx_kw)
+            evt = mock_user_prompt_event(prompt=inp.prompt or "", **ctx_kw)
         case Event.Stop:
-            return mock_stop_event(**ctx_kw)
+            evt = mock_stop_event(**ctx_kw)
         case _:
-            return mock_tool_event(
+            evt = mock_tool_event(
                 tool=inp.tool or spec_tool or "Bash",
                 event=ev,
                 command=inp.command,
@@ -254,6 +254,15 @@ def input_to_event(
                 agent_type=inp.agent_type,
                 **ctx_kw,
             )
+
+    if inp.tasks is not None:
+        from captain_hook.tasks import Task, Tasks
+
+        # Pre-populate the `tasks` cached_property so hooks that read `evt.tasks` see the
+        # injected list in inline tests — no native task store / session_id required.
+        evt.__dict__["tasks"] = Tasks(tuple(Task.from_raw(t) for t in inp.tasks))
+
+    return evt
 
 
 def replay_session(entry: Any, jsonl: Path) -> Iterator[HookResult | None]:
