@@ -22,7 +22,7 @@ the facts tier; the [Guide](../guide/index.qmd) how-tos teach which one to reach
 | `workflow` | block | `SubagentStop` | ✓ | Enforce an ordered, artifact-gated checklist |
 
 Deterministic primitives carry inline `tests={...}`; LLM-backed ones show **SKIP** under
-`uvx capt-hook test` (they need a real model). `nudge` defaults to `PreToolUse` with a `when=`
+`uvx capt-hook test` because they need a real model. `nudge` defaults to `PreToolUse` with a `when=`
 predicate, `PostToolUse` with `signals=`, and `Stop | SubagentStop` when `block=True`.
 
 ## Commands
@@ -67,7 +67,7 @@ audit(events=Event.PreToolUse | Event.PostToolUse | Event.Stop, *, log_dir=None,
       only_if=(), skip_if=()) -> None
 ```
 
-Default record fields: `ts`, `event`, `tool`, `file`, `session_id`.
+The default record fields are `ts`, `event`, `tool`, `file`, and `session_id`.
 
 ## LLM primitives
 

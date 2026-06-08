@@ -9,23 +9,23 @@ Declarative hook framework for Claude Code. Write hooks as data, test them inlin
 
 ## Install
 
-No install needed — run everything through [uvx](https://docs.astral.sh/uv/):
+There's no install step. Run everything through [uvx](https://docs.astral.sh/uv/).
 
 ```bash
 uvx capt-hook init
 ```
 
-`uvx` fetches captain-hook into a throwaway environment and runs it, so you never add it to `pyproject.toml`. Every command below works the same way: prefix it with `uvx`.
+`uvx` fetches captain-hook into a throwaway environment and runs it, so you never add it to `pyproject.toml`. Every command below works the same way once you prefix it with `uvx`.
 
 ## First hook
 
-`uvx capt-hook init` scaffolds `.claude/hooks/`, wires Claude Code's settings, and installs the skills — one command and you're live:
+`uvx capt-hook init` scaffolds `.claude/hooks/`, wires Claude Code's settings, and installs the skills. One command and you're live.
 
 ```bash
 uvx capt-hook init
 ```
 
-A hook is declarative Python: an event, some conditions, and an action. This one stops the agent from finishing a UI change it never looked at:
+A hook is declarative Python with an event, some conditions, and an action. This one stops the agent from finishing a UI change it never looked at.
 
 ```python
 # .claude/hooks/visual_review.py
@@ -35,17 +35,17 @@ from captain_hook import gate, TouchedFile, UsedSkill
 # without doing a visual review.
 gate(
     # the one-line reason shown to the agent when the gate fires
-    "You edited UI files — open them with agent-browser and verify they render before finishing.",
+    "You edited UI files. Open them with agent-browser and verify they render before finishing.",
     only_if=[TouchedFile("**/src/routes/**", "**/src/components/**")],  # fires only if UI files changed
     skip_if=[UsedSkill("agent-browser")],                               # already reviewed -> don't block
 )
 ```
 
-Conditions match anything the agent does — tools, files, commands, even which skills it used.
+Conditions match tools, files, commands, and even which skills the agent used.
 
 ## Test your hooks
 
-Every deterministic hook carries inline tests, so a broken hook fails like broken code. Run them from your project root (`--hooks` defaults to `.claude/hooks`):
+Every deterministic hook carries inline tests, so a broken hook fails like broken code. Run them from your project root, where `--hooks` defaults to `.claude/hooks`.
 
 ```python
 # .claude/hooks/safety.py
@@ -66,11 +66,11 @@ block_command(
 uvx capt-hook test
 ```
 
-`init` already wired Claude Code's settings: each event runs `uvx capt-hook run <Event>`, with the event JSON arriving on stdin and the verdict written to stdout. Re-run `uvx capt-hook generate-settings` only after you add hooks on a new event.
+`init` already wired Claude Code's settings. Each event runs `uvx capt-hook run <Event>`, with the event JSON arriving on stdin and the verdict written to stdout. Re-run `uvx capt-hook generate-settings` only after you add hooks on a new event.
 
 ## Agent skills & plugin
 
-Don't want to write hooks by hand? capt-hook ships two [Agent Skills](https://yasyf.github.io/captain-hook/docs/getting-started/skills.html) — `bootstrapping-hooks` mines your repo's docs, CI, and git history into proposed gates and nudges; `translating-styleguides` turns a STYLEGUIDE.md into enforced rules. `uvx capt-hook init` installs them into `.claude/skills/`, or get them as a plugin:
+capt-hook ships two [Agent Skills](https://yasyf.github.io/captain-hook/docs/getting-started/skills.html) so you don't have to write hooks by hand. `bootstrapping-hooks` mines your repo's docs, CI, and git history into proposed gates and nudges. `translating-styleguides` turns a STYLEGUIDE.md into enforced rules. `uvx capt-hook init` installs both into `.claude/skills/`, or you can add them as a plugin.
 
 ```
 /plugin marketplace add yasyf/captain-hook
@@ -79,13 +79,15 @@ Don't want to write hooks by hand? capt-hook ships two [Agent Skills](https://ya
 
 ## What problems does this solve?
 
-- **Block dangerous tool calls** before they execute (`PreToolUse`) — force-push, package-manager footguns, raw `rm -rf`.
-- **Drive the agent with feedback** that fires on patterns it actually emits — repeated failures, weakened tests, missed conventions.
-- **Enforce multi-step workflows** with stop-gates and artifact validation, so the agent can't declare "done" without running tests / writing a report / completing a checklist.
-- **Keep all of the above testable** — every hook ships with inline `tests = {...}` that `uvx capt-hook test` runs in CI, so you catch broken hooks the same way you catch broken code.
+captain-hook covers four jobs:
+
+- Block dangerous tool calls before they execute on `PreToolUse`, like force-push, package-manager footguns, and raw `rm -rf`.
+- Drive the agent with feedback that fires on the patterns it actually emits, such as repeated failures, weakened tests, and missed conventions.
+- Enforce multi-step workflows with stop-gates and artifact validation, so the agent can't declare "done" without running tests, writing a report, or completing a checklist.
+- Keep all of the above testable. Every hook ships with inline `tests = {...}` that `uvx capt-hook test` runs in CI, so you catch broken hooks the way you catch broken code.
 
 ## Docs
 
-[Read the docs](https://yasyf.github.io/captain-hook/) for the full guide: conditions, primitives, LLM hooks, workflows, state, and real-world patterns.
+[Read the docs](https://yasyf.github.io/captain-hook/) for the full guide to conditions, primitives, LLM hooks, workflows, state, and real-world patterns.
 
-Working on captain-hook itself? See the [development guide](https://yasyf.github.io/captain-hook/docs/development/).
+For working on captain-hook itself, see the [development guide](https://yasyf.github.io/captain-hook/docs/development/).

@@ -6,10 +6,10 @@ body-classes: "gd-homepage"
 
 <!-- gd-embed-fragment: canonical_hook -->
 
-A few lines stop your agent from calling a UI change done before it looked at it. A hook is declarative Python — an event, conditions, and an action.
+A few lines stop your agent from calling a UI change done before it looked at it. Each hook is declarative Python. It has an event, conditions, and an action.
 
 ::: {.callout-note}
-No install step. Every command runs through [uvx](https://docs.astral.sh/uv/): `uvx capt-hook …` fetches captain-hook into a throwaway environment and runs it, so it never enters your `pyproject.toml`.
+No install step. Every command runs through [uvx](https://docs.astral.sh/uv/). `uvx capt-hook …` fetches captain-hook into a throwaway environment and runs it, so it never enters your `pyproject.toml`.
 :::
 
 ---
@@ -19,13 +19,13 @@ No install step. Every command runs through [uvx](https://docs.astral.sh/uv/): `
 ::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
 {{< icon shield-check >}} **Declarative by default**
 
-Most hooks are a single function call. No classes, no boilerplate, no YAML. Define what to block, warn, or enforce — captain-hook handles the rest.
+Most hooks are a single function call. No classes, no boilerplate, no YAML. You define what to block, warn, or enforce, and captain-hook handles the rest.
 :::
 
 ::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
 {{< icon filter >}} **Composable conditions**
 
-Filter hooks with typed conditions: match tools, file paths, commands, transcript history, and more. Combine with `only_if` / `skip_if` for precise targeting.
+Filter hooks with typed conditions that match tools, file paths, commands, and transcript history. Combine `only_if` and `skip_if` for precise targeting.
 :::
 
 ::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
@@ -37,13 +37,13 @@ Gate or nudge with LLM verdicts. Signal scoring detects patterns in transcript t
 ::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
 {{< icon test-tube >}} **Inline testing**
 
-Test hooks where you define them. `Input(command="git stash")` / `Block("jj")` — run with `uvx capt-hook test`.
+Test hooks where you define them. Run `Input(command="git stash")` / `Block("jj")` cases with `uvx capt-hook test`.
 :::
 
 ::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
 {{< icon list-checks >}} **Multi-step workflows**
 
-Enforce checklists before the agent stops. Tests, linting, artifacts — each step must pass before the agent can proceed.
+Enforce checklists before the agent stops. Tests, linting, and artifacts each gate the next step.
 :::
 
 ::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
@@ -58,7 +58,7 @@ Query conversation history with a typed API. Filter tool uses, extract commands,
 
 ## Get started
 
-Four steps from nothing to a hook firing in Claude Code.
+Four steps take you from nothing to a hook firing in Claude Code.
 
 **1. Scaffold and wire it.** One command creates `.claude/hooks/`, wires Claude Code's settings, and installs the skills:
 
@@ -89,7 +89,7 @@ block_command(
 uvx capt-hook test
 ```
 
-**4. It's already live.** `init` wired the settings — each event runs `uvx capt-hook run <Event>`, with the event JSON on stdin and the verdict on stdout. Reload the project and the hook fires.
+**4. It's already live.** `init` wired the settings, so each event runs `uvx capt-hook run <Event>`, with the event JSON on stdin and the verdict on stdout. Reload the project and the hook fires.
 
 [{{< icon arrow-right >}} Installation](docs/getting-started/installation.qmd){.btn .btn-primary}
 [{{< icon arrow-right >}} Quickstart](docs/getting-started/quickstart.qmd){.btn .btn-outline-primary}

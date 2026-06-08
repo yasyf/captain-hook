@@ -2,8 +2,8 @@
 title: "AST Matchers"
 ---
 
-The matcher catalog for [styleguide rules](../guide/styleguide.qmd). A **matcher is a node
-predicate** — it wraps a `(node, parents) -> bool` test, so `M.calls("zip")` asks "is this AST
+The matcher catalog for [styleguide rules](../guide/styleguide.qmd). A matcher is a node
+predicate. It wraps a `(node, parents) -> bool` test, so `M.calls("zip")` asks "is this AST
 node a call to `zip`?" Matchers compose with boolean algebra (`&`, `|`, `~`), refine with
 `.where(...)`, and terminate with `.over(tree)`, `.violations(tree)`, or `.exists(tree)`. Import
 as `from captain_hook.style import matchers as M`.
