@@ -19,14 +19,36 @@ uvx capt-hook init
 
 ## First hook
 
-Scaffold a project and drop a hook into `.claude/hooks/`:
+`uvx capt-hook init` scaffolds `.claude/hooks/`, wires Claude Code's settings, and installs the skills — one command and you're live:
 
 ```bash
 uvx capt-hook init
 ```
 
+A hook is declarative Python: an event, some conditions, and an action. This one stops the agent from finishing a UI change it never looked at:
+
 ```python
-# .claude/hooks/my_first.py
+# .claude/hooks/visual_review.py
+from captain_hook import gate, TouchedFile, UsedSkill
+
+# A Stop gate: before the agent finishes, block if it edited UI files
+# without doing a visual review.
+gate(
+    # the one-line reason shown to the agent when the gate fires
+    "You edited UI files — open them with agent-browser and verify they render before finishing.",
+    only_if=[TouchedFile("**/src/routes/**", "**/src/components/**")],  # fires only if UI files changed
+    skip_if=[UsedSkill("agent-browser")],                               # already reviewed -> don't block
+)
+```
+
+Conditions match anything the agent does — tools, files, commands, even which skills it used.
+
+## Test your hooks
+
+Every deterministic hook carries inline tests, so a broken hook fails like broken code. Run them from your project root (`--hooks` defaults to `.claude/hooks`):
+
+```python
+# .claude/hooks/safety.py
 from captain_hook import Allow, Block, Input, block_command
 
 block_command(
@@ -35,25 +57,16 @@ block_command(
     hint="Commit a WIP change instead of stashing",
     tests={
         Input(command="git stash"): Block(),
-        Input(command="git stash pop"): Block(),
         Input(command="git status"): Allow(),
     },
 )
 ```
 
-Run the inline tests (from your project root, `--hooks` defaults to `.claude/hooks`):
-
 ```bash
-capt-hook test
+uvx capt-hook test
 ```
 
-Wire the hook into Claude Code's settings:
-
-```bash
-capt-hook generate-settings > .claude/settings.local.json
-```
-
-The next time Claude tries `git stash`, captain-hook returns a deny with your reason and hint.
+`init` already wired Claude Code's settings: each event runs `uvx capt-hook run <Event>`, with the event JSON arriving on stdin and the verdict written to stdout. Re-run `uvx capt-hook generate-settings` only after you add hooks on a new event.
 
 ## Agent skills & plugin
 
@@ -69,7 +82,7 @@ Don't want to write hooks by hand? capt-hook ships two [Agent Skills](https://ya
 - **Block dangerous tool calls** before they execute (`PreToolUse`) — force-push, package-manager footguns, raw `rm -rf`.
 - **Drive the agent with feedback** that fires on patterns it actually emits — repeated failures, weakened tests, missed conventions.
 - **Enforce multi-step workflows** with stop-gates and artifact validation, so the agent can't declare "done" without running tests / writing a report / completing a checklist.
-- **Keep all of the above testable** — every hook ships with inline `tests = {...}` that `capt-hook test` runs in CI, so you catch broken hooks the same way you catch broken code.
+- **Keep all of the above testable** — every hook ships with inline `tests = {...}` that `uvx capt-hook test` runs in CI, so you catch broken hooks the same way you catch broken code.
 
 ## Docs
 
