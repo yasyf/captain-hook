@@ -22,7 +22,7 @@ elsewhere.
 
 ## The wiring contract
 
-`init` writes the `hooks` block of `.claude/settings.local.json`, and `generate-settings`
+`init` writes the `hooks` block of `.claude/settings.local.json`, and `register-hooks`
 regenerates it. Each event maps to the one command Claude Code runs:
 
 ```json
@@ -65,12 +65,12 @@ When an event fires, Claude Code runs `uvx capt-hook run <Event>` and talks to i
 ## When to re-wire
 
 Editing a hook's body needs nothing. The same `uvx capt-hook run` command picks it up. Re-run
-`generate-settings` only when you add a hook on a **new event**, so that event gets its own
+`register-hooks` only when you add a hook on a **new event**, so that event gets its own
 entry:
 
 ```bash
-uvx capt-hook generate-settings           # merges into settings.local.json
-uvx capt-hook generate-settings --no-merge # print standalone JSON instead
+uvx capt-hook register-hooks           # writes settings.local.json
+uvx capt-hook register-hooks --dry-run # print the merged JSON without writing
 ```
 
 Then reload the project so Claude Code reads the updated settings. `.claude/hooks/` is code, so
@@ -78,5 +78,5 @@ commit it, and review hook changes in pull requests like anything else.
 
 The wired event set is derived from your registered hooks, not a fixed list, so a hook on an event
 no entry covers never fires. captain-hook catches this. On the next synchronous event it warns the
-agent through `additionalContext` to re-run `uvx capt-hook generate-settings`, so a forgotten re-wire
+agent through `additionalContext` to re-run `uvx capt-hook register-hooks`, so a forgotten re-wire
 surfaces instead of silently swallowing the hook.

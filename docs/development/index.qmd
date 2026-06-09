@@ -64,7 +64,7 @@ uv run --project path/to/captain-hook capt-hook test
 Or generate settings whose hook commands invoke your checkout instead of PyPI:
 
 ```bash
-capt-hook generate-settings --from path/to/captain-hook
+capt-hook register-hooks --from path/to/captain-hook
 ```
 
 ## Releasing

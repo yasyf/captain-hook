@@ -67,7 +67,7 @@ block_command(
 uvx capt-hook test
 ```
 
-`init` already wired Claude Code's settings. Each event runs `uvx capt-hook run <Event>`, with the event JSON arriving on stdin and the verdict written to stdout. Re-run `uvx capt-hook generate-settings` only after you add hooks on a new event.
+`init` already wired Claude Code's settings. Each event runs `uvx capt-hook run <Event>`, with the event JSON arriving on stdin and the verdict written to stdout. Re-run `uvx capt-hook register-hooks` only after you add hooks on a new event; it writes `.claude/settings.local.json` for you.
 
 ## Agent skills & plugin
 

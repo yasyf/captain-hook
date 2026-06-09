@@ -4,6 +4,7 @@ import json
 import os
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -69,8 +70,8 @@ class TestRunSubcommand:
         assert result.returncode != 0
 
 
-class TestGenerateSettings:
-    def test_cli_003_generate_settings(self, tmp_path: Path) -> None:
+class TestRegisterHooks:
+    def test_cli_003_register_hooks_dry_run(self, tmp_path: Path) -> None:
         hooks_dir = tmp_path / "hooks"
         hooks_dir.mkdir()
         (hooks_dir / "__init__.py").write_text("")
@@ -84,7 +85,7 @@ class TestGenerateSettings:
         """)
         )
 
-        result = run_cli("generate-settings", hooks_dir=str(hooks_dir))
+        result = run_cli("register-hooks", "--dry-run", hooks_dir=str(hooks_dir), root_dir=str(tmp_path))
         assert result.returncode == 0
         data = json.loads(result.stdout)
         assert "hooks" in data
@@ -93,7 +94,7 @@ class TestGenerateSettings:
         assert "--hooks" not in raw
         assert "--root" not in raw
 
-    def test_cli_004_generate_settings_hooks_dir(self, tmp_path: Path) -> None:
+    def test_cli_004_register_hooks_hooks_dir(self, tmp_path: Path) -> None:
         hooks_dir = tmp_path / "hooks"
         hooks_dir.mkdir()
         (hooks_dir / "__init__.py").write_text("")
@@ -107,7 +108,14 @@ class TestGenerateSettings:
         """)
         )
 
-        result = run_cli("generate-settings", "--hooks-dir", "custom/hooks", hooks_dir=str(hooks_dir))
+        result = run_cli(
+            "register-hooks",
+            "--hooks-dir",
+            "custom/hooks",
+            "--dry-run",
+            hooks_dir=str(hooks_dir),
+            root_dir=str(tmp_path),
+        )
         assert result.returncode == 0
         data = json.loads(result.stdout)
         raw = json.dumps(data)
@@ -157,6 +165,104 @@ class TestGenerateSettings:
         register_hook(Event.PreToolUse, message="pre tool")
         command = generate_settings(hooks_dir="custom/hooks")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
         assert command == "uvx capt-hook --hooks $CLAUDE_PROJECT_DIR/custom/hooks run PreToolUse"
+
+    def test_cli_021_dry_run_writes_nothing(self, tmp_path: Path) -> None:
+        hooks_dir = tmp_path / "hooks"
+        hooks_dir.mkdir()
+        (hooks_dir / "__init__.py").write_text("")
+        (hooks_dir / "my_hook.py").write_text(
+            textwrap.dedent("""\
+            from captain_hook.app import hook
+            from captain_hook.types import Event
+
+            hook(Event.PreToolUse, message="check")
+        """)
+        )
+        settings_path = tmp_path / ".claude" / "settings.local.json"
+        result = run_cli("register-hooks", "--dry-run", hooks_dir=str(hooks_dir), root_dir=str(tmp_path))
+        assert result.returncode == 0
+        assert not settings_path.exists()
+        assert "PreToolUse" in json.loads(result.stdout)["hooks"]
+
+    def test_cli_022_writes_settings_by_default(self, tmp_path: Path) -> None:
+        hooks_dir = tmp_path / "hooks"
+        hooks_dir.mkdir()
+        (hooks_dir / "__init__.py").write_text("")
+        (hooks_dir / "my_hook.py").write_text(
+            textwrap.dedent("""\
+            from captain_hook.app import hook
+            from captain_hook.types import Event
+
+            hook(Event.PreToolUse, message="check")
+        """)
+        )
+        settings_path = tmp_path / ".claude" / "settings.local.json"
+        result = run_cli("register-hooks", hooks_dir=str(hooks_dir), root_dir=str(tmp_path))
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        data = json.loads(settings_path.read_text())
+        assert "PreToolUse" in data["hooks"]
+        assert "+ added PreToolUse" in result.stdout
+
+
+class TestMergeSettings:
+    @staticmethod
+    def seed(path: Path, hooks: dict[str, Any], **extra: Any) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"hooks": hooks} | extra))
+
+    def test_cli_023_preserves_foreign_and_adds_own(self, tmp_path: Path) -> None:
+        from captain_hook.cli import merge_settings
+
+        register_hook(Event.PreToolUse, message="pre")
+        sp = tmp_path / "settings.local.json"
+        foreign = {"matcher": "Bash", "hooks": [{"type": "command", "command": "my-tool"}]}
+        self.seed(sp, {"PreToolUse": [foreign]}, customKey="keep-me")
+
+        merged, summary = merge_settings(".claude/hooks", sp)
+        groups = merged["hooks"]["PreToolUse"]
+        assert foreign in groups
+        assert any(h["command"] == "uvx capt-hook run PreToolUse" for g in groups for h in g["hooks"])
+        assert merged["customKey"] == "keep-me"
+        assert summary["PreToolUse"] == "added"
+
+    def test_cli_024_refreshes_changed_own(self, tmp_path: Path) -> None:
+        from captain_hook.cli import merge_settings
+
+        register_hook(Event.PreToolUse, message="pre", async_=True)
+        sp = tmp_path / "settings.local.json"
+        self.seed(sp, {"PreToolUse": [{"hooks": [{"type": "command", "command": "uvx capt-hook run PreToolUse"}]}]})
+
+        merged, summary = merge_settings(".claude/hooks", sp)
+        commands = [h["command"] for g in merged["hooks"]["PreToolUse"] for h in g["hooks"]]
+        assert commands == ["uvx capt-hook run PreToolUse --async"]
+        assert summary["PreToolUse"] == "updated"
+
+    def test_cli_025_removes_stale_own_keeps_foreign(self, tmp_path: Path) -> None:
+        from captain_hook.cli import merge_settings
+
+        register_hook(Event.PreToolUse, message="pre")
+        sp = tmp_path / "settings.local.json"
+        foreign = {"matcher": "Bash", "hooks": [{"type": "command", "command": "keep"}]}
+        stale = {"hooks": [{"type": "command", "command": "uvx capt-hook run PostToolUse"}]}
+        self.seed(sp, {"PostToolUse": [foreign, stale]})
+
+        merged, summary = merge_settings(".claude/hooks", sp)
+        assert summary["PostToolUse"] == "removed"
+        assert merged["hooks"]["PostToolUse"] == [foreign]
+
+    def test_cli_026_idempotent(self, tmp_path: Path) -> None:
+        from captain_hook.cli import merge_settings, write_settings
+
+        register_hook(Event.PreToolUse, message="pre")
+        register_hook(Event.Stop, message="stop")
+        sp = tmp_path / "settings.local.json"
+
+        write_settings(sp, merge_settings(".claude/hooks", sp)[0])
+        first = sp.read_text()
+        merged2, summary2 = merge_settings(".claude/hooks", sp)
+        write_settings(sp, merged2)
+        assert sp.read_text() == first
+        assert set(summary2.values()) == {"unchanged"}
 
 
 class TestSettingsDrift:
@@ -216,7 +322,7 @@ class TestSettingsDrift:
         first = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), root_dir=str(root_dir), stdin_data=stdin)
         assert first.returncode == 0
         assert "UserPromptSubmit" in first.stdout
-        assert "generate-settings" in first.stdout
+        assert "register-hooks" in first.stdout
 
         second = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), root_dir=str(root_dir), stdin_data=stdin)
         assert second.returncode == 0

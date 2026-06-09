@@ -78,13 +78,15 @@ def register_marketplace(root: Path) -> None:
     existing settings so the bundled skills track the repository as a plugin.
     """
     settings_path = root / ".claude" / "settings.local.json"
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
     existing = json.loads(settings_path.read_text()) if settings_path.exists() else {}
-    merged = existing | {
-        "extraKnownMarketplaces": existing.get("extraKnownMarketplaces", {}) | MARKETPLACE,
-        "enabledPlugins": existing.get("enabledPlugins", {}) | {PLUGIN_ID: True},
-    }
-    settings_path.write_text(json.dumps(merged, indent=2) + "\n")
+    write_settings(
+        settings_path,
+        existing
+        | {
+            "extraKnownMarketplaces": existing.get("extraKnownMarketplaces", {}) | MARKETPLACE,
+            "enabledPlugins": existing.get("enabledPlugins", {}) | {PLUGIN_ID: True},
+        },
+    )
 
 
 def maybe_launch_bootstrap(root: Path) -> bool:
@@ -140,45 +142,60 @@ def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str = DIST_
     }
 
 
-def generate_settings_json(hooks_dir: str = ".claude/hooks", from_source: str = DIST_NAME) -> str:
-    return json.dumps(generate_settings(hooks_dir, from_source=from_source), indent=2)
-
-
-def merge_settings(hooks_dir: str, settings_path: Path, from_source: str = DIST_NAME) -> dict[str, Any]:
-    hook_settings = generate_settings(hooks_dir, from_source=from_source)
-    if settings_path.exists():
-        existing = json.loads(settings_path.read_text())
-        existing["hooks"] = hook_settings["hooks"]
-        return existing
-    return hook_settings
-
-
 def is_captain_hook_group(group: dict[str, Any]) -> bool:
     return any("capt-hook" in (h.get("command") or "") for h in group.get("hooks") or [])
 
 
-def merge_init_settings(
+def merge_settings(
     hooks_dir: str, settings_path: Path, from_source: str = DIST_NAME
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    hook_settings = generate_settings(hooks_dir, from_source=from_source)
-    new_hooks: dict[str, list[dict[str, Any]]] = hook_settings["hooks"]
+    new_hooks: dict[str, list[dict[str, Any]]] = generate_settings(hooks_dir, from_source=from_source)["hooks"]
+    existing = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    existing_hooks: dict[str, list[dict[str, Any]]] = existing.get("hooks") or {}
 
-    if not settings_path.exists():
-        return hook_settings, {event: "added" for event in new_hooks}
-
-    existing = json.loads(settings_path.read_text())
-    existing_hooks = existing.setdefault("hooks", {})
     summary: dict[str, str] = {}
+    merged_hooks: dict[str, list[dict[str, Any]]] = {}
+    for event in sorted(existing_hooks.keys() | new_hooks.keys()):
+        foreign = [g for g in existing_hooks.get(event, []) if not is_captain_hook_group(g)]
+        old_own = [g for g in existing_hooks.get(event, []) if is_captain_hook_group(g)]
+        fresh_own = new_hooks.get(event, [])
+        if old_own or fresh_own:
+            summary[event] = (
+                "unchanged"
+                if old_own == fresh_own
+                else "added"
+                if not old_own
+                else "removed"
+                if not fresh_own
+                else "updated"
+            )
+        if groups := foreign + fresh_own:
+            merged_hooks[event] = groups
+    return existing | {"hooks": merged_hooks}, summary
 
-    for event, new_entries in new_hooks.items():
-        existing_entries = existing_hooks.get(event, [])
-        if any(is_captain_hook_group(g) for g in existing_entries):
-            summary[event] = "unchanged"
-        else:
-            existing_hooks[event] = existing_entries + new_entries
-            summary[event] = "added"
 
-    return existing, summary
+def write_settings(settings_path: Path, data: dict[str, Any]) -> None:
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = settings_path.with_suffix(f"{settings_path.suffix}.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    os.replace(tmp, settings_path)
+
+
+def print_hook_summary(label: str, summary: dict[str, str]) -> None:
+    by_status: defaultdict[str, list[str]] = defaultdict(list)
+    for event, status in summary.items():
+        by_status[status].append(event)
+    print(f"{label}:")
+    if not summary:
+        print("  no hook entries")
+    for event in by_status["added"]:
+        print(f"  + added {event}")
+    for event in by_status["updated"]:
+        print(f"  ~ updated {event}")
+    for event in by_status["removed"]:
+        print(f"  - removed {event}")
+    if unchanged := by_status["unchanged"]:
+        print(f"  unchanged: {', '.join(unchanged)} (already present)")
 
 
 def settings_drift(root: Path) -> set[str]:
@@ -208,7 +225,7 @@ def warn_settings_drift(
     message = (
         "captain-hook: these events have registered hooks but are not wired in .claude/settings, "
         f"so the hooks never fire: {', '.join(sorted(drift))}. "
-        "Run `uvx capt-hook generate-settings` to wire them."
+        "Run `uvx capt-hook register-hooks` to wire them."
     )
     base = output or {"hookSpecificOutput": {"hookEventName": event.name}}
     hso = base["hookSpecificOutput"]
@@ -279,22 +296,14 @@ def init_project(root: Path) -> None:
     settings_path = root / ".claude" / "settings.local.json"
     reset()
     discover_hooks(str(hooks_dir))
-    merged, summary = merge_init_settings(".claude/hooks", settings_path)
-    settings_path.write_text(json.dumps(merged, indent=2) + "\n")
+    merged, summary = merge_settings(".claude/hooks", settings_path)
+    write_settings(settings_path, merged)
 
     skills_summary = install_skills(root)
 
     print(f"Scaffolded {example.relative_to(root)} + {settings_path.relative_to(root)}.")
     print()
-    print(f"{settings_path.relative_to(root)}:")
-    added = [e for e, status in summary.items() if status == "added"]
-    unchanged = [e for e, status in summary.items() if status == "unchanged"]
-    if not added and not unchanged:
-        print("  no hook entries to add")
-    for event in added:
-        print(f"  + added {event} hook entry")
-    if unchanged:
-        print(f"  unchanged: {', '.join(unchanged)} (already present)")
+    print_hook_summary(str(settings_path.relative_to(root)), summary)
     print()
     print(".claude/skills/:")
     for name in (n for n, status in skills_summary.items() if status == "installed"):
@@ -306,7 +315,7 @@ def init_project(root: Path) -> None:
     print("  1. Read the quickstart: https://yasyf.github.io/captain-hook/")
     print("  2. Edit example.py or add new files under .claude/hooks/")
     print("  3. uvx capt-hook test       # verify inline tests")
-    print("  4. uvx capt-hook generate-settings    # rewire after adding events")
+    print("  4. uvx capt-hook register-hooks    # re-register after adding events")
     print("  5. /bootstrapping-hooks in Claude  # mine hooks from this repo's conventions")
     print()
     maybe_launch_bootstrap(root)
@@ -435,9 +444,9 @@ def run(state: CliState, event: str, async_: bool) -> None:
     run_event(event, async_=async_, root=state.root)
 
 
-@cli.command(name="generate-settings")
+@cli.command(name="register-hooks")
 @click.option("--hooks-dir", default=".claude/hooks", help="Hooks directory relative to project root")
-@click.option("--no-merge", is_flag=True, default=False, help="Output standalone JSON instead of merging")
+@click.option("--dry-run", is_flag=True, default=False, help="Print the merged settings JSON without writing")
 @click.option(
     "--from",
     "from_source",
@@ -445,14 +454,16 @@ def run(state: CliState, event: str, async_: bool) -> None:
     help=f"Package source for uvx --from (local path or PyPI spec, default: {DIST_NAME})",
 )
 @click.pass_obj
-def generate_settings_cmd(state: CliState, hooks_dir: str, no_merge: bool, from_source: str) -> None:
-    """Generate Claude Code settings JSON for .claude/settings.local.json."""
+def register_hooks_cmd(state: CliState, hooks_dir: str, dry_run: bool, from_source: str) -> None:
+    """Register captain-hook's event hooks into .claude/settings.local.json."""
     state.discover()
-    if no_merge:
-        click.echo(generate_settings_json(hooks_dir, from_source=from_source))
-    else:
-        settings_path = state.root / ".claude" / "settings.local.json"
-        click.echo(json.dumps(merge_settings(hooks_dir, settings_path, from_source=from_source), indent=2))
+    settings_path = state.root / ".claude" / "settings.local.json"
+    merged, summary = merge_settings(hooks_dir, settings_path, from_source=from_source)
+    if dry_run:
+        click.echo(json.dumps(merged, indent=2))
+        return
+    write_settings(settings_path, merged)
+    print_hook_summary(str(settings_path), summary)
 
 
 @cli.command()

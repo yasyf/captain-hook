@@ -58,7 +58,7 @@ class TestInit:
         assert "Next:" in result.stdout
         assert "https://yasyf.github.io/captain-hook/" in result.stdout
         assert "capt-hook test" in result.stdout
-        assert "capt-hook generate-settings" in result.stdout
+        assert "capt-hook register-hooks" in result.stdout
         assert "Scaffolded" in result.stdout
 
     def test_init_merge_preserves_existing_hook_entries(self, tmp_path: Path) -> None:
@@ -241,10 +241,10 @@ class TestCliTest:
         assert any(r["status"] == "fail" for r in records)
 
 
-class TestGenerateSettings:
-    def test_generate_settings_for_init_hooks(self, project_dir: Path) -> None:
+class TestRegisterHooks:
+    def test_register_hooks_for_init_hooks(self, project_dir: Path) -> None:
         hooks_dir = project_dir / ".claude" / "hooks"
-        result = run_cli("generate-settings", "--no-merge", hooks_dir=str(hooks_dir))
+        result = run_cli("register-hooks", "--dry-run", hooks_dir=str(hooks_dir), root_dir=str(project_dir))
         assert result.returncode == 0, f"stderr: {result.stderr}"
         data = json.loads(result.stdout)
         assert "hooks" in data
@@ -257,7 +257,7 @@ class TestGenerateSettings:
         settings_path.write_text(json.dumps(existing))
 
         hooks_dir = project_dir / ".claude" / "hooks"
-        result = run_cli("generate-settings", hooks_dir=str(hooks_dir), root_dir=str(project_dir))
+        result = run_cli("register-hooks", "--dry-run", hooks_dir=str(hooks_dir), root_dir=str(project_dir))
         assert result.returncode == 0
         data = json.loads(result.stdout)
         assert data["customKey"] == "preserved"
@@ -713,7 +713,7 @@ class TestComplexInlineTests:
         assert "2 tests" in result.stdout
 
 
-class TestGenerateSettingsMultiEvent:
+class TestRegisterHooksMultiEvent:
     def test_multi_event_hook_appears_in_all_event_sections(self, tmp_path: Path) -> None:
         hooks_dir = write_hooks(tmp_path, ("multi_event.py", """\
             from captain_hook import hook, Event
@@ -723,7 +723,7 @@ class TestGenerateSettingsMultiEvent:
                 message="Audit trail: tool invocation logged",
             )
         """))
-        result = run_cli("generate-settings", "--no-merge", hooks_dir=str(hooks_dir))
+        result = run_cli("register-hooks", "--dry-run", hooks_dir=str(hooks_dir), root_dir=str(tmp_path))
         assert result.returncode == 0, f"stderr: {result.stderr}"
         data = json.loads(result.stdout)
         assert "PreToolUse" in data["hooks"]

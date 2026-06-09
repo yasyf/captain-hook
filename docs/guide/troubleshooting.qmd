@@ -60,13 +60,11 @@ Wrong event. Each primitive defaults to one event, so `block_command` targets `P
 
 Unsatisfiable conditions. An `only_if` is AND, so every condition must match at once. A hook with `only_if=[Tool("Bash"), FilePath("**/*.py")]` never fires, because a Bash command carries no file path. Run `uvx capt-hook --hooks <dir> test` and read the `Input` each test built against your conditions.
 
-Settings not re-wired. After you add or change events, regenerate the settings fragment so Claude Code knows to call your hook.
+Settings not re-wired. After you add or change events, re-register the hooks so Claude Code knows to call your hook. This writes `.claude/settings.local.json` for you, merging non-destructively with what's already there.
 
 ```bash
-uvx capt-hook --hooks <dir> generate-settings
+uvx capt-hook --hooks <dir> register-hooks
 ```
-
-Merge the output into `.claude/settings.local.json`.
 
 Project not reloaded. Claude Code reads hook settings at session start. After you rewire settings, start a fresh session so the new wiring loads.
 

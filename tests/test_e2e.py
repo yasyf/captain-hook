@@ -291,10 +291,11 @@ class TestEventDispatchRoundTrip:
         assert output["reason"] == "incomplete"
 
 
-class TestGenerateSettings:
-    def test_e2e_050_generate_settings_valid_json(self, tmp_path: Path) -> None:
+class TestRegisterHooks:
+    def test_e2e_050_register_hooks_valid_json(self, tmp_path: Path) -> None:
         result = run_cli(
-            "generate-settings",
+            "register-hooks",
+            "--dry-run",
             hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
         )
@@ -303,9 +304,10 @@ class TestGenerateSettings:
         assert "hooks" in data
         assert isinstance(data["hooks"], dict)
 
-    def test_e2e_051_generate_settings_has_expected_events(self, tmp_path: Path) -> None:
+    def test_e2e_051_register_hooks_has_expected_events(self, tmp_path: Path) -> None:
         result = run_cli(
-            "generate-settings",
+            "register-hooks",
+            "--dry-run",
             hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
         )
@@ -315,11 +317,12 @@ class TestGenerateSettings:
         assert "PreToolUse" in events
         assert "Stop" in events
 
-    def test_e2e_052_generate_settings_commands_have_uvx(self, tmp_path: Path) -> None:
+    def test_e2e_052_register_hooks_commands_have_uvx(self, tmp_path: Path) -> None:
         result = run_cli(
-            "generate-settings",
+            "register-hooks",
             "--hooks-dir",
             "custom/hooks",
+            "--dry-run",
             hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
         )
@@ -329,13 +332,14 @@ class TestGenerateSettings:
         assert "uvx capt-hook" in raw
         assert "$CLAUDE_PROJECT_DIR/custom/hooks" in raw
 
-    def test_e2e_053_generate_settings_with_from_source(self, tmp_path: Path) -> None:
+    def test_e2e_053_register_hooks_with_from_source(self, tmp_path: Path) -> None:
         result = run_cli(
-            "generate-settings",
+            "register-hooks",
             "--hooks-dir",
             "custom/hooks",
             "--from",
             "./local/path",
+            "--dry-run",
             hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
         )

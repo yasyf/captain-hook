@@ -35,7 +35,7 @@ Bootstrap Progress:
 - [ ] Step 5: Scaffold (uvx capt-hook init)
 - [ ] Step 6: Write approved hooks, one file per category
 - [ ] Step 7: Verify (uvx capt-hook test, fix until green)
-- [ ] Step 8: Wire settings (generate-settings if new events)
+- [ ] Step 8: Wire settings (register-hooks if new events)
 - [ ] Step 9: Final report (table + declined list)
 ```
 
@@ -145,13 +145,12 @@ Required whenever hooks target events `init` didn't know about (e.g. a new `Stop
 after scaffolding). Run:
 
 ```bash
-uvx capt-hook generate-settings > /tmp/capt-hook-settings.json
-mv /tmp/capt-hook-settings.json .claude/settings.local.json
+uvx capt-hook register-hooks
 ```
 
-`generate-settings` prints the merged JSON to stdout (it reads and merges the existing
-`.claude/settings.local.json`). Never redirect straight into the settings file — the shell
-truncates it before the command reads it.
+`register-hooks` writes `.claude/settings.local.json` directly, merging non-destructively: it
+preserves every non-captain-hook entry, refreshes captain-hook's own, and drops entries for
+events you no longer subscribe to. Add `--dry-run` to print the merged JSON without writing.
 
 ### 9. Final report
 

@@ -4,6 +4,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-06-08
+
+### Changed
+- The `generate-settings` command is now `register-hooks` and **writes**
+  `.claude/settings.local.json` directly (atomically) instead of printing to stdout. The
+  merge is non-destructive: existing non-captain-hook entries are preserved, captain-hook's
+  own entries are refreshed, and entries for events you no longer subscribe to are dropped,
+  so re-registering can never clobber hand-authored or third-party hooks. `init` and
+  `register-hooks` now share one merge codepath.
+
+### Removed
+- The `generate-settings` command name (renamed to `register-hooks`, no alias) and its
+  `--no-merge` flag. Use `register-hooks --dry-run` to print the merged JSON without writing.
+
 ## [0.7.0] - 2026-06-08
 
 ### Added
