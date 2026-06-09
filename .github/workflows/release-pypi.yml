@@ -9,7 +9,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify-tag-on-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Verify the tagged commit is on main
+        env:
+          TAG_SHA: ${{ github.sha }}
+        run: |
+          git fetch --no-tags --quiet origin main
+          if git merge-base --is-ancestor "$TAG_SHA" FETCH_HEAD; then
+            echo "✓ ${GITHUB_REF_NAME} (${TAG_SHA}) is on main."
+          else
+            echo "::error title=Tag not on main::${GITHUB_REF_NAME} points at ${TAG_SHA}, which is not on main. Versioned releases must come from main — delete this tag, merge the commit to main, then re-tag the commit that landed on main."
+            exit 1
+          fi
+
   build:
+    needs: verify-tag-on-main
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6.0.2
