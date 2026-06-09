@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from captain_hook.app import get_matching_hooks
+from captain_hook.fire_log import record_fire
 from captain_hook.session import SessionStore
 from captain_hook.state import HookState
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
@@ -47,6 +48,10 @@ def execute_hook(
     if result:
         hook_state.fire_count += 1
         store[HookState].set(hook_state)
+        try:
+            record_fire(entry, evt, result)
+        except Exception:
+            logger.bind(hook=entry.name).exception("fire-log write failed")
 
     return result
 
