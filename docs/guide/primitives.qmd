@@ -3,9 +3,7 @@ title: "Deterministic Primitives"
 ---
 
 Primitives are one-call helpers that register a hook for a common pattern. They
-target the right events, count fires, and suppress echo for you. This page covers the
-deterministic ones, where a regex, an AST walk, or a predicate decides the outcome with
-no model call. For the LLM-backed primitives, see [LLM Hooks](llm-hooks.qmd).
+target the right events, count fires, and suppress echo for you. The deterministic primitives decide the outcome with a regex, an AST walk, or a predicate, no model call. For the LLM-backed primitives, see [LLM Hooks](llm-hooks.qmd).
 
 ## Pick a primitive
 

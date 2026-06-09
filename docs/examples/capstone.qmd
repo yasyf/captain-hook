@@ -6,4 +6,4 @@ Hooks rarely live alone. A real `.claude/hooks/` directory mixes a safety block,
 
 <!-- gd-embed: capstone.py -->
 
-**What to learn.** `block_command` is deterministic, so it ships with inline tests that run in CI. The `gate` and `audit` fire on live session state, like which files were touched and whether the tests ran, so they carry no inline tests and you verify them by replaying a real session. One file listens on `PreToolUse`, `Stop`, and `PostToolUse` at once. See [Test hooks inline](../guide/testing.qmd) and [Enforce a multi-step workflow](../guide/workflows.qmd).
+`block_command` is deterministic, so it ships with inline tests that run in CI. The `gate` and `audit` fire on live session state, like which files were touched and whether the tests ran, so they carry no inline tests and you verify them by replaying a real session. One file listens on `PreToolUse`, `Stop`, and `PostToolUse` at once. See [Test hooks inline](../guide/testing.qmd) and [Enforce a multi-step workflow](../guide/workflows.qmd).

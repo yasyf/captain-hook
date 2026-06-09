@@ -4,8 +4,7 @@ title: "Security & Trust"
 
 A hook is real Python that runs on your machine whenever Claude Code fires an
 event. The code runs for an AI agent, but it runs with your permissions, so the
-trust model matters. This page explains where the boundaries sit and why running
-through `uvx` keeps captain-hook out of your project's environment.
+trust model matters.
 
 ## The trust boundary
 
@@ -28,7 +27,7 @@ never sees more of your machine than the hook itself does.
 
 `uvx capt-hook` runs captain-hook from an ephemeral, isolated environment that
 `uv` builds on demand. The framework and its dependencies install into a cache
-that `uv` manages, separate from your project. Three properties follow.
+that `uv` manages, separate from your project.
 
 Your project's virtualenv stays untouched. captain-hook never lands in your
 `pyproject.toml`, your lockfile, or your site-packages. You can add a hook to any

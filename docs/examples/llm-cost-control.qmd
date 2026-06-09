@@ -6,4 +6,4 @@ An LLM hook that fires on every edit burns tokens fast. This example spends a mo
 
 <!-- gd-embed: llm_cost_control.py -->
 
-**What to learn.** Four levers bound the cost. Cheap deterministic conditions like `SourceEdits`, `TestFile`, and `Content` run first, so the model only sees edits that already look suspicious. Then `skip_if=[Agent(...)]` skips planning subagents, `model="small"` picks the cheaper model, and `max_fires=1` stops after the first intervention. LLM hooks report `SKIP` under `uvx capt-hook test` because they need a live model, so you verify them by replaying a session. See [Write an LLM hook](../guide/llm-hooks.qmd).
+Four levers bound the cost. Cheap deterministic conditions like `SourceEdits`, `TestFile`, and `Content` run first, so the model only sees edits that already look suspicious. Then `skip_if=[Agent(...)]` skips planning subagents, `model="small"` picks the cheaper model, and `max_fires=1` stops after the first intervention. LLM hooks report `SKIP` under `uvx capt-hook test` because they need a live model, so you verify them by replaying a session. See [Write an LLM hook](../guide/llm-hooks.qmd).

@@ -6,4 +6,4 @@ You want a per-day record of every tool the agent invoked, what file it touched,
 
 <!-- gd-embed: audit.py -->
 
-**What to learn.** `audit()` is the no-result primitive that drops one JSONL line per matching event under `$CLAUDE_PROJECT_DIR/.context/hook-logs/`. Here it fires on `PreToolUse`, `PostToolUse`, and `Stop`. Customize the destination with `log_dir` and `filename`, and the record shape with `fields`. Add `only_if=[FilePath(...)]` to scope the audit to one slice of activity. See also [the primitives guide](../guide/primitives.qmd) and [the conditions reference](../reference/conditions.qmd).
+`audit()` is the no-result primitive that drops one JSONL line per matching event under `$CLAUDE_PROJECT_DIR/.context/hook-logs/`. Here it fires on `PreToolUse`, `PostToolUse`, and `Stop`. Customize the destination with `log_dir` and `filename`, and the record shape with `fields`. Add `only_if=[FilePath(...)]` to scope the audit to one slice of activity. See also [the primitives guide](../guide/primitives.qmd) and [the conditions reference](../reference/conditions.qmd).

@@ -2,7 +2,7 @@
 title: "Write an LLM Hook"
 ---
 
-An LLM hook sends transcript context to a language model and acts on its verdict. Reach for one when the judgment needs to read intent, tone, or reasoning quality, and a regex cannot express it. This page shows you how to pick the right primitive, keep its cost bounded, and wire it onto a single judgment.
+An LLM hook sends transcript context to a language model and acts on its verdict. Reach for one when the judgment needs to read intent, tone, or reasoning quality, and a regex cannot express it.
 
 ## Decide: LLM or static
 

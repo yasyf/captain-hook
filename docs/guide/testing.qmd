@@ -4,9 +4,7 @@ title: "Test hooks inline"
 
 Captain Hook ships the test next to the hook. You attach a `tests` dict to any
 deterministic primitive, mapping an `Input` to the outcome you expect, then run them all
-with one command. No separate test file, no fixtures to wire up. This page walks one hook
-from empty file to a passing run, shows you how a broken expectation fails, and sets up the
-same command in CI.
+with one command. No separate test file, no fixtures to wire up.
 
 ## Write a hook with inline tests
 

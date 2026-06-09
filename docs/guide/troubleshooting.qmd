@@ -2,7 +2,7 @@
 title: "Troubleshooting"
 ---
 
-A hook misbehaved. There is no `doctor` command. You diagnose with two tools, the dispatch logs and a re-run of your inline tests. This page gives you the diagnostic commands first, then three flows for the failures you hit most.
+A hook misbehaved. There is no `doctor` command. You diagnose with two tools, the dispatch logs and a re-run of your inline tests.
 
 ## Diagnostic commands
 

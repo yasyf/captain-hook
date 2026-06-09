@@ -69,7 +69,7 @@ This exact layout is optional. `capt-hook --hooks <any-dir> test` works on any d
 `capt-hook` bundles:
 
 - `pydantic` and `pydantic-settings` provide typed settings and data models
-- `tree-sitter` and `tree-sitter-bash` parse bash commands for `CommandLine`
+- `tree-sitter` and `tree-sitter-bash` parse bash commands
 - `spacy` drives NLP-based signal matching and echo detection
 - `wn` handles WordNet synonym expansion for NLP signals
 - `funcy` supplies functional utilities

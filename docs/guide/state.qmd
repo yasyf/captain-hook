@@ -37,7 +37,7 @@ def count_edits(evt):
     evt.ctx.s[EditCounter].set(state)
 ```
 
-A slot gives you three operations. `.get()` returns the stored instance or `None`, and passing a default returns that instead, as in `.get(EditCounter())`. `.set(instance)` writes the model to disk atomically through a temp file and rename. `.delete()` removes the stored file.
+A slot gives you three operations. `.get()` returns the stored instance or `None`, and passing a default returns that instead, as in `.get(EditCounter())`. `.set(instance)` writes the model to disk atomically. `.delete()` removes the stored file.
 
 The read-update-write cycle above is the common shape. `store.load(EditCounter)` shortens the read leg, returning the stored instance or a fresh `EditCounter()` when nothing is stored yet.
 
@@ -113,10 +113,10 @@ The store then reports every registered model:
 
 Registration does not change slot access. `evt.ctx.s[Snapshot].get()` still works the same way. Both `@workflow_state` and `@session_state` register the model, so a workflow model shows up in `tracked_models()` too.
 
-The framework tracks `HookState` and `PrimitiveState` at import time. `HookState` counts how many times a hook fired and backs `max_fires` enforcement. `PrimitiveState` backs the LLM primitives. The framework owns both, so you read them at most and never write them.
+The framework reserves two slots of its own. `HookState` counts how many times a hook fired and backs `max_fires` enforcement, and `PrimitiveState` backs the LLM primitives. You read them at most, never write them.
 
 ## Where state lives
 
 Each session gets a directory keyed by a hash of its transcript path. A slot serializes its model to JSON at `~/.claude/state/hooks/sessions/<hash>/<hook>/<model_key>.json`, where the model key is the snake-case class name, so `ReviewState` becomes `review_state.json`. When a session's transcript is deleted, its state directory is cleaned up on the next run.
 
-Set `CAPTAIN_HOOK_STATE_DIR` to relocate the root, which helps in CI sandboxes that forbid writes outside the workspace. The default is `~/.claude/state`, and `CLAUDE_HOOKS_STATE_DIR` is honored as a legacy fallback. For every tunable setting, see [configuration](configuration.qmd).
+Set `CAPTAIN_HOOK_STATE_DIR` to relocate the root, which helps in CI sandboxes that forbid writes outside the workspace. The default is `~/.claude/state`. For every tunable setting, see [configuration](configuration.qmd).

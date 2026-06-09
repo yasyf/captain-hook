@@ -2,7 +2,7 @@
 title: "Configure settings"
 ---
 
-This page shows you how to wire typed settings into your hooks. You define a
+You define a
 `HooksSettings` subclass in `.claude/hooks/conf.py`, override its fields from
 code or environment variables, and read the values inside a handler through
 `evt.ctx.c`.
@@ -110,8 +110,7 @@ class ProjectSettings(HooksSettings):
 ### state_dir
 
 Where `@session_state` and `@workflow_state` models persist their JSON. The
-field reads `CAPTAIN_HOOK_STATE_DIR` first, then the legacy
-`CLAUDE_HOOKS_STATE_DIR`, and falls back to `~/.claude/state`. Set
+field reads `CAPTAIN_HOOK_STATE_DIR`, falling back to `~/.claude/state`. Set
 `CAPTAIN_HOOK_STATE_DIR` to relocate state, which helps in CI sandboxes that
 block writes outside the workspace. See [State and sessions](state.qmd) for how
 state directories are laid out.

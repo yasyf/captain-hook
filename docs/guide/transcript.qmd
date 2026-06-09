@@ -4,7 +4,7 @@ title: "Query the transcript"
 
 Your handler often needs to know what already happened this session. Whether the agent ran the tests, which files it edited this turn, whether the user asked for the change you're about to block. The `Transcript` answers these with a typed, chainable API.
 
-Reach the transcript through `evt.ctx.t` inside any handler. This page shows the queries you'll use most. To score recent text for retry loops, speculation, or blame-shifting, see [Score the transcript with signals](signals.qmd).
+Reach the transcript through `evt.ctx.t` inside any handler. To score recent text for retry loops, speculation, or blame-shifting, see [Score the transcript with signals](signals.qmd).
 
 ## Query tool uses
 

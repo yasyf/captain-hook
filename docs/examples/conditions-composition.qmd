@@ -6,4 +6,4 @@ Most real hooks fire on several facts at once, like the right tool, the right fi
 
 <!-- gd-embed: conditions_composition.py -->
 
-**What to learn.** `only_if` is AND, so every condition must match, and `skip_if` skips the hook when any of its conditions match. `SourceEdits(lang="py")` already excludes test files, so a test edit passes without an extra `TestFile()`. Adding `paths="app/**"` scopes the match to one package, and `FilePath("**/migrations/**")` in `skip_if` carves out an exception. The hook fires on `PostToolUse`. See [Filter hooks with conditions](../guide/conditions.qmd) and the [conditions cheatsheet](../reference/conditions.qmd).
+`only_if` is AND, so every condition must match, and `skip_if` skips the hook when any of its conditions match. `SourceEdits(lang="py")` already excludes test files, so a test edit passes without an extra `TestFile()`. Adding `paths="app/**"` scopes the match to one package, and `FilePath("**/migrations/**")` in `skip_if` carves out an exception. The hook fires on `PostToolUse`. See [Filter hooks with conditions](../guide/conditions.qmd) and the [conditions cheatsheet](../reference/conditions.qmd).

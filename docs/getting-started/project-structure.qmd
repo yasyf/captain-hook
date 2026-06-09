@@ -2,8 +2,7 @@
 title: "Project Structure & Wiring"
 ---
 
-`uvx capt-hook init` already wired your project. This page shows what it produced and how Claude
-Code actually runs your hooks, so the wiring stops being a black box.
+`uvx capt-hook init` already wired your project, scaffolding `.claude/hooks/`, the skills, and the `settings.local.json` that points Claude Code at them.
 
 ## What init creates
 

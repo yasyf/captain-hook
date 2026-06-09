@@ -2,7 +2,7 @@
 title: "How Hooks Work"
 ---
 
-A captain-hook hook is a rule that runs at one moment in Claude Code's loop and returns a verdict. This page explains that lifecycle. You learn when an event fires, how the dispatch pipeline turns it into a verdict, and how that verdict reaches Claude Code.
+A captain-hook hook is a rule that runs at one moment in Claude Code's loop and returns a verdict.
 
 ## A hook firing
 
@@ -16,7 +16,7 @@ block_command(r"git\s+stash", reason="git stash is not allowed; use jj shelve")
 
 When Claude tries to run `git stash pop`, Claude Code pauses the tool call and runs your hooks first. The hook matches the command, returns a deny verdict, and Claude Code skips the call. Claude reads the reason and reaches for `jj shelve` instead.
 
-That is the whole shape of a hook. The rest of this page traces each stage so you can predict what any hook does before you ship it.
+That is the whole shape of a hook.
 
 ## The lifecycle
 

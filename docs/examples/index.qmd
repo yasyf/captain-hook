@@ -2,7 +2,7 @@
 title: "Examples"
 ---
 
-Each page picks one capability, frames it as a problem you've hit, and links to a self-contained `docs/examples/*.py` file you can drop into your hooks directory. Every example ships with inline `tests = {...}` you can run with `uvx capt-hook --hooks docs/examples test`. The pages read thin in source because the code is injected from the `.py` file at build time.
+Each page picks one capability, frames it as a problem you've hit, and links to a self-contained `docs/examples/*.py` file you can drop into your hooks directory. Every example ships with inline `tests = {...}` you can run with `uvx capt-hook --hooks docs/examples test`.
 
 Work through them by job, from guarding against mistakes to composing a full hooks file.
 

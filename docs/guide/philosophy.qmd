@@ -3,8 +3,7 @@ title: "Design Philosophy & When NOT to Use This"
 ---
 
 captain-hook treats a hook as typed, declarative data you can test inline and check with a type
-checker, not a shell snippet you hand-write in `settings.json`. This page explains why that trade
-is worth making, and when it is not.
+checker, not a shell snippet you hand-write in `settings.json`.
 
 ## A hook is data, not a script
 
@@ -29,8 +28,7 @@ block_command(
 The event target, the conditions, and the verdict are now values with types. The
 [primitives reference](../reference/primitives.qmd) lists every builder and the verdict each one
 produces; the [conditions reference](../reference/conditions.qmd) lists every filter; the
-[events reference](../reference/events.qmd) lists every lifecycle moment you can target. Because
-these are objects and not strings, three properties follow.
+[events reference](../reference/events.qmd) lists every lifecycle moment you can target.
 
 ### You can test a hook before it ships
 
