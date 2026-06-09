@@ -25,6 +25,7 @@ from captain_hook.tests.helpers import (
     make_transcript_ctx,
     raw_assistant,
     raw_notification,
+    raw_text,
     raw_tool_result,
     raw_tool_use,
     text_msg,
@@ -539,6 +540,25 @@ class TestWaitingCondition:
             raw_assistant(raw_tool_use("Bash", {"command": "ls"}, "tu_y")),
             raw_tool_result("tu_y", content=[], tool_use_result={"status": "completed"}),
         ]
+        assert check_condition(Waiting(), waiting_evt(raw)) is True
+
+    def test_workflow_orphaned_across_user_message_still_waiting(self) -> None:
+
+        raw = [*workflow_launch(id="toolu_wf"), raw_text("user", "actually, also update the changelog")]
+        assert check_condition(Waiting(), waiting_evt(raw)) is True
+
+    def test_workflow_orphaned_then_notified_in_later_turn_is_not_waiting(self) -> None:
+
+        raw = [
+            *workflow_launch(id="toolu_wf"),
+            raw_text("user", "actually, also update the changelog"),
+            raw_notification("toolu_wf", task_id="waux9o41y"),
+        ]
+        assert check_condition(Waiting(), waiting_evt(raw)) is False
+
+    def test_async_agent_orphaned_across_user_message_still_waiting(self) -> None:
+
+        raw = [*async_agent_launch(id="tu_x"), raw_text("user", "while that runs, what's the plan?")]
         assert check_condition(Waiting(), waiting_evt(raw)) is True
 
     def test_empty_transcript_rejects(self) -> None:

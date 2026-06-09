@@ -14,6 +14,7 @@ from captain_hook.types import (
     Signal,
     Signals,
     TCondition,
+    Waiting,
 )
 
 if TYPE_CHECKING:
@@ -76,10 +77,11 @@ def nudge(
         message,
     )
 
+    resolved = events or ((Event.Stop | Event.SubagentStop) if block else Event.PostToolUse if sig else Event.PreToolUse)
     on(
-        events or ((Event.Stop | Event.SubagentStop) if block else Event.PostToolUse if sig else Event.PreToolUse),
+        resolved,
         only_if=only_if,
-        skip_if=skip_if,
+        skip_if=skip_if or ((Waiting(),) if block and resolved & (Event.Stop | Event.SubagentStop) else ()),
         max_fires=max_fires if max_fires is not None else (3 if sig else 1),
         tests=tests,
         async_=async_,

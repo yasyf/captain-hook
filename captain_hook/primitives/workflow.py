@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 
 from pydantic import BaseModel
 
-from captain_hook.types import Action, Event, HookResult, InlineTests, TCondition
+from captain_hook.types import Action, Event, HookResult, InlineTests, TCondition, Waiting
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
@@ -107,7 +107,7 @@ def workflow(
 
     guard.__name__ = f"{label.lower().replace('-', '_')}_workflow_guard"
     guard.__qualname__ = guard.__name__
-    on(Event.SubagentStop, only_if=only_if, skip_if=skip_if, max_fires=1, tests=tests)(guard)
+    on(Event.SubagentStop, only_if=only_if, skip_if=skip_if or (Waiting(),), max_fires=1, tests=tests)(guard)
 
     if on_start is not None:
 

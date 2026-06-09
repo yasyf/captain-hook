@@ -108,11 +108,11 @@ Require something done before the agent stops. A gate is a blocking nudge on the
 `Stop | SubagentStop` events, so it holds the turn open until the work is complete.
 
 ```python
-from captain_hook import Allow, Block, Input, RanCommand, gate
+from captain_hook import Allow, Block, Input, RanCommand, Waiting, gate
 
 gate(
     "Run the tests before stopping.",
-    skip_if=[RanCommand(r"uv\s+run\s+mtest")],
+    skip_if=[Waiting(), RanCommand(r"uv\s+run\s+mtest")],
     tests={
         Input(transcript=[
             {"role": "assistant", "content": "edited the parser"},
@@ -125,6 +125,12 @@ gate(
 ```
 
 A gate is the same as `nudge(message, block=True, ...)`.
+
+Stop gates are wait-aware by default. Give a gate no `skip_if` and it skips while the
+agent waits on background work such as a running `Workflow`, an async sub-agent, or a
+`ScheduleWakeup` loop, then re-fires once that work resumes. Pass any `skip_if` and that
+default switches off, so include [`Waiting()`](../reference/conditions.qmd) yourself, as
+the example above does.
 
 ## lint {#lint}
 

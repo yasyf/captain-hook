@@ -254,6 +254,20 @@ class InPlanMode:
 
 @dataclass(frozen=True, slots=True)
 class Waiting:
+    """Condition matching while the session is parked on out-of-band work.
+
+    True when an in-flight background or async tool has not yet reported back: a
+    ``Workflow`` or async sub-agent awaiting its completion ``<task-notification>``
+    (tracked across turns, so a launch in an earlier turn still counts), a
+    ``run_in_background`` Bash/Agent/Task, or a user-facing wait such as
+    ``ScheduleWakeup``/``Monitor``. Blocking Stop gates built with ``gate``/``llm_gate``
+    skip on it automatically when no ``skip_if`` is given, so the agent isn't nagged
+    for pausing on work it is correctly waiting on.
+
+    Example:
+        >>> gate("Run tests before stopping", skip_if=[Waiting()])
+    """
+
     pass
 
 

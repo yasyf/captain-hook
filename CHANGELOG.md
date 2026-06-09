@@ -4,6 +4,29 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-06-08
+
+### Added
+- Blocking Stop/SubagentStop gates built with `gate`, `llm_gate`, or `workflow` are now
+  wait-aware by default. When no `skip_if` is given, `Waiting()` is added automatically so
+  the gate skips while the agent is parked on background work and re-fires once it resumes.
+  Pass any `skip_if` and the default is off, so include `Waiting()` yourself.
+
+### Fixed
+- `Waiting()` now detects a background `Workflow` or async sub-agent launched in an
+  earlier turn. Previously it only inspected the current turn, so once a user or loop
+  message advanced the turn boundary a still-in-flight launch went unseen and Stop
+  gates fired mid-wait. The durable cases are tracked across the whole session until
+  their completion `<task-notification>` arrives, while ephemeral waits such as
+  `run_in_background` Bash and `ScheduleWakeup` stay turn-scoped.
+- Restored the `categorize_files` and `read_json` re-exports to the package root; they
+  were defined and documented but dropped from `captain_hook/__init__.py`, breaking
+  top-level imports in consumer hooks.
+
+### Changed
+- The root `captain_hook/__init__.py` re-exports drop the redundant `X as X` aliasing in
+  favor of plain imports (ruff `F401` is ignored for `__init__.py`).
+
 ## [0.6.0] - 2026-06-09
 
 ### Added

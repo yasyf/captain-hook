@@ -169,7 +169,8 @@ class TestWorkflowFunction:
         )
         assert _state.hooks[-1].spec.skip_if == (Agent("Explore"),)
 
-    def test_only_if_and_skip_if_default_to_empty(self) -> None:
+    def test_default_only_if_empty_and_skip_if_wait_aware(self) -> None:
+        from captain_hook.types import Waiting
         from captain_hook.primitives.workflow import Step, workflow
 
         workflow(
@@ -178,7 +179,7 @@ class TestWorkflowFunction:
             steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
         )
         assert _state.hooks[-1].spec.only_if == ()
-        assert _state.hooks[-1].spec.skip_if == ()
+        assert _state.hooks[-1].spec.skip_if == (Waiting(),)
 class TestWorkflowOnStart:
     def test_on_start_registers_both_subagent_start_and_stop(self) -> None:
         from captain_hook.types import Agent

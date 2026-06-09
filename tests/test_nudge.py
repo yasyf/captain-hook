@@ -6,8 +6,9 @@ from typing import Any
 from captain_hook.app import _state
 from captain_hook.dispatch import dispatch
 from captain_hook.events import PreToolUseEvent
-from captain_hook.types import Event, Tool
-from captain_hook.tests.helpers import make_ctx, make_post_tool_event, make_pre_tool_event, make_stop_event, make_subagent_stop_event
+from captain_hook.transcript import Transcript
+from captain_hook.types import Event, Tool, Waiting
+from captain_hook.tests.helpers import build_ctx, make_ctx, make_post_tool_event, make_pre_tool_event, make_stop_event, make_subagent_stop_event, workflow_launch
 
 
 def register_nudge(
@@ -151,6 +152,33 @@ class TestGateDefaultEvents:
     def test_gate_default_stop_events(self) -> None:
         register_gate("gate message")
         assert _state.hooks[-1].spec.events == (Event.Stop | Event.SubagentStop)
+
+
+class TestGateWaitAwareDefault:
+    def test_stop_gate_without_skip_if_gets_waiting(self) -> None:
+        register_gate("gate message")
+        assert _state.hooks[-1].spec.skip_if == (Waiting(),)
+
+    def test_stop_gate_with_skip_if_is_left_untouched(self) -> None:
+        register_gate("gate message", skip_if=[Tool("Bash")])
+        assert _state.hooks[-1].spec.skip_if == (Tool("Bash"),)
+
+    def test_pretooluse_block_gate_is_not_wait_aware(self) -> None:
+        register_nudge("blocking pre-tool gate", block=True, events=Event.PreToolUse)
+        assert _state.hooks[-1].spec.skip_if == ()
+
+    def test_plain_warn_nudge_is_not_wait_aware(self) -> None:
+        register_nudge("plain nudge")
+        assert _state.hooks[-1].spec.skip_if == ()
+
+    def test_stop_gate_skips_while_waiting(self, tmp_path: Path) -> None:
+        register_gate("You must stop!")
+
+        ctx = build_ctx(transcript=Transcript.from_messages(workflow_launch(id="toolu_wf")), session_dir=tmp_path)
+        evt = make_stop_event(ctx=ctx)
+        result = dispatch(Event.Stop, evt, session_dir=tmp_path)
+
+        assert result is None
 
 
 class TestNudgeMessageDedent:

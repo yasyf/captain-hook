@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 from loguru import logger
 
 from captain_hook.transcript.models import ToolResult
-from captain_hook.transcript.models import ToolUse as ToolUse
-from captain_hook.transcript.models import TranscriptMessage as TranscriptMessage
+from captain_hook.transcript.models import ToolUse
+from captain_hook.transcript.models import TranscriptMessage
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

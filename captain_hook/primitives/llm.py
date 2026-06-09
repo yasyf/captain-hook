@@ -23,6 +23,7 @@ from captain_hook.types import (
     Signal,
     Signals,
     TCondition,
+    Waiting,
 )
 
 FAILURE_ROOT = state.CACHE_ROOT / "failures"
@@ -168,10 +169,12 @@ def llm_primitive[M: BaseModel](
 
     handler.__name__ = handler.__qualname__ = hook_name(label, None, prompt)
 
+    resolved = events or default_events
     on(
-        events or default_events,
+        resolved,
         only_if=only_if,
-        skip_if=skip_if,
+        skip_if=skip_if
+        or ((Waiting(),) if action is Action.block and resolved & (Event.Stop | Event.SubagentStop) else ()),
         max_fires=max_fires if max_fires is not None else default_max_fires,
         tests=tests,
         async_=async_,

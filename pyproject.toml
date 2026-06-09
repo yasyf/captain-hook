@@ -1,6 +1,6 @@
 [project]
 name = "capt-hook"
-version = "0.6.0"
+version = "0.7.0"
 description = "Declarative hook framework for Claude Code"
 readme = "README.md"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -85,6 +85,9 @@ src = [".", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]
 
 [dependency-groups]
 docs = [

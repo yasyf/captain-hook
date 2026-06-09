@@ -43,7 +43,7 @@ def waiting_tool_names(evt: BaseHookEvent) -> set[str]:
     return {str(x) for x in custom} if isinstance(custom, list) else set(DEFAULT_WAITING_TOOLS)
 
 
-def tool_use_waiting(tu: ToolUse, t: Transcript, waiting_names: set[str]) -> bool:
+def ephemeral_wait(tu: ToolUse, waiting_names: set[str]) -> bool:
     if tu.name in waiting_names:
         return True
     match tu.name:
@@ -51,6 +51,11 @@ def tool_use_waiting(tu: ToolUse, t: Transcript, waiting_names: set[str]) -> boo
             return True
         case "Agent" | "Task" if "subagent_type" not in tu.raw_input:
             return True
+    return False
+
+
+def pending_async(tu: ToolUse, t: Transcript) -> bool:
+    match tu.name:
         case "Agent" | "Task" if tu.result and tu.result.is_async:
             return not has_completion_notification(t, tu.id, tu.message_index)
         case "Workflow":
@@ -62,7 +67,9 @@ def is_waiting(evt: BaseHookEvent) -> bool:
     if not (t := evt.ctx.transcript):
         return False
     waiting_names = waiting_tool_names(evt)
-    return any(tool_use_waiting(tu, t.current_turn, waiting_names) for tu in t.current_turn.tool_uses)
+    return any(ephemeral_wait(tu, waiting_names) for tu in t.current_turn.tool_uses) or any(
+        pending_async(tu, t) for tu in t.tool_uses
+    )
 
 
 def is_project_file(evt: BaseHookEvent) -> bool:

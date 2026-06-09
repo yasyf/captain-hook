@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING
 
 from captain_hook.app import on
 from captain_hook.state import hook_name
-from captain_hook.style import matchers as matchers
+from captain_hook.style import matchers
 from captain_hook.style.scope import changed_lines, read_source, reconstruct_pre
-from captain_hook.style.types import StyleDiffRule as StyleDiffRule
-from captain_hook.style.types import StyleRule as StyleRule
-from captain_hook.style.types import Violation as Violation
+from captain_hook.style.types import StyleDiffRule
+from captain_hook.style.types import StyleRule
+from captain_hook.style.types import Violation
 from captain_hook.types import Action, Event, FilePath, HookResult, TCondition, TestFile, Tool
 
 if TYPE_CHECKING:

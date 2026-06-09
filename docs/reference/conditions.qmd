@@ -34,7 +34,7 @@ These check what happened earlier in the session, from the transcript.
 | `RanCommand(p, subagents=True)` | A Bash command matching the regex ran | Regex | `RanCommand(r"uv\s+run\s+pytest")` |
 | `UsedSkill(p, subagents=True)` | A skill with a matching name was invoked | Pipe-separated names | `UsedSkill("codex\|codex:codex")` |
 | `InPlanMode()` | The agent is in plan mode | — | `InPlanMode()` |
-| `Waiting()` | The current turn has a tool still running (background/async) | — | `Waiting()` |
+| `Waiting()` | A background or async tool is still pending. Durable `Workflow` and async sub-agent launches count across turns until their completion notification lands | — | `Waiting()` |
 
 `subagents=True` also searches subagent transcripts; `TouchedFile` defaults to `False` (the
 main agent's edits only).
