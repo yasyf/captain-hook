@@ -221,7 +221,10 @@ class TestInputToEvent:
         from captain_hook.testing.types import Input
 
         p = tmp_path / "test.jsonl"
-        p.write_text('{"type": "user", "message": {"content": "hi"}}\n')
+        p.write_text(
+            '{"type": "user", "uuid": "u", "sessionId": "s", "timestamp": "2026-01-01T00:00:00Z",'
+            ' "message": {"content": "hi"}}\n'
+        )
         inp = Input(tool="Bash", command="ls", transcript=p)
         evt = input_to_event(Event.PreToolUse, inp)
         assert len(evt.ctx.transcript) == 1

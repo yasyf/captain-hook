@@ -19,6 +19,8 @@ from captain_hook.transcript.models import TranscriptMessage
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from cc_transcript.models import TranscriptEvent
+
     from captain_hook.command import Command
     from captain_hook.file import File
     from captain_hook.tools import EditOp, TaskOp, WriteOp
@@ -175,6 +177,15 @@ def extract_content(data: RawDict) -> list[Any]:
     return []
 
 
+def parse_line(raw: RawDict) -> TranscriptEvent | None:
+    from cc_transcript.parser import parse_event
+
+    try:
+        return parse_event(raw)
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
 def subagents(method: Callable[..., bool]) -> Callable[..., bool]:
     @functools.wraps(method)
     def wrapper(self: Transcript, *args: Any, subagents: bool = True, **kwargs: Any) -> bool:
@@ -250,13 +261,10 @@ class Transcript:
         if not path or not (path := Path(path)).exists():
             return cls([])
         messages = [
-            TranscriptMessage.from_raw(
-                type=str(data.get("type", "")),
-                content=extract_content(data),
-                raw=data,
-            )
+            TranscriptMessage.from_event(event, raw)
             for line in path.read_text().splitlines()
-            if (stripped := line.strip()) and (data := try_json(stripped)) is not None
+            if (stripped := line.strip()) and (raw := try_json(stripped)) is not None
+            if (event := parse_line(raw)) is not None
         ]
         t = cls(messages, path=path)
         t._auto_wire_classifier()

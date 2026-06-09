@@ -20,6 +20,7 @@ classifiers = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "cc-transcript>=0.7,<0.8",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "tree-sitter>=0.24",
@@ -53,6 +54,9 @@ Documentation = "https://yasyf.github.io/captain-hook/"
 Repository = "https://github.com/yasyf/captain-hook"
 Issues = "https://github.com/yasyf/captain-hook/issues"
 Changelog = "https://github.com/yasyf/captain-hook/blob/main/CHANGELOG.md"
+
+[tool.uv.sources]
+cc-transcript = { path = "../cc-transcript-reorg", editable = true }
 
 [build-system]
 requires = ["uv_build>=0.11,<0.12"]

@@ -6,7 +6,15 @@ from typing import Any
 
 from captain_hook.conditions import check_condition
 from captain_hook.events import PreToolUseEvent, SubagentStopEvent
-from captain_hook.tests.helpers import build_ctx, make_event, make_pre_tool_event
+from captain_hook.tests.helpers import (
+    build_ctx,
+    make_event,
+    make_pre_tool_event,
+    raw_assistant,
+    raw_text,
+    raw_tool_result,
+    raw_tool_use,
+)
 from captain_hook.transcript import Transcript
 from captain_hook.types import Agent, Or, Tool
 
@@ -49,52 +57,18 @@ class TestTurnSubagentAccessor:
         subagents_dir.mkdir(parents=True)
 
         parent_msgs = [
-            {"type": "user", "message": {"content": [{"type": "text", "text": "go"}]}},
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "name": "Agent",
-                            "id": "tu_test_runner_1",
-                            "input": {"subagent_type": "test-runner", "prompt": "run tests"},
-                        }
-                    ]
-                },
-            },
+            raw_text("user", "go"),
+            raw_assistant(
+                raw_tool_use("Agent", {"subagent_type": "test-runner", "prompt": "run tests"}, "tu_test_runner_1")
+            ),
         ]
         session_file.write_text("\n".join(json.dumps(m) for m in parent_msgs) + "\n")
 
         sub_msgs: list[dict[str, Any]] = []
         for i in range(3):
             tu_id = f"sub_tu_{i}"
-            sub_msgs.append({
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "name": "Bash",
-                            "id": tu_id,
-                            "input": {"command": f"echo {i}"},
-                        }
-                    ]
-                },
-            })
-            sub_msgs.append({
-                "type": "user",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tu_id,
-                            "is_error": True,
-                            "content": "boom",
-                        }
-                    ]
-                },
-            })
+            sub_msgs.append(raw_assistant(raw_tool_use("Bash", {"command": f"echo {i}"}, tu_id)))
+            sub_msgs.append(raw_tool_result(tu_id, "boom", is_error=True))
 
         sub_jsonl = subagents_dir / "agent-tu_test_runner_1.jsonl"
         sub_jsonl.write_text("\n".join(json.dumps(m) for m in sub_msgs) + "\n")

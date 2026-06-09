@@ -806,14 +806,10 @@ def event_with_subagent_tool_use(tmp_path: Path) -> Callable[[dict[str, Any]], B
         subagents_dir.mkdir(parents=True)
 
         session_file = session_dir / "session.jsonl"
-        session_file.write_text(
-            json.dumps({"type": "user", "message": {"content": [{"type": "text", "text": "hi"}]}}) + "\n"
-        )
+        session_file.write_text(json.dumps(raw_text("user", "hi")) + "\n")
 
         sub1 = subagents_dir / "sub1.jsonl"
-        sub1.write_text(
-            json.dumps({"type": "assistant", "message": {"content": [tool_use]}}) + "\n"
-        )
+        sub1.write_text(json.dumps(raw_assistant(tool_use)) + "\n")
 
         return make_event(
             PreToolUseEvent,

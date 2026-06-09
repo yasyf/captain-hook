@@ -6,6 +6,9 @@ from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from cc_transcript.models import ContentBlock as CoreContentBlock
+    from cc_transcript.models import TranscriptEvent
+
     from captain_hook.command import CommandLine
     from captain_hook.file import File
 
@@ -86,6 +89,23 @@ def parse_content(raw: list[RawBlock] | str, *, is_async: bool = False) -> list[
             return [parse_content_block(b, is_async=is_async) for b in raw]
 
 
+def core_block_to_content(block: CoreContentBlock) -> ContentBlock:
+    from cc_transcript.models import TextBlock as CoreText
+    from cc_transcript.models import ThinkingBlock as CoreThinking
+    from cc_transcript.models import ToolResultBlock as CoreToolResult
+    from cc_transcript.models import ToolUseBlock as CoreToolUse
+
+    match block:
+        case CoreText(text=text):
+            return TextBlock(text=text)
+        case CoreThinking():
+            return TextBlock(text="")
+        case CoreToolUse(id=tool_id, name=name, input=tool_input):
+            return ToolUseBlock(name=name, input=dict(tool_input), id=tool_id)
+        case CoreToolResult(tool_use_id=tool_use_id, content=content, is_error=is_error, is_async=is_async):
+            return ToolResult(tool_use_id=tool_use_id, content=content, is_error=is_error, is_async=is_async)
+
+
 @dataclass(frozen=True, kw_only=True)
 class ToolUse:
     """A transcript tool invocation with typed input parsing, file/command access, and result linkage."""
@@ -152,6 +172,22 @@ class TranscriptMessage:
             content=parse_content(content, is_async=cls.is_async_tool_use(raw)),
             raw=raw,
         )
+
+    @classmethod
+    def from_event(cls, event: TranscriptEvent, raw: RawDict) -> TranscriptMessage:
+        from cc_transcript.models import AssistantEvent, ModeEvent, OtherEvent, SystemEvent, UserEvent
+
+        match event:
+            case UserEvent():
+                return cls(type="user", content=[core_block_to_content(b) for b in event.blocks], raw=raw)
+            case AssistantEvent():
+                return cls(type="assistant", content=[core_block_to_content(b) for b in event.blocks], raw=raw)
+            case SystemEvent():
+                return cls(type="system", content=[], raw=raw)
+            case ModeEvent(channel=channel):
+                return cls(type=channel, content=[], raw=raw)
+            case OtherEvent(type=event_type):
+                return cls(type=event_type, content=[], raw=raw)
 
     @staticmethod
     def is_async_tool_use(raw: RawDict) -> bool:

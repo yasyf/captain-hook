@@ -213,9 +213,22 @@ def raw_tool_result_block(
 
 
 def raw_msg(role: str, content: list[dict[str, Any]] | str = "", **raw: Any) -> dict[str, Any]:
-    """A raw transcript line wrapping ``content`` (a block list or plain text) under ``message``."""
+    """A raw transcript line wrapping ``content`` (a block list or plain text) under ``message``.
+
+    Carries the envelope metadata (``uuid``/``sessionId``/``timestamp``) that real
+    transcript lines have, so the same dict round-trips through both the synthetic
+    ``from_messages`` parser and the ``from_path`` core parser. Callers can override
+    any envelope field via keyword.
+    """
     blocks = content if isinstance(content, list) else [raw_text_block(content)]
-    return {"type": role, "message": {"content": blocks}, **raw}
+    message = {"content": blocks} | ({"model": "<test>"} if role == "assistant" else {})
+    return {
+        "type": role,
+        "uuid": "uuid",
+        "sessionId": "sess",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": message,
+    } | raw
 
 
 def raw_text(role: str, text: str) -> dict[str, Any]:

@@ -20,12 +20,19 @@ from captain_hook.tests.helpers import (
 from captain_hook.tests.helpers import (
     raw_tool_use as _tool_use,
 )
+from captain_hook.tests.helpers import (
+    async_agent_launch,
+    raw_assistant,
+    raw_text,
+    raw_tool_result,
+)
 from captain_hook.transcript import (
     Transcript,
     TranscriptMessage,
     TranscriptSlice,
     Turn,
 )
+from captain_hook.transcript.models import ContentBlock, TextBlock, ToolResult, ToolUseBlock
 
 
 class TestToolUseSequence:
@@ -1036,3 +1043,50 @@ class TestMcpToolNameMatching:
         )
         sliced = t.after("AskUserQuestion")
         assert sliced.tool_uses.where(name="Edit").count() == 1
+
+
+def _block_sig(b: ContentBlock) -> tuple[Any, ...]:
+    match b:
+        case TextBlock():
+            return ("text", b.text)
+        case ToolUseBlock():
+            return ("tool_use", b.name, b.id, b.input)
+        case ToolResult():
+            return ("tool_result", b.tool_use_id, b.is_error, b.is_async)
+
+
+def _structure(t: Transcript) -> list[tuple[str, list[tuple[Any, ...]]]]:
+    return [(msg.type, [_block_sig(b) for b in msg.content]) for msg in t.messages]
+
+
+class TestConstructionEquivalence:
+    """from_path (core-routed) and from_messages (synthetic) must agree on block structure."""
+
+    def test_from_path_matches_from_messages(self, tmp_path: Path) -> None:
+        msgs = [
+            raw_text("user", "fix the bug"),
+            raw_assistant(_tool_use("Read", {"file_path": "/x"}, "tu_1")),
+            raw_tool_result("tu_1", "file contents", is_error=False),
+            *async_agent_launch(id="tu_2"),
+            raw_text("assistant", "done"),
+        ]
+
+        synthetic = Transcript.from_messages(msgs)
+
+        p = tmp_path / "session.jsonl"
+        p.write_text("\n".join(json.dumps(m) for m in msgs) + "\n")
+        core_routed = Transcript.from_path(p)
+
+        assert _structure(core_routed) == _structure(synthetic)
+
+    def test_async_tool_result_flows_through_both_paths(self, tmp_path: Path) -> None:
+        msgs = list(async_agent_launch(id="tu_async"))
+
+        synthetic = Transcript.from_messages(msgs)
+        p = tmp_path / "async.jsonl"
+        p.write_text("\n".join(json.dumps(m) for m in msgs) + "\n")
+        core_routed = Transcript.from_path(p)
+
+        for t in (synthetic, core_routed):
+            [result] = [tr for msg in t.messages for tr in msg.tool_results]
+            assert result.is_async is True
