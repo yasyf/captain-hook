@@ -22,7 +22,7 @@ from captain_hook import (
     Allow, BaseHookEvent, Block, Event, HookResult, InlineTests, Input, Prompt,
     RanCommand, Signal, Signals, SourceEdits, TestFile, Tool, TouchedFile,
     TranscriptFixture, Warn,
-    audit, block_command, gate, hook, lint, llm_gate, llm_nudge, nudge, on,
+    block_command, gate, hook, lint, llm_gate, llm_nudge, nudge, on,
     prompt_check, warn_command, workflow, Artifact, Step, text_matches,
 )
 from captain_hook.types import Command
@@ -71,7 +71,6 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 | `gate` | `(message, *, when=None, only_if=(), skip_if=(), events=None, max_fires=None, tests=None)` | `Stop \| SubagentStop`, `max_fires=1`; blocks |
 | `nudge` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), block=False, events=None, max_fires=None, tests=None)` | `PostToolUse` (with signals) else `PreToolUse`; `max_fires` 3 / 1; warns |
 | `lint` | `(check, *, message, trigger=None, sep=", ", block=False, events=None, tests=None, max_shown=5)` | `PostToolUse`, `Tool("Edit\|Write")` + `*.py`, skips test files |
-| `audit` | `(events=Pre\|Post\|Stop, *, log_dir=None, filename=..., fields=..., only_if=(), skip_if=())` | JSONL to `$CLAUDE_PROJECT_DIR/.context/hook-logs/` |
 | `workflow` | `(*, label, marker, steps, artifacts=None, only_if=(), skip_if=(), tests=None)` | guard on `SubagentStop`, `max_fires=1` |
 | `llm_gate` | `(prompt, *, message, signals=None, when=None, only_if=(), skip_if=(), events=None, max_fires=None, tests=None, max_context=2000, model="small", agent=True, transcript=True)` | `Stop \| SubagentStop`, `max_fires=1`; blocks on `GateVerdict.block` |
 | `llm_nudge` | same as `llm_gate` | `PostToolUse`, `max_fires=3`; warns on `NudgeVerdict.fire` |

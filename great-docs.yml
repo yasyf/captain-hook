@@ -73,7 +73,6 @@ reference:
   - title: Primitives
     desc: One-line hooks for the common cases.
     contents:
-      - audit
       - gate
       - nudge
       - lint

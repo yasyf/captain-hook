@@ -15,7 +15,6 @@ from captain_hook import (
     SourceEdits,
     TouchedFile,
     UsedSkill,
-    audit,
     block_command,
     gate,
     nudge,
@@ -65,14 +64,7 @@ nudge(
     max_fires=1,
 )
 
-# 3. audit — append one JSONL record per matching tool call into .context/.
-# see https://yasyf.github.io/captain-hook/docs/guide/primitives.html
-audit(
-    Event.PreToolUse | Event.PostToolUse | Event.Stop,
-    log_dir=".context/hook-audit",
-)
-
-# 4. prompt_check — LLM gate on Python edits that smell like unfinished work.
+# 3. prompt_check — LLM gate on Python edits that smell like unfinished work.
 # see https://yasyf.github.io/captain-hook/docs/examples/test-integrity.html
 PLACEHOLDER_TEMPLATE = """
 The agent just edited {fp}. Flag the change if the new content contains

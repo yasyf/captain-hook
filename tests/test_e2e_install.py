@@ -47,7 +47,7 @@ class TestInit:
         text = (project_dir / ".claude" / "hooks" / "example.py").read_text()
         assert "block_command(" in text
         assert "nudge(" in text
-        assert "audit(" in text
+        assert "gate(" in text
         assert "prompt_check(" in text
         assert "Prompt.from_template" in text
         assert "tests={" in text

@@ -14,7 +14,6 @@ Stop dangerous actions before they run.
 |---|---|
 | [Command Safety](command-safety.qmd) | `block_command` plus command-line AST predicates |
 | [Deploy & Secret Guard](deploy-secret-guard.qmd) | block infra-destroying commands and secret leaks |
-| [Audit Logging](audit.qmd) | a JSONL trail of every tool call |
 
 ## Feedback
 

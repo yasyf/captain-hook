@@ -15,7 +15,6 @@ Start from what you want to enforce.
 - Require something done before the agent finishes, go to [`gate`](#gate).
 - Check a Python edit against a rule, go to [`lint`](#lint).
 - Flag only what an edit changed, go to [`diff_lint`](#diff_lint).
-- Append a record of activity for later, go to [`audit`](#audit).
 
 Each primitive accepts `tests={...}` mapping an `Input` to a `Block`, `Warn`, or
 `Allow` expectation. Run them with `uvx capt-hook test`. The
@@ -200,33 +199,6 @@ diff_lint(
 
 `diff_lint` fires on `Edit` of `.py` files by default. For declarative AST rules scoped
 to the change, see [Style Rules](styleguide.qmd).
-
-## audit {#audit}
-
-Append a JSONL record per matching event for later analysis. Each default line carries
-`ts`, `event`, `tool`, `file`, and a session id derived from the transcript path.
-
-```python
-from captain_hook import Event, audit
-
-audit(Event.PreToolUse | Event.PostToolUse | Event.Stop)
-```
-
-Records land in `$CLAUDE_PROJECT_DIR/.context/hook-logs/<YYYY-MM-DD>.jsonl`. Override
-the destination and the record shape with `log_dir`, `filename`, and `fields`.
-
-```python
-from captain_hook import Event, audit
-
-audit(
-    Event.PostToolUse,
-    log_dir="logs/hooks",
-    filename=lambda d: f"{d:%Y-%m-%dT%H}.jsonl",
-    fields=lambda evt: {"event": evt.event_name.name, "tool": evt.tool_name},
-)
-```
-
-`audit` is a side-effect, so it carries no inline tests.
 
 ---
 

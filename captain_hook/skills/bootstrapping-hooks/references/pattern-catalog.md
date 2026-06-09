@@ -12,7 +12,6 @@ to the surveyed repo while keeping the test structure. Test-format details and d
 - C — Test integrity (`testing.py`)
 - D — Workflow rituals (`workflow.py`)
 - E — Styleguide rules — delegate, no code
-- F — Audit (`audit.py`)
 
 ## A — Command safety (`safety.py`)
 
@@ -368,37 +367,3 @@ Found one? Stop. Do not write `StyleRule`s, `lint` approximations of style rules
 `translating-styleguides` skill with the markdown path — it owns rule atomization, the
 Matcher/`check()`/LLM tier decision, `style.py`, and its own enforcement report. If the
 Skill tool is unavailable, read that skill's `SKILL.md` and follow it (both ship together).
-
-## F — Audit (`audit.py`)
-
-Signals: compliance- or ops-flavored repos; a user asking "what did the agent do?";
-debugging hook behavior itself.
-
-```python
-from __future__ import annotations
-
-from captain_hook import Event, FilePath, audit
-
-audit(Event.PreToolUse | Event.PostToolUse | Event.Stop)
-
-audit(
-    Event.PostToolUse,
-    log_dir="logs/hooks",
-    filename=lambda d: f"{d:%Y-%m-%dT%H}.jsonl",
-    fields=lambda evt: {
-        "event": evt.event_name.name,
-        "tool": evt.tool_name,
-        "agent": evt.agent_type,
-        "file": str(evt.file.path) if evt.file else None,
-    },
-    only_if=[FilePath("**/*.py")],
-)
-```
-
-Adaptation notes:
-
-- The bare call covers most needs: one JSONL line per event (`ts`, `event`, `tool`, `file`,
-  `session_id`) under `$CLAUDE_PROJECT_DIR/.context/hook-logs/`.
-- `audit` is side-effect-only — it never blocks or warns and takes no `tests=`. Add the
-  log directory to `.gitignore`.
-- Offer this category only as an opt-in extra; most repos do not need it.

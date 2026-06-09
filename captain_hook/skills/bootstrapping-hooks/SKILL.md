@@ -81,7 +81,6 @@ Map every signal onto the taxonomy below. Record per candidate: the **source quo
 | C. Test integrity | `tests/` dir + CI test job; "never skip tests", coverage rules | `gate(only_if=[TouchedFile], skip_if=[RanCommand])`; `prompt_check` on test-file edits |
 | D. Workflow rituals | CONTRIBUTING rituals ("run make lint before pushing", "update CHANGELOG"), multi-step done-criteria | `gate` on `PreToolUse` + `Command(r"git\s+push")`; `workflow()` for ordered checklists |
 | E. Styleguide rules | `STYLEGUIDE.md`, style sections in CONTRIBUTING/AGENTS/CLAUDE | **delegate to `translating-styleguides`** |
-| F. Audit (opt-in extra) | compliance/ops-flavored repos | `audit()` |
 
 Worked code per category: [pattern catalog](references/pattern-catalog.md).
 
@@ -112,8 +111,8 @@ writing the real hooks — the approved hooks replace it.
 
 ### 6. Write hooks
 
-One file per approved category: `safety.py`, `quality.py`, `testing.py`, `workflow.py`,
-`audit.py` (+ `style.py`, owned end-to-end by `translating-styleguides`). Every hook file gets:
+One file per approved category: `safety.py`, `quality.py`, `testing.py`, `workflow.py`
+(+ `style.py`, owned end-to-end by `translating-styleguides`). Every hook file gets:
 
 - `from __future__ import annotations` at the top.
 - Inline tests with at least one firing `Input` and one `Allow()` (deterministic hooks only).

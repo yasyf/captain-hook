@@ -117,8 +117,6 @@ state directories are laid out.
 
 ### log_dir
 
-Where `audit()` writes its JSONL files and where the framework writes its own
-session logs. The field reads `CAPTAIN_HOOK_LOG_DIR` and otherwise falls back to
-`~/.cache/captain-hook/logs`, or to `$XDG_CACHE_HOME/captain-hook/logs` when you
-set `XDG_CACHE_HOME`. A per-hook `audit(log_dir=...)` overrides this for that
-hook only.
+Where the framework writes its own session logs. The field reads
+`CAPTAIN_HOOK_LOG_DIR` and otherwise falls back to `~/.cache/captain-hook/logs`,
+or to `$XDG_CACHE_HOME/captain-hook/logs` when you set `XDG_CACHE_HOME`.

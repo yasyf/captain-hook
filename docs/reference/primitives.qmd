@@ -15,7 +15,6 @@ the facts tier; the [Guide](../guide/index.qmd) how-tos teach which one to reach
 | `nudge` | warn (or block) | see below | ✓ | Advise when conditions or signals fire |
 | `lint` | warn (or block) | `PostToolUse` | ✓ | Check Python edits (string- or AST-mode) |
 | `diff_lint` | warn (or block) | `PostToolUse` | ✓ | Flag only what an edit changed |
-| `audit` | log | `PreToolUse \| PostToolUse \| Stop` | — | Append JSONL records of activity |
 | `llm_gate` | block | `Stop \| SubagentStop` | SKIP | Block on a judgment a regex can't make |
 | `llm_nudge` | warn | `PostToolUse` | SKIP | Advise on a judgment a regex can't make |
 | `prompt_check` | warn/block | called in a handler | SKIP | Judge an edit inside a custom handler |
@@ -58,16 +57,6 @@ diff_lint(check: Callable[[ast.AST, ast.AST], list[str]], *, message: str, sep="
 
 `lint` infers string- vs AST-mode from the check's first parameter type. `{violations}` in the
 message is replaced with the joined results. Both fire on `.py` edits and skip test files.
-
-## Audit
-
-```python
-audit(events=Event.PreToolUse | Event.PostToolUse | Event.Stop, *, log_dir=None,
-      filename=lambda d: f"{d:%Y-%m-%d}.jsonl", fields=default_fields,
-      only_if=(), skip_if=()) -> None
-```
-
-The default record fields are `ts`, `event`, `tool`, `file`, and `session_id`.
 
 ## LLM primitives
 

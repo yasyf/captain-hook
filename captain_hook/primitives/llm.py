@@ -11,8 +11,8 @@ from pydantic import BaseModel
 
 from captain_hook import state
 from captain_hook.app import on
-from captain_hook.primitives.audit import session_id_for
 from captain_hook.prompt import Prompt
+from captain_hook.session import session_hash
 from captain_hook.signals import extract_signal_context, resolve_signals, transcript_texts
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import (
@@ -305,7 +305,7 @@ def record_prompt_check_failure(
         case _:
             argv, exit_code, stdout, stderr = None, None, "", ""
 
-    failure_path = FAILURE_ROOT / (session_id_for(evt) or "unknown") / f"{timestamp}.json"
+    failure_path = FAILURE_ROOT / (session_hash(p) if (p := evt.ctx.t.path) else "unknown") / f"{timestamp}.json"
     failure_path.parent.mkdir(parents=True, exist_ok=True)
     failure_path.write_text(
         json.dumps(

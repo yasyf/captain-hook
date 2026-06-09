@@ -34,11 +34,10 @@ from captain_hook.primitives import llm_nudge
 from captain_hook.primitives import prompt_check
 from captain_hook.primitives import warn_command
 
-# audit/lint/nudge are imported from their defining modules, not the
-# primitives package: the package attribute and the submodule share a name,
-# and an alias targeting captain_hook.primitives.<name> resolves to the
-# module under static analysis (griffe), shadowing the function.
-from captain_hook.primitives.audit import audit
+# lint/nudge are imported from their defining modules, not the primitives
+# package: the package attribute and the submodule share a name, and an alias
+# targeting captain_hook.primitives.<name> resolves to the module under static
+# analysis (griffe), shadowing the function.
 from captain_hook.primitives.lint import diff_lint
 from captain_hook.primitives.lint import lint
 from captain_hook.primitives.nudge import nudge

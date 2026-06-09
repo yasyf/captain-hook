@@ -2,8 +2,8 @@
 title: "A Complete Hooks File"
 ---
 
-Hooks rarely live alone. A real `.claude/hooks/` directory mixes a safety block, a workflow gate, and an audit trail. This capstone shows several primitives composing in one file, and which ones you can unit-test.
+Hooks rarely live alone. A real `.claude/hooks/` directory mixes a safety block and a workflow gate. This capstone shows several primitives composing in one file, and which ones you can unit-test.
 
 <!-- gd-embed: capstone.py -->
 
-`block_command` is deterministic, so it ships with inline tests that run in CI. The `gate` and `audit` fire on live session state, like which files were touched and whether the tests ran, so they carry no inline tests and you verify them by replaying a real session. One file listens on `PreToolUse`, `Stop`, and `PostToolUse` at once. See [Test hooks inline](../guide/testing.qmd) and [Enforce a multi-step workflow](../guide/workflows.qmd).
+`block_command` is deterministic, so it ships with inline tests that run in CI. The `gate` fires on live session state, like which files were touched and whether the tests ran, so it carries no inline tests and you verify it by replaying a real session. One file listens on `PreToolUse` and `Stop` at once. See [Test hooks inline](../guide/testing.qmd) and [Enforce a multi-step workflow](../guide/workflows.qmd).
