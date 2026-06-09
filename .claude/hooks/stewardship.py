@@ -11,6 +11,7 @@ from captain_hook import (
     Input,
     NlpSignal,
     Phrase,
+    RanCommand,
     Signal,
     Signals,
     Warn,
@@ -118,6 +119,147 @@ nudge(
                                     "type: ignore. Moving on to the actual feature work."
                                 ),
                             }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+    },
+)
+
+
+nudge(
+    "Stop investigating trivial pyright/typing warnings. Per AGENTS.md § General Rules — "
+    "Don't contort code to satisfy a checker: ignore trivial type issues (`cached_property` "
+    "overriding `property`, minor override mismatches, descriptor protocol). Only fix type "
+    "issues that indicate actual bugs. Don't check git history to see if you introduced "
+    "them — move on.",
+    signals=Signals(
+        [
+            Signal(
+                pattern=r"(?i)check\s+(?:the\s+)?git\s+(?:history|log|blame)",
+                weight=2,
+            ),
+            Signal(
+                pattern=r"(?i)(?:something|warnings?|errors?)\s+i\s+(?:introduced|added|caused)",
+                weight=2,
+            ),
+            Signal(
+                pattern=(
+                    r"(?i)(?:existed|were\s+there|present)\s+(?:before|prior\s+to)\s+"
+                    r"(?:my\s+)?(?:changes?|edits?)"
+                ),
+                weight=2,
+            ),
+            Signal(
+                pattern=(
+                    r"(?i)warnings?\s+(?:are|is)?\s*(?:showing\s+up|appearing|popping\s+up)\s+"
+                    r"(?:again|now|in)"
+                ),
+                weight=2,
+            ),
+            Signal(pattern=r"(?i)(?:actual|real|genuine)\s+(?:bug|error)", weight=-3),
+            Signal(pattern=r"(?i)wrong\s+(?:type|signature|return\s+type)", weight=-3),
+        ],
+        threshold=4,
+        window=10,
+    ),
+    skip_if=[RanCommand(r"(?:uv run ty check|uvx pyright)")],
+    tests={
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "The warnings are showing up again in strict mode, "
+                                    "which means pyright is catching them."
+                                ),
+                            },
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Let me check the git history to see if these pyright "
+                                    "warnings existed before my changes."
+                                ),
+                            },
+                        ]
+                    },
+                }
+            ]
+        ): Warn(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Strict mode pyright is catching warnings — "
+                                    "is this something I introduced?"
+                                ),
+                            },
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "The wrong return type is the actual bug — let me fix it.",
+                            },
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "I'll fix this real type error in the engine.",
+                            },
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Let me check git history for the auth refactor.",
+                            },
                         ]
                     },
                 }
