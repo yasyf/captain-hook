@@ -48,13 +48,14 @@ Editing the plan first robs the user of the choice and forces them to diff the p
 
 ## Parallelize Independent Work
 
-Independent tasks dispatch concurrently. Two agents that could run at the same time must run at the same time; the orchestrator only routes, never executes. Pick the surface by who holds the plan:
+Sequential is the exception, not the default. Two steps that don't consume each other's output run at the same time; when unsure whether they're independent, assume they are and fan out. The orchestrator routes and synthesizes — it never executes work a subagent could. Pick the surface by scale:
 
-- **Dynamic workflow** — default for substantive multi-step work: the script holds the loop, branching, and intermediate results.
-- **Parallel subagent calls in one message** — ad-hoc independent investigations. One message, N `Agent` tool uses, results gathered in parallel.
+- **Batch tool calls in one message** — the cheapest parallelism and the most missed. Independent reads, greps, globs, and read-only Bash go in a *single* message, never one per turn.
+- **Parallel subagent calls in one message** — ad-hoc independent investigations: "explore X while I check Y", multi-file reviews, independent edits. One message, N `Agent` tool uses, results gathered in parallel.
+- **Dynamic workflow** — substantive multi-step work; the script holds the loop, branching, and intermediate results.
 - **Named team** — long-running peers needing agent-to-agent handoffs mid-run, via `TeamCreate`.
 
-Single-step exception: one task, no parallel sibling, no follow-on → one subagent call is fine.
+Single-step exception: one task, no parallel sibling, no follow-on → act directly.
 
 ## Writing Plans
 
