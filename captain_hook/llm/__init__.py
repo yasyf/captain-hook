@@ -1,10 +1,10 @@
-"""LLM backend abstractions for captain-hook's ``call_llm`` helper."""
+"""LLM backend abstractions, re-exported from the shared spawnllm library."""
 
 from __future__ import annotations
 
-from captain_hook.llm.backends import ClaudeBackend
-from captain_hook.llm.backends import CodexBackend
-from captain_hook.llm.backends import LlmBackend
-from captain_hook.llm.backends import LlmBackends
-from captain_hook.llm.backends import TModel
-from captain_hook.llm.backends import TSpecialty
+from spawnllm import ClaudeCliBackend as ClaudeBackend
+from spawnllm import CodexCliBackend as CodexBackend
+from spawnllm import LlmBackend
+from spawnllm import LlmBackends
+from spawnllm import TModel
+from spawnllm import TSpecialty

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -11,8 +9,9 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
+from spawnllm import resolve_schema_path, run_cli, schema_for
 
-from captain_hook.llm import CodexBackend, LlmBackend, LlmBackends, TModel, TSpecialty
+from captain_hook.llm import LlmBackends, TModel, TSpecialty
 from captain_hook.prompt import Prompt
 from captain_hook.session import SessionStore
 
@@ -72,28 +71,13 @@ class HookContext:
         timeout: int = 30,
         env: dict[str, str] | None = None,
     ) -> str:
-        result = subprocess.run(
+        return run_cli(
             args,
             input=input,
-            capture_output=True,
-            text=True,
             timeout=timeout,
             env=os.environ | (env or {}),
             cwd=os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR"),
         )
-        if result.returncode != 0:
-            err = subprocess.CalledProcessError(
-                result.returncode,
-                args,
-                output=result.stdout,
-                stderr=result.stderr,
-            )
-            err.add_note(f"argv: {args}")
-            err.add_note(f"exit_code: {result.returncode}")
-            err.add_note(f"stderr: {result.stderr[-4096:]}")
-            err.add_note(f"stdout: {result.stdout[-4096:]}")
-            raise err
-        return result.stdout
 
     def git(self, *args: str) -> str | None:
         try:
@@ -137,23 +121,10 @@ class HookContext:
             if transcript:
                 template = f"{{transcript}}\n\n<task>\n{template}\n</task>"
             prompt = template.format(*args, **kwargs, transcript=self.transcript)
-        schema = (
-            json.dumps(response_model.model_json_schema() | {"additionalProperties": False}) if response_model else None
-        )
+        schema = schema_for(response_model) if response_model else None
         backend = LlmBackends.for_specialty(specialty)
-        schema_path = self.resolve_schema_path(backend, schema)
+        schema_path = resolve_schema_path(backend, schema)
 
         cmd = backend.build_command(backend.models[model], schema_path, agent)
         raw = self.call_cli(cmd, input=prompt, timeout=timeout, env=backend.env())
         return backend.parse_response(raw, response_model)
-
-    @staticmethod
-    def resolve_schema_path(backend: LlmBackend, schema: str | None) -> str | None:
-        if not schema:
-            return None
-        if isinstance(backend, CodexBackend):
-            fd, path = tempfile.mkstemp(suffix=".json")
-            os.write(fd, schema.encode())
-            os.close(fd)
-            return path
-        return schema
