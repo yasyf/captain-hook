@@ -1,7 +1,7 @@
 {
   "setup": [
     "cp -R $SUPERSET_ROOT_PATH/.env*",
-    "echo 'DEBUG=1' >> .env.local",
+    "echo 'DEBUG=1' >> .env",
     "direnv allow",
     "uv sync --group dev --inexact",
     "jj git init --git-repo .",
