@@ -11,7 +11,14 @@ from captain_hook.app import reset
 
 
 @pytest.fixture(autouse=True)
-def clean_state():
+def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch):
+    # Isolate the on-disk state dir per test: SessionStore, fire-counts (max_fires),
+    # and the fire-log all root under resolve_state_dir(), which defaults to the real
+    # ~/.claude/state. Without this, run_cli subprocesses share one session dir
+    # (session_hash of an absent transcript is constant), so fire-state leaks across
+    # tests under random ordering. CLAUDE_HOOKS_STATE_DIR is the lower-precedence var
+    # that TestStateRoot manages, so this stays compatible with its default-path test.
+    monkeypatch.setenv("CLAUDE_HOOKS_STATE_DIR", str(tmp_path_factory.mktemp("hook-state")))
     reset()
     yield
     reset()
