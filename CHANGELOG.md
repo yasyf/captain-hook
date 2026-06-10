@@ -4,6 +4,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-06-10
+
+### Added
+- SQLite fire-log subsystem recording every hook fire.
+
+### Changed
+- Transcript parsing now wraps the `cc-transcript` core parser (`parse_event`); the
+  public `Transcript`/`Turn`/`ToolUseQuery` API is unchanged. Adds a dependency on
+  `cc-transcript>=0.7,<0.8`.
+- Requires Python ≥3.13; LLM backends delegated to `spawnllm`.
+
+### Removed
+- The `audit()` primitive (superseded by the fire-log).
+
 ## [0.8.0] - 2026-06-08
 
 ### Changed
