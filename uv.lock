@@ -269,7 +269,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cc-transcript", editable = "../cc-transcript-reorg" },
+    { name = "cc-transcript", specifier = ">=0.7,<0.8" },
     { name = "click", specifier = ">=8" },
     { name = "filelock", specifier = ">=3" },
     { name = "funcy", specifier = ">=2.0" },
@@ -308,32 +308,19 @@ wheels = [
 
 [[package]]
 name = "cc-transcript"
-version = "0.6.0"
-source = { editable = "../cc-transcript-reorg" }
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "anyio" },
     { name = "orjson" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "afinn", marker = "extra == 'sentiment'", specifier = ">=0.1" },
-    { name = "aiosqlite", specifier = ">=0.20" },
-    { name = "anyio", specifier = ">=4.4" },
-    { name = "cc-transcript", extras = ["sentiment"], marker = "extra == 'lexicon'" },
-    { name = "orjson", specifier = ">=3.10" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
-    { name = "spacy", marker = "extra == 'sentiment'", specifier = ">=3.8" },
-    { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.44" },
-]
-provides-extras = ["dev", "sentiment", "lexicon"]
-
-[package.metadata.requires-dev]
-docs = [
-    { name = "great-docs", git = "https://github.com/posit-dev/great-docs?rev=main" },
-    { name = "griffelib", specifier = ">=2.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/fc/fe/418d91db017208cbe77fea5b0092a9438498ebcd597207ba9c299fe127c8/cc_transcript-0.7.0.tar.gz", hash = "sha256:8d143a6e0f57eb6e12b5a4016ca64ba75f14de2a16cbc10d516b7b8c39917a11", size = 71962, upload-time = "2026-06-10T10:29:37.78Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/62/90/45667d38df17e7a614f1187e8e19754d9b29e640ffd9c9eb992a260afc1d/cc_transcript-0.7.0-cp313-abi3-macosx_11_0_arm64.whl", hash = "sha256:509c9f6a5990c93bc05af1e7db8fe25f4eb0b95d92fe2d256c4669cd231ca456", size = 2095144, upload-time = "2026-06-10T10:29:29.62Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/40/74fae716d01a95047bfe6426533be257a02e5855e421b902ab314a18db8e/cc_transcript-0.7.0-cp313-abi3-macosx_11_0_x86_64.whl", hash = "sha256:9e4acd7d16d8d31b7f71678c6bd7c7c373953970f4538e7dc83ae8d96389d3e5", size = 2246155, upload-time = "2026-06-10T10:29:31.937Z" },
+    { url = "https://files.pythonhosted.org/packages/86/4a/343e81c0745458c68cb7869d58344864b97cb1c9d3074890480b11c87782/cc_transcript-0.7.0-cp313-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:3f22c27c2bc6c6ec2e1b47b1e92f91d04b48707be48de72e146b09cd32910bec", size = 2247258, upload-time = "2026-06-10T10:29:33.912Z" },
+    { url = "https://files.pythonhosted.org/packages/db/77/73cfe295ed7eacd6bf7a94a884fa0d4c15d1ecef8ce0fa6fe7744b9a3841/cc_transcript-0.7.0-cp313-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:af3fb87213f1a67e828c228acd4a74beeffd53631948e8779f5eee509c15eedb", size = 2376332, upload-time = "2026-06-10T10:29:35.837Z" },
 ]
 
 [[package]]
