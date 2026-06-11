@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-06-11
+
+### Changed
+- Full docs pass: one Diataxis mode per page, consistent `uvx capt-hook` run
+  convention and product naming, next-steps links on how-to pages, and real
+  regenerated output in the quickstart.
+
+### Fixed
+- `llm_gate` example hooks (`code_quality.py`, `llm_cost_control.py`) now pass
+  `events=Event.PostToolUse`, so their `SourceEdits`/`Content` conditions can
+  match; previously they could never fire.
+- `session_workflow.py` example reads `evt.user_prompt` instead of the
+  nonexistent `evt.prompt`; examples without inline tests gained them.
+- Changelog: restored the missing 0.1.1 and 0.3.0–0.5.0 sections and corrected
+  release dates.
+
 ## [0.9.0] - 2026-06-10
 
 ### Added
@@ -114,7 +130,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Claude Code event types, condition types, transcript query API, workflows,
   session/workflow state, inline test harness, and the `captain-hook` CLI.
 
-[Unreleased]: https://github.com/yasyf/captain-hook/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/yasyf/captain-hook/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/yasyf/captain-hook/releases/tag/v0.9.1
 [0.9.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.9.0
 [0.8.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.8.0
 [0.7.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.7.0
