@@ -1,5 +1,7 @@
 # captain-hook
 
+![captain-hook banner](https://github.com/yasyf/captain-hook/raw/main/docs/assets/readme-banner.png)
+
 [![PyPI](https://img.shields.io/pypi/v/capt-hook.svg)](https://pypi.org/project/capt-hook/)
 [![Python](https://img.shields.io/pypi/pyversions/capt-hook.svg)](https://pypi.org/project/capt-hook/)
 [![Docs](https://github.com/yasyf/captain-hook/actions/workflows/docs.yml/badge.svg)](https://yasyf.github.io/captain-hook/)
