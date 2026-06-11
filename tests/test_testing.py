@@ -8,6 +8,7 @@ import pytest
 from captain_hook.app import _state, hook as register_hook, on, reset
 from captain_hook.events import (
     PreToolUseEvent,
+    SessionEndEvent,
     StopEvent,
     SubagentStartEvent,
     SubagentStopEvent,
@@ -36,6 +37,7 @@ class TestInput:
         assert i.tool is None
         assert i.prompt is None
         assert i.agent_type is None
+        assert i.reason is None
         assert i.transcript is None
 
     def test_input_with_all_fields(self):
@@ -49,6 +51,7 @@ class TestInput:
             tool="Bash",
             prompt="do it",
             agent_type="worker",
+            reason="clear",
             transcript=Path("/tmp/test.jsonl"),
         )
         assert i.command == "ls"
@@ -58,6 +61,7 @@ class TestInput:
         assert i.tool == "Bash"
         assert i.prompt == "do it"
         assert i.agent_type == "worker"
+        assert i.reason == "clear"
         assert i.transcript == Path("/tmp/test.jsonl")
 
     def test_input_transcript_list_wraps_in_fixture(self):
@@ -148,6 +152,20 @@ class TestMockEvent:
 
         evt = mock_event("Stop")
         assert isinstance(evt, StopEvent)
+
+    def test_mock_event_session_end(self):
+        from captain_hook.tests.helpers import mock_event
+
+        evt = mock_event("SessionEnd", reason="clear")
+        assert isinstance(evt, SessionEndEvent)
+        assert evt.reason == "clear"
+
+    def test_mock_event_session_end_default_reason(self):
+        from captain_hook.tests.helpers import mock_event
+
+        evt = mock_event("SessionEnd")
+        assert isinstance(evt, SessionEndEvent)
+        assert evt.reason == "other"
 
     def test_mock_event_subagent_stop(self):
         from captain_hook.tests.helpers import mock_event
@@ -274,6 +292,22 @@ class TestInputToEvent:
 
         evt = input_to_event(Event.Stop, Input())
         assert isinstance(evt, StopEvent)
+
+    def test_input_to_event_session_end(self):
+        from captain_hook.tests.helpers import input_to_event
+        from captain_hook.testing.types import Input
+
+        evt = input_to_event(Event.SessionEnd, Input(reason="prompt_input_exit"))
+        assert isinstance(evt, SessionEndEvent)
+        assert evt.reason == "prompt_input_exit"
+
+    def test_input_to_event_session_end_default_reason(self):
+        from captain_hook.tests.helpers import input_to_event
+        from captain_hook.testing.types import Input
+
+        evt = input_to_event(Event.SessionEnd, Input())
+        assert isinstance(evt, SessionEndEvent)
+        assert evt.reason == "other"
 
     def test_input_to_event_subagent_stop(self):
         from captain_hook.tests.helpers import input_to_event

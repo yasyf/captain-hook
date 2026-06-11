@@ -11,7 +11,7 @@ CLI references give you exhaustive signatures.
 
 ## Cheatsheets
 
-- [Events](events.qmd) — the nine lifecycle events and what each can block
+- [Events](events.qmd) — the ten lifecycle events and what each can block
 - [Conditions](conditions.qmd) — every condition type, grouped and scannable
 - [Primitives & Verdicts](primitives.qmd) — every primitive's signature, plus the LLM verdict types
 - [AST Matchers](matchers.qmd) — the matcher catalog for styleguide rules

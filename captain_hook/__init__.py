@@ -16,6 +16,7 @@ from captain_hook.events import PostToolUseEvent
 from captain_hook.events import PostToolUseFailureEvent
 from captain_hook.events import PreCompactEvent
 from captain_hook.events import PreToolUseEvent
+from captain_hook.events import SessionEndEvent
 from captain_hook.events import StopEvent
 from captain_hook.events import SubagentStartEvent
 from captain_hook.events import SubagentStopEvent

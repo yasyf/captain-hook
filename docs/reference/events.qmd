@@ -2,7 +2,7 @@
 title: "Events"
 ---
 
-The nine lifecycle events Claude Code fires. For the lifecycle narrative, see
+The ten lifecycle events Claude Code fires. For the lifecycle narrative, see
 [how hooks work](../guide/how-it-works.qmd).
 
 A hook targets one event, or several combined with `|`:
@@ -31,6 +31,7 @@ can block.
 | `SubagentStart` | `SubagentStartEvent` | When a subagent launches | `agent_type` | No — advisory |
 | `PreCompact` | `PreCompactEvent` | Before context compaction | `trigger`, `custom_instructions` | No — advisory |
 | `Notification` | `NotificationEvent` | On a system notification | `message`, `title`, `notification_type` | No — advisory |
+| `SessionEnd` | `SessionEndEvent` | When the session ends | `reason` | No — output ignored |
 
 `PreToolUse` is the only event that prevents an action. `Stop` and `SubagentStop` force the
 agent to keep going. Every other event is advisory — a hook injects context but cannot block.

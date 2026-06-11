@@ -93,6 +93,16 @@ class TestFormatOutput:
         output = format_output(Event.Stop, result)
         assert output is None or output == {"decision": "block", "reason": "warning stop"}
 
+    def test_session_end_warn_uses_additional_context(self) -> None:
+        result = HookResult(action=Action.warn, message="session over")
+        output = format_output(Event.SessionEnd, result)
+        assert output is not None
+        assert "decision" not in output
+        hso = output["hookSpecificOutput"]
+        assert hso["hookEventName"] == "SessionEnd"
+        assert hso["additionalContext"] == "session over"
+        assert "permissionDecision" not in hso
+
 
 class TestExecuteHook:
     def test_handler_returns_result(self, tmp_path: Path) -> None:

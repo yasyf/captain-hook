@@ -18,6 +18,7 @@ class TestEventFlag:
             PostToolUseFailureEvent,
             PreCompactEvent,
             PreToolUseEvent,
+            SessionEndEvent,
             StopEvent,
             SubagentStartEvent,
             SubagentStopEvent,
@@ -34,8 +35,9 @@ class TestEventFlag:
             Event.SubagentStart: SubagentStartEvent,
             Event.PreCompact: PreCompactEvent,
             Event.Notification: NotificationEvent,
+            Event.SessionEnd: SessionEndEvent,
         }
-        assert len(mapping) == 9
+        assert len(mapping) == 10
         for member, expected_cls in mapping.items():
             assert member.event_class is expected_cls
 
@@ -55,7 +57,7 @@ class TestEventFlag:
         for m in Event:
             assert m.value > 0 and (m.value & (m.value - 1)) == 0
             seen.add(m.value)
-        assert len(seen) == 9
+        assert len(seen) == 10
 
 
 class TestHookSpec:

@@ -12,6 +12,7 @@ from captain_hook.context import HookContext
 from captain_hook.dispatch import execute_hook
 from captain_hook.events import (
     BaseHookEvent,
+    SessionEndEvent,
     StopEvent,
     SubagentStartEvent,
     SubagentStopEvent,
@@ -113,6 +114,20 @@ def mock_stop_event(
     )
 
 
+def mock_session_end_event(
+    reason: str = "other",
+    *,
+    permission_mode: str | None = None,
+    transcript: Transcript | None = None,
+    transcript_path: str | Path | None = None,
+    session_dir: Path | None = None,
+) -> SessionEndEvent:
+    return SessionEndEvent(
+        _raw={"reason": reason} | ({"permission_mode": permission_mode} if permission_mode else {}),
+        ctx=build_context(transcript, transcript_path, session_dir),
+    )
+
+
 def mock_subagent_stop_event(
     agent_type: str = "",
     *,
@@ -186,6 +201,8 @@ def mock_event(
     match ev:
         case Event.Stop:
             return mock_stop_event(stop_hook_active=stop_hook_active, **ctx_kw)
+        case Event.SessionEnd:
+            return mock_session_end_event(reason=extra.pop("reason", "other"), **ctx_kw)
         case Event.SubagentStop:
             return mock_subagent_stop_event(
                 agent_type=extra.pop("agent_type", ""),
@@ -243,6 +260,8 @@ def input_to_event(
             evt = mock_user_prompt_event(prompt=inp.prompt or "", **ctx_kw)
         case Event.Stop:
             evt = mock_stop_event(**ctx_kw)
+        case Event.SessionEnd:
+            evt = mock_session_end_event(reason=inp.reason or "other", **ctx_kw)
         case _:
             evt = mock_tool_event(
                 tool=inp.tool or spec_tool or "Bash",
@@ -304,6 +323,8 @@ def transcript_event_payloads(
                 for msg in transcript.messages
                 if transcript.is_user_message(msg) and msg.text
             )
+        case Event.SessionEnd:
+            yield base | {"reason": "other"}
         case Event.Stop | Event.SubagentStop | Event.SubagentStart | Event.Notification | Event.PreCompact:
             yield base
 

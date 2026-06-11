@@ -53,6 +53,7 @@ class Input:
     tool: str | None = None
     prompt: str | None = None
     agent_type: str | None = None
+    reason: str | None = None
     permission_mode: str | None = None
     transcript: Path | TranscriptFixture | list[dict[str, Any]] | None = None
     tasks: list[dict[str, Any]] | None = None

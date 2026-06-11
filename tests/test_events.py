@@ -13,6 +13,7 @@ from captain_hook.events import (
     PostToolUseFailureEvent,
     PreCompactEvent,
     PreToolUseEvent,
+    SessionEndEvent,
     StopEvent,
     SubagentStartEvent,
     SubagentStopEvent,
@@ -41,6 +42,7 @@ class TestEventClassVar:
             SubagentStartEvent: Event.SubagentStart,
             PreCompactEvent: Event.PreCompact,
             NotificationEvent: Event.Notification,
+            SessionEndEvent: Event.SessionEnd,
         }
         for cls, expected_event in mapping.items():
             assert cls.event_name is expected_event
@@ -276,6 +278,34 @@ class TestNotificationEvent:
         assert evt.message is None
         assert evt.title is None
         assert evt.notification_type is None
+
+
+class TestSessionEndEvent:
+    @pytest.mark.parametrize("reason", ["clear", "logout", "prompt_input_exit", "other"])
+    def test_reason_from_raw(self, reason: str) -> None:
+        evt = SessionEndEvent(_raw={"reason": reason}, ctx=make_ctx())
+        assert evt.reason == reason
+
+    def test_reason_raises_key_error_when_missing(self) -> None:
+        evt = SessionEndEvent(_raw={}, ctx=make_ctx())
+        with pytest.raises(KeyError):
+            evt.reason
+
+    def test_full_payload_parses(self) -> None:
+        evt = SessionEndEvent(
+            _raw={
+                "session_id": "abc123",
+                "transcript_path": "/tmp/t.jsonl",
+                "cwd": "/tmp",
+                "hook_event_name": "SessionEnd",
+                "reason": "clear",
+            },
+            ctx=make_ctx(),
+        )
+        assert evt.event is Event.SessionEnd
+        assert evt.session_id == "abc123"
+        assert evt.transcript_path == Path("/tmp/t.jsonl")
+        assert evt.reason == "clear"
 
 
 

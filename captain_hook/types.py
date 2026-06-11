@@ -63,6 +63,7 @@ class Event(Flag):
     SubagentStart = auto()
     PreCompact = auto()
     Notification = auto()
+    SessionEnd = auto()
 
     @property
     def event_class(self) -> type[BaseHookEvent]:
@@ -72,6 +73,7 @@ class Event(Flag):
             PostToolUseFailureEvent,
             PreCompactEvent,
             PreToolUseEvent,
+            SessionEndEvent,
             StopEvent,
             SubagentStartEvent,
             SubagentStopEvent,
@@ -88,6 +90,7 @@ class Event(Flag):
             Event.SubagentStart: SubagentStartEvent,
             Event.PreCompact: PreCompactEvent,
             Event.Notification: NotificationEvent,
+            Event.SessionEnd: SessionEndEvent,
         }
         if cls := mapping.get(self):
             return cls

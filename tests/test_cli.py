@@ -166,6 +166,13 @@ class TestRegisterHooks:
         command = generate_settings(hooks_dir="custom/hooks")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
         assert command == "uvx capt-hook --hooks $CLAUDE_PROJECT_DIR/custom/hooks run PreToolUse"
 
+    def test_cli_027_session_end_hook_wired(self) -> None:
+        from captain_hook.cli import generate_settings
+
+        register_hook(Event.SessionEnd, message="session over")
+        command = generate_settings()["hooks"]["SessionEnd"][0]["hooks"][0]["command"]
+        assert command == "uvx capt-hook run SessionEnd"
+
     def test_cli_021_dry_run_writes_nothing(self, tmp_path: Path) -> None:
         hooks_dir = tmp_path / "hooks"
         hooks_dir.mkdir()
@@ -288,6 +295,13 @@ class TestSettingsDrift:
         register_hook(Event.UserPromptSubmit, message="ups")
         self.write_settings(tmp_path, "PreToolUse")
         assert settings_drift(tmp_path) == {"UserPromptSubmit"}
+
+    def test_cli_028_drift_flags_unwired_session_end(self, tmp_path: Path) -> None:
+        from captain_hook.cli import settings_drift
+
+        register_hook(Event.SessionEnd, message="session over")
+        self.write_settings(tmp_path, "PreToolUse")
+        assert settings_drift(tmp_path) == {"SessionEnd"}
 
     def test_cli_018_no_drift_when_all_wired(self, tmp_path: Path) -> None:
         from captain_hook.cli import settings_drift

@@ -24,6 +24,9 @@ from captain_hook.testing.helpers import (
     mock_event as mock_event,
 )
 from captain_hook.testing.helpers import (
+    mock_session_end_event as mock_session_end_event,
+)
+from captain_hook.testing.helpers import (
     mock_stop_event as mock_stop_event,
 )
 from captain_hook.testing.helpers import (

@@ -47,6 +47,7 @@ passing it to `only_if` raises `TypeError: missing 2 required positional argumen
 | `SubagentStart` | A subagent launches | Capture initial state |
 | `Notification` | Informational event | Logging, metrics |
 | `PreCompact` | Before context compaction | Preserve critical context |
+| `SessionEnd` | Session ends | Cleanup, audit logging |
 
 ## Registration
 

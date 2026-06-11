@@ -54,6 +54,7 @@ flowchart TD
     T --> B
 
     B -.->|System notification| U[Notification]
+    N -.->|Session exits| V[SessionEnd]
 
     style D fill:#f9f,stroke:#333
     style I fill:#9f9,stroke:#333
@@ -63,11 +64,12 @@ flowchart TD
     style A fill:#ff9,stroke:#333
     style S fill:#9ff,stroke:#333
     style U fill:#ddd,stroke:#333
+    style V fill:#ddd,stroke:#333
 ```
 
 Three of these events let a hook change the agent's course. `PreToolUse` is the one event where a hook prevents an action, denying the tool so Claude Code skips the call. `Stop` and `SubagentStop` run the loop the other way, forcing the agent to keep going when it tries to finish early. Every other event is advisory. The hook injects a message into Claude's context but cannot block.
 
-Claude Code fires nine events in total. For when each one fires, the event class it carries, and whether it can block, see [the events reference](../reference/events.qmd).
+Claude Code fires ten events in total. For when each one fires, the event class it carries, and whether it can block, see [the events reference](../reference/events.qmd).
 
 ## The dispatch pipeline
 

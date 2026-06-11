@@ -316,3 +316,14 @@ class NotificationEvent(BaseHookEvent):
     @property
     def notification_type(self) -> str | None:
         return self._raw.get("notification_type")
+
+
+@dataclass
+class SessionEndEvent(BaseHookEvent):
+    """Fires when the session ends, providing the termination reason. Output is ignored, so it cannot block."""
+
+    event_name: ClassVar[Event] = Event.SessionEnd
+
+    @property
+    def reason(self) -> str:
+        return self._raw["reason"]
