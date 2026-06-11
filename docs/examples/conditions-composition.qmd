@@ -1,5 +1,5 @@
 ---
-title: "Conditions Composition"
+title: "Conditions composition"
 ---
 
 Most real hooks fire on several facts at once, like the right tool, the right file, the right content, and not the wrong directory. This example targets a single edit precisely by stacking conditions instead of writing one sprawling regex.

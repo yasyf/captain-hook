@@ -3,6 +3,7 @@ from __future__ import annotations
 from captain_hook import (
     Agent,
     Content,
+    Event,
     SourceEdits,
     TestFile,
     llm_gate,
@@ -19,6 +20,7 @@ llm_gate(
     # assert/mock/skip ever reach the model.
     only_if=[SourceEdits(lang="py", include_tests=True), TestFile(), Content(r"\b(assert|mock|skip)\b")],
     skip_if=[Agent("Explore|Plan|general-purpose")],
+    events=Event.PostToolUse,
     model="small",
     max_fires=1,
 )

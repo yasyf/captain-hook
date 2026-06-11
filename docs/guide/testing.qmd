@@ -2,7 +2,7 @@
 title: "Test hooks inline"
 ---
 
-Captain Hook ships the test next to the hook. You attach a `tests` dict to any
+captain-hook ships the test next to the hook. You attach a `tests` dict to any
 deterministic primitive, mapping an `Input` to the outcome you expect, then run them all
 with one command. No separate test file, no fixtures to wire up.
 
@@ -27,8 +27,7 @@ block_command(
 
 The first case says "a `git stash` command must block, and the block message must mention
 `jj`." The second says "a `git status` command must pass through." `Input` carries one
-field per event payload; see the [Input fields](#input-fields) section below for the full
-list.
+field per event payload; see [Input fields](#input-fields) for the full list.
 
 ## Run the tests
 
@@ -42,14 +41,16 @@ uvx capt-hook test
 Each test prints one line, then a summary:
 
 ```
-  PASS  block_command:Input(command='git stash')
-  PASS  block_command:Input(command='git status')
+  PASS  declarative_1:Input(command='git stash', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None)
+  PASS  declarative_1:Input(command='git status', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None)
 
 2 tests: 2 passed, 0 failed, 0 errors, 0 skipped
 ```
 
-The id on each line is the hook function name, a colon, then the `Input` that produced the
-case. The command exits `0` when every test passes and `1` when any test fails or errors.
+The id on each line is the hook's registered name, then a colon and the repr of the
+`Input` that produced the case. Declarative primitives such as `block_command` register as
+`declarative_N` in definition order. The command exits `0` when every test passes and `1`
+when any test fails or errors.
 
 ## Read a failure
 
@@ -63,8 +64,8 @@ Input(command="git stash"): Block(pattern="mercurial"),
 Run `uvx capt-hook test` again:
 
 ```
-  FAIL  block_command:Input(command='git stash'): [block_command] Block message doesn't match 'mercurial'
-  PASS  block_command:Input(command='git status')
+  FAIL  declarative_1:Input(command='git stash', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None): [declarative_1] Block message doesn't match 'mercurial'
+  PASS  declarative_1:Input(command='git status', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None)
 
 2 tests: 1 passed, 1 failed, 0 errors, 0 skipped
 ```
@@ -125,8 +126,8 @@ jobs:
 single line you can pipe into `jq` or read in another tool:
 
 ```json
-{"id": "block_command:Input(command='git stash')", "status": "pass", "expected": "block", "reason": ""}
-{"id": "block_command:Input(command='git status')", "status": "pass", "expected": "allow", "reason": ""}
+{"id": "declarative_1:Input(command='git stash', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None)", "status": "pass", "expected": "block", "reason": ""}
+{"id": "declarative_1:Input(command='git status', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None)", "status": "pass", "expected": "allow", "reason": ""}
 ```
 
 The fields are the test `id`, its `status` of `pass`, `fail`, `error`, or `skip`, the
@@ -137,11 +138,16 @@ exit code when you want a gate.
 
 ## Why some tests report SKIP
 
-A test reports `SKIP` when the runner has nothing real to run it against. Two cases hit
-this. Legacy string-key tests replay a recorded session, so they skip when no fixture or
-local Claude session exists for that key. LLM-backed and signal-scored primitives such as
-`llm_gate`, `llm_nudge`, and `prompt_check` skip because they need a real model to produce a
-verdict, and `uvx capt-hook test` does not call one. The
-[Primitives reference](../reference/primitives.qmd) marks which primitives skip. Test the
-deterministic narrowing on those hooks, the `only_if` and `skip_if` conditions, on a sibling
-hook you can assert against; see [LLM Hooks](llm-hooks.qmd) for that split.
+Legacy string-key tests are the only ones that report `SKIP`. They replay a recorded
+session, so they skip when no fixture or local Claude session exists for that key.
+LLM-backed primitives such as `llm_gate` and `llm_nudge` never skip. The runner stubs the
+model with a verdict that always fires, so their inline tests exercise the deterministic
+narrowing, the `only_if` and `skip_if` conditions, instead of the model's judgment; see
+[LLM hooks](llm-hooks.qmd) for that split.
+
+## See also
+
+[Primitives & Verdicts](../reference/primitives.qmd) lists the full `Input` field set and
+the result-type contract. [Write an LLM hook](llm-hooks.qmd) covers splitting deterministic
+narrowing from model judgment, and [Query the transcript](transcript.qmd) shows how to
+build transcript fixtures for `Stop` gates.

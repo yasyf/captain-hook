@@ -1,24 +1,24 @@
 ---
-title: "Project Structure & Wiring"
+title: "Project structure and wiring"
 ---
 
 `uvx capt-hook init` already wired your project, scaffolding `.claude/hooks/`, the skills, and the `settings.local.json` that points Claude Code at them.
 
-## What init creates
+## What `init` creates
 
 ```
 your-project/
 ├── .claude/
 │   ├── hooks/
-│   │   ├── conf.py              # optional settings (planning agents, state dir, ...)
 │   │   └── example.py           # the starter hook
 │   ├── skills/                  # bootstrapping-hooks + translating-styleguides
 │   └── settings.local.json      # the wiring (below)
 ```
 
-Hooks are just Python files under `.claude/hooks/`. `uvx capt-hook test` and
-`uvx capt-hook run` both default `--hooks` to that directory; pass `--hooks <dir>` to point
-elsewhere.
+Hooks are just Python files under `.claude/hooks/`. An optional `conf.py` beside them holds
+[settings](../guide/configuration.qmd). `init` doesn't create it; add one when you need it.
+`uvx capt-hook test` and `uvx capt-hook run` both default `--hooks` to that directory; pass
+`--hooks <dir>` to point elsewhere.
 
 ## The wiring contract
 
@@ -65,8 +65,8 @@ When an event fires, Claude Code runs `uvx capt-hook run <Event>` and talks to i
 ## When to re-wire
 
 Editing a hook's body needs nothing. The same `uvx capt-hook run` command picks it up. Re-run
-`register-hooks` only when you add a hook on a **new event**, so that event gets its own
-entry:
+`register-hooks` when you add a hook on a **new event**, or your first async hook on an
+already-wired one, so the event gets its own entry:
 
 ```bash
 uvx capt-hook register-hooks           # writes settings.local.json

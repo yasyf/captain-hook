@@ -2,12 +2,14 @@
 title: "Agent Skills"
 ---
 
-capt-hook bundles two Claude Code [Agent Skills](https://code.claude.com/docs/en/skills) that automate adoption. One surveys a repository and sets up hooks from its conventions, and the other translates a prose style guide into enforced rules. Both ship in the PyPI wheel and as a Claude Code plugin, from the same source.
+captain-hook bundles two Claude Code [Agent Skills](https://code.claude.com/docs/en/skills) that automate adoption. One surveys a repository and sets up hooks from its conventions, and the other translates a prose style guide into enforced rules. Both ship in the PyPI wheel and as a Claude Code plugin, from the same source.
 
 - `bootstrapping-hooks` surveys your repo's docs, CI workflows, lint configs, and git history, proposes categorized gates and nudges for your approval, then writes `.claude/hooks/*.py` with inline tests, verifies them with `uvx capt-hook test`, and wires `.claude/settings.local.json`.
 - `translating-styleguides` turns a STYLEGUIDE.md, or the style sections of CONTRIBUTING/AGENTS/CLAUDE.md, into `StyleRule` classes, custom validation logic, or LLM hooks. It tiers each rule by what it needs and reports anything it can't enforce.
 
 ## Install as project skills
+
+Run either command from your project root:
 
 ```bash
 uvx capt-hook init                  # scaffolds hooks AND installs the skills
@@ -18,9 +20,11 @@ Either command copies the skills into `.claude/skills/`, where Claude Code picks
 
 In an interactive terminal, `init` finishes by offering to launch Claude with `/bootstrapping-hooks` right away. Accept and the survey-propose-write loop starts immediately in your repo. Accepting also registers the captain-hook plugin marketplace in `.claude/settings.local.json`, so the skills track the repository and update automatically.
 
-Existing skill directories are never overwritten on re-run; use `capt-hook skills install --force` to replace them wholesale after upgrading capt-hook.
+Existing skill directories are never overwritten on re-run; use `uvx capt-hook skills install --force` to replace them wholesale after upgrading captain-hook.
 
 ## Install as a plugin
+
+From inside a Claude Code session, run:
 
 ```
 /plugin marketplace add yasyf/captain-hook

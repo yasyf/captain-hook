@@ -6,6 +6,8 @@ Working on captain-hook itself. For using captain-hook in your project, see [Ins
 
 ## Setup
 
+Clone the repo and sync the dev extra:
+
 ```bash
 git clone https://github.com/yasyf/captain-hook
 cd captain-hook
@@ -25,6 +27,8 @@ This mirrors what CI provisions — see `.github/workflows/ci.yml`.
 
 ## Tests
 
+Run the suite:
+
 ```bash
 uv run pytest
 ```
@@ -39,12 +43,16 @@ uv run capt-hook --hooks docs/examples test
 
 The docs are Great Docs (Quarto), published to GitHub Pages. The API reference is generated from docstrings at build time; the CLI reference comes from the Click app.
 
+Sync the docs group alongside the dev extra, then preview locally:
+
 ```bash
-uv sync --group docs
+uv sync --extra dev --group docs
 uv run great-docs preview
 ```
 
 ## Build and smoke-test the wheel
+
+Build the wheel, then install and exercise it in a throwaway venv:
 
 ```bash
 uv build
@@ -64,16 +72,21 @@ uv run --project path/to/captain-hook capt-hook test
 Or generate settings whose hook commands invoke your checkout instead of PyPI:
 
 ```bash
-capt-hook register-hooks --from path/to/captain-hook
+uvx capt-hook register-hooks --from path/to/captain-hook
 ```
 
 ## Releasing
 
-Tag a version and push — `.github/workflows/release-pypi.yml` builds the sdist and wheel, publishes to PyPI via trusted publishing, and cuts a GitHub release:
+Bump `version` in `pyproject.toml`, add the CHANGELOG entry, and commit them together with `uv.lock`, which pins the package's own version. Then tag the new version and push. `.github/workflows/release-pypi.yml` builds the sdist and wheel, publishes to PyPI via trusted publishing, and cuts a GitHub release:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.9.1
+git push origin v0.9.1
 ```
 
-The package version is set from the tag at build time; the version in `pyproject.toml` is never bumped by hand.
+The release workflow re-derives the wheel version from the tag via `uv version --frozen`, so tag the same version you bumped to.
+
+## See also
+
+- [Examples](../examples/index.qmd) holds the runnable hooks whose inline tests `uv run capt-hook --hooks docs/examples test` exercises
+- [Reference](../reference/index.qmd) covers the API and CLI surface the docs build renders

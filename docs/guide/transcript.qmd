@@ -93,6 +93,8 @@ turn.edited_files       # set[File] edited this turn
 
 ## Extract text
 
+When a check needs raw text instead of tool uses, read it straight off the transcript:
+
 ```python
 t.full_text             # every message's text, concatenated
 t.assistant_text()      # recent assistant messages, truncated per message

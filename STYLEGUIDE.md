@@ -1,6 +1,6 @@
 # captain-hook Style Guide
 
-The concrete style rules for `captain_hook/`. Target Python 3.12+.
+The concrete style rules for `captain_hook/`. Target Python 3.13+.
 
 ## Core Principles
 

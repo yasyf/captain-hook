@@ -6,7 +6,7 @@ The facts tier: accurate, complete, and neutral. Every tutorial and how-to links
 than restating signatures. For tasks ("how do I gate a command?"), start in the
 [Guide](../guide/index.qmd); this section is for looking things up.
 
-Hand-written cheatsheets give you scannable tables the auto-generated API can't; the symbol and
+Hand-written cheatsheets give you scannable tables the generated API reference can't; the symbol and
 CLI references give you exhaustive signatures.
 
 ## Cheatsheets

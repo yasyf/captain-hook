@@ -21,13 +21,8 @@ hook(
 ## Combine conditions
 
 `skip_if` runs first. If any skip condition matches, the hook is skipped and
-`only_if` is never checked. So the hook above fires when the tool is Bash **and** the
+`only_if` is never checked. So the opening hook fires when the tool is Bash **and** the
 command matches `git stash`, unless the agent already ran `jj shelve`.
-
-```python
-only_if=[A, B, C]   # A and B and C must all match
-skip_if=[X, Y]      # X or Y, either match skips the hook
-```
 
 For an "or" inside one condition, use pipe-alternation instead of separate entries.
 `Tool("Edit|Write")` matches either tool. `Tool("Edit"), Tool("Write")` requires both,
@@ -51,9 +46,9 @@ Start from what you want to match.
 | A skill used earlier this session | `UsedSkill("codex")` |
 | Plan mode | `InPlanMode()` |
 
-The first group inspects the current event. The last group inspects the session
-transcript, so it tells you whether something already happened earlier in the
-session. For the full table with every pattern type and default, see
+Most of these inspect the current event. `TouchedFile`, `RanCommand`, and
+`UsedSkill` inspect the session transcript, so they tell you whether something
+already happened earlier in the session. For the full table with every pattern type and default, see
 [Conditions Cheatsheet](../reference/conditions.qmd).
 
 ## Match the current event
@@ -103,7 +98,7 @@ hook(Event.Stop, message="codex was consulted", only_if=[UsedSkill("codex")])
 
 When no built-in fits, implement `CustomCondition`. It is a `runtime_checkable`
 Protocol, so any frozen dataclass with a `check(self, evt) -> bool` method satisfies
-it without inheritance. Carry configuration as fields.
+it. Carry configuration as fields.
 
 ```python
 from dataclasses import dataclass
@@ -168,4 +163,10 @@ hook(
 ::: {.callout-tip title="Regex patterns"}
 `Tool`, `Command`, `Content`, and `RanCommand` match with regex. Escape special
 characters and use raw strings (`r"..."`) to avoid backslash issues.
+:::
+
+::: {.callout-note title="Related"}
+For every condition's pattern syntax and defaults, see the
+[Conditions Cheatsheet](../reference/conditions.qmd). To write richer checks against
+session history, see [Query the transcript](transcript.qmd).
 :::

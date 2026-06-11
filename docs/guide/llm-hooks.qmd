@@ -1,8 +1,8 @@
 ---
-title: "Write an LLM Hook"
+title: "Write an LLM hook"
 ---
 
-An LLM hook sends transcript context to a language model and acts on its verdict. Reach for one when the judgment needs to read intent, tone, or reasoning quality, and a regex cannot express it.
+An LLM hook sends transcript context to a large language model and acts on its verdict. Reach for one when the judgment needs to read intent, tone, or reasoning quality, and a regex cannot express it.
 
 ## Decide: LLM or static
 
@@ -24,7 +24,7 @@ An LLM hook calls a model on every qualifying event, so set its cost ceiling bef
 1. Set `max_fires` to cap calls per session. `llm_gate` defaults to `1`; `llm_nudge` defaults to `3`.
 2. Add a narrow `only_if` so the hook reaches the model only on events that could matter. A `Tool("Edit")` condition skips every Bash and read event for free.
 3. Keep `model="small"` (the default). Move up to `"medium"` or `"large"` only when the small model misjudges.
-4. Short-circuit with `signals`. Cheap regex and NLP scoring runs first, and the model is invoked only when the score meets the threshold.
+4. Short-circuit with `signals`. Cheap regex and natural-language-processing (NLP) scoring runs first, and the model is invoked only when the score meets the threshold.
 
 ```python
 from captain_hook import Signal, Signals, llm_gate
@@ -88,7 +88,7 @@ from captain_hook import Event, Prompt, Tool, on, prompt_check
 
 @on(Event.PostToolUse, only_if=[Tool("Edit")])
 def review_test_quality(evt):
-    content = evt.tool_input.get("new_string", "")
+    content = evt.content or ""
     if "def test_" not in content:
         return None
     return prompt_check(
@@ -128,8 +128,15 @@ llm_gate(
 
 ## Test an LLM hook
 
-`uvx capt-hook test` runs inline `tests={...}` against the deterministic primitives, but it reports **SKIP** for `llm_gate`, `llm_nudge`, and `prompt_check`. Those hooks need a live model, so the runner cannot evaluate them offline. Validate the LLM judgment by running the hook against real sessions, and reserve inline tests for the static primitives that gate around it.
+`uvx capt-hook test` runs inline `tests={...}` without a live model. For `Input`-keyed tests it stubs the model call with a verdict that always fires, so the test exercises your `only_if` narrowing and message wiring, not the model's judgment. Legacy string-keyed tests report `SKIP` when no recorded session fixture exists. Validate the LLM judgment itself by running the hook against real sessions.
 
 ::: {.callout-note title="One fire per turn"}
-The LLM primitives share a per-turn guard. Once one fires during a dispatch cycle, the others return without calling the model. This stops several expensive hooks from stacking on the same event.
+`llm_gate` and `llm_nudge` share a per-turn guard. Once one fires during a dispatch cycle, the other returns without calling the model, which stops several expensive hooks from stacking on the same event. `prompt_check` runs inside your own handler and does not participate.
 :::
+
+## See also
+
+- [Score patterns with signals](signals.qmd) explains the scoring pipeline behind `signals=`.
+- [Test hooks inline](testing.qmd) covers what the test runner stubs and skips.
+- The [primitives reference](../reference/primitives.qmd) lists the full `llm_gate`, `llm_nudge`, and `prompt_check` option set.
+- [LLM cost control](../examples/llm-cost-control.qmd) is a runnable cost-bounded gate, and [Test integrity](../examples/test-integrity.qmd) is a runnable `prompt_check` hook.

@@ -11,8 +11,7 @@ from captain_hook import (
 )
 
 # A complete .claude/hooks/ file: a safety block and a workflow gate composing in one
-# place. block_command is unit-tested below; the gate fires on live session state, so
-# you verify it by replaying a session, not with inline tests.
+# place.
 
 # 1. Safety: never let the agent force-push.
 block_command(

@@ -36,11 +36,13 @@ from typing import cast
 
 from captain_hook import Event, Tool, on
 
+from .conf import ProjectSettings
+
 
 @on(Event.PreToolUse, only_if=[Tool("Bash")])
 def enforce_test_command(evt):
     settings = cast(ProjectSettings, evt.ctx.c)
-    if settings.require_tests_after_edit and settings.test_command != "pytest":
+    if (cl := evt.command_line) and cl.q.runs("pytest") and settings.test_command != "pytest":
         return evt.block(f"Run the project test command: {settings.test_command}")
     return None
 ```
@@ -75,28 +77,31 @@ and keep it stable.
 
 ## Tune the built-in fields
 
-`HooksSettings` ships four fields you can override the same way.
+`HooksSettings` ships built-in fields you can override the same way.
 
-### planning_agents
+### `planning_agents`
 
 A list of subagent names that the framework treats as scratch work, not real
-edits. When a hook sets `skip_planning_agents`, it ignores `Event.SubagentStart`
-and `Event.SubagentStop` for any agent on this list, so planning runs do not
-trip your gates. The defaults cover Claude Code's built-in planning agents, such
-as `Explore` and `Plan`. Add your own when your team uses custom planning agent
-types:
+edits. `skip_planning_agents` is on by default for every hook, so hooks ignore
+`Event.SubagentStart` and `Event.SubagentStop` for any agent on this list and
+planning runs do not trip your gates. The defaults cover Claude Code's built-in
+planning agents, such as `Explore` and `Plan`. Add your own when your team uses
+custom planning agent types:
 
 ```python
 class ProjectSettings(HooksSettings):
-    planning_agents: list[str] = ["Explore", "Plan", "research"]
+    planning_agents: list[str] = [
+        *HooksSettings.model_fields["planning_agents"].default_factory(),
+        "research",
+    ]
 ```
 
-### waiting_tools
+### `waiting_tools`
 
 A list of tool names that mean the agent is waiting on something external, not
 working. The `Waiting()` condition reads this list to suppress nudges and
-gates while a background tool is still running. The defaults cover the
-framework's own long-running tools, such as `Monitor` and `TeamCreate`. Append
+gates while a background tool is still running. The defaults cover Claude
+Code's long-running tools, such as `Monitor` and `TeamCreate`. Append
 your custom async tools to the defaults:
 
 ```python
@@ -107,7 +112,7 @@ class ProjectSettings(HooksSettings):
     ]
 ```
 
-### state_dir
+### `state_dir`
 
 Where `@session_state` and `@workflow_state` models persist their JSON. The
 field reads `CAPTAIN_HOOK_STATE_DIR`, falling back to `~/.claude/state`. Set
@@ -115,8 +120,13 @@ field reads `CAPTAIN_HOOK_STATE_DIR`, falling back to `~/.claude/state`. Set
 block writes outside the workspace. See [State and sessions](state.qmd) for how
 state directories are laid out.
 
-### log_dir
+### `log_dir`
 
 Where the framework writes its own session logs. The field reads
 `CAPTAIN_HOOK_LOG_DIR` and otherwise falls back to `~/.cache/captain-hook/logs`,
 or to `$XDG_CACHE_HOME/captain-hook/logs` when you set `XDG_CACHE_HOME`.
+
+## See also
+
+- [State and sessions](state.qmd) covers where `@session_state` and `@workflow_state` data lands under `state_dir`.
+- [Configure settings example](../examples/settings-config.qmd) is the tested, runnable version of the handler on this page.

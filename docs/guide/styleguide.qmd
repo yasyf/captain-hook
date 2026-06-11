@@ -1,5 +1,5 @@
 ---
-title: "Enforce a Style Guide"
+title: "Enforce a style guide"
 ---
 
 `styleguide()` turns AST-based style checks into a hook. It ships no rules of its own. You
@@ -34,7 +34,7 @@ M.call.where(lambda n: len(n.args) > 5)
 
 The full catalog, every node category, name convention, position matcher, and terminal,
 lives in [AST Matchers](../reference/matchers.qmd). Reach for it when you need a matcher
-beyond the three above.
+beyond these three.
 
 ## Write your first rule
 
@@ -62,8 +62,6 @@ class ZipStrict(StyleRule):
 
 styleguide(ZipStrict)
 ```
-
-Three facts make the rule work:
 
 The class name is the identity. `ZipStrict` becomes `zip-strict` in kebab-case.
 
@@ -97,7 +95,7 @@ The pre-edit tree is reconstructed from the edit, so the rule fires only on a ne
 wildcard, not one already there. Override `check()` when `ast.unparse` is not the right
 notion of "the same construct", such as comparing annotated slots by name.
 
-## Drop to check() for logic a matcher can't express
+## Drop to `check()` for logic a matcher can't express
 
 When a rule's logic needs cross-node aggregation, body normalization, or anything stateful,
 override `check()` instead of setting `match`. It receives the post-edit `ast.Module`, or both
@@ -129,6 +127,8 @@ styleguide(NoSqlInjection, block=True, only_if=[FilePath("api/**/*.py")])
 The built-in `Tool("Edit|Write")` and `FilePath("*.py")` guards always apply, and test files
 are skipped. `only_if` and `skip_if` narrow from there. Under `block=True`, the single hook
 returns one block listing every violation at once.
+
+Every parameter `styleguide()` accepts:
 
 | Parameter | Description |
 |-----------|-------------|
@@ -178,3 +178,7 @@ The skill writes `.claude/hooks/style.py` for Tiers 1 and 2 and `.claude/hooks/s
 for Tier 3, synthesizes inline tests from the guide's own good and bad examples, verifies them
 with `uvx capt-hook test`, and reports every statement including the Tier 4 rows it cannot
 enforce. See [Agent Skills](../getting-started/skills.qmd) for how to invoke it.
+
+::: {.callout-note title="Related"}
+For the full matcher catalog, see [AST Matchers](../reference/matchers.qmd). For running inline tests, see [Test hooks inline](testing.qmd). For change-scoped lint without AST rules, see [Deterministic Primitives](primitives.qmd).
+:::

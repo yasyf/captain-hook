@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from captain_hook import Event, ReadFile, Signal, Signals, UsedSkill, nudge
+from captain_hook import Allow, Event, Input, ReadFile, Signal, Signals, UsedSkill, Warn, nudge
 
 RETRY_SIGNALS = Signals(
     patterns=[
@@ -15,6 +15,19 @@ RETRY_SIGNALS = Signals(
     window=10,
 )
 
+THREE_FAILURES = [
+    msg
+    for i in range(3)
+    for msg in (
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "id": f"b{i}", "input": {"command": "uv run pytest"}},
+        ]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": f"b{i}", "is_error": True, "content": "ModuleNotFoundError"},
+        ]}},
+    )
+]
+
 
 nudge(
     "Repeated failures detected. Stop retrying and pick a debug tool:\n"
@@ -25,14 +38,30 @@ nudge(
     events=Event.Stop,
     skip_if=[UsedSkill("codex"), ReadFile("DEBUGGING.md")],
     max_fires=1,
+    tests={
+        Input(transcript=[
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Same error again. Let me try again."},
+            ]}},
+        ]): Warn(pattern="debug tool"),
+        Input(transcript=[
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "All checks pass; wrapping up."},
+            ]}},
+        ]): Allow(),
+    },
 )
 
 
 nudge(
-    "Three consecutive tool failures without a debug skill. "
+    "Three tool failures this turn without a debug skill. "
     "Read DEBUGGING.md before the next attempt.",
     events=Event.PostToolUseFailure,
     when=lambda evt: evt.ctx.turn.count_failures() >= 3,
     skip_if=[ReadFile("DEBUGGING.md")],
     max_fires=2,
+    tests={
+        Input(transcript=THREE_FAILURES): Warn(pattern="DEBUGGING.md"),
+        Input(transcript=THREE_FAILURES[:2]): Allow(),
+    },
 )

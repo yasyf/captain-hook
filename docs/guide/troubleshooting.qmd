@@ -2,7 +2,7 @@
 title: "Troubleshooting"
 ---
 
-A hook misbehaved. There is no `doctor` command. You diagnose with two tools, the dispatch logs and a re-run of your inline tests.
+A hook misbehaved. captain-hook ships no `doctor` command. You diagnose with two tools, the dispatch logs and a re-run of your inline tests.
 
 ## Diagnostic commands
 
@@ -16,11 +16,11 @@ uvx capt-hook --hooks <dir> test            # Re-run inline tests; prints the In
 uvx capt-hook --hooks <dir> test --json     # One record per test: id, status, expected, reason
 ```
 
-`logs` reads from the log directory, which defaults to `~/.cache/captain-hook/logs`. Each session writes one log file there. To target a past session, pass its id, or pass the transcript path and `logs` hashes it for you. See [Configuration](configuration.qmd#log-directory) to relocate the directory.
+`logs` reads from the log directory, which defaults to `~/.cache/captain-hook/logs`. Each session writes one log file there. To target a past session, pass its id, or pass the transcript path and `logs` hashes it for you. See [Configuration](configuration.qmd#log_dir) to relocate the directory.
 
-If a hook never appears in the log, dispatch never reached it. Work through "It never fires" below.
+If a hook never appears in the log, dispatch never reached it. Work through [It never fires](#it-never-fires).
 
-## Is my hook firing?
+## Confirm the hook fires
 
 Confirm three things, in order.
 
@@ -32,7 +32,7 @@ uvx capt-hook --hooks <dir> test
 
 Each test prints the `Input` it built and a PASS or FAIL. A FAIL means your conditions don't match the input you expect, so fix the condition before you touch dispatch. If the test passes but the hook still seems dead, move on.
 
-Second, check that `--hooks` points at the directory holding your hook file. Captain-hook loads `.py` files under that root and nothing else.
+Second, check that `--hooks` points at the directory holding your hook file. captain-hook loads `.py` files under that root and nothing else.
 
 Third, read the session log.
 
@@ -48,7 +48,7 @@ A hook that fires on every event, or twice per event, is matching too broadly. T
 
 Narrow the conditions. Add a `skip_if` for the cases you want to spare, or a tighter `only_if` glob. A `FilePath("**/*.py")` matches every Python file in the project; `FilePath("src/**/*.py")` matches only your source tree. See the [conditions cheatsheet](../reference/conditions.qmd) for every condition and the [conditions guide](conditions.qmd) for how to combine them.
 
-Cap the count. For `nudge`, pass `max_fires=N` so it emits at most `N` times per session. The LLM primitives already default to a low cap, with `llm_gate` at 1 and `llm_nudge` at 3. See the [primitives reference](../reference/primitives.qmd).
+Cap the count. A `nudge` already defaults to one fire per session, or three when signal-scored; pass `max_fires=N` to change the cap. The LLM primitives also default low, with `llm_gate` at 1 and `llm_nudge` at 3. See the [primitives reference](../reference/primitives.qmd).
 
 Check the event set. A hook registered with `Event.Stop | Event.SubagentStop` fires on both. Confirm that both belong by reading the [events reference](../reference/events.qmd).
 
@@ -56,7 +56,7 @@ Check the event set. A hook registered with `Event.Stop | Event.SubagentStop` fi
 
 The hook is silent because dispatch never matched it. Check four causes.
 
-Wrong event. Each primitive defaults to one event, so `block_command` targets `PreToolUse` and `nudge` targets `PostToolUse`. If you need a different one, pass `events=` explicitly. The [events reference](../reference/events.qmd) lists which event fires when.
+Wrong event. Each primitive picks a default event. `block_command` and a bare `nudge` target `PreToolUse`, a signal-scored `nudge` targets `PostToolUse`, and a blocking `gate` targets `Event.Stop | Event.SubagentStop`. If you need a different one, pass `events=` explicitly. The [events reference](../reference/events.qmd) lists which event fires when.
 
 Unsatisfiable conditions. An `only_if` is AND, so every condition must match at once. A hook with `only_if=[Tool("Bash"), FilePath("**/*.py")]` never fires, because a Bash command carries no file path. Run `uvx capt-hook --hooks <dir> test` and read the `Input` each test built against your conditions.
 
@@ -67,6 +67,22 @@ uvx capt-hook --hooks <dir> register-hooks
 ```
 
 Project not reloaded. Claude Code reads hook settings at session start. After you rewire settings, start a fresh session so the new wiring loads.
+
+## `NlpSignal` hooks need the spaCy model {#nlpsignal-hooks-need-the-spacy-model}
+
+Hooks that use `NlpSignal` need the `en_core_web_sm` spaCy model. captain-hook does not auto-download it at hook execution time, because that would trigger a silent network download behind the agent's back mid-session. Install it once with one command.
+
+```bash
+python -m spacy download en_core_web_sm
+```
+
+Alternatively, the bundled `ensure_spacy_model` helper caches the model where captain-hook looks for it.
+
+```bash
+python -c "from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()"
+```
+
+A missing model raises `RuntimeError: spaCy model 'en_core_web_sm' is not installed` when the hook runs.
 
 ## Case study, a block that caught a safe command
 
@@ -85,7 +101,7 @@ hook(
 
 The block works. It also blocks `git stash pop`, because `git\s+stash` is a substring of `git stash pop` and `Command` matches anywhere in the command text. Popping a stash is safe, so the hook now blocks a command you want to allow.
 
-Fix it with a `skip_if`, which is checked first and skips the hook on any match. List the safe subcommands there.
+Fix it with a `skip_if`, which skips the hook when any of its conditions match. List the safe subcommands there.
 
 ```python
 hook(
@@ -98,19 +114,3 @@ hook(
 ```
 
 Now the safe subcommands pass through while a bare `git stash` still blocks. A re-run of `uvx capt-hook --hooks <dir> test` with a test for each subcommand confirms the split.
-
-## NlpSignal hooks need the spaCy model
-
-Hooks that use `NlpSignal` need the `en_core_web_sm` spaCy model. Captain-hook does not auto-download it at hook execution time, because that would trigger a silent fetch of around 100MB mid-session. Install it once with one command.
-
-```bash
-python -m spacy download en_core_web_sm
-```
-
-The form below caches it where captain-hook looks for it.
-
-```bash
-python -c "from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()"
-```
-
-A missing model raises `RuntimeError: spaCy model 'en_core_web_sm' is not installed` when the hook runs.

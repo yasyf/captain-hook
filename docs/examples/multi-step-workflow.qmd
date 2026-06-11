@@ -1,9 +1,9 @@
 ---
-title: "Multi-Step Workflow"
+title: "Multi-step workflow"
 ---
 
 Before a subagent finishes, it must run tests, lint, and verify coverage. The agent sometimes decides it's "done" after the implementation step and tries to stop early. You want a checklist guard that blocks `SubagentStop` until every step has run *and* the agent has emitted a deliberate completion marker.
 
 <!-- gd-embed: multi_step_workflow.py -->
 
-`workflow(label=..., marker=..., steps=[...], artifacts=[...])` registers a `SubagentStop` guard. Each `Step.check` is a callable that scans the transcript for evidence the step ran. The canonical helper is `text_matches(r"…")`. Adding an `Artifact(path, model, validate)` requires the agent to also produce a file that parses into your Pydantic model and passes the validator. The `marker` string prevents accidental passes from stale transcript text, so instruct the agent to emit it deliberately. See also [Workflows](../guide/workflows.qmd) and the [primitives reference](../reference/primitives.qmd).
+`workflow(label=..., marker=..., steps=[...], artifacts=[...])` registers a `SubagentStop` guard. Each `Step.check` is a callable that scans the transcript for evidence the step ran. The canonical helper is `text_matches`, as in `text_matches(r"pytest.*passed")`. Adding an `Artifact(path, model, validate)` requires the agent to also produce a file that parses into your Pydantic model and passes the validator. The `marker` string prevents accidental passes from stale transcript text, so instruct the agent to emit it deliberately. See also [Workflows](../guide/workflows.qmd) and the [primitives reference](../reference/primitives.qmd).

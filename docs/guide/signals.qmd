@@ -12,7 +12,7 @@ For the full signal type list and field defaults, see the
 [Conditions Cheatsheet](../reference/conditions.qmd) signals section. To query the
 text these signals score, see [Query the transcript](transcript.qmd).
 
-## Match a literal phrase with a regex Signal
+## Match a literal phrase with a regex `Signal`
 
 A `Signal` is a regex worth `weight` points. Every match against a window message
 adds `weight` to the running score. Positive weights push toward the threshold;
@@ -35,7 +35,7 @@ from captain_hook import Signal
 Signal(pattern=r"external.*service", weight=2, flags=re.IGNORECASE)
 ```
 
-## Match meaning with an NlpSignal
+## Match meaning with an `NlpSignal`
 
 An `NlpSignal` matches a grammatical relationship instead of a fixed string. It
 parses each message with spaCy and checks whether a `Clause` you describe appears in
@@ -62,13 +62,15 @@ the noun, set `negated=True` to require a negation, or pass a compound noun phra
 its own:
 
 ```python
+from captain_hook import Clause, Phrase
+
 Clause(noun=Phrase.expand("issue"), adj=Phrase("existing", "previous"))
 Clause(noun=Phrase.expand("change"), verb=Phrase("cause", "introduce"), negated=True)
 ```
 
 `Phrase.expand("issue")` pulls in WordNet synonyms of "issue" so the clause matches
 "problem," "bug," and other near-synonyms without you listing each one. The bare
-`Phrase("existing", "present")` stays exact.
+`Phrase("existing", "previous")` stays exact.
 
 ## Bundle signals with a threshold and window
 
@@ -101,7 +103,7 @@ You can also pass a bare `list[Signal]` to a primitive. The framework wraps it w
 
 Pass the bundle to `nudge(signals=...)`. The primitive extracts text from the last
 `window` messages, scores it against every pattern, and warns when the total crosses
-the threshold. It also deduplicates by content, so the same triggering text will not
+the threshold. It also deduplicates by content, so the same triggering text doesn't
 fire the nudge twice in a row.
 
 ```python
@@ -128,3 +130,10 @@ naming the text that set it off, so the agent sees why it fired.
 The same `signals=` parameter works on `gate()`, `llm_gate()`, and `llm_nudge()`.
 Use `gate()` instead of `nudge()` when crossing the threshold should block the turn
 instead of warning.
+
+## See also
+
+The [Conditions Cheatsheet](../reference/conditions.qmd) lists every signal type
+and its field defaults. [Query the transcript](transcript.qmd) explains the text
+extraction these signals score, and [Primitives](primitives.qmd) covers `nudge`,
+`gate`, and the LLM variants that accept `signals=`.

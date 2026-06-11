@@ -89,7 +89,7 @@ Reach for **`Grep`** only for material neither tool indexes: literal *content* o
 
 ## Python Style
 
-Target Python 3.12+. Run `uv sync --extra dev`, `uv run pytest`, and `uv build`.
+Target Python 3.13+. Run `uv sync --extra dev`, `uv run pytest`, and `uv build`.
 
 **Docstrings on the public API only.** `captain_hook/types.py` and other user-facing surfaces carry Google-style docstrings; they render into the docs site via Great Docs. Internal helpers get none. No comments except TODOs, non-obvious workarounds, or disabled code.
 

@@ -11,7 +11,7 @@ Pick your entry point:
 
 - To block one command in 5 minutes, jump straight to the [Quickstart](quickstart.qmd).
 - To set up a project, read [Installation](installation.qmd), then [Quickstart](quickstart.qmd), then [Project Structure](project-structure.qmd).
-- To get the mental model first, read [How It Works](../guide/how-it-works.qmd).
+- To get the mental model first, read [How Hooks Work](../guide/how-it-works.qmd).
 - To browse everything in one place, see the [Reference](../reference/index.qmd).
 
 ::: {.grid}
@@ -43,7 +43,7 @@ See what `init` wired and how Claude Code runs your hooks over stdin/stdout.
 ::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
 {{< icon stars >}} **Agent Skills**
 
-Let Claude set up capt-hook for you. Bootstrap hooks from your conventions or translate a style guide.
+Let Claude set up captain-hook for you. Bootstrap hooks from your conventions or translate a style guide.
 
 [{{< icon arrow-right >}} Agent Skills](skills.qmd)
 :::

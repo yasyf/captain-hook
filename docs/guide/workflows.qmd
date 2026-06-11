@@ -8,7 +8,7 @@ For a single yes-or-no gate, reach for `gate` instead. The [primitives reference
 
 ## How the pieces fit together
 
-A workflow has three interlinked parts, and you need all three to read the examples below.
+A workflow has three interlinked parts.
 
 The **marker** is a distinctive string the agent prints when it believes the whole checklist is done, such as `"QA COMPLETE"`. The workflow searches the transcript for it. While the marker is absent, the workflow walks the steps. Once the marker appears, the workflow stops checking steps and moves on to artifacts.
 
@@ -81,7 +81,7 @@ For the full `workflow()` signature, including the `artifacts`, `post_complete`,
 
 ## Write a step check
 
-A step's `check` receives the whole [`Transcript`](transcript.qmd) and returns a bool. You have two ways to write one.
+A step's `check` receives the whole [`Transcript`](transcript.qmd) and returns a `bool`. You have two ways to write one.
 
 Use `text_matches(pattern)` for a regex over the transcript text. It calls `re.search`, so the pattern matches a substring anywhere in the transcript, not the whole command line. `text_matches(r"ruff check")` fires the moment any line containing `ruff check` appears in the transcript, including `ruff check src/`. Anchor with `\b`, `^`, or `$` when you need a tighter match.
 

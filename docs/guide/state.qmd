@@ -4,7 +4,7 @@ title: "Persist state across events"
 
 Hooks run stateless by default. Each invocation starts fresh and forgets the last. Session state gives a hook memory that survives across invocations within one Claude Code session, so you can count events, deduplicate warnings, and accumulate data over a whole session.
 
-## Why state?
+## When to reach for state
 
 A hook decision draws on three sources. Pick the smallest one that answers your question.
 
@@ -39,7 +39,7 @@ def count_edits(evt):
 
 A slot gives you three operations. `.get()` returns the stored instance or `None`, and passing a default returns that instead, as in `.get(EditCounter())`. `.set(instance)` writes the model to disk atomically. `.delete()` removes the stored file.
 
-The read-update-write cycle above is the common shape. `store.load(EditCounter)` shortens the read leg, returning the stored instance or a fresh `EditCounter()` when nothing is stored yet.
+This read-update-write cycle is the common shape. `evt.ctx.s.load(EditCounter)` shortens the read leg, returning the stored instance or a fresh `EditCounter()` when nothing is stored yet.
 
 ::: {.callout-note title="Mutable defaults"}
 Give every list, set, or dict field a `Field(default_factory=...)`. A bare `list[str] = []` shares one list across instances.
@@ -47,7 +47,7 @@ Give every list, set, or dict field a `Field(default_factory=...)`. A bare `list
 
 ## Bundle one workflow with `@workflow_state`
 
-When a hook spans several events, you do not want each handler hand-rolling the same read-update-write. Decorate the model with `@workflow_state("name")` and it grows three methods that take the event directly. `.load(evt)` reads and defaults to a fresh instance, `.save(evt)` writes, and `.reset(evt)` deletes.
+When a hook spans several events, you don't want each handler hand-rolling the same read-update-write. Decorate the model with `@workflow_state("name")` and it grows three methods that take the event directly. `.load(evt)` reads and defaults to a fresh instance, `.save(evt)` writes, and `.reset(evt)` deletes.
 
 This example threads one model through three events. A prompt seeds intent, edits accumulate as they happen, a test run flips a flag, and `Stop` gates the agent if it edited code but never ran tests.
 

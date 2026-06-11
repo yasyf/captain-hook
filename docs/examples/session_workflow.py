@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from captain_hook import (
+    Allow,
     BaseHookEvent,
     Event,
     HookResult,
+    Input,
     Tool,
     Waiting,
     on,
@@ -19,15 +21,19 @@ class ReviewState(BaseModel):
     edits: list[str] = Field(default_factory=list)
 
 
-@on(Event.UserPromptSubmit)
+@on(Event.UserPromptSubmit, tests={Input(prompt="refactor the auth module"): Allow()})
 def capture_intent(evt: BaseHookEvent) -> HookResult | None:
     state = ReviewState.load(evt)
-    state.intent = (evt.prompt or "").strip()[:200]
+    state.intent = (evt.user_prompt or "").strip()[:200]
     state.save(evt)
     return None
 
 
-@on(Event.PreToolUse, only_if=[Tool("Edit|Write")])
+@on(
+    Event.PreToolUse,
+    only_if=[Tool("Edit|Write")],
+    tests={Input(tool="Edit", file="app/users.py", content="x = 1\n"): Allow()},
+)
 def record_edit(evt: BaseHookEvent) -> HookResult | None:
     if not (fp := evt.file):
         return None
@@ -37,7 +43,7 @@ def record_edit(evt: BaseHookEvent) -> HookResult | None:
     return None
 
 
-@on(Event.PreToolUse, only_if=[Tool("Bash")])
+@on(Event.PreToolUse, only_if=[Tool("Bash")], tests={Input(command="pytest -q"): Allow()})
 def mark_tested(evt: BaseHookEvent) -> HookResult | None:
     cl = evt.command_line
     if cl and cl.q.runs("pytest"):
@@ -47,7 +53,7 @@ def mark_tested(evt: BaseHookEvent) -> HookResult | None:
     return None
 
 
-@on(Event.Stop, skip_if=[Waiting()])
+@on(Event.Stop, skip_if=[Waiting()], tests={Input(): Allow()})
 def require_tests_after_edits(evt: BaseHookEvent) -> HookResult | None:
     state = ReviewState.load(evt)
     if state.edits and not state.ran_tests:

@@ -1,12 +1,12 @@
 ---
-title: "Real-World Patterns"
+title: "Real-world patterns"
 ---
 
-Each pattern below answers one recurring problem with a self-contained example you can drop into your hooks directory. The example files carry inline `tests = {...}`, so you can run them with `uvx capt-hook --hooks docs/examples test` before adapting them.
+Each pattern answers one recurring problem with a self-contained example you can drop into your hooks directory. The example files carry inline `tests = {...}`, so you can run them with `uvx capt-hook --hooks docs/examples test` before adapting them.
 
-If you are new to the framework, work through the [Quickstart](../getting-started/quickstart.qmd) first, then come back here for the production recipes.
+If you're new to the framework, work through the [Quickstart](../getting-started/quickstart.qmd) first, then come back here for the production patterns.
 
-## Recipes
+## Patterns
 
 | Pattern | Problem it solves |
 |---|---|

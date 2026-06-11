@@ -1,5 +1,5 @@
 ---
-title: "Security & Trust"
+title: "Security & trust"
 ---
 
 A hook is real Python that runs on your machine whenever Claude Code fires an
@@ -23,7 +23,7 @@ The boundary, then, sits between the framework you install and the hooks you
 author. captain-hook gives the hooks a typed event and reads back a verdict. It
 never sees more of your machine than the hook itself does.
 
-## uvx isolation as a safety guarantee
+## `uvx` isolation as a safety guarantee
 
 `uvx capt-hook` runs captain-hook from an ephemeral, isolated environment that
 `uv` builds on demand. The framework and its dependencies install into a cache
@@ -46,7 +46,7 @@ leaves no trace in the code you ship.
 
 ## Where LLM-hook credentials come from
 
-[LLM hooks](llm-hooks.qmd) call a language model to judge transcript context.
+[LLM hooks](llm-hooks.qmd) call a large language model to judge transcript context.
 captain-hook does not hold an API key and does not call a provider's HTTP API
 directly. Instead, it shells out to the CLI of the model the project configures
 through the hook's `specialty`, then reads the structured verdict back from that

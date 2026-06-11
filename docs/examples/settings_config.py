@@ -3,10 +3,12 @@ from __future__ import annotations
 from typing import cast
 
 from captain_hook import (
+    Allow,
     BaseHookEvent,
     Event,
     HookResult,
     HooksSettings,
+    Input,
     Tool,
     on,
 )
@@ -18,7 +20,14 @@ class ProjectSettings(HooksSettings):
     excluded_dirs: tuple[str, ...] = ("vendor", "node_modules")
 
 
-@on(Event.PreToolUse, only_if=[Tool("Bash")])
+@on(
+    Event.PreToolUse,
+    only_if=[Tool("Bash")],
+    tests={
+        Input(tool="Bash", command="ls -la"): Allow(),
+        Input(tool="Bash", command="ruff check ."): Allow(),
+    },
+)
 def enforce_test_command(evt: BaseHookEvent) -> HookResult | None:
     settings = cast(ProjectSettings, evt.ctx.c)
     if (cl := evt.command_line) and cl.q.runs("pytest") and settings.test_command != "pytest":

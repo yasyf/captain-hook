@@ -4,8 +4,8 @@ title: "Installation"
 
 ## Requirements
 
-- Python 3.12 or later
-- [uv](https://docs.astral.sh/uv/) is required. The `uvx` runner ships with uv and is how every captain-hook command is invoked.
+- Python 3.13 or later
+- [uv](https://docs.astral.sh/uv/) is required. The `uvx` runner ships with uv and runs every captain-hook command.
 
 ## Run without installing (default)
 
@@ -15,16 +15,16 @@ The fastest way to use captain-hook, with no project dependency needed:
 uvx capt-hook init
 ```
 
-`uvx` fetches capt-hook into a throwaway environment, runs the CLI, and discards it. Every command works the same way once you prefix it with `uvx`:
+`uvx` fetches captain-hook into a throwaway environment, runs the CLI, and discards it. Every command works the same way once you prefix it with `uvx`:
 
 ```bash
 uvx capt-hook test
 uvx capt-hook register-hooks
 ```
 
-Run from your project root and `--hooks` defaults to `.claude/hooks`. This is the headline path. You never add captain-hook to `pyproject.toml` and never manage a venv yourself.
+Run from your project root and `--hooks` defaults to `.claude/hooks`. You never add captain-hook to `pyproject.toml` and never manage a venv yourself.
 
-## Prefer a pinned install?
+## Pin the install
 
 For a stable, offline-friendly setup, install captain-hook once as a uv tool. You then drop the
 `uvx` prefix from every command:
@@ -39,47 +39,29 @@ use `uv add capt-hook`.
 
 ## Verify installation
 
+Run the inline tests on the scaffolded example hook:
+
 ```bash
 uvx capt-hook test
 ```
 
-This runs the inline tests on the scaffolded example hook. If you added captain-hook as a dependency, you can also check the import directly:
+If you added captain-hook as a dependency, you can also check the import directly:
 
 ```bash
-python -c "import captain_hook; print(captain_hook.__name__)"
+uv run python -c "import captain_hook; print(captain_hook.__name__)"
 ```
 
 ## Project layout
 
-`capt-hook init` produces:
+`uvx capt-hook init` scaffolds `.claude/hooks/` with a `conf.py` and a starter `example.py`, plus the bundled skills and `.claude/settings.local.json`. [Project Structure & Wiring](project-structure.qmd) walks the full layout. The exact layout is optional; `uvx capt-hook --hooks <any-dir> test` works on any directory of hooks, and the default lines up with what Claude Code looks for.
 
-```
-my-project/
-├── .claude/
-│   ├── hooks/
-│   │   ├── conf.py       # Settings (optional)
-│   │   └── example.py    # Starter hook
-│   └── settings.local.json   # Captain-hook wires itself in here
-```
+## spaCy model
 
-This exact layout is optional. `capt-hook --hooks <any-dir> test` works on any directory of hooks. The default lines up with what Claude Code looks for.
-
-## Dependencies
-
-`capt-hook` bundles:
-
-- `pydantic` and `pydantic-settings` provide typed settings and data models
-- `tree-sitter` and `tree-sitter-bash` parse bash commands
-- `spacy` drives NLP-based signal matching and echo detection
-- `wn` handles WordNet synonym expansion for NLP signals
-- `funcy` supplies functional utilities
-- `orjsonl` reads JSONL fast for transcripts
-
-You must download the spaCy English model yourself, since it is not auto-downloaded. See [Troubleshooting](../guide/troubleshooting.qmd#runtimeerror-spacy-model-is-not-installed).
+Hooks that use NLP signals need the `en_core_web_sm` spaCy model; captain-hook does not auto-download it. Install it once with `python -m spacy download en_core_web_sm`. See [NlpSignal hooks need the spaCy model](../guide/troubleshooting.qmd#nlpsignal-hooks-need-the-spacy-model).
 
 ## CI integration
 
-Run inline hook tests in CI so scaffold edits cannot ship broken expectations. `capt-hook test --json` emits one JSON object per test with the fields `id`, `status`, `expected`, and `reason`, and it exits non-zero on the first failure.
+Run inline hook tests in CI so scaffold edits cannot ship broken expectations. `uvx capt-hook test --json` emits one JSON object per test with the fields `id`, `status`, `expected`, and `reason`, and it exits non-zero on the first failure.
 
 ```yaml
 # .github/workflows/hooks.yml
@@ -99,4 +81,9 @@ jobs:
       - run: uvx capt-hook test
 ```
 
-`setup-uv` installs uv, which provides Python 3.12+ and `uvx`, so there's no separate Python or install step. Drop `--json` in if a downstream reporter consumes the output.
+`setup-uv` installs uv, which provides Python 3.13+ and `uvx`, so there's no separate Python or install step. If a downstream reporter consumes the output, drop `--json` in.
+
+## Next steps
+
+- [Quickstart](quickstart.qmd) walks you through writing and testing your first hook in 5 minutes
+- [Project Structure & Wiring](project-structure.qmd) shows what `init` wired and how Claude Code runs your hooks

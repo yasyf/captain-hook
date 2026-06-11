@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
 ## [0.9.0] - 2026-06-10
 
 ### Added
@@ -55,7 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The root `captain_hook/__init__.py` re-exports drop the redundant `X as X` aliasing in
   favor of plain imports (ruff `F401` is ignored for `__init__.py`).
 
-## [0.6.0] - 2026-06-09
+## [0.6.0] - 2026-06-08
 
 ### Added
 - `Input(tasks=[...])` inline-test support: the harness pre-populates the `evt.tasks`
@@ -63,17 +65,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   block/warn paths in inline tests (previously `evt.tasks` raised `KeyError` under the
   mock event, fail-opening to a misleading pass).
 
+## [0.5.0] - 2026-06-08
+
+### Added
+- Namespaced public API for the file helpers; restored `diff_lint`.
+
+## [0.4.0] - 2026-06-06
+
+### Added
+- Bundled Claude Code agent skills, installed by `init` and published as a plugin.
+
+### Changed
+- Renamed `PromptMessage` to `Prompt`.
+- Dropped `__all__` everywhere; the root `captain_hook/__init__.py` re-exports define the public API.
+
+## [0.3.0] - 2026-06-06
+
+### Changed
+- Converted the CLI from argparse to Click.
+- Collapsed the styleguide DSL into a single composable `Matcher` in `captain_hook.style`.
+
 ## [0.2.0] - 2026-06-06
+
+### Added
+- `styleguide` primitive for AST style rules.
+- Hooks read the native task store via `evt.tasks`, staying in sync with the real task list.
 
 ### Changed
 - Renamed the PyPI distribution and CLI command to `capt-hook` (previously published as `cc-captain-hook` with a `captain-hook` command), so `uvx capt-hook …` runs without the `--from` flag.
+- Relicensed from Apache-2.0 to PolyForm Noncommercial 1.0.0.
 
 ### Fixed
 - `Waiting()` now detects background `Workflow` tool runs: a launched workflow
   counts as waiting until its completion `<task-notification>` arrives, so Stop
   gates (e.g. task/plan completion) no longer block mid-workflow.
 
-## [0.1.0] - 2026-06-01
+## [0.1.1] - 2026-06-04
+
+### Changed
+- The CLI defaults `--hooks` and `--root` from `CLAUDE_PROJECT_DIR`; the explicit path flags are dropped.
+
+## [0.1.0] - 2026-06-03
 
 ### Added
 - Initial public release, extracted from an internal monorepo.
@@ -82,6 +114,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Claude Code event types, condition types, transcript query API, workflows,
   session/workflow state, inline test harness, and the `captain-hook` CLI.
 
+[Unreleased]: https://github.com/yasyf/captain-hook/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.9.0
+[0.8.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.8.0
+[0.7.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.7.0
 [0.6.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.6.0
+[0.5.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.5.0
+[0.4.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.4.0
+[0.3.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.3.0
 [0.2.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.2.0
+[0.1.1]: https://github.com/yasyf/captain-hook/releases/tag/v0.1.1
 [0.1.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.1.0

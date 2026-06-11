@@ -15,7 +15,7 @@ There's no install step. Run everything through [uvx](https://docs.astral.sh/uv/
 uvx capt-hook init
 ```
 
-`uvx` fetches captain-hook into a throwaway environment and runs it, so you never add it to `pyproject.toml`. Every command below works the same way once you prefix it with `uvx`.
+`uvx` fetches captain-hook into a throwaway environment and runs it, so you never add it to `pyproject.toml`. Every command in this README works the same way once you prefix it with `uvx`.
 
 ## First hook
 
@@ -69,22 +69,22 @@ uvx capt-hook test
 
 `init` already wired Claude Code's settings. Each event runs `uvx capt-hook run <Event>`, with the event JSON arriving on stdin and the verdict written to stdout. Re-run `uvx capt-hook register-hooks` only after you add hooks on a new event; it writes `.claude/settings.local.json` for you.
 
-## Agent skills & plugin
+## Agent Skills & plugin
 
-capt-hook ships two [Agent Skills](https://yasyf.github.io/captain-hook/docs/getting-started/skills.html) so you don't have to write hooks by hand. `bootstrapping-hooks` mines your repo's docs, CI, and git history into proposed gates and nudges. `translating-styleguides` turns a STYLEGUIDE.md into enforced rules. `uvx capt-hook init` installs both into `.claude/skills/`, or you can add them as a plugin.
+captain-hook ships two [Agent Skills](https://yasyf.github.io/captain-hook/docs/getting-started/skills.html) so you don't have to write hooks by hand. `bootstrapping-hooks` mines your repo's docs, CI, and git history into proposed gates and nudges. `translating-styleguides` turns a STYLEGUIDE.md into enforced rules. `uvx capt-hook init` installs both into `.claude/skills/`, or you can add them as a plugin.
 
 ```
 /plugin marketplace add yasyf/captain-hook
 /plugin install captain-hook@captain-hook
 ```
 
-## What problems does this solve?
+## What this solves
 
-captain-hook covers four jobs:
+captain-hook covers these jobs:
 
 - Block dangerous tool calls before they execute on `PreToolUse`, like force-push, package-manager footguns, and raw `rm -rf`.
 - Drive the agent with feedback that fires on the patterns it actually emits, such as repeated failures, weakened tests, and missed conventions.
-- Enforce multi-step workflows with stop-gates and artifact validation, so the agent can't declare "done" without running tests, writing a report, or completing a checklist.
+- Enforce multi-step workflows with Stop gates and artifact validation, so the agent can't declare "done" without running tests, writing a report, or completing a checklist.
 - Keep all of the above testable. Every hook ships with inline `tests = {...}` that `uvx capt-hook test` runs in CI, so you catch broken hooks the way you catch broken code.
 
 ## Docs
@@ -92,3 +92,7 @@ captain-hook covers four jobs:
 [Read the docs](https://yasyf.github.io/captain-hook/) for the full guide to conditions, primitives, LLM hooks, workflows, state, and real-world patterns.
 
 For working on captain-hook itself, see the [development guide](https://yasyf.github.io/captain-hook/docs/development/).
+
+## License
+
+Licensed under [PolyForm Noncommercial 1.0.0](LICENSE), free for noncommercial use.

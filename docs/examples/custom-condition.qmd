@@ -1,5 +1,5 @@
 ---
-title: "Custom Condition"
+title: "Custom condition"
 ---
 
 The built-in conditions (`Tool`, `FilePath`, `Content`, `SourceEdits`, ...) cover the common cases, but you'll eventually want a predicate that depends on something specific to your project. A line-count threshold, a project-specific file shape, or a computed property of the event.

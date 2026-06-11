@@ -1,9 +1,9 @@
 ---
-title: "Command Safety"
+title: "Command safety"
 ---
 
-The agent will happily run `git stash`, force-push, or pipe `curl` into a shell unless something stops it. A single file collects every command-shaped guard rail. You get VCS workflow rules, dangerous flags, and inspection-driven blocks for things a regex alone cannot catch.
+The agent happily runs `git stash`, force-pushes, or pipes `curl` into a shell unless something stops it. A single file collects every command-shaped guard rail. You get VCS workflow rules, dangerous flags, and inspection-driven blocks for things a regex alone cannot catch.
 
 <!-- gd-embed: command_safety.py -->
 
-Three flavors of command blocking, all firing on `Event.PreToolUse` against `Tool("Bash")`. `block_command(["git", "stash"], ...)` covers prefix-style blocks with whitespace-flexible token lists. A raw regex with a negative lookahead (`--force(?!-)`) handles flag-level precision. When a decision needs the parsed AST of the command line, drop into `@on(Event.PreToolUse, only_if=[Tool("Bash")])` and reach `evt.command_line.q.runs(...)`, `.q.has_subcommand(...)`, and `.q.uses_redirect()` to inspect subcommands, pipes, and redirects. See also [../guide/primitives.qmd](../guide/primitives.qmd) and [../reference/conditions.qmd](../reference/conditions.qmd).
+Three flavors of command blocking, all firing on `Event.PreToolUse` against `Tool("Bash")`. `block_command(["git", "stash"], ...)` covers prefix-style blocks with whitespace-flexible token lists. A raw regex with a negative lookahead (`--force(?!-)`) handles flag-level precision. When a decision needs the parsed AST of the command line, drop into `@on(Event.PreToolUse, only_if=[Tool("Bash")])` and reach `evt.command_line.q.any_command(...)`, `.q.has_subcommand(...)`, and `.q.uses_redirect()` to inspect subcommands, pipes, and redirects. See also [the primitives guide](../guide/primitives.qmd) and [the conditions reference](../reference/conditions.qmd).

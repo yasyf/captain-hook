@@ -6,7 +6,8 @@ Write your first hook in under five minutes. By the end, Claude Code stops your 
 finishing a UI change it never looked at, and you have a second hook that proves itself with a
 passing test.
 
-Every command runs through `uvx`, so nothing is installed.
+Before you begin, you need [uv installed](installation.qmd) and a project open in Claude Code.
+Every command runs through `uvx`, so nothing else is installed.
 
 ## 1. Scaffold
 
@@ -14,8 +15,8 @@ Every command runs through `uvx`, so nothing is installed.
 uvx capt-hook init
 ```
 
-`init` creates `.claude/hooks/`, wires Claude Code's settings, and installs the two helper
-skills. You're already live, so there's no separate wiring step.
+`init` creates `.claude/hooks/`, wires Claude Code's settings, and installs the
+[two helper skills](skills.qmd). You're already live, with no separate wiring step.
 
 ## 2. Read your first hook
 
@@ -32,8 +33,8 @@ session. That's the whole model. An event, conditions that decide when it fires,
 ## 3. Watch it fire
 
 Reload the project so Claude Code picks up the settings. Edit a file under `src/components/` and
-try to end the turn. The gate blocks with your message until the agent reviews the change with
-`agent-browser`.
+try to end the turn. The gate blocks with your message, and the agent turns to `agent-browser`
+to review the change before finishing.
 
 ## 4. Test your hooks
 
@@ -61,11 +62,10 @@ uvx capt-hook test
 ```
 
 ```
-.claude/hooks/safety.py
-  PASS  Input(command='git stash')    expected Block, got Block
-  PASS  Input(command='git status')   expected Allow, got Allow
+  PASS  declarative_1:Input(command='git stash', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None)
+  PASS  declarative_1:Input(command='git status', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None)
 
-2 passed, 0 failed
+2 tests: 2 passed, 0 failed, 0 errors, 0 skipped
 ```
 
 Break an expectation and the line flips to `FAIL` and the command exits non-zero. Drop the same

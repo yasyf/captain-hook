@@ -1,10 +1,10 @@
 ---
-title: "Conditions Cheatsheet"
+title: "Conditions cheatsheet"
 ---
 
 Every condition type, in one place. Use conditions in `only_if` (all must match) or `skip_if`
-(any match skips the hook). This card is the single source of truth — the
-[Filter hooks with conditions](../guide/conditions.qmd) guide teaches how to pick and combine them.
+(any match skips the hook). [Filter hooks with conditions](../guide/conditions.qmd) shows how to
+pick and combine them.
 
 ## Current event
 
@@ -17,7 +17,7 @@ These match the event being processed right now.
 | `Command(p)` | The Bash command text matches | Regex | `Command(r"git\s+stash")` |
 | `Content(p, project_only=True)` | The written/edited file content matches | Regex (multiline) | `Content(r"print\(")` |
 | `Agent(p)` | The subagent type matches | Pipe-separated names | `Agent("cleanup\|refactor")` |
-| `TestFile(project_only=True)` | The file is a test file (`test_*.py`, `conftest.py`) | — | `TestFile()` |
+| `TestFile(project_only=True)` | The file is a test file (`test_*.py`, `conftest.py`, or any `.py` under a `tests/` directory) | — | `TestFile()` |
 | `SourceEdits(lang="py", include_tests=False, paths=None)` | The event edits/writes a source file in `lang` (and not a test, unless `include_tests`) | Language glob | `SourceEdits(lang="ts", paths="src/**")` |
 
 `FilePath`, `Content`, `TestFile`, and `SourceEdits` match project files only by default. Pass
@@ -46,7 +46,8 @@ only_if=[A, B, C]   # A AND B AND C must all match
 skip_if=[X, Y]      # X OR Y — any match skips the hook
 ```
 
-`skip_if` is checked first. For OR within a single condition, use pipe-alternation
+A matching `skip_if` skips the hook even when every `only_if` condition matches.
+For OR within a single condition, use pipe-alternation
 (`Tool("Bash|Execute")`) rather than separate entries.
 
 ## Custom conditions
@@ -56,8 +57,7 @@ dataclass with a `check(self, evt) -> bool` method:
 
 ```python
 from dataclasses import dataclass
-from captain_hook import CustomCondition
-from captain_hook.events import BaseHookEvent
+from captain_hook import BaseHookEvent, CustomCondition, Event, hook
 
 @dataclass(frozen=True)
 class MinEdits(CustomCondition):
@@ -70,8 +70,7 @@ class MinEdits(CustomCondition):
 hook(Event.Stop, message="Too many edits", block=True, only_if=[MinEdits(threshold=10)])
 ```
 
-The predicate goes in `check()`; the firing goes through a primitive. Don't reach for an `@on` body
-to run the same test.
+The predicate goes in `check()`; the firing goes through a primitive.
 
 ## Signals (scoring)
 
@@ -81,5 +80,5 @@ cumulative score crosses the threshold. See [Score patterns with signals](../gui
 
 | Type | Purpose | Example |
 |------|---------|---------|
-| `Signal(pattern, weight=1, flags=0)` | A regex worth `weight` points per match | `Signal(r"\bretry\b", weight=2)` |
-| `Signals(patterns, threshold, window=15)` | A bundle that fires at `threshold` over the last `window` messages | `Signals([Signal(r"retry")], threshold=3)` |
+| `Signal(pattern=..., weight=1, flags=0)` | A regex worth `weight` points per match (fields are keyword-only) | `Signal(pattern=r"\bretry\b", weight=2)` |
+| `Signals(patterns, threshold, window=15)` | A bundle that fires at `threshold` over the last `window` messages | `Signals([Signal(pattern=r"retry")], threshold=3)` |

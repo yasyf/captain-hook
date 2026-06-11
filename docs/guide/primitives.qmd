@@ -1,9 +1,9 @@
 ---
-title: "Deterministic Primitives"
+title: "Deterministic primitives"
 ---
 
 Primitives are one-call helpers that register a hook for a common pattern. They
-target the right events, count fires, and suppress echo for you. The deterministic primitives decide the outcome with a regex, an AST walk, or a predicate, no model call. For the LLM-backed primitives, see [LLM Hooks](llm-hooks.qmd).
+target the right events, count fires, and suppress echo for you, so a fired message the agent repeats back doesn't re-trigger the hook. The deterministic primitives decide the outcome with a regex, an AST walk, or a predicate, no model call. For the LLM-backed primitives, see [LLM Hooks](llm-hooks.qmd).
 
 ## Pick a primitive
 
@@ -127,7 +127,7 @@ Stop gates are wait-aware by default. Give a gate no `skip_if` and it skips whil
 agent waits on background work such as a running `Workflow`, an async sub-agent, or a
 `ScheduleWakeup` loop, then re-fires once that work resumes. Pass any `skip_if` and that
 default switches off, so include [`Waiting()`](../reference/conditions.qmd) yourself, as
-the example above does.
+the example in this section does.
 
 ## lint {#lint}
 

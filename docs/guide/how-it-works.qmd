@@ -1,5 +1,5 @@
 ---
-title: "How Hooks Work"
+title: "How hooks work"
 ---
 
 A captain-hook hook is a rule that runs at one moment in Claude Code's loop and returns a verdict.
@@ -78,8 +78,6 @@ One captain-hook process handles every event the same way, in four stages.
 3. **Execute matching hooks.** Each matched hook produces a verdict. A handler hook runs its function; a declarative hook returns its configured message. The first hook to block or allow wins and short-circuits the rest; warnings from every hook accumulate.
 4. **Format the verdict.** The winning verdict is rendered as the JSON envelope Claude Code expects and written to stdout. A block becomes a deny, a warning becomes injected context, and no verdict means an empty response that leaves the action untouched.
 
-The trace below walks one event through all four stages.
-
 ## Tracing a blocked `git stash`
 
 Start with the same hook, written in its full declarative form so every part is visible:
@@ -99,7 +97,7 @@ hook(
 
 ### Parse the event
 
-Claude tries to run `git stash pop`. Claude Code pauses the tool call and sends this payload to the hook process on stdin:
+Claude tries to run `git stash pop`. Claude Code pauses the tool call and sends a payload to the hook process on stdin, trimmed here to the fields the trace touches:
 
 ```json
 {

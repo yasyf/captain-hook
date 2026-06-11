@@ -2,8 +2,8 @@
 title: "Events"
 ---
 
-The nine lifecycle events Claude Code fires. This table is the single source of truth; the
-[How It Works](../guide/how-it-works.qmd) guide explains the lifecycle narrative and links here.
+The nine lifecycle events Claude Code fires. For the lifecycle narrative, see
+[how hooks work](../guide/how-it-works.qmd).
 
 A hook targets one event, or several combined with `|`:
 
@@ -16,6 +16,9 @@ hook(Event.Stop | Event.SubagentStop, message="Review before finishing", block=T
 `Event` is a `Flag` enum, so `|` registers one hook for every named event at once.
 
 ## Event reference
+
+Each row lists the event's typed class, when it fires, its key accessors, and whether it
+can block.
 
 | Event | Event class | Fires | Key properties | Can block? |
 |-------|-------------|-------|----------------|------------|
@@ -35,5 +38,6 @@ agent to keep going. Every other event is advisory — a hook injects context bu
 ## Shared properties
 
 Every event also exposes the base accessors: `event`, `session_id`, `is_subagent`,
-`transcript_path`, `permission_mode`, `stop_hook_active`, `tasks` (the live Claude Code task
-list), and `ctx` (the hook context — transcript, settings, and the current turn).
+`transcript_path`, `permission_mode`, `parent_agent_type`, `stop_hook_active`, `tasks`, and
+`ctx`. `tasks` is the live Claude Code task list; `ctx` is the hook context, with the
+transcript, settings, and the current turn.
