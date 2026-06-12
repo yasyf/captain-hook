@@ -1,6 +1,6 @@
 [project]
 name = "capt-hook"
-version = "0.11.1"
+version = "2.0.0"
 description = "Declarative hook framework for Claude Code"
 readme = "README.md"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -20,7 +20,7 @@ classifiers = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "cc-transcript>=0.8,<0.9",
+    "cc-transcript>=2.0,<3",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "tree-sitter>=0.24",
@@ -101,3 +101,4 @@ docs = [
     # widget's client-side API calls (the source of the navbar 403s).
     "great-docs @ git+https://github.com/posit-dev/great-docs@d8540ae2",
 ]
+

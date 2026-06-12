@@ -2,25 +2,32 @@
 
 The first detector over ASSISTANT turns. Three deterministic gates, all required:
 a dismissal **marker** near hook vocabulary (strong dismissals score
-:data:`~cc_transcript.domains.mining.confidence.VERY_HIGH`, hedged ones
-:data:`~cc_transcript.domains.mining.confidence.MEDIUM`), a **de-noise** drop of
+:data:`~cc_transcript.mining.VERY_HIGH`, hedged ones
+:data:`~cc_transcript.mining.MEDIUM`), a **de-noise** drop of
 pure compliance, and **proximity** — a hook-fire fingerprint within
 :data:`PROXIMITY_TURNS` preceding conversational turns. The fingerprint shapes are
 enumerated from the real captured transcripts in ``tests/fixtures/hook_fires/``
 (the harness's rendering of hook output), never derived from captain-hook source:
 
-- ``attachment:hook_additional_context`` — a nudge's message, verbatim, in ``content``.
+- ``attachment:hook_additional_context`` — a nudge's message, verbatim, in ``content``,
+  with the firing tool call's ``toolUseID``.
 - ``attachment:hook_blocking_error`` — a Stop block's message under ``blockingError``.
 - a synthetic ``isMeta`` user turn starting ``"Stop hook feedback:\\n"``.
 - a synthetic ``is_error`` tool_result whose content is a PreToolUse deny's
   ``permissionDecisionReason`` verbatim (a deny leaves NO attachment — it is
-  joinable only via the fire-log).
+  joinable only via the decision ledger).
 
-A surviving complaint attributes through :meth:`captain_hook.fire_log.FireLog.attribute`
-(drop-on-miss and drop-on-ambiguity built in) and resolves its PR target
-primitive-aware: a ``nudge()``/``gate()`` fire records the primitive file as its
-``source_file``, so the real user hook comes from ``hook_name``'s module prefix.
-Unattributable or unresolvable complaints are dropped — precision over recall.
+A surviving complaint attributes through the
+:class:`~cc_transcript.decisions.DecisionLog`: tool-shaped fingerprints join by
+the tool call's content digest via
+:meth:`~cc_transcript.decisions.DecisionLog.attribute_tool`, and digestless
+shapes (Stop feedback, blocking errors) fall back to
+:meth:`~cc_transcript.decisions.DecisionLog.attribute_nearest` with the
+decision's recorded message as the tiebreak — the only place message-substring
+matching survives. The PR target resolves primitive-aware: a ``nudge()``/``gate()``
+fire records the primitive file as its ``source_file``, so the real user hook
+comes from the decision ``kind``'s module prefix. Unattributable or unresolvable
+complaints are dropped — precision over recall.
 """
 
 from __future__ import annotations
@@ -29,18 +36,19 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from cc_transcript.domains.mining.confidence import MEDIUM, VERY_HIGH, CandidateSignal
-from cc_transcript.domains.mining.signals import CONFIDENCE_STEP, MiningSignal, adjust
-from cc_transcript.domains.mining.sourcekind import SourceKind
+from cc_transcript.filterspec import tool_uses
+from cc_transcript.mining.confidence import MEDIUM, VERY_HIGH, CandidateSignal
+from cc_transcript.mining.signals import CONFIDENCE_STEP, MiningSignal, adjust
+from cc_transcript.mining.sourcekind import SourceKind
 from cc_transcript.models import AssistantEvent, OtherEvent, ToolResultBlock, UserEvent
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
     from typing import Any
 
-    from cc_transcript.models import TranscriptEvent
-
-    from captain_hook.fire_log import FireLog, FireRow
+    from cc_transcript.decisions import Decision, DecisionLog
+    from cc_transcript.ids import SessionId, ToolUseId
+    from cc_transcript.models import ToolUseBlock, TranscriptEvent
 
 HOOK_COMPLAINT = SourceKind("hook_complaint")
 """The source kind for an assistant turn dismissing a hook fire as a misfire."""
@@ -95,6 +103,22 @@ class Marker:
     matched: str
 
 
+@dataclass(frozen=True, slots=True)
+class Fingerprint:
+    """One hook-fire trace the harness rendered into the transcript.
+
+    Attributes:
+        message: The hook's fire message, verbatim.
+        tool_use_id: The firing tool call's id, when the trace carries one —
+            the handle to the tool digest the ledger joins on.
+        event: The hook event name for digestless traces, e.g. ``Stop``.
+    """
+
+    message: str
+    tool_use_id: ToolUseId | None = None
+    event: str | None = None
+
+
 def classify_marker(text: str) -> Marker | None:
     if not HOOK_VOCAB_RE.search(text):
         return None
@@ -109,45 +133,77 @@ def classify_marker(text: str) -> Marker | None:
     return None
 
 
-def fire_message(event: TranscriptEvent) -> str | None:
+def fingerprint_of(event: TranscriptEvent) -> Fingerprint | None:
     match event:
         case OtherEvent(type="attachment", raw=raw):
             attachment: Mapping[str, Any] = raw["attachment"]
             match attachment.get("type"):
                 case "hook_additional_context":
-                    return "\n".join(str(part) for part in attachment["content"])
+                    return Fingerprint(
+                        message="\n".join(str(part) for part in attachment["content"]),
+                        tool_use_id=attachment.get("toolUseID"),
+                        event=attachment.get("hookEvent"),
+                    )
                 case "hook_blocking_error":
-                    return str(attachment["blockingError"]["blockingError"])
+                    return Fingerprint(
+                        message=str(attachment["blockingError"]["blockingError"]),
+                        event=str(attachment.get("hookEvent") or "Stop"),
+                    )
                 case _:
                     return None
         case UserEvent(meta=meta, text=text) if meta.is_meta and text.startswith(STOP_FEEDBACK_PREFIX):
-            return text.removeprefix(STOP_FEEDBACK_PREFIX)
+            return Fingerprint(message=text.removeprefix(STOP_FEEDBACK_PREFIX), event="Stop")
         case UserEvent(blocks=blocks):
-            return next((b.content for b in blocks if isinstance(b, ToolResultBlock) and b.is_error), None)
+            return next(
+                (
+                    Fingerprint(message=b.content, tool_use_id=b.tool_use_id)
+                    for b in blocks
+                    if isinstance(b, ToolResultBlock) and b.is_error
+                ),
+                None,
+            )
         case _:
             return None
 
 
-def preceding_fires(events: Sequence[TranscriptEvent], index: int) -> list[tuple[int, int, str]]:
-    fires: list[tuple[int, int, str]] = []
+def preceding_fingerprints(events: Sequence[TranscriptEvent], index: int) -> list[tuple[int, int, Fingerprint]]:
+    fingerprints: list[tuple[int, int, Fingerprint]] = []
     turns = 0
     for i in range(index - 1, -1, -1):
-        if (message := fire_message(events[i])) is not None:
-            fires.append((i, turns, message))
+        if (fingerprint := fingerprint_of(events[i])) is not None:
+            fingerprints.append((i, turns, fingerprint))
         if isinstance(events[i], UserEvent | AssistantEvent):
             turns += 1
             if turns >= PROXIMITY_TURNS:
                 break
-    return fires
+    return fingerprints
 
 
-def resolve_target(fire: FireRow) -> tuple[str, str] | None:
-    if PRIMITIVES_DIR not in fire.source_file:
-        return fire.source_file, fire.hook_name
-    module, sep, _ = fire.hook_name.partition(":")
+def attribute_fingerprint(
+    decisions: DecisionLog,
+    uses: Mapping[ToolUseId, ToolUseBlock],
+    session_id: SessionId,
+    near_ts_ms: int,
+    fingerprint: Fingerprint,
+) -> Decision | None:
+    if fingerprint.tool_use_id is not None and (block := uses.get(fingerprint.tool_use_id)) is not None:
+        found = decisions.attribute_tool(session_id, tool_digest=block.call.digest, near_ts_ms=near_ts_ms)
+        return found if found is not None and found.source_file else None
+    if fingerprint.event is None:
+        return None
+    found = decisions.attribute_nearest(session_id, event=fingerprint.event, near_ts_ms=near_ts_ms)
+    if found is None or not found.source_file or not found.message or found.message not in fingerprint.message:
+        return None
+    return found
+
+
+def resolve_target(decision: Decision) -> tuple[str, str] | None:
+    if PRIMITIVES_DIR not in decision.source_file:
+        return decision.source_file, decision.kind
+    module, sep, _ = decision.kind.partition(":")
     if not sep or not module:
         return None
-    return f"{HOOKS_DIR}/{module.rsplit('.', 1)[-1]}.py", fire.hook_name
+    return f"{HOOKS_DIR}/{module.rsplit('.', 1)[-1]}.py", decision.kind
 
 
 def complaint_signal(marker: Marker, turns_back: int) -> CandidateSignal:
@@ -158,38 +214,39 @@ def complaint_signal(marker: Marker, turns_back: int) -> CandidateSignal:
     return adjust(base, CONFIDENCE_STEP, "tight_proximity") if turns_back <= TIGHT_PROXIMITY_TURNS else base
 
 
-def iter_hook_complaint_signals(events: Sequence[TranscriptEvent], *, firelog: FireLog) -> Iterator[MiningSignal]:
-    """Yields one :class:`~cc_transcript.domains.mining.MiningSignal` per attributed misfire complaint.
+def iter_hook_complaint_signals(events: Sequence[TranscriptEvent], *, decisions: DecisionLog) -> Iterator[MiningSignal]:
+    """Yields one :class:`~cc_transcript.mining.MiningSignal` per attributed misfire complaint.
 
-    Fires are joined by the events' own session UUID (``claude_session_id``), never by
-    transcript-path hash — the same transcript is reachable under multiple path
-    spellings (symlinked config dirs), so a path-derived key silently misses.
+    Fires are joined by the events' own session UUID — the only session key —
+    plus the tool call's content digest when the fingerprint carries a tool-use
+    id, or by event name and timestamp proximity when it does not.
 
     Args:
         events: The transcript's full ordered event stream.
-        firelog: The fire log joining fingerprint messages to the firing hook.
+        decisions: The decision ledger joining fingerprint traces to the firing hook.
 
     Returns:
         Signals of kind :data:`HOOK_COMPLAINT` whose ``evidence`` stashes the
         attribution (``hook_name``, ``source_file``, ``event``, ``action``,
-        ``fire_ts``, ``fire_message``, ``marker``) plus the resolved
+        ``fire_ts_ms``, ``fire_message``, ``marker``) plus the resolved
         ``target_source_file``/``target_hook_name``/``misfire_class``.
     """
+    uses = tool_uses(events)
     for index, event in enumerate(events):
         if not isinstance(event, AssistantEvent) or event.meta.is_sidechain or not event.text.strip():
             continue
         if (marker := classify_marker(event.text)) is None:
             continue
-        if not (fires := preceding_fires(events, index)):
+        if not (fingerprints := preceding_fingerprints(events, index)):
             continue
-        near_ts = event.meta.timestamp.timestamp()
+        near_ts_ms = int(event.meta.timestamp.timestamp() * 1000)
         attributed = [
-            (i, turns_back, row)
-            for i, turns_back, message in fires
-            if (row := firelog.attribute(claude_session_id=event.meta.session_id, message=message, near_ts=near_ts))
+            (i, turns_back, found)
+            for i, turns_back, fingerprint in fingerprints
+            if (found := attribute_fingerprint(decisions, uses, event.meta.session_id, near_ts_ms, fingerprint))
             is not None
         ]
-        if not attributed or len({(row.source_file, row.hook_name) for _, _, row in attributed}) > 1:
+        if not attributed or len({(found.source_file, found.kind) for _, _, found in attributed}) > 1:
             continue
         trigger_index, turns_back, fire = attributed[0]
         if (target := resolve_target(fire)) is None:
@@ -206,11 +263,11 @@ def iter_hook_complaint_signals(events: Sequence[TranscriptEvent], *, firelog: F
             cc_version=event.meta.cc_version,
             trigger_index=trigger_index,
             evidence={
-                "hook_name": fire.hook_name,
+                "hook_name": fire.kind,
                 "source_file": fire.source_file,
                 "event": fire.event,
                 "action": fire.action,
-                "fire_ts": fire.ts,
+                "fire_ts_ms": fire.ts_ms,
                 "fire_message": fire.message,
                 "marker": marker.matched,
                 "misfire_class": marker.misfire_class,

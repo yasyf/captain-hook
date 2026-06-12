@@ -27,16 +27,15 @@ def isolate_failure_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 class TestSetupLogging:
     def test_writes_per_session_file_with_bound_context(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from captain_hook.log import setup_logging
-        from captain_hook.session import session_hash
 
         monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path / "logs"))
-        transcript = "/tmp/some-transcript.jsonl"
-        setup_logging(transcript)
+        session_id = "sess-bound-context"
+        setup_logging(session_id)
         try:
             logger.bind(marker="xyz123").warning("sink check")
             logger.complete()
 
-            text = (tmp_path / "logs" / f"{session_hash(transcript)}.log").read_text()
+            text = (tmp_path / "logs" / f"{session_id}.log").read_text()
             assert "sink check" in text
             assert "xyz123" in text
             assert "WARNING" in text
@@ -45,11 +44,10 @@ class TestSetupLogging:
 
     def test_renders_exceptions_into_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from captain_hook.log import setup_logging
-        from captain_hook.session import session_hash
 
         monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path / "logs"))
-        transcript = "/tmp/exc-transcript.jsonl"
-        setup_logging(transcript)
+        session_id = "sess-exceptions"
+        setup_logging(session_id)
         try:
             try:
                 raise RuntimeError("kaboom-marker")
@@ -57,7 +55,7 @@ class TestSetupLogging:
                 logger.opt(exception=True).warning("blew up")
             logger.complete()
 
-            text = (tmp_path / "logs" / f"{session_hash(transcript)}.log").read_text()
+            text = (tmp_path / "logs" / f"{session_id}.log").read_text()
             assert "blew up" in text
             assert "kaboom-marker" in text
             assert "RuntimeError" in text
@@ -66,16 +64,15 @@ class TestSetupLogging:
 
     def test_truncates_long_bound_values(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from captain_hook.log import MAX_BOUND_VALUE, setup_logging
-        from captain_hook.session import session_hash
 
         monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path / "logs"))
-        transcript = "/tmp/trunc-transcript.jsonl"
-        setup_logging(transcript)
+        session_id = "sess-truncation"
+        setup_logging(session_id)
         try:
             logger.bind(blob="A" * 1000).warning("long value")
             logger.complete()
 
-            text = (tmp_path / "logs" / f"{session_hash(transcript)}.log").read_text()
+            text = (tmp_path / "logs" / f"{session_id}.log").read_text()
             assert "A" * MAX_BOUND_VALUE + "…" in text
             assert "A" * (MAX_BOUND_VALUE + 1) not in text
         finally:
@@ -217,9 +214,10 @@ class TestLlmLogging:
         from captain_hook.context import HookContext
         from captain_hook.primitives.llm import prompt_check
         from captain_hook.session import SessionStore
+        from captain_hook.testing.helpers import fixture_session
 
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
-        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(spec=["path"], path=None), settings=None)
+        ctx = HookContext(session=SessionStore(None), transcript=fixture_session([]), settings=None)
         marker = "stderr-marker-7f3a9c"
         monkeypatch.setenv("STDERR_MARKER", marker)
         ctx.call_llm = lambda *a, **kw: ctx.call_cli(

@@ -6,7 +6,7 @@ import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
-from cc_transcript.domains.mining.sourcekind import TRANSCRIPT_MESSAGE
+from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE
 from click.testing import CliRunner
 
 from captain_hook.cli import cli, generate_settings

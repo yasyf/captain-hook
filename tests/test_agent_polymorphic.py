@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from captain_hook.conditions import check_condition
+from captain_hook.context import load_transcript
 from captain_hook.events import PreToolUseEvent, SubagentStopEvent
 from captain_hook.tests.helpers import (
     build_ctx,
@@ -15,7 +16,6 @@ from captain_hook.tests.helpers import (
     raw_tool_result,
     raw_tool_use,
 )
-from captain_hook.transcript import Transcript
 from captain_hook.types import Agent, Or, Tool
 
 
@@ -73,16 +73,16 @@ class TestTurnSubagentAccessor:
         sub_jsonl = subagents_dir / "agent-tu_test_runner_1.jsonl"
         sub_jsonl.write_text("\n".join(json.dumps(m) for m in sub_msgs) + "\n")
 
-        ctx = build_ctx(transcript=Transcript.from_path(session_file))
+        ctx = build_ctx(transcript=load_transcript(session_file))
         evt = make_event(PreToolUseEvent, raw={"tool_name": "Bash", "tool_input": {"command": "echo"}}, ctx=ctx)
 
-        accessors = evt.ctx.turn.subagents.with_type("test-runner")
-        assert len(accessors) == 1
-        accessor = accessors[0]
-        assert accessor.id == "tu_test_runner_1"
-        assert accessor.type == "test-runner"
-        assert len(list(accessor.tool_uses.with_errors)) == 3
-        assert accessor.failed is True
+        subagents = evt.ctx.turn.subagents.with_type("test-runner")
+        assert len(subagents) == 1
+        subagent = subagents[0]
+        assert subagent.id == "tu_test_runner_1"
+        assert subagent.type == "test-runner"
+        assert subagent.tool_calls.failed().count() == 3
+        assert subagent.failed is True
 
 
 class TestOrCombinator:

@@ -59,9 +59,8 @@ authors:
     email: yasyfm@gmail.com
 
 # Curated symbol reference (public API only) — the root __init__ re-exports
-# define the API; there is no __all__. ContentBlock, InlineTests, and
-# TCondition are excluded automatically (cyclic aliases under dynamic
-# introspection).
+# define the API; there is no __all__. InlineTests and TCondition are
+# excluded automatically (cyclic aliases under dynamic introspection).
 reference:
   - title: Registration
     desc: Declaring and registering hooks.
@@ -140,40 +139,12 @@ reference:
       - Command
       - CommandLine
       - Redirect
-      - EditOp
-      - WriteOp
-      - TaskOp
 
-  - title: Transcript
-    desc: Typed access to conversation history.
+  - title: Tasks
+    desc: The native task list, read via evt.tasks.
     contents:
-      - Transcript
-      - TranscriptMessage
-      - TranscriptSlice
-      - ToolUse
-      - ToolUseQuery
-      - ToolUseSequence
-      - Turn
       - Task
       - Tasks
-
-  - title: Tool Inputs
-    desc: Parsed tool-input models.
-    contents:
-      - InputBase
-      - FileInputBase
-      - AgentInput
-      - BashInput
-      - EditInput
-      - GenericInput
-      - GlobInput
-      - GrepInput
-      - ReadInput
-      - SkillInput
-      - TaskCreateInput
-      - TaskUpdateInput
-      - WriteInput
-      - ToolResult
 
   - title: Signals
     desc: NLP signal scoring over transcript text.

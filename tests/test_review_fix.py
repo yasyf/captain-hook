@@ -9,17 +9,19 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from cc_transcript import parse_events_from_bytes
-from cc_transcript.domains.mining.candidates import DedupKey, dedup_key
-from cc_transcript.domains.mining.confidence import HIGH, MEDIUM, VERY_HIGH
-from cc_transcript.domains.mining.context import ContextSnapshot, ContextTurn
-from cc_transcript.domains.mining.verdicts import GoldenRow, golden_result
+from cc_transcript.context import SUMMARY_LABEL, ContextWindow, TurnRef
+from cc_transcript.decisions import Decision
+from cc_transcript.ids import SessionId, ToolDigest, tool_digest
+from cc_transcript.judge.verdicts import GoldenRow, golden_result
+from cc_transcript.mining.candidates import DedupKey, dedup_key
+from cc_transcript.mining.confidence import HIGH, MEDIUM, VERY_HIGH
 
-from captain_hook.fire_log import FireLog, FireRow
+from captain_hook.decisions import decisions_db_path, open_decision_log
 from captain_hook.review.fix import (
     COMPLIANCE_RE,
     HOOK_COMPLAINT,
     classify_marker,
-    fire_message,
+    fingerprint_of,
     iter_hook_complaint_signals,
     resolve_target,
 )
@@ -28,7 +30,6 @@ from captain_hook.review.repo import RepoKey
 from captain_hook.review.scan import ScanReport, scan_transcript
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import ReviewStore
-from captain_hook.session import session_hash
 from tests.test_review_scan import (
     assistant_text,
     assistant_tool_use,
@@ -41,18 +42,24 @@ from tests.test_review_scan import (
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from cc_transcript.decisions import DecisionLog
     from cc_transcript.models import TranscriptEvent
+
+    from captain_hook.review.judge import Category
 
 FIXTURES = Path(__file__).parent / "fixtures" / "hook_fires"
 MANIFEST = json.loads((FIXTURES / "manifest.json").read_text())
 MISFIRE_FIXTURE = "fire-misfire-complaint.jsonl"
 REPO = RepoKey("github.com/yasyf/scratch")
 BASE_TS = "2026-06-01T12:00:00+00:00"
-BASE_EPOCH = datetime.fromisoformat(BASE_TS).timestamp()
+BASE_MS = int(datetime.fromisoformat(BASE_TS).timestamp() * 1000)
 PRIMITIVE_NUDGE = "/x/site-packages/captain_hook/primitives/nudge.py"
 NUDGE_MESSAGE = "Remember to use the project's task tracker before running status checks."
+STOP_MESSAGE = "Before you finish: leave a one-line summary of what changed."
 STRONG_COMPLAINT = "**Note**: The task tracker reminder re-fired on a sequence I already completed - ignoring it."
 HEDGED_COMPLAINT = "The lint reminder seems to have misfired here - the file is generated output, not source."
+STOP_COMPLAINT = "That stop gate shouldn't have fired - I had already addressed every open task"
+GIT_STATUS_DIGEST = tool_digest("Bash", {"command": "git status"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,32 +75,40 @@ def fixture_events(name: str) -> list[TranscriptEvent]:
     return parse_events_from_bytes((FIXTURES / name).read_bytes())
 
 
-def seed_fixture_fires(firelog: FireLog, name: str, path: Path) -> None:
-    for row in MANIFEST["files"][name]["fire_log_rows"]:
-        firelog.append(
-            ts=row["ts"],
-            session_id=session_hash(path),
-            claude_session_id=row["claude_session_id"],
-            repo_key=row["repo_key"],
-            hook_name=row["hook_name"],
-            source_file=row["source_file"],
-            event=row["event"],
-            action=row["action"],
-            message=row["message"],
+def seed_fixture_decisions(decisions: DecisionLog, name: str) -> None:
+    for row in MANIFEST["files"][name]["decision_rows"]:
+        decisions.append(
+            Decision(
+                ts_ms=row["ts_ms"],
+                session_id=SessionId(row["session_id"]),
+                source=row["source"],
+                kind=row["kind"],
+                source_file=row["source_file"],
+                event=row["event"],
+                action=row["action"],
+                message=row["message"],
+                tool_digest=ToolDigest(row["tool_digest"]) if row["tool_digest"] else None,
+            )
         )
 
 
-def nudge_attachment(content: str, **overrides: Any) -> dict[str, Any]:
+def nudge_attachment(content: str, *, tool_use_id: str = "t1", **overrides: Any) -> dict[str, Any]:
     return envelope(
         "attachment",
         attachment={
             "type": "hook_additional_context",
             "content": [content],
             "hookName": "PreToolUse:Bash",
-            "toolUseID": "t1",
+            "toolUseID": tool_use_id,
             "hookEvent": "PreToolUse",
         },
         **overrides,
+    )
+
+
+def stop_feedback_turn(content: str, **overrides: Any) -> dict[str, Any]:
+    return envelope(
+        "user", message={"role": "user", "content": f"Stop hook feedback:\n{content}"}, isMeta=True, **overrides
     )
 
 
@@ -115,27 +130,38 @@ async def store(tmp_path: Path) -> AsyncIterator[ReviewStore]:
 
 @pytest.fixture
 def settings(tmp_path: Path) -> ReviewSettings:
-    return ReviewSettings(db_path=tmp_path / "review.db", fire_log_path=tmp_path / "fires.db")
+    return ReviewSettings(db_path=tmp_path / "review.db")
 
 
 @pytest.fixture
-def firelog(settings: ReviewSettings) -> FireLog:
-    return FireLog.open(settings.fire_log_path)
+def decisions() -> DecisionLog:
+    return open_decision_log(decisions_db_path())
 
 
-def seed_nudge_fire(
-    firelog: FireLog, path: Path, *, source_file: str = PRIMITIVE_NUDGE, claude_session_id: str = "sess-1"
+def seed_decision(
+    decisions: DecisionLog,
+    *,
+    ts_ms: int = BASE_MS - 10_000,
+    session_id: str = "sess-1",
+    kind: str = "status_nudge:nudge_c424798f",
+    source_file: str = PRIMITIVE_NUDGE,
+    event: str = "PreToolUse",
+    action: str = "warn",
+    message: str | None = NUDGE_MESSAGE,
+    tool_digest: ToolDigest | None = GIT_STATUS_DIGEST,
 ) -> None:
-    firelog.append(
-        ts=BASE_EPOCH - 10,
-        session_id=session_hash(path),
-        claude_session_id=claude_session_id,
-        repo_key=str(REPO),
-        hook_name="status_nudge:nudge_c424798f",
-        source_file=source_file,
-        event="PreToolUse",
-        action="warn",
-        message=NUDGE_MESSAGE,
+    decisions.append(
+        Decision(
+            ts_ms=ts_ms,
+            session_id=SessionId(session_id),
+            source="captain-hook",
+            kind=kind,
+            source_file=source_file,
+            event=event,
+            action=action,
+            message=message,
+            tool_digest=tool_digest,
+        )
     )
 
 
@@ -201,16 +227,24 @@ class TestFingerprints:
     def test_manifest_fingerprints_match_parser_view(self, name: str) -> None:
         events = fixture_events(name)
         for fp in MANIFEST["files"][name]["fingerprints"]:
-            extracted = fire_message(events[fp["line"] - 1])
+            extracted = fingerprint_of(events[fp["line"] - 1])
             match fp["kind"]:
                 case "hook_additional_context":
-                    assert extracted == "\n".join(fp["content"])
+                    assert extracted is not None
+                    assert extracted.message == "\n".join(fp["content"])
+                    assert extracted.tool_use_id is not None
                 case "hook_blocking_error":
-                    assert extracted == fp["blockingError"]["blockingError"]
+                    assert extracted is not None
+                    assert extracted.message == fp["blockingError"]["blockingError"]
+                    assert extracted.event == "Stop"
                 case "stop_hook_feedback_meta_turn":
-                    assert extracted == fp["content"].removeprefix("Stop hook feedback:\n")
+                    assert extracted is not None
+                    assert extracted.message == fp["content"].removeprefix("Stop hook feedback:\n")
+                    assert extracted.event == "Stop"
                 case "is_error_tool_result":
-                    assert extracted == fp["content"]
+                    assert extracted is not None
+                    assert extracted.message == fp["content"]
+                    assert extracted.tool_use_id is not None
                 case "hook_success":
                     assert extracted is None
                 case unknown:
@@ -226,12 +260,12 @@ class TestFingerprints:
                 + json.dumps(tool_result("t1", "ok"))
             ).encode()
         )
-        assert [fire_message(event) for event in events] == [None, None, None]
+        assert [fingerprint_of(event) for event in events] == [None, None, None]
 
 
 class TestResolveTarget:
     @pytest.mark.parametrize(
-        ("source_file", "hook_name", "expected"),
+        ("source_file", "kind", "expected"),
         [
             pytest.param(
                 PRIMITIVE_NUDGE,
@@ -254,28 +288,24 @@ class TestResolveTarget:
             ),
         ],
     )
-    def test_resolve_target(self, source_file: str, hook_name: str, expected: tuple[str, str] | None) -> None:
-        row = FireRow(
-            id=1,
-            ts=BASE_EPOCH,
-            session_id="s",
-            claude_session_id=None,
-            repo_key=None,
-            hook_name=hook_name,
+    def test_resolve_target(self, source_file: str, kind: str, expected: tuple[str, str] | None) -> None:
+        decision = Decision(
+            ts_ms=BASE_MS,
+            session_id=SessionId("sess-1"),
+            source="captain-hook",
+            kind=kind,
             source_file=source_file,
             event="PreToolUse",
             action="warn",
             message="m",
         )
-        assert resolve_target(row) == expected
+        assert resolve_target(decision) == expected
 
 
 class TestDetector:
-    def test_real_misfire_complaint_attributes_to_user_hook_not_primitive(self, firelog: FireLog) -> None:
-        path = FIXTURES / MISFIRE_FIXTURE
-        seed_fixture_fires(firelog, MISFIRE_FIXTURE, path)
-        [sig] = iter_hook_complaint_signals(
-            fixture_events(MISFIRE_FIXTURE), firelog=firelog)
+    def test_real_misfire_complaint_attributes_to_user_hook_not_primitive(self, decisions: DecisionLog) -> None:
+        seed_fixture_decisions(decisions, MISFIRE_FIXTURE)
+        [sig] = iter_hook_complaint_signals(fixture_events(MISFIRE_FIXTURE), decisions=decisions)
         assert sig.kind == HOOK_COMPLAINT
         assert "re-fired unnecessarily and I am ignoring the repeats" in sig.text
         assert sig.evidence["target_source_file"] == ".claude/hooks/status_nudge.py"
@@ -283,20 +313,20 @@ class TestDetector:
         assert str(sig.evidence["source_file"]).endswith("captain_hook/primitives/nudge.py")
         assert (sig.evidence["event"], sig.evidence["action"]) == ("PreToolUse", "warn")
         assert sig.evidence["fire_message"] == NUDGE_MESSAGE
-        assert sig.evidence["fire_ts"] == 1781224517.348702
+        assert sig.evidence["fire_ts_ms"] == 1781224517348
         assert (sig.evidence["marker"], sig.evidence["misfire_class"]) == ("re-fired", "refire")
         assert sig.signal is not None
         assert sig.signal.confidence == VERY_HIGH
         assert sig.signal.reasons == ("strong_marker", "refire")
 
     @pytest.mark.parametrize("name", ["fire-compliance.jsonl", "fire-block.jsonl", "fire-stop.jsonl"])
-    def test_compliance_and_working_fire_fixtures_yield_nothing(self, firelog: FireLog, name: str) -> None:
-        path = FIXTURES / name
-        seed_fixture_fires(firelog, name, path)
-        events = fixture_events(name)
-        assert list(iter_hook_complaint_signals(events, firelog=firelog)) == []
+    def test_compliance_and_working_fire_fixtures_yield_nothing(self, decisions: DecisionLog, name: str) -> None:
+        seed_fixture_decisions(decisions, name)
+        assert list(iter_hook_complaint_signals(fixture_events(name), decisions=decisions)) == []
 
-    def test_complaint_with_no_preceding_fingerprint_yields_nothing(self, firelog: FireLog, tmp_path: Path) -> None:
+    def test_complaint_with_no_preceding_fingerprint_yields_nothing(
+        self, decisions: DecisionLog, tmp_path: Path
+    ) -> None:
         path = tmp_path / "s.jsonl"
         entries = [
             user_text("run a status check"),
@@ -304,28 +334,38 @@ class TestDetector:
             assistant_text(STRONG_COMPLAINT),
         ]
         write_transcript(path, entries)
-        seed_nudge_fire(firelog, path)
+        seed_decision(decisions)
         events = parse_events_from_bytes(path.read_bytes())
-        assert list(iter_hook_complaint_signals(events, firelog=firelog)) == []
+        assert list(iter_hook_complaint_signals(events, decisions=decisions)) == []
 
-    def test_complaint_with_no_fire_log_row_yields_nothing(self, firelog: FireLog) -> None:
-        path = FIXTURES / MISFIRE_FIXTURE
+    def test_complaint_with_no_decision_row_yields_nothing(self, decisions: DecisionLog) -> None:
         events = fixture_events(MISFIRE_FIXTURE)
-        assert list(iter_hook_complaint_signals(events, firelog=firelog)) == []
+        assert list(iter_hook_complaint_signals(events, decisions=decisions)) == []
 
-    def test_ambiguous_attribution_across_source_files_drops(self, firelog: FireLog) -> None:
-        path = FIXTURES / MISFIRE_FIXTURE
-        seed_fixture_fires(firelog, MISFIRE_FIXTURE, path)
-        seed_nudge_fire(
-            firelog,
-            path,
+    def test_fingerprints_attributing_to_two_targets_drop(self, decisions: DecisionLog, tmp_path: Path) -> None:
+        other_message = "Prefer `eza` over `ls` in this repo."
+        path = tmp_path / "s.jsonl"
+        entries = [
+            user_text("run the checks"),
+            assistant_tool_use("t1", "Bash", {"command": "git status"}),
+            nudge_attachment(NUDGE_MESSAGE, tool_use_id="t1"),
+            assistant_tool_use("t2", "Bash", {"command": "ls"}),
+            nudge_attachment(other_message, tool_use_id="t2"),
+            assistant_text(STRONG_COMPLAINT),
+        ]
+        write_transcript(path, entries)
+        seed_decision(decisions)
+        seed_decision(
+            decisions,
+            kind="other_hook:nudge_deadbeef",
             source_file="/repo/.claude/hooks/other.py",
-            claude_session_id=str(MANIFEST["files"][MISFIRE_FIXTURE]["fire_log_rows"][0]["claude_session_id"]),
+            message=other_message,
+            tool_digest=tool_digest("Bash", {"command": "ls"}),
         )
-        events = fixture_events(MISFIRE_FIXTURE)
-        assert list(iter_hook_complaint_signals(events, firelog=firelog)) == []
+        events = parse_events_from_bytes(path.read_bytes())
+        assert list(iter_hook_complaint_signals(events, decisions=decisions)) == []
 
-    def test_anonymous_declarative_fire_drops(self, firelog: FireLog, tmp_path: Path) -> None:
+    def test_anonymous_declarative_fire_drops(self, decisions: DecisionLog, tmp_path: Path) -> None:
         deny = "BLOCKED: recursive force-delete (rm -rf) is forbidden in this repo."
         path = tmp_path / "s.jsonl"
         entries = [
@@ -334,21 +374,18 @@ class TestDetector:
             assistant_text(f"That rm guard misfired - the path is a scratch dir. {deny}"),
         ]
         write_transcript(path, entries)
-        firelog.append(
-            ts=BASE_EPOCH - 10,
-            session_id=session_hash(path),
-            claude_session_id="sess-1",
-            repo_key=str(REPO),
-            hook_name="declarative_1",
+        seed_decision(
+            decisions,
+            kind="declarative_1",
             source_file="",
-            event="PreToolUse",
             action="block",
             message=deny,
+            tool_digest=tool_digest("Bash", {"command": "rm -rf scratch"}),
         )
         events = parse_events_from_bytes(path.read_bytes())
-        assert list(iter_hook_complaint_signals(events, firelog=firelog)) == []
+        assert list(iter_hook_complaint_signals(events, decisions=decisions)) == []
 
-    def test_tight_proximity_bumps_hedged_to_high(self, firelog: FireLog, tmp_path: Path) -> None:
+    def test_tight_proximity_bumps_hedged_to_high(self, decisions: DecisionLog, tmp_path: Path) -> None:
         path = tmp_path / "s.jsonl"
         entries = [
             user_text("run a status check"),
@@ -357,12 +394,58 @@ class TestDetector:
             assistant_text(HEDGED_COMPLAINT),
         ]
         write_transcript(path, entries)
-        seed_nudge_fire(firelog, path)
+        seed_decision(decisions)
         events = parse_events_from_bytes(path.read_bytes())
-        [sig] = iter_hook_complaint_signals(events, firelog=firelog)
+        [sig] = iter_hook_complaint_signals(events, decisions=decisions)
         assert sig.signal is not None
         assert sig.signal.confidence == MEDIUM + 0.25
         assert sig.signal.reasons == ("hedged_marker", "misfire", "tight_proximity")
+
+    def test_digestless_stop_complaint_attributes_via_nearest(self, decisions: DecisionLog, tmp_path: Path) -> None:
+        path = tmp_path / "s.jsonl"
+        entries = [
+            user_text("wrap up the change"),
+            assistant_text("done with the work"),
+            stop_feedback_turn(STOP_MESSAGE),
+            assistant_text(STOP_COMPLAINT),
+        ]
+        write_transcript(path, entries)
+        seed_decision(
+            decisions,
+            kind="stop_reminder:gate_e76ccd07",
+            event="Stop",
+            action="block",
+            message=STOP_MESSAGE,
+            tool_digest=None,
+        )
+        events = parse_events_from_bytes(path.read_bytes())
+        [sig] = iter_hook_complaint_signals(events, decisions=decisions)
+        assert sig.evidence["target_source_file"] == ".claude/hooks/stop_reminder.py"
+        assert sig.evidence["target_hook_name"] == "stop_reminder:gate_e76ccd07"
+        assert (sig.evidence["event"], sig.evidence["action"]) == ("Stop", "block")
+        assert sig.evidence["misfire_class"] == "already_addressed"
+
+    def test_digestless_attribution_requires_the_message_tiebreak(
+        self, decisions: DecisionLog, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "s.jsonl"
+        entries = [
+            user_text("wrap up the change"),
+            assistant_text("done with the work"),
+            stop_feedback_turn(STOP_MESSAGE),
+            assistant_text(STOP_COMPLAINT),
+        ]
+        write_transcript(path, entries)
+        seed_decision(
+            decisions,
+            kind="other_gate:gate_deadbeef",
+            event="Stop",
+            action="block",
+            message="A different gate's text entirely.",
+            tool_digest=None,
+        )
+        events = parse_events_from_bytes(path.read_bytes())
+        assert list(iter_hook_complaint_signals(events, decisions=decisions)) == []
 
 
 class TestStrictFixPartition:
@@ -376,21 +459,21 @@ class TestStrictFixPartition:
         ]
 
     async def test_hedged_complaint_passes_the_default_fix_floor(
-        self, store: ReviewStore, settings: ReviewSettings, firelog: FireLog, tmp_path: Path
+        self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog, tmp_path: Path
     ) -> None:
         path = write_transcript(tmp_path / "s.jsonl", self.hedged_entries())
-        seed_nudge_fire(firelog, path)
+        seed_decision(decisions)
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
         [event] = await rows(store, "SELECT * FROM feedback_events")
         assert event["source_kind"] == HOOK_COMPLAINT
         assert json.loads(str(event["payload_json"]))["signal"]["confidence"] == MEDIUM
 
     async def test_hedged_complaint_drops_under_a_raised_fix_floor(
-        self, store: ReviewStore, settings: ReviewSettings, firelog: FireLog, tmp_path: Path
+        self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog, tmp_path: Path
     ) -> None:
-        raised = ReviewSettings(db_path=settings.db_path, fire_log_path=settings.fire_log_path, min_confidence_fix=HIGH)
+        raised = ReviewSettings(db_path=settings.db_path, min_confidence_fix=HIGH)
         path = write_transcript(tmp_path / "s.jsonl", self.hedged_entries())
-        seed_nudge_fire(firelog, path)
+        seed_decision(decisions)
         assert await scan_transcript(store, path, settings=raised, repo_key=REPO) == ScanReport(scanned=1, inserted=0)
         assert await rows(store, "SELECT * FROM feedback_events") == []
         assert await rows(store, "SELECT * FROM candidates") == []
@@ -398,10 +481,10 @@ class TestStrictFixPartition:
 
 class TestFixGroupingAndStore:
     async def test_end_to_end_fixture_scan_creates_fix_candidate_with_target(
-        self, store: ReviewStore, settings: ReviewSettings, firelog: FireLog
+        self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog
     ) -> None:
         path = FIXTURES / MISFIRE_FIXTURE
-        seed_fixture_fires(firelog, MISFIRE_FIXTURE, path)
+        seed_fixture_decisions(decisions, MISFIRE_FIXTURE)
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
 
         [event] = await rows(store, "SELECT * FROM feedback_events")
@@ -409,6 +492,7 @@ class TestFixGroupingAndStore:
         payload = json.loads(str(event["payload_json"]))
         assert payload["target_source_file"] == ".claude/hooks/status_nudge.py"
         assert payload["signal"]["confidence"] == VERY_HIGH
+        assert json.loads(str(event["context_json"]))["schema"] == "cc-transcript.context/1"
 
         [candidate] = await rows(store, "SELECT * FROM candidates")
         assert (candidate["candidate_kind"], candidate["status"]) == ("fix", "watching")
@@ -427,6 +511,7 @@ class TestFixGroupingAndStore:
             role="judge",
             prompt_version=REVIEW_PROMPT_VERSION,
             model="m1",
+            fidelity="full",
         )
         status = await store.threshold_status(
             int(candidate["id"]), settings=settings, prompt_version=REVIEW_PROMPT_VERSION
@@ -435,11 +520,11 @@ class TestFixGroupingAndStore:
         assert await store.eligible(int(candidate["id"]), settings=settings, prompt_version=REVIEW_PROMPT_VERSION)
 
     async def test_two_sessions_complaints_about_one_hook_group_under_one_candidate(
-        self, store: ReviewStore, settings: ReviewSettings, firelog: FireLog, tmp_path: Path
+        self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog, tmp_path: Path
     ) -> None:
         for session in ("s1", "s2"):
             path = write_transcript(tmp_path / f"{session}.jsonl", complaint_entries(STRONG_COMPLAINT, session=session))
-            seed_nudge_fire(firelog, path, claude_session_id=session)
+            seed_decision(decisions, session_id=session)
             assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(
                 scanned=1, inserted=1
             )
@@ -458,6 +543,7 @@ class TestFixGroupingAndStore:
                 role="judge",
                 prompt_version=REVIEW_PROMPT_VERSION,
                 model="m1",
+                fidelity="full",
             )
         status = await store.threshold_status(
             int(candidate["id"]), settings=settings, prompt_version=REVIEW_PROMPT_VERSION
@@ -475,19 +561,23 @@ class TestFixJudge:
             pytest.param("ambient_mention", False, id="ambient-rejected"),
         ],
     )
-    def test_fix_categories_drive_acceptance(self, category: Any, accepted: bool) -> None:
+    def test_fix_categories_drive_acceptance(self, category: Category, accepted: bool) -> None:
         verdict = ReviewVerdict(category=category, summary="s", confidence=0.5, rationale="r")
         assert verdict.accepted is accepted
 
-    def test_hook_complaint_rows_get_the_fix_prompt(self) -> None:
-        snapshot = ContextSnapshot(
-            before=(ContextTurn(role="assistant", text="running git status"),),
+    async def test_hook_complaint_rows_get_the_fix_prompt(self) -> None:
+        window = ContextWindow(
+            anchor=None,
+            before=(TurnRef(role="assistant", refs=(), preview="running git status", tool_digests=()),),
             trigger=None,
             after=(),
+            fidelity="full",
+            preview_chars=200,
+            origin="live",
         )
         row = {
             "source_kind": "hook_complaint",
-            "context_json": snapshot.to_json(),
+            "context_json": window.to_json(),
             "text": STRONG_COMPLAINT,
             "payload_json": json.dumps(
                 {
@@ -498,17 +588,23 @@ class TestFixJudge:
                 }
             ),
         }
-        prompt = build_prompt(row)
+        prompt, fidelity = await build_prompt(row)
+        assert fidelity == "summary"
+        assert SUMMARY_LABEL in prompt
         assert "misfire_confirmed" in prompt
         assert "[hook: status_nudge:nudge_c424798f (PreToolUse/warn)]" in prompt
         assert NUDGE_MESSAGE in prompt
         assert STRONG_COMPLAINT in prompt
         assert "running git status" in prompt
 
-    def test_create_rows_keep_the_create_prompt(self) -> None:
-        snapshot = ContextSnapshot(before=(), trigger=None, after=())
-        row = {"source_kind": "transcript_message", "context_json": snapshot.to_json(), "text": "never do X"}
-        assert "DURABLE correction worth encoding as an" in build_prompt(row)
+    async def test_create_rows_keep_the_create_prompt(self) -> None:
+        window = ContextWindow(
+            anchor=None, before=(), trigger=None, after=(), fidelity="full", preview_chars=200, origin="live"
+        )
+        row = {"source_kind": "transcript_message", "context_json": window.to_json(), "text": "never do X"}
+        prompt, fidelity = await build_prompt(row)
+        assert fidelity == "summary"
+        assert "DURABLE correction worth encoding as an" in prompt
 
 
 class TestGoldenReview:

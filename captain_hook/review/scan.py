@@ -1,12 +1,15 @@
 """The transcript scanner: mine user corrections and hook-misfire complaints into PR candidates.
 
-The fact-recognition mechanism lives in :mod:`cc_transcript.domains.mining` (the
+The fact-recognition mechanism lives in :mod:`cc_transcript.mining` (the
 six CREATE-mode user-correction detectors) and
 :mod:`captain_hook.review.fix` (the FIX-mode :func:`~captain_hook.review.fix.iter_hook_complaint_signals`
 detector over assistant turns); this module injects the reviewer's policy over
 raw core transcript events read via :class:`cc_transcript.TranscriptParser` and
 persists every surviving signal through one ingest codepath into
-:class:`~captain_hook.review.store.ReviewStore`. The candidate floors partition
+:class:`~captain_hook.review.store.ReviewStore`. Each surviving signal captures
+its durable :class:`~cc_transcript.context.ContextWindow` via
+:func:`~cc_transcript.context.capture_window` over the transcript lifted into a
+:class:`~cc_transcript.activity.SessionActivity`. The candidate floors partition
 by kind: user-correction kinds gate under :data:`STRICT_USER` (event prefilter,
 trigger-absence disqualification, the ``min_confidence`` floor) while
 ``hook_complaint`` gates under the ``STRICT_FIX`` floor (``min_confidence_fix``)
@@ -29,6 +32,7 @@ from dataclasses import dataclass
 from itertools import chain
 from typing import TYPE_CHECKING
 
+from cc_transcript.activity import SessionActivity
 from cc_transcript.builders import (
     build_spec,
     drop_compacted,
@@ -40,18 +44,8 @@ from cc_transcript.builders import (
     drop_sidechain,
     keep_only,
 )
+from cc_transcript.context import capture_window
 from cc_transcript.discovery import TranscriptDiscovery
-from cc_transcript.domains.mining.candidates import FeedbackCandidate, dedup_key
-from cc_transcript.domains.mining.context import build_snapshot
-from cc_transcript.domains.mining.filterspec import at_least, build_candidate_filter, keep_candidate
-from cc_transcript.domains.mining.signals import (
-    iter_interrupt_marker_signals,
-    iter_plan_reentry_signals,
-    iter_plan_rejection_signals,
-    iter_review_comment_signals,
-    iter_tool_denial_signals,
-    iter_user_message_signals,
-)
 from cc_transcript.filterspec import (
     RESUME_PHRASE_SET,
     TRIVIAL_ACK_SET,
@@ -60,10 +54,21 @@ from cc_transcript.filterspec import (
     event_meta,
     keep,
 )
+from cc_transcript.ids import EventRef
+from cc_transcript.mining.candidates import FeedbackCandidate, dedup_key
+from cc_transcript.mining.filterspec import at_least, build_candidate_filter, keep_candidate
+from cc_transcript.mining.signals import (
+    iter_interrupt_marker_signals,
+    iter_plan_reentry_signals,
+    iter_plan_rejection_signals,
+    iter_review_comment_signals,
+    iter_tool_denial_signals,
+    iter_user_message_signals,
+)
 from cc_transcript.models import UserEvent
 from cc_transcript.parser import TranscriptParser
 
-from captain_hook.fire_log import open_fire_log
+from captain_hook.decisions import decisions_db_path, open_decision_log
 from captain_hook.review.fix import HOOK_COMPLAINT, iter_hook_complaint_signals
 from captain_hook.review.formats import formats
 from captain_hook.review.repo import resolve_repo_key
@@ -75,7 +80,7 @@ if TYPE_CHECKING:
     from typing import Any
 
     from cc_transcript.backend import ParsedTranscript
-    from cc_transcript.domains.mining.signals import MiningSignal
+    from cc_transcript.mining.signals import MiningSignal
     from cc_transcript.models import TranscriptEvent
 
     from captain_hook.review.repo import RepoKey
@@ -169,16 +174,16 @@ def payload_of(sig: MiningSignal) -> Mapping[str, Any] | None:
             raise AssertionError(sig.detector)
 
 
-def to_candidate(path: Path, events: Sequence[TranscriptEvent], sig: MiningSignal) -> FeedbackCandidate:
+def to_candidate(activity: SessionActivity, sig: MiningSignal) -> FeedbackCandidate:
+    anchor = EventRef(sig.session_id, sig.event_uuid)
     return FeedbackCandidate(
         dedup_key=dedup_key(*parts(sig)),
         source_kind=sig.kind,
         occurred_at=sig.occurred_at,
         text=sig.text,
-        context=build_snapshot(events, sig.event_index, lower_bound=sig.lower_bound),
+        window=capture_window(activity, anchor),
+        ref=anchor,
         session_id=sig.session_id,
-        origin_path=path,
-        origin_uuid=sig.event_uuid,
         cc_version=sig.cc_version,
         payload=payload_of(sig),
         signal=sig.signal,
@@ -206,19 +211,19 @@ def detect(events: Sequence[TranscriptEvent]) -> Iterator[MiningSignal]:
 
 
 def candidates_from(
-    path: Path, events: Sequence[TranscriptEvent], signals: Iterable[MiningSignal], *, settings: ReviewSettings
+    events: Sequence[TranscriptEvent], signals: Iterable[MiningSignal], *, settings: ReviewSettings
 ) -> Iterator[tuple[MiningSignal, FeedbackCandidate]]:
     strict_user = build_candidate_filter(at_least(settings.min_confidence))
     strict_fix = build_candidate_filter(at_least(settings.min_confidence_fix))
-    return (
-        (sig, candidate)
-        for sig in signals
-        if survives(events, sig)
-        if keep_candidate(
-            candidate := to_candidate(path, events, sig),
-            strict_fix if sig.kind == HOOK_COMPLAINT else strict_user,
-        )
-    )
+    activity: SessionActivity | None = None
+    for sig in signals:
+        if not survives(events, sig):
+            continue
+        if activity is None:
+            activity = SessionActivity.from_events(sig.session_id, events)
+        candidate = to_candidate(activity, sig)
+        if keep_candidate(candidate, strict_fix if sig.kind == HOOK_COMPLAINT else strict_user):
+            yield sig, candidate
 
 
 def is_reviewer_session(events: Sequence[TranscriptEvent]) -> bool:
@@ -246,10 +251,10 @@ async def ingest(
         await store.record_file_scan(str(parsed.path), parsed.mtime, [])
         return ScanReport(scanned=1, inserted=0)
     signals = chain(
-        iter_hook_complaint_signals(parsed.events, firelog=open_fire_log(settings.fire_log_path)),
+        iter_hook_complaint_signals(parsed.events, decisions=open_decision_log(decisions_db_path())),
         detect(parsed.events),
     )
-    kept = list(candidates_from(parsed.path, parsed.events, signals, settings=settings))
+    kept = list(candidates_from(parsed.events, signals, settings=settings))
     inserted = await store.record_file_scan(str(parsed.path), parsed.mtime, [candidate for _, candidate in kept])
     for sig, candidate in kept:
         candidate_id = (

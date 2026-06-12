@@ -109,7 +109,7 @@ class MinEdits(CustomCondition):
     threshold: int = 5
 
     def check(self, evt: BaseHookEvent) -> bool:
-        return evt.ctx.t.tool_uses.where(name="Edit").count() >= self.threshold
+        return evt.ctx.t.tool_calls.named("Edit").count() >= self.threshold
 
 hook(Event.Stop, message="Many edits, run a review", only_if=[MinEdits(threshold=10)])
 ```

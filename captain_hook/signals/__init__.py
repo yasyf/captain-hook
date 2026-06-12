@@ -4,6 +4,8 @@ import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from cc_transcript.models import AssistantEvent, UserEvent
+
 from captain_hook.signals.nlp import NlpSignal
 from captain_hook.types import Event, Signal, Signals
 
@@ -42,15 +44,19 @@ def extract_signal_context(patterns: Sequence[TSignalPattern], text: str) -> lis
 
 
 def transcript_texts(evt: BaseHookEvent, window: int) -> list[str]:
-    """Extract text from recent transcript messages for signal scoring.
+    """Extract text from recent transcript events for signal scoring.
 
     For ``UserPromptSubmit`` events, returns just the user prompt.
-    Otherwise returns ``.text`` from the last ``window`` messages.
+    Otherwise returns ``.text`` from the last ``window`` events.
     """
     return (
         [evt.user_prompt]
         if evt.event == Event.UserPromptSubmit and evt.user_prompt
-        else [msg.text for msg in evt.ctx.t.recent(window).messages if msg.text]
+        else [
+            text
+            for event in evt.ctx.t.recent(window).events
+            if isinstance(event, UserEvent | AssistantEvent) and (text := event.text)
+        ]
     )
 
 

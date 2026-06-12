@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from captain_hook.app import _state, hook as register_hook, on, reset
+from captain_hook.app import hook as register_hook, reset
 from captain_hook.events import (
     PreToolUseEvent,
     SessionEndEvent,
@@ -14,7 +14,6 @@ from captain_hook.events import (
     SubagentStopEvent,
     UserPromptSubmitEvent,
 )
-from captain_hook.transcript import Transcript
 from captain_hook.types import Action, Event, HookResult, Tool
 
 
@@ -188,13 +187,9 @@ class TestMockEvent:
         assert evt._raw["prompt"] == "do this"
 
     def test_mock_event_with_transcript(self):
-        from captain_hook.tests.helpers import mock_event
+        from captain_hook.tests.helpers import fixture_session, mock_event
 
-        transcript = Transcript.from_messages(
-            [
-                {"type": "user", "message": {"content": "hello"}},
-            ]
-        )
+        transcript = fixture_session([{"type": "user", "message": {"content": "hello"}}])
         evt = mock_event("PreToolUse", tool="Bash", command="ls", transcript=transcript)
         assert evt.ctx.transcript is transcript
 

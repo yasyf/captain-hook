@@ -333,7 +333,7 @@ class TestSettingsDrift:
         root_dir = tmp_path / "project"
         self.write_settings(root_dir, "PreToolUse")
 
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
+        stdin = json.dumps({"session_id": "drift-sess", "tool_name": "Bash", "tool_input": {"command": "echo hi"}})
         first = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), root_dir=str(root_dir), stdin_data=stdin)
         assert first.returncode == 0
         assert "UserPromptSubmit" in first.stdout
@@ -411,7 +411,9 @@ class TestCLIWithContext:
         """)
         )
 
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
+        stdin = json.dumps(
+            {"session_id": "max-fires-sess", "tool_name": "Bash", "tool_input": {"command": "echo hi"}}
+        )
         root_dir = tmp_path / "project"
         root_dir.mkdir()
 
@@ -579,7 +581,7 @@ class TestTranscriptWiring:
                     turn = evt.ctx.turn
                     return HookResult(
                         action=Action.warn,
-                        message=f"turn start_idx={turn.start_idx}",
+                        message=f"turn events={len(turn)} prompt={turn.user_text}",
                     )
                 except Exception as e:
                     return HookResult(action=Action.block, message=f"turn error: {e}")
@@ -598,7 +600,8 @@ class TestTranscriptWiring:
         assert result.stdout.strip()
         output = json.loads(result.stdout)
         raw = json.dumps(output)
-        assert "turn start_idx=" in raw, f"unexpected output: {raw}"
+        assert "turn events=4" in raw, f"unexpected output: {raw}"
+        assert "prompt=fix the bug" in raw, f"unexpected output: {raw}"
         assert "turn error" not in raw, f"turn access failed: {raw}"
 
     def test_cli_agent_transcript_path_preferred(self, tmp_path: Path) -> None:
@@ -644,7 +647,7 @@ class TestTranscriptWiring:
         raw = json.dumps(output)
         assert "transcript has 4 messages" in raw, f"expected agent transcript (4 msgs), got: {raw}"
 
-    def test_cli_session_scoped_to_transcript(self, tmp_path: Path) -> None:
+    def test_cli_session_scoped_to_session_id(self, tmp_path: Path) -> None:
         hooks_dir = tmp_path / "hooks"
         hooks_dir.mkdir()
         (hooks_dir / "__init__.py").write_text("")
@@ -664,6 +667,7 @@ class TestTranscriptWiring:
 
         stdin = json.dumps(
             {
+                "session_id": "scoped-sess-a",
                 "tool_name": "Bash",
                 "tool_input": {"command": "echo hi"},
                 "transcript_path": str(transcript),
@@ -692,13 +696,12 @@ class TestTranscriptWiring:
         assert result2.returncode == 0
         assert result2.stdout.strip() == ""
 
-        other_transcript = tmp_path / "other_transcript.jsonl"
-        self._make_transcript_jsonl(other_transcript)
         stdin_other = json.dumps(
             {
+                "session_id": "scoped-sess-b",
                 "tool_name": "Bash",
                 "tool_input": {"command": "echo hi"},
-                "transcript_path": str(other_transcript),
+                "transcript_path": str(transcript),
             }
         )
         result3 = run_cli(
@@ -709,7 +712,7 @@ class TestTranscriptWiring:
             stdin_data=stdin_other,
         )
         assert result3.returncode == 0
-        assert "once only" in result3.stdout, "different transcript should have fresh session"
+        assert "once only" in result3.stdout, "different session id should have fresh session"
 
     def test_cli_no_transcript_path_still_works(self, tmp_path: Path) -> None:
         hooks_dir = tmp_path / "hooks"
@@ -835,16 +838,15 @@ class TestLogsSubcommand:
         show_logs(session="old")
         assert capsys.readouterr().out == "OLD-A\nOLD-B\n"
 
-    def test_session_transcript_path_resolves_via_hash(
+    def test_session_transcript_path_resolves_via_stem(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         from captain_hook.cli import show_logs
-        from captain_hook.session import session_hash
 
         monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path))
-        (tmp_path / f"{session_hash('/tmp/t.jsonl')}.log").write_text("BY-HASH")
+        (tmp_path / "t.log").write_text("BY-STEM")
         show_logs(session="/tmp/t.jsonl")
-        assert capsys.readouterr().out == "BY-HASH\n"
+        assert capsys.readouterr().out == "BY-STEM\n"
 
     def test_missing_dir_prints_to_stderr(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

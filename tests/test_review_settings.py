@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from cc_transcript.domains.mining.confidence import MEDIUM, VERY_HIGH
+from cc_transcript.mining import MEDIUM, VERY_HIGH
 
 from captain_hook.review.settings import ReviewSettings
 

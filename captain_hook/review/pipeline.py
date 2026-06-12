@@ -184,7 +184,8 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
     """Runs the detached reviewer pass over one ended session.
 
     Scan, judge, and PR sync run whenever the repo is watched — verdicts
-    amortize per session — and the brain spawns only when at least one
+    amortize per session, and summary-fidelity verdicts re-judge once their
+    windows hydrate again — and the brain spawns only when at least one
     candidate is eligible.
 
     Args:
@@ -206,7 +207,7 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
         if not await store.watching(repo):
             return SpawnReport(repo=repo)
         scan = await scan_transcript(store, transcript, settings=settings, repo_key=repo)
-        verdicts = await judge_pass(store, settings=settings)
+        verdicts = await judge_pass(store, settings=settings, refresh_summary=True)
         await sync_open_prs(store, repo, settings=settings)
         eligible = tuple(
             [

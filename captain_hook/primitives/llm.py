@@ -12,7 +12,6 @@ from pydantic import BaseModel
 from captain_hook import state
 from captain_hook.app import on
 from captain_hook.prompt import Prompt
-from captain_hook.session import session_hash
 from captain_hook.signals import extract_signal_context, resolve_signals, transcript_texts
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import (
@@ -305,7 +304,7 @@ def record_prompt_check_failure(
         case _:
             argv, exit_code, stdout, stderr = None, None, "", ""
 
-    failure_path = FAILURE_ROOT / (session_hash(p) if (p := evt.ctx.t.path) else "unknown") / f"{timestamp}.json"
+    failure_path = FAILURE_ROOT / (p.stem if (p := evt.ctx.t.path) else "unknown") / f"{timestamp}.json"
     failure_path.parent.mkdir(parents=True, exist_ok=True)
     failure_path.write_text(
         json.dumps(
@@ -347,9 +346,7 @@ def prompt_check(
     response_model: type[PromptCheckVerdict] = PromptCheckVerdict,
 ) -> HookResult | None:
     """Run an LLM check with a formatted prompt and return block/warn/None."""
-    reasoning = ""
-    if include_reasoning:
-        reasoning = evt.ctx.t.recent(50).assistant_text() if hasattr(evt.ctx.t, "recent") else ""
+    reasoning = evt.ctx.t.recent(50).assistant_text() if include_reasoning else ""
 
     base = template if isinstance(template, Prompt) else Prompt().system(template.format(**(fmt or {})))
     built = base.context("agent_reasoning", reasoning or None)

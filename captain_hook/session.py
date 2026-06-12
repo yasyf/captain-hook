@@ -4,15 +4,19 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from collections.abc import Sequence
-from hashlib import sha256
 from pathlib import Path
 from typing import ClassVar, Generic, TypeVar, overload
 
+from cc_transcript.discovery import find_transcript_sync
+from cc_transcript.ids import SessionId
 from loguru import logger
 from pydantic import BaseModel
 
 M = TypeVar("M", bound=BaseModel)
+
+STALE_AGE_SECONDS = 30 * 24 * 60 * 60
 
 
 def state_root() -> Path:
@@ -21,16 +25,9 @@ def state_root() -> Path:
     return resolve_state_dir()
 
 
-def session_hash(transcript_path: str | Path) -> str:
-    return sha256(str(transcript_path).encode()).hexdigest()[:12]
-
-
-def ensure_session(transcript_path: str | Path) -> Path:
-    sd = state_root() / "hooks" / "sessions" / session_hash(transcript_path)
+def ensure_session(session_id: SessionId) -> Path:
+    sd = state_root() / "hooks" / "sessions" / session_id
     sd.mkdir(parents=True, exist_ok=True)
-    marker = sd / ".transcript_path"
-    if not marker.exists():
-        marker.write_text(str(transcript_path))
     return sd
 
 
@@ -38,11 +35,9 @@ def cleanup_stale() -> None:
     sessions = state_root() / "hooks" / "sessions"
     if not sessions.exists():
         return
+    cutoff = time.time() - STALE_AGE_SECONDS
     for sd in sessions.iterdir():
-        if not sd.is_dir():
-            continue
-        marker = sd / ".transcript_path"
-        if marker.exists() and not Path(marker.read_text().strip()).exists():
+        if sd.is_dir() and sd.stat().st_mtime < cutoff and find_transcript_sync(SessionId(sd.name)) is None:
             shutil.rmtree(sd, ignore_errors=True)
 
 

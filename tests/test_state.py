@@ -202,7 +202,7 @@ class TestFireCounting:
         transcript.__len__ = lambda self: 15
         store = SessionStore(tmp_path)
         turn = MagicMock()
-        turn.start_idx = 10
+        turn.__len__ = lambda self: 5
         ctx = MagicMock()
         ctx.s = store
         ctx.t = transcript
@@ -218,7 +218,7 @@ class TestFireCounting:
 
         store = SessionStore(tmp_path)
         turn = MagicMock()
-        turn.start_idx = 10
+        turn.__len__ = lambda self: 5
         ctx = MagicMock()
         ctx.s = store
         ctx.turn = turn
@@ -234,7 +234,7 @@ class TestFireCounting:
         transcript.__len__ = lambda self: 5
         store = SessionStore(tmp_path)
         turn_old = MagicMock()
-        turn_old.start_idx = 0
+        turn_old.__len__ = lambda self: 5
         ctx = MagicMock()
         ctx.s = store
         ctx.t = transcript
@@ -245,8 +245,9 @@ class TestFireCounting:
 
         record_fire(evt)
 
+        transcript.__len__ = lambda self: 15
         turn_new = MagicMock()
-        turn_new.start_idx = 10
+        turn_new.__len__ = lambda self: 5
         ctx.turn = turn_new
 
         assert fired_this_turn(evt) is False
@@ -257,7 +258,7 @@ class TestFireCounting:
         transcript.__len__ = lambda self: 15
         store = SessionStore(tmp_path)
         turn = MagicMock()
-        turn.start_idx = 10
+        turn.__len__ = lambda self: 5
         ctx = MagicMock()
         ctx.s = store
         ctx.t = transcript

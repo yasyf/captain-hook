@@ -1,14 +1,27 @@
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
-from captain_hook.tests.helpers import raw_text, raw_text_block
-from captain_hook.transcript.models import TranscriptMessage
+from cc_transcript.activity import SessionActivity, native_user_classifier
+from cc_transcript.ids import SessionId
+from cc_transcript.parser import parse_event
+from cc_transcript.query import Session
+
+from captain_hook.testing.helpers import fixture_session
+from captain_hook.tests.helpers import raw_text
+
+if TYPE_CHECKING:
+    from cc_transcript.models import UserEvent
 
 
-def _msg(type: str, text: str) -> TranscriptMessage:
-    return TranscriptMessage.from_raw(type=type, content=[raw_text_block(text)], raw={})
+def user_event(text: str, **extra: Any) -> UserEvent:
+    return parse_event(raw_text("user", text) | extra)
+
+
+def events_from(*lines: dict[str, Any]) -> list[Any]:
+    return [parse_event(line) for line in lines]
 
 
 class TestConductorDetect:
@@ -35,16 +48,16 @@ class TestConductorDetect:
     def test_detects_via_system_instruction(self):
         from captain_hook.classifiers.conductor import detect
 
-        msgs = [_msg("user", "<system_instruction>You are a helpful agent.")] + [
-            _msg("assistant", f"response {i}") for i in range(10)
-        ]
-        assert detect(messages=msgs)
+        events = events_from(
+            raw_text("user", "<system_instruction>You are a helpful agent."),
+            *(raw_text("assistant", f"response {i}") for i in range(10)),
+        )
+        assert detect(events=events)
 
     def test_no_detect_without_system_instruction(self):
         from captain_hook.classifiers.conductor import detect
 
-        msgs = [_msg("user", "Hello world")]
-        assert not detect(messages=msgs)
+        assert not detect(events=events_from(raw_text("user", "Hello world")))
 
     def test_no_detect_all_none(self):
         from captain_hook.classifiers.conductor import detect
@@ -53,11 +66,10 @@ class TestConductorDetect:
 
 
 class TestConductorClassifier:
-    def test_real_user_message(self):
+    def test_real_user_prompt(self):
         from captain_hook.classifiers.conductor import classifier
 
-        msg = _msg("user", "Help me fix this bug")
-        assert classifier(msg)
+        assert classifier(user_event("Help me fix this bug"))
 
     def test_all_four_prefixes_filtered(self):
         from captain_hook.classifiers.conductor import classifier
@@ -69,20 +81,17 @@ class TestConductorClassifier:
             "<command-name>",
         ]
         for prefix in prefixes:
-            msg = _msg("user", f"{prefix}payload")
-            assert not classifier(msg), f"Failed to filter prefix: {prefix}"
+            assert not classifier(user_event(f"{prefix}payload")), f"Failed to filter prefix: {prefix}"
 
-    def test_rejects_assistant_messages(self):
+    def test_rejects_empty_user_events(self):
         from captain_hook.classifiers.conductor import classifier
 
-        msg = _msg("assistant", "I can help with that")
-        assert not classifier(msg)
+        assert not classifier(user_event("   "))
 
-    def test_rejects_empty_user_messages(self):
+    def test_rejects_meta_user_events(self):
         from captain_hook.classifiers.conductor import classifier
 
-        msg = _msg("user", "   ")
-        assert not classifier(msg)
+        assert not classifier(user_event("Hello", isMeta=True))
 
 
 class TestDroidDetect:
@@ -102,23 +111,20 @@ class TestDroidDetect:
 
 
 class TestDroidClassifier:
-    def test_user_message(self):
+    def test_is_native_classifier(self):
         from captain_hook.classifiers.droid import classifier
 
-        msg = _msg("user", "Hello")
-        assert classifier(msg)
+        assert classifier is native_user_classifier
 
-    def test_rejects_assistant_messages(self):
+    def test_user_prompt(self):
         from captain_hook.classifiers.droid import classifier
 
-        msg = _msg("assistant", "Hello")
-        assert not classifier(msg)
+        assert classifier(user_event("Hello"))
 
-    def test_rejects_empty_user_messages(self):
+    def test_rejects_empty_user_events(self):
         from captain_hook.classifiers.droid import classifier
 
-        msg = _msg("user", "")
-        assert not classifier(msg)
+        assert not classifier(user_event(""))
 
 
 class TestNativeDetect:
@@ -128,21 +134,24 @@ class TestNativeDetect:
         assert detect()
         assert detect(cwd="/anything")
         assert detect(transcript_path="/anything")
-        assert detect(messages=[])
+        assert detect(events=[])
 
 
 class TestNativeClassifier:
-    def test_user_message(self):
+    def test_is_native_classifier(self):
         from captain_hook.classifiers.native import classifier
 
-        msg = _msg("user", "Hello")
-        assert classifier(msg)
+        assert classifier is native_user_classifier
 
-    def test_rejects_assistant(self):
+    def test_user_prompt(self):
         from captain_hook.classifiers.native import classifier
 
-        msg = _msg("assistant", "Hello")
-        assert not classifier(msg)
+        assert classifier(user_event("Hello"))
+
+    def test_rejects_sidechain_user_events(self):
+        from captain_hook.classifiers.native import classifier
+
+        assert not classifier(user_event("Hello", isSidechain=True))
 
 
 class TestDetectPriorityChain:
@@ -151,9 +160,7 @@ class TestDetectPriorityChain:
         from captain_hook.classifiers.droid import classifier as droid_classifier
 
         with patch.dict(os.environ, {"FACTORY_PROJECT_DIR": "/tmp/project"}):
-            result = detect(cwd="/Users/yasyf/conductor/workspaces/bioqa/test")
-            msg = _msg("user", "Hello")
-            assert result(msg) == droid_classifier(msg)
+            assert detect(cwd="/Users/yasyf/conductor/workspaces/bioqa/test") is droid_classifier
 
     def test_conductor_when_path_matches(self):
         from captain_hook.classifiers import detect
@@ -162,9 +169,7 @@ class TestDetectPriorityChain:
         env = dict(os.environ)
         env.pop("FACTORY_PROJECT_DIR", None)
         with patch.dict(os.environ, env, clear=True):
-            result = detect(cwd="/Users/yasyf/conductor/workspaces/bioqa/test")
-            msg = _msg("user", "Hello")
-            assert result(msg) == conductor_classifier(msg)
+            assert detect(cwd="/Users/yasyf/conductor/workspaces/bioqa/test") is conductor_classifier
 
     def test_native_as_fallback(self):
         from captain_hook.classifiers import detect
@@ -173,9 +178,7 @@ class TestDetectPriorityChain:
         env = dict(os.environ)
         env.pop("FACTORY_PROJECT_DIR", None)
         with patch.dict(os.environ, env, clear=True):
-            result = detect(cwd="/Users/yasyf/projects/something")
-            msg = _msg("user", "Hello")
-            assert result(msg) == native_classifier(msg)
+            assert detect(cwd="/Users/yasyf/projects/something") is native_classifier
 
     def test_conductor_filters_synthetic_in_chain(self):
         from captain_hook.classifiers import detect
@@ -184,134 +187,49 @@ class TestDetectPriorityChain:
         env.pop("FACTORY_PROJECT_DIR", None)
         with patch.dict(os.environ, env, clear=True):
             result = detect(cwd="/Users/yasyf/conductor/workspaces/bioqa/test")
-            synthetic = _msg("user", "<system_instruction>test")
-            assert not result(synthetic)
+            assert not result(user_event("<system_instruction>test"))
 
     def test_classifier_returns_correct_callable(self):
         from captain_hook.classifiers import detect
 
-        result = detect()
-        real = _msg("user", "Hello world")
-        assert result(real)
+        assert detect()(user_event("Hello world"))
 
 
-class TestClassifierIntegration:
-    def test_conductor_classifier_with_empty_text(self):
+class TestClassifierSegmentsSession:
+    def test_conductor_classifier_filters_synthetic_prompts(self):
         from captain_hook.classifiers.conductor import classifier
 
-        msg = _msg("user", "")
-        assert not classifier(msg)
-
-    def test_all_classifiers_accept_real_user_messages(self):
-        from captain_hook.classifiers.conductor import classifier as c
-        from captain_hook.classifiers.droid import classifier as d
-        from captain_hook.classifiers.native import classifier as n
-
-        msg = _msg("user", "Help me debug this error")
-        assert c(msg)
-        assert d(msg)
-        assert n(msg)
-
-
-class TestClassifierWiredIntoTranscript:
-    def test_user_said_with_conductor_classifier_filters_synthetic(self):
-        from captain_hook.classifiers.conductor import classifier
-        from captain_hook.transcript import Transcript
-
-        transcript = Transcript.from_parsed(
-            [
-                _msg("user", "<system_instruction>help me"),
-                _msg("user", "debug this error"),
-                _msg("assistant", "Sure, I can help"),
-            ]
-        )
-        transcript.classifier = classifier
-        assert transcript.user_said("debug")
-        assert not transcript.user_said("help me")
-
-    def test_user_said_without_classifier_matches_all_user_messages(self):
-        from captain_hook.transcript import Transcript
-
-        transcript = Transcript.from_parsed(
-            [
-                _msg("user", "<system_instruction>help me"),
-                _msg("user", "debug this error"),
-            ]
-        )
-        assert transcript.user_said("help me")
-        assert transcript.user_said("debug")
-
-    def test_first_user_message_with_classifier_skips_synthetic(self):
-        from captain_hook.classifiers.conductor import classifier
-        from captain_hook.transcript import Transcript
-
-        transcript = Transcript.from_parsed(
-            [
-                _msg("user", "<system_instruction>You are helpful"),
-                _msg("user", "Fix the bug"),
-            ]
-        )
-        transcript.classifier = classifier
-        assert transcript.first_user_message() == "Fix the bug"
-
-    def test_first_user_message_without_classifier_returns_first(self):
-        from captain_hook.transcript import Transcript
-
-        transcript = Transcript.from_parsed(
-            [
-                _msg("user", "<system_instruction>You are helpful"),
-                _msg("user", "Fix the bug"),
-            ]
-        )
-        assert transcript.first_user_message() == "<system_instruction>You are helpful"
-
-
-class TestClassifierAutoWiring:
-    def test_from_messages_auto_wires_conductor_on_system_instruction(self):
-        from captain_hook.transcript import Transcript
-
-        raw = [
+        events = events_from(
             raw_text("user", "<system_instruction>You are helpful"),
             raw_text("user", "Fix the bug"),
-        ]
-        transcript = Transcript.from_messages(raw)
-        assert transcript.classifier is not None
-        assert transcript.user_said("Fix")
-        assert not transcript.user_said("system_instruction")
+            raw_text("assistant", "Sure, I can help"),
+        )
+        session = Session.from_activity(
+            SessionActivity.from_events(SessionId("sess"), events, user_classifier=classifier)
+        )
+        assert session.first_prompt == "Fix the bug"
+        assert session.user_said("fix the bug")
+        assert not session.user_said("system_instruction")
 
-    def test_from_messages_auto_wires_and_filters_first_user_message(self):
-        from captain_hook.transcript import Transcript
-
-        raw = [
-            raw_text("user", "<system_instruction>setup"),
-            raw_text("user", "Real user message"),
-        ]
-        transcript = Transcript.from_messages(raw)
-        assert transcript.first_user_message() == "Real user message"
-
-    def test_from_path_auto_wires_conductor(self, tmp_path):
-        import json
-
-        from captain_hook.transcript import Transcript
-
-        transcript_path = tmp_path / "conductor-workspaces" / "test.jsonl"
-        transcript_path.parent.mkdir(parents=True)
-        lines = [
-            json.dumps(raw_text("user", "<system_instruction>setup")),
-            json.dumps(raw_text("user", "Fix bug")),
-        ]
-        transcript_path.write_text("\n".join(lines))
-        transcript = Transcript.from_path(transcript_path)
-        assert transcript.classifier is not None
-        assert transcript.first_user_message() == "Fix bug"
-
-    def test_no_classifier_when_no_detection(self, monkeypatch):
-        from captain_hook.transcript import Transcript
-
+    def test_fixture_session_auto_detects_conductor(self, monkeypatch):
         monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
         monkeypatch.delenv("FACTORY_PROJECT_DIR", raising=False)
-        raw = [
-            raw_text("user", "normal message"),
-        ]
-        transcript = Transcript.from_messages(raw)
-        assert transcript.classifier is not None
+        session = fixture_session(
+            [
+                raw_text("user", "<system_instruction>setup"),
+                raw_text("user", "Real user message"),
+            ]
+        )
+        assert session.first_prompt == "Real user message"
+
+    def test_fixture_session_native_keeps_all_prompts(self, monkeypatch):
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        monkeypatch.delenv("FACTORY_PROJECT_DIR", raising=False)
+        session = fixture_session(
+            [
+                raw_text("user", "normal message"),
+                raw_text("user", "another message"),
+            ]
+        )
+        assert session.first_prompt == "normal message"
+        assert len(session.turns) == 2

@@ -5,6 +5,9 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from cc_transcript.models import OtherEvent
+from cc_transcript.tools import tool_name_matches
+
 from captain_hook.types import (
     Agent,
     Command,
@@ -22,18 +25,23 @@ from captain_hook.types import (
     TouchedFile,
     UsedSkill,
     Waiting,
-    tool_name_matches,
 )
 
 if TYPE_CHECKING:
+    from cc_transcript.activity import ToolUse
+    from cc_transcript.query import Session
+
     from captain_hook.events import BaseHookEvent
-    from captain_hook.transcript import Transcript
-    from captain_hook.transcript.models import ToolUse
     from captain_hook.types import HookSpec
 
 
-def has_completion_notification(t: Transcript, tool_use_id: str, after_idx: int) -> bool:
-    return any((n := m.notification) and n.tool_use_id == tool_use_id for m in t.messages[after_idx + 1 :])
+def has_completion_notification(t: Session, tool_use_id: str) -> bool:
+    return any(
+        isinstance(event, OtherEvent)
+        and event.type == "queue-operation"
+        and f"<tool-use-id>{tool_use_id}</tool-use-id>" in str(event.raw.get("content", ""))
+        for event in t.events
+    )
 
 
 def waiting_tool_names(evt: BaseHookEvent) -> set[str]:
@@ -43,23 +51,23 @@ def waiting_tool_names(evt: BaseHookEvent) -> set[str]:
     return {str(x) for x in custom} if isinstance(custom, list) else set(DEFAULT_WAITING_TOOLS)
 
 
-def ephemeral_wait(tu: ToolUse, waiting_names: set[str]) -> bool:
-    if tu.name in waiting_names:
+def ephemeral_wait(use: ToolUse, waiting_names: set[str]) -> bool:
+    if use.call.name in waiting_names:
         return True
-    match tu.name:
-        case "Agent" | "Task" | "Bash" if tu.raw_input.get("run_in_background"):
+    match use.call.name:
+        case "Agent" | "Task" | "Bash" if use.call.raw.get("run_in_background"):
             return True
-        case "Agent" | "Task" if "subagent_type" not in tu.raw_input:
+        case "Agent" | "Task" if "subagent_type" not in use.call.raw:
             return True
     return False
 
 
-def pending_async(tu: ToolUse, t: Transcript) -> bool:
-    match tu.name:
-        case "Agent" | "Task" if tu.result and tu.result.is_async:
-            return not has_completion_notification(t, tu.id, tu.message_index)
+def pending_async(use: ToolUse, t: Session) -> bool:
+    match use.call.name:
+        case "Agent" | "Task" if use.result and use.result.is_async:
+            return not has_completion_notification(t, use.ref.tool_use_id)
         case "Workflow":
-            return not has_completion_notification(t, tu.id, tu.message_index)
+            return not has_completion_notification(t, use.ref.tool_use_id)
     return False
 
 
@@ -67,8 +75,8 @@ def is_waiting(evt: BaseHookEvent) -> bool:
     if not (t := evt.ctx.transcript):
         return False
     waiting_names = waiting_tool_names(evt)
-    return any(ephemeral_wait(tu, waiting_names) for tu in t.current_turn.tool_uses) or any(
-        pending_async(tu, t) for tu in t.tool_uses
+    return any(ephemeral_wait(use, waiting_names) for use in t.current_turn.tool_calls) or any(
+        pending_async(use, t) for use in t.tool_calls
     )
 
 
@@ -85,9 +93,7 @@ def is_project_file(evt: BaseHookEvent) -> bool:
 def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
     match c:
         case Tool(pattern):
-            if not evt.tool_name:
-                return False
-            return any(tool_name_matches(evt.tool_name, p) for p in pattern.split("|"))
+            return bool(evt.tool_name) and tool_name_matches(evt.tool_name, pattern)
         case FilePath(patterns, project_only):
             return bool(evt.file and (not project_only or is_project_file(evt)) and evt.file.matches(*patterns))
         case Command(pattern):
@@ -105,25 +111,24 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
         case SourceEdits(lang, include_tests, paths):
             return bool(
                 evt.tool_name
-                and any(tool_name_matches(evt.tool_name, n) for n in ("Edit", "Write"))
+                and tool_name_matches(evt.tool_name, "Edit|Write")
                 and (f := evt.file)
                 and f.matches(*SourceEdits(lang=lang).globs)
                 and (include_tests or not f.is_test)
                 and (paths is None or f.matches(paths))
             )
         case UsedSkill(name, subagents):
-            return bool(evt.ctx.transcript) and evt.ctx.transcript.has_skill(*name.split("|"), subagents=subagents)
+            return evt.ctx.transcript.has_skill(*name.split("|"), subagents=subagents)
         case ReadFile(patterns, subagents):
-            return bool(evt.ctx.transcript) and any(
-                evt.ctx.transcript.has_read(p, subagents=subagents) for p in patterns
-            )
+            return any(evt.ctx.transcript.has_read(p, subagents=subagents) for p in patterns)
         case TouchedFile(patterns, subagents):
-            return bool(evt.ctx.transcript) and evt.ctx.transcript.has_edit_to(*patterns, subagents=subagents)
+            return evt.ctx.transcript.has_edit_to(*patterns, subagents=subagents)
         case RanCommand(pattern, subagents):
-            return bool(evt.ctx.transcript) and evt.ctx.transcript.has_command(pattern, subagents=subagents)
+            return evt.ctx.transcript.has_command(pattern, subagents=subagents)
         case InPlanMode():
             return evt.permission_mode == "plan" or (
-                bool(t := evt.ctx.transcript) and t.count_tools("EnterPlanMode") > t.count_tools("ExitPlanMode")
+                (t := evt.ctx.transcript).tool_calls.named("EnterPlanMode").count()
+                > t.tool_calls.named("ExitPlanMode").count()
             )
         case Waiting():
             return is_waiting(evt)

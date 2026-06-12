@@ -12,15 +12,15 @@ from pathlib import Path
 from typing import Any
 
 import click
+from cc_transcript.ids import SessionId
 
 from captain_hook.app import _state, load_gitignore, reset
-from captain_hook.context import HookContext
+from captain_hook.context import HookContext, load_transcript
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_hooks
 from captain_hook.log import setup_logging
 from captain_hook.review.cli import review
 from captain_hook.session import SessionStore, ensure_session
-from captain_hook.transcript import Transcript
 from captain_hook.types import Event
 
 DIST_NAME = "capt-hook"
@@ -214,9 +214,9 @@ def settings_drift(root: Path) -> set[str]:
 
 
 def warn_settings_drift(
-    output: dict[str, Any] | None, event: Event, root: Path | None, session_dir: Path, *, async_: bool
+    output: dict[str, Any] | None, event: Event, root: Path | None, session_dir: Path | None, *, async_: bool
 ) -> dict[str, Any] | None:
-    if async_ or root is None or event in (Event.Stop | Event.SubagentStop):
+    if async_ or root is None or session_dir is None or event in (Event.Stop | Event.SubagentStop):
         return output
     marker = session_dir / ".drift_surfaced"
     if marker.exists():
@@ -263,14 +263,14 @@ def run_event(
         print(f"Malformed stdin: {e}", file=sys.stderr)
         return
 
-    transcript_path = raw.get("transcript_path")
-    setup_logging(transcript_path)
-    resolved_path = raw.get("agent_transcript_path") or transcript_path
+    session_id = raw.get("session_id")
+    setup_logging(session_id)
+    resolved_path = raw.get("agent_transcript_path") or raw.get("transcript_path")
 
-    session_dir = ensure_session(transcript_path) if transcript_path else ensure_session(root or Path.cwd())
+    session_dir = ensure_session(SessionId(session_id)) if session_id else None
     ctx = HookContext(
         session=SessionStore(session_dir),
-        transcript=Transcript.from_path(resolved_path),
+        transcript=load_transcript(resolved_path),
         settings=_state.settings,
         project_root=root,
     )
@@ -327,12 +327,11 @@ def show_logs(session: str | None = None, tail: int | None = None) -> None:
     """Print a captain-hook session log.
 
     Args:
-        session: A session id, or a transcript path (hashed via ``session_hash``)
-            to locate its log file. When ``None``, the most recently modified log
-            is shown.
+        session: A session id, or a transcript path (whose stem is the session
+            id) to locate its log file. When ``None``, the most recently
+            modified log is shown.
         tail: When set, print only the last ``tail`` lines.
     """
-    from captain_hook.session import session_hash
     from captain_hook.settings import resolve_log_dir
 
     log_dir = resolve_log_dir()
@@ -347,7 +346,7 @@ def show_logs(session: str | None = None, tail: int | None = None) -> None:
             return
         log_file = logs[-1]
     else:
-        session_id = session_hash(session) if ("/" in session or session.endswith(".jsonl")) else session
+        session_id = Path(session).stem if ("/" in session or session.endswith(".jsonl")) else session
         log_file = log_dir / f"{session_id}.log"
 
     if not log_file.exists():
@@ -485,7 +484,7 @@ def init(state: CliState) -> None:
 
 
 @cli.command()
-@click.option("--session", default=None, help="Session id or transcript path (hashed) to view")
+@click.option("--session", default=None, help="Session id or transcript path to view")
 @click.option("--tail", type=int, default=None, help="Show only the last N lines")
 def logs(session: str | None, tail: int | None) -> None:
     """View a recent captain-hook session log."""

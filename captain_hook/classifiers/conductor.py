@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from cc_transcript.activity import native_user_classifier
+from cc_transcript.models import UserEvent
+
 if TYPE_CHECKING:
-    from captain_hook.transcript.models import TranscriptMessage
+    from collections.abc import Sequence
+
+    from cc_transcript.models import TranscriptEvent
 
 SYNTHETIC_PREFIXES = (
     "<system_instruction>",
@@ -13,23 +18,23 @@ SYNTHETIC_PREFIXES = (
 )
 
 
-def classifier(msg: TranscriptMessage) -> bool:
-    if msg.type != "user":
-        return False
-    text = msg.text.strip()
-    return bool(text) and not text.startswith(SYNTHETIC_PREFIXES)
+def classifier(event: UserEvent) -> bool:
+    return native_user_classifier(event) and not event.text.strip().startswith(SYNTHETIC_PREFIXES)
 
 
 def detect(
     *,
     cwd: str | None = None,
     transcript_path: str | None = None,
-    messages: list[TranscriptMessage] | None = None,
+    events: Sequence[TranscriptEvent] | None = None,
 ) -> bool:
     if cwd and "conductor/workspaces" in cwd:
         return True
     if transcript_path and "conductor-workspaces" in transcript_path:
         return True
-    if messages:
-        return any(m.type == "user" and m.text.strip().startswith("<system_instruction>") for m in messages[:50])
+    if events:
+        return any(
+            isinstance(event, UserEvent) and event.text.strip().startswith("<system_instruction>")
+            for event in events[:50]
+        )
     return False

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from cc_transcript import keep, parse_events_from_bytes
-from cc_transcript.domains.mining.candidates import DedupKey, dedup_key
+from cc_transcript.mining.candidates import DedupKey, dedup_key
 
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.scan import (
@@ -146,7 +146,9 @@ async def rows(store: ReviewStore, query: str) -> list[dict[str, Any]]:
 
 
 async def judge(store: ReviewStore, key: str) -> None:
-    await store.record_verdict(DedupKey(key), Verdict(), role="judge", prompt_version=PROMPT_VERSION, model="m1")
+    await store.record_verdict(
+        DedupKey(key), Verdict(), role="judge", prompt_version=PROMPT_VERSION, model="m1", fidelity="full"
+    )
 
 
 class TestDedupDesign:

@@ -6,9 +6,8 @@ from typing import Any
 from captain_hook.app import _state
 from captain_hook.dispatch import dispatch
 from captain_hook.events import PreToolUseEvent
-from captain_hook.transcript import Transcript
 from captain_hook.types import Event, Tool, Waiting
-from captain_hook.tests.helpers import build_ctx, make_ctx, make_post_tool_event, make_pre_tool_event, make_stop_event, make_subagent_stop_event, workflow_launch
+from captain_hook.tests.helpers import build_ctx, make_ctx, make_post_tool_event, make_pre_tool_event, make_stop_event, make_subagent_stop_event, make_transcript, workflow_launch
 
 
 def register_nudge(
@@ -174,7 +173,7 @@ class TestGateWaitAwareDefault:
     def test_stop_gate_skips_while_waiting(self, tmp_path: Path) -> None:
         register_gate("You must stop!")
 
-        ctx = build_ctx(transcript=Transcript.from_messages(workflow_launch(id="toolu_wf")), session_dir=tmp_path)
+        ctx = build_ctx(transcript=make_transcript(workflow_launch(id="toolu_wf")), session_dir=tmp_path)
         evt = make_stop_event(ctx=ctx)
         result = dispatch(Event.Stop, evt, session_dir=tmp_path)
 

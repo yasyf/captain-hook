@@ -10,16 +10,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from cc_transcript.domains.mining import (
-    TRANSCRIPT_MESSAGE,
-    ContextSnapshot,
-    ContextTurn,
-    FeedbackCandidate,
-    dedup_key,
-    firm,
-    noise,
-)
-from cc_transcript.models import SessionId
+from cc_transcript.activity import SessionActivity
+from cc_transcript.context import SUMMARY_LABEL, ContextWindow, TurnRef, capture_window
+from cc_transcript.ids import EventRef, SessionId
+from cc_transcript.mining.candidates import FeedbackCandidate, dedup_key
+from cc_transcript.mining.confidence import firm, noise
+from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE
 
 from captain_hook.review.judge import (
     DURABLE_CATEGORIES,
@@ -45,12 +41,20 @@ from captain_hook.review.repo import RepoKey
 from captain_hook.review.scan import REVIEWER_MARKER, scan_transcript
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import ReviewStore
-from tests.test_review_scan import CORRECTION, assistant_text, correction_entries, user_text, write_transcript
+from tests.test_review_scan import (
+    CORRECTION,
+    assistant_text,
+    assistant_tool_use,
+    correction_entries,
+    parse,
+    user_text,
+    write_transcript,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
 
-    from cc_transcript.domains.mining import CandidateSignal
+    from cc_transcript.mining.confidence import CandidateSignal
 
     from captain_hook.review.judge import Category
 
@@ -115,7 +119,15 @@ def synthetic(text: str, signal: CandidateSignal) -> FeedbackCandidate:
         source_kind=TRANSCRIPT_MESSAGE,
         occurred_at=datetime(2026, 6, 1, 12, 0, tzinfo=UTC),
         text=text,
-        context=ContextSnapshot(before=(), trigger=ContextTurn(role="assistant", text="did a thing"), after=()),
+        window=ContextWindow(
+            anchor=None,
+            before=(),
+            trigger=TurnRef(role="assistant", refs=(), preview="did a thing", tool_digests=()),
+            after=(),
+            fidelity="full",
+            preview_chars=200,
+            origin="live",
+        ),
         session_id=SessionId("s1"),
         signal=signal,
     )
@@ -152,6 +164,17 @@ def git_repo(tmp_path: Path) -> Path:
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:yasyf/scratch.git"], check=True)
     return repo
+
+
+@pytest.fixture
+def projects_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    monkeypatch.setattr("cc_transcript.discovery.CLAUDE_PROJECTS_DIR", tmp_path)
+    return tmp_path
+
+
+async def verdict_fidelities(store: ReviewStore) -> list[str]:
+    cur = await store.store.conn.execute("SELECT fidelity FROM verdicts ORDER BY id")
+    return [str(row["fidelity"]) async for row in cur]
 
 
 @pytest.fixture
@@ -319,24 +342,82 @@ class TestJudgePass:
         verdict = ReviewVerdict(category=category, summary="s", confidence=0.5, rationale="r")
         assert verdict.accepted is (category in DURABLE_CATEGORIES)
 
-    def test_build_prompt_renders_context_trigger_and_text(self) -> None:
-        snapshot = ContextSnapshot(
-            before=(ContextTurn(role="user", text="add the parser"),),
-            trigger=ContextTurn(
-                role="assistant",
-                text="wrapping it now",
-                tool_calls=("Bash",),
-                tool_inputs=("pip install foo",),
-            ),
-            after=(),
+    async def test_build_prompt_renders_context_trigger_and_text(self) -> None:
+        events = parse(
+            [
+                user_text("add the parser"),
+                assistant_tool_use("t1", "Bash", {"command": "pip install foo"}),
+                user_text(CORRECTION),
+            ]
         )
-        row = {"source_kind": "transcript_message", "context_json": snapshot.to_json(), "text": CORRECTION}
-        prompt = build_prompt(row)
+        activity = SessionActivity.from_events(SessionId("sess-1"), events)
+        window = capture_window(activity, EventRef(SessionId("sess-1"), events[-1].meta.uuid))
+        row = {"source_kind": "transcript_message", "context_json": window.to_json(), "text": CORRECTION}
+        prompt, fidelity = await build_prompt(row)
+        assert fidelity == "summary"
         assert "[source: transcript_message]" in prompt
         assert "add the parser" in prompt
-        assert "Bash(pip install foo)" in prompt
+        assert "pip install foo" in prompt
         assert CORRECTION in prompt
         assert "DURABLE correction worth encoding as an" in prompt
+
+
+class TestFidelity:
+    async def test_verdict_records_full_fidelity_while_the_transcript_lives(
+        self,
+        store: ReviewStore,
+        settings: ReviewSettings,
+        tmp_path: Path,
+        projects_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        calls = install_judge(monkeypatch)
+        await seed_corrections(store, settings, tmp_path, [CORRECTION])
+        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
+        assert await verdict_fidelities(store) == ["full"]
+        assert SUMMARY_LABEL not in calls[0]
+        assert "the turn the feedback arrived in" in calls[0]
+
+    async def test_expired_transcript_judges_at_summary_with_the_label(
+        self,
+        store: ReviewStore,
+        settings: ReviewSettings,
+        tmp_path: Path,
+        projects_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        calls = install_judge(monkeypatch)
+        await seed_corrections(store, settings, tmp_path, [CORRECTION])
+        (tmp_path / "s1.jsonl").unlink()
+        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
+        assert await verdict_fidelities(store) == ["summary"]
+        assert SUMMARY_LABEL in calls[0]
+
+    async def test_refresh_summary_rejudges_once_the_window_hydrates_again(
+        self,
+        store: ReviewStore,
+        settings: ReviewSettings,
+        tmp_path: Path,
+        projects_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        calls = install_judge(monkeypatch)
+        await seed_corrections(store, settings, tmp_path, [CORRECTION])
+        transcript = tmp_path / "s1.jsonl"
+        content = transcript.read_text()
+        transcript.unlink()
+        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
+        assert await verdict_fidelities(store) == ["summary"]
+        assert await judge_pass(store, settings=settings) == JudgeReport(judged=0, failed=0, pending=0)
+        transcript.write_text(content)
+        assert await judge_pass(store, settings=settings, refresh_summary=True) == JudgeReport(
+            judged=1, failed=0, pending=0
+        )
+        assert await verdict_fidelities(store) == ["full"]
+        assert len(calls) == 2
+        assert await judge_pass(store, settings=settings, refresh_summary=True) == JudgeReport(
+            judged=0, failed=0, pending=0
+        )
 
 
 class TestBrain:
@@ -404,6 +485,7 @@ class TestReviewSession:
         self,
         tmp_path: Path,
         git_repo: Path,
+        projects_root: Path,
         monkeypatch: pytest.MonkeyPatch,
         category: Category,
         expect_brain: bool,

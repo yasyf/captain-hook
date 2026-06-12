@@ -43,7 +43,7 @@ class AllEditsUnder(CustomCondition):
         self.prefixes = prefixes
 
     def check(self, evt: BaseHookEvent) -> bool:
-        return evt.ctx.t.all_edits_under(*self.prefixes)
+        return bool(files := evt.ctx.t.edited_files) and all(f.under(*self.prefixes) for f in files)
 
 
 class CommitsPython(CustomCondition):

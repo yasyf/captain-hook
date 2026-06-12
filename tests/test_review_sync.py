@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
-from cc_transcript.domains.mining.sourcekind import TRANSCRIPT_MESSAGE
+from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE
 
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings

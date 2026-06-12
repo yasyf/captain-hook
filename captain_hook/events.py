@@ -7,19 +7,24 @@ from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from captain_hook.file import File
-from captain_hook.transcript.inputs import (
-    AgentInput,
-    BashInput,
-    EditInput,
-    FileInputBase,
-    ToolInput,
-    WriteInput,
-    parse_tool_input,
+from cc_transcript.tools import (
+    BashCall,
+    EditCall,
+    MultiEditCall,
+    NotebookEditCall,
+    TaskCall,
+    WriteCall,
+    file_path_of,
+    parse_tool_call,
 )
+
+from captain_hook.file import File
 from captain_hook.types import Event
 
 if TYPE_CHECKING:
+    from cc_transcript.ids import ToolDigest
+    from cc_transcript.tools import ToolCall
+
     from captain_hook.command import CommandLine as CommandLineType
     from captain_hook.context import HookContext
     from captain_hook.tasks import Tasks
@@ -88,12 +93,16 @@ class BaseHookEvent:
         return {}
 
     @cached_property
-    def input(self) -> ToolInput:
-        return parse_tool_input(self.tool_name or "", self._tool_input)
+    def input(self) -> ToolCall:
+        return parse_tool_call(self.tool_name or "", self._tool_input, on_error="other")
+
+    @property
+    def tool_digest(self) -> ToolDigest | None:
+        return self.input.digest if self.tool_name else None
 
     @property
     def command(self) -> str | None:
-        return self.input.command if isinstance(self.input, BashInput) else None
+        return self.input.command if isinstance(self.input, BashCall) else None
 
     @cached_property
     def command_line(self) -> CommandLineType | None:
@@ -101,7 +110,7 @@ class BaseHookEvent:
 
     @property
     def file(self) -> File | None:
-        return self.input.file if isinstance(self.input, FileInputBase) else None
+        return File(path=Path(p)) if (p := file_path_of(self.input)) else None
 
     @property
     def content(self) -> str | None:
@@ -188,20 +197,30 @@ class ToolHookEvent(BaseHookEvent):
     @property
     def content(self) -> str | None:
         match self.input:
-            case EditInput(new=new):
+            case EditCall(new=new):
                 return new
-            case WriteInput(content=c):
-                return c
+            case WriteCall(content=content):
+                return content
+            case MultiEditCall(edits=edits):
+                return "\n".join(span.new for span in edits)
+            case NotebookEditCall(new_source=new_source):
+                return new_source
             case _:
                 return None
 
     @property
     def old(self) -> str | None:
-        return self.input.old if isinstance(self.input, EditInput) else None
+        match self.input:
+            case EditCall(old=old):
+                return old
+            case MultiEditCall(edits=edits):
+                return "\n".join(span.old for span in edits)
+            case _:
+                return None
 
     @property
     def agent_type(self) -> str | None:
-        return ti.agent_type if isinstance(ti := self.input, AgentInput) else None
+        return call.agent_type if isinstance(call := self.input, TaskCall) else None
 
     def command_matches(self, *patterns: str) -> bool:
         if not (cl := self.command_line):

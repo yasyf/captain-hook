@@ -45,8 +45,9 @@ from captain_hook.tests.helpers import (
 from captain_hook.tests.helpers import (
     raw_tool_result as tool_resultmsg,
 )
-from captain_hook.transcript import Transcript
-from captain_hook.transcript.models import TranscriptMessage
+from cc_transcript.activity import SessionActivity
+
+from captain_hook.testing.helpers import fixture_session
 from captain_hook.types import (
     Action,
     Command,
@@ -394,7 +395,7 @@ class TestCLIFullPipeline:
         assert len(_state.hooks) >= 1
 
         raw = {"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}}
-        ctx = HookContext(session=SessionStore(None), transcript=Transcript(messages=[]), settings=_state.settings)
+        ctx = HookContext(session=SessionStore(None), transcript=fixture_session([]), settings=_state.settings)
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         output = dispatch(Event.PreToolUse, evt)
         assert output is not None
@@ -420,7 +421,7 @@ class TestCLIFullPipeline:
 
         discover_hooks(hooks_dir)
         raw = {"tool_name": "Bash", "tool_input": {"command": "echo hi"}}
-        ctx = HookContext(session=SessionStore(None), transcript=Transcript(messages=[]), settings=_state.settings)
+        ctx = HookContext(session=SessionStore(None), transcript=fixture_session([]), settings=_state.settings)
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         output = dispatch(Event.PreToolUse, evt)
         assert output is not None
@@ -490,45 +491,39 @@ class TestClassifierTranscript:
     """VAL-CROSS-013"""
 
     def test_conductor_filters_synthetic_messages(self) -> None:
+        from cc_transcript.ids import SessionId
+        from cc_transcript.parser import parse_event
+        from cc_transcript.query import Session
+
         from captain_hook.classifiers.conductor import classifier
 
-        synthetic: list[str | dict[str, Any]] = [{"type": "text", "text": "<system_instruction>setup"}]
-        transcript = Transcript(
-            messages=[
-                TranscriptMessage.from_raw(type="user", content=synthetic, raw={}),
-                TranscriptMessage.from_raw(
-                    type="user",
-                    content=[{"type": "text", "text": "please help me debug"}],
-                    raw={},
-                ),
-                TranscriptMessage.from_raw(
-                    type="assistant",
-                    content=[{"type": "text", "text": "I will help"}],
-                    raw={},
-                ),
-            ],
-            classifier=classifier,
+        events = [
+            parse_event(msg("user", "<system_instruction>setup")),
+            parse_event(msg("user", "please help me debug")),
+            parse_event(msg("assistant", "I will help")),
+        ]
+        session = Session.from_activity(
+            SessionActivity.from_events(SessionId("sess"), events, user_classifier=classifier)
         )
-        assert transcript.user_said("help")
-        assert not transcript.user_said("setup")
+        assert session.user_said("help")
+        assert not session.user_said("setup")
 
     def test_native_includes_all_user_messages(self) -> None:
+        from cc_transcript.ids import SessionId
+        from cc_transcript.parser import parse_event
+        from cc_transcript.query import Session
+
         from captain_hook.classifiers.native import classifier
 
-        synthetic: list[str | dict[str, Any]] = [{"type": "text", "text": "<system_instruction>setup"}]
-        transcript = Transcript(
-            messages=[
-                TranscriptMessage.from_raw(type="user", content=synthetic, raw={}),
-                TranscriptMessage.from_raw(
-                    type="user",
-                    content=[{"type": "text", "text": "help me debug"}],
-                    raw={},
-                ),
-            ],
-            classifier=classifier,
+        events = [
+            parse_event(msg("user", "<system_instruction>setup")),
+            parse_event(msg("user", "help me debug")),
+        ]
+        session = Session.from_activity(
+            SessionActivity.from_events(SessionId("sess"), events, user_classifier=classifier)
         )
-        assert transcript.user_said("help")
-        assert transcript.user_said("setup")
+        assert session.user_said("help")
+        assert session.user_said("setup")
 
 
 class TestNlpSignalNudge:

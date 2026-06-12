@@ -8,8 +8,8 @@ from typing import Any
 class TranscriptFixture:
     """A lightweight transcript stub for use in inline tests.
 
-    Wraps a list of raw message dicts that get parsed into a ``Transcript``
-    when the test runs.
+    Wraps a list of raw transcript-line dicts that get lifted into a query
+    ``Session`` when the test runs; missing envelope fields are synthesized.
     """
 
     __slots__ = ("messages",)

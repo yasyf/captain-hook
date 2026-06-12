@@ -3,18 +3,20 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from cc_transcript.activity import native_user_classifier
+
 if TYPE_CHECKING:
-    from captain_hook.transcript.models import TranscriptMessage
+    from collections.abc import Sequence
 
+    from cc_transcript.models import TranscriptEvent
 
-def classifier(msg: TranscriptMessage) -> bool:
-    return msg.type == "user" and bool(msg.text.strip())
+classifier = native_user_classifier
 
 
 def detect(
     *,
     cwd: str | None = None,
     transcript_path: str | None = None,
-    messages: list[TranscriptMessage] | None = None,
+    events: Sequence[TranscriptEvent] | None = None,
 ) -> bool:
     return "FACTORY_PROJECT_DIR" in os.environ

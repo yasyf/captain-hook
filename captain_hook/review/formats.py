@@ -1,7 +1,7 @@
 """The concrete code-review formats the session reviewer recognizes.
 
 The generic :class:`ReviewComment`/:class:`ReviewFormat` types and the
-format-dispatch live in :mod:`cc_transcript.domains.mining`; this module supplies
+format-dispatch live in :mod:`cc_transcript.mining`; this module supplies
 the reviewer's policy — the three review formats it recognizes — and injects them
 into the domain's review-comment detector. The shapes are shared transcript
 conventions (inline ``In file:Lx:`` cites, conductor finding blocks, conductor
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-from cc_transcript.domains.mining.formats import ReviewComment, ReviewFormat
+from cc_transcript.mining.formats import ReviewComment, ReviewFormat
 
 SUPERSET_INLINE_RE = re.compile(
     r"^In ((?=\S*[./]|\S+?:L)\S+?)(?::L(\d+)(?:-(\d+))?)?: (.+)$", re.MULTILINE

@@ -54,7 +54,7 @@ class DriftedFromTasks(CustomCondition):
         if not evt.tasks.open:
             return False
         since = evt.ctx.t.after(tool="TaskCreate|TaskUpdate|TaskList|TaskGet")
-        return since.tool_uses.where(name=EXPLORATION_TOOLS).count() >= TASK_DRIFT_THRESHOLD
+        return since.tool_calls.named(EXPLORATION_TOOLS).count() >= TASK_DRIFT_THRESHOLD
 
 
 gate(

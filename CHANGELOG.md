@@ -6,6 +6,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-12
+
+The platform release: captain-hook becomes the hook runtime of the cc-family
+session-activity platform (cc-transcript 2.0). Breaking throughout — no
+compatibility shims.
+
+### Changed
+- `evt.input` is a typed `cc_transcript.tools.ToolCall` (parsed with the
+  hook-runtime degrade: a Claude Code tool-shape change yields `OtherCall`
+  with a still-correct content digest instead of crashing hook fires).
+  `evt.content`/`evt.old`/`evt.file` re-expressed over the platform types;
+  MultiEdit exposes every span; new `evt.tool_digest`.
+- `ctx.t`/`ctx.transcript`/`ctx.prior`/`ctx.turn` return
+  `cc_transcript.query.Session` views. Spelling changes:
+  `tool_uses.where(name=...)` → `tool_calls.named(...)`,
+  `where(input_has=...)` → `where_input(...)`, `File` results → `FileRef`.
+- Conditions (`UsedSkill`, `ReadFile`, `TouchedFile`, `RanCommand`,
+  `InPlanMode`, `Waiting`, ...) rewritten over Session predicates; tool
+  matching honors platform aliases + `mcp__` suffixes.
+- Session state is keyed by the Claude session UUID; stale-state GC checks
+  by-UUID transcript discovery instead of a marker file.
+- Hook fires write `Decision` rows to the shared cc-family ledger
+  (`~/.cc-transcript/decisions.db`, dual-written with cc-review) instead of a
+  private fire log; misfire attribution joins by content digest +
+  nearest-preceding timestamp (`attribute_tool`), never message substrings.
+- The review pipeline mines via `cc_transcript.mining` (durable
+  `ContextWindow`s with refs + labeled previews); judge prompts hydrate to
+  full fidelity and degrade to a labeled summary; verdicts record fidelity
+  and summary-judged rows re-judge once their windows hydrate.
+
+### Removed
+- `captain_hook/transcript/` and `captain_hook/tools.py` — the transcript
+  query surface lives in `cc_transcript.query`; the typed tool calls in
+  `cc_transcript.tools`. All 25 transcript-era root exports are gone.
+- `fire_log.py` (replaced by the decisions ledger) and the
+  `HOOKS_FIRE_LOG_ENABLED` kill switch.
+- `types.py` tool-alias helpers (lifted into `cc_transcript.tools`).
+
+
 ## [0.11.1] - 2026-06-12
 
 ### Fixed

@@ -8,19 +8,25 @@ import pytest
 from loguru import logger
 
 from captain_hook.app import reset
+from captain_hook.decisions import open_decision_log
 
 
 @pytest.fixture(autouse=True)
 def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch):
-    # Isolate the on-disk state dir per test: SessionStore, fire-counts (max_fires),
-    # and the fire-log all root under resolve_state_dir(), which defaults to the real
-    # ~/.claude/state. Without this, run_cli subprocesses share one session dir
-    # (session_hash of an absent transcript is constant), so fire-state leaks across
-    # tests under random ordering. CLAUDE_HOOKS_STATE_DIR is the lower-precedence var
-    # that TestStateRoot manages, so this stays compatible with its default-path test.
+    # Isolate the on-disk state dir per test: SessionStore and fire-counts (max_fires)
+    # root under resolve_state_dir(), which defaults to the real ~/.claude/state.
+    # Without this, run_cli subprocesses sharing a stdin session_id share one session
+    # dir, so fire-state leaks across tests under random ordering.
+    # CLAUDE_HOOKS_STATE_DIR is the lower-precedence var that TestStateRoot
+    # manages, so this stays compatible with its default-path test. The decision
+    # ledger defaults to the real ~/.cc-transcript/decisions.db, so it gets its own
+    # per-test override (inherited by run_cli subprocesses).
     monkeypatch.setenv("CLAUDE_HOOKS_STATE_DIR", str(tmp_path_factory.mktemp("hook-state")))
+    monkeypatch.setenv("CAPT_HOOK_DECISIONS_DB", str(tmp_path_factory.mktemp("decisions") / "decisions.db"))
+    open_decision_log.cache_clear()
     reset()
     yield
+    open_decision_log.cache_clear()
     reset()
 
 

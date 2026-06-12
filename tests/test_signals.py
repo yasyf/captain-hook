@@ -9,16 +9,15 @@ import pytest
 from captain_hook.context import HookContext
 from captain_hook.session import SessionStore
 from captain_hook.state import PrimitiveState
-from captain_hook.transcript import Transcript
-from captain_hook.transcript.models import TextBlock, TranscriptMessage
+from captain_hook.testing.helpers import fixture_session
+from captain_hook.tests.helpers import raw_text
 from captain_hook.types import Signal, Signals
 
 
 def make_ctx(tmp_path: Path | None = None, texts: list[str] | None = None) -> HookContext:
-    msgs = [TranscriptMessage(type="assistant", content=[TextBlock(text=t)]) for t in (texts or [])]
     return HookContext(
         session=SessionStore(tmp_path),
-        transcript=Transcript(messages=msgs),
+        transcript=fixture_session([raw_text("assistant", t) for t in (texts or [])]),
         settings=None,
     )
 

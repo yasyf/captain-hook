@@ -7,10 +7,10 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
-from cc_transcript.domains.mining.candidates import DedupKey
-from cc_transcript.domains.mining.confidence import MEDIUM, VERY_HIGH, CandidateSignal, Confidence, to_payload
-from cc_transcript.domains.mining.sourcekind import SourceKind
-from cc_transcript.models import SessionId
+from cc_transcript.ids import SessionId
+from cc_transcript.mining.candidates import DedupKey
+from cc_transcript.mining.confidence import MEDIUM, VERY_HIGH, CandidateSignal, Confidence, to_payload
+from cc_transcript.mining.sourcekind import SourceKind
 
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings
@@ -117,6 +117,7 @@ async def judge(
         role="judge",
         prompt_version=PROMPT_VERSION,
         model=model,
+        fidelity="full",
     )
 
 

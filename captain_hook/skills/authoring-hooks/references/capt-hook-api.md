@@ -141,7 +141,7 @@ Glob caveat: patterns match the full relative path. `**/*.py` matches `src/main.
 | `evt.user_prompt` | prompt text on `UserPromptSubmit` |
 | `evt.agent_type` | subagent type on `SubagentStart`/`SubagentStop` |
 | `evt.permission_mode` | e.g. `"plan"` |
-| `evt.ctx.t` | the session `Transcript` (tool uses, messages, full text) |
+| `evt.ctx.t` | the session as a `cc_transcript.query.Session` (turns, tool calls, text) |
 | `evt.block(msg)` / `evt.warn(msg)` / `evt.allow()` | build the `HookResult` to return |
 
 `evt.command_line.q` predicates for compound commands:

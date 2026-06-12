@@ -32,7 +32,7 @@ from captain_hook.tests.helpers import (
     waiting_evt,
     workflow_launch,
 )
-from captain_hook.transcript import Transcript
+from captain_hook.context import load_transcript
 from captain_hook.types import (
     Agent,
     Command,
@@ -814,7 +814,7 @@ def event_with_subagent_tool_use(tmp_path: Path) -> Callable[[dict[str, Any]], B
         return make_event(
             PreToolUseEvent,
             raw={"tool_name": "Bash", "tool_input": {"command": "echo"}},
-            ctx=build_ctx(transcript=Transcript.from_path(session_file)),
+            ctx=build_ctx(transcript=load_transcript(session_file)),
         )
 
     return make

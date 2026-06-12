@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from captain_hook.session import session_hash
 from captain_hook.settings import resolve_log_dir
 
 if TYPE_CHECKING:
@@ -40,9 +39,9 @@ def make_format(template: str) -> Callable[[Record], str]:
     return formatter
 
 
-def setup_logging(transcript_path: str | None) -> None:
+def setup_logging(session_id: str | None) -> None:
     """Route captain-hook logs to a per-session loguru file sink plus stderr warnings."""
-    session_id = session_hash(transcript_path) if transcript_path else "unknown"
+    session_id = session_id or "unknown"
     log_dir = resolve_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
 

@@ -5,10 +5,12 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
+from cc_transcript.parser import parse_event
+from cc_transcript.query import Session
 from pydantic import BaseModel
 
 from captain_hook.conditions import matches_conditions
-from captain_hook.context import HookContext
+from captain_hook.context import HookContext, lift_session, load_transcript
 from captain_hook.dispatch import execute_hook
 from captain_hook.events import (
     BaseHookEvent,
@@ -22,7 +24,6 @@ from captain_hook.events import (
 from captain_hook.session import SessionStore
 from captain_hook.testing.session_cache import SessionCache
 from captain_hook.testing.types import Allow, Block, Input, TranscriptFixture, Warn
-from captain_hook.transcript import Transcript
 from captain_hook.types import Event, HookResult, Tool
 
 STUB_FIELD_VALUES: dict[str, Any] = {
@@ -33,16 +34,39 @@ STUB_FIELD_VALUES: dict[str, Any] = {
     "reason": "inline test stub",
 }
 
+FIXTURE_ENVELOPE: dict[str, Any] = {"sessionId": "fixture", "timestamp": "2026-01-01T00:00:00Z"}
+
+
+def fixture_line(index: int, message: dict[str, Any]) -> dict[str, Any]:
+    line = FIXTURE_ENVELOPE | {"uuid": f"fixture-{index}"} | dict(message)
+    match line:
+        case {"type": "assistant", "message": dict() as inner} if "model" not in inner:
+            return line | {"message": {"model": "<fixture>"} | inner}
+        case _:
+            return line
+
+
+def fixture_session(messages: list[dict[str, Any]], *, path: Path | None = None) -> Session:
+    """Build a ``Session`` from raw transcript-line dicts, synthesizing missing envelope fields."""
+    return lift_session(
+        [
+            event
+            for index, message in enumerate(messages)
+            if (event := parse_event(fixture_line(index, message))) is not None
+        ],
+        path=path,
+    )
+
 
 def build_context(
-    transcript: Transcript | None = None,
+    transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
     project_root: Path | None = None,
 ) -> HookContext:
     return HookContext(
         session=SessionStore(session_dir),
-        transcript=transcript or Transcript.from_path(transcript_path),
+        transcript=transcript if transcript is not None else load_transcript(transcript_path),
         settings=None,
         project_root=project_root,
     )
@@ -62,8 +86,10 @@ def make_tool_input(
     match tool:
         case "Bash" | "Execute":
             return omit_none({"command": command, "timeout": None, "description": None})
-        case "Edit" | "MultiEdit":
+        case "Edit":
             return {"file_path": file or "", "old_string": old or "", "new_string": content or ""}
+        case "MultiEdit":
+            return {"file_path": file or "", "edits": [{"old_string": old or "", "new_string": content or ""}]}
         case "Write" | "Create":
             return {"file_path": file or "", "content": content or ""}
         case "Read":
@@ -84,7 +110,7 @@ def mock_tool_event(
     old: str | None = None,
     agent_type: str | None = None,
     permission_mode: str | None = None,
-    transcript: Transcript | None = None,
+    transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
     project_root: Path | None = None,
@@ -104,7 +130,7 @@ def mock_stop_event(
     *,
     stop_hook_active: bool = False,
     permission_mode: str | None = None,
-    transcript: Transcript | None = None,
+    transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> StopEvent:
@@ -118,7 +144,7 @@ def mock_session_end_event(
     reason: str = "other",
     *,
     permission_mode: str | None = None,
-    transcript: Transcript | None = None,
+    transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> SessionEndEvent:
@@ -135,7 +161,7 @@ def mock_subagent_stop_event(
     stop_hook_active: bool = False,
     agent_transcript_path: str = "",
     permission_mode: str | None = None,
-    transcript: Transcript | None = None,
+    transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> SubagentStopEvent:
@@ -156,7 +182,7 @@ def mock_subagent_start_event(
     *,
     agent_id: str = "",
     permission_mode: str | None = None,
-    transcript: Transcript | None = None,
+    transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> SubagentStartEvent:
@@ -171,7 +197,7 @@ def mock_user_prompt_event(
     prompt: str = "",
     *,
     permission_mode: str | None = None,
-    transcript: Transcript | None = None,
+    transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> UserPromptSubmitEvent:
@@ -190,7 +216,7 @@ def mock_event(
     content: str | None = None,
     old: str | None = None,
     prompt: str | None = None,
-    transcript: Transcript | None = None,
+    transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     stop_hook_active: bool = False,
     session_dir: Path | None = None,
@@ -239,7 +265,7 @@ def input_to_event(
 ) -> BaseHookEvent:
     match inp.transcript:
         case TranscriptFixture() as tf:
-            transcript, transcript_path = Transcript.from_messages(tf.messages), None
+            transcript, transcript_path = fixture_session(tf.messages), None
         case Path() as p:
             transcript, transcript_path = None, p
         case _:
@@ -285,7 +311,7 @@ def input_to_event(
 
 
 def replay_session(entry: Any, jsonl: Path) -> Iterator[HookResult | None]:
-    transcript = Transcript.from_path(jsonl)
+    transcript = load_transcript(jsonl)
     ctx = HookContext(session=SessionStore(None), transcript=transcript, settings=None)
     ctx.call_llm = stub_call_llm  # type: ignore[method-assign]
     transcript_path = str(jsonl)
@@ -297,32 +323,31 @@ def replay_session(entry: Any, jsonl: Path) -> Iterator[HookResult | None]:
 
 def transcript_event_payloads(
     ev_type: Event,
-    transcript: Transcript,
+    transcript: Session,
     transcript_path: str,
 ) -> Iterator[dict[str, Any]]:
     base = {"transcript_path": transcript_path}
     match ev_type:
         case Event.PreToolUse:
-            yield from (base | {"tool_name": tu.name, "tool_input": tu.raw_input} for tu in transcript.tool_uses)
+            yield from (
+                base | {"tool_name": use.call.name, "tool_input": dict(use.call.raw)}
+                for use in transcript.tool_calls
+            )
         case Event.PostToolUse:
             yield from (
                 base
-                | {"tool_name": tu.name, "tool_input": tu.raw_input}
-                | ({"tool_response": str(tu.result.content)} if tu.result and not tu.result.is_error else {})
-                for tu in transcript.tool_uses
+                | {"tool_name": use.call.name, "tool_input": dict(use.call.raw)}
+                | ({"tool_response": use.result.content} if use.result and not use.result.is_error else {})
+                for use in transcript.tool_calls
             )
         case Event.PostToolUseFailure:
             yield from (
-                base | {"tool_name": tu.name, "tool_input": tu.raw_input, "error": str(tu.result.content)}
-                for tu in transcript.tool_uses.with_errors
-                if tu.result and tu.result.is_error
+                base | {"tool_name": use.call.name, "tool_input": dict(use.call.raw), "error": use.result.content}
+                for use in transcript.tool_calls.failed()
+                if use.result
             )
         case Event.UserPromptSubmit:
-            yield from (
-                base | {"prompt": msg.text}
-                for msg in transcript.messages
-                if transcript.is_user_message(msg) and msg.text
-            )
+            yield from (base | {"prompt": turn.prompt} for turn in transcript.turns if turn.prompt)
         case Event.SessionEnd:
             yield base | {"reason": "other"}
         case Event.Stop | Event.SubagentStop | Event.SubagentStart | Event.Notification | Event.PreCompact:

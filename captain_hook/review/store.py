@@ -1,11 +1,12 @@
 """The reviewer's SQLite store: feedback events, judge verdicts, and PR candidates.
 
-Layers three review tables onto :class:`cc_transcript.domains.mining.FeedbackStore`'s
-event ledger and :class:`cc_transcript.domains.mining.VerdictStoreMixin`'s verdict
-table: ``candidates`` (one row per grouped correction or misfire), ``candidate_observations``
-(one row per evidencing feedback event), and ``repos`` (the per-repo watching flag).
-Eligibility is judge-aware: only observations whose latest judge verdict accepts them
-with enough confidence count toward the thresholds.
+Layers three review tables onto :class:`cc_transcript.mining.FeedbackStore`'s
+event ledger (whose ``context_json`` column holds ``cc-transcript.context/1``
+documents) and :class:`cc_transcript.judge.VerdictStoreMixin`'s fidelity-aware
+verdict table: ``candidates`` (one row per grouped correction or misfire),
+``candidate_observations`` (one row per evidencing feedback event), and ``repos``
+(the per-repo watching flag). Eligibility is judge-aware: only observations whose
+latest judge verdict accepts them with enough confidence count toward the thresholds.
 """
 
 from __future__ import annotations
@@ -16,9 +17,9 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Self
 
-from cc_transcript.domains.mining.confidence import effective_confidence, from_payload
-from cc_transcript.domains.mining.store import FEEDBACK_DDL, FeedbackStore, now
-from cc_transcript.domains.mining.verdicts import VerdictStoreMixin
+from cc_transcript.judge.verdicts import VerdictStoreMixin
+from cc_transcript.mining.confidence import effective_confidence, from_payload
+from cc_transcript.mining.store import FEEDBACK_DDL, FeedbackStore, now
 from cc_transcript.store import FileStateStore
 
 from captain_hook.review.repo import RepoKey
@@ -28,10 +29,10 @@ if TYPE_CHECKING:
     from pathlib import Path
     from typing import Any
 
-    from cc_transcript.domains.mining.candidates import DedupKey
-    from cc_transcript.domains.mining.confidence import Confidence
-    from cc_transcript.domains.mining.sourcekind import SourceKind
-    from cc_transcript.models import SessionId
+    from cc_transcript.ids import SessionId
+    from cc_transcript.mining.candidates import DedupKey
+    from cc_transcript.mining.confidence import Confidence
+    from cc_transcript.mining.sourcekind import SourceKind
 
     from captain_hook.review.settings import ReviewSettings
 

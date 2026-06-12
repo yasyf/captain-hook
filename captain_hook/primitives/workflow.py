@@ -6,25 +6,31 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Generic, TypeVar
 
+from cc_transcript.models import AssistantEvent, UserEvent
 from pydantic import BaseModel
 
 from captain_hook.types import Action, Event, HookResult, InlineTests, TCondition, Waiting
 
 if TYPE_CHECKING:
+    from cc_transcript.query import Session
+
     from captain_hook.events import BaseHookEvent
-    from captain_hook.transcript import Transcript
 
 M = TypeVar("M", bound=BaseModel)
 
 
-def text_matches(pattern: str) -> Callable[[Transcript], bool]:
-    return lambda t: bool(re.search(pattern, t.full_text))
+def session_text(t: Session) -> str:
+    return "\n".join(event.text for event in t.events if isinstance(event, UserEvent | AssistantEvent))
+
+
+def text_matches(pattern: str) -> Callable[[Session], bool]:
+    return lambda t: bool(re.search(pattern, session_text(t)))
 
 
 @dataclass(frozen=True, kw_only=True)
 class Step:
     name: str
-    check: Callable[[Transcript], bool]
+    check: Callable[[Session], bool]
     stopped_at: str
     next_step: str
 
@@ -50,7 +56,7 @@ class Workflow:
         return self.on_start(evt) if self.on_start else None
 
     def guard(self, evt: BaseHookEvent) -> HookResult | None:
-        if self.marker not in evt.ctx.t.full_text:
+        if self.marker not in session_text(evt.ctx.t):
             resume = next(
                 (s for s in self.steps if not s.check(evt.ctx.t)),
                 self.steps[-1],

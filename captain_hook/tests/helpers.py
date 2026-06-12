@@ -3,8 +3,9 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from itertools import count
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
 from captain_hook.context import HookContext
@@ -39,13 +40,18 @@ from captain_hook.testing.helpers import (
     mock_tool_event as mock_tool_event,
 )
 from captain_hook.testing.helpers import (
+    fixture_session as fixture_session,
+)
+from captain_hook.testing.helpers import (
     mock_user_prompt_event as mock_user_prompt_event,
 )
-from captain_hook.transcript import Transcript
-from captain_hook.transcript.models import TextBlock, ToolResult, ToolUseBlock, TranscriptMessage
 from captain_hook.types import Event
 
+if TYPE_CHECKING:
+    from cc_transcript.query import Session
+
 PKG_DIR = Path(__file__).resolve().parents[3]
+UUIDS = count(1)
 
 
 def dispatch_test(
@@ -57,7 +63,7 @@ def dispatch_test(
     content: str | None = None,
     old: str | None = None,
     prompt: str | None = None,
-    transcript: Transcript | None = None,
+    transcript: Session | None = None,
     async_: bool = False,
 ) -> dict[str, Any] | None:
     return _dispatch(
@@ -78,13 +84,11 @@ def make_ctx(
     call_llm_return: Any = None,
     project_root: Path | None = None,
 ) -> HookContext:
-    from captain_hook.transcript.models import TextBlock, TranscriptMessage
-
-    text_msgs = [TranscriptMessage(type="assistant", content=[TextBlock(text=t)]) for t in (texts or [])]
-    padding = [TranscriptMessage(type="assistant", content=[]) for _ in range(max(0, n_messages - len(text_msgs)))]
+    text_msgs = [raw_text("assistant", t) for t in (texts or [])]
+    padding = [raw_text("assistant", "") for _ in range(max(0, n_messages - len(text_msgs)))]
     ctx = HookContext(
         session=SessionStore(session_dir),
-        transcript=Transcript(messages=padding + text_msgs),
+        transcript=fixture_session(padding + text_msgs),
         settings=settings,
         project_root=project_root,
     )
@@ -93,14 +97,14 @@ def make_ctx(
 
 
 def build_ctx(
-    transcript: Transcript | None = None,
+    transcript: Session | None = None,
     session_dir: Any = None,
     settings: Any = None,
     project_root: Path | None = None,
 ) -> HookContext:
     return HookContext(
         session=SessionStore(session_dir),
-        transcript=transcript or Transcript(messages=[]),
+        transcript=transcript if transcript is not None else fixture_session([]),
         settings=settings,
         project_root=project_root,
     )
@@ -151,18 +155,22 @@ def make_transcript_ctx(
     has_command_result: bool = False,
     count_tools_map: dict[str, int] | None = None,
 ) -> Any:
+    counts = count_tools_map or {}
     ctx = MagicMock()
     (transcript := ctx.transcript)  # noqa: E275 — walrus for inline binding
+    ctx.t = transcript
     transcript.has_skill = MagicMock(return_value=has_skill_result)
     transcript.has_read = MagicMock(return_value=has_read_result)
     transcript.has_edit_to = MagicMock(return_value=has_edit_to_result)
     transcript.has_command = MagicMock(return_value=has_command_result)
-    transcript.count_tools = MagicMock(side_effect=lambda t: (count_tools_map or {}).get(t, 0))
+    transcript.tool_calls.named = MagicMock(
+        side_effect=lambda spec: MagicMock(count=MagicMock(return_value=counts.get(spec, 0)))
+    )
     return ctx
 
 
-def make_messages_ctx(messages: list[TranscriptMessage] | None) -> Any:
-    return MagicMock(transcript=None if messages is None else Transcript(messages=messages))
+def make_messages_ctx(messages: list[dict[str, Any]] | None) -> Any:
+    return MagicMock(transcript=fixture_session(messages or []))
 
 
 def run_cli(
@@ -188,7 +196,7 @@ def run_cli(
 
 # --- Raw JSONL-line builders ------------------------------------------------
 # These return plain dicts in the shape Claude Code writes to transcript JSONL,
-# ready for ``Transcript.from_messages([...])``.
+# ready for ``fixture_session([...])``.
 
 
 def raw_text_block(text: str) -> dict[str, Any]:
@@ -219,15 +227,15 @@ def raw_msg(role: str, content: list[dict[str, Any]] | str = "", **raw: Any) -> 
     """A raw transcript line wrapping ``content`` (a block list or plain text) under ``message``.
 
     Carries the envelope metadata (``uuid``/``sessionId``/``timestamp``) that real
-    transcript lines have, so the same dict round-trips through both the synthetic
-    ``from_messages`` parser and the ``from_path`` core parser. Callers can override
-    any envelope field via keyword.
+    transcript lines have, so the same dict parses through the core parser whether
+    written to a JSONL file or handed to ``fixture_session``. Each line gets a
+    unique ``uuid``; callers can override any envelope field via keyword.
     """
     blocks = content if isinstance(content, list) else [raw_text_block(content)]
     message = {"content": blocks} | ({"model": "<test>"} if role == "assistant" else {})
     return {
         "type": role,
-        "uuid": "uuid",
+        "uuid": f"uuid-{next(UUIDS)}",
         "sessionId": "sess",
         "timestamp": "2026-01-01T00:00:00Z",
         "message": message,
@@ -319,37 +327,31 @@ def workflow_launch(id: str = "tu_x") -> list[dict[str, Any]]:
     ]
 
 
-def make_transcript(*messages: dict[str, Any] | list[dict[str, Any]]) -> Transcript:
-    """Build a ``Transcript`` from raw message dicts, given either as varargs or a single list."""
+def make_transcript(*messages: dict[str, Any] | list[dict[str, Any]]) -> Session:
+    """Build a ``Session`` from raw message dicts, given either as varargs or a single list."""
     items = messages[0] if len(messages) == 1 and isinstance(messages[0], list) else list(messages)
-    return Transcript.from_messages(list(items))
+    return fixture_session(list(items))
 
 
 def waiting_evt(raw_messages: list[dict[str, Any]]) -> PreToolUseEvent:
     """A Bash ``echo`` PreToolUse event over the given raw transcript, ready for ``check_condition``."""
-    ctx = build_ctx(transcript=Transcript.from_messages(raw_messages))
+    ctx = build_ctx(transcript=fixture_session(raw_messages))
     return make_pre_tool_event("Bash", {"command": "echo"}, ctx=ctx)
 
 
-# --- TranscriptMessage-level factories --------------------------------------
+# --- Single-line message factories -------------------------------------------
 
 
-def assistant_msg(*tools: tuple[str, dict[str, Any]]) -> TranscriptMessage:
-    """An assistant ``TranscriptMessage`` whose content is a ToolUseBlock per ``(name, input)`` tuple."""
-    return TranscriptMessage(
-        type="assistant",
-        content=[ToolUseBlock(name=name, input=inp, id=f"tu_{i}") for i, (name, inp) in enumerate(tools)],
-    )
+def assistant_msg(*tools: tuple[str, dict[str, Any]]) -> dict[str, Any]:
+    """A raw assistant line carrying a tool_use block per ``(name, input)`` tuple."""
+    return raw_assistant(*(raw_tool_use(name, inp, f"tu_{i}") for i, (name, inp) in enumerate(tools)))
 
 
-def text_msg(text: str = "done") -> TranscriptMessage:
-    """An assistant ``TranscriptMessage`` carrying a single text block."""
-    return TranscriptMessage(type="assistant", content=[TextBlock(text=text)])
+def text_msg(text: str = "done") -> dict[str, Any]:
+    """A raw assistant line carrying a single text block."""
+    return raw_text("assistant", text)
 
 
-def tool_result_msg(tool_use_id: str, text: str) -> TranscriptMessage:
-    """A user ``TranscriptMessage`` carrying a single tool_result block."""
-    return TranscriptMessage(
-        type="user",
-        content=[ToolResult(tool_use_id=tool_use_id, content=[{"type": "text", "text": text}])],
-    )
+def tool_result_msg(tool_use_id: str, text: str) -> dict[str, Any]:
+    """A raw user line carrying a single tool_result block."""
+    return raw_tool_result(tool_use_id, content=[{"type": "text", "text": text}])

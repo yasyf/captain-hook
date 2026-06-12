@@ -20,7 +20,8 @@ from captain_hook.types import (
 )
 
 if TYPE_CHECKING:
-    from captain_hook.classifiers import MessageClassifier
+    from cc_transcript.activity import UserClassifier
+
     from captain_hook.events import BaseHookEvent
     from captain_hook.types import HookResult
 
@@ -69,7 +70,7 @@ class State:
     hooks: list[RegisteredHook] = field(default_factory=list)
     gitignore_patterns: list[str] = field(default_factory=list)
     settings: BaseSettings | None = None
-    classifier: MessageClassifier | None = None
+    classifier: UserClassifier | None = None
     counter: int = field(default=0, repr=False)
 
 

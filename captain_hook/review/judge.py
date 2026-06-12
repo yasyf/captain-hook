@@ -1,28 +1,32 @@
 """The reviewer's LLM judge over both candidate kinds: durable corrections and confirmed misfires.
 
 The deterministic scan is tuned for recall; this module supplies the precision.
-The lifted :func:`cc_transcript.domains.mining.run_verdicts` mechanism fans a
-structured judge over every stored row lacking a verdict at the current prompt
-version — under the CREATE taxonomy ("is this correction durable enough to
-encode as a hook?") for user-correction rows and the FIX taxonomy
-(``misfire_confirmed`` / ``compliance`` / ``ambient_mention``) for
-``hook_complaint`` rows — and each verdict persists idempotently through
-:meth:`~captain_hook.review.store.ReviewStore.record_verdict`. Rows whose
-heuristic confidence sits below :data:`~cc_transcript.domains.mining.NOISE_FLOOR`
+The :func:`cc_transcript.judge.run_verdicts` mechanism fans a structured judge
+over every stored row lacking a verdict at the current prompt version — under
+the CREATE taxonomy ("is this correction durable enough to encode as a hook?")
+for user-correction rows and the FIX taxonomy (``misfire_confirmed`` /
+``compliance`` / ``ambient_mention``) for ``hook_complaint`` rows — and each
+verdict persists idempotently through
+:meth:`~captain_hook.review.store.ReviewStore.record_verdict`. Prompts render
+each row's :class:`~cc_transcript.context.ContextWindow` at full fidelity while
+the transcript lives and fall back to the labeled summary previews once it
+expires; each verdict records the fidelity it was judged at. Rows whose
+heuristic confidence sits below :data:`~cc_transcript.mining.NOISE_FLOOR`
 never reach the LLM, and each pass is capped so verdicts amortize per session.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
-from cc_transcript.domains.mining.candidates import DedupKey
-from cc_transcript.domains.mining.confidence import NOISE_FLOOR
-from cc_transcript.domains.mining.context import ContextSnapshot, render_turn, render_turns
-from cc_transcript.domains.mining.llm import resolved_model, structured_judge
-from cc_transcript.domains.mining.verdicts import run_verdicts
+from cc_transcript.context import ContextWindow, HydratedWindow
+from cc_transcript.judge.llm import resolved_model, structured_judge
+from cc_transcript.judge.verdicts import run_verdicts
+from cc_transcript.mining.candidates import DedupKey
+from cc_transcript.mining.confidence import NOISE_FLOOR
+from cc_transcript.render import Budget
 from pydantic import BaseModel, Field
 
 from captain_hook.review.fix import HOOK_COMPLAINT
@@ -31,12 +35,16 @@ from captain_hook.review.store import signal_confidence
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
+    from cc_transcript.activity import Turn
+    from cc_transcript.context import Fidelity
+
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
 
-REVIEW_PROMPT_VERSION = 1
+REVIEW_PROMPT_VERSION = 2
 JUDGE_ROLE = "judge"
-TRIGGER_TEXT_LIMIT = 2000
+TRIGGER_BUDGET = Budget(turn_chars=2000, tool_chars=6000)
+CONTEXT_BUDGET = Budget()
 
 DURABLE_CATEGORIES = frozenset({"durable_style_rule", "workflow_rule", "tooling_rule", "safety_guard"})
 ACCEPTED_CATEGORIES = DURABLE_CATEGORIES | {"misfire_confirmed"}
@@ -92,14 +100,9 @@ rationale: one short clause.
 Respond with strict JSON matching the schema — no extra keys, no prose.
 
 [source: {source_kind}]
-=== conversation before ===
-{before}
-=== assistant action under review ===
-{trigger}
+{context}
 === FEEDBACK TO CLASSIFY ===
-{text}
-=== conversation after ===
-{after}"""
+{text}"""
 
 FIX_JUDGE_PROMPT = """\
 You are auditing one remark an AI coding assistant (Claude) made about an
@@ -129,14 +132,11 @@ rationale: one short clause.
 Respond with strict JSON matching the schema — no extra keys, no prose.
 
 [hook: {hook_name} ({event}/{action})]
-=== conversation before ===
-{before}
 === the hook's fire message ===
 {fire_message}
+{context}
 === REMARK TO CLASSIFY ===
-{text}
-=== conversation after ===
-{after}"""
+{text}"""
 
 
 class ReviewVerdict(BaseModel):
@@ -175,54 +175,101 @@ class JudgeReport:
     pending: int
 
 
-def build_create_prompt(row: Mapping[str, object]) -> str:
-    ctx = ContextSnapshot.from_json(str(row["context_json"]))
-    return JUDGE_PROMPT.format(
-        source_kind=row["source_kind"],
-        before=render_turns(ctx.before),
-        trigger=render_turn(ctx.trigger, TRIGGER_TEXT_LIMIT) if ctx.trigger else "(unknown)",
-        text=row["text"],
-        after=render_turns(ctx.after),
+def section(window: ContextWindow, label: str, turns: tuple[Turn, ...], budget: Budget) -> str:
+    return f"=== {label} ===\n" + (HydratedWindow(window=window, turns=turns).render(budget=budget) or "(none)")
+
+
+async def render_context(window: ContextWindow) -> tuple[str, Fidelity]:
+    """Renders a row's window for a prompt, at the best fidelity available.
+
+    While the transcript lives, the window hydrates and renders at full fidelity —
+    the trigger turn under the generous :data:`TRIGGER_BUDGET`, the surrounding
+    turns under the moderate :data:`CONTEXT_BUDGET`. Once it expires (or any ref
+    was compacted away), the persisted previews render instead, led by the
+    built-in summary-fidelity label.
+
+    Returns:
+        The rendered context and the fidelity it was rendered at.
+    """
+    if (hydrated := await window.hydrate()) is None:
+        return replace(window, fidelity="summary").render_preview(budget=CONTEXT_BUDGET), "summary"
+    split = len(window.before)
+    end = split + (window.trigger is not None)
+    return (
+        "\n".join(
+            (
+                section(window, "conversation before", hydrated.turns[:split], CONTEXT_BUDGET),
+                section(window, "the turn the feedback arrived in", hydrated.turns[split:end], TRIGGER_BUDGET),
+                section(window, "conversation after", hydrated.turns[end:], CONTEXT_BUDGET),
+            )
+        ),
+        "full",
     )
 
 
-def build_fix_prompt(row: Mapping[str, object]) -> str:
-    ctx = ContextSnapshot.from_json(str(row["context_json"]))
+def build_create_prompt(row: Mapping[str, object], context: str) -> str:
+    return JUDGE_PROMPT.format(source_kind=row["source_kind"], context=context, text=row["text"])
+
+
+def build_fix_prompt(row: Mapping[str, object], context: str) -> str:
     payload: dict[str, object] = json.loads(str(row["payload_json"]))
     return FIX_JUDGE_PROMPT.format(
         hook_name=payload["target_hook_name"],
         event=payload["event"],
         action=payload["action"],
         fire_message=payload["fire_message"],
-        before=render_turns(ctx.before),
+        context=context,
         text=row["text"],
-        after=render_turns(ctx.after),
     )
 
 
-def build_prompt(row: Mapping[str, object]) -> str:
-    return build_fix_prompt(row) if str(row["source_kind"]) == HOOK_COMPLAINT else build_create_prompt(row)
+async def build_prompt(row: Mapping[str, object]) -> tuple[str, Fidelity]:
+    """Builds one row's judge prompt, hydrating its context window first.
+
+    Returns:
+        The prompt under the row's taxonomy (FIX for ``hook_complaint`` rows,
+        CREATE otherwise) and the fidelity its context rendered at.
+    """
+    context, fidelity = await render_context(ContextWindow.from_json(str(row["context_json"])))
+    builder = build_fix_prompt if str(row["source_kind"]) == HOOK_COMPLAINT else build_create_prompt
+    return builder(row, context), fidelity
+
+
+def prompt_builder(fidelities: dict[str, Fidelity]) -> Callable[[Mapping[str, object]], Awaitable[str]]:
+    async def build(row: Mapping[str, object]) -> str:
+        prompt, fidelity = await build_prompt(row)
+        fidelities[str(row["dedup_key"])] = fidelity
+        return prompt
+
+    return build
 
 
 def persist_verdict(
-    store: ReviewStore, *, model: str
+    store: ReviewStore, *, model: str, fidelities: Mapping[str, Fidelity]
 ) -> Callable[[Mapping[str, object], ReviewVerdict], Awaitable[None]]:
     async def persist(row: Mapping[str, object], verdict: ReviewVerdict) -> None:
         await store.record_verdict(
-            DedupKey(str(row["dedup_key"])), verdict, role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION, model=model
+            DedupKey(str(row["dedup_key"])),
+            verdict,
+            role=JUDGE_ROLE,
+            prompt_version=REVIEW_PROMPT_VERSION,
+            model=model,
+            fidelity=fidelities[str(row["dedup_key"])],
         )
 
     return persist
 
 
-async def judge_pass(store: ReviewStore, *, settings: ReviewSettings, limit: int | None = None) -> JudgeReport:
+async def judge_pass(
+    store: ReviewStore, *, settings: ReviewSettings, limit: int | None = None, refresh_summary: bool = False
+) -> JudgeReport:
     """Judges stored corrections lacking a verdict at :data:`REVIEW_PROMPT_VERSION`.
 
     Incremental and idempotent: each verdict persists as soon as its call
     completes, a failed row stays unjudged and is retried on the next pass, and
     re-running over a fully judged corpus is a no-op. Rows whose heuristic
-    :func:`~cc_transcript.domains.mining.effective_confidence` sits below
-    :data:`~cc_transcript.domains.mining.NOISE_FLOOR` are never sent.
+    :func:`~cc_transcript.mining.effective_confidence` sits below
+    :data:`~cc_transcript.mining.NOISE_FLOOR` are never sent.
 
     Args:
         store: The open review store.
@@ -230,18 +277,24 @@ async def judge_pass(store: ReviewStore, *, settings: ReviewSettings, limit: int
             per-session call cap.
         limit: When set, overrides ``settings.max_judge_calls_per_session``
             as this pass's call cap (the manual-backfill path).
+        refresh_summary: When True, also re-judge rows whose verdict was
+            recorded at summary fidelity; a full-fidelity verdict replaces the
+            summary one once the row's window hydrates again.
 
     Returns:
         The pass's judged/failed/pending counts over judge-worthy rows.
     """
     model = resolved_model(settings.judge_tier)
-    rows = await store.unjudged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION, model=model)
+    rows = await store.unjudged(
+        role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION, model=model, refresh_summary=refresh_summary
+    )
     worthy = [row for row in rows if signal_confidence(row["payload_json"]) >= NOISE_FLOOR]
+    fidelities: dict[str, Fidelity] = {}
     judged, failed = await run_verdicts(
         worthy[: limit if limit is not None else settings.max_judge_calls_per_session],
-        build_prompt,
+        prompt_builder(fidelities),
         structured_judge(ReviewVerdict, tier=settings.judge_tier, timeout=settings.judge_timeout),
-        persist_verdict(store, model=model),
+        persist_verdict(store, model=model, fidelities=fidelities),
         concurrency=settings.judge_concurrency,
     )
     return JudgeReport(judged=judged, failed=failed, pending=len(worthy) - judged)

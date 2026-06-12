@@ -83,7 +83,7 @@ A fix PR adapts the template: title `[capt-hook] Fix <slug> misfiring on
 amendment chosen (tightened condition, re-fire guard, live state, demoted severity, or
 removal); the Hook section names the regression test pair (silent on the misfiring
 input, still firing on the genuine case); the Evidence section quotes Claude's
-verbatim complaints with their session ids and dates, plus the fire-log attribution
+verbatim complaints with their session ids and dates, plus the decision-ledger attribution
 (`target_hook_name`, the fire's event/action, and its message).
 
 ```bash

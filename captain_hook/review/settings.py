@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cc_transcript.domains.mining.confidence import MEDIUM, VERY_HIGH, Confidence
+from cc_transcript.mining.confidence import MEDIUM, VERY_HIGH, Confidence
 from pydantic import Field
 from pydantic_settings import SettingsConfigDict
 from spawnllm import TModel

@@ -46,14 +46,6 @@ def resolve_log_dir() -> Path:
     return Path(os.environ.get("CAPTAIN_HOOK_LOG_DIR") or DEFAULT_LOG_DIR)
 
 
-def resolve_fire_log_path() -> Path:
-    return Path(os.environ.get("HOOKS_FIRE_LOG_PATH") or resolve_state_dir() / "hooks" / "fires.db")
-
-
-def resolve_fire_log_enabled() -> bool:
-    return os.environ.get("HOOKS_FIRE_LOG_ENABLED", "1").strip().lower() not in ("0", "false", "no", "")
-
-
 class HooksSettings(BaseSettings):
     """Base settings class for hook configuration, backed by environment variables with ``HOOKS_`` prefix."""
 
@@ -63,8 +55,6 @@ class HooksSettings(BaseSettings):
     waiting_tools: list[str] = Field(default_factory=lambda: list(DEFAULT_WAITING_TOOLS))
     state_dir: Path = Field(default_factory=resolve_state_dir)
     log_dir: Path = Field(default_factory=resolve_log_dir)
-    fire_log_path: Path = Field(default_factory=resolve_fire_log_path)
-    fire_log_enabled: bool = Field(default_factory=resolve_fire_log_enabled)
 
 
 class AutoConf:

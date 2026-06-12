@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from cc_transcript.ids import SessionId
 from pydantic import BaseModel
 
 from captain_hook.context import HookContext
 from captain_hook.session import (
+    STALE_AGE_SECONDS,
     SessionStore,
     cleanup_stale,
     ensure_session,
-    session_hash,
     state_root,
 )
 
@@ -23,54 +26,64 @@ class MyModel(BaseModel):
     value: int
 
 
+SESSION_ID = "11111111-2222-3333-4444-555555555555"
+
+
+def age_dir(path: Path, *, seconds: int) -> None:
+    stale = time.time() - seconds
+    os.utime(path, (stale, stale))
+
+
 class TestSessionManagement:
-    def test_ensure_session_creates_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_ensure_session_creates_directory_keyed_by_session_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CLAUDE_HOOKS_STATE_DIR", str(tmp_path))
-        transcript = tmp_path / "transcript.jsonl"
-        transcript.touch()
 
-        sd = ensure_session(transcript)
+        sd = ensure_session(SessionId(SESSION_ID))
         assert sd.is_dir()
+        assert sd.name == SESSION_ID
         assert sd.parent.name == "sessions"
+        assert list(sd.iterdir()) == []
 
-    def test_session_hash_deterministic(self) -> None:
-        p = Path("/some/transcript.jsonl")
-        assert session_hash(p) == session_hash(p)
-        assert session_hash(str(p)) == session_hash(p)
-
-    def test_session_hash_different_paths(self) -> None:
-        assert session_hash("/a") != session_hash("/b")
-
-    def test_ensure_session_creates_marker(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_cleanup_stale_removes_old_dir_without_transcript(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CLAUDE_HOOKS_STATE_DIR", str(tmp_path))
-        transcript = tmp_path / "transcript.jsonl"
-        transcript.touch()
+        monkeypatch.setattr("captain_hook.session.find_transcript_sync", lambda session_id: None)
 
-        sd = ensure_session(transcript)
-        marker = sd / ".transcript_path"
-        assert marker.exists()
-        assert marker.read_text() == str(transcript)
-
-    def test_cleanup_stale_removes_missing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("CLAUDE_HOOKS_STATE_DIR", str(tmp_path))
-        transcript = tmp_path / "transcript.jsonl"
-        transcript.touch()
-
-        sd = ensure_session(transcript)
-        assert sd.is_dir()
-
-        transcript.unlink()
+        sd = ensure_session(SessionId(SESSION_ID))
+        age_dir(sd, seconds=STALE_AGE_SECONDS + 60)
         cleanup_stale()
         assert not sd.exists()
 
-    def test_cleanup_stale_preserves_valid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_cleanup_stale_preserves_recent_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_HOOKS_STATE_DIR", str(tmp_path))
-        transcript = tmp_path / "transcript.jsonl"
-        transcript.touch()
+        monkeypatch.setattr("captain_hook.session.find_transcript_sync", lambda session_id: None)
 
-        sd = ensure_session(transcript)
+        sd = ensure_session(SessionId(SESSION_ID))
         cleanup_stale()
         assert sd.is_dir()
+
+    def test_cleanup_stale_preserves_old_dir_with_living_transcript(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CLAUDE_HOOKS_STATE_DIR", str(tmp_path))
+        transcript = tmp_path / f"{SESSION_ID}.jsonl"
+        transcript.touch()
+        seen: list[str] = []
+
+        def fake_find(session_id):
+            seen.append(str(session_id))
+            return transcript
+
+        monkeypatch.setattr("captain_hook.session.find_transcript_sync", fake_find)
+
+        sd = ensure_session(SessionId(SESSION_ID))
+        age_dir(sd, seconds=STALE_AGE_SECONDS + 60)
+        cleanup_stale()
+        assert sd.is_dir()
+        assert seen == [SESSION_ID]
 
     def test_atomic_write_produces_valid_json(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
@@ -94,7 +107,6 @@ class TestContextCaching:
     def test_turn_cached(self) -> None:
         transcript = MagicMock()
         turn_mock = MagicMock()
-        turn_mock.start_idx = 0
         transcript.current_turn = turn_mock
         ctx = HookContext(session=SessionStore(None), transcript=transcript, settings=None)
         assert ctx.turn is ctx.turn
@@ -175,8 +187,10 @@ class TestCallLlm:
             assert "claude" in cmd
 
     def test_with_transcript(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        transcript = MagicMock()
-        transcript.__str__ = lambda self: "transcript content here"
+        from captain_hook.testing.helpers import fixture_session
+        from captain_hook.tests.helpers import raw_text
+
+        transcript = fixture_session([raw_text("user", "transcript content here")])
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=transcript, settings=None)
 
