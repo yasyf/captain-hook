@@ -25,7 +25,8 @@ from captain_hook.review.settings import ReviewSettings
         pytest.param("judge_timeout", 180, id="judge_timeout"),
         pytest.param("min_judge_confidence", 0.6, id="min_judge_confidence"),
         pytest.param("max_judge_calls_per_session", 40, id="max_judge_calls_per_session"),
-        pytest.param("brain_max_turns", 40, id="brain_max_turns"),
+        pytest.param("brain_max_turns", 80, id="brain_max_turns"),
+        pytest.param("brain_max_budget_usd", 5.0, id="brain_max_budget_usd"),
     ],
 )
 def test_defaults(field: str, expected: object) -> None:

@@ -21,8 +21,8 @@ class ReviewSettings(HooksSettings):
 
     The threshold knobs gate when a candidate becomes PR-eligible (the ``*_fix``
     variants apply to hook-misfire fix candidates), the judge knobs bound the
-    per-session LLM verdict pass, and ``brain_max_turns`` caps the headless
-    PR-drafting agent.
+    per-session LLM verdict pass, and ``brain_max_turns``/``brain_max_budget_usd``
+    cap the headless PR-drafting agent.
     """
 
     model_config = SettingsConfigDict(env_prefix="HOOKS_REVIEW_")
@@ -41,5 +41,6 @@ class ReviewSettings(HooksSettings):
     judge_timeout: int = 180
     min_judge_confidence: float = 0.6
     max_judge_calls_per_session: int = 40
-    brain_max_turns: int = 40
+    brain_max_turns: int = 80
+    brain_max_budget_usd: float = 5.0
     db_path: Path = Field(default_factory=resolve_review_db_path)

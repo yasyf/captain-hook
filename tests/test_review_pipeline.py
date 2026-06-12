@@ -341,7 +341,7 @@ class TestJudgePass:
 
 class TestBrain:
     def test_brain_argv_composes_backend_base_with_reviewer_scope(self) -> None:
-        argv = brain_argv(max_turns=40)
+        argv = brain_argv(max_turns=40, max_budget_usd=5.0)
         assert argv[:2] == ["claude", "-p"]
         assert "--no-session-persistence" in argv
         assert argv[argv.index("--model") + 1] == "sonnet"
@@ -349,7 +349,7 @@ class TestBrain:
         assert "auto" not in argv
         assert argv[argv.index("--max-turns") + 1] == "40"
         assert argv[argv.index("--allowedTools") + 1] == ",".join(BRAIN_ALLOWED_TOOLS)
-        assert "--max-budget-usd" in argv
+        assert argv[argv.index("--max-budget-usd") + 1] == "5.0"
 
     def test_brain_prompt_carries_skill_and_reviewer_marker(self) -> None:
         prompt = brain_prompt(Path("/tmp/t.jsonl"))
@@ -361,9 +361,9 @@ class TestBrain:
     ) -> None:
         runs: list[tuple[list[str], dict[str, Any]]] = []
         monkeypatch.setattr("captain_hook.review.pipeline.subprocess.run", lambda argv, **kw: runs.append((argv, kw)))
-        spawn_brain(tmp_path / "t.jsonl", repo_root=tmp_path, settings=ReviewSettings(brain_max_turns=7))
+        spawn_brain(tmp_path / "t.jsonl", repo_root=tmp_path, settings=ReviewSettings(brain_max_turns=7, brain_max_budget_usd=2.5))
         [(argv, kwargs)] = runs
-        assert argv == brain_argv(max_turns=7)
+        assert argv == brain_argv(max_turns=7, max_budget_usd=2.5)
         assert kwargs["cwd"] == tmp_path
         assert kwargs["env"][SPAWNED_ENV] == "1"
         assert REVIEWER_MARKER in kwargs["input"].decode()

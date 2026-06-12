@@ -139,12 +139,13 @@ def brain_prompt(transcript: Path) -> str:
     )
 
 
-def brain_argv(*, max_turns: int) -> list[str]:
+def brain_argv(*, max_turns: int, max_budget_usd: float) -> list[str]:
     from captain_hook.llm import ClaudeBackend
 
     backend = ClaudeBackend()
     argv = backend.build_command(backend.models[BRAIN_TIER], None, agent=True)
     argv[argv.index("--permission-mode") + 1] = "acceptEdits"
+    argv[argv.index("--max-budget-usd") + 1] = str(max_budget_usd)
     return [*argv, "--max-turns", str(max_turns), "--allowedTools", ",".join(BRAIN_ALLOWED_TOOLS)]
 
 
@@ -166,7 +167,7 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
     (log_path := review_log_path()).parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("ab") as log:
         subprocess.run(
-            brain_argv(max_turns=settings.brain_max_turns),
+            brain_argv(max_turns=settings.brain_max_turns, max_budget_usd=settings.brain_max_budget_usd),
             input=brain_prompt(transcript).encode(),
             cwd=repo_root,
             env=os.environ | {SPAWNED_ENV: "1"},
