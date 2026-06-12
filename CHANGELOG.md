@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-06-12
+
+### Fixed
+- `Transcript.from_path` returns an empty transcript for undecodable files
+  instead of raising, and subagent discovery skips macOS AppleDouble (`._*`)
+  sidecar files.
+
 ## [0.11.0] - 2026-06-11
 
 ### Added
