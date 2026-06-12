@@ -63,6 +63,13 @@ plus its threshold line:
 thresholds: sessions=3 days=2 open_prs=0 single_observation=False eligible=True
 ```
 
+Fix candidates (`candidate_kind=fix`, `source_kind=hook_complaint`) additionally carry
+`target_source_file` (the hook file to amend), `target_hook_name` (its registered
+name), and `misfire_class` (e.g. `refire`, `false_positive`); `sample_text` is
+Claude's verbatim complaint. Fix thresholds are looser: `min_sessions_fix` distinct
+sessions, or one observation that is both judge-accepted and heuristically VERY_HIGH
+(`single_observation=True`).
+
 ### `review threshold-check [ID] [--repo <key>]`
 
 The eligibility verdict — the source of truth. Without `ID`, reports every candidate in

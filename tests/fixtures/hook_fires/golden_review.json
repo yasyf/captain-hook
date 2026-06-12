@@ -1,0 +1,100 @@
+[
+  {
+    "dedup_key": "609dc7b26c6ee9491432ea1609ebe75638d50c356b7fccacf5206b4d602de743",
+    "source_kind": "hook_complaint",
+    "text": "**Step 5 complete**: Repository is clean again.\n\n**Hook repetition note**: The task tracker reminder has now fired three times (after steps 1, 3, and 5) for status checks. Since you explicitly asked me to follow a specific command sequence without task tracking, this reminder re-fired unnecessarily and I am ignoring the repeats.\n\n**Step 6 - Summary**: The repository started clean and now contains a new committed file `notes.txt` with the content \"hello\" (commit cc07506). The working tree is clean with no uncommitted changes.",
+    "expected": "accepted",
+    "note": "the real captured misfire complaint: strong 're-fired'/'ignoring the repeats' dismissal of the status nudge"
+  },
+  {
+    "dedup_key": "1cd87cbe6cf38e133bffb5d6f54b1895e22ad6bc758dfded798a121403e0120e",
+    "source_kind": "hook_complaint",
+    "text": "**Step 3 complete**: notes.txt now appears as an untracked file.\n\n**Note**: The hook reminder about using the task tracker has fired again, but since you asked for a specific command sequence that doesn't include task tracking, I'm proceeding with your explicit instructions.\n\nNow committing the file:",
+    "expected": "rejected",
+    "note": "observes the repeat fire without disputing it, then proceeds"
+  },
+  {
+    "dedup_key": "85dd82b6011c12507a43bf90235422d46df3903f322be56992b6329dea7827a8",
+    "source_kind": "hook_complaint",
+    "text": "Understood. I'll stop mentioning hook feedback and add a one-line summary of what changed before finishing tasks from now on.\n\n**What changed:** Created and committed notes.txt with the content \"hello\".",
+    "expected": "rejected",
+    "note": "compliance: promises to stop mentioning hook feedback and follow the gate"
+  },
+  {
+    "dedup_key": "ac0c16f15d464972fcd9c9803d57f16b4ba11ff3017c8b9d103c5bf396a66ace",
+    "source_kind": "hook_complaint",
+    "text": "The working tree is clean.\n\n(Noted: I should use the project's task tracker for status checks going forward.)",
+    "expected": "rejected",
+    "note": "compliance with the nudge; no dismissal, no hook vocabulary dispute"
+  },
+  {
+    "dedup_key": "93dfe3d8a107c0c5af94ae1fd420c1c773b860c503209d79f4dc552ba714b461",
+    "source_kind": "hook_complaint",
+    "text": "Understood \u2014 I'll add a one-line summary of what changed whenever I finish a task.",
+    "expected": "rejected",
+    "note": "compliance with the stop gate's summary requirement"
+  },
+  {
+    "dedup_key": "f957d93b96e79fb1da77af6f3c0e93d1063e3aa0af622d293e449c658fbf075e",
+    "source_kind": "hook_complaint",
+    "text": "The `rm -rf ./scratch-dir` command was **blocked by a policy hook** with the message:\n\n> recursive force-delete (rm -rf) is forbidden in this repo. Remove files individually or move them into a trash/ directory instead.\n\nI'll comply with the policy by removing the contents individually:",
+    "expected": "rejected",
+    "note": "ambient mention: quotes the deny verbatim and complies with it"
+  },
+  {
+    "dedup_key": "dfd9c87b06682d25edd384e76f6d4fa61268d3e40835c78285defaa12154ade9",
+    "source_kind": "hook_complaint",
+    "text": "Confirmed: the directory is gone. The policy hook blocked the force-delete, so I removed the file individually with `rm` and then removed the now-empty directory with `rmdir`. The directory no longer exists.",
+    "expected": "rejected",
+    "note": "ambient mention: factual recap of a hook that fired correctly"
+  },
+  {
+    "dedup_key": "aad6a6970424a224fff2cd0cc0cd14a3ca993eb3d3f8b37f95deeda10f062e78",
+    "source_kind": "hook_complaint",
+    "text": "Got it\u2014I'll add a one-line summary of what changed at the end of my final message on future tasks.",
+    "expected": "rejected",
+    "note": "compliance with the stop gate"
+  },
+  {
+    "dedup_key": "00e1f7e48320166892e7a338c3f28a1461f8539b8cb08f2eec83a1378f372de4",
+    "source_kind": "hook_complaint",
+    "text": "I think the hook may be a false positive here \u2014 the file I edited is generated, not source.",
+    "expected": "accepted",
+    "note": "hedged false-positive claim with a concrete reason"
+  },
+  {
+    "dedup_key": "9f06388bd5296fd956fe20d3598553e98757130ff99bd04be78ba8a6688857ad",
+    "source_kind": "hook_complaint",
+    "text": "This reminder is spurious \u2014 the tests already pass; ignoring it.",
+    "expected": "accepted",
+    "note": "strong spurious + ignoring-it dismissal of a reminder"
+  },
+  {
+    "dedup_key": "4db4c42fd0ff64f7e7cd103417debe2c13bf28f000c1cd9081198f7de541081a",
+    "source_kind": "hook_complaint",
+    "text": "That stop gate shouldn't have fired \u2014 I had already addressed every open task.",
+    "expected": "accepted",
+    "note": "strong shouldn't-have-fired dismissal of the gate"
+  },
+  {
+    "dedup_key": "a69a5b4cb58bd689c85ed3203a0cdda40c61b23fe7c6627103a18804f589b83d",
+    "source_kind": "hook_complaint",
+    "text": "Good catch \u2014 the gate is right, I had not run the tests yet. Running them now.",
+    "expected": "rejected",
+    "note": "compliance: agrees with the gate and acts on it"
+  },
+  {
+    "dedup_key": "eeeaa30b419bd66b780654e394e3beb1d2af420a52232e3e4be52a88edf3f53a",
+    "source_kind": "hook_complaint",
+    "text": "Let me re-run the linter before the hook complains again.",
+    "expected": "rejected",
+    "note": "compliance phrasing near hook vocabulary; 're-run' is not 're-fired'"
+  },
+  {
+    "dedup_key": "d774f1e543ad5910a40feb2453bb512b4aca6f552c40a805e7fabbe03813ec5d",
+    "source_kind": "hook_complaint",
+    "text": "The user pointed out a false positive in my analysis of the parser output.",
+    "expected": "rejected",
+    "note": "dismissal vocabulary without any hook vocabulary nearby"
+  }
+]

@@ -1,6 +1,6 @@
 ---
 name: authoring-hooks
-description: Drafts one capt-hook (captain-hook) hook from a durable correction — the user's verbatim feedback plus its context — as a new .claude/hooks/<slug>.py. Picks the right primitive (nudge for one-shot advice, gate for one-shot stop checks, hook(block=True) for always-on enforcement), writes the narrowest condition that captures the correction, a message that cites the correction, and inline tests (one Input firing on the offending shape, one Allow() on a benign neighbor), then proves the file with uvx capt-hook test before any settings wiring. Use when the user says "author a hook", "draft a hook from feedback", "encode this correction as a hook", or when the bootstrapping-hooks or scanning-sessions skill delegates a hook to write.
+description: Drafts one capt-hook (captain-hook) hook from a durable correction — the user's verbatim feedback plus its context — as a new .claude/hooks/<slug>.py, or (FIX mode) amends an existing misfiring hook with a mandatory regression test reproducing the misfire. Picks the right primitive (nudge for one-shot advice, gate for one-shot stop checks, hook(block=True) for always-on enforcement), writes the narrowest condition that captures the correction, a message that cites the correction, and inline tests (one Input firing on the offending shape, one Allow() on a benign neighbor), then proves the file with uvx capt-hook test before any settings wiring. Use when the user says "author a hook", "draft a hook from feedback", "encode this correction as a hook", "fix this misfiring hook", or when the bootstrapping-hooks or scanning-sessions skill delegates a hook to write or amend.
 argument-hint: "[the correction to encode — verbatim user text + context]"
 allowed-tools: Read, Grep, Glob, Write, Edit, Bash(uvx capt-hook:*, capt-hook:*, ls:*, git log:*)
 ---
@@ -148,6 +148,54 @@ warn_command(
 ```
 
 `uvx capt-hook test` → 2 passed; `PostToolUse` is already wired, so no Step 5.
+
+## FIX mode — amending a misfiring hook
+
+When the input is a **misfire complaint** instead of a correction — the scanning-sessions
+skill hands you a fix candidate carrying the target hook file, the hook's registered
+name, the misfire class, and Claude's verbatim complaint — you **amend the existing
+hook file**, never write a new one.
+
+### 1. Reproduce the misfire
+
+From the complaint and its context, extract the **offending input**: the exact tool
+call or content the hook wrongly fired on (for a re-fire, the repeat occurrence the
+hook should have stayed silent on). Also extract the **genuine case**: the input the
+hook exists to catch — read it off the hook's current inline tests and message. If you
+cannot state the offending input precisely, stop and report the candidate as
+unreproducible instead of guessing.
+
+### 2. Pick the narrowest amendment
+
+In order of preference:
+
+| Misfire shape | Amendment |
+|---|---|
+| The condition matches calls outside the rule's intent | **Tighten the condition** — anchor the regex, scope with `FilePath`/`TestFile`, add a `skip_if` carve-out |
+| The hook re-fires on content it already fired on (`max_fires` too high, no per-turn guard) | **Add a re-fire guard** — lower `max_fires`, or `skip_if` on the already-satisfied state |
+| The hook re-fires because it greps stale transcript text instead of live state | **Switch to live state** — read the event object (`evt.tasks`, `evt.ctx`) instead of transcript text |
+| The rule is real but blocking is disproportionate | **Demote `block=True` → `Warn`** (or `block_command` → `warn_command`) |
+| The rule no longer holds at all | **Remove the registration** (and say so in the PR body) |
+
+### 3. Write the regression test — MANDATORY
+
+Every fix ships a regression test reproducing the misfire inside the hook's
+`tests = {...}`:
+
+- one `Input(...)` built from the **offending input**, asserting the amended hook
+  stays silent: `Allow()`;
+- one `Input(...)` for the **genuine case**, asserting the hook still fires
+  (`Block(...)`/`Warn(...)` matching its severity).
+
+A fix without the silent-on-misfire test is not done — that test is what stops the
+same complaint from being mined again next session.
+
+### 4. Verify
+
+`uvx capt-hook test` must be green, existing tests included. Never delete or weaken
+the hook's existing tests to make the amendment pass; if the genuine-case test now
+fails, the amendment is too broad — go back to Step 2. No settings wiring changes:
+the file is already dispatched.
 
 ## References
 

@@ -1,10 +1,16 @@
-"""The CREATE-mode transcript scanner: mine user corrections into PR candidates.
+"""The transcript scanner: mine user corrections and hook-misfire complaints into PR candidates.
 
-The fact-recognition mechanism lives in :mod:`cc_transcript.domains.mining`; this
-module injects the reviewer's policy — the :data:`STRICT_USER` event prefilter,
-the trigger-absence disqualification, and the ``min_confidence`` candidate floor —
-over raw core transcript events read via :class:`cc_transcript.TranscriptParser`,
-and persists each surviving correction through :class:`~captain_hook.review.store.ReviewStore`.
+The fact-recognition mechanism lives in :mod:`cc_transcript.domains.mining` (the
+six CREATE-mode user-correction detectors) and
+:mod:`captain_hook.review.fix` (the FIX-mode :func:`~captain_hook.review.fix.iter_hook_complaint_signals`
+detector over assistant turns); this module injects the reviewer's policy over
+raw core transcript events read via :class:`cc_transcript.TranscriptParser` and
+persists every surviving signal through one ingest codepath into
+:class:`~captain_hook.review.store.ReviewStore`. The candidate floors partition
+by kind: user-correction kinds gate under :data:`STRICT_USER` (event prefilter,
+trigger-absence disqualification, the ``min_confidence`` floor) while
+``hook_complaint`` gates under the ``STRICT_FIX`` floor (``min_confidence_fix``)
+inside :func:`candidates_from`.
 
 Dedup is scoped twice, deliberately diverging from cc-pushback's session-free
 keys: each feedback event dedups per session (``dedup_key(kind, session_id,
@@ -12,7 +18,9 @@ keys: each feedback event dedups per session (``dedup_key(kind, session_id,
 observation), while candidates group across sessions by the session-free
 ``rule = dedup_key(kind, *content)`` — the same correction in three sessions
 yields three observations under one candidate row, which is what the
-distinct-session eligibility thresholds count.
+distinct-session eligibility thresholds count. Fix candidates group by their
+attributed target, ``(hook_complaint, target_hook_name, target_source_file)``,
+so two sessions' complaints about one hook collapse to one candidate.
 """
 
 from __future__ import annotations
@@ -55,9 +63,12 @@ from cc_transcript.filterspec import (
 from cc_transcript.models import UserEvent
 from cc_transcript.parser import TranscriptParser
 
+from captain_hook.fire_log import open_fire_log
+from captain_hook.review.fix import HOOK_COMPLAINT, iter_hook_complaint_signals
 from captain_hook.review.formats import formats
 from captain_hook.review.repo import resolve_repo_key
 from captain_hook.review.store import CandidateKind
+from captain_hook.session import session_hash
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -65,7 +76,6 @@ if TYPE_CHECKING:
     from typing import Any
 
     from cc_transcript.backend import ParsedTranscript
-    from cc_transcript.domains.mining.confidence import Confidence
     from cc_transcript.domains.mining.signals import MiningSignal
     from cc_transcript.models import TranscriptEvent
 
@@ -117,6 +127,8 @@ def survives(events: Sequence[TranscriptEvent], sig: MiningSignal) -> bool:
 
 def rule_parts(sig: MiningSignal) -> tuple[str, ...]:
     match sig.detector:
+        case "hook_complaint":
+            return ("hook_complaint", str(sig.evidence["target_hook_name"]), str(sig.evidence["target_source_file"]))
         case "transcript_message":
             return ("transcript_message", sig.text)
         case "exit_plan_rejection":
@@ -144,6 +156,8 @@ def parts(sig: MiningSignal) -> tuple[str, ...]:
 
 def payload_of(sig: MiningSignal) -> Mapping[str, Any] | None:
     match sig.detector:
+        case "hook_complaint":
+            return dict(sig.evidence)
         case "transcript_message":
             return None
         case "exit_plan_rejection" | "plan_reentry" | "interrupt":
@@ -193,14 +207,18 @@ def detect(events: Sequence[TranscriptEvent]) -> Iterator[MiningSignal]:
 
 
 def candidates_from(
-    path: Path, events: Sequence[TranscriptEvent], signals: Iterable[MiningSignal], *, floor: Confidence
+    path: Path, events: Sequence[TranscriptEvent], signals: Iterable[MiningSignal], *, settings: ReviewSettings
 ) -> Iterator[tuple[MiningSignal, FeedbackCandidate]]:
-    spec = build_candidate_filter(at_least(floor))
+    strict_user = build_candidate_filter(at_least(settings.min_confidence))
+    strict_fix = build_candidate_filter(at_least(settings.min_confidence_fix))
     return (
         (sig, candidate)
         for sig in signals
         if survives(events, sig)
-        if keep_candidate(candidate := to_candidate(path, events, sig), spec)
+        if keep_candidate(
+            candidate := to_candidate(path, events, sig),
+            strict_fix if sig.kind == HOOK_COMPLAINT else strict_user,
+        )
     )
 
 
@@ -228,11 +246,29 @@ async def ingest(
     if repo_key is None or is_reviewer_session(parsed.events):
         await store.record_file_scan(str(parsed.path), parsed.mtime, [])
         return ScanReport(scanned=1, inserted=0)
-    kept = list(candidates_from(parsed.path, parsed.events, detect(parsed.events), floor=settings.min_confidence))
+    signals = chain(
+        iter_hook_complaint_signals(
+            parsed.events, firelog=open_fire_log(settings.fire_log_path), session_key=session_hash(parsed.path)
+        ),
+        detect(parsed.events),
+    )
+    kept = list(candidates_from(parsed.path, parsed.events, signals, settings=settings))
     inserted = await store.record_file_scan(str(parsed.path), parsed.mtime, [candidate for _, candidate in kept])
     for sig, candidate in kept:
-        candidate_id = await store.ensure_candidate(
-            repo_key, kind=CandidateKind.CREATE, rule=dedup_key(*rule_parts(sig)), source_kind=sig.kind
+        candidate_id = (
+            await store.ensure_candidate(
+                repo_key,
+                kind=CandidateKind.FIX,
+                rule=dedup_key(*rule_parts(sig)),
+                source_kind=sig.kind,
+                target_source_file=str(sig.evidence["target_source_file"]),
+                target_hook_name=str(sig.evidence["target_hook_name"]),
+                misfire_class=str(sig.evidence["misfire_class"]),
+            )
+            if sig.kind == HOOK_COMPLAINT
+            else await store.ensure_candidate(
+                repo_key, kind=CandidateKind.CREATE, rule=dedup_key(*rule_parts(sig)), source_kind=sig.kind
+            )
         )
         await store.record_observation(
             candidate_id, dedup_key=candidate.dedup_key, session_id=sig.session_id, occurred_at=sig.occurred_at
@@ -243,7 +279,7 @@ async def ingest(
 async def scan_transcript(
     store: ReviewStore, path: Path, *, settings: ReviewSettings, repo_key: RepoKey | None = None
 ) -> ScanReport:
-    """Scans one transcript for user corrections, incrementally.
+    """Scans one transcript for user corrections and hook-misfire complaints, incrementally.
 
     The transcript is parsed only when new or modified since the last recorded
     scan; a transcript that fails to parse — for example one Claude Code is
@@ -273,7 +309,7 @@ async def scan_transcript(
 
 
 async def scan(store: ReviewStore, *, settings: ReviewSettings, transcripts: Sequence[Path]) -> ScanReport:
-    """Scans explicit transcript files and directories for user corrections, incrementally.
+    """Scans explicit transcript files and directories for corrections and misfire complaints, incrementally.
 
     ``cc_transcript`` hardcodes its projects directory, so every entry point
     here takes explicit paths instead: directories are searched recursively for

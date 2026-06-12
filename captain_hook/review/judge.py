@@ -1,9 +1,12 @@
-"""The reviewer's LLM judge: is a stored correction durable enough to encode as a hook?
+"""The reviewer's LLM judge over both candidate kinds: durable corrections and confirmed misfires.
 
 The deterministic scan is tuned for recall; this module supplies the precision.
 The lifted :func:`cc_transcript.domains.mining.run_verdicts` mechanism fans a
-structured judge over every stored correction lacking a verdict at the current
-prompt version, and each verdict persists idempotently through
+structured judge over every stored row lacking a verdict at the current prompt
+version — under the CREATE taxonomy ("is this correction durable enough to
+encode as a hook?") for user-correction rows and the FIX taxonomy
+(``misfire_confirmed`` / ``compliance`` / ``ambient_mention``) for
+``hook_complaint`` rows — and each verdict persists idempotently through
 :meth:`~captain_hook.review.store.ReviewStore.record_verdict`. Rows whose
 heuristic confidence sits below :data:`~cc_transcript.domains.mining.NOISE_FLOOR`
 never reach the LLM, and each pass is capped so verdicts amortize per session.
@@ -11,6 +14,7 @@ never reach the LLM, and each pass is capped so verdicts amortize per session.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -21,6 +25,7 @@ from cc_transcript.domains.mining.llm import resolved_model, structured_judge
 from cc_transcript.domains.mining.verdicts import run_verdicts
 from pydantic import BaseModel, Field
 
+from captain_hook.review.fix import HOOK_COMPLAINT
 from captain_hook.review.store import signal_confidence
 
 if TYPE_CHECKING:
@@ -34,6 +39,7 @@ JUDGE_ROLE = "judge"
 TRIGGER_TEXT_LIMIT = 2000
 
 DURABLE_CATEGORIES = frozenset({"durable_style_rule", "workflow_rule", "tooling_rule", "safety_guard"})
+ACCEPTED_CATEGORIES = DURABLE_CATEGORIES | {"misfire_confirmed"}
 
 Category = Literal[
     "durable_style_rule",
@@ -44,6 +50,9 @@ Category = Literal[
     "task_specific",
     "preference_unclear",
     "ambient_noise",
+    "misfire_confirmed",
+    "compliance",
+    "ambient_mention",
 ]
 
 JUDGE_PROMPT = """\
@@ -92,6 +101,43 @@ Respond with strict JSON matching the schema — no extra keys, no prose.
 === conversation after ===
 {after}"""
 
+FIX_JUDGE_PROMPT = """\
+You are auditing one remark an AI coding assistant (Claude) made about an
+automated hook that fired during its session, deciding whether the remark
+REPORTS A MISFIRE — the hook firing wrongly or redundantly — or something else.
+
+Pick exactly one category:
+- misfire_confirmed: the remark asserts the hook fired wrongly — it re-fired on
+  content already addressed, flagged a false positive, or fired outside its
+  intended scope — and the surrounding conversation is consistent with that
+  claim.
+- compliance: the remark acknowledges the hook's message and follows it (or
+  promises to follow it going forward).
+- ambient_mention: the hook is merely described, quoted, or referenced in
+  passing, with no claim that it fired wrongly.
+
+Only misfire_confirmed marks the hook as worth amending. A remark that both
+complies and dismisses ("noted, but this re-fired on text I already fixed") is
+misfire_confirmed — the dismissal is the signal. A remark that merely reports
+the hook fired, or works around it without disputing it, is not.
+
+summary: ONE neutral sentence naming what the hook did and what Claude claims
+about it. Write it for every category.
+confidence: your probability (0 to 1) that your misfire-vs-not call is correct.
+rationale: one short clause.
+
+Respond with strict JSON matching the schema — no extra keys, no prose.
+
+[hook: {hook_name} ({event}/{action})]
+=== conversation before ===
+{before}
+=== the hook's fire message ===
+{fire_message}
+=== REMARK TO CLASSIFY ===
+{text}
+=== conversation after ===
+{after}"""
+
 
 class ReviewVerdict(BaseModel):
     """One judge verdict on a stored correction.
@@ -110,8 +156,8 @@ class ReviewVerdict(BaseModel):
 
     @property
     def accepted(self) -> bool:
-        """Whether the category marks a durable, hook-worthy correction."""
-        return self.category in DURABLE_CATEGORIES
+        """Whether the category marks a durable correction or a confirmed misfire."""
+        return self.category in ACCEPTED_CATEGORIES
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +175,7 @@ class JudgeReport:
     pending: int
 
 
-def build_prompt(row: Mapping[str, object]) -> str:
+def build_create_prompt(row: Mapping[str, object]) -> str:
     ctx = ContextSnapshot.from_json(str(row["context_json"]))
     return JUDGE_PROMPT.format(
         source_kind=row["source_kind"],
@@ -138,6 +184,24 @@ def build_prompt(row: Mapping[str, object]) -> str:
         text=row["text"],
         after=render_turns(ctx.after),
     )
+
+
+def build_fix_prompt(row: Mapping[str, object]) -> str:
+    ctx = ContextSnapshot.from_json(str(row["context_json"]))
+    payload: dict[str, object] = json.loads(str(row["payload_json"]))
+    return FIX_JUDGE_PROMPT.format(
+        hook_name=payload["target_hook_name"],
+        event=payload["event"],
+        action=payload["action"],
+        fire_message=payload["fire_message"],
+        before=render_turns(ctx.before),
+        text=row["text"],
+        after=render_turns(ctx.after),
+    )
+
+
+def build_prompt(row: Mapping[str, object]) -> str:
+    return build_fix_prompt(row) if str(row["source_kind"]) == HOOK_COMPLAINT else build_create_prompt(row)
 
 
 def persist_verdict(

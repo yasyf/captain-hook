@@ -1,0 +1,430 @@
+{
+  "captured": "2026-06-12",
+  "lab_repo": "/tmp/capt-hook-fixture-lab",
+  "hooks": {
+    "status_nudge": {
+      "file": ".claude/hooks/status_nudge.py",
+      "primitive": "nudge",
+      "registered_name": "status_nudge:nudge_c424798f",
+      "condition": "Command(\"status\"), max_fires=20 (deliberately over-broad)"
+    },
+    "rm_guard": {
+      "file": ".claude/hooks/rm_guard.py",
+      "primitive": "hook(Event.PreToolUse, block=True)",
+      "registered_name": "declarative_1",
+      "condition": "Tool(\"Bash\"), Command(r\"rm\\s+-rf\")"
+    },
+    "stop_reminder": {
+      "file": ".claude/hooks/stop_reminder.py",
+      "primitive": "gate",
+      "registered_name": "stop_reminder:gate_e76ccd07",
+      "condition": "(none)"
+    }
+  },
+  "harness_rendering_notes": [
+    "A PreToolUse deny leaves NO attachment: it surfaces only as a synthetic is_error:true tool_result whose content is the permissionDecisionReason verbatim, indistinguishable from an ordinary tool failure except by joining the text to fires.db.",
+    "A nudge fire leaves two traces: attachment:hook_success (hookSpecificOutput JSON with additionalContext in stdout) plus attachment:hook_additional_context whose content list carries the message verbatim.",
+    "A Stop block leaves two traces: a synthetic isMeta user turn starting 'Stop hook feedback:\\n' plus attachment:hook_blocking_error whose blockingError carries the message and the hook command string.",
+    "Attachments carry the hook command string ('uvx capt-hook run Stop' vs 'rtk hook claude') - the user's global rtk rewriter contributes its own hook_success noise on PreToolUse:Bash.",
+    "Fire-log source_file for nudge/gate is the uvx-cached captain_hook/primitives/nudge.py (the user hook file lives only in hook_name's module prefix); declarative hook() rows have an EMPTY source_file and an anonymous name like declarative_1.",
+    "Permission denials ('Claude requested permissions to ...') are also is_error tool_results; they join to no fire-log row and must not be confused with hook fires."
+  ],
+  "files": {
+    "fire-compliance.jsonl": {
+      "claude_session_id": "138ec4dc-7afd-4ad1-93cb-d53ac511c55c",
+      "scenario": "A nudge fires once and Claude complies; the stop gate fires and Claude complies.",
+      "fingerprints": [
+        {
+          "line": 9,
+          "kind": "hook_success",
+          "hookName": "PreToolUse:Bash",
+          "command": "rtk hook claude",
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecisionReason\":\"RTK auto-rewrite\",\"updatedInput\":{\"command\":\"rtk git status\",\"description\":\"Check working tree status\"}}}\n"
+        },
+        {
+          "line": 10,
+          "kind": "hook_success",
+          "hookName": "PreToolUse:Bash",
+          "command": "uvx capt-hook run PreToolUse",
+          "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"additionalContext\": \"Remember to use the project's task tracker before running status checks.\", \"permissionDecision\": \"allow\"}}\n"
+        },
+        {
+          "line": 11,
+          "kind": "hook_additional_context",
+          "hookName": "PreToolUse:Bash",
+          "content": [
+            "Remember to use the project's task tracker before running status checks."
+          ]
+        },
+        {
+          "line": 15,
+          "kind": "stop_hook_feedback_meta_turn",
+          "content": "Stop hook feedback:\nBefore you finish: leave a one-line summary of what changed in your final message."
+        },
+        {
+          "line": 16,
+          "kind": "hook_blocking_error",
+          "hookName": "Stop",
+          "blockingError": {
+            "blockingError": "Before you finish: leave a one-line summary of what changed in your final message.",
+            "command": "uvx capt-hook run Stop"
+          }
+        },
+        {
+          "line": 19,
+          "kind": "is_error_tool_result",
+          "content": "Claude requested permissions to edit /Users/yasyf/.cc-pool/accounts/acct-05/projects/-private-tmp-capt-hook-fixture-lab/memory/feedback_summary_format.md which is a sensitive file.",
+          "tool_use_id": "toolu_01CCEAiXQNZofoSCDjwoRjXi"
+        }
+      ],
+      "quotes": [
+        {
+          "line": 14,
+          "label": "compliance",
+          "timestamp": "2026-06-12T00:34:02.263Z",
+          "text": "The working tree is clean.\n\n(Noted: I should use the project's task tracker for status checks going forward.)"
+        },
+        {
+          "line": 23,
+          "label": "compliance",
+          "timestamp": "2026-06-12T00:34:09.417Z",
+          "text": "Understood \u2014 I'll add a one-line summary of what changed whenever I finish a task."
+        }
+      ],
+      "fire_log_rows": [
+        {
+          "id": 597,
+          "ts": 1781224439.1340008,
+          "session_id": "c833aab166a0",
+          "claude_session_id": "138ec4dc-7afd-4ad1-93cb-d53ac511c55c",
+          "repo_key": "/private/tmp/capt-hook-fixture-lab/.git",
+          "hook_name": "status_nudge:nudge_c424798f",
+          "source_file": "/Users/yasyf/.cache/uv/archive-v0/grvA_SCLPI7A81S0/lib/python3.13/site-packages/captain_hook/primitives/nudge.py",
+          "event": "PreToolUse",
+          "action": "warn",
+          "message": "Remember to use the project's task tracker before running status checks."
+        },
+        {
+          "id": 598,
+          "ts": 1781224442.459899,
+          "session_id": "c833aab166a0",
+          "claude_session_id": "138ec4dc-7afd-4ad1-93cb-d53ac511c55c",
+          "repo_key": "/private/tmp/capt-hook-fixture-lab/.git",
+          "hook_name": "stop_reminder:gate_e76ccd07",
+          "source_file": "/Users/yasyf/.cache/uv/archive-v0/grvA_SCLPI7A81S0/lib/python3.13/site-packages/captain_hook/primitives/nudge.py",
+          "event": "Stop",
+          "action": "block",
+          "message": "Before you finish: leave a one-line summary of what changed in your final message."
+        }
+      ]
+    },
+    "fire-misfire-complaint.jsonl": {
+      "claude_session_id": "abe07c81-8be4-495d-a594-9c5ef86f045b",
+      "scenario": "The over-broad status nudge fires three times across an explicit command sequence; Claude dismisses the repeats as a misfire (line 42).",
+      "fingerprints": [
+        {
+          "line": 10,
+          "kind": "hook_success",
+          "hookName": "PreToolUse:Bash",
+          "command": "rtk hook claude",
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecisionReason\":\"RTK auto-rewrite\",\"updatedInput\":{\"command\":\"rtk git status\",\"description\":\"Check git status\"}}}\n"
+        },
+        {
+          "line": 11,
+          "kind": "hook_success",
+          "hookName": "PreToolUse:Bash",
+          "command": "uvx capt-hook run PreToolUse",
+          "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"additionalContext\": \"Remember to use the project's task tracker before running status checks.\", \"permissionDecision\": \"allow\"}}\n"
+        },
+        {
+          "line": 12,
+          "kind": "hook_additional_context",
+          "hookName": "PreToolUse:Bash",
+          "content": [
+            "Remember to use the project's task tracker before running status checks."
+          ]
+        },
+        {
+          "line": 24,
+          "kind": "hook_success",
+          "hookName": "PreToolUse:Bash",
+          "command": "rtk hook claude",
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecisionReason\":\"RTK auto-rewrite\",\"updatedInput\":{\"command\":\"rtk git status\",\"description\":\"Check git status after creating notes.txt\"}}}\n"
+        },
+        {
+          "line": 25,
+          "kind": "hook_success",
+          "hookName": "PreToolUse:Bash",
+          "command": "uvx capt-hook run PreToolUse",
+          "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"additionalContext\": \"Remember to use the project's task tracker before running status checks.\", \"permissionDecision\": \"allow\"}}\n"
+        },
+        {
+          "line": 26,
+          "kind": "hook_additional_context",
+          "hookName": "PreToolUse:Bash",
+          "content": [
+            "Remember to use the project's task tracker before running status checks."
+          ]
+        },
+        {
+          "line": 31,
+          "kind": "hook_success",
+          "hookName": "PreToolUse:Bash",
+          "command": "rtk hook claude",
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecisionReason\":\"RTK auto-rewrite\",\"updatedInput\":{\"command\":\"rtk git add notes.txt && rtk git commit -m \\\"add notes\\\"\",\"description\":\"Add and commit notes.txt with message 'add notes'\"}}}\n"
+        },
+        {
+          "line": 36,
+          "kind": "hook_success",
+          "hookName": "PreToolUse:Bash",
+          "command": "rtk hook claude",
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecisionReason\":\"RTK auto-rewrite\",\"updatedInput\":{\"command\":\"rtk git status\",\"description\":\"Final git status check\"}}}\n"
+        },
+        {
+          "line": 37,
+          "kind": "hook_success",
+          "hookName": "PreToolUse:Bash",
+          "command": "uvx capt-hook run PreToolUse",
+          "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"additionalContext\": \"Remember to use the project's task tracker before running status checks.\", \"permissionDecision\": \"allow\"}}\n"
+        },
+        {
+          "line": 38,
+          "kind": "hook_additional_context",
+          "hookName": "PreToolUse:Bash",
+          "content": [
+            "Remember to use the project's task tracker before running status checks."
+          ]
+        },
+        {
+          "line": 43,
+          "kind": "stop_hook_feedback_meta_turn",
+          "content": "Stop hook feedback:\nBefore you finish: leave a one-line summary of what changed in your final message."
+        },
+        {
+          "line": 44,
+          "kind": "hook_blocking_error",
+          "hookName": "Stop",
+          "blockingError": {
+            "blockingError": "Before you finish: leave a one-line summary of what changed in your final message.",
+            "command": "uvx capt-hook run Stop"
+          }
+        },
+        {
+          "line": 47,
+          "kind": "is_error_tool_result",
+          "content": "Claude requested permissions to edit /Users/yasyf/.cc-pool/accounts/acct-05/projects/-private-tmp-capt-hook-fixture-lab/memory/feedback_hook_feedback.md which is a sensitive file.",
+          "tool_use_id": "toolu_014KQmzE8R18JMmMCBbUNF6F"
+        },
+        {
+          "line": 51,
+          "kind": "is_error_tool_result",
+          "content": "Claude requested permissions to edit /Users/yasyf/.cc-pool/accounts/acct-05/projects/-private-tmp-capt-hook-fixture-lab/memory/feedback_hook_feedback.md which is a sensitive file.",
+          "tool_use_id": "toolu_01De8sTPeZuTL2AfqVuz1xq7"
+        }
+      ],
+      "quotes": [
+        {
+          "line": 29,
+          "label": "ambient_mention",
+          "timestamp": "2026-06-12T00:35:14.186Z",
+          "text": "**Step 3 complete**: notes.txt now appears as an untracked file.\n\n**Note**: The hook reminder about using the task tracker has fired again, but since you asked for a specific command sequence that doesn't include task tracking, I'm proceeding with your explicit instructions.\n\nNow committing the file:"
+        },
+        {
+          "line": 42,
+          "label": "misfire_complaint",
+          "timestamp": "2026-06-12T00:35:21.522Z",
+          "text": "**Step 5 complete**: Repository is clean again.\n\n**Hook repetition note**: The task tracker reminder has now fired three times (after steps 1, 3, and 5) for status checks. Since you explicitly asked me to follow a specific command sequence without task tracking, this reminder re-fired unnecessarily and I am ignoring the repeats.\n\n**Step 6 - Summary**: The repository started clean and now contains a new committed file `notes.txt` with the content \"hello\" (commit cc07506). The working tree is clean with no uncommitted changes."
+        },
+        {
+          "line": 53,
+          "label": "compliance",
+          "timestamp": "2026-06-12T00:35:33.377Z",
+          "text": "Understood. I'll stop mentioning hook feedback and add a one-line summary of what changed before finishing tasks from now on.\n\n**What changed:** Created and committed notes.txt with the content \"hello\"."
+        }
+      ],
+      "fire_log_rows": [
+        {
+          "id": 599,
+          "ts": 1781224505.359516,
+          "session_id": "2ce5d2a6bd4a",
+          "claude_session_id": "abe07c81-8be4-495d-a594-9c5ef86f045b",
+          "repo_key": "/private/tmp/capt-hook-fixture-lab/.git",
+          "hook_name": "status_nudge:nudge_c424798f",
+          "source_file": "/Users/yasyf/.cache/uv/archive-v0/grvA_SCLPI7A81S0/lib/python3.13/site-packages/captain_hook/primitives/nudge.py",
+          "event": "PreToolUse",
+          "action": "warn",
+          "message": "Remember to use the project's task tracker before running status checks."
+        },
+        {
+          "id": 600,
+          "ts": 1781224510.800722,
+          "session_id": "2ce5d2a6bd4a",
+          "claude_session_id": "abe07c81-8be4-495d-a594-9c5ef86f045b",
+          "repo_key": "/private/tmp/capt-hook-fixture-lab/.git",
+          "hook_name": "status_nudge:nudge_c424798f",
+          "source_file": "/Users/yasyf/.cache/uv/archive-v0/grvA_SCLPI7A81S0/lib/python3.13/site-packages/captain_hook/primitives/nudge.py",
+          "event": "PreToolUse",
+          "action": "warn",
+          "message": "Remember to use the project's task tracker before running status checks."
+        },
+        {
+          "id": 601,
+          "ts": 1781224517.348702,
+          "session_id": "2ce5d2a6bd4a",
+          "claude_session_id": "abe07c81-8be4-495d-a594-9c5ef86f045b",
+          "repo_key": "/private/tmp/capt-hook-fixture-lab/.git",
+          "hook_name": "status_nudge:nudge_c424798f",
+          "source_file": "/Users/yasyf/.cache/uv/archive-v0/grvA_SCLPI7A81S0/lib/python3.13/site-packages/captain_hook/primitives/nudge.py",
+          "event": "PreToolUse",
+          "action": "warn",
+          "message": "Remember to use the project's task tracker before running status checks."
+        },
+        {
+          "id": 602,
+          "ts": 1781224521.745384,
+          "session_id": "2ce5d2a6bd4a",
+          "claude_session_id": "abe07c81-8be4-495d-a594-9c5ef86f045b",
+          "repo_key": "/private/tmp/capt-hook-fixture-lab/.git",
+          "hook_name": "stop_reminder:gate_e76ccd07",
+          "source_file": "/Users/yasyf/.cache/uv/archive-v0/grvA_SCLPI7A81S0/lib/python3.13/site-packages/captain_hook/primitives/nudge.py",
+          "event": "Stop",
+          "action": "block",
+          "message": "Before you finish: leave a one-line summary of what changed in your final message."
+        }
+      ]
+    },
+    "fire-block.jsonl": {
+      "claude_session_id": "e8c0f647-76cd-4e79-a9c3-e8d8c660aa2a",
+      "scenario": "A declarative hook(block=True) denies rm -rf; the deny renders only as a synthetic is_error tool_result; Claude complies.",
+      "fingerprints": [
+        {
+          "line": 12,
+          "kind": "is_error_tool_result",
+          "content": "BLOCKED: recursive force-delete (rm -rf) is forbidden in this repo. Remove files individually or move them into a trash/ directory instead.",
+          "tool_use_id": "toolu_01MEFsdbV3ww49Zdc5aKDZVx"
+        },
+        {
+          "line": 18,
+          "kind": "hook_success",
+          "hookName": "PreToolUse:Bash",
+          "command": "rtk hook claude",
+          "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecisionReason\":\"RTK auto-rewrite\",\"updatedInput\":{\"command\":\"rm ./scratch-dir/junk.txt && rmdir ./scratch-dir && rtk ls -la | grep scratch-dir\",\"description\":\"Remove junk.txt file, then remove the empty directory, then verify it's gone\"}}}\n"
+        },
+        {
+          "line": 23,
+          "kind": "stop_hook_feedback_meta_turn",
+          "content": "Stop hook feedback:\nBefore you finish: leave a one-line summary of what changed in your final message."
+        },
+        {
+          "line": 24,
+          "kind": "hook_blocking_error",
+          "hookName": "Stop",
+          "blockingError": {
+            "blockingError": "Before you finish: leave a one-line summary of what changed in your final message.",
+            "command": "uvx capt-hook run Stop"
+          }
+        },
+        {
+          "line": 27,
+          "kind": "is_error_tool_result",
+          "content": "Claude requested permissions to edit /Users/yasyf/.cc-pool/accounts/acct-05/projects/-private-tmp-capt-hook-fixture-lab/memory/feedback_summary_style.md which is a sensitive file.",
+          "tool_use_id": "toolu_01Ghf4PRmpKZ2wThGTjeUMXC"
+        }
+      ],
+      "quotes": [
+        {
+          "line": 16,
+          "label": "ambient_mention",
+          "timestamp": "2026-06-12T00:35:46.355Z",
+          "text": "The `rm -rf ./scratch-dir` command was **blocked by a policy hook** with the message:\n\n> recursive force-delete (rm -rf) is forbidden in this repo. Remove files individually or move them into a trash/ directory instead.\n\nI'll comply with the policy by removing the contents individually:"
+        },
+        {
+          "line": 21,
+          "label": "ambient_mention",
+          "timestamp": "2026-06-12T00:35:49.423Z",
+          "text": "Confirmed: the directory is gone. The policy hook blocked the force-delete, so I removed the file individually with `rm` and then removed the now-empty directory with `rmdir`. The directory no longer exists."
+        },
+        {
+          "line": 29,
+          "label": "compliance",
+          "timestamp": "2026-06-12T00:35:58.329Z",
+          "text": "Got it\u2014I'll remember to end with a one-line summary of what changed from now on. Noted and will apply to future responses."
+        }
+      ],
+      "fire_log_rows": [
+        {
+          "id": 603,
+          "ts": 1781224541.2907588,
+          "session_id": "16555bfca965",
+          "claude_session_id": "e8c0f647-76cd-4e79-a9c3-e8d8c660aa2a",
+          "repo_key": "/private/tmp/capt-hook-fixture-lab/.git",
+          "hook_name": "declarative_1",
+          "source_file": "",
+          "event": "PreToolUse",
+          "action": "block",
+          "message": "BLOCKED: recursive force-delete (rm -rf) is forbidden in this repo. Remove files individually or move them into a trash/ directory instead."
+        },
+        {
+          "id": 604,
+          "ts": 1781224550.039947,
+          "session_id": "16555bfca965",
+          "claude_session_id": "e8c0f647-76cd-4e79-a9c3-e8d8c660aa2a",
+          "repo_key": "/private/tmp/capt-hook-fixture-lab/.git",
+          "hook_name": "stop_reminder:gate_e76ccd07",
+          "source_file": "/Users/yasyf/.cache/uv/archive-v0/grvA_SCLPI7A81S0/lib/python3.13/site-packages/captain_hook/primitives/nudge.py",
+          "event": "Stop",
+          "action": "block",
+          "message": "Before you finish: leave a one-line summary of what changed in your final message."
+        }
+      ]
+    },
+    "fire-stop.jsonl": {
+      "claude_session_id": "fda6a786-a86e-4c41-bc10-21b7b0195ccb",
+      "scenario": "Only the stop gate fires; Claude complies.",
+      "fingerprints": [
+        {
+          "line": 12,
+          "kind": "stop_hook_feedback_meta_turn",
+          "content": "Stop hook feedback:\nBefore you finish: leave a one-line summary of what changed in your final message."
+        },
+        {
+          "line": 13,
+          "kind": "hook_blocking_error",
+          "hookName": "Stop",
+          "blockingError": {
+            "blockingError": "Before you finish: leave a one-line summary of what changed in your final message.",
+            "command": "uvx capt-hook run Stop"
+          }
+        },
+        {
+          "line": 16,
+          "kind": "is_error_tool_result",
+          "content": "Claude requested permissions to edit /Users/yasyf/.cc-pool/accounts/acct-05/projects/-private-tmp-capt-hook-fixture-lab/memory/feedback_end_summary.md which is a sensitive file.",
+          "tool_use_id": "toolu_01MTzDB93tBgGJYU52ibEEQM"
+        }
+      ],
+      "quotes": [
+        {
+          "line": 20,
+          "label": "compliance",
+          "timestamp": "2026-06-12T00:36:12.769Z",
+          "text": "Got it\u2014I'll add a one-line summary of what changed at the end of my final message on future tasks."
+        }
+      ],
+      "fire_log_rows": [
+        {
+          "id": 605,
+          "ts": 1781224565.314125,
+          "session_id": "77baa9704e8c",
+          "claude_session_id": "fda6a786-a86e-4c41-bc10-21b7b0195ccb",
+          "repo_key": "/private/tmp/capt-hook-fixture-lab/.git",
+          "hook_name": "stop_reminder:gate_e76ccd07",
+          "source_file": "/Users/yasyf/.cache/uv/archive-v0/grvA_SCLPI7A81S0/lib/python3.13/site-packages/captain_hook/primitives/nudge.py",
+          "event": "Stop",
+          "action": "block",
+          "message": "Before you finish: leave a one-line summary of what changed in your final message."
+        }
+      ]
+    }
+  }
+}

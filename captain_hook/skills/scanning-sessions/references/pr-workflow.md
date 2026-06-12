@@ -16,7 +16,9 @@ all three.
 
 Branch naming: `capt-hook/review/<rule-slug>`, where `<rule-slug>` is the short
 kebab-case name of the rule (it should match the hook file's slug:
-`.claude/hooks/no_force_push.py` → `capt-hook/review/no-force-push`).
+`.claude/hooks/no_force_push.py` → `capt-hook/review/no-force-push`). Fix
+candidates use `capt-hook/review/fix-<slug>`, where `<slug>` is the target hook
+file's stem (`.claude/hooks/status_nudge.py` → `capt-hook/review/fix-status-nudge`).
 
 ```bash
 default=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
@@ -38,7 +40,9 @@ git -C "$worktree" push -u origin "capt-hook/review/<rule-slug>"
 ```
 
 Commit only the hook file — never settings, lockfiles, or anything else the worktree
-picked up.
+picked up. A fix PR commits the **amended** target hook file (which now carries the
+regression test) with
+`fix(hooks): stop <slug> misfiring on <misfire-class> (regression-tested)`.
 
 ## PR title and body
 
@@ -73,6 +77,14 @@ The Evidence section is the PR's case: every quote verbatim, each with its sessi
 and date taken from the Step-2 verification — the transcript file the quote was found
 in names the session (the JSONL filename stem is the session id) and the matching
 line's `timestamp` field gives the date.
+
+A fix PR adapts the template: title `[capt-hook] Fix <slug> misfiring on
+<misfire-class>`; the Rule section states what the hook wrongly fired on and the
+amendment chosen (tightened condition, re-fire guard, live state, demoted severity, or
+removal); the Hook section names the regression test pair (silent on the misfiring
+input, still firing on the genuine case); the Evidence section quotes Claude's
+verbatim complaints with their session ids and dates, plus the fire-log attribution
+(`target_hook_name`, the fire's event/action, and its message).
 
 ```bash
 gh pr create --title "<title>" --body "<body>" \
