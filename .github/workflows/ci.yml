@@ -31,7 +31,14 @@ jobs:
       # poisoned the key: a sync that rebuilt the venv silently dropped the
       # model while the hit still skipped provisioning. Both assets are
       # interpreter-independent, so the key is shared across the matrix and
-      # with the docs workflow.
+      # with the docs workflow. The key tracks only the locked spaCy minor —
+      # model selection is per spacy minor and the wn lexicon is pinned below —
+      # so unrelated lockfile churn no longer evicts the cache and re-downloads
+      # from GitHub (which rate-limits, 403).
+      - name: Resolve spaCy minor (cache key)
+        id: spacy
+        run: echo "minor=$(grep -A1 '^name = "spacy"$' uv.lock | grep '^version' | grep -o '[0-9]*\.[0-9]*' | head -1)" >> "$GITHUB_OUTPUT"
+
       - name: Cache NLP assets
         id: nlp-cache
         uses: actions/cache@v5
@@ -39,7 +46,7 @@ jobs:
           path: |
             ~/.cache/spacy/models
             ~/.wn_data
-          key: nlp-v2-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          key: nlp-v3-${{ runner.os }}-spacy-${{ steps.spacy.outputs.minor }}
 
       - name: Sync (dev)
         run: uv sync --extra dev
