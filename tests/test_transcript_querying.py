@@ -482,6 +482,25 @@ class TestSubagents:
         t = transcript_with_subagent_tool_use(_tool_use("Read", {"file_path": "docs/TESTING.md"}, "tu_sub"))
         assert len(t.subagents) == 1
 
+    def test_skips_appledouble_sidecars(self, tmp_path: Path) -> None:
+        session_dir = tmp_path / "session"
+        subagents_dir = session_dir / "session" / "subagents"
+        subagents_dir.mkdir(parents=True)
+        session_file = session_dir / "session.jsonl"
+        session_file.write_text(json.dumps(_msg("user", "hello")) + "\n")
+        sub = subagents_dir / "agent-1.jsonl"
+        sub.write_text(json.dumps(_msg("assistant", [_tool_use("Bash", {"command": "codex exec -p 'hi'"}, "tu_sub")])) + "\n")
+        (subagents_dir / "._agent-1.jsonl").write_bytes(b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X\xb0")
+
+        t = Transcript.from_path(session_file)
+        assert len(t.subagents) == 1
+        assert t.has_command(r"codex exec", subagents=True) is True
+
+    def test_from_path_tolerates_undecodable_file(self, tmp_path: Path) -> None:
+        junk = tmp_path / "junk.jsonl"
+        junk.write_bytes(b"\x00\x05\x16\x07\xb0")
+        assert Transcript.from_path(junk).messages == []
+
     @pytest.mark.parametrize(
         ("tool_use", "query"),
         [

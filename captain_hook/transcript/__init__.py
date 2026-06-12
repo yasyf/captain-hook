@@ -260,9 +260,13 @@ class Transcript:
     def from_path(cls, path: Path | str | None) -> Transcript:
         if not path or not (path := Path(path)).exists():
             return cls([])
+        try:
+            text = path.read_text()
+        except UnicodeDecodeError:
+            return cls([])
         messages = [
             TranscriptMessage.from_event(event, raw)
-            for line in path.read_text().splitlines()
+            for line in text.splitlines()
             if (stripped := line.strip()) and (raw := try_json(stripped)) is not None
             if (event := parse_line(raw)) is not None
         ]
@@ -429,7 +433,9 @@ class Transcript:
     def subagents(self) -> list[Transcript]:
         if not self.path or not (d := self.path.parent / self.path.stem / "subagents").is_dir():
             return []
-        return [Transcript.from_path(p) for p in sorted(d.glob("*.jsonl"))]
+        return [
+            Transcript.from_path(p) for p in sorted(d.glob("*.jsonl")) if not p.name.startswith("._")
+        ]
 
     def count_failures(self) -> int:
         return sum(1 for msg in self.messages for tr in msg.tool_results if tr.is_error)
