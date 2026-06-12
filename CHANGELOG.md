@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Requires cc-transcript `>=3.0,<4`.
+
 ## [2.0.0] - 2026-06-12
 
 The platform release: captain-hook becomes the hook runtime of the cc-family

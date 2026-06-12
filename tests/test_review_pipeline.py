@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from cc_transcript.activity import SessionActivity
 from cc_transcript.context import SUMMARY_LABEL, ContextWindow, TurnRef, capture_window
-from cc_transcript.ids import EventRef, SessionId
+from cc_transcript.ids import EventRef, EventUuid, SessionId
 from cc_transcript.mining.candidates import FeedbackCandidate, dedup_key
 from cc_transcript.mining.confidence import firm, noise
 from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE
@@ -114,20 +114,21 @@ def install_brain(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Path, Path]]:
 
 
 def synthetic(text: str, signal: CandidateSignal) -> FeedbackCandidate:
+    anchor = EventRef(SessionId("s1"), EventUuid(f"u-{dedup_key('transcript_message', 's1', text)}"))
     return FeedbackCandidate(
         dedup_key=dedup_key("transcript_message", "s1", text),
         source_kind=TRANSCRIPT_MESSAGE,
         occurred_at=datetime(2026, 6, 1, 12, 0, tzinfo=UTC),
         text=text,
         window=ContextWindow(
-            anchor=None,
+            anchor=anchor,
             before=(),
             trigger=TurnRef(role="assistant", refs=(), preview="did a thing", tool_digests=()),
             after=(),
             fidelity="full",
             preview_chars=200,
-            origin="live",
         ),
+        ref=anchor,
         session_id=SessionId("s1"),
         signal=signal,
     )

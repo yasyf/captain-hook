@@ -92,13 +92,9 @@ async def fix_candidate(
 
 
 async def seed(
-    store: ReviewStore, candidate_id: int, key: str, *, session: str, occurred: str, heuristic: float | None = None
+    store: ReviewStore, candidate_id: int, key: str, *, session: str, occurred: str, heuristic: float = MEDIUM
 ) -> None:
-    payload = (
-        json.dumps({"signal": to_payload(CandidateSignal(Confidence(heuristic), ("marker",)))})
-        if heuristic is not None
-        else None
-    )
+    payload = json.dumps({"signal": to_payload(CandidateSignal(Confidence(heuristic), ("marker",)))})
     await store.store.conn.execute(INSERT_EVENT, (key, session, occurred, f"text {key}", payload))
     await store.record_observation(
         candidate_id,
@@ -453,14 +449,13 @@ class TestFixEligibility:
             pytest.param(VERY_HIGH, False, 0.9, False, id="very-high-but-judge-rejected"),
             pytest.param(VERY_HIGH, True, 0.5, False, id="very-high-but-below-min-judge-confidence"),
             pytest.param(MEDIUM, True, 0.9, False, id="judge-accepted-but-only-medium-heuristic"),
-            pytest.param(None, True, 0.9, False, id="judge-accepted-but-no-signal-payload"),
         ],
     )
     async def test_single_observation_path_requires_very_high_and_judge_acceptance(
         self,
         store: ReviewStore,
         settings: ReviewSettings,
-        heuristic: float | None,
+        heuristic: float,
         accepted: bool | None,
         judge_confidence: float,
         expected: bool,

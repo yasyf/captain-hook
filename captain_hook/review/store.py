@@ -1,8 +1,7 @@
 """The reviewer's SQLite store: feedback events, judge verdicts, and PR candidates.
 
 Layers three review tables onto :class:`cc_transcript.mining.FeedbackStore`'s
-event ledger (whose ``context_json`` column holds ``cc-transcript.context/1``
-documents) and :class:`cc_transcript.judge.VerdictStoreMixin`'s fidelity-aware
+event ledger and :class:`cc_transcript.judge.VerdictStoreMixin`'s fidelity-aware
 verdict table: ``candidates`` (one row per grouped correction or misfire),
 ``candidate_observations`` (one row per evidencing feedback event), and ``repos``
 (the per-repo watching flag). Eligibility is judge-aware: only observations whose
@@ -18,7 +17,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Self
 
 from cc_transcript.judge.verdicts import VerdictStoreMixin
-from cc_transcript.mining.confidence import effective_confidence, from_payload
+from cc_transcript.mining.confidence import from_payload
 from cc_transcript.mining.store import FEEDBACK_DDL, FeedbackStore, now
 from cc_transcript.store import FileStateStore
 
@@ -147,7 +146,7 @@ TRANSITIONS: Mapping[CandidateStatus, frozenset[CandidateStatus]] = {
 
 def signal_confidence(payload_json: object) -> Confidence:
     payload: dict[str, Any] = json.loads(str(payload_json)) if payload_json else {}
-    return effective_confidence(from_payload(payload.get("signal")))
+    return from_payload(payload["signal"]).confidence
 
 
 @dataclass(frozen=True, slots=True)

@@ -11,7 +11,7 @@ import pytest
 from cc_transcript import parse_events_from_bytes
 from cc_transcript.context import SUMMARY_LABEL, ContextWindow, TurnRef
 from cc_transcript.decisions import Decision
-from cc_transcript.ids import SessionId, ToolDigest, tool_digest
+from cc_transcript.ids import EventRef, EventUuid, SessionId, ToolDigest, tool_digest
 from cc_transcript.judge.verdicts import GoldenRow, golden_result
 from cc_transcript.mining.candidates import DedupKey, dedup_key
 from cc_transcript.mining.confidence import HIGH, MEDIUM, VERY_HIGH
@@ -492,7 +492,7 @@ class TestFixGroupingAndStore:
         payload = json.loads(str(event["payload_json"]))
         assert payload["target_source_file"] == ".claude/hooks/status_nudge.py"
         assert payload["signal"]["confidence"] == VERY_HIGH
-        assert json.loads(str(event["context_json"]))["schema"] == "cc-transcript.context/1"
+        assert ContextWindow.from_json(str(event["context_json"])).anchor is not None
 
         [candidate] = await rows(store, "SELECT * FROM candidates")
         assert (candidate["candidate_kind"], candidate["status"]) == ("fix", "watching")
@@ -567,13 +567,12 @@ class TestFixJudge:
 
     async def test_hook_complaint_rows_get_the_fix_prompt(self) -> None:
         window = ContextWindow(
-            anchor=None,
+            anchor=EventRef(SessionId("s1"), EventUuid("u1")),
             before=(TurnRef(role="assistant", refs=(), preview="running git status", tool_digests=()),),
             trigger=None,
             after=(),
             fidelity="full",
             preview_chars=200,
-            origin="live",
         )
         row = {
             "source_kind": "hook_complaint",
@@ -599,7 +598,8 @@ class TestFixJudge:
 
     async def test_create_rows_keep_the_create_prompt(self) -> None:
         window = ContextWindow(
-            anchor=None, before=(), trigger=None, after=(), fidelity="full", preview_chars=200, origin="live"
+            anchor=EventRef(SessionId("s2"), EventUuid("u2")), before=(), trigger=None, after=(), fidelity="full",
+            preview_chars=200,
         )
         row = {"source_kind": "transcript_message", "context_json": window.to_json(), "text": "never do X"}
         prompt, fidelity = await build_prompt(row)

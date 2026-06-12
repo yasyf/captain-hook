@@ -268,8 +268,8 @@ async def judge_pass(
     Incremental and idempotent: each verdict persists as soon as its call
     completes, a failed row stays unjudged and is retried on the next pass, and
     re-running over a fully judged corpus is a no-op. Rows whose heuristic
-    :func:`~cc_transcript.mining.effective_confidence` sits below
-    :data:`~cc_transcript.mining.NOISE_FLOOR` are never sent.
+    signal confidence sits below :data:`~cc_transcript.mining.NOISE_FLOOR` are
+    never sent.
 
     Args:
         store: The open review store.
