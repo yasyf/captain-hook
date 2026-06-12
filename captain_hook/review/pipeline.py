@@ -135,7 +135,10 @@ def brain_prompt(transcript: Path) -> str:
 
     return (
         f"/scanning-sessions --transcript {transcript}\n\n"
-        f"[{REVIEWER_MARKER}] Review this repo's eligible candidates and open at most one pull request per candidate."
+        f"[{REVIEWER_MARKER}] Review this repo's eligible candidates and open at most one pull request per"
+        " candidate. Work in one continuous run: do not stop to summarize after drafting — you are done only"
+        " when every eligible candidate has a PR recorded via `review update <id> pr_open --pr-url <url>` or"
+        " is explicitly skipped with a reason."
     )
 
 

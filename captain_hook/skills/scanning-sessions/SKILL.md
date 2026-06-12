@@ -34,6 +34,12 @@ user feedback next pass.
 - **You do not draft hooks yourself** — this skill carries no Write/Edit. Drafting
   happens inside the `authoring-hooks` skill, invoked via the Skill tool.
 - **`uvx capt-hook test` must be green** in the worktree before `gh pr create`.
+- **Run to completion — never stop early.** You run headless; a text-only reply ends
+  the session immediately. After the authoring-hooks skill returns, keep going in the
+  same run: the job is done only when every eligible candidate either has
+  `uvx capt-hook review update <id> pr_open --pr-url <url>` recorded for a created PR
+  or has been explicitly skipped with a logged reason. Summaries come last, after
+  Step 7 — never between steps.
 
 ## Workflow
 
