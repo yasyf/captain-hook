@@ -55,6 +55,10 @@ Repository = "https://github.com/yasyf/captain-hook"
 Issues = "https://github.com/yasyf/captain-hook/issues"
 Changelog = "https://github.com/yasyf/captain-hook/blob/main/CHANGELOG.md"
 
+# TODO(release-0.10.0): drop this override once cc-transcript 0.8.0 is on PyPI and the pin is bumped.
+[tool.uv.sources]
+cc-transcript = { path = "../cc-transcript", editable = true }
+
 [build-system]
 requires = ["uv_build>=0.11,<0.12"]
 build-backend = "uv_build"
