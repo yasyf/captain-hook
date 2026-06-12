@@ -6,6 +6,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-11
+
+### Added
+- **SessionEnd event**: `Event.SessionEnd` and `SessionEndEvent` (with `reason`),
+  wired through the testing helpers, settings template, and docs.
+- **The session reviewer** (`capt-hook review`): at SessionEnd, a detached child
+  mines the just-ended session for durable user corrections (the CREATE mode of
+  the reviewer), judges them with a small-tier LLM verdict pass, and — once a
+  correction is judge-accepted across enough distinct sessions and days — spawns
+  a headless brain that drafts a new `.claude/hooks/*.py` and opens a PR.
+  - `review` CLI group: `run` (the SessionEnd hook entry, guard-and-spawn only,
+    always exits 0), `enable`/`disable`, `scan`, `triage`, `list`/`show`,
+    `threshold-check`, `update`, `sync-prs`.
+  - `ReviewStore` over cc-transcript 0.8's mining + verdicts mechanism:
+    judge-aware eligibility (unjudged or judge-rejected observations never
+    count), candidate grouping by content rule across sessions, PR lifecycle
+    tracking (open → merged/closed/stale) via `gh`.
+  - `ReviewSettings` (`HOOKS_REVIEW_*` env): session/day thresholds, judge tier
+    and per-session call cap, brain turn/budget caps.
+- **Skills**: `authoring-hooks` (drafting a hook from a verbatim correction, with
+  the pattern catalog, API, testing references, and a new pitfalls guide) and
+  `scanning-sessions` (the headless reviewer brain workflow);
+  `bootstrapping-hooks` now delegates drafting to `authoring-hooks`.
+
+### Changed
+- Requires `cc-transcript>=0.8,<0.9` and `spawnllm>=0.1.3`.
+
 ## [0.9.1] - 2026-06-11
 
 ### Changed

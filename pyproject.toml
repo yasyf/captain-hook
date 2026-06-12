@@ -1,6 +1,6 @@
 [project]
 name = "capt-hook"
-version = "0.9.1"
+version = "0.10.0"
 description = "Declarative hook framework for Claude Code"
 readme = "README.md"
 license = "PolyForm-Noncommercial-1.0.0"
