@@ -1,0 +1,230 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import subprocess
+from typing import TYPE_CHECKING
+
+import pytest
+from cc_transcript.domains.mining.sourcekind import TRANSCRIPT_MESSAGE
+from click.testing import CliRunner
+
+from captain_hook.cli import cli, generate_settings
+from captain_hook.review.cli import REVIEW_RUN_COMMAND, STATUS_CHOICES
+from captain_hook.review.repo import RepoKey
+from captain_hook.review.settings import ReviewSettings
+from captain_hook.review.store import CandidateKind, CandidateStatus, ReviewStore
+from tests.test_review_pipeline import install_judge
+from tests.test_review_scan import CORRECTION, correction_entries, write_transcript
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from click.testing import Result
+
+GIT_REPO_KEY = RepoKey("github.com/yasyf/scratch")
+
+
+def invoke(*args: str, root: Path) -> Result:
+    return CliRunner().invoke(cli, ["--root", str(root), "review", *args])
+
+
+def db_path() -> Path:
+    return ReviewSettings().db_path
+
+
+async def repo_watching(repo: RepoKey) -> bool:
+    async with await ReviewStore.open(db_path()) as store:
+        return await store.watching(repo)
+
+
+async def candidate_status(candidate_id: int) -> tuple[str, object]:
+    async with await ReviewStore.open(db_path()) as store:
+        row = await store.candidate(candidate_id)
+        return str(row["status"]), row["pr_opened_at"]
+
+
+async def seed_pr_open(url: str) -> int:
+    async with await ReviewStore.open(db_path()) as store:
+        candidate_id = await store.ensure_candidate(
+            GIT_REPO_KEY, kind=CandidateKind.CREATE, rule="r", source_kind=TRANSCRIPT_MESSAGE
+        )
+        await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=url)
+        return candidate_id
+
+
+@pytest.fixture
+def git_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:yasyf/scratch.git"], check=True)
+    return repo
+
+
+@pytest.fixture
+def scanned_repo(tmp_path: Path, git_repo: Path) -> Path:
+    transcript = write_transcript(tmp_path / "s.jsonl", correction_entries(cwd=str(git_repo)))
+    result = invoke("scan", "--transcript", str(transcript), root=git_repo)
+    assert result.exit_code == 0, result.output
+    return git_repo
+
+
+class TestSettingsTemplate:
+    def test_generate_settings_wires_session_end_to_review_run(self) -> None:
+        assert generate_settings()["hooks"]["SessionEnd"] == [
+            {"hooks": [{"type": "command", "command": "uvx capt-hook review run"}]}
+        ]
+
+    def test_review_run_command_honors_from_source(self) -> None:
+        [command] = [
+            entry["command"]
+            for group in generate_settings(from_source="/local/captain-hook")["hooks"]["SessionEnd"]
+            for entry in group["hooks"]
+        ]
+        assert command == "uvx --from /local/captain-hook capt-hook review run"
+
+
+class TestGroupSurface:
+    def test_spawn_is_hidden_and_public_commands_listed(self, tmp_path: Path) -> None:
+        result = CliRunner().invoke(cli, ["review", "--help"])
+        assert result.exit_code == 0
+        assert "spawn" not in result.output
+        for command in (
+            "run",
+            "enable",
+            "disable",
+            "scan",
+            "triage",
+            "list",
+            "show",
+            "threshold-check",
+            "update",
+            "sync-prs",
+        ):
+            assert command in result.output
+
+    def test_status_choices_match_candidate_status(self) -> None:
+        assert set(STATUS_CHOICES) == {status.value for status in CandidateStatus}
+
+
+class TestEnableDisable:
+    def test_enable_watches_and_wires_session_end(self, git_repo: Path) -> None:
+        result = invoke("enable", root=git_repo)
+        assert result.exit_code == 0, result.output
+        assert f"watching {GIT_REPO_KEY}" in result.output
+        assert asyncio.run(repo_watching(GIT_REPO_KEY)) is True
+        data = json.loads((git_repo / ".claude" / "settings.local.json").read_text())
+        commands = [entry["command"] for group in data["hooks"]["SessionEnd"] for entry in group["hooks"]]
+        assert commands == [f"uvx {REVIEW_RUN_COMMAND}"]
+
+    def test_enable_twice_is_idempotent_and_preserves_foreign_settings(self, git_repo: Path) -> None:
+        settings_path = git_repo / ".claude" / "settings.local.json"
+        settings_path.parent.mkdir(parents=True)
+        foreign = {"hooks": [{"type": "command", "command": "my-tool"}]}
+        settings_path.write_text(json.dumps({"hooks": {"SessionEnd": [foreign]}, "custom": "keep-me"}))
+        assert invoke("enable", root=git_repo).exit_code == 0
+        assert invoke("enable", root=git_repo).exit_code == 0
+        data = json.loads(settings_path.read_text())
+        assert data["custom"] == "keep-me"
+        groups = data["hooks"]["SessionEnd"]
+        assert foreign in groups
+        review_groups = [
+            group for group in groups if any(REVIEW_RUN_COMMAND in entry["command"] for entry in group["hooks"])
+        ]
+        assert len(review_groups) == 1
+
+    def test_disable_unwatches(self, git_repo: Path) -> None:
+        assert invoke("enable", root=git_repo).exit_code == 0
+        result = invoke("disable", root=git_repo)
+        assert result.exit_code == 0
+        assert f"not watching {GIT_REPO_KEY}" in result.output
+        assert asyncio.run(repo_watching(GIT_REPO_KEY)) is False
+
+    def test_enable_outside_a_git_repo_fails(self, tmp_path: Path) -> None:
+        result = invoke("enable", root=tmp_path)
+        assert result.exit_code != 0
+        assert "not inside a git repository" in result.output
+
+
+class TestScanAndTriage:
+    def test_scan_is_incremental(self, tmp_path: Path, git_repo: Path) -> None:
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries(cwd=str(git_repo)))
+        first = invoke("scan", "--transcript", str(transcript), root=git_repo)
+        assert first.exit_code == 0
+        assert "scanned 1 transcripts, 1 new corrections" in first.output
+        second = invoke("scan", "--transcript", str(transcript), root=git_repo)
+        assert "scanned 0 transcripts, 0 new corrections" in second.output
+
+    def test_scan_accepts_directories(self, tmp_path: Path, git_repo: Path) -> None:
+        write_transcript(tmp_path / "proj" / "s.jsonl", correction_entries(cwd=str(git_repo)))
+        result = invoke("scan", "--dir", str(tmp_path / "proj"), root=git_repo)
+        assert result.exit_code == 0
+        assert "scanned 1 transcripts, 1 new corrections" in result.output
+
+    def test_scan_requires_a_path(self, git_repo: Path) -> None:
+        assert invoke("scan", root=git_repo).exit_code != 0
+
+    def test_triage_judges_pending_rows(self, scanned_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = install_judge(monkeypatch)
+        result = invoke("triage", root=scanned_repo)
+        assert result.exit_code == 0, result.output
+        assert "judged 1, failed 0, pending 0" in result.output
+        assert len(calls) == 1
+        again = invoke("triage", "--limit", "5", root=scanned_repo)
+        assert "judged 0, failed 0, pending 0" in again.output
+
+
+class TestListShowThreshold:
+    def test_list_shows_candidates_with_evidence(self, scanned_repo: Path) -> None:
+        result = invoke("list", root=scanned_repo)
+        assert result.exit_code == 0, result.output
+        assert "#1 [watching] create/transcript_message x1:" in result.output
+        assert CORRECTION[:40] in result.output
+
+    def test_list_empty_repo(self, git_repo: Path) -> None:
+        result = invoke("list", root=git_repo)
+        assert result.exit_code == 0
+        assert f"no candidates for {GIT_REPO_KEY}" in result.output
+
+    def test_show_prints_row_and_thresholds(self, scanned_repo: Path) -> None:
+        result = invoke("show", "1", root=scanned_repo)
+        assert result.exit_code == 0, result.output
+        assert "status: watching" in result.output
+        assert "thresholds: sessions=0 days=0 open_prs=0 single_observation=False eligible=False" in result.output
+
+    def test_show_unknown_candidate_fails(self, git_repo: Path) -> None:
+        result = invoke("show", "99", root=git_repo)
+        assert result.exit_code != 0
+        assert "no candidate with id 99" in result.output
+
+    def test_threshold_check_reports_eligibility(self, scanned_repo: Path) -> None:
+        result = invoke("threshold-check", root=scanned_repo)
+        assert result.exit_code == 0, result.output
+        assert "#1 eligible=False sessions=0/3 days=0/2 open_prs=0/2 watching=False" in result.output
+
+
+class TestUpdateAndSyncPrs:
+    def test_update_moves_status_and_stamps_pr(self, scanned_repo: Path) -> None:
+        url = "https://github.com/yasyf/scratch/pull/1"
+        result = invoke("update", "1", "pr_open", "--pr-url", url, root=scanned_repo)
+        assert result.exit_code == 0, result.output
+        assert "#1 -> pr_open" in result.output
+        status, opened_at = asyncio.run(candidate_status(1))
+        assert status == "pr_open"
+        assert opened_at is not None
+
+    def test_update_rejects_invalid_transition(self, scanned_repo: Path) -> None:
+        result = invoke("update", "1", "accepted", root=scanned_repo)
+        assert result.exit_code != 0
+        assert "watching -> accepted" in result.output
+
+    def test_sync_prs_folds_gh_state(self, git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        url = "https://github.com/yasyf/scratch/pull/7"
+        candidate_id = asyncio.run(seed_pr_open(url))
+        monkeypatch.setattr("captain_hook.review.sync.gh_pr_state", lambda _url: "MERGED")
+        result = invoke("sync-prs", root=git_repo)
+        assert result.exit_code == 0, result.output
+        assert "accepted 1, rejected 0, stale 0, unreachable 0" in result.output
+        status, _ = asyncio.run(candidate_status(candidate_id))
+        assert status == "accepted"

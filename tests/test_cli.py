@@ -129,7 +129,8 @@ class TestRegisterHooks:
         settings = generate_settings()
         assert "PreToolUse" in settings["hooks"]
         assert "Stop" in settings["hooks"]
-        assert len(settings["hooks"]) == 2
+        assert "SessionEnd" in settings["hooks"]
+        assert len(settings["hooks"]) == 3
 
     def test_cli_009_async_hooks_produce_async_entries(self) -> None:
         from captain_hook.cli import generate_settings

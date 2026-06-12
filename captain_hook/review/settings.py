@@ -7,6 +7,7 @@ from pathlib import Path
 from cc_transcript.domains.mining.confidence import MEDIUM, VERY_HIGH, Confidence
 from pydantic import Field
 from pydantic_settings import SettingsConfigDict
+from spawnllm import TModel
 
 from captain_hook.settings import HooksSettings, resolve_state_dir
 
@@ -35,7 +36,7 @@ class ReviewSettings(HooksSettings):
     min_days_fix: int = 0
     min_confidence_fix: Confidence = MEDIUM
     min_confidence_fix_single: Confidence = VERY_HIGH
-    judge_tier: str = "small"
+    judge_tier: TModel = "small"
     judge_concurrency: int = 8
     judge_timeout: int = 180
     min_judge_confidence: float = 0.6

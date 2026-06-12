@@ -105,6 +105,14 @@ WHERE o.candidate_id = ? AND l.accepted = 1 AND l.confidence >= ?
 
 OPEN_PRS_QUERY = "SELECT COUNT(*) AS n FROM candidates WHERE repo_key = ? AND status = ? AND pr_opened_at > ?"
 
+CANDIDATES_QUERY = """
+SELECT c.*,
+  (SELECT e.text FROM candidate_observations o JOIN feedback_events e ON e.dedup_key = o.dedup_key
+   WHERE o.candidate_id = c.id ORDER BY o.id LIMIT 1) AS sample_text,
+  (SELECT COUNT(*) FROM candidate_observations o WHERE o.candidate_id = c.id) AS observations
+FROM candidates c
+"""
+
 
 class InvalidTransition(Exception):
     """Raised when a candidate status move is outside :data:`TRANSITIONS`."""
@@ -279,6 +287,43 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
             INSERT_OBSERVATION,
             (candidate_id, dedup_key, session_id, occurred_at.astimezone(UTC).isoformat()),
         )
+
+    async def candidates(
+        self, repo: RepoKey | None = None, *, status: CandidateStatus | None = None
+    ) -> list[dict[str, object]]:
+        """Returns candidate rows, newest first, optionally narrowed by repo and status.
+
+        Each row carries the ``candidates`` columns plus ``sample_text`` (the
+        earliest observation's verbatim correction) and ``observations`` (the
+        evidence count).
+
+        Args:
+            repo: When set, restrict to this repo.
+            status: When set, restrict to this status.
+        """
+        filters = [
+            (clause, value)
+            for clause, value in (("c.repo_key = ?", repo), ("c.status = ?", status))
+            if value is not None
+        ]
+        query = (
+            CANDIDATES_QUERY
+            + (f"WHERE {' AND '.join(clause for clause, _ in filters)}\n" if filters else "")
+            + "ORDER BY c.id DESC"
+        )
+        cur = await self.store.conn.execute(query, tuple(value for _, value in filters))
+        return [dict(row) async for row in cur]
+
+    async def candidate(self, candidate_id: int) -> dict[str, object]:
+        """Returns one candidate's row in :meth:`candidates` shape.
+
+        Raises:
+            LookupError: If no candidate carries ``candidate_id``.
+        """
+        cur = await self.store.conn.execute(CANDIDATES_QUERY + "WHERE c.id = ?", (candidate_id,))
+        if not (rows := [dict(row) async for row in cur]):
+            raise LookupError(f"no candidate with id {candidate_id}")
+        return rows[0]
 
     async def transition(
         self,

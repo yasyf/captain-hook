@@ -18,6 +18,7 @@ from captain_hook.context import HookContext
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_hooks
 from captain_hook.log import setup_logging
+from captain_hook.review.cli import review
 from captain_hook.session import SessionStore, ensure_session
 from captain_hook.transcript import Transcript
 from captain_hook.types import Event
@@ -133,11 +134,12 @@ def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str = DIST_
             | ({"async": True} if is_async else {})
             for is_async, events in sorted(events_by_async.items())
             if event in events
-        ]
+        ] + ([{"type": "command", "command": f"uvx{from_flag} capt-hook review run"}] if event == "SessionEnd" else [])
 
     return {
         "hooks": {
-            event: [{"hooks": commands(event)}] for event in sorted(events_by_async[False] | events_by_async[True])
+            event: [{"hooks": commands(event)}]
+            for event in sorted(events_by_async[False] | events_by_async[True] | {"SessionEnd"})
         }
     }
 
@@ -503,5 +505,7 @@ def skills_install(state: CliState, force: bool) -> None:
     for name, status in install_skills(state.root, force=force).items():
         click.echo(f"  {status} {name}")
 
+
+cli.add_command(review)
 
 main = cli

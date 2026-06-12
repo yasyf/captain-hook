@@ -1,0 +1,433 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import pytest
+from cc_transcript.domains.mining import (
+    TRANSCRIPT_MESSAGE,
+    ContextSnapshot,
+    ContextTurn,
+    FeedbackCandidate,
+    dedup_key,
+    firm,
+    noise,
+)
+from cc_transcript.models import SessionId
+
+from captain_hook.review.judge import (
+    DURABLE_CATEGORIES,
+    JUDGE_ROLE,
+    REVIEW_PROMPT_VERSION,
+    JudgeReport,
+    ReviewVerdict,
+    build_prompt,
+    judge_pass,
+)
+from captain_hook.review.pipeline import (
+    BRAIN_ALLOWED_TOOLS,
+    SPAWNED_ENV,
+    SpawnReport,
+    brain_argv,
+    brain_prompt,
+    guard_and_spawn,
+    review_session,
+    spawn_argv,
+    spawn_brain,
+)
+from captain_hook.review.repo import RepoKey
+from captain_hook.review.scan import REVIEWER_MARKER, scan_transcript
+from captain_hook.review.settings import ReviewSettings
+from captain_hook.review.store import ReviewStore
+from tests.test_review_scan import CORRECTION, assistant_text, correction_entries, user_text, write_transcript
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Sequence
+
+    from cc_transcript.domains.mining import CandidateSignal
+
+    from captain_hook.review.judge import Category
+
+REPO = RepoKey("github.com/yasyf/captain-hook")
+GIT_REPO_KEY = RepoKey("github.com/yasyf/scratch")
+SECOND_CORRECTION = "never run pip directly, always go through uv in this repo"
+ALL_CATEGORIES = (
+    "durable_style_rule",
+    "workflow_rule",
+    "tooling_rule",
+    "safety_guard",
+    "one_off_correction",
+    "task_specific",
+    "preference_unclear",
+    "ambient_noise",
+)
+
+
+def state_dir() -> Path:
+    return Path(os.environ["CLAUDE_HOOKS_STATE_DIR"])
+
+
+def run_review(stdin: bytes, *, env: dict[str, str] | None = None, cwd: Path | None = None):
+    return subprocess.run(
+        [sys.executable, "-m", "captain_hook", "review", "run"],
+        input=stdin,
+        capture_output=True,
+        timeout=120,
+        env=os.environ | (env or {}),
+        cwd=cwd,
+    )
+
+
+def install_judge(
+    monkeypatch: pytest.MonkeyPatch, *, category: Category = "durable_style_rule", fail_on: str | None = None
+) -> list[str]:
+    calls: list[str] = []
+
+    async def judge(prompt: str) -> ReviewVerdict:
+        calls.append(prompt)
+        if fail_on is not None and fail_on in prompt:
+            raise subprocess.CalledProcessError(1, ["claude"])
+        return ReviewVerdict(category=category, summary="states a durable rule", confidence=0.9, rationale="r")
+
+    monkeypatch.setattr("captain_hook.review.judge.structured_judge", lambda *_, **__: judge)
+    return calls
+
+
+def install_brain(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Path, Path]]:
+    calls: list[tuple[Path, Path]] = []
+
+    def fake(transcript: Path, *, repo_root: Path, settings: ReviewSettings) -> None:
+        calls.append((transcript, repo_root))
+
+    monkeypatch.setattr("captain_hook.review.pipeline.spawn_brain", fake)
+    return calls
+
+
+def synthetic(text: str, signal: CandidateSignal) -> FeedbackCandidate:
+    return FeedbackCandidate(
+        dedup_key=dedup_key("transcript_message", "s1", text),
+        source_kind=TRANSCRIPT_MESSAGE,
+        occurred_at=datetime(2026, 6, 1, 12, 0, tzinfo=UTC),
+        text=text,
+        context=ContextSnapshot(before=(), trigger=ContextTurn(role="assistant", text="did a thing"), after=()),
+        session_id=SessionId("s1"),
+        signal=signal,
+    )
+
+
+async def seed_corrections(
+    store: ReviewStore, settings: ReviewSettings, tmp_path: Path, texts: Sequence[str], *, session: str = "s1"
+) -> None:
+    entries = [
+        entry
+        for text in texts
+        for entry in (assistant_text("attempt", sessionId=session), user_text(text, sessionId=session))
+    ]
+    await scan_transcript(
+        store, write_transcript(tmp_path / f"{session}.jsonl", entries), settings=settings, repo_key=REPO
+    )
+
+
+@pytest.fixture
+async def store(tmp_path: Path) -> AsyncIterator[ReviewStore]:
+    async with await ReviewStore.open(tmp_path / "review.db") as opened:
+        yield opened
+
+
+@pytest.fixture
+def settings(tmp_path: Path) -> ReviewSettings:
+    return ReviewSettings(db_path=tmp_path / "review.db")
+
+
+@pytest.fixture
+def git_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:yasyf/scratch.git"], check=True)
+    return repo
+
+
+@pytest.fixture
+def popen_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[str], dict[str, Any]]]:
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+    monkeypatch.setattr(
+        "captain_hook.review.pipeline.subprocess.Popen", lambda argv, **kwargs: calls.append((argv, kwargs))
+    )
+    return calls
+
+
+class TestExitZeroInvariant:
+    @pytest.mark.parametrize(
+        "stdin",
+        [
+            pytest.param(b"{}", id="empty-payload"),
+            pytest.param(b"", id="empty-stdin"),
+            pytest.param(b"not json {{{", id="garbage-text"),
+            pytest.param(b"\xff\xfe\x00garbage", id="garbage-bytes"),
+            pytest.param(b"[1, 2]", id="non-dict-payload"),
+            pytest.param(json.dumps({"transcript_path": 42, "cwd": "/x"}).encode(), id="non-string-transcript"),
+            pytest.param(json.dumps({"transcript_path": "/nonexistent/t.jsonl"}).encode(), id="missing-transcript"),
+        ],
+    )
+    def test_exits_zero_silently_and_fast(self, stdin: bytes) -> None:
+        start = time.monotonic()
+        proc = run_review(stdin)
+        assert time.monotonic() - start < 30
+        assert proc.returncode == 0
+        assert proc.stdout == b""
+
+    def test_spawned_env_exits_zero_without_spawning(self, tmp_path: Path) -> None:
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        payload = json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path)}).encode()
+        proc = run_review(payload, env={SPAWNED_ENV: "1"})
+        assert proc.returncode == 0
+        assert proc.stdout == b""
+        assert not (state_dir() / "review").exists()
+
+    def test_non_git_cwd_exits_zero_and_detached_child_finishes_clean(self, tmp_path: Path) -> None:
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        payload = json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path)}).encode()
+        start = time.monotonic()
+        proc = run_review(payload, cwd=tmp_path)
+        assert time.monotonic() - start < 30
+        assert proc.returncode == 0
+        assert proc.stdout == b""
+        log = state_dir() / "review" / "spawn.log"
+        assert log.exists()
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            if "SpawnReport(repo=None" in log.read_text():
+                return
+            time.sleep(0.2)
+        pytest.fail(f"detached child never finished: {log.read_text()!r}")
+
+
+class TestGuardAndSpawn:
+    def test_spawns_detached_child_with_log_and_marker_env(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
+    ) -> None:
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        guard_and_spawn(json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path)}).encode())
+        [(argv, kwargs)] = popen_calls
+        assert argv == spawn_argv(str(transcript), str(tmp_path))
+        assert argv[:5] == [sys.executable, "-m", "captain_hook", "review", "spawn"]
+        assert kwargs["start_new_session"] is True
+        assert kwargs["env"][SPAWNED_ENV] == "1"
+        assert kwargs["stdin"] is subprocess.DEVNULL
+        assert Path(kwargs["stdout"].name) == state_dir() / "review" / "spawn.log"
+        assert kwargs["stderr"] is kwargs["stdout"]
+
+    def test_omits_cwd_flag_when_payload_has_none(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
+    ) -> None:
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        guard_and_spawn(json.dumps({"transcript_path": str(transcript)}).encode())
+        [(argv, _)] = popen_calls
+        assert "--cwd" not in argv
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            pytest.param(b"", id="empty"),
+            pytest.param(b"not json {{{", id="garbage"),
+            pytest.param(b"\xff\xfe\x00", id="bad-utf8"),
+            pytest.param(b"[1, 2]", id="non-dict"),
+            pytest.param(b"{}", id="no-transcript"),
+            pytest.param(json.dumps({"transcript_path": 42}).encode(), id="non-string-transcript"),
+            pytest.param(json.dumps({"transcript_path": "/nonexistent/t.jsonl"}).encode(), id="missing-file"),
+            pytest.param(json.dumps({"transcript_path": "bad\x00null"}).encode(), id="null-byte-path"),
+        ],
+    )
+    def test_guards_never_spawn(self, popen_calls: list[tuple[list[str], dict[str, Any]]], raw: bytes) -> None:
+        guard_and_spawn(raw)
+        assert popen_calls == []
+
+    def test_spawned_env_guard_blocks_respawn(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv(SPAWNED_ENV, "1")
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        guard_and_spawn(json.dumps({"transcript_path": str(transcript)}).encode())
+        assert popen_calls == []
+
+
+class TestJudgePass:
+    async def test_judges_all_then_noop(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = install_judge(monkeypatch)
+        await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
+        report = await judge_pass(store, settings=settings)
+        assert report == JudgeReport(judged=2, failed=0, pending=0)
+        assert len(calls) == 2
+        judged = await store.judged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION)
+        assert {bool(row["accepted"]) for row in judged} == {True}
+        assert {str(row["model"]) for row in judged} == {"haiku"}
+        assert await judge_pass(store, settings=settings) == JudgeReport(judged=0, failed=0, pending=0)
+        assert len(calls) == 2
+
+    async def test_cap_limits_calls_and_pending_rows_retry_next_pass(
+        self, store: ReviewStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db", max_judge_calls_per_session=1)
+        calls = install_judge(monkeypatch)
+        await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
+        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=1)
+        assert len(calls) == 1
+        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
+
+    async def test_limit_overrides_the_session_cap(
+        self, store: ReviewStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db", max_judge_calls_per_session=1)
+        calls = install_judge(monkeypatch)
+        await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
+        assert await judge_pass(store, settings=settings, limit=2) == JudgeReport(judged=2, failed=0, pending=0)
+        assert len(calls) == 2
+
+    async def test_noise_floor_rows_never_reach_the_judge(
+        self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = install_judge(monkeypatch)
+        await store.record_file_scan(
+            "synthetic", 1.0, [synthetic("structural junk", noise("bare_marker")), synthetic(CORRECTION, firm())]
+        )
+        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
+        assert len(calls) == 1
+        assert "structural junk" not in calls[0]
+        unjudged = await store.unjudged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION, model="haiku")
+        assert [row["text"] for row in unjudged] == ["structural junk"]
+
+    async def test_failed_judge_leaves_row_unjudged_for_retry(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        install_judge(monkeypatch, fail_on=f"FEEDBACK TO CLASSIFY ===\n{SECOND_CORRECTION}")
+        await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
+        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=1, pending=1)
+        install_judge(monkeypatch)
+        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
+
+    @pytest.mark.parametrize("category", ALL_CATEGORIES)
+    def test_accepted_derives_from_durable_categories(self, category: Category) -> None:
+        verdict = ReviewVerdict(category=category, summary="s", confidence=0.5, rationale="r")
+        assert verdict.accepted is (category in DURABLE_CATEGORIES)
+
+    def test_build_prompt_renders_context_trigger_and_text(self) -> None:
+        snapshot = ContextSnapshot(
+            before=(ContextTurn(role="user", text="add the parser"),),
+            trigger=ContextTurn(
+                role="assistant",
+                text="wrapping it now",
+                tool_calls=("Bash",),
+                tool_inputs=("pip install foo",),
+            ),
+            after=(),
+        )
+        row = {"source_kind": "transcript_message", "context_json": snapshot.to_json(), "text": CORRECTION}
+        prompt = build_prompt(row)
+        assert "[source: transcript_message]" in prompt
+        assert "add the parser" in prompt
+        assert "Bash(pip install foo)" in prompt
+        assert CORRECTION in prompt
+        assert "DURABLE correction worth encoding as an" in prompt
+
+
+class TestBrain:
+    def test_brain_argv_composes_backend_base_with_reviewer_scope(self) -> None:
+        argv = brain_argv(max_turns=40)
+        assert argv[:2] == ["claude", "-p"]
+        assert "--no-session-persistence" in argv
+        assert argv[argv.index("--model") + 1] == "sonnet"
+        assert argv[argv.index("--permission-mode") + 1] == "acceptEdits"
+        assert "auto" not in argv
+        assert argv[argv.index("--max-turns") + 1] == "40"
+        assert argv[argv.index("--allowedTools") + 1] == ",".join(BRAIN_ALLOWED_TOOLS)
+        assert "--max-budget-usd" in argv
+
+    def test_brain_prompt_carries_skill_and_reviewer_marker(self) -> None:
+        prompt = brain_prompt(Path("/tmp/t.jsonl"))
+        assert prompt.startswith("/scanning-sessions --transcript /tmp/t.jsonl")
+        assert REVIEWER_MARKER in prompt
+
+    def test_spawn_brain_runs_in_repo_with_marker_env_and_prompt_on_stdin(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        runs: list[tuple[list[str], dict[str, Any]]] = []
+        monkeypatch.setattr("captain_hook.review.pipeline.subprocess.run", lambda argv, **kw: runs.append((argv, kw)))
+        spawn_brain(tmp_path / "t.jsonl", repo_root=tmp_path, settings=ReviewSettings(brain_max_turns=7))
+        [(argv, kwargs)] = runs
+        assert argv == brain_argv(max_turns=7)
+        assert kwargs["cwd"] == tmp_path
+        assert kwargs["env"][SPAWNED_ENV] == "1"
+        assert REVIEWER_MARKER in kwargs["input"].decode()
+        assert Path(kwargs["stdout"].name) == state_dir() / "review" / "spawn.log"
+
+
+class TestReviewSession:
+    async def test_non_git_cwd_is_a_clean_skip(self, tmp_path: Path) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        assert await review_session(transcript, cwd=str(plain), settings=settings) == SpawnReport(repo=None)
+        assert not settings.db_path.exists()
+
+    async def test_unwatched_repo_skips_scan_judge_and_brain(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        calls = install_judge(monkeypatch)
+        brains = install_brain(monkeypatch)
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        report = await review_session(transcript, cwd=str(git_repo), settings=settings)
+        assert report == SpawnReport(repo=GIT_REPO_KEY)
+        assert calls == []
+        assert brains == []
+        async with await ReviewStore.open(settings.db_path) as store:
+            assert await store.file_mtimes() == {}
+
+    @pytest.mark.parametrize(
+        ("category", "expect_brain"),
+        [
+            pytest.param("durable_style_rule", True, id="judge-accepts-brain-spawns"),
+            pytest.param("one_off_correction", False, id="judge-rejects-brain-stays-down"),
+        ],
+    )
+    async def test_brain_spawns_only_when_judge_accepted_evidence_crosses_thresholds(
+        self,
+        tmp_path: Path,
+        git_repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        category: Category,
+        expect_brain: bool,
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        install_judge(monkeypatch, category=category)
+        brains = install_brain(monkeypatch)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
+        sessions = [
+            ("s1", "2026-06-01T10:00:00+00:00"),
+            ("s2", "2026-06-01T15:00:00+00:00"),
+            ("s3", "2026-06-02T10:00:00+00:00"),
+        ]
+        reports = []
+        for session, timestamp in sessions:
+            transcript = write_transcript(
+                tmp_path / f"{session}.jsonl", correction_entries(session=session, timestamp=timestamp)
+            )
+            reports.append(await review_session(transcript, cwd=str(git_repo), settings=settings))
+        assert [report.judged for report in reports] == [1, 1, 1]
+        assert [report.brain for report in reports[:2]] == [False, False]
+        assert reports[2].brain is expect_brain
+        assert len(brains) == (1 if expect_brain else 0)
+        if expect_brain:
+            assert reports[2].eligible != ()
+            assert brains[0][1] == Path(str(git_repo))
