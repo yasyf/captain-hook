@@ -6,6 +6,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-11
+
+### Added
+- **The reviewer's FIX mode**: the SessionEnd scanner now also mines Claude's own
+  hook-misfire complaints ("the hook re-fired on my own earlier text") from
+  assistant turns — three deterministic gates (dismissal marker, compliance
+  de-noise, preceding-fire fingerprint) with fingerprints enumerated from real
+  captured transcripts checked into `tests/fixtures/hook_fires/`. A surviving
+  complaint attributes to the exact firing hook through the fire log
+  (drop-on-miss, drop-on-ambiguity, primitive-aware: a `nudge()`/`gate()` fire
+  resolves to the user's `hooks/<module>.py`, never `primitives/*.py`), is
+  judged under a FIX taxonomy (`misfire_confirmed`/`compliance`/
+  `ambient_mention`), and — once judge-accepted (a single VERY_HIGH observation
+  suffices) — the brain opens a PR that **amends** the offending hook with a
+  mandatory regression test. A vanished or unattributable target is skipped,
+  never PR'd. `golden_review.json` gates the marker heuristics.
+- Skills: `authoring-hooks` FIX mode (amend + regression test);
+  `scanning-sessions` fix branch (re-verify the target at `origin/<default>`
+  HEAD; stay inside the workflow — no settings edits, no improvisation).
+
+### Fixed
+- Fire-log attribution joins by `claude_session_id` (the session UUID on
+  transcript events) instead of the transcript-path hash — the same transcript
+  is reachable under multiple path spellings (symlinked config dirs), which made
+  path-derived joins silently miss.
+- `eligible()` now requires the candidate itself to be in `watching` status, so
+  `threshold-check` and the brain can never re-work a candidate that already
+  has a PR or reached a terminal state.
+- The headless brain's turn/budget caps were too tight to finish PR creation;
+  they are now settings (`brain_max_turns=80`, `brain_max_budget_usd=5.0`), and
+  the scanning-sessions skill carries an explicit run-to-completion contract
+  (a text-only reply ends a headless run).
+
 ## [0.10.0] - 2026-06-11
 
 ### Added
