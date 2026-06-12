@@ -269,7 +269,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cc-transcript", editable = "../cc-transcript" },
+    { name = "cc-transcript", specifier = ">=0.8,<0.9" },
     { name = "click", specifier = ">=8" },
     { name = "filelock", specifier = ">=3" },
     { name = "funcy", specifier = ">=2.0" },
@@ -284,7 +284,7 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "spacy", specifier = ">=3.7" },
-    { name = "spawnllm", specifier = ">=0.1" },
+    { name = "spawnllm", specifier = ">=0.1.3" },
     { name = "tree-sitter", specifier = ">=0.24" },
     { name = "tree-sitter-bash", specifier = ">=0.23" },
     { name = "wn", specifier = ">=1.1.0" },
@@ -308,33 +308,19 @@ wheels = [
 
 [[package]]
 name = "cc-transcript"
-version = "0.7.1"
-source = { editable = "../cc-transcript" }
+version = "0.8.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "anyio" },
     { name = "orjson" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "afinn", marker = "extra == 'sentiment'", specifier = ">=0.1" },
-    { name = "aiosqlite", specifier = ">=0.20" },
-    { name = "anyio", specifier = ">=4.4" },
-    { name = "cc-transcript", extras = ["sentiment"], marker = "extra == 'lexicon'" },
-    { name = "orjson", specifier = ">=3.10" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
-    { name = "spacy", marker = "extra == 'sentiment'", specifier = ">=3.8" },
-    { name = "spawnllm", marker = "extra == 'llm'", specifier = ">=0.1.3" },
-    { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.44" },
-]
-provides-extras = ["dev", "sentiment", "lexicon", "llm"]
-
-[package.metadata.requires-dev]
-docs = [
-    { name = "great-docs", git = "https://github.com/posit-dev/great-docs?rev=main" },
-    { name = "griffelib", specifier = ">=2.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/bf/0d/d77470f959c9119522c4944f9f986d684457ae3bd23dacf46555e17c6e9b/cc_transcript-0.8.0.tar.gz", hash = "sha256:711957e76cb21ad2752dda22e22511098a36393a658faef4bb8aac6dc4e8f055", size = 82515, upload-time = "2026-06-12T00:11:33.37Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b0/43/7bef5ff6f87861da92ea30d35c23a7adf1c3ce854ef0854dc0a0f27f5ceb/cc_transcript-0.8.0-cp313-abi3-macosx_11_0_arm64.whl", hash = "sha256:59b8ddafc2b5f1eb32190cfd437bea2ea57e44f316fe7801fb40a1906c1df1ad", size = 2107437, upload-time = "2026-06-12T00:11:27.02Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/48/901cbfc248a60c8c2d61dc0e4f06c572aab106fc720b05cfb408c0914687/cc_transcript-0.8.0-cp313-abi3-macosx_11_0_x86_64.whl", hash = "sha256:e6f62188fcda6a5d1ff17f4f3b3635723b09bf8b3e6b297e56a62e585b43f3ad", size = 2251027, upload-time = "2026-06-12T00:11:29.109Z" },
+    { url = "https://files.pythonhosted.org/packages/61/c3/89d46bc857432eb064dd37d9001d8a4074e92eebd4ffec2d0be52093ce11/cc_transcript-0.8.0-cp313-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:dee8c945ba3fe405de9e47f1192db25ae343d5c19727a6a5e39500d4753df376", size = 2259558, upload-time = "2026-06-12T00:11:30.677Z" },
+    { url = "https://files.pythonhosted.org/packages/e1/2e/bbc143830089ee0f8904480fb5168ce8d1a23f779e9375b545bdb6bf1ed5/cc_transcript-0.8.0-cp313-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:e737ef2b0e426255352b42445edec243e37e88890d3fd718eec2c4dac1972a7f", size = 2388625, upload-time = "2026-06-12T00:11:32.033Z" },
 ]
 
 [[package]]
@@ -2300,16 +2286,16 @@ wheels = [
 
 [[package]]
 name = "spawnllm"
-version = "0.1.0"
+version = "0.1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "loguru" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3a/bf/c321136d823a02abfd1764834f0517bd4d4e3ea4bfbaaae61f9ee52c5608/spawnllm-0.1.0.tar.gz", hash = "sha256:0be332429021ce2781249e1cfc4b319e642f5c089aa79f5f3e54c8f89c000f10", size = 13261, upload-time = "2026-06-10T09:09:08.16Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6e/3f/fa14651cc6e900e2e99c34deb50f424e7f41c1b121bdb5dbeeb1b30a1847/spawnllm-0.1.3.tar.gz", hash = "sha256:2533e5b76c2b4b51bbf0c572df68c49b8a90b45923fee1c1d483517bcf0bdc6b", size = 13387, upload-time = "2026-06-10T13:28:44.718Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3f/f9/3c9593a14ab8543935abf180b119978ada08b1f7d1d83eed244ac135e029/spawnllm-0.1.0-py3-none-any.whl", hash = "sha256:9b668b63efe80d3eb4c9a333d14e18ded9cbe7f8ebf60c64b78f811d30c9b6c7", size = 19003, upload-time = "2026-06-10T09:09:09.137Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/7d/f03994edc20a0d68f0d9c33d236065617f18d407e9c3138f3cb20fc1dee0/spawnllm-0.1.3-py3-none-any.whl", hash = "sha256:2e0831252211f60d67fe52dfcdbcd0bc1926d232eefa88d85ca35c4428c31884", size = 19121, upload-time = "2026-06-10T13:28:43.551Z" },
 ]
 
 [[package]]

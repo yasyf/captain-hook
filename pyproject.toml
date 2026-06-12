@@ -20,7 +20,7 @@ classifiers = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "cc-transcript>=0.7,<0.8",
+    "cc-transcript>=0.8,<0.9",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "tree-sitter>=0.24",
@@ -33,7 +33,7 @@ dependencies = [
     "lazy-object-proxy>=1.12.0",
     "filelock>=3",
     "loguru>=0.7.3",
-    "spawnllm>=0.1",
+    "spawnllm>=0.1.3",
 ]
 
 [project.optional-dependencies]
@@ -54,10 +54,6 @@ Documentation = "https://yasyf.github.io/captain-hook/"
 Repository = "https://github.com/yasyf/captain-hook"
 Issues = "https://github.com/yasyf/captain-hook/issues"
 Changelog = "https://github.com/yasyf/captain-hook/blob/main/CHANGELOG.md"
-
-# TODO(release-0.10.0): drop this override once cc-transcript 0.8.0 is on PyPI and the pin is bumped.
-[tool.uv.sources]
-cc-transcript = { path = "../cc-transcript", editable = true }
 
 [build-system]
 requires = ["uv_build>=0.11,<0.12"]
