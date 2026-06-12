@@ -19,7 +19,8 @@ from captain_hook.cli import install_skills, maybe_launch_bootstrap, register_ma
 
 SKILLS_DIR = Path(captain_hook.__file__).parent / "skills"
 SKILL_DIRS = sorted(p for p in SKILLS_DIR.iterdir() if p.is_dir())
-EXPECTED_SKILLS = {"bootstrapping-hooks", "translating-styleguides"}
+EXPECTED_SKILLS = {"authoring-hooks", "bootstrapping-hooks", "scanning-sessions", "translating-styleguides"}
+MOVED_REFERENCES = {"capt-hook-api.md", "pattern-catalog.md", "testing-hooks.md"}
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL_NAME = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*")
 MARKDOWN_LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
@@ -68,6 +69,12 @@ class TestSkillValidation:
 
 def test_expected_skills_present() -> None:
     assert {d.name for d in SKILL_DIRS} == EXPECTED_SKILLS
+
+
+def test_authoring_hooks_owns_the_drafting_references() -> None:
+    references = SKILLS_DIR / "authoring-hooks" / "references"
+    assert {p.name for p in references.iterdir()} == MOVED_REFERENCES | {"pitfalls.md"}
+    assert tree_files(SKILLS_DIR / "bootstrapping-hooks") == {"SKILL.md"}
 
 
 class TestInstallSkills:

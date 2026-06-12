@@ -746,7 +746,7 @@ class TestSkillsInstall:
         skill.write_text("# sentinel\n")
         result = run_cli("init", root_dir=str(project_dir))
         assert result.returncode == 0
-        assert "unchanged: bootstrapping-hooks, translating-styleguides" in result.stdout
+        assert "unchanged: authoring-hooks, bootstrapping-hooks, scanning-sessions, translating-styleguides" in result.stdout
         assert skill.read_text() == "# sentinel\n"
 
     def test_skills_install_standalone(self, tmp_path: Path) -> None:

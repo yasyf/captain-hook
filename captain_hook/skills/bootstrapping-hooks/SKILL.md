@@ -12,8 +12,9 @@ capt-hook is a declarative hook framework for Claude Code. Hooks are Python file
 `.claude/settings.local.json`. Each hook carries inline tests —
 `tests={Input(...): Block() | Warn() | Allow()}` — run with `uvx capt-hook test`. Hooks are
 always Python regardless of the target repo's language: conditions like `Command` and
-`FilePath` are language-agnostic; only AST `lint` rules are Python-specific. Full API:
-[capt-hook API reference](references/capt-hook-api.md).
+`FilePath` are language-agnostic; only AST `lint` rules are Python-specific. The full
+API reference, pattern catalog, and testing guide ship with the `authoring-hooks`
+skill, which owns hook drafting (Step 6 delegates to it).
 
 ## Hard Rules
 
@@ -33,7 +34,7 @@ Bootstrap Progress:
 - [ ] Step 3: Mine candidates onto the taxonomy
 - [ ] Step 4: Propose via AskUserQuestion — nothing written before approval
 - [ ] Step 5: Scaffold (uvx capt-hook init)
-- [ ] Step 6: Write approved hooks, one file per category
+- [ ] Step 6: Draft approved hooks via authoring-hooks, one file per category
 - [ ] Step 7: Verify (uvx capt-hook test, fix until green)
 - [ ] Step 8: Wire settings (register-hooks if new events)
 - [ ] Step 9: Final report (table + declined list)
@@ -82,7 +83,8 @@ Map every signal onto the taxonomy below. Record per candidate: the **source quo
 | D. Workflow rituals | CONTRIBUTING rituals ("run make lint before pushing", "update CHANGELOG"), multi-step done-criteria | `gate` on `PreToolUse` + `Command(r"git\s+push")`; `workflow()` for ordered checklists |
 | E. Styleguide rules | `STYLEGUIDE.md`, style sections in CONTRIBUTING/AGENTS/CLAUDE | **delegate to `translating-styleguides`** |
 
-Worked code per category: [pattern catalog](references/pattern-catalog.md).
+Worked code per category: the pattern catalog in the `authoring-hooks` skill
+(`references/pattern-catalog.md` there).
 
 ### 4. Propose via AskUserQuestion
 
@@ -112,19 +114,20 @@ writing the real hooks — the approved hooks replace it.
 ### 6. Write hooks
 
 One file per approved category: `safety.py`, `quality.py`, `testing.py`, `workflow.py`
-(+ `style.py`, owned end-to-end by `translating-styleguides`). Every hook file gets:
+(+ `style.py`, owned end-to-end by `translating-styleguides`). Drafting is delegated:
+for each approved hook, invoke the `authoring-hooks` skill via the Skill tool, passing
 
-- `from __future__ import annotations` at the top.
-- Inline tests with at least one firing `Input` and one `Allow()` (deterministic hooks only).
-- The source-doc citation inside the message text — the agent being blocked learns *why*
-  ("CONTRIBUTING.md: force-push rewrites remote history").
-- The surveyed repo's *exact* commands substituted into both messages and `RanCommand`
-  regexes (e.g. `make test` vs `uv run pytest` vs `npm test`).
+- the **source quote, verbatim** (it becomes the citation inside the message — the
+  agent being blocked learns *why*),
+- the approved **primitive and severity** from Step 4,
+- the surveyed repo's *exact* commands (e.g. `make test` vs `uv run pytest` vs
+  `npm test`) for messages and `RanCommand` regexes,
+- the **target category file** so related hooks stay grouped.
 
-Import gotcha: the `Command` regex *condition* is `from captain_hook.types import Command` —
-top-level `captain_hook.Command` is the parsed-command class, not the condition. Copy code
-from the [pattern catalog](references/pattern-catalog.md); every snippet there passes
-`capt-hook test` verbatim.
+`authoring-hooks` owns the rest — primitive-choice pitfalls, the narrowest matching
+condition, inline tests (at least one firing `Input` and one `Allow()`), and the
+pattern catalog its drafts copy from. If the Skill tool is unavailable, read that
+skill's `SKILL.md` directly and follow it — both skills ship together.
 
 ### 7. Verify
 
@@ -135,8 +138,8 @@ uvx capt-hook test
 ```
 
 Add `--json` when parsing results (one JSON record per test). Fix failures until green —
-debugging recipes in [testing hooks](references/testing-hooks.md). Never weaken a test to
-pass; fix the hook.
+debugging recipes in the `authoring-hooks` skill's `references/testing-hooks.md`. Never
+weaken a test to pass; fix the hook.
 
 ### 8. Wire settings
 
@@ -175,8 +178,9 @@ Survey of a fictional repo finds two signals:
 - README.md, Setup: "this repo uses uv, not pip"
 
 Step 4 proposes two options — category D: *lint-before-push gate (block)*, category A:
-*warn on pip install (warn)*. The user approves both. The pip warning goes in `safety.py`
-(pattern catalog, category A). The gate goes in `.claude/hooks/workflow.py`:
+*warn on pip install (warn)*. The user approves both; each is drafted by the
+`authoring-hooks` skill. The pip warning goes in `safety.py` (pattern catalog,
+category A). The gate goes in `.claude/hooks/workflow.py`:
 
 ```python
 from __future__ import annotations
@@ -222,6 +226,6 @@ unavailable, read that skill's `SKILL.md` directly and follow it — both skills
 
 ## References
 
-- [capt-hook API reference](references/capt-hook-api.md) — events, primitives, conditions, event object, CLI.
-- [Pattern catalog](references/pattern-catalog.md) — one validated hook file per taxonomy category.
-- [Testing hooks](references/testing-hooks.md) — inline test format, fixtures, debugging recipes.
+The capt-hook API reference, pattern catalog, and testing guide live in the
+`authoring-hooks` skill's `references/` directory — Step 6 delegates drafting there, so
+this skill carries none of its own.
