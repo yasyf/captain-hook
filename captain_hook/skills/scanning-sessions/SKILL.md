@@ -54,6 +54,11 @@ user feedback next pass.
   `uvx capt-hook review update <id> pr_open --pr-url <url>` recorded for a created PR
   or has been explicitly skipped with a logged reason. Summaries come last, after
   Step 7 — never between steps.
+- **Stay inside the workflow.** Never edit the user's checkout or any
+  `.claude/settings*.json` (settings edits stall headless runs on a permission
+  prompt you cannot answer), never re-wire hooks, and never chase problems you
+  notice along the way — a failed check means *log the skip and move on to the
+  final report*, not improvise a fix.
 
 ## Workflow
 
