@@ -116,19 +116,29 @@ class FireLog:
 
     def attribute(
         self,
-        session_id: str,
+        session_id: str | None = None,
         *,
+        claude_session_id: str | None = None,
         message: str | None = None,
         event: str | None = None,
         near_ts: float | None = None,
     ) -> FireRow | None:
         """Return the single fire whose message is a substring of ``message``, or ``None`` if ambiguous/unfound.
 
-        Rows are ordered nearest-preceding first (``ts`` then ``id`` descending). The match survives only when
-        every substring hit shares one non-empty ``source_file`` — otherwise attribution is ambiguous and we
-        refuse rather than risk pointing at the wrong hook.
+        The session is selected by ``session_id`` (the transcript-path hash the hook runtime recorded) or by
+        ``claude_session_id`` (the session UUID carried on transcript events) — the latter is path-independent,
+        so it survives the same transcript being reachable under different path spellings. Rows are ordered
+        nearest-preceding first (``ts`` then ``id`` descending). The match survives only when every substring
+        hit shares one non-empty ``source_file`` — otherwise attribution is ambiguous and we refuse rather
+        than risk pointing at the wrong hook.
         """
-        clauses, params = ["session_id = ?"], [session_id]
+        match session_id, claude_session_id:
+            case None, None:
+                raise ValueError("attribute() needs session_id or claude_session_id")
+            case _, None:
+                clauses, params = ["session_id = ?"], [session_id]
+            case _:
+                clauses, params = ["claude_session_id = ?"], [claude_session_id]
         if near_ts is not None:
             clauses.append("ts <= ?")
             params.append(near_ts)

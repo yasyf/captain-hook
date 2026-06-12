@@ -155,6 +155,8 @@ class ThresholdStatus:
 
     Attributes:
         kind: The candidate's PR shape.
+        status: The candidate's lifecycle status; only ``watching`` candidates
+            can become eligible.
         watching: Whether the candidate's repo is watched.
         sessions: How many distinct sessions carry a judge-accepted observation.
         days: How many distinct UTC days carry a judge-accepted observation.
@@ -165,6 +167,7 @@ class ThresholdStatus:
     """
 
     kind: CandidateKind
+    status: CandidateStatus
     watching: bool
     sessions: int
     days: int
@@ -378,10 +381,11 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
             LookupError: If no candidate carries ``candidate_id``.
         """
         conn = self.store.conn
-        cur = await conn.execute("SELECT repo_key, candidate_kind FROM candidates WHERE id = ?", (candidate_id,))
+        cur = await conn.execute("SELECT repo_key, candidate_kind, status FROM candidates WHERE id = ?", (candidate_id,))
         if not (candidates := [dict(row) async for row in cur]):
             raise LookupError(f"no candidate with id {candidate_id}")
         repo, kind = RepoKey(str(candidates[0]["repo_key"])), CandidateKind(str(candidates[0]["candidate_kind"]))
+        status = CandidateStatus(str(candidates[0]["status"]))
 
         accepted_cur = await conn.execute(
             ACCEPTED_OBSERVATIONS_QUERY.format(table=self.VERDICT_TABLE, accepted=self.ACCEPTED_COLUMN),
@@ -394,6 +398,7 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
 
         return ThresholdStatus(
             kind=kind,
+            status=status,
             watching=await self.watching(repo),
             sessions=len({row["session_id"] for row in accepted}),
             days=len({row["day"] for row in accepted}),
@@ -419,7 +424,7 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
             prompt_version: The judge prompt version whose verdicts apply.
         """
         status = await self.threshold_status(candidate_id, settings=settings, prompt_version=prompt_version)
-        if not status.watching or status.open_prs >= settings.max_open_prs:
+        if status.status != CandidateStatus.WATCHING or not status.watching or status.open_prs >= settings.max_open_prs:
             return False
         match status.kind:
             case CandidateKind.CREATE:

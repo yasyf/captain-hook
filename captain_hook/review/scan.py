@@ -68,7 +68,6 @@ from captain_hook.review.fix import HOOK_COMPLAINT, iter_hook_complaint_signals
 from captain_hook.review.formats import formats
 from captain_hook.review.repo import resolve_repo_key
 from captain_hook.review.store import CandidateKind
-from captain_hook.session import session_hash
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -247,9 +246,7 @@ async def ingest(
         await store.record_file_scan(str(parsed.path), parsed.mtime, [])
         return ScanReport(scanned=1, inserted=0)
     signals = chain(
-        iter_hook_complaint_signals(
-            parsed.events, firelog=open_fire_log(settings.fire_log_path), session_key=session_hash(parsed.path)
-        ),
+        iter_hook_complaint_signals(parsed.events, firelog=open_fire_log(settings.fire_log_path)),
         detect(parsed.events),
     )
     kept = list(candidates_from(parsed.path, parsed.events, signals, settings=settings))

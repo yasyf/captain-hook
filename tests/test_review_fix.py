@@ -123,11 +123,13 @@ def firelog(settings: ReviewSettings) -> FireLog:
     return FireLog.open(settings.fire_log_path)
 
 
-def seed_nudge_fire(firelog: FireLog, path: Path, *, source_file: str = PRIMITIVE_NUDGE) -> None:
+def seed_nudge_fire(
+    firelog: FireLog, path: Path, *, source_file: str = PRIMITIVE_NUDGE, claude_session_id: str = "sess-1"
+) -> None:
     firelog.append(
         ts=BASE_EPOCH - 10,
         session_id=session_hash(path),
-        claude_session_id="sess-1",
+        claude_session_id=claude_session_id,
         repo_key=str(REPO),
         hook_name="status_nudge:nudge_c424798f",
         source_file=source_file,
@@ -273,8 +275,7 @@ class TestDetector:
         path = FIXTURES / MISFIRE_FIXTURE
         seed_fixture_fires(firelog, MISFIRE_FIXTURE, path)
         [sig] = iter_hook_complaint_signals(
-            fixture_events(MISFIRE_FIXTURE), firelog=firelog, session_key=session_hash(path)
-        )
+            fixture_events(MISFIRE_FIXTURE), firelog=firelog)
         assert sig.kind == HOOK_COMPLAINT
         assert "re-fired unnecessarily and I am ignoring the repeats" in sig.text
         assert sig.evidence["target_source_file"] == ".claude/hooks/status_nudge.py"
@@ -293,7 +294,7 @@ class TestDetector:
         path = FIXTURES / name
         seed_fixture_fires(firelog, name, path)
         events = fixture_events(name)
-        assert list(iter_hook_complaint_signals(events, firelog=firelog, session_key=session_hash(path))) == []
+        assert list(iter_hook_complaint_signals(events, firelog=firelog)) == []
 
     def test_complaint_with_no_preceding_fingerprint_yields_nothing(self, firelog: FireLog, tmp_path: Path) -> None:
         path = tmp_path / "s.jsonl"
@@ -305,19 +306,24 @@ class TestDetector:
         write_transcript(path, entries)
         seed_nudge_fire(firelog, path)
         events = parse_events_from_bytes(path.read_bytes())
-        assert list(iter_hook_complaint_signals(events, firelog=firelog, session_key=session_hash(path))) == []
+        assert list(iter_hook_complaint_signals(events, firelog=firelog)) == []
 
     def test_complaint_with_no_fire_log_row_yields_nothing(self, firelog: FireLog) -> None:
         path = FIXTURES / MISFIRE_FIXTURE
         events = fixture_events(MISFIRE_FIXTURE)
-        assert list(iter_hook_complaint_signals(events, firelog=firelog, session_key=session_hash(path))) == []
+        assert list(iter_hook_complaint_signals(events, firelog=firelog)) == []
 
     def test_ambiguous_attribution_across_source_files_drops(self, firelog: FireLog) -> None:
         path = FIXTURES / MISFIRE_FIXTURE
         seed_fixture_fires(firelog, MISFIRE_FIXTURE, path)
-        seed_nudge_fire(firelog, path, source_file="/repo/.claude/hooks/other.py")
+        seed_nudge_fire(
+            firelog,
+            path,
+            source_file="/repo/.claude/hooks/other.py",
+            claude_session_id=str(MANIFEST["files"][MISFIRE_FIXTURE]["fire_log_rows"][0]["claude_session_id"]),
+        )
         events = fixture_events(MISFIRE_FIXTURE)
-        assert list(iter_hook_complaint_signals(events, firelog=firelog, session_key=session_hash(path))) == []
+        assert list(iter_hook_complaint_signals(events, firelog=firelog)) == []
 
     def test_anonymous_declarative_fire_drops(self, firelog: FireLog, tmp_path: Path) -> None:
         deny = "BLOCKED: recursive force-delete (rm -rf) is forbidden in this repo."
@@ -340,7 +346,7 @@ class TestDetector:
             message=deny,
         )
         events = parse_events_from_bytes(path.read_bytes())
-        assert list(iter_hook_complaint_signals(events, firelog=firelog, session_key=session_hash(path))) == []
+        assert list(iter_hook_complaint_signals(events, firelog=firelog)) == []
 
     def test_tight_proximity_bumps_hedged_to_high(self, firelog: FireLog, tmp_path: Path) -> None:
         path = tmp_path / "s.jsonl"
@@ -353,7 +359,7 @@ class TestDetector:
         write_transcript(path, entries)
         seed_nudge_fire(firelog, path)
         events = parse_events_from_bytes(path.read_bytes())
-        [sig] = iter_hook_complaint_signals(events, firelog=firelog, session_key=session_hash(path))
+        [sig] = iter_hook_complaint_signals(events, firelog=firelog)
         assert sig.signal is not None
         assert sig.signal.confidence == MEDIUM + 0.25
         assert sig.signal.reasons == ("hedged_marker", "misfire", "tight_proximity")
@@ -433,7 +439,7 @@ class TestFixGroupingAndStore:
     ) -> None:
         for session in ("s1", "s2"):
             path = write_transcript(tmp_path / f"{session}.jsonl", complaint_entries(STRONG_COMPLAINT, session=session))
-            seed_nudge_fire(firelog, path)
+            seed_nudge_fire(firelog, path, claude_session_id=session)
             assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(
                 scanned=1, inserted=1
             )

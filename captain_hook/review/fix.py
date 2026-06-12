@@ -158,15 +158,16 @@ def complaint_signal(marker: Marker, turns_back: int) -> CandidateSignal:
     return adjust(base, CONFIDENCE_STEP, "tight_proximity") if turns_back <= TIGHT_PROXIMITY_TURNS else base
 
 
-def iter_hook_complaint_signals(
-    events: Sequence[TranscriptEvent], *, firelog: FireLog, session_key: str
-) -> Iterator[MiningSignal]:
+def iter_hook_complaint_signals(events: Sequence[TranscriptEvent], *, firelog: FireLog) -> Iterator[MiningSignal]:
     """Yields one :class:`~cc_transcript.domains.mining.MiningSignal` per attributed misfire complaint.
+
+    Fires are joined by the events' own session UUID (``claude_session_id``), never by
+    transcript-path hash — the same transcript is reachable under multiple path
+    spellings (symlinked config dirs), so a path-derived key silently misses.
 
     Args:
         events: The transcript's full ordered event stream.
         firelog: The fire log joining fingerprint messages to the firing hook.
-        session_key: The transcript-path hash the session's fires were recorded under.
 
     Returns:
         Signals of kind :data:`HOOK_COMPLAINT` whose ``evidence`` stashes the
@@ -185,7 +186,8 @@ def iter_hook_complaint_signals(
         attributed = [
             (i, turns_back, row)
             for i, turns_back, message in fires
-            if (row := firelog.attribute(session_key, message=message, near_ts=near_ts)) is not None
+            if (row := firelog.attribute(claude_session_id=event.meta.session_id, message=message, near_ts=near_ts))
+            is not None
         ]
         if not attributed or len({(row.source_file, row.hook_name) for _, _, row in attributed}) > 1:
             continue

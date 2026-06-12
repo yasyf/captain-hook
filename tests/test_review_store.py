@@ -328,6 +328,23 @@ class TestCreateEligibility:
         assert (status.sessions, status.days, status.open_prs) == (3, 2, 0)
         assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is True
 
+    @pytest.mark.parametrize(
+        "terminal",
+        [CandidateStatus.PR_OPEN, CandidateStatus.ACCEPTED, CandidateStatus.REJECTED],
+        ids=lambda s: s.value,
+    )
+    async def test_non_watching_status_never_eligible(
+        self, store: ReviewStore, settings: ReviewSettings, terminal: CandidateStatus
+    ) -> None:
+        await store.enable(REPO)
+        candidate_id = await eligible_create_candidate(store)
+        await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_opened_at=datetime.now(UTC))
+        if terminal != CandidateStatus.PR_OPEN:
+            await store.transition(candidate_id, terminal)
+        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        assert (status.status, status.sessions, status.days) == (terminal, 3, 2)
+        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is False
+
     async def test_unwatched_repo_never_eligible(self, store: ReviewStore, settings: ReviewSettings) -> None:
         candidate_id = await eligible_create_candidate(store)
         assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is False
