@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib
+import importlib.machinery
 import importlib.util
 import pkgutil
+import re
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -14,6 +16,7 @@ from pydantic_settings import BaseSettings
 from captain_hook.app import State, _state
 
 CONF_MODULE = "conf"
+PACK_PACKAGE_PREFIX = "captain_hook._packs"
 
 
 def build_hook_settings(module: ModuleType) -> BaseSettings | ModuleType:
@@ -61,3 +64,18 @@ def discover_hooks(hooks_dir: str | Path, state: State | None = None) -> None:
 
     for fqn in sorted(all_modules - {f"{pkg}.{CONF_MODULE}"}):
         import_or_reload(fqn, fresh_this_pass)
+
+
+def import_pack_module(fqn: str, path: Path) -> ModuleType:
+    loader = importlib.machinery.SourceFileLoader(fqn, str(path))
+    module = importlib.util.module_from_spec(importlib.machinery.ModuleSpec(fqn, loader, origin=str(path)))
+    sys.modules[fqn] = module
+    loader.exec_module(module)
+    return module
+
+
+def discover_pack(name: str, pack_dir: Path) -> None:
+    pkg = f"{PACK_PACKAGE_PREFIX}.{re.sub(r'\W', '_', name)}"
+    for path in sorted(pack_dir.glob("*.py")):
+        if not (path.stem.startswith("_") or path.stem == CONF_MODULE):
+            import_pack_module(f"{pkg}.{path.stem}", path)

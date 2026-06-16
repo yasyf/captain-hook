@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Packs — named, versioned collections of hooks enabled via
+  `.claude/hooks/packs.toml` instead of vendoring hook files into a repo.
+  Builtin packs ship in the wheel (`general`, `python`); external packs come
+  from a GitHub repo carrying a `capt-hook.toml` manifest, fetched as a
+  commit-pinned tarball into `~/.cache/captain-hook/packs/`. Manage them with
+  `capt-hook pack add|list|remove|update`. Local `.claude/hooks/` modules
+  register first, so a local hook's decision overrides a pack hook on the same
+  event.
+
 ## [3.0.0] - 2026-06-16
 
 ### Changed

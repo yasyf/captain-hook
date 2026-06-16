@@ -17,8 +17,9 @@ from cc_transcript.ids import SessionId
 from captain_hook.app import _state, load_gitignore, reset
 from captain_hook.context import HookContext, load_transcript
 from captain_hook.dispatch import dispatch
-from captain_hook.loader import discover_hooks
+from captain_hook.loader import CONF_MODULE, discover_hooks, discover_pack
 from captain_hook.log import setup_logging
+from captain_hook.packs import manager
 from captain_hook.review.cli import review
 from captain_hook.session import SessionStore, ensure_session
 from captain_hook.types import Event
@@ -38,6 +39,14 @@ class CliState:
         reset()
         load_gitignore(self.root)
         discover_hooks(self.hooks)
+        resolved, missing = manager.resolve_enabled_packs(self.root)
+        for pack_ in resolved:
+            discover_pack(pack_.entry.name, pack_.path)
+        if missing:
+            print(
+                f"capt-hook: packs not cached: {', '.join(missing)} — run `capt-hook pack update`",
+                file=sys.stderr,
+            )
 
 
 def example_hook_source() -> str:
@@ -200,6 +209,14 @@ def print_hook_summary(label: str, summary: dict[str, str]) -> None:
         print(f"  unchanged: {', '.join(unchanged)} (already present)")
 
 
+def regenerate_settings(state: CliState) -> None:
+    state.discover()
+    settings_path = state.root / ".claude" / "settings.local.json"
+    merged, summary = merge_settings(".claude/hooks", settings_path)
+    write_settings(settings_path, merged)
+    print_hook_summary(str(settings_path.relative_to(state.root)), summary)
+
+
 def settings_drift(root: Path) -> set[str]:
     settings = [p for name in ("settings.json", "settings.local.json") if (p := root / ".claude" / name).exists()]
     if not settings:
@@ -296,8 +313,7 @@ def init_project(root: Path) -> None:
         example.write_text(example_hook_source())
 
     settings_path = root / ".claude" / "settings.local.json"
-    reset()
-    discover_hooks(str(hooks_dir))
+    CliState(root=root, hooks=str(hooks_dir)).discover()
     merged, summary = merge_settings(".claude/hooks", settings_path)
     write_settings(settings_path, merged)
 
@@ -503,6 +519,75 @@ def skills_install(state: CliState, force: bool) -> None:
     """Copy the bundled skills into .claude/skills/."""
     for name, status in install_skills(state.root, force=force).items():
         click.echo(f"  {status} {name}")
+
+
+@cli.group()
+def pack() -> None:
+    """Manage capt-hook packs — named collections of hooks (builtin or from GitHub)."""
+
+
+@pack.command(name="add")
+@click.argument("target")
+@click.pass_obj
+def pack_add(state: CliState, target: str) -> None:
+    """Enable a builtin pack by name, or an external pack as github:owner/repo[@ref]."""
+    try:
+        entry = (
+            manager.BuiltinPack(name=target)
+            if target in manager.builtin_packs()
+            else manager.fetch_pack(manager.PackSource.parse(target)).entry
+        )
+        manager.upsert_entry(manager.packs_toml_path(state.root), entry)
+    except manager.PackError as e:
+        raise click.ClickException(str(e)) from e
+    click.echo(f"  added {entry.name}")
+    regenerate_settings(state)
+
+
+@pack.command(name="list")
+@click.pass_obj
+def pack_list(state: CliState) -> None:
+    """List the packs enabled in .claude/hooks/packs.toml."""
+    resolved, missing = manager.resolve_enabled_packs(state.root)
+    for r in resolved:
+        match r.entry:
+            case manager.BuiltinPack():
+                kind, ref = "builtin", "-"
+            case manager.ExternalPack(source=source, commit=commit):
+                kind, ref = "github", f"{source.ref or 'HEAD'}@{commit[:7]}"
+        count = sum(1 for p in r.path.glob("*.py") if not p.stem.startswith("_") and p.stem != CONF_MODULE)
+        click.echo(f"  {r.entry.name:24} {kind:8} {ref:20} v{r.manifest.version:8} {count} hooks")
+    for name in missing:
+        click.echo(f"  {name:24} github   (not cached — run `capt-hook pack update`)")
+
+
+@pack.command(name="remove")
+@click.argument("name")
+@click.pass_obj
+def pack_remove(state: CliState, name: str) -> None:
+    """Disable a pack (leaves its content-addressed cache intact)."""
+    try:
+        manager.delete_entry(manager.packs_toml_path(state.root), name)
+    except manager.PackError as e:
+        raise click.ClickException(str(e)) from e
+    click.echo(f"  removed {name}")
+    regenerate_settings(state)
+
+
+@pack.command(name="update")
+@click.argument("name", required=False)
+@click.pass_obj
+def pack_update(state: CliState, name: str | None) -> None:
+    """Re-resolve external packs' refs to fresh commits and re-fetch."""
+    path = manager.packs_toml_path(state.root)
+    for entry in manager.read_entries(path):
+        match entry:
+            case manager.ExternalPack(name=n, source=source) if name in (None, n):
+                manager.upsert_entry(path, fresh := manager.fetch_pack(source).entry)
+                click.echo(f"  updated {n} -> {fresh.commit[:7]}")
+            case manager.BuiltinPack(name=n) if name == n:
+                click.echo(f"  {n} is builtin; it tracks the installed capt-hook version")
+    regenerate_settings(state)
 
 
 cli.add_command(review)
