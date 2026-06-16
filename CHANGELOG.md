@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-06-16
+
 ### Added
 - Packs — named, versioned collections of hooks enabled via
   `.claude/hooks/packs.toml` instead of vendoring hook files into a repo.
@@ -15,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `capt-hook pack add|list|remove|update`. Local `.claude/hooks/` modules
   register first, so a local hook's decision overrides a pack hook on the same
   event.
+
+## [3.1.0] - 2026-06-16
+
+### Changed
+- Requires cc-transcript `>=3.2,<4`.
 
 ## [3.0.0] - 2026-06-16
 
