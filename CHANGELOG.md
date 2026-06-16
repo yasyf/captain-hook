@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-06-16
+
 ### Changed
 - Requires cc-transcript `>=3.0,<4`.
 
