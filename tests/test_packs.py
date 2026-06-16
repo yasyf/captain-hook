@@ -173,6 +173,71 @@ def test_fetch_pack_caches_and_pins(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert manager.find_cached("acme-guards", "e" * 40) is None
 
 
+def test_fetch_pack_caches_only_manifest_and_hooks_subdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
+    repo = tmp_path / "repo"
+    write_pack(repo, "acme-guards", hooks="plugin/hooks")
+    (repo / "plugin" / "hooks").mkdir(parents=True)
+    (repo / "plugin" / "hooks" / "h.py").write_text(HOOK_SRC)
+    (repo / "README.md").write_text("# big repo\n")
+    (repo / "go.mod").write_text("module example.com/big\n")
+    (repo / "src").mkdir()
+    (repo / "src" / "big.txt").write_text("x" * 4096)
+    tarball = tmp_path / "repo.tar.gz"
+    with tarfile.open(tarball, "w:gz") as tf:
+        tf.add(repo, arcname="big-repo-sha")
+
+    sha = "d" * 40
+    monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
+    monkeypatch.setattr("urllib.request.urlretrieve", lambda url: (str(tarball), None))
+
+    resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
+
+    cached = tmp_path / "cache" / f"acme-guards@{sha}"
+    assert {p.name for p in cached.iterdir()} == {manager.PACK_MANIFEST, "plugin", manager.SHA_MARKER}
+    assert (cached / "plugin" / "hooks" / "h.py").is_file()
+    assert (resolved.path / "h.py").is_file()
+    for junk in ("README.md", "go.mod", "src"):
+        assert not (cached / junk).exists(), f"{junk} leaked into the cache"
+
+
+def test_fetch_pack_root_hooks_caches_full_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
+    repo = tmp_path / "repo"
+    write_pack(repo, "acme-flat", hooks=".")
+    (repo / "h.py").write_text(HOOK_SRC)
+    tarball = tmp_path / "repo.tar.gz"
+    with tarfile.open(tarball, "w:gz") as tf:
+        tf.add(repo, arcname="flat-sha")
+
+    sha = "e" * 40
+    monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
+    monkeypatch.setattr("urllib.request.urlretrieve", lambda url: (str(tarball), None))
+
+    resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/flat@v1"))
+
+    cached = tmp_path / "cache" / f"acme-flat@{sha}"
+    assert (cached / manager.PACK_MANIFEST).is_file()
+    assert (cached / "h.py").is_file()
+    assert (resolved.path / "h.py").is_file()
+
+
+def test_fetch_pack_missing_manifest_fails_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text("# no manifest here\n")
+    tarball = tmp_path / "repo.tar.gz"
+    with tarfile.open(tarball, "w:gz") as tf:
+        tf.add(repo, arcname="no-manifest-sha")
+
+    monkeypatch.setattr(manager, "resolve_commit", lambda source: "f" * 40)
+    monkeypatch.setattr("urllib.request.urlretrieve", lambda url: (str(tarball), None))
+
+    with pytest.raises(manager.PackError):
+        manager.fetch_pack(manager.PackSource.parse("github:acme/empty@v1"))
+
+
 # --- resolution ----------------------------------------------------------------------
 
 
@@ -194,7 +259,8 @@ def test_resolve_unknown_builtin_fails_loud(tmp_path: Path) -> None:
 def test_resolve_uncached_external_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
     manager.upsert_entry(
-        manager.packs_toml_path(tmp_path), manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@v1"), "a" * 40)
+        manager.packs_toml_path(tmp_path),
+        manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@v1"), "a" * 40),
     )
     resolved, missing = manager.resolve_enabled_packs(tmp_path)
     assert (resolved, missing) == ([], ["acme"])

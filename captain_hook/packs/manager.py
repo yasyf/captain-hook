@@ -170,9 +170,23 @@ def resolve_commit(source: PackSource) -> str:
 
 def strip_top_level(tf: tarfile.TarFile) -> Iterator[tarfile.TarInfo]:
     for member in tf.getmembers():
-        if (tail := member.name.partition("/")[2]):
+        if tail := member.name.partition("/")[2]:
             member.path = tail
             yield member
+
+
+def members_under(members: list[tarfile.TarInfo], hooks: str) -> Iterator[tarfile.TarInfo]:
+    """Yield the manifest plus members within the pack's hooks dir.
+
+    hooks == "." (hooks beside the manifest) selects the whole tree; a real
+    subdir selects only the manifest and that subtree, so the cache holds just
+    what the loader imports.
+    """
+    rel = hooks.strip("/")
+    prefix = "" if rel in ("", ".") else rel + "/"
+    for m in members:
+        if m.path == PACK_MANIFEST or not prefix or m.path == rel or m.path.startswith(prefix):
+            yield m
 
 
 def find_cached(name: str, sha: str) -> Path | None:
@@ -188,14 +202,21 @@ def fetch_commit(source: PackSource, sha: str) -> ResolvedPack:
         if staging.exists():
             shutil.rmtree(staging)
         with tarfile.open(tarball) as tf:
-            tf.extractall(staging, members=strip_top_level(tf), filter="data")
-        manifest = PackManifest.load(staging / PACK_MANIFEST)
+            members = list(strip_top_level(tf))
+            manifest_member = next((m for m in members if m.path == PACK_MANIFEST), None)
+            if manifest_member is None:
+                raise PackError(f"pack manifest {PACK_MANIFEST} missing in {source}")
+            tf.extract(manifest_member, staging, filter="data")
+            manifest = PackManifest.load(staging / PACK_MANIFEST)
+            tf.extractall(staging, members=list(members_under(members, manifest.hooks)), filter="data")
         final = root / f"{manifest.name}@{sha}"
         if final.exists():
             shutil.rmtree(final)
         os.replace(staging, final)
         (final / SHA_MARKER).write_text(sha)
-    return ResolvedPack(ExternalPack(name=manifest.name, source=source, commit=sha), manifest.hooks_dir(final), manifest)
+    return ResolvedPack(
+        ExternalPack(name=manifest.name, source=source, commit=sha), manifest.hooks_dir(final), manifest
+    )
 
 
 def fetch_pack(source: PackSource) -> ResolvedPack:
@@ -228,7 +249,7 @@ def resolve_enabled_packs(root: Path) -> tuple[list[ResolvedPack], list[str]]:
         match entry:
             case BuiltinPack(name=name):
                 resolved.append(resolve_builtin(name))
-            case ExternalPack() as ext if (found := resolve_external(ext)):
+            case ExternalPack() as ext if found := resolve_external(ext):
                 resolved.append(found)
             case ExternalPack() as ext:
                 missing.append(ext.name)
