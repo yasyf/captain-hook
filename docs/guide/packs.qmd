@@ -1,0 +1,134 @@
+---
+title: "Use packs"
+---
+
+A pack is a named, versioned collection of hooks you enable instead of copying
+hook files into your repo. Builtin packs ship inside `capt-hook`; external packs
+live in a GitHub repo. You list the packs you want in `.claude/hooks/packs.toml`,
+and the loader imports them alongside your own `.claude/hooks/` modules.
+
+## Enable a builtin pack
+
+`capt-hook` ships two builtin packs: `general` (language-agnostic guards for git
+safety, code stewardship, task and plan discipline, and a review gate) and
+`python` (a pytest-before-commit gate, AST style rules, and `ruff`/`uv` toolchain
+guards). Add one by name:
+
+```bash
+uvx capt-hook pack add general
+```
+
+This records the pack in `.claude/hooks/packs.toml` and wires the events its hooks
+subscribe to into `.claude/settings.local.json`:
+
+```toml
+[packs.general]
+```
+
+The pack's hooks now fire on the next event. Verify them with the inline tests
+every hook carries:
+
+```bash
+uvx capt-hook test
+```
+
+## List, update, and remove packs
+
+List the enabled packs, their kind, pinned version, and hook count:
+
+```bash
+uvx capt-hook pack list
+```
+
+```
+  general                  builtin  -                    v0.1.0    7 hooks
+  python                   builtin  -                    v0.1.0    3 hooks
+```
+
+Remove a pack by name. The entry leaves `packs.toml` and the events it added are
+unwired, but its cache stays on disk for other projects:
+
+```bash
+uvx capt-hook pack remove general
+```
+
+## Add a pack from GitHub
+
+Point `pack add` at a GitHub repo as `github:owner/repo@ref`, where `ref` is a
+tag, branch, or commit (omit it to track the default branch):
+
+```bash
+uvx capt-hook pack add github:acme/guards@v1.2
+```
+
+`pack add` resolves the ref to a commit, downloads that commit as a tarball into
+`~/.cache/captain-hook/packs/`, validates its manifest, and pins the commit in
+`packs.toml`:
+
+```toml
+[packs.acme-guards]
+source = "github:acme/guards@v1.2"
+commit = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
+```
+
+The pinned `commit` makes hydration reproducible: a teammate who clones the repo
+runs `uvx capt-hook pack update` to fetch the exact same commit, even if the tag
+later moves. Discovery never reaches the network. An uncached external pack prints
+a one-line notice telling you to run `pack update`.
+
+Re-resolve a tracked ref to its latest commit and re-fetch:
+
+```bash
+uvx capt-hook pack update acme-guards
+```
+
+Run `pack update` with no name to refresh every external pack.
+
+## How packs combine with your own hooks
+
+Your `.claude/hooks/` modules import first, so they register ahead of pack hooks.
+Dispatch returns the first `allow` or `block` decision, which means a local hook
+overrides a pack hook on the same event. Packs are the shared baseline; your
+local hooks stay authoritative.
+
+## Author a pack
+
+A pack repo needs a `capt-hook.toml` manifest at its root and a directory of hook
+`.py` files. The manifest names the pack, versions it, and points at the hooks
+directory:
+
+```toml
+name = "acme-guards"
+version = "1.2.0"
+description = "Guards for ACME service conventions"
+hooks = "hooks"
+```
+
+Set `hooks = "."` when the hook files sit beside the manifest. Each hook file is a
+flat module that imports from `captain_hook` and registers with the same
+primitives you use locally:
+
+```python
+from captain_hook import Allow, Block, Input, block_command
+
+block_command(
+    ["git", "push", "--force"],
+    reason="Force-push rewrites shared history",
+    hint="Push a new commit instead",
+    tests={
+        Input(command="git push --force"): Block(),
+        Input(command="git push"): Allow(),
+    },
+)
+```
+
+The `name` in the manifest becomes the `packs.toml` section key, so it must be a
+slug matching `[a-z][a-z0-9-]*`. Tag a release, and consumers add the pack with
+`uvx capt-hook pack add github:acme/guards@v1.2`.
+
+## See also
+
+- [Configure settings](configuration.qmd) covers `conf.py`, which sets project
+  settings for your own hooks and any enabled pack.
+- [How hooks run](how-it-works.qmd) explains discovery, dispatch, and the
+  first-decision-wins ordering that gives local hooks precedence.
