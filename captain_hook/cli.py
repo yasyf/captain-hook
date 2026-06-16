@@ -537,9 +537,9 @@ def pack_add(state: CliState, target: str) -> None:
             if target in manager.builtin_packs()
             else manager.fetch_pack(manager.PackSource.parse(target)).entry
         )
-        manager.upsert_entry(manager.packs_toml_path(state.root), entry)
     except manager.PackError as e:
         raise click.ClickException(str(e)) from e
+    manager.upsert_entry(manager.packs_toml_path(state.root), entry)
     click.echo(f"  added {entry.name}")
     regenerate_settings(state)
 

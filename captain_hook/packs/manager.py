@@ -228,6 +228,8 @@ def resolve_enabled_packs(root: Path) -> tuple[list[ResolvedPack], list[str]]:
         match entry:
             case BuiltinPack(name=name):
                 resolved.append(resolve_builtin(name))
+            case ExternalPack() as ext if (found := resolve_external(ext)):
+                resolved.append(found)
             case ExternalPack() as ext:
-                resolved.append(found) if (found := resolve_external(ext)) else missing.append(ext.name)
+                missing.append(ext.name)
     return resolved, missing
