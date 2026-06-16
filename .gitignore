@@ -38,3 +38,4 @@ coverage.xml
 # Claude Code local settings
 .claude/settings.local.json
 great-docs/
+stress/reports/
