@@ -9,8 +9,9 @@ instead of learning, switch to the [Reference](../reference/index.qmd).
 
 Pick your entry point:
 
+- To set up in one command, run `uvx capt-hook init` — see [Installation](installation.qmd).
+- To let Claude do it, install the plugin and ask it to "set up captain hook" — see [Agent Skills](skills.qmd).
 - To block one command in 5 minutes, jump straight to the [Quickstart](quickstart.qmd).
-- To set up a project, read [Installation](installation.qmd), then [Quickstart](quickstart.qmd), then [Project Structure](project-structure.qmd).
 - To get the mental model first, read [How Hooks Work](../guide/how-it-works.qmd).
 - To browse everything in one place, see the [Reference](../reference/index.qmd).
 

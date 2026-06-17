@@ -1,0 +1,117 @@
+---
+title: "Session reviewer"
+---
+
+The session reviewer closes the loop on hook authoring. The corrections you give Claude
+during a session — "never force-push", "use `uv`, not `pip`", "you weakened that test" — are
+exactly the rules a hook should enforce, but writing the hook by hand is friction you skip in the
+moment. The reviewer notices those corrections for you. When a session ends, it reads the
+transcript, finds the durable corrections and the hooks that misfired, and once a pattern proves
+itself, opens a pull request that adds or fixes a hook. You review the PR like any other.
+
+It is on by default after `uvx capt-hook init`. This page explains the path from a session to a
+PR, what it takes to run, and the knobs that decide what crosses the bar.
+
+## How it works
+
+The reviewer runs entirely on your machine, triggered by Claude Code's `SessionEnd` event:
+
+1. **`review run`** is the wired `SessionEnd` hook. It returns immediately (always exit 0, never
+   blocking the session) after detaching a background pass.
+2. The background pass **resolves the repo**, checks that you are watching it, then **scans the
+   ended transcript** for two things: durable corrections you gave, and hooks that fired when they
+   should not have.
+3. Each finding is **judged by an LLM** for whether it states a durable, enforceable rule.
+4. A judged finding becomes a **candidate**. The reviewer tracks it across sessions and only acts
+   once it clears its thresholds.
+5. An eligible candidate spawns a **headless brain** (`claude -p` running the `scanning-sessions`
+   skill) inside the repo, which drafts the hook, proves it with `uvx capt-hook test`, and opens
+   one pull request carrying the verbatim evidence.
+
+Candidates come in two kinds. A **create** candidate turns a recurring correction into a new hook.
+A **fix** candidate amends a hook that misfired, adding a regression test that reproduces the
+misfire. Fix candidates clear the bar faster — a hook firing when it should not is a concrete,
+actionable defect.
+
+## Turn it on
+
+`uvx capt-hook init` arms the reviewer for the current repo. For a repo you have already wired by
+hand, or one that uses a committed `settings.json`, enable it directly:
+
+```bash
+uvx capt-hook review enable
+```
+
+Both paths set up the same three things the reviewer needs:
+
+- the `scanning-sessions` and `authoring-hooks` skills in `.claude/skills/` (the brain runs them);
+- a `uvx capt-hook review run` entry on `SessionEnd` in your settings;
+- a per-machine watching flag for this repo.
+
+Watching is stored once per machine, so each clone you want reviewed runs `review enable` (or
+`init`) once.
+
+## Prerequisites
+
+The reviewer shells out to two CLIs, so both must be authenticated:
+
+- **`claude`** — the judge and the PR-drafting brain both call it. Log in with `claude` once.
+- **`gh`** — the brain opens the PR with it. Authenticate with push and pull-request scope
+  (`gh auth login`).
+
+The repo also needs a git remote; the reviewer keys candidates to the normalized origin.
+
+## What crosses the bar
+
+A correction does not become a PR the moment you say it. It has to recur, survive an LLM verdict,
+and clear thresholds — so a one-off aside never turns into noise. Every threshold is an
+environment variable with the `HOOKS_REVIEW_` prefix:
+
+| Setting | Default | What it gates |
+|---|---|---|
+| `HOOKS_REVIEW_MIN_SESSIONS` | `3` | Distinct sessions a correction must recur across before a create candidate is eligible. |
+| `HOOKS_REVIEW_MIN_DAYS` | `2` | Days a create candidate must span before it is eligible. |
+| `HOOKS_REVIEW_MIN_SESSIONS_FIX` | `2` | Sessions a hook-misfire fix candidate must recur across. |
+| `HOOKS_REVIEW_JUDGE_TIER` | `medium` | LLM tier that judges each candidate (`small`, `medium`, `large`). |
+| `HOOKS_REVIEW_MIN_JUDGE_CONFIDENCE` | `0.6` | Minimum judge confidence for a candidate to count. |
+| `HOOKS_REVIEW_MAX_OPEN_PRS` | `2` | Open reviewer PRs allowed per repo at once. |
+| `HOOKS_REVIEW_BRAIN_MAX_BUDGET_USD` | `5.0` | Spend cap on the PR-drafting brain per session. |
+| `HOOKS_REVIEW_BRAIN_MAX_TURNS` | `80` | Turn cap on the PR-drafting brain. |
+
+Set them in your Claude Code `settings.json` `env` block, or export them in the shell that ends
+the session.
+
+## Watch the queue
+
+The candidates the reviewer is tracking are inspectable at any time:
+
+```bash
+uvx capt-hook review list             # the repo's candidates and their status
+uvx capt-hook review show <id>        # one candidate's row and threshold status
+uvx capt-hook review threshold-check  # which candidates currently cross the bar
+uvx capt-hook review sync-prs         # fold merged/closed PR states back into candidates
+```
+
+`scan` and `triage` run the ingest and judge passes manually over explicit transcripts, and
+`update` moves a candidate's status by hand — useful when you want to backfill or override the
+automatic flow.
+
+## Turn it off
+
+The reviewer is opt-out per repo:
+
+```bash
+uvx capt-hook review disable          # stop watching this repo (candidates stay recorded)
+uvx capt-hook init --no-review        # scaffold without arming the reviewer
+```
+
+`disable` stops new sessions from being reviewed; the candidates already recorded stay, so
+re-enabling later picks up where it left off.
+
+## Cost and privacy
+
+The reviewer reads your transcripts locally and never uploads them — it sends only the specific
+correction text to the judge, and the brain runs in your own `claude` session. It does spend
+tokens: one judge call per new candidate at the configured tier, and, when a candidate is
+eligible, one brain session bounded by `HOOKS_REVIEW_BRAIN_MAX_BUDGET_USD`. The `max_open_prs`
+cap keeps it from flooding your repo with pull requests while you catch up.

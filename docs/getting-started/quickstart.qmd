@@ -15,8 +15,10 @@ Every command runs through `uvx`, so nothing else is installed.
 uvx capt-hook init
 ```
 
-`init` creates `.claude/hooks/`, wires Claude Code's settings, and installs the
-[two helper skills](skills.qmd). You're already live, with no separate wiring step.
+`init` creates `.claude/hooks/`, wires Claude Code's settings, installs the
+[helper skills](skills.qmd), and arms the [session reviewer](../guide/session-reviewer.qmd).
+You're already live, with no separate wiring step. To drive setup from Claude instead, install
+the plugin and ask it to "set up captain hook" — see [Agent Skills](skills.qmd).
 
 ## 2. Read your first hook
 

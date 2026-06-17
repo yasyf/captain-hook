@@ -9,23 +9,28 @@
 
 Declarative hook framework for Claude Code. Write hooks as data, test them inline, and ship them to CI in the same shape they run in production.
 
-## Install
+## Quickstart
 
-There's no install step. Run everything through [uvx](https://docs.astral.sh/uv/).
+No install step — everything runs through [uvx](https://docs.astral.sh/uv/). Pick a front door:
 
-```bash
-uvx capt-hook init
-```
-
-`uvx` fetches captain-hook into a throwaway environment and runs it, so you never add it to `pyproject.toml`. Every command in this README works the same way once you prefix it with `uvx`.
-
-## First hook
-
-`uvx capt-hook init` scaffolds `.claude/hooks/`, wires Claude Code's settings, and installs the skills. One command and you're live.
+**From your terminal:**
 
 ```bash
 uvx capt-hook init
 ```
+
+**From inside Claude Code** — install the plugin, then ask Claude to set it up:
+
+```
+/plugin marketplace add yasyf/captain-hook
+/plugin install captain-hook@captain-hook
+```
+
+> set up captain hook
+
+Either path lands in the same place: `.claude/hooks/` scaffolded, Claude Code's settings wired, the bundled skills installed, and the [session reviewer](#session-reviewer) watching this repo. `uvx` fetches captain-hook into a throwaway environment, so it never enters your `pyproject.toml` — and every command below works the same way once you prefix it with `uvx`.
+
+## Your first hook
 
 A hook is declarative Python with an event, some conditions, and an action. This one stops the agent from finishing a UI change it never looked at.
 
@@ -71,14 +76,15 @@ uvx capt-hook test
 
 `init` already wired Claude Code's settings. Each event runs `uvx capt-hook run <Event>`, with the event JSON arriving on stdin and the verdict written to stdout. Re-run `uvx capt-hook register-hooks` only after you add hooks on a new event; it writes `.claude/settings.local.json` for you.
 
-## Agent Skills & plugin
+## Session reviewer
 
-captain-hook ships two [Agent Skills](https://yasyf.github.io/captain-hook/docs/getting-started/skills.html) so you don't have to write hooks by hand. `bootstrapping-hooks` mines your repo's docs, CI, and git history into proposed gates and nudges. `translating-styleguides` turns a STYLEGUIDE.md into enforced rules. `uvx capt-hook init` installs both into `.claude/skills/`, or you can add them as a plugin.
+`init` also turns on the **session reviewer**. When a Claude Code session ends, it mines the transcript for the durable corrections you gave and the hooks that misfired, judges each one, and — once a pattern clears its thresholds — opens a pull request that adds a new hook or fixes the one that misfired. You review the PR like any other.
 
-```
-/plugin marketplace add yasyf/captain-hook
-/plugin install captain-hook@captain-hook
-```
+It's on by default after `init`. Turn it off for a repo with `uvx capt-hook review disable`, or skip it at setup with `uvx capt-hook init --no-review`. The [session reviewer guide](https://yasyf.github.io/captain-hook/docs/guide/session-reviewer.html) covers prerequisites (an authenticated `claude` and `gh`) and the `HOOKS_REVIEW_*` tuning knobs.
+
+## Agent Skills
+
+captain-hook ships two [Agent Skills](https://yasyf.github.io/captain-hook/docs/getting-started/skills.html) so you don't have to write hooks by hand. `bootstrapping-hooks` surveys your repo's docs, CI, and git history and proposes gates and nudges; `translating-styleguides` turns a STYLEGUIDE.md into enforced rules. Both land in `.claude/skills/` via `init` and ship as the plugin in the [Quickstart](#quickstart) — ask Claude to "set up captain hook" and `bootstrapping-hooks` takes it from there.
 
 ## What this solves
 

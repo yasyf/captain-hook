@@ -16,7 +16,7 @@ uvx capt-hook init                  # scaffolds hooks AND installs the skills
 uvx capt-hook skills install        # skills only; --force refreshes existing copies
 ```
 
-Either command copies the skills into `.claude/skills/`, where Claude Code picks them up after you accept workspace trust. Invoke them as `/bootstrapping-hooks` and `/translating-styleguides`, or ask in plain language such as "set up hooks for this repo" or "enforce our style guide".
+Either command copies the skills into `.claude/skills/`, where Claude Code picks them up after you accept workspace trust. Invoke them as `/bootstrapping-hooks` and `/translating-styleguides`, or ask in plain language such as "set up captain hook" or "enforce our style guide". `init` installs two more skills — `scanning-sessions` and `authoring-hooks` — that power the [session reviewer](../guide/session-reviewer.qmd); you do not invoke those directly.
 
 In an interactive terminal, `init` finishes by offering to launch Claude with `/bootstrapping-hooks` right away. Accept and the survey-propose-write loop starts immediately in your repo. Accepting also registers the captain-hook plugin marketplace in `.claude/settings.local.json`, so the skills track the repository and update automatically.
 
