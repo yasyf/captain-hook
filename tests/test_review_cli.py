@@ -140,6 +140,19 @@ class TestEnableDisable:
         ]
         assert len(review_groups) == 1
 
+    def test_enable_defers_session_end_to_committed_settings(self, git_repo: Path) -> None:
+        claude = git_repo / ".claude"
+        claude.mkdir(parents=True)
+        (claude / "settings.json").write_text(
+            json.dumps({"hooks": {"SessionEnd": [{"hooks": [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}"}]}]}})
+        )
+        result = invoke("enable", root=git_repo)
+        assert result.exit_code == 0, result.output
+        assert "SessionEnd hook wired" not in result.output
+        local = claude / "settings.local.json"
+        groups = (json.loads(local.read_text()).get("hooks") or {}).get("SessionEnd") or [] if local.exists() else []
+        assert not any(REVIEW_RUN_COMMAND in entry["command"] for group in groups for entry in group["hooks"])
+
     def test_disable_unwatches(self, git_repo: Path) -> None:
         assert invoke("enable", root=git_repo).exit_code == 0
         result = invoke("disable", root=git_repo)

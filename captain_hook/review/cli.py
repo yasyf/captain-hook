@@ -60,8 +60,10 @@ def ensure_review_wiring(settings_path: Path) -> bool:
     from captain_hook.cli import write_settings
 
     existing: dict[str, Any] = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    committed = settings_path.parent / "settings.json"
+    committed_hooks: dict[str, Any] = (json.loads(committed.read_text()).get("hooks") or {}) if committed.exists() else {}
     hooks: dict[str, Any] = existing.get("hooks") or {}
-    if review_wired(hooks):
+    if review_wired(hooks) or review_wired(committed_hooks):
         return False
     group = {"hooks": [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}"}]}
     write_settings(

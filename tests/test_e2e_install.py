@@ -96,6 +96,37 @@ class TestInit:
         assert "unchanged:" in second.stdout
         assert "PreToolUse" in second.stdout
 
+    def test_init_defers_to_committed_settings_json(self, tmp_path: Path) -> None:
+        settings_dir = tmp_path / ".claude"
+        settings_dir.mkdir()
+        (settings_dir / "settings.json").write_text(json.dumps({
+            "hooks": {
+                event: [{"hooks": [{"type": "command", "command": f"uvx capt-hook run {event}"}]}]
+                for event in ("PreToolUse", "Stop")
+            },
+        }))
+
+        result = run_cli("init", root_dir=str(tmp_path))
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert "deferred to settings.json" in result.stdout
+
+        local = json.loads((settings_dir / "settings.local.json").read_text())
+        assert "PreToolUse" not in local["hooks"]
+        assert "Stop" not in local["hooks"]
+        assert "SessionEnd" in local["hooks"]
+
+    def test_init_strips_preexisting_local_duplicate(self, tmp_path: Path) -> None:
+        settings_dir = tmp_path / ".claude"
+        settings_dir.mkdir()
+        group = {"hooks": [{"type": "command", "command": "uvx capt-hook run PreToolUse"}]}
+        (settings_dir / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [group]}}))
+        (settings_dir / "settings.local.json").write_text(json.dumps({"hooks": {"PreToolUse": [group]}}))
+
+        result = run_cli("init", root_dir=str(tmp_path))
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        local = json.loads((settings_dir / "settings.local.json").read_text())
+        assert "PreToolUse" not in local["hooks"]
+
     def test_creates_settings_json(self, project_dir: Path) -> None:
         settings = project_dir / ".claude" / "settings.local.json"
         assert settings.exists()

@@ -157,20 +157,33 @@ def is_captain_hook_group(group: dict[str, Any]) -> bool:
     return any("capt-hook" in (h.get("command") or "") for h in group.get("hooks") or [])
 
 
+def capt_hook_events(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    return {
+        event
+        for event, groups in (json.loads(path.read_text()).get("hooks") or {}).items()
+        if any(is_captain_hook_group(g) for g in groups)
+    }
+
+
 def merge_settings(
     hooks_dir: str, settings_path: Path, from_source: str = DIST_NAME
 ) -> tuple[dict[str, Any], dict[str, str]]:
     new_hooks: dict[str, list[dict[str, Any]]] = generate_settings(hooks_dir, from_source=from_source)["hooks"]
     existing = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     existing_hooks: dict[str, list[dict[str, Any]]] = existing.get("hooks") or {}
+    committed = capt_hook_events(settings_path.parent / "settings.json")
 
     summary: dict[str, str] = {}
     merged_hooks: dict[str, list[dict[str, Any]]] = {}
     for event in sorted(existing_hooks.keys() | new_hooks.keys()):
         foreign = [g for g in existing_hooks.get(event, []) if not is_captain_hook_group(g)]
         old_own = [g for g in existing_hooks.get(event, []) if is_captain_hook_group(g)]
-        fresh_own = new_hooks.get(event, [])
-        if old_own or fresh_own:
+        fresh_own = [] if event in committed else new_hooks.get(event, [])
+        if event in committed and (old_own or new_hooks.get(event)):
+            summary[event] = "deferred"
+        elif old_own or fresh_own:
             summary[event] = (
                 "unchanged"
                 if old_own == fresh_own
@@ -207,6 +220,8 @@ def print_hook_summary(label: str, summary: dict[str, str]) -> None:
         click.echo(f"  - removed {event}")
     if unchanged := by_status["unchanged"]:
         click.echo(f"  unchanged: {', '.join(unchanged)} (already present)")
+    if deferred := by_status["deferred"]:
+        click.echo(f"  deferred to settings.json: {', '.join(deferred)}")
 
 
 def regenerate_settings(state: CliState) -> None:
@@ -218,16 +233,8 @@ def regenerate_settings(state: CliState) -> None:
 
 
 def settings_drift(root: Path) -> set[str]:
-    settings = [p for name in ("settings.json", "settings.local.json") if (p := root / ".claude" / name).exists()]
-    if not settings:
-        return set()
-    wired = {
-        event
-        for path in settings
-        for event, groups in (json.loads(path.read_text()).get("hooks") or {}).items()
-        if any(is_captain_hook_group(g) for g in groups)
-    }
-    return subscribed_events() - wired
+    paths = [p for name in ("settings.json", "settings.local.json") if (p := root / ".claude" / name).exists()]
+    return subscribed_events() - {event for p in paths for event in capt_hook_events(p)} if paths else set()
 
 
 def warn_settings_drift(

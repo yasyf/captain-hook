@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.1] - 2026-06-17
+
+### Changed
+- `capt-hook init` and `capt-hook review enable` now defer to a committed
+  `.claude/settings.json`. Events (and the `review run` hook) already wired there
+  are not duplicated into `.claude/settings.local.json`, so running either in a
+  repo with committed capt-hook hooks no longer double-fires. `init` reports the
+  deferred events.
+
 ## [3.3.0] - 2026-06-17
 
 ### Added
