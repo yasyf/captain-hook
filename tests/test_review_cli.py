@@ -11,6 +11,7 @@ from click.testing import CliRunner
 
 from captain_hook.cli import cli, generate_settings
 from captain_hook.review.cli import REVIEW_RUN_COMMAND, STATUS_CHOICES
+from captain_hook.tests.helpers import run_cli
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import CandidateKind, CandidateStatus, ReviewStore
@@ -118,6 +119,11 @@ class TestEnableDisable:
         commands = [entry["command"] for group in data["hooks"]["SessionEnd"] for entry in group["hooks"]]
         assert commands == [f"uvx {REVIEW_RUN_COMMAND}"]
 
+    def test_enable_installs_brain_skills(self, git_repo: Path) -> None:
+        assert invoke("enable", root=git_repo).exit_code == 0
+        for name in ("scanning-sessions", "authoring-hooks", "bootstrapping-hooks", "translating-styleguides"):
+            assert (git_repo / ".claude" / "skills" / name / "SKILL.md").is_file()
+
     def test_enable_twice_is_idempotent_and_preserves_foreign_settings(self, git_repo: Path) -> None:
         settings_path = git_repo / ".claude" / "settings.local.json"
         settings_path.parent.mkdir(parents=True)
@@ -145,6 +151,31 @@ class TestEnableDisable:
         result = invoke("enable", root=tmp_path)
         assert result.exit_code != 0
         assert "not inside a git repository" in result.output
+
+
+class TestJudgeDefault:
+    def test_judge_tier_ships_medium(self) -> None:
+        assert ReviewSettings.model_fields["judge_tier"].default == "medium"
+
+
+class TestInitEnablesReviewer:
+    def test_init_watches_and_installs_for_git_repo(self, git_repo: Path) -> None:
+        result = run_cli("init", root_dir=str(git_repo))
+        assert result.returncode == 0, result.stderr
+        assert asyncio.run(repo_watching(GIT_REPO_KEY)) is True
+        assert f"watching {GIT_REPO_KEY}" in result.stdout
+        assert (git_repo / ".claude" / "skills" / "scanning-sessions" / "SKILL.md").is_file()
+
+    def test_init_no_review_does_not_watch(self, git_repo: Path) -> None:
+        result = run_cli("init", "--no-review", root_dir=str(git_repo))
+        assert result.returncode == 0, result.stderr
+        assert asyncio.run(repo_watching(GIT_REPO_KEY)) is False
+        assert "--no-review" in result.stdout
+
+    def test_init_outside_git_skips_review(self, tmp_path: Path) -> None:
+        result = run_cli("init", root_dir=str(tmp_path))
+        assert result.returncode == 0, result.stderr
+        assert "needs a git repo" in result.stdout
 
 
 class TestScanAndTriage:

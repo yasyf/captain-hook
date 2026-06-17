@@ -20,7 +20,7 @@ from captain_hook.review.settings import ReviewSettings
         pytest.param("min_days_fix", 0, id="min_days_fix"),
         pytest.param("min_confidence_fix", MEDIUM, id="min_confidence_fix"),
         pytest.param("min_confidence_fix_single", VERY_HIGH, id="min_confidence_fix_single"),
-        pytest.param("judge_tier", "small", id="judge_tier"),
+        pytest.param("judge_tier", "medium", id="judge_tier"),
         pytest.param("judge_concurrency", 8, id="judge_concurrency"),
         pytest.param("judge_timeout", 180, id="judge_timeout"),
         pytest.param("min_judge_confidence", 0.6, id="min_judge_confidence"),

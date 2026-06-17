@@ -71,6 +71,18 @@ def ensure_review_wiring(settings_path: Path) -> bool:
     return True
 
 
+def watch_repo(repo: RepoKey) -> None:
+    """Flip the global watching bit for ``repo`` — the single persistence path shared by ``init`` and ``review enable``."""
+    from captain_hook.review.settings import ReviewSettings
+    from captain_hook.review.store import ReviewStore
+
+    async def go() -> None:
+        async with await ReviewStore.open(ReviewSettings().db_path) as store:
+            await store.enable(repo)
+
+    asyncio.run(go())
+
+
 def candidate_line(row: dict[str, object]) -> str:
     text = str(row["sample_text"] or "").replace("\n", " ")
     return (
@@ -106,17 +118,12 @@ def spawn(transcript: Path, cwd: str | None) -> None:
 @review.command()
 @click.pass_obj
 def enable(state: CliState) -> None:
-    """Watch the current repo and wire the SessionEnd reviewer hook."""
-    from captain_hook.review.settings import ReviewSettings
-    from captain_hook.review.store import ReviewStore
+    """Watch the current repo, install the reviewer's skills, and wire the SessionEnd hook."""
+    from captain_hook.cli import install_skills
 
     repo = current_repo(state.root)
-
-    async def go() -> None:
-        async with await ReviewStore.open(ReviewSettings().db_path) as store:
-            await store.enable(repo)
-
-    asyncio.run(go())
+    watch_repo(repo)
+    install_skills(state.root)
     wired = ensure_review_wiring(state.root / ".claude" / "settings.local.json")
     click.echo(f"watching {repo}" + (" (SessionEnd hook wired into .claude/settings.local.json)" if wired else ""))
 

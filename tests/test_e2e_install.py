@@ -60,6 +60,7 @@ class TestInit:
         assert "capt-hook test" in result.stdout
         assert "capt-hook register-hooks" in result.stdout
         assert "Scaffolded" in result.stdout
+        assert "Session reviewer:" in result.stdout
 
     def test_init_merge_preserves_existing_hook_entries(self, tmp_path: Path) -> None:
         settings_dir = tmp_path / ".claude"

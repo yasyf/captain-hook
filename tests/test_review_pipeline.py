@@ -293,7 +293,7 @@ class TestJudgePass:
         assert len(calls) == 2
         judged = await store.judged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION)
         assert {bool(row["accepted"]) for row in judged} == {True}
-        assert {str(row["model"]) for row in judged} == {"haiku"}
+        assert {str(row["model"]) for row in judged} == {"sonnet"}
         assert await judge_pass(store, settings=settings) == JudgeReport(judged=0, failed=0, pending=0)
         assert len(calls) == 2
 
@@ -326,7 +326,7 @@ class TestJudgePass:
         assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
         assert len(calls) == 1
         assert "structural junk" not in calls[0]
-        unjudged = await store.unjudged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION, model="haiku")
+        unjudged = await store.unjudged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION, model="sonnet")
         assert [row["text"] for row in unjudged] == ["structural junk"]
 
     async def test_failed_judge_leaves_row_unjudged_for_retry(

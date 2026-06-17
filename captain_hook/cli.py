@@ -196,17 +196,17 @@ def print_hook_summary(label: str, summary: dict[str, str]) -> None:
     by_status: defaultdict[str, list[str]] = defaultdict(list)
     for event, status in summary.items():
         by_status[status].append(event)
-    print(f"{label}:")
+    click.echo(f"{label}:")
     if not summary:
-        print("  no hook entries")
+        click.echo("  no hook entries")
     for event in by_status["added"]:
-        print(f"  + added {event}")
+        click.echo(f"  + added {event}")
     for event in by_status["updated"]:
-        print(f"  ~ updated {event}")
+        click.echo(f"  ~ updated {event}")
     for event in by_status["removed"]:
-        print(f"  - removed {event}")
+        click.echo(f"  - removed {event}")
     if unchanged := by_status["unchanged"]:
-        print(f"  unchanged: {', '.join(unchanged)} (already present)")
+        click.echo(f"  unchanged: {', '.join(unchanged)} (already present)")
 
 
 def regenerate_settings(state: CliState) -> None:
@@ -303,13 +303,15 @@ def run_event(
         print(json.dumps(output))
 
 
-def init_project(root: Path) -> None:
+def init_project(root: Path, *, review: bool = True) -> None:
+    from captain_hook.review.cli import watch_repo
+    from captain_hook.review.repo import repo_key
+
     hooks_dir = root / ".claude" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
 
     example = hooks_dir / "example.py"
-    example_created = not example.exists()
-    if example_created:
+    if not example.exists():
         example.write_text(example_hook_source())
 
     settings_path = root / ".claude" / "settings.local.json"
@@ -319,23 +321,33 @@ def init_project(root: Path) -> None:
 
     skills_summary = install_skills(root)
 
-    print(f"Scaffolded {example.relative_to(root)} + {settings_path.relative_to(root)}.")
-    print()
+    click.echo(f"Scaffolded {example.relative_to(root)} + {settings_path.relative_to(root)}.")
+    click.echo()
     print_hook_summary(str(settings_path.relative_to(root)), summary)
-    print()
-    print(".claude/skills/:")
+    click.echo()
+    click.echo(".claude/skills/:")
     for name in (n for n, status in skills_summary.items() if status == "installed"):
-        print(f"  + installed {name}")
+        click.echo(f"  + installed {name}")
     if skipped := [n for n, status in skills_summary.items() if status == "skipped"]:
-        print(f"  unchanged: {', '.join(skipped)} (already present; capt-hook skills install --force to refresh)")
-    print()
-    print("Next:")
-    print("  1. Read the quickstart: https://yasyf.github.io/captain-hook/")
-    print("  2. Edit example.py or add new files under .claude/hooks/")
-    print("  3. uvx capt-hook test       # verify inline tests")
-    print("  4. uvx capt-hook register-hooks    # re-register after adding events")
-    print("  5. /bootstrapping-hooks in Claude  # mine hooks from this repo's conventions")
-    print()
+        click.echo(f"  unchanged: {', '.join(skipped)} (already present; capt-hook skills install --force to refresh)")
+    click.echo()
+    match (review, repo_key(root)):
+        case (False, _):
+            click.echo("Session reviewer: skipped (--no-review) — `uvx capt-hook review enable` to turn it on later.")
+        case (True, None):
+            click.echo("Session reviewer: needs a git repo with a remote — `uvx capt-hook review enable` once it has one.")
+        case (True, repo):
+            watch_repo(repo)
+            click.echo(f"Session reviewer: watching {repo} — mines your ended sessions and opens hook PRs automatically.")
+            click.echo("  Stop anytime with `uvx capt-hook review disable`.")
+    click.echo()
+    click.echo("Next:")
+    click.echo("  1. Read the quickstart: https://yasyf.github.io/captain-hook/")
+    click.echo("  2. Edit example.py or add new files under .claude/hooks/")
+    click.echo("  3. uvx capt-hook test               # verify inline tests")
+    click.echo("  4. uvx capt-hook register-hooks     # re-register after adding events")
+    click.echo('  5. Ask Claude "set up captain hook" # mine guardrails from this repo (the bootstrapping-hooks skill)')
+    click.echo()
     maybe_launch_bootstrap(root)
 
 
@@ -493,10 +505,11 @@ def test(state: CliState, json_output: bool) -> None:
 
 
 @cli.command()
+@click.option("--no-review", is_flag=True, default=False, help="Skip enabling the SessionEnd session reviewer for this repo")
 @click.pass_obj
-def init(state: CliState) -> None:
-    """Scaffold the hooks directory, install bundled skills, and wire settings."""
-    init_project(state.root)
+def init(state: CliState, no_review: bool) -> None:
+    """Scaffold the hooks directory, install bundled skills, wire settings, and enable the session reviewer."""
+    init_project(state.root, review=not no_review)
 
 
 @cli.command()
