@@ -6,6 +6,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-06-17
+
+### Added
+- Turnkey session reviewer. `capt-hook init` now enables the SessionEnd reviewer
+  for the current repo — it installs the reviewer skills, wires the `review run`
+  hook, and starts watching — so one command leaves the repo mining ended
+  sessions into hook PRs. Opt out with `capt-hook init --no-review`, or stop a
+  watched repo with `capt-hook review disable`. Outside a git repo, `init` skips
+  the reviewer with a hint instead of failing.
+- `capt-hook review enable` now also vendors the reviewer's skills
+  (`scanning-sessions`, `authoring-hooks`) into `.claude/skills/`, so arming an
+  existing repo is a single command.
+- The `bootstrapping-hooks` skill is the turnkey "set up captain hook" front
+  door: it scaffolds with `init` (or, in repos with a committed `settings.json`,
+  runs `review enable` to avoid double-firing) up front, then surveys the repo
+  and proposes guardrails.
+
+### Changed
+- The shipped judge tier default moves `small` → `medium` (Sonnet), for better
+  correction mining out of the box. Override with `HOOKS_REVIEW_JUDGE_TIER`.
+- `capt-hook init` output is friendlier and names what it armed, including the
+  session reviewer and how to disable it.
+
 ## [3.2.0] - 2026-06-16
 
 ### Added
