@@ -1,6 +1,6 @@
 ---
 name: bootstrapping-hooks
-description: Surveys a repository and sets up captain-hook (capt-hook) guardrails for Claude Code — blocking gates, advisory nudges, command blocks, and test-integrity checks mined from the repo's own docs, CI workflows, lint configs, and git history. Proposes categorized candidates for user approval before writing anything, then writes .claude/hooks/*.py with inline tests, verifies with capt-hook test, and wires .claude/settings.local.json. Use when the user asks to "set up hooks", "bootstrap capt-hook", "add guardrails", "enforce our conventions with hooks", "protect this repo", or "make Claude follow CONTRIBUTING.md".
+description: Surveys a repository and sets up captain-hook (capt-hook) guardrails for Claude Code — blocking gates, advisory nudges, command blocks, and test-integrity checks mined from the repo's own docs, CI workflows, lint configs, and git history. Scaffolds the framework and enables the session reviewer up front (Step 1), then proposes categorized candidates for user approval before writing anything, then writes .claude/hooks/*.py with inline tests, verifies with capt-hook test, and wires .claude/settings.local.json. Use when the user asks to "set up captain hook", "set up capt-hook", "set up hooks", "bootstrap capt-hook", "add guardrails", "enforce our conventions with hooks", "protect this repo", or "make Claude follow CONTRIBUTING.md".
 argument-hint: "[repo path] (defaults to current project)"
 allowed-tools: Read, Grep, Glob, AskUserQuestion, Write, Edit, Bash(uvx capt-hook:*, capt-hook:*, git log:*, git diff:*, ls:*, find:*)
 ---
@@ -29,28 +29,41 @@ Copy this checklist into your response and check off steps as you complete them:
 
 ```
 Bootstrap Progress:
-- [ ] Step 1: Locate + pre-flight (.claude/hooks, settings)
+- [ ] Step 1: Locate + scaffold (init or review enable) + pre-flight
 - [ ] Step 2: Survey the repo (docs, CI, lint configs, git log)
 - [ ] Step 3: Mine candidates onto the taxonomy
 - [ ] Step 4: Propose via AskUserQuestion — nothing written before approval
-- [ ] Step 5: Scaffold (uvx capt-hook init)
+- [ ] Step 5: Clear the demo example.py (scaffolding ran in Step 1)
 - [ ] Step 6: Draft approved hooks via authoring-hooks, one file per category
 - [ ] Step 7: Verify (uvx capt-hook test, fix until green)
 - [ ] Step 8: Wire settings (register-hooks if new events)
 - [ ] Step 9: Final report (table + declined list)
 ```
 
-### 1. Locate + pre-flight
+### 1. Locate + scaffold + pre-flight
 
-Resolve the target repo (argument path, else current project). Run:
+Resolve the target repo (argument path, else current project). Inspect what's already wired:
 
 ```bash
 ls .claude/hooks/ 2>/dev/null
+grep -lq 'capt-hook' .claude/settings.json 2>/dev/null && echo COMMITTED || echo FRESH
 ```
 
-Read `.claude/settings.local.json` and `.claude/settings.json` if present. If capt-hook hooks
-already exist, switch to **additive mode**: never overwrite existing hook files; new categories
-go in new files, and the Step 4 menu only offers candidates not already covered.
+Then scaffold up front, so the framework and the session reviewer are live before you propose
+anything — pick the command by what you found:
+
+- **FRESH** (no committed capt-hook wiring) — run `uvx capt-hook init`. It scaffolds
+  `.claude/hooks/`, wires `.claude/settings.local.json`, installs the skills, and **enables the
+  session reviewer** (watching this repo; it mines ended sessions and opens hook PRs —
+  `uvx capt-hook review disable` to stop).
+- **COMMITTED** (a checked-in `.claude/settings.json` already runs `uvx capt-hook run …`) — do
+  **not** run `init`; it would duplicate those hooks into `settings.local.json` and double-fire.
+  Run `uvx capt-hook review enable` instead — it installs the reviewer skills and arms the session
+  reviewer without touching the committed event hooks.
+
+Read `.claude/settings.local.json` and `.claude/settings.json`. If capt-hook hooks already exist,
+switch to **additive mode**: never overwrite existing hook files; new categories go in new files,
+and the Step 4 menu only offers candidates not already covered.
 
 ### 2. Survey the repo
 
@@ -99,17 +112,11 @@ and the proposed primitive + severity. Then one final severity question:
 If a styleguide-like markdown was found, category E is a single option: **"Translate `<file>`
 into enforced style rules (runs the translating-styleguides skill)"**.
 
-### 5. Scaffold
+### 5. Clear the demo example.py
 
-Run:
-
-```bash
-uvx capt-hook init
-```
-
-This creates `.claude/hooks/example.py` (only when absent) and merges capt-hook entries into
-`.claude/settings.local.json`. If this run created the demo `example.py`, delete it after
-writing the real hooks — the approved hooks replace it.
+Scaffolding already ran in Step 1. If that `init` created the demo `.claude/hooks/example.py`,
+delete it once you've drafted the real hooks (Step 6) — the approved hooks replace it. (In
+**COMMITTED** repos `review enable` writes no `example.py`, so there's nothing to clear.)
 
 ### 6. Write hooks
 
@@ -168,7 +175,9 @@ Declined: <candidates the user rejected, with their source quotes>
 ```
 
 Close with next steps: `uvx capt-hook logs --tail 50` to inspect live firings, and tune
-`max_fires` on any hook that nags.
+`max_fires` on any hook that nags. Note that Step 1 also armed the **session reviewer** — it now
+watches this repo, mines your ended sessions for durable corrections, and opens hook PRs
+automatically; `uvx capt-hook review disable` turns it off.
 
 ## Worked mini-example
 
