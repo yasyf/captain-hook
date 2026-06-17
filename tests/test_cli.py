@@ -272,6 +272,42 @@ class TestMergeSettings:
         assert sp.read_text() == first
         assert set(summary2.values()) == {"unchanged"}
 
+    def test_cli_029_defers_events_wired_in_committed_settings(self, tmp_path: Path) -> None:
+        from captain_hook.cli import merge_settings
+
+        register_hook(Event.PreToolUse, message="pre")
+        register_hook(Event.Stop, message="stop")
+        committed = 'env -u UV_EXCLUDE_NEWER uv run --project "$CLAUDE_PROJECT_DIR" capt-hook run {}'
+        self.seed(
+            tmp_path / "settings.json",
+            {event: [{"hooks": [{"type": "command", "command": committed.format(event)}]}] for event in ("PreToolUse", "Stop")},
+        )
+
+        merged, summary = merge_settings(".claude/hooks", tmp_path / "settings.local.json")
+        assert "PreToolUse" not in merged["hooks"]
+        assert "Stop" not in merged["hooks"]
+        assert "SessionEnd" in merged["hooks"]
+        assert summary["PreToolUse"] == "deferred"
+        assert summary["Stop"] == "deferred"
+        assert summary["SessionEnd"] == "added"
+
+    def test_cli_030_strips_local_duplicate_of_committed(self, tmp_path: Path) -> None:
+        from captain_hook.cli import merge_settings
+
+        register_hook(Event.PreToolUse, message="pre")
+        self.seed(
+            tmp_path / "settings.json",
+            {"PreToolUse": [{"hooks": [{"type": "command", "command": "uvx capt-hook run PreToolUse"}]}]},
+        )
+        sp = tmp_path / "settings.local.json"
+        foreign = {"matcher": "Bash", "hooks": [{"type": "command", "command": "my-tool"}]}
+        dup = {"hooks": [{"type": "command", "command": "uvx capt-hook run PreToolUse"}]}
+        self.seed(sp, {"PreToolUse": [foreign, dup]})
+
+        merged, summary = merge_settings(".claude/hooks", sp)
+        assert merged["hooks"]["PreToolUse"] == [foreign]
+        assert summary["PreToolUse"] == "deferred"
+
 
 class TestSettingsDrift:
     @staticmethod
@@ -315,6 +351,18 @@ class TestSettingsDrift:
         from captain_hook.cli import settings_drift
 
         register_hook(Event.UserPromptSubmit, message="ups")
+        assert settings_drift(tmp_path) == set()
+
+    def test_cli_031_no_drift_when_committed_covers_omitted_events(self, tmp_path: Path) -> None:
+        from captain_hook.cli import settings_drift
+
+        register_hook(Event.PreToolUse, message="pre")
+        register_hook(Event.Stop, message="stop")
+        register_hook(Event.PostToolUse, message="post")
+        self.write_settings(tmp_path, "PreToolUse", "Stop")
+        (tmp_path / ".claude" / "settings.local.json").write_text(
+            json.dumps({"hooks": {"PostToolUse": [{"hooks": [{"type": "command", "command": "uvx capt-hook run PostToolUse"}]}]}})
+        )
         assert settings_drift(tmp_path) == set()
 
     def test_cli_020_run_surfaces_drift_to_agent_once(self, tmp_path: Path) -> None:

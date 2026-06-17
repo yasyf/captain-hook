@@ -29,7 +29,7 @@ Copy this checklist into your response and check off steps as you complete them:
 
 ```
 Bootstrap Progress:
-- [ ] Step 1: Locate + scaffold (init or review enable) + pre-flight
+- [ ] Step 1: Locate + scaffold (init) + pre-flight
 - [ ] Step 2: Survey the repo (docs, CI, lint configs, git log)
 - [ ] Step 3: Mine candidates onto the taxonomy
 - [ ] Step 4: Propose via AskUserQuestion — nothing written before approval
@@ -50,16 +50,12 @@ grep -lq 'capt-hook' .claude/settings.json 2>/dev/null && echo COMMITTED || echo
 ```
 
 Then scaffold up front, so the framework and the session reviewer are live before you propose
-anything — pick the command by what you found:
-
-- **FRESH** (no committed capt-hook wiring) — run `uvx capt-hook init`. It scaffolds
-  `.claude/hooks/`, wires `.claude/settings.local.json`, installs the skills, and **enables the
-  session reviewer** (watching this repo; it mines ended sessions and opens hook PRs —
-  `uvx capt-hook review disable` to stop).
-- **COMMITTED** (a checked-in `.claude/settings.json` already runs `uvx capt-hook run …`) — do
-  **not** run `init`; it would duplicate those hooks into `settings.local.json` and double-fire.
-  Run `uvx capt-hook review enable` instead — it installs the reviewer skills and arms the session
-  reviewer without touching the committed event hooks.
+anything. Run `uvx capt-hook init` in every repo. It scaffolds `.claude/hooks/`,
+wires `.claude/settings.local.json`, installs the skills, and **enables the session reviewer**
+(watching this repo; it mines ended sessions and opens hook PRs — `uvx capt-hook review disable`
+to stop). In a **COMMITTED** repo (a checked-in `.claude/settings.json` already runs
+`uvx capt-hook run …`), `init` defers those events to the committed file instead of re-wiring
+them locally. It prints `deferred to settings.json: …` and never double-fires.
 
 Read `.claude/settings.local.json` and `.claude/settings.json`. If capt-hook hooks already exist,
 switch to **additive mode**: never overwrite existing hook files; new categories go in new files,
@@ -115,8 +111,9 @@ into enforced style rules (runs the translating-styleguides skill)"**.
 ### 5. Clear the demo example.py
 
 Scaffolding already ran in Step 1. If that `init` created the demo `.claude/hooks/example.py`,
-delete it once you've drafted the real hooks (Step 6) — the approved hooks replace it. (In
-**COMMITTED** repos `review enable` writes no `example.py`, so there's nothing to clear.)
+delete it once you've drafted the real hooks (Step 6) — the approved hooks replace it. (In a repo
+that already had its own `.claude/hooks/`, `init` leaves those files untouched and only adds
+`example.py` if it was absent; clear it the same way.)
 
 ### 6. Write hooks
 
