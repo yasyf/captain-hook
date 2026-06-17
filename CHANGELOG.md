@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.2] - 2026-06-17
+
+### Changed
+- The `bootstrapping-hooks` skill now runs `capt-hook init` in every repo,
+  including those with a committed `.claude/settings.json`. 3.3.1 made `init`
+  defer to the committed file instead of double-firing, so the skill no longer
+  routes committed repos through `review enable`.
+
 ## [3.3.1] - 2026-06-17
 
 ### Changed
