@@ -17,7 +17,7 @@ from captain_hook import (
 block_command(
     ["git", "stash"],
     reason="git stash is not allowed",
-    hint="Commit your changes to a branch instead",
+    hint="In a jj repo you never need to stash — the working copy is commit @; use `jj new` to set it aside or `jj rebase` directly (no clean tree required). In plain git, commit your changes to a branch",
     tests={
         Input(command="git stash"): Block(),
         Input(command="git stash pop"): Block(),
