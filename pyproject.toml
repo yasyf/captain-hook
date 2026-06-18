@@ -28,6 +28,7 @@ dependencies = [
     "funcy>=2.0",
     "spacy>=3.7",
     "click>=8",
+    "rich>=13",
     "orjsonl>=1.0",
     "wn>=1.1.0",
     "lazy-object-proxy>=1.12.0",

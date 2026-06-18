@@ -527,6 +527,18 @@ def logs(session: str | None, tail: int | None) -> None:
     show_logs(session=session, tail=tail)
 
 
+@cli.command()
+@click.option("--repo", "repo_", default=None, help="Repo key (default: the current repo)")
+@click.option("--sync/--no-sync", default=True, help="Refresh open PR states from GitHub in the background")
+@click.pass_obj
+def status(state: CliState, repo_: str | None, sync: bool) -> None:
+    """Show the corrections the session reviewer is tracking and the hook PRs they would open."""
+    from captain_hook.review.cli import resolve_repo
+    from captain_hook.review.dashboard import status_command
+
+    status_command(resolve_repo(repo_, state.root), sync=sync)
+
+
 @cli.group()
 def skills() -> None:
     """Manage the bundled Claude Code skills."""

@@ -113,6 +113,22 @@ SELECT c.*,
 FROM candidates c
 """
 
+PR_SUMMARY_QUERY = """
+WITH latest AS (
+  SELECT v.dedup_key, v.{accepted} AS accepted, v.{summary} AS summary, v.confidence, ROW_NUMBER() OVER (
+    PARTITION BY v.dedup_key ORDER BY v.judged_at DESC, v.id DESC
+  ) AS rn
+  FROM {table} v
+  WHERE v.role = 'judge' AND v.prompt_version = ?
+)
+SELECT l.summary AS summary
+FROM candidate_observations o
+JOIN latest l ON l.dedup_key = o.dedup_key AND l.rn = 1
+WHERE o.candidate_id = ? AND l.accepted = 1 AND l.confidence >= ?
+ORDER BY l.confidence DESC, o.id DESC
+LIMIT 1
+"""
+
 
 class InvalidTransition(Exception):
     """Raised when a candidate status move is outside :data:`TRANSITIONS`."""
@@ -173,6 +189,47 @@ class ThresholdStatus:
     days: int
     open_prs: int
     single_observation: bool
+
+
+def crosses_thresholds(status: ThresholdStatus, *, settings: ReviewSettings) -> bool:
+    """Whether a candidate's judge-accepted evidence clears its kind's PR thresholds.
+
+    The single eligibility predicate, shared by :meth:`ReviewStore.eligible` and
+    the status dashboard so a candidate shown as eligible is exactly one the
+    reviewer would act on. Create candidates need ``min_sessions`` distinct
+    judge-accepted sessions across ``min_days`` distinct UTC days; fix candidates
+    need the ``min_sessions_fix``/``min_days_fix`` pair or one observation that is
+    both judge-accepted and heuristically at least ``min_confidence_fix_single``.
+    Both require the repo watched and a free slot under ``max_open_prs``.
+    """
+    if status.status != CandidateStatus.WATCHING or not status.watching or status.open_prs >= settings.max_open_prs:
+        return False
+    match status.kind:
+        case CandidateKind.CREATE:
+            return status.sessions >= settings.min_sessions and status.days >= settings.min_days
+        case CandidateKind.FIX:
+            return (
+                status.sessions >= settings.min_sessions_fix and status.days >= settings.min_days_fix
+            ) or status.single_observation
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateView:
+    """One candidate's full dashboard record: its row, evidence counts, eligibility, and the PR it would open.
+
+    Attributes:
+        row: The :meth:`ReviewStore.candidates` row (status, kind, ``pr_url``,
+            ``sample_text``, ``observations``, and the fix targets).
+        threshold: The judge-accepted evidence counts behind the eligibility call.
+        eligible: Whether :func:`crosses_thresholds` accepts ``threshold``.
+        summary: The highest-confidence accepted verdict's one-sentence summary —
+            what the candidate's PR would do — or ``None`` while still unjudged.
+    """
+
+    row: dict[str, object]
+    threshold: ThresholdStatus
+    eligible: bool
+    summary: str | None
 
 
 class ReviewStore(VerdictStoreMixin, FeedbackStore):
@@ -411,25 +468,64 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
     async def eligible(self, candidate_id: int, *, settings: ReviewSettings, prompt_version: int) -> bool:
         """Returns whether a candidate's judge-accepted evidence crosses its thresholds.
 
-        Create candidates need ``min_sessions`` distinct judge-accepted sessions
-        across ``min_days`` distinct UTC days. Fix candidates need the
-        ``min_sessions_fix``/``min_days_fix`` pair, or one observation that is
-        both judge-accepted and heuristically at least
-        ``min_confidence_fix_single``. Both kinds require the repo watched and a
-        free slot under ``max_open_prs``.
+        Delegates to :func:`crosses_thresholds` over the candidate's
+        :meth:`threshold_status`, so the dashboard and the reviewer agree on what
+        is eligible.
 
         Args:
             candidate_id: The candidate to check.
             settings: The thresholds and judge knobs to check under.
             prompt_version: The judge prompt version whose verdicts apply.
         """
-        status = await self.threshold_status(candidate_id, settings=settings, prompt_version=prompt_version)
-        if status.status != CandidateStatus.WATCHING or not status.watching or status.open_prs >= settings.max_open_prs:
-            return False
-        match status.kind:
-            case CandidateKind.CREATE:
-                return status.sessions >= settings.min_sessions and status.days >= settings.min_days
-            case CandidateKind.FIX:
-                return (
-                    status.sessions >= settings.min_sessions_fix and status.days >= settings.min_days_fix
-                ) or status.single_observation
+        return crosses_thresholds(
+            await self.threshold_status(candidate_id, settings=settings, prompt_version=prompt_version),
+            settings=settings,
+        )
+
+    async def pr_summary(self, candidate_id: int, *, settings: ReviewSettings, prompt_version: int) -> str | None:
+        """Returns the candidate's most-confident accepted verdict summary — what its PR would do.
+
+        Reads the same judge-accepted observations the thresholds count and
+        returns the highest-confidence verdict's one-sentence summary, or ``None``
+        while no observation is judged-accepted yet.
+
+        Args:
+            candidate_id: The candidate to describe.
+            settings: The judge knobs supplying ``min_judge_confidence``.
+            prompt_version: The judge prompt version whose verdicts apply.
+        """
+        cur = await self.store.conn.execute(
+            PR_SUMMARY_QUERY.format(
+                table=self.VERDICT_TABLE, accepted=self.ACCEPTED_COLUMN, summary=self.SUMMARY_COLUMN
+            ),
+            (prompt_version, candidate_id, settings.min_judge_confidence),
+        )
+        return str(rows[0]["summary"]) if (rows := [dict(row) async for row in cur]) else None
+
+    async def candidate_view(
+        self, row: dict[str, object], *, settings: ReviewSettings, prompt_version: int
+    ) -> CandidateView:
+        """Assembles one :class:`CandidateView` from a :meth:`candidates` row."""
+        candidate_id = int(str(row["id"]))
+        threshold = await self.threshold_status(candidate_id, settings=settings, prompt_version=prompt_version)
+        return CandidateView(
+            row=row,
+            threshold=threshold,
+            eligible=crosses_thresholds(threshold, settings=settings),
+            summary=await self.pr_summary(candidate_id, settings=settings, prompt_version=prompt_version),
+        )
+
+    async def overview(
+        self, repo: RepoKey | None = None, *, settings: ReviewSettings, prompt_version: int
+    ) -> list[CandidateView]:
+        """Returns a :class:`CandidateView` per candidate — the status dashboard's whole read.
+
+        Args:
+            repo: When set, restrict to this repo.
+            settings: The thresholds and judge knobs to evaluate under.
+            prompt_version: The judge prompt version whose verdicts apply.
+        """
+        return [
+            await self.candidate_view(row, settings=settings, prompt_version=prompt_version)
+            for row in await self.candidates(repo)
+        ]

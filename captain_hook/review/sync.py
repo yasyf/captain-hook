@@ -8,6 +8,7 @@ skipped so the detached child never dies on it.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 from collections import Counter
@@ -75,9 +76,11 @@ async def sync_open_prs(store: ReviewStore, repo: RepoKey, *, settings: ReviewSe
         The pass's transition counts.
     """
     counts: Counter[str] = Counter()
-    for row in await store.candidates(repo, status=CandidateStatus.PR_OPEN):
+    rows = await store.candidates(repo, status=CandidateStatus.PR_OPEN)
+    states = await asyncio.gather(*(asyncio.to_thread(gh_pr_state, str(row["pr_url"])) for row in rows))
+    for row, state in zip(rows, states, strict=True):
         candidate_id, url = int(str(row["id"])), str(row["pr_url"])
-        match gh_pr_state(url):
+        match state:
             case "MERGED":
                 await store.transition(candidate_id, CandidateStatus.ACCEPTED)
                 counts["accepted"] += 1

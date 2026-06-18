@@ -198,6 +198,17 @@ def triage(limit: int | None) -> None:
     click.echo(f"judged {report.judged}, failed {report.failed}, pending {report.pending}")
 
 
+@review.command(name="status")
+@click.option("--repo", "repo_", default=None, help="Repo key (default: the current repo)")
+@click.option("--sync/--no-sync", default=True, help="Refresh open PR states from GitHub in the background")
+@click.pass_obj
+def status(state: CliState, repo_: str | None, sync: bool) -> None:
+    """Show the tracked corrections, their progress toward a PR, and open PR status."""
+    from captain_hook.review.dashboard import status_command
+
+    status_command(resolve_repo(repo_, state.root), sync=sync)
+
+
 @review.command(name="list")
 @click.option("--repo", "repo_", default=None, help="Repo key (default: the current repo)")
 @click.pass_obj

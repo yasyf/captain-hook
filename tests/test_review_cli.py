@@ -97,6 +97,7 @@ class TestGroupSurface:
             "disable",
             "scan",
             "triage",
+            "status",
             "list",
             "show",
             "threshold-check",

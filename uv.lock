@@ -6,9 +6,6 @@ resolution-markers = [
     "python_full_version < '3.14'",
 ]
 
-[options]
-exclude-newer = "2026-06-16T14:25:05Z"
-
 [[package]]
 name = "aiosqlite"
 version = "0.22.1"
@@ -248,6 +245,7 @@ dependencies = [
     { name = "orjsonl" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "rich" },
     { name = "spacy" },
     { name = "spawnllm" },
     { name = "tree-sitter" },
@@ -285,6 +283,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6" },
+    { name = "rich", specifier = ">=13" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "spacy", specifier = ">=3.7" },
     { name = "spawnllm", specifier = ">=0.1.3" },
