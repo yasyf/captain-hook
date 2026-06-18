@@ -29,7 +29,7 @@ def expected_repo(sandbox: Sandbox) -> str:
 
 
 def settings_path(sandbox: Sandbox) -> Path:
-    return sandbox.repo / ".claude" / "settings.local.json"
+    return sandbox.repo / ".claude" / "settings.json"
 
 
 def wired_commands(sandbox: Sandbox) -> list[str]:

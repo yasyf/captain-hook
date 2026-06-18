@@ -60,7 +60,7 @@ Wrong event. Each primitive picks a default event. `block_command` and a bare `n
 
 Unsatisfiable conditions. An `only_if` is AND, so every condition must match at once. A hook with `only_if=[Tool("Bash"), FilePath("**/*.py")]` never fires, because a Bash command carries no file path. Run `uvx capt-hook --hooks <dir> test` and read the `Input` each test built against your conditions.
 
-Settings not re-wired. After you add or change events, re-register the hooks so Claude Code knows to call your hook. This writes `.claude/settings.local.json` for you, merging non-destructively with what's already there.
+Settings not re-wired. After you add or change events, re-register the hooks so Claude Code knows to call your hook. This writes `.claude/settings.json` for you, merging non-destructively with what's already there.
 
 ```bash
 uvx capt-hook --hooks <dir> register-hooks

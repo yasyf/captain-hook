@@ -50,7 +50,7 @@ AUTOFIRE_WAIT = 180
 
 
 def wire_session_end(sandbox: Sandbox, command: str) -> None:
-    path = sandbox.repo / ".claude" / "settings.local.json"
+    path = sandbox.repo / ".claude" / "settings.json"
     path.parent.mkdir(exist_ok=True)
     existing = json.loads(path.read_text()) if path.exists() else {}
     group = {"hooks": [{"type": "command", "command": command}]}

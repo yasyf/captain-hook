@@ -32,7 +32,7 @@ def expected_repo(sandbox: Sandbox) -> str:
 
 
 def session_end_commands(sandbox: Sandbox) -> list[str]:
-    hooks = json.loads((sandbox.repo / ".claude" / "settings.local.json").read_text()).get("hooks") or {}
+    hooks = json.loads((sandbox.repo / ".claude" / "settings.json").read_text()).get("hooks") or {}
     return [
         str(entry.get("command") or "") for group in hooks.get("SessionEnd") or [] for entry in group.get("hooks") or []
     ]

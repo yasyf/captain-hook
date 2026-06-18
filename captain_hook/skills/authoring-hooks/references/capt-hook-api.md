@@ -159,7 +159,7 @@ Glob caveat: patterns match the full relative path. `**/*.py` matches `src/main.
 |---|---|
 | `uvx capt-hook init` | Scaffold `.claude/hooks/example.py` + merge settings entries |
 | `uvx capt-hook test [--json]` | Run all inline tests; exit 1 on failure; `--json` = one record per test |
-| `uvx capt-hook register-hooks [--hooks-dir D] [--dry-run] [--from SRC]` | Merge captain-hook's hooks into `.claude/settings.local.json` and write it (`--dry-run` prints without writing) |
+| `uvx capt-hook register-hooks [--hooks-dir D] [--dry-run] [--from SRC]` | Merge captain-hook's hooks into `.claude/settings.json` and write it (`--dry-run` prints without writing) |
 | `uvx capt-hook run <Event> [--async]` | Dispatch one event (Claude Code calls this, not you) |
 | `uvx capt-hook logs [--session S] [--tail N]` | View a recent capt-hook session log |
 

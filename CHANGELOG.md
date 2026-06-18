@@ -4,7 +4,18 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.7.0] - 2026-06-18
+
+### Changed
+- `capt-hook register-hooks`, `init`, the `pack` commands, and `review enable` now
+  wire captain-hook's hooks into the committed `.claude/settings.json` by default
+  instead of the gitignored `.claude/settings.local.json`, so hook policy is shared
+  and reviewed in version control. The non-destructive merge is symmetric: when an
+  event is already wired in `.claude/settings.local.json` (a per-machine setup), it
+  is deferred there instead of duplicated into the committed file, so hooks never
+  double-fire.
+
+## [3.6.0] - 2026-06-18
 
 ### Added
 - Pack manifests may live at `.claude/capt-hook.toml` (preferred) in addition to

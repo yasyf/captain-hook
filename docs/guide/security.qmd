@@ -38,7 +38,7 @@ resolves, not a copy pinned into your project that silently rots. Upgrades happe
 at the `uvx` layer, where you control them.
 
 Removing the wiring removes captain-hook. Delete the `hooks` block from
-`.claude/settings.local.json` and nothing in your project still references the
+`.claude/settings.json` and nothing in your project still references the
 framework, because nothing in your project ever did.
 
 This isolation is the guarantee. Adding hooks to a repository is reversible and

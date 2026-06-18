@@ -2,7 +2,7 @@
 title: "Project structure and wiring"
 ---
 
-`uvx capt-hook init` already wired your project, scaffolding `.claude/hooks/`, the skills, and the `settings.local.json` that points Claude Code at them.
+`uvx capt-hook init` already wired your project, scaffolding `.claude/hooks/`, the skills, and the `settings.json` that points Claude Code at them.
 
 ## What `init` creates
 
@@ -12,7 +12,7 @@ your-project/
 │   ├── hooks/
 │   │   └── example.py           # the starter hook
 │   ├── skills/                  # bootstrapping-hooks + translating-styleguides
-│   └── settings.local.json      # the wiring (below)
+│   └── settings.json            # the wiring (below)
 ```
 
 Hooks are just Python files under `.claude/hooks/`. An optional `conf.py` beside them holds
@@ -22,7 +22,7 @@ Hooks are just Python files under `.claude/hooks/`. An optional `conf.py` beside
 
 ## The wiring contract
 
-`init` writes the `hooks` block of `.claude/settings.local.json`, and `register-hooks`
+`init` writes the `hooks` block of `.claude/settings.json`, and `register-hooks`
 regenerates it. Each event maps to the one command Claude Code runs:
 
 ```json
@@ -69,7 +69,7 @@ Editing a hook's body needs nothing. The same `uvx capt-hook run` command picks 
 already-wired one, so the event gets its own entry:
 
 ```bash
-uvx capt-hook register-hooks           # writes settings.local.json
+uvx capt-hook register-hooks           # writes settings.json
 uvx capt-hook register-hooks --dry-run # print the merged JSON without writing
 ```
 

@@ -1,6 +1,6 @@
 ---
 name: bootstrapping-hooks
-description: Surveys a repository and sets up captain-hook (capt-hook) guardrails for Claude Code — blocking gates, advisory nudges, command blocks, and test-integrity checks mined from the repo's own docs, CI workflows, lint configs, and git history. Scaffolds the framework and enables the session reviewer up front (Step 1), then proposes categorized candidates for user approval before writing anything, then writes .claude/hooks/*.py with inline tests, verifies with capt-hook test, and wires .claude/settings.local.json. Use when the user asks to "set up captain hook", "set up capt-hook", "set up hooks", "bootstrap capt-hook", "add guardrails", "enforce our conventions with hooks", "protect this repo", or "make Claude follow CONTRIBUTING.md".
+description: Surveys a repository and sets up captain-hook (capt-hook) guardrails for Claude Code — blocking gates, advisory nudges, command blocks, and test-integrity checks mined from the repo's own docs, CI workflows, lint configs, and git history. Scaffolds the framework and enables the session reviewer up front (Step 1), then proposes categorized candidates for user approval before writing anything, then writes .claude/hooks/*.py with inline tests, verifies with capt-hook test, and wires .claude/settings.json. Use when the user asks to "set up captain hook", "set up capt-hook", "set up hooks", "bootstrap capt-hook", "add guardrails", "enforce our conventions with hooks", "protect this repo", or "make Claude follow CONTRIBUTING.md".
 argument-hint: "[repo path] (defaults to current project)"
 allowed-tools: Read, Grep, Glob, AskUserQuestion, Write, Edit, Bash(uvx capt-hook:*, capt-hook:*, git log:*, git diff:*, ls:*, find:*)
 ---
@@ -9,7 +9,7 @@ allowed-tools: Read, Grep, Glob, AskUserQuestion, Write, Edit, Bash(uvx capt-hoo
 
 capt-hook is a declarative hook framework for Claude Code. Hooks are Python files in
 `.claude/hooks/`, dispatched by `uvx capt-hook run <Event>` entries in
-`.claude/settings.local.json`. Each hook carries inline tests —
+`.claude/settings.json`. Each hook carries inline tests —
 `tests={Input(...): Block() | Warn() | Allow()}` — run with `uvx capt-hook test`. Hooks are
 always Python regardless of the target repo's language: conditions like `Command` and
 `FilePath` are language-agnostic; only AST `lint` rules are Python-specific. The full
@@ -51,11 +51,11 @@ grep -lq 'capt-hook' .claude/settings.json 2>/dev/null && echo COMMITTED || echo
 
 Then scaffold up front, so the framework and the session reviewer are live before you propose
 anything. Run `uvx capt-hook init` in every repo. It scaffolds `.claude/hooks/`,
-wires `.claude/settings.local.json`, installs the skills, and **enables the session reviewer**
+wires `.claude/settings.json`, installs the skills, and **enables the session reviewer**
 (watching this repo; it mines ended sessions and opens hook PRs — `uvx capt-hook review disable`
-to stop). In a **COMMITTED** repo (a checked-in `.claude/settings.json` already runs
-`uvx capt-hook run …`), `init` defers those events to the committed file instead of re-wiring
-them locally. It prints `deferred to settings.json: …` and never double-fires.
+to stop). When `.claude/settings.local.json` already runs `uvx capt-hook run …` for some events
+(a per-machine setup), `init` defers those events to the local file instead of duplicating them
+into the committed settings. It prints `deferred to settings.local.json: …` and never double-fires.
 
 Read `.claude/settings.local.json` and `.claude/settings.json`. If capt-hook hooks already exist,
 switch to **additive mode**: never overwrite existing hook files; new categories go in new files,
@@ -154,7 +154,7 @@ after scaffolding). Run:
 uvx capt-hook register-hooks
 ```
 
-`register-hooks` writes `.claude/settings.local.json` directly, merging non-destructively: it
+`register-hooks` writes `.claude/settings.json` directly, merging non-destructively: it
 preserves every non-captain-hook entry, refreshes captain-hook's own, and drops entries for
 events you no longer subscribe to. Add `--dry-run` to print the merged JSON without writing.
 

@@ -9,7 +9,7 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash(uvx capt-hook:*, capt-hook:*,
 
 capt-hook is a declarative hook framework for Claude Code. Hooks are Python files in
 `.claude/hooks/`, dispatched by `uvx capt-hook run <Event>` entries in
-`.claude/settings.local.json`. Each hook carries inline tests —
+`.claude/settings.json`. Each hook carries inline tests —
 `tests={Input(...): Block() | Warn() | Allow()}` — run with `uvx capt-hook test`. This
 skill turns **one durable correction** (the user's verbatim feedback plus the context it
 fired in) into **one new hook file** `.claude/hooks/<slug>.py`. Full API:
@@ -111,7 +111,7 @@ hook.
 ### 5. Wire settings
 
 Only after Step 4 is green, and only when the hook targets an event no existing
-`.claude/settings.local.json` entry dispatches:
+`.claude/settings.json` entry dispatches:
 
 ```bash
 uvx capt-hook register-hooks

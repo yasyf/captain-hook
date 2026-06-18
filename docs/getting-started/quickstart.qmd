@@ -76,7 +76,7 @@ a live model, so they report `SKIP` instead of failing.
 
 ## Next steps
 
-- [Project structure](project-structure.qmd) shows how `.claude/settings.local.json` wires hooks into Claude Code
+- [Project structure](project-structure.qmd) shows how `.claude/settings.json` wires hooks into Claude Code
 - [Write a hook](../guide/primitives.qmd) walks through the full primitive palette
 - [Filter with conditions](../guide/conditions.qmd) matches tools, files, commands, and history
 - [Test hooks in CI](../guide/testing.qmd) runs `uvx capt-hook test --json` on every PR

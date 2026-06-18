@@ -44,7 +44,7 @@ broken hook.
 
 Wire only commands proven to run: execute the exact settings command by hand first, and
 prefer `uvx capt-hook register-hooks` (which writes known-good entries) over editing
-`.claude/settings.local.json` manually.
+`.claude/settings.json` manually.
 
 ## 4. `uvx capt-hook test` green BEFORE wiring — always
 

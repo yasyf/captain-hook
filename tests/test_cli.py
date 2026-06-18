@@ -186,7 +186,7 @@ class TestRegisterHooks:
             hook(Event.PreToolUse, message="check")
         """)
         )
-        settings_path = tmp_path / ".claude" / "settings.local.json"
+        settings_path = tmp_path / ".claude" / "settings.json"
         result = run_cli("register-hooks", "--dry-run", hooks_dir=str(hooks_dir), root_dir=str(tmp_path))
         assert result.returncode == 0
         assert not settings_path.exists()
@@ -204,7 +204,7 @@ class TestRegisterHooks:
             hook(Event.PreToolUse, message="check")
         """)
         )
-        settings_path = tmp_path / ".claude" / "settings.local.json"
+        settings_path = tmp_path / ".claude" / "settings.json"
         result = run_cli("register-hooks", hooks_dir=str(hooks_dir), root_dir=str(tmp_path))
         assert result.returncode == 0, f"stderr: {result.stderr}"
         data = json.loads(settings_path.read_text())
@@ -300,6 +300,41 @@ class TestMergeSettings:
             {"PreToolUse": [{"hooks": [{"type": "command", "command": "uvx capt-hook run PreToolUse"}]}]},
         )
         sp = tmp_path / "settings.local.json"
+        foreign = {"matcher": "Bash", "hooks": [{"type": "command", "command": "my-tool"}]}
+        dup = {"hooks": [{"type": "command", "command": "uvx capt-hook run PreToolUse"}]}
+        self.seed(sp, {"PreToolUse": [foreign, dup]})
+
+        merged, summary = merge_settings(".claude/hooks", sp)
+        assert merged["hooks"]["PreToolUse"] == [foreign]
+        assert summary["PreToolUse"] == "deferred"
+
+    def test_cli_031_defers_events_wired_in_local_settings(self, tmp_path: Path) -> None:
+        from captain_hook.cli import merge_settings
+
+        register_hook(Event.PreToolUse, message="pre")
+        register_hook(Event.Stop, message="stop")
+        self.seed(
+            tmp_path / "settings.local.json",
+            {event: [{"hooks": [{"type": "command", "command": f"uvx capt-hook run {event}"}]}] for event in ("PreToolUse", "Stop")},
+        )
+
+        merged, summary = merge_settings(".claude/hooks", tmp_path / "settings.json")
+        assert "PreToolUse" not in merged["hooks"]
+        assert "Stop" not in merged["hooks"]
+        assert "SessionEnd" in merged["hooks"]
+        assert summary["PreToolUse"] == "deferred"
+        assert summary["Stop"] == "deferred"
+        assert summary["SessionEnd"] == "added"
+
+    def test_cli_032_strips_committed_duplicate_of_local(self, tmp_path: Path) -> None:
+        from captain_hook.cli import merge_settings
+
+        register_hook(Event.PreToolUse, message="pre")
+        self.seed(
+            tmp_path / "settings.local.json",
+            {"PreToolUse": [{"hooks": [{"type": "command", "command": "uvx capt-hook run PreToolUse"}]}]},
+        )
+        sp = tmp_path / "settings.json"
         foreign = {"matcher": "Bash", "hooks": [{"type": "command", "command": "my-tool"}]}
         dup = {"hooks": [{"type": "command", "command": "uvx capt-hook run PreToolUse"}]}
         self.seed(sp, {"PreToolUse": [foreign, dup]})

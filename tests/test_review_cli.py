@@ -116,7 +116,7 @@ class TestEnableDisable:
         assert result.exit_code == 0, result.output
         assert f"watching {GIT_REPO_KEY}" in result.output
         assert asyncio.run(repo_watching(GIT_REPO_KEY)) is True
-        data = json.loads((git_repo / ".claude" / "settings.local.json").read_text())
+        data = json.loads((git_repo / ".claude" / "settings.json").read_text())
         commands = [entry["command"] for group in data["hooks"]["SessionEnd"] for entry in group["hooks"]]
         assert commands == [f"uvx {REVIEW_RUN_COMMAND}"]
 
@@ -130,7 +130,7 @@ class TestEnableDisable:
         }
 
     def test_enable_twice_is_idempotent_and_preserves_foreign_settings(self, git_repo: Path) -> None:
-        settings_path = git_repo / ".claude" / "settings.local.json"
+        settings_path = git_repo / ".claude" / "settings.json"
         settings_path.parent.mkdir(parents=True)
         foreign = {"hooks": [{"type": "command", "command": "my-tool"}]}
         settings_path.write_text(json.dumps({"hooks": {"SessionEnd": [foreign]}, "custom": "keep-me"}))
@@ -145,17 +145,17 @@ class TestEnableDisable:
         ]
         assert len(review_groups) == 1
 
-    def test_enable_defers_session_end_to_committed_settings(self, git_repo: Path) -> None:
+    def test_enable_defers_session_end_to_local_settings(self, git_repo: Path) -> None:
         claude = git_repo / ".claude"
         claude.mkdir(parents=True)
-        (claude / "settings.json").write_text(
+        (claude / "settings.local.json").write_text(
             json.dumps({"hooks": {"SessionEnd": [{"hooks": [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}"}]}]}})
         )
         result = invoke("enable", root=git_repo)
         assert result.exit_code == 0, result.output
         assert "SessionEnd hook wired" not in result.output
-        local = claude / "settings.local.json"
-        groups = (json.loads(local.read_text()).get("hooks") or {}).get("SessionEnd") or [] if local.exists() else []
+        committed = claude / "settings.json"
+        groups = (json.loads(committed.read_text()).get("hooks") or {}).get("SessionEnd") or [] if committed.exists() else []
         assert not any(REVIEW_RUN_COMMAND in entry["command"] for group in groups for entry in group["hooks"])
 
     def test_disable_unwatches(self, git_repo: Path) -> None:

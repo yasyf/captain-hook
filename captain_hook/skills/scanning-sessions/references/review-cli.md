@@ -25,7 +25,7 @@ defaults to the process cwd. This is what spawned you; do not recurse into it.
 ### `review enable` / `review disable`
 
 `enable` marks the current repo watched and wires the SessionEnd hook into
-`.claude/settings.local.json` (idempotent). `disable` stops watching; candidates stay
+`.claude/settings.json` (idempotent). `disable` stops watching; candidates stay
 recorded but never become eligible.
 
 ### `review scan [--transcript <file>]... [--dir <dir>]...`

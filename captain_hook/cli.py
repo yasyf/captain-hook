@@ -155,21 +155,25 @@ def capt_hook_events(path: Path) -> set[str]:
     }
 
 
+def sibling_settings(path: Path) -> Path:
+    return path.parent / ("settings.json" if path.name == "settings.local.json" else "settings.local.json")
+
+
 def merge_settings(
     hooks_dir: str, settings_path: Path, from_source: str = DIST_NAME
 ) -> tuple[dict[str, Any], dict[str, str]]:
     new_hooks: dict[str, list[dict[str, Any]]] = generate_settings(hooks_dir, from_source=from_source)["hooks"]
     existing = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     existing_hooks: dict[str, list[dict[str, Any]]] = existing.get("hooks") or {}
-    committed = capt_hook_events(settings_path.parent / "settings.json")
+    deferred = capt_hook_events(sibling_settings(settings_path))
 
     summary: dict[str, str] = {}
     merged_hooks: dict[str, list[dict[str, Any]]] = {}
     for event in sorted(existing_hooks.keys() | new_hooks.keys()):
         foreign = [g for g in existing_hooks.get(event, []) if not is_captain_hook_group(g)]
         old_own = [g for g in existing_hooks.get(event, []) if is_captain_hook_group(g)]
-        fresh_own = [] if event in committed else new_hooks.get(event, [])
-        if event in committed and (old_own or new_hooks.get(event)):
+        fresh_own = [] if event in deferred else new_hooks.get(event, [])
+        if event in deferred and (old_own or new_hooks.get(event)):
             summary[event] = "deferred"
         elif old_own or fresh_own:
             summary[event] = (
@@ -193,7 +197,7 @@ def write_settings(settings_path: Path, data: dict[str, Any]) -> None:
     os.replace(tmp, settings_path)
 
 
-def print_hook_summary(label: str, summary: dict[str, str]) -> None:
+def print_hook_summary(label: str, summary: dict[str, str], deferred_to: str) -> None:
     by_status: defaultdict[str, list[str]] = defaultdict(list)
     for event, status in summary.items():
         by_status[status].append(event)
@@ -209,15 +213,15 @@ def print_hook_summary(label: str, summary: dict[str, str]) -> None:
     if unchanged := by_status["unchanged"]:
         click.echo(f"  unchanged: {', '.join(unchanged)} (already present)")
     if deferred := by_status["deferred"]:
-        click.echo(f"  deferred to settings.json: {', '.join(deferred)}")
+        click.echo(f"  deferred to {deferred_to}: {', '.join(deferred)}")
 
 
 def regenerate_settings(state: CliState) -> None:
     state.discover()
-    settings_path = state.root / ".claude" / "settings.local.json"
+    settings_path = state.root / ".claude" / "settings.json"
     merged, summary = merge_settings(".claude/hooks", settings_path)
     write_settings(settings_path, merged)
-    print_hook_summary(str(settings_path.relative_to(state.root)), summary)
+    print_hook_summary(str(settings_path.relative_to(state.root)), summary, sibling_settings(settings_path).name)
 
 
 def settings_drift(root: Path) -> set[str]:
@@ -309,7 +313,7 @@ def init_project(root: Path, *, review: bool = True) -> None:
     if not example.exists():
         example.write_text(example_hook_source())
 
-    settings_path = root / ".claude" / "settings.local.json"
+    settings_path = root / ".claude" / "settings.json"
     CliState(root=root, hooks=str(hooks_dir)).discover()
     merged, summary = merge_settings(".claude/hooks", settings_path)
     write_settings(settings_path, merged)
@@ -318,7 +322,7 @@ def init_project(root: Path, *, review: bool = True) -> None:
 
     click.echo(f"Scaffolded {example.relative_to(root)} + {settings_path.relative_to(root)}.")
     click.echo()
-    print_hook_summary(str(settings_path.relative_to(root)), summary)
+    print_hook_summary(str(settings_path.relative_to(root)), summary, sibling_settings(settings_path).name)
     click.echo()
     click.echo("Claude Code plugin:")
     click.echo(f"  + registered {PLUGIN_ID} in .claude/settings.json (skills install on folder-trust)")
@@ -476,15 +480,15 @@ def run(state: CliState, event: str, async_: bool) -> None:
 )
 @click.pass_obj
 def register_hooks_cmd(state: CliState, hooks_dir: str, dry_run: bool, from_source: str) -> None:
-    """Register captain-hook's event hooks into .claude/settings.local.json."""
+    """Register captain-hook's event hooks into .claude/settings.json."""
     state.discover()
-    settings_path = state.root / ".claude" / "settings.local.json"
+    settings_path = state.root / ".claude" / "settings.json"
     merged, summary = merge_settings(hooks_dir, settings_path, from_source=from_source)
     if dry_run:
         click.echo(json.dumps(merged, indent=2))
         return
     write_settings(settings_path, merged)
-    print_hook_summary(str(settings_path), summary)
+    print_hook_summary(str(settings_path), summary, sibling_settings(settings_path).name)
 
 
 @cli.command()

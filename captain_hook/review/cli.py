@@ -57,13 +57,13 @@ def review_wired(hooks: dict[str, Any]) -> bool:
 
 
 def ensure_review_wiring(settings_path: Path) -> bool:
-    from captain_hook.cli import write_settings
+    from captain_hook.cli import sibling_settings, write_settings
 
     existing: dict[str, Any] = json.loads(settings_path.read_text()) if settings_path.exists() else {}
-    committed = settings_path.parent / "settings.json"
-    committed_hooks: dict[str, Any] = (json.loads(committed.read_text()).get("hooks") or {}) if committed.exists() else {}
+    sibling = sibling_settings(settings_path)
+    sibling_hooks: dict[str, Any] = (json.loads(sibling.read_text()).get("hooks") or {}) if sibling.exists() else {}
     hooks: dict[str, Any] = existing.get("hooks") or {}
-    if review_wired(hooks) or review_wired(committed_hooks):
+    if review_wired(hooks) or review_wired(sibling_hooks):
         return False
     group = {"hooks": [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}"}]}
     write_settings(
@@ -126,8 +126,8 @@ def enable(state: CliState) -> None:
     repo = current_repo(state.root)
     watch_repo(repo)
     register_marketplace(state.root)
-    wired = ensure_review_wiring(state.root / ".claude" / "settings.local.json")
-    click.echo(f"watching {repo}" + (" (SessionEnd hook wired into .claude/settings.local.json)" if wired else ""))
+    wired = ensure_review_wiring(state.root / ".claude" / "settings.json")
+    click.echo(f"watching {repo}" + (" (SessionEnd hook wired into .claude/settings.json)" if wired else ""))
 
 
 @review.command()

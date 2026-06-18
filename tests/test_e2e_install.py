@@ -65,7 +65,7 @@ class TestInit:
     def test_init_merge_preserves_existing_hook_entries(self, tmp_path: Path) -> None:
         settings_dir = tmp_path / ".claude"
         settings_dir.mkdir()
-        settings_path = settings_dir / "settings.local.json"
+        settings_path = settings_dir / "settings.json"
         settings_path.write_text(json.dumps({
             "permissions": {"allow": ["foo"]},
             "hooks": {
@@ -96,10 +96,10 @@ class TestInit:
         assert "unchanged:" in second.stdout
         assert "PreToolUse" in second.stdout
 
-    def test_init_defers_to_committed_settings_json(self, tmp_path: Path) -> None:
+    def test_init_defers_to_local_settings_json(self, tmp_path: Path) -> None:
         settings_dir = tmp_path / ".claude"
         settings_dir.mkdir()
-        (settings_dir / "settings.json").write_text(json.dumps({
+        (settings_dir / "settings.local.json").write_text(json.dumps({
             "hooks": {
                 event: [{"hooks": [{"type": "command", "command": f"uvx capt-hook run {event}"}]}]
                 for event in ("PreToolUse", "Stop")
@@ -108,27 +108,27 @@ class TestInit:
 
         result = run_cli("init", root_dir=str(tmp_path))
         assert result.returncode == 0, f"stderr: {result.stderr}"
-        assert "deferred to settings.json" in result.stdout
+        assert "deferred to settings.local.json" in result.stdout
 
-        local = json.loads((settings_dir / "settings.local.json").read_text())
-        assert "PreToolUse" not in local["hooks"]
-        assert "Stop" not in local["hooks"]
-        assert "SessionEnd" in local["hooks"]
+        committed = json.loads((settings_dir / "settings.json").read_text())
+        assert "PreToolUse" not in committed["hooks"]
+        assert "Stop" not in committed["hooks"]
+        assert "SessionEnd" in committed["hooks"]
 
-    def test_init_strips_preexisting_local_duplicate(self, tmp_path: Path) -> None:
+    def test_init_strips_preexisting_committed_duplicate(self, tmp_path: Path) -> None:
         settings_dir = tmp_path / ".claude"
         settings_dir.mkdir()
         group = {"hooks": [{"type": "command", "command": "uvx capt-hook run PreToolUse"}]}
-        (settings_dir / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [group]}}))
         (settings_dir / "settings.local.json").write_text(json.dumps({"hooks": {"PreToolUse": [group]}}))
+        (settings_dir / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [group]}}))
 
         result = run_cli("init", root_dir=str(tmp_path))
         assert result.returncode == 0, f"stderr: {result.stderr}"
-        local = json.loads((settings_dir / "settings.local.json").read_text())
-        assert "PreToolUse" not in local["hooks"]
+        committed = json.loads((settings_dir / "settings.json").read_text())
+        assert "PreToolUse" not in committed["hooks"]
 
     def test_creates_settings_json(self, project_dir: Path) -> None:
-        settings = project_dir / ".claude" / "settings.local.json"
+        settings = project_dir / ".claude" / "settings.json"
         assert settings.exists()
         data = json.loads(settings.read_text())
         assert "hooks" in data
@@ -136,12 +136,12 @@ class TestInit:
         assert len(data["hooks"]) > 0
 
     def test_settings_has_pretooluse(self, project_dir: Path) -> None:
-        settings = project_dir / ".claude" / "settings.local.json"
+        settings = project_dir / ".claude" / "settings.json"
         data = json.loads(settings.read_text())
         assert "PreToolUse" in data["hooks"]
 
     def test_settings_commands_use_uvx(self, project_dir: Path) -> None:
-        settings = project_dir / ".claude" / "settings.local.json"
+        settings = project_dir / ".claude" / "settings.json"
         raw = settings.read_text()
         assert "uvx capt-hook" in raw
 
@@ -283,7 +283,7 @@ class TestRegisterHooks:
         assert "PreToolUse" in data["hooks"]
 
     def test_merge_preserves_existing_keys(self, project_dir: Path) -> None:
-        settings_path = project_dir / ".claude" / "settings.local.json"
+        settings_path = project_dir / ".claude" / "settings.json"
         existing = json.loads(settings_path.read_text())
         existing["customKey"] = "preserved"
         settings_path.write_text(json.dumps(existing))
