@@ -1,11 +1,11 @@
 """Throwaway GitHub repo lifecycle for the live brain leg.
 
 Creates a private ``capt-hook-stress-<run>`` repo under the authed user, points
-the sandbox repo's origin at it, installs the bundled skills, and rewires every
-``uvx capt-hook`` reference — the wired SessionEnd command, plus the skill
-bodies' hardcoded calls — at the sandbox's ``capt-hook`` shim so the brain
-exercises the local checkout. Teardown closes stray PRs and deletes the repo
-(``gh auth refresh -s delete_repo`` grants the needed scope).
+the sandbox repo's origin at it, registers the captain-hook plugin, and rewires
+the wired SessionEnd command at the sandbox's ``capt-hook`` shim so the brain
+runs from the local checkout (which loads the bundled skills via ``--plugin-dir``).
+Teardown closes stray PRs and deletes the repo (``gh auth refresh -s delete_repo``
+grants the needed scope).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from captain_hook.cli import install_skills
+from captain_hook.cli import register_marketplace
 
 from stress.sandbox import git
 
@@ -55,15 +55,6 @@ def rewire_settings(sandbox: Sandbox) -> None:
     )
 
 
-def rewire_skills(sandbox: Sandbox) -> int:
-    rewired = 0
-    for path in (sandbox.repo / ".claude" / "skills").rglob("*.md"):
-        if "uvx capt-hook" in (text := path.read_text()):
-            path.write_text(text.replace("uvx capt-hook", f"{sandbox.bin}/capt-hook"))
-            rewired += 1
-    return rewired
-
-
 def seed_project_files(repo: Path) -> None:
     (repo / "app.py").write_text('def main() -> None:\n    print("hello")\n\n\nif __name__ == "__main__":\n    main()\n')
     (repo / ".gitignore").write_text(".claude/settings.local.json\n")
@@ -76,9 +67,8 @@ def create_throwaway(sandbox: Sandbox, *, run_id: str) -> ThrowawayRepo:
     if created.returncode != 0 and "already exists" not in created.stderr:
         raise RuntimeError(f"gh repo create failed: {created.stderr.strip()}")
     seed_project_files(sandbox.repo)
-    install_skills(sandbox.repo)
+    register_marketplace(sandbox.repo)
     rewire_settings(sandbox)
-    rewire_skills(sandbox)
     git(sandbox.repo, "remote", "set-url", "origin", f"https://github.com/{name}.git")
     git(sandbox.repo, "add", "-A")
     git(sandbox.repo, "commit", "-qm", "seed stress project")

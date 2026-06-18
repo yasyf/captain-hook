@@ -17,6 +17,7 @@ from cc_transcript.mining.candidates import FeedbackCandidate, dedup_key
 from cc_transcript.mining.confidence import firm, noise
 from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE
 
+from captain_hook.cli import plugin_dir
 from captain_hook.review.judge import (
     DURABLE_CATEGORIES,
     JUDGE_ROLE,
@@ -432,10 +433,11 @@ class TestBrain:
         assert argv[argv.index("--max-turns") + 1] == "40"
         assert argv[argv.index("--allowedTools") + 1] == ",".join(BRAIN_ALLOWED_TOOLS)
         assert argv[argv.index("--max-budget-usd") + 1] == "5.0"
+        assert argv[argv.index("--plugin-dir") + 1] == str(plugin_dir())
 
     def test_brain_prompt_carries_skill_and_reviewer_marker(self) -> None:
         prompt = brain_prompt(Path("/tmp/t.jsonl"))
-        assert prompt.startswith("/scanning-sessions --transcript /tmp/t.jsonl")
+        assert prompt.startswith("/captain-hook:scanning-sessions --transcript /tmp/t.jsonl")
         assert REVIEWER_MARKER in prompt
 
     def test_spawn_brain_runs_in_repo_with_marker_env_and_prompt_on_stdin(

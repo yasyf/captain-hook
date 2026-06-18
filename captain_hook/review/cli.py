@@ -120,12 +120,12 @@ def spawn(transcript: Path, cwd: str | None) -> None:
 @review.command()
 @click.pass_obj
 def enable(state: CliState) -> None:
-    """Watch the current repo, install the reviewer's skills, and wire the SessionEnd hook."""
-    from captain_hook.cli import install_skills
+    """Watch the current repo, register the captain-hook plugin, and wire the SessionEnd hook."""
+    from captain_hook.cli import register_marketplace
 
     repo = current_repo(state.root)
     watch_repo(repo)
-    install_skills(state.root)
+    register_marketplace(state.root)
     wired = ensure_review_wiring(state.root / ".claude" / "settings.local.json")
     click.echo(f"watching {repo}" + (" (SessionEnd hook wired into .claude/settings.local.json)" if wired else ""))
 

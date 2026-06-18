@@ -120,10 +120,14 @@ class TestEnableDisable:
         commands = [entry["command"] for group in data["hooks"]["SessionEnd"] for entry in group["hooks"]]
         assert commands == [f"uvx {REVIEW_RUN_COMMAND}"]
 
-    def test_enable_installs_brain_skills(self, git_repo: Path) -> None:
+    def test_enable_registers_plugin(self, git_repo: Path) -> None:
         assert invoke("enable", root=git_repo).exit_code == 0
-        for name in ("scanning-sessions", "authoring-hooks", "bootstrapping-hooks", "translating-styleguides"):
-            assert (git_repo / ".claude" / "skills" / name / "SKILL.md").is_file()
+        settings = json.loads((git_repo / ".claude" / "settings.json").read_text())
+        assert settings["enabledPlugins"] == {"captain-hook@captain-hook": True}
+        assert settings["extraKnownMarketplaces"]["captain-hook"]["source"] == {
+            "source": "github",
+            "repo": "yasyf/captain-hook",
+        }
 
     def test_enable_twice_is_idempotent_and_preserves_foreign_settings(self, git_repo: Path) -> None:
         settings_path = git_repo / ".claude" / "settings.local.json"
@@ -178,7 +182,8 @@ class TestInitEnablesReviewer:
         assert result.returncode == 0, result.stderr
         assert asyncio.run(repo_watching(GIT_REPO_KEY)) is True
         assert f"watching {GIT_REPO_KEY}" in result.stdout
-        assert (git_repo / ".claude" / "skills" / "scanning-sessions" / "SKILL.md").is_file()
+        settings = json.loads((git_repo / ".claude" / "settings.json").read_text())
+        assert settings["enabledPlugins"] == {"captain-hook@captain-hook": True}
 
     def test_init_no_review_does_not_watch(self, git_repo: Path) -> None:
         result = run_cli("init", "--no-review", root_dir=str(git_repo))

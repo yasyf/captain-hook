@@ -15,7 +15,7 @@ import pytest
 import yaml
 
 import captain_hook
-from captain_hook.cli import install_skills, maybe_launch_bootstrap, register_marketplace
+from captain_hook.cli import maybe_launch_bootstrap, plugin_dir, register_marketplace
 
 SKILLS_DIR = Path(captain_hook.__file__).parent / "skills"
 SKILL_DIRS = sorted(p for p in SKILLS_DIR.iterdir() if p.is_dir())
@@ -77,34 +77,6 @@ def test_authoring_hooks_owns_the_drafting_references() -> None:
     assert tree_files(SKILLS_DIR / "bootstrapping-hooks") == {"SKILL.md"}
 
 
-class TestInstallSkills:
-    def test_installs_all_skills(self, tmp_path: Path) -> None:
-        summary = install_skills(tmp_path)
-        assert summary == {name: "installed" for name in EXPECTED_SKILLS}
-        for name in EXPECTED_SKILLS:
-            dest = tmp_path / ".claude" / "skills" / name
-            assert (dest / "SKILL.md").is_file()
-            assert tree_files(dest) == tree_files(SKILLS_DIR / name)
-
-    def test_skip_preserves_local_edits(self, tmp_path: Path) -> None:
-        install_skills(tmp_path)
-        edited = tmp_path / ".claude" / "skills" / "bootstrapping-hooks" / "SKILL.md"
-        edited.write_text("# sentinel\n")
-        summary = install_skills(tmp_path)
-        assert summary == {name: "skipped" for name in EXPECTED_SKILLS}
-        assert edited.read_text() == "# sentinel\n"
-
-    def test_force_replaces_and_removes_strays(self, tmp_path: Path) -> None:
-        install_skills(tmp_path)
-        skill_dir = tmp_path / ".claude" / "skills" / "translating-styleguides"
-        stray = skill_dir / "stray.md"
-        stray.write_text("stray\n")
-        summary = install_skills(tmp_path, force=True)
-        assert summary == {name: "replaced" for name in EXPECTED_SKILLS}
-        assert not stray.exists()
-        assert tree_files(skill_dir) == tree_files(SKILLS_DIR / "translating-styleguides")
-
-
 class TestMaybeLaunchBootstrap:
     def test_skips_without_tty(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr(sys, "stdin", io.StringIO())
@@ -124,8 +96,13 @@ class TestMaybeLaunchBootstrap:
         calls: list[tuple[Any, ...]] = []
         monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)))
         assert maybe_launch_bootstrap(tmp_path) is True
-        assert calls == [(["claude", "/bootstrapping-hooks"], {"cwd": tmp_path, "check": False})]
-        settings = json.loads((tmp_path / ".claude" / "settings.local.json").read_text())
+        assert calls == [
+            (
+                ["claude", "--plugin-dir", str(plugin_dir()), "/captain-hook:bootstrapping-hooks"],
+                {"cwd": tmp_path, "check": False},
+            )
+        ]
+        settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
         assert settings["enabledPlugins"] == {"captain-hook@captain-hook": True}
 
     def test_respects_decline(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -139,7 +116,7 @@ class TestMaybeLaunchBootstrap:
 class TestRegisterMarketplace:
     def test_creates_settings(self, tmp_path: Path) -> None:
         register_marketplace(tmp_path)
-        settings = json.loads((tmp_path / ".claude" / "settings.local.json").read_text())
+        settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
         assert settings["extraKnownMarketplaces"]["captain-hook"]["source"] == {
             "source": "github",
             "repo": "yasyf/captain-hook",
@@ -147,7 +124,7 @@ class TestRegisterMarketplace:
         assert settings["enabledPlugins"] == {"captain-hook@captain-hook": True}
 
     def test_merges_existing_settings(self, tmp_path: Path) -> None:
-        settings_path = tmp_path / ".claude" / "settings.local.json"
+        settings_path = tmp_path / ".claude" / "settings.json"
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text(json.dumps({
             "hooks": {"PreToolUse": []},

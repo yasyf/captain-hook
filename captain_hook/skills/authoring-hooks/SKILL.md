@@ -70,7 +70,7 @@ has the full decision rules and defaults:
 | A done-criterion to check once at stop ("run tests before stopping") | `gate(only_if=[...], skip_if=[RanCommand(...)])` |
 | Advice worth surfacing once per session | `nudge` |
 | A code-content rule needing AST precision | `lint()` |
-| A whole style guide | delegate to the `translating-styleguides` skill |
+| A whole style guide | delegate to the `captain-hook:translating-styleguides` skill |
 
 Worked, test-passing code for each shape:
 [pattern catalog](references/pattern-catalog.md).

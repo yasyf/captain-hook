@@ -119,7 +119,7 @@ that already had its own `.claude/hooks/`, `init` leaves those files untouched a
 
 One file per approved category: `safety.py`, `quality.py`, `testing.py`, `workflow.py`
 (+ `style.py`, owned end-to-end by `translating-styleguides`). Drafting is delegated:
-for each approved hook, invoke the `authoring-hooks` skill via the Skill tool, passing
+for each approved hook, invoke the `captain-hook:authoring-hooks` skill via the Skill tool, passing
 
 - the **source quote, verbatim** (it becomes the citation inside the message — the
   agent being blocked learns *why*),
@@ -225,7 +225,7 @@ Report row:
 
 When the survey finds a style guide (`STYLEGUIDE.md`, a "Code style" section in
 CONTRIBUTING/AGENTS/CLAUDE, `docs/style*.md`), this skill **never** writes `StyleRule`s
-itself. If the user approves the category E option, invoke the `translating-styleguides`
+itself. If the user approves the category E option, invoke the `captain-hook:translating-styleguides`
 skill via the Skill tool with the markdown path as args; it owns `style.py` end-to-end and
 its enforcement report is appended to this skill's final report. If the Skill tool is
 unavailable, read that skill's `SKILL.md` directly and follow it — both skills ship together.

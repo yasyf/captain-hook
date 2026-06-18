@@ -364,6 +364,6 @@ CONTRIBUTING/AGENTS/CLAUDE.
 
 Found one? Stop. Do not write `StyleRule`s, `lint` approximations of style rules, or a
 `style.py` here. Offer the category E menu option and, if approved, invoke the
-`translating-styleguides` skill with the markdown path — it owns rule atomization, the
+`captain-hook:translating-styleguides` skill with the markdown path — it owns rule atomization, the
 Matcher/`check()`/LLM tier decision, `style.py`, and its own enforcement report. If the
 Skill tool is unavailable, read that skill's `SKILL.md` and follow it (both ship together).

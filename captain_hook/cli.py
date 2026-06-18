@@ -54,40 +54,24 @@ def example_hook_source() -> str:
     return (importlib.resources.files("captain_hook") / "templates" / "example_hook.py.tmpl").read_text()
 
 
-def install_skills(root: Path, *, force: bool = False) -> dict[str, str]:
-    """Copy the bundled Claude Code skills into ``root/.claude/skills``.
+def plugin_dir() -> Path:
+    """Filesystem path to the bundled captain-hook plugin root.
 
-    Args:
-        root: Project root receiving the skills.
-        force: Replace existing skill directories wholesale instead of skipping them.
-
-    Returns:
-        Per-skill status of ``"installed"``, ``"replaced"``, or ``"skipped"``.
+    Holds ``.claude-plugin/plugin.json`` and ``skills/``, so ``claude --plugin-dir``
+    can load the skills in-place from the installed wheel without a marketplace clone.
     """
-    dest_root = root / ".claude" / "skills"
-    summary: dict[str, str] = {}
-    with importlib.resources.as_file(importlib.resources.files("captain_hook") / "skills") as src_root:
-        for skill in sorted(p for p in src_root.iterdir() if p.is_dir()):
-            dest = dest_root / skill.name
-            if dest.exists() and not force:
-                summary[skill.name] = "skipped"
-                continue
-            if dest.exists():
-                shutil.rmtree(dest)
-                summary[skill.name] = "replaced"
-            else:
-                summary[skill.name] = "installed"
-            shutil.copytree(skill, dest)
-    return summary
+    return Path(str(importlib.resources.files("captain_hook")))
 
 
 def register_marketplace(root: Path) -> None:
-    """Enable the captain-hook plugin marketplace in ``root/.claude/settings.local.json``.
+    """Enable the captain-hook plugin marketplace in ``root/.claude/settings.json``.
 
     Merges ``extraKnownMarketplaces`` and ``enabledPlugins`` entries into the
-    existing settings so the bundled skills track the repository as a plugin.
+    committed settings so the skills load from the plugin (tracking the repository)
+    instead of being copied into ``.claude/skills``. Claude Code prompts to install
+    the plugin when the project folder is trusted.
     """
-    settings_path = root / ".claude" / "settings.local.json"
+    settings_path = root / ".claude" / "settings.json"
     existing = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     write_settings(
         settings_path,
@@ -104,7 +88,9 @@ def maybe_launch_bootstrap(root: Path) -> bool:
 
     Only fires in an interactive session with the ``claude`` CLI on PATH; CI and
     scripted runs skip the prompt entirely. On acceptance, the captain-hook plugin
-    marketplace is registered in ``.claude/settings.local.json`` before launching.
+    marketplace is registered in ``.claude/settings.json``, and Claude is launched
+    with the bundled plugin loaded via ``--plugin-dir`` so the namespaced skill
+    resolves immediately without waiting on a marketplace install.
 
     Returns:
         Whether Claude was launched.
@@ -114,7 +100,9 @@ def maybe_launch_bootstrap(root: Path) -> bool:
     if not click.confirm("Bootstrap hooks now? (launches Claude with the bootstrapping-hooks skill)", default=True):
         return False
     register_marketplace(root)
-    subprocess.run(["claude", "/bootstrapping-hooks"], cwd=root, check=False)
+    subprocess.run(
+        ["claude", "--plugin-dir", str(plugin_dir()), "/captain-hook:bootstrapping-hooks"], cwd=root, check=False
+    )
     return True
 
 
@@ -326,17 +314,14 @@ def init_project(root: Path, *, review: bool = True) -> None:
     merged, summary = merge_settings(".claude/hooks", settings_path)
     write_settings(settings_path, merged)
 
-    skills_summary = install_skills(root)
+    register_marketplace(root)
 
     click.echo(f"Scaffolded {example.relative_to(root)} + {settings_path.relative_to(root)}.")
     click.echo()
     print_hook_summary(str(settings_path.relative_to(root)), summary)
     click.echo()
-    click.echo(".claude/skills/:")
-    for name in (n for n, status in skills_summary.items() if status == "installed"):
-        click.echo(f"  + installed {name}")
-    if skipped := [n for n, status in skills_summary.items() if status == "skipped"]:
-        click.echo(f"  unchanged: {', '.join(skipped)} (already present; capt-hook skills install --force to refresh)")
+    click.echo("Claude Code plugin:")
+    click.echo(f"  + registered {PLUGIN_ID} in .claude/settings.json (skills install on folder-trust)")
     click.echo()
     match (review, repo_key(root)):
         case (False, _):
@@ -545,12 +530,11 @@ def skills() -> None:
 
 
 @skills.command(name="install")
-@click.option("--force", is_flag=True, default=False, help="Replace skills that already exist in .claude/skills")
 @click.pass_obj
-def skills_install(state: CliState, force: bool) -> None:
-    """Copy the bundled skills into .claude/skills/."""
-    for name, status in install_skills(state.root, force=force).items():
-        click.echo(f"  {status} {name}")
+def skills_install(state: CliState) -> None:
+    """Register the captain-hook plugin in .claude/settings.json (skills load from the plugin, not copied files)."""
+    register_marketplace(state.root)
+    click.echo(f"  registered {PLUGIN_ID} in .claude/settings.json")
 
 
 @cli.group()

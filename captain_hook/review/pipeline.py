@@ -134,7 +134,7 @@ def brain_prompt(transcript: Path) -> str:
     from captain_hook.review.scan import REVIEWER_MARKER
 
     return (
-        f"/scanning-sessions --transcript {transcript}\n\n"
+        f"/captain-hook:scanning-sessions --transcript {transcript}\n\n"
         f"[{REVIEWER_MARKER}] Review this repo's eligible candidates and open at most one pull request per"
         " candidate. Work in one continuous run: do not stop to summarize after drafting — you are done only"
         " when every eligible candidate has a PR recorded via `review update <id> pr_open --pr-url <url>` or"
@@ -143,13 +143,22 @@ def brain_prompt(transcript: Path) -> str:
 
 
 def brain_argv(*, max_turns: int, max_budget_usd: float) -> list[str]:
+    from captain_hook.cli import plugin_dir
     from captain_hook.llm import ClaudeBackend
 
     backend = ClaudeBackend()
     argv = backend.build_command(backend.models[BRAIN_TIER], None, agent=True)
     argv[argv.index("--permission-mode") + 1] = "acceptEdits"
     argv[argv.index("--max-budget-usd") + 1] = str(max_budget_usd)
-    return [*argv, "--max-turns", str(max_turns), "--allowedTools", ",".join(BRAIN_ALLOWED_TOOLS)]
+    return [
+        *argv,
+        "--plugin-dir",
+        str(plugin_dir()),
+        "--max-turns",
+        str(max_turns),
+        "--allowedTools",
+        ",".join(BRAIN_ALLOWED_TOOLS),
+    ]
 
 
 def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) -> None:

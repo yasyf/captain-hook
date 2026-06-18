@@ -763,37 +763,34 @@ class TestRegisterHooksMultiEvent:
 
 
 class TestSkillsInstall:
-    def test_init_installs_skills(self, project_dir: Path) -> None:
-        for name in ("bootstrapping-hooks", "translating-styleguides"):
-            assert (project_dir / ".claude" / "skills" / name / "SKILL.md").is_file()
+    def test_init_registers_plugin(self, project_dir: Path) -> None:
+        settings = json.loads((project_dir / ".claude" / "settings.json").read_text())
+        assert settings["enabledPlugins"] == {"captain-hook@captain-hook": True}
+        assert settings["extraKnownMarketplaces"]["captain-hook"]["source"] == {
+            "source": "github",
+            "repo": "yasyf/captain-hook",
+        }
+        assert not (project_dir / ".claude" / "skills").exists()
 
-    def test_init_reports_skills(self, tmp_path: Path) -> None:
+    def test_init_reports_plugin(self, tmp_path: Path) -> None:
         result = run_cli("init", root_dir=str(tmp_path))
         assert result.returncode == 0
-        assert "+ installed bootstrapping-hooks" in result.stdout
-        assert "+ installed translating-styleguides" in result.stdout
+        assert "registered captain-hook@captain-hook" in result.stdout
 
-    def test_init_rerun_preserves_user_edits(self, project_dir: Path) -> None:
-        skill = project_dir / ".claude" / "skills" / "bootstrapping-hooks" / "SKILL.md"
-        skill.write_text("# sentinel\n")
-        result = run_cli("init", root_dir=str(project_dir))
+    def test_init_rerun_preserves_foreign_settings(self, tmp_path: Path) -> None:
+        settings_path = tmp_path / ".claude" / "settings.json"
+        settings_path.parent.mkdir(parents=True)
+        settings_path.write_text(json.dumps({"permissions": {"allow": ["Bash(ls)"]}}))
+        result = run_cli("init", root_dir=str(tmp_path))
         assert result.returncode == 0
-        assert "unchanged: authoring-hooks, bootstrapping-hooks, scanning-sessions, translating-styleguides" in result.stdout
-        assert skill.read_text() == "# sentinel\n"
+        settings = json.loads(settings_path.read_text())
+        assert settings["permissions"] == {"allow": ["Bash(ls)"]}
+        assert settings["enabledPlugins"] == {"captain-hook@captain-hook": True}
 
     def test_skills_install_standalone(self, tmp_path: Path) -> None:
         result = run_cli("skills", "install", root_dir=str(tmp_path))
         assert result.returncode == 0
-        assert "installed bootstrapping-hooks" in result.stdout
-        assert (tmp_path / ".claude" / "skills" / "translating-styleguides" / "SKILL.md").is_file()
-
-    def test_skills_install_force_overwrites(self, project_dir: Path) -> None:
-        skill_dir = project_dir / ".claude" / "skills" / "translating-styleguides"
-        (skill_dir / "SKILL.md").write_text("# sentinel\n")
-        stray = skill_dir / "stray.md"
-        stray.write_text("stray\n")
-        result = run_cli("skills", "install", "--force", root_dir=str(project_dir))
-        assert result.returncode == 0
-        assert "replaced translating-styleguides" in result.stdout
-        assert not stray.exists()
-        assert "# sentinel" not in (skill_dir / "SKILL.md").read_text()
+        assert "registered captain-hook@captain-hook" in result.stdout
+        settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+        assert settings["enabledPlugins"] == {"captain-hook@captain-hook": True}
+        assert not (tmp_path / ".claude" / "skills").exists()

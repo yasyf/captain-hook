@@ -1,6 +1,6 @@
 ---
 name: scanning-sessions
-description: The headless session-reviewer brain — turns a watched repo's PR-eligible candidates into pull requests, both kinds. Invoked as /scanning-sessions --transcript <path> inside the target repo by capt-hook's detached SessionEnd reviewer pipeline. Enumerates judge-accepted, threshold-eligible candidates via uvx capt-hook review (the CLI is the source of truth), re-verifies every cited correction or complaint verbatim against its session transcript, then per candidate drafts a new hook (create candidates) or amends the attributed misfiring hook with a regression test (fix candidates) in a worktree by delegating to the authoring-hooks skill, proves it with uvx capt-hook test, opens exactly one PR with the verbatim evidence, and records the PR on the candidate. Use when a prompt starts with /scanning-sessions, or to review eligible capt-hook candidates and open hook PRs.
+description: The headless session-reviewer brain — turns a watched repo's PR-eligible candidates into pull requests, both kinds. Invoked as /captain-hook:scanning-sessions --transcript <path> inside the target repo by capt-hook's detached SessionEnd reviewer pipeline. Enumerates judge-accepted, threshold-eligible candidates via uvx capt-hook review (the CLI is the source of truth), re-verifies every cited correction or complaint verbatim against its session transcript, then per candidate drafts a new hook (create candidates) or amends the attributed misfiring hook with a regression test (fix candidates) in a worktree by delegating to the authoring-hooks skill, proves it with uvx capt-hook test, opens exactly one PR with the verbatim evidence, and records the PR on the candidate. Use when a prompt starts with /captain-hook:scanning-sessions, or to review eligible capt-hook candidates and open hook PRs.
 argument-hint: "--transcript <path to the ended session's transcript>"
 allowed-tools: Read, Grep, Glob, Bash, Skill
 ---
@@ -46,7 +46,7 @@ user feedback next pass.
   the candidate stays `watching`, and you never open a PR against a hook that is no
   longer there.
 - **You do not draft hooks yourself** — this skill carries no Write/Edit. Drafting
-  happens inside the `authoring-hooks` skill, invoked via the Skill tool.
+  happens inside the `captain-hook:authoring-hooks` skill, invoked via the Skill tool.
 - **`uvx capt-hook test` must be green** in the worktree before `gh pr create`.
 - **Run to completion — never stop early.** You run headless; a text-only reply ends
   the session immediately. After the authoring-hooks skill returns, keep going in the
@@ -126,7 +126,7 @@ Follow [references/pr-workflow.md](references/pr-workflow.md) exactly:
 
 1. **Worktree** — fetch, then `git worktree add` a `capt-hook/review/<rule-slug>`
    branch off `origin/<default>`.
-2. **Draft** — invoke the `authoring-hooks` skill via the Skill tool, passing the
+2. **Draft** — invoke the `captain-hook:authoring-hooks` skill via the Skill tool, passing the
    verbatim correction, its context, and the worktree path. It picks the primitive,
    writes `.claude/hooks/<slug>.py` with inline tests (one firing on the offending
    shape, one `Allow()` on a benign neighbor), and runs `uvx capt-hook test`. For a
