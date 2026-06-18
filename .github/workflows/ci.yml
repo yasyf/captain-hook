@@ -68,6 +68,7 @@ jobs:
           uv pip install --python .wheel-smoke/bin/python dist/*.whl
           .wheel-smoke/bin/capt-hook --help
           unzip -l dist/*.whl | grep -q 'captain_hook/skills/.*/SKILL.md'
+          unzip -l dist/*.whl | grep -q 'captain_hook/.claude-plugin/plugin.json'
           unzip -l dist/*.whl | grep -q 'captain_hook/packs/general/capt-hook.toml'
           unzip -l dist/*.whl | grep -q 'captain_hook/packs/python/capt-hook.toml'
           unzip -l dist/*.whl | grep -qE 'captain_hook/packs/general/[^/]+\.py'
@@ -75,6 +76,7 @@ jobs:
           ! tar tzf dist/*.tar.gz | grep -q '/stress/'
           smoke_proj="$(mktemp -d)"
           (cd "$smoke_proj" && "$GITHUB_WORKSPACE/.wheel-smoke/bin/capt-hook" skills install)
-          test -n "$(find "$smoke_proj/.claude/skills" -name SKILL.md)"
+          grep -q '"captain-hook@captain-hook": true' "$smoke_proj/.claude/settings.json"
+          ! test -e "$smoke_proj/.claude/skills"
           (cd "$smoke_proj" && "$GITHUB_WORKSPACE/.wheel-smoke/bin/capt-hook" pack add general)
           grep -q '\[packs.general\]' "$smoke_proj/.claude/hooks/packs.toml"
