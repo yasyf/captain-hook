@@ -7,53 +7,48 @@
 [![Docs](https://github.com/yasyf/captain-hook/actions/workflows/docs.yml/badge.svg)](https://yasyf.github.io/captain-hook/)
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-blue.svg)](https://github.com/yasyf/captain-hook/blob/main/LICENSE)
 
-Declarative hook framework for Claude Code. Write hooks as data, test them inline, and ship them to CI in the same shape they run in production.
+Guardrails for Claude Code, written as typed, testable data — and learned from the corrections you give Claude.
 
-## Quickstart
+A captain-hook hook is declarative Python: an event, some conditions, an action. Block a footgun before it runs, nudge the agent off a bad pattern, gate "done" until the tests pass. Then captain-hook closes the loop: it reads the corrections you give Claude as you work and opens pull requests that codify the durable ones as new hooks. You write the first few; it writes the rest.
 
-No install step — everything runs through [uvx](https://docs.astral.sh/uv/). Pick a front door:
+## Install
 
-**From your terminal:**
+captain-hook needs no install — it runs through [uvx](https://docs.astral.sh/uv/). From your project root:
 
 ```bash
 uvx capt-hook init
 ```
 
-**From inside Claude Code** — install the plugin, then ask Claude to set it up:
-
-```
-/plugin marketplace add yasyf/captain-hook
-/plugin install captain-hook@captain-hook
-```
-
-> set up captain hook
-
-Either path lands in the same place: `.claude/hooks/` scaffolded, Claude Code's settings wired, the bundled skills installed, and the [session reviewer](#session-reviewer) watching this repo. `uvx` fetches captain-hook into a throwaway environment, so it never enters your `pyproject.toml` — and every command below works the same way once you prefix it with `uvx`.
+`init` scaffolds `.claude/hooks/`, wires Claude Code's settings, installs the bundled skills, and arms the [session reviewer](#it-learns-from-your-corrections). Or install the plugin and let Claude do it. Run `/plugin marketplace add yasyf/captain-hook`, then ask Claude to "set up captain hook".
 
 ## Your first hook
 
-A hook is declarative Python with an event, some conditions, and an action. This one stops the agent from finishing a UI change it never looked at.
+A hook is an event, some conditions, and an action. This one stops the agent from finishing a UI change it never looked at:
 
 ```python
 # .claude/hooks/visual_review.py
 from captain_hook import gate, TouchedFile, UsedSkill
 
-# A Stop gate: before the agent finishes, block if it edited UI files without doing a visual review.
 gate(
-    # the one-line reason shown to the agent when the gate fires
     "You edited UI files. Open them with agent-browser and verify they render before finishing.",
-    # fires only if UI files changed
     only_if=[TouchedFile("**/src/routes/**", "**/src/components/**")],
-    # already reviewed -> don't block
     skip_if=[UsedSkill("agent-browser")],
 )
 ```
 
-Conditions match tools, files, commands, and even which skills the agent used.
+`only_if` arms the gate only when UI files changed; `skip_if` stands it down once the agent has done the review. Conditions match tools, files, commands, and even which skills the agent used.
 
-## Test your hooks
+## It learns from your corrections
 
-Every deterministic hook carries inline tests, so a broken hook fails like broken code. Run them from your project root, where `--hooks` defaults to `.claude/hooks`.
+Most hooks you'll never write by hand.
+
+The corrections you give Claude as you work are exactly the rules a hook should enforce: "never force-push", "use `uv`, not `pip`", "you weakened that test". Writing the hook by hand is friction you skip in the moment, so the **session reviewer** notices for you. When a session ends, it reads the transcript, finds the durable corrections and the hooks that misfired, judges which ones are standing rules and which are one-offs, and once a pattern proves itself across sessions, opens a pull request that adds the hook — or fixes the one that misfired. You review the PR like any other.
+
+It's on by default after `init`. Turn it off for a repo with `uvx capt-hook review disable`. The [session reviewer guide](https://yasyf.github.io/captain-hook/docs/guide/session-reviewer.html) covers the prerequisites (an authenticated `claude` and `gh`) and the `HOOKS_REVIEW_*` thresholds.
+
+## Tested like code
+
+Every deterministic hook carries inline tests, so a broken hook fails like broken code:
 
 ```python
 # .claude/hooks/safety.py
@@ -70,36 +65,24 @@ block_command(
 )
 ```
 
+Run them from your project root, where `--hooks` defaults to `.claude/hooks`:
+
 ```bash
 uvx capt-hook test
 ```
 
-`init` already wired Claude Code's settings. Each event runs `uvx capt-hook run <Event>`, with the event JSON arriving on stdin and the verdict written to stdout. Re-run `uvx capt-hook register-hooks` only after you add hooks on a new event; it writes `.claude/settings.local.json` for you.
+Wire that into CI and you catch a broken hook the way you catch broken code.
 
-## Session reviewer
+## What it's for
 
-`init` also turns on the **session reviewer**. When a Claude Code session ends, it mines the transcript for the durable corrections you gave and the hooks that misfired, judges each one, and — once a pattern clears its thresholds — opens a pull request that adds a new hook or fixes the one that misfired. You review the PR like any other.
-
-It's on by default after `init`. Turn it off for a repo with `uvx capt-hook review disable`, or skip it at setup with `uvx capt-hook init --no-review`. The [session reviewer guide](https://yasyf.github.io/captain-hook/docs/guide/session-reviewer.html) covers prerequisites (an authenticated `claude` and `gh`) and the `HOOKS_REVIEW_*` tuning knobs.
-
-## Agent Skills
-
-captain-hook ships two [Agent Skills](https://yasyf.github.io/captain-hook/docs/getting-started/skills.html) so you don't have to write hooks by hand. `bootstrapping-hooks` surveys your repo's docs, CI, and git history and proposes gates and nudges; `translating-styleguides` turns a STYLEGUIDE.md into enforced rules. Both land in `.claude/skills/` via `init` and ship as the plugin in the [Quickstart](#quickstart) — ask Claude to "set up captain hook" and `bootstrapping-hooks` takes it from there.
-
-## What this solves
-
-captain-hook covers these jobs:
-
-- Block dangerous tool calls before they execute on `PreToolUse`, like force-push, package-manager footguns, and raw `rm -rf`.
-- Drive the agent with feedback that fires on the patterns it actually emits, such as repeated failures, weakened tests, and missed conventions.
-- Enforce multi-step workflows with Stop gates and artifact validation, so the agent can't declare "done" without running tests, writing a report, or completing a checklist.
-- Keep all of the above testable. Every hook ships with inline `tests = {...}` that `uvx capt-hook test` runs in CI, so you catch broken hooks the way you catch broken code.
+- Block footguns before they run on `PreToolUse`: force-push, `rm -rf`, package-manager traps.
+- Steer the agent with feedback that fires on the patterns it actually emits: repeated failures, weakened tests, missed conventions.
+- Hold the line on multi-step work with Stop gates and artifact checks, so the agent can't call it "done" before the tests run or the report's written.
+- Keep all of it testable; every hook ships with inline tests that run in CI.
 
 ## Docs
 
-[Read the docs](https://yasyf.github.io/captain-hook/) for the full guide to conditions, primitives, LLM hooks, workflows, state, and real-world patterns.
-
-For working on captain-hook itself, see the [development guide](https://yasyf.github.io/captain-hook/docs/development/).
+[Read the docs](https://yasyf.github.io/captain-hook/) for the full guide to conditions, primitives, LLM hooks, workflows, state, and real-world patterns. To work on captain-hook itself, see the [development guide](https://yasyf.github.io/captain-hook/docs/development/).
 
 ## License
 

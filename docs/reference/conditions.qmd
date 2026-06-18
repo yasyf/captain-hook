@@ -52,25 +52,9 @@ For OR within a single condition, use pipe-alternation
 
 ## Custom conditions
 
-When a built-in condition can't express the check, implement `CustomCondition` — any frozen
-dataclass with a `check(self, evt) -> bool` method:
-
-```python
-from dataclasses import dataclass
-from captain_hook import BaseHookEvent, CustomCondition, Event, hook
-
-@dataclass(frozen=True)
-class MinEdits(CustomCondition):
-    threshold: int = 5
-
-    def check(self, evt: BaseHookEvent) -> bool:
-        return evt.ctx.t.tool_calls.named("Edit").count() >= self.threshold
-
-# Use it like any built-in:
-hook(Event.Stop, message="Too many edits", block=True, only_if=[MinEdits(threshold=10)])
-```
-
-The predicate goes in `check()`; the firing goes through a primitive.
+`CustomCondition` is a `runtime_checkable` protocol. Any frozen dataclass with a
+`check(self, evt: BaseHookEvent) -> bool` method satisfies it and slots into `only_if`/`skip_if`.
+See [Write a custom condition](../guide/conditions.qmd#write-a-custom-condition) for a worked example.
 
 ## Signals (scoring)
 

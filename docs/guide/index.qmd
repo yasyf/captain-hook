@@ -20,7 +20,8 @@ Read these to learn how captain-hook fits together before you write a rule.
 ## How-to (get a task done)
 
 Each page is one task with the shortest correct path. Start in Foundation, then
-reach for Intermediate and Advanced as you need them.
+reach for Intermediate and Advanced as you need them. For complete, runnable hooks
+to copy and adapt, see the [Examples](../examples/index.qmd).
 
 ### Foundation
 
@@ -36,6 +37,7 @@ inline tests and mock events.
 - [Query the transcript](transcript.qmd) reads the conversation history inside a handler.
 - [Signals](signals.qmd) scores patterns across the transcript to drive a nudge.
 - [Real-World Patterns](patterns.qmd) collects hooks distilled from a production hooks directory, ready to copy and adapt.
+- [Packs](packs.qmd) enables versioned hook collections, builtin (`general`, `python`) or from GitHub, instead of copying files into your repo.
 
 ### Advanced
 

@@ -7,22 +7,24 @@ The [Guide](../guide/index.qmd) how-tos teach which one to reach for.
 
 ## At a glance
 
-| Primitive | Action | Default events | Inline tests? | Reach for it when |
-|-----------|--------|----------------|:-------------:|-------------------|
-| `block_command` | block | `PreToolUse` | ✓ | Deny a Bash command outright |
-| `warn_command` | warn | `PostToolUse` | ✓ | Flag a command without blocking |
-| `gate` | block | `Stop \| SubagentStop` | ✓ | Require something done before the agent finishes |
-| `nudge` | warn (or block) | `PreToolUse`/`PostToolUse`/`Stop \| SubagentStop` | ✓ | Advise when conditions or signals fire |
-| `lint` | warn (or block) | `PostToolUse` | ✓ | Check Python edits (string- or AST-mode) |
-| `diff_lint` | warn (or block) | `PostToolUse` | ✓ | Flag only what an edit changed |
-| `llm_gate` | block | `Stop \| SubagentStop` | SKIP | Block on a judgment a regex can't make |
-| `llm_nudge` | warn | `PostToolUse` | SKIP | Advise on a judgment a regex can't make |
-| `prompt_check` | warn/block | called in a handler | SKIP | Judge an edit inside a custom handler |
-| `workflow` | block | `SubagentStop` | ✓ | Enforce an ordered, artifact-gated checklist |
+| Primitive | Action | Default events | Inline tests? | Use |
+|-----------|--------|----------------|:-------------:|-----|
+| `block_command` | block | `PreToolUse` | ✓ | command |
+| `warn_command` | warn | `PostToolUse` | ✓ | command |
+| `gate` | block | `Stop \| SubagentStop` | ✓ | completion |
+| `nudge` | warn (or block) | `PreToolUse`/`PostToolUse`/`Stop \| SubagentStop` | ✓ | advice |
+| `lint` | warn (or block) | `PostToolUse` | ✓ | edit (string/AST) |
+| `diff_lint` | warn (or block) | `PostToolUse` | ✓ | edit delta |
+| `llm_gate` | block | `Stop \| SubagentStop` | SKIP | judgment |
+| `llm_nudge` | warn | `PostToolUse` | SKIP | judgment |
+| `prompt_check` | warn/block | called in a handler | SKIP | handler |
+| `workflow` | block | `SubagentStop` | ✓ | checklist |
 
 Deterministic primitives carry inline `tests={...}`; LLM-backed ones show `SKIP` under
 `uvx capt-hook test` because they need a live model. `nudge` defaults to `PreToolUse` with a `when=`
 predicate, `PostToolUse` with `signals=`, and `Stop | SubagentStop` when `block=True`.
+[Deterministic primitives](../guide/primitives.qmd) and [LLM Hooks](../guide/llm-hooks.qmd) show
+which one to reach for, with worked examples.
 
 ## Commands
 

@@ -37,19 +37,13 @@ Start from what you want to match.
 | A file path | `FilePath("*.py", "*.pyi")` |
 | A bash command | `Command(r"git\s+push")` |
 | An edit to a source file in a language | `SourceEdits(lang="ts")` |
-| A test file | `TestFile()` |
-| Written or edited file content | `Content(r"print\(")` |
 | The current tool | `Tool("Bash")` |
-| A subagent type | `Agent("cleanup")` |
 | A file edited earlier this session | `TouchedFile("**/*.py")` |
 | A command run earlier this session | `RanCommand(r"uv\s+run\s+mtest")` |
-| A skill used earlier this session | `UsedSkill("codex")` |
-| Plan mode | `InPlanMode()` |
 
-Most of these inspect the current event. `TouchedFile`, `RanCommand`, and
-`UsedSkill` inspect the session transcript, so they tell you whether something
-already happened earlier in the session. For the full table with every pattern type and default, see
-[Conditions Cheatsheet](../reference/conditions.qmd).
+The first three inspect the current event; the last two inspect the session transcript, so they
+tell you whether something already happened earlier. For every condition with its pattern type and
+defaults, see the [conditions cheatsheet](../reference/conditions.qmd).
 
 ## Match the current event
 

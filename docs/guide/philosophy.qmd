@@ -5,6 +5,12 @@ title: "Design philosophy and when not to use it"
 captain-hook treats a hook as typed, declarative data you can test inline and check with a type
 checker, not a shell snippet you hand-write in `settings.json`.
 
+Not every hook needs that. A one-liner you never change, a script you already trust, or a machine
+without `uv` calls for a native `settings.json` hook instead. The honest scoping answer lives in
+[When a native `settings.json` hook suffices](#when-a-native-settingsjson-hook-suffices); read it
+first if you're deciding whether to adopt captain-hook at all. The rest of this page is the case
+for the trade when you make it.
+
 ## A hook is data, not a script
 
 A native `settings.json` hook is a command string. Claude Code pipes the event to
@@ -13,8 +19,29 @@ verdict all live as text inside a JSON file. Nothing reads that text until Claud
 event, so a typo, a wrong field name, or a broken regex stays invisible until the moment it
 should have fired.
 
-captain-hook moves the same description into Python objects. You register a hook by calling a
-typed function:
+Take a rule that bans `git stash`. Natively, it's a matcher block wrapping a shell command that
+greps stdin and emits the deny envelope by hand:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command' | grep -qE 'git\\s+stash' && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Use jj instead of git stash\"}}'"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+captain-hook moves the same rule into Python objects. You register the hook by calling a typed
+function:
 
 ```python
 from captain_hook import block_command
@@ -25,7 +52,8 @@ block_command(
 )
 ```
 
-The event target, the conditions, and the verdict are now values with types. The
+Same rule, same verdict. The event target, the conditions, and the verdict are now values with
+types. The
 [primitives reference](../reference/primitives.qmd) lists every builder and the verdict each one
 produces; the [conditions reference](../reference/conditions.qmd) lists every filter; the
 [events reference](../reference/events.qmd) lists every lifecycle moment you can target.

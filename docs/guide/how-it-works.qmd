@@ -82,7 +82,7 @@ One captain-hook process handles every event the same way, in four stages.
 
 ## Tracing a blocked `git stash`
 
-Start with the same hook, written in its full declarative form so every part is visible:
+Take the same hook in its full declarative form, so every part the pipeline reads is visible:
 
 ```python
 from captain_hook import hook, Event, Tool, Command
@@ -95,57 +95,14 @@ hook(
 )
 ```
 
-`block_command` is a primitive that expands to this same call, and the [primitives reference](../reference/primitives.qmd) lists the rest.
+`block_command` expands to this same call. Watch it run the four stages when Claude tries `git stash pop`.
 
-### Parse the event
+**Parse the event.** Claude Code pauses the tool call and writes the payload to stdin. The CLI parses that JSON into a typed `PreToolUseEvent`, where `evt.tool_name` reads `"Bash"` and `evt.command` reads `"git stash pop"`. The exact stdin fields live in the [events reference](../reference/events.qmd).
 
-Claude tries to run `git stash pop`. Claude Code pauses the tool call and sends a payload to the hook process on stdin, trimmed here to the fields the trace touches:
+**Match conditions.** `Event.PreToolUse` is in the hook's event set, so the event qualifies, and the `only_if` conditions then run against it. `Tool("Bash")` reads `evt.tool_name` and matches, while `Command(r"git\s+stash")` searches `evt.command` and matches. No `skip_if` is registered, so with every condition holding, the hook is matched.
 
-```json
-{
-  "tool_name": "Bash",
-  "tool_input": { "command": "git stash pop" },
-  "transcript_path": "/tmp/claude/session/transcript.jsonl"
-}
-```
+**Run the action.** This hook has no handler function, so it returns its configured message as a blocking verdict, `HookResult(action=Action.block, message="git stash is not allowed; use jj shelve")`. A block is final. The pipeline stops checking further hooks and carries the verdict forward.
 
-The CLI parses that JSON into a typed `PreToolUseEvent`:
+**Format the verdict.** The block renders as a `PreToolUse` deny envelope on stdout, `permissionDecision: "deny"` with the message as `permissionDecisionReason`. Claude Code reads the deny and skips the tool call. Claude sees the reason and reaches for `jj shelve`.
 
-```python
-evt.tool_name  # "Bash"
-evt.command    # "git stash pop"
-```
-
-### Match conditions
-
-The pipeline checks the hook against the event. `Event.PreToolUse` is in the hook's event set, so the event matches. Then each `only_if` condition runs. `Tool("Bash")` reads `evt.tool_name` and matches, and `Command(r"git\s+stash")` searches `evt.command` and matches. No `skip_if` conditions are registered, so nothing skips the hook. Every condition holds, so this hook is matched.
-
-### Execute matching hooks
-
-This is a declarative hook with no handler function, so it returns its configured message as a blocking verdict:
-
-```python
-HookResult(action=Action.block, message="git stash is not allowed; use jj shelve")
-```
-
-A block is final, so the pipeline stops checking further hooks and carries this verdict forward.
-
-### Format the verdict
-
-The block becomes the deny envelope for a `PreToolUse` event, written to stdout:
-
-```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "deny",
-    "permissionDecisionReason": "git stash is not allowed; use jj shelve"
-  }
-}
-```
-
-Claude Code reads `permissionDecision: "deny"` and skips the tool call. Claude sees the reason and adjusts, reaching for `jj shelve`.
-
-::: {.callout-note title="Block versus warn"}
-Set `block=False` and the verdict becomes a warning. The envelope swaps `permissionDecision: "deny"` for `additionalContext`, so Claude reads the message as advice and the tool still runs.
-:::
+Set `block=False` and the same trace ends in a warning instead. The envelope swaps `permissionDecision: "deny"` for `additionalContext`, so Claude reads the message as advice and the tool still runs.
