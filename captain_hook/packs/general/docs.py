@@ -12,7 +12,9 @@ from captain_hook import Allow, FilePath, Input, Tool, UsedSkill, Warn, nudge
 nudge(
     "You're editing documentation. Consult the writing-docs skill first for the "
     "Diataxis modes, voice rules, and code-sample rules, then run "
-    "`slop-cop check <file> --lang=markdown` to catch prose tells before you finish.",
+    "`slop-cop check <file> --lang=markdown` to catch prose tells before you finish. "
+    "slop-cop is a Go binary — if it's not on PATH, run the `/slop-cop-check` skill "
+    "(it installs it), never `uvx slop-cop`.",
     only_if=[Tool("Write|Edit"), FilePath("**/*.md", "**/*.qmd", "docs/**", "README.md")],
     skip_if=[UsedSkill("writing-docs|writing-docs:writing-docs")],
     max_fires=1,
