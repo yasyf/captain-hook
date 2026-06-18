@@ -7,31 +7,29 @@ captain-hook bundles two Claude Code [Agent Skills](https://code.claude.com/docs
 - `bootstrapping-hooks` surveys your repo's docs, CI workflows, lint configs, and git history, proposes categorized gates and nudges for your approval, then writes `.claude/hooks/*.py` with inline tests, verifies them with `uvx capt-hook test`, and wires `.claude/settings.local.json`.
 - `translating-styleguides` turns a STYLEGUIDE.md, or the style sections of CONTRIBUTING/AGENTS/CLAUDE.md, into `StyleRule` classes, custom validation logic, or LLM hooks. It tiers each rule by what it needs and reports anything it can't enforce.
 
-## Install as project skills
+## Install with the CLI
 
 Run either command from your project root:
 
 ```bash
-uvx capt-hook init                  # scaffolds hooks AND installs the skills
-uvx capt-hook skills install        # skills only; --force refreshes existing copies
+uvx capt-hook init                  # scaffolds hooks AND registers the plugin
+uvx capt-hook skills install        # registers the plugin only
 ```
 
-Either command copies the skills into `.claude/skills/`, where Claude Code picks them up after you accept workspace trust. Invoke them as `/bootstrapping-hooks` and `/translating-styleguides`, or ask in plain language such as "set up captain hook" or "enforce our style guide". `init` installs two more skills — `scanning-sessions` and `authoring-hooks` — that power the [session reviewer](../guide/session-reviewer.qmd); you do not invoke those directly.
+Both write the captain-hook plugin into your committed `.claude/settings.json` as an `extraKnownMarketplaces` entry pointing at this repository plus an `enabledPlugins` entry that turns it on. Claude Code prompts you to install the plugin when you accept workspace trust. The skills then load from the plugin instead of being copied into your repo, so they track the repository and pick up every new commit. Invoke them as `/captain-hook:bootstrapping-hooks` and `/captain-hook:translating-styleguides`, or ask in plain language such as "set up captain hook" or "enforce our style guide". The plugin also ships `scanning-sessions` and `authoring-hooks`, which power the [session reviewer](../guide/session-reviewer.qmd); you do not invoke those directly.
 
-In an interactive terminal, `init` finishes by offering to launch Claude with `/bootstrapping-hooks` right away. Accept and the survey-propose-write loop starts immediately in your repo. Accepting also registers the captain-hook plugin marketplace in `.claude/settings.local.json`, so the skills track the repository and update automatically.
+In an interactive terminal, `init` finishes by offering to launch Claude with the bootstrapping skill right away. Accept and the survey-propose-write loop starts in your repo, with the bundled plugin loaded directly so the skill resolves before the marketplace install completes.
 
-Existing skill directories are never overwritten on re-run; use `uvx capt-hook skills install --force` to replace them wholesale after upgrading captain-hook.
+## Install from inside Claude Code
 
-## Install as a plugin
-
-From inside a Claude Code session, run:
+Already in a session? Add the marketplace and install the plugin by hand:
 
 ```
 /plugin marketplace add yasyf/captain-hook
 /plugin install captain-hook@captain-hook
 ```
 
-Plugin skills are namespaced as `/captain-hook:bootstrapping-hooks` and track the repository. Each commit is treated as a new version, so updates arrive without a PyPI release.
+Plugin skills are namespaced as `/captain-hook:bootstrapping-hooks`. Each commit is treated as a new version, so updates arrive without a PyPI release.
 
 ## What's inside
 

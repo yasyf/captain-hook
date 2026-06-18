@@ -68,7 +68,7 @@ uv run python -c "import captain_hook; print(captain_hook.__name__)"
 
 ## Project layout
 
-`uvx capt-hook init` scaffolds `.claude/hooks/` with a `conf.py` and a starter `example.py`, plus the bundled skills and `.claude/settings.local.json`. [Project Structure & Wiring](project-structure.qmd) walks the full layout. The exact layout is optional; `uvx capt-hook --hooks <any-dir> test` works on any directory of hooks, and the default lines up with what Claude Code looks for.
+`uvx capt-hook init` scaffolds `.claude/hooks/` with a `conf.py` and a starter `example.py`, registers the captain-hook plugin in `.claude/settings.json`, and wires `.claude/settings.local.json`. [Project Structure & Wiring](project-structure.qmd) walks the full layout. The exact layout is optional; `uvx capt-hook --hooks <any-dir> test` works on any directory of hooks, and the default lines up with what Claude Code looks for.
 
 ## spaCy model
 

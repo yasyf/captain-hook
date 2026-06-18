@@ -19,7 +19,7 @@ captain-hook needs no install — it runs through [uvx](https://docs.astral.sh/u
 uvx capt-hook init
 ```
 
-`init` scaffolds `.claude/hooks/`, wires Claude Code's settings, installs the bundled skills, and arms the [session reviewer](#it-learns-from-your-corrections). Or install the plugin and let Claude do it. Run `/plugin marketplace add yasyf/captain-hook`, then ask Claude to "set up captain hook".
+`init` scaffolds `.claude/hooks/`, wires Claude Code's settings, registers the captain-hook plugin so its skills install on workspace-trust, and arms the [session reviewer](#it-learns-from-your-corrections). Or do it all from a session. Run `/plugin marketplace add yasyf/captain-hook`, then ask Claude to "set up captain hook".
 
 ## Your first hook
 

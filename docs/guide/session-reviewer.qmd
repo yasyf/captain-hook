@@ -44,7 +44,7 @@ uvx capt-hook review enable
 
 Both paths set up the same three things the reviewer needs:
 
-- the `scanning-sessions` and `authoring-hooks` skills in `.claude/skills/` (the brain runs them);
+- the captain-hook plugin registered in `.claude/settings.json` (the brain loads its `scanning-sessions` and `authoring-hooks` skills directly);
 - a `uvx capt-hook review run` entry on `SessionEnd` in your settings;
 - a per-machine watching flag for this repo.
 
