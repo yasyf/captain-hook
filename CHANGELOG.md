@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-06-18
+
+### Added
+- `capt-hook status` (and `capt-hook review status`): a dashboard for the session
+  reviewer's corrections lifecycle. It groups every tracked correction by stage —
+  watching, eligible, PR open, and the merged, closed, or stale outcomes — and for
+  each one shows kind-aware progress toward its PR thresholds plus the one-sentence
+  summary of what its PR would do. Open-PR state renders from cache immediately,
+  then refreshes against GitHub in the background and updates in place.
+
 ## [3.3.2] - 2026-06-17
 
 ### Changed
