@@ -9,9 +9,10 @@ and the loader imports them alongside your own `.claude/hooks/` modules.
 
 ## Enable a builtin pack
 
-`capt-hook` ships two builtin packs: `general` (language-agnostic guards for git
-safety, code stewardship, task and plan discipline, and a review gate) and
-`python` (a pytest-before-commit gate, AST style rules, and `ruff`/`uv` toolchain
+`capt-hook` ships three builtin packs: `general` (language-agnostic guards for git
+safety, code stewardship, task and plan discipline, and a review gate), `python`
+(a pytest-before-commit gate, AST style rules, and `ruff`/`uv` toolchain guards),
+and `go` (a go-test-before-commit gate and `gofumpt`/`golangci-lint` toolchain
 guards). Add one by name:
 
 ```bash
@@ -43,6 +44,7 @@ uvx capt-hook pack list
 ```
   general                  builtin  -                    v0.1.0    7 hooks
   python                   builtin  -                    v0.1.0    3 hooks
+  go                       builtin  -                    v0.1.0    2 hooks
 ```
 
 Remove a pack by name. The entry leaves `packs.toml` and the events it added are

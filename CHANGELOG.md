@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0] - 2026-06-18
+
+### Added
+- New builtin `go` pack: a go-test-before-commit gate (blocks `git commit` of `.go`
+  paths until `go test` ran this session), `gofumpt`/`golangci-lint` toolchain guards
+  (mechanical formatting/linting is owned by the commit hook + CI), and a `go mod tidy`
+  nudge on module-resolution failures. Enable with `capt-hook pack add go`.
+
 ## [3.8.0] - 2026-06-18
 
 ### Added

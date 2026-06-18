@@ -14,9 +14,10 @@ from captain_hook.loader import discover_pack
 from captain_hook.packs import manager
 
 PACKS_DIR = Path(captain_hook.__file__).parent / "packs"
-EXPECTED_BUILTINS = {"general", "python"}
+EXPECTED_BUILTINS = {"general", "python", "go"}
 GENERAL_HOOKS = {"commands", "docs", "plans", "prompts", "review", "stewardship", "tasks"}
 PYTHON_HOOKS = {"style", "testing", "toolchain"}
+GO_HOOKS = {"testing", "toolchain"}
 HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 
 
@@ -52,8 +53,8 @@ def test_expected_builtin_packs_present() -> None:
 
 @pytest.mark.parametrize(
     ("name", "hook_stems"),
-    [("general", GENERAL_HOOKS), ("python", PYTHON_HOOKS)],
-    ids=["general", "python"],
+    [("general", GENERAL_HOOKS), ("python", PYTHON_HOOKS), ("go", GO_HOOKS)],
+    ids=["general", "python", "go"],
 )
 def test_builtin_pack_layout(name: str, hook_stems: set[str]) -> None:
     pack_dir = manager.builtin_packs()[name]
