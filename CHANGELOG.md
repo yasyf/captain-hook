@@ -4,6 +4,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0] - 2026-06-18
+
+### Added
+- The session reviewer feeds and reads cc-transcript's shared correction ledger.
+  Per ended session it grounds each user-correction candidate via
+  `extract_correction` (source `captain-hook`) — idempotent per anchor, skipping
+  the hook-misfire FIX path — and `review show` surfaces the ledger's before/after
+  evidence for the PR-drafting brain.
+
+### Changed
+- Track cc-transcript v4: requires `cc-transcript>=4,<5` and `spawnllm>=0.2.0`.
+  The shared decision ledger table is now `decisions` (was `decisions_v1`).
+
 ## [3.7.0] - 2026-06-18
 
 ### Changed

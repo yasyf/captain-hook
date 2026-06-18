@@ -147,7 +147,7 @@ def run_compliance_suppressed(sandbox: Sandbox) -> ScenarioResult:
 def run_attribution_miss(sandbox: Sandbox) -> ScenarioResult:
     enable(sandbox)
     report = run_planted(sandbox, fix_strong(session="stress-fix-unseeded"))
-    decisions = query(sandbox.decisions_db, "SELECT * FROM decisions_v1")
+    decisions = query(sandbox.decisions_db, "SELECT * FROM decisions")
     return ScenarioResult(
         (
             check("decision ledger empty", decisions == [], decisions),
@@ -178,7 +178,7 @@ def run_ambiguity_drop(sandbox: Sandbox) -> ScenarioResult:
         digest=None,
     )
     report = run_planted(sandbox, ambiguous_planted())
-    decisions = query(sandbox.decisions_db, "SELECT kind, source_file, event, message FROM decisions_v1")
+    decisions = query(sandbox.decisions_db, "SELECT kind, source_file, event, message FROM decisions")
     return ScenarioResult(
         (
             check(

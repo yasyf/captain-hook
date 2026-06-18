@@ -40,7 +40,7 @@ LEAK_QUERIES = (
     (REAL_REVIEW_DB, f"SELECT COUNT(*) FROM candidates WHERE repo_key LIKE '%{ORIGIN_ORG}%'"),
     (REAL_REVIEW_DB, f"SELECT COUNT(*) FROM repos WHERE repo_key LIKE '%{ORIGIN_ORG}%'"),
     (REAL_REVIEW_DB, "SELECT COUNT(*) FROM files WHERE path LIKE '/tmp/capt-stress%'"),
-    (REAL_DECISIONS_DB, f"SELECT COUNT(*) FROM decisions_v1 WHERE session_id LIKE '{SESSION_PREFIX}%'"),
+    (REAL_DECISIONS_DB, f"SELECT COUNT(*) FROM decisions WHERE session_id LIKE '{SESSION_PREFIX}%'"),
 )
 
 
