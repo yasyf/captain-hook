@@ -21,6 +21,8 @@ import click
 if TYPE_CHECKING:
     from typing import Any
 
+    from cc_transcript.corrections import Correction
+
     from captain_hook.cli import CliState
     from captain_hook.review.judge import JudgeReport
     from captain_hook.review.repo import RepoKey
@@ -229,26 +231,52 @@ def list_candidates(state: CliState, repo_: str | None) -> None:
         click.echo(candidate_line(row))
 
 
+def correction_lines(correction: Correction) -> tuple[str, ...]:
+    match correction.correction_origin:
+        case "session" | "git":
+            return (
+                f"  correction ({correction.correction_origin}):",
+                f"    - {correction.correction_old}",
+                f"    + {correction.correction_new}",
+            )
+        case _ if correction.correction_text:
+            return (f"  correction note: {correction.correction_text}",)
+        case _:
+            return ()
+
+
+def correction_block(correction: Correction) -> str:
+    return "\n".join(
+        (
+            f"- {correction.incorrect_file} (session {correction.session_id}):",
+            f"    - {correction.incorrect_old}",
+            f"    + {correction.incorrect_new}",
+            *correction_lines(correction),
+        )
+    )
+
+
 @review.command()
 @click.argument("candidate_id", type=int)
 def show(candidate_id: int) -> None:
-    """Show one candidate's row and its threshold status."""
+    """Show one candidate's row, its threshold status, and the shared ledger's faulted edits."""
     from captain_hook.review.judge import REVIEW_PROMPT_VERSION
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
 
     settings = ReviewSettings()
 
-    async def go() -> tuple[dict[str, object], ThresholdStatus, bool]:
+    async def go() -> tuple[dict[str, object], ThresholdStatus, bool, tuple[Correction, ...]]:
         async with await ReviewStore.open(settings.db_path) as store:
             return (
                 await store.candidate(candidate_id),
                 await store.threshold_status(candidate_id, settings=settings, prompt_version=REVIEW_PROMPT_VERSION),
                 await store.eligible(candidate_id, settings=settings, prompt_version=REVIEW_PROMPT_VERSION),
+                await store.correction_evidence(candidate_id),
             )
 
     try:
-        row, status, ok = asyncio.run(go())
+        row, status, ok, evidence = asyncio.run(go())
     except LookupError as exc:
         raise click.ClickException(str(exc)) from exc
     for key, value in row.items():
@@ -257,6 +285,10 @@ def show(candidate_id: int) -> None:
         f"thresholds: sessions={status.sessions} days={status.days} open_prs={status.open_prs} "
         f"single_observation={status.single_observation} eligible={ok}"
     )
+    if evidence:
+        click.echo("correction_evidence:")
+        for correction in evidence:
+            click.echo(correction_block(correction))
 
 
 @review.command(name="threshold-check")

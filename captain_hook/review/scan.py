@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import chain
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from cc_transcript.activity import SessionActivity
@@ -76,7 +77,6 @@ from captain_hook.review.store import CandidateKind
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping, Sequence
-    from pathlib import Path
     from typing import Any
 
     from cc_transcript.backend import ParsedTranscript
@@ -243,6 +243,39 @@ def transcript_repo(events: Sequence[TranscriptEvent]) -> RepoKey | None:
     )
 
 
+def transcript_cwd(events: Sequence[TranscriptEvent]) -> Path | None:
+    return next(
+        (Path(meta.cwd) for event in events if (meta := event_meta(event)) is not None if meta.cwd is not None),
+        None,
+    )
+
+
+async def record_corrections(
+    events: Sequence[TranscriptEvent], kept: Sequence[tuple[MiningSignal, FeedbackCandidate]], *, repo: Path | None
+) -> None:
+    """Grounds each user-correction candidate in the shared code-correction ledger.
+
+    For every kept user-correction signal (the FIX-mode ``hook_complaint`` is a
+    local hook misfire, not a code correction, so it is skipped), harvests the
+    edit the feedback faults around its anchor and appends one row to the family
+    ledger. Idempotent per anchor: a no-op when cc-pushback already wrote it, so
+    captain-hook only fills the ledger for sessions nobody else processed.
+    """
+    from cc_transcript.corrections import CorrectionLog
+    from cc_transcript.extract import extract_correction, usable_backend
+
+    corrections = [(sig, candidate) for sig, candidate in kept if sig.kind != HOOK_COMPLAINT]
+    if not corrections:
+        return
+    activity = SessionActivity.from_events(corrections[0][0].session_id, events)
+    backend = usable_backend()
+    log = CorrectionLog.open()
+    for sig, candidate in corrections:
+        await extract_correction(
+            log, activity, candidate.ref, source="captain-hook", feedback=sig.text, repo=repo, backend=backend
+        )
+
+
 async def ingest(
     store: ReviewStore, parsed: ParsedTranscript, *, settings: ReviewSettings, repo_key: RepoKey | None
 ) -> ScanReport:
@@ -275,6 +308,7 @@ async def ingest(
         await store.record_observation(
             candidate_id, dedup_key=candidate.dedup_key, session_id=sig.session_id, occurred_at=sig.occurred_at
         )
+    await record_corrections(parsed.events, kept, repo=transcript_cwd(parsed.events))
     return ScanReport(scanned=1, inserted=inserted)
 
 

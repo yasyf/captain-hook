@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from pathlib import Path
     from typing import Any
 
+    from cc_transcript.corrections import Correction
     from cc_transcript.ids import SessionId
     from cc_transcript.mining.candidates import DedupKey
     from cc_transcript.mining.confidence import Confidence
@@ -104,6 +105,14 @@ WHERE o.candidate_id = ? AND l.accepted = 1 AND l.confidence >= ?
 """
 
 OPEN_PRS_QUERY = "SELECT COUNT(*) AS n FROM candidates WHERE repo_key = ? AND status = ? AND pr_opened_at > ?"
+
+OBSERVATION_ANCHORS_QUERY = """
+SELECT DISTINCT e.session_id, e.event_uuid
+FROM candidate_observations o
+JOIN feedback_events e ON e.dedup_key = o.dedup_key
+WHERE o.candidate_id = ? AND e.session_id IS NOT NULL AND e.event_uuid IS NOT NULL
+ORDER BY o.id
+"""
 
 CANDIDATES_QUERY = """
 SELECT c.*,
@@ -501,6 +510,26 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
             (prompt_version, candidate_id, settings.min_judge_confidence),
         )
         return str(rows[0]["summary"]) if (rows := [dict(row) async for row in cur]) else None
+
+    async def correction_evidence(self, candidate_id: int) -> tuple[Correction, ...]:
+        """Returns the shared-ledger code corrections grounding a candidate's observations.
+
+        Joins each observation back to its feedback anchor ``(session_id,
+        event_uuid)`` and pulls the corrections the family ledger holds for that
+        anchor — the offending before/after edit the PR-drafting brain needs. The
+        reviewer's own per-session pass writes these rows, so a candidate that
+        crossed its thresholds carries its faulted edits.
+        """
+        from cc_transcript.corrections import CorrectionLog
+        from cc_transcript.ids import EventUuid, SessionId
+
+        cur = await self.store.conn.execute(OBSERVATION_ANCHORS_QUERY, (candidate_id,))
+        log = CorrectionLog.open()
+        return tuple(
+            correction
+            for row in [dict(row) async for row in cur]
+            for correction in log.for_anchor(SessionId(str(row["session_id"])), EventUuid(str(row["event_uuid"])))
+        )
 
     async def candidate_view(
         self, row: dict[str, object], *, settings: ReviewSettings, prompt_version: int
