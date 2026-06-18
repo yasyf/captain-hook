@@ -93,9 +93,11 @@ local hooks stay authoritative.
 
 ## Author a pack
 
-A pack repo needs a `capt-hook.toml` manifest at its root and a directory of hook
-`.py` files. The manifest names the pack, versions it, and points at the hooks
-directory:
+A pack repo needs a `capt-hook.toml` manifest and a directory of hook `.py`
+files. The manifest may live at `.claude/capt-hook.toml`, beside your other
+Claude Code config, or at the repo root; discovery prefers `.claude/` and falls
+back to the root. The manifest names the pack, versions it, and points at the
+hooks directory:
 
 ```toml
 name = "acme-guards"
@@ -104,7 +106,9 @@ description = "Guards for ACME service conventions"
 hooks = "hooks"
 ```
 
-Set `hooks = "."` when the hook files sit beside the manifest. Each hook file is a
+The `hooks` path is relative to the repo root regardless of where the manifest
+sits, so moving the manifest into `.claude/` needs no other change. Set
+`hooks = "."` when the hook files sit beside the manifest. Each hook file is a
 flat module that imports from `captain_hook` and registers with the same
 primitives you use locally:
 

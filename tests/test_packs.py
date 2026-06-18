@@ -20,9 +20,11 @@ PYTHON_HOOKS = {"style", "testing", "toolchain"}
 HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 
 
-def write_pack(root: Path, name: str, *, hooks: str = ".", version: str = "0.1.0") -> Path:
+def write_pack(root: Path, name: str, *, hooks: str = ".", version: str = "0.1.0", manifest_subdir: str = "") -> Path:
     root.mkdir(parents=True, exist_ok=True)
-    (root / manager.PACK_MANIFEST).write_text(
+    manifest_dir = root / manifest_subdir if manifest_subdir else root
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    (manifest_dir / manager.PACK_MANIFEST).write_text(
         f'name = "{name}"\nversion = "{version}"\ndescription = "d"\nhooks = "{hooks}"\n'
     )
     return root
@@ -108,6 +110,21 @@ def test_manifest_missing_field_fails_loud(tmp_path: Path) -> None:
 def test_manifest_missing_file(tmp_path: Path) -> None:
     with pytest.raises(manager.PackError):
         manager.PackManifest.load(tmp_path / manager.PACK_MANIFEST)
+
+
+def test_manifest_in_prefers_claude(tmp_path: Path) -> None:
+    (tmp_path / manager.PACK_MANIFEST).write_text("root")
+    assert manager.manifest_in(tmp_path) == tmp_path / manager.PACK_MANIFEST
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / manager.PACK_MANIFEST).write_text("claude")
+    assert manager.manifest_in(tmp_path) == claude / manager.PACK_MANIFEST
+
+
+def test_manifest_in_missing_returns_root(tmp_path: Path) -> None:
+    found = manager.manifest_in(tmp_path)
+    assert found == tmp_path / manager.PACK_MANIFEST
+    assert not found.is_file()
 
 
 # --- packs.toml IO -------------------------------------------------------------------
@@ -199,6 +216,54 @@ def test_fetch_pack_caches_only_manifest_and_hooks_subdir(tmp_path: Path, monkey
     assert (resolved.path / "h.py").is_file()
     for junk in ("README.md", "go.mod", "src"):
         assert not (cached / junk).exists(), f"{junk} leaked into the cache"
+
+
+def test_fetch_pack_claude_manifest_caches_manifest_and_hooks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
+    repo = tmp_path / "repo"
+    write_pack(repo, "acme-guards", hooks="plugin/hooks", manifest_subdir=".claude")
+    (repo / ".claude" / "settings.json").write_text("{}\n")  # other .claude/ content must not leak
+    (repo / "plugin" / "hooks").mkdir(parents=True)
+    (repo / "plugin" / "hooks" / "h.py").write_text(HOOK_SRC)
+    tarball = tmp_path / "repo.tar.gz"
+    with tarfile.open(tarball, "w:gz") as tf:
+        tf.add(repo, arcname="big-repo-sha")
+
+    sha = "d" * 40
+    monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
+    monkeypatch.setattr("urllib.request.urlretrieve", lambda url: (str(tarball), None))
+
+    resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
+
+    cached = tmp_path / "cache" / f"acme-guards@{sha}"
+    assert {p.name for p in cached.iterdir()} == {".claude", "plugin", manager.SHA_MARKER}
+    assert manager.manifest_in(cached) == cached / ".claude" / manager.PACK_MANIFEST
+    assert not (cached / ".claude" / "settings.json").exists(), "other .claude/ content leaked into the cache"
+    assert (resolved.path / "h.py").is_file()  # resolved.path == cached/plugin/hooks
+    assert resolved.manifest.name == "acme-guards"
+    re_resolved = manager.resolve_external(resolved.entry)
+    assert re_resolved is not None and re_resolved.manifest.name == "acme-guards"
+
+
+def test_fetch_pack_prefers_claude_manifest_over_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
+    repo = tmp_path / "repo"
+    write_pack(repo, "root-pack", hooks="hooks")  # root manifest
+    write_pack(repo, "claude-pack", hooks="hooks", manifest_subdir=".claude")  # .claude wins
+    (repo / "hooks").mkdir()
+    (repo / "hooks" / "h.py").write_text(HOOK_SRC)
+    tarball = tmp_path / "repo.tar.gz"
+    with tarfile.open(tarball, "w:gz") as tf:
+        tf.add(repo, arcname="sha-top")
+
+    sha = "a" * 40
+    monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
+    monkeypatch.setattr("urllib.request.urlretrieve", lambda url: (str(tarball), None))
+
+    resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
+    assert resolved.manifest.name == "claude-pack"
 
 
 def test_fetch_pack_root_hooks_caches_full_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

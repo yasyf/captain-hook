@@ -27,6 +27,8 @@ from captain_hook import state
 
 PACKS_TOML = "packs.toml"
 PACK_MANIFEST = "capt-hook.toml"
+# A pack's manifest may sit in .claude/ (preferred) or at the repo root.
+MANIFEST_MEMBERS = (f".claude/{PACK_MANIFEST}", PACK_MANIFEST)
 SHA_MARKER = ".sha"
 SOURCE_RE = re.compile(r"^github:(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+?)(?:@(?P<ref>[\w./-]+))?$")
 PACK_NAME_RE = re.compile(r"[a-z][a-z0-9-]*")
@@ -102,6 +104,16 @@ def packs_toml_path(root: Path) -> Path:
     return root / ".claude" / "hooks" / PACKS_TOML
 
 
+def manifest_in(root: Path) -> Path:
+    """Return the pack manifest path under root, preferring .claude/capt-hook.toml.
+
+    Falls back to the repo-root location. The returned path may not exist (the
+    canonical missing location), so PackManifest.load still fails loudly.
+    """
+    claude = root / ".claude" / PACK_MANIFEST
+    return claude if claude.is_file() else root / PACK_MANIFEST
+
+
 def parse_entry(name: str, table: dict[str, Any]) -> PackEntry:
     match table:
         case {"source": source, "commit": commit}:
@@ -175,17 +187,18 @@ def strip_top_level(tf: tarfile.TarFile) -> Iterator[tarfile.TarInfo]:
             yield member
 
 
-def members_under(members: list[tarfile.TarInfo], hooks: str) -> Iterator[tarfile.TarInfo]:
+def members_under(members: list[tarfile.TarInfo], hooks: str, manifest_path: str) -> Iterator[tarfile.TarInfo]:
     """Yield the manifest plus members within the pack's hooks dir.
 
     hooks == "." (hooks beside the manifest) selects the whole tree; a real
     subdir selects only the manifest and that subtree, so the cache holds just
-    what the loader imports.
+    what the loader imports. The manifest is included by its actual archive path
+    so a .claude/ manifest survives without dragging in the rest of .claude/.
     """
     rel = hooks.strip("/")
     prefix = "" if rel in ("", ".") else rel + "/"
     for m in members:
-        if m.path == PACK_MANIFEST or not prefix or m.path == rel or m.path.startswith(prefix):
+        if m.path == manifest_path or not prefix or m.path == rel or m.path.startswith(prefix):
             yield m
 
 
@@ -203,12 +216,15 @@ def fetch_commit(source: PackSource, sha: str) -> ResolvedPack:
             shutil.rmtree(staging)
         with tarfile.open(tarball) as tf:
             members = list(strip_top_level(tf))
-            manifest_member = next((m for m in members if m.path == PACK_MANIFEST), None)
+            by_path = {m.path: m for m in members}
+            manifest_member = next((by_path[p] for p in MANIFEST_MEMBERS if p in by_path), None)
             if manifest_member is None:
                 raise PackError(f"pack manifest {PACK_MANIFEST} missing in {source}")
             tf.extract(manifest_member, staging, filter="data")
-            manifest = PackManifest.load(staging / PACK_MANIFEST)
-            tf.extractall(staging, members=list(members_under(members, manifest.hooks)), filter="data")
+            manifest = PackManifest.load(staging / manifest_member.path)
+            tf.extractall(
+                staging, members=list(members_under(members, manifest.hooks, manifest_member.path)), filter="data"
+            )
         final = root / f"{manifest.name}@{sha}"
         if final.exists():
             shutil.rmtree(final)
@@ -225,20 +241,20 @@ def fetch_pack(source: PackSource) -> ResolvedPack:
 
 def builtin_packs() -> dict[str, Path]:
     base = Path(str(importlib.resources.files("captain_hook") / "packs"))
-    return {p.name: p for p in base.iterdir() if p.is_dir() and (p / PACK_MANIFEST).is_file()}
+    return {p.name: p for p in base.iterdir() if p.is_dir() and manifest_in(p).is_file()}
 
 
 def resolve_builtin(name: str) -> ResolvedPack:
     if not (pack_dir := builtin_packs().get(name)):
         raise PackError(f"unknown builtin pack {name!r}; available: {', '.join(sorted(builtin_packs())) or 'none'}")
-    manifest = PackManifest.load(pack_dir / PACK_MANIFEST)
+    manifest = PackManifest.load(manifest_in(pack_dir))
     return ResolvedPack(BuiltinPack(name=name), manifest.hooks_dir(pack_dir), manifest)
 
 
 def resolve_external(entry: ExternalPack) -> ResolvedPack | None:
     if not (cached := find_cached(entry.name, entry.commit)):
         return None
-    manifest = PackManifest.load(cached / PACK_MANIFEST)
+    manifest = PackManifest.load(manifest_in(cached))
     return ResolvedPack(entry, manifest.hooks_dir(cached), manifest)
 
 

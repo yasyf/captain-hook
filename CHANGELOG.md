@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Pack manifests may live at `.claude/capt-hook.toml` (preferred) in addition to
+  the repo root. Discovery prefers the `.claude/` location and falls back to the
+  root, so a pack repo can keep its manifest beside its other Claude Code config.
+  The `hooks` path stays relative to the repo root either way, and only the
+  manifest plus the `hooks` subtree are cached — the rest of `.claude/` is left
+  behind.
+
 ## [3.5.0] - 2026-06-18
 
 ### Changed
