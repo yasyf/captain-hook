@@ -83,7 +83,15 @@ the session.
 
 ## Watch the queue
 
-The candidates the reviewer is tracking are inspectable at any time:
+`uvx capt-hook status` shows everything the reviewer is tracking — each correction, how close it is
+to a PR, and what that PR would do — grouped by lifecycle stage. [Watch corrections become
+hooks](corrections-lifecycle.qmd) walks through reading it.
+
+```bash
+uvx capt-hook status                  # the whole funnel: watching -> eligible -> PR -> merged
+```
+
+For one candidate, or to script against the queue, the narrower views print plain lines:
 
 ```bash
 uvx capt-hook review list             # the repo's candidates and their status

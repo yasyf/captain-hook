@@ -44,5 +44,6 @@ inline tests and mock events.
 - [State & Sessions](state.qmd) persists data across hook invocations.
 - [Workflows](workflows.qmd) enforces a multi-step checklist before the agent can stop.
 - [Session reviewer](session-reviewer.qmd) mines your ended sessions for durable corrections and opens hook PRs automatically.
+- [Watch corrections become hooks](corrections-lifecycle.qmd) reads `capt-hook status` to track each correction from watching to a merged PR.
 - [Configuration](configuration.qmd) tunes `HooksSettings`, the env prefix, and the state and log directories.
 - [Troubleshooting](troubleshooting.qmd) diagnoses common errors with the right command.

@@ -37,7 +37,7 @@ Then tell Claude **"set up captain hook"**. The `bootstrapping-hooks` skill runs
 
 ## The session reviewer
 
-`init` (and the skill) also arm the [session reviewer](../guide/session-reviewer.qmd): when a session ends, it mines your corrections into hook pull requests. It needs an authenticated `claude` and `gh`. Skip it with `uvx capt-hook init --no-review`, or turn it off later with `uvx capt-hook review disable`.
+`init` (and the skill) also arm the [session reviewer](../guide/session-reviewer.qmd): when a session ends, it mines your corrections into hook pull requests. Watch what it's tracking, and how close each correction is to a PR, with [`uvx capt-hook status`](../guide/corrections-lifecycle.qmd). It needs an authenticated `claude` and `gh`. Skip it with `uvx capt-hook init --no-review`, or turn it off later with `uvx capt-hook review disable`.
 
 ## Pin the install
 

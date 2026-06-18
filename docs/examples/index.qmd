@@ -23,6 +23,7 @@ Drive the agent with the right nudge at the right time.
 |---|---|
 | [Code Quality](code-quality.qmd) | layered detection: regex `hook`, AST `lint`, signal `nudge`, `llm_gate` |
 | [Failure Recovery](failure-recovery.qmd) | a signal-driven `Stop` nudge when failures repeat |
+| [Surface Tracked Corrections](corrections-nudge.qmd) | a `Stop` nudge pointing at the session reviewer's queue |
 | [LLM Cost Control](llm-cost-control.qmd) | bound an LLM hook's token spend |
 
 ## Workflow

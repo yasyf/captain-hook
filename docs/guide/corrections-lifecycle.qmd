@@ -1,0 +1,85 @@
+---
+title: "Watch corrections become hooks"
+---
+
+The [session reviewer](session-reviewer.qmd) turns the corrections you give Claude into hook pull
+requests on its own. `uvx capt-hook status` is how you watch that happen: every correction it is
+tracking, how close each one is to a PR, and what that PR would do.
+
+```bash
+uvx capt-hook status
+```
+
+```text
+captain-hook  ·  github.com/you/app    [watching]    PR slots 1/2
+
+WATCHING   building toward the bar
+  #3  fix     sessions █░ 1/2
+      would fix hooks.style:nudge_1 (.claude/hooks/style.py): stop firing on its own output
+  #1  create  sessions ██░ 2/3   days ██ 2/2
+      would add a hook: "block force-push to main"
+
+ELIGIBLE   a PR opens next session
+  #2  create  ready  ·  sessions ███ 3/3   days ██ 2/2
+      would add a hook: "run the test suite before every commit"
+
+PR OPEN   pull request awaiting your review
+  #4  create  https://github.com/you/app/pull/214   ·   4d open
+      would add a hook: "use uv instead of pip"
+
+ACCEPTED   PR merged
+  #5  create  https://github.com/you/app/pull/208
+      would add a hook: "use loguru instead of print"
+```
+
+The same view lives under the reviewer namespace as `uvx capt-hook review status`. Read it top to
+bottom as a funnel — a correction climbs from `WATCHING` to a merged hook.
+
+## The header
+
+The top line is the repo the reviewer keys candidates to, whether you are `[watching]` it, and the
+open-PR slots in use (`1/2` here). At the cap, eligible candidates wait for a slot before a new PR
+opens. An unwatched repo says so and tells you to run `uvx capt-hook review enable`.
+
+## The stages
+
+Each candidate sits in exactly one stage:
+
+- **Watching** — tracked, still under the bar. The bars show judge-accepted progress toward the
+  thresholds: distinct sessions and distinct days for a `create` candidate, a lower bar for a `fix`.
+  A correction has to recur and survive an LLM verdict before it counts, so a one-off aside never
+  climbs. See [the thresholds](session-reviewer.qmd#what-crosses-the-bar) for the exact gates.
+- **Eligible** — over the bar and watched, with a free PR slot. The next session that ends drafts
+  and opens the PR; you do nothing.
+- **PR open** — the reviewer opened a pull request, shown with its URL and age. Review it like any
+  other.
+- **Accepted / rejected / stale** — a merged PR accepts the candidate, a closed PR rejects it, and a
+  PR left open past the staleness cutoff goes stale and frees its slot.
+
+## Each row
+
+A row reads `#id  kind  progress`, then the one-sentence summary of what its PR would do — the
+verdict the judge wrote when it accepted the correction. A `create` candidate adds a new hook; a
+`fix` candidate amends an attributed hook that misfired and adds a regression test. Pull the verbatim
+evidence and the full thresholds for one candidate with `uvx capt-hook review show <id>`.
+
+## Refresh and manual passes
+
+`status` prints the last-synced PR state immediately, then refreshes open PRs against GitHub in the
+background and updates the frame when `gh` answers. Skip the network round-trip with `--no-sync`:
+
+```bash
+uvx capt-hook status --no-sync
+```
+
+Corrections only land after a session ends with the reviewer watching the repo, so an empty queue
+usually means no session has closed yet. To backfill from a transcript you already have, run the
+ingest and judge passes by hand:
+
+```bash
+uvx capt-hook review scan --transcript path/to/session.jsonl
+uvx capt-hook review triage
+```
+
+For the kind of correction signal the reviewer mines — and a hook that points you back here when you
+give one — see [Surface tracked corrections](../examples/corrections-nudge.qmd).

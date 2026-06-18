@@ -1,0 +1,9 @@
+---
+title: "Surface tracked corrections"
+---
+
+You keep correcting Claude on the same rule — "never force-push", "use `uv`, not `pip`" — and writing the hook by hand is friction you skip in the moment. The [session reviewer](../guide/session-reviewer.qmd) already mines those corrections into hook PRs, so the nudge below points you at `uvx capt-hook status` whenever a session ends on a correction strong enough for the reviewer to track.
+
+<!-- gd-embed: corrections_nudge.py -->
+
+The `Signals` bundle scores the same correction shape the reviewer's miners look for — imperative rules in the user's own words — over the last `window` transcript messages, both yours and the agent's. With `threshold=3`, one message has to stack enough weight ("never" plus "always" clears it; a passing "ship it" does not), so the nudge stays quiet on ordinary turns. The hook itself opens nothing; it just makes the lifecycle visible, then [`capt-hook status`](../guide/corrections-lifecycle.qmd) shows the correction climbing from `WATCHING` to an open PR. See also [the signals guide](../guide/signals.qmd) and [the primitives guide](../guide/primitives.qmd).
