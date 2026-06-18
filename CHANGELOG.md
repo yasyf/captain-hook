@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-06-18
+
+### Changed
+- `capt-hook skills install`, `capt-hook init`, and `capt-hook review enable` now
+  register the captain-hook Claude Code plugin in your committed
+  `.claude/settings.json` (an `extraKnownMarketplaces` entry plus `enabledPlugins`)
+  instead of copying the skills into `.claude/skills/`. Claude Code installs the
+  plugin on workspace-trust, so the skills track the repository and refresh on every
+  commit rather than going stale after an upgrade. Plugin skills are namespaced, so
+  they are invoked as `/captain-hook:bootstrapping-hooks`.
+- The session reviewer's headless brain loads the bundled plugin in place with
+  `claude --plugin-dir`, so it resolves `/captain-hook:scanning-sessions` without a
+  marketplace clone or install prompt.
+
+### Removed
+- The `--force` flag on `capt-hook skills install` and the file-copy install path.
+  Skills are no longer vendored into `.claude/skills/`.
+
 ## [3.4.0] - 2026-06-18
 
 ### Added
