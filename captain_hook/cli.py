@@ -603,7 +603,11 @@ def pack_update(state: CliState, name: str | None) -> None:
     for entry in manager.read_entries(path):
         match entry:
             case manager.ExternalPack(name=n, source=source) if name in (None, n):
-                manager.upsert_entry(path, fresh := manager.fetch_pack(source).entry)
+                try:
+                    fresh = manager.fetch_pack(source).entry
+                except manager.PackError as e:
+                    raise click.ClickException(str(e)) from e
+                manager.upsert_entry(path, fresh)
                 click.echo(f"  updated {n} -> {fresh.commit[:7]}")
             case manager.BuiltinPack(name=n) if name == n:
                 click.echo(f"  {n} is builtin; it tracks the installed capt-hook version")

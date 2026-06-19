@@ -9,13 +9,11 @@ into a local cache. A project enables packs by listing them in ``.claude/hooks/p
 from __future__ import annotations
 
 import importlib.resources
-import json
 import os
 import re
 import shutil
 import tarfile
 import tomllib
-import urllib.request
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +22,7 @@ from typing import Any
 from filelock import FileLock
 
 from captain_hook import state
+from captain_hook.util import http
 
 PACKS_TOML = "packs.toml"
 PACK_MANIFEST = "capt-hook.toml"
@@ -164,20 +163,9 @@ def packs_cache_root() -> Path:
     return state.CACHE_ROOT / "packs"
 
 
-def github_headers() -> dict[str, str]:
-    return {"Accept": "application/vnd.github+json", "User-Agent": "capt-hook"} | (
-        {"Authorization": f"Bearer {token}"} if (token := os.environ.get("GITHUB_TOKEN")) else {}
-    )
-
-
-def github_get(url: str) -> Any:
-    with urllib.request.urlopen(urllib.request.Request(url, headers=github_headers())) as resp:
-        return json.load(resp)
-
-
 def resolve_commit(source: PackSource) -> str:
-    ref = source.ref or github_get(GITHUB_REPO.format(owner=source.owner, repo=source.repo))["default_branch"]
-    return github_get(GITHUB_COMMIT.format(owner=source.owner, repo=source.repo, ref=ref))["sha"]
+    ref = source.ref or http.github_get_json(GITHUB_REPO.format(owner=source.owner, repo=source.repo))["default_branch"]
+    return http.github_get_json(GITHUB_COMMIT.format(owner=source.owner, repo=source.repo, ref=ref))["sha"]
 
 
 def strip_top_level(tf: tarfile.TarFile) -> Iterator[tarfile.TarInfo]:
@@ -210,7 +198,8 @@ def fetch_commit(source: PackSource, sha: str) -> ResolvedPack:
     root = packs_cache_root()
     root.mkdir(parents=True, exist_ok=True)
     with FileLock(str(root / f"{sha}.lock")):
-        tarball, _ = urllib.request.urlretrieve(GITHUB_TARBALL.format(owner=source.owner, repo=source.repo, sha=sha))
+        tarball = root / f".tarball-{sha}.tar.gz"
+        http.github_download(GITHUB_TARBALL.format(owner=source.owner, repo=source.repo, sha=sha), tarball)
         staging = root / f".staging-{sha}"
         if staging.exists():
             shutil.rmtree(staging)
@@ -225,6 +214,7 @@ def fetch_commit(source: PackSource, sha: str) -> ResolvedPack:
             tf.extractall(
                 staging, members=list(members_under(members, manifest.hooks, manifest_member.path)), filter="data"
             )
+        tarball.unlink()
         final = root / f"{manifest.name}@{sha}"
         if final.exists():
             shutil.rmtree(final)
@@ -236,7 +226,10 @@ def fetch_commit(source: PackSource, sha: str) -> ResolvedPack:
 
 
 def fetch_pack(source: PackSource) -> ResolvedPack:
-    return fetch_commit(source, resolve_commit(source))
+    try:
+        return fetch_commit(source, resolve_commit(source))
+    except http.GitHubFetchError as e:
+        raise PackError(str(e)) from e
 
 
 def builtin_packs() -> dict[str, Path]:

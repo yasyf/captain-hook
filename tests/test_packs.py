@@ -189,7 +189,9 @@ def test_fetch_pack_caches_and_pins(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     tarball = make_pack_tarball(tmp_path, name="acme-guards", top="guards-abc")
     sha = "d" * 40
     monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
-    monkeypatch.setattr("urllib.request.urlretrieve", lambda url: (str(tarball), None))
+    monkeypatch.setattr(
+        "captain_hook.util.http.github_download", lambda url, dest: dest.write_bytes(Path(tarball).read_bytes())
+    )
 
     resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
 
@@ -216,7 +218,9 @@ def test_fetch_pack_caches_only_manifest_and_hooks_subdir(tmp_path: Path, monkey
 
     sha = "d" * 40
     monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
-    monkeypatch.setattr("urllib.request.urlretrieve", lambda url: (str(tarball), None))
+    monkeypatch.setattr(
+        "captain_hook.util.http.github_download", lambda url, dest: dest.write_bytes(Path(tarball).read_bytes())
+    )
 
     resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
 
@@ -228,9 +232,7 @@ def test_fetch_pack_caches_only_manifest_and_hooks_subdir(tmp_path: Path, monkey
         assert not (cached / junk).exists(), f"{junk} leaked into the cache"
 
 
-def test_fetch_pack_claude_manifest_caches_manifest_and_hooks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_fetch_pack_claude_manifest_caches_manifest_and_hooks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
     repo = tmp_path / "repo"
     write_pack(repo, "acme-guards", hooks="plugin/hooks", manifest_subdir=".claude")
@@ -243,7 +245,9 @@ def test_fetch_pack_claude_manifest_caches_manifest_and_hooks(
 
     sha = "d" * 40
     monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
-    monkeypatch.setattr("urllib.request.urlretrieve", lambda url: (str(tarball), None))
+    monkeypatch.setattr(
+        "captain_hook.util.http.github_download", lambda url, dest: dest.write_bytes(Path(tarball).read_bytes())
+    )
 
     resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
 
@@ -270,7 +274,9 @@ def test_fetch_pack_prefers_claude_manifest_over_root(tmp_path: Path, monkeypatc
 
     sha = "a" * 40
     monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
-    monkeypatch.setattr("urllib.request.urlretrieve", lambda url: (str(tarball), None))
+    monkeypatch.setattr(
+        "captain_hook.util.http.github_download", lambda url, dest: dest.write_bytes(Path(tarball).read_bytes())
+    )
 
     resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
     assert resolved.manifest.name == "claude-pack"
@@ -287,7 +293,9 @@ def test_fetch_pack_root_hooks_caches_full_tree(tmp_path: Path, monkeypatch: pyt
 
     sha = "e" * 40
     monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
-    monkeypatch.setattr("urllib.request.urlretrieve", lambda url: (str(tarball), None))
+    monkeypatch.setattr(
+        "captain_hook.util.http.github_download", lambda url, dest: dest.write_bytes(Path(tarball).read_bytes())
+    )
 
     resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/flat@v1"))
 
@@ -307,7 +315,9 @@ def test_fetch_pack_missing_manifest_fails_loud(tmp_path: Path, monkeypatch: pyt
         tf.add(repo, arcname="no-manifest-sha")
 
     monkeypatch.setattr(manager, "resolve_commit", lambda source: "f" * 40)
-    monkeypatch.setattr("urllib.request.urlretrieve", lambda url: (str(tarball), None))
+    monkeypatch.setattr(
+        "captain_hook.util.http.github_download", lambda url, dest: dest.write_bytes(Path(tarball).read_bytes())
+    )
 
     with pytest.raises(manager.PackError):
         manager.fetch_pack(manager.PackSource.parse("github:acme/empty@v1"))

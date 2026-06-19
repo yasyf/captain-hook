@@ -41,20 +41,17 @@ def pinned_sha(fake_wheel_bytes: bytes, monkeypatch: pytest.MonkeyPatch) -> str:
 
 
 @pytest.fixture
-def urlretrieve_spy(
+def download_spy(
     monkeypatch: pytest.MonkeyPatch,
     fake_wheel_bytes: bytes,
-    tmp_path: Path,
 ) -> MagicMock:
     spy = MagicMock()
 
-    def fake_urlretrieve(url: str, *_args: object, **_kwargs: object) -> tuple[str, None]:
+    def fake_download(url: str, dest: Path) -> None:
         spy(url)
-        wheel = tmp_path / "fetched.whl"
-        wheel.write_bytes(fake_wheel_bytes)
-        return str(wheel), None
+        dest.write_bytes(fake_wheel_bytes)
 
-    monkeypatch.setattr(model_cache.urllib.request, "urlretrieve", fake_urlretrieve)
+    monkeypatch.setattr(model_cache.http, "github_download", fake_download)
     monkeypatch.setattr(model_cache, "FileLock", lambda _path: contextlib.nullcontext())
     return spy
 
@@ -96,12 +93,12 @@ def test_downloads_when_cache_empty(
     cache_dir: Path,
     pinned_version: str,
     pinned_sha: str,
-    urlretrieve_spy: MagicMock,
+    download_spy: MagicMock,
     fake_zipfile: MagicMock,
 ) -> None:
     path = model_cache.ensure_spacy_model()
 
-    assert urlretrieve_spy.call_count == 1
+    assert download_spy.call_count == 1
     assert fake_zipfile.call_count == 1
     assert path.exists()
     assert path == cache_dir / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}" / model_cache.MODEL_NAME / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}"
@@ -112,7 +109,7 @@ def test_downloads_when_cache_empty(
 def test_cached_model_skips_all_network(
     cache_dir: Path,
     pinned_version: str,
-    urlretrieve_spy: MagicMock,
+    download_spy: MagicMock,
     fake_zipfile: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -125,7 +122,7 @@ def test_cached_model_skips_all_network(
 
     path = model_cache.ensure_spacy_model()
 
-    urlretrieve_spy.assert_not_called()
+    download_spy.assert_not_called()
     fake_zipfile.assert_not_called()
     assert path == pipeline
 
@@ -145,14 +142,14 @@ def test_ignores_cache_from_other_spacy_minor(
     cache_dir: Path,
     pinned_version: str,
     pinned_sha: str,
-    urlretrieve_spy: MagicMock,
+    download_spy: MagicMock,
     fake_zipfile: MagicMock,
 ) -> None:
     seed_cache(cache_dir, "3.8.0")
 
     path = model_cache.ensure_spacy_model()
 
-    assert urlretrieve_spy.call_count == 1
+    assert download_spy.call_count == 1
     assert path == cache_dir / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}" / model_cache.MODEL_NAME / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}"
 
 
@@ -160,14 +157,14 @@ def test_redownloads_when_sentinel_missing(
     cache_dir: Path,
     pinned_version: str,
     pinned_sha: str,
-    urlretrieve_spy: MagicMock,
+    download_spy: MagicMock,
     fake_zipfile: MagicMock,
 ) -> None:
     pipeline = seed_cache(cache_dir, MODEL_VERSION, sentinel=None)
 
     path = model_cache.ensure_spacy_model()
 
-    assert urlretrieve_spy.call_count == 1
+    assert download_spy.call_count == 1
     assert fake_zipfile.call_count == 1
     assert (cache_dir / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}" / ".sha256").read_text() == pinned_sha
     assert path == pipeline
@@ -176,7 +173,7 @@ def test_redownloads_when_sentinel_missing(
 def test_raises_on_post_download_digest_mismatch(
     cache_dir: Path,
     pinned_version: str,
-    urlretrieve_spy: MagicMock,
+    download_spy: MagicMock,
     fake_zipfile: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

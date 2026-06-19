@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import functools
 import hashlib
-import json
 import os
 import re
 import shutil
-import urllib.request
 import zipfile
 from importlib.metadata import version as installed_version
 from pathlib import Path
 from typing import Any
 
 from filelock import FileLock
+
+from captain_hook.util import http
 
 MODEL_NAME = "en_core_web_sm"
 COMPATIBILITY_URL = "https://raw.githubusercontent.com/explosion/spacy-models/master/compatibility.json"
@@ -35,8 +35,7 @@ def spacy_minor() -> str:
 
 
 def fetch_json(url: str) -> Any:
-    with urllib.request.urlopen(url) as resp:
-        return json.load(resp)
+    return http.github_get_json(url)
 
 
 @functools.cache
@@ -75,12 +74,14 @@ def ensure_spacy_model() -> Path:
     with FileLock(str(extract.with_suffix(".lock"))):
         if cached := cached_pipeline():
             return cached
-        wheel, _ = urllib.request.urlretrieve(MODEL_URL.format(model=MODEL_NAME, version=version))
-        if (digest := hashlib.sha256(Path(wheel).read_bytes()).hexdigest()) != expected:
+        wheel = extract.parent / f"{extract.name}.whl"
+        http.github_download(MODEL_URL.format(model=MODEL_NAME, version=version), wheel)
+        if (digest := hashlib.sha256(wheel.read_bytes()).hexdigest()) != expected:
             raise RuntimeError(f"sha256 mismatch for {MODEL_NAME}-{version}: got {digest}, expected {expected}")
         if extract.exists():
             shutil.rmtree(extract)
         with zipfile.ZipFile(wheel) as zf:
             zf.extractall(extract)
+        wheel.unlink()
         (extract / ".sha256").write_text(expected)
     return extract / MODEL_NAME / extract.name

@@ -4,6 +4,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.0] - 2026-06-20
+
+### Changed
+- GitHub fetches for `pack add` / `pack update`, and the bundled spaCy model
+  download, are now resilient to rate limits. Requests authenticate via
+  `GITHUB_TOKEN` and fall back to `gh auth token` for the 5000/hr authenticated
+  limit. Transient failures such as 429s, 5xx responses, and dropped connections
+  retry with jittered backoff, and GitHub's rate-limit headers are honored, so a
+  near reset is waited out while a far-off reset fails fast with an actionable
+  message. An exhausted limit now raises a clean `PackError` instead of a raw
+  `HTTPError` traceback, and `pack update` reports a failed re-fetch as cleanly as
+  `pack add`.
+
 ## [3.10.1] - 2026-06-19
 
 ### Fixed
