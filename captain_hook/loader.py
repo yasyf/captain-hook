@@ -68,6 +68,8 @@ def discover_hooks(hooks_dir: str | Path, state: State | None = None) -> None:
     }
 
     for fqn in sorted(all_modules - {f"{pkg}.{CONF_MODULE}"}):
+        # Broad catch is deliberate (see discover_pack): a single bad module must
+        # not abort discovery. Logged loudly at WARNING, never swallowed.
         try:
             import_or_reload(fqn, fresh_this_pass)
         except Exception:
@@ -93,6 +95,8 @@ def discover_pack(name: str, pack_dir: Path) -> None:
     for path in sorted(pack_dir.glob("*.py")):
         if path.stem.startswith("_") or path.stem == CONF_MODULE or is_test_module(path.stem):
             continue
+        # Broad catch is deliberate: one unloadable or non-hook .py must not abort
+        # the whole pack. The failure is logged loudly at WARNING, never swallowed.
         try:
             import_pack_module(f"{pkg}.{path.stem}", path)
         except Exception:
