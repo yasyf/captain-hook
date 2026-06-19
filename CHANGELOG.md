@@ -4,6 +4,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.1] - 2026-06-19
+
+### Fixed
+- Pack and hook discovery no longer aborts when a hooks directory holds a file it
+  can't import as a hook. Discovery skips test files (`test_*.py`, `conftest.py`,
+  anything under `tests/`) outright, and warns-and-continues past any remaining file
+  that fails to import instead of failing the whole `pack add` / discovery pass.
+  `import_pack_module` now loads via `spec_from_file_location`, so a hook module that
+  reads `__file__` at import time works, and a module that raises mid-import is no
+  longer left half-initialized in `sys.modules`.
+
 ## [3.10.0] - 2026-06-19
 
 ### Changed

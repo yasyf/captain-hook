@@ -3,14 +3,16 @@ from __future__ import annotations
 import sys
 import tarfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 from click.testing import CliRunner
+from loguru import logger
 
 import captain_hook
 from captain_hook import app
 from captain_hook.cli import cli
-from captain_hook.loader import discover_pack
+from captain_hook.loader import discover_pack, import_pack_module
 from captain_hook.packs import manager
 
 PACKS_DIR = Path(captain_hook.__file__).parent / "packs"
@@ -19,6 +21,13 @@ GENERAL_HOOKS = {"commands", "docs", "plans", "prompts", "review", "stewardship"
 PYTHON_HOOKS = {"style", "testing", "toolchain"}
 GO_HOOKS = {"testing", "toolchain"}
 HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
+SRC_USES_FILE = (
+    "from pathlib import Path\n"
+    "from captain_hook import Event, hook\n"
+    "_here = Path(__file__).parent\n"
+    "hook(Event.PreToolUse, message=str(_here))\n"
+)
+WARNING_NO = logger.level("WARNING").no
 
 
 def write_pack(root: Path, name: str, *, hooks: str = ".", version: str = "0.1.0", manifest_subdir: str = "") -> Path:
@@ -362,6 +371,38 @@ def test_discover_pack_sanitizes_name(tmp_path: Path) -> None:
     (pack / "h.py").write_text(HOOK_SRC)
     discover_pack("acme-guards@d4", pack)
     assert "captain_hook._packs.acme_guards_d4.h" in sys.modules
+
+
+def test_discover_pack_skips_test_files(tmp_path: Path) -> None:
+    pack = tmp_path / "p"
+    pack.mkdir()
+    for stem in ("hook", "test_hook", "conftest"):
+        (pack / f"{stem}.py").write_text(HOOK_SRC)
+    discover_pack("solo", pack)
+    assert len(app._state.hooks) == 1
+    assert "captain_hook._packs.solo.hook" in sys.modules
+    assert "captain_hook._packs.solo.test_hook" not in sys.modules
+    assert "captain_hook._packs.solo.conftest" not in sys.modules
+
+
+def test_discover_pack_warns_and_continues_on_unloadable(tmp_path: Path, logcap: Any) -> None:
+    pack = tmp_path / "p"
+    pack.mkdir()
+    (pack / "good.py").write_text(HOOK_SRC)
+    (pack / "bad.py").write_text("raise RuntimeError('boom')\n")
+    discover_pack("solo", pack)
+    assert len(app._state.hooks) == 1
+    assert "captain_hook._packs.solo.good" in sys.modules
+    assert "captain_hook._packs.solo.bad" not in sys.modules
+    assert any("bad.py" in r.message and r.levelno >= WARNING_NO for r in logcap.records)
+
+
+def test_import_pack_module_sets_file(tmp_path: Path) -> None:
+    path = tmp_path / "uses_file.py"
+    path.write_text(SRC_USES_FILE)
+    module = import_pack_module("captain_hook._packs.solo.uses_file", path)
+    assert module.__file__ == str(path)
+    assert len(app._state.hooks) == 1
 
 
 # --- CLI -----------------------------------------------------------------------------

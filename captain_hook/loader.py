@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import importlib.machinery
 import importlib.util
 import pkgutil
 import re
@@ -11,12 +10,18 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+from loguru import logger
 from pydantic_settings import BaseSettings
 
 from captain_hook.app import State, _state
 
 CONF_MODULE = "conf"
 PACK_PACKAGE_PREFIX = "captain_hook._packs"
+
+
+def is_test_module(fqn: str) -> bool:
+    parts = fqn.split(".")
+    return parts[-1].startswith("test_") or parts[-1] == "conftest" or "tests" in parts
 
 
 def build_hook_settings(module: ModuleType) -> BaseSettings | ModuleType:
@@ -59,23 +64,36 @@ def discover_hooks(hooks_dir: str | Path, state: State | None = None) -> None:
     all_modules = {
         info.name
         for info in pkgutil.walk_packages([str(hooks_path)], prefix=f"{pkg}.")
-        if not info.name.rpartition(".")[2].startswith("_")
+        if not info.name.rpartition(".")[2].startswith("_") and not is_test_module(info.name)
     }
 
     for fqn in sorted(all_modules - {f"{pkg}.{CONF_MODULE}"}):
-        import_or_reload(fqn, fresh_this_pass)
+        try:
+            import_or_reload(fqn, fresh_this_pass)
+        except Exception:
+            logger.bind(module=fqn).opt(exception=True).warning("skipped unloadable hook module")
 
 
 def import_pack_module(fqn: str, path: Path) -> ModuleType:
-    loader = importlib.machinery.SourceFileLoader(fqn, str(path))
-    module = importlib.util.module_from_spec(importlib.machinery.ModuleSpec(fqn, loader, origin=str(path)))
+    spec = importlib.util.spec_from_file_location(fqn, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load module spec for {path}")
+    module = importlib.util.module_from_spec(spec)
     sys.modules[fqn] = module
-    loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(fqn, None)
+        raise
     return module
 
 
 def discover_pack(name: str, pack_dir: Path) -> None:
     pkg = f"{PACK_PACKAGE_PREFIX}.{re.sub(r'\W', '_', name)}"
     for path in sorted(pack_dir.glob("*.py")):
-        if not (path.stem.startswith("_") or path.stem == CONF_MODULE):
+        if path.stem.startswith("_") or path.stem == CONF_MODULE or is_test_module(path.stem):
+            continue
+        try:
             import_pack_module(f"{pkg}.{path.stem}", path)
+        except Exception:
+            logger.bind(file=str(path)).opt(exception=True).warning("skipped unloadable hook file")

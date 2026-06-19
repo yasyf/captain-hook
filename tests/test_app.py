@@ -4,18 +4,21 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from loguru import logger
 
-from captain_hook.loader import discover_hooks
 from captain_hook.app import (
     _state,
     get_matching_hooks,
-    hook as register_hook,
     load_gitignore,
     on,
     register,
     reset,
 )
+from captain_hook.app import (
+    hook as register_hook,
+)
 from captain_hook.events import PreToolUseEvent, StopEvent
+from captain_hook.loader import discover_hooks
 from captain_hook.types import (
     Command,
     Event,
@@ -24,6 +27,8 @@ from captain_hook.types import (
 )
 
 pytestmark = pytest.mark.usefixtures("isolate_modules")
+
+WARNING_NO = logger.level("WARNING").no
 
 
 def pre_tool_event(
@@ -156,6 +161,42 @@ class TestDiscoverHooks:
         (d / "__init__.py").write_text("")
         discover_hooks(d)
         assert len(_state.hooks) == 0
+
+    def test_skips_test_modules(self, tmp_path: Path) -> None:
+        d = tmp_path / "dhooks_skiptests"
+        d.mkdir()
+        (d / "__init__.py").write_text("")
+        (d / "real_hook.py").write_text(
+            "from captain_hook.app import hook\n"
+            "from captain_hook.types import Event\n"
+            "hook(Event.PreToolUse, message='real')\n"
+        )
+        (d / "test_real_hook.py").write_text(
+            "from captain_hook.app import hook\n"
+            "from captain_hook.types import Event\n"
+            "hook(Event.PreToolUse, message='should_not_load')\n"
+        )
+        (d / "conftest.py").write_text(
+            "from captain_hook.app import hook\n"
+            "from captain_hook.types import Event\n"
+            "hook(Event.PreToolUse, message='conftest_should_not_load')\n"
+        )
+        discover_hooks(d)
+        assert [h.spec.message for h in _state.hooks] == ["real"]
+
+    def test_warns_and_continues_on_unloadable(self, tmp_path: Path, logcap: Any) -> None:
+        d = tmp_path / "dhooks_unloadable"
+        d.mkdir()
+        (d / "__init__.py").write_text("")
+        (d / "good_hook.py").write_text(
+            "from captain_hook.app import hook\n"
+            "from captain_hook.types import Event\n"
+            "hook(Event.PreToolUse, message='good')\n"
+        )
+        (d / "bad_hook.py").write_text("raise RuntimeError('boom')\n")
+        discover_hooks(d)
+        assert [h.spec.message for h in _state.hooks] == ["good"]
+        assert any("bad_hook" in r.message and r.levelno >= WARNING_NO for r in logcap.records)
 
 
 class TestMultipleHooks:

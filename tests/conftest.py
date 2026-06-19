@@ -31,7 +31,7 @@ def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mo
 
 
 @dataclass
-class _LogRecord:
+class LogRecord:
     levelno: int
     message: str
     exc_info: Any
@@ -41,7 +41,7 @@ class LogCapture:
     """Collects loguru records for assertions, mirroring the bits of pytest ``caplog`` we use."""
 
     def __init__(self) -> None:
-        self.records: list[_LogRecord] = []
+        self.records: list[LogRecord] = []
         self._lines: list[str] = []
 
     def sink(self, message: Any) -> None:
@@ -50,7 +50,7 @@ class LogCapture:
         rendered = record["message"]
         if extra:
             rendered += " " + " ".join(f"{k}={v!r}" for k, v in extra.items())
-        self.records.append(_LogRecord(record["level"].no, rendered, record["exception"]))
+        self.records.append(LogRecord(record["level"].no, rendered, record["exception"]))
         self._lines.append(str(message))
 
     @property
