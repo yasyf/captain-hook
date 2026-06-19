@@ -807,53 +807,46 @@ class TestCLISubprocess:
 
 
 class TestCallLlmIntegration:
-    """VAL-CROSS-018: test that HookContext.call_llm invokes the configured backend"""
+    """VAL-CROSS-018: HookContext.call_llm delegates to spawnllm.call with the right backend and knobs."""
+
+    @staticmethod
+    def capture_call(monkeypatch: pytest.MonkeyPatch, returns: object) -> dict[str, Any]:
+        import captain_hook.context as context_mod
+
+        captured: dict[str, Any] = {}
+
+        def fake_call(prompt: str, **kwargs: Any) -> object:
+            captured["prompt"] = prompt
+            captured.update(kwargs)
+            return returns
+
+        monkeypatch.setattr(context_mod, "call", fake_call)
+        return captured
 
     def test_call_llm_invokes_review_backend(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        transcript = make_transcript([msg("assistant", "some context")])
-        ctx = build_ctx(transcript=transcript, session_dir=tmp_path)
+        from captain_hook.llm import CodexBackend
 
-        captured: dict[str, Any] = {}
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+        captured = self.capture_call(monkeypatch, "all good")
+        ctx = build_ctx(transcript=make_transcript([msg("assistant", "some context")]), session_dir=tmp_path)
 
-        def mock_call_cli(
-            args: list[str],
-            *,
-            input: str | None = None,
-            timeout: int = 30,
-            env: dict[str, str] | None = None,
-        ) -> str:
-            captured["args"] = args
-            captured["input"] = input
-            return '{"block": false, "reasoning": "all good"}'
-
-        monkeypatch.setattr(ctx, "call_cli", mock_call_cli)
-
-        result = ctx.call_llm("Review this code", specialty="review", model="small")
-        assert isinstance(result, str)
-        assert "all good" in result
-        assert captured["args"][0] == "codex"
+        result = ctx.call_llm("Review this code", specialty="review", model="small", timeout=99)
+        assert result == "all good"
+        assert isinstance(captured["backend"], CodexBackend)
+        assert captured["model"] == "small"
+        assert captured["timeout"] == 99
+        assert captured["cwd"] == str(tmp_path)
+        assert captured["response_model"] is None
 
     def test_call_llm_general_uses_claude_backend(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        transcript = make_transcript([msg("assistant", "context")])
-        ctx = build_ctx(transcript=transcript, session_dir=tmp_path)
+        from captain_hook.llm import ClaudeBackend
 
-        captured: dict[str, Any] = {}
-
-        def mock_call_cli(
-            args: list[str],
-            *,
-            input: str | None = None,
-            timeout: int = 30,
-            env: dict[str, str] | None = None,
-        ) -> str:
-            captured["args"] = args
-            return "claude response"
-
-        monkeypatch.setattr(ctx, "call_cli", mock_call_cli)
+        captured = self.capture_call(monkeypatch, "claude response")
+        ctx = build_ctx(transcript=make_transcript([msg("assistant", "context")]), session_dir=tmp_path)
 
         result = ctx.call_llm("hello", specialty="general", model="small")
         assert result == "claude response"
-        assert captured["args"][0] == "claude"
+        assert isinstance(captured["backend"], ClaudeBackend)
 
     def test_call_llm_with_response_model(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from pydantic import BaseModel
@@ -862,42 +855,17 @@ class TestCallLlmIntegration:
             block: bool
             reasoning: str
 
-        transcript = make_transcript([msg("assistant", "context")])
-        ctx = build_ctx(transcript=transcript, session_dir=tmp_path)
-
-        def mock_call_cli(
-            args: list[str],
-            *,
-            input: str | None = None,
-            timeout: int = 30,
-            env: dict[str, str] | None = None,
-        ) -> str:
-            return '{"block": true, "reasoning": "detected issue"}'
-
-        monkeypatch.setattr(ctx, "call_cli", mock_call_cli)
+        verdict = Verdict(block=True, reasoning="detected issue")
+        captured = self.capture_call(monkeypatch, verdict)
+        ctx = build_ctx(transcript=make_transcript([msg("assistant", "context")]), session_dir=tmp_path)
 
         result = ctx.call_llm("check", specialty="review", model="small", response_model=Verdict)
-        assert isinstance(result, Verdict)
-        assert result.block is True
-        assert result.reasoning == "detected issue"
+        assert result is verdict
+        assert captured["response_model"] is Verdict
 
     def test_call_llm_with_transcript_interpolation(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        transcript = make_transcript([msg("assistant", "important context")])
-        ctx = build_ctx(transcript=transcript, session_dir=tmp_path)
-
-        captured: dict[str, Any] = {}
-
-        def mock_call_cli(
-            args: list[str],
-            *,
-            input: str | None = None,
-            timeout: int = 30,
-            env: dict[str, str] | None = None,
-        ) -> str:
-            captured["input"] = input
-            return "ok"
-
-        monkeypatch.setattr(ctx, "call_cli", mock_call_cli)
+        captured = self.capture_call(monkeypatch, "ok")
+        ctx = build_ctx(transcript=make_transcript([msg("assistant", "important context")]), session_dir=tmp_path)
 
         ctx.call_llm("Review: {transcript}", specialty="review", model="small", transcript=True)
-        assert "important context" in captured["input"]
+        assert "important context" in captured["prompt"]

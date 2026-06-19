@@ -16,7 +16,7 @@ from cc_transcript.render import Budget, render_turn
 from cc_transcript.tools import parse_tool_call
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
-from spawnllm import resolve_schema_path, run_cli, schema_for
+from spawnllm import call, run_cli
 
 from captain_hook.classifiers import detect
 from captain_hook.llm import LlmBackends, TModel, TSpecialty
@@ -193,10 +193,12 @@ class HookContext:
             if transcript:
                 template = f"{{transcript}}\n\n<task>\n{template}\n</task>"
             prompt = template.format(*args, **kwargs, transcript=self.transcript_text())
-        schema = schema_for(response_model) if response_model else None
-        backend = LlmBackends.for_specialty(specialty)
-        schema_path = resolve_schema_path(backend, schema)
-
-        cmd = backend.build_command(backend.models[model], schema_path, agent)
-        raw = self.call_cli(cmd, input=prompt, timeout=timeout, env=backend.env())
-        return backend.parse_response(raw, response_model)
+        return call(
+            prompt,
+            backend=LlmBackends.for_specialty(specialty),
+            model=model,
+            agent=agent,
+            response_model=response_model,
+            cwd=os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR"),
+            timeout=timeout,
+        )

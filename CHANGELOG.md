@@ -4,6 +4,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0] - 2026-06-19
+
+### Changed
+- Track spawnllm 0.3.x: requires `spawnllm>=0.3.1`, which moves `schema_for` onto
+  each backend and reads results through its `Invocation` seam. `call_llm` now
+  delegates to `spawnllm.call`, so Codex-backed gates and nudges read their final
+  message from the result file instead of the interactive log and clean up the
+  schema temp file. The `openai` and `anthropic` SDKs join the dependency tree.
+
+## [3.9.1] - 2026-06-18
+
+### Fixed
+- The `general` pack's git-stash block hint points at jj, not git branches.
+
 ## [3.9.0] - 2026-06-18
 
 ### Added

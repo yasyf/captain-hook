@@ -167,24 +167,27 @@ class TestCallCli:
 
 class TestCallLlm:
     def test_backend_dispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from captain_hook.llm import CodexBackend
+
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
 
-        with patch.object(ctx, "call_cli", return_value="mocked response") as mock_cli:
+        with patch("captain_hook.context.call", return_value="mocked response") as mock_call:
             result = ctx.call_llm("test prompt", specialty="review")
-            assert result == "mocked response"
-            cmd = mock_cli.call_args[0][0]
-            assert "codex" in cmd
+        assert result == "mocked response"
+        assert isinstance(mock_call.call_args.kwargs["backend"], CodexBackend)
+        assert mock_call.call_args.kwargs["cwd"] == "/tmp"
 
     def test_general_uses_claude(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from captain_hook.llm import ClaudeBackend
+
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
 
-        with patch.object(ctx, "call_cli", return_value="mocked response") as mock_cli:
+        with patch("captain_hook.context.call", return_value="mocked response") as mock_call:
             result = ctx.call_llm("test prompt", specialty="general")
-            assert result == "mocked response"
-            cmd = mock_cli.call_args[0][0]
-            assert "claude" in cmd
+        assert result == "mocked response"
+        assert isinstance(mock_call.call_args.kwargs["backend"], ClaudeBackend)
 
     def test_with_transcript(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from captain_hook.testing.helpers import fixture_session
@@ -194,20 +197,19 @@ class TestCallLlm:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=transcript, settings=None)
 
-        with patch.object(ctx, "call_cli", return_value="mocked") as mock_cli:
+        with patch("captain_hook.context.call", return_value="mocked") as mock_call:
             ctx.call_llm("analyze this", transcript=True)
-            input_text = mock_cli.call_args[1].get("input", "")
-            assert "transcript content here" in input_text
-            assert "<task>" in input_text
+        prompt = mock_call.call_args.args[0]
+        assert "transcript content here" in prompt
+        assert "<task>" in prompt
 
     def test_with_agent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
 
-        with patch.object(ctx, "call_cli", return_value="mocked") as mock_cli:
+        with patch("captain_hook.context.call", return_value="mocked") as mock_call:
             ctx.call_llm("test", agent=True, specialty="general")
-            cmd = mock_cli.call_args[0][0]
-            assert "--permission-mode" in cmd
+        assert mock_call.call_args.kwargs["agent"] is True
 
     def test_with_response_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class Verdict(BaseModel):
@@ -216,12 +218,12 @@ class TestCallLlm:
 
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        verdict = Verdict(should_block=True, reason="bad")
 
-        with patch.object(ctx, "call_cli", return_value='{"should_block": true, "reason": "bad"}'):
+        with patch("captain_hook.context.call", return_value=verdict) as mock_call:
             result = ctx.call_llm("test", response_model=Verdict, specialty="review")
-            assert isinstance(result, Verdict)
-            assert result.should_block is True
-            assert result.reason == "bad"
+        assert result is verdict
+        assert mock_call.call_args.kwargs["response_model"] is Verdict
 
 
 class TestContextState:
