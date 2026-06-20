@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,7 +45,8 @@ class CliState:
             discover_pack(pack_.entry.name, pack_.path)
         if missing:
             print(
-                f"capt-hook: packs not cached: {', '.join(missing)} — run `capt-hook pack update`",
+                f"capt-hook: packs unavailable (offline and not cached): {', '.join(missing)} "
+                "— run `capt-hook pack update` when online",
                 file=sys.stderr,
             )
 
@@ -335,10 +337,14 @@ def init_project(root: Path, *, review: bool = True) -> None:
         case (False, _):
             click.echo("Session reviewer: skipped (--no-review) — `uvx capt-hook review enable` to turn it on later.")
         case (True, None):
-            click.echo("Session reviewer: needs a git repo with a remote — `uvx capt-hook review enable` once it has one.")
+            click.echo(
+                "Session reviewer: needs a git repo with a remote — `uvx capt-hook review enable` once it has one."
+            )
         case (True, repo):
             watch_repo(repo)
-            click.echo(f"Session reviewer: watching {repo} — mines your ended sessions and opens hook PRs automatically.")
+            click.echo(
+                f"Session reviewer: watching {repo} — mines your ended sessions and opens hook PRs automatically."
+            )
             click.echo("  Stop anytime with `uvx capt-hook review disable`.")
     click.echo()
     click.echo("Next:")
@@ -505,7 +511,9 @@ def test(state: CliState, json_output: bool) -> None:
 
 
 @cli.command()
-@click.option("--no-review", is_flag=True, default=False, help="Skip enabling the SessionEnd session reviewer for this repo")
+@click.option(
+    "--no-review", is_flag=True, default=False, help="Skip enabling the SessionEnd session reviewer for this repo"
+)
 @click.pass_obj
 def init(state: CliState, no_review: bool) -> None:
     """Scaffold the hooks directory, install bundled skills, wire settings, and enable the session reviewer."""
@@ -559,7 +567,7 @@ def pack_add(state: CliState, target: str) -> None:
         entry = (
             manager.BuiltinPack(name=target)
             if target in manager.builtin_packs()
-            else manager.fetch_pack(manager.PackSource.parse(target)).entry
+            else manager.add_external(manager.PackSource.parse(target))
         )
     except manager.PackError as e:
         raise click.ClickException(str(e)) from e
@@ -577,12 +585,12 @@ def pack_list(state: CliState) -> None:
         match r.entry:
             case manager.BuiltinPack():
                 kind, ref = "builtin", "-"
-            case manager.ExternalPack(source=source, commit=commit):
-                kind, ref = "github", f"{source.ref or 'HEAD'}@{commit[:7]}"
+            case manager.ExternalPack(source=source) as ext:
+                kind, ref = "github", f"{source.ref or 'HEAD'}@{(manager.resolved_commit(ext) or '???')[:7]}"
         count = sum(1 for p in r.path.glob("*.py") if not p.stem.startswith("_") and p.stem != CONF_MODULE)
         click.echo(f"  {r.entry.name:24} {kind:8} {ref:20} v{r.manifest.version:8} {count} hooks")
     for name in missing:
-        click.echo(f"  {name:24} github   (not cached — run `capt-hook pack update`)")
+        click.echo(f"  {name:24} github   (unavailable — offline; run `capt-hook pack update` when online)")
 
 
 @pack.command(name="remove")
@@ -602,17 +610,24 @@ def pack_remove(state: CliState, name: str) -> None:
 @click.argument("name", required=False)
 @click.pass_obj
 def pack_update(state: CliState, name: str | None) -> None:
-    """Re-resolve external packs' refs to fresh commits and re-fetch."""
+    """Re-resolve external packs' refs to fresh commits and re-fetch.
+
+    A pack pinned with an explicit ``commit`` is re-pinned in packs.toml; a moving-ref
+    pack (no ``commit``) refreshes its per-machine sidecar and stays source-only.
+    """
     path = manager.packs_toml_path(state.root)
     for entry in manager.read_entries(path):
         match entry:
-            case manager.ExternalPack(name=n, source=source) if name in (None, n):
+            case manager.ExternalPack(name=n, source=source, commit=commit) if name in (None, n):
                 try:
-                    fresh = manager.fetch_pack(source).entry
+                    sha = manager.fetched_commit(manager.fetch_pack(source))
                 except manager.PackError as e:
                     raise click.ClickException(str(e)) from e
-                manager.upsert_entry(path, fresh)
-                click.echo(f"  updated {n} -> {fresh.commit[:7]}")
+                if commit is not None:
+                    manager.upsert_entry(path, manager.ExternalPack(name=n, source=source, commit=sha))
+                else:
+                    manager.PackMeta(commit=sha, checked_at=time.time()).write(manager.meta_path(n))
+                click.echo(f"  updated {n} -> {sha[:7]}")
             case manager.BuiltinPack(name=n) if name == n:
                 click.echo(f"  {n} is builtin; it tracks the installed capt-hook version")
     regenerate_settings(state)

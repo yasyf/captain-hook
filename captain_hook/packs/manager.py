@@ -2,20 +2,31 @@
 
 A *pack* is a named, versioned collection of hooks. Builtin packs ship inside the
 ``captain_hook`` wheel under ``captain_hook/packs/<name>/``; external packs live in a
-GitHub repo carrying a ``capt-hook.toml`` manifest and are fetched as a pinned tarball
-into a local cache. A project enables packs by listing them in ``.claude/hooks/packs.toml``.
+GitHub repo carrying a ``capt-hook.toml`` manifest and are fetched as a tarball into a
+local cache. A project enables packs by listing them in ``.claude/hooks/packs.toml``.
+
+packs.toml is the source of truth. An entry may pin a ``commit`` (a hard lock used
+directly) or carry only a ``source`` whose ref moves: ``@latest`` (the latest GitHub
+release), a branch, or the bare default branch. A moving ref re-resolves to a commit at
+most once per 24h, tracked alongside the resolved commit in a per-machine ``PackMeta``
+sidecar; within the window the cached commit is used with no network. A declared pack
+missing from the cache is fetched on demand, so the first event after a clone or a moved
+ref self-heals. The only loud failure is a pack that is both uncached and unreachable.
 """
 
 from __future__ import annotations
 
 import importlib.resources
+import json
 import os
 import re
 import shutil
 import tarfile
+import time
 import tomllib
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -29,10 +40,17 @@ PACK_MANIFEST = "capt-hook.toml"
 # A pack's manifest may sit in .claude/ (preferred) or at the repo root.
 MANIFEST_MEMBERS = (f".claude/{PACK_MANIFEST}", PACK_MANIFEST)
 SHA_MARKER = ".sha"
+META_SUFFIX = ".meta"
+FASTPATH_NAME = ".resolve-fastpath"
+LATEST_REF = "latest"
+# Moving refs (@latest / a branch / a bare default-branch source) re-resolve to a fresh
+# commit at most once per this window; within it the cached commit is used with no network.
+REFRESH_TTL_SECONDS = 24 * 60 * 60
 SOURCE_RE = re.compile(r"^github:(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+?)(?:@(?P<ref>[\w./-]+))?$")
 PACK_NAME_RE = re.compile(r"[a-z][a-z0-9-]*")
 GITHUB_REPO = "https://api.github.com/repos/{owner}/{repo}"
 GITHUB_COMMIT = "https://api.github.com/repos/{owner}/{repo}/commits/{ref}"
+GITHUB_LATEST_RELEASE = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
 GITHUB_TARBALL = "https://github.com/{owner}/{repo}/archive/{sha}.tar.gz"
 
 
@@ -86,7 +104,10 @@ class BuiltinPack:
 class ExternalPack:
     name: str
     source: PackSource
-    commit: str
+    # A pinned commit is a hard lock used directly; None means the source's ref
+    # (@latest, a branch, or the bare default branch) moves, and the resolved
+    # commit lives in a per-machine sidecar (see PackMeta), not in packs.toml.
+    commit: str | None = None
 
 
 type PackEntry = BuiltinPack | ExternalPack
@@ -97,6 +118,32 @@ class ResolvedPack:
     entry: PackEntry
     path: Path
     manifest: PackManifest
+
+
+@dataclass(frozen=True, slots=True)
+class PackMeta:
+    """Per-machine resolution sidecar for a moving-ref pack: the last-resolved commit and when.
+
+    Stored as JSON next to the cache so the resolved ``commit`` and ``checked_at``
+    timestamp never enter the committed ``packs.toml``. ``checked_at`` gates the
+    24h re-resolution TTL.
+    """
+
+    commit: str
+    checked_at: float
+
+    def fresh(self, now: float) -> bool:
+        return now - self.checked_at < REFRESH_TTL_SECONDS
+
+    @classmethod
+    def load(cls, path: Path) -> PackMeta | None:
+        if not path.is_file():
+            return None
+        data = json.loads(path.read_text())
+        return cls(commit=data["commit"], checked_at=data["checked_at"])
+
+    def write(self, path: Path) -> None:
+        atomic_write(path, json.dumps({"commit": self.commit, "checked_at": self.checked_at}))
 
 
 def packs_toml_path(root: Path) -> Path:
@@ -117,6 +164,8 @@ def parse_entry(name: str, table: dict[str, Any]) -> PackEntry:
     match table:
         case {"source": source, "commit": commit}:
             return ExternalPack(name=name, source=PackSource.parse(source), commit=commit)
+        case {"source": source}:
+            return ExternalPack(name=name, source=PackSource.parse(source), commit=None)
         case {} if not table:
             return BuiltinPack(name=name)
         case _:
@@ -133,6 +182,8 @@ def render_entry(entry: PackEntry) -> str:
     match entry:
         case BuiltinPack(name=name):
             return f"[packs.{name}]\n\n"
+        case ExternalPack(name=name, source=source, commit=None):
+            return f'[packs.{name}]\nsource = "{source}"\n\n'
         case ExternalPack(name=name, source=source, commit=commit):
             return f'[packs.{name}]\nsource = "{source}"\ncommit = "{commit}"\n\n'
 
@@ -163,9 +214,25 @@ def packs_cache_root() -> Path:
     return state.CACHE_ROOT / "packs"
 
 
+def meta_path(name: str) -> Path:
+    return packs_cache_root() / f"{name}{META_SUFFIX}"
+
+
+def resolve_ref(source: PackSource) -> str:
+    """Resolve a source's effective git ref: @latest via the latest release, else the ref or default branch."""
+    match source.ref:
+        case None:
+            return http.github_get_json(GITHUB_REPO.format(owner=source.owner, repo=source.repo))["default_branch"]
+        case ref if ref == LATEST_REF:
+            return http.github_get_json(GITHUB_LATEST_RELEASE.format(owner=source.owner, repo=source.repo))["tag_name"]
+        case ref:
+            return ref
+
+
 def resolve_commit(source: PackSource) -> str:
-    ref = source.ref or http.github_get_json(GITHUB_REPO.format(owner=source.owner, repo=source.repo))["default_branch"]
-    return http.github_get_json(GITHUB_COMMIT.format(owner=source.owner, repo=source.repo, ref=ref))["sha"]
+    return http.github_get_json(GITHUB_COMMIT.format(owner=source.owner, repo=source.repo, ref=resolve_ref(source)))[
+        "sha"
+    ]
 
 
 def strip_top_level(tf: tarfile.TarFile) -> Iterator[tarfile.TarInfo]:
@@ -232,6 +299,29 @@ def fetch_pack(source: PackSource) -> ResolvedPack:
         raise PackError(str(e)) from e
 
 
+def add_external(source: PackSource) -> ExternalPack:
+    """Fetch a source to validate and warm the cache, then return its packs.toml entry.
+
+    A concrete ref (a tag or branch) is FROZEN: the entry carries the resolved commit,
+    so packs.toml is a reproducible lockfile and runtime uses the pin directly. A moving
+    ref — ``@latest`` or a bare source (default branch) — stays source-only (``commit=None``)
+    and the 24h TTL keeps the resolved commit in the per-machine sidecar instead.
+    """
+    fetched = fetch_pack(source)
+    commit = fetched_commit(fetched)
+    if source.ref is None or source.ref == LATEST_REF:
+        PackMeta(commit=commit, checked_at=time.time()).write(meta_path(fetched.manifest.name))
+        return ExternalPack(name=fetched.manifest.name, source=source, commit=None)
+    return ExternalPack(name=fetched.manifest.name, source=source, commit=commit)
+
+
+def fetched_commit(resolved: ResolvedPack) -> str:
+    """The commit a just-fetched external pack resolved to (fetch_commit always pins one)."""
+    if not isinstance(resolved.entry, ExternalPack) or resolved.entry.commit is None:
+        raise PackError(f"expected a fetched external pack, got {resolved.entry!r}")
+    return resolved.entry.commit
+
+
 def builtin_packs() -> dict[str, Path]:
     base = Path(str(importlib.resources.files("captain_hook") / "packs"))
     return {p.name: p for p in base.iterdir() if p.is_dir() and manifest_in(p).is_file()}
@@ -244,22 +334,118 @@ def resolve_builtin(name: str) -> ResolvedPack:
     return ResolvedPack(BuiltinPack(name=name), manifest.hooks_dir(pack_dir), manifest)
 
 
-def resolve_external(entry: ExternalPack) -> ResolvedPack | None:
-    if not (cached := find_cached(entry.name, entry.commit)):
+def load_cached(entry: ExternalPack, sha: str) -> ResolvedPack | None:
+    if not (cached := find_cached(entry.name, sha)):
         return None
     manifest = PackManifest.load(manifest_in(cached))
     return ResolvedPack(entry, manifest.hooks_dir(cached), manifest)
 
 
+def resolve_external(entry: ExternalPack) -> ResolvedPack | None:
+    """Resolve a declared external pack to its cached content, fetching on a cache miss.
+
+    A pinned ``commit`` is a hard lock used directly. A moving ref re-resolves to a
+    fresh commit at most once per 24h (tracked in the PackMeta sidecar); within the
+    window the cached commit is used with no network. Returns None only when nothing
+    is cached and the network is unreachable — the single loud "not cached" path.
+    """
+    if entry.commit is not None:
+        return load_cached(entry, entry.commit) or auto_fetch(entry, entry.commit)
+    return resolve_moving(entry)
+
+
+def auto_fetch(entry: ExternalPack, sha: str) -> ResolvedPack | None:
+    """Fetch a known commit on a cache miss, returning None if the network is unreachable.
+
+    Re-loads through the declared ``entry`` so the resolved pack reports the packs.toml
+    identity (name, source, pinned-or-moving commit), not fetch_commit's synthesized entry.
+    """
+    try:
+        fetch_commit(entry.source, sha)
+    except http.GitHubFetchError:
+        return None
+    return load_cached(entry, sha)
+
+
+def resolve_moving(entry: ExternalPack) -> ResolvedPack | None:
+    now = time.time()
+    cached_meta = PackMeta.load(meta_path(entry.name))
+    if cached_meta and cached_meta.fresh(now) and (hit := load_cached(entry, cached_meta.commit)):
+        return hit
+    try:
+        sha = resolve_commit(entry.source)
+    except http.GitHubFetchError:
+        return load_cached(entry, cached_meta.commit) if cached_meta else None
+    resolved = load_cached(entry, sha) or auto_fetch(entry, sha)
+    if resolved is not None:
+        PackMeta(commit=sha, checked_at=now).write(meta_path(entry.name))
+    return resolved
+
+
+def cached_commit(entry: ExternalPack, now: float) -> str | None:
+    """The commit to load from cache with no network: the pin, or a within-TTL sidecar commit."""
+    match entry.commit:
+        case None if (meta := PackMeta.load(meta_path(entry.name))) and meta.fresh(now):
+            return meta.commit
+        case None:
+            return None
+        case commit:
+            return commit
+
+
+def resolved_commit(entry: ExternalPack) -> str | None:
+    """The commit this entry last resolved to for display: its pin, else the sidecar's record (ignoring TTL)."""
+    return entry.commit if entry.commit is not None else (m := PackMeta.load(meta_path(entry.name))) and m.commit
+
+
+def load_cached_fresh(entry: ExternalPack, now: float) -> ResolvedPack:
+    """Load a pack the fast path already proved is cached and within TTL; crash if the invariant broke."""
+    if (sha := cached_commit(entry, now)) is None or (hit := load_cached(entry, sha)) is None:
+        raise PackError(f"fast-path invariant violated: {entry.name} no longer cached")
+    return hit
+
+
+def all_cached_and_fresh(entries: Sequence[PackEntry], now: float) -> bool:
+    return all(
+        bool((sha := cached_commit(ext, now)) and find_cached(ext.name, sha))
+        for ext in entries
+        if isinstance(ext, ExternalPack)
+    )
+
+
+def fastpath_path(root: Path) -> Path:
+    return packs_cache_root() / f"{sha256(str(root.resolve()).encode()).hexdigest()[:16]}{FASTPATH_NAME}"
+
+
+def fastpath_unchanged(root: Path, entries: Sequence[PackEntry], now: float) -> bool:
+    """Fast skip: packs.toml is byte-identical to the last resolve and every pack is cached within TTL.
+
+    Avoids any re-resolution on the hot path. The recorded hash is a per-machine,
+    per-project sidecar; a stale or missing one just forces the full resolve below. No network.
+    """
+    fastpath = fastpath_path(root)
+    return fastpath.is_file() and fastpath.read_text() == toml_hash(root) and all_cached_and_fresh(entries, now)
+
+
+def toml_hash(root: Path) -> str:
+    path = packs_toml_path(root)
+    return sha256(path.read_bytes() if path.exists() else b"").hexdigest()
+
+
 def resolve_enabled_packs(root: Path) -> tuple[list[ResolvedPack], list[str]]:
+    entries = read_entries(packs_toml_path(root))
+    now = time.time()
+    fast = fastpath_unchanged(root, entries, now)
     resolved: list[ResolvedPack] = []
     missing: list[str] = []
-    for entry in read_entries(packs_toml_path(root)):
+    for entry in entries:
         match entry:
             case BuiltinPack(name=name):
                 resolved.append(resolve_builtin(name))
-            case ExternalPack() as ext if found := resolve_external(ext):
+            case ExternalPack() as ext if found := (load_cached_fresh(ext, now) if fast else resolve_external(ext)):
                 resolved.append(found)
             case ExternalPack() as ext:
                 missing.append(ext.name)
+    if not (fast or missing):
+        atomic_write(fastpath_path(root), toml_hash(root))
     return resolved, missing

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import tarfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from captain_hook import app
 from captain_hook.cli import cli
 from captain_hook.loader import discover_pack, import_pack_module
 from captain_hook.packs import manager
+from captain_hook.util import http
 
 PACKS_DIR = Path(captain_hook.__file__).parent / "packs"
 EXPECTED_BUILTINS = {"general", "python", "go"}
@@ -49,6 +51,74 @@ def make_pack_tarball(dest: Path, *, name: str, top: str) -> Path:
     with tarfile.open(tarball, "w:gz") as tf:
         tf.add(src, arcname=top)
     return tarball
+
+
+class Clock:
+    """A movable monotonic-enough clock; patch onto manager.time.time to drive the TTL."""
+
+    def __init__(self, start: float = 1_700_000_000.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@dataclass
+class FakeGitHub:
+    """In-memory GitHub: serves resolve_ref/resolve_commit JSON and the tarball, counting every network call.
+
+    ``default_branch`` -> ref for a bare source; ``latest_tag`` -> tag for @latest;
+    ``sha`` -> the commit every ref resolves to. ``calls`` proves the within-TTL hot
+    path makes no requests.
+    """
+
+    name: str
+    sha: str
+    tarball: Path
+    default_branch: str = "main"
+    latest_tag: str = "v9.9.9"
+    json_calls: int = 0
+    download_calls: int = 0
+    seen_refs: list[str] = field(default_factory=list)
+
+    @property
+    def calls(self) -> int:
+        return self.json_calls + self.download_calls
+
+    def get_json(self, url: str) -> Any:
+        self.json_calls += 1
+        if url.endswith("/releases/latest"):
+            return {"tag_name": self.latest_tag}
+        if "/commits/" in url:
+            self.seen_refs.append(url.rsplit("/commits/", 1)[1])
+            return {"sha": self.sha}
+        return {"default_branch": self.default_branch}
+
+    def download(self, url: str, dest: Path) -> None:
+        self.download_calls += 1
+        dest.write_bytes(self.tarball.read_bytes())
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
+        monkeypatch.setattr(http, "github_get_json", self.get_json)
+        monkeypatch.setattr(http, "github_download", self.download)
+        return self
+
+
+def fake_github(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, name: str, sha: str, **kw: Any) -> FakeGitHub:
+    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
+    tarball = make_pack_tarball(tmp_path / f"src-{sha[:8]}", name=name, top=f"{name}-{sha[:8]}")
+    return FakeGitHub(name=name, sha=sha, tarball=tarball, **kw).install(monkeypatch)
+
+
+def go_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_: Any, **__: Any) -> Any:
+        raise http.GitHubFetchError("offline")
+
+    monkeypatch.setattr(http, "github_get_json", boom)
+    monkeypatch.setattr(http, "github_download", boom)
 
 
 # --- builtin pack content -------------------------------------------------------------
@@ -166,9 +236,24 @@ def test_delete_entry(tmp_path: Path) -> None:
         manager.delete_entry(path, "missing")
 
 
-def test_read_entries_rejects_partial_external(tmp_path: Path) -> None:
+def test_read_entries_accepts_source_only_as_moving(tmp_path: Path) -> None:
     path = tmp_path / "packs.toml"
-    path.write_text('[packs.acme]\nsource = "github:a/b@v1"\n')
+    path.write_text('[packs.acme]\nsource = "github:a/b@latest"\n')
+    (entry,) = manager.read_entries(path)
+    assert entry == manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@latest"), commit=None)
+
+
+def test_source_only_round_trips_without_commit(tmp_path: Path) -> None:
+    path = tmp_path / "packs.toml"
+    moving = manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@latest"), commit=None)
+    manager.atomic_write(path, manager.render_packs_toml([moving]))
+    assert "commit" not in path.read_text()
+    assert manager.read_entries(path) == [moving]
+
+
+def test_read_entries_rejects_unknown_keys(tmp_path: Path) -> None:
+    path = tmp_path / "packs.toml"
+    path.write_text('[packs.acme]\ncommit = "abc"\n')  # commit without source is not a valid entry
     with pytest.raises(manager.PackError):
         manager.read_entries(path)
 
@@ -341,14 +426,15 @@ def test_resolve_unknown_builtin_fails_loud(tmp_path: Path) -> None:
         manager.resolve_enabled_packs(tmp_path)
 
 
-def test_resolve_uncached_external_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_uncached_external_offline_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
+    go_offline(monkeypatch)
     manager.upsert_entry(
         manager.packs_toml_path(tmp_path),
         manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@v1"), "a" * 40),
     )
     resolved, missing = manager.resolve_enabled_packs(tmp_path)
-    assert (resolved, missing) == ([], ["acme"])
+    assert (resolved, missing) == ([], ["acme"])  # uncached pin + offline auto-fetch fails -> the one loud path
 
 
 # --- loader.discover_pack ------------------------------------------------------------
@@ -436,3 +522,284 @@ def test_cli_pack_add_rejects_invalid_target(tmp_path: Path) -> None:
     result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "add", "not-a-pack"])
     assert result.exit_code != 0
     assert not manager.packs_toml_path(tmp_path).exists()
+
+
+# --- @latest / ref resolution --------------------------------------------------------
+
+
+def test_resolve_ref_latest_uses_release_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="d" * 40, latest_tag="v3.2.1")
+    assert manager.resolve_commit(manager.PackSource.parse("github:acme/acme@latest")) == "d" * 40
+    assert gh.seen_refs == ["v3.2.1"]  # the commits endpoint was queried for the release tag, not "latest"
+
+
+def test_resolve_ref_bare_uses_default_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="e" * 40, default_branch="trunk")
+    assert manager.resolve_commit(manager.PackSource.parse("github:acme/acme")) == "e" * 40
+    assert gh.seen_refs == ["trunk"]
+
+
+def test_resolve_ref_explicit_tag_passes_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="f" * 40)
+    assert manager.resolve_commit(manager.PackSource.parse("github:acme/acme@v1.2")) == "f" * 40
+    assert gh.seen_refs == ["v1.2"]  # no release lookup for an explicit ref
+
+
+# --- auto-fetch on miss --------------------------------------------------------------
+
+
+def test_cache_miss_pinned_auto_fetches_and_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sha = "a" * 40
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha=sha)
+    manager.upsert_entry(
+        manager.packs_toml_path(tmp_path),
+        manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@v1"), sha),
+    )
+    assert manager.find_cached("acme", sha) is None  # cold cache
+
+    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+
+    assert missing == []
+    (pack,) = resolved
+    assert pack.manifest.name == "acme" and (pack.path / "h.py").is_file()
+    assert manager.find_cached("acme", sha) is not None  # the miss self-healed
+    assert gh.download_calls == 1
+
+
+def test_cache_miss_latest_auto_fetches_via_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sha = "b" * 40
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha=sha, latest_tag="v2.0.0")
+    monkeypatch.setattr(manager.time, "time", Clock())
+    manager.upsert_entry(
+        manager.packs_toml_path(tmp_path),
+        manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@latest"), commit=None),
+    )
+
+    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+
+    assert missing == []
+    assert resolved[0].manifest.name == "acme"
+    assert gh.seen_refs == ["v2.0.0"] and gh.download_calls == 1
+    meta = manager.PackMeta.load(manager.meta_path("acme"))
+    assert meta is not None and meta.commit == sha  # resolved commit recorded in the per-machine sidecar
+
+
+def test_cache_miss_offline_other_packs_still_resolve(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
+    go_offline(monkeypatch)
+    path = manager.packs_toml_path(tmp_path)
+    manager.upsert_entry(path, manager.BuiltinPack("general"))
+    manager.upsert_entry(path, manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@v1"), "a" * 40))
+
+    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+
+    assert missing == ["acme"]  # one bad pack does not block the others
+    assert [r.entry.name for r in resolved] == ["general"]
+
+
+# --- 24h TTL + content-hash fast path ------------------------------------------------
+
+
+def enable_moving(tmp_path: Path, *, ref: str = "@latest") -> None:
+    manager.upsert_entry(
+        manager.packs_toml_path(tmp_path),
+        manager.ExternalPack("acme", manager.PackSource.parse(f"github:acme/acme{ref}"), commit=None),
+    )
+
+
+def test_within_ttl_does_no_network(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = Clock()
+    monkeypatch.setattr(manager.time, "time", clock)
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
+    enable_moving(tmp_path)
+
+    manager.resolve_enabled_packs(tmp_path)  # warms cache + sidecar
+    calls_after_warm = gh.calls
+    assert calls_after_warm > 0
+
+    clock.advance(23 * 60 * 60)  # still inside the 24h window
+    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+
+    assert missing == [] and resolved[0].manifest.name == "acme"
+    assert gh.calls == calls_after_warm  # ZERO new network calls within the TTL window
+
+
+def test_past_ttl_reresolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = Clock()
+    monkeypatch.setattr(manager.time, "time", clock)
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
+    enable_moving(tmp_path)
+
+    manager.resolve_enabled_packs(tmp_path)
+    calls_after_warm = gh.calls
+
+    clock.advance(25 * 60 * 60)  # past the 24h window
+    manager.resolve_enabled_packs(tmp_path)
+
+    assert gh.json_calls > calls_after_warm  # the ref was re-resolved over the network
+    meta = manager.PackMeta.load(manager.meta_path("acme"))
+    assert meta is not None and meta.checked_at == clock.now  # sidecar timestamp refreshed
+
+
+def test_past_ttl_moved_ref_fetches_new_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = Clock()
+    monkeypatch.setattr(manager.time, "time", clock)
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
+    enable_moving(tmp_path)
+    manager.resolve_enabled_packs(tmp_path)
+
+    new_tarball = make_pack_tarball(tmp_path / "src-new", name="acme", top="acme-new")
+    gh.sha, gh.tarball = "c" * 40, new_tarball  # the moving ref now points at a new commit
+    clock.advance(25 * 60 * 60)
+
+    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+
+    assert missing == [] and resolved[0].manifest.name == "acme"
+    assert manager.find_cached("acme", "c" * 40) is not None
+    meta = manager.PackMeta.load(manager.meta_path("acme"))
+    assert meta is not None and meta.commit == "c" * 40
+
+
+def test_offline_during_ttl_refresh_falls_back_to_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = Clock()
+    monkeypatch.setattr(manager.time, "time", clock)
+    fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
+    enable_moving(tmp_path)
+    manager.resolve_enabled_packs(tmp_path)  # warm
+
+    clock.advance(25 * 60 * 60)  # TTL expired -> a refresh is due
+    go_offline(monkeypatch)  # ...but the network is gone
+    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+
+    assert missing == []  # offline always works: fall back to the cached commit
+    assert resolved[0].manifest.name == "acme"
+    meta = manager.PackMeta.load(manager.meta_path("acme"))
+    assert meta is not None and meta.checked_at == clock() - 25 * 60 * 60  # not bumped on a failed refresh
+
+
+def test_fastpath_unchanged_skips_all_network(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = Clock()
+    monkeypatch.setattr(manager.time, "time", clock)
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
+    enable_moving(tmp_path)
+
+    manager.resolve_enabled_packs(tmp_path)  # writes the fastpath sidecar
+    baseline = gh.calls
+
+    # packs.toml byte-identical, every pack cached within TTL -> pure fast skip.
+    for _ in range(3):
+        clock.advance(60)  # well within TTL
+        manager.resolve_enabled_packs(tmp_path)
+    assert gh.calls == baseline  # the hot path never touched the network
+
+
+def test_fastpath_invalidated_by_packs_toml_edit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = Clock()
+    monkeypatch.setattr(manager.time, "time", clock)
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
+    enable_moving(tmp_path)
+    manager.resolve_enabled_packs(tmp_path)
+    after_warm = gh.calls
+
+    manager.upsert_entry(manager.packs_toml_path(tmp_path), manager.BuiltinPack("general"))  # toml changed
+    manager.resolve_enabled_packs(tmp_path)
+
+    # The hash mismatch drops the fast path; the moving pack is still fresh within TTL, so
+    # resolution stays local (no network), but the fastpath sidecar is rewritten for the new toml.
+    assert gh.calls == after_warm
+    assert manager.fastpath_path(tmp_path).read_text() == manager.toml_hash(tmp_path)
+
+
+# --- pinned lockfile path (existing source+commit) -----------------------------------
+
+
+def test_pinned_lockfile_resolves_without_ref_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sha = "a" * 40
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha=sha)
+    manager.upsert_entry(
+        manager.packs_toml_path(tmp_path),
+        manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@v1"), sha),
+    )
+    manager.resolve_enabled_packs(tmp_path)  # cold: fetch the pinned commit directly
+    assert gh.json_calls == 0  # a hard pin never resolves a ref
+    assert gh.download_calls == 1
+
+    monkeypatch.setattr(manager.time, "time", Clock(start=1_700_000_000.0 + 10 * 24 * 60 * 60))
+    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+
+    assert missing == [] and resolved[0].manifest.name == "acme"
+    assert gh.download_calls == 1  # pinned + cached: no TTL, no re-fetch even years later
+    assert manager.PackMeta.load(manager.meta_path("acme")) is None  # pins keep no sidecar
+
+
+# --- pack add / update / list moving-ref consistency ---------------------------------
+
+
+def test_cli_pack_add_latest_is_source_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager.time, "time", Clock())
+    fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40, latest_tag="v1.0.0")
+    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "add", "github:acme/acme@latest"])
+
+    assert result.exit_code == 0, result.output
+    toml = manager.packs_toml_path(tmp_path).read_text()
+    assert 'source = "github:acme/acme@latest"' in toml and "commit" not in toml  # no frozen pin
+    (entry,) = manager.read_entries(manager.packs_toml_path(tmp_path))
+    assert entry == manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@latest"), commit=None)
+    meta = manager.PackMeta.load(manager.meta_path("acme"))
+    assert meta is not None and meta.commit == "a" * 40  # cache warmed + sidecar recorded
+
+
+def test_cli_pack_add_tag_freezes_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager.time, "time", Clock())
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
+    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "add", "github:acme/acme@v1.2.3"])
+
+    assert result.exit_code == 0, result.output
+    toml = manager.packs_toml_path(tmp_path).read_text()
+    assert 'source = "github:acme/acme@v1.2.3"' in toml and f'commit = "{"a" * 40}"' in toml  # frozen lockfile pin
+    (entry,) = manager.read_entries(manager.packs_toml_path(tmp_path))
+    assert entry == manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@v1.2.3"), commit="a" * 40)
+    assert manager.PackMeta.load(manager.meta_path("acme")) is None  # a frozen pin keeps no sidecar
+    assert gh.seen_refs == ["v1.2.3"]  # resolved the tag once, at add time
+
+
+def test_cli_pack_update_moving_refreshes_sidecar_not_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = Clock()
+    monkeypatch.setattr(manager.time, "time", clock)
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40, latest_tag="v1.0.0")
+    enable_moving(tmp_path)
+    manager.resolve_enabled_packs(tmp_path)
+
+    gh.sha, gh.tarball = "c" * 40, make_pack_tarball(tmp_path / "src-c", name="acme", top="acme-c")
+    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "update", "acme"])
+
+    assert result.exit_code == 0, result.output
+    assert "commit" not in manager.packs_toml_path(tmp_path).read_text()  # still source-only
+    meta = manager.PackMeta.load(manager.meta_path("acme"))
+    assert meta is not None and meta.commit == "c" * 40  # sidecar advanced to the new commit
+
+
+def test_cli_pack_update_pinned_repins_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    old, new = "a" * 40, "c" * 40
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha=new)
+    manager.upsert_entry(
+        manager.packs_toml_path(tmp_path),
+        manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@v1"), old),
+    )
+    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "update", "acme"])
+
+    assert result.exit_code == 0, result.output
+    (entry,) = manager.read_entries(manager.packs_toml_path(tmp_path))
+    assert isinstance(entry, manager.ExternalPack) and entry.commit == new  # re-pinned in the lockfile
+    assert gh.seen_refs == ["v1"]  # re-resolved the declared @v1 ref
+
+
+def test_cli_pack_list_shows_resolved_commit_for_moving(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager.time, "time", Clock())
+    fake_github(tmp_path, monkeypatch, name="acme", sha="abcdef1" + "0" * 33, latest_tag="v1.0.0")
+    enable_moving(tmp_path)
+    manager.resolve_enabled_packs(tmp_path)
+
+    listed = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "list"])
+    assert listed.exit_code == 0, listed.output
+    assert "acme" in listed.output and "latest@abcdef1" in listed.output  # honest resolved commit, not "None"
