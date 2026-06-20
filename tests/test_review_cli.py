@@ -74,7 +74,7 @@ def scanned_repo(tmp_path: Path, git_repo: Path) -> Path:
 class TestSettingsTemplate:
     def test_generate_settings_wires_session_end_to_review_run(self) -> None:
         assert generate_settings()["hooks"]["SessionEnd"] == [
-            {"hooks": [{"type": "command", "command": "uvx capt-hook review run"}]}
+            {"hooks": [{"type": "command", "command": "uvx capt-hook review run", "async": True}]}
         ]
 
     def test_review_run_command_honors_from_source(self) -> None:
@@ -117,8 +117,8 @@ class TestEnableDisable:
         assert f"watching {GIT_REPO_KEY}" in result.output
         assert asyncio.run(repo_watching(GIT_REPO_KEY)) is True
         data = json.loads((git_repo / ".claude" / "settings.json").read_text())
-        commands = [entry["command"] for group in data["hooks"]["SessionEnd"] for entry in group["hooks"]]
-        assert commands == [f"uvx {REVIEW_RUN_COMMAND}"]
+        entries = [entry for group in data["hooks"]["SessionEnd"] for entry in group["hooks"]]
+        assert entries == [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}", "async": True}]
 
     def test_enable_registers_plugin(self, git_repo: Path) -> None:
         assert invoke("enable", root=git_repo).exit_code == 0
@@ -145,18 +145,48 @@ class TestEnableDisable:
         ]
         assert len(review_groups) == 1
 
-    def test_enable_defers_session_end_to_local_settings(self, git_repo: Path) -> None:
+    def test_enable_migrates_local_sync_hook_without_duplicating(self, git_repo: Path) -> None:
         claude = git_repo / ".claude"
         claude.mkdir(parents=True)
-        (claude / "settings.local.json").write_text(
+        local = claude / "settings.local.json"
+        local.write_text(
             json.dumps({"hooks": {"SessionEnd": [{"hooks": [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}"}]}]}})
         )
         result = invoke("enable", root=git_repo)
         assert result.exit_code == 0, result.output
-        assert "SessionEnd hook wired" not in result.output
         committed = claude / "settings.json"
-        groups = (json.loads(committed.read_text()).get("hooks") or {}).get("SessionEnd") or [] if committed.exists() else []
-        assert not any(REVIEW_RUN_COMMAND in entry["command"] for group in groups for entry in group["hooks"])
+        committed_groups = (
+            (json.loads(committed.read_text()).get("hooks") or {}).get("SessionEnd") or [] if committed.exists() else []
+        )
+        assert not any(REVIEW_RUN_COMMAND in entry["command"] for group in committed_groups for entry in group["hooks"])
+        local_entries = [entry for group in json.loads(local.read_text())["hooks"]["SessionEnd"] for entry in group["hooks"]]
+        assert local_entries == [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}", "async": True}]
+
+    def test_enable_migrates_committed_sync_hook_to_async(self, git_repo: Path) -> None:
+        settings_path = git_repo / ".claude" / "settings.json"
+        settings_path.parent.mkdir(parents=True)
+        settings_path.write_text(
+            json.dumps({"hooks": {"SessionEnd": [{"hooks": [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}"}]}]}})
+        )
+        result = invoke("enable", root=git_repo)
+        assert result.exit_code == 0, result.output
+        assert "wired/updated" in result.output
+        entries = [entry for group in json.loads(settings_path.read_text())["hooks"]["SessionEnd"] for entry in group["hooks"]]
+        assert entries == [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}", "async": True}]
+
+    def test_enable_leaves_async_hook_unchanged(self, git_repo: Path) -> None:
+        settings_path = git_repo / ".claude" / "settings.json"
+        settings_path.parent.mkdir(parents=True)
+        settings_path.write_text(
+            json.dumps(
+                {"hooks": {"SessionEnd": [{"hooks": [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}", "async": True}]}]}}
+            )
+        )
+        result = invoke("enable", root=git_repo)
+        assert result.exit_code == 0, result.output
+        assert "wired/updated" not in result.output
+        entries = [entry for group in json.loads(settings_path.read_text())["hooks"]["SessionEnd"] for entry in group["hooks"]]
+        assert entries == [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}", "async": True}]
 
     def test_disable_unwatches(self, git_repo: Path) -> None:
         assert invoke("enable", root=git_repo).exit_code == 0

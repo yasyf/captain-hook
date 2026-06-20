@@ -131,7 +131,11 @@ def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str = DIST_
             | ({"async": True} if is_async else {})
             for is_async, events in sorted(events_by_async.items())
             if event in events
-        ] + ([{"type": "command", "command": f"uvx{from_flag} capt-hook review run"}] if event == "SessionEnd" else [])
+        ] + (
+            [{"type": "command", "command": f"uvx{from_flag} capt-hook review run", "async": True}]
+            if event == "SessionEnd"
+            else []
+        )
 
     return {
         "hooks": {

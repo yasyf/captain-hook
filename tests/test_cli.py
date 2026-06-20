@@ -171,8 +171,9 @@ class TestRegisterHooks:
         from captain_hook.cli import generate_settings
 
         register_hook(Event.SessionEnd, message="session over")
-        command = generate_settings()["hooks"]["SessionEnd"][0]["hooks"][0]["command"]
-        assert command == "uvx capt-hook run SessionEnd"
+        entries = generate_settings()["hooks"]["SessionEnd"][0]["hooks"]
+        assert entries[0]["command"] == "uvx capt-hook run SessionEnd"
+        assert entries[1] == {"type": "command", "command": "uvx capt-hook review run", "async": True}
 
     def test_cli_021_dry_run_writes_nothing(self, tmp_path: Path) -> None:
         hooks_dir = tmp_path / "hooks"

@@ -16,8 +16,10 @@ PR, what it takes to run, and the knobs that decide what crosses the bar.
 
 The reviewer runs entirely on your machine, triggered by Claude Code's `SessionEnd` event:
 
-1. **`review run`** is the wired `SessionEnd` hook. It returns immediately (always exit 0, never
-   blocking the session) after detaching a background pass.
+1. **`review run`** is the wired `SessionEnd` hook, registered async so Claude Code fires it
+   without waiting; a utility command like `claude update` never blocks on it or cancels it. It
+   returns immediately (always exit 0) after detaching a background pass, and skips a non-interactive
+   `claude -p` session end, which carries no corrections worth mining.
 2. The background pass **resolves the repo**, checks that you are watching it, then **scans the
    ended transcript** for two things: durable corrections you gave, and hooks that fired when they
    should not have.
@@ -45,7 +47,7 @@ uvx capt-hook review enable
 Both paths set up the same three things the reviewer needs:
 
 - the captain-hook plugin registered in `.claude/settings.json` (the brain loads its `scanning-sessions` and `authoring-hooks` skills directly);
-- a `uvx capt-hook review run` entry on `SessionEnd` in your settings;
+- an async `uvx capt-hook review run` entry on `SessionEnd` in your settings;
 - a per-machine watching flag for this repo.
 
 Watching is stored once per machine, so each clone you want reviewed runs `review enable` (or

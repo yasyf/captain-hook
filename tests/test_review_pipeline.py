@@ -218,7 +218,7 @@ class TestExitZeroInvariant:
 
     def test_non_git_cwd_exits_zero_and_detached_child_finishes_clean(self, tmp_path: Path) -> None:
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
-        payload = json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path)}).encode()
+        payload = json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path), "reason": "other"}).encode()
         start = time.monotonic()
         proc = run_review(payload, cwd=tmp_path)
         assert time.monotonic() - start < 30
@@ -233,13 +233,23 @@ class TestExitZeroInvariant:
             time.sleep(0.2)
         pytest.fail(f"detached child never finished: {log.read_text()!r}")
 
+    def test_non_interactive_reason_exits_zero_without_spawning(self, tmp_path: Path) -> None:
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        payload = json.dumps(
+            {"transcript_path": str(transcript), "cwd": str(tmp_path), "reason": "prompt_input_exit"}
+        ).encode()
+        proc = run_review(payload, cwd=tmp_path)
+        assert proc.returncode == 0
+        assert proc.stdout == b""
+        assert not (state_dir() / "review").exists()
+
 
 class TestGuardAndSpawn:
     def test_spawns_detached_child_with_log_and_marker_env(
         self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
     ) -> None:
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
-        guard_and_spawn(json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path)}).encode())
+        guard_and_spawn(json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path), "reason": "other"}).encode())
         [(argv, kwargs)] = popen_calls
         assert argv == spawn_argv(str(transcript), str(tmp_path))
         assert argv[:5] == [sys.executable, "-m", "captain_hook", "review", "spawn"]
@@ -253,7 +263,7 @@ class TestGuardAndSpawn:
         self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
     ) -> None:
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
-        guard_and_spawn(json.dumps({"transcript_path": str(transcript)}).encode())
+        guard_and_spawn(json.dumps({"transcript_path": str(transcript), "reason": "other"}).encode())
         [(argv, _)] = popen_calls
         assert "--cwd" not in argv
 
@@ -280,6 +290,15 @@ class TestGuardAndSpawn:
         monkeypatch.setenv(SPAWNED_ENV, "1")
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
         guard_and_spawn(json.dumps({"transcript_path": str(transcript)}).encode())
+        assert popen_calls == []
+
+    def test_non_interactive_reason_skips_spawn(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
+    ) -> None:
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        guard_and_spawn(
+            json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path), "reason": "prompt_input_exit"}).encode()
+        )
         assert popen_calls == []
 
 
