@@ -10,8 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `SessionEnd` reviewer no longer prints `Hook cancelled` when a non-interactive
   command like `claude update` ends. The wired `uvx capt-hook review run` hook is now
   registered async (fire-and-forget), so Claude Code fires it without waiting on or
-  cancelling it, and `review enable` upgrades an already-wired synchronous hook to async
-  in place. The reviewer also skips non-interactive session ends outright — a headless
+  cancelling it. The reviewer also skips non-interactive session ends outright — a headless
   `claude -p` run (`reason` `prompt_input_exit`) carries no corrections worth mining.
 
 ## [3.11.0] - 2026-06-20

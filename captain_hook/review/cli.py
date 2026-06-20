@@ -58,35 +58,15 @@ def review_wired(hooks: dict[str, Any]) -> bool:
     return any(REVIEW_RUN_COMMAND in command for group in groups for command in group_commands(group))
 
 
-def mark_review_async(hooks: dict[str, Any]) -> bool:
-    pending = [
-        entry
-        for group in (hooks.get("SessionEnd") or [])
-        for entry in (group.get("hooks") or [])
-        if REVIEW_RUN_COMMAND in (entry.get("command") or "") and entry.get("async") is not True
-    ]
-    for entry in pending:
-        entry["async"] = True
-    return bool(pending)
-
-
 def ensure_review_wiring(settings_path: Path) -> bool:
     from captain_hook.cli import sibling_settings, write_settings
 
     existing: dict[str, Any] = json.loads(settings_path.read_text()) if settings_path.exists() else {}
-    hooks: dict[str, Any] = existing.get("hooks") or {}
-    if review_wired(hooks):
-        if not mark_review_async(hooks):
-            return False
-        write_settings(settings_path, existing | {"hooks": hooks})
-        return True
     sibling = sibling_settings(settings_path)
-    sibling_existing: dict[str, Any] = json.loads(sibling.read_text()) if sibling.exists() else {}
-    if review_wired(sibling_hooks := sibling_existing.get("hooks") or {}):
-        if not mark_review_async(sibling_hooks):
-            return False
-        write_settings(sibling, sibling_existing | {"hooks": sibling_hooks})
-        return True
+    sibling_hooks: dict[str, Any] = (json.loads(sibling.read_text()).get("hooks") or {}) if sibling.exists() else {}
+    hooks: dict[str, Any] = existing.get("hooks") or {}
+    if review_wired(hooks) or review_wired(sibling_hooks):
+        return False
     group = {"hooks": [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}", "async": True}]}
     write_settings(
         settings_path,
@@ -149,7 +129,7 @@ def enable(state: CliState) -> None:
     watch_repo(repo)
     register_marketplace(state.root)
     wired = ensure_review_wiring(state.root / ".claude" / "settings.json")
-    click.echo(f"watching {repo}" + (" (SessionEnd hook wired/updated in .claude/settings.json)" if wired else ""))
+    click.echo(f"watching {repo}" + (" (SessionEnd hook wired into .claude/settings.json)" if wired else ""))
 
 
 @review.command()
