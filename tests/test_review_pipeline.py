@@ -74,6 +74,23 @@ ALL_CATEGORIES = (
 )
 
 
+def _llm_backend_available() -> bool:
+    from cc_transcript.judge.llm import default_backend
+    from spawnllm import BackendUnavailable
+
+    try:
+        default_backend()
+    except BackendUnavailable:
+        return False
+    return True
+
+
+requires_llm_backend = pytest.mark.skipif(
+    not _llm_backend_available(),
+    reason="no installed, authenticated LLM backend (spawnllm.select_backend raised BackendUnavailable)",
+)
+
+
 def state_dir() -> Path:
     return Path(os.environ["CLAUDE_HOOKS_STATE_DIR"])
 
@@ -303,6 +320,7 @@ class TestGuardAndSpawn:
 
 
 class TestJudgePass:
+    @requires_llm_backend
     async def test_judges_all_then_noop(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -317,6 +335,7 @@ class TestJudgePass:
         assert await judge_pass(store, settings=settings) == JudgeReport(judged=0, failed=0, pending=0)
         assert len(calls) == 2
 
+    @requires_llm_backend
     async def test_cap_limits_calls_and_pending_rows_retry_next_pass(
         self, store: ReviewStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -327,6 +346,7 @@ class TestJudgePass:
         assert len(calls) == 1
         assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
 
+    @requires_llm_backend
     async def test_limit_overrides_the_session_cap(
         self, store: ReviewStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -336,6 +356,7 @@ class TestJudgePass:
         assert await judge_pass(store, settings=settings, limit=2) == JudgeReport(judged=2, failed=0, pending=0)
         assert len(calls) == 2
 
+    @requires_llm_backend
     async def test_noise_floor_rows_never_reach_the_judge(
         self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -349,6 +370,7 @@ class TestJudgePass:
         unjudged = await store.unjudged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION, model="sonnet")
         assert [row["text"] for row in unjudged] == ["structural junk"]
 
+    @requires_llm_backend
     async def test_failed_judge_leaves_row_unjudged_for_retry(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -383,6 +405,7 @@ class TestJudgePass:
         assert "DURABLE correction worth encoding as an" in prompt
 
 
+@requires_llm_backend
 class TestFidelity:
     async def test_verdict_records_full_fidelity_while_the_transcript_lives(
         self,
@@ -503,6 +526,7 @@ class TestReviewSession:
             pytest.param("one_off_correction", False, id="judge-rejects-brain-stays-down"),
         ],
     )
+    @requires_llm_backend
     async def test_brain_spawns_only_when_judge_accepted_evidence_crosses_thresholds(
         self,
         tmp_path: Path,

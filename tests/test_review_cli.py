@@ -15,7 +15,7 @@ from captain_hook.tests.helpers import run_cli
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import CandidateKind, CandidateStatus, ReviewStore
-from tests.test_review_pipeline import install_judge
+from tests.test_review_pipeline import install_judge, requires_llm_backend
 from tests.test_review_scan import CORRECTION, correction_entries, write_transcript
 
 if TYPE_CHECKING:
@@ -215,6 +215,7 @@ class TestScanAndTriage:
     def test_scan_requires_a_path(self, git_repo: Path) -> None:
         assert invoke("scan", root=git_repo).exit_code != 0
 
+    @requires_llm_backend
     def test_triage_judges_pending_rows(self, scanned_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = install_judge(monkeypatch)
         result = invoke("triage", root=scanned_repo)
