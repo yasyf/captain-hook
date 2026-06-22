@@ -11,6 +11,7 @@ The [Guide](../guide/index.qmd) how-tos teach which one to reach for.
 |-----------|--------|----------------|:-------------:|-----|
 | `block_command` | block | `PreToolUse` | ✓ | command |
 | `warn_command` | warn | `PostToolUse` | ✓ | command |
+| `rewrite_command` | rewrite (or block) | `PreToolUse` | ✓ | command |
 | `gate` | block | `Stop \| SubagentStop` | ✓ | completion |
 | `nudge` | warn (or block) | `PreToolUse`/`PostToolUse`/`Stop \| SubagentStop` | ✓ | advice |
 | `lint` | warn (or block) | `PostToolUse` | ✓ | edit (string/AST) |
@@ -34,9 +35,27 @@ block_command(pattern: str | list[str], *, reason: str, hint: str | None = None,
 
 warn_command(pattern: str | list[str], *, message: str, tests: InlineTests | None = None,
              events: Event = Event.PostToolUse) -> None
+
+rewrite_command(pattern: str | None = None, replace: str | None = None, *,
+                only_if: Sequence[TCondition] = (),
+                to: Callable[[PreToolUseEvent], str | None] | None = None,
+                block: str | None = None,
+                note: str | Callable[[PreToolUseEvent], str | None] | None = None,
+                tests: InlineTests | None = None) -> None
 ```
 
 A token list (`["git", "stash"]`) becomes a whitespace-tolerant regex; a string is used as-is.
+
+`rewrite_command` takes one of two mutually exclusive forms. Passing both, or neither,
+raises `TypeError`.
+
+| Form | Pass | Behavior |
+|------|------|----------|
+| Regex | `pattern`, `replace` | Rewrites matching commands via `re.sub`. `note` must be a string. |
+| Conditional | `to`, plus optional `only_if` and `block` | `to` maps the event to its new command under the `[Tool("Bash"), *only_if]` gate. A `None` return blocks with `block` when set, otherwise passes the command through. `note` may be a callable. |
+
+Both forms surface `note` as `additionalContext` and assert with `Rewrite` for a substring
+match or `Block`.
 
 ## Nudges & gates
 
@@ -92,6 +111,39 @@ workflow(*, label: str, marker: str, steps: list[Step], artifacts: list[Artifact
 `workflow` registers a `SubagentStop` guard (`max_fires=1`); with `on_start` it also registers a
 `SubagentStart` hook. `Step` and `Artifact` are keyword-only dataclasses; `text_matches(pattern)`
 builds a transcript check for `Step.check`.
+
+## Inline test inputs
+
+Each deterministic primitive accepts `tests={Input(...): expectation}`. `Input` models one
+event payload; set the fields the target event reads. All fields default to `None`.
+
+| Field | Type | Feeds |
+|-------|------|-------|
+| `command` | `str` | Bash command for `PreToolUse` and `PostToolUse` |
+| `file` | `str \| FileFixture` | The tool's file path; `FileFixture` materializes a real temp file |
+| `content` | `str` | New file content for `Edit`/`Write` |
+| `old` | `str` | Pre-edit content for `Edit`/`diff_lint` |
+| `tool` | `str` | Tool name when no condition pins it |
+| `prompt` | `str` | `UserPromptSubmit` text |
+| `agent_type` | `str` | Subagent type |
+| `reason` | `str` | `SessionEnd` reason |
+| `permission_mode` | `str` | Plan-mode and permission gating |
+| `offset` | `int` | `Read` call offset |
+| `limit` | `int` | `Read` call limit |
+| `transcript` | `Path \| TranscriptFixture \| list[dict]` | Session history for transcript conditions |
+| `tasks` | `list[dict]` | The native task list read via `evt.tasks` |
+
+`FileFixture(size=N)` fills a temp file with `N` bytes, `content=...` writes exact text, and
+`name=...` sets the file name an extension- or path-based condition matches. Use it when the
+hook stats or reads the file; a plain `file="app.py"` is a virtual path with no bytes behind
+it.
+
+| Expectation | Asserts | Optional `pattern` |
+|-------------|---------|--------------------|
+| `Allow()` | The hook returned `None` or action `allow` | none |
+| `Block(pattern=...)` | The hook blocked | Regex against the block message |
+| `Warn(pattern=...)` | The hook warned | Regex against the warning message |
+| `Rewrite(pattern=...)` | The hook rewrote the command | Substring of `updated_input["command"]` |
 
 ## Verdict types
 

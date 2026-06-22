@@ -42,3 +42,28 @@ Every event also exposes the base accessors: `event`, `session_id`, `is_subagent
 `transcript_path`, `permission_mode`, `parent_agent_type`, `stop_hook_active`, `tasks`, and
 `ctx`. `tasks` is the live Claude Code task list; `ctx` is the hook context, with the
 transcript, settings, and the current turn.
+
+## Typed tool input
+
+`evt.input` is the parsed tool call for the current event, typed as one of the `*Call`
+classes such as `ReadCall` and `BashCall`. `evt.as_input(call_type)` narrows it:
+
+| Method | Returns |
+|--------|---------|
+| `evt.input` | The parsed `ToolCall`; `OtherCall` for an unrecognized tool |
+| `evt.as_input(ReadCall)` | `evt.input` typed as `ReadCall`, or `None` when the event is a different tool |
+
+For a non-matching tool `as_input` returns `None` instead of raising, so a hook reads
+typed fields without an `isinstance` check:
+
+```python
+from captain_hook import ReadCall
+
+call = evt.as_input(ReadCall)
+if call and call.limit and call.limit > 1000:
+    return evt.warn("Large read; narrow with offset/limit.")
+```
+
+`ReadCall` carries `.file_path`, `.offset`, and `.limit`; each `*Call` type exposes the
+fields of its tool. For a declarative form, subclass
+[`CustomInputTypeCondition[ReadCall]`](conditions.qmd#custom-conditions).

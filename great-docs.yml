@@ -59,8 +59,10 @@ authors:
     email: yasyfm@gmail.com
 
 # Curated symbol reference (public API only) — the root __init__ re-exports
-# define the API; there is no __all__. InlineTests and TCondition are
-# excluded automatically (cyclic aliases under dynamic introspection).
+# define the API; there is no __all__. The PEP 695 `type` aliases InlineTests,
+# TCondition, and HookResponse are excluded: griffe reports them as cyclic
+# aliases under dynamic introspection and cannot render a TYPE_ALIAS, which
+# fails the API-reference build. Their docstrings live in source.
 reference:
   - title: Registration
     desc: Declaring and registering hooks.
@@ -106,6 +108,8 @@ reference:
       - Signal
       - Signals
       - CustomCondition
+      - CustomCommandLineCondition
+      - CustomInputTypeCondition
 
   - title: Events & Results
     desc: Typed lifecycle events and hook outcomes.
@@ -128,6 +132,7 @@ reference:
       - Action
       - Agent
       - Content
+      - BaseHookEvent.as_input
 
   - title: Files & Commands
     desc: Path matching and AST-level command inspection.
@@ -136,9 +141,30 @@ reference:
       - file.PathMatcher
       - file.categorize_files
       - utils.read_json
+      - utils.resolve_binary
       - Command
       - CommandLine
       - Redirect
+
+  - title: Tool Calls
+    desc: Typed tool-call inputs reached via evt.input and evt.as_input().
+    contents:
+      - ToolCall
+      - ToolCallBase
+      - ReadCall
+      - BashCall
+      - EditCall
+      - MultiEditCall
+      - WriteCall
+      - NotebookEditCall
+      - GlobCall
+      - GrepCall
+      - SkillCall
+      - TaskCall
+      - TaskCreateCall
+      - TaskUpdateCall
+      - ExitPlanModeCall
+      - OtherCall
 
   - title: Tasks
     desc: The native task list, read via evt.tasks.
@@ -176,6 +202,7 @@ reference:
       - Allow
       - Block
       - Warn
+      - FileFixture
       - TranscriptFixture
 
   - title: Configuration & Prompts

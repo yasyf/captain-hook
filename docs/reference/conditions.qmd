@@ -56,6 +56,21 @@ For OR within a single condition, use pipe-alternation
 `check(self, evt: BaseHookEvent) -> bool` method satisfies it and slots into `only_if`/`skip_if`.
 See [Write a custom condition](../guide/conditions.qmd#write-a-custom-condition) for a worked example.
 
+Two typed base classes narrow `check` to one shape of input. Subclass and implement the
+inner method; the base handles narrowing and skips events that don't apply.
+
+| Base | Implement | Fires when |
+|------|-----------|------------|
+| `CustomInputTypeCondition[T]` | `check_input(self, evt, call: T) -> bool` | `evt.input` is a `T` (e.g. `ReadCall`) and `check_input` returns `True`; skips every other tool |
+| `CustomCommandLineCondition` | `check_command_line(self, evt, cl) -> bool` | the event has a parsed Bash `CommandLine` and `check_command_line` returns `True`; returns `False` for non-Bash tools |
+
+`CustomInputTypeCondition[T]` narrows `evt.input` to the parameterized `*Call` type, so
+`call` arrives typed for direct field access like `call.limit` and `call.file_path`.
+`CustomCommandLineCondition` receives the parsed `CommandLine`; query it via `cl.q`, whose
+methods are `runs`, `has_subcommand`, `contains_token`, and `uses_redirect`. See
+[Match a typed tool call](../guide/conditions.qmd#match-a-typed-tool-call) and
+[Match a structured command line](../guide/conditions.qmd#match-a-structured-command-line).
+
 ## Signals (scoring)
 
 `Signal` and `Signals` aren't `only_if`/`skip_if` filters — they pass to a primitive's

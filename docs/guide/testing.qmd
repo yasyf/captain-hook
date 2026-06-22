@@ -41,8 +41,8 @@ uvx capt-hook test
 Each test prints one line, then a summary:
 
 ```
-  PASS  declarative_1:Input(command='git stash', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None)
-  PASS  declarative_1:Input(command='git status', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None)
+  PASS  declarative_1:Input(command='git stash', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, reason=None, permission_mode=None, offset=None, limit=None, transcript=None, tasks=None)
+  PASS  declarative_1:Input(command='git status', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, reason=None, permission_mode=None, offset=None, limit=None, transcript=None, tasks=None)
 
 2 tests: 2 passed, 0 failed, 0 errors, 0 skipped
 ```
@@ -64,8 +64,8 @@ Input(command="git stash"): Block(pattern="mercurial"),
 Run `uvx capt-hook test` again:
 
 ```
-  FAIL  declarative_1:Input(command='git stash', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None): [declarative_1] Block message doesn't match 'mercurial'
-  PASS  declarative_1:Input(command='git status', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None)
+  FAIL  declarative_1:Input(command='git stash', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, reason=None, permission_mode=None, offset=None, limit=None, transcript=None, tasks=None): [declarative_1] Block message doesn't match 'mercurial'
+  PASS  declarative_1:Input(command='git status', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, reason=None, permission_mode=None, offset=None, limit=None, transcript=None, tasks=None)
 
 2 tests: 1 passed, 1 failed, 0 errors, 0 skipped
 ```
@@ -94,10 +94,50 @@ contract lives in the [Primitives reference](../reference/primitives.qmd).
 
 `Input` models the event payload, and which fields you set depends on the event the hook
 listens to. A `block_command` hook fires on `PreToolUse` for a Bash command, so you set
-`command`. An `Edit` hook needs `file` and `content`. A `Stop` gate needs a `transcript`
-fixture. The complete field list, including `file`, `content`, `old`, `tool`, `prompt`,
-`agent_type`, and `transcript`, lives in the [Primitives reference](../reference/primitives.qmd),
-alongside which primitives carry inline tests.
+`command`. An `Edit` hook needs `file` and `content`, a `Read` guard reads `offset` and
+`limit`, and a `Stop` gate needs a `transcript` fixture. The
+[Primitives reference](../reference/primitives.qmd) holds the complete field table, from
+`command` through `transcript` and `tasks`, alongside which primitives carry inline tests.
+
+`offset` and `limit` populate a `Read` call's typed fields, so a hook that reads
+`evt.as_input(ReadCall).limit` or matches a `CustomInputTypeCondition[ReadCall]` sees them:
+
+```python
+Input(tool="Read", file="big.py", limit=5000): Warn(pattern="narrow"),
+```
+
+### Test size-based guards with a real file
+
+Pass a `FileFixture` to `file` when the hook stats the file or reads its size. `Input`
+materializes the fixture to a real temp file before the hook runs, so a guard that calls
+`evt.file.path.stat().st_size` sees a file of the size you asked for:
+
+```python
+from captain_hook import FileFixture, Input, Warn, Allow, nudge, Event, CustomCondition, BaseHookEvent
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class LargeFile(CustomCondition):
+    max_bytes: int = 1_000_000
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return evt.file is not None and evt.file.path.stat().st_size > self.max_bytes
+
+nudge(
+    "Large file — read a section, not the whole thing.",
+    only_if=[LargeFile(max_bytes=1024)],
+    events=Event.PreToolUse,
+    tests={
+        Input(tool="Read", file=FileFixture(size=2048)): Warn(),
+        Input(tool="Read", file=FileFixture(size=128)): Allow(),
+    },
+)
+```
+
+`FileFixture` takes `size` to fill a file with that many bytes, `content` for exact text,
+or `name` to control the file name an extension- or path-based condition matches. A plain
+string `file="app.py"` stays a virtual path with no bytes behind it, so reach for
+`FileFixture` only when the hook needs the file to exist.
 
 When a hook depends on session history, pass a `transcript` fixture so the
 [transcript conditions](../reference/conditions.qmd) have something to read. The
@@ -126,8 +166,8 @@ jobs:
 single line you can pipe into `jq` or read in another tool:
 
 ```json
-{"id": "declarative_1:Input(command='git stash', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None)", "status": "pass", "expected": "block", "reason": ""}
-{"id": "declarative_1:Input(command='git status', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None)", "status": "pass", "expected": "allow", "reason": ""}
+{"id": "declarative_1:Input(command='git stash', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, reason=None, permission_mode=None, offset=None, limit=None, transcript=None, tasks=None)", "status": "pass", "expected": "block", "reason": ""}
+{"id": "declarative_1:Input(command='git status', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, reason=None, permission_mode=None, offset=None, limit=None, transcript=None, tasks=None)", "status": "pass", "expected": "allow", "reason": ""}
 ```
 
 The fields are the test `id`, its `status` of `pass`, `fail`, `error`, or `skip`, the

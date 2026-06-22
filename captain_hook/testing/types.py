@@ -65,7 +65,27 @@ class Rewrite:
 
 @dataclass(frozen=True, kw_only=True, eq=False)
 class Input:
-    """Inline test input descriptor modeling an event payload. Set fields based on the target event type."""
+    """Inline test input descriptor modeling an event payload.
+
+    Set the fields the target event reads; all default to ``None``.
+
+    Args:
+        command: Bash command for ``PreToolUse``/``PostToolUse``.
+        file: The tool's file path. A ``FileFixture`` materializes a real temp
+            file so size/stat-based guards run; a ``str`` stays a virtual path.
+        content: New file content for ``Edit``/``Write``.
+        old: Pre-edit content for ``Edit`` and ``diff_lint``.
+        tool: Tool name when no condition pins it.
+        prompt: ``UserPromptSubmit`` text.
+        agent_type: Subagent type for subagent events.
+        reason: ``SessionEnd`` reason.
+        permission_mode: Permission mode, e.g. ``"plan"`` for plan-mode gating.
+        offset: ``Read`` call offset.
+        limit: ``Read`` call limit.
+        transcript: Session history for transcript conditions — a path, a
+            ``TranscriptFixture``, or a raw list of transcript-line dicts.
+        tasks: The native task list read via ``evt.tasks``.
+    """
 
     command: str | None = None
     file: str | FileFixture | None = None

@@ -9,8 +9,9 @@ target the right events, count fires, and suppress echo for you, so a fired mess
 
 Start from what you want to enforce.
 
-- Deny a Bash command outright, go to [`block_command`](#block_command).
-- Flag a command without stopping it, go to [`warn_command`](#warn_command).
+- For a Bash command, [`block_command`](#block_command) denies it,
+  [`warn_command`](#warn_command) flags it without stopping it, and
+  [`rewrite_command`](#rewrite_command) swaps it for a better one before it runs.
 - Advise the agent when conditions or accumulating signals fire, go to [`nudge`](#nudge).
 - Require something done before the agent finishes, go to [`gate`](#gate).
 - Check a Python edit against a rule, go to [`lint`](#lint).
@@ -199,6 +200,67 @@ diff_lint(
 
 `diff_lint` fires on `Edit` of `.py` files by default. For declarative AST rules scoped
 to the change, see [Style Rules](styleguide.qmd).
+
+## rewrite_command {#rewrite_command}
+
+Swap a Bash command for a better one before it runs, instead of blocking and making the
+agent retry. The hook fires on `PreToolUse` for Bash and replaces the command, surfacing
+`note` as context so the model sees the substitution. It has two forms.
+
+The **regex form** takes a `pattern` and a `replace` template and rewrites matching
+commands with `re.sub`. Use it for a fixed textual swap.
+
+```python
+from captain_hook import Allow, Input, Rewrite, rewrite_command
+
+rewrite_command(
+    r"^cat\s+(\S+)$",
+    r"ccx read \1 --full",
+    note="Rewrote cat to ccx read",
+    tests={
+        Input(command="cat README.md"): Rewrite(pattern="ccx read README.md"),
+        Input(command="grep foo bar.py"): Allow(),
+    },
+)
+```
+
+`Rewrite(pattern=...)` matches a substring of the rewritten command, so it survives any
+absolute-path prefix the rewrite adds.
+
+The **conditional form** takes `to=`, a callable that maps the event to its new command.
+The hook fires on every Bash command, gated by `[Tool("Bash"), *only_if]`. Your `to`
+callable receives the event, reads `evt.command` for the raw string or `evt.command_line`
+for the parsed form, and returns the rewritten command, or `None` to block with `block`.
+Reach for it when the decision depends on parsed structure, not a fixed textual swap.
+
+```python
+from captain_hook import Block, Input, Rewrite, rewrite_command
+
+
+def to_safe_push(evt):
+    cl = evt.command_line
+    if not cl.q.runs("git", "push") or not cl.q.contains_token("--force"):
+        return evt.command  # not a bare force-push; leave it untouched
+    if cl.q.contains_token("--force-with-lease"):
+        return None  # already lease-guarded but flagged here; block to be explicit
+    return evt.command.replace("--force", "--force-with-lease", 1)
+
+
+rewrite_command(
+    to=to_safe_push,
+    block="Use --force-with-lease, not a bare force-push.",
+    note="Rewrote --force to the lease form.",
+    tests={
+        Input(command="git push --force origin main"): Rewrite(pattern="--force-with-lease"),
+        Input(command="git push --force --force-with-lease"): Block(pattern="lease"),
+    },
+)
+```
+
+A `to` callable that returns `None` blocks with `block`; otherwise it returns the command
+string, rewritten or unchanged to leave it alone. `note` may itself be a callable computed
+from the event when the conditional form needs a per-command message. Passing both
+`(pattern, replace)` and `to=`, or neither, raises `TypeError`.
 
 ---
 

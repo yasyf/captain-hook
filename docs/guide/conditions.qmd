@@ -40,9 +40,14 @@ Start from what you want to match.
 | The current tool | `Tool("Bash")` |
 | A file edited earlier this session | `TouchedFile("**/*.py")` |
 | A command run earlier this session | `RanCommand(r"uv\s+run\s+mtest")` |
+| A typed tool call's fields | `CustomInputTypeCondition[ReadCall]` |
+| A parsed Bash command line | `CustomCommandLineCondition` |
 
-The first three inspect the current event; the last two inspect the session transcript, so they
-tell you whether something already happened earlier. For every condition with its pattern type and
+The first three inspect the current event; the next two inspect the session transcript, so they
+tell you whether something already happened earlier. The last two are typed custom-condition
+bases for matching one tool's structured input, covered under [Match a typed tool
+call](#match-a-typed-tool-call) and [Match a structured command
+line](#match-a-structured-command-line). For every condition with its pattern type and
 defaults, see the [conditions cheatsheet](../reference/conditions.qmd).
 
 ## Match the current event
@@ -110,6 +115,58 @@ hook(Event.Stop, message="Many edits, run a review", only_if=[MinEdits(threshold
 
 Use a custom condition like any built-in in either list. The predicate goes in `check()`; the
 firing goes through a primitive, never an `@on` body.
+
+## Match a typed tool call
+
+When your predicate only makes sense for one tool, subclass
+`CustomInputTypeCondition[T]` instead of reading raw payload fields. Parameterize it
+with the tool-call type and implement `check_input(self, evt, call)`. The base narrows
+`evt.input` to that type and skips every other tool, so `call` arrives typed and you read
+its fields directly.
+
+```python
+from captain_hook import CustomInputTypeCondition, BaseHookEvent, ReadCall, nudge, Event
+
+class BigRead(CustomInputTypeCondition[ReadCall]):
+    def check_input(self, evt: BaseHookEvent, call: ReadCall) -> bool:
+        return call.limit is not None and call.limit > 1000
+
+nudge(
+    "Reading more than 1000 lines; narrow with offset/limit or grep first.",
+    only_if=[BigRead()],
+    events=Event.PreToolUse,
+)
+```
+
+`ReadCall` exposes `.file_path`, `.offset`, and `.limit`; the other `*Call` types carry
+their own typed fields. The same narrowing is available imperatively via
+[`evt.as_input(ReadCall)`](../reference/events.qmd), which returns the typed call or
+`None` for a different tool.
+
+## Match a structured command line
+
+`Command` matches the raw Bash string with a regex. Sometimes you need the parsed
+structure instead, like which executable runs, whether a flag or subcommand appears, or
+whether the line pipes or redirects. For that, subclass `CustomCommandLineCondition` and
+implement `check_command_line(self, evt, cl)`. The base returns `False` for any event
+without a parsed command line, every non-Bash tool, so `cl` arrives ready to query.
+
+```python
+from captain_hook import CustomCommandLineCondition, BaseHookEvent, CommandLine, gate
+
+class PushesWithoutLease(CustomCommandLineCondition):
+    def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
+        return cl.q.runs("git", "push") and not cl.q.contains_token("--force-with-lease")
+
+gate(
+    "Force-push without --force-with-lease. Use the lease form.",
+    only_if=[PushesWithoutLease()],
+)
+```
+
+`cl.q` is a `CommandLineQuery` with predicates like `runs`, `has_subcommand`,
+`contains_token`, and `uses_redirect`, so a structured check stays readable where a regex
+would not.
 
 ## Worked patterns
 
