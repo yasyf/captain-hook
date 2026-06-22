@@ -206,6 +206,28 @@ class TestPreToolUseEvent:
 
         assert evt.file.path == Path("a.py")
 
+    def test_rewrite_returns_rewrite_result(self) -> None:
+        evt = make_event(PreToolUseEvent, {"tool_name": "Bash", "tool_input": {"command": "cat x"}})
+        result = evt.rewrite({"command": "ccx read x --full"}, note="ran ccx")  # type: ignore[attr-defined]
+        assert result.action is Action.rewrite
+        assert result.updated_input == {"command": "ccx read x --full"}
+        assert result.note == "ran ccx"
+
+    def test_rewrite_note_defaults_none(self) -> None:
+        evt = make_event(PreToolUseEvent, {"tool_name": "Bash", "tool_input": {"command": "cat x"}})
+        result = evt.rewrite({"command": "y"})  # type: ignore[attr-defined]
+        assert result.note is None
+
+    def test_rewrite_command_preserves_other_input_keys(self) -> None:
+        evt = make_event(
+            PreToolUseEvent,
+            {"tool_name": "Bash", "tool_input": {"command": "cat x", "timeout": 5000, "description": "read"}},
+        )
+        result = evt.rewrite_command("ccx read x --full", note="swapped")  # type: ignore[attr-defined]
+        assert result.action is Action.rewrite
+        assert result.updated_input == {"command": "ccx read x --full", "timeout": 5000, "description": "read"}
+        assert result.note == "swapped"
+
 
 class TestPostToolUseEvent:
     def test_tool_response_from_raw(self) -> None:

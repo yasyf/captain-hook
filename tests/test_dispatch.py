@@ -60,6 +60,28 @@ class TestFormatOutput:
         assert output is not None
         assert output["hookSpecificOutput"]["permissionDecision"] == "allow"
 
+    def test_pre_tool_use_rewrite_emits_updated_input(self) -> None:
+        result = HookResult(
+            action=Action.rewrite,
+            updated_input={"command": "ccx read x --full"},
+            note="ran ccx",
+        )
+        output = format_output(Event.PreToolUse, result)
+        assert output is not None
+        hso = output["hookSpecificOutput"]
+        assert hso["hookEventName"] == "PreToolUse"
+        assert hso["permissionDecision"] == "allow"
+        assert hso["updatedInput"] == {"command": "ccx read x --full"}
+        assert hso["additionalContext"] == "ran ccx"
+
+    def test_pre_tool_use_rewrite_without_note_omits_additional_context(self) -> None:
+        result = HookResult(action=Action.rewrite, updated_input={"command": "ccx find **"})
+        output = format_output(Event.PreToolUse, result)
+        assert output is not None
+        hso = output["hookSpecificOutput"]
+        assert hso["updatedInput"] == {"command": "ccx find **"}
+        assert "additionalContext" not in hso
+
     def test_post_tool_use_warn_no_permission_decision(self) -> None:
         result = HookResult(action=Action.warn, message="info")
         output = format_output(Event.PostToolUse, result)
@@ -277,6 +299,37 @@ class TestDispatch:
 
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is None
+
+    def test_handler_rewrite(self) -> None:
+
+        @on(Event.PreToolUse)
+        def rewriter(evt: Any) -> HookResult:
+            return HookResult(action=Action.rewrite, updated_input={"command": "ccx read x --full"}, note="n")
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        hso = result["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert hso["updatedInput"] == {"command": "ccx read x --full"}
+        assert hso["additionalContext"] == "n"
+
+    def test_rewrite_short_circuits_no_side_effects(self) -> None:
+        counter = 0
+
+        @on(Event.PreToolUse)
+        def rewriter(evt: Any) -> HookResult:
+            return HookResult(action=Action.rewrite, updated_input={"command": "ccx find **"})
+
+        @on(Event.PreToolUse)
+        def counter_handler(evt: Any) -> HookResult:
+            nonlocal counter
+            counter += 1
+            return HookResult(action=Action.warn, message="counted")
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        assert result["hookSpecificOutput"]["updatedInput"] == {"command": "ccx find **"}
+        assert counter == 0
 
     def test_block_takes_priority_over_warn(self) -> None:
         register_hook(Event.PreToolUse, message="warning first")

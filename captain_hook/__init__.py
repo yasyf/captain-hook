@@ -33,6 +33,7 @@ from captain_hook.primitives import llm_evaluate
 from captain_hook.primitives import llm_gate
 from captain_hook.primitives import llm_nudge
 from captain_hook.primitives import prompt_check
+from captain_hook.primitives import rewrite_command
 from captain_hook.primitives import warn_command
 
 # lint/nudge are imported from their defining modules, not the primitives
@@ -65,6 +66,7 @@ from captain_hook.testing import Allow
 from captain_hook.testing import Block
 from captain_hook.testing import InlineTests
 from captain_hook.testing import Input
+from captain_hook.testing import Rewrite
 from captain_hook.testing import TranscriptFixture
 from captain_hook.testing import Warn
 from captain_hook.types import Action

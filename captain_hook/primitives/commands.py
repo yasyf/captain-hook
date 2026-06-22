@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
 from captain_hook.app import hook as register_hook
-from captain_hook.types import Command, Event, InlineTests, Tool
+from captain_hook.app import on
+from captain_hook.types import Command, Event, HookResult, InlineTests, Tool
+
+if TYPE_CHECKING:
+    from captain_hook.events import PreToolUseEvent
 
 
 def block_command_pattern(tokens: list[str]) -> str:
@@ -60,3 +65,25 @@ def warn_command(
     """
     cmd = Command(block_command_pattern(pattern) if isinstance(pattern, list) else pattern)
     register_hook(events, only_if=[Tool("Bash"), cmd], message=message, tests=tests)
+
+
+def rewrite_command(
+    pattern: str,
+    replace: str,
+    *,
+    note: str | None = None,
+    tests: InlineTests | None = None,
+) -> None:
+    """Register a ``PreToolUse`` hook that rewrites a matching Bash command via ``re.sub``.
+
+    ``replace`` is a ``re.sub`` replacement applied to commands matching ``pattern``;
+    ``note`` surfaces as ``additionalContext`` so the model sees the substitution.
+
+    Example:
+        >>> rewrite_command(r"^cat\\s+(\\S+)$", r"ccx read \\1 --full", note="Rewrote cat to ccx read")
+    """
+
+    def handler(evt: PreToolUseEvent) -> HookResult | None:
+        return evt.rewrite_command(re.sub(pattern, replace, command), note=note) if (command := evt.command) else None
+
+    on(Event.PreToolUse, only_if=[Tool("Bash"), Command(pattern)], tests=tests)(handler)

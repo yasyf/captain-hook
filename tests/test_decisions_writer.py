@@ -79,6 +79,16 @@ class TestRecordDecision:
         assert row.tool_name is None
         assert row.tool_digest is None
 
+    def test_rewrite_records_note_as_message(self, db_path: Path) -> None:
+        record_decision(
+            entry("ccx_rewrite", "/h/ccx.py"),
+            pre_tool_evt("Bash", {"command": "cat x"}),
+            HookResult(action=Action.rewrite, updated_input={"command": "ccx read x --full"}, note="ran ccx"),
+        )
+        (row,) = rows(db_path)
+        assert (row.kind, row.event, row.action, row.message) == ("ccx_rewrite", "PreToolUse", "note", "ran ccx")
+        assert row.tool_name == "Bash"
+
     def test_degraded_parse_marks_detail(self, db_path: Path) -> None:
         malformed = {"file_path": "a.py", "old_string": "x"}
         record_decision(entry(), pre_tool_evt("Edit", malformed), HookResult(action=Action.warn, message="m"))

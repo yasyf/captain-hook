@@ -17,6 +17,7 @@ CONSUMER_SURFACE = {
     "HookContext",
     "HookResult",
     "Input",
+    "Rewrite",
     "Tool",
     "TouchedFile",
     "TranscriptFixture",
@@ -30,6 +31,7 @@ CONSUMER_SURFACE = {
     "nudge",
     "on",
     "prompt_check",
+    "rewrite_command",
     "warn_command",
     "workflow",
 }

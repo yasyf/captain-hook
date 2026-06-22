@@ -23,7 +23,7 @@ from captain_hook.events import (
 )
 from captain_hook.session import SessionStore
 from captain_hook.testing.session_cache import SessionCache
-from captain_hook.testing.types import Allow, Block, Input, TranscriptFixture, Warn
+from captain_hook.testing.types import Allow, Block, Input, Rewrite, TranscriptFixture, Warn
 from captain_hook.types import Event, HookResult, Tool
 
 STUB_FIELD_VALUES: dict[str, Any] = {
@@ -354,7 +354,7 @@ def transcript_event_payloads(
             yield base
 
 
-def matches_expected(result: HookResult | None, expected: Block | Warn | Allow) -> bool:
+def matches_expected(result: HookResult | None, expected: Block | Warn | Allow | Rewrite) -> bool:
     match expected:
         case Allow():
             return result is None or result.action == "allow"
@@ -370,11 +370,14 @@ def matches_expected(result: HookResult | None, expected: Block | Warn | Allow) 
                 and result.action == "warn"
                 and (not pat or not result.message or bool(re.search(pat, result.message)))
             )
+        case Rewrite(pattern=pat):
+            command = (result.updated_input or {}).get("command", "") if result else ""
+            return result is not None and result.action == "rewrite" and (not pat or pat in command)
 
 
 def assert_result(
     result: HookResult | None,
-    expected: Block | Warn | Allow,
+    expected: Block | Warn | Allow | Rewrite,
     hook_name: str = "",
 ) -> None:
     prefix = f"[{hook_name}] " if hook_name else ""
@@ -389,6 +392,11 @@ def assert_result(
             assert result is not None and result.action == "warn", f"{prefix}Expected Warn, got {result}"
             if pat and result.message:
                 assert re.search(pat, result.message), f"{prefix}Warn message doesn't match '{pat}'"
+        case Rewrite(pattern=pat):
+            assert result is not None and result.action == "rewrite", f"{prefix}Expected Rewrite, got {result}"
+            if pat:
+                command = (result.updated_input or {}).get("command", "")
+                assert pat in command, f"{prefix}Rewrite command {command!r} doesn't contain '{pat}'"
 
 
 def stub_call_llm(

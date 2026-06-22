@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from captain_hook.primitives.commands import block_command
+from captain_hook.primitives.commands import rewrite_command
 from captain_hook.primitives.commands import warn_command
 from captain_hook.primitives.lint import diff_lint
 from captain_hook.primitives.lint import lint

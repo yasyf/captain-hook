@@ -85,6 +85,15 @@ def format_output(event: Event, result: HookResult) -> dict[str, Any] | None:
                     "permissionDecision": "allow",
                 }
             }
+        case Action.rewrite:
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": event.name,
+                    "permissionDecision": "allow",
+                    "updatedInput": result.updated_input,
+                    **({"additionalContext": result.note} if result.note else {}),
+                }
+            }
 
 
 def dispatch(
@@ -100,7 +109,7 @@ def dispatch(
     warns: list[str] = []
     for entry in matching:
         match execute_hook(entry, evt, session_dir):
-            case HookResult(action=Action.block | Action.allow) as r:
+            case HookResult(action=Action.block | Action.allow | Action.rewrite) as r:
                 return format_output(event, r)
             case HookResult(action=Action.warn, message=msg) if msg:
                 warns.append(msg)

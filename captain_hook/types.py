@@ -4,7 +4,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Flag, StrEnum, auto
 from textwrap import dedent
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
@@ -81,11 +81,13 @@ class Action(StrEnum):
     - ``block``: Prevents the tool use or stops the agent.
     - ``warn``: Adds advisory context without blocking.
     - ``allow``: Explicitly permits the action.
+    - ``rewrite``: Replaces a ``PreToolUse`` tool's input with ``updated_input`` and allows it.
     """
 
     block = "block"
     warn = "warn"
     allow = "allow"
+    rewrite = "rewrite"
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,10 +338,16 @@ class Signals:
 
 @dataclass(frozen=True, kw_only=True)
 class HookResult:
-    """The return value from a hook handler, specifying the action and optional message."""
+    """The return value from a hook handler, specifying the action and optional message.
+
+    ``updated_input`` and ``note`` carry the ``rewrite`` action's replacement tool
+    input and the advisory context surfaced alongside it.
+    """
 
     action: Action
     message: str | None = None
+    updated_input: dict[str, Any] | None = None
+    note: str | None = None
 
     @classmethod
     def of(cls, action: Action, message: str | None = None) -> HookResult:

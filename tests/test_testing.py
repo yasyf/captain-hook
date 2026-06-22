@@ -427,6 +427,38 @@ class TestAssertResult:
         with pytest.raises(AssertionError):
             assert_result(None, Warn(pattern="x"))
 
+    def test_assert_result_rewrite_matches_substring(self):
+        from captain_hook.tests.helpers import assert_result
+        from captain_hook.testing.types import Rewrite
+
+        assert_result(
+            HookResult(action=Action.rewrite, updated_input={"command": "/abs/path/ccx read x --full"}),
+            Rewrite(pattern="ccx read x --full"),
+        )
+
+    def test_assert_result_rewrite_no_pattern(self):
+        from captain_hook.tests.helpers import assert_result
+        from captain_hook.testing.types import Rewrite
+
+        assert_result(HookResult(action=Action.rewrite, updated_input={"command": "anything"}), Rewrite())
+
+    def test_assert_result_rewrite_fails_on_block(self):
+        from captain_hook.tests.helpers import assert_result
+        from captain_hook.testing.types import Rewrite
+
+        with pytest.raises(AssertionError):
+            assert_result(HookResult(action=Action.block, message="no"), Rewrite())
+
+    def test_assert_result_rewrite_fails_on_wrong_substring(self):
+        from captain_hook.tests.helpers import assert_result
+        from captain_hook.testing.types import Rewrite
+
+        with pytest.raises(AssertionError):
+            assert_result(
+                HookResult(action=Action.rewrite, updated_input={"command": "ccx find **"}),
+                Rewrite(pattern="ccx read"),
+            )
+
 
 class TestRunInlineTests:
     def test_discovers_and_executes_inline_tests(self):
@@ -470,3 +502,22 @@ class TestRunInlineTests:
         results = run_inline_tests()
         assert len(results) == 1
         assert not results[0][2]
+
+    def test_rewrite_expectation_passes_against_rewriting_hook(self):
+        from captain_hook.primitives.commands import rewrite_command
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Allow, Input, Rewrite
+
+        reset()
+        rewrite_command(
+            r"^cat\s+(\S+)$",
+            r"ccx read \1 --full",
+            note="cat -> ccx read",
+            tests={
+                Input(tool="Bash", command="cat foo.py"): Rewrite(pattern="ccx read foo.py --full"),
+                Input(tool="Bash", command="ls -la"): Allow(),
+            },
+        )
+        results = run_inline_tests()
+        assert len(results) == 2
+        assert all(r[2] for r in results), f"Failed: {results}"

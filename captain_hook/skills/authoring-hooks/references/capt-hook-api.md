@@ -20,10 +20,10 @@ from __future__ import annotations
 
 from captain_hook import (
     Allow, BaseHookEvent, Block, Event, HookResult, InlineTests, Input, Prompt,
-    RanCommand, Signal, Signals, SourceEdits, TestFile, Tool, TouchedFile,
+    RanCommand, Rewrite, Signal, Signals, SourceEdits, TestFile, Tool, TouchedFile,
     TranscriptFixture, Warn,
     block_command, gate, hook, lint, llm_gate, llm_nudge, nudge, on,
-    prompt_check, warn_command, workflow, Artifact, Step, text_matches,
+    prompt_check, rewrite_command, warn_command, workflow, Artifact, Step, text_matches,
 )
 from captain_hook.types import Command
 ```
@@ -69,6 +69,7 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 |---|---|---|
 | `block_command` | `(pattern, *, reason, hint=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; message `"BLOCKED: {reason}. {hint}."` |
 | `warn_command` | `(pattern, *, message, tests=None, events=Event.PostToolUse)` | warns, never blocks |
+| `rewrite_command` | `(pattern, replace, *, note=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; `re.sub(pattern, replace, command)` then allows with the rewritten command |
 | `gate` | `(message, *, when=None, only_if=(), skip_if=(), events=None, max_fires=None, tests=None)` | `Stop \| SubagentStop`, `max_fires=1`; blocks |
 | `nudge` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), block=False, events=None, max_fires=None, tests=None)` | `PostToolUse` (with signals) else `PreToolUse`; `max_fires` 3 / 1; warns |
 | `lint` | `(check, *, message, trigger=None, sep=", ", block=False, events=None, tests=None, max_shown=5)` | `PostToolUse`, `Tool("Edit\|Write")` + `*.py`, skips test files |
@@ -93,6 +94,28 @@ Notes:
 - LLM cost controls: `signals` pre-filter (LLM only called past the score threshold),
   `max_fires`, `max_context`, `model="small"`, and static `only_if`/`skip_if` narrowing.
   At most one LLM primitive fires per turn.
+
+## Inline test expectations
+
+`tests={Input(...): <expectation>}` maps an input to its expected outcome:
+
+| Expectation | Passes when | `pattern` |
+|---|---|---|
+| `Allow()` | result is `None` or `allow` | — |
+| `Block(pattern=...)` | result is `block` | regex over the block message |
+| `Warn(pattern=...)` | result is `warn` | regex over the warning message |
+| `Rewrite(pattern=...)` | result is `rewrite` | **substring** of the rewritten `updated_input["command"]` |
+
+`Rewrite`'s `pattern` is a substring (not a regex), so an absolute-path prefix in the
+rewritten command (e.g. `/abs/bin/ccx read x --full`) still matches `Rewrite(pattern="ccx
+read x --full")`.
+
+```python
+rewrite_command(r"^cat\s+(\S+)$", r"ccx read \1 --full", note="ran ccx", tests={
+    Input(command="cat foo.py"): Rewrite(pattern="ccx read foo.py --full"),
+    Input(command="ls -la"): Allow(),
+})
+```
 
 ## Conditions
 
@@ -143,6 +166,8 @@ Glob caveat: patterns match the full relative path. `**/*.py` matches `src/main.
 | `evt.permission_mode` | e.g. `"plan"` |
 | `evt.ctx.t` | the session as a `cc_transcript.query.Session` (turns, tool calls, text) |
 | `evt.block(msg)` / `evt.warn(msg)` / `evt.allow()` | build the `HookResult` to return |
+| `evt.rewrite_command(new_command, *, note=None)` | **PreToolUse only** — rewrite a Bash command in place (keeps the rest of the tool input), allowing it; `note` surfaces as `additionalContext` |
+| `evt.rewrite(updated_input, *, note=None)` | **PreToolUse only** — replace the tool input wholesale with `updated_input` (same tool schema), allowing it |
 
 `evt.command_line.q` predicates for compound commands:
 

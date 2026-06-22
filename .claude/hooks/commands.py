@@ -13,7 +13,7 @@ from captain_hook import (
 )
 from captain_hook.events import PostToolUseFailureEvent
 
-# Repo-specific overlay on top of the `general` pack (git stash / grep / codex hooks
+# Repo-specific overlay on top of the `general` pack (git stash / codex hooks
 # come from the pack; only the captain-hook-specific guards live here).
 
 block_command(

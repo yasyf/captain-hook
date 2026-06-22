@@ -240,6 +240,21 @@ class PreToolUseEvent(ToolHookEvent):
 
     event_name: ClassVar[Event] = Event.PreToolUse
 
+    def rewrite(self, updated_input: dict[str, Any], *, note: str | None = None) -> HookResult:
+        """Allow the tool but replace its input with ``updated_input`` (Claude Code's ``updatedInput``).
+
+        ``updated_input`` must satisfy the same tool's schema; ``note`` surfaces as
+        ``additionalContext`` so the model sees that its input was rewritten.
+        """
+        from captain_hook.types import Action
+        from captain_hook.types import HookResult as HR
+
+        return HR(action=Action.rewrite, updated_input=updated_input, note=note)
+
+    def rewrite_command(self, new_command: str, *, note: str | None = None) -> HookResult:
+        """Rewrite a Bash command in place, replacing ``command`` while preserving the rest of the tool input."""
+        return self.rewrite({**self._tool_input, "command": new_command}, note=note)
+
 
 @dataclass
 class PostToolUseEvent(ToolHookEvent):

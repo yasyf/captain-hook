@@ -42,6 +42,18 @@ class Allow:
     pass
 
 
+@dataclass(frozen=True, kw_only=True)
+class Rewrite:
+    """Inline test expectation: the hook should rewrite the command.
+
+    Optional ``pattern`` is a substring matched against the rewritten command
+    (``updated_input["command"]``) — substring, not regex, so an absolute path
+    prefix in the rewritten command does not break the match.
+    """
+
+    pattern: str | None = None
+
+
 @dataclass(frozen=True, kw_only=True, eq=False)
 class Input:
     """Inline test input descriptor modeling an event payload. Set fields based on the target event type."""
@@ -63,12 +75,12 @@ class Input:
             object.__setattr__(self, "transcript", TranscriptFixture(self.transcript))
 
 
-type InlineTests = dict[str | Input, Block | Warn | Allow]
+type InlineTests = dict[str | Input, Block | Warn | Allow | Rewrite]
 """Inline test specification mapping inputs to expected outcomes.
 
 A mapping whose keys are ``Input`` descriptors (or legacy ``str`` session
 keys) and whose values are the expected hook result — ``Block``, ``Warn``,
-or ``Allow``.
+``Allow``, or ``Rewrite``.
 
 Keys:
     Input: Structured test-input descriptor specifying tool, command, file,
@@ -80,6 +92,8 @@ Values:
     Block: The hook must block, optionally matching a regex ``pattern``.
     Warn: The hook must warn, optionally matching a regex ``pattern``.
     Allow: The hook must allow (return ``None`` or action ``"allow"``).
+    Rewrite: The hook must rewrite the command, optionally matching a
+        substring ``pattern`` against ``updated_input["command"]``.
 
 Example::
 
