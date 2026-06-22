@@ -48,8 +48,7 @@ def has_completion_notification(t: Session, tool_use_id: str) -> bool:
 def waiting_tool_names(evt: BaseHookEvent) -> set[str]:
     from captain_hook.settings import DEFAULT_WAITING_TOOLS
 
-    custom: object = getattr(evt.ctx.settings, "waiting_tools", None)
-    return {str(x) for x in custom} if isinstance(custom, list) else set(DEFAULT_WAITING_TOOLS)
+    return set(settings.waiting_tools) if (settings := evt.ctx.settings) else set(DEFAULT_WAITING_TOOLS)
 
 
 def ephemeral_wait(use: ToolUse, waiting_names: set[str]) -> bool:

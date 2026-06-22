@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
+
+import pydantic
+from pydantic import BeforeValidator
+from pydantic.dataclasses import dataclass as pyd_dataclass
 
 
 class TranscriptFixture:
@@ -63,7 +67,18 @@ class Rewrite:
     pattern: str | None = None
 
 
-@dataclass(frozen=True, kw_only=True, eq=False)
+def coerce_transcript(
+    value: Path | TranscriptFixture | list[dict[str, Any]] | None,
+) -> Path | TranscriptFixture | None:
+    return TranscriptFixture(value) if isinstance(value, list) else value
+
+
+@pyd_dataclass(
+    frozen=True,
+    kw_only=True,
+    eq=False,
+    config=pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid"),
+)
 class Input:
     """Inline test input descriptor modeling an event payload.
 
@@ -98,12 +113,10 @@ class Input:
     permission_mode: str | None = None
     offset: int | None = None
     limit: int | None = None
-    transcript: Path | TranscriptFixture | list[dict[str, Any]] | None = None
+    transcript: Annotated[
+        Path | TranscriptFixture | list[dict[str, Any]] | None, BeforeValidator(coerce_transcript)
+    ] = None
     tasks: list[dict[str, Any]] | None = None
-
-    def __post_init__(self) -> None:
-        if isinstance(self.transcript, list):
-            object.__setattr__(self, "transcript", TranscriptFixture(self.transcript))
 
 
 type InlineTests = dict[str | Input, Block | Warn | Allow | Rewrite]

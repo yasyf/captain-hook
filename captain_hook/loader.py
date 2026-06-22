@@ -11,9 +11,9 @@ from pathlib import Path
 from types import ModuleType
 
 from loguru import logger
-from pydantic_settings import BaseSettings
 
 from captain_hook.app import State, _state
+from captain_hook.settings import build_settings
 
 CONF_MODULE = "conf"
 PACK_PACKAGE_PREFIX = "captain_hook._packs"
@@ -22,13 +22,6 @@ PACK_PACKAGE_PREFIX = "captain_hook._packs"
 def is_test_module(fqn: str) -> bool:
     parts = fqn.split(".")
     return parts[-1].startswith("test_") or parts[-1] == "conftest" or "tests" in parts
-
-
-def build_hook_settings(module: ModuleType) -> BaseSettings | ModuleType:
-    if importlib.util.find_spec("captain_hook.settings"):
-        settings_mod = importlib.import_module("captain_hook.settings")
-        return settings_mod.build_settings(module)
-    return module
 
 
 def import_or_reload(fqn: str, fresh_this_pass: set[str]) -> ModuleType:
@@ -57,7 +50,7 @@ def discover_hooks(hooks_dir: str | Path, state: State | None = None) -> None:
 
     if CONF_MODULE in top_level:
         conf_module = import_or_reload(f"{pkg}.{CONF_MODULE}", fresh_this_pass)
-        target.settings = build_hook_settings(conf_module)
+        target.settings = build_settings(conf_module)
         if classifier := getattr(conf_module, "classifier", None):
             target.classifier = classifier
 

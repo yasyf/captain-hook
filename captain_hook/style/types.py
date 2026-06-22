@@ -4,6 +4,7 @@ import ast
 from abc import ABC
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from functools import cached_property
 from typing import TYPE_CHECKING, ClassVar
 
 from captain_hook.utils import kebab
@@ -24,6 +25,36 @@ class Violation:
 
     line: int
     label: str
+
+
+def parse_or_empty(source: str) -> ast.Module:
+    try:
+        return ast.parse(source)
+    except SyntaxError:
+        return ast.parse("")
+
+
+@dataclass(frozen=True)
+class Change:
+    """The pre- and post-edit state of a file, passed to every style rule's ``check``.
+
+    Attributes:
+        source: The post-edit source text.
+        pre: The pre-edit source text (``""`` when there is nothing to diff against).
+        tree: The parsed post-edit module (an empty module when the source doesn't parse).
+        pre_tree: The parsed pre-edit module (parsed lazily, only when a diff rule reads it).
+    """
+
+    source: str
+    pre: str
+
+    @cached_property
+    def tree(self) -> ast.Module:
+        return parse_or_empty(self.source)
+
+    @cached_property
+    def pre_tree(self) -> ast.Module:
+        return parse_or_empty(self.pre)
 
 
 class StyleRule(ABC):
@@ -55,9 +86,9 @@ class StyleRule(ABC):
     def slug(cls) -> str:
         return kebab(cls.__name__)
 
-    def check(self, tree: ast.Module) -> Iterator[Violation]:
+    def check(self, change: Change) -> Iterator[Violation]:
         if (matcher := type(self).match) is not None:
-            yield from matcher.violations(tree, type(self).label)
+            yield from matcher.violations(change.tree, type(self).label)
 
 
 class StyleDiffRule(StyleRule):
@@ -79,6 +110,6 @@ class StyleDiffRule(StyleRule):
         ```
     """
 
-    def check(self, pre: ast.Module, post: ast.Module) -> Iterator[Violation]:  # type: ignore[override]
+    def check(self, change: Change) -> Iterator[Violation]:
         if (matcher := type(self).match) is not None:
-            yield from matcher.diff(pre, post, label=type(self).label)
+            yield from matcher.diff(change.pre_tree, change.tree, label=type(self).label)

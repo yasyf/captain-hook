@@ -47,16 +47,16 @@ Give every list, set, or dict field a `Field(default_factory=...)`. A bare `list
 
 ## Bundle one workflow with `@workflow_state`
 
-When a hook spans several events, you don't want each handler hand-rolling the same read-update-write. Decorate the model with `@workflow_state("name")` and it grows three methods that take the event directly. `.load(evt)` reads and defaults to a fresh instance, `.save(evt)` writes, and `.reset(evt)` deletes.
+When a hook spans several events, you don't want each handler hand-rolling the same read-update-write. Subclass `WorkflowState` and decorate it with `@workflow_state("name")`; the model inherits three methods that take the event directly. `.load(evt)` reads and defaults to a fresh instance, `.save(evt)` writes, and `.reset(evt)` deletes.
 
 This example threads one model through three events. A prompt seeds intent, edits accumulate as they happen, a test run flips a flag, and `Stop` gates the agent if it edited code but never ran tests.
 
 ```python
-from pydantic import BaseModel, Field
-from captain_hook import Event, RanCommand, Tool, on, workflow_state
+from pydantic import Field
+from captain_hook import Event, RanCommand, Tool, WorkflowState, on, workflow_state
 
 @workflow_state("review")
-class ReviewState(BaseModel):
+class ReviewState(WorkflowState):
     intent: str | None = None
     edits: list[str] = Field(default_factory=list)
     ran_tests: bool = False

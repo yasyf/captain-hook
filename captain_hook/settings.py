@@ -72,7 +72,7 @@ class AutoConf:
         return None
 
     @staticmethod
-    def build_settings(module: types.ModuleType, prefix: str = "HOOKS_") -> BaseSettings:
+    def build_settings(module: types.ModuleType, prefix: str = "HOOKS_") -> HooksSettings:
         if settings_cls := AutoConf.find_settings_class(module):
             return settings_cls()
 
@@ -117,6 +117,6 @@ class AutoConf:
         )()
 
 
-def build_settings(module: types.ModuleType, prefix: str = "HOOKS_") -> BaseSettings:
+def build_settings(module: types.ModuleType, prefix: str = "HOOKS_") -> HooksSettings:
     """Build settings from a conf module via an explicit ``HooksSettings`` subclass or auto-inferred fields."""
     return AutoConf.build_settings(module, prefix)

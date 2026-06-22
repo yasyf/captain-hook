@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from hashlib import sha256
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, ClassVar, Self, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -165,9 +165,7 @@ def record_fire(evt: BaseHookEvent) -> None:
 
 
 def fired_this_turn(evt: BaseHookEvent) -> bool:
-    return (ps := evt.ctx.s[PrimitiveState].get()) is not None and ps.last_fired_at > len(evt.ctx.t) - len(
-        evt.ctx.turn
-    )
+    return (ps := evt.ctx.s[PrimitiveState].get()) is not None and ps.last_fired_at > len(evt.ctx.t) - len(evt.ctx.turn)
 
 
 from captain_hook.session import SessionStore  # noqa: E402
@@ -190,26 +188,40 @@ class EchoTracker:
         evt.ctx.s[PrimitiveState].set(ps)
 
 
-T = TypeVar("T", bound=BaseModel)
+class WorkflowState(BaseModel):
+    """Base for a pydantic model that bundles one session workflow across several hooks.
+
+    Decorate the subclass with [`workflow_state`][captain_hook.workflow_state] to register it; the
+    subclass then carries three event-driven helpers. ``load`` reads the stored state (defaulting to
+    a fresh instance), ``save`` writes it, and ``reset`` deletes it.
+
+    Example:
+        >>> @workflow_state("review")
+        ... class ReviewState(WorkflowState):
+        ...     intent: str | None = None
+    """
+
+    __workflow_name__: ClassVar[str | None] = None
+
+    @classmethod
+    def load(cls, evt: BaseHookEvent) -> Self:
+        return evt.ctx.s.load(cls)
+
+    def save(self, evt: BaseHookEvent) -> None:
+        evt.ctx.s[type(self)].set(self)
+
+    @classmethod
+    def reset(cls, evt: BaseHookEvent) -> None:
+        evt.ctx.s[cls].delete()
+
+
+T = TypeVar("T", bound=WorkflowState)
 
 
 def workflow_state(name: str) -> Callable[[type[T]], type[T]]:
     def wrap(cls: type[T]) -> type[T]:
-        cls.__workflow_name__ = name  # type: ignore[attr-defined]
+        cls.__workflow_name__ = name
         SessionStore.track(cls)
-
-        def load(inner_cls: type[T], evt: BaseHookEvent) -> T:
-            return evt.ctx.s.load(inner_cls)
-
-        def save(self: T, evt: BaseHookEvent) -> None:
-            evt.ctx.s[type(self)].set(self)
-
-        def reset(inner_cls: type[T], evt: BaseHookEvent) -> None:
-            evt.ctx.s[inner_cls].delete()
-
-        cls.load = classmethod(load)  # type: ignore[attr-defined]
-        cls.save = save  # type: ignore[attr-defined]
-        cls.reset = classmethod(reset)  # type: ignore[attr-defined]
         return cls
 
     return wrap

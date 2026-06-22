@@ -15,7 +15,6 @@ from cc_transcript.query import Session
 from cc_transcript.render import Budget, render_turn
 from cc_transcript.tools import parse_tool_call
 from pydantic import BaseModel
-from pydantic_settings import BaseSettings
 from spawnllm import call, run_cli
 
 from captain_hook.classifiers import detect
@@ -28,6 +27,8 @@ if TYPE_CHECKING:
 
     from cc_transcript.models import TranscriptEvent
     from cc_transcript.tools import ToolCall
+
+    from captain_hook.settings import HooksSettings
 
 
 class LenientToolUseBlock(ToolUseBlock):
@@ -91,7 +92,7 @@ class HookContext:
 
     session: SessionStore
     transcript: Session
-    settings: BaseSettings | None
+    settings: HooksSettings | None
     project_root: Path | None = None
 
     @property
@@ -110,12 +111,12 @@ class HookContext:
         return self.session
 
     @property
-    def conf(self) -> BaseSettings | None:
+    def conf(self) -> HooksSettings | None:
         """Alias for ``settings``."""
         return self.settings
 
     @property
-    def c(self) -> BaseSettings | None:
+    def c(self) -> HooksSettings | None:
         """Alias for ``settings`` (shortest form)."""
         return self.conf
 

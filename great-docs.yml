@@ -95,6 +95,7 @@ reference:
       - style.AstGrepStyleRule
       - style.AstGrepStyleDiffRule
       - style.Violation
+      - style.Change
       - GateVerdict
       - NudgeVerdict
       - PromptCheckVerdict
@@ -192,6 +193,7 @@ reference:
       - HookState
       - PrimitiveState
       - SourceEdits
+      - WorkflowState
       - workflow_state
       - SessionSlot
       - SessionStore

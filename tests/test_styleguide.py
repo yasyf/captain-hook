@@ -10,7 +10,15 @@ import pytest
 
 from captain_hook.app import _state
 from captain_hook.dispatch import dispatch
-from captain_hook.style import StyleDiffRule, StyleRule, Violation, ast_grep_diff_rule, ast_grep_rule, styleguide
+from captain_hook.style import (
+    Change,
+    StyleDiffRule,
+    StyleRule,
+    Violation,
+    ast_grep_diff_rule,
+    ast_grep_rule,
+    styleguide,
+)
 from captain_hook.style import matchers as M
 from captain_hook.tests.helpers import make_ctx, make_post_tool_event
 from captain_hook.types import Event, FilePath
@@ -39,8 +47,8 @@ class NoPrint(StyleRule):
     Use a logger instead.
     """
 
-    def check(self, tree: ast.Module) -> Iterator[Violation]:
-        for node in ast.walk(tree):
+    def check(self, change: Change) -> Iterator[Violation]:
+        for node in ast.walk(change.tree):
             match node:
                 case ast.Call(func=ast.Name(id="print")):
                     yield Violation(node.lineno, "print() call")
@@ -52,8 +60,8 @@ class NoLambda(StyleRule):
       - {violations}
     """
 
-    def check(self, tree: ast.Module) -> Iterator[Violation]:
-        yield from (Violation(n.lineno, "lambda") for n in ast.walk(tree) if isinstance(n, ast.Lambda))
+    def check(self, change: Change) -> Iterator[Violation]:
+        yield from (Violation(n.lineno, "lambda") for n in ast.walk(change.tree) if isinstance(n, ast.Lambda))
 
 
 class NoNewGlobal(StyleDiffRule):
@@ -62,9 +70,9 @@ class NoNewGlobal(StyleDiffRule):
       - {violations}
     """
 
-    def check(self, pre: ast.Module, post: ast.Module) -> Iterator[Violation]:
-        old = {name for node in ast.walk(pre) if isinstance(node, ast.Global) for name in node.names}
-        for node in ast.walk(post):
+    def check(self, change: Change) -> Iterator[Violation]:
+        old = {name for node in ast.walk(change.pre_tree) if isinstance(node, ast.Global) for name in node.names}
+        for node in ast.walk(change.tree):
             if isinstance(node, ast.Global):
                 yield from (Violation(node.lineno, f"global {name}") for name in node.names if name not in old)
 
@@ -218,8 +226,8 @@ class TestDocstringMessage:
             Calls are not allowed in this file.
             """
 
-            def check(self, tree: ast.Module) -> Iterator[Violation]:
-                yield from (Violation(n.lineno, "call") for n in ast.walk(tree) if isinstance(n, ast.Call))
+            def check(self, change: Change) -> Iterator[Violation]:
+                yield from (Violation(n.lineno, "call") for n in ast.walk(change.tree) if isinstance(n, ast.Call))
 
         styleguide(NoCall)
         msg = warn_text(
@@ -236,15 +244,15 @@ class TestDocstringMessage:
 
             tests = {Input(file="a.py", content="print(1)\n"): Warn()}
 
-            def check(self, tree: ast.Module) -> Iterator[Violation]:
-                yield from (Violation(n.lineno, "p") for n in ast.walk(tree) if isinstance(n, ast.Call))
+            def check(self, change: Change) -> Iterator[Violation]:
+                yield from (Violation(n.lineno, "p") for n in ast.walk(change.tree) if isinstance(n, ast.Call))
 
         class B(StyleRule):
             """B: {violations}"""
 
             tests = {Input(file="a.py", content="x = 1\n"): Allow()}
 
-            def check(self, tree: ast.Module) -> Iterator[Violation]:
+            def check(self, change: Change) -> Iterator[Violation]:
                 return iter(())
 
         styleguide(A, B)
@@ -254,7 +262,7 @@ class TestDocstringMessage:
 class TestValidation:
     def test_rejects_missing_docstring(self) -> None:
         class NoDoc(StyleRule):
-            def check(self, tree: ast.Module) -> Iterator[Violation]:
+            def check(self, change: Change) -> Iterator[Violation]:
                 return iter(())
 
         with pytest.raises(ValueError, match="docstring"):

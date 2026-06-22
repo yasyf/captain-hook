@@ -64,7 +64,7 @@ from captain_hook.prompt import Prompt
 from captain_hook.session import SessionSlot, SessionStore, session_state
 from captain_hook.settings import HooksSettings, build_settings
 from captain_hook.signals.nlp import Clause, NlpSignal, Phrase
-from captain_hook.state import HookState, PrimitiveState, workflow_state
+from captain_hook.state import HookState, PrimitiveState, WorkflowState, workflow_state
 from captain_hook.tasks import Task, Tasks
 from captain_hook.testing import Allow, Block, FileFixture, InlineTests, Input, Rewrite, TranscriptFixture, Warn
 from captain_hook.types import (

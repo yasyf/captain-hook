@@ -9,12 +9,16 @@ if TYPE_CHECKING:
     from spacy.tokens import Doc, Span, Token
 
 
-@dataclass(frozen=True, slots=True, init=False)
-class Phrase:
+@dataclass(frozen=True, slots=True)
+class PhraseFields:
     lemmas: tuple[str, ...]
 
+
+class Phrase(PhraseFields):
+    __slots__ = ()
+
     def __init__(self, *terms: str) -> None:
-        object.__setattr__(self, "lemmas", tuple(t.lower() for t in terms))
+        super().__init__(tuple(t.lower() for t in terms))
 
     @classmethod
     def expand(cls, *terms: str, pos: str = "n") -> Phrase:

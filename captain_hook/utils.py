@@ -6,7 +6,7 @@ import re
 import shutil
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, overload
+from typing import Any, cast, overload
 
 
 def resolve_binary(name: str, *, extra_dirs: Sequence[Path] = ()) -> str | None:
@@ -42,6 +42,7 @@ def read_json(path: Path, default: dict[str, Any]) -> dict[str, Any]: ...
 def read_json(path: Path, default: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Read and parse a JSON file, returning *default* on missing file or parse error."""
     try:
-        return json.loads(path.read_text())  # type: ignore[no-any-return]
+        data = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError, ValueError):
         return default
+    return cast("dict[str, Any]", data) if isinstance(data, dict) else default

@@ -8,14 +8,15 @@ from captain_hook import (
     Input,
     Tool,
     Waiting,
+    WorkflowState,
     on,
     workflow_state,
 )
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 
 @workflow_state("review")
-class ReviewState(BaseModel):
+class ReviewState(WorkflowState):
     intent: str | None = None
     ran_tests: bool = False
     edits: list[str] = Field(default_factory=list)

@@ -170,7 +170,7 @@ def make_transcript_ctx(
 
 
 def make_messages_ctx(messages: list[dict[str, Any]] | None) -> Any:
-    return MagicMock(transcript=fixture_session(messages or []))
+    return MagicMock(transcript=fixture_session(messages or []), settings=None)
 
 
 def run_cli(

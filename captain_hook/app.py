@@ -7,8 +7,6 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import TYPE_CHECKING, get_args
 
-from pydantic_settings import BaseSettings
-
 from captain_hook.conditions import matches_conditions
 from captain_hook.types import (
     CustomCondition,
@@ -23,6 +21,7 @@ if TYPE_CHECKING:
     from cc_transcript.activity import UserClassifier
 
     from captain_hook.events import BaseHookEvent
+    from captain_hook.settings import HooksSettings
     from captain_hook.types import HookResult
 
 HookHandler = Callable[["BaseHookEvent"], "HookResult | None"]
@@ -69,7 +68,7 @@ def validate_handler_signature(fn: HookHandler) -> None:
 class State:
     hooks: list[RegisteredHook] = field(default_factory=list)
     gitignore_patterns: list[str] = field(default_factory=list)
-    settings: BaseSettings | None = None
+    settings: HooksSettings | None = None
     classifier: UserClassifier | None = None
     counter: int = field(default=0, repr=False)
 
@@ -254,7 +253,7 @@ def is_planning_agent_skip(spec: HookSpec, evt: BaseHookEvent) -> bool:
         return False
     if evt.event not in (Event.SubagentStop | Event.SubagentStart):
         return False
-    names = getattr(_state.settings, "planning_agents", DEFAULT_PLANNING_AGENTS)
+    names = settings.planning_agents if (settings := _state.settings) else DEFAULT_PLANNING_AGENTS
     return bool(evt.agent_type and evt.agent_type in names)
 
 

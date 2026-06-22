@@ -14,7 +14,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, ClassVar
 
 from captain_hook.ast_grep import find_all, find_introduced
-from captain_hook.style.types import StyleDiffRule, StyleRule, Violation
+from captain_hook.style.types import Change, StyleDiffRule, StyleRule, Violation
 
 if TYPE_CHECKING:
     from captain_hook.ast_grep import Match
@@ -31,17 +31,19 @@ class AstGrepStyleRule(StyleRule):
     pattern: ClassVar[str]
     lang: ClassVar[str]
 
-    def check_source(self, source: str) -> Iterator[Violation]:
-        return (Violation(m.line, label_of(self, m)) for m in find_all(source, type(self).lang, type(self).pattern))
+    def check(self, change: Change) -> Iterator[Violation]:
+        return (
+            Violation(m.line, label_of(self, m)) for m in find_all(change.source, type(self).lang, type(self).pattern)
+        )
 
 
 class AstGrepStyleDiffRule(AstGrepStyleRule, StyleDiffRule):
     """An [`AstGrepStyleRule`][captain_hook.style.AstGrepStyleRule] that flags only constructs the edit introduces."""
 
-    def check_diff(self, pre: str, post: str) -> Iterator[Violation]:
+    def check(self, change: Change) -> Iterator[Violation]:
         return (
             Violation(m.line, label_of(self, m))
-            for m in find_introduced(pre, post, type(self).lang, type(self).pattern)
+            for m in find_introduced(change.pre, change.source, type(self).lang, type(self).pattern)
         )
 
 
