@@ -62,8 +62,8 @@ class ZipStrict(StyleRule):
         Input(file="m.py", content="pairs = list(zip(a, b))\n"): Warn(),
         Input(file="m.py", content="pairs = list(zip(a, b, strict=True))\n"): Allow(),
     }
-    match = M.calls("zip") & ~M.kwarg("strict")
     label = "zip()"
+    match = M.calls("zip") & ~M.kwarg("strict")
 
 
 class LateModuleConstants(StyleRule):

@@ -34,6 +34,7 @@ LANG_GLOBS: dict[str, tuple[str, ...]] = {
     "go": ("*.go",),
     "rs": ("*.rs",),
     "java": ("*.java",),
+    "bash": ("*.sh", "*.bash"),
 }
 
 
@@ -158,9 +159,39 @@ class Content:
     """Condition matching the current event's file content against a regex.
 
     Applies to Edit (new content) and Write (file content) tool events.
+
+    Args:
+        pattern: A regular expression searched against the content with ``re.MULTILINE``.
+        project_only: Only fire on files inside the repository root (default ``True``); set
+            ``False`` to also match scratch files, attachments, and other paths outside the repo.
     """
 
     pattern: str
+    project_only: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class Pattern:
+    """Condition matching the edit's new content against an ast-grep **structural** pattern.
+
+    Where [`Content`][captain_hook.types.Content] matches text with a regex, ``Pattern`` matches
+    code *shape* across languages — ``print($$$)`` matches a print call however its arguments are
+    spelled, ignoring matches inside strings or comments.
+
+    Args:
+        pattern: An ast-grep pattern string with metavariables, e.g. ``"os.system($CMD)"`` or
+            ``"print($$$)"``.
+        lang: ast-grep language id (the short keys of [`LANG_GLOBS`][captain_hook.types.LANG_GLOBS],
+            e.g. ``"py"``, ``"go"``); inferred from the edited file's extension when omitted.
+        project_only: Only fire on files inside the repository root (default ``True``), like
+            [`Content`][captain_hook.types.Content].
+
+    Example:
+        >>> hook(Event.PreToolUse, only_if=[Pattern("eval($$$)")], message="no eval", block=True)
+    """
+
+    pattern: str
+    lang: str | None = None
     project_only: bool = True
 
 
@@ -351,6 +382,7 @@ TCondition = (
     | FilePath
     | Command
     | Content
+    | Pattern
     | Agent
     | UsedSkill
     | ReadFile

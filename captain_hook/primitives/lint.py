@@ -15,6 +15,7 @@ from captain_hook.types import (
     FilePath,
     HookResult,
     InlineTests,
+    SourceEdits,
     TCondition,
     TestFile,
     Tool,
@@ -75,10 +76,26 @@ def lint(
 ) -> None: ...
 
 
+@overload
 def lint(
-    check: Callable[[str], list[str]] | Callable[[ast.AST], Iterator[str]],
     *,
+    pattern: str,
     message: str,
+    lang: str = ...,
+    sep: str = ...,
+    block: bool = ...,
+    events: Event | None = ...,
+    tests: InlineTests | None = ...,
+    max_shown: int = ...,
+) -> None: ...
+
+
+def lint(
+    check: Callable[[str], list[str]] | Callable[[ast.AST], Iterator[str]] | None = None,
+    *,
+    pattern: str | None = None,
+    message: str,
+    lang: str = "py",
     trigger: str | None = None,
     sep: str = ", ",
     block: bool = False,
@@ -86,17 +103,49 @@ def lint(
     tests: InlineTests | None = None,
     max_shown: int = 5,
 ) -> None:
-    """Register a lint check that runs on Python file edits/writes.
+    """Register a lint check that runs on source-file edits and writes.
 
-    Supports two modes based on the ``check`` function's type hint:
-    - **String mode**: receives the file content as ``str``, returns violation strings.
-    - **AST mode**: receives each ``ast.AST`` node, yields violation strings.
+    Three modes, exactly one of ``check`` or ``pattern``:
+    - **String mode**: ``check`` receives the file content as ``str``, returns violation strings.
+    - **AST mode**: ``check`` receives each ``ast.AST`` node, yields violation strings (Python only).
+    - **ast-grep mode**: ``pattern`` is an ast-grep pattern string; every structural match becomes a
+      ``"{snippet} (line N)"`` violation. ``lang`` (default ``"py"``) selects the language *and* the
+      file guard, so a ``lang="ts"`` lint fires on ``*.ts`` edits.
 
     Example:
         >>> def find_prints(content: str) -> list[str]:
         ...     return [line for line in content.splitlines() if "print(" in line]
         >>> lint(find_prints, message="Remove print statements: {violations}")
+        >>> lint(pattern="console.log($$$)", message="Drop console.log: {violations}", lang="ts")
     """
+    if pattern is not None:
+        if check is not None:
+            raise TypeError("lint takes either a check function or pattern=, not both or neither")
+
+        def pattern_handler(evt: BaseHookEvent) -> HookResult | None:
+            from captain_hook.ast_grep import find_all
+
+            if (content := evt.content) is None:
+                return None
+            try:
+                violations = [f"{m.text.splitlines()[0]} (line {m.line})" for m in find_all(content, lang, pattern)]
+            except Exception:
+                logger.bind(pattern=pattern).opt(exception=True).warning("lint pattern check failed")
+                return None
+            return format_result(violations, message, sep, block, max_shown)
+
+        pattern_handler.__name__ = pattern_handler.__qualname__ = hook_name("lint", None, message)
+        on(
+            events or Event.PostToolUse,
+            only_if=(Tool("Edit|Write"), FilePath(*SourceEdits(lang=lang).globs, project_only=False)),
+            skip_if=DEFAULT_SKIP_IF,
+            tests=tests,
+        )(pattern_handler)
+        return
+
+    if check is None:
+        raise TypeError("lint takes either a check function or pattern=, not both or neither")
+
     is_ast = detect_ast_mode(check)
 
     def handler(evt: BaseHookEvent) -> HookResult | None:

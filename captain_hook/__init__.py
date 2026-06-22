@@ -48,6 +48,7 @@ from captain_hook.primitives import (
     llm_gate,
     llm_nudge,
     prompt_check,
+    rewrite_code,
     rewrite_command,
     warn_command,
 )
@@ -78,6 +79,7 @@ from captain_hook.types import (
     HookResponse,
     HookResult,
     InPlanMode,
+    Pattern,
     RanCommand,
     ReadFile,
     Signal,

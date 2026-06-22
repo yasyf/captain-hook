@@ -16,6 +16,7 @@ from captain_hook.types import (
     FilePath,
     InPlanMode,
     Or,
+    Pattern,
     RanCommand,
     ReadFile,
     SourceEdits,
@@ -104,6 +105,14 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
                 and evt.content
                 and re.search(pattern, evt.content, re.MULTILINE)
             )
+        case Pattern(pattern, lang, project_only):
+            from captain_hook.ast_grep import lang_for_path
+            from captain_hook.ast_grep import matches as ast_grep_matches
+
+            if not (evt.content and (not project_only or is_project_file(evt))):
+                return False
+            resolved = lang or (lang_for_path(evt.file.path) if evt.file else None)
+            return bool(resolved and ast_grep_matches(evt.content, resolved, pattern))
         case Agent(name):
             return bool(evt.agent_type) and evt.agent_type in name.split("|")
         case TestFile(project_only):

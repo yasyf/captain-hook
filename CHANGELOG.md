@@ -4,6 +4,30 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- A `Pattern` condition matches the edit's new content against an
+  [ast-grep](https://ast-grep.github.io) structural pattern, the cross-language
+  counterpart to `Content`'s regex — `Pattern("os.system($CMD)")` matches the call
+  whatever its argument, ignoring strings and comments. The language is inferred from the
+  file extension and overridable with `lang=`.
+- `ast_grep_rule` and `ast_grep_diff_rule` build `styleguide()` rules from inline ast-grep
+  patterns, reusing the existing change-scoping, diffing, and message formatting. They reach
+  languages the Python-AST `matchers` can't, while Python naming, ordering, and scope checks
+  stay on `StyleRule`/`matchers`.
+- `rewrite_code` rewrites edited code structurally before it lands: every ast-grep pattern
+  match in an Edit, Write, MultiEdit, or NotebookEdit is replaced through an ast-grep fix
+  template — `rewrite_code("os.system($CMD)", "subprocess.run([$CMD], check=True)")`.
+- `rewrite_command`'s `(pattern, replace)` shorthand is now polymorphic: a pattern carrying
+  an ast-grep metavariable (`$NAME` / `$$$NAME`) rewrites the command structurally over
+  tree-sitter-bash, while a plain pattern stays a `re.sub`. `CommandLine` gains `matches` and
+  `rewrite` for structural ops on a parsed command line. Shell scripts (`.sh`, `.bash`) are
+  recognized as the `bash` language, so `Pattern`, `lint`, and `rewrite_code` reach them too.
+- `lint` gains an ast-grep mode: `lint(pattern="console.log($$$)", message="…", lang="ts")`
+  flags each structural match by line, with the file guard following `lang`.
+- `ast-grep-py` is a new dependency, used in-process for all structural matching and rewriting.
+
 ## [3.11.1] - 2026-06-20
 
 ### Fixed

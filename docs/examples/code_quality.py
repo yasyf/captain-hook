@@ -6,9 +6,9 @@ from collections.abc import Iterator
 
 from captain_hook import (
     Allow,
-    Content,
     Event,
     Input,
+    Pattern,
     Signal,
     Signals,
     SourceEdits,
@@ -20,27 +20,31 @@ from captain_hook import (
     nudge,
 )
 
+
+def bare_excepts(node: ast.AST) -> Iterator[str]:
+    if isinstance(node, ast.ExceptHandler) and node.type is None:
+        yield f"line {node.lineno}"
+
 hook(
     Event.PostToolUse,
-    only_if=[SourceEdits(lang="py"), Content(r"^\s*print\(")],
+    only_if=[SourceEdits(lang="py"), Pattern("print($$$)")],
     skip_if=[TestFile()],
     message="Use the project logger instead of print(). See docs/logging.md.",
     tests={
         Input(tool="Edit", file="src/app.py", content='import sys\nprint("debug")\n'): Warn(pattern="logger"),
         Input(tool="Edit", file="src/app.py", content="logger.info('ok')\n"): Allow(),
+        Input(tool="Edit", file="src/app.py", content="label = 'print(x)'  # only in a string\n"): Allow(),
     },
 )
 
 
-def bare_excepts(node: ast.AST) -> Iterator[str]:
-    if isinstance(node, ast.ExceptHandler) and node.type is None:
-        yield f"line {node.lineno}: bare except"
-
-
 lint(
     bare_excepts,
-    message="Bare except clauses silently swallow errors: {violations}",
-    trigger="except",
+    message="Bare except clauses silently swallow errors. Catch a specific exception type instead: {violations}",
+    tests={
+        Input(tool="Edit", file="src/app.py", content="try:\n    f()\nexcept:\n    pass\n"): Warn(pattern="swallow"),
+        Input(tool="Edit", file="src/app.py", content="try:\n    f()\nexcept ValueError:\n    pass\n"): Allow(),
+    },
 )
 
 
@@ -62,7 +66,7 @@ llm_gate(
     "module already imports a logger? Block only if the prod print is unambiguous.",
     message=lambda r: f"Replace print() with logger: {r.reasoning}",
     events=Event.PostToolUse,
-    only_if=[SourceEdits(lang="py"), Content(r"^\s*print\(")],
+    only_if=[SourceEdits(lang="py"), Pattern("print($$$)")],
     skip_if=[TestFile()],
     max_fires=2,
 )

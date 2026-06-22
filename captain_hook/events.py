@@ -23,6 +23,8 @@ from captain_hook.file import File
 from captain_hook.types import Event
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from cc_transcript.ids import ToolDigest
     from cc_transcript.tools import ToolCall
 
@@ -261,6 +263,28 @@ class PreToolUseEvent(ToolHookEvent):
     def rewrite_command(self, new_command: str, *, note: str | None = None) -> HookResult:
         """Rewrite a Bash command in place, replacing ``command`` while preserving the rest of the tool input."""
         return self.rewrite({**self._tool_input, "command": new_command}, note=note)
+
+    def rewrite_content(self, transform: Callable[[str], str], *, note: str | None = None) -> HookResult | None:
+        """Rewrite each editable-content field through ``transform``, allowing the tool with the result.
+
+        Maps the transform onto whichever field holds new source for this tool — an Edit's
+        ``new_string``, a Write's ``content``, a NotebookEdit's ``new_source``, or every span of a
+        MultiEdit's ``edits`` — and preserves the rest of the input. Returns None (a no-op) when
+        ``transform`` leaves every field unchanged, so callers stay idempotent.
+        """
+        base = self._tool_input
+        match self.input:
+            case EditCall():
+                updated = base | {"new_string": transform(base["new_string"])}
+            case WriteCall():
+                updated = base | {"content": transform(base["content"])}
+            case NotebookEditCall():
+                updated = base | {"new_source": transform(base["new_source"])}
+            case MultiEditCall():
+                updated = base | {"edits": [e | {"new_string": transform(e["new_string"])} for e in base["edits"]]}
+            case _:
+                return None
+        return self.rewrite(updated, note=note) if updated != base else None
 
 
 @dataclass

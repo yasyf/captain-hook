@@ -9,10 +9,14 @@ from typing import TYPE_CHECKING
 from captain_hook.app import on
 from captain_hook.state import hook_name
 from captain_hook.style import matchers
+from captain_hook.style.ast_grep import (
+    AstGrepStyleDiffRule,
+    AstGrepStyleRule,
+    ast_grep_diff_rule,
+    ast_grep_rule,
+)
 from captain_hook.style.scope import changed_lines, read_source, reconstruct_pre
-from captain_hook.style.types import StyleDiffRule
-from captain_hook.style.types import StyleRule
-from captain_hook.style.types import Violation
+from captain_hook.style.types import StyleDiffRule, StyleRule, Violation
 from captain_hook.types import Action, Event, FilePath, HookResult, TCondition, TestFile, Tool
 
 if TYPE_CHECKING:
@@ -78,6 +82,8 @@ def validate(rule: object) -> type[StyleRule]:
         raise TypeError(f"styleguide() expects StyleRule subclasses, got {rule!r}")
     if rule.__doc__ is None:
         raise ValueError(f"{rule.__name__} must define a docstring — it is the rule's message")
+    if issubclass(rule, AstGrepStyleRule):
+        return rule
     base = StyleDiffRule if issubclass(rule, StyleDiffRule) else StyleRule
     if rule.match is None and rule.check is base.check:
         raise TypeError(f"{rule.__name__} must define `match` or override `check`")
@@ -87,16 +93,19 @@ def validate(rule: object) -> type[StyleRule]:
 def run_rules(rules: list[StyleRule], evt: BaseHookEvent, *, block: bool, max_shown: int) -> HookResult | None:
     if (source := read_source(evt)) is None:
         return None
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return None
     pre = reconstruct_pre(evt, source)
     changed = changed_lines(pre, source)
-    pre_tree = parse_quietly(pre) if any(isinstance(r, StyleDiffRule) for r in rules) else None
+    tree = parse_quietly(source)
+    pre_tree = (
+        parse_quietly(pre)
+        if any(isinstance(r, StyleDiffRule) and not isinstance(r, AstGrepStyleRule) for r in rules)
+        else None
+    )
     if not (
         sections := [
-            section for rule in rules if (section := run_one(rule, tree, pre_tree, changed, max_shown)) is not None
+            section
+            for rule in rules
+            if (section := run_one(rule, tree, pre_tree, changed, max_shown, source, pre)) is not None
         ]
     ):
         return None
@@ -105,23 +114,31 @@ def run_rules(rules: list[StyleRule], evt: BaseHookEvent, *, block: bool, max_sh
 
 def run_one(
     rule: StyleRule,
-    tree: ast.Module,
+    tree: ast.Module | None,
     pre_tree: ast.Module | None,
     changed: set[int],
     max_shown: int,
+    source: str,
+    pre: str,
 ) -> str | None:
     match rule:
-        case StyleDiffRule() if pre_tree is not None:
+        case AstGrepStyleDiffRule():
+            violations = rule.check_diff(pre, source)
+        case AstGrepStyleRule():
+            violations = rule.check_source(source)
+        case StyleDiffRule() if tree is not None and pre_tree is not None:
             violations = rule.check(pre_tree, tree)
         case StyleDiffRule():
             return None
-        case _:
+        case _ if tree is not None:
             violations = rule.check(tree)
+        case _:
+            return None
     if not (scoped := [v for v in violations if v.line in changed]):
         return None
-    block = rule.sep.join(f"{v.label} (line {v.line})" for v in scoped[:max_shown])
+    body = rule.sep.join(f"{v.label} (line {v.line})" for v in scoped[:max_shown])
     doc = inspect.cleandoc(type(rule).__doc__ or "")
-    return doc.format(violations=block) if "{violations}" in doc else f"{doc}{rule.sep}{block}"
+    return doc.format(violations=body) if "{violations}" in doc else f"{doc}{rule.sep}{body}"
 
 
 def parse_quietly(source: str) -> ast.Module | None:

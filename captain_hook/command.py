@@ -130,6 +130,26 @@ class CommandLine:
     def q(self) -> CommandLineQuery:
         return CommandLineQuery(self)
 
+    def matches(self, pattern: str) -> bool:
+        """Whether ``pattern`` matches this command line structurally (ast-grep over tree-sitter-bash).
+
+        The structural counterpart to the regex helpers — ``"cat $$$ARGS"`` matches a ``cat`` call
+        however its arguments are spelled. Compose it into a condition with ``CustomCommandLineCondition``.
+        """
+        from captain_hook import ast_grep
+
+        return ast_grep.matches(self.raw, "bash", pattern)
+
+    def rewrite(self, pattern: str, replace: str) -> str:
+        """Rewrite every structural ``pattern`` match to ``replace``, an ast-grep ``$VAR`` fix template.
+
+        ``"cat $$$ARGS"`` → ``"bat $$$ARGS"`` rewrites the call while preserving its arguments; returns
+        the command line unchanged when nothing matches.
+        """
+        from captain_hook import ast_grep
+
+        return ast_grep.rewrite(self.raw, "bash", pattern, replace)
+
     @staticmethod
     def node_text(node: Node) -> str:
         return node.text.decode() if node.text else ""

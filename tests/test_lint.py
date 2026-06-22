@@ -735,3 +735,54 @@ class TestCheckExceptionLogging:
         result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
         assert any("check" in r.message and r.exc_info for r in logcap.records)
+
+
+class TestPatternModeLint:
+    def test_pattern_flags_match_with_line(self, session_dir: Path) -> None:
+        from captain_hook.primitives.lint import lint
+
+        lint(pattern="print($$$)", message="Found: {violations}")
+        evt = make_post_tool_event(
+            tool_name="Edit",
+            tool_input={"file_path": "foo.py", "old_string": "", "new_string": 'x = 1\nprint("hi")\n'},
+            ctx=make_ctx(session_dir),
+        )
+        result = dispatch(Event.PostToolUse, evt, session_dir)
+        assert result is not None
+        assert 'print("hi") (line 2)' in result["hookSpecificOutput"]["additionalContext"]
+
+    def test_pattern_no_match_returns_none(self, session_dir: Path) -> None:
+        from captain_hook.primitives.lint import lint
+
+        lint(pattern="print($$$)", message="Found: {violations}")
+        evt = make_post_tool_event(
+            tool_name="Edit",
+            tool_input={"file_path": "foo.py", "old_string": "", "new_string": "x = 1\n"},
+            ctx=make_ctx(session_dir),
+        )
+        assert dispatch(Event.PostToolUse, evt, session_dir) is None
+
+    def test_lang_drives_file_guard(self, session_dir: Path) -> None:
+        from captain_hook.primitives.lint import lint
+
+        lint(pattern="console.log($$$)", message="No console.log: {violations}", lang="ts")
+        ts_evt = make_post_tool_event(
+            tool_name="Edit",
+            tool_input={"file_path": "app.ts", "old_string": "", "new_string": "console.log(x)\n"},
+            ctx=make_ctx(session_dir),
+        )
+        assert dispatch(Event.PostToolUse, ts_evt, session_dir) is not None
+        py_evt = make_post_tool_event(
+            tool_name="Edit",
+            tool_input={"file_path": "app.py", "old_string": "", "new_string": "console.log(x)\n"},
+            ctx=make_ctx(session_dir),
+        )
+        assert dispatch(Event.PostToolUse, py_evt, session_dir) is None
+
+    def test_requires_exactly_one_of_check_or_pattern(self) -> None:
+        from captain_hook.primitives.lint import lint
+
+        with pytest.raises(TypeError, match="either a check function or pattern"):
+            lint(message="m")
+        with pytest.raises(TypeError, match="either a check function or pattern"):
+            lint(lambda c: [], pattern="print($$$)", message="m")

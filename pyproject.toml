@@ -25,6 +25,7 @@ dependencies = [
     "pydantic-settings>=2.0",
     "tree-sitter>=0.24",
     "tree-sitter-bash>=0.23",
+    "ast-grep-py>=0.39,<1",
     "funcy>=2.0",
     "spacy>=3.7",
     "click>=8",

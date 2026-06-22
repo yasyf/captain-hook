@@ -1,0 +1,11 @@
+---
+title: "Rewriting code structurally"
+---
+
+`os.system()` runs its argument through a shell, so anything interpolated into it is a shell-injection hole that `subprocess.run([...], check=True)` closes. A warning leaves the fix to the agent. `rewrite_code()` instead edits the call before it reaches disk. It matches an [ast-grep](https://ast-grep.github.io) pattern in the edit's new content, captures the argument as `$CMD`, and drops it into the replacement template.
+
+<!-- gd-embed: rewrite_code.py -->
+
+`rewrite_code()` registers a `PreToolUse` hook, the one stage where the tool input is still editable, and rewrites the new content of an Edit, Write, MultiEdit, or NotebookEdit. `$CMD` matches the single argument, while `$$$ARGS` matches a whole argument list with its whitespace preserved. The rewrite stays idempotent. Code that already reads `subprocess.run(...)` has nothing to match, so the hook passes it straight through. The language comes from the edited file's extension, and `lang=` overrides it.
+
+The second hook applies the same idea to shell commands. `rewrite_command("cat $$$ARGS", "bat $$$ARGS")` reads as a regex rewrite but works structurally. Because the pattern carries an ast-grep metavariable, `rewrite_command` rewrites the command through [`CommandLine.rewrite`](../reference/index.qmd), which parses it with tree-sitter-bash. A plain regex with no metavariable, like `r"^cat\s+(\S+)$"` paired with `r"bat \1"`, stays a `re.sub`. Structural matching ignores a `cat` that appears as an argument or inside a string, where a regex would not. Watch one footgun. A single metavariable binds only the first argument, so `"cat $F"` turns `cat -n foo.txt` into `bat -n` and drops the file, so reach for `$$$ARGS` to carry the whole list. `note` rides along as `additionalContext` on both hooks so the model sees that its call was rewritten and why. See also [`rewrite_command`](../guide/primitives.qmd) and [the conditions guide](../guide/conditions.qmd).

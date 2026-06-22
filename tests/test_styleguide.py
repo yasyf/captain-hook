@@ -10,7 +10,8 @@ import pytest
 
 from captain_hook.app import _state
 from captain_hook.dispatch import dispatch
-from captain_hook.style import StyleDiffRule, StyleRule, Violation, matchers as M, styleguide
+from captain_hook.style import StyleDiffRule, StyleRule, Violation, ast_grep_diff_rule, ast_grep_rule, styleguide
+from captain_hook.style import matchers as M
 from captain_hook.tests.helpers import make_ctx, make_post_tool_event
 from captain_hook.types import Event, FilePath
 from captain_hook.utils import kebab
@@ -328,6 +329,56 @@ class TestMatcher:
     def test_matches_raises_on_structural(self) -> None:
         with pytest.raises(ValueError, match="structural"):
             M.under(M.module).matches(ast.parse("x = 1\n"))
+
+
+class TestAstGrepRules:
+    def test_string_pattern_warns_with_line(self, session_dir: Path) -> None:
+        rule = ast_grep_rule("NoPrintAg", pattern="print($$$)", message="No print: {violations}", label="print() call")
+        styleguide(rule)
+        evt = edit_event(session_dir, file="a.py", old="", new='x = 1\nprint("hi")\n')
+        assert "print() call (line 2)" in warn_text(dispatch(Event.PostToolUse, evt, session_dir))
+
+    def test_clean_code_passes(self, session_dir: Path) -> None:
+        rule = ast_grep_rule("NoEvalAg", pattern="eval($$$)", message="No eval: {violations}", label="eval")
+        styleguide(rule)
+        evt = edit_event(session_dir, file="a.py", old="", new="x = 1\n")
+        assert dispatch(Event.PostToolUse, evt, session_dir) is None
+
+    def test_default_label_is_matched_code(self, session_dir: Path) -> None:
+        rule = ast_grep_rule("NoEvalAg", pattern="eval($$$)", message="No eval: {violations}")
+        styleguide(rule)
+        msg = warn_text(
+            dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new="eval('x')\n"), session_dir)
+        )
+        assert "eval('x') (line 1)" in msg
+
+    def test_diff_rule_flags_new(self, session_dir: Path) -> None:
+        rule = ast_grep_diff_rule("NoNewWildcardAg", pattern="from $MOD import *", message="New wildcard: {violations}")
+        styleguide(rule)
+        evt = edit_event(session_dir, file="d.py", old="import os\n", new="from os import *\n")
+        assert "from os import *" in warn_text(dispatch(Event.PostToolUse, evt, session_dir))
+
+    def test_diff_rule_preexisting_not_flagged(self, session_dir: Path) -> None:
+        rule = ast_grep_diff_rule("NoNewWildcardAg", pattern="from $MOD import *", message="New wildcard: {violations}")
+        styleguide(rule)
+        evt = edit_event(session_dir, file="d.py", old="from os import *\n", new="from os import *\nx = 1\n")
+        assert dispatch(Event.PostToolUse, evt, session_dir) is None
+
+    def test_change_scoping_suppresses_untouched_match(self, work_dir: Path, session_dir: Path) -> None:
+        path = work_dir / "m.py"
+        path.write_text('def a():\n    print("a")\n\ndef b():\n    print("b")\n')
+        rule = ast_grep_rule("NoPrintAg", pattern="print($$$)", message="No print: {violations}", label="print")
+        styleguide(rule)
+        evt = edit_event(session_dir, file=str(path), old="    pass", new='    print("b")')
+        msg = warn_text(dispatch(Event.PostToolUse, evt, session_dir))
+        assert "line 5" in msg and "line 2" not in msg
+
+    def test_mixes_with_python_rule_in_one_call(self, session_dir: Path) -> None:
+        ag = ast_grep_rule("NoPrintAg", pattern="print($$$)", message="No print: {violations}", label="print() call")
+        styleguide(ag, NoLambda)
+        evt = edit_event(session_dir, file="a.py", old="", new="f = lambda: print(1)\n")
+        msg = warn_text(dispatch(Event.PostToolUse, evt, session_dir))
+        assert "print() call" in msg and "lambda" in msg
 
 
 class TestDeclarative:

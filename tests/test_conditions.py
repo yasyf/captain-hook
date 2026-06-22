@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from captain_hook.conditions import check_condition, matches_conditions
+from captain_hook.context import load_transcript
 from captain_hook.events import (
     BaseHookEvent,
     PreToolUseEvent,
@@ -32,7 +33,6 @@ from captain_hook.tests.helpers import (
     waiting_evt,
     workflow_launch,
 )
-from captain_hook.context import load_transcript
 from captain_hook.types import (
     Agent,
     Command,
@@ -41,6 +41,7 @@ from captain_hook.types import (
     FilePath,
     HookSpec,
     InPlanMode,
+    Pattern,
     RanCommand,
     ReadFile,
     TCondition,
@@ -62,6 +63,43 @@ def make_tool_event(
     if permission_mode is not None:
         raw["permission_mode"] = permission_mode
     return PreToolUseEvent(_raw=raw, ctx=ctx or build_ctx())
+
+
+class TestPatternCondition:
+    def edit(self, file: str, new: str) -> PreToolUseEvent:
+        return make_tool_event("Edit", {"file_path": file, "old_string": "", "new_string": new})
+
+    def test_string_pattern_matches(self) -> None:
+        assert check_condition(Pattern("print($$$)"), self.edit("a.py", "print('x')\n")) is True
+
+    def test_string_pattern_no_match(self) -> None:
+        assert check_condition(Pattern("print($$$)"), self.edit("a.py", "logger.info('x')\n")) is False
+
+    def test_ignores_match_inside_string_literal(self) -> None:
+        assert check_condition(Pattern("print($$$)"), self.edit("a.py", "s = 'print(x)'\n")) is False
+
+    def test_language_inferred_from_extension(self) -> None:
+        assert check_condition(Pattern("panic($$$)"), self.edit("main.go", 'func f() { panic("x") }\n')) is True
+
+    def test_lang_override_when_extension_unknown(self) -> None:
+        assert (
+            check_condition(Pattern("panic($$$)", lang="go"), self.edit("x.txt", 'func f() { panic("x") }\n')) is True
+        )
+
+    def test_unsupported_extension_no_match(self) -> None:
+        assert check_condition(Pattern("print($$$)"), self.edit("notes.txt", "print('x')\n")) is False
+
+    def test_no_content_no_match(self) -> None:
+        assert check_condition(Pattern("print($$$)"), make_tool_event("Read", {"file_path": "a.py"})) is False
+
+    def test_captures_metavar(self) -> None:
+        assert check_condition(Pattern("os.system($CMD)"), self.edit("a.py", 'os.system("ls")\n')) is True
+
+    def test_hashable_and_equal(self) -> None:
+        assert hash(Pattern("print($$$)")) == hash(Pattern("print($$$)"))
+        assert Pattern("print($$$)") == Pattern("print($$$)")
+        assert Pattern("print($$$)", lang="go") != Pattern("print($$$)")
+
 
 class TestToolCondition:
     def test_tool_matches_edit(self) -> None:
@@ -139,6 +177,7 @@ class TestToolCondition:
         evt = make_event(UserPromptSubmitEvent)
         assert check_condition(Tool("Bash"), evt) is False
 
+
 class TestFilePathCondition:
     def test_filepath_matches_py(self) -> None:
 
@@ -192,6 +231,7 @@ class TestFilePathCondition:
         )
         assert check_condition(FilePath("*.py", project_only=False), evt) is True
 
+
 class TestCommandCondition:
     def test_command_matches_git_push_force(self) -> None:
 
@@ -218,6 +258,7 @@ class TestCommandCondition:
         evt = make_tool_event("Bash", {"command": "uv run mtest run bioqa/"})
         assert check_condition(Command(r"mtest\s+run"), evt) is True
         assert check_condition(Command(r"git"), evt) is False
+
 
 class TestContentCondition:
     def test_content_matches_import_pdb(self) -> None:
@@ -272,6 +313,7 @@ class TestContentCondition:
         )
         assert check_condition(Content(r"import\s+re", project_only=False), evt) is True
 
+
 class TestAgentCondition:
     def test_agent_matches_cleanup(self) -> None:
 
@@ -297,6 +339,7 @@ class TestAgentCondition:
 
         evt = make_event(StopEvent)
         assert check_condition(Agent("cleanup"), evt) is False
+
 
 class TestTestFileCondition:
     def test_testfile_matches_test_file(self) -> None:
@@ -351,6 +394,7 @@ class TestTestFileCondition:
         )
         assert check_condition(TestFile(project_only=False), evt) is True
 
+
 class TestUsedSkillCondition:
     def test_usedskill_matches_codex(self) -> None:
 
@@ -365,6 +409,7 @@ class TestUsedSkillCondition:
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(UsedSkill("codex|agent-browser"), evt) is False
 
+
 class TestReadFileCondition:
     def test_readfile_matches_styleguide(self) -> None:
 
@@ -377,6 +422,7 @@ class TestReadFileCondition:
         ctx = make_transcript_ctx(has_read_result=False)
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(ReadFile("STYLEGUIDE.md"), evt) is False
+
 
 class TestTouchedFileCondition:
     def test_touchedfile_matches_edit(self) -> None:
@@ -392,6 +438,7 @@ class TestTouchedFileCondition:
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(TouchedFile("**/www/src/**"), evt) is False
 
+
 class TestRanCommandCondition:
     def test_rancommand_matches(self) -> None:
 
@@ -405,6 +452,7 @@ class TestRanCommandCondition:
         ctx = make_transcript_ctx(has_command_result=False)
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(RanCommand(r"codex exec"), evt) is False
+
 
 class TestInPlanModeCondition:
     def test_inplanmode_matches_when_more_enter(self) -> None:
@@ -573,6 +621,7 @@ class TestWaitingCondition:
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(Waiting(), evt) is False
 
+
 class TestOnlyIfSemantics:
     def test_only_if_all_must_match(self) -> None:
 
@@ -594,6 +643,7 @@ class TestOnlyIfSemantics:
         )
         evt = make_tool_event("Edit", {"file_path": "a.py", "old_string": "", "new_string": ""})
         assert matches_conditions(spec, evt) is False
+
 
 class TestSkipIfSemantics:
     def test_skip_if_any_causes_skip(self) -> None:
@@ -638,6 +688,7 @@ class TestSkipIfSemantics:
         )
         assert matches_conditions(spec, evt) is True
 
+
 class TestCombinedConditions:
     def test_only_if_and_skip_if_combined(self) -> None:
 
@@ -665,6 +716,7 @@ class TestCombinedConditions:
             },
         )
         assert matches_conditions(spec, evt_test) is False
+
 
 class TestNonToolEventConditions:
     def test_tool_condition_on_stop_is_false(self) -> None:
@@ -697,6 +749,7 @@ class TestNonToolEventConditions:
         assert check_condition(TestFile(), evt) is False
         assert check_condition(Agent("cleanup"), evt) is False
 
+
 class TestTokensToRegex:
     def test_simple_tokens(self) -> None:
         result = block_command_pattern(["git", "stash"])
@@ -717,6 +770,7 @@ class TestTokensToRegex:
     def test_empty_list_returns_empty_string(self) -> None:
         assert block_command_pattern([]) == ""
 
+
 class TestEmptyConditions:
     def test_empty_only_if_always_matches(self) -> None:
 
@@ -735,6 +789,7 @@ class TestEmptyConditions:
         spec = HookSpec(events=Event.PreToolUse, only_if=(), skip_if=())
         evt = make_tool_event("Bash", {"command": "echo hi"})
         assert matches_conditions(spec, evt) is True
+
 
 class TestCustomCondition:
     def test_custom_condition_returns_true(self) -> None:
@@ -798,6 +853,7 @@ class TestCustomCondition:
         evt = make_tool_event("Bash", {"command": "echo"})
         assert check_condition(NotACondition(42), evt) is False  # type: ignore[arg-type]
 
+
 @pytest.fixture
 def event_with_subagent_tool_use(tmp_path: Path) -> Callable[[dict[str, Any]], BaseHookEvent]:
     def make(tool_use: dict[str, Any]) -> BaseHookEvent:
@@ -841,7 +897,12 @@ class TestSubagentFlags:
                 id="RanCommand",
             ),
             pytest.param(
-                {"type": "tool_use", "name": "Edit", "input": {"file_path": "src/foo.py", "old_string": "", "new_string": ""}, "id": "tu_c"},
+                {
+                    "type": "tool_use",
+                    "name": "Edit",
+                    "input": {"file_path": "src/foo.py", "old_string": "", "new_string": ""},
+                    "id": "tu_c",
+                },
                 TouchedFile("**/foo.py"),
                 TouchedFile("**/foo.py", subagents=True),
                 False,

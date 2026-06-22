@@ -3,23 +3,40 @@ from __future__ import annotations
 import ast
 
 from captain_hook import Allow, Input, Warn
-from captain_hook.style import StyleDiffRule, StyleRule, matchers as M, styleguide
+from captain_hook.style import StyleRule, ast_grep_diff_rule, ast_grep_rule, styleguide
+from captain_hook.style import matchers as M
 
-
-class NoPrint(StyleRule):
-    """
+NoPrint = ast_grep_rule(
+    "NoPrint",
+    pattern="print($$$)",
+    message="""
     print() calls don't belong in committed code:
       - {violations}
 
     Use a logger (logger.info(...)) instead.
-    """
-
-    tests = {
+    """,
+    label="print() call",
+    tests={
         Input(file="app.py", content="def f():\n    print('debug')\n"): Warn(),
         Input(file="app.py", content="def f():\n    logger.info('ok')\n"): Allow(),
-    }
-    match = M.calls("print")
-    label = "print() call"
+    },
+)
+
+
+NoNewWildcardImport = ast_grep_diff_rule(
+    "NoNewWildcardImport",
+    pattern="from $MOD import *",
+    message="""
+    Wildcard import added by this edit:
+      - {violations}
+
+    Import the names you use explicitly instead of `import *`.
+    """,
+    tests={
+        Input(file="m.py", old="import os\n", content="from os import *\n"): Warn(),
+        Input(file="m.py", old="from os import *\n", content="from os import *\nx = 1\n"): Allow(),
+    },
+)
 
 
 class NoBareExcept(StyleRule):
@@ -34,23 +51,8 @@ class NoBareExcept(StyleRule):
         Input(file="app.py", content="try:\n    f()\nexcept:\n    pass\n"): Warn(),
         Input(file="app.py", content="try:\n    f()\nexcept ValueError:\n    pass\n"): Allow(),
     }
-    match = M.kind(ast.ExceptHandler).where(lambda n: n.type is None)
     label = "bare except"
+    match = M.kind(ast.ExceptHandler).where(lambda n: isinstance(n, ast.ExceptHandler) and n.type is None)
 
 
-class NoNewWildcardImport(StyleDiffRule):
-    """
-    Wildcard import added by this edit:
-      - {violations}
-
-    Import the names you use explicitly instead of `import *`.
-    """
-
-    tests = {
-        Input(file="m.py", old="import os\n", content="from os import *\n"): Warn(),
-        Input(file="m.py", old="from os import *\n", content="from os import *\nx = 1\n"): Allow(),
-    }
-    match = M.imports.where(lambda n: any(alias.name == "*" for alias in n.names))
-
-
-styleguide(NoPrint, NoBareExcept, NoNewWildcardImport)
+styleguide(NoPrint, NoNewWildcardImport, NoBareExcept)

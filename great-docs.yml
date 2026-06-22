@@ -80,6 +80,8 @@ reference:
       - diff_lint
       - block_command
       - warn_command
+      - rewrite_command
+      - rewrite_code
       - llm_gate
       - llm_nudge
       - llm_evaluate
@@ -88,6 +90,10 @@ reference:
       - style.matchers
       - style.StyleRule
       - style.StyleDiffRule
+      - style.ast_grep_rule
+      - style.ast_grep_diff_rule
+      - style.AstGrepStyleRule
+      - style.AstGrepStyleDiffRule
       - style.Violation
       - GateVerdict
       - NudgeVerdict
@@ -98,6 +104,8 @@ reference:
     contents:
       - Tool
       - FilePath
+      - Content
+      - Pattern
       - TouchedFile
       - TestFile
       - ReadFile
@@ -131,7 +139,6 @@ reference:
       - HookResult
       - Action
       - Agent
-      - Content
       - BaseHookEvent.as_input
 
   - title: Files & Commands

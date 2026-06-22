@@ -1,0 +1,9 @@
+---
+title: "Structural patterns across languages"
+---
+
+A regex on `panic(` flags the call inside strings and comments too, and the `StyleRule` matchers only understand Python's AST. The [`Pattern`](../reference/index.qmd) condition matches code *structure* through [ast-grep](https://ast-grep.github.io), so it works the same way in Go, TypeScript, Rust, and the rest. `panic($$$)` matches a real call however its arguments are spelled, never a string that contains the word.
+
+<!-- gd-embed: no_go_panic.py -->
+
+`Pattern` infers the language from the edited file's extension (here `.go`), so the same hook matches Python with `Pattern("eval($$$)")` or TypeScript with `Pattern("console.log($$$)")`. Pass `lang=` to override. A `Pattern` answers yes or no for a whole edit. To get violations located by line and scoped to the changed lines, reach for [`ast_grep_rule`](styleguide.qmd) and `styleguide()`; for a Python-specific shape no pattern string expresses, a `StyleRule` matches the AST directly. See also [the conditions guide](../guide/conditions.qmd).
