@@ -4,11 +4,25 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Flag, StrEnum, auto
 from textwrap import dedent
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Generic,
+    Protocol,
+    TypeVar,
+    get_args,
+    get_origin,
+    runtime_checkable,
+)
 
 if TYPE_CHECKING:
+    from cc_transcript.tools import ToolCallBase
+
+    from captain_hook.command import CommandLine
     from captain_hook.events import BaseHookEvent
     from captain_hook.signals.nlp import NlpSignal
+
+T = TypeVar("T", bound="ToolCallBase")
 
 
 LANG_GLOBS: dict[str, tuple[str, ...]] = {
@@ -286,6 +300,52 @@ class CustomCondition(Protocol):
     def check(self, evt: BaseHookEvent) -> bool: ...
 
 
+class CustomInputTypeCondition(CustomCondition, Generic[T]):  # noqa: UP046
+    """CustomCondition that fires only for a specific typed tool call.
+
+    Parameterize with the tool call type and implement ``check_input``; ``check``
+    narrows the event's input to that type and skips events of any other tool.
+
+    Example:
+        >>> class BigRead(CustomInputTypeCondition[ReadCall]):
+        ...     def check_input(self, evt: BaseHookEvent, call: ReadCall) -> bool:
+        ...         return call.limit is not None and call.limit > 1000
+    """
+
+    _call_type: type[T]
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        for base in getattr(cls, "__orig_bases__", ()):
+            if get_origin(base) is CustomInputTypeCondition:
+                (cls._call_type,) = get_args(base)
+                return
+        raise TypeError(f"{cls.__name__} must parameterize CustomInputTypeCondition with a tool call type")
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        call = evt.as_input(self._call_type)
+        return call is not None and self.check_input(evt, call)
+
+    def check_input(self, evt: BaseHookEvent, call: T) -> bool:
+        raise NotImplementedError
+
+
+class CustomCommandLineCondition(CustomCondition):
+    """CustomCondition that fires only when a parsed Bash command line is present.
+
+    Implement ``check_command_line`` to match against the structured command line;
+    ``check`` returns False for events without one (non-Bash tools).
+    """
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        if not (cl := evt.command_line):
+            return False
+        return self.check_command_line(evt, cl)
+
+    def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
+        raise NotImplementedError
+
+
 TCondition = (
     Tool
     | FilePath
@@ -353,6 +413,10 @@ class HookResult:
     def of(cls, action: Action, message: str | None = None) -> HookResult:
         """Build a ``HookResult``, dedenting and stripping ``message`` for readable triple-quoted handler returns."""
         return cls(action=action, message=dedent(message).strip() if message else None)
+
+
+type HookResponse = HookResult | None
+"""Return type of a hook handler: a :class:`HookResult`, or None to take no action."""
 
 
 from captain_hook.testing.types import InlineTests as InlineTests  # noqa: E402

@@ -1,9 +1,29 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, overload
+
+
+def resolve_binary(name: str, *, extra_dirs: Sequence[Path] = ()) -> str | None:
+    """Resolve an absolute, executable path for *name*, or None.
+
+    Search order: ``$CLAUDE_PLUGIN_ROOT/bin/<name>``, then each *extra_dirs* entry's
+    ``<name>``, then ``shutil.which(name)``.
+    """
+    roots = [Path(root) / "bin" for root in (os.environ.get("CLAUDE_PLUGIN_ROOT"),) if root]
+    return next(
+        (
+            str(candidate)
+            for d in (*roots, *extra_dirs)
+            if (candidate := d / name).is_file() and os.access(candidate, os.X_OK)
+        ),
+        shutil.which(name),
+    )
 
 
 def kebab(name: str) -> str:

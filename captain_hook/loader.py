@@ -76,6 +76,19 @@ def discover_hooks(hooks_dir: str | Path, state: State | None = None) -> None:
             logger.bind(module=fqn).opt(exception=True).warning("skipped unloadable hook module")
 
 
+def ensure_pack_package(fqn: str, search_paths: list[str]) -> ModuleType:
+    if existing := sys.modules.get(fqn):
+        return existing
+    spec = importlib.util.spec_from_loader(fqn, loader=None, is_package=True)
+    if spec is None:
+        raise ImportError(f"cannot synthesize package spec for {fqn}")
+    package = importlib.util.module_from_spec(spec)
+    package.__path__ = search_paths
+    package.__package__ = fqn
+    sys.modules[fqn] = package
+    return package
+
+
 def import_pack_module(fqn: str, path: Path) -> ModuleType:
     spec = importlib.util.spec_from_file_location(fqn, path)
     if spec is None or spec.loader is None:
@@ -92,6 +105,8 @@ def import_pack_module(fqn: str, path: Path) -> ModuleType:
 
 def discover_pack(name: str, pack_dir: Path) -> None:
     pkg = f"{PACK_PACKAGE_PREFIX}.{re.sub(r'\W', '_', name)}"
+    ensure_pack_package(PACK_PACKAGE_PREFIX, [])
+    ensure_pack_package(pkg, [str(pack_dir)])
     for path in sorted(pack_dir.glob("*.py")):
         if path.stem.startswith("_") or path.stem == CONF_MODULE or is_test_module(path.stem):
             continue

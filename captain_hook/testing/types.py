@@ -22,6 +22,15 @@ class TranscriptFixture:
 
 
 @dataclass(frozen=True, kw_only=True)
+class FileFixture:
+    """Inline-test file descriptor: materialized to a real temp file so size/stat-based guards run for real."""
+
+    size: int | None = None
+    content: str | None = None
+    name: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
 class Block:
     """Inline test expectation: the hook should block. Optional regex ``pattern`` matches the block message."""
 
@@ -59,7 +68,7 @@ class Input:
     """Inline test input descriptor modeling an event payload. Set fields based on the target event type."""
 
     command: str | None = None
-    file: str | None = None
+    file: str | FileFixture | None = None
     content: str | None = None
     old: str | None = None
     tool: str | None = None
@@ -67,6 +76,8 @@ class Input:
     agent_type: str | None = None
     reason: str | None = None
     permission_mode: str | None = None
+    offset: int | None = None
+    limit: int | None = None
     transcript: Path | TranscriptFixture | list[dict[str, Any]] | None = None
     tasks: list[dict[str, Any]] | None = None
 

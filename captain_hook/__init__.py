@@ -1,91 +1,93 @@
 from __future__ import annotations
 
-from captain_hook import file
-from captain_hook import style
-from captain_hook import utils
-from captain_hook.app import hook
-from captain_hook.app import on
-from captain_hook.app import register
-from captain_hook.command import Command
-from captain_hook.command import CommandLine
-from captain_hook.command import Redirect
+from cc_transcript.tools import (
+    BashCall,
+    EditCall,
+    ExitPlanModeCall,
+    GlobCall,
+    GrepCall,
+    MultiEditCall,
+    NotebookEditCall,
+    OtherCall,
+    ReadCall,
+    SkillCall,
+    TaskCall,
+    TaskCreateCall,
+    TaskUpdateCall,
+    ToolCall,
+    ToolCallBase,
+    WriteCall,
+)
+
+from captain_hook import file, style, utils
+from captain_hook.app import hook, on, register
+from captain_hook.command import Command, CommandLine, Redirect
 from captain_hook.context import HookContext
-from captain_hook.events import BaseHookEvent
-from captain_hook.events import NotificationEvent
-from captain_hook.events import PostToolUseEvent
-from captain_hook.events import PostToolUseFailureEvent
-from captain_hook.events import PreCompactEvent
-from captain_hook.events import PreToolUseEvent
-from captain_hook.events import SessionEndEvent
-from captain_hook.events import StopEvent
-from captain_hook.events import SubagentStartEvent
-from captain_hook.events import SubagentStopEvent
-from captain_hook.events import ToolHookEvent
-from captain_hook.events import UserPromptSubmitEvent
-from captain_hook.file import File
-from captain_hook.file import categorize_files
-from captain_hook.primitives import GateVerdict
-from captain_hook.primitives import NudgeVerdict
-from captain_hook.primitives import PromptCheckVerdict
-from captain_hook.primitives import block_command
-from captain_hook.primitives import gate
-from captain_hook.primitives import llm_evaluate
-from captain_hook.primitives import llm_gate
-from captain_hook.primitives import llm_nudge
-from captain_hook.primitives import prompt_check
-from captain_hook.primitives import rewrite_command
-from captain_hook.primitives import warn_command
+from captain_hook.events import (
+    BaseHookEvent,
+    NotificationEvent,
+    PostToolUseEvent,
+    PostToolUseFailureEvent,
+    PreCompactEvent,
+    PreToolUseEvent,
+    SessionEndEvent,
+    StopEvent,
+    SubagentStartEvent,
+    SubagentStopEvent,
+    ToolHookEvent,
+    UserPromptSubmitEvent,
+)
+from captain_hook.file import File, categorize_files
+from captain_hook.primitives import (
+    GateVerdict,
+    NudgeVerdict,
+    PromptCheckVerdict,
+    block_command,
+    gate,
+    llm_evaluate,
+    llm_gate,
+    llm_nudge,
+    prompt_check,
+    rewrite_command,
+    warn_command,
+)
 
 # lint/nudge are imported from their defining modules, not the primitives
 # package: the package attribute and the submodule share a name, and an alias
 # targeting captain_hook.primitives.<name> resolves to the module under static
 # analysis (griffe), shadowing the function.
-from captain_hook.primitives.lint import diff_lint
-from captain_hook.primitives.lint import lint
+from captain_hook.primitives.lint import diff_lint, lint
 from captain_hook.primitives.nudge import nudge
-from captain_hook.primitives.workflow import Artifact
-from captain_hook.primitives.workflow import Step
-from captain_hook.primitives.workflow import Workflow
-from captain_hook.primitives.workflow import text_matches
-from captain_hook.primitives.workflow import workflow
+from captain_hook.primitives.workflow import Artifact, Step, Workflow, text_matches, workflow
 from captain_hook.prompt import Prompt
-from captain_hook.session import SessionSlot
-from captain_hook.session import SessionStore
-from captain_hook.session import session_state
-from captain_hook.settings import HooksSettings
-from captain_hook.settings import build_settings
-from captain_hook.signals.nlp import Clause
-from captain_hook.signals.nlp import NlpSignal
-from captain_hook.signals.nlp import Phrase
-from captain_hook.state import HookState
-from captain_hook.state import PrimitiveState
-from captain_hook.state import workflow_state
-from captain_hook.tasks import Task
-from captain_hook.tasks import Tasks
-from captain_hook.testing import Allow
-from captain_hook.testing import Block
-from captain_hook.testing import InlineTests
-from captain_hook.testing import Input
-from captain_hook.testing import Rewrite
-from captain_hook.testing import TranscriptFixture
-from captain_hook.testing import Warn
-from captain_hook.types import Action
-from captain_hook.types import Agent
-from captain_hook.types import Content
-from captain_hook.types import CustomCondition
-from captain_hook.types import Event
-from captain_hook.types import FilePath
-from captain_hook.types import HookResult
-from captain_hook.types import InPlanMode
-from captain_hook.types import RanCommand
-from captain_hook.types import ReadFile
-from captain_hook.types import Signal
-from captain_hook.types import Signals
-from captain_hook.types import SourceEdits
-from captain_hook.types import TCondition
-from captain_hook.types import TestFile
-from captain_hook.types import Tool
-from captain_hook.types import TouchedFile
-from captain_hook.types import UsedSkill
-from captain_hook.types import Waiting
-from captain_hook.utils import read_json
+from captain_hook.session import SessionSlot, SessionStore, session_state
+from captain_hook.settings import HooksSettings, build_settings
+from captain_hook.signals.nlp import Clause, NlpSignal, Phrase
+from captain_hook.state import HookState, PrimitiveState, workflow_state
+from captain_hook.tasks import Task, Tasks
+from captain_hook.testing import Allow, Block, FileFixture, InlineTests, Input, Rewrite, TranscriptFixture, Warn
+from captain_hook.types import (
+    Action,
+    Agent,
+    Content,
+    CustomCommandLineCondition,
+    CustomCondition,
+    CustomInputTypeCondition,
+    Event,
+    FilePath,
+    HookResponse,
+    HookResult,
+    InPlanMode,
+    RanCommand,
+    ReadFile,
+    Signal,
+    Signals,
+    SourceEdits,
+    TCondition,
+    TestFile,
+    Tool,
+    TouchedFile,
+    UsedSkill,
+    Waiting,
+)
+from captain_hook.utils import read_json, resolve_binary

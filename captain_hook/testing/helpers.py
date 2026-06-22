@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import atexit
 import re
+import shutil
+import tempfile
 from collections.abc import Iterator
+from itertools import count
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,7 +27,7 @@ from captain_hook.events import (
 )
 from captain_hook.session import SessionStore
 from captain_hook.testing.session_cache import SessionCache
-from captain_hook.testing.types import Allow, Block, Input, Rewrite, TranscriptFixture, Warn
+from captain_hook.testing.types import Allow, Block, FileFixture, Input, Rewrite, TranscriptFixture, Warn
 from captain_hook.types import Event, HookResult, Tool
 
 STUB_FIELD_VALUES: dict[str, Any] = {
@@ -35,6 +39,23 @@ STUB_FIELD_VALUES: dict[str, Any] = {
 }
 
 FIXTURE_ENVELOPE: dict[str, Any] = {"sessionId": "fixture", "timestamp": "2026-01-01T00:00:00Z"}
+
+FIXTURE_FILE_DIR: list[Path] = []
+FIXTURE_FILE_COUNTER = count()
+
+
+def fixture_file_dir() -> Path:
+    if not FIXTURE_FILE_DIR:
+        root = Path(tempfile.mkdtemp(prefix="capt-hook-fixture-"))
+        FIXTURE_FILE_DIR.append(root)
+        atexit.register(shutil.rmtree, root, ignore_errors=True)
+    return FIXTURE_FILE_DIR[0]
+
+
+def materialize_file(fixture: FileFixture) -> str:
+    path = fixture_file_dir() / (fixture.name or f"fixture-{next(FIXTURE_FILE_COUNTER)}")
+    path.write_bytes(fixture.content.encode() if fixture.content is not None else b"x" * (fixture.size or 0))
+    return str(path)
 
 
 def fixture_line(index: int, message: dict[str, Any]) -> dict[str, Any]:
@@ -82,6 +103,8 @@ def make_tool_input(
     file: str | None,
     content: str | None,
     old: str | None,
+    offset: int | None = None,
+    limit: int | None = None,
 ) -> dict[str, Any]:
     match tool:
         case "Bash" | "Execute":
@@ -93,7 +116,7 @@ def make_tool_input(
         case "Write" | "Create":
             return {"file_path": file or "", "content": content or ""}
         case "Read":
-            return omit_none({"file_path": file or "", "limit": None, "offset": None})
+            return omit_none({"file_path": file or "", "limit": limit, "offset": offset})
         case "Agent" | "Task":
             return omit_none({"prompt": content or "", "subagent_type": None})
         case _:
@@ -108,6 +131,8 @@ def mock_tool_event(
     file: str | None = None,
     content: str | None = None,
     old: str | None = None,
+    offset: int | None = None,
+    limit: int | None = None,
     agent_type: str | None = None,
     permission_mode: str | None = None,
     transcript: Session | None = None,
@@ -118,7 +143,7 @@ def mock_tool_event(
     return cast(
         ToolHookEvent,
         event.event_class(
-            _raw={"tool_name": tool, "tool_input": make_tool_input(tool, command, file, content, old)}
+            _raw={"tool_name": tool, "tool_input": make_tool_input(tool, command, file, content, old, offset, limit)}
             | ({"agent_type": agent_type} if agent_type else {})
             | ({"permission_mode": permission_mode} if permission_mode else {}),
             ctx=build_context(transcript, transcript_path, session_dir, project_root),
@@ -289,13 +314,16 @@ def input_to_event(
         case Event.SessionEnd:
             evt = mock_session_end_event(reason=inp.reason or "other", **ctx_kw)
         case _:
+            file = materialize_file(inp.file) if isinstance(inp.file, FileFixture) else inp.file
             evt = mock_tool_event(
                 tool=inp.tool or spec_tool or "Bash",
                 event=ev,
                 command=inp.command,
-                file=inp.file,
+                file=file,
                 content=inp.content,
                 old=inp.old,
+                offset=inp.offset,
+                limit=inp.limit,
                 agent_type=inp.agent_type,
                 **ctx_kw,
             )

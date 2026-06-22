@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from cc_transcript.tools import (
     BashCall,
@@ -13,6 +13,7 @@ from cc_transcript.tools import (
     MultiEditCall,
     NotebookEditCall,
     TaskCall,
+    ToolCallBase,
     WriteCall,
     file_path_of,
     parse_tool_call,
@@ -29,6 +30,8 @@ if TYPE_CHECKING:
     from captain_hook.context import HookContext
     from captain_hook.tasks import Tasks
     from captain_hook.types import HookResult
+
+T = TypeVar("T", bound=ToolCallBase)
 
 
 @dataclass
@@ -95,6 +98,10 @@ class BaseHookEvent:
     @cached_property
     def input(self) -> ToolCall:
         return parse_tool_call(self.tool_name or "", self._tool_input, on_error="other")
+
+    def as_input(self, call_type: type[T]) -> T | None:
+        """Return ``input`` narrowed to ``call_type``, or None when it is a different tool call."""
+        return self.input if isinstance(self.input, call_type) else None
 
     @property
     def tool_digest(self) -> ToolDigest | None:
