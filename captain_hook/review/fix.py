@@ -38,8 +38,9 @@ from typing import TYPE_CHECKING, Literal
 
 from cc_transcript.filterspec import tool_uses
 from cc_transcript.mining.confidence import MEDIUM, VERY_HIGH, CandidateSignal
-from cc_transcript.mining.signals import CONFIDENCE_STEP, MiningSignal, adjust
+from cc_transcript.mining.signals import MiningSignal
 from cc_transcript.mining.sourcekind import SourceKind
+from cc_transcript.mining.spec import CONFIDENCE_STEP, bump
 from cc_transcript.models import AssistantEvent, OtherEvent, ToolResultBlock, UserEvent
 
 if TYPE_CHECKING:
@@ -211,7 +212,7 @@ def complaint_signal(marker: Marker, turns_back: int) -> CandidateSignal:
         VERY_HIGH if marker.strength == "strong" else MEDIUM,
         (f"{marker.strength}_marker", marker.misfire_class),
     )
-    return adjust(base, CONFIDENCE_STEP, "tight_proximity") if turns_back <= TIGHT_PROXIMITY_TURNS else base
+    return bump(base, CONFIDENCE_STEP, "tight_proximity") if turns_back <= TIGHT_PROXIMITY_TURNS else base
 
 
 def iter_hook_complaint_signals(events: Sequence[TranscriptEvent], *, decisions: DecisionLog) -> Iterator[MiningSignal]:

@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.21.0] - 2026-06-23
+
+### Changed
+- Adopts cc-transcript `>=6,<7` and its new declarative mining API. The review
+  scanner now drives detection through a single spec-based entry point —
+  `mine(events, REVIEWER_MINING_SPEC)` over a `MiningSpec(review=ReviewSpec(...))` —
+  replacing the six removed `iter_*_signals` per-detector iterators. The three
+  review formats move onto the spec: `conductor-finding` becomes a Rust-portable
+  `RegexReviewFormat`, while `superset-inline` and `conductor-workstream` stay
+  `CallableReviewFormat` escape hatches (lookahead / multi-pass). The FIX-mode
+  hook-complaint detector switches from the renamed `adjust` to `bump`, sourced
+  with `CONFIDENCE_STEP` from `cc_transcript.mining.spec`. Mined output (formats,
+  surfaces, detectors, confidence/reason tuples) is unchanged.
+
 ## [3.20.0] - 2026-06-23
 
 ### Added

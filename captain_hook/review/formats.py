@@ -2,32 +2,51 @@
 
 The generic :class:`ReviewComment`/:class:`ReviewFormat` types and the
 format-dispatch live in :mod:`cc_transcript.mining`; this module supplies
-the reviewer's policy — the three review formats it recognizes — and injects them
-into the domain's review-comment detector. The shapes are shared transcript
-conventions (inline ``In file:Lx:`` cites, conductor finding blocks, conductor
-workstream headers) first proven in cc-pushback's formats module, not
-cc-pushback specifics.
+the reviewer's policy — the three review formats it recognizes — and assembles them
+into the :class:`~cc_transcript.mining.ReviewSpec` the review-comment detector runs.
+The shapes are shared transcript conventions (inline ``In file:Lx:`` cites,
+conductor finding blocks, conductor workstream headers) first proven in
+cc-pushback's formats module, not cc-pushback specifics.
+
+``conductor-finding`` is a Rust-portable :class:`~cc_transcript.mining.RegexReviewFormat`
+(a declarative claim+suggestion group-join); ``superset-inline`` (lookahead) and
+``conductor-workstream`` (multi-pass header + body scan) stay
+:class:`~cc_transcript.mining.CallableReviewFormat` escape hatches, which keep the
+review-comment detector in Python for those formats.
 """
 
 from __future__ import annotations
 
 import re
 
-from cc_transcript.mining.formats import ReviewComment, ReviewFormat
+from cc_transcript.mining.formats import ReviewComment
+from cc_transcript.mining.spec import CallableReviewFormat, RegexReviewFormat, ReviewSpec
 
 SUPERSET_INLINE_RE = re.compile(r"^In ((?=\S*[./]|\S+?:L)\S+?)(?::L(\d+)(?:-(\d+))?)?: (.+)$", re.MULTILINE)
-CONDUCTOR_FINDING_RE = re.compile(
-    r"^- file: (?P<file>\S+?):(?P<line>\d+)\s*$"
-    r"(?:\n- theme: .+$)?"
-    r"(?:\n- claim: (?P<claim>.+)$)?"
-    r"(?:\n- suggestion: (?P<suggestion>.+)$)?",
-    re.MULTILINE,
-)
 CONDUCTOR_WORKSTREAM_HEADER_RE = re.compile(
     r"^### (?P<id>[A-Z][\w-]*\d*)\s*\[(?P<kind>[A-Z]+)\]\s*—\s*(?P<title>.+)$",
     re.MULTILINE,
 )
 WORKSTREAM_BODY_RE = re.compile(r"^(?:FIX|Tests): .+$", re.MULTILINE)
+CONDUCTOR_FINDING_FMT = RegexReviewFormat(
+    name="conductor-finding",
+    groups=(
+        (
+            "conductor-finding",
+            r"^- file: (\S+?):(\d+)\s*$"
+            r"(?:\n- theme: .+$)?"
+            r"(?:\n- claim: (.+)$)?"
+            r"(?:\n- suggestion: (.+)$)?",
+        ),
+    ),
+    file_group=1,
+    line_start_group=2,
+    line_end_group=None,
+    comment_groups=(3, 4),
+    join=" ",
+    multiline=True,
+    ignore_case=False,
+)
 
 
 def extract_superset_inline(text: str) -> tuple[ReviewComment, ...]:
@@ -39,18 +58,6 @@ def extract_superset_inline(text: str) -> tuple[ReviewComment, ...]:
             comment=match.group(4).strip(),
         )
         for match in SUPERSET_INLINE_RE.finditer(text)
-    )
-
-
-def extract_conductor_finding(text: str) -> tuple[ReviewComment, ...]:
-    return tuple(
-        ReviewComment(
-            file=match.group("file"),
-            line_start=int(match.group("line")),
-            line_end=None,
-            comment=" ".join(part.strip() for part in (match.group("claim"), match.group("suggestion")) if part),
-        )
-        for match in CONDUCTOR_FINDING_RE.finditer(text)
     )
 
 
@@ -74,9 +81,13 @@ def extract_conductor_workstream(text: str) -> tuple[ReviewComment, ...]:
     )
 
 
-def formats() -> tuple[ReviewFormat, ...]:
-    return (
-        ReviewFormat("superset-inline", SUPERSET_INLINE_RE, extract_superset_inline),
-        ReviewFormat("conductor-finding", CONDUCTOR_FINDING_RE, extract_conductor_finding),
-        ReviewFormat("conductor-workstream", CONDUCTOR_WORKSTREAM_HEADER_RE, extract_conductor_workstream),
+def review_spec() -> ReviewSpec:
+    return ReviewSpec(
+        regex_formats=(CONDUCTOR_FINDING_FMT,),
+        callable_formats=(
+            CallableReviewFormat("superset-inline", SUPERSET_INLINE_RE, extract_superset_inline),
+            CallableReviewFormat("conductor-workstream", CONDUCTOR_WORKSTREAM_HEADER_RE, extract_conductor_workstream),
+        ),
+        structured_formats=(),
+        surfaces=frozenset({"typed"}),
     )

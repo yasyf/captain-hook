@@ -58,20 +58,14 @@ from cc_transcript.filterspec import (
 from cc_transcript.ids import EventRef
 from cc_transcript.mining.candidates import FeedbackCandidate, dedup_key
 from cc_transcript.mining.filterspec import at_least, build_candidate_filter, keep_candidate
-from cc_transcript.mining.signals import (
-    iter_interrupt_marker_signals,
-    iter_plan_reentry_signals,
-    iter_plan_rejection_signals,
-    iter_review_comment_signals,
-    iter_tool_denial_signals,
-    iter_user_message_signals,
-)
+from cc_transcript.mining.signals import mine
+from cc_transcript.mining.spec import MiningSpec
 from cc_transcript.models import UserEvent
 from cc_transcript.parser import TranscriptParser
 
 from captain_hook.decisions import decisions_db_path, open_decision_log
 from captain_hook.review.fix import HOOK_COMPLAINT, iter_hook_complaint_signals
-from captain_hook.review.formats import formats
+from captain_hook.review.formats import review_spec
 from captain_hook.review.repo import resolve_repo_key
 from captain_hook.review.store import CandidateKind
 
@@ -91,6 +85,14 @@ REVIEWER_MARKER = "capt-hook-session-reviewer"
 """The token the reviewer's own headless sessions carry in their first user message."""
 
 SPEC_DETECTORS = frozenset({"transcript_message", "plan_reentry", "review_comment"})
+
+REVIEWER_MINING_SPEC = MiningSpec(review=review_spec())
+"""The reviewer's mining policy: all six core detectors with the reviewer's review formats.
+
+Scoring, provenance, reentry lookback, and edit tools take the :class:`MiningSpec`
+defaults; only the review-comment policy (the three reviewer formats, ``typed``
+surfaces, no structured formats) is customized.
+"""
 
 STRICT_USER: FilterSpec = build_spec(
     keep_only("user"),
@@ -191,23 +193,16 @@ def to_candidate(activity: SessionActivity, sig: MiningSignal) -> FeedbackCandid
 
 
 def detect(events: Sequence[TranscriptEvent]) -> Iterator[MiningSignal]:
-    """Composes all six neutral mining iterators over one transcript's events.
+    """Mines all six neutral detectors over one transcript's events.
 
     Args:
         events: The transcript's full ordered event stream.
 
     Returns:
         Every mining signal the detectors recognize, ungated; review comments
-        run under the reviewer's :func:`~captain_hook.review.formats.formats`.
+        run under the reviewer's :data:`REVIEWER_MINING_SPEC`.
     """
-    return chain(
-        iter_user_message_signals(events),
-        iter_plan_rejection_signals(events),
-        iter_plan_reentry_signals(events),
-        iter_tool_denial_signals(events),
-        iter_interrupt_marker_signals(events),
-        iter_review_comment_signals(events, formats(), surfaces=frozenset({"typed"}), structured_formats=()),
-    )
+    return mine(events, REVIEWER_MINING_SPEC)
 
 
 def candidates_from(
