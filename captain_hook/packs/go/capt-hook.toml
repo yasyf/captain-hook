@@ -1,4 +1,4 @@
 name = "go"
 version = "0.1.0"
-description = "Go-specific guards: a go-test-before-commit gate, gofumpt/golangci-lint toolchain guards, and a go.mod nudge on module-resolution errors."
+description = "Go-specific guards: a go-test-before-commit gate and a go.mod nudge on module-resolution errors."
 hooks = "."

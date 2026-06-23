@@ -11,9 +11,9 @@ and the loader imports them alongside your own `.claude/hooks/` modules.
 
 `capt-hook` ships three builtin packs: `general` (language-agnostic guards for git
 safety, code stewardship, task and plan discipline, and a review gate), `python`
-(a pytest-before-commit gate, AST style rules, and `ruff`/`uv` toolchain guards),
-and `go` (a go-test-before-commit gate and `gofumpt`/`golangci-lint` toolchain
-guards). Add one by name:
+(a pytest-before-commit gate, AST style rules, and a `uv` missing-dependency nudge),
+and `go` (a go-test-before-commit gate and a `go.mod` nudge on module-resolution
+errors). Add one by name:
 
 ```bash
 uvx capt-hook pack add general

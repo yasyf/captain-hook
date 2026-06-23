@@ -81,6 +81,13 @@ include = ["captain_hook"]
 venvPath = "."
 venv = ".venv"
 
+# ty runs warnings-only via the prek commit hook (astral-sh/ty-pre-commit) and never
+# blocks a commit; pyright (strict) stays the primary editor checker.
+[tool.ty.rules]
+all = "warn"
+unused-type-ignore-comment = "ignore"
+unresolved-import = "ignore"
+
 [tool.ruff]
 line-length = 120
 target-version = "py313"

@@ -1,0 +1,20 @@
+# Commit-time checks: mechanical linting (ruff format + import/lint --fix) and a
+# whole-project ty type check (warnings only) on every commit.
+# Run by prek — a fast Rust drop-in for pre-commit that reads this file unchanged.
+# Activate once per clone:  uvx prek install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.16
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+  - repo: https://github.com/astral-sh/ty-pre-commit
+    # The rev pins the ty version (the hook entry carries --ty-version);
+    # bump with `uvx prek autoupdate`. Warning-only: [tool.ty.rules] sets
+    # all = "warn", so ty exits 0 and never blocks a commit.
+    rev: v0.0.48
+    hooks:
+      - id: ty
+        # A passing hook hides its output by default; verbose surfaces the warnings.
+        verbose: true
