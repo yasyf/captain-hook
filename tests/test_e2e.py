@@ -4,6 +4,7 @@ import json
 import sys
 import textwrap
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -33,9 +34,13 @@ from captain_hook.types import Action, Event, HookResult
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "client_hooks"
 
 
+def stdin_json(**raw: Any) -> str:
+    return json.dumps(raw)
+
+
 class TestEntryPointExecution:
     def test_e2e_001_bin_hooks_run_blocks_git_stash(self, tmp_path: Path) -> None:
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git stash"}})
+        stdin = stdin_json(tool_name="Bash", tool_input={"command": "git stash"})
         result = run_cli(
             "run",
             "PreToolUse",
@@ -49,7 +54,7 @@ class TestEntryPointExecution:
         assert "use the team VCS workflow" in output["hookSpecificOutput"]["permissionDecisionReason"]
 
     def test_e2e_002_bin_hooks_run_allows_safe_command(self, tmp_path: Path) -> None:
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
+        stdin = stdin_json(tool_name="Bash", tool_input={"command": "echo hi"})
         result = run_cli(
             "run",
             "PreToolUse",
@@ -61,7 +66,7 @@ class TestEntryPointExecution:
         assert result.stdout.strip() in ("", "{}")
 
     def test_e2e_003_bin_hooks_run_stop_event(self, tmp_path: Path) -> None:
-        stdin = json.dumps({"stop_hook_active": False})
+        stdin = stdin_json(stop_hook_active=False)
         result = run_cli(
             "run",
             "Stop",
@@ -108,7 +113,7 @@ class TestHookDiscovery:
         discover_hooks(str(FIXTURES_DIR))
 
     def test_e2e_015_discovery_via_cli_subprocess(self, tmp_path: Path) -> None:
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
+        stdin = stdin_json(tool_name="Bash", tool_input={"command": "echo hi"})
         result = run_cli(
             "run",
             "PreToolUse",
@@ -186,7 +191,7 @@ class TestInlineTests:
 
 class TestEventDispatchRoundTrip:
     def test_e2e_031_pretooluse_allow_no_output(self, tmp_path: Path) -> None:
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git status"}})
+        stdin = stdin_json(tool_name="Bash", tool_input={"command": "git status"})
         result = run_cli(
             "run",
             "PreToolUse",
@@ -197,72 +202,41 @@ class TestEventDispatchRoundTrip:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert result.stdout.strip() in ("", "{}")
 
-    def test_e2e_032_stop_event_dispatch(self, tmp_path: Path) -> None:
-        stdin = json.dumps({})
+    @pytest.mark.parametrize(
+        ("event", "stdin"),
+        [
+            pytest.param("Stop", stdin_json(), id="032_stop_event_dispatch"),
+            pytest.param(
+                "UserPromptSubmit",
+                stdin_json(prompt="hello world"),
+                id="033_user_prompt_submit_dispatch",
+            ),
+            pytest.param(
+                "SubagentStop",
+                stdin_json(agent_type="worker", agent_id="abc"),
+                id="034_subagent_stop_dispatch",
+            ),
+            pytest.param(
+                "SubagentStart",
+                stdin_json(agent_type="cleanup", agent_id="abc"),
+                id="035_subagent_start_dispatch",
+            ),
+            pytest.param(
+                "PostToolUse",
+                stdin_json(tool_name="Bash", tool_input={"command": "echo hi"}, tool_response="hi"),
+                id="036_post_tool_use_dispatch",
+            ),
+            pytest.param(
+                "PostToolUseFailure",
+                stdin_json(tool_name="Bash", tool_input={"command": "false"}, error="command failed"),
+                id="037_post_tool_use_failure_dispatch",
+            ),
+        ],
+    )
+    def test_e2e_03x_event_dispatch(self, tmp_path: Path, event: str, stdin: str) -> None:
         result = run_cli(
             "run",
-            "Stop",
-            hooks_dir=str(FIXTURES_DIR),
-            root_dir=str(tmp_path),
-            stdin_data=stdin,
-        )
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-
-    def test_e2e_033_user_prompt_submit_dispatch(self, tmp_path: Path) -> None:
-        stdin = json.dumps({"prompt": "hello world"})
-        result = run_cli(
-            "run",
-            "UserPromptSubmit",
-            hooks_dir=str(FIXTURES_DIR),
-            root_dir=str(tmp_path),
-            stdin_data=stdin,
-        )
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-
-    def test_e2e_034_subagent_stop_dispatch(self, tmp_path: Path) -> None:
-        stdin = json.dumps({"agent_type": "worker", "agent_id": "abc"})
-        result = run_cli(
-            "run",
-            "SubagentStop",
-            hooks_dir=str(FIXTURES_DIR),
-            root_dir=str(tmp_path),
-            stdin_data=stdin,
-        )
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-
-    def test_e2e_035_subagent_start_dispatch(self, tmp_path: Path) -> None:
-        stdin = json.dumps({"agent_type": "cleanup", "agent_id": "abc"})
-        result = run_cli(
-            "run",
-            "SubagentStart",
-            hooks_dir=str(FIXTURES_DIR),
-            root_dir=str(tmp_path),
-            stdin_data=stdin,
-        )
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-
-    def test_e2e_036_post_tool_use_dispatch(self, tmp_path: Path) -> None:
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}, "tool_response": "hi"})
-        result = run_cli(
-            "run",
-            "PostToolUse",
-            hooks_dir=str(FIXTURES_DIR),
-            root_dir=str(tmp_path),
-            stdin_data=stdin,
-        )
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-
-    def test_e2e_037_post_tool_use_failure_dispatch(self, tmp_path: Path) -> None:
-        stdin = json.dumps(
-            {
-                "tool_name": "Bash",
-                "tool_input": {"command": "false"},
-                "error": "command failed",
-            }
-        )
-        result = run_cli(
-            "run",
-            "PostToolUseFailure",
+            event,
             hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
             stdin_data=stdin,
