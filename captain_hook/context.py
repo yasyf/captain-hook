@@ -15,7 +15,7 @@ from cc_transcript.query import Session
 from cc_transcript.render import Budget, render_turn
 from cc_transcript.tools import parse_tool_call
 from pydantic import BaseModel
-from spawnllm import call, run_cli
+from spawnllm import call_sync, run_cli
 
 from captain_hook.classifiers import detect
 from captain_hook.llm import LlmBackends, TModel, TSpecialty
@@ -197,7 +197,7 @@ class HookContext:
             if transcript:
                 template = f"{{transcript}}\n\n<task>\n{template}\n</task>"
             prompt = template.format(*args, **kwargs, transcript=self.transcript_text())
-        return call(
+        return call_sync(
             prompt,
             backend=LlmBackends.for_specialty(specialty),
             model=model,

@@ -147,15 +147,20 @@ def brain_prompt(transcript: Path) -> str:
 
 
 def brain_argv(*, max_turns: int, max_budget_usd: float) -> list[str]:
+    from spawnllm import ClaudeConfig, RunSpec
+
     from captain_hook.cli import plugin_dir
     from captain_hook.llm import ClaudeBackend
 
     backend = ClaudeBackend()
-    argv = backend.build_command(backend.models[BRAIN_TIER], None, agent=True)
-    argv[argv.index("--permission-mode") + 1] = "acceptEdits"
-    argv[argv.index("--max-budget-usd") + 1] = str(max_budget_usd)
+    spec = RunSpec(
+        prompt="",
+        model=backend.models[BRAIN_TIER],
+        agent=True,
+        provider_configs={"claude": ClaudeConfig(permission_mode="acceptEdits", max_budget_usd=max_budget_usd)},
+    )
     return [
-        *argv,
+        *backend.build_command(spec),
         "--plugin-dir",
         str(plugin_dir()),
         "--max-turns",

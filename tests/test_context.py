@@ -172,7 +172,7 @@ class TestCallLlm:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
 
-        with patch("captain_hook.context.call", return_value="mocked response") as mock_call:
+        with patch("captain_hook.context.call_sync", return_value="mocked response") as mock_call:
             result = ctx.call_llm("test prompt", specialty="review")
         assert result == "mocked response"
         assert isinstance(mock_call.call_args.kwargs["backend"], CodexBackend)
@@ -184,7 +184,7 @@ class TestCallLlm:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
 
-        with patch("captain_hook.context.call", return_value="mocked response") as mock_call:
+        with patch("captain_hook.context.call_sync", return_value="mocked response") as mock_call:
             result = ctx.call_llm("test prompt", specialty="general")
         assert result == "mocked response"
         assert isinstance(mock_call.call_args.kwargs["backend"], ClaudeBackend)
@@ -197,7 +197,7 @@ class TestCallLlm:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=transcript, settings=None)
 
-        with patch("captain_hook.context.call", return_value="mocked") as mock_call:
+        with patch("captain_hook.context.call_sync", return_value="mocked") as mock_call:
             ctx.call_llm("analyze this", transcript=True)
         prompt = mock_call.call_args.args[0]
         assert "transcript content here" in prompt
@@ -207,7 +207,7 @@ class TestCallLlm:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
 
-        with patch("captain_hook.context.call", return_value="mocked") as mock_call:
+        with patch("captain_hook.context.call_sync", return_value="mocked") as mock_call:
             ctx.call_llm("test", agent=True, specialty="general")
         assert mock_call.call_args.kwargs["agent"] is True
 
@@ -220,7 +220,7 @@ class TestCallLlm:
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
         verdict = Verdict(should_block=True, reason="bad")
 
-        with patch("captain_hook.context.call", return_value=verdict) as mock_call:
+        with patch("captain_hook.context.call_sync", return_value=verdict) as mock_call:
             result = ctx.call_llm("test", response_model=Verdict, specialty="review")
         assert result is verdict
         assert mock_call.call_args.kwargs["response_model"] is Verdict

@@ -679,19 +679,23 @@ class TestCallLlm:
     """VAL-CROSS-018"""
 
     def test_codex_backend_builds_command_and_parses(self) -> None:
+        from spawnllm import RunSpec
+
         from captain_hook.llm import CodexBackend
 
         backend = CodexBackend()
-        cmd = backend.build_command(backend.models["small"], None, agent=True)
+        cmd = backend.build_command(RunSpec(prompt="", model=backend.models["small"], agent=True))
         assert cmd[0] == "codex"
         assert "exec" in cmd
         assert backend.parse_response("raw output", None) == "raw output"
 
     def test_claude_backend_builds_command_and_parses(self) -> None:
+        from spawnllm import RunSpec
+
         from captain_hook.llm import ClaudeBackend
 
         backend = ClaudeBackend()
-        cmd = backend.build_command(backend.models["small"], None, agent=False)
+        cmd = backend.build_command(RunSpec(prompt="", model=backend.models["small"], agent=False))
         assert cmd[0] == "claude"
         assert "--bare" not in cmd
         assert "--system-prompt" in cmd and cmd[cmd.index("--system-prompt") + 1] == ""
@@ -859,7 +863,7 @@ class TestCallLlmIntegration:
             captured.update(kwargs)
             return returns
 
-        monkeypatch.setattr(context_mod, "call", fake_call)
+        monkeypatch.setattr(context_mod, "call_sync", fake_call)
         return captured
 
     def test_call_llm_invokes_review_backend(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
