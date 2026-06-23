@@ -42,7 +42,6 @@ def read_json(path: Path, default: dict[str, Any]) -> dict[str, Any]: ...
 def read_json(path: Path, default: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Read and parse a JSON file, returning *default* on missing file or parse error."""
     try:
-        data = json.loads(path.read_text())
+        return cast("dict[str, Any]", data) if isinstance(data := json.loads(path.read_text()), dict) else default
     except (OSError, json.JSONDecodeError, ValueError):
         return default
-    return cast("dict[str, Any]", data) if isinstance(data, dict) else default

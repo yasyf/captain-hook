@@ -27,13 +27,6 @@ class Violation:
     label: str
 
 
-def parse_or_empty(source: str) -> ast.Module:
-    try:
-        return ast.parse(source)
-    except SyntaxError:
-        return ast.parse("")
-
-
 @dataclass(frozen=True)
 class Change:
     """The pre- and post-edit state of a file, passed to every style rule's ``check``.
@@ -48,13 +41,20 @@ class Change:
     source: str
     pre: str
 
+    @staticmethod
+    def parse_or_empty(source: str) -> ast.Module:
+        try:
+            return ast.parse(source)
+        except SyntaxError:
+            return ast.parse("")
+
     @cached_property
     def tree(self) -> ast.Module:
-        return parse_or_empty(self.source)
+        return self.parse_or_empty(self.source)
 
     @cached_property
     def pre_tree(self) -> ast.Module:
-        return parse_or_empty(self.pre)
+        return self.parse_or_empty(self.pre)
 
 
 class StyleRule(ABC):

@@ -11,7 +11,7 @@ makes them work for languages other than Python.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Self
 
 from captain_hook.ast_grep import find_all, find_introduced
 from captain_hook.style.types import Change, StyleDiffRule, StyleRule, Violation
@@ -33,8 +33,29 @@ class AstGrepStyleRule(StyleRule):
 
     def check(self, change: Change) -> Iterator[Violation]:
         return (
-            Violation(m.line, label_of(self, m)) for m in find_all(change.source, type(self).lang, type(self).pattern)
+            Violation(m.line, self.label_of(m)) for m in find_all(change.source, type(self).lang, type(self).pattern)
         )
+
+    def label_of(self, m: Match) -> str:
+        return label if isinstance(label := type(self).label, str) else m.text.splitlines()[0]
+
+    @classmethod
+    def configure(
+        cls,
+        name: str,
+        pattern: str,
+        message: str,
+        lang: str,
+        label: str | None,
+        tests: InlineTests | None,
+    ) -> type[Self]:
+        cls.__name__ = cls.__qualname__ = name
+        cls.__doc__ = message
+        cls.pattern = pattern
+        cls.lang = lang
+        cls.label = label
+        cls.tests = tests or {}
+        return cls
 
 
 class AstGrepStyleDiffRule(AstGrepStyleRule, StyleDiffRule):
@@ -42,7 +63,7 @@ class AstGrepStyleDiffRule(AstGrepStyleRule, StyleDiffRule):
 
     def check(self, change: Change) -> Iterator[Violation]:
         return (
-            Violation(m.line, label_of(self, m))
+            Violation(m.line, self.label_of(m))
             for m in find_introduced(change.pre, change.source, type(self).lang, type(self).pattern)
         )
 
@@ -71,7 +92,7 @@ def ast_grep_rule(
     class Cls(AstGrepStyleRule):
         pass
 
-    return configure(Cls, name, pattern, message, lang, label, tests)
+    return Cls.configure(name, pattern, message, lang, label, tests)
 
 
 def ast_grep_diff_rule(
@@ -92,26 +113,4 @@ def ast_grep_diff_rule(
     class Cls(AstGrepStyleDiffRule):
         pass
 
-    return configure(Cls, name, pattern, message, lang, label, tests)
-
-
-def configure[R: AstGrepStyleRule](
-    cls: type[R],
-    name: str,
-    pattern: str,
-    message: str,
-    lang: str,
-    label: str | None,
-    tests: InlineTests | None,
-) -> type[R]:
-    cls.__name__ = cls.__qualname__ = name
-    cls.__doc__ = message
-    cls.pattern = pattern
-    cls.lang = lang
-    cls.label = label
-    cls.tests = tests or {}
-    return cls
-
-
-def label_of(rule: AstGrepStyleRule, m: Match) -> str:
-    return label if isinstance(label := type(rule).label, str) else m.text.splitlines()[0]
+    return Cls.configure(name, pattern, message, lang, label, tests)

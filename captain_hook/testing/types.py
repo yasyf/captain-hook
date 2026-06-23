@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 
 import pydantic
-from pydantic import BeforeValidator
+from pydantic import field_validator
 from pydantic.dataclasses import dataclass as pyd_dataclass
 
 
@@ -67,12 +67,6 @@ class Rewrite:
     pattern: str | None = None
 
 
-def coerce_transcript(
-    value: Path | TranscriptFixture | list[dict[str, Any]] | None,
-) -> Path | TranscriptFixture | None:
-    return TranscriptFixture(value) if isinstance(value, list) else value
-
-
 @pyd_dataclass(
     frozen=True,
     kw_only=True,
@@ -113,10 +107,15 @@ class Input:
     permission_mode: str | None = None
     offset: int | None = None
     limit: int | None = None
-    transcript: Annotated[
-        Path | TranscriptFixture | list[dict[str, Any]] | None, BeforeValidator(coerce_transcript)
-    ] = None
+    transcript: Path | TranscriptFixture | list[dict[str, Any]] | None = None
     tasks: list[dict[str, Any]] | None = None
+
+    @field_validator("transcript", mode="before")
+    @classmethod
+    def coerce_transcript(
+        cls, value: Path | TranscriptFixture | list[dict[str, Any]] | None
+    ) -> Path | TranscriptFixture | None:
+        return TranscriptFixture(value) if isinstance(value, list) else value
 
 
 type InlineTests = dict[str | Input, Block | Warn | Allow | Rewrite]
