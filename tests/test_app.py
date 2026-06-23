@@ -17,8 +17,8 @@ from captain_hook.app import (
 from captain_hook.app import (
     hook as register_hook,
 )
-from captain_hook.events import PreToolUseEvent, StopEvent
 from captain_hook.loader import discover_hooks
+from captain_hook.tests.helpers import make_pre_tool_event
 from captain_hook.types import (
     Command,
     Event,
@@ -29,21 +29,6 @@ from captain_hook.types import (
 pytestmark = pytest.mark.usefixtures("isolate_modules")
 
 WARNING_NO = logger.level("WARNING").no
-
-
-def pre_tool_event(
-    tool_name: str = "Edit",
-    tool_input: dict[str, Any] | None = None,
-    ctx: Any = None,
-) -> PreToolUseEvent:
-    return PreToolUseEvent(
-        _raw={"tool_name": tool_name, "tool_input": tool_input or {}},
-        ctx=ctx,
-    )
-
-
-def stop_event(ctx: Any = None) -> StopEvent:
-    return StopEvent(_raw={}, ctx=ctx)
 
 
 class TestHookDeclarative:
@@ -249,7 +234,7 @@ class TestPlanningAgentSkip:
 
     def test_pre_tool_use_never_skipped(self) -> None:
         register_hook(Event.PreToolUse, message="tool check")
-        evt = pre_tool_event(
+        evt = make_pre_tool_event(
             tool_name="Task",
             tool_input={"subagent_type": "Explore", "prompt": "go"},
         )
@@ -280,7 +265,7 @@ class TestGetMatchingHooks:
     def test_filters_by_event(self) -> None:
         register_hook(Event.PreToolUse, message="pre_tool")
         register_hook(Event.Stop, message="stop")
-        matching = get_matching_hooks(pre_tool_event())
+        matching = get_matching_hooks(make_pre_tool_event("Edit"))
         assert len(matching) == 1
         assert matching[0].spec.message == "pre_tool"
 
@@ -316,11 +301,18 @@ class TestGitignore:
         assert is_gitignored("cache.pyc")
         assert not is_gitignored("src/main.py")
 
-    def test_respect_gitignore_true_skips(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        ("respect_gitignore", "expected"),
+        [
+            pytest.param(True, 0, id="respect_gitignore_true_skips"),
+            pytest.param(False, 1, id="respect_gitignore_false_matches"),
+        ],
+    )
+    def test_respect_gitignore(self, tmp_path: Path, respect_gitignore: bool, expected: int) -> None:
         (tmp_path / ".gitignore").write_text("node_modules\n")
         load_gitignore(tmp_path)
-        register_hook(Event.PreToolUse, message="check", respect_gitignore=True)
-        evt = pre_tool_event(
+        register_hook(Event.PreToolUse, message="check", respect_gitignore=respect_gitignore)
+        evt = make_pre_tool_event(
             tool_name="Edit",
             tool_input={
                 "file_path": "node_modules/pkg/index.js",
@@ -328,21 +320,7 @@ class TestGitignore:
                 "new_string": "x",
             },
         )
-        assert len(get_matching_hooks(evt)) == 0
-
-    def test_respect_gitignore_false_matches(self, tmp_path: Path) -> None:
-        (tmp_path / ".gitignore").write_text("node_modules\n")
-        load_gitignore(tmp_path)
-        register_hook(Event.PreToolUse, message="check", respect_gitignore=False)
-        evt = pre_tool_event(
-            tool_name="Edit",
-            tool_input={
-                "file_path": "node_modules/pkg/index.js",
-                "old_string": "",
-                "new_string": "x",
-            },
-        )
-        assert len(get_matching_hooks(evt)) == 1
+        assert len(get_matching_hooks(evt)) == expected
 
 
 class TestRegister:
