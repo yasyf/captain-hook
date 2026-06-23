@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Style rules can read the post-edit file path via the new required `Change.path` field.
 - Requires cc-transcript `>=5,<6` (the 5.0.0 review-scan API); the review scanner passes
   the now-required `surfaces`/`structured_formats` to `iter_review_comment_signals`.
+- Track spawnllm 0.4.0: requires `spawnllm>=0.4.0`, adopting its `RunSpec`/`run` invocation API.
 
 ## [3.16.0] - 2026-06-22
 
