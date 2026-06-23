@@ -124,6 +124,12 @@ def go_offline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(http, "github_download", boom)
 
 
+def install_fetch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tarball: Path, sha: str) -> None:
+    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
+    monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
+    monkeypatch.setattr(http, "github_download", lambda url, dest: dest.write_bytes(tarball.read_bytes()))
+
+
 # --- builtin pack content -------------------------------------------------------------
 
 
@@ -178,8 +184,16 @@ def test_manifest_load_and_hooks_dir(tmp_path: Path) -> None:
     assert manifest.hooks_dir(pack) == pack / "hooks"
 
 
-def test_manifest_rejects_bad_name(tmp_path: Path) -> None:
-    (tmp_path / manager.PACK_MANIFEST).write_text('name = "Bad_Name"\nversion = "0"\ndescription = "d"\nhooks = "."\n')
+@pytest.mark.parametrize(
+    "manifest_text",
+    [
+        pytest.param('name = "Bad_Name"\nversion = "0"\ndescription = "d"\nhooks = "."\n', id="rejects_bad_name"),
+        pytest.param(None, id="missing_file"),
+    ],
+)
+def test_manifest_rejects(tmp_path: Path, manifest_text: str | None) -> None:
+    if manifest_text is not None:
+        (tmp_path / manager.PACK_MANIFEST).write_text(manifest_text)
     with pytest.raises(manager.PackError):
         manager.PackManifest.load(tmp_path / manager.PACK_MANIFEST)
 
@@ -187,11 +201,6 @@ def test_manifest_rejects_bad_name(tmp_path: Path) -> None:
 def test_manifest_missing_field_fails_loud(tmp_path: Path) -> None:
     (tmp_path / manager.PACK_MANIFEST).write_text('name = "x"\nversion = "0"\nhooks = "."\n')
     with pytest.raises(KeyError):
-        manager.PackManifest.load(tmp_path / manager.PACK_MANIFEST)
-
-
-def test_manifest_missing_file(tmp_path: Path) -> None:
-    with pytest.raises(manager.PackError):
         manager.PackManifest.load(tmp_path / manager.PACK_MANIFEST)
 
 
@@ -213,52 +222,51 @@ def test_manifest_in_missing_returns_root(tmp_path: Path) -> None:
 # --- packs.toml IO -------------------------------------------------------------------
 
 
-def test_packs_toml_round_trip(tmp_path: Path) -> None:
-    path = tmp_path / "packs.toml"
+@pytest.fixture
+def packs_toml(tmp_path: Path) -> Path:
+    return tmp_path / "packs.toml"
+
+
+def test_packs_toml_round_trip(packs_toml: Path) -> None:
     builtin = manager.BuiltinPack(name="general")
     external = manager.ExternalPack(name="acme", source=manager.PackSource.parse("github:a/b@v1"), commit="a" * 40)
-    manager.atomic_write(path, manager.render_packs_toml([external, builtin]))
-    assert manager.read_entries(path) == [external, builtin]  # rendered sorted by name: "acme" < "general"
+    manager.atomic_write(packs_toml, manager.render_packs_toml([external, builtin]))
+    assert manager.read_entries(packs_toml) == [external, builtin]  # rendered sorted by name: "acme" < "general"
 
 
-def test_upsert_replaces_same_name(tmp_path: Path) -> None:
-    path = tmp_path / "packs.toml"
-    manager.upsert_entry(path, manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@v1"), "a" * 40))
-    manager.upsert_entry(path, manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@v2"), "b" * 40))
-    (entry,) = manager.read_entries(path)
+def test_upsert_replaces_same_name(packs_toml: Path) -> None:
+    manager.upsert_entry(packs_toml, manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@v1"), "a" * 40))
+    manager.upsert_entry(packs_toml, manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@v2"), "b" * 40))
+    (entry,) = manager.read_entries(packs_toml)
     assert isinstance(entry, manager.ExternalPack) and entry.commit == "b" * 40
 
 
-def test_delete_entry(tmp_path: Path) -> None:
-    path = tmp_path / "packs.toml"
-    manager.upsert_entry(path, manager.BuiltinPack("general"))
-    manager.upsert_entry(path, manager.BuiltinPack("python"))
-    manager.delete_entry(path, "general")
-    assert manager.read_entries(path) == [manager.BuiltinPack("python")]
+def test_delete_entry(packs_toml: Path) -> None:
+    manager.upsert_entry(packs_toml, manager.BuiltinPack("general"))
+    manager.upsert_entry(packs_toml, manager.BuiltinPack("python"))
+    manager.delete_entry(packs_toml, "general")
+    assert manager.read_entries(packs_toml) == [manager.BuiltinPack("python")]
     with pytest.raises(manager.PackError):
-        manager.delete_entry(path, "missing")
+        manager.delete_entry(packs_toml, "missing")
 
 
-def test_read_entries_accepts_source_only_as_moving(tmp_path: Path) -> None:
-    path = tmp_path / "packs.toml"
-    path.write_text('[packs.acme]\nsource = "github:a/b@latest"\n')
-    (entry,) = manager.read_entries(path)
+def test_read_entries_accepts_source_only_as_moving(packs_toml: Path) -> None:
+    packs_toml.write_text('[packs.acme]\nsource = "github:a/b@latest"\n')
+    (entry,) = manager.read_entries(packs_toml)
     assert entry == manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@latest"), commit=None)
 
 
-def test_source_only_round_trips_without_commit(tmp_path: Path) -> None:
-    path = tmp_path / "packs.toml"
+def test_source_only_round_trips_without_commit(packs_toml: Path) -> None:
     moving = manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@latest"), commit=None)
-    manager.atomic_write(path, manager.render_packs_toml([moving]))
-    assert "commit" not in path.read_text()
-    assert manager.read_entries(path) == [moving]
+    manager.atomic_write(packs_toml, manager.render_packs_toml([moving]))
+    assert "commit" not in packs_toml.read_text()
+    assert manager.read_entries(packs_toml) == [moving]
 
 
-def test_read_entries_rejects_unknown_keys(tmp_path: Path) -> None:
-    path = tmp_path / "packs.toml"
-    path.write_text('[packs.acme]\ncommit = "abc"\n')  # commit without source is not a valid entry
+def test_read_entries_rejects_unknown_keys(packs_toml: Path) -> None:
+    packs_toml.write_text('[packs.acme]\ncommit = "abc"\n')  # commit without source is not a valid entry
     with pytest.raises(manager.PackError):
-        manager.read_entries(path)
+        manager.read_entries(packs_toml)
 
 
 # --- fetch / cache -------------------------------------------------------------------
@@ -273,13 +281,9 @@ def test_strip_top_level(tmp_path: Path) -> None:
 
 
 def test_fetch_pack_caches_and_pins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
     tarball = make_pack_tarball(tmp_path, name="acme-guards", top="guards-abc")
     sha = "d" * 40
-    monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
-    monkeypatch.setattr(
-        "captain_hook.util.http.github_download", lambda url, dest: dest.write_bytes(Path(tarball).read_bytes())
-    )
+    install_fetch(monkeypatch, tmp_path, tarball, sha)
 
     resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
 
@@ -291,7 +295,6 @@ def test_fetch_pack_caches_and_pins(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 def test_fetch_pack_caches_only_manifest_and_hooks_subdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
     repo = tmp_path / "repo"
     write_pack(repo, "acme-guards", hooks="plugin/hooks")
     (repo / "plugin" / "hooks").mkdir(parents=True)
@@ -305,10 +308,7 @@ def test_fetch_pack_caches_only_manifest_and_hooks_subdir(tmp_path: Path, monkey
         tf.add(repo, arcname="big-repo-sha")
 
     sha = "d" * 40
-    monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
-    monkeypatch.setattr(
-        "captain_hook.util.http.github_download", lambda url, dest: dest.write_bytes(Path(tarball).read_bytes())
-    )
+    install_fetch(monkeypatch, tmp_path, tarball, sha)
 
     resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
 
@@ -321,7 +321,6 @@ def test_fetch_pack_caches_only_manifest_and_hooks_subdir(tmp_path: Path, monkey
 
 
 def test_fetch_pack_claude_manifest_caches_manifest_and_hooks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
     repo = tmp_path / "repo"
     write_pack(repo, "acme-guards", hooks="plugin/hooks", manifest_subdir=".claude")
     (repo / ".claude" / "settings.json").write_text("{}\n")  # other .claude/ content must not leak
@@ -332,10 +331,7 @@ def test_fetch_pack_claude_manifest_caches_manifest_and_hooks(tmp_path: Path, mo
         tf.add(repo, arcname="big-repo-sha")
 
     sha = "d" * 40
-    monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
-    monkeypatch.setattr(
-        "captain_hook.util.http.github_download", lambda url, dest: dest.write_bytes(Path(tarball).read_bytes())
-    )
+    install_fetch(monkeypatch, tmp_path, tarball, sha)
 
     resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
 
@@ -350,7 +346,6 @@ def test_fetch_pack_claude_manifest_caches_manifest_and_hooks(tmp_path: Path, mo
 
 
 def test_fetch_pack_prefers_claude_manifest_over_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
     repo = tmp_path / "repo"
     write_pack(repo, "root-pack", hooks="hooks")  # root manifest
     write_pack(repo, "claude-pack", hooks="hooks", manifest_subdir=".claude")  # .claude wins
@@ -361,17 +356,13 @@ def test_fetch_pack_prefers_claude_manifest_over_root(tmp_path: Path, monkeypatc
         tf.add(repo, arcname="sha-top")
 
     sha = "a" * 40
-    monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
-    monkeypatch.setattr(
-        "captain_hook.util.http.github_download", lambda url, dest: dest.write_bytes(Path(tarball).read_bytes())
-    )
+    install_fetch(monkeypatch, tmp_path, tarball, sha)
 
     resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
     assert resolved.manifest.name == "claude-pack"
 
 
 def test_fetch_pack_root_hooks_caches_full_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
     repo = tmp_path / "repo"
     write_pack(repo, "acme-flat", hooks=".")
     (repo / "h.py").write_text(HOOK_SRC)
@@ -380,10 +371,7 @@ def test_fetch_pack_root_hooks_caches_full_tree(tmp_path: Path, monkeypatch: pyt
         tf.add(repo, arcname="flat-sha")
 
     sha = "e" * 40
-    monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
-    monkeypatch.setattr(
-        "captain_hook.util.http.github_download", lambda url, dest: dest.write_bytes(Path(tarball).read_bytes())
-    )
+    install_fetch(monkeypatch, tmp_path, tarball, sha)
 
     resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/flat@v1"))
 
@@ -394,7 +382,6 @@ def test_fetch_pack_root_hooks_caches_full_tree(tmp_path: Path, monkeypatch: pyt
 
 
 def test_fetch_pack_missing_manifest_fails_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "README.md").write_text("# no manifest here\n")
@@ -402,10 +389,7 @@ def test_fetch_pack_missing_manifest_fails_loud(tmp_path: Path, monkeypatch: pyt
     with tarfile.open(tarball, "w:gz") as tf:
         tf.add(repo, arcname="no-manifest-sha")
 
-    monkeypatch.setattr(manager, "resolve_commit", lambda source: "f" * 40)
-    monkeypatch.setattr(
-        "captain_hook.util.http.github_download", lambda url, dest: dest.write_bytes(Path(tarball).read_bytes())
-    )
+    install_fetch(monkeypatch, tmp_path, tarball, "f" * 40)
 
     with pytest.raises(manager.PackError):
         manager.fetch_pack(manager.PackSource.parse("github:acme/empty@v1"))
@@ -443,14 +427,26 @@ def test_resolve_uncached_external_offline_is_missing(tmp_path: Path, monkeypatc
 # --- loader.discover_pack ------------------------------------------------------------
 
 
-def test_discover_pack_skips_underscore_and_conf(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("stems", "present", "absent"),
+    [
+        pytest.param(("hook", "_skip", "conf"), ("hook",), (), id="skips_underscore_and_conf"),
+        pytest.param(("hook", "test_hook", "conftest"), ("hook",), ("test_hook", "conftest"), id="skips_test_files"),
+    ],
+)
+def test_discover_pack_skips(
+    tmp_path: Path, stems: tuple[str, ...], present: tuple[str, ...], absent: tuple[str, ...]
+) -> None:
     pack = tmp_path / "p"
     pack.mkdir()
-    for stem in ("hook", "_skip", "conf"):
+    for stem in stems:
         (pack / f"{stem}.py").write_text(HOOK_SRC)
     discover_pack("solo", pack)
     assert len(app._state.hooks) == 1
-    assert "captain_hook._packs.solo.hook" in sys.modules
+    for module in present:
+        assert f"captain_hook._packs.solo.{module}" in sys.modules
+    for module in absent:
+        assert f"captain_hook._packs.solo.{module}" not in sys.modules
 
 
 def test_discover_pack_namespaces_avoid_collision(tmp_path: Path) -> None:
@@ -470,18 +466,6 @@ def test_discover_pack_sanitizes_name(tmp_path: Path) -> None:
     (pack / "h.py").write_text(HOOK_SRC)
     discover_pack("acme-guards@d4", pack)
     assert "captain_hook._packs.acme_guards_d4.h" in sys.modules
-
-
-def test_discover_pack_skips_test_files(tmp_path: Path) -> None:
-    pack = tmp_path / "p"
-    pack.mkdir()
-    for stem in ("hook", "test_hook", "conftest"):
-        (pack / f"{stem}.py").write_text(HOOK_SRC)
-    discover_pack("solo", pack)
-    assert len(app._state.hooks) == 1
-    assert "captain_hook._packs.solo.hook" in sys.modules
-    assert "captain_hook._packs.solo.test_hook" not in sys.modules
-    assert "captain_hook._packs.solo.conftest" not in sys.modules
 
 
 def test_discover_pack_skips_marked_library_but_keeps_it_importable(tmp_path: Path, isolate_modules: None) -> None:
@@ -559,22 +543,28 @@ def test_cli_pack_add_rejects_invalid_target(tmp_path: Path) -> None:
 # --- @latest / ref resolution --------------------------------------------------------
 
 
-def test_resolve_ref_latest_uses_release_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="d" * 40, latest_tag="v3.2.1")
-    assert manager.resolve_commit(manager.PackSource.parse("github:acme/acme@latest")) == "d" * 40
-    assert gh.seen_refs == ["v3.2.1"]  # the commits endpoint was queried for the release tag, not "latest"
-
-
-def test_resolve_ref_bare_uses_default_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="e" * 40, default_branch="trunk")
-    assert manager.resolve_commit(manager.PackSource.parse("github:acme/acme")) == "e" * 40
-    assert gh.seen_refs == ["trunk"]
-
-
-def test_resolve_ref_explicit_tag_passes_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="f" * 40)
-    assert manager.resolve_commit(manager.PackSource.parse("github:acme/acme@v1.2")) == "f" * 40
-    assert gh.seen_refs == ["v1.2"]  # no release lookup for an explicit ref
+@pytest.mark.parametrize(
+    ("ref_suffix", "gh_kwargs", "sha", "expected_seen_refs"),
+    [
+        # @latest resolves the release tag, not the literal "latest", before the commits endpoint.
+        pytest.param("@latest", {"latest_tag": "v3.2.1"}, "d" * 40, ["v3.2.1"], id="latest_uses_release_endpoint"),
+        # a bare source resolves the repo's default branch.
+        pytest.param("", {"default_branch": "trunk"}, "e" * 40, ["trunk"], id="bare_uses_default_branch"),
+        # an explicit ref passes through with no release lookup.
+        pytest.param("@v1.2", {}, "f" * 40, ["v1.2"], id="explicit_tag_passes_through"),
+    ],
+)
+def test_resolve_ref(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ref_suffix: str,
+    gh_kwargs: dict[str, Any],
+    sha: str,
+    expected_seen_refs: list[str],
+) -> None:
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha=sha, **gh_kwargs)
+    assert manager.resolve_commit(manager.PackSource.parse(f"github:acme/acme{ref_suffix}")) == sha
+    assert gh.seen_refs == expected_seen_refs
 
 
 # --- auto-fetch on miss --------------------------------------------------------------
