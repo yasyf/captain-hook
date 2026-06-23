@@ -18,7 +18,6 @@ from captain_hook.app import (
     hook as register_hook,
 )
 from captain_hook.command import CommandLine
-from captain_hook.context import HookContext
 from captain_hook.dispatch import dispatch
 from captain_hook.events import (
     BaseHookEvent,
@@ -26,15 +25,16 @@ from captain_hook.events import (
 )
 from captain_hook.loader import discover_hooks
 from captain_hook.primitives.workflow import Step, text_matches, workflow
-from captain_hook.session import SessionStore
 from captain_hook.signals import score_signals
 from captain_hook.signals.nlp import Clause, NlpSignal, Phrase
 from captain_hook.state import HookState
-from captain_hook.testing.helpers import fixture_session, run_inline_tests
+from captain_hook.testing.helpers import run_inline_tests
 from captain_hook.testing.types import Allow, Block, Input
 from captain_hook.tests.helpers import (
     build_ctx,
     dispatch_test,
+    make_event,
+    make_pre_tool_event,
     make_transcript,
     mock_tool_event,
 )
@@ -64,6 +64,18 @@ from captain_hook.types import (
 )
 
 
+def dispatch_pre(
+    tool_input: dict[str, Any],
+    *,
+    tool_name: str = "Bash",
+    transcript: Any = None,
+    session_dir: Any = None,
+    project_root: Path | None = None,
+) -> dict[str, Any] | None:
+    ctx = build_ctx(transcript=transcript, session_dir=session_dir, project_root=project_root)
+    return dispatch(Event.PreToolUse, make_pre_tool_event(tool_name, tool_input, ctx=ctx), session_dir=session_dir)
+
+
 class TestDeclarativeHookE2E:
     """VAL-CROSS-001"""
 
@@ -74,10 +86,7 @@ class TestDeclarativeHookE2E:
             block=True,
             only_if=[Tool("Bash"), Command(r"rm\s+-rf")],
         )
-        raw = {"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}}
-        ctx = build_ctx()
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        output = dispatch(Event.PreToolUse, evt)
+        output = dispatch_pre({"command": "rm -rf /"})
 
         assert output is not None
         assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -90,10 +99,7 @@ class TestDeclarativeHookE2E:
             block=True,
             only_if=[Tool("Bash"), Command(r"rm\s+-rf")],
         )
-        raw = {"tool_name": "Bash", "tool_input": {"command": "ls -la"}}
-        ctx = build_ctx()
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        assert dispatch(Event.PreToolUse, evt) is None
+        assert dispatch_pre({"command": "ls -la"}) is None
 
 
 class TestHandlerHookE2E:
@@ -105,10 +111,7 @@ class TestHandlerHookE2E:
         def check_style(evt: BaseHookEvent) -> HookResult | None:
             return HookResult(action=Action.warn, message="check style")
 
-        raw = {"tool_name": "Edit", "tool_input": {"file_path": "foo.py", "old_string": "", "new_string": "x"}}
-        ctx = build_ctx()
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        output = dispatch(Event.PreToolUse, evt)
+        output = dispatch_pre({"file_path": "foo.py", "old_string": "", "new_string": "x"}, tool_name="Edit")
 
         assert output is not None
         assert output["hookSpecificOutput"]["additionalContext"] == "check style"
@@ -120,10 +123,7 @@ class TestHandlerHookE2E:
         def check_style(evt: BaseHookEvent) -> HookResult | None:
             return HookResult(action=Action.warn, message="check style")
 
-        raw = {"tool_name": "Edit", "tool_input": {"file_path": "foo.js", "old_string": "", "new_string": "x"}}
-        ctx = build_ctx()
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        assert dispatch(Event.PreToolUse, evt) is None
+        assert dispatch_pre({"file_path": "foo.js", "old_string": "", "new_string": "x"}, tool_name="Edit") is None
 
     def test_external_absolute_file_passes_by_default(self, tmp_path: Path) -> None:
 
@@ -131,10 +131,14 @@ class TestHandlerHookE2E:
         def check_style(evt: BaseHookEvent) -> HookResult | None:
             return HookResult(action=Action.warn, message="check style")
 
-        raw = {"tool_name": "Write", "tool_input": {"file_path": "/tmp/regex_check.py", "content": "x"}}
-        ctx = build_ctx(project_root=tmp_path)
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        assert dispatch(Event.PreToolUse, evt) is None
+        assert (
+            dispatch_pre(
+                {"file_path": "/tmp/regex_check.py", "content": "x"},
+                tool_name="Write",
+                project_root=tmp_path,
+            )
+            is None
+        )
 
     def test_in_project_absolute_file_matches_default(self, tmp_path: Path) -> None:
 
@@ -142,10 +146,11 @@ class TestHandlerHookE2E:
         def check_style(evt: BaseHookEvent) -> HookResult | None:
             return HookResult(action=Action.warn, message="check style")
 
-        raw = {"tool_name": "Write", "tool_input": {"file_path": str(tmp_path / "regex_check.py"), "content": "x"}}
-        ctx = build_ctx(project_root=tmp_path)
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        output = dispatch(Event.PreToolUse, evt)
+        output = dispatch_pre(
+            {"file_path": str(tmp_path / "regex_check.py"), "content": "x"},
+            tool_name="Write",
+            project_root=tmp_path,
+        )
 
         assert output is not None
         assert output["hookSpecificOutput"]["additionalContext"] == "check style"
@@ -167,10 +172,14 @@ class TestInPlanModeCondition:
             ]
         )
         register_hook(Event.PreToolUse, message="in plan mode", block=True, only_if=[InPlanMode()])
-        raw = {"tool_name": "Edit", "tool_input": {"file_path": "x.py", "old_string": "", "new_string": ""}}
-        ctx = build_ctx(transcript=transcript)
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        assert dispatch(Event.PreToolUse, evt) is not None
+        assert (
+            dispatch_pre(
+                {"file_path": "x.py", "old_string": "", "new_string": ""},
+                tool_name="Edit",
+                transcript=transcript,
+            )
+            is not None
+        )
 
     def test_does_not_fire_when_equal(self) -> None:
         transcript = make_transcript(
@@ -182,10 +191,14 @@ class TestInPlanModeCondition:
             ]
         )
         register_hook(Event.PreToolUse, message="in plan mode", block=True, only_if=[InPlanMode()])
-        raw = {"tool_name": "Edit", "tool_input": {"file_path": "x.py", "old_string": "", "new_string": ""}}
-        ctx = build_ctx(transcript=transcript)
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        assert dispatch(Event.PreToolUse, evt) is None
+        assert (
+            dispatch_pre(
+                {"file_path": "x.py", "old_string": "", "new_string": ""},
+                tool_name="Edit",
+                transcript=transcript,
+            )
+            is None
+        )
 
 
 class TestReadFileCondition:
@@ -199,18 +212,26 @@ class TestReadFileCondition:
             ]
         )
         register_hook(Event.PreToolUse, message="read first", block=True, skip_if=[ReadFile("STYLEGUIDE.md")])
-        raw = {"tool_name": "Edit", "tool_input": {"file_path": "x.py", "old_string": "", "new_string": ""}}
-        ctx = build_ctx(transcript=transcript)
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        assert dispatch(Event.PreToolUse, evt) is None
+        assert (
+            dispatch_pre(
+                {"file_path": "x.py", "old_string": "", "new_string": ""},
+                tool_name="Edit",
+                transcript=transcript,
+            )
+            is None
+        )
 
     def test_fires_when_not_read(self) -> None:
         transcript = make_transcript([msg("user", "hello")])
         register_hook(Event.PreToolUse, message="read first", block=True, skip_if=[ReadFile("STYLEGUIDE.md")])
-        raw = {"tool_name": "Edit", "tool_input": {"file_path": "x.py", "old_string": "", "new_string": ""}}
-        ctx = build_ctx(transcript=transcript)
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        assert dispatch(Event.PreToolUse, evt) is not None
+        assert (
+            dispatch_pre(
+                {"file_path": "x.py", "old_string": "", "new_string": ""},
+                tool_name="Edit",
+                transcript=transcript,
+            )
+            is not None
+        )
 
 
 class TestTouchedFileCondition:
@@ -224,10 +245,7 @@ class TestTouchedFileCondition:
             ]
         )
         register_hook(Event.PreToolUse, message="www touched", block=True, only_if=[TouchedFile("www/src/*")])
-        raw = {"tool_name": "Bash", "tool_input": {"command": "echo hi"}}
-        ctx = build_ctx(transcript=transcript)
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        assert dispatch(Event.PreToolUse, evt) is not None
+        assert dispatch_pre({"command": "echo hi"}, transcript=transcript) is not None
 
     def test_does_not_match_other_files(self) -> None:
         transcript = make_transcript(
@@ -237,10 +255,7 @@ class TestTouchedFileCondition:
             ]
         )
         register_hook(Event.PreToolUse, message="www touched", block=True, only_if=[TouchedFile("www/src/*")])
-        raw = {"tool_name": "Bash", "tool_input": {"command": "echo hi"}}
-        ctx = build_ctx(transcript=transcript)
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        assert dispatch(Event.PreToolUse, evt) is None
+        assert dispatch_pre({"command": "echo hi"}, transcript=transcript) is None
 
 
 class TestRanCommandCondition:
@@ -256,10 +271,7 @@ class TestRanCommandCondition:
         register_hook(
             Event.PreToolUse, message="run mtest first", block=True, skip_if=[RanCommand(r"uv\s+run\s+mtest")]
         )
-        raw = {"tool_name": "Bash", "tool_input": {"command": "echo hi"}}
-        ctx = build_ctx(transcript=transcript)
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        assert dispatch(Event.PreToolUse, evt) is None
+        assert dispatch_pre({"command": "echo hi"}, transcript=transcript) is None
 
     def test_fires_when_not_matching(self) -> None:
         transcript = make_transcript(
@@ -271,10 +283,7 @@ class TestRanCommandCondition:
         register_hook(
             Event.PreToolUse, message="run mtest first", block=True, skip_if=[RanCommand(r"uv\s+run\s+mtest")]
         )
-        raw = {"tool_name": "Bash", "tool_input": {"command": "echo hi"}}
-        ctx = build_ctx(transcript=transcript)
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        assert dispatch(Event.PreToolUse, evt) is not None
+        assert dispatch_pre({"command": "echo hi"}, transcript=transcript) is not None
 
 
 class TestNudgeSignalScoring:
@@ -374,10 +383,7 @@ class TestMaxFiresSessionStore:
         session_dir = Path(tempfile.mkdtemp())
         register_hook(Event.PreToolUse, message="limited", block=True, max_fires=2)
         for i in range(3):
-            raw = {"tool_name": "Bash", "tool_input": {"command": f"echo {i}"}}
-            ctx = build_ctx(session_dir=session_dir)
-            evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-            output = dispatch(Event.PreToolUse, evt, session_dir=session_dir)
+            output = dispatch_pre({"command": f"echo {i}"}, session_dir=session_dir)
             if i < 2:
                 assert output is not None, f"Dispatch {i} should fire"
             else:
@@ -386,10 +392,7 @@ class TestMaxFiresSessionStore:
     def test_fire_count_persisted(self) -> None:
         session_dir = Path(tempfile.mkdtemp())
         register_hook(Event.PreToolUse, message="counted", block=True, max_fires=5)
-        raw = {"tool_name": "Bash", "tool_input": {"command": "echo hi"}}
-        ctx = build_ctx(session_dir=session_dir)
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        dispatch(Event.PreToolUse, evt, session_dir=session_dir)
+        dispatch_pre({"command": "echo hi"}, session_dir=session_dir)
 
         hook_dir = session_dir / _state.hooks[0].name
         state_file = hook_dir / "hook_state.json"
@@ -420,9 +423,7 @@ class TestCLIFullPipeline:
         assert _state.settings.test_command == "uv run mtest"
         assert len(_state.hooks) >= 1
 
-        raw = {"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}}
-        ctx = HookContext(session=SessionStore(None), transcript=fixture_session([]), settings=_state.settings)
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
+        evt = make_pre_tool_event("Bash", {"command": "rm -rf /"}, ctx=build_ctx(settings=_state.settings))
         output = dispatch(Event.PreToolUse, evt)
         assert output is not None
         assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -446,9 +447,7 @@ class TestCLIFullPipeline:
         )
 
         discover_hooks(hooks_dir)
-        raw = {"tool_name": "Bash", "tool_input": {"command": "echo hi"}}
-        ctx = HookContext(session=SessionStore(None), transcript=fixture_session([]), settings=_state.settings)
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
+        evt = make_pre_tool_event("Bash", {"command": "echo hi"}, ctx=build_ctx(settings=_state.settings))
         output = dispatch(Event.PreToolUse, evt)
         assert output is not None
         assert "custom=42" in output["hookSpecificOutput"]["additionalContext"]
@@ -593,18 +592,12 @@ class TestUsedSkillCondition:
             ]
         )
         register_hook(Event.PreToolUse, message="use codex", block=True, skip_if=[UsedSkill("codex|test-runner")])
-        raw = {"tool_name": "Bash", "tool_input": {"command": "echo hi"}}
-        ctx = build_ctx(transcript=transcript)
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        assert dispatch(Event.PreToolUse, evt) is None
+        assert dispatch_pre({"command": "echo hi"}, transcript=transcript) is None
 
     def test_fires_when_skill_not_used(self) -> None:
         transcript = make_transcript([msg("user", "hello")])
         register_hook(Event.PreToolUse, message="use codex", block=True, skip_if=[UsedSkill("codex|test-runner")])
-        raw = {"tool_name": "Bash", "tool_input": {"command": "echo hi"}}
-        ctx = build_ctx(transcript=transcript)
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
-        assert dispatch(Event.PreToolUse, evt) is not None
+        assert dispatch_pre({"command": "echo hi"}, transcript=transcript) is not None
 
 
 class _InMissionMode:
@@ -640,8 +633,7 @@ class TestInMissionModeCondition:
             return HookResult(action=Action.warn, message="fired")
 
         raw = {"tool_name": "Bash", "tool_input": {"command": "echo hi"}, "transcript_path": str(transcript_file)}
-        ctx = build_ctx()
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
+        evt = make_event(PreToolUseEvent, raw, build_ctx())
         assert dispatch(Event.PreToolUse, evt) is None
 
     def test_fires_without_settings(self) -> None:
@@ -651,8 +643,7 @@ class TestInMissionModeCondition:
             return HookResult(action=Action.warn, message="fired")
 
         raw = {"tool_name": "Bash", "tool_input": {"command": "echo hi"}, "transcript_path": "/nonexistent/s.jsonl"}
-        ctx = build_ctx()
-        evt = PreToolUseEvent(_raw=raw, ctx=ctx)
+        evt = make_event(PreToolUseEvent, raw, build_ctx())
         output = dispatch(Event.PreToolUse, evt)
         assert output is not None
 
