@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.17.0] - 2026-06-22
+
+### Changed
+- The `python` pack's `NoUnderscorePrefixes` rule now also warns on leading-underscore
+  module filenames (e.g. `_common.py`), not only underscore-prefixed classes and constants.
+  Style rules can read the post-edit file path via the new required `Change.path` field.
+
 ## [3.16.0] - 2026-06-22
 
 ### Removed
