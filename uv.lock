@@ -272,7 +272,7 @@ wheels = [
 
 [[package]]
 name = "capt-hook"
-version = "3.19.0"
+version = "0.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "ast-grep-py" },

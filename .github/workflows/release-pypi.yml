@@ -40,6 +40,23 @@ jobs:
           python-version: "3.13"
           cache-dependency-glob: uv.lock
 
+      - name: Tag must exceed the latest published version
+        run: |
+          uv run --no-project --with packaging python - "$GITHUB_REF_NAME" "$PKG" <<'PY'
+          import sys, json, urllib.request
+          from packaging.version import Version
+          tag = sys.argv[1].removeprefix("v"); pkg = sys.argv[2]
+          try:
+              latest = json.load(urllib.request.urlopen(f"https://pypi.org/pypi/{pkg}/json"))["info"]["version"]
+          except Exception:
+              latest = "0.0.0"  # first release / never published
+          if Version(tag) <= Version(latest):
+              sys.exit(f"::error::tag {tag} ({pkg}) is not greater than latest published {latest}")
+          print(f"OK: {tag} > {latest}")
+          PY
+        env:
+          PKG: capt-hook
+
       - name: Set version from tag
         run: uv version --frozen "${GITHUB_REF_NAME#v}"
 
