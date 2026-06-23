@@ -56,16 +56,15 @@ class TestRepoKey:
         git(repo, "worktree", "add", str(wt))
         assert repo_key(repo) == repo_key(wt) == "github.com/yasyf/x"
 
-    def test_no_origin_falls_back_to_shared_common_dir(self, tmp_path: Path) -> None:
+    def test_no_origin_returns_none(self, tmp_path: Path) -> None:
         repo = tmp_path / "repo"
         repo.mkdir()
         git(repo, "init")
         git(repo, "commit", "--allow-empty", "-m", "init")
         wt = tmp_path / "wt"
         git(repo, "worktree", "add", str(wt))
-        key = repo_key(repo)
-        assert key is not None and key.endswith(".git")
-        assert repo_key(wt) == key  # worktrees share the common .git dir
+        assert repo_key(repo) is None  # no origin: review opens PRs against origin, so it can't be keyed
+        assert repo_key(wt) is None
 
     def test_non_repo_returns_none(self, tmp_path: Path) -> None:
         assert repo_key(tmp_path) is None

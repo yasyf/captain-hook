@@ -383,4 +383,4 @@ class TestStatusCommand:
     def test_status_outside_a_git_repo_fails(self, tmp_path: Path) -> None:
         result = review_status(root=tmp_path)
         assert result.exit_code != 0
-        assert "not inside a git repository" in result.output
+        assert "is not a git repo with an 'origin' remote" in result.output

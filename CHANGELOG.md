@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.19.0] - 2026-06-23
+
+### Changed
+- The session reviewer now keys a repo solely by its git `origin` remote. The
+  git-common-dir path fallback in `resolve_repo_key` is removed, so `capt-hook review
+  enable` (and the run-time scan) reject a repo with no `origin` — the reviewer opens PRs
+  against `origin`, so an origin-less repo can never be watched. This prevents the stale
+  path-form repo keys that silently read as unwatched once a remote was added later.
+
 ## [3.17.0] - 2026-06-22
 
 ### Changed

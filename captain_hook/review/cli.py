@@ -38,7 +38,9 @@ def current_repo(root: Path) -> RepoKey:
     from captain_hook.review.repo import repo_key
 
     if (repo := repo_key(root)) is None:
-        raise click.ClickException(f"{root} is not inside a git repository")
+        raise click.ClickException(
+            f"{root} is not a git repo with an 'origin' remote (the session reviewer opens PRs against origin)"
+        )
     return repo
 
 

@@ -1,4 +1,4 @@
-"""Worktree-safe repository identity: a normalized git origin shared across a repo's worktrees."""
+"""Worktree-safe repository identity: the normalized git ``origin`` remote, shared across a repo's worktrees."""
 
 from __future__ import annotations
 
@@ -30,11 +30,9 @@ def normalize_origin(url: str) -> str:
 def resolve_repo_key(cwd: str) -> RepoKey | None:
     if origin := git_output(cwd, "remote", "get-url", "origin"):
         return RepoKey(normalize_origin(origin))
-    if common := git_output(cwd, "rev-parse", "--git-common-dir"):
-        return RepoKey(str((p if (p := Path(common)).is_absolute() else Path(cwd) / p).resolve()))
     return None
 
 
 def repo_key(start: Path | None = None) -> RepoKey | None:
-    """Return the worktree-safe key for the repo at ``start`` (defaults to cwd), or ``None`` outside a repo."""
+    """Worktree-safe key for the repo at ``start`` (cwd default); ``None`` without a git repo or ``origin`` remote."""
     return resolve_repo_key(str((start or Path.cwd()).resolve()))
