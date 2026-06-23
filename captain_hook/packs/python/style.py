@@ -41,7 +41,7 @@ class NoUnderscorePrefixes(StyleRule):
     def check(self, change: Change) -> Iterator[Violation]:
         yield from super().check(change)
         name = Path(change.path).name
-        if name.endswith(".py") and name.startswith("_") and not name.startswith("__"):
+        if name.startswith("_") and not name.startswith("__"):
             yield Violation(line=1, label=f"module filename {name!r}")
 
 
