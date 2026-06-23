@@ -139,6 +139,17 @@ class HookContext:
             rendered for turn in self.transcript.turns if (rendered := render_turn(turn, budget=Budget()))
         )
 
+    def transcript_block(self) -> str:
+        """The rendered transcript wrapped in a ``<transcript>`` tag carrying its source path.
+
+        The render clips long turns and tool calls under :class:`Budget`, so an agent-mode
+        LLM needs the path to read the untruncated content (e.g. a full ``ExitPlanMode`` plan).
+        """
+        rendered = self.transcript_text()
+        if (path := self.transcript.path) is not None:
+            return f'<transcript path="{path}">\n{rendered}\n</transcript>'
+        return f"<transcript>\n{rendered}\n</transcript>"
+
     def call_cli(
         self,
         args: list[str],
@@ -198,11 +209,11 @@ class HookContext:
         if isinstance(template, Prompt):
             prompt = str(template)
             if transcript:
-                prompt = f"{self.transcript_text()}\n\n<task>\n{prompt}\n</task>"
+                prompt = f"{self.transcript_block()}\n\n<task>\n{prompt}\n</task>"
         else:
             if transcript:
                 template = f"{{transcript}}\n\n<task>\n{template}\n</task>"
-            prompt = template.format(*args, **kwargs, transcript=self.transcript_text())
+            prompt = template.format(*args, **kwargs, transcript=self.transcript_block())
         return call_sync(
             prompt,
             backend=LlmBackends.for_specialty(specialty),

@@ -252,6 +252,29 @@ class TestCallLlm:
         prompt = mock_call.call_args.args[0]
         assert "transcript content here" in prompt
         assert "<task>" in prompt
+        assert "<transcript>" in prompt  # transcript is wrapped (this fixture has no path → bare tag)
+
+    def test_transcript_block_carries_path(self) -> None:
+        from pathlib import Path
+
+        from captain_hook.testing.helpers import fixture_session
+        from captain_hook.tests.helpers import raw_text
+
+        with_path = HookContext(
+            session=SessionStore(None),
+            transcript=fixture_session([raw_text("user", "hi")], path=Path("/p/sess.jsonl")),
+            settings=None,
+        )
+        block = with_path.transcript_block()
+        assert block.startswith('<transcript path="/p/sess.jsonl">')
+        assert block.endswith("</transcript>")
+
+        no_path = HookContext(
+            session=SessionStore(None),
+            transcript=fixture_session([raw_text("user", "hi")]),
+            settings=None,
+        )
+        assert no_path.transcript_block().startswith("<transcript>\n")
 
     def test_with_agent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")

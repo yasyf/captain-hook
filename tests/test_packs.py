@@ -24,7 +24,7 @@ PYTHON_HOOKS = {"style", "testing", "toolchain"}
 GO_HOOKS = {"testing", "toolchain"}
 # lib.py carries __capt_hook_skip__ so it is a non-underscore file the loader skips; the
 # layout test counts .py files, so it appears here, but only steering.py registers hooks.
-STEERING_HOOKS = {"lib", "steering"}
+STEERING_HOOKS = {"steering"}
 HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 SRC_USES_FILE = (
     "from pathlib import Path\n"
@@ -522,28 +522,14 @@ def test_import_pack_module_sets_file(tmp_path: Path) -> None:
     assert len(app._state.hooks) == 1
 
 
-# --- steering pack: importable building blocks vs. enabled registration --------------
+# --- steering pack: enabled registration --------------------------------------------
 
 
-def test_importing_steering_building_blocks_registers_nothing(isolate_modules: None) -> None:
-    # Force a cold import so the package init (and its skip-marked lib) re-runs under
-    # this test's clean state — the whole point is that the import fires no hooks.
-    for name in [k for k in sys.modules if k.startswith("captain_hook.packs.steering")]:
-        del sys.modules[name]
-
-    from captain_hook.packs.steering import TypeCheckerContext, pre_existing_nudge, trivial_type_nudge
-
-    assert app._state.hooks == []  # importing the inert library registers ZERO hooks
-    assert callable(pre_existing_nudge) and callable(trivial_type_nudge)
-    assert TypeCheckerContext().PATTERN.search("pyright type error")  # the building block is usable
-
-
-def test_enabling_steering_pack_registers_both_nudges() -> None:
+def test_enabling_steering_pack_registers_nudges() -> None:
     resolved = manager.resolve_builtin("steering")
     discover_pack("steering", resolved.path)
-    # Exactly two: steering.py registers the two nudges; lib.py is skip-marked, so the
-    # auto-load loop never imports it — any top-level nudge it carried would push this past 2.
-    assert len(app._state.hooks) == 2
+    # Three: steering.py registers the two signal nudges plus the band-aid-plan llm_nudge.
+    assert len(app._state.hooks) == 3
     assert "captain_hook._packs.steering.steering" in sys.modules
 
 

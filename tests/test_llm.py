@@ -290,6 +290,40 @@ class TestLlmNudgeDefaultEvents:
         assert _state.hooks[0].spec.events == Event.PostToolUse
 
 
+class TestLlmNudgeExitPlanModeGate:
+    """Wiring for the band-aid-plan nudge: only_if=[Tool('ExitPlanMode')] on PostToolUse."""
+
+    def test_fires_on_exitplanmode_when_fire_true(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import NudgeVerdict
+
+        ctx = make_ctx(tmp_path, texts=["plan"], call_llm_return=NudgeVerdict(fire=True, reasoning="band-aid"))
+        register_llm_nudge("Band-aid?", message="WARNING", only_if=[Tool("ExitPlanMode")], events=Event.PostToolUse)
+        evt = make_post_tool_event(tool_name="ExitPlanMode", ctx=ctx)
+        result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
+
+        assert result is not None
+        assert "additionalContext" in result["hookSpecificOutput"]
+
+    def test_silent_on_exitplanmode_when_fire_false(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import NudgeVerdict
+
+        ctx = make_ctx(tmp_path, texts=["plan"], call_llm_return=NudgeVerdict(fire=False, reasoning="root cause"))
+        register_llm_nudge("Band-aid?", message="WARNING", only_if=[Tool("ExitPlanMode")], events=Event.PostToolUse)
+        evt = make_post_tool_event(tool_name="ExitPlanMode", ctx=ctx)
+
+        assert dispatch(Event.PostToolUse, evt, session_dir=tmp_path) is None
+
+    def test_skips_non_exitplanmode_tools(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import NudgeVerdict
+
+        ctx = make_ctx(tmp_path, texts=["plan"], call_llm_return=NudgeVerdict(fire=True, reasoning="band-aid"))
+        register_llm_nudge("Band-aid?", message="WARNING", only_if=[Tool("ExitPlanMode")], events=Event.PostToolUse)
+        evt = make_post_tool_event(tool_name="Edit", ctx=ctx)
+
+        assert dispatch(Event.PostToolUse, evt, session_dir=tmp_path) is None
+        ctx.call_llm.assert_not_called()
+
+
 class TestLlmGateWaitAwareDefault:
     def test_stop_llm_gate_without_skip_if_gets_waiting(self) -> None:
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True)

@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.20.0] - 2026-06-23
+
+### Added
+- The `steering` pack gains a band-aid-plan nudge: an `llm_nudge` on `ExitPlanMode`
+  (`PostToolUse`, `max_fires=1`, agent mode) that flags a plan-mode plan treating the
+  symptom instead of removing the root cause, and points the agent back at a
+  first-principles fix.
+
+### Changed
+- `HookContext.call_llm(transcript=True)` now wraps the rendered transcript in a
+  `<transcript path="…">` tag (new `HookContext.transcript_block`), so an agent-mode call
+  can read the untruncated transcript past the `Budget()` clip — e.g. a full `ExitPlanMode`
+  plan. Benefits every `llm_nudge`/`llm_gate`/`call_llm(transcript=True)` agent call.
+- The `steering` pack now registers its nudges directly in `steering.py`, matching the
+  `general`/`python`/`go` packs (no `lib.py` split).
+
+### Removed
+- `captain_hook.packs.steering` no longer re-exports `pre_existing_nudge`,
+  `trivial_type_nudge`, `TypeCheckerContext`, or the signal constants — these were
+  pack-internal building blocks. Copy the condition into a local hook if you need it.
+
 ## [3.19.0] - 2026-06-23
 
 ### Changed
