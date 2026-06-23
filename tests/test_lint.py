@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import ast
-import shutil
-import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -18,20 +16,6 @@ from captain_hook.types import (
     TestFile,
     Tool,
 )
-
-
-@pytest.fixture
-def work_dir():
-    d = Path(tempfile.mkdtemp(prefix="src_"))
-    yield d
-    shutil.rmtree(d, ignore_errors=True)
-
-
-@pytest.fixture
-def session_dir():
-    d = Path(tempfile.mkdtemp(prefix="session_"))
-    yield d
-    shutil.rmtree(d, ignore_errors=True)
 
 
 def register_lint(
@@ -59,19 +43,35 @@ def register_lint(
     )
 
 
+def lint_and_dispatch(
+    session_dir: Path,
+    check: Any,
+    *,
+    tool_name: str = "Edit",
+    tool_input: dict[str, Any],
+    **lint_kwargs: Any,
+) -> Any:
+    register_lint(check, **lint_kwargs)
+    evt = make_post_tool_event(
+        tool_name=tool_name,
+        tool_input=tool_input,
+        ctx=make_ctx(session_dir),
+    )
+    return dispatch(Event.PostToolUse, evt, session_dir)
+
+
 class TestStringModeLint:
     def test_string_check_receives_content(self, session_dir: Path) -> None:
 
         def check(content: str) -> list[str]:
             return ["found_issue"] if "bad_pattern" in content else []
 
-        register_lint(check, message="Issues: {violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "bad_pattern here"},
-            ctx=make_ctx(session_dir),
+            message="Issues: {violations}",
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "found_issue" in result["hookSpecificOutput"]["additionalContext"]
 
@@ -80,13 +80,12 @@ class TestStringModeLint:
         def check(content: str) -> list[str]:
             return []
 
-        register_lint(check, message="Issues: {violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "clean content"},
-            ctx=make_ctx(session_dir),
+            message="Issues: {violations}",
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
 
 
@@ -103,13 +102,13 @@ class TestAstModeLint:
                         if alias.name == "pdb":
                             yield "pdb import found"
 
-        register_lint(check, message="AST issues: {violations}", trigger="pdb")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "import pdb"},
-            ctx=make_ctx(session_dir),
+            message="AST issues: {violations}",
+            trigger="pdb",
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "pdb import found" in result["hookSpecificOutput"]["additionalContext"]
 
@@ -123,13 +122,11 @@ class TestModeDetection:
             called_with_str = True
             return ["violation"]
 
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "something"},
-            ctx=make_ctx(session_dir),
         )
-        dispatch(Event.PostToolUse, evt, session_dir)
         assert called_with_str
 
     def test_ast_mode_detected_from_hint(self, work_dir: Path, session_dir: Path) -> None:
@@ -143,13 +140,12 @@ class TestModeDetection:
             called_with_ast = True
             return iter([])
 
-        register_lint(check, message="{violations}", trigger="x")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "x = 1"},
-            ctx=make_ctx(session_dir),
+            trigger="x",
         )
-        dispatch(Event.PostToolUse, evt, session_dir)
         assert called_with_ast
 
 
@@ -159,13 +155,13 @@ class TestViolationFormatting:
         def check(content: str) -> list[str]:
             return ["issue_a", "issue_b", "issue_c"]
 
-        register_lint(check, message="Found: {violations}", sep="; ")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
-            ctx=make_ctx(session_dir),
+            message="Found: {violations}",
+            sep="; ",
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         msg = result["hookSpecificOutput"]["additionalContext"]
         assert "issue_a; issue_b; issue_c" in msg
@@ -176,13 +172,11 @@ class TestViolationFormatting:
         def check(content: str) -> list[str]:
             return ["a", "b"]
 
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
-            ctx=make_ctx(session_dir),
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "a, b" in result["hookSpecificOutput"]["additionalContext"]
 
@@ -199,13 +193,12 @@ class TestTriggerShortCircuit:
             check_called = True
             yield "should not appear"
 
-        register_lint(check, message="{violations}", trigger="pdb")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "x = 1"},
-            ctx=make_ctx(session_dir),
+            trigger="pdb",
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
         assert not check_called
 
@@ -220,13 +213,12 @@ class TestTriggerShortCircuit:
             check_called = True
             yield "pdb found"
 
-        register_lint(check, message="{violations}", trigger="pdb")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "import pdb"},
-            ctx=make_ctx(session_dir),
+            trigger="pdb",
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert check_called
 
@@ -237,13 +229,12 @@ class TestMaxShown:
         def check(content: str) -> list[str]:
             return [f"v{i}" for i in range(10)]
 
-        register_lint(check, message="{violations}", max_shown=3)
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
-            ctx=make_ctx(session_dir),
+            max_shown=3,
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         msg = result["hookSpecificOutput"]["additionalContext"]
         assert "v0" in msg
@@ -256,13 +247,11 @@ class TestMaxShown:
         def check(content: str) -> list[str]:
             return [f"v{i}" for i in range(10)]
 
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
-            ctx=make_ctx(session_dir),
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         msg = result["hookSpecificOutput"]["additionalContext"]
         assert "v4" in msg
@@ -275,13 +264,12 @@ class TestBlockMode:
         def check(content: str) -> list[str]:
             return ["violation"]
 
-        register_lint(check, message="{violations}", block=True)
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
-            ctx=make_ctx(session_dir),
+            block=True,
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -290,87 +278,56 @@ class TestBlockMode:
         def check(content: str) -> list[str]:
             return ["violation"]
 
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
-            ctx=make_ctx(session_dir),
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "additionalContext" in result["hookSpecificOutput"]
 
 
 class TestDefaultConditions:
-    def test_non_python_file_skipped(self, session_dir: Path) -> None:
+    @pytest.mark.parametrize(
+        ("tool_name", "tool_input"),
+        [
+            pytest.param(
+                "Edit",
+                {"file_path": "style.css", "old_string": "", "new_string": "content"},
+                id="non_python_file",
+            ),
+            pytest.param(
+                "Edit",
+                {"file_path": "tests/test_foo.py", "old_string": "", "new_string": "content"},
+                id="test_file",
+            ),
+            pytest.param("Bash", {"command": "echo hello"}, id="bash_tool"),
+        ],
+    )
+    def test_skipped(self, session_dir: Path, tool_name: str, tool_input: dict[str, Any]) -> None:
 
         def check(content: str) -> list[str]:
             return ["violation"]
 
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
-            tool_input={"file_path": "style.css", "old_string": "", "new_string": "content"},
-            ctx=make_ctx(session_dir),
-        )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
-        assert result is None
+        assert lint_and_dispatch(session_dir, check, tool_name=tool_name, tool_input=tool_input) is None
 
-    def test_test_file_skipped(self, session_dir: Path) -> None:
-
-        def check(content: str) -> list[str]:
-            return ["violation"]
-
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
-            tool_input={"file_path": "tests/test_foo.py", "old_string": "", "new_string": "content"},
-            ctx=make_ctx(session_dir),
-        )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
-        assert result is None
-
-    def test_bash_tool_skipped(self, session_dir: Path) -> None:
+    @pytest.mark.parametrize(
+        ("tool_name", "tool_input"),
+        [
+            pytest.param(
+                "Edit",
+                {"file_path": "foo.py", "old_string": "", "new_string": "content"},
+                id="python_edit",
+            ),
+            pytest.param("Write", {"file_path": "foo.py", "content": "content"}, id="write_tool"),
+        ],
+    )
+    def test_matches(self, session_dir: Path, tool_name: str, tool_input: dict[str, Any]) -> None:
 
         def check(content: str) -> list[str]:
             return ["violation"]
 
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Bash",
-            tool_input={"command": "echo hello"},
-            ctx=make_ctx(session_dir),
-        )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
-        assert result is None
-
-    def test_python_edit_matches(self, session_dir: Path) -> None:
-
-        def check(content: str) -> list[str]:
-            return ["violation"]
-
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
-            tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
-            ctx=make_ctx(session_dir),
-        )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
-        assert result is not None
-
-    def test_write_tool_matches(self, session_dir: Path) -> None:
-
-        def check(content: str) -> list[str]:
-            return ["violation"]
-
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Write",
-            tool_input={"file_path": "foo.py", "content": "content"},
-            ctx=make_ctx(session_dir),
-        )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
-        assert result is not None
+        assert lint_and_dispatch(session_dir, check, tool_name=tool_name, tool_input=tool_input) is not None
 
     def test_spec_has_correct_defaults(self) -> None:
 
@@ -395,13 +352,11 @@ class TestFileVsContentRead:
             received_content = content
             return ["v"] if "target" in content else []
 
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "target code"},
-            ctx=make_ctx(session_dir),
         )
-        dispatch(Event.PostToolUse, evt, session_dir)
         assert received_content == "target code"
 
     def test_ast_mode_reads_full_file_from_disk(self, work_dir: Path, session_dir: Path) -> None:
@@ -419,13 +374,12 @@ class TestFileVsContentRead:
                 if isinstance(node, ast.FunctionDef):
                     tree_nodes_seen.append(node.name)
 
-        register_lint(check, message="{violations}", trigger="pdb")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "import pdb"},
-            ctx=make_ctx(session_dir),
+            trigger="pdb",
         )
-        dispatch(Event.PostToolUse, evt, session_dir)
         assert "pdb" in tree_nodes_seen
         assert "foo" in tree_nodes_seen
 
@@ -439,13 +393,12 @@ class TestSyntaxError:
         def check(tree: ast.AST) -> Iterator[str]:
             yield "should not appear"
 
-        register_lint(check, message="{violations}", trigger="def")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "def foo(:"},
-            ctx=make_ctx(session_dir),
+            trigger="def",
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
 
 
@@ -455,13 +408,11 @@ class TestEmptyViolations:
         def check(content: str) -> list[str]:
             return []
 
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "clean"},
-            ctx=make_ctx(session_dir),
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
 
     def test_empty_iterator_returns_none(self, work_dir: Path, session_dir: Path) -> None:
@@ -472,13 +423,12 @@ class TestEmptyViolations:
         def check(tree: ast.AST) -> Iterator[str]:
             return iter([])
 
-        register_lint(check, message="{violations}", trigger="x")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "x = 1"},
-            ctx=make_ctx(session_dir),
+            trigger="x",
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
 
 
@@ -503,13 +453,12 @@ class TestTriggerIgnoredInStringMode:
         def check(content: str) -> list[str]:
             return ["found"]
 
-        register_lint(check, message="{violations}", trigger="xyz")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content without trigger"},
-            ctx=make_ctx(session_dir),
+            trigger="xyz",
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "found" in result["hookSpecificOutput"]["additionalContext"]
 
@@ -520,13 +469,11 @@ class TestCheckRaises:
         def check(content: str) -> list[str]:
             raise ValueError("boom")
 
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
-            ctx=make_ctx(session_dir),
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
 
     def test_ast_check_raises_returns_none(self, work_dir: Path, session_dir: Path) -> None:
@@ -537,32 +484,30 @@ class TestCheckRaises:
         def check(tree: ast.AST) -> Iterator[str]:
             raise TypeError("oops")
 
-        register_lint(check, message="{violations}", trigger="x")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "x = 1"},
-            ctx=make_ctx(session_dir),
+            trigger="x",
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
 
 
 class TestDefaultEvents:
-    def test_default_event_is_post_tool_use(self) -> None:
+    @pytest.mark.parametrize(
+        ("events", "expected"),
+        [
+            pytest.param(None, Event.PostToolUse, id="default_is_post_tool_use"),
+            pytest.param(Event.PreToolUse, Event.PreToolUse, id="can_be_overridden"),
+        ],
+    )
+    def test_event(self, events: Event | None, expected: Event) -> None:
 
         def check(content: str) -> list[str]:
             return []
 
-        register_lint(check, message="{violations}")
-        assert _state.hooks[-1].spec.events == Event.PostToolUse
-
-    def test_events_can_be_overridden(self) -> None:
-
-        def check(content: str) -> list[str]:
-            return []
-
-        register_lint(check, message="{violations}", events=Event.PreToolUse)
-        assert _state.hooks[-1].spec.events == Event.PreToolUse
+        register_lint(check, message="{violations}", events=events)
+        assert _state.hooks[-1].spec.events == expected
 
 
 class TestAstFullFileRead:
@@ -580,13 +525,12 @@ class TestAstFullFileRead:
                 if isinstance(node, ast.FunctionDef):
                     found_nodes.append(f"func:{node.name}")
 
-        register_lint(check, message="{violations}", trigger="class")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "class Foo"},
-            ctx=make_ctx(session_dir),
+            trigger="class",
         )
-        dispatch(Event.PostToolUse, evt, session_dir)
         assert "class:Foo" in found_nodes
         assert "func:bar" in found_nodes
 
@@ -602,13 +546,11 @@ class TestEmptyStringPassthrough:
             received_content.append(content)
             return ["empty file edit"]
 
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": "foo.py", "old_string": "old", "new_string": ""},
-            ctx=make_ctx(session_dir),
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert len(received_content) == 1
         assert received_content[0] == ""
         assert result is not None
@@ -621,13 +563,12 @@ class TestEmptyStringPassthrough:
             check_called = True
             return ["should not fire"]
 
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_name="Bash",
             tool_input={"command": "echo hi"},
-            ctx=make_ctx(session_dir),
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert not check_called
         assert result is None
 
@@ -649,13 +590,11 @@ class TestAstLintEmptyFile:
             received_tree.append(tree)
             return iter([])
 
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": ""},
-            ctx=make_ctx(session_dir),
         )
-        dispatch(Event.PostToolUse, evt, session_dir)
         assert len(received_tree) == 1
         assert isinstance(received_tree[0], ast.Module)
 
@@ -668,13 +607,11 @@ class TestAstLintEmptyFile:
                 yield "empty module"
             yield "always fires"
 
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": ""},
-            ctx=make_ctx(session_dir),
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is not None
         assert "always fires" in result["hookSpecificOutput"]["additionalContext"]
 
@@ -703,13 +640,11 @@ class TestCheckExceptionLogging:
         def check(content: str) -> list[str]:
             raise ValueError("intentional boom")
 
-        register_lint(check, message="{violations}")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
-            ctx=make_ctx(session_dir),
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
         assert any("check" in r.message and r.exc_info for r in logcap.records)
 
@@ -726,13 +661,12 @@ class TestCheckExceptionLogging:
         def check(tree: ast.AST) -> Iterator[str]:
             raise TypeError("ast boom")
 
-        register_lint(check, message="{violations}", trigger="x")
-        evt = make_post_tool_event(
-            tool_name="Edit",
+        result = lint_and_dispatch(
+            session_dir,
+            check,
             tool_input={"file_path": str(py_file), "old_string": "", "new_string": "x = 1"},
-            ctx=make_ctx(session_dir),
+            trigger="x",
         )
-        result = dispatch(Event.PostToolUse, evt, session_dir)
         assert result is None
         assert any("check" in r.message and r.exc_info for r in logcap.records)
 
