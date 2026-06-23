@@ -206,7 +206,7 @@ def detect(events: Sequence[TranscriptEvent]) -> Iterator[MiningSignal]:
         iter_plan_reentry_signals(events),
         iter_tool_denial_signals(events),
         iter_interrupt_marker_signals(events),
-        iter_review_comment_signals(events, formats()),
+        iter_review_comment_signals(events, formats(), surfaces=frozenset({"typed"}), structured_formats=()),
     )
 
 
