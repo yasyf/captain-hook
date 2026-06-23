@@ -66,34 +66,65 @@ def make_tool_event(
 
 
 class TestPatternCondition:
-    def edit(self, file: str, new: str) -> PreToolUseEvent:
-        return make_tool_event("Edit", {"file_path": file, "old_string": "", "new_string": new})
-
-    def test_string_pattern_matches(self) -> None:
-        assert check_condition(Pattern("print($$$)"), self.edit("a.py", "print('x')\n")) is True
-
-    def test_string_pattern_no_match(self) -> None:
-        assert check_condition(Pattern("print($$$)"), self.edit("a.py", "logger.info('x')\n")) is False
-
-    def test_ignores_match_inside_string_literal(self) -> None:
-        assert check_condition(Pattern("print($$$)"), self.edit("a.py", "s = 'print(x)'\n")) is False
-
-    def test_language_inferred_from_extension(self) -> None:
-        assert check_condition(Pattern("panic($$$)"), self.edit("main.go", 'func f() { panic("x") }\n')) is True
-
-    def test_lang_override_when_extension_unknown(self) -> None:
-        assert (
-            check_condition(Pattern("panic($$$)", lang="go"), self.edit("x.txt", 'func f() { panic("x") }\n')) is True
-        )
-
-    def test_unsupported_extension_no_match(self) -> None:
-        assert check_condition(Pattern("print($$$)"), self.edit("notes.txt", "print('x')\n")) is False
-
-    def test_no_content_no_match(self) -> None:
-        assert check_condition(Pattern("print($$$)"), make_tool_event("Read", {"file_path": "a.py"})) is False
-
-    def test_captures_metavar(self) -> None:
-        assert check_condition(Pattern("os.system($CMD)"), self.edit("a.py", 'os.system("ls")\n')) is True
+    @pytest.mark.parametrize(
+        ("cond", "evt", "expected"),
+        [
+            pytest.param(
+                Pattern("print($$$)"),
+                make_tool_event("Edit", {"file_path": "a.py", "old_string": "", "new_string": "print('x')\n"}),
+                True,
+                id="string_pattern_matches",
+            ),
+            pytest.param(
+                Pattern("print($$$)"),
+                make_tool_event("Edit", {"file_path": "a.py", "old_string": "", "new_string": "logger.info('x')\n"}),
+                False,
+                id="string_pattern_no_match",
+            ),
+            pytest.param(
+                Pattern("print($$$)"),
+                make_tool_event("Edit", {"file_path": "a.py", "old_string": "", "new_string": "s = 'print(x)'\n"}),
+                False,
+                id="ignores_match_inside_string_literal",
+            ),
+            pytest.param(
+                Pattern("panic($$$)"),
+                make_tool_event(
+                    "Edit", {"file_path": "main.go", "old_string": "", "new_string": 'func f() { panic("x") }\n'}
+                ),
+                True,
+                id="language_inferred_from_extension",
+            ),
+            pytest.param(
+                Pattern("panic($$$)", lang="go"),
+                make_tool_event(
+                    "Edit", {"file_path": "x.txt", "old_string": "", "new_string": 'func f() { panic("x") }\n'}
+                ),
+                True,
+                id="lang_override_when_extension_unknown",
+            ),
+            pytest.param(
+                Pattern("print($$$)"),
+                make_tool_event("Edit", {"file_path": "notes.txt", "old_string": "", "new_string": "print('x')\n"}),
+                False,
+                id="unsupported_extension_no_match",
+            ),
+            pytest.param(
+                Pattern("print($$$)"),
+                make_tool_event("Read", {"file_path": "a.py"}),
+                False,
+                id="no_content_no_match",
+            ),
+            pytest.param(
+                Pattern("os.system($CMD)"),
+                make_tool_event("Edit", {"file_path": "a.py", "old_string": "", "new_string": 'os.system("ls")\n'}),
+                True,
+                id="captures_metavar",
+            ),
+        ],
+    )
+    def test_pattern(self, cond: TCondition, evt: PreToolUseEvent, expected: bool) -> None:
+        assert check_condition(cond, evt) is expected
 
     def test_hashable_and_equal(self) -> None:
         assert hash(Pattern("print($$$)")) == hash(Pattern("print($$$)"))
@@ -102,97 +133,50 @@ class TestPatternCondition:
 
 
 class TestToolCondition:
-    def test_tool_matches_edit(self) -> None:
+    @pytest.mark.parametrize(
+        ("pattern", "tool_name", "expected"),
+        [
+            pytest.param("Edit|Write", "Edit", True, id="matches_edit"),
+            pytest.param("Edit|Write", "Write", True, id="matches_write"),
+            pytest.param("Edit|Write", "Bash", False, id="rejects_bash"),
+            pytest.param("Bash", "Execute", True, id="bash_matches_execute"),
+            pytest.param("Execute", "Bash", True, id="execute_matches_bash"),
+            pytest.param("Write", "Create", True, id="write_matches_create"),
+            pytest.param("Create", "Write", True, id="create_matches_write"),
+            pytest.param("Agent", "Task", True, id="agent_matches_task"),
+            pytest.param("Task", "Agent", True, id="task_matches_agent"),
+            pytest.param("WebFetch", "FetchUrl", True, id="webfetch_matches_fetchurl"),
+            pytest.param("FetchUrl", "WebFetch", True, id="fetchurl_matches_webfetch"),
+            pytest.param("ExitPlanMode", "ExitSpecMode", True, id="exitplanmode_matches_exitspecmode"),
+            pytest.param("ExitSpecMode", "ExitPlanMode", True, id="exitspecmode_matches_exitplanmode"),
+        ],
+    )
+    def test_tool(self, pattern: str, tool_name: str, expected: bool) -> None:
+        assert check_condition(Tool(pattern), make_tool_event(tool_name)) is expected
 
-        evt = make_tool_event("Edit")
-        assert check_condition(Tool("Edit|Write"), evt) is True
-
-    def test_tool_matches_write(self) -> None:
-
-        evt = make_tool_event("Write")
-        assert check_condition(Tool("Edit|Write"), evt) is True
-
-    def test_tool_rejects_bash(self) -> None:
-
-        evt = make_tool_event("Bash")
-        assert check_condition(Tool("Edit|Write"), evt) is False
-
-    def test_tool_bash_matches_execute(self) -> None:
-
-        evt = make_tool_event("Execute")
-        assert check_condition(Tool("Bash"), evt) is True
-
-    def test_tool_execute_matches_bash(self) -> None:
-
-        evt = make_tool_event("Bash")
-        assert check_condition(Tool("Execute"), evt) is True
-
-    def test_tool_write_matches_create(self) -> None:
-
-        evt = make_tool_event("Create")
-        assert check_condition(Tool("Write"), evt) is True
-
-    def test_tool_create_matches_write(self) -> None:
-
-        evt = make_tool_event("Write")
-        assert check_condition(Tool("Create"), evt) is True
-
-    def test_tool_agent_matches_task(self) -> None:
-
-        evt = make_tool_event("Task")
-        assert check_condition(Tool("Agent"), evt) is True
-
-    def test_tool_task_matches_agent(self) -> None:
-
-        evt = make_tool_event("Agent")
-        assert check_condition(Tool("Task"), evt) is True
-
-    def test_tool_webfetch_matches_fetchurl(self) -> None:
-
-        evt = make_tool_event("FetchUrl")
-        assert check_condition(Tool("WebFetch"), evt) is True
-
-    def test_tool_fetchurl_matches_webfetch(self) -> None:
-
-        evt = make_tool_event("WebFetch")
-        assert check_condition(Tool("FetchUrl"), evt) is True
-
-    def test_tool_exitplanmode_matches_exitspecmode(self) -> None:
-
-        evt = make_tool_event("ExitSpecMode")
-        assert check_condition(Tool("ExitPlanMode"), evt) is True
-
-    def test_tool_exitspecmode_matches_exitplanmode(self) -> None:
-
-        evt = make_tool_event("ExitPlanMode")
-        assert check_condition(Tool("ExitSpecMode"), evt) is True
-
-    def test_tool_returns_false_for_stop_event(self) -> None:
-
-        evt = make_event(StopEvent)
-        assert check_condition(Tool("Bash"), evt) is False
-
-    def test_tool_returns_false_for_user_prompt_event(self) -> None:
-
-        evt = make_event(UserPromptSubmitEvent)
-        assert check_condition(Tool("Bash"), evt) is False
+    @pytest.mark.parametrize(
+        ("event_cls", "expected"),
+        [
+            pytest.param(StopEvent, False, id="returns_false_for_stop_event"),
+            pytest.param(UserPromptSubmitEvent, False, id="returns_false_for_user_prompt_event"),
+        ],
+    )
+    def test_tool_non_tool_event(self, event_cls: type[BaseHookEvent], expected: bool) -> None:
+        assert check_condition(Tool("Bash"), make_event(event_cls)) is expected
 
 
 class TestFilePathCondition:
-    def test_filepath_matches_py(self) -> None:
-
-        evt = make_tool_event("Edit", {"file_path": "a.py", "old_string": "", "new_string": ""})
-        assert check_condition(FilePath("*.py", "*.ts"), evt) is True
-
-    def test_filepath_matches_ts(self) -> None:
-
-        evt = make_tool_event("Edit", {"file_path": "b.ts", "old_string": "", "new_string": ""})
-        assert check_condition(FilePath("*.py", "*.ts"), evt) is True
-
-    def test_filepath_rejects_rs(self) -> None:
-
-        evt = make_tool_event("Edit", {"file_path": "c.rs", "old_string": "", "new_string": ""})
-        assert check_condition(FilePath("*.py", "*.ts"), evt) is False
+    @pytest.mark.parametrize(
+        ("cond", "file_path", "expected"),
+        [
+            pytest.param(FilePath("*.py", "*.ts"), "a.py", True, id="matches_py"),
+            pytest.param(FilePath("*.py", "*.ts"), "b.ts", True, id="matches_ts"),
+            pytest.param(FilePath("*.py", "*.ts"), "c.rs", False, id="rejects_rs"),
+        ],
+    )
+    def test_filepath_relative(self, cond: TCondition, file_path: str, expected: bool) -> None:
+        evt = make_tool_event("Edit", {"file_path": file_path, "old_string": "", "new_string": ""})
+        assert check_condition(cond, evt) is expected
 
     def test_filepath_returns_false_when_no_file(self) -> None:
 
@@ -204,54 +188,56 @@ class TestFilePathCondition:
         evt = make_event(StopEvent)
         assert check_condition(FilePath("*.py"), evt) is False
 
-    def test_filepath_matches_absolute_inside_project(self, tmp_path: Path) -> None:
-
+    @pytest.mark.parametrize(
+        ("cond", "file_path", "expected"),
+        [
+            pytest.param(FilePath("*.py"), "a.py", True, id="matches_absolute_inside_project"),
+            pytest.param(FilePath("*.py"), "/tmp/regex_check.py", False, id="rejects_absolute_outside_project"),
+            pytest.param(
+                FilePath("*.py", project_only=False),
+                "/tmp/regex_check.py",
+                True,
+                id="opt_out_matches_absolute_outside_project",
+            ),
+        ],
+    )
+    def test_filepath_absolute(self, cond: TCondition, file_path: str, expected: bool, tmp_path: Path) -> None:
+        path = file_path if file_path.startswith("/") else str(tmp_path / file_path)
         evt = make_tool_event(
             "Edit",
-            {"file_path": str(tmp_path / "a.py"), "old_string": "", "new_string": ""},
+            {"file_path": path, "old_string": "", "new_string": ""},
             ctx=build_ctx(project_root=tmp_path),
         )
-        assert check_condition(FilePath("*.py"), evt) is True
-
-    def test_filepath_rejects_absolute_outside_project(self, tmp_path: Path) -> None:
-
-        evt = make_tool_event(
-            "Edit",
-            {"file_path": "/tmp/regex_check.py", "old_string": "", "new_string": ""},
-            ctx=build_ctx(project_root=tmp_path),
-        )
-        assert check_condition(FilePath("*.py"), evt) is False
-
-    def test_filepath_opt_out_matches_absolute_outside_project(self, tmp_path: Path) -> None:
-
-        evt = make_tool_event(
-            "Edit",
-            {"file_path": "/tmp/regex_check.py", "old_string": "", "new_string": ""},
-            ctx=build_ctx(project_root=tmp_path),
-        )
-        assert check_condition(FilePath("*.py", project_only=False), evt) is True
+        assert check_condition(cond, evt) is expected
 
 
 class TestCommandCondition:
-    def test_command_matches_git_push_force(self) -> None:
-
-        evt = make_tool_event("Bash", {"command": "git push --force origin"})
-        assert check_condition(Command(r"git\s+push\s+--force"), evt) is True
-
-    def test_command_matches_inside_echo(self) -> None:
-
-        evt = make_tool_event("Bash", {"command": 'echo "git push --force"'})
-        assert check_condition(Command(r"git\s+push\s+--force"), evt) is True
-
-    def test_command_returns_false_for_edit_event(self) -> None:
-
-        evt = make_tool_event("Edit", {"file_path": "a.py", "old_string": "", "new_string": ""})
-        assert check_condition(Command(r"git"), evt) is False
-
-    def test_command_returns_false_for_stop_event(self) -> None:
-
-        evt = make_event(StopEvent)
-        assert check_condition(Command(r"git"), evt) is False
+    @pytest.mark.parametrize(
+        ("cond", "evt", "expected"),
+        [
+            pytest.param(
+                Command(r"git\s+push\s+--force"),
+                make_tool_event("Bash", {"command": "git push --force origin"}),
+                True,
+                id="matches_git_push_force",
+            ),
+            pytest.param(
+                Command(r"git\s+push\s+--force"),
+                make_tool_event("Bash", {"command": 'echo "git push --force"'}),
+                True,
+                id="matches_inside_echo",
+            ),
+            pytest.param(
+                Command(r"git"),
+                make_tool_event("Edit", {"file_path": "a.py", "old_string": "", "new_string": ""}),
+                False,
+                id="returns_false_for_edit_event",
+            ),
+            pytest.param(Command(r"git"), make_event(StopEvent), False, id="returns_false_for_stop_event"),
+        ],
+    )
+    def test_command(self, cond: TCondition, evt: BaseHookEvent, expected: bool) -> None:
+        assert check_condition(cond, evt) is expected
 
     def test_command_uses_search_not_match(self) -> None:
 
@@ -261,138 +247,127 @@ class TestCommandCondition:
 
 
 class TestContentCondition:
-    def test_content_matches_import_pdb(self) -> None:
+    @pytest.mark.parametrize(
+        ("cond", "evt", "expected"),
+        [
+            pytest.param(
+                Content(r"import\s+pdb"),
+                make_tool_event(
+                    "Edit", {"file_path": "a.py", "old_string": "", "new_string": "import pdb; pdb.set_trace()"}
+                ),
+                True,
+                id="matches_import_pdb",
+            ),
+            pytest.param(
+                Content(r"import\s+pdb"),
+                make_tool_event("Edit", {"file_path": "a.py", "old_string": "", "new_string": "import logging"}),
+                False,
+                id="rejects_import_logging",
+            ),
+            pytest.param(
+                Content(r"import\s+pdb"),
+                make_tool_event("Bash", {"command": "echo hi"}),
+                False,
+                id="returns_false_for_bash_event",
+            ),
+            pytest.param(Content(r"import"), make_event(StopEvent), False, id="returns_false_for_stop_event"),
+        ],
+    )
+    def test_content(self, cond: TCondition, evt: BaseHookEvent, expected: bool) -> None:
+        assert check_condition(cond, evt) is expected
 
-        evt = make_tool_event(
-            "Edit",
-            {
-                "file_path": "a.py",
-                "old_string": "",
-                "new_string": "import pdb; pdb.set_trace()",
-            },
-        )
-        assert check_condition(Content(r"import\s+pdb"), evt) is True
-
-    def test_content_rejects_import_logging(self) -> None:
-
-        evt = make_tool_event(
-            "Edit",
-            {
-                "file_path": "a.py",
-                "old_string": "",
-                "new_string": "import logging",
-            },
-        )
-        assert check_condition(Content(r"import\s+pdb"), evt) is False
-
-    def test_content_returns_false_for_bash_event(self) -> None:
-
-        evt = make_tool_event("Bash", {"command": "echo hi"})
-        assert check_condition(Content(r"import\s+pdb"), evt) is False
-
-    def test_content_returns_false_for_stop_event(self) -> None:
-
-        evt = make_event(StopEvent)
-        assert check_condition(Content(r"import"), evt) is False
-
-    def test_content_rejects_absolute_outside_project(self, tmp_path: Path) -> None:
-
-        evt = make_tool_event(
-            "Write",
-            {"file_path": "/tmp/regex_check.py", "content": "import re"},
-            ctx=build_ctx(project_root=tmp_path),
-        )
-        assert check_condition(Content(r"import\s+re"), evt) is False
-
-    def test_content_opt_out_matches_absolute_outside_project(self, tmp_path: Path) -> None:
-
+    @pytest.mark.parametrize(
+        ("cond", "expected"),
+        [
+            pytest.param(Content(r"import\s+re"), False, id="rejects_absolute_outside_project"),
+            pytest.param(
+                Content(r"import\s+re", project_only=False), True, id="opt_out_matches_absolute_outside_project"
+            ),
+        ],
+    )
+    def test_content_absolute_outside_project(self, cond: TCondition, expected: bool, tmp_path: Path) -> None:
         evt = make_tool_event(
             "Write",
             {"file_path": "/tmp/regex_check.py", "content": "import re"},
             ctx=build_ctx(project_root=tmp_path),
         )
-        assert check_condition(Content(r"import\s+re", project_only=False), evt) is True
+        assert check_condition(cond, evt) is expected
 
 
 class TestAgentCondition:
-    def test_agent_matches_cleanup(self) -> None:
-
-        evt = make_tool_event("Agent", {"subagent_type": "cleanup", "prompt": "run cleanup"})
-        assert check_condition(Agent("cleanup|quality-gate"), evt) is True
-
-    def test_agent_matches_quality_gate(self) -> None:
-
-        evt = make_tool_event("Agent", {"subagent_type": "quality-gate", "prompt": "review code"})
-        assert check_condition(Agent("cleanup|quality-gate"), evt) is True
-
-    def test_agent_rejects_non_matching(self) -> None:
-
-        evt = make_tool_event("Agent", {"subagent_type": "worker", "prompt": "do work"})
-        assert check_condition(Agent("cleanup|quality-gate"), evt) is False
-
-    def test_agent_returns_false_for_bash(self) -> None:
-
-        evt = make_tool_event("Bash", {"command": "echo hi"})
-        assert check_condition(Agent("cleanup"), evt) is False
-
-    def test_agent_returns_false_for_stop(self) -> None:
-
-        evt = make_event(StopEvent)
-        assert check_condition(Agent("cleanup"), evt) is False
+    @pytest.mark.parametrize(
+        ("cond", "evt", "expected"),
+        [
+            pytest.param(
+                Agent("cleanup|quality-gate"),
+                make_tool_event("Agent", {"subagent_type": "cleanup", "prompt": "run cleanup"}),
+                True,
+                id="matches_cleanup",
+            ),
+            pytest.param(
+                Agent("cleanup|quality-gate"),
+                make_tool_event("Agent", {"subagent_type": "quality-gate", "prompt": "review code"}),
+                True,
+                id="matches_quality_gate",
+            ),
+            pytest.param(
+                Agent("cleanup|quality-gate"),
+                make_tool_event("Agent", {"subagent_type": "worker", "prompt": "do work"}),
+                False,
+                id="rejects_non_matching",
+            ),
+            pytest.param(
+                Agent("cleanup"),
+                make_tool_event("Bash", {"command": "echo hi"}),
+                False,
+                id="returns_false_for_bash",
+            ),
+            pytest.param(Agent("cleanup"), make_event(StopEvent), False, id="returns_false_for_stop"),
+        ],
+    )
+    def test_agent(self, cond: TCondition, evt: BaseHookEvent, expected: bool) -> None:
+        assert check_condition(cond, evt) is expected
 
 
 class TestTestFileCondition:
-    def test_testfile_matches_test_file(self) -> None:
+    @pytest.mark.parametrize(
+        ("cond", "evt", "expected"),
+        [
+            pytest.param(
+                TestFile(),
+                make_tool_event("Edit", {"file_path": "tests/test_foo.py", "old_string": "", "new_string": ""}),
+                True,
+                id="matches_test_file",
+            ),
+            pytest.param(
+                TestFile(),
+                make_tool_event("Edit", {"file_path": "bioqa/main.py", "old_string": "", "new_string": ""}),
+                False,
+                id="rejects_non_test_file",
+            ),
+            pytest.param(
+                TestFile(), make_tool_event("Bash", {"command": "echo hi"}), False, id="returns_false_for_bash"
+            ),
+            pytest.param(TestFile(), make_event(StopEvent), False, id="returns_false_for_stop"),
+        ],
+    )
+    def test_testfile(self, cond: TCondition, evt: BaseHookEvent, expected: bool) -> None:
+        assert check_condition(cond, evt) is expected
 
-        evt = make_tool_event(
-            "Edit",
-            {
-                "file_path": "tests/test_foo.py",
-                "old_string": "",
-                "new_string": "",
-            },
-        )
-        assert check_condition(TestFile(), evt) is True
-
-    def test_testfile_rejects_non_test_file(self) -> None:
-
-        evt = make_tool_event(
-            "Edit",
-            {
-                "file_path": "bioqa/main.py",
-                "old_string": "",
-                "new_string": "",
-            },
-        )
-        assert check_condition(TestFile(), evt) is False
-
-    def test_testfile_returns_false_for_bash(self) -> None:
-
-        evt = make_tool_event("Bash", {"command": "echo hi"})
-        assert check_condition(TestFile(), evt) is False
-
-    def test_testfile_returns_false_for_stop(self) -> None:
-
-        evt = make_event(StopEvent)
-        assert check_condition(TestFile(), evt) is False
-
-    def test_testfile_rejects_absolute_outside_project(self, tmp_path: Path) -> None:
-
+    @pytest.mark.parametrize(
+        ("cond", "expected"),
+        [
+            pytest.param(TestFile(), False, id="rejects_absolute_outside_project"),
+            pytest.param(TestFile(project_only=False), True, id="opt_out_matches_absolute_outside_project"),
+        ],
+    )
+    def test_testfile_absolute_outside_project(self, cond: TCondition, expected: bool, tmp_path: Path) -> None:
         evt = make_tool_event(
             "Edit",
             {"file_path": "/tmp/test_regex_check.py", "old_string": "", "new_string": ""},
             ctx=build_ctx(project_root=tmp_path),
         )
-        assert check_condition(TestFile(), evt) is False
-
-    def test_testfile_opt_out_matches_absolute_outside_project(self, tmp_path: Path) -> None:
-
-        evt = make_tool_event(
-            "Edit",
-            {"file_path": "/tmp/test_regex_check.py", "old_string": "", "new_string": ""},
-            ctx=build_ctx(project_root=tmp_path),
-        )
-        assert check_condition(TestFile(project_only=False), evt) is True
+        assert check_condition(cond, evt) is expected
 
 
 class TestUsedSkillCondition:
@@ -411,17 +386,17 @@ class TestUsedSkillCondition:
 
 
 class TestReadFileCondition:
-    def test_readfile_matches_styleguide(self) -> None:
-
-        ctx = make_transcript_ctx(has_read_result=True)
+    @pytest.mark.parametrize(
+        ("cond", "has_read_result", "expected"),
+        [
+            pytest.param(ReadFile("STYLEGUIDE.md", "docs/styleguide/"), True, True, id="matches_styleguide"),
+            pytest.param(ReadFile("STYLEGUIDE.md"), False, False, id="rejects_non_matching"),
+        ],
+    )
+    def test_readfile(self, cond: TCondition, has_read_result: bool, expected: bool) -> None:
+        ctx = make_transcript_ctx(has_read_result=has_read_result)
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(ReadFile("STYLEGUIDE.md", "docs/styleguide/"), evt) is True
-
-    def test_readfile_rejects_non_matching(self) -> None:
-
-        ctx = make_transcript_ctx(has_read_result=False)
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(ReadFile("STYLEGUIDE.md"), evt) is False
+        assert check_condition(cond, evt) is expected
 
 
 class TestTouchedFileCondition:
@@ -455,41 +430,26 @@ class TestRanCommandCondition:
 
 
 class TestInPlanModeCondition:
-    def test_inplanmode_matches_when_more_enter(self) -> None:
-
-        ctx = make_transcript_ctx(count_tools_map={"EnterPlanMode": 2, "ExitPlanMode": 1})
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(InPlanMode(), evt) is True
-
-    def test_inplanmode_rejects_when_equal(self) -> None:
-
-        ctx = make_transcript_ctx(count_tools_map={"EnterPlanMode": 1, "ExitPlanMode": 1})
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(InPlanMode(), evt) is False
-
-    def test_inplanmode_rejects_when_zero(self) -> None:
-
-        ctx = make_transcript_ctx(count_tools_map={})
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(InPlanMode(), evt) is False
-
-    def test_inplanmode_matches_when_permission_mode_plan(self) -> None:
-
-        ctx = make_transcript_ctx(count_tools_map={})
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx, permission_mode="plan")
-        assert check_condition(InPlanMode(), evt) is True
-
-    def test_inplanmode_rejects_when_permission_mode_default(self) -> None:
-
-        ctx = make_transcript_ctx(count_tools_map={})
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx, permission_mode="default")
-        assert check_condition(InPlanMode(), evt) is False
-
-    def test_inplanmode_falls_back_to_tool_count_when_permission_mode_unset(self) -> None:
-
-        ctx = make_transcript_ctx(count_tools_map={"EnterPlanMode": 1, "ExitPlanMode": 0})
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(InPlanMode(), evt) is True
+    @pytest.mark.parametrize(
+        ("count_tools_map", "permission_mode", "expected"),
+        [
+            pytest.param({"EnterPlanMode": 2, "ExitPlanMode": 1}, None, True, id="matches_when_more_enter"),
+            pytest.param({"EnterPlanMode": 1, "ExitPlanMode": 1}, None, False, id="rejects_when_equal"),
+            pytest.param({}, None, False, id="rejects_when_zero"),
+            pytest.param({}, "plan", True, id="matches_when_permission_mode_plan"),
+            pytest.param({}, "default", False, id="rejects_when_permission_mode_default"),
+            pytest.param(
+                {"EnterPlanMode": 1, "ExitPlanMode": 0},
+                None,
+                True,
+                id="falls_back_to_tool_count_when_permission_mode_unset",
+            ),
+        ],
+    )
+    def test_inplanmode(self, count_tools_map: dict[str, int], permission_mode: str | None, expected: bool) -> None:
+        ctx = make_transcript_ctx(count_tools_map=count_tools_map)
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx, permission_mode=permission_mode)
+        assert check_condition(InPlanMode(), evt) is expected
 
 
 class TestWaitingCondition:
@@ -719,25 +679,17 @@ class TestCombinedConditions:
 
 
 class TestNonToolEventConditions:
-    def test_tool_condition_on_stop_is_false(self) -> None:
-
-        evt = make_event(StopEvent)
-        assert check_condition(Tool("Bash"), evt) is False
-
-    def test_command_condition_on_stop_is_false(self) -> None:
-
-        evt = make_event(StopEvent)
-        assert check_condition(Command(r"git"), evt) is False
-
-    def test_content_condition_on_stop_is_false(self) -> None:
-
-        evt = make_event(StopEvent)
-        assert check_condition(Content(r"import"), evt) is False
-
-    def test_filepath_condition_on_stop_is_false(self) -> None:
-
-        evt = make_event(StopEvent)
-        assert check_condition(FilePath("*.py"), evt) is False
+    @pytest.mark.parametrize(
+        "cond",
+        [
+            pytest.param(Tool("Bash"), id="tool_condition_on_stop_is_false"),
+            pytest.param(Command(r"git"), id="command_condition_on_stop_is_false"),
+            pytest.param(Content(r"import"), id="content_condition_on_stop_is_false"),
+            pytest.param(FilePath("*.py"), id="filepath_condition_on_stop_is_false"),
+        ],
+    )
+    def test_condition_on_stop_is_false(self, cond: TCondition) -> None:
+        assert check_condition(cond, make_event(StopEvent)) is False
 
     def test_conditions_on_user_prompt_graceful(self) -> None:
 
@@ -772,21 +724,15 @@ class TestTokensToRegex:
 
 
 class TestEmptyConditions:
-    def test_empty_only_if_always_matches(self) -> None:
-
-        spec = HookSpec(events=Event.PreToolUse, only_if=())
-        evt = make_tool_event("Bash", {"command": "echo hi"})
-        assert matches_conditions(spec, evt) is True
-
-    def test_empty_skip_if_never_skipped(self) -> None:
-
-        spec = HookSpec(events=Event.PreToolUse, skip_if=())
-        evt = make_tool_event("Bash", {"command": "echo hi"})
-        assert matches_conditions(spec, evt) is True
-
-    def test_both_empty_conditions_matches(self) -> None:
-
-        spec = HookSpec(events=Event.PreToolUse, only_if=(), skip_if=())
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            pytest.param(HookSpec(events=Event.PreToolUse, only_if=()), id="empty_only_if_always_matches"),
+            pytest.param(HookSpec(events=Event.PreToolUse, skip_if=()), id="empty_skip_if_never_skipped"),
+            pytest.param(HookSpec(events=Event.PreToolUse, only_if=(), skip_if=()), id="both_empty_conditions_matches"),
+        ],
+    )
+    def test_empty_conditions(self, spec: HookSpec) -> None:
         evt = make_tool_event("Bash", {"command": "echo hi"})
         assert matches_conditions(spec, evt) is True
 
