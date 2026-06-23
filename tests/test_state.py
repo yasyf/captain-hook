@@ -30,7 +30,7 @@ class DefaultModel(BaseModel):
     value: int = 0
 
 
-def make_pre_tool_event(ctx: MagicMock | None = None) -> MagicMock:
+def mock_edit_event(ctx: MagicMock | None = None) -> MagicMock:
     from captain_hook.events import PreToolUseEvent
 
     evt = PreToolUseEvent(
@@ -158,11 +158,11 @@ class TestFireCounting:
             name="fire_test",
         )
 
-        r1 = execute_hook(entry, make_pre_tool_event(), tmp_path)
+        r1 = execute_hook(entry, mock_edit_event(), tmp_path)
         assert r1 is not None and r1.action == Action.warn
-        r2 = execute_hook(entry, make_pre_tool_event(), tmp_path)
+        r2 = execute_hook(entry, mock_edit_event(), tmp_path)
         assert r2 is not None and r2.action == Action.warn
-        r3 = execute_hook(entry, make_pre_tool_event(), tmp_path)
+        r3 = execute_hook(entry, mock_edit_event(), tmp_path)
         assert r3 is None
 
     def test_fire_count_persists_via_state(self, tmp_path: Path) -> None:
@@ -175,7 +175,7 @@ class TestFireCounting:
             name="persist_test",
         )
 
-        execute_hook(entry, make_pre_tool_event(), tmp_path)
+        execute_hook(entry, mock_edit_event(), tmp_path)
         hook_dir = tmp_path / "persist_test"
         store = SessionStore(hook_dir)
         state = store[HookState].get()
@@ -285,20 +285,22 @@ class TestFireCounting:
         )
 
         for _ in range(10):
-            r = execute_hook(entry, make_pre_tool_event(), tmp_path)
+            r = execute_hook(entry, mock_edit_event(), tmp_path)
             assert r is not None and r.action == Action.warn
 
     # NOTE: This assertion tests primitive defaults (nudge, gate, etc.) which
     # are implemented in the m2-nudge-gate feature. The mechanism is tested here;
     # the defaults are verified when primitives are available.
 
-    def test_hookspec_max_fires_default_is_none(self) -> None:
-        spec = HookSpec(events=Event.PreToolUse)
-        assert spec.max_fires is None
-
-    def test_explicit_max_fires_override(self) -> None:
-        spec = HookSpec(events=Event.PreToolUse, max_fires=5)
-        assert spec.max_fires == 5
+    @pytest.mark.parametrize(
+        ("spec", "max_fires"),
+        [
+            pytest.param(HookSpec(events=Event.PreToolUse), None, id="hookspec_max_fires_default_is_none"),
+            pytest.param(HookSpec(events=Event.PreToolUse, max_fires=5), 5, id="explicit_max_fires_override"),
+        ],
+    )
+    def test_max_fires_spec_value(self, spec: HookSpec, max_fires: int | None) -> None:
+        assert spec.max_fires == max_fires
 
     def test_max_fires_zero_never_fires(self, tmp_path: Path) -> None:
         def handler(evt: object) -> HookResult:
@@ -310,7 +312,7 @@ class TestFireCounting:
             name="never_hook",
         )
 
-        r = execute_hook(entry, make_pre_tool_event(), tmp_path)
+        r = execute_hook(entry, mock_edit_event(), tmp_path)
         assert r is None
 
     def test_hook_state_is_base_model(self) -> None:
@@ -331,13 +333,13 @@ class TestFireCounting:
             name="counter_hook",
         )
 
-        r1 = execute_hook(entry, make_pre_tool_event(), tmp_path)
+        r1 = execute_hook(entry, mock_edit_event(), tmp_path)
         assert r1 is None
-        r2 = execute_hook(entry, make_pre_tool_event(), tmp_path)
+        r2 = execute_hook(entry, mock_edit_event(), tmp_path)
         assert r2 is None
-        r3 = execute_hook(entry, make_pre_tool_event(), tmp_path)
+        r3 = execute_hook(entry, mock_edit_event(), tmp_path)
         assert r3 is not None and r3.action == Action.warn and r3.message == "now"
-        r4 = execute_hook(entry, make_pre_tool_event(), tmp_path)
+        r4 = execute_hook(entry, mock_edit_event(), tmp_path)
         assert r4 is None
 
 
