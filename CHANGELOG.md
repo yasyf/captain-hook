@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.15.0] - 2026-06-22
+
 ### Added
 - A `Pattern` condition matches the edit's new content against an
   [ast-grep](https://ast-grep.github.io) structural pattern, the cross-language
@@ -27,6 +29,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lint` gains an ast-grep mode: `lint(pattern="console.log($$$)", message="…", lang="ts")`
   flags each structural match by line, with the file guard following `lang`.
 - `ast-grep-py` is a new dependency, used in-process for all structural matching and rewriting.
+
+### Changed
+- `@workflow_state` models now subclass `WorkflowState` instead of the decorator grafting
+  `load`/`save`/`reset` onto the class. The new base, exported from `captain_hook`, carries the
+  three event-driven helpers typed with `Self`; keep pairing it with `@workflow_state("name")`.
+  Migrate by changing `class ReviewState(BaseModel)` to `class ReviewState(WorkflowState)`.
+- Every `styleguide` rule shares one `check(self, change: Change)` signature. The new `Change`
+  context, exported from `captain_hook.style`, carries the pre- and post-edit source and the
+  lazily parsed `tree`/`pre_tree`, replacing the separate `check(tree)`, `check(pre, post)`, and
+  ast-grep `check_source`/`check_diff` methods. Override `check` and read `change.tree`,
+  `change.pre_tree`, `change.source`, or `change.pre`.
 
 ## [3.11.1] - 2026-06-20
 
