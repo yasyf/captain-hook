@@ -40,20 +40,23 @@ class TestSignalDataclass:
 
 
 class TestSignalsBundle:
-    def test_default_window(self) -> None:
-        sig = Signals(
-            patterns=[Signal(pattern=r"test", weight=1)],
-            threshold=2,
-        )
-        assert sig.window == 15
-
-    def test_custom_window(self) -> None:
-        sig = Signals(
-            patterns=[Signal(pattern=r"test", weight=1)],
-            threshold=3,
-            window=10,
-        )
-        assert sig.window == 10
+    @pytest.mark.parametrize(
+        ("sig", "window"),
+        [
+            pytest.param(
+                Signals(patterns=[Signal(pattern=r"test", weight=1)], threshold=2),
+                15,
+                id="default_window",
+            ),
+            pytest.param(
+                Signals(patterns=[Signal(pattern=r"test", weight=1)], threshold=3, window=10),
+                10,
+                id="custom_window",
+            ),
+        ],
+    )
+    def test_window(self, sig: Signals, window: int) -> None:
+        assert sig.window == window
 
     def test_accepts_mixed_signal_types(self) -> None:
         sig = Signals(
@@ -64,69 +67,72 @@ class TestSignalsBundle:
 
 
 class TestScoreSignals:
-    def test_single_match(self) -> None:
+    @pytest.mark.parametrize(
+        ("patterns", "text", "expected"),
+        [
+            pytest.param([Signal(pattern=r"retry", weight=2)], "let me retry this", 2, id="single_match"),
+            pytest.param([Signal(pattern=r"retry", weight=2)], "everything works fine", 0, id="no_match"),
+            pytest.param(
+                [Signal(pattern=r"retry", weight=2), Signal(pattern=r"again", weight=1)],
+                "let me retry again",
+                3,
+                id="multiple_matches_sum",
+            ),
+            pytest.param(
+                [Signal(pattern=r"retry", weight=2), Signal(pattern=r"impossible", weight=3)],
+                "let me retry",
+                2,
+                id="partial_match",
+            ),
+        ],
+    )
+    def test_score(self, patterns: list[Signal], text: str, expected: int) -> None:
         from captain_hook.signals import score_signals
 
-        patterns = [Signal(pattern=r"retry", weight=2)]
-        assert score_signals(patterns, "let me retry this") == 2
-
-    def test_no_match(self) -> None:
-        from captain_hook.signals import score_signals
-
-        patterns = [Signal(pattern=r"retry", weight=2)]
-        assert score_signals(patterns, "everything works fine") == 0
-
-    def test_multiple_matches_sum(self) -> None:
-        from captain_hook.signals import score_signals
-
-        patterns = [
-            Signal(pattern=r"retry", weight=2),
-            Signal(pattern=r"again", weight=1),
-        ]
-        assert score_signals(patterns, "let me retry again") == 3
-
-    def test_partial_match(self) -> None:
-        from captain_hook.signals import score_signals
-
-        patterns = [
-            Signal(pattern=r"retry", weight=2),
-            Signal(pattern=r"impossible", weight=3),
-        ]
-        assert score_signals(patterns, "let me retry") == 2
+        assert score_signals(patterns, text) == expected
 
 
 class TestScoreSignalsFlags:
-    def test_case_insensitive_flag(self) -> None:
+    @pytest.mark.parametrize(
+        ("patterns", "text", "expected"),
+        [
+            pytest.param(
+                [Signal(pattern=r"RETRY", weight=2, flags=re.IGNORECASE)],
+                "let me retry",
+                2,
+                id="case_insensitive_flag",
+            ),
+            pytest.param([Signal(pattern=r"RETRY", weight=2)], "let me retry", 0, id="no_flag_case_sensitive"),
+        ],
+    )
+    def test_score(self, patterns: list[Signal], text: str, expected: int) -> None:
         from captain_hook.signals import score_signals
 
-        patterns = [Signal(pattern=r"RETRY", weight=2, flags=re.IGNORECASE)]
-        assert score_signals(patterns, "let me retry") == 2
-
-    def test_no_flag_case_sensitive(self) -> None:
-        from captain_hook.signals import score_signals
-
-        patterns = [Signal(pattern=r"RETRY", weight=2)]
-        assert score_signals(patterns, "let me retry") == 0
+        assert score_signals(patterns, text) == expected
 
 
 class TestScoreSignalsNegativeWeights:
-    def test_negative_weight_subtracts(self) -> None:
+    @pytest.mark.parametrize(
+        ("patterns", "text", "expected"),
+        [
+            pytest.param(
+                [Signal(pattern=r"retry", weight=3), Signal(pattern=r"investigating", weight=-2)],
+                "retry after investigating",
+                1,
+                id="negative_weight_subtracts",
+            ),
+            pytest.param(
+                [Signal(pattern=r"retry", weight=1), Signal(pattern=r"evidence", weight=-5)],
+                "retry with evidence",
+                -4,
+                id="score_can_go_below_zero",
+            ),
+        ],
+    )
+    def test_score(self, patterns: list[Signal], text: str, expected: int) -> None:
         from captain_hook.signals import score_signals
 
-        patterns = [
-            Signal(pattern=r"retry", weight=3),
-            Signal(pattern=r"investigating", weight=-2),
-        ]
-        assert score_signals(patterns, "retry after investigating") == 1
-
-    def test_score_can_go_below_zero(self) -> None:
-        from captain_hook.signals import score_signals
-
-        patterns = [
-            Signal(pattern=r"retry", weight=1),
-            Signal(pattern=r"evidence", weight=-5),
-        ]
-        assert score_signals(patterns, "retry with evidence") == -4
+        assert score_signals(patterns, text) == expected
 
 
 class TestScoreSignalsMixed:
