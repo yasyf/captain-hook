@@ -92,7 +92,7 @@ def validate(rule: object) -> type[StyleRule]:
 def run_rules(rules: list[StyleRule], evt: BaseHookEvent, *, block: bool, max_shown: int) -> HookResult | None:
     if (source := read_source(evt)) is None:
         return None
-    change = Change(source=source, pre=reconstruct_pre(evt, source))
+    change = Change(source=source, pre=reconstruct_pre(evt, source), path=str(evt.file.path))
     changed = changed_lines(change.pre, source)
     if not (
         sections := [section for rule in rules if (section := run_one(rule, change, changed, max_shown)) is not None]

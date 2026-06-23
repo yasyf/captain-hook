@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Iterator
+from pathlib import Path
 
 from captain_hook import Allow, Input, Warn
 from captain_hook.style import Change, StyleDiffRule, StyleRule, Violation, styleguide
@@ -20,10 +21,10 @@ def any_label(node: ast.AST) -> str:
 
 class NoUnderscorePrefixes(StyleRule):
     """
-    This edit introduces underscore-prefixed class(es) or constant(s): {violations}
+    This edit introduces an underscore-prefixed class, constant, or module filename: {violations}
 
-    This project never uses leading underscores on classes, constants, or module-level
-    helpers. See STYLEGUIDE.md § Code Organization.
+    This project never uses leading underscores on classes, constants, module-level
+    helpers, or module filenames. See STYLEGUIDE.md § Code Organization.
     """
 
     tests = {
@@ -31,8 +32,17 @@ class NoUnderscorePrefixes(StyleRule):
         Input(file="m.py", content="_MAX_RETRIES = 3\n"): Warn(),
         Input(file="m.py", content="class Helper:\n    pass\n"): Allow(),
         Input(file="m.py", content="MAX_RETRIES = 3\n"): Allow(),
+        Input(file="_common.py", content="value = 1\n"): Warn(),
+        Input(file="common.py", content="value = 1\n"): Allow(),
+        Input(file="__init__.py", content="value = 1\n"): Allow(),
     }
     match = M.private & (M.cls | (M.assignment & M.constant))
+
+    def check(self, change: Change) -> Iterator[Violation]:
+        yield from super().check(change)
+        name = Path(change.path).name
+        if name.endswith(".py") and name.startswith("_") and not name.startswith("__"):
+            yield Violation(line=1, label=f"module filename {name!r}")
 
 
 class NoNestedImports(StyleRule):

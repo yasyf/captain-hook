@@ -34,12 +34,14 @@ class Change:
     Attributes:
         source: The post-edit source text.
         pre: The pre-edit source text (``""`` when there is nothing to diff against).
+        path: The post-edit file's path as a string, so rules can inspect the filename.
         tree: The parsed post-edit module (an empty module when the source doesn't parse).
         pre_tree: The parsed pre-edit module (parsed lazily, only when a diff rule reads it).
     """
 
     source: str
     pre: str
+    path: str
 
     @staticmethod
     def parse_or_empty(source: str) -> ast.Module:
