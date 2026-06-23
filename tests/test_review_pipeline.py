@@ -42,24 +42,26 @@ from captain_hook.review.repo import RepoKey
 from captain_hook.review.scan import REVIEWER_MARKER, scan_transcript
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import ReviewStore
-from tests.test_review_scan import (
+from captain_hook.tests.review_helpers import (
     CORRECTION,
+    REPO,
     assistant_text,
     assistant_tool_use,
     correction_entries,
+    install_judge,
     parse,
+    requires_llm_backend,
     user_text,
     write_transcript,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Sequence
+    from collections.abc import Sequence
 
     from cc_transcript.mining.confidence import CandidateSignal
 
     from captain_hook.review.judge import Category
 
-REPO = RepoKey("github.com/yasyf/captain-hook")
 GIT_REPO_KEY = RepoKey("github.com/yasyf/scratch")
 SECOND_CORRECTION = "never run pip directly, always go through uv in this repo"
 ALL_CATEGORIES = (
@@ -71,23 +73,6 @@ ALL_CATEGORIES = (
     "task_specific",
     "preference_unclear",
     "ambient_noise",
-)
-
-
-def _llm_backend_available() -> bool:
-    from cc_transcript.judge.llm import default_backend
-    from spawnllm import BackendUnavailable
-
-    try:
-        default_backend()
-    except BackendUnavailable:
-        return False
-    return True
-
-
-requires_llm_backend = pytest.mark.skipif(
-    not _llm_backend_available(),
-    reason="no installed, authenticated LLM backend (spawnllm.select_backend raised BackendUnavailable)",
 )
 
 
@@ -104,21 +89,6 @@ def run_review(stdin: bytes, *, env: dict[str, str] | None = None, cwd: Path | N
         env=os.environ | (env or {}),
         cwd=cwd,
     )
-
-
-def install_judge(
-    monkeypatch: pytest.MonkeyPatch, *, category: Category = "durable_style_rule", fail_on: str | None = None
-) -> list[str]:
-    calls: list[str] = []
-
-    async def judge(prompt: str) -> ReviewVerdict:
-        calls.append(prompt)
-        if fail_on is not None and fail_on in prompt:
-            raise subprocess.CalledProcessError(1, ["claude"])
-        return ReviewVerdict(category=category, summary="states a durable rule", confidence=0.9, rationale="r")
-
-    monkeypatch.setattr("captain_hook.review.judge.structured_judge", lambda *_, **__: judge)
-    return calls
 
 
 def install_brain(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Path, Path]]:
@@ -163,26 +133,6 @@ async def seed_corrections(
     await scan_transcript(
         store, write_transcript(tmp_path / f"{session}.jsonl", entries), settings=settings, repo_key=REPO
     )
-
-
-@pytest.fixture
-async def store(tmp_path: Path) -> AsyncIterator[ReviewStore]:
-    async with await ReviewStore.open(tmp_path / "review.db") as opened:
-        yield opened
-
-
-@pytest.fixture
-def settings(tmp_path: Path) -> ReviewSettings:
-    return ReviewSettings(db_path=tmp_path / "review.db")
-
-
-@pytest.fixture
-def git_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:yasyf/scratch.git"], check=True)
-    return repo
 
 
 @pytest.fixture

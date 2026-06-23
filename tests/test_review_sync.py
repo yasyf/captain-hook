@@ -13,23 +13,10 @@ from captain_hook.review.store import CandidateKind, CandidateStatus, ReviewStor
 from captain_hook.review.sync import SyncReport, gh_pr_state, sync_open_prs
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
-    from pathlib import Path
     from typing import Any
 
 REPO = RepoKey("github.com/yasyf/captain-hook")
 OTHER_REPO = RepoKey("github.com/yasyf/other")
-
-
-@pytest.fixture
-async def store(tmp_path: Path) -> AsyncIterator[ReviewStore]:
-    async with await ReviewStore.open(tmp_path / "review.db") as opened:
-        yield opened
-
-
-@pytest.fixture
-def settings() -> ReviewSettings:
-    return ReviewSettings()
 
 
 def install_gh(monkeypatch: pytest.MonkeyPatch, states: dict[str, str | None]) -> list[str]:

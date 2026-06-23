@@ -4,7 +4,6 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
 
 import pytest
 from cc_transcript.ids import SessionId
@@ -21,10 +20,6 @@ from captain_hook.review.store import (
     InvalidTransition,
     ReviewStore,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
-    from pathlib import Path
 
 REPO = RepoKey("github.com/yasyf/captain-hook")
 PROMPT_VERSION = 1
@@ -59,17 +54,6 @@ class Verdict:
     category: str = "durable_correction"
     summary: str = "user corrected approach"
     rationale: str = "explicit correction"
-
-
-@pytest.fixture
-async def store(tmp_path: Path) -> AsyncIterator[ReviewStore]:
-    async with await ReviewStore.open(tmp_path / "review.db") as opened:
-        yield opened
-
-
-@pytest.fixture
-def settings() -> ReviewSettings:
-    return ReviewSettings()
 
 
 async def create_candidate(store: ReviewStore, *, rule: str = "no-force-push") -> int:

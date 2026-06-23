@@ -30,7 +30,7 @@ from captain_hook.review.repo import RepoKey
 from captain_hook.review.scan import ScanReport, scan_transcript
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import ReviewStore
-from tests.test_review_scan import (
+from captain_hook.tests.review_helpers import (
     assistant_text,
     assistant_tool_use,
     envelope,
@@ -40,8 +40,6 @@ from tests.test_review_scan import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
-
     from cc_transcript.decisions import DecisionLog
     from cc_transcript.models import TranscriptEvent
 
@@ -120,17 +118,6 @@ def complaint_entries(complaint: str, *, session: str = "sess-1") -> list[dict[s
         tool_result("t1", "clean", sessionId=session),
         assistant_text(complaint, sessionId=session),
     ]
-
-
-@pytest.fixture
-async def store(tmp_path: Path) -> AsyncIterator[ReviewStore]:
-    async with await ReviewStore.open(tmp_path / "review.db") as opened:
-        yield opened
-
-
-@pytest.fixture
-def settings(tmp_path: Path) -> ReviewSettings:
-    return ReviewSettings(db_path=tmp_path / "review.db")
 
 
 @pytest.fixture

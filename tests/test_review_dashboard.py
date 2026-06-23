@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from io import StringIO
@@ -219,12 +218,6 @@ class TestRenderFrame:
         assert "capt-hook review enable" in out
 
 
-@pytest.fixture
-async def store(tmp_path: Path) -> object:
-    async with await ReviewStore.open(tmp_path / "review.db") as opened:
-        yield opened
-
-
 async def seed_obs(
     store: ReviewStore,
     candidate_id: int,
@@ -293,15 +286,6 @@ class TestOverview:
         views = await store.overview(REPO, settings=settings, prompt_version=PV)
         assert [v.eligible for v in views] == [True]
         assert views[0].summary == "run the suite before committing"
-
-
-@pytest.fixture
-def git_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:yasyf/scratch.git"], check=True)
-    return repo
 
 
 def review_status(*args: str, root: Path) -> Result:

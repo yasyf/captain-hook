@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-import itertools
 import json
-import subprocess
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from cc_transcript import keep, parse_events_from_bytes
+from cc_transcript import keep
 from cc_transcript.mining.candidates import DedupKey, dedup_key
 
-from captain_hook.review.repo import RepoKey
 from captain_hook.review.scan import (
     REVIEWER_MARKER,
     STRICT_USER,
@@ -23,121 +19,22 @@ from captain_hook.review.scan import (
 )
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import ReviewStore
+from captain_hook.tests.review_helpers import (
+    CORRECTION,
+    PROMPT_VERSION,
+    REPO,
+    Verdict,
+    assistant_text,
+    assistant_tool_use,
+    correction_entries,
+    parse,
+    tool_result,
+    user_text,
+    write_transcript,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
     from pathlib import Path
-
-    from cc_transcript.models import TranscriptEvent
-
-REPO = RepoKey("github.com/yasyf/captain-hook")
-BASE_TS = "2026-06-01T12:00:00+00:00"
-CORRECTION = "no, never use a bare except here, always catch the specific parser error"
-PROMPT_VERSION = 1
-
-counter = itertools.count()
-
-
-@dataclass(frozen=True, slots=True)
-class Verdict:
-    accepted: bool = True
-    confidence: float = 0.9
-    category: str = "durable_correction"
-    summary: str = "user corrected approach"
-    rationale: str = "explicit correction"
-
-
-def next_uuid() -> str:
-    return f"uuid-{next(counter)}"
-
-
-def envelope(entry_type: str, **overrides: Any) -> dict[str, Any]:
-    return {
-        "type": entry_type,
-        "uuid": overrides.pop("uuid", next_uuid()),
-        "parentUuid": None,
-        "sessionId": overrides.pop("sessionId", "sess-1"),
-        "timestamp": overrides.pop("timestamp", BASE_TS),
-        "cwd": overrides.pop("cwd", "/repo"),
-        "gitBranch": "main",
-        "version": "1.2.3",
-        "isSidechain": False,
-        "isMeta": False,
-        "entrypoint": "cli",
-        **overrides,
-    }
-
-
-def user_text(text: str, **overrides: Any) -> dict[str, Any]:
-    return envelope("user", message={"role": "user", "content": text}, **overrides)
-
-
-def assistant_text(text: str, **overrides: Any) -> dict[str, Any]:
-    return envelope(
-        "assistant",
-        message={"role": "assistant", "model": "claude", "content": [{"type": "text", "text": text}]},
-        **overrides,
-    )
-
-
-def assistant_tool_use(tool_id: str, name: str, tool_input: dict[str, Any], **overrides: Any) -> dict[str, Any]:
-    return envelope(
-        "assistant",
-        message={
-            "role": "assistant",
-            "model": "claude",
-            "content": [{"type": "tool_use", "id": tool_id, "name": name, "input": tool_input}],
-        },
-        **overrides,
-    )
-
-
-def tool_result(tool_id: str, content: str, *, is_error: bool = False, **overrides: Any) -> dict[str, Any]:
-    return envelope(
-        "user",
-        message={
-            "role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": tool_id, "content": content, "is_error": is_error}],
-        },
-        **overrides,
-    )
-
-
-def correction_entries(*, session: str = "sess-1", timestamp: str = BASE_TS, **overrides: Any) -> list[dict[str, Any]]:
-    return [
-        assistant_text("I'll wrap the parser in a bare except", sessionId=session, timestamp=timestamp, **overrides),
-        user_text(CORRECTION, sessionId=session, timestamp=timestamp, **overrides),
-    ]
-
-
-def parse(entries: list[dict[str, Any]]) -> list[TranscriptEvent]:
-    return parse_events_from_bytes("".join(json.dumps(entry) + "\n" for entry in entries).encode())
-
-
-def write_transcript(path: Path, entries: list[dict[str, Any]]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
-    return path
-
-
-@pytest.fixture
-async def store(tmp_path: Path) -> AsyncIterator[ReviewStore]:
-    async with await ReviewStore.open(tmp_path / "review.db") as opened:
-        yield opened
-
-
-@pytest.fixture
-def settings() -> ReviewSettings:
-    return ReviewSettings()
-
-
-@pytest.fixture
-def git_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:yasyf/scratch.git"], check=True)
-    return repo
 
 
 async def rows(store: ReviewStore, query: str) -> list[dict[str, Any]]:

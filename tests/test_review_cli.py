@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
@@ -15,8 +14,13 @@ from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import CandidateKind, CandidateStatus, ReviewStore
 from captain_hook.tests.helpers import run_cli
-from tests.test_review_pipeline import install_judge, requires_llm_backend
-from tests.test_review_scan import CORRECTION, correction_entries, write_transcript
+from captain_hook.tests.review_helpers import (
+    CORRECTION,
+    correction_entries,
+    install_judge,
+    requires_llm_backend,
+    write_transcript,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -52,15 +56,6 @@ async def seed_pr_open(url: str) -> int:
         )
         await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=url)
         return candidate_id
-
-
-@pytest.fixture
-def git_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:yasyf/scratch.git"], check=True)
-    return repo
 
 
 @pytest.fixture
