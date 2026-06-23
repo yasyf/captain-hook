@@ -122,9 +122,13 @@ def make_pre_tool_event(
     tool_name: str = "Bash",
     tool_input: dict[str, Any] | None = None,
     ctx: Any = None,
+    *,
+    permission_mode: str | None = None,
 ) -> PreToolUseEvent:
     return PreToolUseEvent(
-        _raw={"tool_name": tool_name} | ({"tool_input": tool_input} if tool_input is not None else {}),
+        _raw={"tool_name": tool_name}
+        | ({"tool_input": tool_input} if tool_input is not None else {})
+        | ({"permission_mode": permission_mode} if permission_mode is not None else {}),
         ctx=ctx or make_ctx(),
     )
 

@@ -1,14 +1,24 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from loguru import logger
 
 from captain_hook.app import reset
 from captain_hook.decisions import open_decision_log
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
+
+    from captain_hook.review.settings import ReviewSettings
+    from captain_hook.review.store import ReviewStore
 
 
 @pytest.fixture(autouse=True)
@@ -79,3 +89,41 @@ def isolate_modules():
     for key in set(sys.modules.keys()) - snapshot_modules:
         del sys.modules[key]
     sys.path[:] = snapshot_path
+
+
+@pytest.fixture
+async def store(tmp_path: Path) -> AsyncIterator[ReviewStore]:
+    from captain_hook.review.store import ReviewStore
+
+    async with await ReviewStore.open(tmp_path / "review.db") as opened:
+        yield opened
+
+
+@pytest.fixture
+def settings(tmp_path: Path) -> ReviewSettings:
+    from captain_hook.review.settings import ReviewSettings
+
+    return ReviewSettings(db_path=tmp_path / "review.db")
+
+
+@pytest.fixture
+def git_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:yasyf/scratch.git"], check=True)
+    return repo
+
+
+@pytest.fixture
+def work_dir() -> Iterator[Path]:
+    path = Path(tempfile.mkdtemp(prefix="src_"))
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
+
+
+@pytest.fixture
+def session_dir() -> Iterator[Path]:
+    path = Path(tempfile.mkdtemp(prefix="session_"))
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
