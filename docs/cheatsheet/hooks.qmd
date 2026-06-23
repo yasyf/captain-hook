@@ -1,0 +1,134 @@
+---
+title: "Hooks"
+---
+
+Every primitive and condition, grouped by intent. Pick the action first, then narrow with
+conditions. Full signatures live in the [primitives reference](../reference/primitives.qmd)
+and the [conditions reference](../reference/conditions.qmd).
+
+## 🛑 Block before it happens
+
+**block_command** — stop a dangerous Bash command before it runs
+```python
+block_command(["git", "stash"], reason="Use the team VCS workflow")
+```
+
+**gate** — refuse to let the agent stop until a condition holds
+```python
+gate("Run the tests before finishing", skip_if=[RanCommand(r"pytest")])
+```
+
+**hook(..., block=True)** — a hand-rolled always-on guard when no primitive fits
+```python
+hook(Event.PreToolUse, only_if=[Tool("Bash"), Command(r"curl.*\|.*sh")],
+     message="Don't pipe curl into a shell", block=True)
+```
+
+## ✏️ Rewrite in place
+
+**rewrite_command** — swap a command for a safer form before it runs
+```python
+rewrite_command(r"^pip install ", replace="uv pip install ")
+```
+
+## 💬 Nudge in the moment
+
+**nudge** — advisory message on an edit or stop, no block
+```python
+nudge("Prefer the project logger over print()", only_if=[Tool("Edit")])
+```
+
+**nudge(signals=...)** — fire only when the transcript crosses a score
+```python
+nudge("You keep retrying — stop and read the error", signals=RETRIES)
+```
+
+**warn_command** — flag a smell after a command has run
+```python
+warn_command(r"rm -rf", message="Double-check that path next time")
+```
+
+## 🔍 Lint the code
+
+**lint** — run a string or AST check on every Python edit
+```python
+lint(find_bare_excepts, message="Bare except swallows errors: {violations}")
+```
+
+**diff_lint** — flag only what this edit newly introduced
+```python
+diff_lint(widened_to_any, message="New Any annotation: {violations}")
+```
+
+**styleguide** — run composable matcher rules on the lines you changed
+```python
+styleguide(NoPrint, NoBareExcept)
+```
+
+## 🤖 Ask a model
+
+**llm_gate** — block on a model's judgment of intent or quality
+```python
+llm_gate("Is the agent making excuses instead of finishing?",
+         message=lambda r: r.reasoning, max_fires=1)
+```
+
+**llm_nudge** — warn on a model's judgment, without blocking
+```python
+llm_nudge("Does this edit assert behavior, or only that code exists?",
+          message=lambda r: r.reasoning, only_if=[Tool("Edit")])
+```
+
+**prompt_check** — call the model from inside your own handler
+```python
+prompt_check(evt, Prompt.from_template("Review {code}", code=evt.content),
+             prefix="Test quality")
+```
+
+## 🎯 Decide when (conditions)
+
+Stack conditions in `only_if` (all must match) or `skip_if` (any match skips).
+
+**Tool** — the tool name matches
+```python
+Tool("Edit|Write")
+```
+
+**FilePath** — the event's file path matches a glob
+```python
+FilePath("src/**/*.py")
+```
+
+**Command** / **Content** — the Bash command, or the written content, matches a regex
+```python
+Command(r"git\s+push\s+--force")
+Content(r"\bprint\(")
+```
+
+**TestFile** / **SourceEdits** — the edit hits a test, or a source file in a language
+```python
+SourceEdits(lang="py", include_tests=False)
+```
+
+**RanCommand** / **ReadFile** / **TouchedFile** — something already happened this session
+```python
+RanCommand(r"uv\s+run\s+pytest")
+```
+
+**UsedSkill** / **InPlanMode** / **Waiting** — session mode and history
+```python
+only_if=[InPlanMode()]
+```
+
+## 🪝 Register by hand
+
+**hook** / **on** — when no primitive fits, target an event directly
+```python
+@on(Event.PostToolUse, only_if=[Tool("Edit")])
+def my_check(evt): ...
+```
+
+## See also
+
+- How-tos: [Deterministic primitives](../guide/primitives.qmd) · [LLM hooks](../guide/llm-hooks.qmd) · [Filter with conditions](../guide/conditions.qmd)
+- Reference: [Primitives & verdicts](../reference/primitives.qmd) · [Conditions](../reference/conditions.qmd) · [Events](../reference/events.qmd)

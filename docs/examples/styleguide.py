@@ -1,3 +1,5 @@
+"""Enforce team conventions a linter can't express on every Python edit."""
+
 from __future__ import annotations
 
 import ast

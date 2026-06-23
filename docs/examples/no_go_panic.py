@@ -1,3 +1,5 @@
+"""Warn on Go panic() calls so callers return errors instead of aborting the process."""
+
 from __future__ import annotations
 
 from captain_hook import Allow, Event, Input, Pattern, SourceEdits, Warn, hook

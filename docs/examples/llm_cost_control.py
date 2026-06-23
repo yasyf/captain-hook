@@ -1,3 +1,5 @@
+"""Gate an LLM verdict behind cheap deterministic filters to catch weakened tests cheaply."""
+
 from __future__ import annotations
 
 from captain_hook import (

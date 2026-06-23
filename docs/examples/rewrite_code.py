@@ -1,3 +1,5 @@
+"""Rewrite unsafe code and command patterns structurally before they reach disk."""
+
 from __future__ import annotations
 
 from captain_hook import Allow, Input, Rewrite, rewrite_code, rewrite_command

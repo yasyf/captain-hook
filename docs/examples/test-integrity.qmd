@@ -2,8 +2,45 @@
 title: "Test integrity"
 ---
 
-When a test fails, the path of least resistance is to weaken the test. An agent might replace the assertion with `assert True`, swap an integration call for a `Mock()`, or sprinkle `@pytest.mark.skip` to make red go green. You want an LLM reviewer that catches these patterns at the moment the test edit lands, with full diff context.
+> Catch test edits that weaken assertions to turn red green, the moment the diff lands.
+
+When a test fails, the path of least resistance is to weaken the test. An agent swaps an assertion for `assert True`, replaces an integration call with a `Mock()`, or sprinkles `@pytest.mark.skip` to make red go green. You want an LLM reviewer that reads the edit diff and blocks these patterns before they merge.
 
 <!-- gd-embed: test_integrity.py -->
 
-This hook fires on `Event.PostToolUse`. `prompt_check()` runs an inline LLM evaluation and returns a `HookResult | None` you can pass straight back from an `@on` handler. It stays imperative because the verdict is an LLM evaluation over the edit diff, a per-event judgment no declarative primitive can precompute. `Prompt.from_template(TEMPLATE, **vars)` renders the template with `str.format`-style substitution and dedents the block. The `only_if` conditions `SourceEdits(lang="py", include_tests=True)`, `TestFile()`, and `Tool("Edit")` restrict the hook to `Edit` calls on Python test files, the one slice where weakening matters. See also [LLM hooks](../guide/llm-hooks.qmd) and [conditions](../guide/conditions.qmd).
+::: {.callout-note title="Verified by replay"}
+
+The weakening verdict is an LLM judgment, so it isn't asserted by an inline test — the model's decision is exercised by replaying real test-edit sessions through the hook.
+
+:::
+
+## What it catches
+
+```python
+# assert exercise_count == 3  ->  assert True             # assertion gutted to a no-op
+# total = service.charge(card)  ->  total = Mock()         # real call swapped for a stub
+# @pytest.mark.skip("flaky")                               # bulk skip with no justification
+# db.execute(query)  ->  return FAKE_ROW                   # integration boundary stubbed out
+```
+
+## What it allows
+
+```python
+# Edit on src/billing/charge.py                            # not a test file — only_if skips it
+# Write on tests/test_billing.py                           # not an Edit — Tool("Edit") skips it
+# Edit on tests/test_billing.py tightening an assertion    # LLM allows; doesn't weaken the test
+```
+
+*The catch / allow split mirrors the hook's `only_if` narrowing and prompt, so it stays true as the hook evolves.*
+
+## Run it yourself
+
+```bash
+uvx capt-hook --hooks docs/examples test
+```
+
+## See also
+
+- [LLM hooks](../guide/llm-hooks.qmd)
+- [conditions](../guide/conditions.qmd)
+- [matchers](../reference/matchers.qmd)

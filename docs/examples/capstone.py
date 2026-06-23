@@ -1,3 +1,5 @@
+"""Compose a safety block and a workflow gate in one hooks file."""
+
 from __future__ import annotations
 
 from captain_hook import (

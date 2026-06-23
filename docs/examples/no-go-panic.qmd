@@ -2,8 +2,38 @@
 title: "Structural patterns across languages"
 ---
 
-A regex on `panic(` flags the call inside strings and comments too, and the `StyleRule` matchers only understand Python's AST. The [`Pattern`](../reference/index.qmd) condition matches code *structure* through [ast-grep](https://ast-grep.github.io), so it works the same way in Go, TypeScript, Rust, and the rest. `panic($$$)` matches a real call however its arguments are spelled, never a string that contains the word.
+> Match code *structure* — not text — so the same rule catches a real `panic()` call in Go, TypeScript, Rust, or Python without flagging the word in a string or comment.
+
+A regex on `panic(` flags the call inside strings and comments too, and `StyleRule` matchers only understand Python's AST. The [`Pattern`](../reference/index.qmd) condition matches structure through [ast-grep](https://ast-grep.github.io), so `panic($$$)` catches a real call however its arguments are spelled, and never a string that happens to contain the word.
 
 <!-- gd-embed: no_go_panic.py -->
 
-`Pattern` infers the language from the edited file's extension (here `.go`), so the same hook matches Python with `Pattern("eval($$$)")` or TypeScript with `Pattern("console.log($$$)")`. Pass `lang=` to override. A `Pattern` answers yes or no for a whole edit. To get violations located by line and scoped to the changed lines, reach for [`ast_grep_rule`](styleguide.qmd) and `styleguide()`; for a Python-specific shape no pattern string expresses, a `StyleRule` matches the AST directly. See also [the conditions guide](../guide/conditions.qmd).
+## What it catches
+
+```go
+func h() {
+	panic("boom")  // panic() aborts the process; return an error instead
+}
+```
+
+## What it allows
+
+```go
+func h() error {
+	return err  // returns an error for the caller to recover from
+}
+```
+
+*The catch / allow split mirrors the hook inline `tests`, so it stays true as the hook evolves.*
+
+## Run it yourself
+
+```bash
+uvx capt-hook --hooks docs/examples test
+```
+
+## See also
+
+- [Conditions guide](../guide/conditions.qmd)
+- [Style rules guide](styleguide.qmd)
+- [Conditions reference](../reference/conditions.qmd)

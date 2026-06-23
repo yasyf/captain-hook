@@ -4,18 +4,19 @@ title: "Reference"
 
 The facts tier: accurate, complete, and neutral. Every tutorial and how-to links here rather
 than restating signatures. For tasks ("how do I gate a command?"), start in the
-[Guide](../guide/index.qmd); this section is for looking things up.
+[Guide](../guide/index.qmd); for a one-line snippet to copy, scan the
+[Cheatsheet](../cheatsheet/index.qmd); this section is for looking up the exact signature.
 
-Hand-written cheatsheets give you scannable tables the generated API reference can't; the symbol and
-CLI references give you exhaustive signatures.
+## Curated tables
 
-## Cheatsheets
+Hand-written tables the generated API reference can't assemble: every event, condition,
+primitive, and matcher in one place, with its full option set.
 
 - [Events](events.qmd) — the ten lifecycle events and what each can block
-- [Conditions](conditions.qmd) — every condition type, grouped and scannable
-- [Primitives & Verdicts](primitives.qmd) — every primitive's signature, plus the LLM verdict types
-- [AST Matchers](matchers.qmd) — the matcher catalog for styleguide rules
-- [Agent Skills](skills.qmd) — the full source of the two bundled skills
+- [Conditions](conditions.qmd) — every condition type and its match semantics
+- [Primitives & verdicts](primitives.qmd) — every primitive's signature, plus the LLM verdict types
+- [AST matchers](matchers.qmd) — the matcher catalog for styleguide rules
+- [Agent skills](skills.qmd) — the full source of the two bundled skills
 
 ## Generated
 

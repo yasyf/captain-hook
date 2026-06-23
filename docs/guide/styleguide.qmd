@@ -9,8 +9,10 @@ just data, a docstring and a matcher.
 
 ## Start with matchers
 
-A matcher is a node predicate. `M.calls("zip")` matches an AST node that is a call to
-`zip`, and a `StyleRule` points its `match` at one. Three you reach for constantly:
+A matcher is a CSS selector for your syntax tree. Where `button.primary > span` picks DOM
+nodes by tag, class, and parent, `M.call & M.child_of(M.func)` picks AST nodes by kind and
+position — you compose, negate, and scope selectors the same way, and the framework does the
+walking. A `StyleRule` points its `match` at one. Three you reach for constantly:
 
 ```python
 from captain_hook.style import matchers as M
@@ -19,6 +21,24 @@ M.calls("zip")              # a call to the bare-name function zip()
 M.child_of(M.control_flow)  # a node whose immediate parent is an if/for/while/with/try
 M.private                   # a single-leading-underscore name (not dunder)
 ```
+
+Read a matcher against a line of code by asking "does this node match?". Here
+`M.calls("zip") & ~M.kwarg("strict")` — a call to bare `zip` with no `strict=` keyword —
+matches the first input and rejects the rest:
+
+| Code | `M.calls("zip") & ~M.kwarg("strict")` |
+|------|:--:|
+| `zip(a, b)` | ✅ matches |
+| `zip(a, b, strict=True)` | ❌ the `~M.kwarg` excludes it |
+| `itertools.zip_longest(a, b)` | ❌ not a bare-name `zip` call |
+| `x = zip` | ❌ a reference, not a call |
+
+::: {.callout-warning title="`M.calls` matches the bare name only"}
+`M.calls("zip")` matches `zip(...)` but not `builtins.zip(...)` or an aliased
+`from itertools import zip_longest as zip`. It keys on the call's bare name, not on what the
+name resolves to — captain-hook has no scope or type information. Reach for `M.call.where(...)`
+when you need to inspect an attribute-access call.
+:::
 
 Matchers compose with boolean algebra (`&`, `|`, `~`) and refine with `.where(...)`, so you
 build a rule by combining matchers instead of reaching for a framework helper:
@@ -65,9 +85,14 @@ styleguide(ZipStrict)
 
 The class name is the identity. `ZipStrict` becomes `zip-strict` in kebab-case.
 
-The docstring is the message. Open it with a newline after `"""` so `inspect.cleandoc`
-normalizes your indentation, and the runner substitutes `{violations}` with the findings
-joined by `sep`, which defaults to a bulleted list.
+The docstring is the message. The runner substitutes `{violations}` with the findings joined
+by `sep`, which defaults to a bulleted list.
+
+::: {.callout-warning title="Open the docstring with a newline"}
+Put a newline right after the opening `"""` so `inspect.cleandoc` can normalize the
+indentation. A message that starts on the same line as the quotes keeps its leading
+whitespace and renders ragged.
+:::
 
 `match` selects the offending nodes. Each becomes a violation rendered as `label (line N)`.
 `label` may be a fixed string (as here), a `node -> str` callable, or omitted, in which case
@@ -140,8 +165,13 @@ Every parameter `styleguide()` accepts:
 
 A rule sees the whole post-edit file, so a check always parses against complete source, and it
 reports only violations on the lines your edit changed. Editing one function leaves a
-pre-existing `zip()` in another function of the same file alone. A `Write` counts as fully
-changed, so every violation is reported.
+pre-existing `zip()` in another function of the same file alone.
+
+::: {.callout-warning title="A `Write` reports every match"}
+Change-scoping keys off the edited lines. An `Edit` reports only the lines it touched, but a
+`Write` replaces the whole file, so every line counts as changed and every matching violation
+is reported — not just the ones you added.
+:::
 
 ## Test each rule inline
 

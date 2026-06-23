@@ -1,3 +1,5 @@
+"""Carry one Pydantic state object across a session and block Stop if the agent skipped tests."""
+
 from __future__ import annotations
 
 from pydantic import Field

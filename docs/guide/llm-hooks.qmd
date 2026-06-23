@@ -130,6 +130,10 @@ llm_gate(
 
 `uvx capt-hook test` runs inline `tests={...}` without a live model. For `Input`-keyed tests it stubs the model call with a verdict that always fires, so the test exercises your `only_if` narrowing and message wiring, not the model's judgment. Legacy string-keyed tests report `SKIP` when no recorded session fixture exists. Validate the LLM judgment itself by running the hook against real sessions.
 
+::: {.callout-warning title="Inline tests don't test the model"}
+The stubbed verdict always fires, so a passing inline test proves your narrowing and message wiring work — never that the model judges correctly. The judgment is the part that can be wrong in production. Verify it by replaying real sessions, not by adding more inline tests.
+:::
+
 ::: {.callout-note title="One fire per turn"}
 `llm_gate` and `llm_nudge` share a per-turn guard. Once one fires during a dispatch cycle, the other returns without calling the model, which stops several expensive hooks from stacking on the same event. `prompt_check` runs inside your own handler and does not participate.
 :::

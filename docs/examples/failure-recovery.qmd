@@ -2,8 +2,38 @@
 title: "Failure recovery"
 ---
 
-After two or three back-to-back failures the agent often spirals. It retries the same approach, restates the same error, and never reaches for a debug tool. You want a Stop-event nudge that fires only when the recent transcript looks like a retry loop, and a separate per-failure nudge that points at the project's debugging playbook.
+> Nudge the agent toward a debug tool when the recent transcript looks like a retry loop or the turn has stacked up failures.
+
+After two or three back-to-back failures the agent often spirals. It retries the same approach, restates the same error, and never reaches for a debug tool. You want a Stop-event nudge that fires only when the recent narration reads like a retry loop, plus a separate per-failure nudge that points at the project's debugging playbook. Both silence themselves once the agent has already done the thing you'd suggest.
 
 <!-- gd-embed: failure_recovery.py -->
 
-`nudge(... signals=Signals(patterns=..., threshold=N, window=N))` matches against the *agent's narration* instead of tool inputs. Each of the last `window` transcript messages is scored on its own, and every pattern that matches adds its `weight` once. The nudge fires when a single message's score reaches `threshold`. With `threshold=4` here, one narration message has to hit two of the weight-2 phrases. The first nudge runs on `Event.Stop`; the second runs on `Event.PostToolUseFailure` and gates on a `when` predicate that counts the turn's failures. Combine `skip_if=[UsedSkill("codex"), ReadFile("DEBUGGING.md")]` so the nudge silences itself once the agent has already done the thing you'd suggest. See also [the signals guide](../guide/signals.qmd), [the primitives guide](../guide/primitives.qmd), and [the conditions reference](../reference/conditions.qmd).
+This page composes two `nudge` primitives: a `signals`-driven Stop nudge that scores the agent's narration, and a `PostToolUseFailure` nudge gated on the turn's failure count.
+
+## What it catches
+
+```text
+Same error again. Let me try again.   # narration hits two weight-2 retry phrases -> reaches threshold=4
+3 failed Bash tool calls in one turn   # count_failures() >= 3 with no debug skill read -> points at DEBUGGING.md
+```
+
+## What it allows
+
+```text
+All checks pass; wrapping up.          # no retry-loop narration -> Stop nudge stays quiet
+2 failed tool calls in one turn        # below the 3-failure gate -> no DEBUGGING.md nudge
+```
+
+*The block / allow split mirrors the hook inline `tests`, so it stays true as the hook evolves.*
+
+## Run it yourself
+
+```bash
+uvx capt-hook --hooks docs/examples test
+```
+
+## See also
+
+- [Signals guide](../guide/signals.qmd)
+- [Primitives guide](../guide/primitives.qmd)
+- [Conditions reference](../reference/conditions.qmd)

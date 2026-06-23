@@ -1,3 +1,5 @@
+"""Flag raw SQL written into application Python by composing conditions."""
+
 from __future__ import annotations
 
 from captain_hook import (

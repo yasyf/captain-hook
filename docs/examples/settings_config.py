@@ -1,3 +1,5 @@
+"""Enforce a project's configured test runner using typed per-project settings."""
+
 from __future__ import annotations
 
 from typing import cast

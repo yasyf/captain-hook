@@ -2,8 +2,39 @@
 title: "LLM cost control"
 ---
 
-An LLM hook that fires on every edit burns tokens fast. This example spends a model call only when it earns its keep.
+> Gate an LLM verdict behind cheap deterministic filters so the model fires only when an edit already looks suspicious — instead of burning tokens on every turn.
+
+An LLM hook that fires on every edit burns tokens fast. You want a model to catch a weakened test — a real assertion turned into `assertTrue(True)`, a no-op mock, a skip to make a failing test pass — without paying for a model call on edits that could never be one. This example spends a call only when it earns its keep.
 
 <!-- gd-embed: llm_cost_control.py -->
 
-Four levers bound the cost. Cheap deterministic conditions like `SourceEdits`, `TestFile`, and `Content` run first, so the model only sees edits that already look suspicious. Then `skip_if=[Agent(...)]` skips planning subagents, `model="small"` picks the cheaper model, and `max_fires=1` stops after the first intervention. This hook carries no inline tests. An LLM verdict needs a recorded fixture or a live session under `uvx capt-hook test`, so verify it by replaying a session. See [Write an LLM hook](../guide/llm-hooks.qmd).
+::: {.callout-note title="Verified by replay"}
+
+The model verdict carries no inline test — an LLM judgment needs a recorded fixture or a live session, so you exercise it by replaying real sessions under `uvx capt-hook test` rather than asserting it deterministically here.
+
+:::
+
+## What it does
+
+Four levers bound the cost:
+
+```python
+only_if=[SourceEdits(lang="py", include_tests=True), TestFile(), Content(r"\b(assert|mock|skip)\b")]  # cheap pre-filters: only test-file edits touching assert/mock/skip reach the model
+skip_if=[Agent("Explore|Plan|general-purpose")]  # skip planning subagents
+model="small"  # pick the cheaper model
+max_fires=1  # stop after the first intervention
+```
+
+Deterministic conditions run first, so the model only sees edits that already look like a weakened test. Most turns never reach the model, so they never spend a token.
+
+## Run it yourself
+
+```bash
+uvx capt-hook --hooks docs/examples test
+```
+
+## See also
+
+- [Write an LLM hook](../guide/llm-hooks.qmd)
+- [Primitives](../guide/primitives.qmd)
+- [Conditions](../reference/conditions.qmd)

@@ -12,6 +12,10 @@ A workflow has three interlinked parts.
 
 The **marker** is a distinctive string the agent prints when it believes the whole checklist is done, such as `"QA COMPLETE"`. The workflow searches the transcript for it. While the marker is absent, the workflow walks the steps. Once the marker appears, the workflow stops checking steps and moves on to artifacts.
 
+::: {.callout-warning title="The marker is matched exactly"}
+The workflow searches the transcript for the marker as a literal substring, including case. `"QA COMPLETE"` and `"qa complete"` are different strings — a near-miss never satisfies the workflow, and the stop stays blocked. Choose a distinctive uppercase marker and print it verbatim.
+:::
+
 A **Step** is one checkpoint. It pairs a `check` predicate with two messages. The `stopped_at` message says what is missing, and `next_step` tells the agent what to run. The first step whose `check` returns `False` blocks the stop.
 
 An **Artifact** is a file on disk that must exist and parse against a Pydantic model. Artifacts run only after the marker is found, so they verify the output of a finished checklist, not its progress.

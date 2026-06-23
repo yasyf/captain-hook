@@ -2,10 +2,51 @@
 title: "Rewriting code structurally"
 ---
 
-`os.system()` runs its argument through a shell, so anything interpolated into it is a shell-injection hole that `subprocess.run([...], check=True)` closes. A warning leaves the fix to the agent. `rewrite_code()` instead edits the call before it reaches disk. It matches an [ast-grep](https://ast-grep.github.io) pattern in the edit's new content, captures the argument as `$CMD`, and drops it into the replacement template.
+> Rewrite unsafe code and command patterns in place — before the edit lands or the command runs — using ast-grep structural matching.
+
+`os.system()` runs its argument through a shell, so anything interpolated into it is a shell-injection hole that `subprocess.run([...], check=True)` closes. A warning leaves the fix to the agent. `rewrite_code()` edits the call before it reaches disk, and `rewrite_command()` does the same for shell commands. Each matches an [ast-grep](https://ast-grep.github.io) pattern, captures arguments as metavariables, and drops them into a replacement template.
 
 <!-- gd-embed: rewrite_code.py -->
 
-`rewrite_code()` registers a `PreToolUse` hook, the one stage where the tool input is still editable, and rewrites the new content of an Edit, Write, MultiEdit, or NotebookEdit. `$CMD` matches the single argument, while `$$$ARGS` matches a whole argument list with its whitespace preserved. The rewrite stays idempotent. Code that already reads `subprocess.run(...)` has nothing to match, so the hook passes it straight through. The language comes from the edited file's extension, and `lang=` overrides it.
+`rewrite_code()` registers a `PreToolUse` hook, the one stage where the tool input is still editable, and rewrites the new content of an Edit, Write, MultiEdit, or NotebookEdit. `$CMD` matches the single argument, while `$$$ARGS` matches a whole argument list with its whitespace preserved. The rewrite stays idempotent: code that already reads `subprocess.run(...)` has nothing to match, so the hook passes it through. The language comes from the edited file's extension, and `lang=` overrides it.
 
-The second hook applies the same idea to shell commands. `rewrite_command("cat $$$ARGS", "bat $$$ARGS")` reads as a regex rewrite but works structurally. Because the pattern carries an ast-grep metavariable, `rewrite_command` rewrites the command through [`CommandLine.rewrite`](../reference/index.qmd), which parses it with tree-sitter-bash. A plain regex with no metavariable, like `r"^cat\s+(\S+)$"` paired with `r"bat \1"`, stays a `re.sub`. Structural matching ignores a `cat` that appears as an argument or inside a string, where a regex would not. Watch one footgun. A single metavariable binds only the first argument, so `"cat $F"` turns `cat -n foo.txt` into `bat -n` and drops the file, so reach for `$$$ARGS` to carry the whole list. `note` rides along as `additionalContext` on both hooks so the model sees that its call was rewritten and why. See also [`rewrite_command`](../guide/primitives.qmd) and [the conditions guide](../guide/conditions.qmd).
+The second hook applies the same idea to shell commands. `rewrite_command("cat $$$ARGS", "bat $$$ARGS")` reads as a regex rewrite but works structurally, parsing the command with tree-sitter-bash via [`CommandLine.rewrite`](../reference/index.qmd). Structural matching ignores a `cat` that appears as an argument or inside a string, where a regex would not. Watch one footgun: a single metavariable binds only the first argument, so `"cat $F"` turns `cat -n foo.txt` into `bat -n` and drops the file — reach for `$$$ARGS` to carry the whole list. `note` rides along as `additionalContext` so the model sees that its call was rewritten and why.
+
+## What it catches
+
+This page composes two rewrite primitives. The edit content the `rewrite_code` hook rewrites:
+
+```python
+os.system("make build")  # os.system() spawns a shell; rewritten to subprocess.run([...], check=True)
+```
+
+The command the `rewrite_command` hook rewrites:
+
+```bash
+cat -n pyproject.toml  # rewritten to `bat -n pyproject.toml` for syntax highlighting and line numbers
+```
+
+## What it allows
+
+Content and commands with no matching pattern pass straight through:
+
+```python
+subprocess.run(["make", "build"], check=True)  # already the safe form; nothing to match
+```
+
+```bash
+ls -la  # not a `cat` invocation; no rewrite
+```
+
+*The catch / allow split mirrors the hook inline `tests`, so it stays true as the hook evolves.*
+
+## Run it yourself
+
+```bash
+uvx capt-hook --hooks docs/examples test
+```
+
+## See also
+
+- [Primitives guide](../guide/primitives.qmd)
+- [Reference index](../reference/index.qmd)

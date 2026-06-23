@@ -2,8 +2,41 @@
 title: "Settings & configuration"
 ---
 
-Different projects have different test runners, different lint allowlists, different version-control conventions. You want a single typed configuration object available in every hook handler, with sensible defaults and `HOOKS_*` environment-variable overrides.
+> Give every hook handler a typed, per-project configuration object with defaults and environment overrides, so config-driven decisions stop relying on global imports.
+
+Different projects ship different test runners, lint allowlists, and version-control conventions. You want one typed configuration object available in every handler, with sensible defaults and `HOOKS_*` environment-variable overrides — not a module-level singleton or a scatter of `os.environ` reads. Subclass `HooksSettings` to declare your knobs, then read the resolved values off `evt.ctx.c` inside the handler.
 
 <!-- gd-embed: settings_config.py -->
 
-Subclass `HooksSettings`, a `pydantic_settings.BaseSettings`, to declare your project's knobs. Defaults live on the class, and the environment overrides them through the `pydantic-settings` machinery. This `enforce_test_command` handler fires on `Event.PreToolUse` and reads the resolved settings as `evt.ctx.c`, also exposed as `evt.ctx.conf` and `evt.ctx.settings`, so each handler gets typed configuration without a global import or a module-level config singleton. It stays imperative because the block message is built from the resolved per-project settings, a config-driven message a static primitive can't carry. See also [Configuration](../guide/configuration.qmd) for how settings resolve across the environment and project files.
+::: {.callout-note title="Verified by replay"}
+
+The block fires only when the resolved `test_command` setting differs from `pytest`, so the live config-driven decision is exercised by real settings resolution rather than the inline tests, which assert the deterministic narrowing and allow paths.
+
+:::
+
+## What it catches
+
+```bash
+pytest tests/    # project configured a non-pytest test_command — use the configured runner instead
+```
+
+## What it allows
+
+```bash
+ls -la           # not a test invocation
+ruff check .     # lint, not a test invocation
+```
+
+*The block / allow split mirrors the hook inline `tests`, so it stays true as the hook evolves.*
+
+## Run it yourself
+
+```bash
+uvx capt-hook --hooks docs/examples test
+```
+
+## See also
+
+- [Configuration](../guide/configuration.qmd)
+- [Conditions reference](../reference/conditions.qmd)
+- [Primitives guide](../guide/primitives.qmd)

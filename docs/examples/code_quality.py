@@ -1,3 +1,5 @@
+"""Catch print() calls and bare except clauses in Python edits across four escalating tiers."""
+
 from __future__ import annotations
 
 import ast

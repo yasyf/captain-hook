@@ -1,3 +1,5 @@
+"""Warn on edits larger than a line-count threshold via a custom condition."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

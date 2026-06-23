@@ -1,0 +1,16 @@
+---
+title: "Cheatsheet"
+---
+
+Every hook you reach for, on one screen. Copy a line, swap the strings, drop it in
+`.claude/hooks/`. Each sheet links to the how-to that teaches it and the reference that
+lists every option.
+
+::: {.callout-tip title="Run any snippet"}
+Save it to `.claude/hooks/x.py` and run `uvx capt-hook --hooks .claude/hooks test` to
+exercise its inline tests.
+:::
+
+- [Hooks](hooks.qmd) — every primitive and condition, grouped by what you want to do
+- [Matchers](matchers.qmd) — the AST matcher vocabulary for style rules
+- [Workflows & state](workflows.qmd) — multi-step gates, session state, and signal scoring

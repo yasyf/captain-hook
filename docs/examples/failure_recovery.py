@@ -1,3 +1,5 @@
+"""Break the agent out of a retry loop after repeated failures."""
+
 from __future__ import annotations
 
 import re

@@ -2,8 +2,38 @@
 title: "Multi-step workflow"
 ---
 
-Before a subagent finishes, it must run tests, lint, and verify coverage. The agent sometimes decides it's "done" after the implementation step and tries to stop early. You want a checklist guard that blocks `SubagentStop` until every step has run *and* the agent has emitted a deliberate completion marker.
+> Block a subagent from stopping until it has run every required step and emitted a deliberate completion marker.
+
+A subagent must run tests, lint, and verify coverage before it finishes. It sometimes calls itself "done" after the implementation step and tries to stop early. You want a checklist guard that holds `SubagentStop` open until every step shows evidence in the transcript *and* the agent emits an explicit completion marker.
 
 <!-- gd-embed: multi_step_workflow.py -->
 
-`workflow(label=..., marker=..., steps=[...], artifacts=[...])` registers a `SubagentStop` guard. Each `Step.check` is a callable that scans the transcript for evidence the step ran. The canonical helper is `text_matches`, as in `text_matches(r"pytest.*passed")`. Adding an `Artifact(path, model, validate)` requires the agent to also produce a file that parses into your Pydantic model and passes the validator. The `marker` string prevents accidental passes from stale transcript text, so instruct the agent to emit it deliberately. See also [Workflows](../guide/workflows.qmd) and the [primitives reference](../reference/primitives.qmd).
+::: {.callout-note title="Verified by replay"}
+
+The guard's pass/fail decision is exercised by replaying a real subagent session against the transcript and on-disk artifacts, not by the inline `tests` dict — `workflow` here registers no inline tests.
+
+:::
+
+## What it does
+
+`workflow(label=..., marker=..., steps=[...], artifacts=[...])` registers a `SubagentStop` guard. On each stop attempt it scans the replayed session transcript:
+
+- **Marker missing** — blocks with the first step whose `check` has no transcript evidence, e.g. no `pytest.*passed` match means `"Stop: tests not run. Run the test suite with pytest."`
+- **Marker present, artifact missing or invalid** — blocks until `.reports/tests.json` exists and parses into `TestReport`; a non-zero `failed` count blocks with `"N tests failed"`.
+- **Marker present, every step matched, artifact valid** — allows the stop.
+
+Each `Step.check` is a callable scanning the transcript for evidence the step ran; `text_matches(r"pytest.*passed")` is the canonical helper. An `Artifact(path, model, validate)` additionally requires a file that parses into your Pydantic model and clears the validator. The `marker` string prevents accidental passes from stale transcript text, so instruct the agent to emit it deliberately.
+
+This page composes the `workflow` primitive end to end: three transcript-scanning steps plus a validated artifact in one guard.
+
+## Run it yourself
+
+```bash
+uvx capt-hook --hooks docs/examples test
+```
+
+## See also
+
+- [Workflows](../guide/workflows.qmd)
+- [Primitives reference](../reference/primitives.qmd)
+- [Transcript](../guide/transcript.qmd)

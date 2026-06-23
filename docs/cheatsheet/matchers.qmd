@@ -1,0 +1,70 @@
+---
+title: "Matchers"
+---
+
+The AST matcher vocabulary for [style rules](../guide/styleguide.qmd). Compose with `&`, `|`,
+`~`, refine with `.where(...)`, and run with `.over(tree)` or `.violations(tree)`. Import as
+`from captain_hook.style import matchers as M`. Every entry is in the
+[matchers reference](../reference/matchers.qmd).
+
+## 🧱 Node types
+
+**M.cls** / **M.func** / **M.definition** — class defs, function defs, or either
+**M.call** — call expressions
+**M.imports** — `import` and `from … import`
+**M.assignment** — `x = …` and `x: T = …`
+**M.control_flow** — `if` / `for` / `while` / `with` / `try` / `except`
+**M.type_checking** — `if TYPE_CHECKING:` blocks
+**M.kind(*types)** — any of the given `ast` node types
+
+## 📞 Calls & references
+
+**M.calls(name)** — a call to the bare-name function `name`
+```python
+M.calls("zip")
+```
+
+**M.kwarg(name)** — a call passing keyword argument `name`
+**M.ref(name)** — a bare-name reference, like `Any` inside an annotation
+
+## 🏷️ Names
+
+**M.named(pattern)** — a class/func/assignment/param whose name matches a regex
+**M.private** — single-leading-underscore names (not dunder)
+**M.dunder** — `__dunder__` names
+**M.constant** — `SCREAMING_SNAKE` names
+
+## 🧬 Annotations
+
+**M.annotated(inner=None)** — an annotated variable, parameter, or return
+**M.forward_ref** — string forward references inside annotations
+
+## 📍 Position
+
+**M.under(other)** — any ancestor matches `other`
+**M.child_of(other)** — the immediate parent matches `other`
+**M.following(boundary)** — a statement after the first sibling matching `boundary`
+
+## 🔗 Combine & run
+
+**a & b** · **a | b** · **~a** — both, either, negate
+**a.where(pred)** — refine with a node-local predicate
+**m.over(tree)** — yield every matching node
+**m.violations(tree)** — yield a `Violation` per match
+**m.diff(pre, post)** — matches in `post` absent from `pre`, for diff rules
+**m.exists(tree)** — whether any node matches
+
+## A worked rule
+
+```python
+from captain_hook.style import StyleRule, matchers as M
+
+class NoNestedImports(StyleRule):
+    """Lazy imports go at the top of the function body, not inside if/for/try."""
+    match = M.imports & M.child_of(M.control_flow) & ~M.under(M.type_checking)
+```
+
+## See also
+
+- [Enforce a style guide](../guide/styleguide.qmd) — the how-to that uses these
+- [AST matchers reference](../reference/matchers.qmd) — every matcher, with signatures

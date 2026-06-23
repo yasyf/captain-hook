@@ -2,48 +2,62 @@
 title: "Examples"
 ---
 
-Each page picks one capability, frames it as a problem you've hit, and links to a self-contained `docs/examples/*.py` file you can drop into your hooks directory. The deterministic examples ship with inline `tests = {...}` you can run with `uvx capt-hook --hooks docs/examples test`; LLM- and session-state-driven hooks are verified by replaying a session instead.
+Each page picks one capability, frames it as a problem you have hit, and links to a
+self-contained `docs/examples/*.py` file you can drop into your hooks directory. Work through
+them by job, from guarding against mistakes to composing a full hooks file.
 
-Work through them by job, from guarding against mistakes to composing a full hooks file.
+::: {.callout-tip title="Run any example"}
+Every page embeds a runnable hook. Clone the repo and exercise the whole set with:
+
+```bash
+uvx capt-hook --hooks docs/examples test
+```
+
+Deterministic hooks assert their verdicts inline (**inline tests**); LLM- and
+session-state-driven hooks are verified by replaying a real session (**replay**), because a
+stubbed model proves only the wiring.
+:::
 
 ## Threat modeling
 
 Stop dangerous actions before they run.
 
-| Example | Teaches |
-|---|---|
-| [Command Safety](command-safety.qmd) | `block_command` plus command-line AST predicates |
-| [Deploy & Secret Guard](deploy-secret-guard.qmd) | block infra-destroying commands and secret leaks |
+| Example | Teaches | Verified |
+|---|---|---|
+| [Command safety](command-safety.qmd) | `block_command` plus command-line AST predicates | inline tests |
+| [Deploy & secret guard](deploy-secret-guard.qmd) | block infra-destroying commands and secret leaks | inline tests |
 
 ## Feedback
 
 Drive the agent with the right nudge at the right time.
 
-| Example | Teaches |
-|---|---|
-| [Code Quality](code-quality.qmd) | layered detection: regex `hook`, AST `lint`, signal `nudge`, `llm_gate` |
-| [Failure Recovery](failure-recovery.qmd) | a signal-driven `Stop` nudge when failures repeat |
-| [Surface Tracked Corrections](corrections-nudge.qmd) | a `Stop` nudge pointing at the session reviewer's queue |
-| [LLM Cost Control](llm-cost-control.qmd) | bound an LLM hook's token spend |
+| Example | Teaches | Verified |
+|---|---|---|
+| [Code quality](code-quality.qmd) | layered detection: regex `hook`, AST `lint`, signal `nudge`, `llm_gate` | tests + replay |
+| [Failure recovery](failure-recovery.qmd) | a signal-driven `Stop` nudge when failures repeat | inline tests |
+| [Surface tracked corrections](corrections-nudge.qmd) | a `Stop` nudge pointing at the session reviewer's queue | inline tests |
+| [No Go panic](no-go-panic.qmd) | an ast-grep `Pattern` warning on Go `panic()` | inline tests |
+| [LLM cost control](llm-cost-control.qmd) | bound an LLM hook's token spend | replay |
 
 ## Workflow
 
 Enforce process across a session.
 
-| Example | Teaches |
-|---|---|
-| [Settings & Configuration](settings-config.qmd) | a `HooksSettings` subclass read by a sibling hook |
-| [Session Workflow](session-workflow.qmd) | `@workflow_state` spanning several events |
-| [Multi-Step Workflow](multi-step-workflow.qmd) | `workflow` / `Step` / `Artifact` before `SubagentStop` |
+| Example | Teaches | Verified |
+|---|---|---|
+| [Settings & configuration](settings-config.qmd) | a `HooksSettings` subclass read by a sibling hook | tests + replay |
+| [Session workflow](session-workflow.qmd) | `@workflow_state` spanning several events | replay |
+| [Multi-step workflow](multi-step-workflow.qmd) | `workflow` / `Step` / `Artifact` before `SubagentStop` | replay |
 
 ## Reusable & advanced
 
 Build rules you compose and reuse.
 
-| Example | Teaches |
-|---|---|
-| [Conditions Composition](conditions-composition.qmd) | stack `only_if` and `skip_if` to target one edit |
-| [Custom Condition](custom-condition.qmd) | a `CustomCondition` predicate fed to a `nudge` |
-| [Style Guide](styleguide.qmd) | `styleguide` running `StyleRule` matchers on changed lines |
-| [Test Integrity](test-integrity.qmd) | `prompt_check` detecting weakened tests |
-| [A Complete Hooks File](capstone.qmd) | several primitives composing in one file |
+| Example | Teaches | Verified |
+|---|---|---|
+| [Conditions composition](conditions-composition.qmd) | stack `only_if` and `skip_if` to target one edit | inline tests |
+| [Custom condition](custom-condition.qmd) | a `CustomCondition` predicate fed to a `nudge` | inline tests |
+| [Style guide](styleguide.qmd) | `styleguide` running `StyleRule` matchers on changed lines | inline tests |
+| [Rewrite code](rewrite-code.qmd) | rewrite edits in place with an ast-grep fix template | inline tests |
+| [Test integrity](test-integrity.qmd) | `prompt_check` detecting weakened tests | replay |
+| [A complete hooks file](capstone.qmd) | several primitives composing in one file | replay |

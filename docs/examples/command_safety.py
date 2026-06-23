@@ -1,3 +1,5 @@
+"""Block dangerous Bash commands before they run."""
+
 from __future__ import annotations
 
 from captain_hook import (

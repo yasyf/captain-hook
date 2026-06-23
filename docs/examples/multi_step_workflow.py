@@ -1,3 +1,5 @@
+"""Block a subagent from stopping until every workflow step has run and the completion marker is emitted."""
+
 from __future__ import annotations
 
 from pydantic import BaseModel

@@ -2,8 +2,42 @@
 title: "A complete hooks file"
 ---
 
-Hooks rarely live alone. A real `.claude/hooks/` directory mixes a safety block and a workflow gate. This capstone shows two primitives composing in one file, and which one carries inline tests.
+> Compose a deterministic safety block and a live-state workflow gate in one `.claude/hooks/` file.
+
+Hooks rarely live alone. A real `.claude/hooks/` directory mixes a safety block that fires the instant the agent runs a command with a workflow gate that watches session state. This capstone composes two primitives in one file: `block_command` (deterministic, carries inline tests) and `gate` (judges live session state). One file listens on `PreToolUse`, `Stop`, and `SubagentStop` at once.
 
 <!-- gd-embed: capstone.py -->
 
-`block_command` is deterministic, so it ships with inline tests. Drop the file into `.claude/hooks/` and `uvx capt-hook test` runs them. The `gate` fires on live session state, like which files were touched and whether the tests ran; verify it by replaying a real session, or give it inline tests with a `transcript` fixture. One file listens on `PreToolUse`, `Stop`, and `SubagentStop` at once. See [Test hooks inline](../guide/testing.qmd) and [Enforce a multi-step workflow](../guide/workflows.qmd).
+::: {.callout-note title="Verified by replay"}
+
+The `gate` reads live session state — which files were touched and whether the tests ran — so its judgment is exercised by replaying a real session, not by the inline tests.
+
+:::
+
+## What it catches
+
+```bash
+git push --force origin main   # block_command: force-push rewrites shared history
+```
+
+The `gate` also blocks `Stop`/`SubagentStop` when you edited `**/*.py` but never ran `pytest`, judged from live session state rather than a single input.
+
+## What it allows
+
+```bash
+git push --force-with-lease   # --force-with-lease is safe; not a bare --force
+```
+
+*The block / allow split mirrors the hook inline `tests`, so it stays true as the hook evolves.*
+
+## Run it yourself
+
+```bash
+uvx capt-hook --hooks docs/examples test
+```
+
+## See also
+
+- [Compose primitives](../guide/primitives.qmd)
+- [Enforce a multi-step workflow](../guide/workflows.qmd)
+- [Test hooks inline](../guide/testing.qmd)

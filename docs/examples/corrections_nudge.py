@@ -1,3 +1,5 @@
+"""Nudge toward the corrections lifecycle when a session ends on a durable correction."""
+
 from __future__ import annotations
 
 import re

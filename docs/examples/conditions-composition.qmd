@@ -2,8 +2,36 @@
 title: "Conditions composition"
 ---
 
-Most real hooks fire on several facts at once, like the right tool, the right file, the right content, and not the wrong directory. This example targets a single edit precisely by stacking conditions instead of writing one sprawling regex.
+> Target one precise edit by stacking conditions instead of writing one sprawling regex.
+
+Most real hooks fire on several facts at once: the right tool, the right file, the right content, and not the wrong directory. Cram that into a single pattern and it turns unreadable and brittle. This example composes primitives so each fact is its own condition, AND-ed with `only_if` and carved out with `skip_if`.
 
 <!-- gd-embed: conditions_composition.py -->
 
-`only_if` is AND, so every condition must match, and `skip_if` skips the hook when any of its conditions match. `SourceEdits(lang="py")` already excludes test files, so a test edit passes without an extra `TestFile()`. Adding `paths="app/**"` scopes the match to one package, and `FilePath("**/migrations/**")` in `skip_if` carves out an exception. The hook fires on `PostToolUse`. See [Filter hooks with conditions](../guide/conditions.qmd) and the [conditions cheatsheet](../reference/conditions.qmd).
+## What it catches
+
+```python
+Edit app/users.py: q = "SELECT id FROM users"  # raw SQL in application code, not a migration or test
+```
+
+## What it allows
+
+```python
+Edit app/migrations/0001.py: "SELECT 1 FROM t"      # migrations excluded by skip_if FilePath("**/migrations/**")
+Edit app/tests/test_users.py: "SELECT id FROM users"  # test files excluded by SourceEdits default
+Edit app/util.py: x = 1  # nothing to flag here       # no SELECT ... FROM content match
+```
+
+*The catch / allow split mirrors the hook inline `tests`, so it stays true as the hook evolves.*
+
+## Run it yourself
+
+```bash
+uvx capt-hook --hooks docs/examples test
+```
+
+## See also
+
+- [Filter hooks with conditions](../guide/conditions.qmd)
+- [Conditions cheatsheet](../reference/conditions.qmd)
+- [Matchers reference](../reference/matchers.qmd)

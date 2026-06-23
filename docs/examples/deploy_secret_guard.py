@@ -1,3 +1,5 @@
+"""Block irreversible deploys and secret-exfiltration commands before they run."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

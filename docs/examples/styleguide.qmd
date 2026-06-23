@@ -2,8 +2,40 @@
 title: "Style guide"
 ---
 
-Every team has conventions a linter can't express, like banning `print()` in committed code, `import *`, and bare `except:`. captain-hook ships *no* rules of its own. You write the cross-language shape checks as [ast-grep](https://ast-grep.github.io) patterns with `ast_grep_rule()`, the Python-specific ones as `StyleRule` subclasses, and hand them all to `styleguide()`, which parses each edited file, runs every rule, and reports only the violations your edit introduced.
+> Enforce the team conventions a linter can't express, flagging only the violations your edit introduced.
+
+Every team has rules a linter won't catch: no `print()` in committed code, no `import *`, no bare `except:`. captain-hook ships no rules of its own. You write cross-language shape checks as [ast-grep](https://ast-grep.github.io) patterns, the Python-specific ones as `StyleRule` subclasses, and hand them all to `styleguide()`. It parses each edited file, runs every rule, and reports only what your edit added.
 
 <!-- gd-embed: styleguide.py -->
 
-The `styleguide()` call registers one PostToolUse hook that fires after every Python edit or write, skipping test files by default. `ast_grep_rule()` builds a rule from one ast-grep pattern. `NoPrint` is `print($$$)`, which matches a print call however its arguments are spelled and never a string or comment that mentions one. `message` is the text shown, with `{violations}` substituted at fire time, and `label` names each match. `NoNewWildcardImport` uses `ast_grep_diff_rule()` to flag matches present in the new file but absent from the old one, reporting only what the edit *added*. `NoBareExcept` is a plain `StyleRule`. A bare `except:` is `ExceptHandler.type is None`, a Python-AST fact no pattern string expresses, so it matches the tree with a [`matchers`](../guide/styleguide.qmd) expression. That split is the dividing line. Reach for ast-grep on call, literal, and import *shapes*, especially across languages, and a `StyleRule` for Python naming, ordering, and scope. Both kinds register in the same `styleguide(...)` call. The runner renders `label (line N)` and drops any violation whose line you didn't touch, so editing one function never lights up a pre-existing `print()` elsewhere in the file. Pass `block=True` or scope it with `only_if=` to register a second, differently scoped hook. See also [the style guide](../guide/styleguide.qmd) and [the conditions guide](../guide/conditions.qmd) for scoping hooks.
+This page composes three primitives in one `styleguide()` call: `ast_grep_rule()` for call shapes, `ast_grep_diff_rule()` for imports the edit adds, and a `StyleRule` subclass for Python-AST facts no pattern string expresses.
+
+## What it catches
+
+```python
+print('debug')      # print() calls don't belong in committed code; use a logger
+from os import *     # wildcard import added by this edit; import names explicitly
+except:              # bare except swallows every error, including KeyboardInterrupt
+```
+
+## What it allows
+
+```python
+logger.info('ok')   # logging, not a print() call
+from os import *     # pre-existing wildcard import the edit didn't add
+except ValueError:   # catches a specific exception type
+```
+
+*The catch / allow split mirrors the hook inline `tests`, so it stays true as the hook evolves.*
+
+## Run it yourself
+
+```bash
+uvx capt-hook --hooks docs/examples test
+```
+
+## See also
+
+- [Style guide](../guide/styleguide.qmd)
+- [Conditions guide](../guide/conditions.qmd)
+- [Matchers reference](../reference/matchers.qmd)

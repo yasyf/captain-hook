@@ -1,3 +1,5 @@
+"""Block test edits that weaken assertions to make a failing test pass."""
+
 from __future__ import annotations
 
 from captain_hook import (

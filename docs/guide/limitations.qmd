@@ -1,0 +1,60 @@
+---
+title: "What captain-hook does not do"
+---
+
+captain-hook guards a Claude Code session from the inside, with the information a single hook
+event carries. That boundary is real, and the honest way to set expectations is to name it.
+Here is what the framework cannot do, and what to reach for instead.
+
+## No cross-file or whole-project analysis
+
+A hook sees the one file an edit touched and the one event that fired, not the rest of the
+repo. A matcher or `Pattern` parses that single file, so a rule cannot ask "is this symbol
+imported anywhere else?" or "does this change break a caller two modules over?". For
+project-wide invariants, run a real linter or type checker in CI and gate on its result with a
+`block_command` or a workflow `Artifact`.
+
+## No scope, type, or control-flow information
+
+Matching is syntactic. Both the Python `matchers as M` vocabulary and the cross-language
+ast-grep `Pattern` work on the shape of the code, not its meaning. `M.calls("zip")` matches
+the bare name `zip`, not "whatever `zip` resolves to here", so a rule cannot tell a shadowed
+local from the builtin, infer a variable's type, or follow which branch runs. A rule that
+needs name resolution or types belongs in a tool that has them — your type checker — not in a
+matcher.
+
+## The combinator vocabulary is Python-only
+
+The composable `M.` algebra — `M.calls`, `M.child_of`, `.where(...)`, and the rest — is built
+on Python's standard-library `ast`, so it parses Python only. Other languages are not shut
+out: an ast-grep `Pattern("panic($$$)", lang="go")` matches Go, TypeScript, Rust, and more.
+You trade the rich combinator algebra for a flat pattern string. Reach for `Pattern` when you
+guard a non-Python language structurally.
+
+## LLM hooks are non-deterministic and cost money
+
+An `llm_gate` or `llm_nudge` calls a model, so its verdict varies run to run, adds seconds of
+latency, and bills tokens. Inline tests stub the model and never exercise its judgment. Bound
+the cost with `max_fires`, a narrow `only_if`, and `signals` short-circuiting, then validate
+the judgment by replaying real sessions. When a regex or matcher can answer the question, it is
+the better tool every time.
+
+## Hooks share nothing but the session store
+
+Each hook runs in its own process and forgets everything when it exits. Two hooks coordinate
+only through the `SessionStore`, and only within one session — there is no shared memory across
+sessions, machines, or concurrent agents. State keyed to a session is cleaned up once that
+session's transcript is gone.
+
+## A hook reacts to one event at a time
+
+The dispatch model is one event in, one verdict out. A hook cannot poll, run a background loop,
+or wake itself on a timer. `Waiting()` lets a `Stop` hook hold the agent while async work
+finishes, but the hook still acts only when Claude Code fires the next event. Anything that
+needs a clock or a queue lives outside the hook.
+
+## See also
+
+- [Security model](security.qmd) — the trust boundary and where credentials come from
+- [Decide: LLM or static](llm-hooks.qmd) — when a model's cost is worth it
+- [Enforce a style guide](styleguide.qmd) — what AST matchers can and cannot express

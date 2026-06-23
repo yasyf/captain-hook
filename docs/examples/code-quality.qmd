@@ -2,8 +2,49 @@
 title: "Code quality"
 ---
 
-The agent keeps slipping `print()` into production modules instead of using your logger, and bare `except:` clauses show up under deadline pressure. You want layered feedback. Two structural checks fire on every edit, a behavioral nudge reacts when the agent's narration repeats the antipattern, and a final LLM gate handles ambiguous cases.
+> Catch `print()` calls and bare `except:` clauses in Python edits, escalating from structural checks to a behavioral nudge to an LLM gate.
+
+The agent keeps slipping `print()` into production modules instead of your logger, and bare `except:` clauses show up under deadline pressure. You want layered feedback, not one blunt rule. This page composes four primitives on `Event.PostToolUse`: two structural checks fire on every edit, a behavioral nudge reacts when the agent's narration repeats the antipattern, and an LLM gate adjudicates the ambiguous prod-print cases.
 
 <!-- gd-embed: code_quality.py -->
 
-The same problem expressed at four escalating tiers, all firing on `Event.PostToolUse`. The first `hook(...)` uses the [`Pattern`](../reference/index.qmd) condition, where `Pattern("print($$$)")` matches a real print call, never a `print(` inside a string or comment, more precise than the regex it replaces. The `lint(bare_excepts, ...)` check walks the Python AST for a bare `except:`, the `ExceptHandler.type is None` case, a Python-specific fact no pattern string expresses. That is why it stays an `ast` check instead of ast-grep. `nudge(... signals=...)` watches transcript narration to catch the agent talking about the antipattern, and `llm_gate(...)` lets a model adjudicate the ambiguous prod-print cases. A condition answers yes or no. When you want each violation located by line and scoped to the changed lines, reach for [`ast_grep_rule`](styleguide.qmd) and `styleguide()`. See also [primitives](../guide/primitives.qmd) and [LLM hooks](../guide/llm-hooks.qmd) for the full set.
+::: {.callout-note title="Verified by replay"}
+
+The `nudge` (transcript signals) and `llm_gate` (live model verdict) judgments are exercised by replaying real sessions, not the inline tests; only the deterministic `hook` and `lint` expectations below are asserted here.
+
+:::
+
+## What it catches
+
+```python
+print("debug")              # real print() call in a prod module — use the logger
+try:
+    f()
+except:                     # bare except silently swallows every error
+    pass
+```
+
+## What it allows
+
+```python
+logger.info('ok')           # logger call, no print()
+label = 'print(x)'          # 'print(' only inside a string, not a real call
+try:
+    f()
+except ValueError:          # catches a specific exception type
+    pass
+```
+
+*The block / allow split mirrors the hook inline `tests`, so it stays true as the hook evolves.*
+
+## Run it yourself
+
+```bash
+uvx capt-hook --hooks docs/examples test
+```
+
+## See also
+
+- [Primitives](../guide/primitives.qmd)
+- [LLM hooks](../guide/llm-hooks.qmd)
+- [Style guide checks](../guide/styleguide.qmd)

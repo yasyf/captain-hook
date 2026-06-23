@@ -30,9 +30,13 @@ sections:
     navbar_after: Getting Started
     index: true
     index_columns: 2
+  - title: Cheatsheet
+    dir: docs/cheatsheet
+    navbar_after: Guide
+    index: true
   - title: Examples
     dir: docs/examples
-    navbar_after: Guide
+    navbar_after: Cheatsheet
     index: true
   - title: Reference
     dir: docs/reference

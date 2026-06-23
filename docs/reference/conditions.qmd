@@ -1,5 +1,5 @@
 ---
-title: "Conditions cheatsheet"
+title: "Conditions"
 ---
 
 Every condition type, in one place. Use conditions in `only_if` (all must match) or `skip_if`
