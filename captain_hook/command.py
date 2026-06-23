@@ -150,6 +150,17 @@ class CommandLine:
 
         return ast_grep.rewrite(self.raw, "bash", pattern, replace)
 
+    def capture(self, pattern: str) -> dict[str, str] | None:
+        """Match ``pattern`` structurally and return its named metavars, or ``None`` when it doesn't match.
+
+        ``"sed -n $R $F"`` over ``"sed -n '10,40p' f.go"`` yields ``{"R": "10,40p", "F": "f.go"}`` —
+        ``$NAME`` captures a single token, ``$$$NAME`` the original-source span of its matches. A pattern
+        with no metavars that still matches returns an empty dict.
+        """
+        from captain_hook import ast_grep
+
+        return ast_grep.capture(self.raw, "bash", pattern)
+
     @staticmethod
     def node_text(node: Node) -> str:
         return node.text.decode() if node.text else ""

@@ -146,14 +146,20 @@ class HookContext:
         input: str | None = None,
         timeout: int = 30,
         env: dict[str, str] | None = None,
-    ) -> str:
-        return run_cli(
-            args,
-            input=input,
-            timeout=timeout,
-            env=os.environ | (env or {}),
-            cwd=os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR"),
-        )
+        throw: bool = True,
+    ) -> str | None:
+        try:
+            return run_cli(
+                args,
+                input=input,
+                timeout=timeout,
+                env=os.environ | (env or {}),
+                cwd=os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR"),
+            )
+        except (OSError, subprocess.SubprocessError):
+            if throw:
+                raise
+            return None
 
     def git(self, *args: str) -> str | None:
         try:

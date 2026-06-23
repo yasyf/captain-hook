@@ -96,6 +96,27 @@ def rewrite(source: str, lang: str, pattern: str, replace: str) -> str:
     return root.commit_edits(edits)
 
 
+def capture(source: str, lang: str, pattern: str) -> dict[str, str] | None:
+    """Match ``pattern`` against ``source`` and extract its named metavars, or ``None`` when it doesn't match.
+
+    Each ``$NAME`` in the pattern maps to the matched node's text; each ``$$$NAME`` maps to the
+    original-source span covering its matches, so whitespace is preserved (mirroring :func:`fill_template`).
+    A pattern with no metavars that still matches yields an empty dict — present but empty.
+    """
+    if (node := parse(source, lang).find(pattern=pattern)) is None:
+        return None
+
+    def value(m: re.Match[str]) -> str:
+        if (name := m.group(1)) is not None:
+            if not (spans := node.get_multiple_matches(name)):
+                return ""
+            full = node.get_root().root().text()
+            return full[spans[0].range().start.index : spans[-1].range().end.index]
+        return single.text() if (single := node.get_match(m.group(2))) else ""
+
+    return {(m.group(1) or m.group(2)): value(m) for m in TEMPLATE_VAR.finditer(pattern)}
+
+
 def fill_template(node: SgNode, template: str) -> str:
     """Fill an ast-grep fix ``template`` against one match: ``$NAME`` becomes the metavar's text;
     ``$$$NAME`` becomes the original-source span covering its matches, so whitespace is preserved.

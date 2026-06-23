@@ -1,62 +1,15 @@
 from __future__ import annotations
 
-import re
-from typing import ClassVar
+from captain_hook import Allow, Input, Warn
 
-from captain_hook import (
-    Allow,
-    BaseHookEvent,
-    Clause,
-    CustomCondition,
-    Input,
-    NlpSignal,
-    Phrase,
-    RanCommand,
-    Signal,
-    Signals,
-    Warn,
-    nudge,
-)
+from .lib import pre_existing_nudge, trivial_type_nudge
 
-
-class TypeCheckerContext(CustomCondition):
-    PATTERN: ClassVar[re.Pattern[str]] = re.compile(
-        r"(?i)(?:\b(?:pyright|mypy|type.?check(?:ing)?|type.?error|type.?annotation"
-        r"|type.?warning|type.?issue|type.?mismatch|diagnostics?|lsp"
-        r"|could not be resolved|possibly unbound|cannot be assigned)\b"
-        r"|TYPE_CHECKING|#\s*type:\s*ignore)"
-    )
-
-    def check(self, evt: BaseHookEvent) -> bool:
-        return bool((t := evt.ctx.transcript) and self.PATTERN.search(t.assistant_text(n=10)))
-
-
-nudge(
-    "You appear to be dismissing a pre-existing issue rather than fixing it. "
-    "Leave the codebase better than you found it — if you encounter a bug, style "
-    "violation, or broken test in code you're touching, fix it. Don't rationalize "
-    "skipping it as out of scope. See: AGENTS.md § Code Stewardship.",
-    skip_if=[TypeCheckerContext()],
-    signals=Signals(
-        [
-            Signal(pattern=r"(?i)(?:pre-existing|preexisting)", weight=2),
-            Signal(pattern=r"(?i)(?:outside|beyond) (?:the )?scope", weight=1),
-            NlpSignal(
-                clauses=[
-                    Clause(noun=Phrase.expand("change"), verb=Phrase("cause", "introduce"), negated=True),
-                    Clause(noun=Phrase.expand("issue"), verb=Phrase("leave")),
-                ],
-                weight=2,
-            ),
-            NlpSignal(
-                clauses=[
-                    Clause(noun=Phrase.expand("issue"), adj=Phrase("existing", "present", "previous")),
-                ],
-                weight=1,
-            ),
-        ],
-        threshold=2,
-        window=15,
+pre_existing_nudge(
+    message=(
+        "You appear to be dismissing a pre-existing issue rather than fixing it. "
+        "Leave the codebase better than you found it — if you encounter a bug, style "
+        "violation, or broken test in code you're touching, fix it. Don't rationalize "
+        "skipping it as out of scope. See: AGENTS.md § Code Stewardship."
     ),
     tests={
         Input(
@@ -128,43 +81,15 @@ nudge(
 )
 
 
-nudge(
-    "Stop investigating trivial pyright/typing warnings. Per AGENTS.md § General Rules — "
-    "Don't contort code to satisfy a checker: ignore trivial type issues (`cached_property` "
-    "overriding `property`, minor override mismatches, descriptor protocol). Only fix type "
-    "issues that indicate actual bugs. Don't check git history to see if you introduced "
-    "them — move on.",
-    signals=Signals(
-        [
-            Signal(
-                pattern=r"(?i)check\s+(?:the\s+)?git\s+(?:history|log|blame)",
-                weight=2,
-            ),
-            Signal(
-                pattern=r"(?i)(?:something|warnings?|errors?)\s+i\s+(?:introduced|added|caused)",
-                weight=2,
-            ),
-            Signal(
-                pattern=(
-                    r"(?i)(?:existed|were\s+there|present)\s+(?:before|prior\s+to)\s+"
-                    r"(?:my\s+)?(?:changes?|edits?)"
-                ),
-                weight=2,
-            ),
-            Signal(
-                pattern=(
-                    r"(?i)warnings?\s+(?:are|is)?\s*(?:showing\s+up|appearing|popping\s+up)\s+"
-                    r"(?:again|now|in)"
-                ),
-                weight=2,
-            ),
-            Signal(pattern=r"(?i)(?:actual|real|genuine)\s+(?:bug|error)", weight=-3),
-            Signal(pattern=r"(?i)wrong\s+(?:type|signature|return\s+type)", weight=-3),
-        ],
-        threshold=4,
-        window=10,
+trivial_type_nudge(
+    message=(
+        "Stop investigating trivial pyright/typing warnings. Per AGENTS.md § General Rules — "
+        "Don't contort code to satisfy a checker: ignore trivial type issues (`cached_property` "
+        "overriding `property`, minor override mismatches, descriptor protocol). Only fix type "
+        "issues that indicate actual bugs. Don't check git history to see if you introduced "
+        "them — move on."
     ),
-    skip_if=[RanCommand(r"(?:uv run ty check|uvx ty check|(?:uvx )?prek run (?:ty\b|--all-files)|uvx pyright)")],
+    skip=r"(?:uv run ty check|uvx ty check|(?:uvx )?prek run (?:ty\b|--all-files)|uvx pyright)",
     tests={
         Input(
             transcript=[

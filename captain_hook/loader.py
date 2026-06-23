@@ -17,11 +17,18 @@ from captain_hook.settings import build_settings
 
 CONF_MODULE = "conf"
 PACK_PACKAGE_PREFIX = "captain_hook._packs"
+SKIP_MARKER = "__capt_hook_skip__"
+SKIP_MARKER_RE = re.compile(rf"^{SKIP_MARKER}\s*=\s*True\b", re.MULTILINE)
 
 
 def is_test_module(fqn: str) -> bool:
     parts = fqn.split(".")
     return parts[-1].startswith("test_") or parts[-1] == "conftest" or "tests" in parts
+
+
+def is_skip_marked(path: Path) -> bool:
+    """True when the module declares ``__capt_hook_skip__ = True`` — a library, not an auto-loaded hook."""
+    return path.is_file() and bool(SKIP_MARKER_RE.search(path.read_text()))
 
 
 def import_or_reload(fqn: str, fresh_this_pass: set[str]) -> ModuleType:
@@ -57,7 +64,9 @@ def discover_hooks(hooks_dir: str | Path, state: State | None = None) -> None:
     all_modules = {
         info.name
         for info in pkgutil.walk_packages([str(hooks_path)], prefix=f"{pkg}.")
-        if not info.name.rpartition(".")[2].startswith("_") and not is_test_module(info.name)
+        if not info.name.rpartition(".")[2].startswith("_")
+        and not is_test_module(info.name)
+        and not is_skip_marked(hooks_path.parent / Path(*info.name.split(".")).with_suffix(".py"))
     }
 
     for fqn in sorted(all_modules - {f"{pkg}.{CONF_MODULE}"}):
@@ -102,6 +111,8 @@ def discover_pack(name: str, pack_dir: Path) -> None:
     ensure_pack_package(pkg, [str(pack_dir)])
     for path in sorted(pack_dir.glob("*.py")):
         if path.stem.startswith("_") or path.stem == CONF_MODULE or is_test_module(path.stem):
+            continue
+        if is_skip_marked(path):
             continue
         # Broad catch is deliberate: one unloadable or non-hook .py must not abort
         # the whole pack. The failure is logged loudly at WARNING, never swallowed.

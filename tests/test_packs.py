@@ -18,10 +18,13 @@ from captain_hook.packs import manager
 from captain_hook.util import http
 
 PACKS_DIR = Path(captain_hook.__file__).parent / "packs"
-EXPECTED_BUILTINS = {"general", "python", "go"}
-GENERAL_HOOKS = {"commands", "docs", "plans", "prompts", "review", "stewardship", "tasks"}
+EXPECTED_BUILTINS = {"general", "python", "go", "steering"}
+GENERAL_HOOKS = {"commands", "docs", "plans", "prompts", "review", "tasks"}
 PYTHON_HOOKS = {"style", "testing", "toolchain"}
 GO_HOOKS = {"testing", "toolchain"}
+# lib.py carries __capt_hook_skip__ so it is a non-underscore file the loader skips; the
+# layout test counts .py files, so it appears here, but only steering.py registers hooks.
+STEERING_HOOKS = {"lib", "steering"}
 HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 SRC_USES_FILE = (
     "from pathlib import Path\n"
@@ -132,8 +135,8 @@ def test_expected_builtin_packs_present() -> None:
 
 @pytest.mark.parametrize(
     ("name", "hook_stems"),
-    [("general", GENERAL_HOOKS), ("python", PYTHON_HOOKS), ("go", GO_HOOKS)],
-    ids=["general", "python", "go"],
+    [("general", GENERAL_HOOKS), ("python", PYTHON_HOOKS), ("go", GO_HOOKS), ("steering", STEERING_HOOKS)],
+    ids=["general", "python", "go", "steering"],
 )
 def test_builtin_pack_layout(name: str, hook_stems: set[str]) -> None:
     pack_dir = manager.builtin_packs()[name]
@@ -481,6 +484,24 @@ def test_discover_pack_skips_test_files(tmp_path: Path) -> None:
     assert "captain_hook._packs.solo.conftest" not in sys.modules
 
 
+def test_discover_pack_skips_marked_library_but_keeps_it_importable(tmp_path: Path, isolate_modules: None) -> None:
+    pack = tmp_path / "marked"
+    pack.mkdir()
+    (pack / "hook.py").write_text(HOOK_SRC)
+    # A non-underscore library file the loader must skip on the strength of the marker
+    # alone (it would otherwise be auto-loaded). It still imports cleanly on demand.
+    (pack / "lib.py").write_text("__capt_hook_skip__ = True\nSHARED = 42\n")
+    discover_pack("ccx-marked", pack)
+
+    assert len(app._state.hooks) == 1  # only hook.py registered; the marked lib stayed inert
+    assert "captain_hook._packs.ccx_marked.hook" in sys.modules
+    assert "captain_hook._packs.ccx_marked.lib" not in sys.modules  # the auto-load loop never imported it
+
+    lib = __import__("captain_hook._packs.ccx_marked.lib", fromlist=["SHARED"])  # but it remains importable
+    assert lib.SHARED == 42
+    assert len(app._state.hooks) == 1  # importing the marked library registers nothing
+
+
 def test_discover_pack_warns_and_continues_on_unloadable(tmp_path: Path, logcap: Any) -> None:
     pack = tmp_path / "p"
     pack.mkdir()
@@ -501,6 +522,31 @@ def test_import_pack_module_sets_file(tmp_path: Path) -> None:
     assert len(app._state.hooks) == 1
 
 
+# --- steering pack: importable building blocks vs. enabled registration --------------
+
+
+def test_importing_steering_building_blocks_registers_nothing(isolate_modules: None) -> None:
+    # Force a cold import so the package init (and its skip-marked lib) re-runs under
+    # this test's clean state — the whole point is that the import fires no hooks.
+    for name in [k for k in sys.modules if k.startswith("captain_hook.packs.steering")]:
+        del sys.modules[name]
+
+    from captain_hook.packs.steering import TypeCheckerContext, pre_existing_nudge, trivial_type_nudge
+
+    assert app._state.hooks == []  # importing the inert library registers ZERO hooks
+    assert callable(pre_existing_nudge) and callable(trivial_type_nudge)
+    assert TypeCheckerContext().PATTERN.search("pyright type error")  # the building block is usable
+
+
+def test_enabling_steering_pack_registers_both_nudges() -> None:
+    resolved = manager.resolve_builtin("steering")
+    discover_pack("steering", resolved.path)
+    # Exactly two: steering.py registers the two nudges; lib.py is skip-marked, so the
+    # auto-load loop never imports it — any top-level nudge it carried would push this past 2.
+    assert len(app._state.hooks) == 2
+    assert "captain_hook._packs.steering.steering" in sys.modules
+
+
 # --- CLI -----------------------------------------------------------------------------
 
 
@@ -511,7 +557,7 @@ def test_cli_pack_add_list_remove(tmp_path: Path) -> None:
     assert "[packs.general]" in manager.packs_toml_path(tmp_path).read_text()
 
     listed = runner.invoke(cli, ["--root", str(tmp_path), "pack", "list"])
-    assert "general" in listed.output and "7 hooks" in listed.output
+    assert "general" in listed.output and "6 hooks" in listed.output
 
     remove = runner.invoke(cli, ["--root", str(tmp_path), "pack", "remove", "general"])
     assert remove.exit_code == 0

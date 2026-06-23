@@ -150,6 +150,56 @@ class TestCallCli:
             ctx.call_cli(["sh", "-c", "echo partial-output; exit 2"])
         assert any("partial-output" in note for note in getattr(exc_info.value, "__notes__", []))
 
+    def test_throw_false_returns_none_on_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        assert ctx.call_cli(["false"], throw=False) is None
+
+    def test_throw_false_returns_none_on_missing_executable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        with patch(
+            "captain_hook.context.run_cli",
+            side_effect=FileNotFoundError(2, "No such file or directory", "nope"),
+        ):
+            assert ctx.call_cli(["nope"], throw=False) is None
+
+    def test_throw_false_returns_none_on_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        with patch(
+            "captain_hook.context.run_cli",
+            side_effect=subprocess.TimeoutExpired(cmd=["sleep"], timeout=1),
+        ):
+            assert ctx.call_cli(["sleep", "5"], throw=False) is None
+
+    def test_throw_false_returns_output_on_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        result = ctx.call_cli(["echo", "hello"], throw=False)
+        assert result is not None
+        assert "hello" in result
+
+    def test_throw_true_raises_on_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        with patch(
+            "captain_hook.context.run_cli",
+            side_effect=subprocess.TimeoutExpired(cmd=["sleep"], timeout=1),
+        ):
+            with pytest.raises(subprocess.TimeoutExpired):
+                ctx.call_cli(["sleep", "5"])
+
+    def test_throw_true_raises_on_missing_executable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        with patch(
+            "captain_hook.context.run_cli",
+            side_effect=FileNotFoundError(2, "No such file or directory", "nope"),
+        ):
+            with pytest.raises(FileNotFoundError):
+                ctx.call_cli(["nope"])
+
     def test_uses_project_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
         monkeypatch.delenv("FACTORY_PROJECT_DIR", raising=False)

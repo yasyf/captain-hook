@@ -18,7 +18,7 @@ from cc_transcript.ids import SessionId
 from captain_hook.app import _state, load_gitignore, reset
 from captain_hook.context import HookContext, load_transcript
 from captain_hook.dispatch import dispatch
-from captain_hook.loader import CONF_MODULE, discover_hooks, discover_pack
+from captain_hook.loader import CONF_MODULE, discover_hooks, discover_pack, is_skip_marked
 from captain_hook.log import setup_logging
 from captain_hook.packs import manager
 from captain_hook.review.cli import review
@@ -587,7 +587,11 @@ def pack_list(state: CliState) -> None:
                 kind, ref = "builtin", "-"
             case manager.ExternalPack(source=source) as ext:
                 kind, ref = "github", f"{source.ref or 'HEAD'}@{(manager.resolved_commit(ext) or '???')[:7]}"
-        count = sum(1 for p in r.path.glob("*.py") if not p.stem.startswith("_") and p.stem != CONF_MODULE)
+        count = sum(
+            1
+            for p in r.path.glob("*.py")
+            if not p.stem.startswith("_") and p.stem != CONF_MODULE and not is_skip_marked(p)
+        )
         click.echo(f"  {r.entry.name:24} {kind:8} {ref:20} v{r.manifest.version:8} {count} hooks")
     for name in missing:
         click.echo(f"  {name:24} github   (unavailable — offline; run `capt-hook pack update` when online)")

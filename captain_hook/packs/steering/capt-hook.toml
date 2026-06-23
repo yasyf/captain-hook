@@ -1,0 +1,4 @@
+name = "steering"
+version = "0.1.0"
+description = "Steer the agent's judgment on what's worth fixing: don't dismiss a real pre-existing issue, and don't chase trivial type noise."
+hooks = "."

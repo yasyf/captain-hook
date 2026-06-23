@@ -62,6 +62,29 @@ class TestRewriteCore:
         assert not ast_grep.has_metavar(r"^cat\s+(\S+)$")
 
 
+class TestCapture:
+    def test_named_singles(self) -> None:
+        assert ast_grep.capture("sed -n 10,40p f.go", "bash", "sed -n $R $F") == {"R": "10,40p", "F": "f.go"}
+
+    def test_quotes_preserved_from_raw(self) -> None:
+        assert ast_grep.capture("sed -n '10,40p' f.go", "bash", "sed -n $R $F") == {"R": "'10,40p'", "F": "f.go"}
+
+    def test_triple_metavar_span(self) -> None:
+        assert ast_grep.capture("cat a.txt b.txt c.txt", "bash", "cat $$$FILES") == {"FILES": "a.txt b.txt c.txt"}
+
+    def test_triple_metavar_preserves_whitespace(self) -> None:
+        assert ast_grep.capture("echo  a   b", "bash", "echo $$$ARGS") == {"ARGS": "a   b"}
+
+    def test_mixed_single_and_triple(self) -> None:
+        assert ast_grep.capture("git commit -m hi", "bash", "git $SUB $$$REST") == {"SUB": "commit", "REST": "-m hi"}
+
+    def test_no_metavar_match_is_empty_dict(self) -> None:
+        assert ast_grep.capture("ls -la", "bash", "ls -la") == {}
+
+    def test_no_match_is_none(self) -> None:
+        assert ast_grep.capture("ls -la", "bash", "sed -n $R $F") is None
+
+
 class TestRewriteCode:
     def test_edit_rewrites_new_string(self) -> None:
         rewrite_code("os.system($CMD)", "subprocess.run([$CMD], check=True)", note="use subprocess")

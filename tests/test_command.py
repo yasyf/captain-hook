@@ -190,6 +190,17 @@ class TestCommandLine:
         assert len(cl) >= 1
 
 
+class TestCommandLineCapture:
+    def test_named_singles(self) -> None:
+        assert CommandLine.parse("sed -n 10,40p f.go").capture("sed -n $R $F") == {"R": "10,40p", "F": "f.go"}
+
+    def test_triple_metavar_span(self) -> None:
+        assert CommandLine.parse("cat a.txt b.txt").capture("cat $$$FILES") == {"FILES": "a.txt b.txt"}
+
+    def test_no_match_is_none(self) -> None:
+        assert CommandLine.parse("ls -la").capture("sed -n $R $F") is None
+
+
 class TestEdgeCases:
     def test_malformed_quote(self) -> None:
         cmd = Command.parse('echo "unterminated')
