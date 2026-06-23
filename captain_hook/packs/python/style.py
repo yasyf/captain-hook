@@ -4,7 +4,7 @@ import ast
 from collections.abc import Iterator
 
 from captain_hook import Allow, Input, Warn
-from captain_hook.style import StyleDiffRule, StyleRule, Violation, styleguide
+from captain_hook.style import Change, StyleDiffRule, StyleRule, Violation, styleguide
 from captain_hook.style import matchers as M
 
 
@@ -132,8 +132,8 @@ class NoWeakeningToAny(StyleDiffRule):
         ): Allow(),
     }
 
-    def check(self, pre: ast.Module, post: ast.Module) -> Iterator[Violation]:
-        yield from M.annotated(M.ref("Any")).diff(pre, post, key=any_label, label=any_label)
+    def check(self, change: Change) -> Iterator[Violation]:
+        yield from M.annotated(M.ref("Any")).diff(change.pre_tree, change.tree, key=any_label, label=any_label)
 
 
 styleguide(
