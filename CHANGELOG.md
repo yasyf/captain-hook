@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.16.0] - 2026-06-22
+
+### Removed
+- The `python` pack no longer blocks manual `ruff`, and the `go` pack no longer blocks
+  manual `gofumpt`/`golangci-lint`. Running the formatters by hand is fine and encouraged —
+  the prek commit hook owns mechanical lint. The packs' `toolchain` hooks keep their
+  missing-dependency (`uv sync`) and `go.mod` nudges.
+
 ## [3.15.0] - 2026-06-22
 
 ### Added
