@@ -70,14 +70,25 @@ def run_autofire(sandbox: Sandbox) -> ScenarioResult:
             check("headless session ran", session.returncode == 0, f"rc={session.returncode}"),
             check("SessionEnd auto-fired the reviewer", bool(reports), log[-200:] or "spawn.log empty"),
             check("reviewer resolved the sandbox repo, watching", any(r.watching for r in reports), str(reports)),
-            check("no traceback in the detached child", log.count("Traceback") == 0, f"tracebacks={log.count('Traceback')}"),
+            check(
+                "no traceback in the detached child",
+                log.count("Traceback") == 0,
+                f"tracebacks={log.count('Traceback')}",
+            ),
         )
     )
 
 
 def spawn_over(sandbox: Sandbox, transcript: str) -> str:
     proc = capt_hook(
-        "review", "spawn", "--transcript", transcript, "--cwd", str(sandbox.repo), sandbox=sandbox, timeout=SPAWN_TIMEOUT
+        "review",
+        "spawn",
+        "--transcript",
+        transcript,
+        "--cwd",
+        str(sandbox.repo),
+        sandbox=sandbox,
+        timeout=SPAWN_TIMEOUT,
     )
     return proc.stdout + proc.stderr
 
@@ -110,9 +121,17 @@ def run_e2e(sandbox: Sandbox) -> ScenarioResult:
         url = str(prs[0]["url"])
         diff = gh("pr", "diff", url)
         pr_checks = [
-            ("PR branch is capt-hook/review/*", str(prs[0]["headRefName"]).startswith("capt-hook/review/"), str(prs[0]["headRefName"])),
+            (
+                "PR branch is capt-hook/review/*",
+                str(prs[0]["headRefName"]).startswith("capt-hook/review/"),
+                str(prs[0]["headRefName"]),
+            ),
             ("PR adds a hook under .claude/hooks/", ".claude/hooks/" in diff.stdout, diff.stdout[:200]),
-            ("PR body cites the correction", "loguru" in str(prs[0]["body"]).lower() or "print" in str(prs[0]["body"]).lower(), str(prs[0]["body"])[:200]),
+            (
+                "PR body cites the correction",
+                "loguru" in str(prs[0]["body"]).lower() or "print" in str(prs[0]["body"]).lower(),
+                str(prs[0]["body"])[:200],
+            ),
         ]
         if merge_pr(url):
             time.sleep(5)
@@ -121,12 +140,32 @@ def run_e2e(sandbox: Sandbox) -> ScenarioResult:
 
     return ScenarioResult(
         checks=(
-            check("both live sessions + corrections ran", all(a == 0 and b == 0 for a, b in session_rcs), str(session_rcs)),
-            check(">=2 real transcripts captured from SessionEnd payloads", len(transcripts) >= 2, str([t.name for t in transcripts])),
-            check(">=2 distinct sessions observed on a candidate", distinct_sessions >= 2, f"distinct sessions={distinct_sessions} candidates={candidates}"),
-            check("live judge accepted the correction", accepted_verdicts >= 1, f"accepted verdicts={accepted_verdicts}"),
-            check("a brain run was triggered", any("brain=True" in out for out in spawn_outputs), "; ".join(o[-120:] for o in spawn_outputs)),
-            check("a real PR was opened by the brain", bool(prs), f"prs={[(p['url'], p['state']) for p in prs]} elapsed={elapsed:.0f}s"),
+            check(
+                "both live sessions + corrections ran", all(a == 0 and b == 0 for a, b in session_rcs), str(session_rcs)
+            ),
+            check(
+                ">=2 real transcripts captured from SessionEnd payloads",
+                len(transcripts) >= 2,
+                str([t.name for t in transcripts]),
+            ),
+            check(
+                ">=2 distinct sessions observed on a candidate",
+                distinct_sessions >= 2,
+                f"distinct sessions={distinct_sessions} candidates={candidates}",
+            ),
+            check(
+                "live judge accepted the correction", accepted_verdicts >= 1, f"accepted verdicts={accepted_verdicts}"
+            ),
+            check(
+                "a brain run was triggered",
+                any("brain=True" in out for out in spawn_outputs),
+                "; ".join(o[-120:] for o in spawn_outputs),
+            ),
+            check(
+                "a real PR was opened by the brain",
+                bool(prs),
+                f"prs={[(p['url'], p['state']) for p in prs]} elapsed={elapsed:.0f}s",
+            ),
             *(check(name, ok, ev) for name, ok, ev in pr_checks),
         ),
         finding=f"throwaway repo {repo.url} kept for inspection; time-to-PR ~{elapsed:.0f}s",

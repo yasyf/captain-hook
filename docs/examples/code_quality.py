@@ -25,6 +25,7 @@ def bare_excepts(node: ast.AST) -> Iterator[str]:
     if isinstance(node, ast.ExceptHandler) and node.type is None:
         yield f"line {node.lineno}"
 
+
 hook(
     Event.PostToolUse,
     only_if=[SourceEdits(lang="py"), Pattern("print($$$)")],

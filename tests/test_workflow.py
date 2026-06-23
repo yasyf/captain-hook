@@ -5,12 +5,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from cc_transcript.query import Session
 from pydantic import BaseModel
 
 from captain_hook.app import _state
 from captain_hook.events import SubagentStopEvent
 from captain_hook.tests.helpers import build_ctx, make_subagent_stop_event, make_transcript, raw_text
-from cc_transcript.query import Session
 from captain_hook.types import Action, Event, HookResult
 
 
@@ -102,6 +102,7 @@ class TestWorkflowFunction:
             steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
         )
         assert len(_state.hooks) == initial_count + 1
+
     def test_registered_hook_is_subagent_stop(self) -> None:
         from captain_hook.primitives.workflow import Step, workflow
 
@@ -112,6 +113,7 @@ class TestWorkflowFunction:
         )
         hook = _state.hooks[-1]
         assert Event.SubagentStop in hook.spec.events
+
     def test_registered_hook_has_max_fires_1(self) -> None:
         from captain_hook.primitives.workflow import Step, workflow
 
@@ -122,6 +124,7 @@ class TestWorkflowFunction:
         )
         hook = _state.hooks[-1]
         assert hook.spec.max_fires == 1
+
     def test_passes_tests_to_hook_spec(self) -> None:
         from captain_hook.primitives.workflow import Step, workflow
 
@@ -146,8 +149,8 @@ class TestWorkflowFunction:
         assert _state.hooks[-1].spec.skip_planning_agents is True
 
     def test_passes_only_if_to_hook_spec(self) -> None:
-        from captain_hook.types import Agent
         from captain_hook.primitives.workflow import Step, workflow
+        from captain_hook.types import Agent
 
         workflow(
             label="TEST",
@@ -158,8 +161,8 @@ class TestWorkflowFunction:
         assert _state.hooks[-1].spec.only_if == (Agent("cleanup"),)
 
     def test_passes_skip_if_to_hook_spec(self) -> None:
-        from captain_hook.types import Agent
         from captain_hook.primitives.workflow import Step, workflow
+        from captain_hook.types import Agent
 
         workflow(
             label="TEST",
@@ -170,8 +173,8 @@ class TestWorkflowFunction:
         assert _state.hooks[-1].spec.skip_if == (Agent("Explore"),)
 
     def test_default_only_if_empty_and_skip_if_wait_aware(self) -> None:
-        from captain_hook.types import Waiting
         from captain_hook.primitives.workflow import Step, workflow
+        from captain_hook.types import Waiting
 
         workflow(
             label="TEST",
@@ -180,10 +183,12 @@ class TestWorkflowFunction:
         )
         assert _state.hooks[-1].spec.only_if == ()
         assert _state.hooks[-1].spec.skip_if == (Waiting(),)
+
+
 class TestWorkflowOnStart:
     def test_on_start_registers_both_subagent_start_and_stop(self) -> None:
-        from captain_hook.types import Agent
         from captain_hook.primitives.workflow import Step, workflow
+        from captain_hook.types import Agent
 
         before = len(_state.hooks)
         workflow(
@@ -206,8 +211,8 @@ class TestWorkflowOnStart:
         assert start_hooks[0].spec.only_if == (Agent("cleanup"),)
 
     def test_on_start_handler_invokes_callback(self) -> None:
-        from captain_hook.types import Agent
         from captain_hook.primitives.workflow import Step, workflow
+        from captain_hook.types import Agent
 
         captured: list[Any] = []
 

@@ -77,7 +77,9 @@ def nudge(
         message,
     )
 
-    resolved = events or ((Event.Stop | Event.SubagentStop) if block else Event.PostToolUse if sig else Event.PreToolUse)
+    resolved = events or (
+        (Event.Stop | Event.SubagentStop) if block else Event.PostToolUse if sig else Event.PreToolUse
+    )
     on(
         resolved,
         only_if=only_if,

@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
 from pathlib import Path
+
 from cc_transcript.judge.verdicts import GoldenRow, golden_result
 
 from stress.corpus import correction_turns, write_transcript
@@ -77,8 +77,9 @@ async def judge_golden_texts(rows: list[GoldenRow]) -> list[tuple[bool, str]]:
     import asyncio
     import subprocess
 
-    from captain_hook.review.judge import FIX_JUDGE_PROMPT, ReviewVerdict
     from cc_transcript.judge.llm import structured_judge
+
+    from captain_hook.review.judge import FIX_JUDGE_PROMPT, ReviewVerdict
 
     judge = structured_judge(ReviewVerdict, tier="medium")
     semaphore = asyncio.Semaphore(JUDGE_CONCURRENCY)

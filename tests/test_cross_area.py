@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from cc_transcript.activity import SessionActivity
 
 from captain_hook.app import (
     _state,
@@ -24,11 +25,12 @@ from captain_hook.events import (
     PreToolUseEvent,
 )
 from captain_hook.loader import discover_hooks
+from captain_hook.primitives.workflow import Step, text_matches, workflow
 from captain_hook.session import SessionStore
 from captain_hook.signals import score_signals
 from captain_hook.signals.nlp import Clause, NlpSignal, Phrase
 from captain_hook.state import HookState
-from captain_hook.testing.helpers import run_inline_tests
+from captain_hook.testing.helpers import fixture_session, run_inline_tests
 from captain_hook.testing.types import Allow, Block, Input
 from captain_hook.tests.helpers import (
     build_ctx,
@@ -45,9 +47,6 @@ from captain_hook.tests.helpers import (
 from captain_hook.tests.helpers import (
     raw_tool_result as tool_resultmsg,
 )
-from cc_transcript.activity import SessionActivity
-
-from captain_hook.testing.helpers import fixture_session
 from captain_hook.types import (
     Action,
     Command,
@@ -63,7 +62,6 @@ from captain_hook.types import (
     TouchedFile,
     UsedSkill,
 )
-from captain_hook.primitives.workflow import Step, text_matches, workflow
 
 
 class TestDeclarativeHookE2E:
@@ -96,6 +94,8 @@ class TestDeclarativeHookE2E:
         ctx = build_ctx()
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         assert dispatch(Event.PreToolUse, evt) is None
+
+
 class TestHandlerHookE2E:
     """VAL-CROSS-002"""
 
@@ -113,6 +113,7 @@ class TestHandlerHookE2E:
         assert output is not None
         assert output["hookSpecificOutput"]["additionalContext"] == "check style"
         assert output["hookSpecificOutput"]["permissionDecision"] == "allow"
+
     def test_nonmatching_file_passes(self) -> None:
 
         @on(Event.PreToolUse, only_if=[Tool("Edit"), FilePath("*.py")])
@@ -149,6 +150,8 @@ class TestHandlerHookE2E:
         assert output is not None
         assert output["hookSpecificOutput"]["additionalContext"] == "check style"
         assert output["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+
 class TestInPlanModeCondition:
     """VAL-CROSS-003"""
 
@@ -168,6 +171,7 @@ class TestInPlanModeCondition:
         ctx = build_ctx(transcript=transcript)
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         assert dispatch(Event.PreToolUse, evt) is not None
+
     def test_does_not_fire_when_equal(self) -> None:
         transcript = make_transcript(
             [
@@ -182,6 +186,8 @@ class TestInPlanModeCondition:
         ctx = build_ctx(transcript=transcript)
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         assert dispatch(Event.PreToolUse, evt) is None
+
+
 class TestReadFileCondition:
     """VAL-CROSS-004"""
 
@@ -197,6 +203,7 @@ class TestReadFileCondition:
         ctx = build_ctx(transcript=transcript)
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         assert dispatch(Event.PreToolUse, evt) is None
+
     def test_fires_when_not_read(self) -> None:
         transcript = make_transcript([msg("user", "hello")])
         register_hook(Event.PreToolUse, message="read first", block=True, skip_if=[ReadFile("STYLEGUIDE.md")])
@@ -204,6 +211,8 @@ class TestReadFileCondition:
         ctx = build_ctx(transcript=transcript)
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         assert dispatch(Event.PreToolUse, evt) is not None
+
+
 class TestTouchedFileCondition:
     """VAL-CROSS-005"""
 
@@ -219,6 +228,7 @@ class TestTouchedFileCondition:
         ctx = build_ctx(transcript=transcript)
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         assert dispatch(Event.PreToolUse, evt) is not None
+
     def test_does_not_match_other_files(self) -> None:
         transcript = make_transcript(
             [
@@ -231,6 +241,8 @@ class TestTouchedFileCondition:
         ctx = build_ctx(transcript=transcript)
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         assert dispatch(Event.PreToolUse, evt) is None
+
+
 class TestRanCommandCondition:
     """VAL-CROSS-006"""
 
@@ -241,11 +253,14 @@ class TestRanCommandCondition:
                 tool_resultmsg("b1"),
             ]
         )
-        register_hook(Event.PreToolUse, message="run mtest first", block=True, skip_if=[RanCommand(r"uv\s+run\s+mtest")])
+        register_hook(
+            Event.PreToolUse, message="run mtest first", block=True, skip_if=[RanCommand(r"uv\s+run\s+mtest")]
+        )
         raw = {"tool_name": "Bash", "tool_input": {"command": "echo hi"}}
         ctx = build_ctx(transcript=transcript)
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         assert dispatch(Event.PreToolUse, evt) is None
+
     def test_fires_when_not_matching(self) -> None:
         transcript = make_transcript(
             [
@@ -253,11 +268,15 @@ class TestRanCommandCondition:
                 tool_resultmsg("b1"),
             ]
         )
-        register_hook(Event.PreToolUse, message="run mtest first", block=True, skip_if=[RanCommand(r"uv\s+run\s+mtest")])
+        register_hook(
+            Event.PreToolUse, message="run mtest first", block=True, skip_if=[RanCommand(r"uv\s+run\s+mtest")]
+        )
         raw = {"tool_name": "Bash", "tool_input": {"command": "echo hi"}}
         ctx = build_ctx(transcript=transcript)
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         assert dispatch(Event.PreToolUse, evt) is not None
+
+
 class TestNudgeSignalScoring:
     """VAL-CROSS-007"""
 
@@ -289,6 +308,8 @@ class TestNudgeSignalScoring:
         ctx_text = output["hookSpecificOutput"]["additionalContext"]
         assert "stop retrying" in ctx_text
         assert "Triggered by:" in ctx_text
+
+
 class TestEchoSuppression:
     """VAL-CROSS-008"""
 
@@ -344,6 +365,8 @@ class TestEchoSuppression:
         )
         out3 = dispatch(Event.PostToolUse, evt3, session_dir=session_dir)
         assert out3 is not None
+
+
 class TestMaxFiresSessionStore:
     """VAL-CROSS-009"""
 
@@ -359,6 +382,7 @@ class TestMaxFiresSessionStore:
                 assert output is not None, f"Dispatch {i} should fire"
             else:
                 assert output is None, f"Dispatch {i} should be suppressed"
+
     def test_fire_count_persisted(self) -> None:
         session_dir = Path(tempfile.mkdtemp())
         register_hook(Event.PreToolUse, message="counted", block=True, max_fires=5)
@@ -372,6 +396,8 @@ class TestMaxFiresSessionStore:
         assert state_file.exists()
         state = HookState.model_validate_json(state_file.read_text())
         assert state.fire_count == 1
+
+
 @pytest.mark.usefixtures("isolate_modules")
 class TestCLIFullPipeline:
     """VAL-CROSS-010"""
@@ -447,6 +473,8 @@ class TestInlineTestsPipeline:
         assert len(results) >= 2
         for name, status, passed, detail in results:
             assert passed, f"{name} failed: {detail}"
+
+
 class TestWorkflowTranscript:
     """VAL-CROSS-012"""
 
@@ -465,6 +493,7 @@ class TestWorkflowTranscript:
         reason = result.get("reason", "")
         assert "TEST INCOMPLETE" in reason
         assert "Run mtest" in reason
+
     def test_allows_when_marker_present(self) -> None:
         transcript = make_transcript([msg("assistant", "ran mtest and DONE")])
         workflow(
@@ -474,6 +503,7 @@ class TestWorkflowTranscript:
         )
         result = dispatch_test(Event.SubagentStop, transcript=transcript)
         assert result is None
+
     def test_step_evaluation_order(self) -> None:
         transcript = make_transcript([msg("assistant", "I ran mtest but no review")])
         workflow(
@@ -487,6 +517,8 @@ class TestWorkflowTranscript:
         result = dispatch_test(Event.SubagentStop, transcript=transcript)
         assert result is not None
         assert "Do review" in result.get("reason", "")
+
+
 class TestClassifierTranscript:
     """VAL-CROSS-013"""
 
@@ -548,6 +580,8 @@ class TestNlpSignalNudge:
         )
         output = dispatch(Event.PostToolUse, evt, session_dir=session_dir)
         assert output is not None
+
+
 class TestUsedSkillCondition:
     """VAL-CROSS-015"""
 
@@ -563,6 +597,7 @@ class TestUsedSkillCondition:
         ctx = build_ctx(transcript=transcript)
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         assert dispatch(Event.PreToolUse, evt) is None
+
     def test_fires_when_skill_not_used(self) -> None:
         transcript = make_transcript([msg("user", "hello")])
         register_hook(Event.PreToolUse, message="use codex", block=True, skip_if=[UsedSkill("codex|test-runner")])
@@ -570,6 +605,8 @@ class TestUsedSkillCondition:
         ctx = build_ctx(transcript=transcript)
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         assert dispatch(Event.PreToolUse, evt) is not None
+
+
 class _InMissionMode:
     def check(self, evt: BaseHookEvent) -> bool:
         transcript_path = evt._raw.get("transcript_path")
@@ -598,7 +635,6 @@ class TestInMissionModeCondition:
         settings_file = tmp_path / "session.settings.json"
         settings_file.write_text(json.dumps({"tags": [{"name": "mission-worker"}]}))
 
-
         @on(Event.PreToolUse, skip_if=[_InMissionMode()])
         def my_hook(evt: BaseHookEvent) -> HookResult | None:
             return HookResult(action=Action.warn, message="fired")
@@ -607,6 +643,7 @@ class TestInMissionModeCondition:
         ctx = build_ctx()
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         assert dispatch(Event.PreToolUse, evt) is None
+
     def test_fires_without_settings(self) -> None:
 
         @on(Event.PreToolUse, skip_if=[_InMissionMode()])
@@ -618,6 +655,8 @@ class TestInMissionModeCondition:
         evt = PreToolUseEvent(_raw=raw, ctx=ctx)
         output = dispatch(Event.PreToolUse, evt)
         assert output is not None
+
+
 class TestCallCli:
     """VAL-CROSS-017"""
 

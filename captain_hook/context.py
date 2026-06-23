@@ -88,7 +88,10 @@ def load_transcript(path: str | Path | None) -> Session:
 
 @dataclass
 class HookContext:
-    """Runtime context injected into every hook event: session state, transcript ``Session``, settings, and LLM/CLI helpers."""
+    """Runtime context injected into every hook event.
+
+    Holds session state, the transcript ``Session``, settings, and LLM/CLI helpers.
+    """
 
     session: SessionStore
     transcript: Session

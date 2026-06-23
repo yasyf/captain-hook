@@ -66,12 +66,13 @@ def capt_hook(
 
 def session_end_payload(transcript: Path, *, cwd: Path | None) -> str:
     return json.dumps(
-        {"hook_event_name": "SessionEnd", "transcript_path": str(transcript)}
-        | ({"cwd": str(cwd)} if cwd else {})
+        {"hook_event_name": "SessionEnd", "transcript_path": str(transcript)} | ({"cwd": str(cwd)} if cwd else {})
     )
 
 
-def review_run(sandbox: Sandbox, transcript: Path, *, cwd: Path | None = None, **kwargs: object) -> subprocess.CompletedProcess[str]:
+def review_run(
+    sandbox: Sandbox, transcript: Path, *, cwd: Path | None = None, **kwargs: object
+) -> subprocess.CompletedProcess[str]:
     payload = session_end_payload(transcript, cwd=cwd if cwd is not None else sandbox.repo)
     return capt_hook("review", "run", sandbox=sandbox, stdin=payload, **kwargs)  # type: ignore[arg-type]
 

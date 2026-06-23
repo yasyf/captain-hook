@@ -210,10 +210,7 @@ nudge(
                         "content": [
                             {
                                 "type": "text",
-                                "text": (
-                                    "Strict mode pyright is catching warnings — "
-                                    "is this something I introduced?"
-                                ),
+                                "text": ("Strict mode pyright is catching warnings — is this something I introduced?"),
                             },
                         ]
                     },

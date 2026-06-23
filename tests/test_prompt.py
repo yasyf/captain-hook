@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import captain_hook.prompt as prompt_module
-from captain_hook.prompt import Prompt, Prompt
+from captain_hook.prompt import Prompt
 
 
 class TestPromptBasicConstruction:
@@ -241,9 +241,7 @@ class TestPromptLoad:
         (tmp_path / "prompts" / "greet.md").write_text("Hello {who}")
         caller = tmp_path / "caller_mod.py"
         caller.write_text(
-            "from captain_hook.prompt import Prompt\n"
-            "def greet(who):\n"
-            "    return str(Prompt.load('greet', who=who))\n"
+            "from captain_hook.prompt import Prompt\ndef greet(who):\n    return str(Prompt.load('greet', who=who))\n"
         )
         spec = importlib.util.spec_from_file_location("ch_caller_relative_mod", caller)
         assert spec is not None and spec.loader is not None
@@ -259,9 +257,7 @@ class TestPromptLoad:
         (tmp_path / "p.md").write_text("body")
         assert isinstance(Prompt.load("p", base=tmp_path), Prompt)
 
-    def test_framework_fallback_when_first_dir_misses(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_framework_fallback_when_first_dir_misses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         framework = tmp_path / "framework"
         (framework / "prompts").mkdir(parents=True)
         (framework / "prompts" / "sp.md").write_text("FW {x}")

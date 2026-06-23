@@ -358,8 +358,7 @@ def transcript_event_payloads(
     match ev_type:
         case Event.PreToolUse:
             yield from (
-                base | {"tool_name": use.call.name, "tool_input": dict(use.call.raw)}
-                for use in transcript.tool_calls
+                base | {"tool_name": use.call.name, "tool_input": dict(use.call.raw)} for use in transcript.tool_calls
             )
         case Event.PostToolUse:
             yield from (

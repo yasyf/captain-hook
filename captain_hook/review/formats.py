@@ -15,9 +15,7 @@ import re
 
 from cc_transcript.mining.formats import ReviewComment, ReviewFormat
 
-SUPERSET_INLINE_RE = re.compile(
-    r"^In ((?=\S*[./]|\S+?:L)\S+?)(?::L(\d+)(?:-(\d+))?)?: (.+)$", re.MULTILINE
-)
+SUPERSET_INLINE_RE = re.compile(r"^In ((?=\S*[./]|\S+?:L)\S+?)(?::L(\d+)(?:-(\d+))?)?: (.+)$", re.MULTILINE)
 CONDUCTOR_FINDING_RE = re.compile(
     r"^- file: (?P<file>\S+?):(?P<line>\d+)\s*$"
     r"(?:\n- theme: .+$)?"

@@ -78,7 +78,9 @@ class Sandbox:
         return self.state_dir / "decisions.db"
 
     def env(self, **overrides: str) -> dict[str, str]:
-        base = {key: value for key, value in os.environ.items() if key not in DROPPED_ENV and not key.startswith("HOOKS_")}
+        base = {
+            key: value for key, value in os.environ.items() if key not in DROPPED_ENV and not key.startswith("HOOKS_")
+        }
         return (
             base
             | {

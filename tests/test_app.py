@@ -262,9 +262,7 @@ class TestPlanningAgentSkip:
         d.mkdir()
         (d / "__init__.py").write_text("")
         (d / "conf.py").write_text(
-            "from captain_hook.settings import HooksSettings\n"
-            "class CustomSettings(HooksSettings):\n"
-            "    pass\n"
+            "from captain_hook.settings import HooksSettings\nclass CustomSettings(HooksSettings):\n    pass\n"
         )
         (d / "h.py").write_text(
             "from captain_hook.app import hook\n"

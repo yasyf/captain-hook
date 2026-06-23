@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from captain_hook import Artifact, Step, text_matches, workflow
 from pydantic import BaseModel
+
+from captain_hook import Artifact, Step, text_matches, workflow
 
 
 class TestReport(BaseModel):

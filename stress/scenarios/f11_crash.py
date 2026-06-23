@@ -6,12 +6,11 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from tests.test_review_scan import assistant_text, user_text, write_transcript
-
 from stress.corpus import DURABLE_CORRECTION, DURABLE_CORRECTION_LIVE
 from stress.db import count, integrity_ok, one, query
 from stress.drivers.proc import capt_hook, drain_spawn_children, kill_when, review_run, spawn_reports, wait_drained
 from stress.scenarios.base import Scenario, ScenarioResult, Tier, check, expect
+from tests.test_review_scan import assistant_text, user_text, write_transcript
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -113,15 +112,15 @@ def run_torn_mtime_commit(sandbox: Sandbox) -> ScenarioResult:
     torn = attempts[-1]
     if not torn.torn:
         return ScenarioResult(
-            checks=(
-                check("torn state captured within 5 attempts", False, [attempt.summary for attempt in attempts]),
-            )
+            checks=(check("torn state captured within 5 attempts", False, [attempt.summary for attempt in attempts]),)
         )
     before = len(spawn_reports(sandbox))
     review_run(sandbox, torn.path)
     reports = wait_drained(sandbox, count=before + 1, timeout=120)
     rescan = reports[-1] if len(reports) > before else None
-    after = count(sandbox.review_db, "SELECT COUNT(*) FROM candidate_observations WHERE session_id = ?", (torn.session,))
+    after = count(
+        sandbox.review_db, "SELECT COUNT(*) FROM candidate_observations WHERE session_id = ?", (torn.session,)
+    )
     return ScenarioResult(
         checks=(
             check("files row committed before kill", torn.files_row is not None, torn.summary),
@@ -159,7 +158,9 @@ def run_integrity_after_kill_sweep(sandbox: Sandbox) -> ScenarioResult:
             )
         )
         before = len(spawn_reports(sandbox))
-        recovery = write_corrections(sandbox, f"stress-sweep-recover-{index}", 1, session=f"stress-sweep-recover-{index}")
+        recovery = write_corrections(
+            sandbox, f"stress-sweep-recover-{index}", 1, session=f"stress-sweep-recover-{index}"
+        )
         review_run(sandbox, recovery)
         reports = wait_drained(sandbox, count=before + 1, timeout=120)
         fresh = reports[-1] if len(reports) > before else None

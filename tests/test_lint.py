@@ -35,7 +35,7 @@ def session_dir():
 
 
 def register_lint(
-        check: Any,
+    check: Any,
     *,
     message: str = "Violations: {violations}",
     trigger: str | None = None,

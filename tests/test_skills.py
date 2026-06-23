@@ -126,11 +126,15 @@ class TestRegisterMarketplace:
     def test_merges_existing_settings(self, tmp_path: Path) -> None:
         settings_path = tmp_path / ".claude" / "settings.json"
         settings_path.parent.mkdir(parents=True)
-        settings_path.write_text(json.dumps({
-            "hooks": {"PreToolUse": []},
-            "extraKnownMarketplaces": {"skills": {"source": {"source": "github", "repo": "yasyf/skills"}}},
-            "enabledPlugins": {"codex@skills": True},
-        }))
+        settings_path.write_text(
+            json.dumps(
+                {
+                    "hooks": {"PreToolUse": []},
+                    "extraKnownMarketplaces": {"skills": {"source": {"source": "github", "repo": "yasyf/skills"}}},
+                    "enabledPlugins": {"codex@skills": True},
+                }
+            )
+        )
         register_marketplace(tmp_path)
         settings = json.loads(settings_path.read_text())
         assert settings["hooks"] == {"PreToolUse": []}

@@ -1,4 +1,4 @@
-from captain_hook import gate, TouchedFile, UsedSkill
+from captain_hook import TouchedFile, UsedSkill, gate
 
 # A Stop gate: before the agent finishes, block if it edited UI files without doing a visual review.
 gate(

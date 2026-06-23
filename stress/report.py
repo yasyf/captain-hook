@@ -32,14 +32,16 @@ def scenario_table(records: list[RunRecord]) -> str:
         for r in records
     ]
     return "\n".join(
-        ["| family | scenario | tier | status | checks | time | failed checks |", "|---|---|---|---|---|---|---|", *rows]
+        [
+            "| family | scenario | tier | status | checks | time | failed checks |",
+            "|---|---|---|---|---|---|---|",
+            *rows,
+        ]
     )
 
 
 def findings_section(records: list[RunRecord]) -> str:
-    findings = [
-        f"- **{r.scenario.name}**: {r.result.finding}" for r in records if r.result.finding
-    ]
+    findings = [f"- **{r.scenario.name}**: {r.result.finding}" for r in records if r.result.finding]
     return "\n".join(findings) or "_none_"
 
 

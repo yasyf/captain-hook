@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pydantic import Field
+
 from captain_hook import (
     Allow,
     BaseHookEvent,
@@ -12,7 +14,6 @@ from captain_hook import (
     on,
     workflow_state,
 )
-from pydantic import Field
 
 
 @workflow_state("review")

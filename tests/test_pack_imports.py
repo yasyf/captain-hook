@@ -9,9 +9,7 @@ from captain_hook import app
 from captain_hook.loader import discover_pack
 
 RELATIVE_IMPORT_SRC = (
-    "from ._common import SHARED\n"
-    "from captain_hook import Event, hook\n"
-    "hook(Event.PreToolUse, message=str(SHARED))\n"
+    "from ._common import SHARED\nfrom captain_hook import Event, hook\nhook(Event.PreToolUse, message=str(SHARED))\n"
 )
 
 

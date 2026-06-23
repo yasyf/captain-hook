@@ -105,7 +105,9 @@ def pr_description(view: CandidateView) -> str:
             return f'would add a hook: "{detail}"' if detail else "would add a hook for this correction"
         case CandidateKind.FIX:
             tail = view.summary or (
-                f"regression test for {row['misfire_class']}" if row["misfire_class"] else "regression test for the misfire"
+                f"regression test for {row['misfire_class']}"
+                if row["misfire_class"]
+                else "regression test for the misfire"
             )
             return f"would fix {row['target_hook_name']} ({row['target_source_file']}): {trim(str(tail))}"
 
@@ -118,7 +120,11 @@ def age_days(row: dict[str, object]) -> int | None:
 
 def pr_link(view: CandidateView) -> str:
     url = str(view.row["pr_url"] or "(no url)")
-    return f"{url}   ·   {days}d open" if stage_of(view) is Stage.PR_OPEN and (days := age_days(view.row)) is not None else url
+    return (
+        f"{url}   ·   {days}d open"
+        if stage_of(view) is Stage.PR_OPEN and (days := age_days(view.row)) is not None
+        else url
+    )
 
 
 def lead_detail(view: CandidateView, settings: ReviewSettings) -> str:
@@ -197,7 +203,9 @@ async def run_status(repo: RepoKey, *, sync: bool) -> None:
         if not (sync and any(stage_of(v) is Stage.PR_OPEN for v in views)):
             console.print(render(views, repo=repo, settings=settings, watching=watching))
             return
-        with Live(render(views, repo=repo, settings=settings, watching=watching, syncing=True), console=console) as live:
+        with Live(
+            render(views, repo=repo, settings=settings, watching=watching, syncing=True), console=console
+        ) as live:
             await sync_open_prs(store, repo, settings=settings)
             fresh = await store.overview(repo, settings=settings, prompt_version=REVIEW_PROMPT_VERSION)
             live.update(render(fresh, repo=repo, settings=settings, watching=watching))

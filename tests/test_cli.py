@@ -281,7 +281,10 @@ class TestMergeSettings:
         committed = 'env -u UV_EXCLUDE_NEWER uv run --project "$CLAUDE_PROJECT_DIR" capt-hook run {}'
         self.seed(
             tmp_path / "settings.json",
-            {event: [{"hooks": [{"type": "command", "command": committed.format(event)}]}] for event in ("PreToolUse", "Stop")},
+            {
+                event: [{"hooks": [{"type": "command", "command": committed.format(event)}]}]
+                for event in ("PreToolUse", "Stop")
+            },
         )
 
         merged, summary = merge_settings(".claude/hooks", tmp_path / "settings.local.json")
@@ -316,7 +319,10 @@ class TestMergeSettings:
         register_hook(Event.Stop, message="stop")
         self.seed(
             tmp_path / "settings.local.json",
-            {event: [{"hooks": [{"type": "command", "command": f"uvx capt-hook run {event}"}]}] for event in ("PreToolUse", "Stop")},
+            {
+                event: [{"hooks": [{"type": "command", "command": f"uvx capt-hook run {event}"}]}]
+                for event in ("PreToolUse", "Stop")
+            },
         )
 
         merged, summary = merge_settings(".claude/hooks", tmp_path / "settings.json")
@@ -397,7 +403,13 @@ class TestSettingsDrift:
         register_hook(Event.PostToolUse, message="post")
         self.write_settings(tmp_path, "PreToolUse", "Stop")
         (tmp_path / ".claude" / "settings.local.json").write_text(
-            json.dumps({"hooks": {"PostToolUse": [{"hooks": [{"type": "command", "command": "uvx capt-hook run PostToolUse"}]}]}})
+            json.dumps(
+                {
+                    "hooks": {
+                        "PostToolUse": [{"hooks": [{"type": "command", "command": "uvx capt-hook run PostToolUse"}]}]
+                    }
+                }
+            )
         )
         assert settings_drift(tmp_path) == set()
 
@@ -495,9 +507,7 @@ class TestCLIWithContext:
         """)
         )
 
-        stdin = json.dumps(
-            {"session_id": "max-fires-sess", "tool_name": "Bash", "tool_input": {"command": "echo hi"}}
-        )
+        stdin = json.dumps({"session_id": "max-fires-sess", "tool_name": "Bash", "tool_input": {"command": "echo hi"}})
         root_dir = tmp_path / "project"
         root_dir.mkdir()
 

@@ -101,7 +101,13 @@ def test_downloads_when_cache_empty(
     assert download_spy.call_count == 1
     assert fake_zipfile.call_count == 1
     assert path.exists()
-    assert path == cache_dir / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}" / model_cache.MODEL_NAME / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}"
+    assert (
+        path
+        == cache_dir
+        / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}"
+        / model_cache.MODEL_NAME
+        / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}"
+    )
     sentinel = cache_dir / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}" / ".sha256"
     assert sentinel.read_text() == pinned_sha
 
@@ -150,7 +156,13 @@ def test_ignores_cache_from_other_spacy_minor(
     path = model_cache.ensure_spacy_model()
 
     assert download_spy.call_count == 1
-    assert path == cache_dir / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}" / model_cache.MODEL_NAME / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}"
+    assert (
+        path
+        == cache_dir
+        / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}"
+        / model_cache.MODEL_NAME
+        / f"{model_cache.MODEL_NAME}-{MODEL_VERSION}"
+    )
 
 
 def test_redownloads_when_sentinel_missing(

@@ -19,6 +19,9 @@ from captain_hook.testing.helpers import (
     build_context as build_context,
 )
 from captain_hook.testing.helpers import (
+    fixture_session as fixture_session,
+)
+from captain_hook.testing.helpers import (
     input_to_event as input_to_event,
 )
 from captain_hook.testing.helpers import (
@@ -38,9 +41,6 @@ from captain_hook.testing.helpers import (
 )
 from captain_hook.testing.helpers import (
     mock_tool_event as mock_tool_event,
-)
-from captain_hook.testing.helpers import (
-    fixture_session as fixture_session,
 )
 from captain_hook.testing.helpers import (
     mock_user_prompt_event as mock_user_prompt_event,

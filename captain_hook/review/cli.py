@@ -76,7 +76,10 @@ def ensure_review_wiring(settings_path: Path) -> bool:
 
 
 def watch_repo(repo: RepoKey) -> None:
-    """Flip the global watching bit for ``repo`` — the single persistence path shared by ``init`` and ``review enable``."""
+    """Flip the global watching bit for ``repo``.
+
+    The single persistence path shared by ``init`` and ``review enable``.
+    """
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
 

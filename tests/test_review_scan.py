@@ -161,9 +161,15 @@ class TestDedupDesign:
     async def test_correction_across_three_sessions_groups_under_one_candidate(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path
     ) -> None:
-        sessions = [("s1", "2026-06-01T10:00:00+00:00"), ("s2", "2026-06-01T15:00:00+00:00"), ("s3", "2026-06-02T10:00:00+00:00")]
+        sessions = [
+            ("s1", "2026-06-01T10:00:00+00:00"),
+            ("s2", "2026-06-01T15:00:00+00:00"),
+            ("s3", "2026-06-02T10:00:00+00:00"),
+        ]
         for session, timestamp in sessions:
-            path = write_transcript(tmp_path / f"{session}.jsonl", correction_entries(session=session, timestamp=timestamp))
+            path = write_transcript(
+                tmp_path / f"{session}.jsonl", correction_entries(session=session, timestamp=timestamp)
+            )
             report = await scan_transcript(store, path, settings=settings, repo_key=REPO)
             assert report == ScanReport(scanned=1, inserted=1)
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from tests.test_review_fix import (
@@ -23,12 +23,10 @@ from tests.test_review_fix import (
     NUDGE_MESSAGE,
     STRONG_COMPLAINT,
     nudge_attachment,
-    stop_feedback_turn,
 )
 from tests.test_review_scan import (
     assistant_text,
     assistant_tool_use,
-    envelope,
     tool_result,
     user_text,
     write_transcript,
@@ -74,7 +72,9 @@ def correction_turns(
 ) -> list[dict[str, Any]]:
     extra = {"cwd": cwd} if cwd else {}
     return [
-        assistant_text("I'll add a print statement for debugging", sessionId=session, timestamp=turn_ts(0, day=day), **extra),
+        assistant_text(
+            "I'll add a print statement for debugging", sessionId=session, timestamp=turn_ts(0, day=day), **extra
+        ),
         user_text(text, sessionId=session, timestamp=turn_ts(1, day=day), **extra),
     ]
 
@@ -196,7 +196,9 @@ def denial_content(said: str) -> str:
     )
 
 
-def plan_rejection(name: str, *, session: str = SESSION, said: str = "the plan skips the data migration step") -> Planted:
+def plan_rejection(
+    name: str, *, session: str = SESSION, said: str = "the plan skips the data migration step"
+) -> Planted:
     return Planted(
         name,
         (
@@ -208,11 +210,15 @@ def plan_rejection(name: str, *, session: str = SESSION, said: str = "the plan s
     )
 
 
-def plan_reentry(name: str, *, session: str = SESSION, text: str = "reconsider the plan, the parser rewrite is wrong") -> Planted:
+def plan_reentry(
+    name: str, *, session: str = SESSION, text: str = "reconsider the plan, the parser rewrite is wrong"
+) -> Planted:
     return Planted(
         name,
         (
-            assistant_tool_use("e1", "Edit", {"file_path": "/repo/x.py", "old_string": "a", "new_string": "b"}, sessionId=session),
+            assistant_tool_use(
+                "e1", "Edit", {"file_path": "/repo/x.py", "old_string": "a", "new_string": "b"}, sessionId=session
+            ),
             {"type": "mode", "sessionId": session, "mode": "plan"},
             user_text(text, sessionId=session),
         ),
@@ -221,7 +227,9 @@ def plan_reentry(name: str, *, session: str = SESSION, text: str = "reconsider t
     )
 
 
-def tool_denial(name: str, *, session: str = SESSION, said: str = "use the storage adapter instead of raw sql") -> Planted:
+def tool_denial(
+    name: str, *, session: str = SESSION, said: str = "use the storage adapter instead of raw sql"
+) -> Planted:
     return Planted(
         name,
         (
@@ -233,7 +241,9 @@ def tool_denial(name: str, *, session: str = SESSION, said: str = "use the stora
     )
 
 
-def interrupt_followup(name: str, *, session: str = SESSION, text: str = "actually gate the delete behind the dry-run flag") -> Planted:
+def interrupt_followup(
+    name: str, *, session: str = SESSION, text: str = "actually gate the delete behind the dry-run flag"
+) -> Planted:
     return Planted(
         name,
         (

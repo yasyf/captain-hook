@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from tests.test_review_scan import assistant_text, user_text
-
 from stress.corpus import DURABLE_CORRECTION, REVIEWER_MARKER_TEXT, Planted, correction_turns, turn_ts, write
 from stress.db import count, query
 from stress.drivers.proc import capt_hook, review_run, wait_for_report
 from stress.scenarios.base import Scenario, ScenarioResult, Tier, check, expect
+from tests.test_review_scan import assistant_text, user_text
 
 if TYPE_CHECKING:
     from stress.sandbox import Sandbox

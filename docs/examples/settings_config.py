@@ -31,8 +31,5 @@ class ProjectSettings(HooksSettings):
 def enforce_test_command(evt: BaseHookEvent) -> HookResult | None:
     settings = cast(ProjectSettings, evt.ctx.c)
     if (cl := evt.command_line) and cl.q.runs("pytest") and settings.test_command != "pytest":
-        return evt.block(
-            f"BLOCKED: use the project's configured test runner instead. "
-            f"Run: {settings.test_command}"
-        )
+        return evt.block(f"BLOCKED: use the project's configured test runner instead. Run: {settings.test_command}")
     return None

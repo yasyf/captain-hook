@@ -71,7 +71,12 @@ def nuke_github(i_know: bool) -> None:
 @cli.command()
 @click.option("--live", type=click.Choice(["none", "judge", "brain"]), default="none")
 @click.option("--only", default=None, help="Run only scenarios whose family or name contains this substring")
-@click.option("--keep-sandbox", is_flag=True, default=False, help="Keep sandbox dirs for debugging (default: destroy each after its scenario)")
+@click.option(
+    "--keep-sandbox",
+    is_flag=True,
+    default=False,
+    help="Keep sandbox dirs for debugging (default: destroy each after its scenario)",
+)
 @click.option("--run-dir", type=click.Path(path_type=Path), default=None)
 def run(live: str, only: str | None, keep_sandbox: bool, run_dir: Path | None) -> None:
     """Run all scenarios at or below the chosen live tier, then write the report."""

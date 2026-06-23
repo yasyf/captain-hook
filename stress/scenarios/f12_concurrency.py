@@ -6,8 +6,6 @@ import subprocess
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from tests.test_review_scan import assistant_text, user_text, write_transcript
-
 from stress.db import count, integrity_ok, query
 from stress.drivers.proc import (
     CAPT_HOOK_BIN,
@@ -21,6 +19,7 @@ from stress.drivers.proc import (
 )
 from stress.sandbox import create_sandbox
 from stress.scenarios.base import Scenario, ScenarioResult, Tier, check, expect
+from tests.test_review_scan import assistant_text, user_text, write_transcript
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

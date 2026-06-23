@@ -425,9 +425,7 @@ class TestDetector:
         assert (sig.evidence["event"], sig.evidence["action"]) == ("Stop", "block")
         assert sig.evidence["misfire_class"] == "already_addressed"
 
-    def test_digestless_attribution_requires_the_message_tiebreak(
-        self, decisions: DecisionLog, tmp_path: Path
-    ) -> None:
+    def test_digestless_attribution_requires_the_message_tiebreak(self, decisions: DecisionLog, tmp_path: Path) -> None:
         path = tmp_path / "s.jsonl"
         entries = [
             user_text("wrap up the change"),
@@ -598,7 +596,11 @@ class TestFixJudge:
 
     async def test_create_rows_keep_the_create_prompt(self) -> None:
         window = ContextWindow(
-            anchor=EventRef(SessionId("s2"), EventUuid("u2")), before=(), trigger=None, after=(), fidelity="full",
+            anchor=EventRef(SessionId("s2"), EventUuid("u2")),
+            before=(),
+            trigger=None,
+            after=(),
+            fidelity="full",
             preview_chars=200,
         )
         row = {"source_kind": "transcript_message", "context_json": window.to_json(), "text": "never do X"}

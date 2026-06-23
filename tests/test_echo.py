@@ -5,12 +5,12 @@ from typing import Any
 
 from captain_hook.dispatch import dispatch
 from captain_hook.state import PrimitiveState, text_hash
-from captain_hook.types import Event, Signal, Signals
 from captain_hook.tests.helpers import make_ctx, make_post_tool_event
+from captain_hook.types import Event, Signal, Signals
 
 
 def register_nudge(
-        message: str,
+    message: str,
     *,
     signals: list[Signal] | Signals | None = None,
     events: Event | None = None,
@@ -134,11 +134,14 @@ class TestEchoIntegration:
         r1 = dispatch(Event.PostToolUse, evt1, session_dir=tmp_path)
         assert r1 is not None
 
-        ctx2 = make_ctx(tmp_path, texts=["This is a pre-existing issue, not my change.", "I'll look into the pre-existing issue and fix it."], n_messages=12)
+        ctx2 = make_ctx(
+            tmp_path,
+            texts=["This is a pre-existing issue, not my change.", "I'll look into the pre-existing issue and fix it."],
+            n_messages=12,
+        )
         evt2 = make_post_tool_event(ctx=ctx2)
         r2 = dispatch(Event.PostToolUse, evt2, session_dir=tmp_path)
         assert r2 is None
-
 
     def test_unrelated_text_still_fires_in_echo_window(self, tmp_path: Path) -> None:
         register_nudge(
@@ -160,11 +163,18 @@ class TestEchoIntegration:
         r1 = dispatch(Event.PostToolUse, evt1, session_dir=tmp_path)
         assert r1 is not None
 
-        ctx2 = make_ctx(tmp_path, texts=["This is a pre-existing issue.", "I'll look into the pre-existing issue.", "That other bug is outside the scope of this task."], n_messages=12)
+        ctx2 = make_ctx(
+            tmp_path,
+            texts=[
+                "This is a pre-existing issue.",
+                "I'll look into the pre-existing issue.",
+                "That other bug is outside the scope of this task.",
+            ],
+            n_messages=12,
+        )
         evt2 = make_post_tool_event(ctx=ctx2)
         r2 = dispatch(Event.PostToolUse, evt2, session_dir=tmp_path)
         assert r2 is not None
-
 
     def test_echo_window_expires(self, tmp_path: Path) -> None:
         register_nudge(

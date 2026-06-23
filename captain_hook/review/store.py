@@ -447,7 +447,9 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
             LookupError: If no candidate carries ``candidate_id``.
         """
         conn = self.store.conn
-        cur = await conn.execute("SELECT repo_key, candidate_kind, status FROM candidates WHERE id = ?", (candidate_id,))
+        cur = await conn.execute(
+            "SELECT repo_key, candidate_kind, status FROM candidates WHERE id = ?", (candidate_id,)
+        )
         if not (candidates := [dict(row) async for row in cur]):
             raise LookupError(f"no candidate with id {candidate_id}")
         repo, kind = RepoKey(str(candidates[0]["repo_key"])), CandidateKind(str(candidates[0]["candidate_kind"]))

@@ -5,8 +5,17 @@ from captain_hook import Allow, BaseHookEvent, Block, CustomCondition, Event, In
 # Prose and config file extensions that shouldn't, on their own, demand a code-review pass.
 # Tailor this (and the excluded dirs below) to scope what counts as "source" for your repo.
 NON_SOURCE_SUFFIXES = (
-    ".md", ".mdx", ".rst", ".txt", ".json", ".toml",
-    ".yaml", ".yml", ".ini", ".cfg", ".lock",
+    ".md",
+    ".mdx",
+    ".rst",
+    ".txt",
+    ".json",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".ini",
+    ".cfg",
+    ".lock",
 )
 
 
@@ -15,9 +24,7 @@ class EditedSource(CustomCondition):
 
     def check(self, evt: BaseHookEvent) -> bool:
         return any(
-            not f.is_test
-            and f.suffix not in NON_SOURCE_SUFFIXES
-            and not f.under("docs", ".claude", ".github")
+            not f.is_test and f.suffix not in NON_SOURCE_SUFFIXES and not f.under("docs", ".claude", ".github")
             for f in evt.ctx.t.tool_calls.named("Edit|Write").files()
         )
 
@@ -30,15 +37,39 @@ gate(
     skip_if=[Waiting()],
     events=Event.Stop,
     tests={
-        Input(transcript=[
-            {"type": "assistant", "message": {"content": [
-                {"type": "tool_use", "name": "Edit", "id": "e1",
-                 "input": {"file_path": "src/app.py", "old_string": "a", "new_string": "b"}}]}},
-        ]): Block(),
-        Input(transcript=[
-            {"type": "assistant", "message": {"content": [
-                {"type": "tool_use", "name": "Edit", "id": "e1",
-                 "input": {"file_path": "README.md", "old_string": "a", "new_string": "b"}}]}},
-        ]): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "name": "Edit",
+                                "id": "e1",
+                                "input": {"file_path": "src/app.py", "old_string": "a", "new_string": "b"},
+                            }
+                        ]
+                    },
+                },
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "name": "Edit",
+                                "id": "e1",
+                                "input": {"file_path": "README.md", "old_string": "a", "new_string": "b"},
+                            }
+                        ]
+                    },
+                },
+            ]
+        ): Allow(),
     },
 )

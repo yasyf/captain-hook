@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
 from typing import Any
+
 from captain_hook.app import (
     _state,
     reset,
 )
 from captain_hook.dispatch import dispatch
-from captain_hook.types import Action, Event, Signal, Tool, Waiting
 from captain_hook.tests.helpers import (
     make_ctx,
     make_post_tool_event,
     make_stop_event,
 )
+from captain_hook.types import Action, Event, Signal, Tool, Waiting
 
 
 def register_llm_gate(
-        prompt: str,
+    prompt: str,
     *,
     message: str | Any = "BLOCKED",
     response_model: Any = None,
@@ -55,8 +55,10 @@ def register_llm_gate(
     kw.update(kwargs)
 
     llm_gate(prompt, **kw)
+
+
 def register_llm_nudge(
-        prompt: str,
+    prompt: str,
     *,
     message: str | Any = "WARNING",
     response_model: Any = None,
@@ -88,8 +90,6 @@ def register_llm_nudge(
     if max_context != 2000:
         kw["max_context"] = max_context
     kw.update(kwargs)
-
-    from captain_hook.primitives.llm import llm_nudge
 
     llm_nudge(prompt, **kw)
 
@@ -450,7 +450,11 @@ class TestPromptCheckReasoning:
         from captain_hook.primitives.llm import PromptCheckVerdict, prompt_check
         from captain_hook.prompt import Prompt
 
-        ctx = make_ctx(tmp_path, texts=["I decided to do X because Y"], call_llm_return=PromptCheckVerdict(action="block", reason="bad reasoning"))
+        ctx = make_ctx(
+            tmp_path,
+            texts=["I decided to do X because Y"],
+            call_llm_return=PromptCheckVerdict(action="block", reason="bad reasoning"),
+        )
 
         evt = make_stop_event(ctx=ctx)
         prompt_check(
@@ -570,7 +574,9 @@ class TestFireStateTiming:
         from captain_hook.primitives.llm import GateVerdict
         from captain_hook.state import PrimitiveState
 
-        ctx = make_ctx(tmp_path, texts=["critical error found"], call_llm_return=GateVerdict(block=False, reasoning="ok"))
+        ctx = make_ctx(
+            tmp_path, texts=["critical error found"], call_llm_return=GateVerdict(block=False, reasoning="ok")
+        )
 
         register_llm_gate(
             "Check this",
@@ -588,7 +594,9 @@ class TestFireStateTiming:
         from captain_hook.primitives.llm import NudgeVerdict
         from captain_hook.state import PrimitiveState
 
-        ctx = make_ctx(tmp_path, texts=["critical error found"], call_llm_return=NudgeVerdict(fire=False, reasoning="ok"))
+        ctx = make_ctx(
+            tmp_path, texts=["critical error found"], call_llm_return=NudgeVerdict(fire=False, reasoning="ok")
+        )
 
         register_llm_nudge(
             "Check this",
@@ -606,7 +614,9 @@ class TestFireStateTiming:
         from captain_hook.primitives.llm import GateVerdict
         from captain_hook.state import PrimitiveState
 
-        ctx = make_ctx(tmp_path, texts=["critical error found"], call_llm_return=GateVerdict(block=True, reasoning="bad"))
+        ctx = make_ctx(
+            tmp_path, texts=["critical error found"], call_llm_return=GateVerdict(block=True, reasoning="bad")
+        )
 
         register_llm_gate(
             "Check this",
@@ -705,7 +715,9 @@ class TestSignalConsumptionNotSuppressLaterHooks:
         from captain_hook.primitives.llm import GateVerdict
         from captain_hook.state import PrimitiveState
 
-        ctx = make_ctx(tmp_path, texts=["critical error found"], call_llm_return=GateVerdict(block=False, reasoning="ok"))
+        ctx = make_ctx(
+            tmp_path, texts=["critical error found"], call_llm_return=GateVerdict(block=False, reasoning="ok")
+        )
 
         register_llm_gate(
             "Gate check",
@@ -767,6 +779,7 @@ class TestLlmPrimitiveHelper:
 class TestDefaultAgentTranscript:
     def test_llm_gate_defaults_agent_and_transcript_to_true(self) -> None:
         from inspect import signature
+
         from captain_hook.primitives.llm import llm_gate
 
         params = signature(llm_gate).parameters
@@ -775,6 +788,7 @@ class TestDefaultAgentTranscript:
 
     def test_llm_nudge_defaults_agent_and_transcript_to_true(self) -> None:
         from inspect import signature
+
         from captain_hook.primitives.llm import llm_nudge
 
         params = signature(llm_nudge).parameters
@@ -783,6 +797,7 @@ class TestDefaultAgentTranscript:
 
     def test_llm_evaluate_keeps_old_defaults(self) -> None:
         from inspect import signature
+
         from captain_hook.primitives.llm import llm_evaluate
 
         params = signature(llm_evaluate).parameters

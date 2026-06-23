@@ -11,10 +11,10 @@ from click.testing import CliRunner
 
 from captain_hook.cli import cli, generate_settings
 from captain_hook.review.cli import REVIEW_RUN_COMMAND, STATUS_CHOICES
-from captain_hook.tests.helpers import run_cli
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import CandidateKind, CandidateStatus, ReviewStore
+from captain_hook.tests.helpers import run_cli
 from tests.test_review_pipeline import install_judge, requires_llm_backend
 from tests.test_review_scan import CORRECTION, correction_entries, write_transcript
 
@@ -149,13 +149,17 @@ class TestEnableDisable:
         claude = git_repo / ".claude"
         claude.mkdir(parents=True)
         (claude / "settings.local.json").write_text(
-            json.dumps({"hooks": {"SessionEnd": [{"hooks": [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}"}]}]}})
+            json.dumps(
+                {"hooks": {"SessionEnd": [{"hooks": [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}"}]}]}}
+            )
         )
         result = invoke("enable", root=git_repo)
         assert result.exit_code == 0, result.output
         assert "SessionEnd hook wired" not in result.output
         committed = claude / "settings.json"
-        groups = (json.loads(committed.read_text()).get("hooks") or {}).get("SessionEnd") or [] if committed.exists() else []
+        groups = (
+            (json.loads(committed.read_text()).get("hooks") or {}).get("SessionEnd") or [] if committed.exists() else []
+        )
         assert not any(REVIEW_RUN_COMMAND in entry["command"] for group in groups for entry in group["hooks"])
 
     def test_disable_unwatches(self, git_repo: Path) -> None:

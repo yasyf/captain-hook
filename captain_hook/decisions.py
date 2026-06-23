@@ -41,7 +41,9 @@ def record_decision(entry: RegisteredHook, evt: BaseHookEvent, result: HookResul
 
     if os.environ.get("CAPT_HOOK_SPAWNED") or not (session_id := evt._raw.get("session_id")):
         return
-    action, message = ("note", result.note) if result.action is Action.rewrite else (result.action.value, result.message)
+    action, message = (
+        ("note", result.note) if result.action is Action.rewrite else (result.action.value, result.message)
+    )
     open_decision_log(decisions_db_path()).append(
         Decision(
             ts_ms=int(time.time() * 1000),

@@ -8,10 +8,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from captain_hook.loader import discover_hooks
 from captain_hook.app import (
     _state,
     get_matching_hooks,
+)
+from captain_hook.app import (
     hook as register_hook,
 )
 from captain_hook.dispatch import format_output
@@ -23,9 +24,10 @@ from captain_hook.events import (
     SubagentStopEvent,
     UserPromptSubmitEvent,
 )
+from captain_hook.loader import discover_hooks
 from captain_hook.session import SessionStore
 from captain_hook.state import HookState, PrimitiveState
-from captain_hook.tests.helpers import PKG_DIR, build_ctx, run_cli
+from captain_hook.tests.helpers import build_ctx, run_cli
 from captain_hook.types import Action, Event, HookResult
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "client_hooks"
@@ -100,9 +102,7 @@ class TestHookDiscovery:
     def test_e2e_013_named_workflow_hook_discovered(self) -> None:
         discover_hooks(str(FIXTURES_DIR))
         hook_names = {h.name for h in _state.hooks}
-        assert "require_review_before_stop" in hook_names, (
-            f"require_review_before_stop not in {hook_names}"
-        )
+        assert "require_review_before_stop" in hook_names, f"require_review_before_stop not in {hook_names}"
 
     def test_e2e_014_no_import_errors(self) -> None:
         discover_hooks(str(FIXTURES_DIR))

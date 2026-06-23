@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from captain_hook.cli import register_marketplace
-
 from stress.sandbox import git
 
 if TYPE_CHECKING:
@@ -56,7 +55,9 @@ def rewire_settings(sandbox: Sandbox) -> None:
 
 
 def seed_project_files(repo: Path) -> None:
-    (repo / "app.py").write_text('def main() -> None:\n    print("hello")\n\n\nif __name__ == "__main__":\n    main()\n')
+    (repo / "app.py").write_text(
+        'def main() -> None:\n    print("hello")\n\n\nif __name__ == "__main__":\n    main()\n'
+    )
     (repo / ".gitignore").write_text(".claude/settings.local.json\n")
 
 

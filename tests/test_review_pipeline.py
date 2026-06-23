@@ -266,7 +266,9 @@ class TestGuardAndSpawn:
         self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
     ) -> None:
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
-        guard_and_spawn(json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path), "reason": "other"}).encode())
+        guard_and_spawn(
+            json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path), "reason": "other"}).encode()
+        )
         [(argv, kwargs)] = popen_calls
         assert argv == spawn_argv(str(transcript), str(tmp_path))
         assert argv[:5] == [sys.executable, "-m", "captain_hook", "review", "spawn"]
@@ -314,7 +316,9 @@ class TestGuardAndSpawn:
     ) -> None:
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
         guard_and_spawn(
-            json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path), "reason": "prompt_input_exit"}).encode()
+            json.dumps(
+                {"transcript_path": str(transcript), "cwd": str(tmp_path), "reason": "prompt_input_exit"}
+            ).encode()
         )
         assert popen_calls == []
 
@@ -487,7 +491,11 @@ class TestBrain:
     ) -> None:
         runs: list[tuple[list[str], dict[str, Any]]] = []
         monkeypatch.setattr("captain_hook.review.pipeline.subprocess.run", lambda argv, **kw: runs.append((argv, kw)))
-        spawn_brain(tmp_path / "t.jsonl", repo_root=tmp_path, settings=ReviewSettings(brain_max_turns=7, brain_max_budget_usd=2.5))
+        spawn_brain(
+            tmp_path / "t.jsonl",
+            repo_root=tmp_path,
+            settings=ReviewSettings(brain_max_turns=7, brain_max_budget_usd=2.5),
+        )
         [(argv, kwargs)] = runs
         assert argv == brain_argv(max_turns=7, max_budget_usd=2.5)
         assert kwargs["cwd"] == tmp_path

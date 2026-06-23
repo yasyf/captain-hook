@@ -7,6 +7,11 @@ from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from stress.corpus import Planted, fix_compliance, fix_hedged, fix_strong, turn_ts, write
+from stress.db import count, query
+from stress.drivers.proc import capt_hook, review_run, wait_for_report
+from stress.scenarios.base import Scenario, ScenarioResult, Tier, check, expect
+from stress.seeds import NUDGE_MESSAGE, seed_decision
 from tests.test_review_fix import (
     STOP_COMPLAINT,
     STOP_MESSAGE,
@@ -15,12 +20,6 @@ from tests.test_review_fix import (
     stop_feedback_turn,
 )
 from tests.test_review_scan import assistant_text, assistant_tool_use, tool_result, user_text
-
-from stress.corpus import Planted, fix_compliance, fix_hedged, fix_strong, turn_ts, write
-from stress.db import count, query
-from stress.drivers.proc import capt_hook, review_run, wait_for_report
-from stress.scenarios.base import Scenario, ScenarioResult, Tier, check, expect
-from stress.seeds import NUDGE_MESSAGE, seed_decision
 
 if TYPE_CHECKING:
     from typing import Any

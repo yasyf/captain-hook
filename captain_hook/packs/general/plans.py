@@ -37,12 +37,32 @@ hook(
             file="/x/plans/p.md",
             content="# Plan v2",
             transcript=[
-                {"type": "assistant", "message": {"content": [
-                    {"type": "tool_use", "name": "Write", "id": "w0",
-                     "input": {"file_path": "/x/plans/p.md", "content": "# Plan v1"}}]}},
-                {"type": "assistant", "message": {"content": [
-                    {"type": "tool_use", "name": "Write", "id": "w1",
-                     "input": {"file_path": "/x/plans/p.md", "content": "# Plan v2"}}]}},
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "name": "Write",
+                                "id": "w0",
+                                "input": {"file_path": "/x/plans/p.md", "content": "# Plan v1"},
+                            }
+                        ]
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "name": "Write",
+                                "id": "w1",
+                                "input": {"file_path": "/x/plans/p.md", "content": "# Plan v2"},
+                            }
+                        ]
+                    },
+                },
             ],
         ): Block(),
         # A new plan cycle (EnterPlanMode) started since the last write -> allow the rewrite.
@@ -51,14 +71,36 @@ hook(
             file="/x/plans/p.md",
             content="# Plan v2",
             transcript=[
-                {"type": "assistant", "message": {"content": [
-                    {"type": "tool_use", "name": "Write", "id": "w0",
-                     "input": {"file_path": "/x/plans/p.md", "content": "# Plan v1"}}]}},
-                {"type": "assistant", "message": {"content": [
-                    {"type": "tool_use", "name": "EnterPlanMode", "id": "p1", "input": {}}]}},
-                {"type": "assistant", "message": {"content": [
-                    {"type": "tool_use", "name": "Write", "id": "w1",
-                     "input": {"file_path": "/x/plans/p.md", "content": "# Plan v2"}}]}},
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "name": "Write",
+                                "id": "w0",
+                                "input": {"file_path": "/x/plans/p.md", "content": "# Plan v1"},
+                            }
+                        ]
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "tool_use", "name": "EnterPlanMode", "id": "p1", "input": {}}]},
+                },
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "name": "Write",
+                                "id": "w1",
+                                "input": {"file_path": "/x/plans/p.md", "content": "# Plan v2"},
+                            }
+                        ]
+                    },
+                },
             ],
         ): Allow(),
         # First write of this plan this session -> allow.

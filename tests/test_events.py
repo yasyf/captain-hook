@@ -330,8 +330,6 @@ class TestSessionEndEvent:
         assert evt.reason == "clear"
 
 
-
-
 class TestWarnParts:
     def test_single_str_part_verbatim(self) -> None:
         assert make_event(StopEvent, {}).warn("plain message").message == "plain message"

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import pytest
 from cc_transcript.ids import SessionId
 from cc_transcript.mining.candidates import DedupKey
-from cc_transcript.mining.confidence import MEDIUM, VERY_HIGH, CandidateSignal, Confidence, to_payload
+from cc_transcript.mining.confidence import MEDIUM, CandidateSignal, Confidence, to_payload
 from cc_transcript.mining.sourcekind import SourceKind
 from click.testing import CliRunner
 from rich.console import Console
@@ -138,28 +138,34 @@ class TestPrDescription:
         )
 
     def test_fix_names_target_and_prefers_summary(self) -> None:
-        assert pr_description(
-            view(
-                kind="fix",
-                status="watching",
-                summary="stop nudge firing on its own text",
-                target_hook="hooks.style:nudge_1",
-                target_file=".claude/hooks/style.py",
-                misfire="refire_on_own_text",
+        assert (
+            pr_description(
+                view(
+                    kind="fix",
+                    status="watching",
+                    summary="stop nudge firing on its own text",
+                    target_hook="hooks.style:nudge_1",
+                    target_file=".claude/hooks/style.py",
+                    misfire="refire_on_own_text",
+                )
             )
-        ) == "would fix hooks.style:nudge_1 (.claude/hooks/style.py): stop nudge firing on its own text"
+            == "would fix hooks.style:nudge_1 (.claude/hooks/style.py): stop nudge firing on its own text"
+        )
 
     def test_fix_falls_back_to_misfire_class(self) -> None:
-        assert pr_description(
-            view(
-                kind="fix",
-                status="watching",
-                summary=None,
-                target_hook="h:n",
-                target_file="f.py",
-                misfire="refire_on_own_text",
+        assert (
+            pr_description(
+                view(
+                    kind="fix",
+                    status="watching",
+                    summary=None,
+                    target_hook="h:n",
+                    target_file="f.py",
+                    misfire="refire_on_own_text",
+                )
             )
-        ) == "would fix h:n (f.py): regression test for refire_on_own_text"
+            == "would fix h:n (f.py): regression test for refire_on_own_text"
+        )
 
 
 class TestProgress:
@@ -178,7 +184,9 @@ class TestProgress:
         )
 
     def test_progress_text_drops_zero_target_and_shows_counts(self) -> None:
-        text = progress_text(view(kind="fix", status="watching", sessions=1, target_hook="h", target_file="f"), ReviewSettings())
+        text = progress_text(
+            view(kind="fix", status="watching", sessions=1, target_hook="h", target_file="f"), ReviewSettings()
+        )
         assert "sessions" in text and "1/2" in text
         assert "days" not in text
 
@@ -188,7 +196,14 @@ class TestRenderFrame:
         views = [
             view(id=1, kind="create", status="watching", sessions=2, days=2, summary="block force-push"),
             view(id=2, kind="create", status="watching", eligible=True, sessions=3, days=2, summary="run tests"),
-            view(id=3, kind="create", status="pr_open", summary="use uv", pr_url="https://x/pull/42", pr_opened_at="2026-06-10T00:00:00+00:00"),
+            view(
+                id=3,
+                kind="create",
+                status="pr_open",
+                summary="use uv",
+                pr_url="https://x/pull/42",
+                pr_opened_at="2026-06-10T00:00:00+00:00",
+            ),
         ]
         out = plain(render(views, repo=REPO, settings=ReviewSettings(), watching=True))
         assert "WATCHING" in out and "ELIGIBLE" in out and "PR OPEN" in out
@@ -224,18 +239,30 @@ async def seed_obs(
     payload = json.dumps({"signal": to_payload(CandidateSignal(Confidence(heuristic), ("marker",)))})
     await store.store.conn.execute(INSERT_EVENT, (key, source, session, occurred, text, payload))
     await store.record_observation(
-        candidate_id, dedup_key=DedupKey(key), session_id=SessionId(session), occurred_at=datetime.fromisoformat(occurred)
+        candidate_id,
+        dedup_key=DedupKey(key),
+        session_id=SessionId(session),
+        occurred_at=datetime.fromisoformat(occurred),
     )
 
 
-async def judge_obs(store: ReviewStore, key: str, *, accepted: bool = True, summary: str = "encode this rule", model: str = "m1") -> None:
+async def judge_obs(
+    store: ReviewStore, key: str, *, accepted: bool = True, summary: str = "encode this rule", model: str = "m1"
+) -> None:
     await store.record_verdict(
-        DedupKey(key), FakeVerdict(accepted=accepted, summary=summary), role="judge", prompt_version=PV, model=model, fidelity="full"
+        DedupKey(key),
+        FakeVerdict(accepted=accepted, summary=summary),
+        role="judge",
+        prompt_version=PV,
+        model=model,
+        fidelity="full",
     )
 
 
 async def eligible_create(store: ReviewStore, *, rule: str, summary: str) -> int:
-    candidate_id = await store.ensure_candidate(REPO, kind=CandidateKind.CREATE, rule=rule, source_kind=SourceKind("transcript_message"))
+    candidate_id = await store.ensure_candidate(
+        REPO, kind=CandidateKind.CREATE, rule=rule, source_kind=SourceKind("transcript_message")
+    )
     for i, (session, day) in enumerate([("s1", "2026-06-01"), ("s2", "2026-06-01"), ("s3", "2026-06-02")]):
         await seed_obs(store, candidate_id, f"{rule}{i}", session=session, occurred=f"{day}T10:00:00+00:00")
         await judge_obs(store, f"{rule}{i}", summary=summary)
@@ -247,7 +274,9 @@ class TestEligibilityParity:
         settings = ReviewSettings()
         await store.enable(REPO)
         ready = await eligible_create(store, rule="ready", summary="run tests")
-        watching = await store.ensure_candidate(REPO, kind=CandidateKind.CREATE, rule="early", source_kind=SourceKind("transcript_message"))
+        watching = await store.ensure_candidate(
+            REPO, kind=CandidateKind.CREATE, rule="early", source_kind=SourceKind("transcript_message")
+        )
         await seed_obs(store, watching, "early0", session="x1", occurred="2026-06-01T10:00:00+00:00")
         await judge_obs(store, "early0")
         for candidate_id, expected in ((ready, True), (watching, False)):
@@ -286,17 +315,26 @@ def top_status(*args: str, root: Path) -> Result:
 async def seed_db(scenario: str) -> int:
     async with await ReviewStore.open(ReviewSettings().db_path) as store:
         await store.enable(REPO)
-        watching = await store.ensure_candidate(REPO, kind=CandidateKind.CREATE, rule="force", source_kind=SourceKind("transcript_message"))
-        await seed_obs(store, watching, "w0", session="a1", occurred="2026-06-01T10:00:00+00:00", text="never force-push")
+        watching = await store.ensure_candidate(
+            REPO, kind=CandidateKind.CREATE, rule="force", source_kind=SourceKind("transcript_message")
+        )
+        await seed_obs(
+            store, watching, "w0", session="a1", occurred="2026-06-01T10:00:00+00:00", text="never force-push"
+        )
         await judge_obs(store, "w0", summary="block force-push to main")
         await eligible_create(store, rule="tests", summary="run the suite before committing")
         match scenario:
             case "pr_open":
-                pr = await store.ensure_candidate(REPO, kind=CandidateKind.CREATE, rule="uv", source_kind=SourceKind("transcript_message"))
+                pr = await store.ensure_candidate(
+                    REPO, kind=CandidateKind.CREATE, rule="uv", source_kind=SourceKind("transcript_message")
+                )
                 await seed_obs(store, pr, "p0", session="b1", occurred="2026-06-01T10:00:00+00:00", text="use uv")
                 await judge_obs(store, "p0", summary="use uv instead of pip")
                 await store.transition(
-                    pr, CandidateStatus.PR_OPEN, pr_url="https://github.com/yasyf/scratch/pull/42", pr_opened_at=datetime.now(UTC) - timedelta(days=4)
+                    pr,
+                    CandidateStatus.PR_OPEN,
+                    pr_url="https://github.com/yasyf/scratch/pull/42",
+                    pr_opened_at=datetime.now(UTC) - timedelta(days=4),
                 )
                 return pr
         return watching
@@ -327,7 +365,9 @@ class TestStatusCommand:
         assert calls == []
         assert "PR OPEN" in result.output and "pull/42" in result.output
 
-    def test_background_sync_folds_merged_pr_into_accepted(self, git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_background_sync_folds_merged_pr_into_accepted(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         candidate_id = asyncio.run(seed_db("pr_open"))
         monkeypatch.setattr("captain_hook.review.sync.gh_pr_state", lambda _url: "MERGED")
         result = review_status(root=git_repo)

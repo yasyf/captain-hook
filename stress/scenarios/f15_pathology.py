@@ -6,8 +6,6 @@ import os
 import time
 from typing import TYPE_CHECKING
 
-from tests.test_review_scan import assistant_text, user_text, write_transcript
-
 from stress.corpus import (
     DURABLE_CORRECTION,
     durable_correction,
@@ -21,6 +19,7 @@ from stress.corpus import (
 from stress.db import count, one, query
 from stress.drivers.proc import capt_hook, review_run, spawn_reports, wait_drained
 from stress.scenarios.base import Scenario, ScenarioResult, Tier, check, expect
+from tests.test_review_scan import assistant_text, user_text, write_transcript
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -74,7 +73,9 @@ def run_empty_file(sandbox: Sandbox) -> ScenarioResult:
                 report is not None and report.scanned == 1 and report.inserted == 0,
                 f"report={report} files_row={files_row(sandbox, path)}",
             ),
-            check("files row recorded for the empty file", files_row(sandbox, path) is not None, files_row(sandbox, path)),
+            check(
+                "files row recorded for the empty file", files_row(sandbox, path) is not None, files_row(sandbox, path)
+            ),
             check("no Traceback in spawn.log", clean, excerpt),
         ),
     )

@@ -11,19 +11,24 @@ from captain_hook.session import SessionSlot, SessionStore, session_state
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 
+
 class MyModel(BaseModel):
     name: str
     value: int
 
+
 class MyCustomModel(BaseModel):
     score: float
+
 
 class AnotherModel(BaseModel):
     label: str
 
+
 class DefaultModel(BaseModel):
     name: str = "default"
     value: int = 0
+
 
 def make_pre_tool_event(ctx: MagicMock | None = None) -> MagicMock:
     from captain_hook.events import PreToolUseEvent
@@ -34,8 +39,8 @@ def make_pre_tool_event(ctx: MagicMock | None = None) -> MagicMock:
     )
     return evt
 
-class TestStateStore:
 
+class TestStateStore:
     def test_state_store_getitem_returns_session_slot(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
         slot = store[MyModel]
@@ -131,9 +136,7 @@ class TestStateStore:
         assert SessionStore(tmp_path)[MyModel].get() is None
 
     def test_get_default_with_none_session_dir(self) -> None:
-        assert SessionStore(None)[MyModel].get(MyModel(name="fallback", value=7)) == MyModel(
-            name="fallback", value=7
-        )
+        assert SessionStore(None)[MyModel].get(MyModel(name="fallback", value=7)) == MyModel(name="fallback", value=7)
 
     def test_load_returns_fresh_default_when_empty(self, tmp_path: Path) -> None:
         assert SessionStore(tmp_path).load(DefaultModel) == DefaultModel()
@@ -143,8 +146,8 @@ class TestStateStore:
         store[DefaultModel].set(DefaultModel(name="x", value=5))
         assert store.load(DefaultModel) == DefaultModel(name="x", value=5)
 
-class TestFireCounting:
 
+class TestFireCounting:
     def test_max_fires_enforcement(self, tmp_path: Path) -> None:
         def handler(evt: object) -> HookResult:
             return HookResult(action=Action.warn, message="fired")
@@ -337,7 +340,9 @@ class TestFireCounting:
         r4 = execute_hook(entry, make_pre_tool_event(), tmp_path)
         assert r4 is None
 
+
 # hook_name generation
+
 
 class TestHookName:
     def test_hook_name_with_label(self) -> None:
