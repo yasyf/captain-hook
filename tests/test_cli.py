@@ -21,34 +21,47 @@ from captain_hook.tests.helpers import (
 )
 from captain_hook.types import Event
 
+BLOCK_STDIN = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
+
+
+@pytest.fixture
+def hooks_dir(tmp_path: Path) -> Path:
+    d = tmp_path / "hooks"
+    d.mkdir()
+    (d / "__init__.py").write_text("")
+    return d
+
+
+def write_hook(hooks_dir: Path, src: str, name: str = "my_hook.py") -> Path:
+    path = hooks_dir / name
+    path.write_text(textwrap.dedent(src))
+    return path
+
+
+def stdin_json(**raw: Any) -> str:
+    return json.dumps(raw)
+
 
 class TestRunSubcommand:
-    def test_cli_001_run_entry_point(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
+    def test_cli_001_run_entry_point(self, hooks_dir: Path) -> None:
+        stdin = stdin_json(tool_name="Bash", tool_input={"command": "echo hi"})
         result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
         assert result.returncode == 0
 
-    def test_cli_002_run_with_async_flag(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-        conf_py = hooks_dir / "conf.py"
-        conf_py.write_text("")
-        hook_file = hooks_dir / "my_hook.py"
-        hook_file.write_text(
-            textwrap.dedent("""\
+    def test_cli_002_run_with_async_flag(self, hooks_dir: Path) -> None:
+        (hooks_dir / "conf.py").write_text("")
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook, on
             from captain_hook.types import Event
 
             hook(Event.PreToolUse, message="sync hook", async_=False)
             hook(Event.PreToolUse, message="async hook", async_=True)
-        """)
+        """,
         )
 
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
+        stdin = stdin_json(tool_name="Bash", tool_input={"command": "echo hi"})
 
         result_sync = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
         assert result_sync.returncode == 0
@@ -62,27 +75,21 @@ class TestRunSubcommand:
             output_async = json.loads(result_async.stdout)
             assert "async hook" in json.dumps(output_async)
 
-    def test_cli_011_invalid_event_type(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
+    def test_cli_011_invalid_event_type(self, hooks_dir: Path) -> None:
         result = run_cli("run", "InvalidEvent", hooks_dir=str(hooks_dir), stdin_data="{}")
         assert result.returncode != 0
 
 
 class TestRegisterHooks:
-    def test_cli_003_register_hooks_dry_run(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-        hook_file = hooks_dir / "my_hook.py"
-        hook_file.write_text(
-            textwrap.dedent("""\
+    def test_cli_003_register_hooks_dry_run(self, tmp_path: Path, hooks_dir: Path) -> None:
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook, on
             from captain_hook.types import Event
 
             hook(Event.PreToolUse, message="check tool use")
-        """)
+        """,
         )
 
         result = run_cli("register-hooks", "--dry-run", hooks_dir=str(hooks_dir), root_dir=str(tmp_path))
@@ -94,18 +101,15 @@ class TestRegisterHooks:
         assert "--hooks" not in raw
         assert "--root" not in raw
 
-    def test_cli_004_register_hooks_hooks_dir(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-        hook_file = hooks_dir / "my_hook.py"
-        hook_file.write_text(
-            textwrap.dedent("""\
+    def test_cli_004_register_hooks_hooks_dir(self, tmp_path: Path, hooks_dir: Path) -> None:
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook, on
             from captain_hook.types import Event
 
             hook(Event.PreToolUse, message="check tool use")
-        """)
+        """,
         )
 
         result = run_cli(
@@ -153,19 +157,24 @@ class TestRegisterHooks:
         assert has_sync
         assert has_async
 
-    def test_cli_012_default_command_omits_path_flags(self) -> None:
+    @pytest.mark.parametrize(
+        ("hooks_dir_arg", "expected_command"),
+        [
+            pytest.param(None, "uvx capt-hook run PreToolUse", id="default_command_omits_path_flags"),
+            pytest.param(
+                "custom/hooks",
+                "uvx capt-hook --hooks $CLAUDE_PROJECT_DIR/custom/hooks run PreToolUse",
+                id="custom_hooks_dir_keeps_hooks_flag",
+            ),
+        ],
+    )
+    def test_cli_command_for_hooks_dir(self, hooks_dir_arg: str | None, expected_command: str) -> None:
         from captain_hook.cli import generate_settings
 
         register_hook(Event.PreToolUse, message="pre tool")
-        command = generate_settings()["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-        assert command == "uvx capt-hook run PreToolUse"
-
-    def test_cli_013_custom_hooks_dir_keeps_hooks_flag(self) -> None:
-        from captain_hook.cli import generate_settings
-
-        register_hook(Event.PreToolUse, message="pre tool")
-        command = generate_settings(hooks_dir="custom/hooks")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-        assert command == "uvx capt-hook --hooks $CLAUDE_PROJECT_DIR/custom/hooks run PreToolUse"
+        settings = generate_settings(hooks_dir=hooks_dir_arg) if hooks_dir_arg else generate_settings()
+        command = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        assert command == expected_command
 
     def test_cli_027_session_end_hook_wired(self) -> None:
         from captain_hook.cli import generate_settings
@@ -175,17 +184,15 @@ class TestRegisterHooks:
         assert entries[0]["command"] == "uvx capt-hook run SessionEnd"
         assert entries[1] == {"type": "command", "command": "uvx capt-hook review run", "async": True}
 
-    def test_cli_021_dry_run_writes_nothing(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-        (hooks_dir / "my_hook.py").write_text(
-            textwrap.dedent("""\
+    def test_cli_021_dry_run_writes_nothing(self, tmp_path: Path, hooks_dir: Path) -> None:
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook
             from captain_hook.types import Event
 
             hook(Event.PreToolUse, message="check")
-        """)
+        """,
         )
         settings_path = tmp_path / ".claude" / "settings.json"
         result = run_cli("register-hooks", "--dry-run", hooks_dir=str(hooks_dir), root_dir=str(tmp_path))
@@ -193,17 +200,15 @@ class TestRegisterHooks:
         assert not settings_path.exists()
         assert "PreToolUse" in json.loads(result.stdout)["hooks"]
 
-    def test_cli_022_writes_settings_by_default(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-        (hooks_dir / "my_hook.py").write_text(
-            textwrap.dedent("""\
+    def test_cli_022_writes_settings_by_default(self, tmp_path: Path, hooks_dir: Path) -> None:
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook
             from captain_hook.types import Event
 
             hook(Event.PreToolUse, message="check")
-        """)
+        """,
         )
         settings_path = tmp_path / ".claude" / "settings.json"
         result = run_cli("register-hooks", hooks_dir=str(hooks_dir), root_dir=str(tmp_path))
@@ -367,27 +372,38 @@ class TestSettingsDrift:
             )
         )
 
-    def test_cli_017_drift_flags_unwired_event(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        ("registered", "wired", "expected"),
+        [
+            pytest.param(
+                (Event.PreToolUse, Event.UserPromptSubmit),
+                ("PreToolUse",),
+                {"UserPromptSubmit"},
+                id="flags_unwired_event",
+            ),
+            pytest.param(
+                (Event.SessionEnd,),
+                ("PreToolUse",),
+                {"SessionEnd"},
+                id="flags_unwired_session_end",
+            ),
+            pytest.param(
+                (Event.PreToolUse,),
+                ("PreToolUse",),
+                set(),
+                id="no_drift_when_all_wired",
+            ),
+        ],
+    )
+    def test_cli_drift(
+        self, tmp_path: Path, registered: tuple[Event, ...], wired: tuple[str, ...], expected: set[str]
+    ) -> None:
         from captain_hook.cli import settings_drift
 
-        register_hook(Event.PreToolUse, message="pre")
-        register_hook(Event.UserPromptSubmit, message="ups")
-        self.write_settings(tmp_path, "PreToolUse")
-        assert settings_drift(tmp_path) == {"UserPromptSubmit"}
-
-    def test_cli_028_drift_flags_unwired_session_end(self, tmp_path: Path) -> None:
-        from captain_hook.cli import settings_drift
-
-        register_hook(Event.SessionEnd, message="session over")
-        self.write_settings(tmp_path, "PreToolUse")
-        assert settings_drift(tmp_path) == {"SessionEnd"}
-
-    def test_cli_018_no_drift_when_all_wired(self, tmp_path: Path) -> None:
-        from captain_hook.cli import settings_drift
-
-        register_hook(Event.PreToolUse, message="pre")
-        self.write_settings(tmp_path, "PreToolUse")
-        assert settings_drift(tmp_path) == set()
+        for event in registered:
+            register_hook(event, message="m")
+        self.write_settings(tmp_path, *wired)
+        assert settings_drift(tmp_path) == expected
 
     def test_cli_019_no_drift_without_settings_file(self, tmp_path: Path) -> None:
         from captain_hook.cli import settings_drift
@@ -413,23 +429,21 @@ class TestSettingsDrift:
         )
         assert settings_drift(tmp_path) == set()
 
-    def test_cli_020_run_surfaces_drift_to_agent_once(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-        (hooks_dir / "my_hook.py").write_text(
-            textwrap.dedent("""\
+    def test_cli_020_run_surfaces_drift_to_agent_once(self, tmp_path: Path, hooks_dir: Path) -> None:
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook
             from captain_hook.types import Event
 
             hook(Event.PreToolUse, message="pre tool fired")
             hook(Event.UserPromptSubmit, message="prompt hook")
-        """)
+        """,
         )
         root_dir = tmp_path / "project"
         self.write_settings(root_dir, "PreToolUse")
 
-        stdin = json.dumps({"session_id": "drift-sess", "tool_name": "Bash", "tool_input": {"command": "echo hi"}})
+        stdin = stdin_json(session_id="drift-sess", tool_name="Bash", tool_input={"command": "echo hi"})
         first = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), root_dir=str(root_dir), stdin_data=stdin)
         assert first.returncode == 0
         assert "UserPromptSubmit" in first.stdout
@@ -446,18 +460,12 @@ class TestErrorHandling:
         result = run_cli("nonexistent")
         assert result.returncode != 0
 
-    def test_empty_stdin_no_output(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
+    def test_empty_stdin_no_output(self, hooks_dir: Path) -> None:
         result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data="")
         assert result.returncode == 0
         assert result.stdout.strip() == ""
 
-    def test_malformed_json_no_crash(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
+    def test_malformed_json_no_crash(self, hooks_dir: Path) -> None:
         result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data="not json")
         assert result.returncode == 0
         assert result.stdout.strip() == ""
@@ -465,13 +473,10 @@ class TestErrorHandling:
 
 
 class TestCLIWithContext:
-    def test_cli_run_creates_hook_context(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-        hook_file = hooks_dir / "my_hook.py"
-        hook_file.write_text(
-            textwrap.dedent("""\
+    def test_cli_run_creates_hook_context(self, hooks_dir: Path) -> None:
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook, on
             from captain_hook.types import Event, Action, HookResult
 
@@ -481,10 +486,10 @@ class TestCLIWithContext:
                 if evt.ctx is None:
                     return HookResult(action=Action.block, message="ctx is None!")
                 return HookResult(action=Action.warn, message="ctx exists")
-        """)
+        """,
         )
 
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
+        stdin = stdin_json(tool_name="Bash", tool_input={"command": "echo hi"})
         result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
         assert result.returncode == 0
         if result.stdout.strip():
@@ -493,21 +498,18 @@ class TestCLIWithContext:
             assert "ctx exists" in raw
             assert "ctx is None" not in raw
 
-    def test_cli_max_fires_persistent(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-        hook_file = hooks_dir / "my_hook.py"
-        hook_file.write_text(
-            textwrap.dedent("""\
+    def test_cli_max_fires_persistent(self, tmp_path: Path, hooks_dir: Path) -> None:
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook, on
             from captain_hook.types import Event
 
             hook(Event.PreToolUse, message="once only", max_fires=1)
-        """)
+        """,
         )
 
-        stdin = json.dumps({"session_id": "max-fires-sess", "tool_name": "Bash", "tool_input": {"command": "echo hi"}})
+        stdin = stdin_json(session_id="max-fires-sess", tool_name="Bash", tool_input={"command": "echo hi"})
         root_dir = tmp_path / "project"
         root_dir.mkdir()
 
@@ -531,69 +533,41 @@ class TestCLIWithContext:
         assert result2.returncode == 0
         assert result2.stdout.strip() == ""
 
-    def test_cli_hook_accesses_session_store(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-        hook_file = hooks_dir / "my_hook.py"
-        hook_file.write_text(
-            textwrap.dedent("""\
+    @pytest.mark.parametrize(
+        ("accessor", "ok_message"),
+        [
+            pytest.param("evt.ctx.s", "session store ok", id="hook_accesses_session_store"),
+            pytest.param("evt.ctx.state", "state accessor ok", id="hook_accesses_state"),
+        ],
+    )
+    def test_cli_hook_accesses_session_store_type(self, hooks_dir: Path, accessor: str, ok_message: str) -> None:
+        write_hook(
+            hooks_dir,
+            f"""\
             from captain_hook.app import hook, on
             from captain_hook.types import Event, Action, HookResult
 
 
             @on(Event.PreToolUse)
-            def check_session_store(evt):
+            def check_store(evt):
                 try:
-                    store = evt.ctx.s
+                    store = {accessor}
                     from captain_hook.session import SessionStore
                     if not isinstance(store, SessionStore):
                         return HookResult(action=Action.block, message="not a SessionStore")
-                    return HookResult(action=Action.warn, message="session store ok")
+                    return HookResult(action=Action.warn, message="{ok_message}")
                 except Exception as e:
-                    return HookResult(action=Action.block, message=f"error: {e}")
-        """)
+                    return HookResult(action=Action.block, message=f"error: {{e}}")
+        """,
         )
 
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
+        stdin = stdin_json(tool_name="Bash", tool_input={"command": "echo hi"})
         result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
         assert result.returncode == 0
         if result.stdout.strip():
             output = json.loads(result.stdout)
             raw = json.dumps(output)
-            assert "session store ok" in raw
-
-    def test_cli_hook_accesses_state(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-        hook_file = hooks_dir / "my_hook.py"
-        hook_file.write_text(
-            textwrap.dedent("""\
-            from captain_hook.app import hook, on
-            from captain_hook.types import Event, Action, HookResult
-
-
-            @on(Event.PreToolUse)
-            def check_state_accessor(evt):
-                try:
-                    state = evt.ctx.state
-                    from captain_hook.session import SessionStore
-                    if not isinstance(state, SessionStore):
-                        return HookResult(action=Action.block, message="not a SessionStore")
-                    return HookResult(action=Action.warn, message="state accessor ok")
-                except Exception as e:
-                    return HookResult(action=Action.block, message=f"error: {e}")
-        """)
-        )
-
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
-        result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
-        assert result.returncode == 0
-        if result.stdout.strip():
-            output = json.loads(result.stdout)
-            raw = json.dumps(output)
-            assert "state accessor ok" in raw
+            assert ok_message in raw
 
 
 class TestTranscriptWiring:
@@ -614,17 +588,13 @@ class TestTranscriptWiring:
         ]
         path.write_text("\n".join(json.dumps(m) for m in messages) + "\n")
 
-    def test_cli_extracts_transcript_path_from_stdin(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-
+    def test_cli_extracts_transcript_path_from_stdin(self, tmp_path: Path, hooks_dir: Path) -> None:
         transcript = tmp_path / "transcript.jsonl"
         self._make_transcript_jsonl(transcript)
 
-        hook_file = hooks_dir / "my_hook.py"
-        hook_file.write_text(
-            textwrap.dedent("""\
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook, on
             from captain_hook.types import Event, Action, HookResult
 
@@ -637,15 +607,13 @@ class TestTranscriptWiring:
                 if len(t) == 0:
                     return HookResult(action=Action.block, message="transcript is empty")
                 return HookResult(action=Action.warn, message=f"transcript has {len(t)} messages")
-        """)
+        """,
         )
 
-        stdin = json.dumps(
-            {
-                "tool_name": "Bash",
-                "tool_input": {"command": "echo hi"},
-                "transcript_path": str(transcript),
-            }
+        stdin = stdin_json(
+            tool_name="Bash",
+            tool_input={"command": "echo hi"},
+            transcript_path=str(transcript),
         )
         result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
         assert result.returncode == 0
@@ -654,17 +622,13 @@ class TestTranscriptWiring:
         raw = json.dumps(output)
         assert "transcript has 4 messages" in raw, f"unexpected output: {raw}"
 
-    def test_cli_ctx_turn_accessible(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-
+    def test_cli_ctx_turn_accessible(self, tmp_path: Path, hooks_dir: Path) -> None:
         transcript = tmp_path / "transcript.jsonl"
         self._make_transcript_jsonl(transcript)
 
-        hook_file = hooks_dir / "my_hook.py"
-        hook_file.write_text(
-            textwrap.dedent("""\
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook, on
             from captain_hook.types import Event, Action, HookResult
 
@@ -679,15 +643,13 @@ class TestTranscriptWiring:
                     )
                 except Exception as e:
                     return HookResult(action=Action.block, message=f"turn error: {e}")
-        """)
+        """,
         )
 
-        stdin = json.dumps(
-            {
-                "tool_name": "Bash",
-                "tool_input": {"command": "echo hi"},
-                "transcript_path": str(transcript),
-            }
+        stdin = stdin_json(
+            tool_name="Bash",
+            tool_input={"command": "echo hi"},
+            transcript_path=str(transcript),
         )
         result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
         assert result.returncode == 0
@@ -698,20 +660,16 @@ class TestTranscriptWiring:
         assert "prompt=fix the bug" in raw, f"unexpected output: {raw}"
         assert "turn error" not in raw, f"turn access failed: {raw}"
 
-    def test_cli_agent_transcript_path_preferred(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-
+    def test_cli_agent_transcript_path_preferred(self, tmp_path: Path, hooks_dir: Path) -> None:
         parent_transcript = tmp_path / "parent.jsonl"
         parent_transcript.write_text(json.dumps(raw_text("user", "parent")) + "\n")
 
         agent_transcript = tmp_path / "agent.jsonl"
         self._make_transcript_jsonl(agent_transcript)
 
-        hook_file = hooks_dir / "my_hook.py"
-        hook_file.write_text(
-            textwrap.dedent("""\
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook, on
             from captain_hook.types import Event, Action, HookResult
 
@@ -723,16 +681,14 @@ class TestTranscriptWiring:
                     action=Action.warn,
                     message=f"transcript has {len(t)} messages",
                 )
-        """)
+        """,
         )
 
-        stdin = json.dumps(
-            {
-                "tool_name": "Bash",
-                "tool_input": {"command": "echo hi"},
-                "transcript_path": str(parent_transcript),
-                "agent_transcript_path": str(agent_transcript),
-            }
+        stdin = stdin_json(
+            tool_name="Bash",
+            tool_input={"command": "echo hi"},
+            transcript_path=str(parent_transcript),
+            agent_transcript_path=str(agent_transcript),
         )
         result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
         assert result.returncode == 0
@@ -741,31 +697,25 @@ class TestTranscriptWiring:
         raw = json.dumps(output)
         assert "transcript has 4 messages" in raw, f"expected agent transcript (4 msgs), got: {raw}"
 
-    def test_cli_session_scoped_to_session_id(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-
+    def test_cli_session_scoped_to_session_id(self, tmp_path: Path, hooks_dir: Path) -> None:
         transcript = tmp_path / "transcript.jsonl"
         self._make_transcript_jsonl(transcript)
 
-        hook_file = hooks_dir / "my_hook.py"
-        hook_file.write_text(
-            textwrap.dedent("""\
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook, on
             from captain_hook.types import Event
 
             hook(Event.PreToolUse, message="once only", max_fires=1)
-        """)
+        """,
         )
 
-        stdin = json.dumps(
-            {
-                "session_id": "scoped-sess-a",
-                "tool_name": "Bash",
-                "tool_input": {"command": "echo hi"},
-                "transcript_path": str(transcript),
-            }
+        stdin = stdin_json(
+            session_id="scoped-sess-a",
+            tool_name="Bash",
+            tool_input={"command": "echo hi"},
+            transcript_path=str(transcript),
         )
         root_dir = tmp_path / "project"
         root_dir.mkdir()
@@ -790,13 +740,11 @@ class TestTranscriptWiring:
         assert result2.returncode == 0
         assert result2.stdout.strip() == ""
 
-        stdin_other = json.dumps(
-            {
-                "session_id": "scoped-sess-b",
-                "tool_name": "Bash",
-                "tool_input": {"command": "echo hi"},
-                "transcript_path": str(transcript),
-            }
+        stdin_other = stdin_json(
+            session_id="scoped-sess-b",
+            tool_name="Bash",
+            tool_input={"command": "echo hi"},
+            transcript_path=str(transcript),
         )
         result3 = run_cli(
             "run",
@@ -808,13 +756,10 @@ class TestTranscriptWiring:
         assert result3.returncode == 0
         assert "once only" in result3.stdout, "different session id should have fresh session"
 
-    def test_cli_no_transcript_path_still_works(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-        hook_file = hooks_dir / "my_hook.py"
-        hook_file.write_text(
-            textwrap.dedent("""\
+    def test_cli_no_transcript_path_still_works(self, hooks_dir: Path) -> None:
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook, on
             from captain_hook.types import Event, Action, HookResult
 
@@ -826,10 +771,10 @@ class TestTranscriptWiring:
                 if evt.ctx.t is None:
                     return HookResult(action=Action.warn, message="transcript is None ok")
                 return HookResult(action=Action.warn, message="transcript exists")
-        """)
+        """,
         )
 
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
+        stdin = stdin_json(tool_name="Bash", tool_input={"command": "echo hi"})
         result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
         assert result.returncode == 0
         if result.stdout.strip():
@@ -842,52 +787,46 @@ class TestFlags:
         hooks_dir = tmp_path / "custom_hooks"
         hooks_dir.mkdir()
         (hooks_dir / "__init__.py").write_text("")
-        hook_file = hooks_dir / "my_hook.py"
-        hook_file.write_text(
-            textwrap.dedent("""\
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook, on
             from captain_hook.types import Event
 
             hook(Event.PreToolUse, message="custom hook activated", block=True)
-        """)
+        """,
         )
 
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
+        stdin = stdin_json(tool_name="Bash", tool_input={"command": "echo hi"})
         result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
         assert result.returncode == 0
         if result.stdout.strip():
             data = json.loads(result.stdout)
             assert "custom hook activated" in json.dumps(data)
 
-    def test_cli_007_root_flag(self, tmp_path: Path) -> None:
-        hooks_dir = tmp_path / "hooks"
-        hooks_dir.mkdir()
-        (hooks_dir / "__init__.py").write_text("")
-
+    def test_cli_007_root_flag(self, tmp_path: Path, hooks_dir: Path) -> None:
         root_dir = tmp_path / "project_root"
         root_dir.mkdir()
         gitignore = root_dir / ".gitignore"
         gitignore.write_text("node_modules\n")
 
-        hook_file = hooks_dir / "my_hook.py"
-        hook_file.write_text(
-            textwrap.dedent("""\
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook, on
             from captain_hook.types import Event
 
             hook(Event.PreToolUse, message="should be gitignored", block=True)
-        """)
+        """,
         )
 
-        stdin = json.dumps(
-            {
-                "tool_name": "Edit",
-                "tool_input": {
-                    "file_path": "node_modules/pkg/index.js",
-                    "old_string": "a",
-                    "new_string": "b",
-                },
-            }
+        stdin = stdin_json(
+            tool_name="Edit",
+            tool_input={
+                "file_path": "node_modules/pkg/index.js",
+                "old_string": "a",
+                "new_string": "b",
+            },
         )
         result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), root_dir=str(root_dir), stdin_data=stdin)
         assert result.returncode == 0
@@ -902,35 +841,28 @@ class TestLogsSubcommand:
         os.utime(log_dir / "old.log", (1000, 1000))
         os.utime(log_dir / "new.log", (2000, 2000))
 
-    def test_no_arg_prints_newest(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    @pytest.mark.parametrize(
+        ("kwargs", "expected_out"),
+        [
+            pytest.param({}, "NEW-1\nNEW-2\nNEW-3\n", id="no_arg_prints_newest"),
+            pytest.param({"tail": 2}, "NEW-2\nNEW-3\n", id="tail_limits_to_last_n_lines"),
+            pytest.param({"session": "old"}, "OLD-A\nOLD-B\n", id="session_id_selects_that_file"),
+        ],
+    )
+    def test_seeded_logs_print(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        kwargs: dict[str, Any],
+        expected_out: str,
     ) -> None:
         from captain_hook.cli import show_logs
 
         monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path))
         self.seed_logs(tmp_path)
-        show_logs()
-        assert capsys.readouterr().out == "NEW-1\nNEW-2\nNEW-3\n"
-
-    def test_tail_limits_to_last_n_lines(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        from captain_hook.cli import show_logs
-
-        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path))
-        self.seed_logs(tmp_path)
-        show_logs(tail=2)
-        assert capsys.readouterr().out == "NEW-2\nNEW-3\n"
-
-    def test_session_id_selects_that_file(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        from captain_hook.cli import show_logs
-
-        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path))
-        self.seed_logs(tmp_path)
-        show_logs(session="old")
-        assert capsys.readouterr().out == "OLD-A\nOLD-B\n"
+        show_logs(**kwargs)
+        assert capsys.readouterr().out == expected_out
 
     def test_session_transcript_path_resolves_via_stem(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -942,56 +874,47 @@ class TestLogsSubcommand:
         show_logs(session="/tmp/t.jsonl")
         assert capsys.readouterr().out == "BY-STEM\n"
 
-    def test_missing_dir_prints_to_stderr(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    @pytest.mark.parametrize(
+        ("log_dir_name", "kwargs", "needle_is_dir"),
+        [
+            pytest.param("nope", {}, True, id="missing_dir_prints_to_stderr"),
+            pytest.param(None, {}, True, id="empty_dir_prints_to_stderr"),
+            pytest.param(None, {"session": "absent"}, False, id="missing_file_prints_to_stderr"),
+        ],
+    )
+    def test_logs_print_to_stderr(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        log_dir_name: str | None,
+        kwargs: dict[str, Any],
+        needle_is_dir: bool,
     ) -> None:
         from captain_hook.cli import show_logs
 
-        missing = tmp_path / "nope"
-        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(missing))
-        show_logs()
+        log_dir = tmp_path / log_dir_name if log_dir_name else tmp_path
+        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(log_dir))
+        show_logs(**kwargs)
         captured = capsys.readouterr()
         assert captured.out == ""
-        assert str(missing) in captured.err
-
-    def test_empty_dir_prints_to_stderr(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        from captain_hook.cli import show_logs
-
-        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path))
-        show_logs()
-        captured = capsys.readouterr()
-        assert captured.out == ""
-        assert str(tmp_path) in captured.err
-
-    def test_missing_file_prints_to_stderr(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        from captain_hook.cli import show_logs
-
-        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path))
-        show_logs(session="absent")
-        captured = capsys.readouterr()
-        assert captured.out == ""
-        assert "absent" in captured.err
+        assert (str(log_dir) if needle_is_dir else kwargs["session"]) in captured.err
 
 
 class TestDefaultResolution:
-    BLOCK_STDIN = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
-
     @staticmethod
     def scaffold_project(root: Path) -> None:
         hooks_dir = root / ".claude" / "hooks"
         hooks_dir.mkdir(parents=True)
         (hooks_dir / "__init__.py").write_text("")
-        (hooks_dir / "my_hook.py").write_text(
-            textwrap.dedent("""\
+        write_hook(
+            hooks_dir,
+            """\
             from captain_hook.app import hook
             from captain_hook.types import Event
 
             hook(Event.PreToolUse, message="default hooks dir resolved", block=True)
-        """)
+        """,
         )
 
     def test_cli_014_default_hooks_dir_from_claude_project_dir(self, tmp_path: Path) -> None:
@@ -999,7 +922,7 @@ class TestDefaultResolution:
         result = run_cli(
             "run",
             "PreToolUse",
-            stdin_data=self.BLOCK_STDIN,
+            stdin_data=BLOCK_STDIN,
             env={"CLAUDE_PROJECT_DIR": str(tmp_path)},
         )
         assert result.returncode == 0
@@ -1011,7 +934,7 @@ class TestDefaultResolution:
         result = run_cli(
             "run",
             "PreToolUse",
-            stdin_data=self.BLOCK_STDIN,
+            stdin_data=BLOCK_STDIN,
             cwd=str(tmp_path),
         )
         assert result.returncode == 0
@@ -1026,7 +949,7 @@ class TestDefaultResolution:
             "run",
             "PreToolUse",
             hooks_dir=str(empty_hooks),
-            stdin_data=self.BLOCK_STDIN,
+            stdin_data=BLOCK_STDIN,
             env={"CLAUDE_PROJECT_DIR": str(tmp_path)},
         )
         assert result.returncode == 0
