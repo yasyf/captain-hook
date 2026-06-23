@@ -55,37 +55,23 @@ class TestBaseHookEvent:
         evt = make_event(StopEvent, {"tool_name": "Bash"})
         assert not hasattr(type(evt), "raw_input")
 
-    def test_user_prompt_from_raw(self) -> None:
-        evt = make_event(UserPromptSubmitEvent, {"prompt": "hello"})
-        assert evt.user_prompt == "hello"
-
-    def test_user_prompt_none_when_missing(self) -> None:
-        evt = make_event(UserPromptSubmitEvent, {})
-        assert evt.user_prompt is None
-
-    def test_is_subagent_true_when_agent_id_present(self) -> None:
-        evt = make_event(StopEvent, {"agent_id": "sub-1"})
-        assert evt.is_subagent is True
-
-    def test_is_subagent_false_when_absent(self) -> None:
-        evt = make_event(StopEvent, {})
-        assert evt.is_subagent is False
-
-    def test_stop_hook_active_default_false(self) -> None:
-        evt = make_event(StopEvent, {})
-        assert evt.stop_hook_active is False
-
-    def test_stop_hook_active_true_when_set(self) -> None:
-        evt = make_event(StopEvent, {"stop_hook_active": True})
-        assert evt.stop_hook_active is True
-
-    def test_parent_agent_type_from_raw(self) -> None:
-        evt = make_event(StopEvent, {"agent_type": "worker"})
-        assert evt.parent_agent_type == "worker"
-
-    def test_parent_agent_type_none_when_missing(self) -> None:
-        evt = make_event(StopEvent, {})
-        assert evt.parent_agent_type is None
+    @pytest.mark.parametrize(
+        ("cls", "raw", "attr", "expected"),
+        [
+            pytest.param(UserPromptSubmitEvent, {"prompt": "hello"}, "user_prompt", "hello", id="user_prompt_from_raw"),
+            pytest.param(UserPromptSubmitEvent, {}, "user_prompt", None, id="user_prompt_none_when_missing"),
+            pytest.param(StopEvent, {"agent_id": "sub-1"}, "is_subagent", True, id="is_subagent_true"),
+            pytest.param(StopEvent, {}, "is_subagent", False, id="is_subagent_false"),
+            pytest.param(StopEvent, {}, "stop_hook_active", False, id="stop_hook_active_default_false"),
+            pytest.param(StopEvent, {"stop_hook_active": True}, "stop_hook_active", True, id="stop_hook_active_true"),
+            pytest.param(StopEvent, {"agent_type": "worker"}, "parent_agent_type", "worker", id="parent_agent_type"),
+            pytest.param(StopEvent, {}, "parent_agent_type", None, id="parent_agent_type_none"),
+        ],
+    )
+    def test_attribute_round_trip(
+        self, cls: type[BaseHookEvent], raw: dict[str, Any], attr: str, expected: object
+    ) -> None:
+        assert getattr(make_event(cls, raw), attr) == expected
 
     @pytest.mark.parametrize(
         "attr,expected",
@@ -117,79 +103,62 @@ class TestBaseHookEvent:
 
 
 class TestToolHookEvent:
-    def test_tool_name_from_raw(self) -> None:
-        evt = make_event(
-            PreToolUseEvent,
-            {
-                "tool_name": "Edit",
-                "tool_input": {"file_path": "a.py", "old_string": "x", "new_string": "y"},
-            },
-        )
-        assert evt.tool_name == "Edit"
-
-    def test_tool_name_none_when_missing(self) -> None:
-        evt = make_event(PreToolUseEvent, {})
-        assert evt.tool_name is None
-
-    def test_content_for_edit_tool(self) -> None:
-        evt = make_event(
-            PreToolUseEvent,
-            {
-                "tool_name": "Edit",
-                "tool_input": {"file_path": "a.py", "old_string": "old", "new_string": "new text"},
-            },
-        )
-        assert evt.content == "new text"
-
-    def test_content_none_for_bash_tool(self) -> None:
-        evt = make_event(
-            PreToolUseEvent,
-            {
-                "tool_name": "Bash",
-                "tool_input": {"command": "ls"},
-            },
-        )
-        assert evt.content is None
-
-    def test_old_for_edit_tool(self) -> None:
-        evt = make_event(
-            PreToolUseEvent,
-            {
-                "tool_name": "Edit",
-                "tool_input": {"file_path": "a.py", "old_string": "old text", "new_string": "new"},
-            },
-        )
-        assert evt.old == "old text"
-
-    def test_old_none_for_bash_tool(self) -> None:
-        evt = make_event(
-            PreToolUseEvent,
-            {
-                "tool_name": "Bash",
-                "tool_input": {"command": "ls"},
-            },
-        )
-        assert evt.old is None
-
-    def test_content_for_write_tool(self) -> None:
-        evt = make_event(
-            PreToolUseEvent,
-            {
-                "tool_name": "Write",
-                "tool_input": {"file_path": "b.py", "content": "print('hello')"},
-            },
-        )
-        assert evt.content == "print('hello')"
-
-    def test_content_none_for_read_tool(self) -> None:
-        evt = make_event(
-            PreToolUseEvent,
-            {
-                "tool_name": "Read",
-                "tool_input": {"file_path": "c.py"},
-            },
-        )
-        assert evt.content is None
+    @pytest.mark.parametrize(
+        ("raw", "attr", "expected"),
+        [
+            pytest.param(
+                {"tool_name": "Edit", "tool_input": {"file_path": "a.py", "old_string": "x", "new_string": "y"}},
+                "tool_name",
+                "Edit",
+                id="tool_name_from_raw",
+            ),
+            pytest.param({}, "tool_name", None, id="tool_name_none_when_missing"),
+            pytest.param(
+                {
+                    "tool_name": "Edit",
+                    "tool_input": {"file_path": "a.py", "old_string": "old", "new_string": "new text"},
+                },
+                "content",
+                "new text",
+                id="content_for_edit_tool",
+            ),
+            pytest.param(
+                {"tool_name": "Bash", "tool_input": {"command": "ls"}},
+                "content",
+                None,
+                id="content_none_for_bash_tool",
+            ),
+            pytest.param(
+                {
+                    "tool_name": "Edit",
+                    "tool_input": {"file_path": "a.py", "old_string": "old text", "new_string": "new"},
+                },
+                "old",
+                "old text",
+                id="old_for_edit_tool",
+            ),
+            pytest.param(
+                {"tool_name": "Bash", "tool_input": {"command": "ls"}},
+                "old",
+                None,
+                id="old_none_for_bash_tool",
+            ),
+            pytest.param(
+                {"tool_name": "Write", "tool_input": {"file_path": "b.py", "content": "print('hello')"}},
+                "content",
+                "print('hello')",
+                id="content_for_write_tool",
+            ),
+            pytest.param(
+                {"tool_name": "Read", "tool_input": {"file_path": "c.py"}},
+                "content",
+                None,
+                id="content_none_for_read_tool",
+            ),
+        ],
+    )
+    def test_tool_attribute_round_trip(self, raw: dict[str, Any], attr: str, expected: object) -> None:
+        assert getattr(make_event(PreToolUseEvent, raw), attr) == expected
 
 
 class TestPreToolUseEvent:
@@ -230,44 +199,52 @@ class TestPreToolUseEvent:
 
 
 class TestPostToolUseEvent:
-    def test_tool_response_from_raw(self) -> None:
-        evt = PostToolUseEvent(
-            _raw={"tool_name": "Bash", "tool_input": {"command": "ls"}, "tool_response": "file1.txt\nfile2.txt"},
-            ctx=make_ctx(),
-        )
-        assert evt.tool_response == "file1.txt\nfile2.txt"
-
-    def test_tool_response_none_when_missing(self) -> None:
-        evt = PostToolUseEvent(_raw={"tool_name": "Bash", "tool_input": {}}, ctx=make_ctx())
-        assert evt.tool_response is None
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            pytest.param(
+                {"tool_name": "Bash", "tool_input": {"command": "ls"}, "tool_response": "file1.txt\nfile2.txt"},
+                "file1.txt\nfile2.txt",
+                id="tool_response_from_raw",
+            ),
+            pytest.param({"tool_name": "Bash", "tool_input": {}}, None, id="tool_response_none_when_missing"),
+        ],
+    )
+    def test_tool_response(self, raw: dict[str, Any], expected: object) -> None:
+        assert make_event(PostToolUseEvent, raw).tool_response == expected
 
 
 class TestPostToolUseFailureEvent:
-    def test_error_from_raw(self) -> None:
-        evt = PostToolUseFailureEvent(
-            _raw={"tool_name": "Bash", "tool_input": {}, "error": "command failed"},
-            ctx=make_ctx(),
-        )
-        assert evt.error == "command failed"
+    @pytest.mark.parametrize(
+        ("raw", "attr", "expected"),
+        [
+            pytest.param(
+                {"tool_name": "Bash", "tool_input": {}, "error": "command failed"},
+                "error",
+                "command failed",
+                id="error_from_raw",
+            ),
+            pytest.param(
+                {"tool_name": "Bash", "tool_input": {}, "error": "fail", "is_interrupt": True},
+                "is_interrupt",
+                True,
+                id="is_interrupt_from_raw",
+            ),
+            pytest.param(
+                {"tool_name": "Bash", "tool_input": {}, "error": "fail"},
+                "is_interrupt",
+                False,
+                id="is_interrupt_default_false",
+            ),
+        ],
+    )
+    def test_attribute_round_trip(self, raw: dict[str, Any], attr: str, expected: object) -> None:
+        assert getattr(make_event(PostToolUseFailureEvent, raw), attr) == expected
 
     def test_error_raises_key_error_when_missing(self) -> None:
-        evt = PostToolUseFailureEvent(_raw={"tool_name": "Bash", "tool_input": {}}, ctx=make_ctx())
+        evt = make_event(PostToolUseFailureEvent, {"tool_name": "Bash", "tool_input": {}})
         with pytest.raises(KeyError):
             evt.error
-
-    def test_is_interrupt_from_raw(self) -> None:
-        evt = PostToolUseFailureEvent(
-            _raw={"tool_name": "Bash", "tool_input": {}, "error": "fail", "is_interrupt": True},
-            ctx=make_ctx(),
-        )
-        assert evt.is_interrupt is True
-
-    def test_is_interrupt_default_false(self) -> None:
-        evt = PostToolUseFailureEvent(
-            _raw={"tool_name": "Bash", "tool_input": {}, "error": "fail"},
-            ctx=make_ctx(),
-        )
-        assert evt.is_interrupt is False
 
 
 class TestPreCompactEvent:
@@ -331,39 +308,33 @@ class TestSessionEndEvent:
 
 
 class TestWarnParts:
-    def test_single_str_part_verbatim(self) -> None:
-        assert make_event(StopEvent, {}).warn("plain message").message == "plain message"
+    @pytest.mark.parametrize(
+        ("parts", "expected"),
+        [
+            pytest.param(("plain message",), "plain message", id="single_str_part_verbatim"),
+            pytest.param((("files", ["a.py", "b.py"]),), 'files: ["a.py", "b.py"]', id="label_value_tuple_json"),
+            pytest.param((("path", Path("/tmp/x")),), 'path: "/tmp/x"', id="label_value_tuple_default_str"),
+            pytest.param(({"k": 1},), '{"k": 1}', id="bare_dict_renders_json"),
+            pytest.param(("line1", ("n", 3), {"x": 1}), 'line1\nn: 3\n{"x": 1}', id="multiple_parts_join_newline"),
+            pytest.param(("a\nb\nc",), "a\nb\nc", id="legacy_pre_joined_string"),
+        ],
+    )
+    def test_warn_message(self, parts: tuple[object, ...], expected: str) -> None:
+        assert make_event(StopEvent, {}).warn(*parts).message == expected
 
     def test_warn_action_is_warn(self) -> None:
         assert make_event(StopEvent, {}).warn("x").action is Action.warn
 
-    def test_label_value_tuple_renders_label_and_json(self) -> None:
-        assert make_event(StopEvent, {}).warn(("files", ["a.py", "b.py"])).message == 'files: ["a.py", "b.py"]'
-
-    def test_label_value_tuple_uses_default_str_for_non_serializable(self) -> None:
-        assert make_event(StopEvent, {}).warn(("path", Path("/tmp/x"))).message == 'path: "/tmp/x"'
-
-    def test_bare_dict_renders_json(self) -> None:
-        assert make_event(StopEvent, {}).warn({"k": 1}).message == '{"k": 1}'
-
-    def test_multiple_parts_join_with_newline(self) -> None:
-        assert make_event(StopEvent, {}).warn("line1", ("n", 3), {"x": 1}).message == 'line1\nn: 3\n{"x": 1}'
-
-    def test_legacy_pre_joined_string_still_works(self) -> None:
-        assert make_event(StopEvent, {}).warn("a\nb\nc").message == "a\nb\nc"
-
 
 class TestTranscriptPath:
-    def test_returns_path_when_present(self) -> None:
-        from captain_hook.events import StopEvent
-        from captain_hook.tests.helpers import make_ctx
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            pytest.param({"transcript_path": "/tmp/x.jsonl"}, Path("/tmp/x.jsonl"), id="returns_path_when_present"),
+            pytest.param({}, None, id="returns_none_when_absent"),
+        ],
+    )
+    def test_transcript_path(self, raw: dict[str, Any], expected: Path | None) -> None:
+        from captain_hook.tests.helpers import make_ctx as make_padded_ctx
 
-        evt = StopEvent(_raw={"transcript_path": "/tmp/x.jsonl"}, ctx=make_ctx())
-        assert evt.transcript_path == Path("/tmp/x.jsonl")
-
-    def test_returns_none_when_absent(self) -> None:
-        from captain_hook.events import StopEvent
-        from captain_hook.tests.helpers import make_ctx
-
-        evt = StopEvent(_raw={}, ctx=make_ctx())
-        assert evt.transcript_path is None
+        assert StopEvent(_raw=raw, ctx=make_padded_ctx()).transcript_path == expected
