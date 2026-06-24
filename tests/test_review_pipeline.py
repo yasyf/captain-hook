@@ -13,6 +13,7 @@ import pytest
 from cc_transcript.activity import SessionActivity
 from cc_transcript.context import SUMMARY_LABEL, ContextWindow, TurnRef, capture_window
 from cc_transcript.ids import EventRef, EventUuid, SessionId
+from cc_transcript.judge.llm import resolved_model
 from cc_transcript.mining.candidates import FeedbackCandidate, dedup_key
 from cc_transcript.mining.confidence import firm, noise
 from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE
@@ -285,7 +286,7 @@ class TestJudgePass:
         assert len(calls) == 2
         judged = await store.judged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION)
         assert {bool(row["accepted"]) for row in judged} == {True}
-        assert {str(row["model"]) for row in judged} == {"sonnet"}
+        assert {str(row["model"]) for row in judged} == {resolved_model(settings.judge_tier)}
         assert await judge_pass(store, settings=settings) == JudgeReport(judged=0, failed=0, pending=0)
         assert len(calls) == 2
 
@@ -321,7 +322,7 @@ class TestJudgePass:
         assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
         assert len(calls) == 1
         assert "structural junk" not in calls[0]
-        unjudged = await store.unjudged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION, model="sonnet")
+        unjudged = await store.unjudged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION, model=resolved_model(settings.judge_tier))
         assert [row["text"] for row in unjudged] == ["structural junk"]
 
     @requires_llm_backend
