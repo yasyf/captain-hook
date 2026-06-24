@@ -109,7 +109,7 @@ def write_transcript(path: Path, entries: list[dict[str, Any]]) -> Path:
     return path
 
 
-def _llm_backend_available() -> bool:
+def llm_backend_available() -> bool:
     from cc_transcript.judge.llm import default_backend
     from spawnllm import BackendUnavailable
 
@@ -121,7 +121,7 @@ def _llm_backend_available() -> bool:
 
 
 requires_llm_backend = pytest.mark.skipif(
-    not _llm_backend_available(),
+    not llm_backend_available(),
     reason="no installed, authenticated LLM backend (spawnllm.select_backend raised BackendUnavailable)",
 )
 
