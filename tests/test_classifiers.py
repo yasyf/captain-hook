@@ -4,6 +4,7 @@ import os
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
+import pytest
 from cc_transcript.activity import SessionActivity, native_user_classifier
 from cc_transcript.ids import SessionId
 from cc_transcript.parser import parse_event
@@ -25,51 +26,58 @@ def events_from(*lines: dict[str, Any]) -> list[Any]:
 
 
 class TestConductorDetect:
-    def test_detects_via_cwd(self):
+    @pytest.mark.parametrize(
+        ("kwargs", "expected"),
+        [
+            pytest.param({"cwd": "/Users/yasyf/conductor/workspaces/bioqa/test"}, True, id="detects_via_cwd"),
+            pytest.param({"cwd": "/Users/yasyf/projects/something"}, False, id="no_detect_wrong_cwd"),
+            pytest.param(
+                {"transcript_path": "/home/user/.claude/conductor-workspaces/sessions/abc.jsonl"},
+                True,
+                id="detects_via_transcript_path",
+            ),
+            pytest.param(
+                {"transcript_path": "/home/user/.claude/sessions/abc.jsonl"},
+                False,
+                id="no_detect_wrong_transcript_path",
+            ),
+            pytest.param(
+                {
+                    "events": events_from(
+                        raw_text("user", "<system_instruction>You are a helpful agent."),
+                        *(raw_text("assistant", f"response {i}") for i in range(10)),
+                    )
+                },
+                True,
+                id="detects_via_system_instruction",
+            ),
+            pytest.param(
+                {"events": events_from(raw_text("user", "Hello world"))},
+                False,
+                id="no_detect_without_system_instruction",
+            ),
+            pytest.param({}, False, id="no_detect_all_none"),
+        ],
+    )
+    def test_detect(self, kwargs: dict[str, Any], expected: bool):
         from captain_hook.classifiers.conductor import detect
 
-        assert detect(cwd="/Users/yasyf/conductor/workspaces/bioqa/test")
-
-    def test_no_detect_wrong_cwd(self):
-        from captain_hook.classifiers.conductor import detect
-
-        assert not detect(cwd="/Users/yasyf/projects/something")
-
-    def test_detects_via_transcript_path(self):
-        from captain_hook.classifiers.conductor import detect
-
-        assert detect(transcript_path="/home/user/.claude/conductor-workspaces/sessions/abc.jsonl")
-
-    def test_no_detect_wrong_transcript_path(self):
-        from captain_hook.classifiers.conductor import detect
-
-        assert not detect(transcript_path="/home/user/.claude/sessions/abc.jsonl")
-
-    def test_detects_via_system_instruction(self):
-        from captain_hook.classifiers.conductor import detect
-
-        events = events_from(
-            raw_text("user", "<system_instruction>You are a helpful agent."),
-            *(raw_text("assistant", f"response {i}") for i in range(10)),
-        )
-        assert detect(events=events)
-
-    def test_no_detect_without_system_instruction(self):
-        from captain_hook.classifiers.conductor import detect
-
-        assert not detect(events=events_from(raw_text("user", "Hello world")))
-
-    def test_no_detect_all_none(self):
-        from captain_hook.classifiers.conductor import detect
-
-        assert not detect()
+        assert detect(**kwargs) is expected
 
 
 class TestConductorClassifier:
-    def test_real_user_prompt(self):
+    @pytest.mark.parametrize(
+        ("text", "extra", "expected"),
+        [
+            pytest.param("Help me fix this bug", {}, True, id="real_user_prompt"),
+            pytest.param("   ", {}, False, id="rejects_empty_user_events"),
+            pytest.param("Hello", {"isMeta": True}, False, id="rejects_meta_user_events"),
+        ],
+    )
+    def test_classifier(self, text: str, extra: dict[str, Any], expected: bool):
         from captain_hook.classifiers.conductor import classifier
 
-        assert classifier(user_event("Help me fix this bug"))
+        assert classifier(user_event(text, **extra)) is expected
 
     def test_all_four_prefixes_filtered(self):
         from captain_hook.classifiers.conductor import classifier
@@ -82,16 +90,6 @@ class TestConductorClassifier:
         ]
         for prefix in prefixes:
             assert not classifier(user_event(f"{prefix}payload")), f"Failed to filter prefix: {prefix}"
-
-    def test_rejects_empty_user_events(self):
-        from captain_hook.classifiers.conductor import classifier
-
-        assert not classifier(user_event("   "))
-
-    def test_rejects_meta_user_events(self):
-        from captain_hook.classifiers.conductor import classifier
-
-        assert not classifier(user_event("Hello", isMeta=True))
 
 
 class TestDroidDetect:
@@ -116,15 +114,17 @@ class TestDroidClassifier:
 
         assert classifier is native_user_classifier
 
-    def test_user_prompt(self):
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            pytest.param("Hello", True, id="user_prompt"),
+            pytest.param("", False, id="rejects_empty_user_events"),
+        ],
+    )
+    def test_classifier(self, text: str, expected: bool):
         from captain_hook.classifiers.droid import classifier
 
-        assert classifier(user_event("Hello"))
-
-    def test_rejects_empty_user_events(self):
-        from captain_hook.classifiers.droid import classifier
-
-        assert not classifier(user_event(""))
+        assert classifier(user_event(text)) is expected
 
 
 class TestNativeDetect:
@@ -143,15 +143,17 @@ class TestNativeClassifier:
 
         assert classifier is native_user_classifier
 
-    def test_user_prompt(self):
+    @pytest.mark.parametrize(
+        ("text", "extra", "expected"),
+        [
+            pytest.param("Hello", {}, True, id="user_prompt"),
+            pytest.param("Hello", {"isSidechain": True}, False, id="rejects_sidechain_user_events"),
+        ],
+    )
+    def test_classifier(self, text: str, extra: dict[str, Any], expected: bool):
         from captain_hook.classifiers.native import classifier
 
-        assert classifier(user_event("Hello"))
-
-    def test_rejects_sidechain_user_events(self):
-        from captain_hook.classifiers.native import classifier
-
-        assert not classifier(user_event("Hello", isSidechain=True))
+        assert classifier(user_event(text, **extra)) is expected
 
 
 class TestDetectPriorityChain:

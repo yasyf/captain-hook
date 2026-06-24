@@ -307,46 +307,211 @@ def write_hooks(tmp_path: Path, *files: tuple[str, str]) -> Path:
     return hooks_dir
 
 
-class TestHandlerHooks:
-    def test_on_decorator_blocks_with_custom_logic(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "guard.py",
-                """\
-            from captain_hook import on, Event, HookResult, Action
+FORCE_PUSH_HOOK = """\
+    from captain_hook import hook, Event, Tool
+    from captain_hook.types import Command
 
-            @on(Event.PreToolUse)
-            def custom_guard(evt):
-                if evt.tool_name == "Bash" and evt.command and "sudo" in evt.command:
-                    return HookResult(action=Action.block, message="No sudo allowed")
-        """,
+    hook(
+        Event.PreToolUse,
+        only_if=[Tool("Bash"), Command(r"git\\s+push\\s+--force")],
+        message="Force push is forbidden",
+        block=True,
+    )
+"""
+
+DEBUGGER_HOOK = """\
+    from captain_hook import hook, Event, Tool, Content
+
+    hook(
+        Event.PreToolUse,
+        only_if=[Tool("Edit|Write"), Content(r"import\\s+pdb|breakpoint\\(\\)")],
+        message="Remove debugger statements before committing",
+        block=True,
+    )
+"""
+
+SUDO_GUARD_HOOK = """\
+    from captain_hook import on, Event, HookResult, Action
+
+    @on(Event.PreToolUse)
+    def custom_guard(evt):
+        if evt.tool_name == "Bash" and evt.command and "sudo" in evt.command:
+            return HookResult(action=Action.block, message="No sudo allowed")
+"""
+
+BLOCK_OVER_WARN_HOOK = """\
+    from captain_hook import block_command, warn_command
+
+    block_command(r"rm\\s+-rf", reason="Dangerous delete")
+    warn_command(r"rm", message="Be careful with rm")
+"""
+
+STOP_PASS_HOOK = """\
+    from captain_hook import on, Event
+
+    @on(Event.Stop)
+    def pass_through(evt):
+        return None
+"""
+
+PROMPT_GUARD_HOOK = """\
+    from captain_hook import on, Event, HookResult, Action
+
+    @on(Event.UserPromptSubmit)
+    def check_prompt(evt):
+        if evt.user_prompt and "password" in evt.user_prompt.lower():
+            return HookResult(action=Action.warn, message="Avoid sharing credentials in prompts")
+"""
+
+LINT_PRINT_HOOK = """\
+    from captain_hook import lint
+
+    def check_print(source: str) -> list[str]:
+        return ["found print"] if "print(" in source else []
+
+    lint(check_print, message="No prints: {violations}")
+"""
+
+WARN_NPM_HOOK = """\
+    from captain_hook import warn_command
+    from captain_hook.testing import Input, Warn
+
+    warn_command(
+        r"npm\\s+install",
+        message="Prefer pnpm over npm",
+        tests={
+            Input(tool="Bash", command="npm install lodash"): Warn(pattern="pnpm"),
+        },
+    )
+"""
+
+LINT_PRINT_LINES_HOOK = """\
+    from captain_hook import lint
+
+    def check_print_statements(source: str) -> list[str]:
+        return [
+            f"line {i}: bare print() call"
+            for i, line in enumerate(source.splitlines(), 1)
+            if line.strip().startswith("print(")
+        ]
+
+    lint(check_print_statements, message="Found print statements: {violations}")
+"""
+
+
+class TestDispatch:
+    @pytest.mark.parametrize(
+        ("source", "event", "evt"),
+        [
+            pytest.param(
+                FORCE_PUSH_HOOK,
+                Event.PreToolUse,
+                mock_tool_event("Bash", event=Event.PreToolUse, command="git push --force origin main"),
+                id="tool_plus_command_force_push",
             ),
-        )
-        discover_hooks(str(hooks_dir))
+            pytest.param(
+                DEBUGGER_HOOK,
+                Event.PreToolUse,
+                mock_tool_event("Edit", event=Event.PreToolUse, file="app.py", content="import pdb; pdb.set_trace()"),
+                id="content_debugger_statement",
+            ),
+            pytest.param(
+                BLOCK_OVER_WARN_HOOK,
+                Event.PreToolUse,
+                mock_tool_event("Bash", event=Event.PreToolUse, command="rm -rf /tmp/junk"),
+                id="block_takes_priority_over_warn",
+            ),
+        ],
+    )
+    def test_deny(self, tmp_path: Path, source: str, event: Event, evt: object) -> None:
+        discover_hooks(str(write_hooks(tmp_path, ("hook.py", source))))
+        result = dispatch(event, evt)
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    @pytest.mark.parametrize(
+        ("source", "event", "evt"),
+        [
+            pytest.param(
+                SUDO_GUARD_HOOK,
+                Event.PreToolUse,
+                mock_tool_event("Bash", event=Event.PreToolUse, command="echo hi"),
+                id="on_handler_no_match",
+            ),
+            pytest.param(
+                FORCE_PUSH_HOOK,
+                Event.PreToolUse,
+                mock_tool_event("Bash", event=Event.PreToolUse, command="git push origin main"),
+                id="tool_plus_command_non_force",
+            ),
+            pytest.param(
+                DEBUGGER_HOOK,
+                Event.PreToolUse,
+                mock_tool_event("Edit", event=Event.PreToolUse, file="app.py", content="import logging"),
+                id="content_clean_code",
+            ),
+            pytest.param(
+                STOP_PASS_HOOK,
+                Event.Stop,
+                mock_stop_event(),
+                id="stop_pass_through",
+            ),
+            pytest.param(
+                PROMPT_GUARD_HOOK,
+                Event.UserPromptSubmit,
+                mock_user_prompt_event(prompt="fix the login page"),
+                id="user_prompt_safe",
+            ),
+            pytest.param(
+                LINT_PRINT_HOOK,
+                Event.PostToolUse,
+                mock_tool_event("Edit", event=Event.PostToolUse, file="tests/test_app.py", content='print("debug")'),
+                id="lint_skips_test_file",
+            ),
+        ],
+    )
+    def test_no_op(self, tmp_path: Path, source: str, event: Event, evt: object) -> None:
+        discover_hooks(str(write_hooks(tmp_path, ("hook.py", source))))
+        assert dispatch(event, evt) is None
+
+    @pytest.mark.parametrize(
+        ("source", "event", "evt", "expected"),
+        [
+            pytest.param(
+                WARN_NPM_HOOK,
+                Event.PostToolUse,
+                mock_tool_event("Bash", event=Event.PostToolUse, command="npm install lodash"),
+                "pnpm",
+                id="warn_command",
+            ),
+            pytest.param(
+                PROMPT_GUARD_HOOK,
+                Event.UserPromptSubmit,
+                mock_user_prompt_event(prompt="my password is hunter2"),
+                "credentials",
+                id="user_prompt_warns",
+            ),
+            pytest.param(
+                LINT_PRINT_LINES_HOOK,
+                Event.PostToolUse,
+                mock_tool_event("Edit", event=Event.PostToolUse, file="app.py", content='print("debug")\nx = 1'),
+                "print",
+                id="lint_violation",
+            ),
+        ],
+    )
+    def test_adds_context(self, tmp_path: Path, source: str, event: Event, evt: object, expected: str) -> None:
+        discover_hooks(str(write_hooks(tmp_path, ("hook.py", source))))
+        result = dispatch(event, evt)
+        assert result is not None
+        assert expected in result["hookSpecificOutput"]["additionalContext"]
+
+    def test_on_decorator_blocks_with_custom_logic(self, tmp_path: Path) -> None:
+        discover_hooks(str(write_hooks(tmp_path, ("guard.py", SUDO_GUARD_HOOK))))
         result = dispatch(Event.PreToolUse, mock_tool_event("Bash", event=Event.PreToolUse, command="sudo rm -rf /"))
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "sudo" in result["hookSpecificOutput"]["permissionDecisionReason"]
-
-    def test_on_decorator_allows_when_no_match(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "guard.py",
-                """\
-            from captain_hook import on, Event, HookResult, Action
-
-            @on(Event.PreToolUse)
-            def custom_guard(evt):
-                if evt.tool_name == "Bash" and evt.command and "sudo" in evt.command:
-                    return HookResult(action=Action.block, message="No sudo allowed")
-        """,
-            ),
-        )
-        discover_hooks(str(hooks_dir))
-        result = dispatch(Event.PreToolUse, mock_tool_event("Bash", event=Event.PreToolUse, command="echo hi"))
-        assert result is None
 
     def test_on_decorator_warn_adds_context(self, tmp_path: Path) -> None:
         hooks_dir = write_hooks(
@@ -371,59 +536,6 @@ class TestHandlerHooks:
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
         assert "Remember to run tests" in result["hookSpecificOutput"]["additionalContext"]
-
-
-class TestMultiConditionHooks:
-    def test_tool_plus_command_condition_blocks(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "protect.py",
-                """\
-            from captain_hook import hook, Event, Tool
-            from captain_hook.types import Command
-
-            hook(
-                Event.PreToolUse,
-                only_if=[Tool("Bash"), Command(r"git\\s+push\\s+--force")],
-                message="Force push is forbidden",
-                block=True,
-            )
-        """,
-            ),
-        )
-        discover_hooks(str(hooks_dir))
-        result = dispatch(
-            Event.PreToolUse,
-            mock_tool_event("Bash", event=Event.PreToolUse, command="git push --force origin main"),
-        )
-        assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-    def test_tool_plus_command_condition_allows_non_force(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "protect.py",
-                """\
-            from captain_hook import hook, Event, Tool
-            from captain_hook.types import Command
-
-            hook(
-                Event.PreToolUse,
-                only_if=[Tool("Bash"), Command(r"git\\s+push\\s+--force")],
-                message="Force push is forbidden",
-                block=True,
-            )
-        """,
-            ),
-        )
-        discover_hooks(str(hooks_dir))
-        result = dispatch(
-            Event.PreToolUse,
-            mock_tool_event("Bash", event=Event.PreToolUse, command="git push origin main"),
-        )
-        assert result is None
 
     def test_skip_if_testfile_bypasses_hook(self, tmp_path: Path) -> None:
         hooks_dir = write_hooks(
@@ -487,109 +599,6 @@ class TestMultiConditionHooks:
         )
         assert result_py is None
 
-
-class TestContentCondition:
-    def test_content_blocks_debugger_statements(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "no_debug.py",
-                """\
-            from captain_hook import hook, Event, Tool, Content
-
-            hook(
-                Event.PreToolUse,
-                only_if=[Tool("Edit|Write"), Content(r"import\\s+pdb|breakpoint\\(\\)")],
-                message="Remove debugger statements before committing",
-                block=True,
-            )
-        """,
-            ),
-        )
-        discover_hooks(str(hooks_dir))
-        result = dispatch(
-            Event.PreToolUse,
-            mock_tool_event("Edit", event=Event.PreToolUse, file="app.py", content="import pdb; pdb.set_trace()"),
-        )
-        assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-    def test_content_allows_clean_code(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "no_debug.py",
-                """\
-            from captain_hook import hook, Event, Tool, Content
-
-            hook(
-                Event.PreToolUse,
-                only_if=[Tool("Edit|Write"), Content(r"import\\s+pdb|breakpoint\\(\\)")],
-                message="Remove debugger statements",
-                block=True,
-            )
-        """,
-            ),
-        )
-        discover_hooks(str(hooks_dir))
-        result = dispatch(
-            Event.PreToolUse,
-            mock_tool_event("Edit", event=Event.PreToolUse, file="app.py", content="import logging"),
-        )
-        assert result is None
-
-
-class TestWarnCommand:
-    def test_warn_command_adds_context(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "warnings.py",
-                """\
-            from captain_hook import warn_command
-            from captain_hook.testing import Input, Warn
-
-            warn_command(
-                r"npm\\s+install",
-                message="Prefer pnpm over npm",
-                tests={
-                    Input(tool="Bash", command="npm install lodash"): Warn(pattern="pnpm"),
-                },
-            )
-        """,
-            ),
-        )
-        discover_hooks(str(hooks_dir))
-        result = dispatch(
-            Event.PostToolUse,
-            mock_tool_event("Bash", event=Event.PostToolUse, command="npm install lodash"),
-        )
-        assert result is not None
-        assert "pnpm" in result["hookSpecificOutput"]["additionalContext"]
-
-
-class TestMultipleHooksInteraction:
-    def test_block_takes_priority_over_warn(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "multi.py",
-                """\
-            from captain_hook import block_command, warn_command
-
-            block_command(r"rm\\s+-rf", reason="Dangerous delete")
-            warn_command(r"rm", message="Be careful with rm")
-        """,
-            ),
-        )
-        discover_hooks(str(hooks_dir))
-        result = dispatch(
-            Event.PreToolUse,
-            mock_tool_event("Bash", event=Event.PreToolUse, command="rm -rf /tmp/junk"),
-        )
-        assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
     def test_hooks_across_files(self, tmp_path: Path) -> None:
         hooks_dir = write_hooks(
             tmp_path,
@@ -629,8 +638,6 @@ class TestMultipleHooksInteraction:
         assert todo_result is not None
         assert "TODO" in todo_result["hookSpecificOutput"]["additionalContext"]
 
-
-class TestMaxFires:
     def test_hook_respects_max_fires(self, tmp_path: Path) -> None:
         hooks_dir = write_hooks(
             tmp_path,
@@ -658,8 +665,6 @@ class TestMaxFires:
         result2 = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
         assert result2 is None
 
-
-class TestStopEventHooks:
     def test_stop_hook_blocks(self, tmp_path: Path) -> None:
         hooks_dir = write_hooks(
             tmp_path,
@@ -680,197 +685,67 @@ class TestStopEventHooks:
         assert result["decision"] == "block"
         assert "Run tests" in result["reason"]
 
-    def test_stop_hook_allows(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "stop_guard.py",
-                """\
-            from captain_hook import on, Event
-
-            @on(Event.Stop)
-            def pass_through(evt):
-                return None
-        """,
-            ),
-        )
-        discover_hooks(str(hooks_dir))
-        result = dispatch(Event.Stop, mock_stop_event())
-        assert result is None
-
-
-class TestUserPromptHooks:
-    def test_user_prompt_hook_warns(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "prompt_guard.py",
-                """\
-            from captain_hook import on, Event, HookResult, Action
-
-            @on(Event.UserPromptSubmit)
-            def check_prompt(evt):
-                if evt.user_prompt and "password" in evt.user_prompt.lower():
-                    return HookResult(action=Action.warn, message="Avoid sharing credentials in prompts")
-        """,
-            ),
-        )
-        discover_hooks(str(hooks_dir))
-        result = dispatch(
-            Event.UserPromptSubmit,
-            mock_user_prompt_event(prompt="my password is hunter2"),
-        )
-        assert result is not None
-        assert "credentials" in result["hookSpecificOutput"]["additionalContext"]
-
-    def test_user_prompt_hook_ignores_safe_prompt(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "prompt_guard.py",
-                """\
-            from captain_hook import on, Event, HookResult, Action
-
-            @on(Event.UserPromptSubmit)
-            def check_prompt(evt):
-                if evt.user_prompt and "password" in evt.user_prompt.lower():
-                    return HookResult(action=Action.warn, message="Avoid sharing credentials")
-        """,
-            ),
-        )
-        discover_hooks(str(hooks_dir))
-        result = dispatch(
-            Event.UserPromptSubmit,
-            mock_user_prompt_event(prompt="fix the login page"),
-        )
-        assert result is None
-
-
-class TestLintPrimitive:
-    def test_lint_string_check_warns_on_violation(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "lints.py",
-                """\
-            from captain_hook import lint
-
-            def check_print_statements(source: str) -> list[str]:
-                return [
-                    f"line {i}: bare print() call"
-                    for i, line in enumerate(source.splitlines(), 1)
-                    if line.strip().startswith("print(")
-                ]
-
-            lint(check_print_statements, message="Found print statements: {violations}")
-        """,
-            ),
-        )
-        discover_hooks(str(hooks_dir))
-        result = dispatch(
-            Event.PostToolUse,
-            mock_tool_event(
-                "Edit",
-                event=Event.PostToolUse,
-                file="app.py",
-                content='print("debug")\nx = 1',
-            ),
-        )
-        assert result is not None
-        assert "print" in result["hookSpecificOutput"]["additionalContext"]
-
-    def test_lint_skips_test_files_by_default(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "lints.py",
-                """\
-            from captain_hook import lint
-
-            def check_print(source: str) -> list[str]:
-                return ["found print"] if "print(" in source else []
-
-            lint(check_print, message="No prints: {violations}")
-        """,
-            ),
-        )
-        discover_hooks(str(hooks_dir))
-        result = dispatch(
-            Event.PostToolUse,
-            mock_tool_event(
-                "Edit",
-                event=Event.PostToolUse,
-                file="tests/test_app.py",
-                content='print("debug")',
-            ),
-        )
-        assert result is None
-
 
 class TestComplexInlineTests:
-    def test_multiple_inline_test_cases_via_cli(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "guards.py",
+    @pytest.mark.parametrize(
+        ("source", "test_count"),
+        [
+            pytest.param(
                 """\
-            from captain_hook import block_command, warn_command
-            from captain_hook.testing import Input, Block, Allow, Warn
+                from captain_hook import block_command, warn_command
+                from captain_hook.testing import Input, Block, Allow, Warn
 
-            block_command(
-                r"git\\s+(stash|reset\\s+--hard|checkout\\s+\\.)",
-                reason="Destructive git operation blocked",
-                tests={
-                    Input(tool="Bash", command="git stash pop"): Block(pattern="Destructive"),
-                    Input(tool="Bash", command="git reset --hard HEAD"): Block(pattern="Destructive"),
-                    Input(tool="Bash", command="git checkout ."): Block(pattern="Destructive"),
-                    Input(tool="Bash", command="git status"): Allow(),
-                    Input(tool="Bash", command="echo hello"): Allow(),
-                },
-            )
+                block_command(
+                    r"git\\s+(stash|reset\\s+--hard|checkout\\s+\\.)",
+                    reason="Destructive git operation blocked",
+                    tests={
+                        Input(tool="Bash", command="git stash pop"): Block(pattern="Destructive"),
+                        Input(tool="Bash", command="git reset --hard HEAD"): Block(pattern="Destructive"),
+                        Input(tool="Bash", command="git checkout ."): Block(pattern="Destructive"),
+                        Input(tool="Bash", command="git status"): Allow(),
+                        Input(tool="Bash", command="echo hello"): Allow(),
+                    },
+                )
 
-            warn_command(
-                r"docker\\s+build",
-                message="Consider using docker compose instead",
-                tests={
-                    Input(tool="Bash", command="docker build ."): Warn(pattern="compose"),
-                },
-            )
-        """,
+                warn_command(
+                    r"docker\\s+build",
+                    message="Consider using docker compose instead",
+                    tests={
+                        Input(tool="Bash", command="docker build ."): Warn(pattern="compose"),
+                    },
+                )
+                """,
+                "6 tests",
+                id="block_and_warn_commands",
             ),
-        )
+            pytest.param(
+                """\
+                from captain_hook import on, Event, Tool, HookResult, Action
+                from captain_hook.testing import Input, Block, Allow
+
+                @on(
+                    Event.PreToolUse,
+                    only_if=[Tool("Bash")],
+                    tests={
+                        Input(command="pip install requests"): Block(pattern="uv"),
+                        Input(command="echo hello"): Allow(),
+                    },
+                )
+                def prefer_uv(evt):
+                    if evt.command and evt.command.startswith("pip "):
+                        return HookResult(action=Action.block, message="Use uv instead of pip")
+                """,
+                "2 tests",
+                id="on_handler",
+            ),
+        ],
+    )
+    def test_inline_tests_via_cli(self, tmp_path: Path, source: str, test_count: str) -> None:
+        hooks_dir = write_hooks(tmp_path, ("hook.py", source))
         result = run_cli("test", hooks_dir=str(hooks_dir))
         assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
         assert "PASS" in result.stdout
-        assert "6 tests" in result.stdout
-
-    def test_handler_hook_with_inline_tests(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "handler.py",
-                """\
-            from captain_hook import on, Event, Tool, HookResult, Action
-            from captain_hook.testing import Input, Block, Allow
-
-            @on(
-                Event.PreToolUse,
-                only_if=[Tool("Bash")],
-                tests={
-                    Input(command="pip install requests"): Block(pattern="uv"),
-                    Input(command="echo hello"): Allow(),
-                },
-            )
-            def prefer_uv(evt):
-                if evt.command and evt.command.startswith("pip "):
-                    return HookResult(action=Action.block, message="Use uv instead of pip")
-        """,
-            ),
-        )
-        result = run_cli("test", hooks_dir=str(hooks_dir))
-        assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
-        assert "PASS" in result.stdout
-        assert "2 tests" in result.stdout
+        assert test_count in result.stdout
 
 
 class TestRegisterHooksMultiEvent:

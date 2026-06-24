@@ -175,22 +175,30 @@ class TestCandidates:
         assert again == first
         assert await fix_candidate(store, file=".claude/hooks/other.py") != first
 
-    async def test_create_candidate_rejects_fix_only_fields(self, store: ReviewStore) -> None:
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            pytest.param(
+                {
+                    "kind": CandidateKind.CREATE,
+                    "rule": "r",
+                    "source_kind": SourceKind("transcript_message"),
+                    "target_hook_name": "hooks.style:nudge_1",
+                    "target_source_file": ".claude/hooks/style.py",
+                },
+                id="create-rejects-fix-only-fields",
+            ),
+            pytest.param(
+                {"kind": CandidateKind.FIX, "rule": "r", "source_kind": SourceKind("hook_complaint")},
+                id="fix-requires-targets",
+            ),
+        ],
+    )
+    async def test_ensure_candidate_rejects_invalid_target_shape(
+        self, store: ReviewStore, kwargs: dict[str, object]
+    ) -> None:
         with pytest.raises(sqlite3.IntegrityError):
-            await store.ensure_candidate(
-                REPO,
-                kind=CandidateKind.CREATE,
-                rule="r",
-                source_kind=SourceKind("transcript_message"),
-                target_hook_name="hooks.style:nudge_1",
-                target_source_file=".claude/hooks/style.py",
-            )
-
-    async def test_fix_candidate_requires_targets(self, store: ReviewStore) -> None:
-        with pytest.raises(sqlite3.IntegrityError):
-            await store.ensure_candidate(
-                REPO, kind=CandidateKind.FIX, rule="r", source_kind=SourceKind("hook_complaint")
-            )
+            await store.ensure_candidate(REPO, **kwargs)
 
 
 class TestTransitions:

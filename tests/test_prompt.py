@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -85,19 +86,22 @@ class TestPromptMultipleContexts:
 
 
 class TestPromptImmutability:
-    def test_fluent_system_returns_new_instance(self) -> None:
-        p1 = Prompt()
-        p2 = p1.system("hello")
-        assert p1 is not p2
-
-    def test_fluent_context_returns_new_instance(self) -> None:
-        p1 = Prompt().system("x")
-        p2 = p1.context("tag", "content")
-        assert p1 is not p2
-
-    def test_fluent_ask_returns_new_instance(self) -> None:
-        p1 = Prompt().system("x")
-        p2 = p1.ask("question")
+    @pytest.mark.parametrize(
+        "build",
+        [
+            pytest.param(lambda: (p1 := Prompt(), p1.system("hello")), id="fluent_system_returns_new_instance"),
+            pytest.param(
+                lambda: (p1 := Prompt().system("x"), p1.context("tag", "content")),
+                id="fluent_context_returns_new_instance",
+            ),
+            pytest.param(
+                lambda: (p1 := Prompt().system("x"), p1.ask("question")),
+                id="fluent_ask_returns_new_instance",
+            ),
+        ],
+    )
+    def test_fluent_returns_new_instance(self, build: Callable[[], tuple[Prompt, Prompt]]) -> None:
+        p1, p2 = build()
         assert p1 is not p2
 
     def test_original_not_mutated_by_system(self) -> None:
@@ -249,9 +253,18 @@ class TestPromptLoad:
         spec.loader.exec_module(module)
         assert module.greet("World") == "Hello World"
 
-    def test_base_override_resolves_from_explicit_dir(self, tmp_path: Path) -> None:
-        (tmp_path / "hi.md").write_text("Hi {who}")
-        assert str(Prompt.load("hi", base=tmp_path, who="Bob")) == "Hi Bob"
+    @pytest.mark.parametrize(
+        ("name", "body", "kwargs", "expected"),
+        [
+            pytest.param("hi", "Hi {who}", {"who": "Bob"}, "Hi Bob", id="base_override_resolves_from_explicit_dir"),
+            pytest.param("v", "A={a} B={b}", {"a": "1", "b": "2"}, "A=1 B=2", id="vars_formatting"),
+        ],
+    )
+    def test_load_formats_from_explicit_dir(
+        self, tmp_path: Path, name: str, body: str, kwargs: dict[str, str], expected: str
+    ) -> None:
+        (tmp_path / f"{name}.md").write_text(body)
+        assert str(Prompt.load(name, base=tmp_path, **kwargs)) == expected
 
     def test_load_returns_prompt_message(self, tmp_path: Path) -> None:
         (tmp_path / "p.md").write_text("body")
@@ -274,10 +287,6 @@ class TestPromptLoad:
         msg = str(exc.value)
         assert str(empty) in msg
         assert str(prompt_module._FRAMEWORK_DIR / "prompts") in msg
-
-    def test_vars_formatting(self, tmp_path: Path) -> None:
-        (tmp_path / "v.md").write_text("A={a} B={b}")
-        assert str(Prompt.load("v", base=tmp_path, a="1", b="2")) == "A=1 B=2"
 
     def test_missing_placeholder_raises_key_error(self, tmp_path: Path) -> None:
         (tmp_path / "k.md").write_text("Hello {who}")

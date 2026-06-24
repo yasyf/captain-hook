@@ -66,10 +66,13 @@ class TestRegexFormStillWorks:
 
 
 class TestModeValidation:
-    def test_neither_mode_raises(self) -> None:
+    @pytest.mark.parametrize(
+        ("args", "kwargs"),
+        [
+            pytest.param((), {}, id="neither_mode"),
+            pytest.param((r"^cat", r"ccx read"), {"to": lambda evt: "x"}, id="both_modes"),
+        ],
+    )
+    def test_invalid_mode_raises(self, args: tuple[str, ...], kwargs: dict[str, object]) -> None:
         with pytest.raises(TypeError, match="either"):
-            rewrite_command()
-
-    def test_both_modes_raises(self) -> None:
-        with pytest.raises(TypeError, match="either"):
-            rewrite_command(r"^cat", r"ccx read", to=lambda evt: "x")
+            rewrite_command(*args, **kwargs)

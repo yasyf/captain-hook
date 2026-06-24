@@ -4,9 +4,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from captain_hook.conditions import check_condition
 from captain_hook.context import load_transcript
-from captain_hook.events import PreToolUseEvent, SubagentStopEvent
+from captain_hook.events import BaseHookEvent, PreToolUseEvent, SubagentStopEvent
 from captain_hook.tests.helpers import (
     build_ctx,
     make_event,
@@ -19,34 +21,33 @@ from captain_hook.tests.helpers import (
 from captain_hook.types import Agent, Or, Tool
 
 
+def dispatched(subagent_type: str) -> BaseHookEvent:
+    return make_pre_tool_event("Agent", {"subagent_type": subagent_type, "prompt": "go"})
+
+
+def running(agent_type: str) -> BaseHookEvent:
+    return make_event(SubagentStopEvent, raw={"agent_type": agent_type})
+
+
 class TestAgentPolymorphicMatch:
-    def test_agent_matches_dispatched_subagent_type(self) -> None:
-        evt = make_pre_tool_event("Agent", {"subagent_type": "test-runner", "prompt": "go"})
-        assert check_condition(Agent("test-runner"), evt) is True
-
-    def test_agent_matches_running_agent_type(self) -> None:
-        evt = make_event(SubagentStopEvent, raw={"agent_type": "test-runner"})
-        assert check_condition(Agent("test-runner"), evt) is True
-
-    def test_agent_rejects_other_dispatched(self) -> None:
-        evt = make_pre_tool_event("Agent", {"subagent_type": "test-runner", "prompt": "go"})
-        assert check_condition(Agent("other"), evt) is False
-
-    def test_agent_rejects_other_running(self) -> None:
-        evt = make_event(SubagentStopEvent, raw={"agent_type": "test-runner"})
-        assert check_condition(Agent("other"), evt) is False
-
-    def test_agent_pipe_alternation_matches_first(self) -> None:
-        evt = make_pre_tool_event("Agent", {"subagent_type": "test-runner", "prompt": "go"})
-        assert check_condition(Agent("test-runner|test-writer"), evt) is True
-
-    def test_agent_pipe_alternation_matches_second(self) -> None:
-        evt = make_pre_tool_event("Agent", {"subagent_type": "test-writer", "prompt": "go"})
-        assert check_condition(Agent("test-runner|test-writer"), evt) is True
-
-    def test_agent_pipe_alternation_running(self) -> None:
-        evt = make_event(SubagentStopEvent, raw={"agent_type": "test-writer"})
-        assert check_condition(Agent("test-runner|test-writer"), evt) is True
+    @pytest.mark.parametrize(
+        ("pattern", "evt", "expected"),
+        [
+            pytest.param("test-runner", dispatched("test-runner"), True, id="matches_dispatched_subagent_type"),
+            pytest.param("test-runner", running("test-runner"), True, id="matches_running_agent_type"),
+            pytest.param("other", dispatched("test-runner"), False, id="rejects_other_dispatched"),
+            pytest.param("other", running("test-runner"), False, id="rejects_other_running"),
+            pytest.param(
+                "test-runner|test-writer", dispatched("test-runner"), True, id="pipe_alternation_matches_first"
+            ),
+            pytest.param(
+                "test-runner|test-writer", dispatched("test-writer"), True, id="pipe_alternation_matches_second"
+            ),
+            pytest.param("test-runner|test-writer", running("test-writer"), True, id="pipe_alternation_running"),
+        ],
+    )
+    def test_agent(self, pattern: str, evt: BaseHookEvent, expected: bool) -> None:
+        assert check_condition(Agent(pattern), evt) is expected
 
 
 class TestTurnSubagentAccessor:
@@ -86,14 +87,17 @@ class TestTurnSubagentAccessor:
 
 
 class TestOrCombinator:
-    def test_or_matches_first_arm(self) -> None:
-        evt = make_pre_tool_event("Bash", {"command": "echo"})
-        assert check_condition(Or(Tool("Bash"), Agent("test-runner")), evt) is True
-
-    def test_or_matches_second_arm(self) -> None:
-        evt = make_pre_tool_event("Agent", {"subagent_type": "test-runner", "prompt": "go"})
-        assert check_condition(Or(Tool("Bash"), Agent("test-runner")), evt) is True
-
-    def test_or_rejects_when_neither_matches(self) -> None:
-        evt = make_pre_tool_event("Edit", {"file_path": "a.py", "old_string": "", "new_string": ""})
-        assert check_condition(Or(Tool("Bash"), Agent("test-runner")), evt) is False
+    @pytest.mark.parametrize(
+        ("evt", "expected"),
+        [
+            pytest.param(make_pre_tool_event("Bash", {"command": "echo"}), True, id="matches_first_arm"),
+            pytest.param(dispatched("test-runner"), True, id="matches_second_arm"),
+            pytest.param(
+                make_pre_tool_event("Edit", {"file_path": "a.py", "old_string": "", "new_string": ""}),
+                False,
+                id="rejects_when_neither_matches",
+            ),
+        ],
+    )
+    def test_or(self, evt: BaseHookEvent, expected: bool) -> None:
+        assert check_condition(Or(Tool("Bash"), Agent("test-runner")), evt) is expected

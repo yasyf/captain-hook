@@ -108,14 +108,27 @@ def test_get_json_retries_5xx_then_succeeds(
     assert len(no_real_sleep) == 1
 
 
-def test_get_json_429_honors_retry_after(
-    monkeypatch: pytest.MonkeyPatch, no_real_sleep: list[float], authed: None
+@pytest.mark.parametrize(
+    ("err", "slept"),
+    [
+        pytest.param(http_error(429, {"Retry-After": "7"}), [7.0], id="429-retry-after"),
+        pytest.param(
+            http_error(403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1010"}),
+            [10.0],
+            id="primary-ratelimit-near-reset",
+        ),
+    ],
+)
+def test_get_json_waits_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+    no_real_sleep: list[float],
+    authed: None,
+    err: urllib.error.HTTPError,
+    slept: list[float],
 ) -> None:
-    monkeypatch.setattr(
-        http.urllib.request, "urlopen", fake_urlopen(http_error(429, {"Retry-After": "7"}), b'{"ok": 1}')
-    )
+    monkeypatch.setattr(http.urllib.request, "urlopen", fake_urlopen(err, b'{"ok": 1}'))
     http.github_get_json("https://api.github.com/x")
-    assert no_real_sleep == [7.0]
+    assert no_real_sleep == slept
 
 
 def test_get_json_primary_ratelimit_far_reset_fails_fast(
@@ -126,15 +139,6 @@ def test_get_json_primary_ratelimit_far_reset_fails_fast(
     with pytest.raises(http.GitHubFetchError, match="GITHUB_TOKEN"):
         http.github_get_json("https://api.github.com/x")
     assert no_real_sleep == []
-
-
-def test_get_json_primary_ratelimit_near_reset_waits(
-    monkeypatch: pytest.MonkeyPatch, no_real_sleep: list[float], authed: None
-) -> None:
-    err = http_error(403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1010"})
-    monkeypatch.setattr(http.urllib.request, "urlopen", fake_urlopen(err, b'{"ok": 1}'))
-    http.github_get_json("https://api.github.com/x")
-    assert no_real_sleep == [10.0]
 
 
 def test_get_json_exhausts_attempts(monkeypatch: pytest.MonkeyPatch, no_real_sleep: list[float], authed: None) -> None:

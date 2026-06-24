@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from captain_hook.dispatch import dispatch
 from captain_hook.state import PrimitiveState, text_hash
 from captain_hook.tests.helpers import make_ctx, make_post_tool_event
@@ -37,17 +39,31 @@ class TestContentLemmas:
 
 
 class TestIsEcho:
-    def test_detects_overlap(self) -> None:
-        ps = PrimitiveState(echo_lemmas={"issue", "pre-existing", "cause", "change", "fix", "codebase", "bug"})
-        assert ps.is_echo("I'll look at the pre-existing issue and fix it")
-
-    def test_rejects_unrelated(self) -> None:
-        ps = PrimitiveState(echo_lemmas={"issue", "pre-existing", "cause", "change", "fix", "codebase", "bug"})
-        assert not ps.is_echo("Now let me read the configuration file")
-
-    def test_returns_false_when_echo_lemmas_empty(self) -> None:
-        ps = PrimitiveState()
-        assert not ps.is_echo("some random text with issue and change words")
+    @pytest.mark.parametrize(
+        ("ps", "text", "expected"),
+        [
+            pytest.param(
+                PrimitiveState(echo_lemmas={"issue", "pre-existing", "cause", "change", "fix", "codebase", "bug"}),
+                "I'll look at the pre-existing issue and fix it",
+                True,
+                id="detects_overlap",
+            ),
+            pytest.param(
+                PrimitiveState(echo_lemmas={"issue", "pre-existing", "cause", "change", "fix", "codebase", "bug"}),
+                "Now let me read the configuration file",
+                False,
+                id="rejects_unrelated",
+            ),
+            pytest.param(
+                PrimitiveState(),
+                "some random text with issue and change words",
+                False,
+                id="returns_false_when_echo_lemmas_empty",
+            ),
+        ],
+    )
+    def test_is_echo(self, ps: PrimitiveState, text: str, expected: bool) -> None:
+        assert ps.is_echo(text) is expected
 
 
 class TestSeedEchoWindow:
@@ -63,29 +79,32 @@ class TestSeedEchoWindow:
 
 
 class TestConsumeEchoes:
-    def test_marks_echoed_texts_consumed(self) -> None:
-        ps = PrimitiveState(
-            echo_lemmas={"issue", "pre-existing", "cause", "change", "fix"},
-            echo_window_end=20,
-        )
-        echo_text = "I'll look at the pre-existing issue and fix it"
-        ps.consume_echoes([echo_text], transcript_len=10)
-        assert text_hash(echo_text) in ps.consumed
-
-    def test_does_not_consume_when_window_expired(self) -> None:
-        ps = PrimitiveState(
-            echo_lemmas={"issue", "pre-existing", "cause", "change", "fix"},
-            echo_window_end=5,
-        )
-        echo_text = "I'll look at the pre-existing issue and fix it"
-        ps.consume_echoes([echo_text], transcript_len=10)
-        assert text_hash(echo_text) not in ps.consumed
-
-    def test_does_not_consume_when_no_echo_lemmas(self) -> None:
-        ps = PrimitiveState(echo_window_end=20)
-        text = "some random text"
+    @pytest.mark.parametrize(
+        ("ps", "text", "expected"),
+        [
+            pytest.param(
+                PrimitiveState(echo_lemmas={"issue", "pre-existing", "cause", "change", "fix"}, echo_window_end=20),
+                "I'll look at the pre-existing issue and fix it",
+                True,
+                id="marks_echoed_texts_consumed",
+            ),
+            pytest.param(
+                PrimitiveState(echo_lemmas={"issue", "pre-existing", "cause", "change", "fix"}, echo_window_end=5),
+                "I'll look at the pre-existing issue and fix it",
+                False,
+                id="does_not_consume_when_window_expired",
+            ),
+            pytest.param(
+                PrimitiveState(echo_window_end=20),
+                "some random text",
+                False,
+                id="does_not_consume_when_no_echo_lemmas",
+            ),
+        ],
+    )
+    def test_consume_echoes(self, ps: PrimitiveState, text: str, expected: bool) -> None:
         ps.consume_echoes([text], transcript_len=10)
-        assert text_hash(text) not in ps.consumed
+        assert (text_hash(text) in ps.consumed) is expected
 
 
 class TestMatchSignals:
@@ -203,23 +222,18 @@ class TestEchoIntegration:
 
 
 class TestEchoWindowBoundary:
-    def test_window_expired_at_exact_boundary(self) -> None:
-        ps = PrimitiveState(
-            echo_lemmas={"issue", "pre-existing", "cause", "change", "fix"},
-            echo_window_end=10,
-        )
+    @pytest.mark.parametrize(
+        ("transcript_len", "expected"),
+        [
+            pytest.param(10, False, id="window_expired_at_exact_boundary"),
+            pytest.param(9, True, id="window_active_just_before_boundary"),
+        ],
+    )
+    def test_window_boundary(self, transcript_len: int, expected: bool) -> None:
+        ps = PrimitiveState(echo_lemmas={"issue", "pre-existing", "cause", "change", "fix"}, echo_window_end=10)
         echo_text = "I'll look at the pre-existing issue and fix it"
-        ps.consume_echoes([echo_text], transcript_len=10)
-        assert text_hash(echo_text) not in ps.consumed
-
-    def test_window_active_just_before_boundary(self) -> None:
-        ps = PrimitiveState(
-            echo_lemmas={"issue", "pre-existing", "cause", "change", "fix"},
-            echo_window_end=10,
-        )
-        echo_text = "I'll look at the pre-existing issue and fix it"
-        ps.consume_echoes([echo_text], transcript_len=9)
-        assert text_hash(echo_text) in ps.consumed
+        ps.consume_echoes([echo_text], transcript_len=transcript_len)
+        assert (text_hash(echo_text) in ps.consumed) is expected
 
 
 # Regression: Signal-triggered nudge reads/updates PrimitiveState across calls

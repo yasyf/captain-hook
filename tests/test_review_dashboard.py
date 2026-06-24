@@ -126,19 +126,20 @@ class TestStageOf:
 
 
 class TestPrDescription:
-    def test_create_prefers_verdict_summary(self) -> None:
-        assert pr_description(view(kind="create", summary="block force-push", sample_text="never force push")) == (
-            'would add a hook: "block force-push"'
-        )
-
-    def test_create_falls_back_to_sample_text(self) -> None:
-        assert pr_description(view(kind="create", summary=None, sample_text="never force push to main")) == (
-            'would add a hook: "never force push to main"'
-        )
-
-    def test_fix_names_target_and_prefers_summary(self) -> None:
-        assert (
-            pr_description(
+    @pytest.mark.parametrize(
+        ("candidate", "expected"),
+        [
+            pytest.param(
+                view(kind="create", summary="block force-push", sample_text="never force push"),
+                'would add a hook: "block force-push"',
+                id="create_prefers_verdict_summary",
+            ),
+            pytest.param(
+                view(kind="create", summary=None, sample_text="never force push to main"),
+                'would add a hook: "never force push to main"',
+                id="create_falls_back_to_sample_text",
+            ),
+            pytest.param(
                 view(
                     kind="fix",
                     status="watching",
@@ -146,14 +147,11 @@ class TestPrDescription:
                     target_hook="hooks.style:nudge_1",
                     target_file=".claude/hooks/style.py",
                     misfire="refire_on_own_text",
-                )
-            )
-            == "would fix hooks.style:nudge_1 (.claude/hooks/style.py): stop nudge firing on its own text"
-        )
-
-    def test_fix_falls_back_to_misfire_class(self) -> None:
-        assert (
-            pr_description(
+                ),
+                "would fix hooks.style:nudge_1 (.claude/hooks/style.py): stop nudge firing on its own text",
+                id="fix_names_target_and_prefers_summary",
+            ),
+            pytest.param(
                 view(
                     kind="fix",
                     status="watching",
@@ -161,25 +159,45 @@ class TestPrDescription:
                     target_hook="h:n",
                     target_file="f.py",
                     misfire="refire_on_own_text",
-                )
-            )
-            == "would fix h:n (f.py): regression test for refire_on_own_text"
-        )
+                ),
+                "would fix h:n (f.py): regression test for refire_on_own_text",
+                id="fix_falls_back_to_misfire_class",
+            ),
+        ],
+    )
+    def test_description(self, candidate: CandidateView, expected: str) -> None:
+        assert pr_description(candidate) == expected
 
 
 class TestProgress:
-    def test_create_targets_use_create_thresholds(self) -> None:
+    @pytest.mark.parametrize(
+        ("candidate", "sessions", "days", "sessions_attr", "days_attr"),
+        [
+            pytest.param(
+                view(kind="create", sessions=2, days=1),
+                2,
+                1,
+                "min_sessions",
+                "min_days",
+                id="create_targets_use_create_thresholds",
+            ),
+            pytest.param(
+                view(kind="fix", status="watching", sessions=1, target_hook="h", target_file="f"),
+                1,
+                0,
+                "min_sessions_fix",
+                "min_days_fix",
+                id="fix_targets_use_fix_thresholds",
+            ),
+        ],
+    )
+    def test_targets_use_kind_thresholds(
+        self, candidate: CandidateView, sessions: int, days: int, sessions_attr: str, days_attr: str
+    ) -> None:
         settings = ReviewSettings()
-        assert targets(view(kind="create", sessions=2, days=1), settings) == (
-            ("sessions", 2, settings.min_sessions),
-            ("days", 1, settings.min_days),
-        )
-
-    def test_fix_targets_use_fix_thresholds(self) -> None:
-        settings = ReviewSettings()
-        assert targets(view(kind="fix", status="watching", sessions=1, target_hook="h", target_file="f"), settings) == (
-            ("sessions", 1, settings.min_sessions_fix),
-            ("days", 0, settings.min_days_fix),
+        assert targets(candidate, settings) == (
+            ("sessions", sessions, getattr(settings, sessions_attr)),
+            ("days", days, getattr(settings, days_attr)),
         )
 
     def test_progress_text_drops_zero_target_and_shows_counts(self) -> None:

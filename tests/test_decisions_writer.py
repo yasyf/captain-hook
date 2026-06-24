@@ -89,22 +89,21 @@ class TestRecordDecision:
         assert (row.kind, row.event, row.action, row.message) == ("ccx_rewrite", "PreToolUse", "note", "ran ccx")
         assert row.tool_name == "Bash"
 
-    def test_degraded_parse_marks_detail(self, db_path: Path) -> None:
-        malformed = {"file_path": "a.py", "old_string": "x"}
-        record_decision(entry(), pre_tool_evt("Edit", malformed), HookResult(action=Action.warn, message="m"))
+    @pytest.mark.parametrize(
+        ("tool", "tool_input", "detail"),
+        [
+            pytest.param("Edit", {"file_path": "a.py", "old_string": "x"}, {"degraded": True}, id="degraded_parse"),
+            pytest.param("mcp__github__search", {"q": "x"}, {}, id="unknown_tool_not_degraded"),
+        ],
+    )
+    def test_detail_marks_parse_state(
+        self, db_path: Path, tool: str, tool_input: dict[str, Any], detail: dict[str, Any]
+    ) -> None:
+        record_decision(entry(), pre_tool_evt(tool, tool_input), HookResult(action=Action.warn, message="m"))
         (row,) = rows(db_path)
-        assert row.detail == {"degraded": True}
-        assert row.tool_name == "Edit"
-        assert row.tool_digest == tool_digest("Edit", malformed)
-
-    def test_unknown_tool_is_not_degraded(self, db_path: Path) -> None:
-        record_decision(
-            entry(), pre_tool_evt("mcp__github__search", {"q": "x"}), HookResult(action=Action.warn, message="m")
-        )
-        (row,) = rows(db_path)
-        assert row.detail == {}
-        assert row.tool_name == "mcp__github__search"
-        assert row.tool_digest == tool_digest("mcp__github__search", {"q": "x"})
+        assert row.detail == detail
+        assert row.tool_name == tool
+        assert row.tool_digest == tool_digest(tool, tool_input)
 
     def test_spawned_run_does_not_write(self, db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CAPT_HOOK_SPAWNED", "1")

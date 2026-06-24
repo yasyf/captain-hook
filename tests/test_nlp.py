@@ -6,13 +6,16 @@ from captain_hook.signals.nlp import Clause, NlpSignal, Phrase, dep_related, nlp
 
 
 class TestPhrase:
-    def test_single_word_lowercased(self) -> None:
-        p = Phrase("Run")
-        assert p.lemmas == ("run",)
-
-    def test_multi_word_lowercased(self) -> None:
-        p = Phrase("Run", "TEST")
-        assert p.lemmas == ("run", "test")
+    @pytest.mark.parametrize(
+        ("words", "lemmas"),
+        [
+            pytest.param(("Run",), ("run",), id="single_word_lowercased"),
+            pytest.param(("Run", "TEST"), ("run", "test"), id="multi_word_lowercased"),
+            pytest.param(("rate limit",), ("rate limit",), id="preserves_spaces_in_compound"),
+        ],
+    )
+    def test_lemmas(self, words: tuple[str, ...], lemmas: tuple[str, ...]) -> None:
+        assert Phrase(*words).lemmas == lemmas
 
     def test_frozen(self) -> None:
         p = Phrase("hello")
@@ -23,10 +26,6 @@ class TestPhrase:
         p = Phrase("hello")
         with pytest.raises((AttributeError, TypeError)):
             p.extra = "nope"  # type: ignore[attr-defined]
-
-    def test_preserves_spaces_in_compound(self) -> None:
-        p = Phrase("rate limit")
-        assert p.lemmas == ("rate limit",)
 
 
 class TestPhraseExpand:
@@ -59,9 +58,16 @@ class TestPhraseExpand:
 
 
 class TestClauseValidation:
-    def test_bare_single_noun_rejected(self) -> None:
+    @pytest.mark.parametrize(
+        "noun",
+        [
+            pytest.param(Phrase("quota"), id="bare_single_noun_rejected"),
+            pytest.param(Phrase("api", "service"), id="multi_word_noun_with_single_words_rejected"),
+        ],
+    )
+    def test_rejected(self, noun: Phrase) -> None:
         with pytest.raises(ValueError, match="verb, adj, negated, or a compound"):
-            Clause(noun=Phrase("quota"))
+            Clause(noun=noun)
 
     def test_verb_clause_valid(self) -> None:
         c = Clause(noun=Phrase("quota"), verb=Phrase("exceed"))
@@ -78,10 +84,6 @@ class TestClauseValidation:
     def test_compound_noun_valid(self) -> None:
         c = Clause(noun=Phrase("billing issue"))
         assert " " in c.noun.lemmas[0]
-
-    def test_multi_word_noun_with_single_words_rejected(self) -> None:
-        with pytest.raises(ValueError, match="verb, adj, negated, or a compound"):
-            Clause(noun=Phrase("api", "service"))
 
 
 class TestNlpSignal:
@@ -136,11 +138,15 @@ class TestNlpScan:
 
 
 class TestNlpScanEmpty:
-    def test_empty_string(self) -> None:
-        assert nlp_scan([Clause(noun=Phrase("quota"), verb=Phrase("exceed"))], "") == []
-
-    def test_whitespace_only(self) -> None:
-        assert nlp_scan([Clause(noun=Phrase("quota"), verb=Phrase("exceed"))], "   \n\t  ") == []
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("", id="empty_string"),
+            pytest.param("   \n\t  ", id="whitespace_only"),
+        ],
+    )
+    def test_no_match(self, text: str) -> None:
+        assert nlp_scan([Clause(noun=Phrase("quota"), verb=Phrase("exceed"))], text) == []
 
 
 class TestNlpScanNegation:
@@ -160,19 +166,23 @@ class TestNlpScanNegation:
 
 
 class TestNlpScanCompound:
-    def test_compound_noun_match(self) -> None:
-        result = nlp_scan(
-            [Clause(noun=Phrase("rate limit"), verb=Phrase("hit"))],
-            "We hit the rate limit",
-        )
-        assert len(result) == 1
-
-    def test_compound_noun_only(self) -> None:
-        result = nlp_scan(
-            [Clause(noun=Phrase("service outage"))],
-            "There was a service outage",
-        )
-        assert len(result) == 1
+    @pytest.mark.parametrize(
+        ("clauses", "text"),
+        [
+            pytest.param(
+                [Clause(noun=Phrase("rate limit"), verb=Phrase("hit"))],
+                "We hit the rate limit",
+                id="compound_noun_match",
+            ),
+            pytest.param(
+                [Clause(noun=Phrase("service outage"))],
+                "There was a service outage",
+                id="compound_noun_only",
+            ),
+        ],
+    )
+    def test_single_match(self, clauses: list[Clause], text: str) -> None:
+        assert len(nlp_scan(clauses, text)) == 1
 
 
 class TestDepRelated:
@@ -224,31 +234,35 @@ class TestNlpScanMultipleClauses:
 
 
 class TestActivePassiveVoice:
-    def test_active_voice(self) -> None:
-        assert nlp_scan(
-            [Clause(noun=Phrase("quota"), verb=Phrase("exceed"))],
-            "The quota exceeded the threshold",
-        )
-
-    def test_passive_voice(self) -> None:
-        assert nlp_scan(
-            [Clause(noun=Phrase("quota"), verb=Phrase("exceed"))],
-            "The quota was exceeded",
-        )
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("The quota exceeded the threshold", id="active_voice"),
+            pytest.param("The quota was exceeded", id="passive_voice"),
+        ],
+    )
+    def test_voice(self, text: str) -> None:
+        assert nlp_scan([Clause(noun=Phrase("quota"), verb=Phrase("exceed"))], text)
 
 
 class TestCopularAdjectives:
-    def test_copular_adj(self) -> None:
-        assert nlp_scan(
-            [Clause(noun=Phrase("api"), adj=Phrase("unavailable"))],
-            "The API is unavailable",
-        )
-
-    def test_attributive_adj(self) -> None:
-        assert nlp_scan(
-            [Clause(noun=Phrase("service"), adj=Phrase("external"))],
-            "An external service caused the error",
-        )
+    @pytest.mark.parametrize(
+        ("clause", "text"),
+        [
+            pytest.param(
+                Clause(noun=Phrase("api"), adj=Phrase("unavailable")),
+                "The API is unavailable",
+                id="copular_adj",
+            ),
+            pytest.param(
+                Clause(noun=Phrase("service"), adj=Phrase("external")),
+                "An external service caused the error",
+                id="attributive_adj",
+            ),
+        ],
+    )
+    def test_adj(self, clause: Clause, text: str) -> None:
+        assert nlp_scan([clause], text)
 
 
 class TestIntegrationWithScoreSignals:

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from captain_hook.app import _state
 from captain_hook.events import SubagentStopEvent
+from captain_hook.primitives.workflow import Step
 from captain_hook.tests.helpers import build_ctx, make_subagent_stop_event, make_transcript, raw_text
 from captain_hook.types import Action, Event, HookResult
 
@@ -35,17 +36,18 @@ class TestTextMatches:
         pred = text_matches(r"ALL_TESTS_PASS")
         assert callable(pred)
 
-    def test_matches_when_pattern_found(self) -> None:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            pytest.param("ALL_TESTS_PASS done", True, id="matches_when_pattern_found"),
+            pytest.param("nothing here", False, id="no_match_when_pattern_absent"),
+        ],
+    )
+    def test_match(self, text: str, expected: bool) -> None:
         from captain_hook.primitives.workflow import text_matches
 
-        t = make_transcript(raw_text("assistant", "ALL_TESTS_PASS done"))
-        assert text_matches(r"ALL_TESTS_PASS")(t) is True
-
-    def test_no_match_when_pattern_absent(self) -> None:
-        from captain_hook.primitives.workflow import text_matches
-
-        t = make_transcript(raw_text("assistant", "nothing here"))
-        assert text_matches(r"ALL_TESTS_PASS")(t) is False
+        t = make_transcript(raw_text("assistant", text))
+        assert text_matches(r"ALL_TESTS_PASS")(t) is expected
 
 
 class TestStep:
@@ -281,19 +283,37 @@ class TestWorkflowGuard:
         assert "S2:" in result.message  # type: ignore[operator]
         assert "Do step 3." in result.message  # type: ignore[operator]
 
-    def test_guard_message_includes_stopped_at_and_next_step(self) -> None:
-        from captain_hook.primitives.workflow import Step, Workflow
+    @pytest.mark.parametrize(
+        ("steps", "stopped_at", "next_step"),
+        [
+            pytest.param(
+                [Step(name="s1", check=lambda _: False, stopped_at="Stop here", next_step="Then do this")],
+                "Stop here",
+                "Then do this",
+                id="guard_message_includes_stopped_at_and_next_step",
+            ),
+            pytest.param(
+                [
+                    Step(name="s1", check=lambda _: False, stopped_at="Step1:", next_step="Do step 1."),
+                    Step(name="s2", check=lambda _: False, stopped_at="Step2:", next_step="Do step 2."),
+                ],
+                "Step1:",
+                "Do step 1.",
+                id="no_completed_steps_reports_first",
+            ),
+        ],
+    )
+    def test_guard_message_includes_stopped_at_and_next_step(
+        self, steps: list[Step], stopped_at: str, next_step: str
+    ) -> None:
+        from captain_hook.primitives.workflow import Workflow
 
-        w = Workflow(
-            label="FLOW",
-            marker="MARKER",
-            steps=[Step(name="s1", check=lambda _: False, stopped_at="Stop here", next_step="Then do this")],
-        )
+        w = Workflow(label="FLOW", marker="MARKER", steps=steps)
         evt = make_evt("no marker")
         result = w.guard(evt)
         assert result is not None
-        assert "Stop here" in result.message  # type: ignore[operator]
-        assert "Then do this" in result.message  # type: ignore[operator]
+        assert stopped_at in result.message  # type: ignore[operator]
+        assert next_step in result.message  # type: ignore[operator]
 
     def test_guard_invokes_post_complete_when_all_pass(self) -> None:
         from captain_hook.primitives.workflow import Step, Workflow
@@ -445,23 +465,6 @@ class TestWorkflowGuard:
         evt = make_evt("DONE is here")
         result = w.guard(evt)
         assert result is None
-
-    def test_no_completed_steps_reports_first(self) -> None:
-        from captain_hook.primitives.workflow import Step, Workflow
-
-        w = Workflow(
-            label="CHAIN",
-            marker="DONE",
-            steps=[
-                Step(name="s1", check=lambda _: False, stopped_at="Step1:", next_step="Do step 1."),
-                Step(name="s2", check=lambda _: False, stopped_at="Step2:", next_step="Do step 2."),
-            ],
-        )
-        evt = make_evt("no marker")
-        result = w.guard(evt)
-        assert result is not None
-        assert "Step1:" in result.message  # type: ignore[operator]
-        assert "Do step 1." in result.message  # type: ignore[operator]
 
     def test_sequential_finds_first_uncompleted_step(self) -> None:
         from captain_hook.primitives.workflow import Step, Workflow

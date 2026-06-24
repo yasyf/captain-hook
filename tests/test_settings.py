@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import types
 from typing import Any
 
@@ -122,71 +123,25 @@ class TestAutoConfTypeHints:
 
 
 class TestAutoConfSkips:
-    def test_skips_private_vars(self) -> None:
+    @pytest.mark.parametrize(
+        ("attrs", "skipped_key", "kept_field", "kept_value"),
+        [
+            pytest.param({"_secret": "hidden", "visible": "shown"}, "_secret", "visible", "shown", id="private_vars"),
+            pytest.param({"MAX_SIZE": 100, "name": "test"}, "MAX_SIZE", "name", "test", id="uppercase_constants"),
+            pytest.param({"helper": lambda x: x, "name": "test"}, "helper", "name", "test", id="callables"),
+            pytest.param({"os": os, "name": "test"}, "os", "name", "test", id="module_imports"),
+            pytest.param({"__all__": ["x"], "name": "test"}, "__all__", "name", "test", id="dunder_attrs"),
+            pytest.param({"x": {"a": 1}, "name": "test"}, "x", "name", "test", id="dict_values"),
+            pytest.param({"y": {1, 2}, "name": "test"}, "y", "name", "test", id="set_values"),
+            pytest.param({"x": None, "name": "test"}, "x", "name", "test", id="none_values"),
+        ],
+    )
+    def test_skips(self, attrs: dict[str, Any], skipped_key: str, kept_field: str, kept_value: Any) -> None:
         from captain_hook.settings import build_settings
 
-        mod = make_module("conf", {"_secret": "hidden", "visible": "shown"})
-        settings = build_settings(mod)
-        assert settings.visible == "shown"
-        assert not hasattr(settings, "_secret")
-
-    def test_skips_uppercase_constants(self) -> None:
-        from captain_hook.settings import build_settings
-
-        mod = make_module("conf", {"MAX_SIZE": 100, "name": "test"})
-        settings = build_settings(mod)
-        assert settings.name == "test"
-        assert not hasattr(settings, "MAX_SIZE")
-
-    def test_skips_callables(self) -> None:
-        from captain_hook.settings import build_settings
-
-        mod = make_module("conf", {"helper": lambda x: x, "name": "test"})
-        settings = build_settings(mod)
-        assert settings.name == "test"
-        assert not hasattr(settings, "helper")
-
-    def test_skips_module_imports(self) -> None:
-        import os
-
-        from captain_hook.settings import build_settings
-
-        mod = make_module("conf", {"os": os, "name": "test"})
-        settings = build_settings(mod)
-        assert settings.name == "test"
-        assert not hasattr(settings, "os")
-
-    def test_skips_dunder_attrs(self) -> None:
-        from captain_hook.settings import build_settings
-
-        mod = make_module("conf", {"__all__": ["x"], "name": "test"})
-        settings = build_settings(mod)
-        assert settings.name == "test"
-        assert not hasattr(settings, "__all__")
-
-    def test_skips_dict_values(self) -> None:
-        from captain_hook.settings import build_settings
-
-        mod = make_module("conf", {"x": {"a": 1}, "name": "test"})
-        settings = build_settings(mod)
-        assert settings.name == "test"
-        assert not hasattr(settings, "x")
-
-    def test_skips_set_values(self) -> None:
-        from captain_hook.settings import build_settings
-
-        mod = make_module("conf", {"y": {1, 2}, "name": "test"})
-        settings = build_settings(mod)
-        assert settings.name == "test"
-        assert not hasattr(settings, "y")
-
-    def test_skips_none_values(self) -> None:
-        from captain_hook.settings import build_settings
-
-        mod = make_module("conf", {"x": None, "name": "test"})
-        settings = build_settings(mod)
-        assert settings.name == "test"
-        assert not hasattr(settings, "x")
+        settings = build_settings(make_module("conf", attrs))
+        assert getattr(settings, kept_field) == kept_value
+        assert not hasattr(settings, skipped_key)
 
 
 class TestAutoConfMutableDefaults:

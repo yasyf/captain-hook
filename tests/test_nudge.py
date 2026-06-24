@@ -3,9 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from captain_hook.app import _state
 from captain_hook.dispatch import dispatch
-from captain_hook.events import PreToolUseEvent
 from captain_hook.tests.helpers import (
     build_ctx,
     make_ctx,
@@ -15,7 +16,7 @@ from captain_hook.tests.helpers import (
     make_transcript,
     workflow_launch,
 )
-from captain_hook.types import Event, Tool, Waiting
+from captain_hook.types import Event, Signal, Signals, Tool, Waiting
 
 
 def register_nudge(
@@ -82,8 +83,6 @@ class TestNudgeWhenFalse:
 
 class TestNudgeSignalsFire:
     def test_nudge_with_matching_signals_fires(self, tmp_path: Path) -> None:
-        from captain_hook.types import Signal
-
         register_nudge(
             "Detected risky pattern",
             signals=[Signal(pattern=r"git\s+push", weight=2)],
@@ -99,8 +98,6 @@ class TestNudgeSignalsFire:
 
 class TestNudgeSignalsSkip:
     def test_nudge_with_below_threshold_signals_skips(self, tmp_path: Path) -> None:
-        from captain_hook.types import Signal, Signals
-
         register_nudge(
             "Detected risky pattern",
             signals=Signals(patterns=[Signal(pattern=r"git\s+push", weight=2)], threshold=3),
@@ -145,16 +142,22 @@ class TestGateOncePerTurn:
 
 
 class TestNudgeDefaultEvents:
-    def test_nudge_without_signals_default_pretooluse(self) -> None:
-
-        register_nudge("no signals nudge")
-        assert _state.hooks[-1].spec.events == Event.PreToolUse
-
-    def test_nudge_with_signals_default_posttooluse(self) -> None:
-        from captain_hook.types import Signal
-
-        register_nudge("signals nudge", signals=[Signal(pattern=r"test", weight=1)])
-        assert _state.hooks[-1].spec.events == Event.PostToolUse
+    @pytest.mark.parametrize(
+        ("signals", "events", "expected"),
+        [
+            pytest.param(None, None, Event.PreToolUse, id="nudge_without_signals_default_pretooluse"),
+            pytest.param(
+                [Signal(pattern=r"test", weight=1)],
+                None,
+                Event.PostToolUse,
+                id="nudge_with_signals_default_posttooluse",
+            ),
+            pytest.param(None, Event.UserPromptSubmit, Event.UserPromptSubmit, id="nudge_custom_events"),
+        ],
+    )
+    def test_nudge_events(self, signals: Any, events: Event | None, expected: Event) -> None:
+        register_nudge("nudge", signals=signals, events=events)
+        assert _state.hooks[-1].spec.events == expected
 
 
 class TestGateDefaultEvents:
@@ -164,20 +167,26 @@ class TestGateDefaultEvents:
 
 
 class TestGateWaitAwareDefault:
-    def test_stop_gate_without_skip_if_gets_waiting(self) -> None:
-        register_gate("gate message")
-        assert _state.hooks[-1].spec.skip_if == (Waiting(),)
+    @pytest.mark.parametrize(
+        ("skip_if", "expected"),
+        [
+            pytest.param((), (Waiting(),), id="stop_gate_without_skip_if_gets_waiting"),
+            pytest.param([Tool("Bash")], (Tool("Bash"),), id="stop_gate_with_skip_if_is_left_untouched"),
+        ],
+    )
+    def test_gate_skip_if(self, skip_if: Any, expected: tuple[Any, ...]) -> None:
+        register_gate("gate message", skip_if=skip_if)
+        assert _state.hooks[-1].spec.skip_if == expected
 
-    def test_stop_gate_with_skip_if_is_left_untouched(self) -> None:
-        register_gate("gate message", skip_if=[Tool("Bash")])
-        assert _state.hooks[-1].spec.skip_if == (Tool("Bash"),)
-
-    def test_pretooluse_block_gate_is_not_wait_aware(self) -> None:
-        register_nudge("blocking pre-tool gate", block=True, events=Event.PreToolUse)
-        assert _state.hooks[-1].spec.skip_if == ()
-
-    def test_plain_warn_nudge_is_not_wait_aware(self) -> None:
-        register_nudge("plain nudge")
+    @pytest.mark.parametrize(
+        ("kwargs"),
+        [
+            pytest.param({"block": True, "events": Event.PreToolUse}, id="pretooluse_block_gate_is_not_wait_aware"),
+            pytest.param({}, id="plain_warn_nudge_is_not_wait_aware"),
+        ],
+    )
+    def test_nudge_not_wait_aware(self, kwargs: dict[str, Any]) -> None:
+        register_nudge("nudge", **kwargs)
         assert _state.hooks[-1].spec.skip_if == ()
 
     def test_stop_gate_skips_while_waiting(self, tmp_path: Path) -> None:
@@ -221,10 +230,7 @@ class TestNudgeConditions:
         )
 
         ctx = make_ctx(tmp_path)
-        evt_match = PreToolUseEvent(
-            _raw={"tool_name": "Edit", "tool_input": {"file_path": "a.py", "old_string": "x", "new_string": "y"}},
-            ctx=ctx,
-        )
+        evt_match = make_pre_tool_event("Edit", {"file_path": "a.py", "old_string": "x", "new_string": "y"}, ctx=ctx)
         result = dispatch(Event.PreToolUse, evt_match, session_dir=tmp_path)
         assert result is not None
 
@@ -256,21 +262,20 @@ class TestNudgeConditions:
 
 
 class TestNudgeMaxFiresDefault:
-    def test_nudge_without_signals_max_fires_1(self) -> None:
-        register_nudge("plain nudge")
-        assert _state.hooks[-1].spec.max_fires == 1
-
-    def test_nudge_with_signals_max_fires_3(self) -> None:
-        from captain_hook.types import Signal
-
-        register_nudge("signal nudge", signals=[Signal(pattern=r"test", weight=1)])
-        assert _state.hooks[-1].spec.max_fires == 3
+    @pytest.mark.parametrize(
+        ("signals", "expected"),
+        [
+            pytest.param(None, 1, id="nudge_without_signals_max_fires_1"),
+            pytest.param([Signal(pattern=r"test", weight=1)], 3, id="nudge_with_signals_max_fires_3"),
+        ],
+    )
+    def test_nudge_max_fires(self, signals: Any, expected: int) -> None:
+        register_nudge("nudge", signals=signals)
+        assert _state.hooks[-1].spec.max_fires == expected
 
 
 class TestSignalCitation:
     def test_signal_triggered_nudge_cites_context(self, tmp_path: Path) -> None:
-        from captain_hook.types import Signal
-
         register_nudge(
             "Watch out for force push",
             signals=[Signal(pattern=r"force.push", weight=1)],
@@ -286,16 +291,8 @@ class TestSignalCitation:
         assert "force push" in msg
 
 
-class TestNudgeEventsOverride:
-    def test_nudge_custom_events(self) -> None:
-        register_nudge("custom events", events=Event.UserPromptSubmit)
-        assert _state.hooks[-1].spec.events == Event.UserPromptSubmit
-
-
 class TestNudgeSignalsPrecedence:
     def test_nudge_with_both_when_and_signals_ignores_when(self, tmp_path: Path) -> None:
-        from captain_hook.types import Signal
-
         register_nudge(
             "msg",
             when=lambda evt: 1 / 0,
