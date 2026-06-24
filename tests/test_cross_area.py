@@ -678,7 +678,7 @@ class TestCallLlm:
         cmd = backend.build_command(RunSpec(prompt="", model=backend.models["small"], agent=True))
         assert cmd[0] == "codex"
         assert "exec" in cmd
-        assert backend.parse_response("raw output", None) == "raw output"
+        assert backend.result_text("raw output") == "raw output"
 
     def test_claude_backend_builds_command_and_parses(self) -> None:
         from spawnllm import RunSpec
@@ -693,7 +693,7 @@ class TestCallLlm:
         assert "--setting-sources" in cmd and cmd[cmd.index("--setting-sources") + 1] == ""
         assert "--strict-mcp-config" in cmd
         assert "--tools" not in cmd
-        assert backend.parse_response("raw text", None) == "raw text"
+        assert backend.result_text("raw text") == "raw text"
 
     def test_codex_backend_parses_model_response(self) -> None:
         from pydantic import BaseModel
@@ -705,7 +705,7 @@ class TestCallLlm:
             reason: str
 
         backend = CodexBackend()
-        result = backend.parse_response('{"block": true, "reason": "bad code"}', Verdict)
+        result = Verdict.model_validate(backend.result_value('{"block": true, "reason": "bad code"}'))
         assert result.block is True
         assert result.reason == "bad code"
 
@@ -854,7 +854,14 @@ class TestCallLlmIntegration:
             captured.update(kwargs)
             return returns
 
+        def fake_extract(prompt: str, response_model: object, **kwargs: Any) -> object:
+            captured["prompt"] = prompt
+            captured["response_model"] = response_model
+            captured.update(kwargs)
+            return returns
+
         monkeypatch.setattr(context_mod, "call_sync", fake_call)
+        monkeypatch.setattr(context_mod, "extract_sync", fake_extract)
         return captured
 
     def test_call_llm_invokes_review_backend(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -870,7 +877,7 @@ class TestCallLlmIntegration:
         assert captured["model"] == "small"
         assert captured["timeout"] == 99
         assert captured["cwd"] == str(tmp_path)
-        assert captured["response_model"] is None
+        assert "response_model" not in captured
 
     def test_call_llm_general_uses_claude_backend(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from captain_hook.llm import ClaudeBackend

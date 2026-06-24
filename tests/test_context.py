@@ -308,10 +308,10 @@ class TestCallLlm:
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
         verdict = Verdict(should_block=True, reason="bad")
 
-        with patch("captain_hook.context.call_sync", return_value=verdict) as mock_call:
+        with patch("captain_hook.context.extract_sync", return_value=verdict) as mock_extract:
             result = ctx.call_llm("test", response_model=Verdict, specialty="review")
         assert result is verdict
-        assert mock_call.call_args.kwargs["response_model"] is Verdict
+        assert mock_extract.call_args.args[1] is Verdict
 
 
 class TestContextState:

@@ -15,7 +15,8 @@ from cc_transcript.query import Session
 from cc_transcript.render import Budget, render_turn
 from cc_transcript.tools import parse_tool_call
 from pydantic import BaseModel
-from spawnllm import call_sync, run_cli
+from spawnllm import call_sync, extract_sync
+from spawnllm.proc import run_cli
 
 from captain_hook.classifiers import detect
 from captain_hook.llm import LlmBackends, TModel, TSpecialty
@@ -214,12 +215,10 @@ class HookContext:
             if transcript:
                 template = f"{{transcript}}\n\n<task>\n{template}\n</task>"
             prompt = template.format(*args, **kwargs, transcript=self.transcript_block())
-        return call_sync(
-            prompt,
-            backend=LlmBackends.for_specialty(specialty),
-            model=model,
-            agent=agent,
-            response_model=response_model,
-            cwd=os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR"),
-            timeout=timeout,
-        )
+        backend = LlmBackends.for_specialty(specialty)
+        cwd = os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR")
+        if response_model is not None:
+            return extract_sync(
+                prompt, response_model, backend=backend, model=model, agent=agent, cwd=cwd, timeout=timeout
+            )
+        return call_sync(prompt, backend=backend, model=model, agent=agent, cwd=cwd, timeout=timeout)
