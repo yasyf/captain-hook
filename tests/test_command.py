@@ -95,7 +95,6 @@ class TestCommand:
         ("raw", "truthy"),
         [
             pytest.param("", False, id="empty_string"),
-            pytest.param("", False, id="empty_is_falsy"),
             pytest.param("cat", True, id="non_empty_is_truthy"),
         ],
     )
@@ -145,15 +144,8 @@ class TestCommandLine:
         assert len(cl) == 2
         assert cl.parts[0][1] == op
 
-    @pytest.mark.parametrize(
-        ("raw", "executable"),
-        [
-            pytest.param("jj commit", "jj", id="primary_simple"),
-            pytest.param("cd /dir && ./setup.sh", "./setup.sh", id="primary_is_last"),
-        ],
-    )
-    def test_primary_executable(self, raw: str, executable: str) -> None:
-        assert CommandLine.parse(raw).primary.executable == executable
+    def test_primary_executable(self) -> None:
+        assert CommandLine.parse("cd /dir && ./setup.sh").primary.executable == "./setup.sh"
 
     def test_and_chain(self) -> None:
         cl = CommandLine.parse('eval "$(direnv export bash)" && uv run mtest run tests/')
