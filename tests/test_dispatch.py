@@ -95,24 +95,26 @@ class TestFormatOutput:
         assert hso["additionalContext"] == "info"
         assert "permissionDecision" not in hso
 
-    def test_stop_block(self) -> None:
-        result = HookResult(action=Action.block, message="cannot stop")
-        output = format_output(Event.Stop, result)
-        assert output == {"decision": "block", "reason": "cannot stop"}
+    @pytest.mark.parametrize(
+        ("event", "message"),
+        [
+            pytest.param(Event.Stop, "cannot stop", id="stop_block"),
+            pytest.param(Event.SubagentStop, "stay", id="subagent_stop_block"),
+        ],
+    )
+    def test_block_uses_decision_format(self, event: Event, message: str) -> None:
+        output = format_output(event, HookResult(action=Action.block, message=message))
+        assert output == {"decision": "block", "reason": message}
 
-    def test_stop_allow_returns_none(self) -> None:
-        result = HookResult(action=Action.allow)
-        output = format_output(Event.Stop, result)
-        assert output is None
-
-    def test_subagent_stop_block(self) -> None:
-        result = HookResult(action=Action.block, message="stay")
-        output = format_output(Event.SubagentStop, result)
-        assert output == {"decision": "block", "reason": "stay"}
-
-    def test_subagent_stop_allow_returns_none(self) -> None:
-        result = HookResult(action=Action.allow)
-        output = format_output(Event.SubagentStop, result)
+    @pytest.mark.parametrize(
+        "event",
+        [
+            pytest.param(Event.Stop, id="stop_allow_returns_none"),
+            pytest.param(Event.SubagentStop, id="subagent_stop_allow_returns_none"),
+        ],
+    )
+    def test_allow_returns_none(self, event: Event) -> None:
+        output = format_output(event, HookResult(action=Action.allow))
         assert output is None
 
     def test_stop_warn_returns_block_format(self) -> None:
