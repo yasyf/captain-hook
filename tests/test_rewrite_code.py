@@ -31,20 +31,29 @@ def updated_input(result: dict[str, Any] | None) -> dict[str, Any]:
 
 
 class TestRewriteCore:
-    def test_single_metavar(self) -> None:
-        assert ast_grep.rewrite("os.system(cmd)\n", "py", "os.system($CMD)", "run([$CMD])") == "run([cmd])\n"
-
-    def test_triple_metavar_preserves_whitespace(self) -> None:
-        assert ast_grep.rewrite("print(a,   b)\n", "py", "print($$$A)", "log($$$A)") == "log(a,   b)\n"
-
-    def test_no_match_passthrough(self) -> None:
-        assert ast_grep.rewrite("x = 1\n", "py", "print($$$)", "log()") == "x = 1\n"
-
-    def test_empty_triple_metavar(self) -> None:
-        assert ast_grep.rewrite("print()\n", "py", "print($$$A)", "log($$$A)") == "log()\n"
-
-    def test_typescript(self) -> None:
-        assert ast_grep.rewrite("console.log(x)\n", "ts", "console.log($A)", "logger.info($A)") == "logger.info(x)\n"
+    @pytest.mark.parametrize(
+        ("code", "lang", "pattern", "replacement", "expected"),
+        [
+            pytest.param(
+                "os.system(cmd)\n", "py", "os.system($CMD)", "run([$CMD])", "run([cmd])\n", id="single_metavar"
+            ),
+            pytest.param(
+                "print(a,   b)\n",
+                "py",
+                "print($$$A)",
+                "log($$$A)",
+                "log(a,   b)\n",
+                id="triple_metavar_preserves_whitespace",
+            ),
+            pytest.param("x = 1\n", "py", "print($$$)", "log()", "x = 1\n", id="no_match_passthrough"),
+            pytest.param("print()\n", "py", "print($$$A)", "log($$$A)", "log()\n", id="empty_triple_metavar"),
+            pytest.param(
+                "console.log(x)\n", "ts", "console.log($A)", "logger.info($A)", "logger.info(x)\n", id="typescript"
+            ),
+        ],
+    )
+    def test_rewrite(self, code: str, lang: str, pattern: str, replacement: str, expected: str) -> None:
+        assert ast_grep.rewrite(code, lang, pattern, replacement) == expected
 
     def test_uncaptured_metavar_stays_literal(self) -> None:
         # A $NAME the pattern never captured passes through untouched (mismatched names, shell vars).
@@ -63,26 +72,42 @@ class TestRewriteCore:
 
 
 class TestCapture:
-    def test_named_singles(self) -> None:
-        assert ast_grep.capture("sed -n 10,40p f.go", "bash", "sed -n $R $F") == {"R": "10,40p", "F": "f.go"}
-
-    def test_quotes_preserved_from_raw(self) -> None:
-        assert ast_grep.capture("sed -n '10,40p' f.go", "bash", "sed -n $R $F") == {"R": "'10,40p'", "F": "f.go"}
-
-    def test_triple_metavar_span(self) -> None:
-        assert ast_grep.capture("cat a.txt b.txt c.txt", "bash", "cat $$$FILES") == {"FILES": "a.txt b.txt c.txt"}
-
-    def test_triple_metavar_preserves_whitespace(self) -> None:
-        assert ast_grep.capture("echo  a   b", "bash", "echo $$$ARGS") == {"ARGS": "a   b"}
-
-    def test_mixed_single_and_triple(self) -> None:
-        assert ast_grep.capture("git commit -m hi", "bash", "git $SUB $$$REST") == {"SUB": "commit", "REST": "-m hi"}
-
-    def test_no_metavar_match_is_empty_dict(self) -> None:
-        assert ast_grep.capture("ls -la", "bash", "ls -la") == {}
-
-    def test_no_match_is_none(self) -> None:
-        assert ast_grep.capture("ls -la", "bash", "sed -n $R $F") is None
+    @pytest.mark.parametrize(
+        ("raw", "lang", "pattern", "expected"),
+        [
+            pytest.param(
+                "sed -n 10,40p f.go", "bash", "sed -n $R $F", {"R": "10,40p", "F": "f.go"}, id="named_singles"
+            ),
+            pytest.param(
+                "sed -n '10,40p' f.go",
+                "bash",
+                "sed -n $R $F",
+                {"R": "'10,40p'", "F": "f.go"},
+                id="quotes_preserved_from_raw",
+            ),
+            pytest.param(
+                "cat a.txt b.txt c.txt",
+                "bash",
+                "cat $$$FILES",
+                {"FILES": "a.txt b.txt c.txt"},
+                id="triple_metavar_span",
+            ),
+            pytest.param(
+                "echo  a   b", "bash", "echo $$$ARGS", {"ARGS": "a   b"}, id="triple_metavar_preserves_whitespace"
+            ),
+            pytest.param(
+                "git commit -m hi",
+                "bash",
+                "git $SUB $$$REST",
+                {"SUB": "commit", "REST": "-m hi"},
+                id="mixed_single_and_triple",
+            ),
+            pytest.param("ls -la", "bash", "ls -la", {}, id="no_metavar_match_is_empty_dict"),
+            pytest.param("ls -la", "bash", "sed -n $R $F", None, id="no_match_is_none"),
+        ],
+    )
+    def test_capture(self, raw: str, lang: str, pattern: str, expected: dict[str, str] | None) -> None:
+        assert ast_grep.capture(raw, lang, pattern) == expected
 
 
 class TestRewriteCode:
@@ -165,35 +190,55 @@ class TestCommandLineStructural:
         assert CommandLine.parse("cat -n foo.txt").matches("cat $$$ARGS")
         assert not CommandLine.parse("ls -la").matches("cat $$$ARGS")
 
-    def test_rewrite_pipeline_only_rewrites_match(self) -> None:
-        assert CommandLine.parse("cat a.txt | grep x").rewrite("cat $$$A", "bat $$$A") == "bat a.txt | grep x"
-
-    def test_single_metavar_drops_extra_args_footgun(self) -> None:
-        assert CommandLine.parse("cat -n foo.txt").rewrite("cat $F", "bat $F") == "bat -n"
-
-    def test_rewrite_no_match_unchanged(self) -> None:
-        assert CommandLine.parse("ls -la").rewrite("cat $$$A", "bat $$$A") == "ls -la"
+    @pytest.mark.parametrize(
+        ("raw", "pattern", "replacement", "expected"),
+        [
+            pytest.param(
+                "cat a.txt | grep x", "cat $$$A", "bat $$$A", "bat a.txt | grep x", id="pipeline_only_rewrites_match"
+            ),
+            pytest.param("cat -n foo.txt", "cat $F", "bat $F", "bat -n", id="single_metavar_drops_extra_args_footgun"),
+            pytest.param("ls -la", "cat $$$A", "bat $$$A", "ls -la", id="no_match_unchanged"),
+        ],
+    )
+    def test_rewrite(self, raw: str, pattern: str, replacement: str, expected: str) -> None:
+        assert CommandLine.parse(raw).rewrite(pattern, replacement) == expected
 
 
 class TestRewriteCommandDispatch:
-    def test_metavar_routes_to_structural(self) -> None:
-        rewrite_command("cat $$$ARGS", "bat $$$ARGS", note="use bat")
-        out = updated_input(dispatch(Event.PreToolUse, bash("cat -n foo.txt")))
-        assert out["command"] == "bat -n foo.txt"
+    @pytest.mark.parametrize(
+        ("pattern", "replacement", "note", "command", "expected"),
+        [
+            pytest.param(
+                "cat $$$ARGS",
+                "bat $$$ARGS",
+                "use bat",
+                "cat -n foo.txt",
+                "bat -n foo.txt",
+                id="metavar_routes_to_structural",
+            ),
+            pytest.param(
+                r"^cat\s+(\S+)$", r"bat \1", None, "cat foo.txt", "bat foo.txt", id="regex_pattern_stays_resub"
+            ),
+            pytest.param(
+                "cat $$$A",
+                "bat $$$A && echo $HOME",
+                None,
+                "cat foo.txt",
+                "bat foo.txt && echo $HOME",
+                id="shell_var_in_replacement_stays_literal",
+            ),
+        ],
+    )
+    def test_command_rewrite(
+        self, pattern: str, replacement: str, note: str | None, command: str, expected: str
+    ) -> None:
+        rewrite_command(pattern, replacement, note=note)
+        out = updated_input(dispatch(Event.PreToolUse, bash(command)))
+        assert out["command"] == expected
 
     def test_structural_no_match_passes_through(self) -> None:
         rewrite_command("cat $$$ARGS", "bat $$$ARGS")
         assert dispatch(Event.PreToolUse, bash("ls -la")) is None
-
-    def test_regex_pattern_stays_resub(self) -> None:
-        rewrite_command(r"^cat\s+(\S+)$", r"bat \1")
-        out = updated_input(dispatch(Event.PreToolUse, bash("cat foo.txt")))
-        assert out["command"] == "bat foo.txt"
-
-    def test_shell_var_in_replacement_stays_literal(self) -> None:
-        rewrite_command("cat $$$A", "bat $$$A && echo $HOME")
-        out = updated_input(dispatch(Event.PreToolUse, bash("cat foo.txt")))
-        assert out["command"] == "bat foo.txt && echo $HOME"
 
     def test_callable_note_rejected_in_shorthand(self) -> None:
         with pytest.raises(TypeError, match="non-callable note"):
