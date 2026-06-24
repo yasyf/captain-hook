@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import ast
-import shutil
-import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -23,20 +21,6 @@ from captain_hook.style import matchers as M
 from captain_hook.tests.helpers import make_ctx, make_post_tool_event
 from captain_hook.types import Event, FilePath
 from captain_hook.utils import kebab
-
-
-@pytest.fixture
-def work_dir() -> Iterator[Path]:
-    d = Path(tempfile.mkdtemp(prefix="sg_src_"))
-    yield d
-    shutil.rmtree(d, ignore_errors=True)
-
-
-@pytest.fixture
-def session_dir() -> Iterator[Path]:
-    d = Path(tempfile.mkdtemp(prefix="sg_session_"))
-    yield d
-    shutil.rmtree(d, ignore_errors=True)
 
 
 class NoPrint(StyleRule):
@@ -77,6 +61,15 @@ class NoNewGlobal(StyleDiffRule):
                 yield from (Violation(node.lineno, f"global {name}") for name in node.names if name not in old)
 
 
+class MissingDocstring(StyleRule):
+    def check(self, change: Change) -> Iterator[Violation]:
+        return iter(())
+
+
+class UnoverriddenCheck(StyleRule):
+    """Has a docstring but no check."""
+
+
 def edit_event(session_dir: Path, *, file: str, old: str, new: str) -> object:
     return make_post_tool_event(
         tool_name="Edit",
@@ -98,18 +91,22 @@ def warn_text(result: dict | None) -> str:
     return result["hookSpecificOutput"]["additionalContext"]
 
 
+def run_edit(session_dir: Path, *, file: str, old: str, new: str) -> dict | None:
+    return dispatch(Event.PostToolUse, edit_event(session_dir, file=file, old=old, new=new), session_dir)
+
+
+def run_write(session_dir: Path, *, file: str, content: str) -> dict | None:
+    return dispatch(Event.PostToolUse, write_event(session_dir, file=file, content=content), session_dir)
+
+
 class TestBasics:
     def test_warns_with_line_number(self, session_dir: Path) -> None:
         styleguide(NoPrint)
-        result = dispatch(
-            Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new='print("hi")\n'), session_dir
-        )
-        assert "print() call (line 1)" in warn_text(result)
+        assert "print() call (line 1)" in warn_text(run_edit(session_dir, file="a.py", old="", new='print("hi")\n'))
 
     def test_clean_code_passes(self, session_dir: Path) -> None:
         styleguide(NoPrint)
-        result = dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new="x = 1\n"), session_dir)
-        assert result is None
+        assert run_edit(session_dir, file="a.py", old="", new="x = 1\n") is None
 
     def test_one_hook_per_call(self, session_dir: Path) -> None:
         styleguide(NoPrint, NoLambda)
@@ -117,9 +114,7 @@ class TestBasics:
 
     def test_block_mode_denies(self, session_dir: Path) -> None:
         styleguide(NoPrint, block=True)
-        result = dispatch(
-            Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new='print("x")\n'), session_dir
-        )
+        result = run_edit(session_dir, file="a.py", old="", new='print("x")\n')
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -127,20 +122,13 @@ class TestBasics:
 class TestAggregation:
     def test_two_rules_aggregate_into_one_message(self, session_dir: Path) -> None:
         styleguide(NoPrint, NoLambda)
-        result = dispatch(
-            Event.PostToolUse,
-            edit_event(session_dir, file="a.py", old="", new="f = lambda: print(1)\n"),
-            session_dir,
-        )
-        msg = warn_text(result)
+        msg = warn_text(run_edit(session_dir, file="a.py", old="", new="f = lambda: print(1)\n"))
         assert "print() call" in msg and "lambda" in msg
         assert "Use a logger instead." in msg and "hurt readability" in msg
 
     def test_only_firing_rules_appear(self, session_dir: Path) -> None:
         styleguide(NoPrint, NoLambda)
-        msg = warn_text(
-            dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new="print(1)\n"), session_dir)
-        )
+        msg = warn_text(run_edit(session_dir, file="a.py", old="", new="print(1)\n"))
         assert "print() call" in msg and "lambda" not in msg
 
 
@@ -152,8 +140,7 @@ class TestChangeScoping:
         path = work_dir / "m.py"
         path.write_text(self.EDITED)
         styleguide(NoPrint)
-        evt = edit_event(session_dir, file=str(path), old="    pass", new='    print("b")')
-        msg = warn_text(dispatch(Event.PostToolUse, evt, session_dir))
+        msg = warn_text(run_edit(session_dir, file=str(path), old="    pass", new='    print("b")'))
         assert "line 5" in msg
         assert "line 2" not in msg
 
@@ -161,63 +148,55 @@ class TestChangeScoping:
         path = work_dir / "m.py"
         path.write_text(self.EDITED)
         styleguide(NoPrint)
-        msg = warn_text(
-            dispatch(Event.PostToolUse, write_event(session_dir, file=str(path), content=self.EDITED), session_dir)
-        )
+        msg = warn_text(run_write(session_dir, file=str(path), content=self.EDITED))
         assert "line 2" in msg and "line 5" in msg
 
     def test_partial_fragment_never_raises(self, work_dir: Path, session_dir: Path) -> None:
         path = work_dir / "m.py"
         path.write_text("def f():\n    if True:\n        print('x')\n    return 1\n")
         styleguide(NoPrint)
-        evt = edit_event(session_dir, file=str(path), old="        pass", new="        print('x')")
-        assert dispatch(Event.PostToolUse, evt, session_dir) is not None
+        assert run_edit(session_dir, file=str(path), old="        pass", new="        print('x')") is not None
 
 
 class TestMaxShown:
     def test_max_shown_caps_violations(self, session_dir: Path) -> None:
         styleguide(NoPrint, max_shown=2)
-        content = "print(1)\nprint(2)\nprint(3)\nprint(4)\n"
-        msg = warn_text(
-            dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new=content), session_dir)
-        )
+        msg = warn_text(run_edit(session_dir, file="a.py", old="", new="print(1)\nprint(2)\nprint(3)\nprint(4)\n"))
         assert msg.count("(line ") == 2
 
 
 class TestDiffRule:
     def test_newly_introduced_flagged(self, session_dir: Path) -> None:
         styleguide(NoNewGlobal)
-        evt = edit_event(
-            session_dir, file="d.py", old="def f():\n    return 1\n", new="def f():\n    global x\n    return x\n"
+        msg = warn_text(
+            run_edit(
+                session_dir, file="d.py", old="def f():\n    return 1\n", new="def f():\n    global x\n    return x\n"
+            )
         )
-        assert "global x" in warn_text(dispatch(Event.PostToolUse, evt, session_dir))
+        assert "global x" in msg
 
     def test_preexisting_not_flagged(self, session_dir: Path) -> None:
         styleguide(NoNewGlobal)
-        evt = edit_event(
+        result = run_edit(
             session_dir,
             file="d.py",
             old="def f():\n    global x\n    return 1\n",
             new="def f():\n    global x\n    return 2\n",
         )
-        assert dispatch(Event.PostToolUse, evt, session_dir) is None
+        assert result is None
 
     def test_write_introduces_global(self, work_dir: Path, session_dir: Path) -> None:
         path = work_dir / "d.py"
         content = "def f():\n    global y\n    return y\n"
         path.write_text(content)
         styleguide(NoNewGlobal)
-        assert "global y" in warn_text(
-            dispatch(Event.PostToolUse, write_event(session_dir, file=str(path), content=content), session_dir)
-        )
+        assert "global y" in warn_text(run_write(session_dir, file=str(path), content=content))
 
 
 class TestDocstringMessage:
     def test_cleandoc_strips_leading_newline(self, session_dir: Path) -> None:
         styleguide(NoPrint)
-        msg = warn_text(
-            dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new="print(1)\n"), session_dir)
-        )
+        msg = warn_text(run_edit(session_dir, file="a.py", old="", new="print(1)\n"))
         assert msg.startswith("print() calls don't belong")
 
     def test_appends_violations_when_no_placeholder(self, session_dir: Path) -> None:
@@ -230,9 +209,7 @@ class TestDocstringMessage:
                 yield from (Violation(n.lineno, "call") for n in ast.walk(change.tree) if isinstance(n, ast.Call))
 
         styleguide(NoCall)
-        msg = warn_text(
-            dispatch(Event.PostToolUse, edit_event(session_dir, file="a.py", old="", new="f()\n"), session_dir)
-        )
+        msg = warn_text(run_edit(session_dir, file="a.py", old="", new="f()\n"))
         assert "Calls are not allowed in this file." in msg
         assert "call (line 1)" in msg
 
@@ -260,31 +237,23 @@ class TestDocstringMessage:
 
 
 class TestValidation:
-    def test_rejects_missing_docstring(self) -> None:
-        class NoDoc(StyleRule):
-            def check(self, change: Change) -> Iterator[Violation]:
-                return iter(())
-
-        with pytest.raises(ValueError, match="docstring"):
-            styleguide(NoDoc)
-
-    def test_rejects_unoverridden_check(self) -> None:
-        class JustDoc(StyleRule):
-            """Has a docstring but no check."""
-
-        with pytest.raises(TypeError, match="check"):
-            styleguide(JustDoc)
-
-    def test_rejects_non_rule(self) -> None:
-        with pytest.raises(TypeError, match="StyleRule"):
-            styleguide(int)  # type: ignore[arg-type]
+    @pytest.mark.parametrize(
+        ("rule", "exc_type", "match"),
+        [
+            pytest.param(MissingDocstring, ValueError, "docstring", id="rejects_missing_docstring"),
+            pytest.param(UnoverriddenCheck, TypeError, "check", id="rejects_unoverridden_check"),
+            pytest.param(int, TypeError, "StyleRule", id="rejects_non_rule"),
+        ],
+    )
+    def test_rejects(self, rule: type, exc_type: type[Exception], match: str) -> None:
+        with pytest.raises(exc_type, match=match):
+            styleguide(rule)  # type: ignore[arg-type]
 
 
 class TestScoping:
     def test_appends_only_if_guard(self, session_dir: Path) -> None:
         styleguide(NoPrint, only_if=[FilePath("src/**/*.py")])
-        evt = edit_event(session_dir, file="other/a.py", old="", new="print(1)\n")
-        assert dispatch(Event.PostToolUse, evt, session_dir) is None
+        assert run_edit(session_dir, file="other/a.py", old="", new="print(1)\n") is None
 
     def test_default_event_is_post_tool_use(self) -> None:
         styleguide(NoPrint)
@@ -298,9 +267,25 @@ class TestHelpers:
 
 
 class TestMatcher:
-    def test_child_of(self) -> None:
-        tree = ast.parse("def f(c):\n    if c:\n        import os\n")
-        assert len(list((M.imports & M.child_of(M.control_flow)).over(tree))) == 1
+    @pytest.mark.parametrize(
+        ("source", "matcher", "count"),
+        [
+            pytest.param(
+                "def f(c):\n    if c:\n        import os\n",
+                M.imports & M.child_of(M.control_flow),
+                1,
+                id="child_of",
+            ),
+            pytest.param(
+                "pairs = list(zip(a, b))\nok = zip(a, b, strict=True)\n",
+                M.calls("zip") & ~M.kwarg("strict"),
+                1,
+                id="intersection_and_negation",
+            ),
+        ],
+    )
+    def test_match_count(self, source: str, matcher: M.Matcher, count: int) -> None:
+        assert len(list(matcher.over(ast.parse(source)))) == count
 
     def test_negated_under_type_checking(self) -> None:
         tree = ast.parse("from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\n")
@@ -317,10 +302,6 @@ class TestMatcher:
     def test_union(self) -> None:
         tree = ast.parse("class C:\n    pass\ndef f():\n    pass\n")
         assert sum((M.cls | M.func).matches(n) for n in ast.walk(tree)) == 2
-
-    def test_intersection_and_negation(self) -> None:
-        tree = ast.parse("pairs = list(zip(a, b))\nok = zip(a, b, strict=True)\n")
-        assert len(list((M.calls("zip") & ~M.kwarg("strict")).over(tree))) == 1
 
     def test_named_presets(self) -> None:
         tree = ast.parse("class _P:\n    pass\nMAX_RETRIES = 3\n")
