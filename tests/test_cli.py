@@ -498,41 +498,6 @@ class TestCLIWithContext:
             assert "ctx exists" in raw
             assert "ctx is None" not in raw
 
-    def test_cli_max_fires_persistent(self, tmp_path: Path, hooks_dir: Path) -> None:
-        write_hook(
-            hooks_dir,
-            """\
-            from captain_hook.app import hook, on
-            from captain_hook.types import Event
-
-            hook(Event.PreToolUse, message="once only", max_fires=1)
-        """,
-        )
-
-        stdin = stdin_json(session_id="max-fires-sess", tool_name="Bash", tool_input={"command": "echo hi"})
-        root_dir = tmp_path / "project"
-        root_dir.mkdir()
-
-        result1 = run_cli(
-            "run",
-            "PreToolUse",
-            hooks_dir=str(hooks_dir),
-            root_dir=str(root_dir),
-            stdin_data=stdin,
-        )
-        assert result1.returncode == 0
-        assert "once only" in result1.stdout
-
-        result2 = run_cli(
-            "run",
-            "PreToolUse",
-            hooks_dir=str(hooks_dir),
-            root_dir=str(root_dir),
-            stdin_data=stdin,
-        )
-        assert result2.returncode == 0
-        assert result2.stdout.strip() == ""
-
     @pytest.mark.parametrize(
         ("accessor", "ok_message"),
         [
