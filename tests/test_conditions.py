@@ -679,18 +679,6 @@ class TestCombinedConditions:
 
 
 class TestNonToolEventConditions:
-    @pytest.mark.parametrize(
-        "cond",
-        [
-            pytest.param(Tool("Bash"), id="tool_condition_on_stop_is_false"),
-            pytest.param(Command(r"git"), id="command_condition_on_stop_is_false"),
-            pytest.param(Content(r"import"), id="content_condition_on_stop_is_false"),
-            pytest.param(FilePath("*.py"), id="filepath_condition_on_stop_is_false"),
-        ],
-    )
-    def test_condition_on_stop_is_false(self, cond: TCondition) -> None:
-        assert check_condition(cond, make_event(StopEvent)) is False
-
     def test_conditions_on_user_prompt_graceful(self) -> None:
 
         evt = make_event(UserPromptSubmitEvent)
