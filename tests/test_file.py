@@ -64,43 +64,43 @@ class TestFileGetattr:
 
 
 class TestFileMatches:
-    def test_matches_extension(self) -> None:
-        f = File(path=Path("bioqa/models/base.py"))
-        assert f.matches("*.py")
-
-    def test_matches_glob_pattern(self) -> None:
-        f = File(path=Path("bioqa/models/base.py"))
-        assert f.matches("**/base.py")
-
-    def test_no_match(self) -> None:
-        assert not File(path=Path("bioqa/models/base.py")).matches("*.ts")
-
-    def test_multiple_patterns_or(self) -> None:
-        f = File(path=Path("bioqa/models/base.py"))
-        assert f.matches("*.rs", "*.py")
+    @pytest.mark.parametrize(
+        ("patterns", "expected"),
+        [
+            pytest.param(("*.py",), True, id="matches_extension"),
+            pytest.param(("**/base.py",), True, id="matches_glob_pattern"),
+            pytest.param(("*.ts",), False, id="no_match"),
+            pytest.param(("*.rs", "*.py"), True, id="multiple_patterns_or"),
+        ],
+    )
+    def test_matches(self, patterns: tuple[str, ...], expected: bool) -> None:
+        assert File(path=Path("bioqa/models/base.py")).matches(*patterns) is expected
 
 
 class TestFileUnder:
-    def test_under_matching_prefix(self) -> None:
-        f = File(path=Path("bioqa/models/base.py"))
-        assert f.under("bioqa/")
-
-    def test_under_non_matching_prefix(self) -> None:
-        assert not File(path=Path("bioqa/models/base.py")).under("www/")
+    @pytest.mark.parametrize(
+        ("prefix", "expected"),
+        [
+            pytest.param("bioqa/", True, id="matching_prefix"),
+            pytest.param("www/", False, id="non_matching_prefix"),
+        ],
+    )
+    def test_under(self, prefix: str, expected: bool) -> None:
+        assert File(path=Path("bioqa/models/base.py")).under(prefix) is expected
 
 
 class TestFileIsTest:
-    def test_test_prefix_file(self) -> None:
-        assert File(path=Path("tests/test_query.py")).is_test
-
-    def test_conftest(self) -> None:
-        assert File(path=Path("tests/conftest.py")).is_test
-
-    def test_nested_test_dir(self) -> None:
-        assert File(path=Path("/project/bioqa/tests/util/test_helpers.py")).is_test
-
-    def test_non_test_file(self) -> None:
-        assert not File(path=Path("bioqa/main.py")).is_test
+    @pytest.mark.parametrize(
+        ("path", "expected"),
+        [
+            pytest.param("tests/test_query.py", True, id="test_prefix_file"),
+            pytest.param("tests/conftest.py", True, id="conftest"),
+            pytest.param("/project/bioqa/tests/util/test_helpers.py", True, id="nested_test_dir"),
+            pytest.param("bioqa/main.py", False, id="non_test_file"),
+        ],
+    )
+    def test_is_test(self, path: str, expected: bool) -> None:
+        assert File(path=Path(path)).is_test is expected
 
 
 class TestFileFrozen:
