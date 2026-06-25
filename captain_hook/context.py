@@ -199,23 +199,37 @@ class HookContext:
         except (subprocess.CalledProcessError, FileNotFoundError):
             return None
 
-    def diff(self, source: str = "uncommitted", *, scope: str | None = None, budget: int = 4000) -> str | None:
-        """A compact working-tree diff via ``ccx diff`` when available, else plain ``git diff``.
+    def diff(
+        self,
+        source: str = "uncommitted",
+        *,
+        commit: str | None = None,
+        scope: str | None = None,
+        budget: int = 4000,
+    ) -> str | None:
+        """A compact diff via ``ccx diff`` when available, else plain ``git``.
 
-        Prefers cc-context's token-budgeted ``ccx diff`` and transparently falls back to
-        ``git diff`` when ``ccx`` is absent or fails, so a hook gets the same diff in any repo.
+        Prefers cc-context's token-budgeted ``ccx diff`` and falls back to ``git`` when ``ccx`` is
+        absent, fails, or returns a hunkless symbol-outline (no ``@@`` / ``diff --git`` lines, as in
+        jj-colocated repos), so a hook gets a real diff in any repo. The git fallback is bounded to
+        roughly ``budget`` tokens with a trailing marker when truncated, so a large diff can't blow
+        the caller's context.
 
         Args:
-            source: ``"uncommitted"`` (working tree, the default), ``"staged"``, or any git ref.
+            source: ``"uncommitted"`` (the default), ``"staged"``, or any git ref. Ignored when
+                ``commit`` is set.
+            commit: When set, the diff *introduced by* this commit (root-commit-safe), overriding
+                ``source``; its git fallback is ``git show --stat -p``, so it carries the commit
+                header + diffstat ahead of the patch.
             scope: Restrict the diff to this path.
-            budget: Approximate token budget for the ``ccx`` output (the ``git`` fallback is unbounded).
-
-        Returns:
-            The rendered diff, or ``None`` when neither ``ccx`` nor ``git`` produces output.
+            budget: Token budget for both the ``ccx`` output and the bounded git fallback.
         """
-        ccx = ["ccx", "diff", source, "--budget", str(budget), *(("--scope", scope) if scope else ())]
-        if (out := self.call_cli(ccx, throw=False)) is not None:
+        target = f"{commit}~1..{commit}" if commit is not None else source
+        if (out := self.ccx_diff(target, scope=scope, budget=budget)) is not None:
             return out
+        git_scope = ("--", scope) if scope else ()
+        if commit is not None:
+            return self.bounded_git(budget, "show", "--stat", "-p", commit, *git_scope)
         match source:
             case "uncommitted":
                 args = ["diff"]
@@ -223,7 +237,17 @@ class HookContext:
                 args = ["diff", "--staged"]
             case ref:
                 args = ["diff", ref]
-        return self.git(*args, *(("--", scope) if scope else ()))
+        return self.bounded_git(budget, *args, *git_scope)
+
+    def ccx_diff(self, target: str, *, scope: str | None, budget: int) -> str | None:
+        cmd = ["ccx", "diff", target, "--budget", str(budget), *(("--scope", scope) if scope else ())]
+        out = self.call_cli(cmd, throw=False)
+        return out if out is not None and ("@@" in out or "diff --git" in out) else None
+
+    def bounded_git(self, budget: int, *args: str) -> str | None:
+        if (out := self.git(*args)) is None or len(out) <= (limit := budget * 4):
+            return out
+        return out[:limit].rstrip() + f"\n... [diff truncated to ~{budget} tokens] ..."
 
     @cached_property
     def changed_paths(self) -> frozenset[Path] | None:

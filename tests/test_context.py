@@ -401,6 +401,12 @@ def git_in(path: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True)
 
 
+def git_in_out(path: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(path), *args], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
 def make_repo(path: Path, *, branch: str = "test-branch") -> None:
     git_in(path, "init", "--initial-branch", branch)
     git_in(path, "config", "user.email", "test@example.com")
@@ -446,13 +452,14 @@ class TestChangedPaths:
 class TestDiff:
     def test_prefers_ccx_when_available(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         ctx = make_ctx_in(tmp_path, monkeypatch)
-        with patch("captain_hook.context.run_cli", return_value="# Diff: uncommitted\nbody") as mock:
-            assert ctx.diff() == "# Diff: uncommitted\nbody"
+        ccx_out = "# Diff: uncommitted\n@@ -1 +1 @@\n-body\n+body2\n"
+        with patch("captain_hook.context.run_cli", return_value=ccx_out) as mock:
+            assert ctx.diff() == ccx_out
         assert mock.call_args.args[0] == ["ccx", "diff", "uncommitted", "--budget", "4000"]
 
     def test_passes_scope_and_budget_to_ccx(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         ctx = make_ctx_in(tmp_path, monkeypatch)
-        with patch("captain_hook.context.run_cli", return_value="ccx out") as mock:
+        with patch("captain_hook.context.run_cli", return_value="diff --git a/f b/f\nccx out") as mock:
             ctx.diff("HEAD~1", scope="src/", budget=800)
         assert mock.call_args.args[0] == ["ccx", "diff", "HEAD~1", "--budget", "800", "--scope", "src/"]
 
@@ -520,6 +527,116 @@ class TestDiff:
         with patch("captain_hook.context.run_cli", side_effect=fake):
             ctx.diff(source, scope=scope)
         assert captured == [expected]
+
+    def test_commit_hunkless_ccx_falls_back_to_git_show(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured: list[list[str]] = []
+
+        def fake(args: list[str], **kwargs: Any) -> str:
+            if args[0] == "ccx":
+                return "# Diff: HEAD~1..HEAD — 1 file\n\n## f.txt (0 symbols)"  # hunkless symbol-outline
+            captured.append(args)
+            return "diff --git a/f b/f\n@@ -0,0 +1 @@\n+x\n"
+
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        with patch("captain_hook.context.run_cli", side_effect=fake):
+            out = ctx.diff(commit="HEAD")
+        assert captured == [["git", "show", "--stat", "-p", "HEAD"]]
+        assert out == "diff --git a/f b/f\n@@ -0,0 +1 @@\n+x\n"
+
+    def test_commit_prefers_ccx_when_it_has_hunks(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        with patch("captain_hook.context.run_cli", return_value="diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b\n") as mock:
+            out = ctx.diff(commit="abc123", budget=800)
+        assert out == "diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b\n"
+        assert mock.call_args.args[0] == ["ccx", "diff", "abc123~1..abc123", "--budget", "800"]
+
+    def test_commit_ccx_threads_scope(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        with patch("captain_hook.context.run_cli", return_value="diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b\n") as mock:
+            ctx.diff(commit="abc", scope="pkg/", budget=800)
+        assert mock.call_args.args[0] == ["ccx", "diff", "abc~1..abc", "--budget", "800", "--scope", "pkg/"]
+
+    def test_commit_hunkless_ccx_threads_scope_into_git_show(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: list[list[str]] = []
+
+        def fake(args: list[str], **kwargs: Any) -> str:
+            if args[0] == "ccx":
+                return "# Diff: abc~1..abc — 1 file\n\n## f.txt (0 symbols)"  # hunkless symbol-outline
+            captured.append(args)
+            return "diff --git a/f b/f\n@@ -0,0 +1 @@\n+x\n"
+
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        with patch("captain_hook.context.run_cli", side_effect=fake):
+            ctx.diff(commit="abc", scope="pkg/")
+        assert captured == [["git", "show", "--stat", "-p", "abc", "--", "pkg/"]]
+
+    def test_git_fallback_is_truncated_with_marker(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        budget = 100
+        oversized = "+x\n" * (budget * 4)  # comfortably exceeds budget * 4 chars
+
+        def fake(args: list[str], **kwargs: Any) -> str:
+            if args[0] == "ccx":
+                raise FileNotFoundError(2, "No such file or directory", "ccx")
+            return oversized
+
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        with patch("captain_hook.context.run_cli", side_effect=fake):
+            out = ctx.diff(budget=budget)
+        assert out is not None
+        marker = f"... [diff truncated to ~{budget} tokens] ..."
+        assert out.endswith(marker)
+        body = out[: -len(marker)].rstrip("\n")
+        assert len(body) <= budget * 4
+
+    def test_git_fallback_exact_limit_not_truncated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        budget = 100
+        exact = "x" * (budget * 4)  # len(out) == budget * 4, the boundary
+
+        def fake(args: list[str], **kwargs: Any) -> str:
+            if args[0] == "ccx":
+                raise FileNotFoundError(2, "No such file or directory", "ccx")
+            return exact
+
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        with patch("captain_hook.context.run_cli", side_effect=fake):
+            out = ctx.diff(budget=budget)
+        assert out == exact
+        assert "truncated" not in out
+
+    def test_git_fallback_one_over_limit_truncated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        budget = 100
+        over = "x" * (budget * 4 + 1)  # len(out) == budget * 4 + 1, one past the boundary
+
+        def fake(args: list[str], **kwargs: Any) -> str:
+            if args[0] == "ccx":
+                raise FileNotFoundError(2, "No such file or directory", "ccx")
+            return over
+
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        with patch("captain_hook.context.run_cli", side_effect=fake):
+            out = ctx.diff(budget=budget)
+        assert out is not None
+        assert out.endswith(f"\n... [diff truncated to ~{budget} tokens] ...")
+
+    def test_root_commit_returns_git_show_not_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from spawnllm.proc import run_cli as real_run_cli
+
+        make_repo(tmp_path)  # single root commit; HEAD~1 does not exist
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        root = git_in_out(tmp_path, "rev-parse", "HEAD")
+
+        def fake(args: list[str], **kwargs: Any) -> str | None:
+            if args[0] == "ccx":
+                raise FileNotFoundError(2, "No such file or directory", "ccx")
+            return real_run_cli(args, **kwargs)
+
+        with patch("captain_hook.context.run_cli", side_effect=fake):
+            out = ctx.diff(commit=root)
+        assert out is not None
+        assert "README.md" in out
+        assert "init" in out  # commit message from `git show`
 
 
 class TestRepoRoot:
