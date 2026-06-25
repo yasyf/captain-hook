@@ -23,6 +23,22 @@ def run_declarative(spec: HookSpec, evt: BaseHookEvent) -> HookResult | None:
     )
 
 
+def record_fire(
+    entry: RegisteredHook,
+    evt: BaseHookEvent,
+    result: HookResult,
+    store: SessionStore,
+    hook_state: HookState,
+) -> None:
+    """React to a hook firing: bump and persist the fire count, then record the decision."""
+    hook_state.fire_count += 1
+    store[HookState].set(hook_state)
+    try:
+        record_decision(entry, evt, result)
+    except Exception:
+        logger.bind(hook=entry.name).exception("decision write failed")
+
+
 def execute_hook(
     entry: RegisteredHook,
     evt: BaseHookEvent,
@@ -46,12 +62,7 @@ def execute_hook(
         return None
 
     if result:
-        hook_state.fire_count += 1
-        store[HookState].set(hook_state)
-        try:
-            record_decision(entry, evt, result)
-        except Exception:
-            logger.bind(hook=entry.name).exception("decision write failed")
+        record_fire(entry, evt, result, store, hook_state)
 
     return result
 
