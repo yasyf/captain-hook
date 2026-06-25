@@ -152,8 +152,8 @@ reference:
       - File
       - file.PathMatcher
       - file.categorize_files
-      - utils.read_json
-      - utils.resolve_binary
+      - util.fs.read_json
+      - util.fs.resolve_binary
       - Command
       - CommandLine
       - Redirect
