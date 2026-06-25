@@ -322,7 +322,9 @@ class TestJudgePass:
         assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
         assert len(calls) == 1
         assert "structural junk" not in calls[0]
-        unjudged = await store.unjudged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION, model=resolved_model(settings.judge_tier))
+        unjudged = await store.unjudged(
+            role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION, model=resolved_model(settings.judge_tier)
+        )
         assert [row["text"] for row in unjudged] == ["structural junk"]
 
     @requires_llm_backend
