@@ -147,12 +147,11 @@ def brain_prompt(transcript: Path) -> str:
 
 
 def brain_argv(*, max_turns: int, max_budget_usd: float) -> list[str]:
-    from spawnllm import ClaudeConfig, RunSpec
+    from spawnllm import ClaudeCliBackend, ClaudeConfig, RunSpec
 
     from captain_hook.cli import plugin_dir
-    from captain_hook.llm import ClaudeBackend
 
-    backend = ClaudeBackend()
+    backend = ClaudeCliBackend()
     spec = RunSpec(
         prompt="",
         model=backend.models[BRAIN_TIER],

@@ -15,11 +15,10 @@ from cc_transcript.query import Session
 from cc_transcript.render import Budget, render_turn
 from cc_transcript.tools import parse_tool_call
 from pydantic import BaseModel
-from spawnllm import call_sync, extract_sync
+from spawnllm import TModel, TSpecialty, call_sync, extract_sync
 from spawnllm.proc import run_cli
 
 from captain_hook.classifiers import detect
-from captain_hook.llm import LlmBackends, TModel, TSpecialty
 from captain_hook.prompt import Prompt
 from captain_hook.session import SessionStore
 
@@ -310,13 +309,12 @@ class HookContext:
     ) -> str | BaseModel:
         diff_text = self.diff("uncommitted" if diff is True else diff) if diff else None
         prompt = self.assemble_prompt(template, args, kwargs, transcript=transcript, diff_text=diff_text)
-        backend = LlmBackends.for_specialty(specialty)
         cwd = os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR")
         if response_model is not None:
             return extract_sync(
-                prompt, response_model, backend=backend, model=model, agent=agent, cwd=cwd, timeout=timeout
+                prompt, response_model, specialty=specialty, model=model, agent=agent, cwd=cwd, timeout=timeout
             )
-        return call_sync(prompt, backend=backend, model=model, agent=agent, cwd=cwd, timeout=timeout)
+        return call_sync(prompt, specialty=specialty, model=model, agent=agent, cwd=cwd, timeout=timeout)
 
     def assemble_prompt(
         self,

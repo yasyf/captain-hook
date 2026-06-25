@@ -6,9 +6,6 @@ resolution-markers = [
     "python_full_version < '3.14'",
 ]
 
-[options]
-exclude-newer = "2026-06-24T12:00:00Z"
-
 [[package]]
 name = "aiosqlite"
 version = "0.22.1"
@@ -330,7 +327,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "spacy", specifier = ">=3.7" },
-    { name = "spawnllm", specifier = ">=0.5.0" },
+    { name = "spawnllm", specifier = ">=0.5.2,<0.6" },
     { name = "tree-sitter", specifier = ">=0.24" },
     { name = "tree-sitter-bash", specifier = ">=0.23" },
     { name = "wn", specifier = ">=1.1.0" },
@@ -2433,7 +2430,7 @@ wheels = [
 
 [[package]]
 name = "spawnllm"
-version = "0.5.0"
+version = "0.5.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anthropic" },
@@ -2442,9 +2439,9 @@ dependencies = [
     { name = "openai" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/47/86/30f540731e65936cd3fda3b072db4a2260098fd413d0269ca6ee04bbc048/spawnllm-0.5.0.tar.gz", hash = "sha256:d5899d26942ffedc1ddc716195ba508bc4837b6b3fdd730c1a6da8d0285ede9c", size = 26864, upload-time = "2026-06-24T08:19:18.371Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b3/05/73fe4db45a71c4348ec512b3672628a9d040edd01c5306bb4fb152e789da/spawnllm-0.5.2.tar.gz", hash = "sha256:4d766f5d49aa0bb4ccf8172ad957808a444c68e2094690d956be0d0d17d8d3e7", size = 28891, upload-time = "2026-06-25T00:44:43.524Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f0/ef/30cfb4be2f63daa0ba976237ffd06a20618e6278257e4cc7f28589d2b6fa/spawnllm-0.5.0-py3-none-any.whl", hash = "sha256:1e00ea142ae6c4153b98dd3cd41d09e78f862bdffa516dc2bc06b9fe9e127664", size = 37560, upload-time = "2026-06-24T08:19:17.259Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/0a/e7f70b11541e1f3a8aa5e776905bc8cdcc28d66adc6b2c42bcf38973003f/spawnllm-0.5.2-py3-none-any.whl", hash = "sha256:f1372e3c93a03095cabb328549da0875601ffa837d2bd832d016e6a067a20b88", size = 39824, upload-time = "2026-06-25T00:44:42.231Z" },
 ]
 
 [[package]]

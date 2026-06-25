@@ -669,46 +669,6 @@ class TestCallCli:
 class TestCallLlm:
     """VAL-CROSS-018"""
 
-    def test_codex_backend_builds_command_and_parses(self) -> None:
-        from spawnllm import RunSpec
-
-        from captain_hook.llm import CodexBackend
-
-        backend = CodexBackend()
-        cmd = backend.build_command(RunSpec(prompt="", model=backend.models["small"], agent=True))
-        assert cmd[0] == "codex"
-        assert "exec" in cmd
-        assert backend.result_text("raw output") == "raw output"
-
-    def test_claude_backend_builds_command_and_parses(self) -> None:
-        from spawnllm import RunSpec
-
-        from captain_hook.llm import ClaudeBackend
-
-        backend = ClaudeBackend()
-        cmd = backend.build_command(RunSpec(prompt="", model=backend.models["small"], agent=False))
-        assert cmd[0] == "claude"
-        assert "--bare" not in cmd
-        assert "--system-prompt" in cmd and cmd[cmd.index("--system-prompt") + 1] == ""
-        assert "--setting-sources" in cmd and cmd[cmd.index("--setting-sources") + 1] == ""
-        assert "--strict-mcp-config" in cmd
-        assert "--tools" not in cmd
-        assert backend.result_text("raw text") == "raw text"
-
-    def test_codex_backend_parses_model_response(self) -> None:
-        from pydantic import BaseModel
-
-        from captain_hook.llm import CodexBackend
-
-        class Verdict(BaseModel):
-            block: bool
-            reason: str
-
-        backend = CodexBackend()
-        result = Verdict.model_validate(backend.result_value('{"block": true, "reason": "bad code"}'))
-        assert result.block is True
-        assert result.reason == "bad code"
-
     def test_transcript_interpolation_in_template(self) -> None:
         transcript = make_transcript([msg("assistant", "context data")])
         ctx = build_ctx(transcript=transcript)
@@ -841,7 +801,7 @@ class TestCLISubprocess:
 
 
 class TestCallLlmIntegration:
-    """VAL-CROSS-018: HookContext.call_llm delegates to spawnllm.call with the right backend and knobs."""
+    """VAL-CROSS-018: HookContext.call_llm delegates to spawnllm.call with the right specialty and knobs."""
 
     @staticmethod
     def capture_call(monkeypatch: pytest.MonkeyPatch, returns: object) -> dict[str, Any]:
@@ -864,30 +824,26 @@ class TestCallLlmIntegration:
         monkeypatch.setattr(context_mod, "extract_sync", fake_extract)
         return captured
 
-    def test_call_llm_invokes_review_backend(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from captain_hook.llm import CodexBackend
-
+    def test_call_llm_forwards_review_specialty(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
         captured = self.capture_call(monkeypatch, "all good")
         ctx = build_ctx(transcript=make_transcript([msg("assistant", "some context")]), session_dir=tmp_path)
 
         result = ctx.call_llm("Review this code", specialty="review", model="small", timeout=99)
         assert result == "all good"
-        assert isinstance(captured["backend"], CodexBackend)
+        assert captured["specialty"] == "review"
         assert captured["model"] == "small"
         assert captured["timeout"] == 99
         assert captured["cwd"] == str(tmp_path)
         assert "response_model" not in captured
 
-    def test_call_llm_general_uses_claude_backend(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from captain_hook.llm import ClaudeBackend
-
+    def test_call_llm_forwards_general_specialty(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         captured = self.capture_call(monkeypatch, "claude response")
         ctx = build_ctx(transcript=make_transcript([msg("assistant", "context")]), session_dir=tmp_path)
 
         result = ctx.call_llm("hello", specialty="general", model="small")
         assert result == "claude response"
-        assert isinstance(captured["backend"], ClaudeBackend)
+        assert captured["specialty"] == "general"
 
     def test_call_llm_with_response_model(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from pydantic import BaseModel

@@ -28,8 +28,9 @@ from captain_hook.types import (
 FAILURE_ROOT = state.CACHE_ROOT / "failures"
 
 if TYPE_CHECKING:
+    from spawnllm import TModel, TSpecialty
+
     from captain_hook.events import BaseHookEvent
-    from captain_hook.llm import TModel, TSpecialty
     from captain_hook.signals.nlp import NlpSignal
 
 

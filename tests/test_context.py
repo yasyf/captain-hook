@@ -232,28 +232,24 @@ class TestCallCli:
 
 
 class TestCallLlm:
-    def test_backend_dispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from captain_hook.llm import CodexBackend
-
+    def test_dispatch_forwards_specialty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
 
         with patch("captain_hook.context.call_sync", return_value="mocked response") as mock_call:
             result = ctx.call_llm("test prompt", specialty="review")
         assert result == "mocked response"
-        assert isinstance(mock_call.call_args.kwargs["backend"], CodexBackend)
+        assert mock_call.call_args.kwargs["specialty"] == "review"
         assert mock_call.call_args.kwargs["cwd"] == "/tmp"
 
-    def test_general_uses_claude(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from captain_hook.llm import ClaudeBackend
-
+    def test_general_forwards_specialty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
 
         with patch("captain_hook.context.call_sync", return_value="mocked response") as mock_call:
             result = ctx.call_llm("test prompt", specialty="general")
         assert result == "mocked response"
-        assert isinstance(mock_call.call_args.kwargs["backend"], ClaudeBackend)
+        assert mock_call.call_args.kwargs["specialty"] == "general"
 
     def test_with_transcript(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from captain_hook.testing.helpers import fixture_session
