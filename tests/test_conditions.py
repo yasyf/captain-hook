@@ -210,6 +210,14 @@ class TestFilePathCondition:
         )
         assert check_condition(cond, evt) is expected
 
+    def test_filepath_keyword_only_option(self) -> None:
+        assert FilePath("*.py").project_only is True
+        assert FilePath("*.py", project_only=False).project_only is False
+
+    def test_filepath_rejects_unknown_kwarg(self) -> None:
+        with pytest.raises(TypeError):
+            FilePath("*.py", projectonly=False)  # type: ignore[call-arg]
+
 
 class TestCommandCondition:
     @pytest.mark.parametrize(

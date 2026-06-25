@@ -118,17 +118,13 @@ class Tool:
     pattern: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PatternsCondition:
     patterns: tuple[str, ...]
 
 
-@dataclass(frozen=True)
-class FilePathFields(PatternsCondition):
-    project_only: bool
-
-
-class FilePath(FilePathFields):
+@dataclass(frozen=True, slots=True)
+class FilePath(PatternsCondition):
     """Condition matching the current event's file path against glob patterns.
 
     Accepts one or more glob patterns as positional arguments.
@@ -137,8 +133,11 @@ class FilePath(FilePathFields):
         >>> hook(Event.PostToolUse, only_if=[FilePath("*.py", "*.pyi")], message="Python file edited")
     """
 
-    def __init__(self, *patterns: str, **kwargs: bool) -> None:
-        super().__init__(patterns=patterns, project_only=kwargs.pop("project_only", True))
+    project_only: bool
+
+    def __init__(self, *patterns: str, project_only: bool = True) -> None:
+        object.__setattr__(self, "patterns", patterns)
+        object.__setattr__(self, "project_only", project_only)
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,19 +202,18 @@ class UsedSkill:
     subagents: bool = True
 
 
-@dataclass(frozen=True)
-class ReadFileFields(PatternsCondition):
-    subagents: bool
-
-
-class ReadFile(ReadFileFields):
+@dataclass(frozen=True, slots=True)
+class ReadFile(PatternsCondition):
     """Transcript-history condition: true when a Read tool use targeted a matching file.
 
     Accepts one or more glob patterns as positional arguments.
     """
 
-    def __init__(self, *patterns: str, **kwargs: bool) -> None:
-        super().__init__(patterns=patterns, subagents=kwargs.pop("subagents", True))
+    subagents: bool
+
+    def __init__(self, *patterns: str, subagents: bool = True) -> None:
+        object.__setattr__(self, "patterns", patterns)
+        object.__setattr__(self, "subagents", subagents)
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,19 +243,18 @@ class Agent:
     name: str
 
 
-@dataclass(frozen=True)
-class TouchedFileFields(PatternsCondition):
-    subagents: bool
-
-
-class TouchedFile(TouchedFileFields):
+@dataclass(frozen=True, slots=True)
+class TouchedFile(PatternsCondition):
     """Transcript-history condition: true when an Edit/Write targeted a file matching the glob.
 
     Accepts one or more glob patterns as positional arguments.
     """
 
-    def __init__(self, *patterns: str, **kwargs: bool) -> None:
-        super().__init__(patterns=patterns, subagents=kwargs.pop("subagents", False))
+    subagents: bool
+
+    def __init__(self, *patterns: str, subagents: bool = False) -> None:
+        object.__setattr__(self, "patterns", patterns)
+        object.__setattr__(self, "subagents", subagents)
 
 
 @dataclass(frozen=True, slots=True)
@@ -444,7 +441,7 @@ class HookResult:
     @classmethod
     def of(cls, action: Action, message: str | None = None) -> HookResult:
         """Build a ``HookResult``, dedenting and stripping ``message`` for readable triple-quoted handler returns."""
-        return cls(action=action, message=dedent(message).strip() if message else None)
+        return cls(action=action, message=dedent(message).strip() if message is not None else None)
 
 
 type HookResponse = HookResult | None
