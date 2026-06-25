@@ -327,6 +327,17 @@ class TestCallLlm:
         assert "<diff>\nDIFF BODY HERE\n</diff>" in prompt
         assert "review the change" in prompt
 
+    def test_diff_attaches_diff_block_str_template(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        monkeypatch.setattr(ctx, "diff", lambda *a, **k: "DIFF BODY HERE")
+
+        with patch("captain_hook.context.call_sync", return_value="ok") as mock_call:
+            ctx.call_llm("review {item}", item="the change", diff=True)
+        prompt = mock_call.call_args.args[0]
+        assert prompt.startswith("<diff>\nDIFF BODY HERE\n</diff>")
+        assert "review the change" in prompt
+
     def test_diff_false_attaches_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from captain_hook.prompt import Prompt
 

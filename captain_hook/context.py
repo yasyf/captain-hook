@@ -309,17 +309,7 @@ class HookContext:
         **kwargs: Any,
     ) -> str | BaseModel:
         diff_text = self.diff("uncommitted" if diff is True else diff) if diff else None
-        if isinstance(template, Prompt):
-            prompt = str(template.context("diff", diff_text))
-            if transcript:
-                prompt = f"{self.transcript_block(window=transcript_window(transcript))}\n\n<task>\n{prompt}\n</task>"
-        else:
-            block = self.transcript_block(window=transcript_window(transcript)) if transcript else ""
-            if transcript:
-                template = f"{{transcript}}\n\n<task>\n{template}\n</task>"
-            prompt = template.format(*args, **kwargs, transcript=block)
-            if diff_text is not None:
-                prompt = f"<diff>\n{diff_text}\n</diff>\n\n{prompt}"
+        prompt = self.assemble_prompt(template, args, kwargs, transcript=transcript, diff_text=diff_text)
         backend = LlmBackends.for_specialty(specialty)
         cwd = os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR")
         if response_model is not None:
@@ -327,3 +317,23 @@ class HookContext:
                 prompt, response_model, backend=backend, model=model, agent=agent, cwd=cwd, timeout=timeout
             )
         return call_sync(prompt, backend=backend, model=model, agent=agent, cwd=cwd, timeout=timeout)
+
+    def assemble_prompt(
+        self,
+        template: str | Prompt,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        *,
+        transcript: bool | int | Literal["recent", "full"],
+        diff_text: str | None,
+    ) -> str:
+        window = transcript_window(transcript) if transcript else None
+        match template:
+            case Prompt():
+                prompt = str(template.context("diff", diff_text))
+                return f"{self.transcript_block(window=window)}\n\n<task>\n{prompt}\n</task>" if transcript else prompt
+            case str():
+                block = self.transcript_block(window=window) if transcript else ""
+                wrapped = f"{{transcript}}\n\n<task>\n{template}\n</task>" if transcript else template
+                body = wrapped.format(*args, **kwargs, transcript=block)
+                return f"<diff>\n{diff_text}\n</diff>\n\n{body}" if diff_text is not None else body
