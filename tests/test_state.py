@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
 
 from captain_hook.dispatch import HookState, execute_hook
 from captain_hook.session import SessionSlot, SessionStore, session_state
-from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
+from captain_hook.state import PrimitiveState, SeenKeys, fired_this_turn, hook_name, record_fire
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 
 
@@ -412,3 +413,93 @@ class TestSessionStateTracking:
         assert "CustomScope" in paths
         assert paths["CustomScope"].name == "custom_scope.json"
         SessionStore.untrack(CustomScope)
+
+
+class TestSeenKeys:
+    def test_seen_keys_is_tracked(self) -> None:
+        assert SeenKeys in SessionStore.tracked_models()
+
+    def test_once_first_sight_true_then_false(self, tmp_path: Path) -> None:
+        store = SessionStore(tmp_path)
+        assert store.once("k") is True
+        assert store.once("k") is False
+        assert store.once("k") is False
+
+    def test_once_distinct_keys_each_first_sight_true(self, tmp_path: Path) -> None:
+        store = SessionStore(tmp_path)
+        assert store.once("a") is True
+        assert store.once("b") is True
+        assert store.once("a") is False
+        assert store.once("b") is False
+
+    def test_once_scopes_are_independent(self, tmp_path: Path) -> None:
+        store = SessionStore(tmp_path)
+        assert store.once("k", scope="a") is True
+        assert store.once("k", scope="b") is True
+        assert store.once("k", scope="a") is False
+        assert store.once("k", scope="b") is False
+
+    def test_once_records_under_scope(self, tmp_path: Path) -> None:
+        store = SessionStore(tmp_path)
+        store.once("k", scope="a")
+        store.once("j", scope="a")
+        assert store.load(SeenKeys).seen == {"a": ["k", "j"]}
+
+    def test_once_already_seen_no_rewrite(self, tmp_path: Path) -> None:
+        store = SessionStore(tmp_path)
+        store.once("k")
+        path = store[SeenKeys].path
+        assert path is not None
+        mtime_before = path.stat().st_mtime_ns
+        assert store.once("k") is False
+        assert path.stat().st_mtime_ns == mtime_before
+
+    def test_unseen_returns_fresh_subset_and_marks_all(self, tmp_path: Path) -> None:
+        store = SessionStore(tmp_path)
+        assert store.unseen(["a", "b"]) == ["a", "b"]
+        assert store.unseen(["a", "b", "c"]) == ["c"]
+        assert store.unseen(["a", "b", "c"]) == []
+
+    def test_unseen_dedups_within_batch_order_preserving(self, tmp_path: Path) -> None:
+        store = SessionStore(tmp_path)
+        assert store.unseen(["b", "a", "b", "c", "a"]) == ["b", "a", "c"]
+        assert store.load(SeenKeys).seen == {"": ["b", "a", "c"]}
+
+    def test_unseen_marks_all_in_one_persist(self, tmp_path: Path) -> None:
+        store = SessionStore(tmp_path)
+        with patch("captain_hook.session.os.replace", wraps=os.replace) as persist:
+            store.unseen(["x", "y", "z"])
+        assert persist.call_count == 1
+        assert store.load(SeenKeys).seen == {"": ["x", "y", "z"]}
+        assert store.unseen(["x", "y", "z"]) == []
+
+    def test_unseen_empty_returns_empty_and_no_write(self, tmp_path: Path) -> None:
+        store = SessionStore(tmp_path)
+        assert store.unseen([]) == []
+        assert store[SeenKeys].path is not None
+        assert not store[SeenKeys].path.exists()
+
+    def test_unseen_no_fresh_keys_no_write(self, tmp_path: Path) -> None:
+        store = SessionStore(tmp_path)
+        store.unseen(["a"])
+        path = store[SeenKeys].path
+        assert path is not None
+        mtime_before = path.stat().st_mtime_ns
+        assert store.unseen(["a"]) == []
+        assert path.stat().st_mtime_ns == mtime_before
+
+    def test_unseen_scopes_are_independent(self, tmp_path: Path) -> None:
+        store = SessionStore(tmp_path)
+        assert store.unseen(["k"], scope="a") == ["k"]
+        assert store.unseen(["k"], scope="b") == ["k"]
+        assert store.unseen(["k"], scope="a") == []
+
+    def test_persistence_round_trip_fresh_store(self, tmp_path: Path) -> None:
+        first = SessionStore(tmp_path)
+        first.once("k", scope="s")
+        first.unseen(["a", "b"], scope="s")
+
+        second = SessionStore(tmp_path)
+        assert second.once("k", scope="s") is False
+        assert second.unseen(["a", "b", "c"], scope="s") == ["c"]
+        assert second.load(SeenKeys).seen == {"s": ["k", "a", "b", "c"]}

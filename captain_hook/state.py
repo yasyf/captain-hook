@@ -227,5 +227,12 @@ def workflow_state(name: str) -> Callable[[type[T]], type[T]]:
     return wrap
 
 
+class SeenKeys(BaseModel):
+    """Session-scoped record of keys observed by ``SessionStore.once``/``unseen``, namespaced by scope."""
+
+    seen: dict[str, list[str]] = Field(default_factory=dict)
+
+
 SessionStore.track(HookState)
 SessionStore.track(PrimitiveState)
+SessionStore.track(SeenKeys)

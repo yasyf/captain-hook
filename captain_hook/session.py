@@ -5,7 +5,7 @@ import re
 import shutil
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import ClassVar, Generic, TypeVar, overload
 
@@ -118,6 +118,30 @@ class SessionStore:
             stored state exists for this session.
         """
         return self[model].get(model())
+
+    def once(self, key: str, *, scope: str | None = None) -> bool:
+        """Return ``True`` the first time ``(scope, key)`` is seen this session, ``False`` thereafter.
+
+        Keyed, scoped dedup for hook authors — the single-key case of :meth:`unseen`.
+        """
+        return bool(self.unseen([key], scope=scope))
+
+    def unseen(self, keys: Iterable[str], *, scope: str | None = None) -> list[str]:
+        """Return the first-sight ``keys`` under ``scope``, recording the whole fresh subset in one write.
+
+        De-duplicates within the batch (order-preserving) and marks every returned key before any
+        downstream filtering, so a batch is never partially recorded; no write when nothing is fresh.
+        ``scope`` namespaces independent call sites on the shared session store.
+        """
+        from captain_hook.state import SeenKeys
+
+        blob = self.load(SeenKeys)
+        seen = blob.seen.setdefault(scope or "", [])
+        if not (fresh := [key for key in dict.fromkeys(keys) if key not in seen]):
+            return []
+        seen.extend(fresh)
+        self[SeenKeys].set(blob)
+        return fresh
 
     @classmethod
     def track(cls, model: type[BaseModel]) -> None:
