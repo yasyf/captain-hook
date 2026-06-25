@@ -104,6 +104,25 @@ def review_test_quality(evt):
 
 `Prompt.from_template` raises `KeyError` when a placeholder has no matching keyword, so a typo fails loud instead of leaking braces into the prompt. The full `Prompt` builder API lives in [the primitives reference](../reference/primitives.qmd).
 
+## Attach the working-tree diff
+
+A review hook that reads only the transcript sees scattered `Edit` blocks, never the cumulative change, and never edits made outside the agent. Pass `diff=True` to attach a compact diff of the uncommitted change as a `<diff>` block, so the model reviews the real change:
+
+```python
+from captain_hook import Event, llm_gate
+
+llm_gate(
+    "The working-tree diff is in <diff>. Does it introduce a correctness bug?",
+    message=lambda r: f"Fix before stopping: {r.reasoning}",
+    diff=True,
+    events=Event.Stop,
+)
+```
+
+`diff=True` calls `evt.ctx.diff()`, which prefers cc-context's token-budgeted `ccx diff` and falls back to a plain `git diff` when `ccx` is unavailable, so the hook works in any repo. Diff against another source with `diff="staged"` or `diff="HEAD~1"`. For a scoped or custom-budget diff, call `evt.ctx.diff(scope="pkg/", budget=2000)` directly and fold the result into your prompt.
+
+A gate or nudge also attaches a recent window of the transcript by default, not the whole session, since the diff already carries the full change. Pass `transcript="full"` when a check needs the entire history, or `transcript=30` to size the window in events.
+
 ## Write the verdict function
 
 The `verdict` parameter maps the model's response to a boolean. `True` fires the hook, and `False` stays quiet. Its signature is `(verdict_model) -> bool`. The defaults read the obvious field, `r.block` for a gate and `r.fire` for a nudge, so you override `verdict` only when you supply your own `response_model` or want a richer rule.

@@ -5,6 +5,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -313,6 +314,68 @@ class TestCallLlm:
         assert result is verdict
         assert mock_extract.call_args.args[1] is Verdict
 
+    def test_diff_attaches_diff_block(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from captain_hook.prompt import Prompt
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        monkeypatch.setattr(ctx, "diff", lambda *a, **k: "DIFF BODY HERE")
+
+        with patch("captain_hook.context.call_sync", return_value="ok") as mock_call:
+            ctx.call_llm(Prompt().system("review the change"), diff=True)
+        prompt = mock_call.call_args.args[0]
+        assert "<diff>\nDIFF BODY HERE\n</diff>" in prompt
+        assert "review the change" in prompt
+
+    def test_diff_false_attaches_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from captain_hook.prompt import Prompt
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        spy = MagicMock(return_value="d")
+        monkeypatch.setattr(ctx, "diff", spy)
+        with patch("captain_hook.context.call_sync", return_value="ok") as mock_call:
+            ctx.call_llm(Prompt().system("no diff here"))
+        assert "<diff>" not in mock_call.call_args.args[0]
+        spy.assert_not_called()
+
+    def test_diff_string_source_passthrough(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from captain_hook.prompt import Prompt
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        spy = MagicMock(return_value="d")
+        monkeypatch.setattr(ctx, "diff", spy)
+        with patch("captain_hook.context.call_sync", return_value="ok"):
+            ctx.call_llm(Prompt().system("x"), diff="staged")
+        spy.assert_called_once_with("staged")
+
+    def test_transcript_default_is_bounded_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from captain_hook.testing.helpers import fixture_session
+        from captain_hook.tests.helpers import raw_text
+
+        events = [raw_text("user" if i % 2 == 0 else "assistant", f"evt-{i:02d}") for i in range(30)]
+        ctx = HookContext(session=SessionStore(None), transcript=fixture_session(events), settings=None)
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        with patch("captain_hook.context.call_sync", return_value="ok") as mock_call:
+            ctx.call_llm("analyze", transcript=True)
+        prompt = mock_call.call_args.args[0]
+        assert "evt-29" in prompt
+        assert "evt-00" not in prompt
+
+    def test_transcript_full_includes_oldest(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from captain_hook.testing.helpers import fixture_session
+        from captain_hook.tests.helpers import raw_text
+
+        events = [raw_text("user" if i % 2 == 0 else "assistant", f"evt-{i:02d}") for i in range(30)]
+        ctx = HookContext(session=SessionStore(None), transcript=fixture_session(events), settings=None)
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        with patch("captain_hook.context.call_sync", return_value="ok") as mock_call:
+            ctx.call_llm("analyze", transcript="full")
+        prompt = mock_call.call_args.args[0]
+        assert "evt-00" in prompt
+        assert "evt-29" in prompt
+
 
 class TestContextState:
     def test_getitem_works(self, tmp_path: Path) -> None:
@@ -378,6 +441,85 @@ class TestChangedPaths:
             count_after_first = spy.call_count
             assert ctx.changed_paths is not None
             assert spy.call_count == count_after_first
+
+
+class TestDiff:
+    def test_prefers_ccx_when_available(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        with patch("captain_hook.context.run_cli", return_value="# Diff: uncommitted\nbody") as mock:
+            assert ctx.diff() == "# Diff: uncommitted\nbody"
+        assert mock.call_args.args[0] == ["ccx", "diff", "uncommitted", "--budget", "4000"]
+
+    def test_passes_scope_and_budget_to_ccx(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        with patch("captain_hook.context.run_cli", return_value="ccx out") as mock:
+            ctx.diff("HEAD~1", scope="src/", budget=800)
+        assert mock.call_args.args[0] == ["ccx", "diff", "HEAD~1", "--budget", "800", "--scope", "src/"]
+
+    def test_falls_back_to_git_when_ccx_absent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from spawnllm.proc import run_cli as real_run_cli
+
+        make_repo(tmp_path)
+        (tmp_path / "README.md").write_text("changed by diff test\n")
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+
+        def fake(args: list[str], **kwargs: Any) -> str | None:
+            if args[0] == "ccx":
+                raise FileNotFoundError(2, "No such file or directory", "ccx")
+            return real_run_cli(args, **kwargs)
+
+        with patch("captain_hook.context.run_cli", side_effect=fake):
+            out = ctx.diff()
+        assert out is not None
+        assert "changed by diff test" in out
+        assert "README.md" in out
+
+    def test_falls_back_to_git_when_ccx_errors(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from spawnllm.proc import run_cli as real_run_cli
+
+        make_repo(tmp_path)
+        (tmp_path / "README.md").write_text("error fallback diff\n")
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+
+        def fake(args: list[str], **kwargs: Any) -> str | None:
+            if args[0] == "ccx":
+                raise subprocess.CalledProcessError(1, args)
+            return real_run_cli(args, **kwargs)
+
+        with patch("captain_hook.context.run_cli", side_effect=fake):
+            out = ctx.diff()
+        assert out is not None
+        assert "error fallback diff" in out
+
+    @pytest.mark.parametrize(
+        ("source", "scope", "expected"),
+        [
+            pytest.param("uncommitted", None, ["git", "diff"], id="uncommitted"),
+            pytest.param("staged", None, ["git", "diff", "--staged"], id="staged"),
+            pytest.param("HEAD~1", None, ["git", "diff", "HEAD~1"], id="ref"),
+            pytest.param("uncommitted", "pkg/", ["git", "diff", "--", "pkg/"], id="scoped"),
+        ],
+    )
+    def test_git_fallback_argv(
+        self,
+        source: str,
+        scope: str | None,
+        expected: list[str],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured: list[list[str]] = []
+
+        def fake(args: list[str], **kwargs: Any) -> str:
+            if args[0] == "ccx":
+                raise FileNotFoundError(2, "No such file or directory", "ccx")
+            captured.append(args)
+            return ""
+
+        ctx = make_ctx_in(tmp_path, monkeypatch)
+        with patch("captain_hook.context.run_cli", side_effect=fake):
+            ctx.diff(source, scope=scope)
+        assert captured == [expected]
 
 
 class TestRepoRoot:

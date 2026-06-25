@@ -2,16 +2,21 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 from captain_hook.app import (
     _state,
     reset,
 )
 from captain_hook.dispatch import dispatch
+from captain_hook.packs.general.review import EditedSource
+from captain_hook.testing.helpers import fixture_session
 from captain_hook.tests.helpers import (
+    build_ctx,
     make_ctx,
     make_post_tool_event,
     make_stop_event,
+    raw_tool_msg,
 )
 from captain_hook.types import Action, Event, Signal, Tool, Waiting
 
@@ -837,3 +842,56 @@ class TestDefaultAgentTranscript:
         params = signature(llm_evaluate).parameters
         assert params["agent"].default is False
         assert params["transcript"].default is False
+
+    def test_primitives_default_diff_to_false(self) -> None:
+        from inspect import signature
+
+        from captain_hook.primitives.llm import llm_evaluate, llm_gate, llm_nudge, prompt_check
+
+        for fn in (llm_gate, llm_nudge, llm_evaluate, prompt_check):
+            assert signature(fn).parameters["diff"].default is False
+
+
+class TestReviewGateDiff:
+    def _register(self) -> None:
+        from captain_hook.primitives.llm import llm_gate
+
+        llm_gate(
+            "review the diff",
+            message=lambda r: f"issue: {r.reasoning}",
+            diff=True,
+            only_if=[EditedSource()],
+            events=Event.Stop,
+        )
+
+    def _edited_ctx(self, session_dir: Path, *, file_path: str, block: bool) -> Any:
+        from captain_hook.primitives.llm import GateVerdict
+
+        ctx = build_ctx(
+            transcript=fixture_session(
+                [raw_tool_msg("Edit", {"file_path": file_path, "old_string": "a", "new_string": "b"})]
+            ),
+            session_dir=session_dir,
+        )
+        ctx.call_llm = MagicMock(return_value=GateVerdict(block=block, reasoning="r"))
+        return ctx
+
+    def test_blocks_on_bad_diff(self, tmp_path: Path) -> None:
+        ctx = self._edited_ctx(tmp_path, file_path="src/app.py", block=True)
+        self._register()
+        result = dispatch(Event.Stop, make_stop_event(ctx=ctx), session_dir=tmp_path)
+        assert result is not None
+        assert result["decision"] == "block"
+
+    def test_allows_on_clean_diff(self, tmp_path: Path) -> None:
+        ctx = self._edited_ctx(tmp_path, file_path="src/app.py", block=False)
+        self._register()
+        result = dispatch(Event.Stop, make_stop_event(ctx=ctx), session_dir=tmp_path)
+        assert result is None
+
+    def test_skips_non_source_edit_before_llm(self, tmp_path: Path) -> None:
+        ctx = self._edited_ctx(tmp_path, file_path="README.md", block=True)
+        self._register()
+        result = dispatch(Event.Stop, make_stop_event(ctx=ctx), session_dir=tmp_path)
+        assert result is None
+        ctx.call_llm.assert_not_called()

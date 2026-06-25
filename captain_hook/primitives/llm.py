@@ -65,7 +65,8 @@ def llm_evaluate[M: BaseModel](
     specialty: TSpecialty = "review",
     model: TModel = "small",
     agent: bool = False,
-    transcript: bool = False,
+    transcript: bool | int | Literal["recent", "full"] = False,
+    diff: bool | str = False,
 ) -> M | None:
     if fired_this_turn(evt):
         return None
@@ -99,6 +100,7 @@ def llm_evaluate[M: BaseModel](
             model=model,
             agent=agent,
             transcript=transcript,
+            diff=diff,
             response_model=response_model,
         )
     except Exception:
@@ -137,7 +139,8 @@ def llm_primitive[M: BaseModel](
     specialty: TSpecialty = "review",
     model: TModel = "small",
     agent: bool = False,
-    transcript: bool = False,
+    transcript: bool | int | Literal["recent", "full"] = False,
+    diff: bool | str = False,
 ) -> None:
     sig = resolve_signals(signals)
 
@@ -154,6 +157,7 @@ def llm_primitive[M: BaseModel](
                 model=model,
                 agent=agent,
                 transcript=transcript,
+                diff=diff,
             )
         ):
             return None
@@ -197,13 +201,15 @@ def llm_gate(
     specialty: TSpecialty = "review",
     model: TModel = "small",
     agent: bool = True,
-    transcript: bool = True,
+    transcript: bool | int | Literal["recent", "full"] = True,
+    diff: bool | str = False,
 ) -> None:
     """Register an LLM-powered blocking gate.
 
     Defaults are tuned for the common case: ``agent=True`` and ``transcript=True``
-    so the gate has tool access and full transcript context. Pass
-    ``agent=False, transcript=False`` for cheap, stateless yes/no checks.
+    so the gate has tool access and a recent transcript window (the path lets the agent
+    read full history). Pass ``diff=True`` to attach a compact working-tree diff as a
+    ``<diff>`` block, or ``agent=False, transcript=False`` for cheap, stateless yes/no checks.
 
     Example:
         >>> llm_gate("Is the agent making excuses?",
@@ -231,6 +237,7 @@ def llm_gate(
         model=model,
         agent=agent,
         transcript=transcript,
+        diff=diff,
     )
 
 
@@ -252,13 +259,15 @@ def llm_nudge(
     specialty: TSpecialty = "review",
     model: TModel = "small",
     agent: bool = True,
-    transcript: bool = True,
+    transcript: bool | int | Literal["recent", "full"] = True,
+    diff: bool | str = False,
 ) -> None:
     """Register an LLM-powered advisory nudge.
 
     Defaults are tuned for the common case: ``agent=True`` and ``transcript=True``
-    so the nudge has tool access and full transcript context. Pass
-    ``agent=False, transcript=False`` for cheap, stateless yes/no checks.
+    so the nudge has tool access and a recent transcript window (the path lets the agent
+    read full history). Pass ``diff=True`` to attach a compact working-tree diff as a
+    ``<diff>`` block, or ``agent=False, transcript=False`` for cheap, stateless yes/no checks.
 
     Example:
         >>> llm_nudge("Is the agent speculating instead of observing?",
@@ -287,6 +296,7 @@ def llm_nudge(
         model=model,
         agent=agent,
         transcript=transcript,
+        diff=diff,
     )
 
 
@@ -343,6 +353,7 @@ def prompt_check(
     suffix: str = "",
     timeout: int = 45,
     include_reasoning: bool = True,
+    diff: bool | str = False,
     response_model: type[PromptCheckVerdict] = PromptCheckVerdict,
 ) -> HookResult | None:
     """Run an LLM check with a formatted prompt and return block/warn/None."""
@@ -356,6 +367,7 @@ def prompt_check(
         verdict = evt.ctx.call_llm(
             built,
             timeout=timeout,
+            diff=diff,
             response_model=response_model,
         )
     except Exception as exc:

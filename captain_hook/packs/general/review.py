@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from captain_hook import Allow, BaseHookEvent, Block, CustomCondition, Event, Input, Waiting, gate
+from captain_hook import Allow, BaseHookEvent, Block, CustomCondition, Event, Input, llm_gate
 
 # Prose and config file extensions that shouldn't, on their own, demand a code-review pass.
 # Tailor this (and the excluded dirs below) to scope what counts as "source" for your repo.
@@ -29,12 +29,16 @@ class EditedSource(CustomCondition):
         )
 
 
-gate(
-    "You changed source files but haven't done a review pass. Before stopping, review your "
-    "changes for correctness and against STYLEGUIDE.md, and fix any issues in the code you "
-    "wrote. See: STYLEGUIDE.md.",
+llm_gate(
+    "You are reviewing a code change before the agent stops. The compact diff of the "
+    "uncommitted changes is in <diff>. Review it for (1) correctness bugs and (2) clear "
+    "violations of the project's STYLEGUIDE.md (read STYLEGUIDE.md from the working dir). "
+    "Set block=true ONLY for a concrete, real issue in the changed code, with the specific "
+    "problem and the fix in `reasoning`. Otherwise block=false. Do not block on style nits "
+    "absent from STYLEGUIDE, on unchanged pre-existing code, or on speculative concerns.",
+    message=lambda r: f"Review flagged an issue to fix before stopping: {r.reasoning}",
+    diff=True,
     only_if=[EditedSource()],
-    skip_if=[Waiting()],
     events=Event.Stop,
     tests={
         Input(

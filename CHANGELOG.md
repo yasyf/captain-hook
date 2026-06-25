@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-06-24
+
+### Added
+- `HookContext.diff()` returns a compact working-tree diff, preferring cc-context's
+  token-budgeted `ccx diff` and falling back to a plain `git diff` when `ccx` is
+  absent. It takes a `source` (`"uncommitted"`, `"staged"`, or any ref), an optional
+  `scope` path, and a token `budget`.
+- A `diff=` flag on `call_llm`, `llm_gate`, `llm_nudge`, `llm_evaluate`, and
+  `prompt_check` attaches that diff to the prompt as a `<diff>` block, so a review
+  hook is grounded in the real change instead of reconstructing it from the transcript.
+- A `diff-review` example hook demonstrating `llm_gate(diff=True)`.
+
+### Changed
+- `transcript=True` on the LLM primitives now sends a recent-event window (15 events)
+  rather than the whole session, since the new `<diff>` block already carries the
+  full change. Pass `transcript="full"` for the entire history or `transcript=N` to
+  size the window in events.
+- The general pack's review gate is now an `llm_gate(diff=True)` that reviews the
+  compact diff and blocks only on a concrete correctness bug or STYLEGUIDE violation,
+  replacing the deterministic gate that fired on any source edit.
+
 ## [3.21.0] - 2026-06-23
 
 ### Changed

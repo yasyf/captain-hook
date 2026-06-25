@@ -1,0 +1,39 @@
+---
+title: "Diff review"
+---
+
+> Attach a compact working-tree diff to an LLM gate so the model reviews the actual change before the agent stops, instead of a guess reconstructed from the transcript.
+
+A review hook that reads only the transcript sees scattered edit blocks, and it never sees changes made outside the agent's own edits. The `diff=True` flag hands the model a single compact `ccx diff`, budget-bounded so it stays cheap, so the review is grounded in the real change. When `ccx` isn't installed it falls back to a plain `git diff`.
+
+<!-- gd-embed: diff_review.py -->
+
+::: {.callout-note title="Verified by replay"}
+
+The model verdict carries no inline test. An LLM judgment needs a recorded fixture or a live session, so you exercise it by replaying real sessions under `uvx capt-hook test` rather than asserting it deterministically here.
+
+:::
+
+## What it does
+
+`diff=True` resolves to `evt.ctx.diff()`, which prefers cc-context's token-budgeted `ccx diff` and falls back to `git diff` when `ccx` is unavailable. The result is wrapped in a `<diff>` block alongside the recent-transcript window, so the model reviews the change directly.
+
+```python
+diff=True                 # attach a compact <diff> of the uncommitted change
+only_if=[SourceEdits()]   # cheap pre-filter: only Python source edits reach the model
+events=Event.Stop         # review once, right before the agent stops
+```
+
+Deterministic conditions run first, so the model only sees a turn that edited source. Diff against something other than the working tree with `diff="staged"` or `diff="HEAD~1"`.
+
+## Run it yourself
+
+```bash
+uvx capt-hook --hooks docs/examples test
+```
+
+## See also
+
+- [Write an LLM hook](../guide/llm-hooks.qmd)
+- [Query the transcript](../guide/transcript.qmd)
+- [LLM cost control](llm-cost-control.qmd)

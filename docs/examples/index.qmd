@@ -38,6 +38,7 @@ Drive the agent with the right nudge at the right time.
 | [Surface tracked corrections](corrections-nudge.qmd) | a `Stop` nudge pointing at the session reviewer's queue | inline tests |
 | [No Go panic](no-go-panic.qmd) | an ast-grep `Pattern` warning on Go `panic()` | inline tests |
 | [LLM cost control](llm-cost-control.qmd) | bound an LLM hook's token spend | replay |
+| [Diff review](diff-review.qmd) | ground an `llm_gate` in a compact `<diff>` of the change | replay |
 
 ## Workflow
 

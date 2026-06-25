@@ -127,3 +127,17 @@ def task_gate(evt):
 ```
 
 `evt.tasks` reads Claude Code's native task store keyed by the event's session, so it matches what `TaskList` shows. It includes updates made by subagents and teammates, drops deleted tasks, and carries lists across resumed sessions, none of which transcript replay can see. A session with no store has no tasks; it never borrows another session's. Filter by state with `.pending`, `.in_progress`, `.completed`, or `.open`, and check `.all_completed` for the whole list.
+
+## Read the diff
+
+When a check needs the actual change instead of the transcript's scattered edits, call `evt.ctx.diff()`. It returns a compact diff of the working tree, preferring cc-context's token-budgeted `ccx diff` and falling back to a plain `git diff` when `ccx` is unavailable.
+
+```python
+@on(Event.Stop)
+def review(evt):
+    diff = evt.ctx.diff()                 # uncommitted working-tree diff
+    staged = evt.ctx.diff("staged")       # only the staged change
+    scoped = evt.ctx.diff(scope="src/")   # restrict to a path
+```
+
+`diff()` returns `None` only when neither `ccx` nor `git` produces output. To feed the diff straight to a model, prefer the `diff=` flag on the LLM primitives over calling `diff()` by hand, covered in [Write an LLM hook](llm-hooks.qmd).

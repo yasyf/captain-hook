@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import dataclass, replace
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from cc_transcript.activity import SessionActivity, meta_of
 from cc_transcript.ids import SessionId
@@ -30,6 +30,15 @@ if TYPE_CHECKING:
     from cc_transcript.tools import ToolCall
 
     from captain_hook.settings import HooksSettings
+
+
+RECENT_WINDOW = 15
+
+
+def transcript_window(transcript: bool | int | str) -> int | None:
+    if transcript == "full":
+        return None
+    return transcript if isinstance(transcript, int) and transcript is not True else RECENT_WINDOW
 
 
 class LenientToolUseBlock(ToolUseBlock):
@@ -134,19 +143,26 @@ class HookContext:
         """The session window before the current turn's last exchange (cached)."""
         return self.transcript.prior()
 
-    def transcript_text(self) -> str:
-        """The transcript rendered turn by turn under the default budget."""
-        return "\n\n".join(
-            rendered for turn in self.transcript.turns if (rendered := render_turn(turn, budget=Budget()))
-        )
+    def transcript_text(self, *, window: int | None = None) -> str:
+        """The transcript rendered turn by turn under the default budget.
 
-    def transcript_block(self) -> str:
+        Args:
+            window: Render only the most recent ``window`` events; ``None`` renders the whole session.
+        """
+        src = self.transcript if window is None else self.transcript.recent(window)
+        return "\n\n".join(rendered for turn in src.turns if (rendered := render_turn(turn, budget=Budget())))
+
+    def transcript_block(self, *, window: int | None = RECENT_WINDOW) -> str:
         """The rendered transcript wrapped in a ``<transcript>`` tag carrying its source path.
 
-        The render clips long turns and tool calls under :class:`Budget`, so an agent-mode
-        LLM needs the path to read the untruncated content (e.g. a full ``ExitPlanMode`` plan).
+        Defaults to a recent-event window rather than the whole session. The render clips long
+        turns and tool calls under :class:`Budget`, so an agent-mode LLM uses the path to read
+        the untruncated content (e.g. a full ``ExitPlanMode`` plan) or earlier history.
+
+        Args:
+            window: Render only the most recent ``window`` events; ``None`` renders the whole session.
         """
-        rendered = self.transcript_text()
+        rendered = self.transcript_text(window=window)
         if (path := self.transcript.path) is not None:
             return f'<transcript path="{path}">\n{rendered}\n</transcript>'
         return f"<transcript>\n{rendered}\n</transcript>"
@@ -179,6 +195,32 @@ class HookContext:
         except (subprocess.CalledProcessError, FileNotFoundError):
             return None
 
+    def diff(self, source: str = "uncommitted", *, scope: str | None = None, budget: int = 4000) -> str | None:
+        """A compact working-tree diff via ``ccx diff`` when available, else plain ``git diff``.
+
+        Prefers cc-context's token-budgeted ``ccx diff`` and transparently falls back to
+        ``git diff`` when ``ccx`` is absent or fails, so a hook gets the same diff in any repo.
+
+        Args:
+            source: ``"uncommitted"`` (working tree, the default), ``"staged"``, or any git ref.
+            scope: Restrict the diff to this path.
+            budget: Approximate token budget for the ``ccx`` output (the ``git`` fallback is unbounded).
+
+        Returns:
+            The rendered diff, or ``None`` when neither ``ccx`` nor ``git`` produces output.
+        """
+        ccx = ["ccx", "diff", source, "--budget", str(budget), *(("--scope", scope) if scope else ())]
+        if (out := self.call_cli(ccx, throw=False)) is not None:
+            return out
+        match source:
+            case "uncommitted":
+                args = ["diff"]
+            case "staged":
+                args = ["diff", "--staged"]
+            case ref:
+                args = ["diff", ref]
+        return self.git(*args, *(("--", scope) if scope else ()))
+
     @cached_property
     def changed_paths(self) -> frozenset[Path] | None:
         if (out := self.git("diff", "--name-only", "HEAD", "--no-renames")) is None or (root := self.repo_root) is None:
@@ -202,19 +244,24 @@ class HookContext:
         specialty: TSpecialty = "general",
         model: TModel = "small",
         timeout: int = 180,
-        transcript: bool = False,
+        transcript: bool | int | Literal["recent", "full"] = False,
+        diff: bool | str = False,
         agent: bool = False,
         response_model: type[BaseModel] | None = None,
         **kwargs: Any,
     ) -> str | BaseModel:
+        diff_text = self.diff("uncommitted" if diff is True else diff) if diff else None
         if isinstance(template, Prompt):
-            prompt = str(template)
+            prompt = str(template.context("diff", diff_text))
             if transcript:
-                prompt = f"{self.transcript_block()}\n\n<task>\n{prompt}\n</task>"
+                prompt = f"{self.transcript_block(window=transcript_window(transcript))}\n\n<task>\n{prompt}\n</task>"
         else:
+            block = self.transcript_block(window=transcript_window(transcript)) if transcript else ""
             if transcript:
                 template = f"{{transcript}}\n\n<task>\n{template}\n</task>"
-            prompt = template.format(*args, **kwargs, transcript=self.transcript_block())
+            prompt = template.format(*args, **kwargs, transcript=block)
+            if diff_text is not None:
+                prompt = f"<diff>\n{diff_text}\n</diff>\n\n{prompt}"
         backend = LlmBackends.for_specialty(specialty)
         cwd = os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR")
         if response_model is not None:
