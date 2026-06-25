@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import dataclass, replace
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 from cc_transcript.activity import SessionActivity, meta_of
 from cc_transcript.ids import SessionId
@@ -264,6 +264,36 @@ class HookContext:
     @cached_property
     def current_branch(self) -> str | None:
         return out.strip() if (out := self.git("symbolic-ref", "--short", "HEAD")) else None
+
+    @overload
+    def call_llm[M: BaseModel](
+        self,
+        template: str | Prompt,
+        *args: Any,
+        specialty: TSpecialty = "general",
+        model: TModel = "small",
+        timeout: int = 180,
+        transcript: bool | int | Literal["recent", "full"] = False,
+        diff: bool | str = False,
+        agent: bool = False,
+        response_model: type[M],
+        **kwargs: Any,
+    ) -> M: ...
+
+    @overload
+    def call_llm(
+        self,
+        template: str | Prompt,
+        *args: Any,
+        specialty: TSpecialty = "general",
+        model: TModel = "small",
+        timeout: int = 180,
+        transcript: bool | int | Literal["recent", "full"] = False,
+        diff: bool | str = False,
+        agent: bool = False,
+        response_model: None = None,
+        **kwargs: Any,
+    ) -> str: ...
 
     def call_llm(
         self,

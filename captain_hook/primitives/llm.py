@@ -377,7 +377,6 @@ def prompt_check(
     if not verdict:
         return None
 
-    assert isinstance(verdict, response_model)
     match verdict.action:
         case "block":
             return HookResult(action=Action.block, message=f"{prefix}: {verdict.reason}{suffix}")
