@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING, ClassVar
 
-from captain_hook.utils import kebab
+from captain_hook.util import kebab
 
 if TYPE_CHECKING:
     from captain_hook.style.matchers import Matcher

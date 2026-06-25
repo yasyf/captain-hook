@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from captain_hook.utils import resolve_binary
+from captain_hook.util import resolve_binary
 
 
 def make_exe(path: Path) -> Path:

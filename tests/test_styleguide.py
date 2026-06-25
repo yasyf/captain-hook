@@ -20,7 +20,7 @@ from captain_hook.style import (
 from captain_hook.style import matchers as M
 from captain_hook.tests.helpers import make_ctx, make_post_tool_event
 from captain_hook.types import Event, FilePath
-from captain_hook.utils import kebab
+from captain_hook.util import kebab
 
 
 class NoPrint(StyleRule):

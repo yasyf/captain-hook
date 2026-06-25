@@ -19,7 +19,7 @@ from cc_transcript.tools import (
     WriteCall,
 )
 
-from captain_hook import file, style, utils
+from captain_hook import file, style, util
 from captain_hook.app import hook, on, register
 from captain_hook.command import Command, CommandLine, Redirect
 from captain_hook.context import HookContext
@@ -92,4 +92,4 @@ from captain_hook.types import (
     UsedSkill,
     Waiting,
 )
-from captain_hook.utils import read_json, resolve_binary
+from captain_hook.util import read_json, resolve_binary
