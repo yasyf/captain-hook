@@ -35,10 +35,14 @@ if TYPE_CHECKING:
 RECENT_WINDOW = 15
 
 
-def transcript_window(transcript: bool | int | str) -> int | None:
-    if transcript == "full":
-        return None
-    return transcript if isinstance(transcript, int) and transcript is not True else RECENT_WINDOW
+def transcript_window(transcript: bool | int | Literal["recent", "full"]) -> int | None:
+    match transcript:
+        case "full":
+            return None
+        case True | "recent":
+            return RECENT_WINDOW
+        case int() as events:
+            return events
 
 
 class LenientToolUseBlock(ToolUseBlock):
