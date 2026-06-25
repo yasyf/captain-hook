@@ -13,8 +13,8 @@ from captain_hook.review.cli import REVIEW_RUN_COMMAND, STATUS_CHOICES
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import CandidateKind, CandidateStatus, ReviewStore
-from captain_hook.tests.helpers import run_cli
-from captain_hook.tests.review_helpers import (
+from tests.helpers import run_cli
+from tests.review_helpers import (
     CORRECTION,
     correction_entries,
     install_judge,

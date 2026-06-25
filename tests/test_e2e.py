@@ -28,8 +28,8 @@ from captain_hook.events import (
 from captain_hook.loader import discover_hooks
 from captain_hook.session import SessionStore
 from captain_hook.state import HookState, PrimitiveState
-from captain_hook.tests.helpers import build_ctx, run_cli
 from captain_hook.types import Action, Event, HookResult
+from tests.helpers import build_ctx, run_cli
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "client_hooks"
 

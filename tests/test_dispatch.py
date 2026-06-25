@@ -12,12 +12,12 @@ from captain_hook.app import (
     on,
 )
 from captain_hook.dispatch import dispatch, execute_hook, format_output, run_declarative
-from captain_hook.tests.helpers import (
+from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
+from tests.helpers import (
     make_pre_tool_event,
     make_stop_event,
     make_subagent_stop_event,
 )
-from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 
 
 class TestRunDeclarative:

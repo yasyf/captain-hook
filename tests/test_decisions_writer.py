@@ -14,8 +14,8 @@ from captain_hook.decisions import open_decision_log, record_decision
 from captain_hook.dispatch import execute_hook
 from captain_hook.events import PreToolUseEvent, StopEvent
 from captain_hook.primitives.nudge import nudge
-from captain_hook.tests.helpers import mock_tool_event
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
+from tests.helpers import mock_tool_event
 
 SESSION_ID = SessionId("claude-sess")
 

@@ -7,8 +7,8 @@ import pytest
 
 from captain_hook.dispatch import dispatch
 from captain_hook.state import PrimitiveState, text_hash
-from captain_hook.tests.helpers import make_ctx, make_post_tool_event
 from captain_hook.types import Event, Signal, Signals
+from tests.helpers import make_ctx, make_post_tool_event
 
 
 def register_nudge(

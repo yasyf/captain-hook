@@ -335,6 +335,6 @@ class TestTranscriptPath:
         ],
     )
     def test_transcript_path(self, raw: dict[str, Any], expected: Path | None) -> None:
-        from captain_hook.tests.helpers import make_ctx as make_padded_ctx
+        from tests.helpers import make_ctx as make_padded_ctx
 
         assert StopEvent(_raw=raw, ctx=make_padded_ctx()).transcript_path == expected

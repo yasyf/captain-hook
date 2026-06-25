@@ -18,9 +18,9 @@ from captain_hook.style import (
     styleguide,
 )
 from captain_hook.style import matchers as M
-from captain_hook.tests.helpers import make_ctx, make_post_tool_event
 from captain_hook.types import Event, FilePath
 from captain_hook.util import kebab
+from tests.helpers import make_ctx, make_post_tool_event
 
 
 class NoPrint(StyleRule):

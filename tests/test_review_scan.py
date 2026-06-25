@@ -19,7 +19,7 @@ from captain_hook.review.scan import (
 )
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import ReviewStore
-from captain_hook.tests.review_helpers import (
+from tests.review_helpers import (
     CORRECTION,
     PROMPT_VERSION,
     REPO,

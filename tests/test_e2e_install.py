@@ -11,8 +11,8 @@ from captain_hook.app import _state, get_matching_hooks
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_hooks
 from captain_hook.testing.helpers import mock_stop_event, mock_tool_event, mock_user_prompt_event
-from captain_hook.tests.helpers import run_cli
 from captain_hook.types import Event
+from tests.helpers import run_cli
 
 
 def purge_hooks_modules() -> None:

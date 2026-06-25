@@ -17,22 +17,6 @@ from captain_hook.events import (
     UserPromptSubmitEvent,
 )
 from captain_hook.primitives.commands import block_command_pattern
-from captain_hook.tests.helpers import (
-    assistant_msg,
-    async_agent_launch,
-    build_ctx,
-    make_event,
-    make_messages_ctx,
-    make_transcript_ctx,
-    raw_assistant,
-    raw_notification,
-    raw_text,
-    raw_tool_result,
-    raw_tool_use,
-    text_msg,
-    waiting_evt,
-    workflow_launch,
-)
 from captain_hook.types import (
     Agent,
     Command,
@@ -50,6 +34,22 @@ from captain_hook.types import (
     TouchedFile,
     UsedSkill,
     Waiting,
+)
+from tests.helpers import (
+    assistant_msg,
+    async_agent_launch,
+    build_ctx,
+    make_event,
+    make_messages_ctx,
+    make_transcript_ctx,
+    raw_assistant,
+    raw_notification,
+    raw_text,
+    raw_tool_result,
+    raw_tool_use,
+    text_msg,
+    waiting_evt,
+    workflow_launch,
 )
 
 

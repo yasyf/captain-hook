@@ -18,13 +18,13 @@ from captain_hook.app import (
     hook as register_hook,
 )
 from captain_hook.loader import discover_hooks
-from captain_hook.tests.helpers import make_pre_tool_event
 from captain_hook.types import (
     Command,
     Event,
     TestFile,
     Tool,
 )
+from tests.helpers import make_pre_tool_event
 
 pytestmark = pytest.mark.usefixtures("isolate_modules")
 

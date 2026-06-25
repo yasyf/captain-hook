@@ -11,8 +11,8 @@ from pydantic import BaseModel
 from captain_hook.app import _state
 from captain_hook.events import SubagentStopEvent
 from captain_hook.primitives.workflow import Step
-from captain_hook.tests.helpers import build_ctx, make_subagent_stop_event, make_transcript, raw_text
 from captain_hook.types import Action, Event, HookResult
+from tests.helpers import build_ctx, make_subagent_stop_event, make_transcript, raw_text
 
 
 class ArtifactModel(BaseModel):

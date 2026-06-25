@@ -9,8 +9,8 @@ from captain_hook import ast_grep, rewrite_code, rewrite_command
 from captain_hook.command import CommandLine
 from captain_hook.dispatch import dispatch
 from captain_hook.events import PreToolUseEvent
-from captain_hook.tests.helpers import build_ctx
 from captain_hook.types import Event
+from tests.helpers import build_ctx
 
 
 def pre_event(tool: str, tool_input: dict[str, Any], *, project_root: Path | None = None) -> PreToolUseEvent:

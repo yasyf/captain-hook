@@ -257,7 +257,7 @@ class TestCallLlm:
 
     def test_with_transcript(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from captain_hook.testing.helpers import fixture_session
-        from captain_hook.tests.helpers import raw_text
+        from tests.helpers import raw_text
 
         transcript = fixture_session([raw_text("user", "transcript content here")])
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
@@ -274,7 +274,7 @@ class TestCallLlm:
         from pathlib import Path
 
         from captain_hook.testing.helpers import fixture_session
-        from captain_hook.tests.helpers import raw_text
+        from tests.helpers import raw_text
 
         with_path = HookContext(
             session=SessionStore(None),
@@ -363,7 +363,7 @@ class TestCallLlm:
 
     def test_transcript_default_is_bounded_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from captain_hook.testing.helpers import fixture_session
-        from captain_hook.tests.helpers import raw_text
+        from tests.helpers import raw_text
 
         events = [raw_text("user" if i % 2 == 0 else "assistant", f"evt-{i:02d}") for i in range(30)]
         ctx = HookContext(session=SessionStore(None), transcript=fixture_session(events), settings=None)
@@ -376,7 +376,7 @@ class TestCallLlm:
 
     def test_transcript_full_includes_oldest(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from captain_hook.testing.helpers import fixture_session
-        from captain_hook.tests.helpers import raw_text
+        from tests.helpers import raw_text
 
         events = [raw_text("user" if i % 2 == 0 else "assistant", f"evt-{i:02d}") for i in range(30)]
         ctx = HookContext(session=SessionStore(None), transcript=fixture_session(events), settings=None)
@@ -413,9 +413,7 @@ def git_in(path: Path, *args: str) -> None:
 
 
 def git_in_out(path: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(path), *args], check=True, capture_output=True, text=True
-    ).stdout.strip()
+    return subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
 def make_repo(path: Path, *, branch: str = "test-branch") -> None:

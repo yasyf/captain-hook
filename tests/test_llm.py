@@ -11,14 +11,14 @@ from captain_hook.app import (
 from captain_hook.dispatch import dispatch
 from captain_hook.packs.general.review import EditedSource
 from captain_hook.testing.helpers import fixture_session
-from captain_hook.tests.helpers import (
+from captain_hook.types import Action, Event, Signal, Tool, Waiting
+from tests.helpers import (
     build_ctx,
     make_ctx,
     make_post_tool_event,
     make_stop_event,
     raw_tool_msg,
 )
-from captain_hook.types import Action, Event, Signal, Tool, Waiting
 
 
 def register_llm_gate(

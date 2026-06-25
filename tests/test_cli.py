@@ -11,7 +11,8 @@ import pytest
 from captain_hook.app import (
     hook as register_hook,
 )
-from captain_hook.tests.helpers import (
+from captain_hook.types import Event
+from tests.helpers import (
     raw_assistant,
     raw_text,
     raw_text_block,
@@ -19,7 +20,6 @@ from captain_hook.tests.helpers import (
     raw_tool_use,
     run_cli,
 )
-from captain_hook.types import Event
 
 BLOCK_STDIN = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
 

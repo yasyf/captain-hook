@@ -7,7 +7,8 @@ import pytest
 
 from captain_hook.app import _state
 from captain_hook.dispatch import dispatch
-from captain_hook.tests.helpers import (
+from captain_hook.types import Event, Signal, Signals, Tool, Waiting
+from tests.helpers import (
     build_ctx,
     make_ctx,
     make_post_tool_event,
@@ -16,7 +17,6 @@ from captain_hook.tests.helpers import (
     make_transcript,
     workflow_launch,
 )
-from captain_hook.types import Event, Signal, Signals, Tool, Waiting
 
 
 def register_nudge(

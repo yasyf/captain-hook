@@ -13,11 +13,11 @@ from captain_hook.app import (
 )
 from captain_hook.dispatch import execute_hook
 from captain_hook.primitives.commands import block_command, block_command_pattern, warn_command
-from captain_hook.tests.helpers import make_ctx, make_post_tool_event, make_pre_tool_event
 from captain_hook.types import (
     Action,
     Event,
 )
+from tests.helpers import make_ctx, make_post_tool_event, make_pre_tool_event
 
 
 def block_stash() -> None:

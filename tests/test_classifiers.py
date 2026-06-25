@@ -11,7 +11,7 @@ from cc_transcript.parser import parse_event
 from cc_transcript.query import Session
 
 from captain_hook.testing.helpers import fixture_session
-from captain_hook.tests.helpers import raw_text
+from tests.helpers import raw_text
 
 if TYPE_CHECKING:
     from cc_transcript.models import UserEvent

@@ -9,13 +9,13 @@ import pytest
 
 from captain_hook.app import _state
 from captain_hook.dispatch import dispatch
-from captain_hook.tests.helpers import make_ctx, make_post_tool_event
 from captain_hook.types import (
     Event,
     FilePath,
     TestFile,
     Tool,
 )
+from tests.helpers import make_ctx, make_post_tool_event
 
 
 def register_lint(

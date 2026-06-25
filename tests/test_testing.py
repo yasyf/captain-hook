@@ -16,8 +16,8 @@ from captain_hook.events import (
     UserPromptSubmitEvent,
 )
 from captain_hook.testing.types import Allow, Block, Rewrite, Warn
-from captain_hook.tests.helpers import assert_result, mock_event
 from captain_hook.types import Action, Event, HookResult, Tool
+from tests.helpers import assert_result, mock_event
 
 
 class TestInput:
@@ -179,7 +179,7 @@ class TestMockEvent:
         assert evt._raw["prompt"] == "do this"
 
     def test_mock_event_with_transcript(self):
-        from captain_hook.tests.helpers import fixture_session
+        from tests.helpers import fixture_session
 
         transcript = fixture_session([{"type": "user", "message": {"content": "hello"}}])
         evt = mock_event("PreToolUse", tool="Bash", command="ls", transcript=transcript)
@@ -199,7 +199,7 @@ class TestMockEvent:
 class TestInputToEvent:
     def test_input_to_event_basic(self):
         from captain_hook.testing.types import Input
-        from captain_hook.tests.helpers import input_to_event
+        from tests.helpers import input_to_event
 
         inp = Input(tool="Bash", command="ls")
         evt = input_to_event(Event.PreToolUse, inp)
@@ -208,7 +208,7 @@ class TestInputToEvent:
 
     def test_input_to_event_with_transcript_fixture(self):
         from captain_hook.testing.types import Input, TranscriptFixture
-        from captain_hook.tests.helpers import input_to_event
+        from tests.helpers import input_to_event
 
         tf = TranscriptFixture(
             messages=[
@@ -221,7 +221,7 @@ class TestInputToEvent:
 
     def test_input_to_event_with_path(self, tmp_path: Path):
         from captain_hook.testing.types import Input
-        from captain_hook.tests.helpers import input_to_event
+        from tests.helpers import input_to_event
 
         p = tmp_path / "test.jsonl"
         p.write_text(
@@ -234,7 +234,7 @@ class TestInputToEvent:
 
     def test_input_to_event_none_transcript(self):
         from captain_hook.testing.types import Input
-        from captain_hook.tests.helpers import input_to_event
+        from tests.helpers import input_to_event
 
         inp = Input(tool="Edit", file="x.py", content="new", old="old")
         evt = input_to_event(Event.PreToolUse, inp)
@@ -242,7 +242,7 @@ class TestInputToEvent:
 
     def test_input_to_event_injects_tasks(self):
         from captain_hook.testing.types import Input
-        from captain_hook.tests.helpers import input_to_event
+        from tests.helpers import input_to_event
 
         inp = Input(
             tasks=[
@@ -257,7 +257,7 @@ class TestInputToEvent:
 
     def test_input_to_event_empty_tasks_all_completed(self):
         from captain_hook.testing.types import Input
-        from captain_hook.tests.helpers import input_to_event
+        from tests.helpers import input_to_event
 
         evt = input_to_event(Event.Stop, Input(tasks=[]))
         assert len(evt.tasks) == 0
@@ -265,7 +265,7 @@ class TestInputToEvent:
 
     def test_input_to_event_tasks_on_tool_event(self):
         from captain_hook.testing.types import Input
-        from captain_hook.tests.helpers import input_to_event
+        from tests.helpers import input_to_event
 
         inp = Input(tool="Edit", file="x.py", content="y", tasks=[{"id": "1", "subject": "a", "status": "in_progress"}])
         evt = input_to_event(Event.PostToolUse, inp)
@@ -273,14 +273,14 @@ class TestInputToEvent:
 
     def test_input_to_event_stop(self):
         from captain_hook.testing.types import Input
-        from captain_hook.tests.helpers import input_to_event
+        from tests.helpers import input_to_event
 
         evt = input_to_event(Event.Stop, Input())
         assert isinstance(evt, StopEvent)
 
     def test_input_to_event_session_end(self):
         from captain_hook.testing.types import Input
-        from captain_hook.tests.helpers import input_to_event
+        from tests.helpers import input_to_event
 
         evt = input_to_event(Event.SessionEnd, Input(reason="prompt_input_exit"))
         assert isinstance(evt, SessionEndEvent)
@@ -288,7 +288,7 @@ class TestInputToEvent:
 
     def test_input_to_event_session_end_default_reason(self):
         from captain_hook.testing.types import Input
-        from captain_hook.tests.helpers import input_to_event
+        from tests.helpers import input_to_event
 
         evt = input_to_event(Event.SessionEnd, Input())
         assert isinstance(evt, SessionEndEvent)
@@ -296,7 +296,7 @@ class TestInputToEvent:
 
     def test_input_to_event_subagent_stop(self):
         from captain_hook.testing.types import Input
-        from captain_hook.tests.helpers import input_to_event
+        from tests.helpers import input_to_event
 
         evt = input_to_event(Event.SubagentStop, Input(agent_type="cleanup"))
         assert isinstance(evt, SubagentStopEvent)
@@ -304,7 +304,7 @@ class TestInputToEvent:
 
     def test_input_to_event_user_prompt(self):
         from captain_hook.testing.types import Input
-        from captain_hook.tests.helpers import input_to_event
+        from tests.helpers import input_to_event
 
         evt = input_to_event(Event.UserPromptSubmit, Input(prompt="do it"))
         assert isinstance(evt, UserPromptSubmitEvent)
@@ -312,7 +312,7 @@ class TestInputToEvent:
 
     def test_input_to_event_spec_tool_fallback(self):
         from captain_hook.testing.types import Input
-        from captain_hook.tests.helpers import input_to_event
+        from tests.helpers import input_to_event
 
         evt = input_to_event(Event.PreToolUse, Input(command="ls"), spec_tool="Bash")
         assert evt.tool_name == "Bash"
@@ -320,7 +320,7 @@ class TestInputToEvent:
 
 class TestDispatchTest:
     def test_dispatch_test_returns_result(self):
-        from captain_hook.tests.helpers import dispatch_test
+        from tests.helpers import dispatch_test
 
         reset()
         register_hook(
@@ -339,7 +339,7 @@ class TestDispatchTest:
         assert out["permissionDecision"] == "deny"
 
     def test_dispatch_test_returns_none_for_no_match(self):
-        from captain_hook.tests.helpers import dispatch_test
+        from tests.helpers import dispatch_test
 
         reset()
         result = dispatch_test(Event.PreToolUse, tool="Bash", command="ls")

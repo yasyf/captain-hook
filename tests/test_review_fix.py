@@ -30,7 +30,7 @@ from captain_hook.review.repo import RepoKey
 from captain_hook.review.scan import ScanReport, scan_transcript
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import ReviewStore
-from captain_hook.tests.review_helpers import (
+from tests.review_helpers import (
     assistant_text,
     assistant_tool_use,
     envelope,

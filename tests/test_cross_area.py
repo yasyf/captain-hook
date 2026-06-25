@@ -30,23 +30,6 @@ from captain_hook.signals.nlp import Clause, NlpSignal, Phrase
 from captain_hook.state import HookState
 from captain_hook.testing.helpers import run_inline_tests
 from captain_hook.testing.types import Allow, Block, Input
-from captain_hook.tests.helpers import (
-    build_ctx,
-    dispatch_test,
-    make_event,
-    make_pre_tool_event,
-    make_transcript,
-    mock_tool_event,
-)
-from captain_hook.tests.helpers import (
-    raw_text as msg,
-)
-from captain_hook.tests.helpers import (
-    raw_tool_msg as toolmsg,
-)
-from captain_hook.tests.helpers import (
-    raw_tool_result as tool_resultmsg,
-)
 from captain_hook.types import (
     Action,
     Command,
@@ -61,6 +44,23 @@ from captain_hook.types import (
     Tool,
     TouchedFile,
     UsedSkill,
+)
+from tests.helpers import (
+    build_ctx,
+    dispatch_test,
+    make_event,
+    make_pre_tool_event,
+    make_transcript,
+    mock_tool_event,
+)
+from tests.helpers import (
+    raw_text as msg,
+)
+from tests.helpers import (
+    raw_tool_msg as toolmsg,
+)
+from tests.helpers import (
+    raw_tool_result as tool_resultmsg,
 )
 
 
