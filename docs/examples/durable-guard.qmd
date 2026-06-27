@@ -1,0 +1,43 @@
+---
+title: "Durable cross-session state"
+---
+
+> Warn the first time a sensitive file is edited in this project, then stay silent in every later session.
+
+You want a hook that learns and remembers. The first time the agent edits a secrets file, env file, or migration, you warn; after that you stay quiet, even in tomorrow's session. Session state forgets at the end of each session, so it can't carry the "already warned" fact forward. `DurableState` can. A `scope="project"` model keeps one file per repo, and `Deque[256]` caps the remembered set so it never grows without bound.
+
+<!-- gd-embed: durable_guard.py -->
+
+::: {.callout-note title="Verified by the test suite"}
+
+The inline tests assert the first-fire warn and a benign allow. The "stays silent in every later session" behavior needs durable state seeded from a prior session, which single-event inline tests can't set up. It's covered by `tests/test_durable.py`.
+
+:::
+
+The handler mutates under a file lock. `WarnedPaths.mutate(evt)` loads the remembered paths, checks membership, and appends the new one, all atomic, so two concurrent sessions can't both warn for the same path or lose each other's writes.
+
+## What it catches
+
+```python
+Input(tool="Edit", file=".env", content="API_KEY=x\n")   # first edit of a sensitive file — warns
+```
+
+## What it allows
+
+```python
+Input(tool="Edit", file="app/users.py", content="x = 1\n")  # not sensitive — never warns
+# a second edit of .env in any later session — already remembered, stays silent
+```
+
+*The warn / allow split mirrors the hook inline `tests`, so it stays true as the hook evolves.*
+
+## Run it yourself
+
+```bash
+uvx capt-hook --hooks docs/examples test
+```
+
+## See also
+
+- [State](../guide/state.qmd)
+- [Conditions](../reference/conditions.qmd)

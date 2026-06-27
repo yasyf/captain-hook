@@ -48,6 +48,7 @@ Enforce process across a session.
 |---|---|---|
 | [Settings & configuration](settings-config.qmd) | a `HooksSettings` subclass read by a sibling hook | tests + replay |
 | [Session workflow](session-workflow.qmd) | `@workflow_state` spanning several events | replay |
+| [Durable cross-session state](durable-guard.qmd) | `DurableState` + `Deque` remembering across sessions | inline tests |
 | [Multi-step workflow](multi-step-workflow.qmd) | `workflow` / `Step` / `Artifact` before `SubagentStop` | replay |
 
 ## Reusable & advanced

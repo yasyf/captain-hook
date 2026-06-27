@@ -23,6 +23,7 @@ from captain_hook import file, style, util
 from captain_hook.app import hook, on, register
 from captain_hook.command import Command, CommandLine, Redirect
 from captain_hook.context import HookContext
+from captain_hook.durable import DurableSlot, DurableState, DurableStore
 from captain_hook.events import (
     BaseHookEvent,
     NotificationEvent,
@@ -37,6 +38,7 @@ from captain_hook.events import (
     ToolHookEvent,
     UserPromptSubmitEvent,
 )
+from captain_hook.fields import Deque
 from captain_hook.file import File, categorize_files
 from captain_hook.primitives import (
     GateVerdict,

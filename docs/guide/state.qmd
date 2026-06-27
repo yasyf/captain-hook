@@ -115,8 +115,35 @@ Registration does not change slot access. `evt.ctx.s[Snapshot].get()` still work
 
 The framework reserves two slots of its own. `HookState` counts how many times a hook fired and backs `max_fires` enforcement, and `PrimitiveState` backs the LLM primitives. You read them at most, never write them.
 
+## Persist across sessions with `DurableState`
+
+`WorkflowState` and `@session_state` forget everything when the session ends; their files live under one session's directory. When a hook needs to remember a fact from one session and act on it in a later one, reach for `DurableState`, the cross-session twin of `WorkflowState`. Subclass it and declare a scope at subclass time.
+
+```python
+from captain_hook import Deque, DurableState, Event, Tool, on
+
+class FlaggedPaths(DurableState, scope="project"):
+    paths: Deque[256]
+
+@on(Event.PostToolUse, only_if=[Tool("Edit|Write")])
+def remember(evt):
+    if evt.file:
+        with FlaggedPaths.mutate(evt) as state:
+            state.paths.append(str(evt.file.path))
+```
+
+`scope` decides where the file lives. The default `"project"` gives each repo its own file, keyed by the repo root, so a learned fact stays scoped to the codebase it came from. `"global"` shares one file across every project on the machine. Choose it when the fact is repo-independent, like which shell commands emit JSON.
+
+A `DurableState` subclass carries the same `load(evt)`, `save(evt)`, and `reset(evt)` as `WorkflowState`. It adds one method the session store doesn't need. `mutate(evt)` is a context manager that holds a file lock for the whole block, and you reach for it on any write that accumulates into a collection. A durable file has concurrent writers across sessions, since two Claude Code sessions can fire the same hook at once. A plain `load`, modify, then `save` is last-writer-wins, so one session's addition silently overwrites the other's. `mutate` loads, yields, and saves under an exclusive lock, so writers serialize instead of clobbering. Keep the block short, since the lock is held until it exits.
+
+::: {.callout-note title="Bounded collections"}
+A growing durable collection needs a cap, or it grows without bound. `Deque[256]` is a `deque[str]` capped at 256 that auto-evicts its oldest item on append and keeps its bound across reloads. Use `Deque[item, n]` to set the element type.
+:::
+
 ## Where state lives
 
 Each session gets a directory keyed by a hash of its transcript path. A slot serializes its model to JSON at `~/.claude/state/hooks/sessions/<hash>/<hook>/<model_key>.json`, where the model key is the snake-case class name, so `ReviewState` becomes `review_state.json`. When a session's transcript is deleted, its state directory is cleaned up on the next run.
+
+Durable state lives outside any session directory, so it outlives them. A `"global"` model writes to `~/.claude/state/hooks/durable/global/<model_key>.json`, and a `"project"` model writes to `~/.claude/state/hooks/durable/projects/<project-key>/<model_key>.json`, where the project key is the repo basename plus a hash of its path. A project-scoped model needs a resolvable repo root; running outside any project directory or git repo, it keeps its data in memory for that call and persists nothing.
 
 Set `CAPTAIN_HOOK_STATE_DIR` to relocate the root, which helps in CI sandboxes that forbid writes outside the workspace. The default is `~/.claude/state`. For every tunable setting, see [configuration](configuration.qmd).
