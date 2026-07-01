@@ -6,6 +6,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-07-01
+
+### Added
+- `DurableState`, the cross-session counterpart to `SessionStore`. It is typed and
+  scope-keyed, defaulting to project scope and opting into a machine-global file via
+  the `scope=` class kwarg, with a `filelock`-guarded `mutate()` context manager so
+  concurrent cross-session writers never lose an update.
+- `Deque[maxlen]`, a bounded-deque field type whose cap survives JSON round-trips
+  and auto-evicts the oldest item on append. Declare a field as `Deque[256]` for a
+  `deque[str]` capped at 256, or `Deque[int, 256]` to set the element type.
+- A `durable-guard` example hook that warns once per project across sessions.
+
+## [4.2.0] - 2026-06-24
+
+### Added
+- `SessionStore.once(key)` and `unseen(keys)` give hook authors scoped,
+  session-persisted dedup, replacing the roll-your-own load-set/check/append/save
+  pattern. `unseen` records the whole fresh subset in one write, so a batch is never
+  partially marked.
+- `HookContext.diff(commit=REF)` returns the diff a commit introduced, via a
+  root-safe `git show`.
+
+### Changed
+- `HookContext.diff()`'s git fallback is now truncated to roughly the token budget.
+  It was previously unbounded, which regressed in jj-colocated repos where `ccx`
+  returns a hunkless symbol outline.
+
 ## [4.1.0] - 2026-06-24
 
 ### Added
