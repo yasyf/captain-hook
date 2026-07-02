@@ -28,9 +28,7 @@ StringCheck = Callable[[str], list[str]]
 AstCheck = Callable[[ast.AST], Iterator[str]]
 DiffCheck = Callable[[ast.AST, ast.AST], list[str]]
 
-DEFAULT_ONLY_IF: tuple[TCondition, ...] = (Tool("Edit|Write"), FilePath("*.py", project_only=False))
 DEFAULT_SKIP_IF: tuple[TCondition, ...] = (TestFile(),)
-DIFF_DEFAULT_ONLY_IF: tuple[TCondition, ...] = (Tool("Edit"), FilePath("*.py", project_only=False))
 
 
 def detect_ast_mode(check: StringCheck | AstCheck) -> bool:
@@ -53,6 +51,7 @@ def lint(
     check: Callable[[str], list[str]],
     *,
     message: str,
+    lang: str = ...,
     trigger: str | None = ...,
     sep: str = ...,
     block: bool = ...,
@@ -67,6 +66,7 @@ def lint(
     check: Callable[[ast.AST], Iterator[str]],
     *,
     message: str,
+    lang: str = ...,
     trigger: str | None = ...,
     sep: str = ...,
     block: bool = ...,
@@ -152,7 +152,7 @@ def lint(
         try:
             if is_ast:
                 return run_ast_check(check, evt, message, trigger, sep, block, max_shown)  # type: ignore[arg-type]
-            return run_string_check(check, evt, message, sep, block, max_shown)  # type: ignore[arg-type]
+            return run_string_check(check, evt, message, trigger, sep, block, max_shown)  # type: ignore[arg-type]
         except Exception:
             logger.bind(check=check.__name__).opt(exception=True).warning("lint check failed")
             return None
@@ -161,7 +161,7 @@ def lint(
 
     on(
         events or Event.PostToolUse,
-        only_if=DEFAULT_ONLY_IF,
+        only_if=(Tool("Edit|Write"), FilePath(*SourceEdits(lang=lang).globs, project_only=False)),
         skip_if=DEFAULT_SKIP_IF,
         tests=tests,
     )(handler)
@@ -176,7 +176,7 @@ def diff_lint(
     events: Event | None = None,
     tests: InlineTests | None = None,
     max_shown: int = 5,
-    only_if: Sequence[TCondition] = DIFF_DEFAULT_ONLY_IF,
+    only_if: Sequence[TCondition] = (Tool("Edit"), FilePath("*.py", project_only=False)),
     skip_if: Sequence[TCondition] = DEFAULT_SKIP_IF,
 ) -> None:
     def handler(evt: BaseHookEvent) -> HookResult | None:
@@ -200,11 +200,14 @@ def run_string_check(
     check: StringCheck,
     evt: BaseHookEvent,
     message: str,
+    trigger: str | None,
     sep: str,
     block: bool,
     max_shown: int,
 ) -> HookResult | None:
     if (content := evt.content) is None:
+        return None
+    if trigger and trigger not in content:
         return None
     return format_result(check(content), message, sep, block, max_shown)
 

@@ -11,7 +11,6 @@ from captain_hook.app import (
     get_matching_hooks,
     load_gitignore,
     on,
-    register,
     reset,
 )
 from captain_hook.app import (
@@ -321,29 +320,6 @@ class TestGitignore:
             },
         )
         assert len(get_matching_hooks(evt)) == expected
-
-
-class TestRegister:
-    def test_returns_decorator_without_message(self) -> None:
-        dec = register(events=Event.PreToolUse)
-        assert callable(dec)
-        assert len(_state.hooks) == 0
-
-    def test_registers_when_decorator_applied(self) -> None:
-        dec = register(events=Event.PreToolUse)
-
-        @dec
-        def handler(evt: Any) -> None:
-            return None
-
-        assert len(_state.hooks) == 1
-        assert _state.hooks[0].handler is handler
-
-    def test_registers_declarative_with_message(self) -> None:
-        result = register(events=Event.PreToolUse, message="warn")
-        assert result is None
-        assert len(_state.hooks) == 1
-        assert _state.hooks[0].spec.message == "warn"
 
 
 class TestRepeatedDiscovery:

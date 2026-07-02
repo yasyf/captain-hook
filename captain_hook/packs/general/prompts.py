@@ -8,7 +8,19 @@ nudge(
     "(Claude, GPT-5.x, Gemini) — consult it before writing prompts. After editing, run "
     "`/slop-cop-check` on the file to surface LLM-generated writing tells (overused "
     "intensifiers, hedge stacks, em-dash pivots, throat-clearing) and revise any real hits.",
-    only_if=[Tool("Edit|Write"), Content(PROMPT_MARKERS, project_only=False)],
+    only_if=[
+        Tool("Edit|Write"),
+        Content(
+            r"<instruction>|<system>|<examples>|<success_criteria>|<output_format>|"
+            r"<key_constraints>|<reasoning_framework>|<action_rules>|<preferred_patterns>|"
+            r"<persona>|<role>|<tool_persistence>|<completeness_contract>|<verification_loop>|"
+            r"You are an?\b|Your task is to\b|You will be provided with\b|"
+            r"def\s+\w*prompt\s*\(|(?i:\b(?:system|developer) prompt\b)|"
+            r"messages\s*=\s*\[|"
+            r"""["']role["']\s*:\s*["'](?:system|user|assistant|developer)["']""",
+            project_only=False,
+        ),
+    ],
     skip_if=[
         UsedSkill("llm-prompts"),
         UsedSkill("slop-cop-check", "slop-cop-prose"),

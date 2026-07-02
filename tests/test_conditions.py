@@ -437,11 +437,13 @@ class TestWorkflowScriptCondition:
             pytest.param(WorkflowScript(model=r"a\.model"), "model: a.model", True, id="bare_token_by_name"),
             pytest.param(WorkflowScript(model="haiku"), "model: a.model", False, id="bare_token_not_runtime_value"),
             pytest.param(WorkflowScript(retries=r"^3$"), "retries: 3", True, id="bare_number"),
-            pytest.param(WorkflowScript(model="haiku"), "model: \"o'haiku\"", True, id="quote_mix_regression"),
+            pytest.param(WorkflowScript(model="haiku"), 'model: "o\'haiku"', True, id="quote_mix_regression"),
             pytest.param(WorkflowScript(effort="high"), "effort: 'high'", True, id="per_key_high"),
             pytest.param(WorkflowScript(effort="low"), "effort: 'high'", False, id="per_key_reject"),
             pytest.param(WorkflowScript(effort="low"), "effort: 'very-low'", True, id="substring_documented"),
-            pytest.param(WorkflowScript(effort=r"^low$"), "effort: 'very-low'", False, id="anchored_excludes_substring"),
+            pytest.param(
+                WorkflowScript(effort=r"^low$"), "effort: 'very-low'", False, id="anchored_excludes_substring"
+            ),
             pytest.param(WorkflowScript(model="high"), "effort: 'high'", False, id="cross_key_isolation"),
             pytest.param(WorkflowScript(agentType="x"), "subagentType: 'x'", False, id="key_boundary_word"),
         ],

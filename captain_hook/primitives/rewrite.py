@@ -20,6 +20,7 @@ def rewrite_code(
     *,
     lang: str | None = None,
     only_if: Sequence[TCondition] = (),
+    skip_if: Sequence[TCondition] = (),
     note: str | None = None,
     project_only: bool = True,
     tests: InlineTests | None = None,
@@ -39,6 +40,7 @@ def rewrite_code(
             ``"rs"``, ``"java"``, ``"bash"``); inferred from the edited file's extension when omitted.
             Pass it explicitly for an extension that carries no language, like a notebook's ``.ipynb``.
         only_if: Extra conditions ANDed onto the built-in editing-tool guard.
+        skip_if: Conditions that skip the rewrite when any matches (e.g. ``[TestFile()]``).
         note: Advisory context surfaced alongside the rewrite.
         project_only: Only rewrite files inside the repository root (default ``True``).
         tests: Inline tests for the registered hook.
@@ -61,7 +63,12 @@ def rewrite_code(
         return evt.rewrite_content(transform, note=note)
 
     handler.__name__ = handler.__qualname__ = hook_name("rewrite_code", None, f"{pattern}=>{replace}")
-    on(Event.PreToolUse, only_if=[Tool("Edit|Write|MultiEdit|NotebookEdit"), *only_if], tests=tests)(handler)
+    on(
+        Event.PreToolUse,
+        only_if=[Tool("Edit|Write|MultiEdit|NotebookEdit"), *only_if],
+        skip_if=skip_if,
+        tests=tests,
+    )(handler)
 
 
 def set_tool_input(

@@ -54,10 +54,10 @@ class TestStep:
     def test_frozen_dataclass(self) -> None:
         from captain_hook.primitives.workflow import Step
 
-        s = Step(name="test", check=lambda _: True, stopped_at="Step 1:", next_step="Write tests.")
+        s = Step(name="test", check=lambda _: True, message="Step 1: Write tests.")
         assert s.name == "test"
-        assert s.stopped_at == "Step 1:"
-        assert s.next_step == "Write tests."
+        assert s.message == "Step 1: Write tests."
+        assert Step(check=lambda _: True, message="m").name == ""
         with pytest.raises(AttributeError):
             s.name = "other"  # type: ignore[misc]
 
@@ -70,7 +70,7 @@ class TestStep:
             called_with.append(t)
             return True
 
-        s = Step(name="test", check=checker, stopped_at="Stop", next_step="Next")
+        s = Step(name="test", check=checker, message="Stop Next")
         t = make_transcript(raw_text("assistant", "hello"))
         assert s.check(t) is True
         assert len(called_with) == 1
@@ -101,7 +101,7 @@ class TestWorkflowFunction:
         workflow(
             label="TEST",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+            steps=[Step(check=lambda _: True, message="Step 1: Do it.")],
         )
         assert len(_state.hooks) == initial_count + 1
 
@@ -111,7 +111,7 @@ class TestWorkflowFunction:
         workflow(
             label="TEST",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+            steps=[Step(check=lambda _: True, message="Step 1: Do it.")],
         )
         hook = _state.hooks[-1]
         assert Event.SubagentStop in hook.spec.events
@@ -122,7 +122,7 @@ class TestWorkflowFunction:
         workflow(
             label="TEST",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+            steps=[Step(check=lambda _: True, message="Step 1: Do it.")],
         )
         hook = _state.hooks[-1]
         assert hook.spec.max_fires == 1
@@ -134,7 +134,7 @@ class TestWorkflowFunction:
         workflow(
             label="TEST",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+            steps=[Step(check=lambda _: True, message="Step 1: Do it.")],
             tests=tests,
         )
         hook = _state.hooks[-1]
@@ -146,7 +146,7 @@ class TestWorkflowFunction:
         workflow(
             label="TEST",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+            steps=[Step(check=lambda _: True, message="Step 1: Do it.")],
         )
         assert _state.hooks[-1].spec.skip_planning_agents is True
 
@@ -157,7 +157,7 @@ class TestWorkflowFunction:
         workflow(
             label="TEST",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+            steps=[Step(check=lambda _: True, message="Step 1: Do it.")],
             only_if=[Agent("cleanup")],
         )
         assert _state.hooks[-1].spec.only_if == (Agent("cleanup"),)
@@ -169,7 +169,7 @@ class TestWorkflowFunction:
         workflow(
             label="TEST",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+            steps=[Step(check=lambda _: True, message="Step 1: Do it.")],
             skip_if=[Agent("Explore")],
         )
         assert _state.hooks[-1].spec.skip_if == (Agent("Explore"),)
@@ -181,7 +181,7 @@ class TestWorkflowFunction:
         workflow(
             label="TEST",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="Step 1:", next_step="Do it.")],
+            steps=[Step(check=lambda _: True, message="Step 1: Do it.")],
         )
         assert _state.hooks[-1].spec.only_if == ()
         assert _state.hooks[-1].spec.skip_if == (Waiting(),)
@@ -196,7 +196,7 @@ class TestWorkflowOnStart:
         workflow(
             label="CLEANUP",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="S:", next_step="N")],
+            steps=[Step(name="s1", check=lambda _: True, message="S: N")],
             on_start=lambda _: HookResult(action=Action.warn, message="setup ran"),
             only_if=[Agent("cleanup")],
         )
@@ -225,7 +225,7 @@ class TestWorkflowOnStart:
         workflow(
             label="CLEANUP",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="S:", next_step="N")],
+            steps=[Step(name="s1", check=lambda _: True, message="S: N")],
             on_start=starter,
             only_if=[Agent("cleanup")],
         )
@@ -243,7 +243,7 @@ class TestWorkflowOnStart:
         workflow(
             label="PLAIN",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="S:", next_step="N")],
+            steps=[Step(name="s1", check=lambda _: True, message="S: N")],
         )
         assert len(_state.hooks) == before + 1
         assert [h for h in _state.hooks if Event.SubagentStart in h.spec.events] == []
@@ -256,7 +256,7 @@ class TestWorkflowGuard:
         w = Workflow(
             label="TDD",
             marker="ALL_PASS",
-            steps=[Step(name="test", check=lambda _: False, stopped_at="Step 1:", next_step="Write test.")],
+            steps=[Step(name="test", check=lambda _: False, message="Step 1: Write test.")],
         )
         evt = make_evt("no marker here")
         result = w.guard(evt)
@@ -271,9 +271,9 @@ class TestWorkflowGuard:
             label="BUILD",
             marker="DONE",
             steps=[
-                Step(name="step1", check=lambda _: True, stopped_at="S1:", next_step="Do step 2."),
-                Step(name="step2", check=lambda _: False, stopped_at="S2:", next_step="Do step 3."),
-                Step(name="step3", check=lambda _: False, stopped_at="S3:", next_step="Finish."),
+                Step(name="step1", check=lambda _: True, message="S1: Do step 2."),
+                Step(name="step2", check=lambda _: False, message="S2: Do step 3."),
+                Step(name="step3", check=lambda _: False, message="S3: Finish."),
             ],
         )
         evt = make_evt("no marker")
@@ -287,15 +287,15 @@ class TestWorkflowGuard:
         ("steps", "stopped_at", "next_step"),
         [
             pytest.param(
-                [Step(name="s1", check=lambda _: False, stopped_at="Stop here", next_step="Then do this")],
+                [Step(name="s1", check=lambda _: False, message="Stop here Then do this")],
                 "Stop here",
                 "Then do this",
                 id="guard_message_includes_stopped_at_and_next_step",
             ),
             pytest.param(
                 [
-                    Step(name="s1", check=lambda _: False, stopped_at="Step1:", next_step="Do step 1."),
-                    Step(name="s2", check=lambda _: False, stopped_at="Step2:", next_step="Do step 2."),
+                    Step(name="s1", check=lambda _: False, message="Step1: Do step 1."),
+                    Step(name="s2", check=lambda _: False, message="Step2: Do step 2."),
                 ],
                 "Step1:",
                 "Do step 1.",
@@ -328,7 +328,7 @@ class TestWorkflowGuard:
         w = Workflow(
             label="X",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="S1:", next_step="N/A")],
+            steps=[Step(name="s1", check=lambda _: True, message="S1: N/A")],
             post_complete=post,
         )
         evt = make_evt("DONE is here")
@@ -342,7 +342,7 @@ class TestWorkflowGuard:
         w = Workflow(
             label="X",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="S1:", next_step="N/A")],
+            steps=[Step(name="s1", check=lambda _: True, message="S1: N/A")],
         )
         evt = make_evt("DONE is here")
         result = w.guard(evt)
@@ -354,7 +354,7 @@ class TestWorkflowGuard:
         w = Workflow(
             label="ART",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="S:", next_step="N")],
+            steps=[Step(name="s1", check=lambda _: True, message="S: N")],
             artifacts=[Artifact(path="/nonexistent/artifact.json", model=ArtifactModel)],
         )
         evt = make_evt("DONE is here")
@@ -376,7 +376,7 @@ class TestWorkflowGuard:
         w = Workflow(
             label="VAL",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="S:", next_step="N")],
+            steps=[Step(name="s1", check=lambda _: True, message="S: N")],
             artifacts=[Artifact(path=str(artifact_path), model=ArtifactModel, validate=bad_validate)],
         )
         evt = make_evt("DONE is here")
@@ -392,8 +392,8 @@ class TestWorkflowGuard:
             label="MIX",
             marker="DONE",
             steps=[
-                Step(name="s1", check=lambda _: True, stopped_at="S:", next_step="N"),
-                Step(name="s2", check=lambda _: True, stopped_at="S2:", next_step="N2"),
+                Step(name="s1", check=lambda _: True, message="S: N"),
+                Step(name="s2", check=lambda _: True, message="S2: N2"),
             ],
             artifacts=[Artifact(path="/nonexistent/file.json", model=ArtifactModel)],
         )
@@ -411,7 +411,7 @@ class TestWorkflowGuard:
         w = Workflow(
             label="BAD",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="S:", next_step="N")],
+            steps=[Step(name="s1", check=lambda _: True, message="S: N")],
             artifacts=[Artifact(path=str(artifact_path), model=ArtifactModel)],
         )
         evt = make_evt("DONE is here")
@@ -428,7 +428,7 @@ class TestWorkflowGuard:
         w = Workflow(
             label="SCHEMA",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="S:", next_step="N")],
+            steps=[Step(name="s1", check=lambda _: True, message="S: N")],
             artifacts=[Artifact(path=str(artifact_path), model=ArtifactModel)],
         )
         evt = make_evt("DONE is here")
@@ -442,7 +442,7 @@ class TestWorkflowGuard:
         w = Workflow(
             label="MYWORKFLOW",
             marker="COMPLETE",
-            steps=[Step(name="s1", check=lambda _: False, stopped_at="S:", next_step="Do it.")],
+            steps=[Step(name="s1", check=lambda _: False, message="S: Do it.")],
         )
         evt = make_evt("no marker")
         result = w.guard(evt)
@@ -459,7 +459,7 @@ class TestWorkflowGuard:
         w = Workflow(
             label="OK",
             marker="DONE",
-            steps=[Step(name="s1", check=lambda _: True, stopped_at="S:", next_step="N")],
+            steps=[Step(name="s1", check=lambda _: True, message="S: N")],
             artifacts=[Artifact(path=str(artifact_path), model=ArtifactModel)],
         )
         evt = make_evt("DONE is here")
@@ -473,9 +473,9 @@ class TestWorkflowGuard:
             label="SEQ",
             marker="DONE",
             steps=[
-                Step(name="s1", check=lambda _: True, stopped_at="S1:", next_step="N1"),
-                Step(name="s2", check=lambda _: False, stopped_at="S2:", next_step="N2"),
-                Step(name="s3", check=lambda _: True, stopped_at="S3:", next_step="N3"),
+                Step(name="s1", check=lambda _: True, message="S1: N1"),
+                Step(name="s2", check=lambda _: False, message="S2: N2"),
+                Step(name="s3", check=lambda _: True, message="S3: N3"),
             ],
         )
         evt = make_evt("no marker")
@@ -492,9 +492,9 @@ class TestWorkflowGuard:
             label="SEQ",
             marker="DONE",
             steps=[
-                Step(name="s1", check=lambda _: False, stopped_at="S1:", next_step="N1"),
-                Step(name="s2", check=lambda _: True, stopped_at="S2:", next_step="N2"),
-                Step(name="s3", check=lambda _: True, stopped_at="S3:", next_step="N3"),
+                Step(name="s1", check=lambda _: False, message="S1: N1"),
+                Step(name="s2", check=lambda _: True, message="S2: N2"),
+                Step(name="s3", check=lambda _: True, message="S3: N3"),
             ],
         )
         evt = make_evt("no marker")

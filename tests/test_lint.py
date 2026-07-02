@@ -447,9 +447,8 @@ class TestOverloadTyping:
         assert len(_state.hooks) == 2
 
 
-class TestTriggerIgnoredInStringMode:
-    def test_trigger_absent_still_runs_string_check(self, session_dir: Path) -> None:
-
+class TestTriggerHonoredInStringMode:
+    def test_trigger_absent_skips_string_check(self, session_dir: Path) -> None:
         def check(content: str) -> list[str]:
             return ["found"]
 
@@ -457,6 +456,18 @@ class TestTriggerIgnoredInStringMode:
             session_dir,
             check,
             tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content without trigger"},
+            trigger="xyz",
+        )
+        assert result is None
+
+    def test_trigger_present_runs_string_check(self, session_dir: Path) -> None:
+        def check(content: str) -> list[str]:
+            return ["found"]
+
+        result = lint_and_dispatch(
+            session_dir,
+            check,
+            tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content with xyz trigger"},
             trigger="xyz",
         )
         assert result is not None

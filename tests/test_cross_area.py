@@ -483,8 +483,8 @@ class TestWorkflowTranscript:
             label="TEST",
             marker="DONE",
             steps=[
-                Step(name="run tests", check=text_matches(r"mtest"), stopped_at="Stop here", next_step="Run mtest"),
-                Step(name="review", check=text_matches(r"review"), stopped_at="Stop", next_step="Do review"),
+                Step(name="run tests", check=text_matches(r"mtest"), message="Stop here Run mtest"),
+                Step(name="review", check=text_matches(r"review"), message="Stop Do review"),
             ],
         )
         result = dispatch_test(Event.SubagentStop, transcript=transcript)
@@ -498,7 +498,7 @@ class TestWorkflowTranscript:
         workflow(
             label="TEST",
             marker="DONE",
-            steps=[Step(name="run tests", check=text_matches(r"mtest"), stopped_at="S", next_step="N")],
+            steps=[Step(name="run tests", check=text_matches(r"mtest"), message="S N")],
         )
         result = dispatch_test(Event.SubagentStop, transcript=transcript)
         assert result is None
@@ -509,8 +509,8 @@ class TestWorkflowTranscript:
             label="TEST",
             marker="DONE",
             steps=[
-                Step(name="tests", check=text_matches(r"mtest"), stopped_at="S1", next_step="N1"),
-                Step(name="review", check=text_matches(r"review"), stopped_at="S2", next_step="Do review"),
+                Step(name="tests", check=text_matches(r"mtest"), message="S1 N1"),
+                Step(name="review", check=text_matches(r"review"), message="S2 Do review"),
             ],
         )
         result = dispatch_test(Event.SubagentStop, transcript=transcript)

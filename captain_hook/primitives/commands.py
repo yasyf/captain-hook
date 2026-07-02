@@ -43,22 +43,31 @@ def block_command(
     *,
     reason: str,
     hint: str | None = None,
+    only_if: Sequence[TCondition] = (),
+    skip_if: Sequence[TCondition] = (),
     tests: InlineTests | None = None,
 ) -> None:
     """Register a declarative hook that blocks a Bash command matching a pattern.
 
+    Scope the block further with ``only_if``/``skip_if`` (ANDed onto the built-in
+    ``[Tool("Bash"), <pattern>]``), e.g. to allow it in plan mode or only under a path.
+
     Example:
         >>> block_command(["git", "stash"], reason="git stash is not allowed", hint="Use jj")
     """
-    msg = f"BLOCKED: {reason}.{f' {hint}.' if hint else ''}"
+    msg = f"BLOCKED: {reason.rstrip('.')}.{f' {hint.rstrip(".")}.' if hint else ''}"
     cmd = Command(block_command_pattern(pattern) if isinstance(pattern, list) else pattern)
-    register_hook(Event.PreToolUse, only_if=[Tool("Bash"), cmd], message=msg, block=True, tests=tests)
+    register_hook(
+        Event.PreToolUse, msg, only_if=[Tool("Bash"), cmd, *only_if], skip_if=skip_if, block=True, tests=tests
+    )
 
 
 def warn_command(
     pattern: str | list[str],
     *,
     message: str,
+    only_if: Sequence[TCondition] = (),
+    skip_if: Sequence[TCondition] = (),
     tests: InlineTests | None = None,
     events: Event = Event.PostToolUse,
 ) -> None:
@@ -68,7 +77,7 @@ def warn_command(
         >>> warn_command(["python", "-c", "*"], message="Prefer uv run mtest")
     """
     cmd = Command(block_command_pattern(pattern) if isinstance(pattern, list) else pattern)
-    register_hook(events, only_if=[Tool("Bash"), cmd], message=message, tests=tests)
+    register_hook(events, message, only_if=[Tool("Bash"), cmd, *only_if], skip_if=skip_if, tests=tests)
 
 
 def rewrite_command(
@@ -76,6 +85,7 @@ def rewrite_command(
     replace: str | None = None,
     *,
     only_if: Sequence[TCondition] = (),
+    skip_if: Sequence[TCondition] = (),
     to: Callable[[PreToolUseEvent], str | None] | None = None,
     block: str | None = None,
     note: str | Callable[[PreToolUseEvent], str | None] | None = None,
@@ -117,7 +127,7 @@ def rewrite_command(
                 return evt.block(block) if block else None
             return evt.rewrite_command(new, note=note(evt) if callable(note) else note)
 
-        on(Event.PreToolUse, only_if=[Tool("Bash"), *only_if], tests=tests)(handler)
+        on(Event.PreToolUse, only_if=[Tool("Bash"), *only_if], skip_if=skip_if, tests=tests)(handler)
         return
 
     if pattern is None or replace is None or callable(note):
@@ -130,10 +140,12 @@ def rewrite_command(
                 return None
             return evt.rewrite_command(new, note=note) if (new := cl.rewrite(pattern, replace)) != cl.raw else None
 
-        on(Event.PreToolUse, only_if=[Tool("Bash"), *only_if], tests=tests)(structural_handler)
+        on(Event.PreToolUse, only_if=[Tool("Bash"), *only_if], skip_if=skip_if, tests=tests)(structural_handler)
         return
 
     def regex_handler(evt: PreToolUseEvent) -> HookResponse:
         return evt.rewrite_command(re.sub(pattern, replace, command), note=note) if (command := evt.command) else None
 
-    on(Event.PreToolUse, only_if=[Tool("Bash"), Command(pattern), *only_if], tests=tests)(regex_handler)
+    on(Event.PreToolUse, only_if=[Tool("Bash"), Command(pattern), *only_if], skip_if=skip_if, tests=tests)(
+        regex_handler
+    )

@@ -295,7 +295,7 @@ class CommandLine:
             case "program":
                 return CommandLine.collect_parts(node.children, frozenset({";"}))
             case "list":
-                return CommandLine.collect_parts(node.children, COMPOUND_OPS)
+                return CommandLine.collect_parts(node.children, frozenset({"&&", "||", ";", "|", "&"}))
             case "pipeline":
                 return CommandLine.collect_parts(node.children, frozenset({"|"}))
             case "command":

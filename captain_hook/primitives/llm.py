@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from captain_hook import state
 from captain_hook.app import on
+from captain_hook.primitives.nudge import DEFAULT_FIRES
 from captain_hook.prompt import Prompt
 from captain_hook.signals import extract_signal_context, resolve_signals, transcript_texts
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
@@ -71,6 +72,8 @@ def llm_evaluate[M: BaseModel](
 ) -> M | None:
     if fired_this_turn(evt):
         return None
+    if when is not None and not when(evt):
+        return None
 
     if sig := resolve_signals(signals):
         ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
@@ -81,8 +84,6 @@ def llm_evaluate[M: BaseModel](
             return None
         ps.consumed = old_consumed
         evt.ctx.s[PrimitiveState].set(ps)
-    elif when is not None and not when(evt):
-        return None
     else:
         contributing_texts = transcript_texts(evt, 5)
 
@@ -133,7 +134,7 @@ def llm_primitive[M: BaseModel](
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     events: Event | None = None,
-    max_fires: int | None = None,
+    max_fires: int | None = DEFAULT_FIRES,
     tests: InlineTests | None = None,
     async_: bool = False,
     max_context: int = 2000,
@@ -174,12 +175,12 @@ def llm_primitive[M: BaseModel](
     handler.__name__ = handler.__qualname__ = hook_name(label, None, prompt)
 
     resolved = events or default_events
+    guards_waiting = action is Action.block and bool(resolved & (Event.Stop | Event.SubagentStop))
     on(
         resolved,
         only_if=only_if,
-        skip_if=skip_if
-        or ((Waiting(),) if action is Action.block and resolved & (Event.Stop | Event.SubagentStop) else ()),
-        max_fires=max_fires if max_fires is not None else default_max_fires,
+        skip_if=(Waiting(), *skip_if) if guards_waiting else tuple(skip_if),
+        max_fires=(None if action is Action.block else default_max_fires) if max_fires == DEFAULT_FIRES else max_fires,
         tests=tests,
         async_=async_,
     )(handler)
@@ -196,7 +197,7 @@ def llm_gate(
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     events: Event | None = None,
-    max_fires: int | None = None,
+    max_fires: int | None = DEFAULT_FIRES,
     tests: InlineTests | None = None,
     max_context: int = 2000,
     specialty: TSpecialty = "review",
@@ -253,7 +254,7 @@ def llm_nudge(
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     events: Event | None = None,
-    max_fires: int | None = None,
+    max_fires: int | None = DEFAULT_FIRES,
     tests: InlineTests | None = None,
     async_: bool = False,
     max_context: int = 2000,

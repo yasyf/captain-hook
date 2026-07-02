@@ -29,10 +29,18 @@ def text_matches(pattern: str) -> Callable[[Session], bool]:
 
 @dataclass(frozen=True, kw_only=True)
 class Step:
-    name: str
+    """One step of a :func:`workflow` guard: ``check`` gates progress, ``message`` is shown when it fails.
+
+    ``message`` is the full "you are here, do this next" sentence surfaced on the blocking
+    guard. ``name`` is optional and used only for readability at the call site.
+
+    Example:
+        >>> Step(check=text_matches(r"pytest"), message="Step 1: run the tests, then fix failures.")
+    """
+
     check: Callable[[Session], bool]
-    stopped_at: str
-    next_step: str
+    message: str
+    name: str = ""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -63,7 +71,7 @@ class Workflow:
             )
             return HookResult(
                 action=Action.block,
-                message=f"{self.label} INCOMPLETE: {resume.stopped_at} {resume.next_step}",
+                message=f"{self.label} INCOMPLETE: {resume.message}",
             )
 
         for art in self.artifacts:

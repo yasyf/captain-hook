@@ -7,7 +7,8 @@ import pytest
 
 from captain_hook.app import _state
 from captain_hook.dispatch import dispatch
-from captain_hook.types import Event, Signal, Signals, Tool, Waiting
+from captain_hook.primitives.nudge import DEFAULT_FIRES
+from captain_hook.types import Event, RanCommand, Signal, Signals, Tool, Waiting
 from tests.helpers import (
     build_ctx,
     make_ctx,
@@ -28,7 +29,7 @@ def register_nudge(
     skip_if: Any = (),
     block: bool = False,
     events: Event | None = None,
-    max_fires: int | None = None,
+    max_fires: int | None = DEFAULT_FIRES,
     tests: Any = None,
     async_: bool = False,
 ) -> None:
@@ -171,7 +172,11 @@ class TestGateWaitAwareDefault:
         ("skip_if", "expected"),
         [
             pytest.param((), (Waiting(),), id="stop_gate_without_skip_if_gets_waiting"),
-            pytest.param([Tool("Bash")], (Tool("Bash"),), id="stop_gate_with_skip_if_is_left_untouched"),
+            pytest.param(
+                [RanCommand(r"pytest")],
+                (Waiting(), RanCommand(r"pytest")),
+                id="stop_gate_skip_if_is_additive_with_waiting",
+            ),
         ],
     )
     def test_gate_skip_if(self, skip_if: Any, expected: tuple[Any, ...]) -> None:
@@ -292,18 +297,31 @@ class TestSignalCitation:
 
 
 class TestNudgeSignalsPrecedence:
-    def test_nudge_with_both_when_and_signals_ignores_when(self, tmp_path: Path) -> None:
+    def test_when_vetoes_even_when_signal_matches(self, tmp_path: Path) -> None:
         register_nudge(
             "msg",
-            when=lambda evt: 1 / 0,
-            signals=[Signal(pattern=r"no_match_xyz", weight=1)],
+            when=lambda evt: False,
+            signals=[Signal(pattern=r"force.push", weight=1)],
         )
 
-        ctx = make_ctx(tmp_path, texts=["safe text without match"])
+        ctx = make_ctx(tmp_path, texts=["about to force push"])
         evt = make_post_tool_event(ctx=ctx)
 
         result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
         assert result is None
+
+    def test_signal_fires_when_veto_passes(self, tmp_path: Path) -> None:
+        register_nudge(
+            "msg",
+            when=lambda evt: True,
+            signals=[Signal(pattern=r"force.push", weight=1)],
+        )
+
+        ctx = make_ctx(tmp_path, texts=["about to force push"])
+        evt = make_post_tool_event(ctx=ctx)
+
+        result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
+        assert result is not None
 
 
 class TestNudgeUnconditional:

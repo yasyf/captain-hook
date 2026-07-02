@@ -11,7 +11,7 @@ from captain_hook.app import (
 from captain_hook.dispatch import dispatch
 from captain_hook.packs.general.review import EditedSource
 from captain_hook.testing.helpers import fixture_session
-from captain_hook.types import Action, Event, Signal, Tool, Waiting
+from captain_hook.types import Action, Event, RanCommand, Signal, Tool, Waiting
 from tests.helpers import (
     build_ctx,
     make_ctx,
@@ -334,9 +334,9 @@ class TestLlmGateWaitAwareDefault:
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True)
         assert _state.hooks[0].spec.skip_if == (Waiting(),)
 
-    def test_stop_llm_gate_with_skip_if_is_left_untouched(self) -> None:
-        register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True, skip_if=[Tool("Bash")])
-        assert _state.hooks[0].spec.skip_if == (Tool("Bash"),)
+    def test_stop_llm_gate_skip_if_is_additive_with_waiting(self) -> None:
+        register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True, skip_if=[RanCommand(r"pytest")])
+        assert _state.hooks[0].spec.skip_if == (Waiting(), RanCommand(r"pytest"))
 
     def test_posttooluse_llm_gate_is_not_wait_aware(self) -> None:
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True, events=Event.PostToolUse)
@@ -348,10 +348,11 @@ class TestLlmGateWaitAwareDefault:
 
 
 class TestLlmGateDefaultMaxFires:
-    def test_llm_gate_default_max_fires(self, tmp_path: Path) -> None:
+    def test_llm_gate_defaults_to_unlimited_fires(self, tmp_path: Path) -> None:
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True)
 
-        assert _state.hooks[0].spec.max_fires == 1
+        # A gate must keep enforcing across turns, so it defaults to unlimited (once per turn).
+        assert _state.hooks[0].spec.max_fires is None
 
 
 class TestLlmNudgeDefaultMaxFires:

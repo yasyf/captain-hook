@@ -9,12 +9,23 @@ from typing import TYPE_CHECKING, get_args
 
 from captain_hook.conditions import matches_conditions
 from captain_hook.types import (
+    Agent,
+    Command,
+    Content,
     CustomCondition,
     Event,
+    FilePath,
     HookSpec,
     InlineTests,
+    Pattern,
     RegisteredHook,
+    Runs,
+    SourceEdits,
     TCondition,
+    TestFile,
+    Tool,
+    ToolInput,
+    WorkflowScript,
 )
 
 if TYPE_CHECKING:
@@ -29,13 +40,37 @@ HookHandler = Callable[["BaseHookEvent"], "HookResult | None"]
 VALID_CONDITION_TYPES = tuple(t for t in get_args(TCondition) if t is not CustomCondition)
 VALID_CONDITION_NAMES = ", ".join(t.__name__ for t in VALID_CONDITION_TYPES) + ", or a CustomCondition"
 
+_TOOL_EVENTS = Event.PreToolUse | Event.PostToolUse | Event.PostToolUseFailure
 
-def validate_conditions(conditions: Sequence[TCondition], label: str) -> None:
+# Conditions that read the current event's tool input can only match on a tool event; a
+# condition absent from this map (transcript-history conditions, InPlanMode, Waiting,
+# combinators, CustomCondition) reads session state and is valid on every event.
+_CONDITION_EVENTS: dict[type, Event] = {
+    Tool: _TOOL_EVENTS,
+    ToolInput: _TOOL_EVENTS,
+    WorkflowScript: _TOOL_EVENTS,
+    Command: _TOOL_EVENTS,
+    Runs: _TOOL_EVENTS,
+    FilePath: _TOOL_EVENTS,
+    Content: _TOOL_EVENTS,
+    Pattern: _TOOL_EVENTS,
+    TestFile: _TOOL_EVENTS,
+    SourceEdits: _TOOL_EVENTS,
+    Agent: _TOOL_EVENTS | Event.SubagentStart | Event.SubagentStop,
+}
+
+
+def validate_conditions(conditions: Sequence[TCondition], label: str, events: Event | None = None) -> None:
     for c in conditions:
         if not isinstance(c, (*VALID_CONDITION_TYPES, CustomCondition)):
             raise TypeError(
                 f"Invalid condition in {label}: {c!r} (type {type(c).__name__}). "
                 f"Expected one of: {VALID_CONDITION_NAMES}."
+            )
+        if events is not None and (valid := _CONDITION_EVENTS.get(type(c))) is not None and not (events & valid):
+            raise TypeError(
+                f"{c!r} in {label} can never match on {events!r} — it reads the current tool input, "
+                f"which only exists on {valid!r}."
             )
 
 
@@ -104,10 +139,10 @@ def is_gitignored(path_str: str) -> bool:
 
 def hook(
     events: Event,
+    message: str,
     *,
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
-    message: str | None = None,
     block: bool = False,
     respect_gitignore: bool = True,
     max_fires: int | None = None,
@@ -115,13 +150,8 @@ def hook(
     async_: bool = False,
     skip_planning_agents: bool = True,
 ) -> None:
-    if message is None:
-        raise TypeError(
-            "hook() requires message= for declarative hooks. "
-            "Provide message='...' or use @on() for handler-based hooks."
-        )
-    validate_conditions(only_if, "only_if")
-    validate_conditions(skip_if, "skip_if")
+    validate_conditions(only_if, "only_if", events)
+    validate_conditions(skip_if, "skip_if", events)
     _state.counter += 1
     _state.hooks.append(
         RegisteredHook(
@@ -153,77 +183,12 @@ def on(
     async_: bool = False,
     skip_planning_agents: bool = True,
 ) -> Callable[[HookHandler], HookHandler]:
-    validate_conditions(only_if, "only_if")
-    validate_conditions(skip_if, "skip_if")
+    validate_conditions(only_if, "only_if", events)
+    validate_conditions(skip_if, "skip_if", events)
     spec = HookSpec(
         events=events,
         only_if=tuple(only_if),
         skip_if=tuple(skip_if),
-        respect_gitignore=respect_gitignore,
-        max_fires=max_fires,
-        tests=tests,
-        async_=async_,
-        skip_planning_agents=skip_planning_agents,
-    )
-
-    def decorator(fn: HookHandler) -> HookHandler:
-        validate_handler_signature(fn)
-        _state.hooks.append(
-            RegisteredHook(
-                spec=spec,
-                handler=fn,
-                name=fn.__name__,
-                source_file=fn.__code__.co_filename,
-            )
-        )
-        return fn
-
-    return decorator
-
-
-def register(
-    events: Event,
-    *,
-    only_if: Sequence[TCondition] = (),
-    skip_if: Sequence[TCondition] = (),
-    message: str | None = None,
-    block: bool = False,
-    respect_gitignore: bool = True,
-    max_fires: int | None = None,
-    tests: InlineTests | None = None,
-    async_: bool = False,
-    skip_planning_agents: bool = True,
-) -> Callable[[HookHandler], HookHandler] | None:
-    validate_conditions(only_if, "only_if")
-    validate_conditions(skip_if, "skip_if")
-
-    if message is not None:
-        hook(
-            events,
-            only_if=only_if,
-            skip_if=skip_if,
-            message=message,
-            block=block,
-            respect_gitignore=respect_gitignore,
-            max_fires=max_fires,
-            tests=tests,
-            async_=async_,
-            skip_planning_agents=skip_planning_agents,
-        )
-        return None
-
-    if block:
-        raise TypeError(
-            "hook() called with block=True but no message= provided. "
-            "Declarative hooks require message= to specify the block reason. "
-            "Either provide message='...' or use @on() for handler-based hooks."
-        )
-
-    spec = HookSpec(
-        events=events,
-        only_if=tuple(only_if),
-        skip_if=tuple(skip_if),
-        block=block,
         respect_gitignore=respect_gitignore,
         max_fires=max_fires,
         tests=tests,
