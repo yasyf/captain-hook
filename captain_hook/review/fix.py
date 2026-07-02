@@ -25,9 +25,14 @@ shapes (Stop feedback, blocking errors) fall back to
 :meth:`~cc_transcript.decisions.DecisionLog.attribute_nearest` with the
 decision's recorded message as the tiebreak — the only place message-substring
 matching survives. The PR target resolves primitive-aware: a ``nudge()``/``gate()``
-fire records the primitive file as its ``source_file``, so the real user hook
-comes from the decision ``kind``'s module prefix. Unattributable or unresolvable
-complaints are dropped — precision over recall.
+fire records the primitive file as its ``source_file``, so the real hook comes
+from the decision ``kind``'s module prefix — a ``<pack>.<module>`` prefix naming
+a module the installed builtin pack actually ships targets the pack source inside
+captain-hook itself (``captain_hook/packs/<pack>/<module>.py``), while any other
+module prefix — including a packaged user hook whose package merely shares a
+builtin pack's name — targets the repo-local ``.claude/hooks/<module>.py``.
+Unattributable or unresolvable complaints (including legacy kinds whose prefix is
+not a module path, e.g. ``<frozen importlib``) are dropped — precision over recall.
 """
 
 from __future__ import annotations
@@ -59,6 +64,7 @@ TIGHT_PROXIMITY_TURNS = 1
 STOP_FEEDBACK_PREFIX = "Stop hook feedback:\n"
 PRIMITIVES_DIR = "captain_hook/primitives/"
 HOOKS_DIR = ".claude/hooks"
+PACKS_DIR = "captain_hook/packs"
 
 HOOK_VOCAB_RE = re.compile(r"\b(?:hook|reminder|nudge|gate|guard)s?\b", re.IGNORECASE)
 
@@ -199,12 +205,20 @@ def attribute_fingerprint(
 
 
 def resolve_target(decision: Decision) -> tuple[str, str] | None:
+    from captain_hook.packs.manager import builtin_packs
+
     if PRIMITIVES_DIR not in decision.source_file:
         return decision.source_file, decision.kind
     module, sep, _ = decision.kind.partition(":")
     if not sep or not module:
         return None
-    return f"{HOOKS_DIR}/{module.rsplit('.', 1)[-1]}.py", decision.kind
+    match module.split("."):
+        case [pack, mod] if (pack_dir := builtin_packs().get(pack)) and (pack_dir / f"{mod}.py").is_file():
+            return f"{PACKS_DIR}/{pack}/{mod}.py", decision.kind
+        case parts if all(part.isidentifier() for part in parts):
+            return f"{HOOKS_DIR}/{parts[-1]}.py", decision.kind
+        case _:
+            return None
 
 
 def complaint_signal(marker: Marker, turns_back: int) -> CandidateSignal:

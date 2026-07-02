@@ -268,6 +268,21 @@ class TestResolveTarget:
             ),
             pytest.param(PRIMITIVE_NUDGE, "declarative_1", None, id="primitive-anonymous-unresolvable"),
             pytest.param(
+                PRIMITIVE_NUDGE,
+                "general.docs:nudge_1a2b3c4d",
+                ("captain_hook/packs/general/docs.py", "general.docs:nudge_1a2b3c4d"),
+                id="builtin-pack-resolves-into-captain-hook",
+            ),
+            pytest.param(
+                PRIMITIVE_NUDGE,
+                "python.my_thing:nudge_1a2b3c4d",
+                (".claude/hooks/my_thing.py", "python.my_thing:nudge_1a2b3c4d"),
+                id="packaged-user-hook-shadowing-builtin-pack-name-stays-local",
+            ),
+            pytest.param(
+                PRIMITIVE_NUDGE, "<frozen importlib:nudge_a1b2c3d4", None, id="legacy-frozen-importlib-unresolvable"
+            ),
+            pytest.param(
                 "/repo/.claude/hooks/guard.py",
                 "guard:warn_deadbeef",
                 ("/repo/.claude/hooks/guard.py", "guard:warn_deadbeef"),
@@ -535,6 +550,29 @@ class TestFixGroupingAndStore:
         )
         assert status.sessions == 2
         assert await store.eligible(int(candidate["id"]), settings=settings, prompt_version=REVIEW_PROMPT_VERSION)
+
+
+class TestPackTargetRouting:
+    async def test_pack_targeted_complaint_ingests_under_the_captain_hook_repo(
+        self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog, tmp_path: Path
+    ) -> None:
+        path = write_transcript(tmp_path / "s.jsonl", complaint_entries(STRONG_COMPLAINT))
+        seed_decision(decisions, kind="general.docs:nudge_1a2b3c4d")
+        assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
+        [candidate] = await rows(store, "SELECT * FROM candidates")
+        assert candidate["repo_key"] == "github.com/yasyf/captain-hook"
+        assert candidate["target_source_file"] == "captain_hook/packs/general/docs.py"
+        assert candidate["target_hook_name"] == "general.docs:nudge_1a2b3c4d"
+
+    async def test_hooks_targeted_complaint_keeps_the_session_repo(
+        self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog, tmp_path: Path
+    ) -> None:
+        path = write_transcript(tmp_path / "s.jsonl", complaint_entries(STRONG_COMPLAINT))
+        seed_decision(decisions)
+        assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
+        [candidate] = await rows(store, "SELECT * FROM candidates")
+        assert candidate["repo_key"] == REPO
+        assert candidate["target_source_file"] == ".claude/hooks/status_nudge.py"
 
 
 class TestFixJudge:

@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from captain_hook.types import Signals
 
 FRAMEWORK_DIR = str(Path(__file__).resolve().parent)
+PACKS_DIR = str(Path(FRAMEWORK_DIR) / "packs")
 CACHE_ROOT = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "captain-hook"
 SPACY_MODEL = "en_core_web_sm"
 
@@ -134,6 +135,8 @@ def text_hash(text: str) -> str:
 
 
 def package_aware_stem(p: Path) -> str:
+    if str(p).startswith(PACKS_DIR):
+        return f"{p.parent.name}.{p.stem}"
     if (
         p.name != "__init__.py"
         and not str(p).startswith(FRAMEWORK_DIR)
@@ -144,11 +147,15 @@ def package_aware_stem(p: Path) -> str:
     return p.stem
 
 
+def framework_frame(filename: str) -> bool:
+    return filename.startswith(FRAMEWORK_DIR) and not filename.startswith(PACKS_DIR)
+
+
 def caller_stem() -> str:
     frame: FrameType | None = inspect.currentframe()
     if frame:
         frame = frame.f_back
-    while frame and frame.f_code.co_filename.startswith(FRAMEWORK_DIR):
+    while frame and framework_frame(frame.f_code.co_filename):
         frame = frame.f_back
     return package_aware_stem(Path(frame.f_code.co_filename)) if frame else "unknown"
 

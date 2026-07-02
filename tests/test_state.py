@@ -1,16 +1,29 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
 
+import captain_hook
+from captain_hook import app
 from captain_hook.dispatch import HookState, execute_hook
+from captain_hook.loader import import_pack_module
 from captain_hook.session import SessionSlot, SessionStore, session_state
-from captain_hook.state import PrimitiveState, SeenKeys, fired_this_turn, hook_name, record_fire
+from captain_hook.state import (
+    PrimitiveState,
+    SeenKeys,
+    fired_this_turn,
+    hook_name,
+    package_aware_stem,
+    record_fire,
+)
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
+
+PACKS_DIR = Path(captain_hook.__file__).resolve().parent / "packs"
 
 
 class MyModel(BaseModel):
@@ -359,6 +372,34 @@ class TestHookName:
         name = hook_name("gate", None, "some long message text")
         assert "gate" in name
         assert len(name) > 5
+
+    def test_pack_module_hook_name_is_pack_qualified(self, isolate_modules: None) -> None:
+        import_pack_module("captain_hook._packs.general.docs", PACKS_DIR / "general" / "docs.py")
+        [entry] = app._state.hooks
+        assert re.fullmatch(r"general\.docs:nudge_[0-9a-f]{8}", entry.name)
+
+    def test_non_framework_hook_name_keeps_bare_stem(self, tmp_path: Path, isolate_modules: None) -> None:
+        (tmp_path / "my_hook.py").write_text("from captain_hook import nudge\n\nnudge('remember the tests')\n")
+        import_pack_module("captain_hook._packs.local.my_hook", tmp_path / "my_hook.py")
+        [entry] = app._state.hooks
+        assert re.fullmatch(r"my_hook:nudge_[0-9a-f]{8}", entry.name)
+
+
+class TestPackageAwareStem:
+    def test_builtin_pack_file_is_pack_qualified(self) -> None:
+        assert package_aware_stem(PACKS_DIR / "general" / "docs.py") == "general.docs"
+
+    def test_framework_file_keeps_bare_stem(self) -> None:
+        assert package_aware_stem(PACKS_DIR.parent / "primitives" / "nudge.py") == "nudge"
+
+    def test_loose_file_keeps_bare_stem(self, tmp_path: Path) -> None:
+        assert package_aware_stem(tmp_path / "guard.py") == "guard"
+
+    def test_packaged_user_file_is_package_qualified(self, tmp_path: Path) -> None:
+        pkg = tmp_path / "hooks"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("x = 1\n")
+        assert package_aware_stem(pkg / "tasks.py") == "hooks.tasks"
 
 
 class TestSessionStateTracking:

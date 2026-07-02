@@ -64,9 +64,9 @@ from cc_transcript.models import UserEvent
 from cc_transcript.parser import TranscriptParser
 
 from captain_hook.decisions import decisions_db_path, open_decision_log
-from captain_hook.review.fix import HOOK_COMPLAINT, iter_hook_complaint_signals
+from captain_hook.review.fix import HOOK_COMPLAINT, PACKS_DIR, iter_hook_complaint_signals
 from captain_hook.review.formats import review_spec
-from captain_hook.review.repo import resolve_repo_key
+from captain_hook.review.repo import RepoKey, resolve_repo_key
 from captain_hook.review.store import CandidateKind
 
 if TYPE_CHECKING:
@@ -77,12 +77,14 @@ if TYPE_CHECKING:
     from cc_transcript.mining.signals import MiningSignal
     from cc_transcript.models import TranscriptEvent
 
-    from captain_hook.review.repo import RepoKey
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
 
 REVIEWER_MARKER = "capt-hook-session-reviewer"
 """The token the reviewer's own headless sessions carry in their first user message."""
+
+CAPTAIN_HOOK_REPO = RepoKey("github.com/yasyf/captain-hook")
+"""Captain-hook's own repo key: fix candidates targeting a builtin pack file open upstream here."""
 
 SPEC_DETECTORS = frozenset({"transcript_message", "plan_reentry", "review_comment"})
 
@@ -238,6 +240,10 @@ def transcript_repo(events: Sequence[TranscriptEvent]) -> RepoKey | None:
     )
 
 
+def fix_repo(repo_key: RepoKey, target_source_file: str) -> RepoKey:
+    return CAPTAIN_HOOK_REPO if target_source_file.startswith(f"{PACKS_DIR}/") else repo_key
+
+
 def transcript_cwd(events: Sequence[TranscriptEvent]) -> Path | None:
     return next(
         (Path(meta.cwd) for event in events if (meta := event_meta(event)) is not None if meta.cwd is not None),
@@ -287,7 +293,7 @@ async def ingest(
     for sig, candidate in kept:
         candidate_id = (
             await store.ensure_candidate(
-                repo_key,
+                fix_repo(repo_key, str(sig.evidence["target_source_file"])),
                 kind=CandidateKind.FIX,
                 rule=dedup_key(*rule_parts(sig)),
                 source_kind=sig.kind,
