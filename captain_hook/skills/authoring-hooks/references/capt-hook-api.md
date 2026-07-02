@@ -20,10 +20,10 @@ from __future__ import annotations
 
 from captain_hook import (
     Allow, BaseHookEvent, Block, Event, HookResult, InlineTests, Input, Prompt,
-    RanCommand, Rewrite, Signal, Signals, SourceEdits, TestFile, Tool, TouchedFile,
-    TranscriptFixture, Warn,
+    RanCommand, Rewrite, Signal, Signals, SourceEdits, TestFile, Tool, ToolInput, TouchedFile,
+    TranscriptFixture, Warn, WorkflowScript,
     block_command, gate, hook, lint, llm_gate, llm_nudge, nudge, on,
-    prompt_check, rewrite_command, warn_command, workflow, Artifact, Step, text_matches,
+    prompt_check, rewrite_command, set_tool_input, warn_command, workflow, Artifact, Step, text_matches,
 )
 from captain_hook.types import Command
 ```
@@ -70,6 +70,7 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 | `block_command` | `(pattern, *, reason, hint=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; message `"BLOCKED: {reason}. {hint}."` |
 | `warn_command` | `(pattern, *, message, tests=None, events=Event.PostToolUse)` | warns, never blocks |
 | `rewrite_command` | `(pattern, replace, *, note=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; `re.sub(pattern, replace, command)` then allows with the rewritten command |
+| `set_tool_input` | `(field, value, *, tool, only_if=(), skip_if=(), note=None, tests=None)` | `PreToolUse` + `Tool(tool)`; fills a **missing** top-level input field with `value` and allows, never clobbering a present one |
 | `gate` | `(message, *, when=None, only_if=(), skip_if=(), events=None, max_fires=None, tests=None)` | `Stop \| SubagentStop`, `max_fires=1`; blocks |
 | `nudge` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), block=False, events=None, max_fires=None, tests=None)` | `PostToolUse` (with signals) else `PreToolUse`; `max_fires` 3 / 1; warns |
 | `lint` | `(check, *, message, trigger=None, sep=", ", block=False, events=None, tests=None, max_shown=5)` | `PostToolUse`, `Tool("Edit\|Write")` + `*.py`, skips test files |
@@ -128,6 +129,8 @@ evaluated first.
 | Filter by file path | `FilePath("*.py", "*.pyi")` |
 | Filter by bash command text | `Command(r"git\s+push")` — from `captain_hook.types` |
 | Filter by file content being written | `Content(r"print\(")` (multiline regex over Edit new / Write content) |
+| Filter by one raw tool-input field | `ToolInput("model", r"(?i)\bhaiku\b")` (multiline regex over one top-level field of any tool) |
+| Filter by a Workflow script | `WorkflowScript(model="haiku")` (inline `script`, or the `script_path` file's contents) |
 | Filter by subagent type | `Agent("cleanup")` |
 | Match only test files | `TestFile()` (`test_*.py`, `conftest.py`) |
 | Python source edits (skips tests by default) | `SourceEdits(lang="py")`; `lang` also `ts`, `go`, `rs`, ... |

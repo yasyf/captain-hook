@@ -105,7 +105,12 @@ def make_tool_input(
     old: str | None,
     offset: int | None = None,
     limit: int | None = None,
+    agent_type: str | None = None,
+    model: str | None = None,
+    tool_input: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if tool_input is not None:
+        return tool_input
     match tool:
         case "Bash" | "Execute":
             return omit_none({"command": command, "timeout": None, "description": None})
@@ -118,7 +123,7 @@ def make_tool_input(
         case "Read":
             return omit_none({"file_path": file or "", "limit": limit, "offset": offset})
         case "Agent" | "Task":
-            return omit_none({"prompt": content or "", "subagent_type": None})
+            return omit_none({"prompt": content or "", "subagent_type": agent_type, "model": model})
         case _:
             return omit_none({"command": command, "file_path": file, "new_string": content, "old_string": old})
 
@@ -134,6 +139,8 @@ def mock_tool_event(
     offset: int | None = None,
     limit: int | None = None,
     agent_type: str | None = None,
+    model: str | None = None,
+    tool_input: dict[str, Any] | None = None,
     permission_mode: str | None = None,
     transcript: Session | None = None,
     transcript_path: str | Path | None = None,
@@ -143,7 +150,12 @@ def mock_tool_event(
     return cast(
         ToolHookEvent,
         event.event_class(
-            _raw={"tool_name": tool, "tool_input": make_tool_input(tool, command, file, content, old, offset, limit)}
+            _raw={
+                "tool_name": tool,
+                "tool_input": make_tool_input(
+                    tool, command, file, content, old, offset, limit, agent_type, model, tool_input
+                ),
+            }
             | ({"agent_type": agent_type} if agent_type else {})
             | ({"permission_mode": permission_mode} if permission_mode else {}),
             ctx=build_context(transcript, transcript_path, session_dir, project_root),
@@ -325,6 +337,8 @@ def input_to_event(
                 offset=inp.offset,
                 limit=inp.limit,
                 agent_type=inp.agent_type,
+                model=inp.model,
+                tool_input=inp.tool_input,
                 **ctx_kw,
             )
 

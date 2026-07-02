@@ -16,6 +16,8 @@ These match the event being processed right now.
 | `FilePath(*p, project_only=True)` | The event's file path matches any glob | Glob | `FilePath("**/*.py")` |
 | `Command(p)` | The Bash command text matches | Regex | `Command(r"git\s+stash")` |
 | `Content(p, project_only=True)` | The written/edited file content matches | Regex (multiline) | `Content(r"print\(")` |
+| `ToolInput(field, p)` | One top-level field of the raw tool input matches (any tool) | Regex (multiline) | `ToolInput("model", r"(?i)\bhaiku\b")` |
+| `WorkflowScript(pattern=…)` or `WorkflowScript(model=…)` | A `Workflow` tool's inline `script` (or `script_path` file): `pattern` searches the raw source, `model` matches the model names pinned in `agent()` opts | Regex | `WorkflowScript(model="haiku")` |
 | `Agent(p)` | The subagent type matches | Pipe-separated names | `Agent("cleanup\|refactor")` |
 | `TestFile(project_only=True)` | The file is a test file (`test_*.py`, `conftest.py`, or any `.py` under a `tests/` directory) | — | `TestFile()` |
 | `SourceEdits(lang="py", include_tests=False, paths=None)` | The event edits/writes a source file in `lang` (and not a test, unless `include_tests`) | Language glob | `SourceEdits(lang="ts", paths="src/**")` |

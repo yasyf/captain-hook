@@ -52,6 +52,7 @@ from captain_hook.primitives import (
     prompt_check,
     rewrite_code,
     rewrite_command,
+    set_tool_input,
     warn_command,
 )
 
@@ -90,8 +91,10 @@ from captain_hook.types import (
     TCondition,
     TestFile,
     Tool,
+    ToolInput,
     TouchedFile,
     UsedSkill,
     Waiting,
+    WorkflowScript,
 )
 from captain_hook.util import read_json, resolve_binary

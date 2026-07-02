@@ -170,6 +170,46 @@ class Content:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolInput:
+    """Condition matching one top-level field of the raw tool input against a regex.
+
+    Reads a single top-level key of the current event's tool input and searches its value with
+    ``re.MULTILINE``. Works for any tool; false for non-tool events, a missing field, or a
+    non-string value.
+
+    Example:
+        >>> hook(Event.PreToolUse, only_if=[ToolInput("model", r"(?i)\\bhaiku\\b")], message="...", block=True)
+    """
+
+    field: str
+    pattern: str
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowScript:
+    """Condition matching a ``Workflow`` tool's script source.
+
+    ``model`` matches the model names pinned in the script's ``agent()`` opts
+    (``model: 'haiku'`` and friends) — no hand-written quote-aware regex; ``pattern``
+    searches the raw script source (``re.MULTILINE``). Provide exactly one. The source is
+    the inline ``script``, or — when ``script`` is None and ``script_path`` points at a
+    file — that file's contents. A missing or unreadable path, or a file larger than
+    ~1 MiB, never matches and never raises. False for any non-Workflow tool.
+
+    Example:
+        >>> nudge("no haiku steps", only_if=[Tool("Workflow"), WorkflowScript(model="haiku")],
+        ...       events=Event.PreToolUse)
+    """
+
+    pattern: str | None = None
+    model: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.pattern is None) == (self.model is None):
+            raise ValueError("WorkflowScript takes exactly one of pattern or model")
+
+
+@dataclass(frozen=True, slots=True)
 class Pattern:
     """Condition matching the edit's new content against an ast-grep **structural** pattern.
 
@@ -379,6 +419,8 @@ TCondition = (
     | FilePath
     | Command
     | Content
+    | ToolInput
+    | WorkflowScript
     | Pattern
     | Agent
     | UsedSkill

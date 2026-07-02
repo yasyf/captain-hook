@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from captain_hook import ast_grep
 from captain_hook.app import on
@@ -62,3 +62,40 @@ def rewrite_code(
 
     handler.__name__ = handler.__qualname__ = hook_name("rewrite_code", None, f"{pattern}=>{replace}")
     on(Event.PreToolUse, only_if=[Tool("Edit|Write|MultiEdit|NotebookEdit"), *only_if], tests=tests)(handler)
+
+
+def set_tool_input(
+    field: str,
+    value: Any,
+    *,
+    tool: str,
+    only_if: Sequence[TCondition] = (),
+    skip_if: Sequence[TCondition] = (),
+    note: str | None = None,
+    tests: InlineTests | None = None,
+) -> None:
+    """Register a ``PreToolUse`` hook that fills a MISSING top-level input field with ``value``.
+
+    When ``field`` is absent from the matched tool's input, the input is rewritten to
+    ``{**raw, field: value}`` and allowed, with ``note`` surfaced as ``additionalContext``. A field
+    already present — even falsy — is left untouched, so an explicit choice is never clobbered.
+
+    Args:
+        field: The top-level tool-input key to fill.
+        value: The value to set when the field is absent.
+        tool: Tool-name pattern to gate on, e.g. ``"Agent|Task"``.
+        only_if: Extra conditions ANDed onto the built-in tool guard.
+        skip_if: Conditions that skip the hook when any matches.
+        note: Advisory context surfaced alongside the rewrite.
+        tests: Inline tests for the registered hook.
+
+    Example:
+        >>> set_tool_input("model", "sonnet", tool="Agent|Task", only_if=[Agent("Explore")], note="upgraded")
+    """
+
+    def handler(evt: PreToolUseEvent) -> HookResponse:
+        raw = evt.input.raw
+        return None if field in raw else evt.rewrite({**raw, field: value}, note=note)
+
+    handler.__name__ = handler.__qualname__ = hook_name("set_tool_input", None, f"{tool}:{field}")
+    on(Event.PreToolUse, only_if=[Tool(tool), *only_if], skip_if=skip_if, tests=tests)(handler)

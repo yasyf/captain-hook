@@ -31,9 +31,11 @@ from captain_hook.types import (
     TCondition,
     TestFile,
     Tool,
+    ToolInput,
     TouchedFile,
     UsedSkill,
     Waiting,
+    WorkflowScript,
 )
 from tests.helpers import (
     assistant_msg,
@@ -335,6 +337,104 @@ class TestAgentCondition:
     )
     def test_agent(self, cond: TCondition, evt: BaseHookEvent, expected: bool) -> None:
         assert check_condition(cond, evt) is expected
+
+
+class TestToolInputCondition:
+    @pytest.mark.parametrize(
+        ("cond", "evt", "expected"),
+        [
+            pytest.param(
+                ToolInput("model", r"(?i)\bhaiku\b"),
+                make_tool_event("Agent", {"model": "haiku", "prompt": "do it"}),
+                True,
+                id="matches_haiku",
+            ),
+            pytest.param(
+                ToolInput("model", r"(?i)\bhaiku\b"),
+                make_tool_event("Agent", {"model": "claude-haiku-4-5", "prompt": "do it"}),
+                True,
+                id="matches_versioned_haiku",
+            ),
+            pytest.param(
+                ToolInput("model", r"(?i)\bhaiku\b"),
+                make_tool_event("Agent", {"model": "sonnet", "prompt": "do it"}),
+                False,
+                id="rejects_non_matching_model",
+            ),
+            pytest.param(
+                ToolInput("model", r"(?i)\bhaiku\b"),
+                make_tool_event("Agent", {"prompt": "do it"}),
+                False,
+                id="rejects_missing_field",
+            ),
+            pytest.param(
+                ToolInput("edits", r"haiku"),
+                make_tool_event("MultiEdit", {"file_path": "x.py", "edits": [{"old_string": "a", "new_string": "b"}]}),
+                False,
+                id="rejects_non_string_field",
+            ),
+            pytest.param(ToolInput("model", r"haiku"), make_event(StopEvent), False, id="returns_false_for_stop"),
+        ],
+    )
+    def test_toolinput(self, cond: TCondition, evt: BaseHookEvent, expected: bool) -> None:
+        assert check_condition(cond, evt) is expected
+
+
+class TestWorkflowScriptCondition:
+    def test_matches_inline_script(self) -> None:
+        evt = make_tool_event("Workflow", {"script": "steps:\n  - agent: reviewer\n    model: 'haiku'\n"})
+        assert check_condition(WorkflowScript(model="haiku"), evt) is True
+
+    def test_rejects_inline_script_without_match(self) -> None:
+        evt = make_tool_event("Workflow", {"script": "steps:\n  - agent: reviewer\n    model: 'sonnet'\n"})
+        assert check_condition(WorkflowScript(model="haiku"), evt) is False
+
+    @pytest.mark.parametrize(
+        ("pinned", "expected"),
+        [
+            ("model: 'haiku'", True),
+            ('model: "haiku"', True),
+            ("model:'claude-haiku-4-5-20251001'", True),
+            ("model: 'sonnet'", False),
+            ("# a comment mentioning haiku with no pin", False),
+        ],
+        ids=["single-quoted", "double-quoted", "full-id-no-space", "other-model", "unpinned-mention"],
+    )
+    def test_model_matches_pinned_values_only(self, pinned: str, expected: bool) -> None:
+        evt = make_tool_event("Workflow", {"script": f"await agent('x', {{ {pinned} }})"})
+        assert check_condition(WorkflowScript(model="haiku"), evt) is expected
+
+    def test_pattern_searches_raw_source(self) -> None:
+        evt = make_tool_event("Workflow", {"script": "const FLEET = 12"})
+        assert check_condition(WorkflowScript(r"FLEET = \d+"), evt) is True
+
+    @pytest.mark.parametrize("kwargs", [{}, {"pattern": r"haiku", "model": "haiku"}], ids=["neither", "both"])
+    def test_requires_exactly_one_of_pattern_or_model(self, kwargs: dict[str, str]) -> None:
+        with pytest.raises(ValueError, match="exactly one"):
+            WorkflowScript(**kwargs)
+
+    def test_matches_script_path(self, tmp_path: Path) -> None:
+        script = tmp_path / "wf.yaml"
+        script.write_text("steps:\n  - agent: reviewer\n    model: 'haiku'\n")
+        evt = make_tool_event("Workflow", {"script_path": str(script)})
+        assert check_condition(WorkflowScript(model="haiku"), evt) is True
+
+    def test_rejects_missing_script_path(self, tmp_path: Path) -> None:
+        evt = make_tool_event("Workflow", {"script_path": str(tmp_path / "nope.yaml")})
+        assert check_condition(WorkflowScript(r"haiku"), evt) is False
+
+    def test_rejects_oversized_script_path(self, tmp_path: Path) -> None:
+        script = tmp_path / "big.yaml"
+        script.write_text("model: 'haiku'\n" + "x" * 1_000_001)
+        evt = make_tool_event("Workflow", {"script_path": str(script)})
+        assert check_condition(WorkflowScript(r"haiku"), evt) is False
+
+    def test_returns_false_for_non_workflow_tool(self) -> None:
+        evt = make_tool_event("Bash", {"command": "echo model: haiku"})
+        assert check_condition(WorkflowScript(r"haiku"), evt) is False
+
+    def test_returns_false_for_stop_event(self) -> None:
+        assert check_condition(WorkflowScript(r"haiku"), make_event(StopEvent)) is False
 
 
 class TestTestFileCondition:

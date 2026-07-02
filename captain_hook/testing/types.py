@@ -85,8 +85,12 @@ class Input:
         content: New file content for ``Edit``/``Write``.
         old: Pre-edit content for ``Edit`` and ``diff_lint``.
         tool: Tool name when no condition pins it.
+        tool_input: Verbatim raw tool-input mapping — an escape hatch that wins
+            over the input synthesized from the other fields.
         prompt: ``UserPromptSubmit`` text.
-        agent_type: Subagent type for subagent events.
+        agent_type: Subagent type for subagent events (an Agent/Task call's
+            ``subagent_type``).
+        model: Model for an Agent/Task call's ``model`` input field.
         reason: ``SessionEnd`` reason.
         permission_mode: Permission mode, e.g. ``"plan"`` for plan-mode gating.
         offset: ``Read`` call offset.
@@ -101,8 +105,10 @@ class Input:
     content: str | None = None
     old: str | None = None
     tool: str | None = None
+    tool_input: dict[str, Any] | None = None
     prompt: str | None = None
     agent_type: str | None = None
+    model: str | None = None
     reason: str | None = None
     permission_mode: str | None = None
     offset: int | None = None

@@ -6,6 +6,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.4.0] - 2026-07-02
+
+### Added
+- `ToolInput(field, pattern)` condition: a multiline regex over one top-level field of
+  any tool's raw input. False for non-tool events, a missing field, or a non-string value.
+- `WorkflowScript(pattern=…)` / `WorkflowScript(model=…)` condition over a `Workflow`
+  tool's inline `script`, or — when only `script_path` is set — that file's contents:
+  `pattern` is a multiline regex over the raw source; `model` matches the model names
+  pinned in the script's `agent()` opts (`model: 'haiku'`) without hand-written
+  quote-aware regex. A missing or unreadable path, or a file over ~1 MiB, never matches
+  and never raises.
+- `set_tool_input(field, value, *, tool, only_if=(), skip_if=(), note=None)` primitive: a
+  declarative `PreToolUse` rewrite that fills a *missing* top-level input field with `value`
+  and allows the tool, never clobbering a field that is already present.
+- General-pack model-routing hooks (`general/models.py`): block a subagent explicitly pinned
+  to haiku unless its prompt is a single-fact mechanical step, auto-upgrade the `Explore` and
+  `claude-code-guide` recon agents from the silent haiku default to sonnet, and warn on
+  workflow scripts that pin steps to haiku. General pack bumped to 0.2.0.
+- Testing `Input` gains `model` and `tool_input` (a verbatim raw-input escape hatch), so inline
+  tests can express an Agent/Task call's model and a Workflow script.
+
+### Changed
+- Require cc-transcript 7.1.0 for its typed `WorkflowCall`.
+
 ## [4.3.0] - 2026-07-01
 
 ### Added

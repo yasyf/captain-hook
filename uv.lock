@@ -351,7 +351,7 @@ wheels = [
 
 [[package]]
 name = "cc-transcript"
-version = "7.0.0"
+version = "7.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite" },
@@ -359,12 +359,12 @@ dependencies = [
     { name = "click" },
     { name = "orjson" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5d/50/d9ad4632dd340fdd8312b8c6737d0399d696671f30a42e94e6e9bc8fd056/cc_transcript-7.0.0.tar.gz", hash = "sha256:ef4156e5fb7512f2589666abc8541c0a9d89c5f82054daba2e806a642f1f2530", size = 145651, upload-time = "2026-06-24T08:33:07.147Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5a/47/e97d90335fc189c49aa8e872a3094bde361e04446b91337bbdcf8fa4788c/cc_transcript-7.1.0.tar.gz", hash = "sha256:aff11654cd6c6b2b03cccf41ba5749e7f1be13437cc30bf66a4786be0f482cdd", size = 145979, upload-time = "2026-07-02T09:15:26.509Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0f/d6/e2ac17ff4d129e8408703143747c25c41db69ebb7ac1d7ca599ed2f76d95/cc_transcript-7.0.0-cp313-abi3-macosx_11_0_arm64.whl", hash = "sha256:dd39df07c62a05a35f57e87aec9f8cc569e88241b9f2a383a2822ba6b2a41347", size = 2254419, upload-time = "2026-06-24T08:33:01.229Z" },
-    { url = "https://files.pythonhosted.org/packages/2f/2d/bf3b9c9961af8491bdfdda3e751ecfff0ebbde8018d98ef88f525a4210e2/cc_transcript-7.0.0-cp313-abi3-macosx_11_0_x86_64.whl", hash = "sha256:16c440d74ec1963e9a5e6a30d2cd909435d4182dea17bbceb508121c88e036df", size = 2403785, upload-time = "2026-06-24T08:33:03.088Z" },
-    { url = "https://files.pythonhosted.org/packages/e4/c2/6fd50f644ee3b88df32407fe35db7f29aeb308d769c379cfe08e79f0fae3/cc_transcript-7.0.0-cp313-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:79bd6cd32314ea8d848df103495ab76edf1b6462e4d3772563210c321ae918fe", size = 2407738, upload-time = "2026-06-24T08:33:04.424Z" },
-    { url = "https://files.pythonhosted.org/packages/24/c4/5b2810c6c3876a80e20741d24369c382048d88883bced30f9d6afa4b5c56/cc_transcript-7.0.0-cp313-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:c97ba51cce9cb93d38e44b3657669c93853cd5f0a3f5f91b89e77edf06d52c99", size = 2543213, upload-time = "2026-06-24T08:33:05.829Z" },
+    { url = "https://files.pythonhosted.org/packages/44/b0/e243aadfb8985db73b71bd0f5acb1bd6b3e6e66c50784be90110344fde5e/cc_transcript-7.1.0-cp313-abi3-macosx_11_0_arm64.whl", hash = "sha256:6725823c488233e7be5ea9ed6ecd0b8654c05c3ae89ee1617fbbfc5aeac006c0", size = 2254742, upload-time = "2026-07-02T09:15:20.239Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/1f/a3dfb218e2af778cfdd32bde7a9b3e7a8e6e28628dae78b89f7678bb2e1f/cc_transcript-7.1.0-cp313-abi3-macosx_11_0_x86_64.whl", hash = "sha256:6140ffc3a740954309c068d8afca0740d5ac7ae5f58a8152f50a26c11b2d7300", size = 2404107, upload-time = "2026-07-02T09:15:21.99Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/13/00468a3a0ece19a86edb3d565c9b8c6fd4d0211c51889e9d125de0f737fb/cc_transcript-7.1.0-cp313-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:37773e09c22bf0ec55154cb221aac985250408630c0667635c2186c20e6f40d7", size = 2407791, upload-time = "2026-07-02T09:15:23.398Z" },
+    { url = "https://files.pythonhosted.org/packages/33/b5/e57e8840eb0bc28ae1709dbfa1a85a528aba90e54eb77a614a1a72ca492e/cc_transcript-7.1.0-cp313-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:af52fd7bb8551464c62f79655e17c8a226bcf8e0474ed9fa756792a82e757dd0", size = 2543180, upload-time = "2026-07-02T09:15:24.764Z" },
 ]
 
 [[package]]

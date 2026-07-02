@@ -57,7 +57,7 @@ default. Pass `project_only=False` to target external scratch files, attachments
 logs.
 
 ```python
-from captain_hook import hook, Event, FilePath, Command, SourceEdits
+from captain_hook import hook, Event, FilePath, Command, SourceEdits, Tool, ToolInput, WorkflowScript
 
 # Fire only for Python files
 hook(Event.PostToolUse, message="Check imports", only_if=[FilePath("*.py", "*.pyi")])
@@ -68,10 +68,20 @@ hook(Event.PreToolUse, message="Run tests before pushing", block=True,
 
 # Fire only for TypeScript source edits under src/
 hook(Event.PostToolUse, message="Check types", only_if=[SourceEdits(lang="ts", paths="src/**")])
+
+# Fire when a subagent is explicitly pinned to haiku
+hook(Event.PreToolUse, message="haiku is for mechanical steps only", block=True,
+     only_if=[Tool("Agent|Task"), ToolInput("model", r"(?i)\bhaiku\b")])
+
+# Fire when a workflow script pins a step to haiku
+hook(Event.PreToolUse, message="don't pin workflow steps to haiku",
+     only_if=[Tool("Workflow"), WorkflowScript(model="haiku")])
 ```
 
 `SourceEdits` skips test files unless you pass `include_tests=True`, so it pairs a
-language with a source-only scope in one condition.
+language with a source-only scope in one condition. `ToolInput` reads one top-level
+field of any tool's raw input; `WorkflowScript` reads a `Workflow` script whether it
+arrives inline or as a `script_path` on disk.
 
 ## Match the session history
 

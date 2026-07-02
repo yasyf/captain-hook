@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from cc_transcript.models import OtherEvent
-from cc_transcript.tools import tool_name_matches
+from cc_transcript.tools import WorkflowCall, tool_name_matches
 
 from captain_hook.types import (
     Agent,
@@ -23,9 +24,11 @@ from captain_hook.types import (
     TCondition,
     TestFile,
     Tool,
+    ToolInput,
     TouchedFile,
     UsedSkill,
     Waiting,
+    WorkflowScript,
 )
 
 if TYPE_CHECKING:
@@ -80,6 +83,32 @@ def is_waiting(evt: BaseHookEvent) -> bool:
     )
 
 
+def workflow_script_source(evt: BaseHookEvent) -> str | None:
+    if not (call := evt.as_input(WorkflowCall)):
+        return None
+    if call.script is not None:
+        return call.script
+    if not call.script_path:
+        return None
+    try:
+        path = Path(call.script_path)
+        if not path.is_file() or path.stat().st_size > 1_000_000:
+            return None
+        return path.read_text(errors="ignore")
+    except OSError:
+        return None
+
+
+def matches_workflow_script(cond: WorkflowScript, evt: BaseHookEvent) -> bool:
+    if (source := workflow_script_source(evt)) is None:
+        return False
+    if cond.pattern is not None:
+        return bool(re.search(cond.pattern, source, re.MULTILINE))
+    return cond.model is not None and any(
+        re.search(cond.model, pinned) for pinned in re.findall(r"""model\s*:\s*['"]([^'"]*)['"]""", source)
+    )
+
+
 def is_project_file(evt: BaseHookEvent) -> bool:
     if not (file := evt.file):
         return False
@@ -104,6 +133,14 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
                 and evt.content
                 and re.search(pattern, evt.content, re.MULTILINE)
             )
+        case ToolInput(field, pattern):
+            return bool(
+                evt.tool_name
+                and isinstance(value := evt.input.raw.get(field), str)
+                and re.search(pattern, value, re.MULTILINE)
+            )
+        case WorkflowScript() as workflow_script:
+            return matches_workflow_script(workflow_script, evt)
         case Pattern(pattern, lang, project_only):
             from captain_hook.ast_grep import lang_for_path
             from captain_hook.ast_grep import matches as ast_grep_matches

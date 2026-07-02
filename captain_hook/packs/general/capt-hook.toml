@@ -1,4 +1,4 @@
 name = "general"
-version = "0.1.0"
+version = "0.2.0"
 description = "Language-agnostic guards: git/command safety, doc & prompt nudges, task & plan discipline, and a code-review gate."
 hooks = "."

@@ -317,6 +317,73 @@ class TestInputToEvent:
         evt = input_to_event(Event.PreToolUse, Input(command="ls"), spec_tool="Bash")
         assert evt.tool_name == "Bash"
 
+    def test_input_to_event_agent_model_round_trips(self):
+        from cc_transcript.tools import TaskCall
+
+        from captain_hook.testing.types import Input
+        from tests.helpers import input_to_event
+
+        inp = Input(tool="Agent", model="haiku", agent_type="Explore", content="do it")
+        evt = input_to_event(Event.PreToolUse, inp)
+        call = evt.as_input(TaskCall)
+        assert call is not None
+        assert call.model == "haiku"
+        assert call.agent_type == "Explore"
+        assert call.prompt == "do it"
+
+    def test_input_to_event_tool_input_escape_hatch(self):
+        from cc_transcript.tools import WorkflowCall
+
+        from captain_hook.testing.types import Input
+        from tests.helpers import input_to_event
+
+        evt = input_to_event(Event.PreToolUse, Input(tool="Workflow", tool_input={"script": "model: 'haiku'"}))
+        assert evt._raw["tool_input"] == {"script": "model: 'haiku'"}
+        call = evt.as_input(WorkflowCall)
+        assert call is not None
+        assert call.script == "model: 'haiku'"
+
+
+class TestSetToolInput:
+    def test_fills_missing_field(self):
+        from captain_hook.primitives.rewrite import set_tool_input
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Input, Rewrite
+
+        reset()
+        set_tool_input("model", "sonnet", tool="Agent|Task", tests={Input(tool="Agent", content="do it"): Rewrite()})
+        results = run_inline_tests()
+        assert len(results) == 1
+        assert all(r[2] for r in results), f"Failed: {results}"
+
+    def test_never_clobbers_explicit_field(self):
+        from captain_hook.primitives.rewrite import set_tool_input
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Allow, Input
+
+        reset()
+        set_tool_input(
+            "model", "sonnet", tool="Agent|Task", tests={Input(tool="Agent", model="haiku", content="do it"): Allow()}
+        )
+        results = run_inline_tests()
+        assert len(results) == 1
+        assert all(r[2] for r in results), f"Failed: {results}"
+
+    def test_rewrites_input_and_attaches_note(self):
+        from captain_hook.app import _state
+        from captain_hook.dispatch import execute_hook
+        from captain_hook.primitives.rewrite import set_tool_input
+        from captain_hook.testing.types import Input
+        from tests.helpers import input_to_event
+
+        reset()
+        set_tool_input("model", "sonnet", tool="Agent|Task", note="upgraded to sonnet")
+        result = execute_hook(_state.hooks[-1], input_to_event(Event.PreToolUse, Input(tool="Agent", content="do it")))
+        assert result is not None
+        assert result.action == Action.rewrite
+        assert result.updated_input == {"prompt": "do it", "model": "sonnet"}
+        assert result.note == "upgraded to sonnet"
+
 
 class TestDispatchTest:
     def test_dispatch_test_returns_result(self):
