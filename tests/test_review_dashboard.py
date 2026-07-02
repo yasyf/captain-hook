@@ -32,6 +32,7 @@ from captain_hook.review.store import (
     CandidateStatus,
     CandidateView,
     ReviewStore,
+    SpawnHealth,
     ThresholdStatus,
     crosses_thresholds,
 )
@@ -106,6 +107,34 @@ def plain(renderable: object, *, width: int = 200) -> str:
     buf = StringIO()
     Console(file=buf, no_color=True, width=width).print(renderable)
     return buf.getvalue()
+
+
+def spawn_row(
+    *,
+    ok: bool,
+    started_at: str = "2026-06-01T00:00:00+00:00",
+    finished_at: str | None = None,
+    error: str | None = None,
+    report_json: str | None = None,
+) -> dict[str, object]:
+    return {
+        "id": 1,
+        "started_at": started_at,
+        "finished_at": finished_at or started_at,
+        "transcript": "/tmp/t.jsonl",
+        "ok": int(ok),
+        "error": error,
+        "report_json": report_json,
+    }
+
+
+def ok_health(*, ago: timedelta = timedelta(minutes=5), judged: int = 4) -> SpawnHealth:
+    stamp = (datetime.now(UTC) - ago).isoformat()
+    return SpawnHealth(
+        last=spawn_row(ok=True, started_at=stamp, finished_at=stamp, report_json=json.dumps({"judged": judged})),
+        consecutive_failures=0,
+        failing_since=None,
+    )
 
 
 class TestStageOf:
@@ -222,7 +251,7 @@ class TestRenderFrame:
                 pr_opened_at="2026-06-10T00:00:00+00:00",
             ),
         ]
-        out = plain(render(views, repo=REPO, settings=ReviewSettings(), watching=True))
+        out = plain(render(views, repo=REPO, settings=ReviewSettings(), watching=True, health=ok_health()))
         assert "WATCHING" in out and "ELIGIBLE" in out and "PR OPEN" in out
         assert "#1" in out and "#2" in out and "#3" in out
         assert 'would add a hook: "block force-push"' in out
@@ -230,10 +259,63 @@ class TestRenderFrame:
         assert "[watching]" in out and "PR slots 1/2" in out
 
     def test_empty_repo_shows_hint(self) -> None:
-        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=False))
+        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=False, health=ok_health()))
         assert "[not watching]" in out
         assert "No corrections tracked yet" in out
         assert "capt-hook review enable" in out
+
+
+class TestHealthLine:
+    def test_failing_reviewer_renders_banner_at_the_top(self) -> None:
+        health = SpawnHealth(
+            last=spawn_row(
+                ok=False,
+                started_at="2026-06-20T09:00:00+00:00",
+                error="OperationalError: no such column: fidelity",
+            ),
+            consecutive_failures=34,
+            failing_since="2026-06-01T09:00:00+00:00",
+        )
+        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=health))
+        assert out.splitlines()[0].startswith("REVIEWER FAILING")
+        assert "34 consecutive since 2026-06-01T09:00:00+00:00" in out
+        assert "OperationalError: no such column: fidelity" in out
+        assert "spawn.log" in out
+
+    def test_healthy_reviewer_renders_relative_time_and_judged_count(self) -> None:
+        out = plain(
+            render(
+                [],
+                repo=REPO,
+                settings=ReviewSettings(),
+                watching=True,
+                health=ok_health(ago=timedelta(hours=2), judged=7),
+            )
+        )
+        assert "reviewer ok" in out
+        assert "last run 2h ago" in out
+        assert "judged 7" in out
+        assert "REVIEWER FAILING" not in out
+
+    @pytest.mark.parametrize(
+        ("health", "expected"),
+        [
+            pytest.param(
+                SpawnHealth(last=None, consecutive_failures=0, failing_since=None),
+                "reviewer has never run — check the SessionEnd hook wiring",
+                id="never-spawned",
+            ),
+            pytest.param(
+                ok_health(ago=timedelta(days=8)),
+                "reviewer last ran 8d ago — check the SessionEnd hook wiring",
+                id="last-run-older-than-a-week",
+            ),
+        ],
+    )
+    def test_stale_reviewer_renders_yellow_warning(self, health: SpawnHealth, expected: str) -> None:
+        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=health))
+        assert expected in out
+        assert "reviewer ok" not in out
 
 
 async def seed_obs(
@@ -306,6 +388,41 @@ class TestOverview:
         assert views[0].summary == "run the suite before committing"
 
 
+async def seed_spawn_runs(store: ReviewStore, *oks: bool) -> None:
+    for day, ok in enumerate(oks, start=1):
+        await store.record_spawn_run(
+            f"/t/{day}",
+            started_at=datetime(2026, 6, day, tzinfo=UTC),
+            ok=ok,
+            error=None if ok else f"Boom: {day}",
+            report_json='{"judged": 1}' if ok else None,
+        )
+
+
+class TestSpawnHealth:
+    async def test_no_rows_reports_never_run(self, store: ReviewStore) -> None:
+        assert await store.spawn_health() == SpawnHealth(last=None, consecutive_failures=0, failing_since=None)
+
+    async def test_streak_counts_failures_since_last_success(self, store: ReviewStore) -> None:
+        await seed_spawn_runs(store, False, True, False, False)
+        health = await store.spawn_health()
+        assert health.consecutive_failures == 2
+        assert health.failing_since == "2026-06-03T00:00:00+00:00"
+        assert health.last is not None
+        assert health.last["ok"] == 0
+        assert health.last["error"] == "Boom: 4"
+        assert health.last["transcript"] == "/t/4"
+
+    async def test_success_resets_the_streak(self, store: ReviewStore) -> None:
+        await seed_spawn_runs(store, False, True)
+        health = await store.spawn_health()
+        assert health.consecutive_failures == 0
+        assert health.failing_since is None
+        assert health.last is not None
+        assert health.last["ok"] == 1
+        assert health.last["error"] is None
+
+
 def review_status(*args: str, root: Path) -> Result:
     return CliRunner().invoke(cli, ["--root", str(root), "review", "status", *args], env={"COLUMNS": "200"})
 
@@ -350,6 +467,7 @@ class TestStatusCommand:
         assert "WATCHING" in result.output and "ELIGIBLE" in result.output
         assert "would add a hook" in result.output
         assert "[watching]" in result.output
+        assert "reviewer has never run" in result.output
 
     def test_top_level_status_matches_review_status(self, git_repo: Path) -> None:
         asyncio.run(seed_db("watching"))

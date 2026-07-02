@@ -5,10 +5,11 @@ path — a non-zero or hanging hook wedges the user's session — so
 :func:`guard_and_spawn` does nothing but parse, guard, and detach
 ``capt-hook review spawn`` via ``Popen(start_new_session=True)``; no database
 reads, no scanning, no ``gh``, and no heavy imports happen on that path. The
-detached child (:func:`review_session`) does the real work: resolve the repo,
-check it is watched, scan the transcript incrementally, run the judge pass,
-sync open PR states, and — when at least one candidate crosses its
-thresholds — spawn the headless brain that drafts the PRs.
+detached child (:func:`spawn_session`, wrapping :func:`review_session`) does
+the real work: resolve the repo, check it is watched, scan the transcript
+incrementally, run the judge pass, sync open PR states, and — when at least
+one candidate crosses its thresholds — spawn the headless brain that drafts
+the PRs, recording each run's outcome for the status dashboard's health line.
 """
 
 from __future__ import annotations
@@ -17,7 +18,8 @@ import json
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeGuard
 
@@ -247,3 +249,44 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
         eligible=eligible,
         brain=bool(eligible),
     )
+
+
+async def spawn_session(transcript: Path, *, cwd: str, settings: ReviewSettings | None = None) -> SpawnReport:
+    """Runs :func:`review_session` and records its outcome — the ``review spawn`` entry.
+
+    Wraps the whole reviewer pass — settings construction, repo resolve, and
+    store open included (the historical crash sites were inside them) — and
+    records exactly one ``spawn_runs`` row per run into a freshly opened store,
+    so ``capt-hook status`` surfaces a silently crashing reviewer. A crash
+    records ``ok=0`` and re-raises, so the traceback still lands in the spawn
+    log; the catch is ``BaseException`` because anyio cancellation shapes are
+    not ``Exception``. When settings construction itself is the crash, the row
+    lands at the default db path.
+
+    Args:
+        transcript: The ended session's transcript file.
+        cwd: The session's working directory, used to resolve the repo.
+        settings: The reviewer settings; constructed inside the recording
+            boundary when omitted, so a settings/env failure still records.
+
+    Returns:
+        The recorded :class:`SpawnReport` for this pass.
+    """
+    from captain_hook.review.settings import ReviewSettings, resolve_review_db_path
+    from captain_hook.review.store import ReviewStore
+
+    started = datetime.now(UTC)
+    try:
+        settings = settings or ReviewSettings()
+        report = await review_session(transcript, cwd=cwd, settings=settings)
+    except BaseException as exc:
+        async with await ReviewStore.open(settings.db_path if settings else resolve_review_db_path()) as store:
+            await store.record_spawn_run(
+                str(transcript), started_at=started, ok=False, error=f"{type(exc).__name__}: {exc}"
+            )
+        raise
+    async with await ReviewStore.open(settings.db_path) as store:
+        await store.record_spawn_run(
+            str(transcript), started_at=started, ok=True, report_json=json.dumps(asdict(report))
+        )
+    return report

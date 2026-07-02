@@ -12,7 +12,8 @@ background so the view appears instantly and updates when ``gh`` returns.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+import json
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -20,6 +21,7 @@ from rich.console import Console, Group
 from rich.spinner import Spinner
 from rich.text import Text
 
+from captain_hook.review.pipeline import review_log_path
 from captain_hook.review.store import CandidateKind, CandidateStatus
 
 if TYPE_CHECKING:
@@ -27,12 +29,13 @@ if TYPE_CHECKING:
 
     from captain_hook.review.repo import RepoKey
     from captain_hook.review.settings import ReviewSettings
-    from captain_hook.review.store import CandidateView
+    from captain_hook.review.store import CandidateView, SpawnHealth
 
 BAR_FILLED = "█"
 BAR_EMPTY = "░"
 DETAIL_WIDTH = 80
 KIND_STYLE = {CandidateKind.CREATE: "cyan", CandidateKind.FIX: "magenta"}
+SPAWN_STALE_AFTER = timedelta(days=7)
 
 
 class Stage(StrEnum):
@@ -151,6 +154,49 @@ def candidate_block(view: CandidateView, settings: ReviewSettings) -> Renderable
     )
 
 
+def relative(stamp: str) -> str:
+    minutes = int((datetime.now(UTC) - datetime.fromisoformat(stamp)).total_seconds()) // 60
+    match minutes:
+        case m if m < 60:
+            return f"{m}m ago"
+        case m if m < 1440:
+            return f"{m // 60}h ago"
+        case m:
+            return f"{m // 1440}d ago"
+
+
+def spawn_stale(stamp: str) -> bool:
+    return datetime.now(UTC) - datetime.fromisoformat(stamp) > SPAWN_STALE_AFTER
+
+
+def health_line(health: SpawnHealth) -> RenderableType:
+    match health.last:
+        case None:
+            return Text("reviewer has never run — check the SessionEnd hook wiring", style="yellow")
+        case {"ok": 0, "error": error}:
+            return Group(
+                Text.assemble(
+                    ("REVIEWER FAILING", "bold red"),
+                    (
+                        f"   {health.consecutive_failures} consecutive since {health.failing_since}"
+                        f"  ·  {trim(str(error))}",
+                        "red",
+                    ),
+                ),
+                Text(f"  see {review_log_path()}", style="dim"),
+            )
+        case {"finished_at": finished} if spawn_stale(str(finished)):
+            return Text(
+                f"reviewer last ran {relative(str(finished))} — check the SessionEnd hook wiring", style="yellow"
+            )
+        case last:
+            return Text(
+                f"reviewer ok  ·  last run {relative(str(last['finished_at']))}"
+                f"  ·  judged {json.loads(str(last['report_json']))['judged']}",
+                style="dim",
+            )
+
+
 def header(repo: RepoKey, views: list[CandidateView], settings: ReviewSettings, *, watching: bool) -> RenderableType:
     open_n = sum(1 for v in views if stage_of(v) is Stage.PR_OPEN)
     line = Text.assemble(
@@ -168,9 +214,15 @@ def header(repo: RepoKey, views: list[CandidateView], settings: ReviewSettings, 
 
 
 def render(
-    views: list[CandidateView], *, repo: RepoKey, settings: ReviewSettings, watching: bool, syncing: bool = False
+    views: list[CandidateView],
+    *,
+    repo: RepoKey,
+    settings: ReviewSettings,
+    watching: bool,
+    health: SpawnHealth,
+    syncing: bool = False,
 ) -> RenderableType:
-    """The whole dashboard frame: header, then a section per non-empty lifecycle stage."""
+    """The whole dashboard frame: reviewer health, header, then a section per non-empty lifecycle stage."""
     sections = [
         block
         for stage, title, desc, style in SECTIONS
@@ -183,7 +235,9 @@ def render(
     ]
     empty = [] if views else [Text("No corrections tracked yet — they appear here as you correct Claude.", style="dim")]
     spinner = [Spinner("dots", text=Text("syncing open PRs with GitHub…", style="dim"))] if syncing else []
-    return Group(header(repo, views, settings, watching=watching), Text(""), *sections, *empty, *spinner)
+    return Group(
+        health_line(health), header(repo, views, settings, watching=watching), Text(""), *sections, *empty, *spinner
+    )
 
 
 async def run_status(repo: RepoKey, *, sync: bool) -> None:
@@ -198,17 +252,19 @@ async def run_status(repo: RepoKey, *, sync: bool) -> None:
     settings = ReviewSettings()
     console = Console()
     async with await ReviewStore.open(settings.db_path) as store:
+        health = await store.spawn_health()
         watching = await store.watching(repo)
         views = await store.overview(repo, settings=settings, prompt_version=REVIEW_PROMPT_VERSION)
         if not (sync and any(stage_of(v) is Stage.PR_OPEN for v in views)):
-            console.print(render(views, repo=repo, settings=settings, watching=watching))
+            console.print(render(views, repo=repo, settings=settings, watching=watching, health=health))
             return
         with Live(
-            render(views, repo=repo, settings=settings, watching=watching, syncing=True), console=console
+            render(views, repo=repo, settings=settings, watching=watching, health=health, syncing=True),
+            console=console,
         ) as live:
             await sync_open_prs(store, repo, settings=settings)
             fresh = await store.overview(repo, settings=settings, prompt_version=REVIEW_PROMPT_VERSION)
-            live.update(render(fresh, repo=repo, settings=settings, watching=watching))
+            live.update(render(fresh, repo=repo, settings=settings, watching=watching, health=health))
 
 
 def status_command(repo: RepoKey, *, sync: bool) -> None:

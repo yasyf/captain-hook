@@ -75,6 +75,16 @@ CREATE TABLE IF NOT EXISTS repos (
   repo_key TEXT PRIMARY KEY,
   watching INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS spawn_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT NOT NULL,
+  transcript TEXT NOT NULL,
+  ok INTEGER NOT NULL,
+  error TEXT,
+  report_json TEXT,
+  CHECK ((ok = 1) = (error IS NULL))
+);
 """
 
 INSERT_CANDIDATE = """
@@ -136,6 +146,21 @@ JOIN latest l ON l.dedup_key = o.dedup_key AND l.rn = 1
 WHERE o.candidate_id = ? AND l.accepted = 1 AND l.confidence >= ?
 ORDER BY l.confidence DESC, o.id DESC
 LIMIT 1
+"""
+
+INSERT_SPAWN_RUN = """
+INSERT INTO spawn_runs (started_at, finished_at, transcript, ok, error, report_json)
+VALUES (?, ?, ?, ?, ?, ?)
+"""
+
+SPAWN_STREAK_QUERY = """
+WITH streak AS (
+  SELECT id, started_at FROM spawn_runs
+  WHERE id > COALESCE((SELECT MAX(id) FROM spawn_runs WHERE ok = 1), 0)
+)
+SELECT
+  (SELECT COUNT(*) FROM streak) AS consecutive_failures,
+  (SELECT started_at FROM streak ORDER BY id LIMIT 1) AS failing_since
 """
 
 
@@ -239,6 +264,21 @@ class CandidateView:
     threshold: ThresholdStatus
     eligible: bool
     summary: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SpawnHealth:
+    """The detached reviewer's run health — what the status dashboard's top line reads.
+
+    Attributes:
+        last: The newest ``spawn_runs`` row, or ``None`` before the first recorded run.
+        consecutive_failures: How many runs have failed since the last success.
+        failing_since: The failing streak's first ``started_at``, or ``None`` while healthy.
+    """
+
+    last: dict[str, object] | None
+    consecutive_failures: int
+    failing_since: str | None
 
 
 class ReviewStore(VerdictStoreMixin, FeedbackStore):
@@ -560,3 +600,43 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
             await self.candidate_view(row, settings=settings, prompt_version=prompt_version)
             for row in await self.candidates(repo)
         ]
+
+    async def record_spawn_run(
+        self,
+        transcript: str,
+        *,
+        started_at: datetime,
+        ok: bool,
+        error: str | None = None,
+        report_json: str | None = None,
+    ) -> None:
+        """Records one detached reviewer run's outcome — the only spawn-health write.
+
+        ``finished_at`` is stamped here, so the row's span is start-to-record.
+
+        Args:
+            transcript: The reviewed session's transcript path.
+            started_at: When the run started.
+            ok: Whether the run finished cleanly.
+            error: The crash's ``TypeName: message`` line (failed runs only).
+            report_json: The run's serialized ``SpawnReport`` (clean runs only).
+        """
+        await self.store.conn.execute(
+            INSERT_SPAWN_RUN,
+            (started_at.astimezone(UTC).isoformat(), now(), transcript, int(ok), error, report_json),
+        )
+
+    async def spawn_health(self) -> SpawnHealth:
+        """Returns the detached reviewer's run health — the only spawn-health read.
+
+        The failing streak is every run after the last clean one, so a single
+        success resets both ``consecutive_failures`` and ``failing_since``.
+        """
+        last_cur = await self.store.conn.execute("SELECT * FROM spawn_runs ORDER BY id DESC LIMIT 1")
+        streak_cur = await self.store.conn.execute(SPAWN_STREAK_QUERY)
+        streak = [dict(row) async for row in streak_cur][0]
+        return SpawnHealth(
+            last=rows[0] if (rows := [dict(row) async for row in last_cur]) else None,
+            consecutive_failures=int(streak["consecutive_failures"]),
+            failing_since=str(since) if (since := streak["failing_since"]) is not None else None,
+        )

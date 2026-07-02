@@ -124,10 +124,9 @@ def run_hook() -> None:
 @click.option("--cwd", "cwd", default=None, help="The session's working directory (default: the process cwd)")
 def spawn(transcript: Path, cwd: str | None) -> None:
     """Run the detached reviewer pass over one ended session (spawned by ``review run``)."""
-    from captain_hook.review.pipeline import review_session
-    from captain_hook.review.settings import ReviewSettings
+    from captain_hook.review.pipeline import spawn_session
 
-    click.echo(asyncio.run(review_session(transcript, cwd=cwd or os.getcwd(), settings=ReviewSettings())))
+    click.echo(asyncio.run(spawn_session(transcript, cwd=cwd or os.getcwd())))
 
 
 @review.command()

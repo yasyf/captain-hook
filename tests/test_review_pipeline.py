@@ -17,6 +17,7 @@ from cc_transcript.judge.llm import resolved_model
 from cc_transcript.mining.candidates import FeedbackCandidate, dedup_key
 from cc_transcript.mining.confidence import firm, noise
 from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE
+from pydantic import ValidationError
 
 from captain_hook.cli import plugin_dir
 from captain_hook.review.judge import (
@@ -38,10 +39,11 @@ from captain_hook.review.pipeline import (
     review_session,
     spawn_argv,
     spawn_brain,
+    spawn_session,
 )
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.scan import REVIEWER_MARKER, scan_transcript
-from captain_hook.review.settings import ReviewSettings
+from captain_hook.review.settings import ReviewSettings, resolve_review_db_path
 from captain_hook.review.store import ReviewStore
 from tests.review_helpers import (
     CORRECTION,
@@ -455,6 +457,83 @@ class TestBrain:
         assert kwargs["env"][SPAWNED_ENV] == "1"
         assert REVIEWER_MARKER in kwargs["input"].decode()
         assert Path(kwargs["stdout"].name) == state_dir() / "review" / "spawn.log"
+
+
+class TestSpawnSession:
+    async def test_success_records_ok_row_with_report_json(self, tmp_path: Path, git_repo: Path) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        report = await spawn_session(transcript, cwd=str(git_repo), settings=settings)
+        assert report == SpawnReport(repo=GIT_REPO_KEY)
+        async with await ReviewStore.open(settings.db_path) as store:
+            health = await store.spawn_health()
+        assert health.consecutive_failures == 0
+        assert health.failing_since is None
+        assert health.last is not None
+        assert health.last["ok"] == 1
+        assert health.last["error"] is None
+        assert health.last["transcript"] == str(transcript)
+        assert json.loads(str(health.last["report_json"])) == {
+            "repo": str(GIT_REPO_KEY),
+            "watching": False,
+            "scanned": 0,
+            "inserted": 0,
+            "judged": 0,
+            "failed": 0,
+            "eligible": [],
+            "brain": False,
+        }
+
+    @pytest.mark.parametrize(
+        ("exc", "recorded"),
+        [
+            pytest.param(
+                RuntimeError("no such column: fidelity"),
+                "RuntimeError: no such column: fidelity",
+                id="exception",
+            ),
+            pytest.param(
+                KeyboardInterrupt("cancelled"),
+                "KeyboardInterrupt: cancelled",
+                id="base-exception-cancellation-shape",
+            ),
+        ],
+    )
+    async def test_crash_records_failure_row_and_reraises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exc: BaseException, recorded: str
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+
+        async def boom(transcript: Path, *, cwd: str, settings: ReviewSettings) -> SpawnReport:
+            raise exc
+
+        monkeypatch.setattr("captain_hook.review.pipeline.review_session", boom)
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        with pytest.raises(type(exc)):
+            await spawn_session(transcript, cwd=str(tmp_path), settings=settings)
+        async with await ReviewStore.open(settings.db_path) as store:
+            health = await store.spawn_health()
+        assert health.consecutive_failures == 1
+        assert health.last is not None
+        assert health.last["ok"] == 0
+        assert health.last["error"] == recorded
+        assert health.last["report_json"] is None
+        assert health.failing_since == health.last["started_at"]
+
+    async def test_settings_failure_records_failure_row_at_default_db(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOOKS_REVIEW_JUDGE_CONCURRENCY", "not-a-number")
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        with pytest.raises(ValidationError):
+            await spawn_session(transcript, cwd=str(tmp_path))
+        async with await ReviewStore.open(resolve_review_db_path()) as store:
+            health = await store.spawn_health()
+        assert health.consecutive_failures == 1
+        assert health.last is not None
+        assert health.last["ok"] == 0
+        assert str(health.last["error"]).startswith("ValidationError:")
+        assert "judge_concurrency" in str(health.last["error"])
 
 
 class TestReviewSession:
