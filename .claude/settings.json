@@ -29,10 +29,17 @@
         "repo": "yasyf/skills"
       },
       "autoUpdate": true
+    },
+    "captain-hook": {
+      "source": {
+        "source": "github",
+        "repo": "yasyf/captain-hook"
+      }
     }
   },
   "enabledPlugins": {
-    "codex@skills": true
+    "codex@skills": true,
+    "captain-hook@captain-hook": true
   },
   "hooks": {
     "UserPromptSubmit": [
@@ -91,6 +98,17 @@
           {
             "type": "command",
             "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run SubagentStop"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx capt-hook review run",
+            "async": true
           }
         ]
       }
