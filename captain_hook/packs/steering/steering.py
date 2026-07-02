@@ -23,7 +23,7 @@ from captain_hook import (
 
 PRE_EXISTING_SIGNALS = Signals(
     [
-        Signal(pattern=r"(?i)(?:pre-existing|preexisting)", weight=2),
+        Signal(pattern=r"(?i)(?:pre-existing|preexisting)", weight=1),
         Signal(pattern=r"(?i)(?:outside|beyond) (?:the )?scope", weight=1),
         NlpSignal(
             clauses=[
@@ -143,6 +143,26 @@ nudge(
                                     "The pyright complaint here is the cached_property override one — "
                                     "per AGENTS.md this is trivial noise, pre-existing, not worth a "
                                     "type: ignore. Moving on to the actual feature work."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "When you edit an existing doc, fix tells only in the lines you're "
+                                    "already changing — never reflow pre-existing untouched lines to "
+                                    "satisfy the linter, which is scope creep over the author's "
+                                    "deliberate voice."
                                 ),
                             }
                         ]
