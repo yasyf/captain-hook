@@ -2430,7 +2430,7 @@ wheels = [
 
 [[package]]
 name = "spawnllm"
-version = "0.5.2"
+version = "0.5.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anthropic" },
@@ -2439,9 +2439,9 @@ dependencies = [
     { name = "openai" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b3/05/73fe4db45a71c4348ec512b3672628a9d040edd01c5306bb4fb152e789da/spawnllm-0.5.2.tar.gz", hash = "sha256:4d766f5d49aa0bb4ccf8172ad957808a444c68e2094690d956be0d0d17d8d3e7", size = 28891, upload-time = "2026-06-25T00:44:43.524Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1d/fb/fe05941fad408c6d34576a2cd5c57ad98ac8a377858869e9de2c0b369d8f/spawnllm-0.5.4.tar.gz", hash = "sha256:6ce81fb481497d7e4109cace54bbf6e119cabda795ec1e7b3c90cc0d0dbb7ada", size = 29283, upload-time = "2026-07-02T11:23:28.804Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6f/0a/e7f70b11541e1f3a8aa5e776905bc8cdcc28d66adc6b2c42bcf38973003f/spawnllm-0.5.2-py3-none-any.whl", hash = "sha256:f1372e3c93a03095cabb328549da0875601ffa837d2bd832d016e6a067a20b88", size = 39824, upload-time = "2026-06-25T00:44:42.231Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/dd/850867936187376924367d8aa0a4923a47ddc23b0117fa9067833bca637c/spawnllm-0.5.4-py3-none-any.whl", hash = "sha256:b13f16805537c072d51ccd08dd5d75c82bd8b62a95069f28b1a9036af0baca61", size = 40294, upload-time = "2026-07-02T11:23:27.48Z" },
 ]
 
 [[package]]
