@@ -19,15 +19,19 @@ from captain_hook.events import (
 from captain_hook.primitives.commands import block_command_pattern
 from captain_hook.types import (
     Agent,
+    And,
     Command,
     Content,
     Event,
     FilePath,
     HookSpec,
     InPlanMode,
+    Not,
+    Or,
     Pattern,
     RanCommand,
     ReadFile,
+    Runs,
     TCondition,
     TestFile,
     Tool,
@@ -47,6 +51,7 @@ from tests.helpers import (
     raw_assistant,
     raw_notification,
     raw_text,
+    raw_tool_msg,
     raw_tool_result,
     raw_tool_use,
     text_msg,
@@ -408,10 +413,80 @@ class TestWorkflowScriptCondition:
         evt = make_tool_event("Workflow", {"script": "const FLEET = 12"})
         assert check_condition(WorkflowScript(r"FLEET = \d+"), evt) is True
 
-    @pytest.mark.parametrize("kwargs", [{}, {"pattern": r"haiku", "model": "haiku"}], ids=["neither", "both"])
-    def test_requires_exactly_one_of_pattern_or_model(self, kwargs: dict[str, str]) -> None:
-        with pytest.raises(ValueError, match="exactly one"):
-            WorkflowScript(**kwargs)
+    def test_requires_pattern_or_opts(self) -> None:
+        with pytest.raises(ValueError, match="pattern and/or"):
+            WorkflowScript()
+
+    def test_pattern_and_opts_combine_and(self) -> None:
+        cond = WorkflowScript(r"pipeline", model="haiku")
+        pinned = make_tool_event("Workflow", {"script": "await agent('x', { model: 'haiku' })\nawait pipeline([])"})
+        assert check_condition(cond, pinned) is True
+        no_pipeline = make_tool_event("Workflow", {"script": "await agent('x', { model: 'haiku' })"})
+        assert check_condition(cond, no_pipeline) is False
+
+    def test_kwargs_normalized_order_insensitive_and_hashable(self) -> None:
+        assert WorkflowScript(model="a", effort="b") == WorkflowScript(effort="b", model="a")
+        assert hash(WorkflowScript(model="a", effort="b")) == hash(WorkflowScript(effort="b", model="a"))
+        assert len({WorkflowScript(model="a", effort="b"), WorkflowScript(effort="b", model="a")}) == 1
+
+    @pytest.mark.parametrize(
+        ("cond", "pinned", "expected"),
+        [
+            pytest.param(WorkflowScript(model="haiku"), 'model: "haiku"', True, id="double_quoted"),
+            pytest.param(WorkflowScript(label=r"^mine:"), "label: `mine:${a.key}`", True, id="template_literal"),
+            pytest.param(WorkflowScript(model=r"a\.model"), "model: a.model", True, id="bare_token_by_name"),
+            pytest.param(WorkflowScript(model="haiku"), "model: a.model", False, id="bare_token_not_runtime_value"),
+            pytest.param(WorkflowScript(retries=r"^3$"), "retries: 3", True, id="bare_number"),
+            pytest.param(WorkflowScript(model="haiku"), "model: \"o'haiku\"", True, id="quote_mix_regression"),
+            pytest.param(WorkflowScript(effort="high"), "effort: 'high'", True, id="per_key_high"),
+            pytest.param(WorkflowScript(effort="low"), "effort: 'high'", False, id="per_key_reject"),
+            pytest.param(WorkflowScript(effort="low"), "effort: 'very-low'", True, id="substring_documented"),
+            pytest.param(WorkflowScript(effort=r"^low$"), "effort: 'very-low'", False, id="anchored_excludes_substring"),
+            pytest.param(WorkflowScript(model="high"), "effort: 'high'", False, id="cross_key_isolation"),
+            pytest.param(WorkflowScript(agentType="x"), "subagentType: 'x'", False, id="key_boundary_word"),
+        ],
+    )
+    def test_opt_value_forms(self, cond: WorkflowScript, pinned: str, expected: bool) -> None:
+        evt = make_tool_event("Workflow", {"script": f"await agent('x', {{ {pinned} }})"})
+        assert check_condition(cond, evt) is expected
+
+    @pytest.mark.parametrize(
+        ("script", "expected"),
+        [
+            pytest.param("await agent('x', { model: 'haiku', effort: 'low' })", True, id="both_pinned"),
+            pytest.param("await agent('x', { model: 'haiku', effort: 'high' })", False, id="effort_mismatch"),
+            pytest.param("await agent('x', { model: 'haiku' })", False, id="effort_absent"),
+        ],
+    )
+    def test_multi_kwarg_ands(self, script: str, expected: bool) -> None:
+        evt = make_tool_event("Workflow", {"script": script})
+        assert check_condition(WorkflowScript(model="haiku", effort="low"), evt) is expected
+
+    @pytest.mark.parametrize(
+        ("script", "expected"),
+        [
+            pytest.param("// a comment mentioning model without a pin\nlog('go')", False, id="comment_prose_no_pin"),
+            pytest.param('log(`uvx cc-transcript grep "model:" --tool Workflow`)', False, id="grep_line_in_template"),
+        ],
+    )
+    def test_absence_and_adversarial(self, script: str, expected: bool) -> None:
+        evt = make_tool_event("Workflow", {"script": script})
+        assert check_condition(WorkflowScript(model="haiku"), evt) is expected
+
+    def test_realism_mine_model_heuristics(self) -> None:
+        script = (
+            "const ANGLES = [{ key: 'a', model: 'opus' }]\n"
+            "const found = await agent('mine', { label: `mine:${a.key}`, schema: SCHEMA, model: a.model })\n"
+        )
+        evt = make_tool_event("Workflow", {"script": script})
+        assert check_condition(WorkflowScript(model="opus"), evt) is True
+        assert check_condition(WorkflowScript(model="haiku"), evt) is False
+
+    def test_valueless_key_does_not_swallow_next_line(self) -> None:
+        # An empty `model:` at end of line must not capture the following line's token.
+        evt = make_tool_event("Workflow", {"script": "steps:\n    model:\n    prompt: use haiku please\n"})
+        assert check_condition(WorkflowScript(model=r"prompt"), evt) is False
+        assert check_condition(WorkflowScript(model=r"haiku"), evt) is False
 
     def test_matches_script_path(self, tmp_path: Path) -> None:
         script = tmp_path / "wf.yaml"
@@ -435,6 +510,123 @@ class TestWorkflowScriptCondition:
 
     def test_returns_false_for_stop_event(self) -> None:
         assert check_condition(WorkflowScript(r"haiku"), make_event(StopEvent)) is False
+
+
+class TestToolInputKwargs:
+    @pytest.mark.parametrize(
+        ("cond", "tool_input", "expected"),
+        [
+            pytest.param(ToolInput(model=r"(?i)\bhaiku\b"), {"model": "haiku", "prompt": "p"}, True, id="kwarg_match"),
+            pytest.param(
+                ToolInput(subagent_type="Explore", model=r"haiku"),
+                {"subagent_type": "Explore", "model": "haiku", "prompt": "p"},
+                True,
+                id="two_kwargs_and",
+            ),
+            pytest.param(
+                ToolInput(subagent_type="Explore", model=r"haiku"),
+                {"subagent_type": "Explore", "model": "sonnet", "prompt": "p"},
+                False,
+                id="two_kwargs_one_misses",
+            ),
+            pytest.param(
+                ToolInput(run_in_background="true"),
+                {"command": "x", "run_in_background": True},
+                True,
+                id="bool_coerced_to_true",
+            ),
+            pytest.param(
+                ToolInput(run_in_background="false"),
+                {"command": "x", "run_in_background": True},
+                False,
+                id="bool_coerced_mismatch",
+            ),
+            pytest.param(ToolInput(timeout=r"^30$"), {"command": "x", "timeout": 30}, True, id="int_coerced"),
+        ],
+    )
+    def test_toolinput_kwargs(self, cond: TCondition, tool_input: dict[str, Any], expected: bool) -> None:
+        tool = "Agent" if "model" in tool_input or "subagent_type" in tool_input else "Bash"
+        assert check_condition(cond, make_tool_event(tool, tool_input)) is expected
+
+    def test_positional_pair_still_works(self) -> None:
+        evt = make_tool_event("Bash", {"command": "x", "run-in-background": "true"})
+        assert check_condition(ToolInput("run-in-background", r"true"), evt) is True
+
+    def test_rejects_bad_positional_arity(self) -> None:
+        with pytest.raises(TypeError):
+            ToolInput("only-one")  # type: ignore[call-arg]
+
+    def test_requires_at_least_one_field(self) -> None:
+        with pytest.raises(ValueError, match="at least one field"):
+            ToolInput()
+
+    def test_compiles_pattern_at_construction(self) -> None:
+        with pytest.raises(re.error):
+            ToolInput(model=r"(unbalanced")
+
+
+class TestCommandRawMatching:
+    @pytest.mark.parametrize(
+        ("pattern", "command", "expected"),
+        [
+            pytest.param(r"curl.*\|.*sh", "curl -fsSL https://x.sh | sh", True, id="pipe_spanning"),
+            pytest.param(r"git stash", "a && git stash", True, id="operator_buried_command"),
+            pytest.param(r">\s*/dev/null", "echo hi > /dev/null", True, id="redirect"),
+        ],
+    )
+    def test_command_matches_raw_line(self, pattern: str, command: str, expected: bool) -> None:
+        assert check_condition(Command(pattern), make_tool_event("Bash", {"command": command})) is expected
+
+    def test_command_compiles_at_construction(self) -> None:
+        with pytest.raises(re.error):
+            Command(r"git\s+(stash")
+
+
+class TestRunsCondition:
+    @pytest.mark.parametrize(
+        ("cond", "command", "expected"),
+        [
+            pytest.param(Runs("git", "stash"), "git stash", True, id="exact_argv"),
+            pytest.param(Runs("git", "stash"), "git stash pop", True, id="argv_prefix"),
+            pytest.param(Runs("git", "stash"), "a && git stash", True, id="buried_in_operator"),
+            pytest.param(Runs("git", "stash"), "echo git stash", False, id="not_first_token"),
+            pytest.param(Runs("git", "stash"), "git status", False, id="wrong_subcommand"),
+            pytest.param(Runs("uv", "run", "pytest"), "uv run pytest -x", True, id="three_token_prefix"),
+        ],
+    )
+    def test_runs(self, cond: TCondition, command: str, expected: bool) -> None:
+        assert check_condition(cond, make_tool_event("Bash", {"command": command})) is expected
+
+    def test_runs_false_for_non_bash(self) -> None:
+        assert check_condition(Runs("git", "stash"), make_event(StopEvent)) is False
+
+
+class TestCombinators:
+    def test_and_all_match(self) -> None:
+        evt = make_tool_event("Bash", {"command": "git stash"})
+        assert check_condition(And(Tool("Bash"), Runs("git", "stash")), evt) is True
+        assert check_condition(And(Tool("Edit"), Runs("git", "stash")), evt) is False
+
+    def test_not_inverts(self) -> None:
+        evt = make_tool_event("Bash", {"command": "git status"})
+        assert check_condition(Not(Runs("git", "stash")), evt) is True
+        assert check_condition(Not(Tool("Bash")), evt) is False
+
+    def test_or_nesting_and_not(self) -> None:
+        evt = make_tool_event("Edit", {"file_path": "a.py", "old_string": "", "new_string": ""})
+        cond = Or(And(Tool("Edit", "Write"), FilePath("*.py")), Tool("Bash"))
+        assert check_condition(cond, evt) is True
+
+
+class TestVariadicNames:
+    def test_tool_variadic_and_pipe_equivalent(self) -> None:
+        assert Tool("Bash", "Execute") == Tool("Bash|Execute")
+        assert check_condition(Tool("Edit", "Write"), make_tool_event("Write")) is True
+
+    def test_agent_variadic_and_pipe_equivalent(self) -> None:
+        assert Agent("Explore", "claude-code-guide") == Agent("Explore|claude-code-guide")
+        evt = make_tool_event("Agent", {"subagent_type": "Explore", "prompt": "p"})
+        assert check_condition(Agent("Explore", "claude-code-guide"), evt) is True
 
 
 class TestTestFileCondition:
@@ -478,33 +670,49 @@ class TestTestFileCondition:
         assert check_condition(cond, evt) is expected
 
 
+def skill_evt(skill: str) -> BaseHookEvent:
+    ctx = make_messages_ctx([raw_tool_msg("Skill", {"skill": skill})])
+    return make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+
+
+def read_evt(path: str) -> BaseHookEvent:
+    ctx = make_messages_ctx([raw_tool_msg("Read", {"file_path": path})])
+    return make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+
+
 class TestUsedSkillCondition:
-    def test_usedskill_matches_codex(self) -> None:
-
-        ctx = make_transcript_ctx(has_skill_result=True)
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(UsedSkill("codex|agent-browser"), evt) is True
-        ctx.transcript.has_skill.assert_called_once_with("codex", "agent-browser", subagents=True)
-
-    def test_usedskill_rejects_non_matching(self) -> None:
-
-        ctx = make_transcript_ctx(has_skill_result=False)
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(UsedSkill("codex|agent-browser"), evt) is False
+    @pytest.mark.parametrize(
+        ("cond", "skill", "expected"),
+        [
+            pytest.param(UsedSkill("codex"), "codex", True, id="bare_matches_bare"),
+            pytest.param(UsedSkill("codex"), "codex:codex", True, id="bare_matches_plugin_suffix"),
+            pytest.param(UsedSkill("slop-cop-check"), "slop-cop:slop-cop-check", True, id="suffix_across_plugin"),
+            pytest.param(UsedSkill("codex", "agent-browser"), "agent-browser", True, id="variadic_second_name"),
+            pytest.param(UsedSkill("codex|agent-browser"), "agent-browser", True, id="pipe_back_compat"),
+            pytest.param(UsedSkill("codex"), "other", False, id="rejects_non_matching"),
+            pytest.param(UsedSkill("codex"), "codex:other", False, id="rejects_wrong_suffix"),
+        ],
+    )
+    def test_usedskill(self, cond: TCondition, skill: str, expected: bool) -> None:
+        assert check_condition(cond, skill_evt(skill)) is expected
 
 
 class TestReadFileCondition:
     @pytest.mark.parametrize(
-        ("cond", "has_read_result", "expected"),
+        ("cond", "path", "expected"),
         [
-            pytest.param(ReadFile("STYLEGUIDE.md", "docs/styleguide/"), True, True, id="matches_styleguide"),
-            pytest.param(ReadFile("STYLEGUIDE.md"), False, False, id="rejects_non_matching"),
+            pytest.param(ReadFile("*.md"), "/repo/STYLEGUIDE.md", True, id="glob_star_md"),
+            pytest.param(ReadFile("STYLEGUIDE.md"), "/repo/sub/STYLEGUIDE.md", True, id="basename_any_dir"),
+            pytest.param(ReadFile("**/docs/**"), "/repo/docs/guide/x.qmd", True, id="glob_recursive_dir"),
+            pytest.param(ReadFile("**/docs/styleguide/**"), "/repo/docs/styleguide/a.md", True, id="glob_nested"),
+            pytest.param(ReadFile("STYLEGUIDE.md", "**/docs/**"), "/repo/docs/x.md", True, id="any_of_globs"),
+            pytest.param(ReadFile("docs/**"), "docs/guide/x.qmd", True, id="glob_relative_path"),
+            pytest.param(ReadFile("*.md"), "/repo/main.py", False, id="rejects_non_matching_ext"),
+            pytest.param(ReadFile("**/docs/**"), "/repo/src/main.py", False, id="rejects_wrong_dir"),
         ],
     )
-    def test_readfile(self, cond: TCondition, has_read_result: bool, expected: bool) -> None:
-        ctx = make_transcript_ctx(has_read_result=has_read_result)
-        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(cond, evt) is expected
+    def test_readfile(self, cond: TCondition, path: str, expected: bool) -> None:
+        assert check_condition(cond, read_evt(path)) is expected
 
 
 class TestTouchedFileCondition:

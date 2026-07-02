@@ -7,19 +7,22 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from cc_transcript.models import OtherEvent
-from cc_transcript.tools import WorkflowCall, tool_name_matches
+from cc_transcript.tools import SkillCall, WorkflowCall, tool_name_matches
 
 from captain_hook.types import (
     Agent,
+    And,
     Command,
     Content,
     CustomCondition,
     FilePath,
     InPlanMode,
+    Not,
     Or,
     Pattern,
     RanCommand,
     ReadFile,
+    Runs,
     SourceEdits,
     TCondition,
     TestFile,
@@ -99,14 +102,63 @@ def workflow_script_source(evt: BaseHookEvent) -> str | None:
         return None
 
 
+_WF_OPT_VALUE = r"""(?:'([^'\n]*)'|"([^"\n]*)"|`([^`\n]*)`|([$\w][\w.$]*))"""
+
+
+def workflow_opt_values(source: str, key: str) -> list[str]:
+    """Best-effort raw-source scan for values pinned to `key` in agent() opts. Never raises.
+
+    Values are single-line: the whitespace around the colon is horizontal only, so a valueless
+    ``key:`` at end of line does not swallow the next line's token.
+    """
+    return [
+        next(g for g in m.groups() if g is not None)
+        for m in re.finditer(rf"\b{re.escape(key)}[ \t]*:[ \t]*{_WF_OPT_VALUE}", source)
+    ]
+
+
 def matches_workflow_script(cond: WorkflowScript, evt: BaseHookEvent) -> bool:
     if (source := workflow_script_source(evt)) is None:
         return False
-    if cond.pattern is not None:
-        return bool(re.search(cond.pattern, source, re.MULTILINE))
-    return cond.model is not None and any(
-        re.search(cond.model, pinned) for pinned in re.findall(r"""model\s*:\s*['"]([^'"]*)['"]""", source)
+    if cond.pattern is not None and not re.search(cond.pattern, source, re.MULTILINE):
+        return False
+    return all(
+        any(re.search(pattern, value) for value in workflow_opt_values(source, key)) for key, pattern in cond.opts
     )
+
+
+def coerce_tool_input(value: object) -> str | None:
+    """Coerce a scalar raw tool-input value to matchable text; None for non-scalars."""
+    match value:
+        case str():
+            return value
+        case bool():
+            return "true" if value else "false"
+        case int() | float():
+            return str(value)
+        case _:
+            return None
+
+
+def has_read_glob(t: Session, *globs: str, subagents: bool = True) -> bool:
+    from cc_transcript.query import sidechain_sessions
+
+    return any(f.matches(*globs) for f in t.tool_calls.named("Read").files()) or (
+        subagents and any(has_read_glob(sub, *globs) for sub in sidechain_sessions(t.path))
+    )
+
+
+def skill_name_matches(skill: str, names: tuple[str, ...]) -> bool:
+    return skill in names or skill.split(":", 1)[-1] in names
+
+
+def has_used_skill(t: Session, names: tuple[str, ...], *, subagents: bool = True) -> bool:
+    from cc_transcript.query import sidechain_sessions
+
+    return any(
+        isinstance(call := use.call, SkillCall) and skill_name_matches(call.skill, names)
+        for use in t.tool_calls.named("Skill")
+    ) or (subagents and any(has_used_skill(sub, names) for sub in sidechain_sessions(t.path)))
 
 
 def is_project_file(evt: BaseHookEvent) -> bool:
@@ -121,23 +173,25 @@ def is_project_file(evt: BaseHookEvent) -> bool:
 
 def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
     match c:
-        case Tool(pattern):
-            return bool(evt.tool_name) and tool_name_matches(evt.tool_name, pattern)
+        case Tool(names):
+            return bool(evt.tool_name) and tool_name_matches(evt.tool_name, "|".join(names))
         case FilePath(patterns, project_only):
             return bool(evt.file and (not project_only or is_project_file(evt)) and evt.file.matches(*patterns))
         case Command(pattern):
-            return bool((cl := evt.command_line) and any(re.search(pattern, str(cmd)) for cmd in cl.commands))
+            return bool(
+                (cl := evt.command_line) and any(re.search(pattern, s) for s in (cl.raw, *map(str, cl.commands)))
+            )
         case Content(pattern, project_only):
             return bool(
                 (not project_only or is_project_file(evt))
                 and evt.content
                 and re.search(pattern, evt.content, re.MULTILINE)
             )
-        case ToolInput(field, pattern):
-            return bool(
-                evt.tool_name
-                and isinstance(value := evt.input.raw.get(field), str)
+        case ToolInput(fields):
+            return bool(evt.tool_name) and all(
+                (value := coerce_tool_input(evt.input.raw.get(field))) is not None
                 and re.search(pattern, value, re.MULTILINE)
+                for field, pattern in fields
             )
         case WorkflowScript() as workflow_script:
             return matches_workflow_script(workflow_script, evt)
@@ -149,8 +203,8 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
                 return False
             resolved = lang or (lang_for_path(evt.file.path) if evt.file else None)
             return bool(resolved and ast_grep_matches(evt.content, resolved, pattern))
-        case Agent(name):
-            return bool(evt.agent_type) and evt.agent_type in name.split("|")
+        case Agent(names):
+            return bool(evt.agent_type) and evt.agent_type in names
         case TestFile(project_only):
             return bool(evt.file and (not project_only or is_project_file(evt)) and evt.file.is_test)
         case SourceEdits(lang, include_tests, paths):
@@ -160,16 +214,18 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
                 and (f := evt.file)
                 and f.matches(*SourceEdits(lang=lang).globs)
                 and (include_tests or not f.is_test)
-                and (paths is None or f.matches(paths))
+                and (not paths or f.matches(*paths))
             )
-        case UsedSkill(name, subagents):
-            return evt.ctx.transcript.has_skill(*name.split("|"), subagents=subagents)
+        case UsedSkill(names, subagents):
+            return has_used_skill(evt.ctx.transcript, names, subagents=subagents)
         case ReadFile(patterns, subagents):
-            return any(evt.ctx.transcript.has_read(p, subagents=subagents) for p in patterns)
+            return has_read_glob(evt.ctx.transcript, *patterns, subagents=subagents)
         case TouchedFile(patterns, subagents):
             return evt.ctx.transcript.has_edit_to(*patterns, subagents=subagents)
         case RanCommand(pattern, subagents):
             return evt.ctx.transcript.has_command(pattern, subagents=subagents)
+        case Runs(argv):
+            return bool(argv and (cl := evt.command_line) and any(cmd.argv[: len(argv)] == argv for cmd in cl.commands))
         case InPlanMode():
             return evt.permission_mode == "plan" or (
                 (t := evt.ctx.transcript).tool_calls.named("EnterPlanMode").count()
@@ -177,6 +233,10 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
             )
         case Waiting():
             return is_waiting(evt)
+        case And(conditions):
+            return all(check_condition(sub, evt) for sub in conditions)
+        case Not(condition):
+            return not check_condition(condition, evt)
         case Or(conditions):
             return any(check_condition(sub, evt) for sub in conditions)
         case CustomCondition():

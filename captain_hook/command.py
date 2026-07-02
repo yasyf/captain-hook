@@ -12,10 +12,7 @@ from tree_sitter import Language, Node, Parser
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
-BASH_LANGUAGE = Language(tsbash.language())  # pyright: ignore[reportDeprecated]
-BASH_PARSER = Parser(BASH_LANGUAGE)
-
-COMPOUND_OPS = frozenset({"&&", "||", ";", "|", "&"})
+BASH_PARSER = Parser(Language(tsbash.language()))  # pyright: ignore[reportDeprecated]
 
 
 @dataclass(frozen=True)
@@ -28,10 +25,10 @@ class Redirect:
 
 
 @dataclass(frozen=True)
-class Command:
+class ParsedCommand:
     """A single parsed shell command with executable, arguments, env vars, and redirects.
 
-    Use ``Command.parse(raw)`` to parse a command string, or access via ``CommandLine``.
+    Use ``ParsedCommand.parse(raw)`` to parse a command string, or access via ``CommandLine``.
     """
 
     raw: str
@@ -41,11 +38,11 @@ class Command:
     redirects: tuple[Redirect, ...] = ()
 
     @classmethod
-    def parse(cls, raw: str) -> Command:
+    def parse(cls, raw: str) -> ParsedCommand:
         return CommandLine.parse(raw).primary
 
     @classmethod
-    def empty(cls) -> Command:
+    def empty(cls) -> ParsedCommand:
         return cls(raw="", executable="", args=())
 
     @cached_property
@@ -89,7 +86,7 @@ class CommandLine:
     """
 
     raw: str
-    parts: tuple[tuple[Command, str | None], ...]
+    parts: tuple[tuple[ParsedCommand, str | None], ...]
 
     @classmethod
     def parse(cls, raw: str) -> CommandLine:
@@ -100,18 +97,18 @@ class CommandLine:
         return cls(raw=raw, parts=((cls.fallback(raw), None),))
 
     @cached_property
-    def commands(self) -> tuple[Command, ...]:
+    def commands(self) -> tuple[ParsedCommand, ...]:
         return tuple(cmd for cmd, _ in self.parts)
 
     @cached_property
-    def primary(self) -> Command:
-        return self.parts[-1][0] if self.parts else Command.empty()
+    def primary(self) -> ParsedCommand:
+        return self.parts[-1][0] if self.parts else ParsedCommand.empty()
 
     @cached_property
-    def head(self) -> Command:
-        return self.parts[0][0] if self.parts else Command.empty()
+    def head(self) -> ParsedCommand:
+        return self.parts[0][0] if self.parts else ParsedCommand.empty()
 
-    def __iter__(self) -> Iterator[Command]:
+    def __iter__(self) -> Iterator[ParsedCommand]:
         return iter(self.commands)
 
     def __len__(self) -> int:
@@ -197,7 +194,7 @@ class CommandLine:
         return Redirect(op=op, target=target, fd=fd)
 
     @staticmethod
-    def extract_command(node: Node) -> Command:
+    def extract_command(node: Node) -> ParsedCommand:
         executable = ""
         args: list[str] = []
         env: list[tuple[str, str]] = []
@@ -235,7 +232,7 @@ class CommandLine:
                 case _:
                     pass
 
-        return Command(
+        return ParsedCommand(
             raw=CommandLine.node_text(node),
             executable=executable,
             args=tuple(args),
@@ -244,8 +241,8 @@ class CommandLine:
         )
 
     @staticmethod
-    def collect_parts(children: list[Node], ops: frozenset[str]) -> list[tuple[Command, str | None]]:
-        parts: list[tuple[Command, str | None]] = []
+    def collect_parts(children: list[Node], ops: frozenset[str]) -> list[tuple[ParsedCommand, str | None]]:
+        parts: list[tuple[ParsedCommand, str | None]] = []
         for child in children:
             text = CommandLine.node_text(child)
             if child.type in ops or text in ops:
@@ -258,9 +255,9 @@ class CommandLine:
         return parts
 
     @staticmethod
-    def walk_redirected(node: Node) -> list[tuple[Command, str | None]]:
+    def walk_redirected(node: Node) -> list[tuple[ParsedCommand, str | None]]:
         redirects: list[Redirect] = []
-        inner_parts: list[tuple[Command, str | None]] = []
+        inner_parts: list[tuple[ParsedCommand, str | None]] = []
         for child in node.children:
             if child.type == "file_redirect":
                 redirects.append(CommandLine.extract_redirect(child))
@@ -269,7 +266,7 @@ class CommandLine:
         if redirects and inner_parts:
             inner_parts = [
                 (
-                    Command(
+                    ParsedCommand(
                         raw=cmd.raw,
                         executable=cmd.executable,
                         args=cmd.args,
@@ -282,7 +279,7 @@ class CommandLine:
             ]
         return inner_parts or [
             (
-                Command(
+                ParsedCommand(
                     raw=CommandLine.node_text(node),
                     executable="",
                     args=(),
@@ -293,7 +290,7 @@ class CommandLine:
         ]
 
     @staticmethod
-    def walk_node(node: Node) -> list[tuple[Command, str | None]]:
+    def walk_node(node: Node) -> list[tuple[ParsedCommand, str | None]]:
         match node.type:
             case "program":
                 return CommandLine.collect_parts(node.children, frozenset({";"}))
@@ -306,14 +303,14 @@ class CommandLine:
             case "redirected_statement":
                 return CommandLine.walk_redirected(node)
             case _:
-                parts: list[tuple[Command, str | None]] = []
+                parts: list[tuple[ParsedCommand, str | None]] = []
                 for child in node.children:
                     parts.extend(CommandLine.walk_node(child))
                 return parts
 
     @staticmethod
-    def fallback(raw: str) -> Command:
-        return Command(raw=raw, executable=raw.split()[0] if raw.split() else raw, args=())
+    def fallback(raw: str) -> ParsedCommand:
+        return ParsedCommand(raw=raw, executable=raw.split()[0] if raw.split() else raw, args=())
 
 
 @dataclass(frozen=True)
@@ -350,11 +347,11 @@ class CommandLineQuery:
         """
         return any(name in cmd.args for cmd in self.line.commands)
 
-    def any_command(self, pred: Callable[[Command], bool]) -> bool:
+    def any_command(self, pred: Callable[[ParsedCommand], bool]) -> bool:
         """Return whether any command in the line satisfies ``pred``.
 
         Args:
-            pred: Predicate applied to each parsed ``Command``.
+            pred: Predicate applied to each parsed ``ParsedCommand``.
 
         Returns:
             ``True`` if ``pred`` returns truthy for at least one command.

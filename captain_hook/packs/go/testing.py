@@ -4,6 +4,7 @@ from captain_hook import (
     Allow,
     BaseHookEvent,
     Block,
+    Command,
     CustomCondition,
     Event,
     FilePath,
@@ -14,7 +15,6 @@ from captain_hook import (
     gate,
     nudge,
 )
-from captain_hook.types import Command as CommandCondition
 
 nudge(
     """
@@ -55,7 +55,7 @@ class CommitsGo(CustomCondition):
 
 gate(
     "No `go test` execution found. Run tests before committing Go changes.",
-    only_if=[Tool("Bash"), CommandCondition(r"git\s+commit"), CommitsGo()],
+    only_if=[Tool("Bash"), Command(r"git\s+commit"), CommitsGo()],
     skip_if=[
         RanCommand(r"go test"),
         UserSaid("commit", "just commit"),
@@ -72,7 +72,7 @@ gate(
 nudge(
     "No `go test` execution detected in this session. If you changed Go files, run tests "
     "before committing. If this is a docs/config-only change, proceed.",
-    only_if=[Tool("Bash"), CommandCondition(r"git\s+commit")],
+    only_if=[Tool("Bash"), Command(r"git\s+commit")],
     skip_if=[
         RanCommand(r"go test"),
         UserSaid("commit", "just commit"),

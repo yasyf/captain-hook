@@ -338,7 +338,7 @@ class TestDefaultConditions:
         assert len(_state.hooks) == 1
         spec = _state.hooks[0].spec
         assert spec.events == Event.PostToolUse
-        assert any(isinstance(c, Tool) and c.pattern == "Edit|Write" for c in spec.only_if)
+        assert any(isinstance(c, Tool) and c.names == ("Edit", "Write") for c in spec.only_if)
         assert any(isinstance(c, FilePath) and "*.py" in c.patterns for c in spec.only_if)
         assert any(isinstance(c, TestFile) for c in spec.skip_if)
 

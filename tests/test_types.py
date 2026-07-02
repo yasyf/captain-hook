@@ -76,7 +76,7 @@ class TestHookSpec:
     def test_full_construction_stores_all_fields(self) -> None:
         s = HookSpec(
             events=Event.PreToolUse | Event.PostToolUse,
-            only_if=(Tool(pattern="Bash"),),
+            only_if=(Tool("Bash"),),
             skip_if=(TestFile(),),
             message="warning",
             block=True,

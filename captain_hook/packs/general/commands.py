@@ -5,19 +5,22 @@ from captain_hook import (
     Block,
     Event,
     Input,
+    Runs,
+    Tool,
     UsedSkill,
-    block_command,
+    hook,
     nudge,
 )
 
-block_command(
-    ["git", "stash"],
-    reason="git stash is not allowed",
-    hint=(
-        "In a jj repo you never need to stash — the working copy is commit @; use `jj new` "
-        "to set it aside or `jj rebase` directly (no clean tree required). In plain git, "
-        "commit your changes to a branch"
+hook(
+    Event.PreToolUse,
+    only_if=[Tool("Bash"), Runs("git", "stash")],
+    message=(
+        "BLOCKED: git stash is not allowed. In a jj repo you never need to stash — the working copy "
+        "is commit @; use `jj new` to set it aside or `jj rebase` directly (no clean tree required). "
+        "In plain git, commit your changes to a branch."
     ),
+    block=True,
     tests={
         Input(command="git stash"): Block(),
         Input(command="git stash pop"): Block(),
@@ -34,7 +37,7 @@ nudge(
     approaches, get a second opinion from `/codex` before attempting a 3rd —
     Codex catches errors that Claude may miss.
     """,
-    skip_if=[UsedSkill("codex|codex:codex")],
+    skip_if=[UsedSkill("codex")],
     events=Event.PostToolUseFailure,
     when=lambda evt: evt.ctx.turn.count_failures() >= 2 and not evt.ctx.t.has_command(r"codex"),
 )

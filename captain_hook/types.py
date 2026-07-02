@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Flag, StrEnum, auto
@@ -36,6 +37,11 @@ LANG_GLOBS: dict[str, tuple[str, ...]] = {
     "java": ("*.java",),
     "bash": ("*.sh", "*.bash"),
 }
+
+
+def _split_names(names: Sequence[str]) -> tuple[str, ...]:
+    """Flatten any embedded ``|`` alternations so ``("Edit|Write",)`` becomes ``("Edit", "Write")``."""
+    return tuple(part for name in names for part in name.split("|"))
 
 
 class Event(Flag):
@@ -107,15 +113,22 @@ class Action(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Tool:
-    """Condition matching the current event's tool name against a regex pattern.
+    """Condition matching the current event's tool name against one or more names.
 
-    Use in ``only_if`` or ``skip_if`` to filter hooks by which tool is being used.
+    Matching is exact membership, honoring cross-editor aliases (``Bash``/``Execute``,
+    ``Write``/``Create``, …) and MCP suffixes (``mcp__github__Grep`` matches ``Grep``) —
+    NOT a regex, so ``Tool("Edit.*")`` never matches. Pass names variadically, or as a
+    single ``|``-joined string for back-compat (``Tool("Bash|Execute")`` is
+    ``Tool("Bash", "Execute")``).
 
     Example:
-        >>> hook(Event.PreToolUse, only_if=[Tool("Bash|Execute")], message="...", block=True)
+        >>> hook(Event.PreToolUse, only_if=[Tool("Bash", "Execute")], message="...", block=True)
     """
 
-    pattern: str
+    names: tuple[str, ...]
+
+    def __init__(self, *names: str) -> None:
+        object.__setattr__(self, "names", _split_names(names))
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,13 +157,19 @@ class FilePath(PatternsCondition):
 class Command:
     """Condition matching the current event's bash command against a regex.
 
-    Only relevant for ``PreToolUse`` events targeting the Bash/Execute tool.
+    Searched against the raw command line *and* each parsed command's argv join, so a
+    pattern spanning pipes/operators/redirects (``curl ... | sh``) matches. Only relevant
+    for ``PreToolUse`` events targeting the Bash/Execute tool. The regex is compiled at
+    construction, so a malformed pattern raises immediately rather than at dispatch.
 
     Example:
         >>> hook(Event.PreToolUse, only_if=[Command(r"git\\s+stash")], message="blocked", block=True)
     """
 
     pattern: str
+
+    def __post_init__(self) -> None:
+        re.compile(self.pattern)
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,45 +187,87 @@ class Content:
     pattern: str
     project_only: bool = True
 
+    def __post_init__(self) -> None:
+        re.compile(self.pattern)
+
 
 @dataclass(frozen=True, slots=True)
 class ToolInput:
-    """Condition matching one top-level field of the raw tool input against a regex.
+    """Condition matching top-level fields of the raw tool input against regexes.
 
-    Reads a single top-level key of the current event's tool input and searches its value with
-    ``re.MULTILINE``. Works for any tool; false for non-tool events, a missing field, or a
-    non-string value.
+    Two spellings, both ANDing when more than one field is given:
+
+    - ``ToolInput(model=r"haiku", subagent_type="Explore")`` — kwargs, one regex per field.
+    - ``ToolInput("run-in-background", r"true")`` — a single ``(field, pattern)`` positional
+      pair, for keys that are not valid Python identifiers.
+
+    Each field's value is searched with ``re.MULTILINE``. Scalar (bool/int/float) values are
+    coerced to text first, so ``ToolInput(run_in_background="true")`` matches a JSON ``true``.
+    Works for any tool; false for non-tool events or a missing field. Patterns are compiled at
+    construction.
 
     Example:
-        >>> hook(Event.PreToolUse, only_if=[ToolInput("model", r"(?i)\\bhaiku\\b")], message="...", block=True)
+        >>> hook(Event.PreToolUse, only_if=[ToolInput(model=r"(?i)\\bhaiku\\b")], message="...", block=True)
     """
 
-    field: str
-    pattern: str
+    fields: tuple[tuple[str, str], ...]
+
+    def __init__(self, *positional: str, **fields: str) -> None:
+        match positional:
+            case ():
+                pairs = tuple(fields.items())
+            case (field, pattern) if not fields:
+                pairs = ((field, pattern),)
+            case _:
+                raise TypeError(
+                    "ToolInput takes either a single (field, pattern) positional pair or field=regex kwargs"
+                )
+        if not pairs:
+            raise ValueError("ToolInput requires at least one field to match")
+        for _, pattern in pairs:
+            re.compile(pattern)
+        object.__setattr__(self, "fields", tuple(sorted(pairs)))
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class WorkflowScript:
     """Condition matching a ``Workflow`` tool's script source.
 
-    ``model`` matches the model names pinned in the script's ``agent()`` opts
-    (``model: 'haiku'`` and friends) — no hand-written quote-aware regex; ``pattern``
-    searches the raw script source (``re.MULTILINE``). Provide exactly one. The source is
-    the inline ``script``, or — when ``script`` is None and ``script_path`` points at a
-    file — that file's contents. A missing or unreadable path, or a file larger than
-    ~1 MiB, never matches and never raises. False for any non-Workflow tool.
+    Each ``**opts`` kwarg names an ``agent()`` opts key and carries a regex ``re.search``ed
+    against every value pinned for that key anywhere in the script source —
+    ``WorkflowScript(model="haiku")``, ``WorkflowScript(effort=r"^low$")``,
+    ``WorkflowScript(agentType="code-reviewer")``, any future key. ``pattern`` (reserved, so
+    not usable as an opt key) searches the raw source with ``re.MULTILINE``. Everything given
+    ANDs: ``pattern`` (if any) must match and each opt key's regex must match at least one of
+    that key's pins.
+
+    Captured value forms: single-/double-quoted strings, a single-line template literal (raw
+    text incl. ``${…}``), and a bare token (identifier, dotted path, number, boolean) matched
+    by its source TEXT — so ``model: a.model`` matches ``WorkflowScript(model=r"a\\.model")``,
+    not the runtime value. The scan is whole-source (comments and data tables feeding
+    ``agent()`` count); anchor enum-like keys with ``^…$`` (each captured value is single-line).
+    Matching is per-SCRIPT, not per-``agent()``-call. At least one of ``pattern``/``**opts`` is
+    required. The source is the inline ``script``, or — when ``script`` is None and
+    ``script_path`` points at a file — that file's contents; a missing/unreadable path or a
+    file larger than ~1 MiB never matches and never raises. False for any non-Workflow tool.
 
     Example:
         >>> nudge("no haiku steps", only_if=[Tool("Workflow"), WorkflowScript(model="haiku")],
         ...       events=Event.PreToolUse)
     """
 
-    pattern: str | None = None
-    model: str | None = None
+    pattern: str | None
+    opts: tuple[tuple[str, str], ...]
 
-    def __post_init__(self) -> None:
-        if (self.pattern is None) == (self.model is None):
-            raise ValueError("WorkflowScript takes exactly one of pattern or model")
+    def __init__(self, pattern: str | None = None, **opts: str) -> None:
+        if pattern is None and not opts:
+            raise ValueError("WorkflowScript requires a pattern and/or at least one opts key to match")
+        if pattern is not None:
+            re.compile(pattern)
+        for value in opts.values():
+            re.compile(value)
+        object.__setattr__(self, "pattern", pattern)
+        object.__setattr__(self, "opts", tuple(sorted(opts.items())))
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,17 +297,33 @@ class Pattern:
 
 @dataclass(frozen=True, slots=True)
 class UsedSkill:
-    """Transcript-history condition: true when a Skill tool use with a matching name exists."""
+    """Transcript-history condition: true when a Skill tool use named one of ``names``.
 
-    name: str
+    Pass names variadically; a single ``|``-joined string still works for back-compat. A bare
+    name also matches the plugin-qualified spelling, so ``UsedSkill("codex")`` matches a skill
+    reported as ``codex:codex`` and ``UsedSkill("slop-cop-check")`` matches ``slop-cop:slop-cop-check``.
+
+    Example:
+        >>> nudge("run codex first", skip_if=[UsedSkill("codex")])
+    """
+
+    names: tuple[str, ...]
     subagents: bool = True
+
+    def __init__(self, *names: str, subagents: bool = True) -> None:
+        object.__setattr__(self, "names", _split_names(names))
+        object.__setattr__(self, "subagents", subagents)
 
 
 @dataclass(frozen=True, slots=True)
 class ReadFile(PatternsCondition):
     """Transcript-history condition: true when a Read tool use targeted a matching file.
 
-    Accepts one or more glob patterns as positional arguments.
+    Accepts one or more ``fnmatch`` glob patterns as positional arguments, matched against each
+    Read's full path and its basename — so ``ReadFile("*.md")`` matches by extension and a bare
+    ``ReadFile("TESTING.md")`` matches that file in any directory. Reads are recorded as absolute
+    paths, so anchor a directory match with a leading ``**/`` (``ReadFile("**/docs/**")``), the
+    same idiom the test-file globs use.
     """
 
     subagents: bool
@@ -258,7 +335,10 @@ class ReadFile(PatternsCondition):
 
 @dataclass(frozen=True, slots=True)
 class TestFile:
-    """Condition that matches when the current event targets a test file (``test_*.py``, ``conftest.py``)."""
+    """Condition that matches when the current event targets a test file.
+
+    A test file is ``test_*.py``, ``conftest.py``, or any ``.py`` under a ``tests/`` directory.
+    """
 
     __test__ = False
 
@@ -267,9 +347,30 @@ class TestFile:
 
 @dataclass(frozen=True, slots=True)
 class SourceEdits:
-    lang: str = "py"
-    include_tests: bool = False
-    paths: str | None = None
+    """Condition matching an ``Edit``/``Write`` of a non-test source file in one language.
+
+    True when the current event edits a file matching the language's globs and — unless
+    ``include_tests`` — is not a test file, optionally narrowed to ``paths``.
+
+    Args:
+        lang: Language key into [`LANG_GLOBS`][captain_hook.types.LANG_GLOBS] (default ``"py"``);
+            unknown keys fall back to ``*.<lang>``.
+        include_tests: Include test files too (default ``False`` excludes them).
+        paths: One or more ``fnmatch`` globs the file must also match (e.g. ``("src/**", "lib/**")``);
+            ``None`` (default) imposes no path restriction.
+
+    Example:
+        >>> hook(Event.PostToolUse, only_if=[SourceEdits(lang="ts", paths=("src/**", "lib/**"))], message="...")
+    """
+
+    lang: str
+    include_tests: bool
+    paths: tuple[str, ...]
+
+    def __init__(self, lang: str = "py", include_tests: bool = False, paths: str | Sequence[str] | None = None) -> None:
+        object.__setattr__(self, "lang", lang)
+        object.__setattr__(self, "include_tests", include_tests)
+        object.__setattr__(self, "paths", (paths,) if isinstance(paths, str) else tuple(paths or ()))
 
     @property
     def globs(self) -> tuple[str, ...]:
@@ -278,16 +379,24 @@ class SourceEdits:
 
 @dataclass(frozen=True, slots=True)
 class Agent:
-    """Condition matching the current event's subagent type against a name pattern."""
+    """Condition matching the current event's subagent type against one or more names.
 
-    name: str
+    Exact membership (not a regex). Pass names variadically, or as a single ``|``-joined string
+    for back-compat (``Agent("Explore|claude-code-guide")`` is ``Agent("Explore", "claude-code-guide")``).
+    """
+
+    names: tuple[str, ...]
+
+    def __init__(self, *names: str) -> None:
+        object.__setattr__(self, "names", _split_names(names))
 
 
 @dataclass(frozen=True, slots=True)
 class TouchedFile(PatternsCondition):
     """Transcript-history condition: true when an Edit/Write targeted a file matching the glob.
 
-    Accepts one or more glob patterns as positional arguments.
+    Accepts one or more glob patterns as positional arguments. Defaults to the main agent's edits
+    only (subagent edits rarely gate the main session); pass ``subagents=True`` to include sidechains.
     """
 
     subagents: bool
@@ -299,10 +408,16 @@ class TouchedFile(PatternsCondition):
 
 @dataclass(frozen=True, slots=True)
 class RanCommand:
-    """Transcript-history condition: true when a Bash tool use with a matching command exists."""
+    """Transcript-history condition: true when a Bash tool use with a matching command exists.
+
+    ``pattern`` is a regex, compiled at construction so a malformed pattern raises immediately.
+    """
 
     pattern: str
     subagents: bool = True
+
+    def __post_init__(self) -> None:
+        re.compile(self.pattern)
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,9 +451,28 @@ class Waiting:
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class Runs:
+    """Structural Bash condition: true when a parsed command's argv starts with ``argv``.
+
+    Where [`Command`][captain_hook.types.Command] regex-matches the command text (and can false-fire
+    on ``echo git stash``), ``Runs`` matches the argv prefix of any command in the line — so
+    ``Runs("git", "stash")`` fires on ``git stash``, ``git stash pop``, and ``a && git stash`` but
+    not ``echo git stash``. Only relevant for Bash/Execute events.
+
+    Example:
+        >>> hook(Event.PreToolUse, only_if=[Runs("git", "stash")], message="no stashing", block=True)
+    """
+
+    argv: tuple[str, ...]
+
+    def __init__(self, *argv: str) -> None:
+        object.__setattr__(self, "argv", argv)
+
+
 @dataclass(frozen=True)
 class ConditionList:
-    """Container for a tuple of conditions; base class for combinators like ``Or``."""
+    """Container for a tuple of conditions; base class for combinators like ``Or``/``And``."""
 
     conditions: tuple[TCondition, ...]
 
@@ -348,6 +482,20 @@ class Or(ConditionList):
 
     def __init__(self, *conditions: TCondition) -> None:
         super().__init__(conditions=tuple(conditions))
+
+
+class And(ConditionList):
+    """Match only if every inner condition matches (useful nested inside ``Or``/``Not``)."""
+
+    def __init__(self, *conditions: TCondition) -> None:
+        super().__init__(conditions=tuple(conditions))
+
+
+@dataclass(frozen=True, slots=True)
+class Not:
+    """Match only if the inner condition does not match."""
+
+    condition: TCondition
 
 
 @runtime_checkable
@@ -429,9 +577,12 @@ TCondition = (
     | SourceEdits
     | TouchedFile
     | RanCommand
+    | Runs
     | InPlanMode
     | Waiting
     | Or
+    | And
+    | Not
     | CustomCondition
 )
 

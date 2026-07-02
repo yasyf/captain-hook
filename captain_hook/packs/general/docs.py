@@ -16,7 +16,7 @@ nudge(
     "slop-cop is a Go binary — if it's not on PATH, run the `/slop-cop-check` skill "
     "(it installs it), never `uvx slop-cop`.",
     only_if=[Tool("Write|Edit"), FilePath("**/*.md", "**/*.qmd", "docs/**", "README.md")],
-    skip_if=[UsedSkill("writing-docs|writing-docs:writing-docs")],
+    skip_if=[UsedSkill("writing-docs")],
     max_fires=1,
     tests={
         Input(tool="Write", file="docs/guide/x.qmd", content="# X"): Warn(pattern="writing-docs"),

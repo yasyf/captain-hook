@@ -21,7 +21,7 @@ from cc_transcript.tools import (
 
 from captain_hook import file, style, util
 from captain_hook.app import hook, on, register
-from captain_hook.command import Command, CommandLine, Redirect
+from captain_hook.command import CommandLine, ParsedCommand, Redirect
 from captain_hook.context import HookContext
 from captain_hook.durable import DurableSlot, DurableState, DurableStore
 from captain_hook.events import (
@@ -73,6 +73,8 @@ from captain_hook.testing import Allow, Block, FileFixture, InlineTests, Input, 
 from captain_hook.types import (
     Action,
     Agent,
+    And,
+    Command,
     Content,
     CustomCommandLineCondition,
     CustomCondition,
@@ -82,9 +84,12 @@ from captain_hook.types import (
     HookResponse,
     HookResult,
     InPlanMode,
+    Not,
+    Or,
     Pattern,
     RanCommand,
     ReadFile,
+    Runs,
     Signal,
     Signals,
     SourceEdits,

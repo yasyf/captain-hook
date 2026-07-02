@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from captain_hook.command import Command, CommandLine
+from captain_hook.command import CommandLine
+from captain_hook.command import ParsedCommand as Command
 
 
 class TestCommand:

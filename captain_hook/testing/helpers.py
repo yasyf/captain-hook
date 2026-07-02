@@ -469,7 +469,7 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
             test_name = f"{entry.name}:{key!r}"
             try:
                 if isinstance(key, Input):
-                    spec_tools = [p for c in entry.spec.only_if if isinstance(c, Tool) for p in c.pattern.split("|")]
+                    spec_tools = [p for c in entry.spec.only_if if isinstance(c, Tool) for p in c.names]
                     evt = input_to_event(
                         next(iter(entry.spec.events)),
                         key,
