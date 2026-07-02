@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.5.0] - 2026-07-02
+
+### Added
+- Reviewer health ledger: the detached session reviewer records every run's outcome in a
+  `spawn_runs` table (single write codepath, `ReviewStore.record_spawn_run`), and
+  `capt-hook status` opens with a health line — red `REVIEWER FAILING` with the
+  consecutive-crash count and error, a dim `reviewer ok` one-liner, or a yellow staleness
+  warning when the reviewer hasn't run in over a week. The recorder re-raises, so crashes
+  still land in `spawn.log` with a full traceback.
+
+### Fixed
+- Builtin pack hooks now record real module-qualified names (`general.docs:nudge_…`)
+  instead of `<frozen importlib:…`: the caller frame walk stops at `captain_hook/packs/`
+  modules instead of skipping them with the rest of the framework, and
+  `package_aware_stem` pack-qualifies their stems.
+- Misfire complaints about pack hooks resolve to the pack source
+  (`captain_hook/packs/<pack>/<module>.py`) and are recorded under the captain-hook repo
+  key, so their fix PRs open upstream where the hook lives; kinds with a non-module
+  prefix (the legacy frozen-importlib rows) resolve to nothing instead of a fabricated
+  `.claude/hooks` path.
+
 ## [4.4.0] - 2026-07-02
 
 ### Added
