@@ -10,6 +10,7 @@ from captain_hook import (
     Block,
     Clause,
     Event,
+    FilePath,
     Input,
     Phrase,
     Rewrite,
@@ -41,6 +42,19 @@ class DelegatedSpawn:
             return None
         model = call.model or "(none — inherits the session model, fable)"
         return f"model: {model}\nagent_type: {call.agent_type or '(default)'}\nprompt:\n{call.prompt}"
+
+
+@dataclass(frozen=True, slots=True)
+class InlineEdit:
+    """Gating context: the file the main agent is about to edit inline on the main loop."""
+
+    tag: str = "edit_target"
+    required: bool = True
+
+    def content(self, evt: BaseHookEvent) -> str | None:
+        if not evt.file or evt.content is None:
+            return None
+        return f"file: {evt.file.path}\nincoming text: {len(evt.content):,} chars"
 
 
 WORKFLOW_SCRIPT_CAP = 14_000  # below the prose hooks' max_context=16_000, so truncation stays ours
@@ -120,12 +134,13 @@ class ProseSpawn(DelegatedSpawn):
 
 @dataclass(frozen=True, slots=True)
 class WorkflowScriptSource:
-    """Gating context: the pending Workflow call's script source, headed by its model pins and prose asks."""
+    """Gating context: the pending Workflow call's script source, headed by its model pins."""
 
     tag: str = "workflow_script"
     required: bool = True
 
-    def content(self, evt: BaseHookEvent) -> str | None:
+    @staticmethod
+    def pins_and_source(evt: BaseHookEvent) -> tuple[str, str] | None:
         if (source := workflow_script_source(evt)) is None:
             return None
         pin_lines = "\n".join(
@@ -138,14 +153,31 @@ class WorkflowScriptSource:
                 f"… [script truncated: {len(source):,} chars total; every model pin is quoted above] …\n"
                 f"{source[-tail:]}"
             )
+        header = (
+            "lines that pin a model in this script (a stage not quoted here inherits the "
+            f"session model, fable):\n{pin_lines or '  (none)'}"
+        )
+        return header, source
+
+    def content(self, evt: BaseHookEvent) -> str | None:
+        if (parts := self.pins_and_source(evt)) is None:
+            return None
+        header, source = parts
+        return f"{header}\n\n{source}"
+
+
+@dataclass(frozen=True, slots=True)
+class ProseWorkflowScript(WorkflowScriptSource):
+    """Gating context: the script source, present only when its prose asks survive the prefilter."""
+
+    def content(self, evt: BaseHookEvent) -> str | None:
+        if (parts := self.pins_and_source(evt)) is None:
+            return None
+        header, source = parts
         if not (sentences := prose_deliverable_sentences(source)):
             return None
         matched = "\n".join(f"  {s[:300]}" for s in sentences)
-        return (
-            "lines that pin a model in this script (a stage not quoted here inherits the "
-            f"session model, fable):\n{pin_lines or '  (none)'}\n\n"
-            f"sentences the prose prefilter matched:\n{matched}\n\n{source}"
-        )
+        return f"{header}\n\nsentences the prose prefilter matched:\n{matched}\n\n{source}"
 
 
 hook(
@@ -286,16 +318,17 @@ llm_nudge(
 the session model, fable), agent type, and prompt.
 
 The Models rubric: implementation delegates to opus-4.8 at xhigh — opus is ~2x cheaper
-than fable and nearly as capable. Fable's lanes are orchestration, review, hard
-planning/design/diagnosis, all prose/writing, and implementation that is very sensitive
-or error-prone (auth, migrations, concurrency, data loss, crypto, subtle algorithms).
+than fable and nearly as capable. Fable's lanes are orchestration, design/architecture
+review, hard planning, all prose/writing, and implementation that is very sensitive or
+error-prone (auth, migrations, concurrency, data loss, crypto, subtle algorithms).
+Code/diff review and bug diagnosis have their own gpt-5.5 lane with a separate nudge.
 
 Set fire=true only when the prompt is clearly routine implementation — building, fixing,
 wiring, or refactoring code — with no fable-lane signal. A prompt that reviews, plans,
-designs, diagnoses a hard bug, writes prose, or touches a sensitive surface stays on
-fable: fire=false. When uncertain, fire=false — the agent may have chosen fable
-deliberately, and a false alarm teaches it to ignore this nudge. Keep reasoning under
-40 words.
+designs, diagnoses a bug, writes prose, or touches a sensitive surface is not an
+implementation prompt: fire=false. When uncertain, fire=false — the agent may have
+chosen fable deliberately, and a false alarm teaches it to ignore this nudge. Keep
+reasoning under 40 words.
 
 <examples>
 <example fire="true">
@@ -308,7 +341,7 @@ Well-scoped feature wiring; the default implementation lane.
 </example>
 <example fire="false">
 Review the diff for correctness and concurrency issues.
-Review is fable's lane.
+Not implementation — review routes via its own nudge (gpt-5.5's lane), not to opus.
 </example>
 <example fire="false">
 Design the migration strategy for the sharded session store.
@@ -341,6 +374,184 @@ Auth plus concurrency: sensitive, error-prone implementation stays on fable.
         Input(model="opus", prompt="implement the pagination endpoint in api/users.py"): Allow(),
         Input(model="sonnet", prompt="scan the repo for TODO markers"): Allow(),
         Input(agent_type="Explore", prompt="find where the config loader lives"): Allow(),
+    },
+)
+
+llm_nudge(
+    """Decide whether the main agent should delegate this inline edit instead of making
+it itself.
+
+The main loop runs on fable-5; this pending edit is fable implementing directly.
+<edit_target> names the file; <before_edit>/<after_edit> hold the text being replaced
+and written.
+
+The Models rubric: implementation belongs to a delegated opus-4.8 subagent at xhigh —
+~2x cheaper than fable and nearly as capable — or, for a well-scoped edit to existing
+code, to gpt-5.5 via the codex skill. Fable edits inline when the change is small or
+judgment-bound: a fix-up finishing work it just reasoned through, a subtle algorithm,
+or a sensitive surface (auth, migrations, concurrency, data loss, crypto).
+
+Set fire=true only when this edit is clearly substantial routine implementation —
+building out a feature, wiring components, refactoring — that a subagent could own end
+to end. A small fix-up, a sensitive surface, or a change entangled with judgment the
+main agent just exercised stays inline: fire=false. When uncertain, fire=false — the
+agent may be editing inline deliberately, and a false alarm teaches it to ignore this
+nudge. Keep reasoning under 40 words.
+
+<examples>
+<example fire="true">
+after_edit: a new 180-line pagination module written to src/api/pagination.py.
+Substantial net-new feature code — a delegated opus xhigh subagent's lane.
+</example>
+<example fire="true">
+after_edit: rewiring three call sites and adding a formatter class in export.py.
+Routine multi-part refactor a subagent could own end to end.
+</example>
+<example fire="false">
+after_edit: a two-line fix to the retry counter the agent just diagnosed.
+Small fix-up entangled with judgment already exercised — inline is right.
+</example>
+<example fire="false">
+after_edit: reworking the token-refresh lock in auth/middleware.py.
+Auth plus concurrency is a sensitive surface — fable's inline lane.
+</example>
+</examples>""",
+    message=lambda r: (
+        f"This inline edit reads as routine implementation on fable. {r.reasoning} "
+        "Implementation delegates: spawn a model='opus', effort='xhigh' subagent to own the change, "
+        "or route a well-scoped edit to gpt-5.5 via the codex skill. Keep editing inline only when "
+        "the change is small, sensitive, or bound to judgment you just exercised. "
+        "See CLAUDE.md § Plan Execution & Orchestration (Models)."
+    ),
+    contexts=[InlineEdit()],
+    events=Event.PreToolUse,
+    only_if=[
+        Tool("Edit|Write|MultiEdit"),
+        FilePath(
+            "**/*.py",
+            "**/*.go",
+            "**/*.swift",
+            "**/*.rs",
+            "**/*.ts",
+            "**/*.tsx",
+            "**/*.js",
+            "**/*.jsx",
+            "**/*.rb",
+            "**/*.java",
+            "**/*.kt",
+            "**/*.c",
+            "**/*.cc",
+            "**/*.cpp",
+            "**/*.h",
+            "**/*.zig",
+        ),
+    ],
+    skip_if=[
+        FilePath("**/test_*.py", "**/*_test.py", "**/*_test.go", "**/tests/**", "**/*.test.*", "**/*.spec.*"),
+    ],
+    when=lambda evt: not evt.is_subagent and len(evt.content or "") >= 400,
+    max_fires=1,
+    agent=False,
+    transcript=False,
+    tests={
+        Input(
+            file="src/api/users.py",
+            content="def list_users(page: int):\n    return paginate(page)\n" * 12,
+        ): Warn(pattern="opus"),
+        Input(
+            file="README.md",
+            content="Pagination lands in the users API.\n" * 20,
+        ): Allow(),
+        Input(file="src/api/users.py", old="page = 1", content="page = 2"): Allow(),
+        Input(
+            file="tests/test_users.py",
+            content="def test_list_users(page: int):\n    assert paginate(page)\n" * 12,
+        ): Allow(),
+        Input(
+            file="src/auth/middleware.py",
+            content="def refresh_token(lock: Lock):\n    with lock:\n        rotate()\n" * 12,
+            llm={"fire": False},
+        ): Allow(),
+    },
+)
+
+llm_nudge(
+    """Decide whether this delegated subagent runs code review or bug diagnosis that
+should route to gpt-5.5 instead of fable.
+
+<delegated_spawn> holds the pending Agent/Task call: its model pin (or that it inherits
+the session model, fable), agent type, and prompt.
+
+The Models rubric: code/diff review — sweeping a diff or codebase for bugs,
+correctness, or cleanups; finder and refuter passes over findings — and bug diagnosis
+route to gpt-5.5 via the codex skill; fable is the escalation target when gpt-5.5's
+output misses. Fable keeps design/architecture review, "is this the right approach"
+judgment, prose review, and the synthesis/accept-reject pass over review findings.
+
+Set fire=true only when the prompt clearly reviews code or diffs for defects, or
+diagnoses a bug, and the spawn would run on fable. Design review, approach judgment,
+synthesis over findings, and prose review are fable's lanes: fire=false. When
+uncertain, fire=false — the agent may have chosen fable deliberately, and a false
+alarm teaches it to ignore this nudge. Keep reasoning under 40 words.
+
+<examples>
+<example fire="true">
+Review the diff for correctness and concurrency issues; report findings as JSON.
+Diff review for defects — gpt-5.5's lane via codex.
+</example>
+<example fire="true">
+Adversarially refute this finding: the retry loop double-increments the counter.
+A refuter pass over a code finding is review work.
+</example>
+<example fire="true">
+Diagnose why the exporter hangs when two workers flush concurrently.
+Bug diagnosis starts on gpt-5.5; fable is the escalation target.
+</example>
+<example fire="false">
+Judge these three sharding designs and recommend one.
+Design/architecture judgment is fable's lane.
+</example>
+<example fire="false">
+Synthesize the confirmed findings and decide which to fix before release.
+The accept-reject pass over findings stays on fable.
+</example>
+<example fire="false">
+Review the README draft for factual errors.
+Prose review stays on fable.
+</example>
+</examples>""",
+    message=lambda r: (
+        f"This review/diagnosis delegation would run on fable. {r.reasoning} "
+        "Code/diff review and bug diagnosis route to gpt-5.5: run the codex skill (from a "
+        "workflow or subagent, spawn a model='sonnet', effort='low' wrapper that writes a "
+        "self-contained codex prompt), and escalate to fable only when gpt-5.5's output misses. "
+        "Design review and findings synthesis stay on fable. "
+        "See CLAUDE.md § Plan Execution & Orchestration (Models)."
+    ),
+    contexts=[DelegatedSpawn()],
+    events=Event.PreToolUse,
+    only_if=[
+        Tool("Agent|Task"),
+        ToolInput("prompt", r"(?i)\b(review|refut|adversari|audit|correctness|diagnos|root.?caus)"),
+    ],
+    skip_if=[
+        ToolInput("model", r"(?i)\b(opus|sonnet|haiku)\b"),
+        Agent("Explore|claude-code-guide"),
+    ],
+    agent=False,
+    transcript=False,
+    tests={
+        Input(prompt="Review the diff for correctness and concurrency issues"): Warn(pattern="gpt-5.5"),
+        Input(model="fable", prompt="Adversarially refute this finding: the retry loop is wrong"): Warn(
+            pattern="codex"
+        ),
+        Input(model="sonnet", prompt="Review the diff for correctness via the codex skill"): Allow(),
+        Input(prompt="fix the failing import in cli.py"): Allow(),
+        Input(agent_type="Explore", prompt="find where the review pipeline lives"): Allow(),
+        Input(
+            prompt="Synthesize the confirmed review findings and decide which to fix",
+            llm={"fire": False},
+        ): Allow(),
     },
 )
 
@@ -422,7 +633,7 @@ Reading and classifying docs is analysis, not a prose deliverable.
         "session model or pin model: 'fable' on that stage. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
-    contexts=[WorkflowScriptSource()],
+    contexts=[ProseWorkflowScript()],
     events=Event.PreToolUse,
     only_if=[
         Tool("Workflow"),
@@ -442,6 +653,82 @@ Reading and classifying docs is analysis, not a prose deliverable.
         ): Allow(),
         Input(
             script="agent('Fix the import in cli.py. Do NOT edit CHANGELOG.md — a sibling owns it', {model: 'opus'})",
+        ): Allow(),
+    },
+)
+
+llm_nudge(
+    """Decide whether this workflow script runs code review or bug diagnosis stages on
+fable that should route to gpt-5.5.
+
+<workflow_script> holds the pending Workflow call's script source, headed by every
+line that pins a model — a stage not quoted there carries no pin and inherits the
+session model, fable.
+
+The Models rubric: code/diff review stages — finder sweeps over a diff or codebase,
+adversarial refuters over findings — and bug diagnosis route to gpt-5.5 via the codex
+skill. A stage does that correctly when it pins model 'sonnet' at low effort and its
+prompt writes a self-contained codex prompt and runs the codex skill. Fable keeps the
+synthesis/accept-reject stage over findings and design/architecture judgment.
+
+Set fire=true only when at least one review or diagnosis stage would run on fable —
+unpinned, or pinned 'fable'. Stages already wrapped for codex, synthesis stages, and
+design judgment are routed right: fire=false. When uncertain, fire=false — a false
+alarm teaches the agent to ignore this nudge. Keep reasoning under 40 words and name
+the offending stage.
+
+<examples>
+<example fire="true">
+agent(`Sweep the diff for go-correctness issues; return findings as JSON`)
+An unpinned finder inherits fable; finder sweeps are the codex-wrapper lane.
+</example>
+<example fire="true">
+findings.map(f => agent(`Adversarially refute: ${f.title}`, {effort: 'max'}))
+Refuters over code findings inherit fable — route them through codex wrappers.
+</example>
+<example fire="false">
+agent(`Write a self-contained codex prompt reviewing this diff for correctness,
+then run the codex skill`, {model: 'sonnet', effort: 'low'})
+Already the codex wrapper — correctly routed.
+</example>
+<example fire="false">
+agent(`Synthesize the confirmed findings and decide which to fix`)
+Synthesis/accept-reject stays on fable.
+</example>
+</examples>""",
+    message=lambda r: (
+        f"This workflow runs review/diagnosis stages on fable. {r.reasoning} "
+        "Route finder, refuter, and diagnosis stages to gpt-5.5: make each a model: 'sonnet', "
+        "effort: 'low' stage that writes a self-contained codex prompt and runs the codex skill; "
+        "keep the synthesis/accept-reject stage on fable (inherit the session model). "
+        "See CLAUDE.md § Plan Execution & Orchestration (Models)."
+    ),
+    contexts=[WorkflowScriptSource()],
+    events=Event.PreToolUse,
+    only_if=[
+        Tool("Workflow"),
+        WorkflowScript(pattern=r"(?i)\b(review|refut|adversari|audit|correctness|diagnos)"),
+    ],
+    max_fires=2,
+    max_context=16_000,
+    agent=False,
+    transcript=False,
+    tests={
+        Input(script="const findings = await agent(`Sweep the diff for correctness issues; return JSON`)"): Warn(
+            pattern="codex"
+        ),
+        Input(script="agent(`Adversarially refute: ${f.title}`, {model: 'fable', effort: 'max'})"): Warn(
+            pattern="gpt-5.5"
+        ),
+        Input(
+            script="agent('Write a self-contained codex prompt reviewing this diff, "
+            "then run the codex skill', {model: 'sonnet', effort: 'low'})",
+            llm={"fire": False},
+        ): Allow(),
+        Input(script="agent('fix the failing import in cli.py')"): Allow(),
+        Input(
+            script="agent(`Synthesize the confirmed review findings and decide which to fix`)",
+            llm={"fire": False},
         ): Allow(),
     },
 )

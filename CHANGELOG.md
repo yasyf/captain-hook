@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- General-pack main-loop implementation nudge (pack 0.9.0): a substantial routine
+  Edit/Write on the main loop — fable implementing directly instead of delegating —
+  gets an LLM-judged warn pointing at an opus xhigh subagent or the codex edit lane.
+  Deterministic gates keep the judge cheap and quiet: code-file globs only, test
+  files skipped, 400-char minimum, main loop only, one fire per session. A new
+  `InlineEdit` context names the target file; the ambient before/after-edit blocks
+  carry the text.
+- General-pack review/diagnosis routing nudges (pack 0.9.0): an Agent/Task spawn or a
+  workflow script that runs code/diff review or bug diagnosis on fable gets an
+  LLM-judged warn routing it to gpt-5.5 via the codex skill (sonnet low-effort
+  wrapper), with fable as the escalation target. Design/architecture review, prose
+  review, and the synthesis/accept-reject pass stay silent — those are fable's lanes.
+
+### Changed
+- The fable-implementation delegation nudge no longer lists review and diagnosis among
+  fable's lanes; code/diff review and bug diagnosis belong to the new gpt-5.5 nudges.
+- `WorkflowScriptSource` is now the generic script context (pins header + truncated
+  source); the prose prefilter moved to the `ProseWorkflowScript` subclass used by the
+  prose-routing workflow nudge.
+
 ## [6.3.0] - 2026-07-03
 
 ### Changed

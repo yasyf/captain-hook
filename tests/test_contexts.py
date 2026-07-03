@@ -11,6 +11,7 @@ from captain_hook.contexts import AfterEdit, BeforeEdit, Introduced, apply_conte
 from captain_hook.packs.general.models import (
     WORKFLOW_SCRIPT_CAP,
     ProseSpawn,
+    ProseWorkflowScript,
     WorkflowScriptSource,
     prose_deliverable_sentences,
 )
@@ -263,7 +264,7 @@ class TestWorkflowScriptSource:
     def test_inline_script_quotes_pin_lines_and_prose(self) -> None:
         script = "agent('write the README intro', {label: 'docs', model: 'opus'})\nagent('fix the test')\n"
         evt = mock_tool_event("Workflow", tool_input={"script": script})
-        content = WorkflowScriptSource().content(evt)
+        content = ProseWorkflowScript().content(evt)
         assert content is not None
         assert content.startswith("lines that pin a model in this script")
         assert "  agent('write the README intro', {label: 'docs', model: 'opus'})" in content
@@ -278,12 +279,15 @@ class TestWorkflowScriptSource:
 
     def test_no_prose_ask_yields_none(self) -> None:
         evt = mock_tool_event("Workflow", tool_input={"script": "agent('fix the test', {model: 'opus'})"})
-        assert WorkflowScriptSource().content(evt) is None
+        assert ProseWorkflowScript().content(evt) is None
+        base = WorkflowScriptSource().content(evt)
+        assert base is not None
+        assert "  agent('fix the test', {model: 'opus'})" in base
 
     def test_negated_prose_ask_yields_none(self) -> None:
         script = "agent('Fix the import. Do NOT edit CHANGELOG.md — a sibling owns it', {model: 'opus'})"
         evt = mock_tool_event("Workflow", tool_input={"script": script})
-        assert WorkflowScriptSource().content(evt) is None
+        assert ProseWorkflowScript().content(evt) is None
 
     def test_script_path_reads_file(self, tmp_path: Any) -> None:
         p = tmp_path / "wf.js"
