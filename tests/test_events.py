@@ -9,6 +9,7 @@ import pytest
 from captain_hook.events import (
     BaseHookEvent,
     NotificationEvent,
+    PermissionRequestEvent,
     PostToolUseEvent,
     PostToolUseFailureEvent,
     PreCompactEvent,
@@ -45,6 +46,7 @@ class TestEventClassVar:
             NotificationEvent: Event.Notification,
             SessionStartEvent: Event.SessionStart,
             SessionEndEvent: Event.SessionEnd,
+            PermissionRequestEvent: Event.PermissionRequest,
         }
         for cls, expected_event in mapping.items():
             assert cls.event_name is expected_event
@@ -249,6 +251,47 @@ class TestPreToolUseEvent:
         assert result.action is Action.rewrite
         assert result.updated_input == {"command": "ccx read x --full", "timeout": 5000, "description": "read"}
         assert result.note == "swapped"
+
+
+class TestPermissionRequestEvent:
+    def test_permission_suggestions_from_raw(self) -> None:
+        suggestions = [{"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": "ls:*"}]}]
+        evt = make_event(
+            PermissionRequestEvent,
+            {"tool_name": "Bash", "tool_input": {"command": "ls"}, "permission_suggestions": suggestions},
+        )
+        assert evt.permission_suggestions == suggestions
+
+    def test_permission_suggestions_default_empty_list(self) -> None:
+        evt = make_event(PermissionRequestEvent, {"tool_name": "Bash", "tool_input": {"command": "ls"}})
+        assert evt.permission_suggestions == []
+
+    def test_agent_type_reads_raw_payload(self) -> None:
+        evt = make_event(
+            PermissionRequestEvent,
+            {"tool_name": "Bash", "tool_input": {"command": "ls"}, "agent_type": "quality-gate"},
+        )
+        assert evt.agent_type == "quality-gate"
+
+    def test_agent_type_ignores_task_call_subagent_type(self) -> None:
+        # ToolHookEvent.agent_type reads the TaskCall subagent_type; the override reads only the raw payload.
+        evt = make_event(
+            PermissionRequestEvent,
+            {"tool_name": "Task", "tool_input": {"subagent_type": "worker", "prompt": "go"}},
+        )
+        assert evt.agent_type is None
+
+    def test_rewrite_command_available(self) -> None:
+        evt = make_event(PermissionRequestEvent, {"tool_name": "Bash", "tool_input": {"command": "cat x"}})
+        result = evt.rewrite_command("ccx read x --full")
+        assert result.action is Action.rewrite
+        assert result.updated_input == {"command": "ccx read x --full"}
+
+    @pytest.mark.parametrize("injected", [True, False], ids=["true", "false"])
+    def test_skip_permissions_cached_property_injection(self, injected: bool) -> None:
+        evt = make_event(PermissionRequestEvent, {"tool_name": "Bash", "tool_input": {"command": "ls"}})
+        evt.__dict__["skip_permissions"] = injected
+        assert evt.skip_permissions is injected
 
 
 class TestPostToolUseEvent:

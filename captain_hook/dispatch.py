@@ -67,10 +67,25 @@ def execute_hook(
     return result
 
 
+def format_permission_decision(result: HookResult) -> dict[str, Any] | None:
+    match result.action:
+        case Action.allow:
+            decision: dict[str, Any] = {"behavior": "allow"}
+        case Action.rewrite:
+            decision = {"behavior": "allow", "updatedInput": result.updated_input}
+        case Action.block:
+            decision = {"behavior": "deny"} | ({"message": result.message} if result.message else {})
+        case Action.warn:
+            return None
+    return {"hookSpecificOutput": {"hookEventName": Event.PermissionRequest.name, "decision": decision}}
+
+
 def format_output(event: Event, result: HookResult) -> dict[str, Any] | None:
     """Render a ``HookResult`` as the JSON envelope Claude Code expects on stdout for *event*."""
     if event in (Event.Stop | Event.SubagentStop):
         return {"decision": "block", "reason": result.message} if result.action is not Action.allow else None
+    if event is Event.PermissionRequest:
+        return format_permission_decision(result)
 
     match result.action:
         case Action.block:

@@ -12,12 +12,18 @@ from captain_hook.app import (
     on,
 )
 from captain_hook.dispatch import dispatch, execute_hook, format_output, run_declarative
+from captain_hook.events import PermissionRequestEvent
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from tests.helpers import (
+    make_ctx,
     make_pre_tool_event,
     make_stop_event,
     make_subagent_stop_event,
 )
+
+
+def make_permission_request_event() -> PermissionRequestEvent:
+    return PermissionRequestEvent(_raw={"tool_name": "Bash", "tool_input": {"command": "ls"}}, ctx=make_ctx())
 
 
 class TestRunDeclarative:
@@ -141,6 +147,40 @@ class TestFormatOutput:
         assert hso["hookEventName"] == "SessionEnd"
         assert hso["additionalContext"] == "session over"
         assert "permissionDecision" not in hso
+
+    def test_permission_request_allow_full_envelope(self) -> None:
+        output = format_output(Event.PermissionRequest, HookResult(action=Action.allow))
+        assert output == {
+            "hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow"}}
+        }
+
+    def test_permission_request_block_puts_message_inside_decision(self) -> None:
+        output = format_output(Event.PermissionRequest, HookResult(action=Action.block, message="teammate denied"))
+        assert output == {
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {"behavior": "deny", "message": "teammate denied"},
+            }
+        }
+
+    def test_permission_request_block_without_message_omits_message_key(self) -> None:
+        output = format_output(Event.PermissionRequest, HookResult(action=Action.block))
+        assert output == {
+            "hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "deny"}}
+        }
+
+    def test_permission_request_rewrite_emits_updated_input_and_drops_note(self) -> None:
+        result = HookResult(action=Action.rewrite, updated_input={"command": "ccx read x --full"}, note="ran ccx")
+        output = format_output(Event.PermissionRequest, result)
+        assert output == {
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {"behavior": "allow", "updatedInput": {"command": "ccx read x --full"}},
+            }
+        }
+
+    def test_permission_request_warn_returns_none_so_dialog_shows(self) -> None:
+        assert format_output(Event.PermissionRequest, HookResult(action=Action.warn, message="careful")) is None
 
 
 class TestExecuteHook:
@@ -465,6 +505,17 @@ class TestDispatch:
         register_hook(Event.Stop, message="warn stop")
         result = dispatch(Event.Stop, make_stop_event())
         assert result is None or "decision" in result
+
+    def test_permission_request_dispatch_emits_decision_envelope(self) -> None:
+
+        @on(Event.PermissionRequest)
+        def approver(evt: Any) -> HookResult:
+            return HookResult(action=Action.allow)
+
+        result = dispatch(Event.PermissionRequest, make_permission_request_event())
+        assert result == {
+            "hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow"}}
+        }
 
     def test_subagent_stop_block(self) -> None:
         register_hook(Event.SubagentStop, message="stay", block=True)

@@ -33,7 +33,7 @@ from captain_hook.events import (
 from captain_hook.prompt import Prompt
 from captain_hook.session import SessionStore
 from captain_hook.testing.session_cache import SessionCache
-from captain_hook.testing.types import Allow, Block, FileFixture, Input, Rewrite, TranscriptFixture, Warn
+from captain_hook.testing.types import Allow, Ask, Block, FileFixture, Input, Rewrite, TranscriptFixture, Warn
 from captain_hook.types import Event, HookResult, Tool
 
 STUB_FIELD_VALUES: dict[str, Any] = {
@@ -42,6 +42,7 @@ STUB_FIELD_VALUES: dict[str, Any] = {
     "action": "block",
     "reasoning": "inline test stub",
     "reason": "inline test stub",
+    "safe": False,
 }
 
 FIXTURE_FILE_COUNTER = count()
@@ -205,6 +206,7 @@ def mock_tool_event(
     offset: int | None = None,
     limit: int | None = None,
     agent_type: str | None = None,
+    agent_id: str | None = None,
     model: str | None = None,
     prompt: str | None = None,
     script: str | None = None,
@@ -227,6 +229,7 @@ def mock_tool_event(
                 ),
             }
             | ({"agent_type": agent_type} if agent_type else {})
+            | ({"agent_id": agent_id} if agent_id else {})
             | ({"permission_mode": permission_mode} if permission_mode else {})
             | ({"tool_response": output} if output is not None else {})
             | ({"error": error} if error is not None else {}),
@@ -404,9 +407,9 @@ def input_to_event(
     }
     match ev:
         case Event.SubagentStop:
-            evt = mock_subagent_stop_event(agent_type=inp.agent_type or "", **ctx_kw)
+            evt = mock_subagent_stop_event(agent_type=inp.agent_type or "", agent_id=inp.agent_id or "", **ctx_kw)
         case Event.SubagentStart:
-            evt = mock_subagent_start_event(agent_type=inp.agent_type or "", **ctx_kw)
+            evt = mock_subagent_start_event(agent_type=inp.agent_type or "", agent_id=inp.agent_id or "", **ctx_kw)
         case Event.UserPromptSubmit:
             evt = mock_user_prompt_event(prompt=inp.prompt or "", **ctx_kw)
         case Event.Stop:
@@ -427,6 +430,7 @@ def input_to_event(
                 offset=inp.offset,
                 limit=inp.limit,
                 agent_type=inp.agent_type,
+                agent_id=inp.agent_id,
                 model=inp.model,
                 prompt=inp.prompt,
                 script=inp.script,
@@ -443,7 +447,14 @@ def input_to_event(
         # injected list in inline tests — no native task store / session_id required.
         evt.__dict__["tasks"] = Tasks(tuple(Task.from_raw(t) for t in inp.tasks))
 
+    if inp.skip_permissions is not None:
+        # Pre-populate the `skip_permissions` cached_property so the test never hits the
+        # real process-tree walk. `is not None`, not truthiness: False must inject too,
+        # or a no-consent test silently inverts inside a bypass-launched dev session.
+        evt.__dict__["skip_permissions"] = inp.skip_permissions
+
     evt.ctx = StubbedContext.wrapping(evt.ctx, inp.llm)
+
     return evt
 
 
@@ -464,7 +475,7 @@ def transcript_event_payloads(
 ) -> Iterator[dict[str, Any]]:
     base = {"transcript_path": transcript_path}
     match ev_type:
-        case Event.PreToolUse:
+        case Event.PreToolUse | Event.PermissionRequest:
             yield from (
                 base | {"tool_name": use.call.name, "tool_input": dict(use.call.raw)} for use in transcript.tool_calls
             )
@@ -491,8 +502,12 @@ def transcript_event_payloads(
             yield base
 
 
-def matches_expected(result: HookResult | None, expected: Block | Warn | Allow | Rewrite) -> bool:
+def matches_expected(result: HookResult | None, expected: Block | Warn | Allow | Rewrite | Ask) -> bool:
     match expected:
+        case Ask():
+            return result is None
+        case Allow(explicit=True):
+            return result is not None and result.action == "allow"
         case Allow():
             return result is None or result.action == "allow"
         case Block(pattern=pat):
@@ -518,11 +533,15 @@ def matches_expected(result: HookResult | None, expected: Block | Warn | Allow |
 
 def assert_result(
     result: HookResult | None,
-    expected: Block | Warn | Allow | Rewrite,
+    expected: Block | Warn | Allow | Rewrite | Ask,
     hook_name: str = "",
 ) -> None:
     prefix = f"[{hook_name}] " if hook_name else ""
     match expected:
+        case Ask():
+            assert result is None, f"{prefix}Expected Ask (no result), got {result}"
+        case Allow(explicit=True):
+            assert result is not None and result.action == "allow", f"{prefix}Expected explicit Allow, got {result}"
         case Allow():
             assert result is None or result.action == "allow", f"{prefix}Expected Allow, got {result}"
         case Block(pattern=pat):

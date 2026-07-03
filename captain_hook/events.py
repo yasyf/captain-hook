@@ -81,6 +81,18 @@ class BaseHookEvent:
 
         return T.for_session(self.session_id)
 
+    @cached_property
+    def skip_permissions(self) -> bool:
+        """Whether the session's ``claude`` process was launched with permission bypass available.
+
+        Walks the process tree to the nearest ``claude`` ancestor and reports whether that
+        process was started with ``--dangerously-skip-permissions`` or
+        ``--allow-dangerously-skip-permissions``.
+        """
+        from captain_hook.util.proc import claude_skip_permissions
+
+        return claude_skip_permissions()
+
     @property
     def user_prompt(self) -> str | None:
         return self._raw.get("prompt")
@@ -279,10 +291,12 @@ class ToolHookEvent(BaseHookEvent):
 
 
 @dataclass
-class PreToolUseEvent(ToolHookEvent):
-    """Fires before a tool is executed. Return a block result to prevent execution."""
+class ToolRewriteEvent(ToolHookEvent):
+    """Tool event whose input can be rewritten before it runs.
 
-    event_name: ClassVar[Event] = Event.PreToolUse
+    Base for the events where Claude Code accepts an ``updatedInput`` decision
+    (``PreToolUse`` and ``PermissionRequest``), adding the ``rewrite*`` helpers.
+    """
 
     def rewrite(self, updated_input: dict[str, Any], *, note: str | None = None) -> HookResult:
         """Allow the tool but replace its input with ``updated_input`` (Claude Code's ``updatedInput``).
@@ -320,6 +334,33 @@ class PreToolUseEvent(ToolHookEvent):
             case _:
                 return None
         return self.rewrite(updated, note=note) if updated != base else None
+
+
+@dataclass
+class PreToolUseEvent(ToolRewriteEvent):
+    """Fires before a tool is executed. Return a block result to prevent execution."""
+
+    event_name: ClassVar[Event] = Event.PreToolUse
+
+
+@dataclass
+class PermissionRequestEvent(ToolRewriteEvent):
+    """Fires when a permission dialog would be shown.
+
+    ``allow``/``block``/``rewrite`` answer the dialog (block maps to a deny with the
+    message shown to the user); ``None`` and ``warn`` fall through, so the dialog
+    shows normally.
+    """
+
+    event_name: ClassVar[Event] = Event.PermissionRequest
+
+    @property
+    def permission_suggestions(self) -> list[dict[str, Any]]:
+        return self._raw.get("permission_suggestions", [])
+
+    @property
+    def agent_type(self) -> str | None:
+        return self._raw.get("agent_type")
 
 
 @dataclass

@@ -50,9 +50,22 @@ class Warn:
 
 @dataclass(frozen=True, kw_only=True)
 class Allow:
-    """Inline test expectation: the hook should allow (return None or action ``"allow"``)."""
+    """Inline test expectation: the hook should allow (return None or action ``"allow"``).
 
-    pass
+    ``explicit=True`` requires an actual allow result — ``None`` no longer matches, so
+    e.g. a ``PermissionRequest`` hook must have answered the dialog itself.
+    """
+
+    explicit: bool = False
+
+
+@dataclass(frozen=True, kw_only=True)
+class Ask:
+    """Inline test expectation: the hook returned no result (``None``).
+
+    For ``PermissionRequest`` hooks this means the permission dialog shows; a ``warn``
+    result fails ``Ask()``.
+    """
 
 
 @dataclass(frozen=True, init=False)
@@ -99,12 +112,17 @@ class Input:
         script: A ``Workflow`` tool's script source (synthesizes a Workflow call).
         agent_type: Subagent type for subagent events (an Agent/Task call's
             ``subagent_type``).
+        agent_id: Subagent/teammate id — presence makes ``evt.is_subagent`` true
+            (and fills subagent events' ``agent_id``).
         model: Model for an Agent/Task call's ``model`` input field.
         output: The tool result surfaced to ``PostToolUse`` as ``evt.tool_response``.
         error: The failure text surfaced to ``PostToolUseFailure`` as ``evt.error``.
         reason: ``SessionEnd`` reason.
         source: ``SessionStart`` source (``startup``/``resume``/``clear``/``compact``).
         permission_mode: Permission mode, e.g. ``"plan"`` for plan-mode gating.
+        skip_permissions: Pre-seeds ``evt.skip_permissions`` (normally the
+            process-tree walk for ``--dangerously-skip-permissions``); ``None``
+            leaves the real walk in place.
         offset: ``Read`` call offset.
         limit: ``Read`` call limit.
         transcript: Session history for transcript conditions — a path, a
@@ -124,12 +142,14 @@ class Input:
     prompt: str | None = None
     script: str | None = None
     agent_type: str | None = None
+    agent_id: str | None = None
     model: str | None = None
     output: str | None = None
     error: str | None = None
     reason: str | None = None
     source: str | None = None
     permission_mode: str | None = None
+    skip_permissions: bool | None = None
     offset: int | None = None
     limit: int | None = None
     transcript: Path | TranscriptFixture | list[dict[str, Any]] | None = None
@@ -150,12 +170,12 @@ class Input:
         return f"Input({set_fields})"
 
 
-type InlineTests = dict[str | Input, Block | Warn | Allow | Rewrite]
+type InlineTests = dict[str | Input, Block | Warn | Allow | Rewrite | Ask]
 """Inline test specification mapping inputs to expected outcomes.
 
 A mapping whose keys are ``Input`` descriptors (or legacy ``str`` session
 keys) and whose values are the expected hook result — ``Block``, ``Warn``,
-``Allow``, or ``Rewrite``.
+``Allow``, ``Rewrite``, or ``Ask``.
 
 Keys:
     Input: Structured test-input descriptor specifying tool, command, file,
@@ -166,9 +186,12 @@ Keys:
 Values:
     Block: The hook must block, optionally matching a regex ``pattern``.
     Warn: The hook must warn, optionally matching a regex ``pattern``.
-    Allow: The hook must allow (return ``None`` or action ``"allow"``).
+    Allow: The hook must allow (return ``None`` or action ``"allow"``;
+        ``Allow(explicit=True)`` rejects ``None``).
     Rewrite: The hook must rewrite the command, optionally matching a
         substring ``pattern`` against ``updated_input["command"]``.
+    Ask: The hook must return no result (``None``) — for
+        ``PermissionRequest``, the dialog shows.
 
 Example::
 

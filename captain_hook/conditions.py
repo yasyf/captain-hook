@@ -16,6 +16,7 @@ from captain_hook.types import (
     Content,
     CustomCondition,
     FilePath,
+    FromSubagent,
     InPlanMode,
     Not,
     Or,
@@ -23,6 +24,7 @@ from captain_hook.types import (
     RanCommand,
     ReadFile,
     Runs,
+    SkipPermissions,
     SourceEdits,
     TCondition,
     TestFile,
@@ -239,6 +241,10 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
             )
         case Waiting():
             return is_waiting(evt)
+        case FromSubagent():
+            return evt.is_subagent
+        case SkipPermissions():
+            return evt.skip_permissions
         case And(conditions):
             return all(check_condition(sub, evt) for sub in conditions)
         case Not(condition):

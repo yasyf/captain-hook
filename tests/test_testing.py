@@ -16,7 +16,7 @@ from captain_hook.events import (
     SubagentStopEvent,
     UserPromptSubmitEvent,
 )
-from captain_hook.testing.types import Allow, Block, Rewrite, Warn
+from captain_hook.testing.types import Allow, Ask, Block, Rewrite, Warn
 from captain_hook.types import Action, Event, FilePath, HookResult, Tool
 from tests.helpers import assert_result, mock_event
 
@@ -311,6 +311,24 @@ class TestInputToEvent:
         assert isinstance(evt, UserPromptSubmitEvent)
         assert evt._raw["prompt"] == "do it"
 
+    @pytest.mark.parametrize("skip", [True, False], ids=["true_injects", "false_injects"])
+    def test_input_to_event_injects_skip_permissions(self, skip: bool):
+        # False must inject too — truthiness would let a no-consent test fall through to
+        # the real ps-walk and silently invert inside a bypass-launched dev session.
+        from captain_hook.testing.types import Input
+        from tests.helpers import input_to_event
+
+        evt = input_to_event(Event.PermissionRequest, Input(command="ls", skip_permissions=skip))
+        assert evt.__dict__["skip_permissions"] is skip
+        assert evt.skip_permissions is skip
+
+    def test_input_to_event_leaves_skip_permissions_lazy_when_unset(self):
+        from captain_hook.testing.types import Input
+        from tests.helpers import input_to_event
+
+        evt = input_to_event(Event.PermissionRequest, Input(command="ls"))
+        assert "skip_permissions" not in evt.__dict__
+
     def test_input_to_event_spec_tool_fallback(self):
         from captain_hook.testing.types import Input
         from tests.helpers import input_to_event
@@ -466,6 +484,8 @@ class TestAssertResult:
         [
             pytest.param(None, Allow(), id="allow_none"),
             pytest.param(HookResult(action=Action.allow), Allow(), id="allow_action"),
+            pytest.param(None, Ask(), id="ask_none"),
+            pytest.param(HookResult(action=Action.allow), Allow(explicit=True), id="explicit_allow_action"),
             pytest.param(
                 HookResult(action=Action.block, message="not allowed here"),
                 Block(pattern="not allowed"),
@@ -495,6 +515,14 @@ class TestAssertResult:
     def test_assert_result_allow_fails_on_block(self):
         with pytest.raises(AssertionError):
             assert_result(HookResult(action=Action.block, message="no"), Allow())
+
+    def test_assert_result_ask_fails_on_allow(self):
+        with pytest.raises(AssertionError):
+            assert_result(HookResult(action=Action.allow), Ask())
+
+    def test_assert_result_explicit_allow_fails_on_none(self):
+        with pytest.raises(AssertionError):
+            assert_result(None, Allow(explicit=True))
 
     def test_assert_result_block_fails_on_none(self):
         with pytest.raises(AssertionError):
@@ -801,6 +829,16 @@ class TestInferTool:
         )
         results = run_inline_tests()
         assert len(results) == 1 and results[0][2], f"Failed: {results}"
+
+
+class TestTranscriptEventPayloads:
+    def test_permission_request_yields_tool_payloads(self):
+        from captain_hook.testing.helpers import transcript_event_payloads
+        from tests.helpers import make_transcript, raw_tool_msg
+
+        transcript = make_transcript(raw_tool_msg("Bash", {"command": "ls"}))
+        payloads = list(transcript_event_payloads(Event.PermissionRequest, transcript, "/tmp/t.jsonl"))
+        assert payloads == [{"transcript_path": "/tmp/t.jsonl", "tool_name": "Bash", "tool_input": {"command": "ls"}}]
 
 
 class TestWorkflowSynthesis:

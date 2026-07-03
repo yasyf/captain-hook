@@ -30,6 +30,7 @@ from captain_hook.durable import DurableSlot, DurableState, DurableStore
 from captain_hook.events import (
     BaseHookEvent,
     NotificationEvent,
+    PermissionRequestEvent,
     PostToolUseEvent,
     PostToolUseFailureEvent,
     PreCompactEvent,
@@ -40,6 +41,7 @@ from captain_hook.events import (
     SubagentStartEvent,
     SubagentStopEvent,
     ToolHookEvent,
+    ToolRewriteEvent,
     UserPromptSubmitEvent,
 )
 from captain_hook.fields import Deque
@@ -48,8 +50,12 @@ from captain_hook.primitives import (
     GateVerdict,
     NudgeVerdict,
     PromptCheckVerdict,
+    SafetyVerdict,
+    approve,
     block_command,
+    deny,
     gate,
+    llm_approve,
     llm_evaluate,
     llm_gate,
     llm_nudge,
@@ -73,7 +79,7 @@ from captain_hook.settings import HooksSettings, build_settings
 from captain_hook.signals.nlp import Clause, NlpSignal, Phrase, has_nominal_subject, is_past_predicate
 from captain_hook.state import HookState, PrimitiveState, WorkflowState, workflow_state
 from captain_hook.tasks import Task, Tasks
-from captain_hook.testing import Allow, Block, FileFixture, InlineTests, Input, Rewrite, TranscriptFixture, Warn
+from captain_hook.testing import Allow, Ask, Block, FileFixture, InlineTests, Input, Rewrite, TranscriptFixture, Warn
 from captain_hook.types import (
     Action,
     Agent,
@@ -85,6 +91,7 @@ from captain_hook.types import (
     CustomInputTypeCondition,
     Event,
     FilePath,
+    FromSubagent,
     HookResponse,
     HookResult,
     InPlanMode,
@@ -96,6 +103,7 @@ from captain_hook.types import (
     Runs,
     Signal,
     Signals,
+    SkipPermissions,
     SourceEdits,
     TCondition,
     TestFile,

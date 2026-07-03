@@ -12,4 +12,5 @@ from captain_hook.primitives.llm import (
     prompt_check,
 )
 from captain_hook.primitives.nudge import gate, nudge
+from captain_hook.primitives.permissions import SafetyVerdict, approve, deny, llm_approve
 from captain_hook.primitives.rewrite import rewrite_code, set_tool_input

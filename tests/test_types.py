@@ -14,6 +14,7 @@ class TestEventFlag:
     def test_event_class_maps_each_member_to_event_dataclass(self) -> None:
         from captain_hook.events import (
             NotificationEvent,
+            PermissionRequestEvent,
             PostToolUseEvent,
             PostToolUseFailureEvent,
             PreCompactEvent,
@@ -38,8 +39,9 @@ class TestEventFlag:
             Event.Notification: NotificationEvent,
             Event.SessionStart: SessionStartEvent,
             Event.SessionEnd: SessionEndEvent,
+            Event.PermissionRequest: PermissionRequestEvent,
         }
-        assert len(mapping) == 11
+        assert len(mapping) == 12
         for member, expected_cls in mapping.items():
             assert member.event_class is expected_cls
 
@@ -59,7 +61,7 @@ class TestEventFlag:
         for m in Event:
             assert m.value > 0 and (m.value & (m.value - 1)) == 0
             seen.add(m.value)
-        assert len(seen) == 11
+        assert len(seen) == 12
 
 
 class TestHookSpec:

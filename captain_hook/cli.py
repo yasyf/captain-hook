@@ -259,7 +259,12 @@ def settings_drift(root: Path) -> set[str]:
 def warn_settings_drift(
     output: dict[str, Any] | None, event: Event, root: Path | None, session_dir: Path | None, *, async_: bool
 ) -> dict[str, Any] | None:
-    if async_ or root is None or session_dir is None or event in (Event.Stop | Event.SubagentStop):
+    if (
+        async_
+        or root is None
+        or session_dir is None
+        or event in (Event.Stop | Event.SubagentStop | Event.PermissionRequest)
+    ):
         return output
     marker = session_dir / ".drift_surfaced"
     if marker.exists():

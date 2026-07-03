@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,15 @@ from captain_hook.state import FRAMEWORK_DIR
 
 def dedent_text(text: str) -> str:
     return textwrap.dedent(text).strip()
+
+
+def escape_tag_delimiters(tag: str, content: str) -> str:
+    return re.sub(
+        rf"<\s*(/?)\s*{re.escape(tag)}\s*>",
+        lambda m: f"&lt;{m.group(1)}{tag}&gt;",
+        content,
+        flags=re.IGNORECASE,
+    )
 
 
 def caller_dir() -> Path:
@@ -24,7 +34,10 @@ class Prompt:
     """Fluent builder for structured LLM prompts with system text, XML context sections, and a question.
 
     Chain ``.system()``, ``.context(tag, content)``, and ``.ask()`` to build prompts.
-    ``str()`` renders the full prompt with XML-wrapped context blocks.
+    ``str()`` renders the full prompt with XML-wrapped context blocks. Context content is
+    treated as untrusted data: any occurrence of a block's own tag delimiters inside its
+    content is entity-escaped at render time, so embedded text can never close the block
+    early and inject instructions outside it.
     """
 
     system_text: str = ""
@@ -93,7 +106,7 @@ class Prompt:
         if self.system_text:
             parts.append(self.system_text)
         for tag, content in self.contexts:
-            parts.append(f"<{tag}>\n{content}\n</{tag}>")
+            parts.append(f"<{tag}>\n{escape_tag_delimiters(tag, content)}\n</{tag}>")
         if self.ask_text:
             parts.append(self.ask_text)
         return "\n\n".join(parts)

@@ -40,7 +40,7 @@ HookHandler = Callable[["BaseHookEvent"], "HookResult | None"]
 VALID_CONDITION_TYPES = tuple(t for t in get_args(TCondition) if t is not CustomCondition)
 VALID_CONDITION_NAMES = ", ".join(t.__name__ for t in VALID_CONDITION_TYPES) + ", or a CustomCondition"
 
-_TOOL_EVENTS = Event.PreToolUse | Event.PostToolUse | Event.PostToolUseFailure
+_TOOL_EVENTS = Event.PreToolUse | Event.PostToolUse | Event.PostToolUseFailure | Event.PermissionRequest
 
 # Conditions that read the current event's tool input can only match on a tool event; a
 # condition absent from this map (transcript-history conditions, InPlanMode, Waiting,

@@ -8,10 +8,12 @@ from typing import Any
 
 import pytest
 
+from captain_hook.app import on
 from captain_hook.conditions import check_condition, matches_conditions
 from captain_hook.context import load_transcript
 from captain_hook.events import (
     BaseHookEvent,
+    PermissionRequestEvent,
     PreToolUseEvent,
     StopEvent,
     UserPromptSubmitEvent,
@@ -24,6 +26,7 @@ from captain_hook.types import (
     Content,
     Event,
     FilePath,
+    FromSubagent,
     HookSpec,
     InPlanMode,
     Not,
@@ -32,6 +35,7 @@ from captain_hook.types import (
     RanCommand,
     ReadFile,
     Runs,
+    SkipPermissions,
     TCondition,
     TestFile,
     Tool,
@@ -338,6 +342,24 @@ class TestAgentCondition:
                 id="returns_false_for_bash",
             ),
             pytest.param(Agent("cleanup"), make_event(StopEvent), False, id="returns_false_for_stop"),
+            pytest.param(
+                Agent("quality-gate"),
+                make_event(
+                    PermissionRequestEvent,
+                    {"tool_name": "Bash", "tool_input": {"command": "echo hi"}, "agent_type": "quality-gate"},
+                ),
+                True,
+                id="matches_permission_request_raw_agent_type",
+            ),
+            pytest.param(
+                Agent("quality-gate"),
+                make_event(
+                    PermissionRequestEvent,
+                    {"tool_name": "Bash", "tool_input": {"command": "echo hi"}, "agent_type": "worker"},
+                ),
+                False,
+                id="rejects_permission_request_other_agent",
+            ),
         ],
     )
     def test_agent(self, cond: TCondition, evt: BaseHookEvent, expected: bool) -> None:
@@ -898,6 +920,44 @@ class TestWaitingCondition:
         ctx = make_messages_ctx(None)
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(Waiting(), evt) is False
+
+
+class TestFromSubagentCondition:
+    @pytest.mark.parametrize(
+        ("raw_extra", "expected"),
+        [
+            pytest.param({"agent_id": "tm1"}, True, id="matches_when_agent_id_present"),
+            pytest.param({}, False, id="rejects_when_agent_id_absent"),
+        ],
+    )
+    def test_from_subagent(self, raw_extra: dict[str, Any], expected: bool) -> None:
+        evt = make_event(PermissionRequestEvent, {"tool_name": "Bash", "tool_input": {"command": "echo"}} | raw_extra)
+        assert check_condition(FromSubagent(), evt) is expected
+
+
+class TestSkipPermissionsCondition:
+    @pytest.mark.parametrize(
+        "skip",
+        [
+            pytest.param(True, id="matches_when_bypass_available"),
+            pytest.param(False, id="rejects_without_bypass"),
+        ],
+    )
+    def test_skip_permissions(self, skip: bool) -> None:
+        evt = make_event(PermissionRequestEvent, {"tool_name": "Bash", "tool_input": {"command": "echo"}})
+        evt.__dict__["skip_permissions"] = skip
+        assert check_condition(SkipPermissions(), evt) is skip
+
+
+class TestPermissionRequestRegistration:
+    def test_tool_conditions_register_without_error(self) -> None:
+        from captain_hook.app import _state
+
+        @on(Event.PermissionRequest, only_if=[Tool("Bash")], skip_if=[ToolInput("command", "x")])
+        def handler(evt: BaseHookEvent) -> None:
+            return None
+
+        assert _state.hooks[-1].spec.events is Event.PermissionRequest
 
 
 class TestOnlyIfSemantics:

@@ -64,11 +64,13 @@ class Event(Flag):
     Notification = auto()
     SessionStart = auto()
     SessionEnd = auto()
+    PermissionRequest = auto()
 
     @property
     def event_class(self) -> type[BaseHookEvent]:
         from captain_hook.events import (
             NotificationEvent,
+            PermissionRequestEvent,
             PostToolUseEvent,
             PostToolUseFailureEvent,
             PreCompactEvent,
@@ -93,6 +95,7 @@ class Event(Flag):
             Event.Notification: NotificationEvent,
             Event.SessionStart: SessionStartEvent,
             Event.SessionEnd: SessionEndEvent,
+            Event.PermissionRequest: PermissionRequestEvent,
         }
         if cls := mapping.get(self):
             return cls
@@ -395,6 +398,38 @@ class Agent:
 
 
 @dataclass(frozen=True, slots=True)
+class FromSubagent:
+    """Condition matching when the current event originates from a subagent or teammate.
+
+    True when the event payload carries an ``agent_id``, which Claude Code sends only for
+    subagent and teammate events. Distinct from :class:`Agent`, which matches the subagent
+    *type*: this matches the event's *origin*.
+
+    Example:
+        >>> approve("teammate bash", only_if=[Tool("Bash"), FromSubagent(), SkipPermissions()])
+    """
+
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class SkipPermissions:
+    """Condition matching when the session was launched with permission bypass available.
+
+    Walks the process tree to the nearest ``claude`` ancestor and matches when that one
+    process was launched with ``--dangerously-skip-permissions`` **or**
+    ``--allow-dangerously-skip-permissions`` — either spelling means the user made bypass
+    *available* at launch, which counts as consent even while the active
+    ``permission_mode`` is something else (e.g. ``plan``).
+
+    Example:
+        >>> approve("teammate bash", only_if=[Tool("Bash"), FromSubagent(), SkipPermissions()])
+    """
+
+    pass
+
+
+@dataclass(frozen=True, slots=True)
 class TouchedFile(PatternsCondition):
     """Transcript-history condition: true when an Edit/Write targeted a file matching the glob.
 
@@ -574,6 +609,8 @@ TCondition = (
     | WorkflowScript
     | Pattern
     | Agent
+    | FromSubagent
+    | SkipPermissions
     | UsedSkill
     | ReadFile
     | TestFile

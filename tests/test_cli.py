@@ -432,6 +432,29 @@ class TestSettingsDrift:
         )
         assert settings_drift(tmp_path) == set()
 
+    def test_permission_request_output_never_gets_drift_nag(self, tmp_path: Path) -> None:
+        from captain_hook.cli import warn_settings_drift
+
+        register_hook(Event.UserPromptSubmit, message="ups")  # registered but unwired -> drift present
+        self.write_settings(tmp_path, "PreToolUse")
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+
+        # Control: the same drifted root does nag a PreToolUse fire (proves the setup is real).
+        control = warn_settings_drift(None, Event.PreToolUse, tmp_path, session_dir, async_=False)
+        assert control is not None
+        assert "UserPromptSubmit" in control["hookSpecificOutput"]["additionalContext"]
+        (session_dir / ".drift_surfaced").unlink()  # re-arm the once-per-session marker
+
+        envelope = {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow"}}}
+        assert warn_settings_drift(envelope, Event.PermissionRequest, tmp_path, session_dir, async_=False) is envelope
+        assert envelope["hookSpecificOutput"] == {
+            "hookEventName": "PermissionRequest",
+            "decision": {"behavior": "allow"},
+        }
+        assert warn_settings_drift(None, Event.PermissionRequest, tmp_path, session_dir, async_=False) is None
+        assert not (session_dir / ".drift_surfaced").exists()
+
     def test_cli_020_run_surfaces_drift_to_agent_once(self, tmp_path: Path, hooks_dir: Path) -> None:
         write_hook(
             hooks_dir,

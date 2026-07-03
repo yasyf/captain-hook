@@ -13,18 +13,23 @@ from loguru import logger
 import captain_hook
 from captain_hook import app
 from captain_hook.cli import cli
+from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack, import_pack_module
 from captain_hook.packs import manager
+from captain_hook.testing.helpers import input_to_event
+from captain_hook.testing.types import Input
+from captain_hook.types import Event
 from captain_hook.util import http
 
 PACKS_DIR = Path(captain_hook.__file__).parent / "packs"
-EXPECTED_BUILTINS = {"general", "python", "go", "steering"}
+EXPECTED_BUILTINS = {"general", "python", "go", "steering", "fixes"}
 GENERAL_HOOKS = {"commands", "detours", "docs", "models", "plans", "prompts", "review", "tasks", "tombstones"}
 PYTHON_HOOKS = {"style", "testing", "toolchain"}
 GO_HOOKS = {"testing", "toolchain"}
 # lib.py carries __capt_hook_skip__ so it is a non-underscore file the loader skips; the
 # layout test counts .py files, so it appears here, but only steering.py registers hooks.
 STEERING_HOOKS = {"steering"}
+FIXES_HOOKS = {"teammate_permissions"}
 HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 SRC_USES_FILE = (
     "from pathlib import Path\n"
@@ -141,14 +146,37 @@ def test_expected_builtin_packs_present() -> None:
 
 @pytest.mark.parametrize(
     ("name", "hook_stems"),
-    [("general", GENERAL_HOOKS), ("python", PYTHON_HOOKS), ("go", GO_HOOKS), ("steering", STEERING_HOOKS)],
-    ids=["general", "python", "go", "steering"],
+    [
+        ("general", GENERAL_HOOKS),
+        ("python", PYTHON_HOOKS),
+        ("go", GO_HOOKS),
+        ("steering", STEERING_HOOKS),
+        ("fixes", FIXES_HOOKS),
+    ],
+    ids=["general", "python", "go", "steering", "fixes"],
 )
 def test_builtin_pack_layout(name: str, hook_stems: set[str]) -> None:
     pack_dir = manager.builtin_packs()[name]
     manifest = manager.PackManifest.load(pack_dir / manager.PACK_MANIFEST)
     assert manifest.name == name
     assert {p.stem for p in pack_dir.glob("*.py") if not p.stem.startswith("_")} == hook_stems
+
+
+def test_fixes_pack_scopes_to_native_bash(isolate_modules: None, tmp_path: Path) -> None:
+    discover_pack("fixes", PACKS_DIR / "fixes")
+
+    def decision(tool: str, command: str) -> dict[str, Any] | None:
+        evt = input_to_event(
+            Event.PermissionRequest,
+            Input(tool=tool, tool_input={"command": command}, agent_id="tm1", skip_permissions=True),
+        )
+        return dispatch(Event.PermissionRequest, evt, session_dir=tmp_path)
+
+    allowed = decision("Bash", "echo hi")
+    assert allowed is not None
+    assert allowed["hookSpecificOutput"]["decision"]["behavior"] == "allow"
+    assert decision("mcp__srv__Bash", "echo hi") is None
+    assert decision("mcp__ops__Bash", "rm -rf /") is None
 
 
 # --- PackSource ----------------------------------------------------------------------
