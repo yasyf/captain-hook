@@ -97,7 +97,7 @@ def rewrite_command(
 
     - **(pattern, replace)** — polymorphic by the shape of ``pattern``. When it carries an ast-grep
       metavariable (``$NAME`` / ``$$$NAME``), the command is rewritten *structurally* over
-      tree-sitter-bash via [`CommandLine.rewrite`][captain_hook.CommandLine.rewrite]; otherwise it is
+      tree-sitter-bash via [`ast_grep.rewrite`][captain_hook.ast_grep.rewrite]; otherwise it is
       a regex rewritten via ``re.sub``. So ``rewrite_command("cat $$$ARGS", "bat $$$ARGS")`` is
       structural and ``rewrite_command(r"^cat\s+(\S+)$", r"bat \1")`` is regex. ``note`` surfaces as
       ``additionalContext`` so the model sees the substitution.
