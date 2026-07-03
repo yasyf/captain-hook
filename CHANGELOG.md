@@ -30,8 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Edit's `old`, MultiEdit's joined olds, Write's on-disk content) — and
   `Introduced(kind=… | pattern=…)`, which diffs AST constructs the edit newly introduces,
   filtered through `keep()`; tags auto-derive from the class name. User-passed contexts
-  suppress the transcript `<context>` fallback; signals compose unchanged. `PromptContext`,
-  `apply_contexts`, and the built-ins are all exported.
+  with no `signals`/`when` suppress the transcript `<context>` fallback; signals compose
+  unchanged. `PromptContext`, `apply_contexts`, and the built-ins are all exported.
 - ast-grep comment primitives: `parse()` returns a `SyntaxNode` wrapper
   (`kind`/`text`/`descendants()`/`to_match()`) so the binding node stays behind the seam;
   `find_kinds` walks the tree instead of the kind matcher (which raises on kind names a
@@ -49,9 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Inline-test tool resolution under a multi-tool `Tool` condition: `run_inline_tests` built
-  every implicit `Input` as the first named tool. The spec tool now pins only when the
-  `only_if` `Tool` names exactly one tool; otherwise the tool is inferred from the Input's
-  field shape (`old` + `content` → Edit, `content` alone → Write).
+  every implicit `Input` as the first named tool. A single-name `Tool` condition still pins
+  that tool; under a multi-name condition the tool inferred from the Input's field shape
+  (`old` + `content` → Edit, `content` alone → Write) wins when it is among the named tools,
+  and the first named tool pins otherwise. With no `Tool` condition, inference alone decides.
 
 ## [5.1.1] - 2026-07-02
 
