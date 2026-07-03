@@ -4,18 +4,22 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+
 from captain_hook.app import (
     _state,
     reset,
 )
 from captain_hook.dispatch import dispatch
 from captain_hook.packs.general.review import EditedSource
+from captain_hook.packs.general.tombstones import TombstoneComments, is_marker, is_tombstone
 from captain_hook.testing.helpers import fixture_session
 from captain_hook.types import Action, Event, RanCommand, Signal, Tool, Waiting
 from tests.helpers import (
     build_ctx,
     make_ctx,
     make_post_tool_event,
+    make_pre_tool_event,
     make_stop_event,
     raw_tool_msg,
 )
@@ -896,3 +900,238 @@ class TestReviewGateDiff:
         result = dispatch(Event.Stop, make_stop_event(ctx=ctx), session_dir=tmp_path)
         assert result is None
         ctx.call_llm.assert_not_called()
+
+
+class TestLlmContexts:
+    def _edit(self, ctx: Any, *, new: str) -> Any:
+        return make_pre_tool_event("Edit", {"file_path": "a.py", "old_string": "x = 1\n", "new_string": new}, ctx=ctx)
+
+    def _fire_ctx(self, tmp_path: Path, *, texts: list[str] | None = None) -> Any:
+        from captain_hook.primitives.llm import NudgeVerdict
+
+        return make_ctx(
+            tmp_path, texts=texts or ["turn text"], call_llm_return=NudgeVerdict(fire=True, reasoning="bad")
+        )
+
+    def test_required_empty_context_skips_llm_and_consumes_no_fire(self, tmp_path: Path) -> None:
+        from captain_hook.contexts import Introduced
+
+        ctx = self._fire_ctx(tmp_path)
+        register_llm_nudge("Check", message="WARNING", events=Event.PreToolUse, contexts=[Introduced(kind="comment")])
+
+        assert dispatch(Event.PreToolUse, self._edit(ctx, new="x = 2\n"), session_dir=tmp_path) is None
+        ctx.call_llm.assert_not_called()
+
+        result = dispatch(Event.PreToolUse, self._edit(ctx, new="# removed it\nx = 2\n"), session_dir=tmp_path)
+        assert result is not None
+        ctx.call_llm.assert_called_once()
+
+    def test_llm_gate_required_empty_context_skips(self, tmp_path: Path) -> None:
+        from captain_hook.contexts import Introduced
+        from captain_hook.primitives.llm import GateVerdict
+
+        ctx = make_ctx(tmp_path, texts=["turn text"], call_llm_return=GateVerdict(block=True, reasoning="bad"))
+        register_llm_gate("Check", message="BLOCKED", events=Event.PreToolUse, contexts=[Introduced(kind="comment")])
+
+        assert dispatch(Event.PreToolUse, self._edit(ctx, new="x = 2\n"), session_dir=tmp_path) is None
+        ctx.call_llm.assert_not_called()
+
+    def test_context_blocks_ordered_and_transcript_fallback_suppressed(self, tmp_path: Path) -> None:
+        from captain_hook.contexts import Introduced
+
+        ctx = self._fire_ctx(tmp_path, texts=["transcript evidence"])
+        register_llm_nudge(
+            "Check",
+            message="WARNING",
+            events=Event.PreToolUse,
+            contexts=[Introduced(pattern="print($$$)", tag="prints", required=False), Introduced(kind="comment")],
+        )
+
+        evt = self._edit(ctx, new="# note\nprint('hi')\nx = 2\n")
+        assert dispatch(Event.PreToolUse, evt, session_dir=tmp_path) is not None
+
+        prompt = str(ctx.call_llm.call_args[0][0])
+        assert "<context>" not in prompt
+        assert "transcript evidence" not in prompt
+        positions = [prompt.index(tag) for tag in ("<prints>", "<introduced>", "<before_edit>", "<after_edit>")]
+        assert positions == sorted(positions)
+
+    def test_when_predicate_keeps_transcript_fallback(self, tmp_path: Path) -> None:
+        from captain_hook.contexts import Introduced
+
+        ctx = self._fire_ctx(tmp_path, texts=["transcript evidence"])
+        register_llm_nudge(
+            "Check",
+            message="WARNING",
+            events=Event.PreToolUse,
+            when=lambda evt: True,
+            contexts=[Introduced(kind="comment")],
+        )
+
+        assert dispatch(Event.PreToolUse, self._edit(ctx, new="# note\nx = 2\n"), session_dir=tmp_path) is not None
+
+        prompt = str(ctx.call_llm.call_args[0][0])
+        assert "<context>" in prompt
+        assert "transcript evidence" in prompt
+
+    def test_signals_and_contexts_compose(self, tmp_path: Path) -> None:
+        from captain_hook.contexts import Introduced
+
+        ctx = self._fire_ctx(tmp_path, texts=["critical error found"])
+        register_llm_nudge(
+            "Check",
+            message="WARNING",
+            events=Event.PreToolUse,
+            signals=[Signal(pattern=r"critical", weight=1)],
+            contexts=[Introduced(kind="comment")],
+        )
+
+        assert dispatch(Event.PreToolUse, self._edit(ctx, new="# note\nx = 2\n"), session_dir=tmp_path) is not None
+
+        prompt = str(ctx.call_llm.call_args[0][0])
+        assert "critical error found" in prompt
+        assert prompt.index("<context>") < prompt.index("<introduced>")
+
+    def test_default_contexts_attach_without_suppressing_fallback(self, tmp_path: Path) -> None:
+        ctx = self._fire_ctx(tmp_path, texts=["transcript evidence"])
+        register_llm_nudge("Check", message="WARNING", events=Event.PreToolUse, when=lambda evt: True)
+
+        assert dispatch(Event.PreToolUse, self._edit(ctx, new="x = 2\n"), session_dir=tmp_path) is not None
+
+        prompt = str(ctx.call_llm.call_args[0][0])
+        assert "<context>" in prompt
+        assert prompt.count("<before_edit>") == 1
+        assert prompt.count("<after_edit>") == 1
+
+    def test_user_before_edit_gates_and_replaces_default(self, tmp_path: Path) -> None:
+        from captain_hook.contexts import BeforeEdit
+
+        ctx = self._fire_ctx(tmp_path)
+        register_llm_nudge("Check", message="WARNING", events=Event.PreToolUse, contexts=[BeforeEdit(required=True)])
+
+        bash = make_pre_tool_event("Bash", {"command": "ls"}, ctx=ctx)
+        assert dispatch(Event.PreToolUse, bash, session_dir=tmp_path) is None
+        ctx.call_llm.assert_not_called()
+
+        assert dispatch(Event.PreToolUse, self._edit(ctx, new="x = 2\n"), session_dir=tmp_path) is not None
+        prompt = str(ctx.call_llm.call_args[0][0])
+        assert prompt.count("<before_edit>") == 1
+
+
+class TestTombstones:
+    def _register(self) -> None:
+        from captain_hook.primitives.llm import llm_nudge
+
+        llm_nudge(
+            "judge the flagged comments",
+            message=lambda r: f"Tombstone comment: {r.reasoning}",
+            contexts=[TombstoneComments()],
+            events=Event.PreToolUse,
+            only_if=[Tool("Edit", "Write", "MultiEdit")],
+            agent=False,
+            transcript=False,
+        )
+
+    def _ctx(self, session_dir: Path, *, fire: bool) -> Any:
+        from captain_hook.primitives.llm import NudgeVerdict
+
+        return make_ctx(
+            session_dir, texts=["turn"], call_llm_return=NudgeVerdict(fire=fire, reasoning="narrates the edit")
+        )
+
+    def _edit(self, ctx: Any, *, old: str, new: str, file: str = "src/app.py") -> Any:
+        return make_pre_tool_event("Edit", {"file_path": file, "old_string": old, "new_string": new}, ctx=ctx)
+
+    def test_warns_on_confirmed_tombstone(self, tmp_path: Path) -> None:
+        ctx = self._ctx(tmp_path, fire=True)
+        self._register()
+        evt = self._edit(ctx, old="retry(fetch, attempts=3)\n", new="# removed the retry logic\nfetch()\n")
+        result = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
+        assert result is not None
+        message = result["hookSpecificOutput"]["additionalContext"]
+        assert "Tombstone comment" in message
+        assert "narrates the edit" in message
+
+    def test_silent_on_false_verdict_for_migration_guidance(self, tmp_path: Path) -> None:
+        ctx = self._ctx(tmp_path, fire=False)
+        self._register()
+        evt = self._edit(
+            ctx, old="def fetch(): ...\n", new="# removed in API v2 — use fetch_v2() instead\ndef fetch_v2(): ...\n"
+        )
+        assert dispatch(Event.PreToolUse, evt, session_dir=tmp_path) is None
+        ctx.call_llm.assert_called_once()
+
+    def test_clean_edit_skips_llm(self, tmp_path: Path) -> None:
+        ctx = self._ctx(tmp_path, fire=True)
+        self._register()
+        evt = self._edit(ctx, old="a = 1\n", new="a = 2\n")
+        assert dispatch(Event.PreToolUse, evt, session_dir=tmp_path) is None
+        ctx.call_llm.assert_not_called()
+
+    def test_preexisting_comment_skips_llm(self, tmp_path: Path) -> None:
+        ctx = self._ctx(tmp_path, fire=True)
+        self._register()
+        evt = self._edit(ctx, old="# removed the retry logic\nx()\n", new="# removed the retry logic\ny()\n")
+        assert dispatch(Event.PreToolUse, evt, session_dir=tmp_path) is None
+        ctx.call_llm.assert_not_called()
+
+    def test_write_with_comment_already_on_disk_skips_llm(self, tmp_path: Path) -> None:
+        ctx = self._ctx(tmp_path, fire=True)
+        self._register()
+        path = tmp_path / "mod.py"
+        path.write_text("# no longer needed\nx = 1\n")
+        evt = make_pre_tool_event("Write", {"file_path": str(path), "content": "# no longer needed\nx = 2\n"}, ctx=ctx)
+        assert dispatch(Event.PreToolUse, evt, session_dir=tmp_path) is None
+        ctx.call_llm.assert_not_called()
+
+    def test_prompt_contains_suspect_comment(self, tmp_path: Path) -> None:
+        ctx = self._ctx(tmp_path, fire=True)
+        self._register()
+        evt = self._edit(ctx, old="retry(fetch, attempts=3)\n", new="# removed the retry logic\nfetch()\n")
+        assert dispatch(Event.PreToolUse, evt, session_dir=tmp_path) is not None
+        prompt = str(ctx.call_llm.call_args[0][0])
+        assert "<tombstone_comments>" in prompt
+        assert "# removed the retry logic" in prompt
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            pytest.param("removed the retry logic", True, id="removed-retry-logic"),
+            pytest.param("was previously here", True, id="was-previously-here"),
+            pytest.param("used to be handled here", True, id="used-to-be-handled-here"),
+            pytest.param("no longer needed", True, id="no-longer-needed"),
+            pytest.param("remove the node from the queue", False, id="imperative-remove"),
+            pytest.param("skips removed entries", False, id="participle-as-modifier"),
+            pytest.param("the node is removed when it expires", False, id="present-passive"),
+            pytest.param("removal policy", False, id="nominal-removal"),
+            pytest.param("waits no longer than 30 seconds", False, id="no-longer-than-guard"),
+        ],
+    )
+    def test_is_tombstone(self, text: str, expected: bool) -> None:
+        assert is_tombstone(text) is expected
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            pytest.param("# TODO: remove after the June migration", True, id="todo"),
+            pytest.param("// FIXME: handle unicode", True, id="fixme"),
+            pytest.param("/* TODO(alice): tidy */", True, id="todo-block"),
+            pytest.param("# XXX temporary", True, id="xxx"),
+            pytest.param("// HACK around the cache", True, id="hack"),
+            pytest.param("#!/usr/bin/env python", False, id="shebang"),
+            pytest.param("# removed the retry logic", False, id="tombstone-text"),
+        ],
+    )
+    def test_is_marker(self, text: str, expected: bool) -> None:
+        assert is_marker(text) is expected
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            pytest.param("# removed the retry logic", True, id="tombstone-kept"),
+            pytest.param("# TODO: remove after the June migration", False, id="marker-vetoes"),
+            pytest.param("# remove the node from the queue", False, id="imperative-dropped"),
+        ],
+    )
+    def test_keep(self, text: str, expected: bool) -> None:
+        assert TombstoneComments().keep(text) is expected
