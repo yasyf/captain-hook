@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.1.0] - 2026-07-02
+
+### Added
+- General-pack prose-routing hook: an `Agent`/`Task` call pinned to a non-fable model whose
+  prompt is prose/writing work (a writing verb plus a prose artifact — README, docs, blog,
+  changelog, release notes, …) is blocked and routed to fable; mechanical operations on text
+  (classify/label/count/extract) stay exempt. A matching workflow-script nudge warns when a
+  script pins non-fable models alongside prose stages. General pack bumped to 0.3.0.
+
+### Fixed
+- The haiku subagent block over-blocked legitimate mechanical work: the escape now also
+  matches probe/ping/echo/smoke/count/capacity/extract stems, accepts an explicit
+  `mechanical` assertion in the prompt, and the block message teaches that retry path
+  instead of only steering to sonnet.
+
 ## [5.0.0] - 2026-07-02
 
 A DX-audit release: the condition and primitive vocabularies were reshaped so the obvious
