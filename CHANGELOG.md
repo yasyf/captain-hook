@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.3.0] - 2026-07-03
+
 ### Changed
 - General-pack prose-routing prefilters upgraded from proximity regex to dependency-parsed
   clause matching (pack 0.8.0): the judge is consulted only when a sentence asks a writing
