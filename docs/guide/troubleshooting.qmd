@@ -70,19 +70,19 @@ Project not reloaded. Claude Code reads hook settings at session start. After yo
 
 ## `NlpSignal` hooks need the spaCy model {#nlpsignal-hooks-need-the-spacy-model}
 
-Hooks that use `NlpSignal` need the `en_core_web_sm` spaCy model. captain-hook does not auto-download it at hook execution time, because that would trigger a silent network download behind the agent's back mid-session. Install it once with one command.
+Hooks that use `NlpSignal` need two downloads: the `en_core_web_sm` spaCy model (~13MB) and the `oewn:2025` WordNet lexicon (~231MB). Packs that declare `nlp = true` in their manifest — `general` and `steering` do — provision both eagerly: `init`, `register-hooks`, and `pack add` download them on the spot, and an async `SessionStart` hook re-checks at every session start, so an install that deferred the download (offline, say) heals itself the next session. A live hook still never downloads mid-session; that would be a silent network fetch behind the agent's back.
+
+A hook that raises `RuntimeError: spaCy model 'en_core_web_sm' is not installed` means provisioning never ran for this project. Re-register the hooks; with an NLP pack enabled this downloads the resources and wires the `SessionStart` self-heal.
 
 ```bash
-python -m spacy download en_core_web_sm
+uvx capt-hook register-hooks
 ```
 
-Alternatively, the bundled `ensure_spacy_model` helper caches the model where captain-hook looks for it.
+A standalone hooks directory that uses NLP outside any pack skips eager provisioning. Provision the resources directly with the bundled helper.
 
 ```bash
-python -c "from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()"
+python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensure_nlp_resources()"
 ```
-
-A missing model raises `RuntimeError: spaCy model 'en_core_web_sm' is not installed` when the hook runs.
 
 ## Case study, a block that caught a safe command
 

@@ -10,7 +10,9 @@ and the loader imports them alongside your own `.claude/hooks/` modules.
 ## Enable a builtin pack
 
 `capt-hook` ships four builtin packs: `general` (language-agnostic guards for git
-safety, code stewardship, task and plan discipline, and a review gate), `python`
+safety, code stewardship, task and plan discipline, a review gate, and a
+tombstone-comment nudge that flags a comment narrating the edit itself, such
+as `# removed the retry logic`, before it lands), `python`
 (a pytest-before-commit gate, AST style rules, and a `uv` missing-dependency nudge),
 `go` (a go-test-before-commit gate and a `go.mod` nudge on module-resolution
 errors), and `steering` (three judgment nudges — it flags a plan-mode plan that
@@ -45,10 +47,10 @@ uvx capt-hook pack list
 ```
 
 ```
-  general                  builtin  -                    v0.1.0    7 hooks
+  general                  builtin  -                    v0.4.0    8 hooks
   python                   builtin  -                    v0.1.0    3 hooks
   go                       builtin  -                    v0.1.0    2 hooks
-  steering                 builtin  -                    v0.2.0    3 hooks
+  steering                 builtin  -                    v0.3.0    1 hooks
 ```
 
 Remove a pack by name. The entry leaves `packs.toml` and the events it added are

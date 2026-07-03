@@ -2,7 +2,7 @@
 title: "Events"
 ---
 
-The ten lifecycle events Claude Code fires. For the lifecycle narrative, see
+The eleven lifecycle events Claude Code fires. For the lifecycle narrative, see
 [how hooks work](../guide/how-it-works.qmd).
 
 A hook targets one event, or several combined with `|`:
@@ -22,6 +22,7 @@ can block.
 
 | Event | Event class | Fires | Key properties | Can block? |
 |-------|-------------|-------|----------------|------------|
+| `SessionStart` | `SessionStartEvent` | When a session starts, resumes, clears, or compacts | `source` | No — advisory |
 | `PreToolUse` | `PreToolUseEvent` | Before a tool runs | `tool_name`, `command`, `command_line`, `file`, `content`, `old`, `agent_type` | **Yes** — deny the tool |
 | `PostToolUse` | `PostToolUseEvent` | After a tool succeeds | `tool_name`, `command`, `file`, `content`, `tool_response` | No — advisory |
 | `PostToolUseFailure` | `PostToolUseFailureEvent` | After a tool fails | `tool_name`, `error`, `is_interrupt` | No — advisory |

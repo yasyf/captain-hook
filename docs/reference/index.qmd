@@ -12,7 +12,7 @@ than restating signatures. For tasks ("how do I gate a command?"), start in the
 Hand-written tables the generated API reference can't assemble: every event, condition,
 primitive, and matcher in one place, with its full option set.
 
-- [Events](events.qmd) — the ten lifecycle events and what each can block
+- [Events](events.qmd) — the eleven lifecycle events and what each can block
 - [Conditions](conditions.qmd) — every condition type and its match semantics
 - [Primitives & verdicts](primitives.qmd) — every primitive's signature, plus the LLM verdict types
 - [AST matchers](matchers.qmd) — the matcher catalog for styleguide rules

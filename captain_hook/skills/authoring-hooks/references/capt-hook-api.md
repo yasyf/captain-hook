@@ -46,6 +46,7 @@ rarely import it directly.
 | `SubagentStart` | A subagent launches | Capture initial state |
 | `Notification` | Informational event | Logging, metrics |
 | `PreCompact` | Before context compaction | Preserve critical context |
+| `SessionStart` | Session starts, resumes, clears, or compacts (`evt.source`) | Provision resources, prime state |
 | `SessionEnd` | Session ends | Cleanup, audit logging |
 
 ## Registration
@@ -74,8 +75,8 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 | `nudge` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), block=False, events=None, max_fires=…, tests=None)` | `PostToolUse` (with signals) else `PreToolUse`; default fires 3 / 1; `when` vetoes even with `signals`; warns |
 | `lint` | `(check, *, message, lang="py", trigger=None, sep=", ", block=False, events=None, tests=None, max_shown=5)` | `PostToolUse`, `Tool("Edit\|Write")` + the `lang` globs, skips test files; `trigger` pre-filters string **and** ast checks |
 | `workflow` | `(*, label, marker, steps, artifacts=None, only_if=(), skip_if=(), tests=None)` | guard on `SubagentStop`, `max_fires=1` |
-| `llm_gate` | `(prompt, *, message, signals=None, when=None, only_if=(), skip_if=(), events=None, max_fires=None, tests=None, max_context=2000, model="small", agent=True, transcript=True)` | `Stop \| SubagentStop`, `max_fires=1`; blocks on `GateVerdict.block` |
-| `llm_nudge` | same as `llm_gate` | `PostToolUse`, `max_fires=3`; warns on `NudgeVerdict.fire` |
+| `llm_gate` | `(prompt, *, message, response_model=GateVerdict, verdict=…, signals=None, when=None, contexts=(), only_if=(), skip_if=(), events=None, max_fires=…, tests=None, max_context=2000, specialty="review", model="small", agent=True, transcript=True, diff=False)` | `Stop \| SubagentStop`; defaults to **unlimited** fires (keeps enforcing); blocks when `verdict(result)` — default `GateVerdict.block` |
+| `llm_nudge` | same as `llm_gate` (default `response_model=NudgeVerdict`), plus `async_=False` | `PostToolUse`, `max_fires=3`; warns when `verdict(result)` — default `NudgeVerdict.fire` |
 | `prompt_check` | `(evt, template, fmt=None, *, prefix, suffix="", timeout=45)` | call inside an `@on` handler; returns `HookResult \| None` from `PromptCheckVerdict` |
 | `styleguide` | `(*rules, block=False, only_if=(), skip_if=(), events=None)` | AST style rules — owned by the `translating-styleguides` skill |
 
@@ -91,9 +92,20 @@ Notes:
   is a cheap substring pre-filter on the source.
 - `message` on `llm_gate`/`llm_nudge` may be a callable receiving the verdict:
   `message=lambda r: f"...: {r.reasoning}"`.
+- `contexts=` on `llm_gate`/`llm_nudge` attaches declarative evidence blocks — any
+  `PromptContext` (importable from `captain_hook`), each rendered as a named XML block in
+  array order. Built-ins: `BeforeEdit`/`AfterEdit` (ambient defaults on every LLM primitive:
+  the pending edit's before/after text, empty off edit events) and
+  `Introduced(kind=... | pattern=...)` — AST constructs the pending edit newly introduces,
+  diffed between the pre-image (`evt.replaced`) and `evt.content`; `kind=COMMENT_TYPES`
+  extracts comments across languages; subclass and override `keep(text)` to filter. A
+  `required` context (the `Introduced` default) with no evidence skips the LLM call
+  entirely, consuming no fire — the extraction is the cheap trigger, the LLM the confirmer.
+  Passing your own `contexts` with no `signals`/`when` suppresses the implicit transcript
+  `<context>` block.
 - LLM cost controls: `signals` pre-filter (LLM only called past the score threshold),
-  `max_fires`, `max_context`, `model="small"`, and static `only_if`/`skip_if` narrowing.
-  At most one LLM primitive fires per turn.
+  a `required` context gate, `max_fires`, `max_context`, `model="small"`, and static
+  `only_if`/`skip_if` narrowing. At most one LLM primitive fires per turn.
 
 ## Inline test expectations
 

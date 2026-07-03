@@ -6,6 +6,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `Event.SessionStart` + `SessionStartEvent`: fires on session startup, resume, clear, and
+  compact (`evt.source`); it cannot block — warnings surface as `additionalContext`. Inline
+  tests drive it via `Input(source=...)`.
+- Eager NLP provisioning: pack manifests declare `nlp = true` (general and steering both do;
+  general bumped to 0.4.0, steering to 0.3.0). `init` / `register-hooks` / `pack add|remove|update` download the
+  spaCy model and oewn lexicon right after the settings write, echoing what they fetch, and an
+  async `SessionStart` hook (`ensure_nlp_resources()`) self-heals installs that were offline.
+  The oewn download is now filelock-guarded (it previously raced concurrent sessions). Non-NLP
+  projects get neither the `SessionStart` settings entry nor the download.
+- `contexts=` on `llm_gate`/`llm_nudge`: declarative `PromptContext` providers attach named
+  XML evidence blocks at evaluation time; a `required` context with no evidence skips the LLM
+  call entirely, consuming no fire. Built-ins: `BeforeEdit`/`AfterEdit` — ambient defaults
+  carrying the pending edit's before/after text via the new `ToolHookEvent.replaced` pre-image
+  (Edit's `old`, MultiEdit's joined olds, Write's on-disk content) — and
+  `Introduced(kind=… | pattern=…)`, which diffs AST constructs the edit newly introduces,
+  filtered through `keep()`; tags auto-derive from the class name. User-passed contexts
+  suppress the transcript `<context>` fallback; signals compose unchanged. `PromptContext`,
+  `apply_contexts`, and the built-ins are all exported.
+- ast-grep comment primitives: `parse()` returns a `SyntaxNode` wrapper
+  (`kind`/`text`/`descendants()`/`to_match()`) so the binding node stays behind the seam;
+  `find_kinds` walks the tree instead of the kind matcher (which raises on kind names a
+  grammar lacks); `comments()`/`introduced_comments()` extract comments language-agnostically
+  via the exported `COMMENT_TYPES` kind union.
+- Verb-anchored, morphology-aware `Clause`: `noun` is optional and the anchor derives from it
+  or `verb` (VERB/AUX lemma hits, so `Phrase("be")` matches copular "was"); a new `completed=`
+  gate and `subject="no_nominal"` veto, backed by the public `is_past_predicate` /
+  `has_nominal_subject` predicates. `Clause` is now kw_only; keyword call sites (all known
+  consumers) are unaffected.
+- General-pack `tombstones` hook: a comment that narrates the edit itself (`# removed the
+  retry logic`, `// no longer needed`) is caught at PreToolUse — an introduced-comments AST
+  gate feeds an NLP tombstone matcher whose survivors reach a small-model judge; the warn says
+  to delete the comment, not restore the removed code.
+
+### Fixed
+- Inline-test tool resolution under a multi-tool `Tool` condition: `run_inline_tests` built
+  every implicit `Input` as the first named tool. The spec tool now pins only when the
+  `only_if` `Tool` names exactly one tool; otherwise the tool is inferred from the Input's
+  field shape (`old` + `content` → Edit, `content` alone → Write).
+
 ## [5.1.1] - 2026-07-02
 
 ### Fixed

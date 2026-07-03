@@ -142,6 +142,7 @@ reference:
       - SubagentStopEvent
       - PreCompactEvent
       - NotificationEvent
+      - SessionStartEvent
       - SessionEndEvent
       - HookContext
       - HookResult
@@ -193,6 +194,8 @@ reference:
       - Clause
       - NlpSignal
       - Phrase
+      - is_past_predicate
+      - has_nominal_subject
 
   - title: State & Sessions
     desc: Session state, workflow state, and multi-step workflows.
@@ -231,3 +234,13 @@ reference:
       - HooksSettings
       - build_settings
       - Prompt
+
+  - title: Prompt Contexts
+    desc: Declarative evidence blocks attached to LLM primitive prompts.
+    contents:
+      - PromptContext
+      - apply_contexts
+      - BeforeEdit
+      - AfterEdit
+      - Introduced
+      - COMMENT_TYPES

@@ -24,7 +24,8 @@ Claude Code processes a turn in a loop. It reads the prompt, calls a tool, reads
 
 ```{mermaid}
 flowchart TD
-    A[User submits prompt] -->|UserPromptSubmit| B[Agent processes prompt]
+    W[Session starts] -->|SessionStart| A[User submits prompt]
+    A -->|UserPromptSubmit| B[Agent processes prompt]
     B --> C{Needs a tool?}
     C -->|Yes| D[PreToolUse]
     D --> E{Hook blocks?}
@@ -65,11 +66,12 @@ flowchart TD
     style S fill:#9ff,stroke:#333
     style U fill:#ddd,stroke:#333
     style V fill:#ddd,stroke:#333
+    style W fill:#ddd,stroke:#333
 ```
 
 Three of these events let a hook change the agent's course. `PreToolUse` is the one event where a hook prevents an action, denying the tool so Claude Code skips the call. `Stop` and `SubagentStop` run the loop the other way, forcing the agent to keep going when it tries to finish early. Every other event is advisory. The hook injects a message into Claude's context but cannot block.
 
-Claude Code fires ten events in total. For when each one fires, the event class it carries, and whether it can block, see [the events reference](../reference/events.qmd).
+Claude Code fires eleven events in total. For when each one fires, the event class it carries, and whether it can block, see [the events reference](../reference/events.qmd).
 
 ## The dispatch pipeline
 
