@@ -14,7 +14,7 @@ long names (``"python"``).
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Set
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -29,6 +29,13 @@ EXT_TO_LANG: dict[str, str] = {glob.removeprefix("*."): lang for lang, globs in 
 
 TEMPLATE_VAR = re.compile(r"\$\$\$([A-Z_][A-Z0-9_]*)|\$([A-Z_][A-Z0-9_]*)")
 
+COMMENT_TYPES: frozenset[str] = frozenset({"comment", "line_comment", "block_comment"})
+"""Tree-sitter node kinds that denote a comment, across every supported grammar.
+
+The union covers every [`LANG_GLOBS`][captain_hook.types.LANG_GLOBS] grammar; a future grammar
+whose top-level comment kind is named differently would silently miss.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class Match:
@@ -37,6 +44,31 @@ class Match:
     line: int
     end_line: int
     text: str
+
+
+@dataclass(frozen=True, slots=True)
+class SyntaxNode:
+    """One node of a parsed syntax tree — the framework's face over the ast-grep binding node."""
+
+    raw: SgNode
+
+    @property
+    def kind(self) -> str:
+        return self.raw.kind()
+
+    @property
+    def text(self) -> str:
+        return self.raw.text()
+
+    def descendants(self) -> Iterator[SyntaxNode]:
+        """Every node below this one, in document order."""
+        for raw in self.raw.children():
+            yield (child := SyntaxNode(raw))
+            yield from child.descendants()
+
+    def to_match(self) -> Match:
+        r = self.raw.range()
+        return Match(line=r.start.line + 1, end_line=r.end.line + 1, text=self.raw.text())
 
 
 def lang_for_path(path: Path) -> str | None:
@@ -49,15 +81,10 @@ def has_metavar(text: str) -> bool:
     return TEMPLATE_VAR.search(text) is not None
 
 
-def parse(source: str, lang: str) -> SgNode:
+def parse(source: str, lang: str) -> SyntaxNode:
     from ast_grep_py import SgRoot
 
-    return SgRoot(source, lang).root()
-
-
-def to_match(node: SgNode) -> Match:
-    r = node.range()
-    return Match(line=r.start.line + 1, end_line=r.end.line + 1, text=node.text())
+    return SyntaxNode(SgRoot(source, lang).root())
 
 
 def match_key(m: Match) -> str:
@@ -66,22 +93,46 @@ def match_key(m: Match) -> str:
 
 def matches(source: str, lang: str, pattern: str) -> bool:
     """Whether ``pattern`` matches anywhere in ``source`` — the cheap boolean for conditions."""
-    return parse(source, lang).find(pattern=pattern) is not None
+    return parse(source, lang).raw.find(pattern=pattern) is not None
 
 
 def find_all(source: str, lang: str, pattern: str) -> Iterator[Match]:
     """Every structural match of ``pattern`` in ``source``, as 1-based-line :class:`Match` objects."""
-    return (to_match(node) for node in parse(source, lang).find_all(pattern=pattern))
+    return (SyntaxNode(node).to_match() for node in parse(source, lang).raw.find_all(pattern=pattern))
 
 
-def find_introduced(old: str, new: str, lang: str, pattern: str) -> Iterator[Match]:
-    """Matches present in ``new`` whose construct was absent from ``old`` — the diff helper.
+def find_kinds(source: str, lang: str, kinds: Set[str]) -> Iterator[Match]:
+    """Every node whose tree-sitter kind is in ``kinds``, in document order.
+
+    Kinds are read off parsed nodes rather than passed to the ast-grep kind
+    matcher, which raises on kind names a grammar doesn't define.
+    """
+    return (n.to_match() for n in parse(source, lang).descendants() if n.kind in kinds)
+
+
+def comments(source: str, lang: str) -> Iterator[Match]:
+    """Every comment in ``source``, in document order — regardless of language."""
+    return find_kinds(source, lang, COMMENT_TYPES)
+
+
+def introduced(old: Iterable[Match], new: Iterable[Match]) -> Iterator[Match]:
+    """Matches in ``new`` whose construct was absent from ``old``.
 
     Identity is the match's whitespace-normalized text, not its range (which shifts as
     surrounding code moves) — so a pre-existing construct is never reported as newly added.
     """
-    before = {match_key(m) for m in find_all(old, lang, pattern)}
-    return (m for m in find_all(new, lang, pattern) if match_key(m) not in before)
+    before = {match_key(m) for m in old}
+    return (m for m in new if match_key(m) not in before)
+
+
+def find_introduced(old: str, new: str, lang: str, pattern: str) -> Iterator[Match]:
+    """Matches of ``pattern`` present in ``new`` but absent from ``old`` — the diff helper."""
+    return introduced(find_all(old, lang, pattern), find_all(new, lang, pattern))
+
+
+def introduced_comments(old: str, new: str, lang: str) -> Iterator[Match]:
+    """Comments present in ``new`` whose text was absent from ``old``."""
+    return introduced(comments(old, lang), comments(new, lang))
 
 
 def rewrite(source: str, lang: str, pattern: str, replace: str) -> str:
@@ -90,7 +141,7 @@ def rewrite(source: str, lang: str, pattern: str, replace: str) -> str:
     ``replace`` uses ast-grep's ``$VAR`` / ``$$$VAR`` fix syntax, each metavariable filled from the
     match it names. Returns ``source`` unchanged when nothing matches.
     """
-    root = parse(source, lang)
+    root = parse(source, lang).raw
     if not (edits := [node.replace(fill_template(node, replace)) for node in root.find_all(pattern=pattern)]):
         return source
     return root.commit_edits(edits)
@@ -103,7 +154,7 @@ def capture(source: str, lang: str, pattern: str) -> dict[str, str] | None:
     original-source span covering its matches, so whitespace is preserved (mirroring :func:`fill_template`).
     A pattern with no metavars that still matches yields an empty dict — present but empty.
     """
-    if (node := parse(source, lang).find(pattern=pattern)) is None:
+    if (node := parse(source, lang).raw.find(pattern=pattern)) is None:
         return None
 
     def value(m: re.Match[str]) -> str:
