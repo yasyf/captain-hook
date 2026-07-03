@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from captain_hook import state
 from captain_hook.app import on
+from captain_hook.contexts import apply_contexts, with_defaults
 from captain_hook.primitives.nudge import DEFAULT_FIRES
 from captain_hook.prompt import Prompt
 from captain_hook.signals import extract_signal_context, resolve_signals, transcript_texts
@@ -31,6 +32,7 @@ FAILURE_ROOT = state.CACHE_ROOT / "failures"
 if TYPE_CHECKING:
     from spawnllm import TModel, TSpecialty
 
+    from captain_hook.contexts import PromptContext
     from captain_hook.events import BaseHookEvent
     from captain_hook.signals.nlp import NlpSignal
 
@@ -63,6 +65,7 @@ def llm_evaluate[M: BaseModel](
     *,
     signals: Sequence[Signal | NlpSignal] | Signals | None = None,
     when: Callable[[BaseHookEvent], bool] | None = None,
+    contexts: Sequence[PromptContext] = (),
     max_context: int = 2000,
     specialty: TSpecialty = "review",
     model: TModel = "small",
@@ -84,6 +87,8 @@ def llm_evaluate[M: BaseModel](
             return None
         ps.consumed = old_consumed
         evt.ctx.s[PrimitiveState].set(ps)
+    elif contexts and when is None:
+        contributing_texts = []
     else:
         contributing_texts = transcript_texts(evt, 5)
 
@@ -93,7 +98,9 @@ def llm_evaluate[M: BaseModel](
         else contributing_texts
     )[:max_context]
 
-    built = Prompt().system(prompt).context("context", context or None)
+    base = Prompt().system(prompt).context("context", context or None)
+    if (built := apply_contexts(base, evt, with_defaults(contexts), max_len=max_context)) is None:
+        return None
 
     try:
         return evt.ctx.call_llm(
@@ -131,6 +138,7 @@ def llm_primitive[M: BaseModel](
     default_max_fires: int,
     signals: Sequence[Signal | NlpSignal] | Signals | None = None,
     when: Callable[[BaseHookEvent], bool] | None = None,
+    contexts: Sequence[PromptContext] = (),
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     events: Event | None = None,
@@ -154,6 +162,7 @@ def llm_primitive[M: BaseModel](
                 response_model,
                 signals=signals,
                 when=when,
+                contexts=contexts,
                 max_context=max_context,
                 specialty=specialty,
                 model=model,
@@ -194,6 +203,7 @@ def llm_gate(
     verdict: Callable[[GateVerdict], bool] = lambda r: r.block,
     signals: Sequence[Signal | NlpSignal] | Signals | None = None,
     when: Callable[[BaseHookEvent], bool] | None = None,
+    contexts: Sequence[PromptContext] = (),
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     events: Event | None = None,
@@ -213,10 +223,24 @@ def llm_gate(
     read full history). Pass ``diff=True`` to attach a compact working-tree diff as a
     ``<diff>`` block, or ``agent=False, transcript=False`` for cheap, stateless yes/no checks.
 
+    ``contexts`` attaches declarative evidence blocks
+    (:class:`~captain_hook.contexts.PromptContext`), each rendered as an XML block
+    after ``<context>`` in array order; a ``required`` context with empty content
+    skips the LLM call entirely, consuming no fire. Passing your own ``contexts``
+    with no ``signals``/``when`` suppresses the implicit transcript ``<context>``
+    block — you own context assembly. The ambient defaults
+    (:class:`~captain_hook.contexts.BeforeEdit`/:class:`~captain_hook.contexts.AfterEdit`)
+    attach to every gate without suppressing it, carrying the pending edit's
+    before/after text on edit-shaped events and nothing elsewhere.
+
     Example:
         >>> llm_gate("Is the agent making excuses?",
         ...          message=lambda r: f"Excuse detected: {r.reasoning}",
         ...          signals=Signals([Signal(r"external.*service", weight=2)], threshold=2))
+        >>> llm_gate("Does the new code hardcode a secret?",
+        ...          message=lambda r: f"Secret detected: {r.reasoning}",
+        ...          contexts=[Introduced(pattern='os.environ[$KEY] = $VALUE')],
+        ...          events=Event.PreToolUse, only_if=[Tool("Edit", "Write", "MultiEdit")])
     """
     llm_primitive(
         prompt,
@@ -229,6 +253,7 @@ def llm_gate(
         default_max_fires=1,
         signals=signals,
         when=when,
+        contexts=contexts,
         only_if=only_if,
         skip_if=skip_if,
         events=events,
@@ -251,6 +276,7 @@ def llm_nudge(
     verdict: Callable[[NudgeVerdict], bool] = lambda r: r.fire,
     signals: Sequence[Signal | NlpSignal] | Signals | None = None,
     when: Callable[[BaseHookEvent], bool] | None = None,
+    contexts: Sequence[PromptContext] = (),
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     events: Event | None = None,
@@ -271,10 +297,24 @@ def llm_nudge(
     read full history). Pass ``diff=True`` to attach a compact working-tree diff as a
     ``<diff>`` block, or ``agent=False, transcript=False`` for cheap, stateless yes/no checks.
 
+    ``contexts`` attaches declarative evidence blocks
+    (:class:`~captain_hook.contexts.PromptContext`), each rendered as an XML block
+    after ``<context>`` in array order; a ``required`` context with empty content
+    skips the LLM call entirely, consuming no fire. Passing your own ``contexts``
+    with no ``signals``/``when`` suppresses the implicit transcript ``<context>``
+    block — you own context assembly. The ambient defaults
+    (:class:`~captain_hook.contexts.BeforeEdit`/:class:`~captain_hook.contexts.AfterEdit`)
+    attach to every nudge without suppressing it, carrying the pending edit's
+    before/after text on edit-shaped events and nothing elsewhere.
+
     Example:
         >>> llm_nudge("Is the agent speculating instead of observing?",
         ...           message="Observe, don't infer -- check traces first",
         ...           signals=Signals([Signal(r"should contain", weight=2)], threshold=3))
+        >>> llm_nudge("Does any newly introduced comment narrate the edit itself?",
+        ...           message=lambda r: f"Tombstone comment: {r.reasoning}",
+        ...           contexts=[Introduced(kind=COMMENT_TYPES)],
+        ...           events=Event.PreToolUse, only_if=[Tool("Edit", "Write", "MultiEdit")])
     """
     llm_primitive(
         prompt,
@@ -287,6 +327,7 @@ def llm_nudge(
         default_max_fires=3,
         signals=signals,
         when=when,
+        contexts=contexts,
         only_if=only_if,
         skip_if=skip_if,
         events=events,

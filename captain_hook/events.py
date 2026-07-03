@@ -130,6 +130,10 @@ class BaseHookEvent:
         return None
 
     @property
+    def replaced(self) -> str | None:
+        return None
+
+    @property
     def agent_type(self) -> str | None:
         return None
 
@@ -224,6 +228,23 @@ class ToolHookEvent(BaseHookEvent):
                 return old
             case MultiEditCall(edits=edits):
                 return "\n".join(span.old for span in edits)
+            case _:
+                return None
+
+    @property
+    def replaced(self) -> str | None:
+        """The pre-image of the text this call overwrites.
+
+        An Edit's ``old``, a MultiEdit's newline-joined olds, or — for a Write — the
+        file's current on-disk content (``""`` for a new file). ``None`` for other
+        tools. The Write arm reads the disk, so it is only meaningful at
+        ``PreToolUse``: once the Write lands, disk already holds the new text.
+        """
+        match self.input:
+            case EditCall() | MultiEditCall():
+                return self.old
+            case WriteCall(file_path=path):
+                return p.read_text() if (p := Path(path)).exists() else ""
             case _:
                 return None
 

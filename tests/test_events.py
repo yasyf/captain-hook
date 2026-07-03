@@ -84,6 +84,7 @@ class TestBaseHookEvent:
             ("file", None),
             ("content", None),
             ("old", None),
+            ("replaced", None),
             ("agent_type", None),
         ],
     )
@@ -161,6 +162,33 @@ class TestToolHookEvent:
     )
     def test_tool_attribute_round_trip(self, raw: dict[str, Any], attr: str, expected: object) -> None:
         assert getattr(make_event(PreToolUseEvent, raw), attr) == expected
+
+    def test_replaced_for_edit_is_old(self) -> None:
+        raw = {"tool_name": "Edit", "tool_input": {"file_path": "a.py", "old_string": "old text", "new_string": "new"}}
+        assert make_event(PreToolUseEvent, raw).replaced == "old text"
+
+    def test_replaced_for_multi_edit_joins_olds(self) -> None:
+        raw = {
+            "tool_name": "MultiEdit",
+            "tool_input": {
+                "file_path": "a.py",
+                "edits": [{"old_string": "one", "new_string": "1"}, {"old_string": "two", "new_string": "2"}],
+            },
+        }
+        assert make_event(PreToolUseEvent, raw).replaced == "one\ntwo"
+
+    def test_replaced_for_write_reads_disk(self, tmp_path: Path) -> None:
+        path = tmp_path / "b.py"
+        path.write_text("on disk")
+        raw = {"tool_name": "Write", "tool_input": {"file_path": str(path), "content": "new"}}
+        assert make_event(PreToolUseEvent, raw).replaced == "on disk"
+
+    def test_replaced_for_write_new_file_is_empty(self, tmp_path: Path) -> None:
+        raw = {"tool_name": "Write", "tool_input": {"file_path": str(tmp_path / "missing.py"), "content": "new"}}
+        assert make_event(PreToolUseEvent, raw).replaced == ""
+
+    def test_replaced_none_for_bash(self) -> None:
+        assert make_event(PreToolUseEvent, {"tool_name": "Bash", "tool_input": {"command": "ls"}}).replaced is None
 
 
 class TestPreToolUseEvent:
