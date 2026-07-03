@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from captain_hook.app import State, _state, on
+from captain_hook.app import _state, on
 from captain_hook.settings import build_settings
 from captain_hook.types import Event
 
@@ -47,8 +47,7 @@ def import_or_reload(fqn: str, fresh_this_pass: set[str]) -> ModuleType:
     return mod
 
 
-def discover_hooks(hooks_dir: str | Path, state: State | None = None) -> None:
-    target = state or _state
+def discover_hooks(hooks_dir: str | Path) -> None:
     hooks_path = Path(hooks_dir).resolve()
     if str(hooks_path.parent) not in sys.path:
         sys.path.insert(0, str(hooks_path.parent))
@@ -60,9 +59,9 @@ def discover_hooks(hooks_dir: str | Path, state: State | None = None) -> None:
 
     if CONF_MODULE in top_level:
         conf_module = import_or_reload(f"{pkg}.{CONF_MODULE}", fresh_this_pass)
-        target.settings = build_settings(conf_module)
+        _state.settings = build_settings(conf_module)
         if classifier := getattr(conf_module, "classifier", None):
-            target.classifier = classifier
+            _state.classifier = classifier
 
     all_modules = {
         info.name
@@ -80,7 +79,7 @@ def discover_hooks(hooks_dir: str | Path, state: State | None = None) -> None:
             import_or_reload(fqn, fresh_this_pass)
         except Exception as exc:
             logger.bind(module=fqn).opt(exception=True).warning("skipped unloadable hook module")
-            target.load_errors.append((fqn, exc))
+            _state.load_errors.append((fqn, exc))
 
 
 def ensure_pack_package(fqn: str, search_paths: list[str]) -> ModuleType:
