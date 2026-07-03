@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- General-pack `models` fable-implementation nudge (pack 0.5.0): an `Agent`/`Task` spawn that
+  would run on fable (unpinned or `model='fable'`) with a routine-implementation prompt gets an
+  LLM-judged warn pointing at opus `xhigh` (or the codex skill behind a sonnet wrapper for
+  well-scoped edits). Judged rather than pattern-matched — review, writing, hard planning, and
+  sensitive implementation are fable's lanes and stay silent, as does anything uncertain. The
+  spawn's model pin, agent type, and prompt reach the judge via a new required `DelegatedSpawn`
+  context; explicit opus/sonnet/haiku pins and `Explore`/`claude-code-guide` recon skip entirely.
 - `Event.SessionStart` + `SessionStartEvent`: fires on session startup, resume, clear, and
   compact (`evt.source`); it cannot block — warnings surface as `additionalContext`. Inline
   tests drive it via `Input(source=...)`.

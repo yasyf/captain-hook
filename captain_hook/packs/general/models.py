@@ -1,20 +1,40 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from captain_hook import (
     Agent,
     Allow,
+    BaseHookEvent,
     Block,
     Event,
     Input,
     Rewrite,
+    TaskCall,
     Tool,
     ToolInput,
     Warn,
     WorkflowScript,
     hook,
+    llm_nudge,
     nudge,
     set_tool_input,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class DelegatedSpawn:
+    """Gating context: the pending Agent/Task call's model pin, agent type, and prompt."""
+
+    tag: str = "delegated_spawn"
+    required: bool = True
+
+    def content(self, evt: BaseHookEvent) -> str | None:
+        if (call := evt.as_input(TaskCall)) is None or not call.prompt:
+            return None
+        model = call.model or "(none — inherits the session model, fable)"
+        return f"model: {model}\nagent_type: {call.agent_type or '(default)'}\nprompt:\n{call.prompt}"
+
 
 hook(
     Event.PreToolUse,
@@ -95,6 +115,71 @@ set_tool_input(
         Input(agent_type="Explore"): Rewrite(model="sonnet"),
         Input(agent_type="Explore", model="haiku"): Allow(),
         Input(agent_type="general-purpose"): Allow(),
+    },
+)
+
+llm_nudge(
+    """Decide whether this delegated subagent should run on opus-4.8 instead of fable-5.
+
+<delegated_spawn> holds the pending Agent/Task call: its model pin (or that it inherits
+the session model, fable), agent type, and prompt.
+
+The Models rubric: implementation delegates to opus-4.8 at xhigh — opus is ~2x cheaper
+than fable and nearly as capable. Fable's lanes are orchestration, review, hard
+planning/design/diagnosis, all prose/writing, and implementation that is very sensitive
+or error-prone (auth, migrations, concurrency, data loss, crypto, subtle algorithms).
+
+Set fire=true only when the prompt is clearly routine implementation — building, fixing,
+wiring, or refactoring code — with no fable-lane signal. A prompt that reviews, plans,
+designs, diagnoses a hard bug, writes prose, or touches a sensitive surface stays on
+fable: fire=false. When uncertain, fire=false — the agent may have chosen fable
+deliberately, and a false alarm teaches it to ignore this nudge. Keep reasoning under
+40 words.
+
+<examples>
+<example fire="true">
+Implement the pagination endpoint in api/users.py per the spec in the plan.
+Routine implementation with no sensitivity signal — the opus xhigh lane.
+</example>
+<example fire="true">
+Add a --json flag to the export command and thread it through the formatter.
+Well-scoped feature wiring; the default implementation lane.
+</example>
+<example fire="false">
+Review the diff for correctness and concurrency issues.
+Review is fable's lane.
+</example>
+<example fire="false">
+Design the migration strategy for the sharded session store.
+Hard planning/design stays on fable.
+</example>
+<example fire="false">
+Implement the token-refresh race fix in the auth middleware.
+Auth plus concurrency: sensitive, error-prone implementation stays on fable.
+</example>
+</examples>""",
+    message=lambda r: (
+        f"This delegation would run on fable, but it reads as routine implementation. {r.reasoning} "
+        "Implementation defaults to model='opus' + effort='xhigh' (~2x cheaper, nearly as capable); "
+        "a well-scoped edit to existing code can also go to gpt-5.5 via the codex skill behind a "
+        "model='sonnet' low-effort wrapper. Keep fable if this genuinely is sensitive or error-prone. "
+        "See CLAUDE.md § Plan Execution & Orchestration (Models)."
+    ),
+    contexts=[DelegatedSpawn()],
+    events=Event.PreToolUse,
+    only_if=[Tool("Agent|Task")],
+    skip_if=[
+        ToolInput("model", r"(?i)\b(opus|sonnet|haiku)\b"),
+        Agent("Explore|claude-code-guide"),
+    ],
+    agent=False,
+    transcript=False,
+    tests={
+        Input(prompt="implement the pagination endpoint in api/users.py"): Warn(pattern="opus"),
+        Input(model="fable", prompt="add a --json flag to the export command"): Warn(pattern="opus"),
+        Input(model="opus", prompt="implement the pagination endpoint in api/users.py"): Allow(),
+        Input(model="sonnet", prompt="scan the repo for TODO markers"): Allow(),
+        Input(agent_type="Explore", prompt="find where the config loader lives"): Allow(),
     },
 )
 
