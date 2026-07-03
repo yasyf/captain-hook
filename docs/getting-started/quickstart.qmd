@@ -1,10 +1,10 @@
 ---
-title: "Quickstart"
+title: "Write your first hook in under five minutes"
 ---
 
-Write your first hook in under five minutes. By the end, Claude Code stops your agent from
-finishing a UI change it never looked at, and you have a second hook that proves itself with a
-passing test.
+By the end, Claude Code stops your agent from finishing a UI change it never looked at, and you
+have a second hook that proves itself with a passing test — `uvx capt-hook test` prints two
+`PASS` lines and exits zero.
 
 Before you begin, you need [uv installed](installation.qmd) and a project open in Claude Code.
 Every command runs through `uvx`, so nothing else is installed.
@@ -19,6 +19,11 @@ uvx capt-hook init
 [helper skills](skills.qmd), and arms the [session reviewer](../guide/session-reviewer.qmd).
 You're already live, with no separate wiring step. To drive setup from Claude instead, install
 the plugin and ask it to "set up captain hook" — see [Agent Skills](skills.qmd).
+
+::: {.callout-tip title="Checkpoint"}
+`init` prints `Scaffolded .claude/hooks/example.py + .claude/settings.json.` and lists the five
+events it wired (`PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`, `SessionEnd`).
+:::
 
 ## 2. Read your first hook
 
@@ -63,12 +68,15 @@ Run the tests from your project root, where `--hooks` defaults to `.claude/hooks
 uvx capt-hook test
 ```
 
+::: {.callout-tip title="Checkpoint"}
 ```
-  PASS  declarative_1:Input(command='git stash', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None)
-  PASS  declarative_1:Input(command='git status', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, permission_mode=None, transcript=None, tasks=None)
+  PASS  declarative_1:Input(command='git stash')
+  PASS  declarative_1:Input(command='git status')
 
 2 tests: 2 passed, 0 failed, 0 errors, 0 skipped
 ```
+An import error instead means the hook file has a syntax problem — the traceback names the line.
+:::
 
 Break an expectation and the line flips to `FAIL` and the command exits non-zero. Drop the same
 check into CI and a regressed hook fails the build. LLM- and signal-based hooks can't run without

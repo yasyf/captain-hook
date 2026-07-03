@@ -4,65 +4,47 @@ toc: false
 body-classes: "gd-homepage"
 ---
 
-<!-- gd-embed-fragment: canonical_hook -->
-
-A few lines stop your agent from calling a UI change done before it looked at it. Each hook is declarative Python. It has an event, conditions, and an action.
-
-::: {.callout-note}
-No install step. Every command runs through [`uvx`](https://docs.astral.sh/uv/). `uvx capt-hook …` fetches captain-hook into a throwaway environment and runs it, so it never enters your `pyproject.toml`.
-:::
-
----
-
-::: {.grid}
-
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-{{< icon shield-check >}} **Declarative by default**
-
-Most hooks are a single function call. No classes, no boilerplate, no YAML. You define what to block, warn, or enforce, and captain-hook handles the rest.
-:::
-
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-{{< icon filter >}} **Composable conditions**
-
-Filter hooks with typed conditions that match tools, file paths, commands, and transcript history. Combine `only_if` and `skip_if` for precise targeting.
-:::
-
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-{{< icon brain >}} **LLM-powered evaluation**
-
-Gate or nudge with LLM verdicts. Signal scoring detects patterns in transcript text, then an LLM decides whether to intervene.
-:::
-
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-{{< icon test-tube >}} **Inline testing**
-
-Test hooks where you define them. Run `Input(command="git stash")` / `Block("jj")` cases with `uvx capt-hook test`.
-:::
-
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-{{< icon list-checks >}} **Multi-step workflows**
-
-Enforce checklists before the agent stops. Tests, linting, and artifacts each gate the next step.
-:::
-
-::: {.g-col-12 .g-col-md-6 .g-col-lg-4}
-{{< icon message-square-text >}} **Rich transcript API**
-
-Query conversation history with a typed API. Filter tool uses, extract commands, check what files were edited or read.
-:::
-
-:::
-
----
-
-## Get started
-
-Go from nothing to a hook firing in Claude Code. One command creates `.claude/hooks/`, wires Claude Code's settings, drops an example hook, and installs the skills:
+Go from nothing to a hook firing in Claude Code with one command. It creates `.claude/hooks/`, wires Claude Code's settings, drops an example hook, and installs the skills:
 
 ```bash
 uvx capt-hook init
 ```
 
+![Terminal running 'uvx capt-hook test' — a hook blocks git push --force and both inline tests pass](docs/assets/demo.png){width=700}
+
+::: {.callout-note}
+No install step. Every command runs through [`uvx`](https://docs.astral.sh/uv/). `uvx capt-hook …` fetches captain-hook into a throwaway environment and runs it, so it never enters your `pyproject.toml`.
+:::
+
 [{{< icon arrow-right >}} Installation](docs/getting-started/installation.qmd){.btn .btn-primary}
 [{{< icon arrow-right >}} Quickstart](docs/getting-started/quickstart.qmd){.btn .btn-outline-primary}
+
+---
+
+<!-- gd-embed-fragment: canonical_hook -->
+
+A few lines stop your agent from calling a UI change done before it looked at it. Each hook is declarative Python. It has an event, conditions, and an action.
+
+---
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-md-4}
+{{< icon shield-check >}} **Block footguns before they run**
+
+Declare `git push --force` and `rm -rf` off-limits with one `block_command`, tests inline. [Command safety](docs/examples/command-safety.qmd)
+:::
+
+::: {.g-col-12 .g-col-md-4}
+{{< icon message-square-text >}} **Learn hooks from your corrections**
+
+The session reviewer mines each transcript and opens PRs that codify your standing rules. [Session reviewer](docs/guide/session-reviewer.qmd)
+:::
+
+::: {.g-col-12 .g-col-md-4}
+{{< icon list-checks >}} **Gate "done" on green tests**
+
+Stop gates hold the agent until the suite ran and the artifacts exist. [Workflows](docs/guide/workflows.qmd)
+:::
+
+:::

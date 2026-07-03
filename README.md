@@ -1,89 +1,98 @@
-# captain-hook
+# ![captain-hook](https://github.com/yasyf/captain-hook/raw/main/docs/assets/readme-banner.webp)
 
-![captain-hook banner](https://github.com/yasyf/captain-hook/raw/main/docs/assets/readme-banner.webp)
+**Stop repeating yourself to Claude.** captain-hook mines your transcripts for the corrections you keep giving and opens PRs that turn each one into a typed, tested Python hook.
 
-[![PyPI](https://img.shields.io/pypi/v/capt-hook.svg)](https://pypi.org/project/capt-hook/)
-[![Python](https://img.shields.io/pypi/pyversions/capt-hook.svg)](https://pypi.org/project/capt-hook/)
-[![Docs](https://github.com/yasyf/captain-hook/actions/workflows/docs.yml/badge.svg)](https://yasyf.github.io/captain-hook/)
-[![License: PolyForm-Noncommercial-1.0.0](https://img.shields.io/badge/License-PolyForm--Noncommercial--1.0.0-blue.svg)](https://github.com/yasyf/captain-hook/blob/main/LICENSE)
+[![CI](https://github.com/yasyf/captain-hook/actions/workflows/ci.yml/badge.svg)](https://github.com/yasyf/captain-hook/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/capt-hook)](https://pypi.org/project/capt-hook/)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm--Noncommercial--1.0.0-blue)](https://github.com/yasyf/captain-hook/blob/main/LICENSE)
 
-Guardrails for Claude Code, written as typed, testable data — and learned from the corrections you give Claude.
-
-A captain-hook hook is declarative Python: an event, some conditions, an action. Block a footgun before it runs, nudge the agent off a bad pattern, gate "done" until the tests pass. Then captain-hook closes the loop: it reads the corrections you give Claude as you work and opens pull requests that codify the durable ones as new hooks. You write the first few; it writes the rest.
-
-## Install
-
-captain-hook needs no install — it runs through [uvx](https://docs.astral.sh/uv/). From your project root:
+## Get started
 
 ```bash
 uvx capt-hook init
 ```
 
-`init` scaffolds `.claude/hooks/`, wires Claude Code's settings, registers the captain-hook plugin so its skills install on workspace-trust, and arms the [session reviewer](#it-learns-from-your-corrections). Or do it all from a session. Run `/plugin marketplace add yasyf/captain-hook`, then ask Claude to "set up captain hook".
+`init` scaffolds `.claude/hooks/`, wires Claude Code's settings, and arms the session reviewer. One `block_command` later, a force-push dies at `PreToolUse` and the hook's inline tests run green:
 
-## Your first hook
+<img src="https://github.com/yasyf/captain-hook/raw/main/docs/assets/demo.png" alt="Terminal running 'uvx capt-hook test' — a hook blocks git push --force and both inline tests pass" width="700">
 
-A hook is an event, some conditions, and an action. This one stops the agent from finishing a UI change it never looked at:
+Driving with an agent? Paste this:
 
-```python
-# .claude/hooks/visual_review.py
-from captain_hook import gate, TouchedFile, UsedSkill
-
-gate(
-    "You edited UI files. Open them with agent-browser and verify they render before finishing.",
-    only_if=[TouchedFile("**/src/routes/**", "**/src/components/**")],
-    skip_if=[UsedSkill("agent-browser")],
-)
+```text
+/plugin marketplace add yasyf/captain-hook
+/plugin install captain-hook@captain-hook
 ```
 
-`only_if` arms the gate only when UI files changed; `skip_if` stands it down once the agent has done the review. Conditions match tools, files, commands, and even which skills the agent used.
+<details>
+<summary>Prefer a prompt over the plugin?</summary>
 
-## It learns from your corrections
+```text
+Run `uvx capt-hook init` in this repo, write one hook that blocks force-pushes,
+and verify it with `uvx capt-hook test`. Read https://yasyf.github.io/captain-hook/
+if you get stuck.
+```
 
-Most hooks you'll never write by hand.
+</details>
 
-The corrections you give Claude as you work are exactly the rules a hook should enforce: "never force-push", "use `uv`, not `pip`", "you weakened that test". Writing the hook by hand is friction you skip in the moment, so the **session reviewer** notices for you. When a session ends, it reads the transcript, finds the durable corrections and the hooks that misfired, judges which ones are standing rules and which are one-offs, and once a pattern proves itself across sessions, opens a pull request that adds the hook — or fixes the one that misfired. You review the PR like any other.
+---
 
-It's on by default after `init`. Turn it off for a repo with `uvx capt-hook review disable`. The [session reviewer guide](https://yasyf.github.io/captain-hook/docs/guide/session-reviewer.html) covers the prerequisites (an authenticated `claude` and `gh`) and the `HOOKS_REVIEW_*` thresholds.
+## Use cases
 
-## Tested like code
+### Block force-push and rm -rf before they run
 
-Every deterministic hook carries inline tests, so a broken hook fails like broken code:
+One bad Bash call rewrites shared history or eats a directory, and by the time you spot it in the transcript it already ran. Declare the block once, tests inline:
 
 ```python
 # .claude/hooks/safety.py
 from captain_hook import Allow, Block, Input, block_command
 
 block_command(
-    ["git", "stash"],
-    reason="Use the team's VCS workflow for shelving changes",
-    hint="Commit a WIP change instead of stashing",
+    ["git", "push", "--force"],
+    reason="Force-pushing rewrites shared history",
+    hint="Use `git push --force-with-lease` instead",
     tests={
-        Input(command="git stash"): Block(),
-        Input(command="git status"): Allow(),
+        Input(command="git push --force"): Block(),
+        Input(command="git push origin main"): Allow(),
     },
 )
 ```
 
-Run them from your project root, where `--hooks` defaults to `.claude/hooks`:
+The next `git push --force` never executes: the agent sees `BLOCKED: Force-pushing rewrites shared history` plus the hint, and reaches for `--force-with-lease` instead. `rm -rf` is one more `block_command` away.
+
+### Turn repeated corrections into rules Claude can't forget
+
+You've typed "use uv, not pip" in a dozen sessions, and session thirteen makes the same mistake. After `init`, the session reviewer reads each transcript as the session ends, keeps the corrections that are standing rules, and — once a pattern proves itself across sessions — opens a PR that codifies it as a hook. Watch the pipeline:
 
 ```bash
-uvx capt-hook test
+uvx capt-hook status
 ```
 
-Wire that into CI and you catch a broken hook the way you catch broken code.
+The dashboard lists every correction it's tracking, staged from first sighting to open PR. You review the PR like any other; merged hooks enforce the rule from then on.
 
-## What it's for
+### Gate "done" until the tests actually pass
 
-- Block footguns before they run on `PreToolUse`: force-push, `rm -rf`, package-manager traps.
-- Steer the agent with feedback that fires on the patterns it actually emits: repeated failures, weakened tests, missed conventions.
-- Hold the line on multi-step work with Stop gates and artifact checks, so the agent can't call it "done" before the tests run or the report's written.
-- Keep all of it testable; every hook ships with inline tests that run in CI.
+The agent declares victory while the suite is red. A Stop gate holds the line:
 
-## Docs
+```python
+# .claude/hooks/quality.py
+from captain_hook import RanCommand, TouchedFile, gate
 
-[Read the docs](https://yasyf.github.io/captain-hook/) for the full guide to conditions, primitives, LLM hooks, workflows, state, and real-world patterns. To work on captain-hook itself, see the [development guide](https://yasyf.github.io/captain-hook/docs/development/).
+gate(
+    "You edited Python files but never ran the tests. Run `uv run pytest` before finishing.",
+    only_if=[TouchedFile("**/*.py")],
+    skip_if=[RanCommand(r"\bpytest\b")],
+)
+```
 
-## License
+The agent can't end the turn until a pytest run shows up in the transcript, and the gate stands down on its own once one does.
 
-Licensed under [PolyForm Noncommercial 1.0.0](LICENSE), free for noncommercial use.
+## More in the docs
+
+- **Session reviewer** — the full corrections lifecycle, from transcript to merged hook PR — [guide](https://yasyf.github.io/captain-hook/docs/guide/session-reviewer.html)
+- **Conditions** — typed filters over tools, files, commands, and transcript history — [guide](https://yasyf.github.io/captain-hook/docs/guide/conditions.html)
+- **LLM hooks** — gate on a model's verdict when a regex can't decide — [guide](https://yasyf.github.io/captain-hook/docs/guide/llm-hooks.html)
+- **Workflows** — multi-step Stop gates with artifact checks and checklists — [guide](https://yasyf.github.io/captain-hook/docs/guide/workflows.html)
+- **Packs** — the shipped `general`, `python`, and `go` hook packs — [guide](https://yasyf.github.io/captain-hook/docs/guide/packs.html)
+- **Testing** — run `uvx capt-hook test --json` in CI so a regressed hook fails the build — [guide](https://yasyf.github.io/captain-hook/docs/guide/testing.html)
+
+Read the [docs](https://yasyf.github.io/captain-hook/) for the full guide. Licensed under [PolyForm Noncommercial 1.0.0](https://github.com/yasyf/captain-hook/blob/main/LICENSE), free for noncommercial use.

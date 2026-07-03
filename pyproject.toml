@@ -2,7 +2,7 @@
 name = "capt-hook"
 # Inert sentinel — the real version is stamped from the release tag (uv version --frozen).
 version = "0.0.0"
-description = "Declarative hook framework for Claude Code"
+description = "Stop repeating yourself to Claude."
 readme = "README.md"
 license = "PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE"]

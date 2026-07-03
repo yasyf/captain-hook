@@ -18,7 +18,7 @@ keyboard_nav: true
 
 hero:
   name: captain-hook
-  tagline: "Typed, testable hooks for Claude Code — and a reviewer that learns new ones from the corrections you give Claude."
+  tagline: "Stop repeating yourself to Claude."
 
 sections:
   - title: Getting Started
