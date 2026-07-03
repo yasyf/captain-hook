@@ -7,7 +7,8 @@ from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
-from cc_transcript.activity import SessionActivity, meta_of
+from cc_transcript.activity import SessionActivity
+from cc_transcript.filterspec import event_meta
 from cc_transcript.ids import SessionId
 from cc_transcript.models import AssistantEvent, ToolUseBlock
 from cc_transcript.parser import parse_events_from_bytes
@@ -84,7 +85,7 @@ def lift_session(events: Sequence[TranscriptEvent], *, path: Path | None = None)
         events=events,
     )
     session_id = next(
-        (meta.session_id for event in events if (meta := meta_of(event)) is not None),
+        (meta.session_id for event in events if (meta := event_meta(event)) is not None),
         SessionId(path.stem if path else "unknown"),
     )
     return Session.from_activity(
