@@ -55,7 +55,7 @@ uvx capt-hook pack list
 ```
 
 ```
-  general                  builtin  -                    v0.10.0   9 hooks
+  general                  builtin  -                    v0.11.0   10 hooks
   python                   builtin  -                    v0.1.0    3 hooks
   go                       builtin  -                    v0.1.0    2 hooks
   steering                 builtin  -                    v0.3.0    1 hooks

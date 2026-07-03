@@ -23,7 +23,7 @@ from captain_hook.util import http
 
 PACKS_DIR = Path(captain_hook.__file__).parent / "packs"
 EXPECTED_BUILTINS = {"general", "python", "go", "steering", "fixes"}
-GENERAL_HOOKS = {"commands", "detours", "docs", "models", "plans", "prompts", "review", "tasks", "tombstones"}
+GENERAL_HOOKS = {"commands", "comments", "detours", "docs", "models", "plans", "prompts", "review", "tasks", "tombstones"}
 PYTHON_HOOKS = {"style", "testing", "toolchain"}
 GO_HOOKS = {"testing", "toolchain"}
 # lib.py carries __capt_hook_skip__ so it is a non-underscore file the loader skips; the
@@ -570,7 +570,7 @@ def test_cli_pack_add_list_remove(tmp_path: Path) -> None:
     assert "[packs.general]" in manager.packs_toml_path(tmp_path).read_text()
 
     listed = runner.invoke(cli, ["--root", str(tmp_path), "pack", "list"])
-    assert "general" in listed.output and "9 hooks" in listed.output
+    assert "general" in listed.output and "10 hooks" in listed.output
 
     remove = runner.invoke(cli, ["--root", str(tmp_path), "pack", "remove", "general"])
     assert remove.exit_code == 0

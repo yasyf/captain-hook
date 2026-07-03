@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- General-pack `comments` nudge (pack 0.11.0): a language-agnostic `PreToolUse` warn that
+  discourages verbose comments. A `LongCommentIntroduced` custom condition diffs the edit's
+  pre-image against its new text via `introduced_comments`, groups adjacent line-comment runs
+  (a block comment, or consecutive `//`/`#` lines with no code between), and fires when an
+  introduced run exceeds ~4 lines or ~300 characters. Diff-based, so a pre-existing long
+  comment re-saved unchanged never fires; purely numeric, so no LLM call. The strict threshold
+  warns on long doc runs (godoc/rustdoc) too, by design — verbosity of any kind gets a nudge;
+  Python docstrings are string nodes, not comments, so they never trip it.
+
 ### Changed (BREAKING)
 - **cc-transcript v8: the command-parsing core moved upstream.** `captain_hook/command.py`
   is deleted; `Command` (né `ParsedCommand`), `CommandLine`, `CommandLineQuery`, and
@@ -27,7 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   event's command stays on `captain_hook.types.Command`/`Command.matches`.
 - Dependencies: `cc-transcript>=8,<9`; the direct `tree-sitter`/`tree-sitter-bash` pins are
   dropped (they arrive transitively via cc-transcript). `ast-grep-py` stays.
-
 ## [6.5.0] - 2026-07-03
 
 ### Added
