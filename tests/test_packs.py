@@ -879,3 +879,78 @@ def test_cli_pack_list_shows_resolved_commit_for_moving(tmp_path: Path, monkeypa
     listed = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "list"])
     assert listed.exit_code == 0, listed.output
     assert "acme" in listed.output and "latest@abcdef1" in listed.output  # honest resolved commit, not "None"
+
+
+# --- disabled packs.toml entries -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "toml",
+    [
+        pytest.param("[packs.show]\ndisabled = true\n", id="bare_disabled"),
+        # disabled wins even alongside a source (item: disabled beats a packs.toml source)
+        pytest.param('[packs.show]\nsource = "github:a/b@v1"\ndisabled = true\n', id="disabled_beats_source"),
+    ],
+)
+def test_parse_entry_disabled(packs_toml: Path, toml: str) -> None:
+    packs_toml.write_text(toml)
+    assert manager.read_entries(packs_toml) == [manager.DisabledPack("show")]
+
+
+def test_disabled_entry_round_trips(packs_toml: Path) -> None:
+    manager.atomic_write(packs_toml, manager.render_packs_toml([manager.DisabledPack("show")]))
+    assert "disabled = true" in packs_toml.read_text()
+    assert manager.read_entries(packs_toml) == [manager.DisabledPack("show")]
+
+
+def test_disabled_pack_is_not_resolved(tmp_path: Path) -> None:
+    path = manager.packs_toml_path(tmp_path)
+    manager.upsert_entry(path, manager.BuiltinPack("general"))
+    path.write_text(path.read_text() + "[packs.python]\ndisabled = true\n")  # decline the python builtin
+    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+    assert missing == []
+    assert [r.entry.name for r in resolved] == ["general"]  # the disabled entry resolves to nothing
+
+
+# --- attached packs (session-scoped plugin attach) -----------------------------------
+
+
+def test_read_attached_absent_is_empty(tmp_path: Path) -> None:
+    assert manager.read_attached(tmp_path) == []
+
+
+def test_attached_round_trip_is_keyed_by_name(tmp_path: Path) -> None:
+    first = manager.AttachedPack(name="ccx", dir=str(tmp_path / "v1"), version="1.0.0")
+    manager.upsert_attached(tmp_path, first)
+    assert manager.read_attached(tmp_path) == [first]
+
+    moved = manager.AttachedPack(name="ccx", dir=str(tmp_path / "v2"), version="2.0.0")
+    manager.upsert_attached(tmp_path, moved)  # same name replaces, never appends
+    assert manager.read_attached(tmp_path) == [moved]
+
+    other = manager.AttachedPack(name="other", dir=str(tmp_path / "o"), version="0.1.0")
+    manager.upsert_attached(tmp_path, other)  # a new name appends
+    assert manager.read_attached(tmp_path) == [moved, other]
+
+
+def test_resolve_attached_loads_manifest(tmp_path: Path) -> None:
+    pack = write_pack(tmp_path / "p", "ccx", hooks=".")
+    session = tmp_path / "session"
+    session.mkdir()
+    manager.upsert_attached(session, manager.AttachedPack(name="ccx", dir=str(pack), version="0.1.0"))
+
+    (resolved,) = manager.resolve_attached(session)
+    assert resolved.entry == manager.AttachedPack(name="ccx", dir=str(pack), version="0.1.0")
+    assert resolved.manifest.name == "ccx"
+    assert resolved.path == pack  # hooks="." resolves the manifest dir itself
+
+
+def test_resolve_attached_prunes_stale_dir(tmp_path: Path) -> None:
+    pack = write_pack(tmp_path / "p", "ccx", hooks=".")
+    session = tmp_path / "session"
+    session.mkdir()
+    manager.upsert_attached(session, manager.AttachedPack(name="ccx", dir=str(pack), version="0.1.0"))
+    assert len(manager.resolve_attached(session)) == 1
+
+    pack.rename(tmp_path / "moved")  # a plugin update moved the versioned cache path
+    assert manager.resolve_attached(session) == []  # the dangling entry is silently dropped

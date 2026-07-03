@@ -22,6 +22,7 @@ import os
 import re
 import shutil
 import tarfile
+import tempfile
 import time
 import tomllib
 from collections.abc import Iterator, Sequence
@@ -31,11 +32,13 @@ from pathlib import Path
 from typing import Any
 
 from filelock import FileLock
+from loguru import logger
 
 from captain_hook.settings import resolve_cache_dir
 from captain_hook.util import http
 
 PACK_MANIFEST = "capt-hook.toml"
+ATTACHED_FILE = "attached_packs.json"
 SHA_MARKER = ".sha"
 LATEST_REF = "latest"
 # Moving refs (@latest / a branch / a bare default-branch source) re-resolve to a fresh
@@ -108,12 +111,39 @@ class ExternalPack:
     commit: str | None = None
 
 
-type PackEntry = BuiltinPack | ExternalPack
+@dataclass(frozen=True, slots=True)
+class DisabledPack:
+    """A packs.toml entry that declines a pack by name.
+
+    ``[packs.<name>] disabled = true`` suppresses a pack the repo would otherwise
+    inherit — a builtin, a packs.toml source, or a plugin-attached pack — regardless of
+    any other keys on the entry. Disabling always wins.
+    """
+
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class AttachedPack:
+    """A pack a Claude plugin registered for the current session via ``pack attach``.
+
+    Stored per session in ``attached_packs.json`` keyed by ``name``; ``dir`` is the
+    absolute pack root (holding the ``capt-hook.toml`` manifest) and ``version`` is the
+    manifest version recorded at attach time.
+    """
+
+    name: str
+    dir: str
+    version: str
+
+
+type PackEntry = BuiltinPack | ExternalPack | DisabledPack
+type ResolvedEntry = BuiltinPack | ExternalPack | AttachedPack
 
 
 @dataclass(frozen=True, slots=True)
 class ResolvedPack:
-    entry: PackEntry
+    entry: ResolvedEntry
     path: Path
     manifest: PackManifest
 
@@ -160,6 +190,8 @@ def manifest_in(root: Path) -> Path:
 
 def parse_entry(name: str, table: dict[str, Any]) -> PackEntry:
     match table:
+        case {"disabled": True}:
+            return DisabledPack(name=name)
         case {"source": source, "commit": commit}:
             return ExternalPack(name=name, source=PackSource.parse(source), commit=commit)
         case {"source": source}:
@@ -180,6 +212,8 @@ def render_entry(entry: PackEntry) -> str:
     match entry:
         case BuiltinPack(name=name):
             return f"[packs.{name}]\n\n"
+        case DisabledPack(name=name):
+            return f"[packs.{name}]\ndisabled = true\n\n"
         case ExternalPack(name=name, source=source, commit=None):
             return f'[packs.{name}]\nsource = "{source}"\n\n'
         case ExternalPack(name=name, source=source, commit=commit):
@@ -191,10 +225,20 @@ def render_packs_toml(entries: Sequence[PackEntry]) -> str:
 
 
 def atomic_write(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically via a unique temp file in the same directory.
+
+    The temp name is per-call (``mkstemp``), so concurrent writers to the same path never
+    consume each other's temp file — one writer's ``os.replace`` can't yank another's out.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(f"{path.suffix}.tmp")
-    tmp.write_text(text)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=f"{path.suffix}.tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def upsert_entry(path: Path, entry: PackEntry) -> None:
@@ -444,6 +488,8 @@ def resolve_enabled_packs(root: Path) -> tuple[list[ResolvedPack], list[str]]:
         match entry:
             case BuiltinPack(name=name):
                 resolved.append(resolve_builtin(name))
+            case DisabledPack():
+                pass
             case ExternalPack() as ext if found := (load_cached_fresh(ext, now) if fast else resolve_external(ext)):
                 resolved.append(found)
             case ExternalPack() as ext:
@@ -451,3 +497,60 @@ def resolve_enabled_packs(root: Path) -> tuple[list[ResolvedPack], list[str]]:
     if not (fast or missing):
         atomic_write(fastpath_path(root), toml_hash(root))
     return resolved, missing
+
+
+def attached_path(session_dir: Path) -> Path:
+    return session_dir / ATTACHED_FILE
+
+
+def read_attached(session_dir: Path) -> list[AttachedPack]:
+    path = attached_path(session_dir)
+    if not path.exists():
+        return []
+    return [AttachedPack(name=e["name"], dir=e["dir"], version=e["version"]) for e in json.loads(path.read_text())]
+
+
+def upsert_attached(session_dir: Path, pack: AttachedPack) -> None:
+    """Record ``pack`` in the session's attach file, replacing any entry of the same name.
+
+    The read-modify-write runs under a file lock so two ``pack attach`` processes (parallel
+    SessionStart hooks) serialize rather than clobber each other's entries.
+    """
+    path = attached_path(session_dir)
+    lock = path.with_name(path.name + ".lock")
+    with FileLock(str(lock)):
+        existing = read_attached(session_dir)
+        if (prior := next((p for p in existing if p.name == pack.name), None)) and prior.dir != pack.dir:
+            logger.bind(pack=pack.name, previous=prior.dir, incoming=pack.dir).debug(
+                "attached pack name re-bound to a different dir; the newer attach wins"
+            )
+        entries = [*(p for p in existing if p.name != pack.name), pack]
+        atomic_write(
+            path,
+            json.dumps([{"name": p.name, "dir": p.dir, "version": p.version} for p in entries]),
+        )
+
+
+def resolve_attached(session_dir: Path) -> list[ResolvedPack]:
+    """Resolve this session's attached packs, dropping entries that no longer resolve.
+
+    A plugin update moves or non-atomically rewrites its versioned cache path, so a prior
+    session's attach entry can dangle or point at a half-written manifest. SessionStart
+    re-attaches every session, so an entry whose dir has vanished or whose manifest is
+    missing/malformed is skipped with a debug log rather than killing dispatch for every
+    other hook in the event — the same fail-soft shape as ``resolve_enabled_packs``.
+    """
+    resolved: list[ResolvedPack] = []
+    for pack in read_attached(session_dir):
+        root = Path(pack.dir)
+        if not root.is_dir():
+            continue
+        try:
+            manifest = PackManifest.load(manifest_in(root))
+        except (PackError, tomllib.TOMLDecodeError, KeyError, OSError):
+            logger.bind(pack=pack.name, dir=pack.dir).opt(exception=True).debug(
+                "skipped attached pack with a missing or malformed manifest"
+            )
+            continue
+        resolved.append(ResolvedPack(pack, manifest.hooks_dir(root), manifest))
+    return resolved

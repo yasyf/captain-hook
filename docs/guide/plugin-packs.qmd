@@ -1,0 +1,103 @@
+---
+title: "Ship a pack in a Claude plugin"
+---
+
+A Claude plugin can carry a capt-hook pack so its hooks load in every project the
+plugin is enabled for, without that project running `capt-hook init` or editing
+`packs.toml`. There are two sanctioned tiers. Pick by whether the pack should
+track the *repo* or track the *session*.
+
+## Repo-scoped: `packs.toml`
+
+This is the cc-notes model. The pack is pinned in the project's committed
+`.claude/hooks/packs.toml`, so every clone hydrates the same commit and the
+wiring lives in the repo. Use it when the pack encodes that repo's own
+conventions.
+
+```bash
+uvx capt-hook pack add github:acme/notes@v1.2
+```
+
+`pack add` resolves the ref, caches the commit, and writes a pinned entry;
+teammates run `pack update` to hydrate it. The full workflow is in
+[Use packs](packs.qmd). Nothing else on this page applies to this tier — the
+plugin does no per-session work.
+
+## Session-attached: plugin `hooks.json`
+
+This is the cc-context model. The plugin ships the pack inside itself and
+registers it once per session, so it applies to whatever project the plugin is
+enabled in and leaves no trace in the repo. The plugin's `hooks/hooks.json`
+wires two kinds of command:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "uvx capt-hook pack attach ${CLAUDE_PLUGIN_ROOT}/hooks" }] }
+    ],
+    "PreToolUse": [
+      { "hooks": [{ "type": "command", "command": "uvx capt-hook run PreToolUse" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "uvx capt-hook run Stop" }] }
+    ]
+  }
+}
+```
+
+The `SessionStart` command runs once at session start. `pack attach` reads the
+SessionStart JSON from stdin, records the pack — its manifest directory and
+version — under that session, and writes nothing to stdout, since SessionStart
+stdout is injected into the model context. The argument is the pack root: the
+directory holding `capt-hook.toml` (here a `hooks/` subtree with `hooks = "."`).
+A missing or invalid manifest exits non-zero with a stderr message, so a broken
+plugin fails loud at author time rather than silently loading nothing.
+
+Every other command is the canonical `uvx capt-hook run <Event>`, wired for each
+event the pack subscribes.
+
+## Keep the run command byte-identical
+
+Claude Code deduplicates hook commands by exact string match: two hooks that wire
+the same command string for one event run that command once. A plugin that wired
+`uvx capt-hook --hooks ${CLAUDE_PLUGIN_ROOT}/hooks run PreToolUse` produces a
+different string from a project's own `uvx capt-hook run PreToolUse`, so Claude
+Code runs both — two `uvx` processes per event, and the project's `packs.toml`
+packs resolved and dispatched twice.
+
+Wiring the plugin to the identical `uvx capt-hook run PreToolUse` collapses plugin
+and project into one process per event. The session-attached pack still loads
+inside that one process, because `pack attach` already recorded it for the
+session and `run` picks it up during discovery. So keep the run command exactly
+`uvx capt-hook run <Event>` (add `--async` only where the project's own wiring
+does), and put per-plugin configuration in the attached pack's manifest and
+hooks, never in the run command's flags.
+
+Attach records the pack once, keyed by the session id. A subagent's hook events
+carry that same session id, so an attached pack loads for subagents too — the
+attach at SessionStart covers the whole session, sidechains included.
+
+## Precedence
+
+When a pack name arrives from more than one tier, the more explicit source wins.
+A `packs.toml` entry beats an attached pack of the same name: a repo that pins
+`acme-notes` gets that exact commit even if an enabled plugin also attaches an
+`acme-notes`, and the ambient attach is dropped. A repo that wants none of an
+ambient plugin's pack declines it by name, which beats every source:
+
+```toml
+[packs.acme-notes]
+disabled = true
+```
+
+The disabled entry pins nothing and resolves to nothing; it only suppresses the
+pack, whether that pack would have come from a builtin, a `packs.toml` source, or
+an attach. An attached pack no project pins loads normally, and its hooks follow
+the same first-decision-wins dispatch as every other pack.
+
+## See also
+
+- [Use packs](packs.qmd) covers the repo-scoped tier end to end.
+- [How hooks run](how-it-works.qmd) explains discovery, dispatch, and the
+  first-decision-wins ordering.

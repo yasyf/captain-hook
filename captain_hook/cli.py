@@ -15,6 +15,7 @@ from typing import Any
 
 import click
 from cc_transcript.ids import SessionId
+from loguru import logger
 
 from captain_hook.app import _state, load_gitignore, reset
 from captain_hook.context import HookContext, load_transcript
@@ -36,22 +37,62 @@ class CliState:
     root: Path
     hooks: str
 
-    def discover(self) -> list[manager.ResolvedPack]:
+    def discover(self, session_dir: Path | None = None) -> list[manager.ResolvedPack]:
         reset()
         load_gitignore(self.root)
         discover_hooks(self.hooks)
         resolved, missing = manager.resolve_enabled_packs(self.root)
         for pack_ in resolved:
             discover_pack(pack_.entry.name, pack_.path)
-        if any(pack_.manifest.nlp for pack_ in resolved):
+        # NLP provisioning is one shared SessionStart hook. Register it before the attached
+        # span when a project (packs.toml) pack needs it, so it counts as project-owned; only
+        # when solely an attached pack needs it does it register inside the span, so an
+        # attach-only NLP hook is attributed to the attach and never flagged as settings drift.
+        project_nlp = any(pack_.manifest.nlp for pack_ in resolved)
+        if project_nlp:
             register_nlp_provisioning()
+        attached = self.attached_packs(resolved, session_dir)
+        attached_start = len(_state.hooks)
+        for pack_ in attached:
+            discover_pack(pack_.entry.name, pack_.path)
+        if not project_nlp and any(pack_.manifest.nlp for pack_ in attached):
+            register_nlp_provisioning()
+        attached_hooks = _state.hooks[attached_start:]
+        all_resolved = [*resolved, *attached]
+        attached_ids = {id(h) for h in attached_hooks}
+        _state.attach_only_events = {n for h in attached_hooks for n in event_names(h.spec.events)} - {
+            n for h in _state.hooks if id(h) not in attached_ids for n in event_names(h.spec.events)
+        }
         if missing:
             print(
                 f"capt-hook: packs unavailable (offline and not cached): {', '.join(missing)} "
                 "— run `capt-hook pack update` when online",
                 file=sys.stderr,
             )
-        return resolved
+        return all_resolved
+
+    def attached_packs(
+        self, resolved: Sequence[manager.ResolvedPack], session_dir: Path | None
+    ) -> list[manager.ResolvedPack]:
+        """Resolve session-attached packs a builtin or packs.toml pack doesn't already own.
+
+        A packs.toml entry (builtin, source, or ``disabled = true``) of the same name wins
+        over an ambient plugin attach; the shadowed attach is dropped with a debug log.
+        """
+        if session_dir is None:
+            return []
+        owned = {pack_.entry.name for pack_ in resolved} | {
+            e.name
+            for e in manager.read_entries(manager.packs_toml_path(self.root))
+            if isinstance(e, manager.DisabledPack)
+        }
+        kept: list[manager.ResolvedPack] = []
+        for pack_ in manager.resolve_attached(session_dir):
+            if pack_.entry.name in owned:
+                logger.bind(pack=pack_.entry.name).debug("attached pack shadowed by a packs.toml or disabled entry")
+                continue
+            kept.append(pack_)
+        return kept
 
 
 def example_hook_source() -> str:
@@ -253,7 +294,10 @@ def regenerate_settings(state: CliState) -> None:
 
 def settings_drift(root: Path) -> set[str]:
     paths = [p for name in ("settings.json", "settings.local.json") if (p := root / ".claude" / name).exists()]
-    return subscribed_events() - {event for p in paths for event in capt_hook_events(p)} if paths else set()
+    if not paths:
+        return set()
+    wired = {event for p in paths for event in capt_hook_events(p)}
+    return subscribed_events() - _state.attach_only_events - wired
 
 
 def warn_settings_drift(
@@ -285,12 +329,7 @@ def warn_settings_drift(
     return base
 
 
-def run_event(
-    event_name: str,
-    *,
-    async_: bool = False,
-    root: Path | None = None,
-) -> None:
+def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None:
     try:
         event = Event[event_name]
     except KeyError:
@@ -315,19 +354,22 @@ def run_event(
     setup_logging(session_id)
     resolved_path = raw.get("agent_transcript_path") or raw.get("transcript_path")
 
+    # stdin is parsed first so the session dir is known before discovery: CliState.discover
+    # loads this session's attached packs (see attached_packs) on top of packs.toml.
     session_dir = ensure_session(SessionId(session_id)) if session_id else None
+    state.discover(session_dir=session_dir)
     ctx = HookContext(
         session=SessionStore(session_dir),
         transcript=load_transcript(resolved_path),
         settings=_state.settings,
-        project_root=root,
+        project_root=state.root,
     )
     evt = event.event_class(_raw=raw, ctx=ctx)
 
     if output := warn_settings_drift(
         dispatch(event, evt, session_dir=session_dir, async_=async_),
         event,
-        root,
+        state.root,
         session_dir,
         async_=async_,
     ):
@@ -520,8 +562,7 @@ def cli(ctx: click.Context, hooks: str | None, root_path: str | None) -> None:
 @click.option("--async", "async_", is_flag=True, default=False, help="Run async hooks only")
 @click.pass_obj
 def run(state: CliState, event: str, async_: bool) -> None:
-    state.discover()
-    run_event(event, async_=async_, root=state.root)
+    run_event(state, event, async_=async_)
 
 
 @cli.command(name="register-hooks")
@@ -620,6 +661,29 @@ def pack_add(state: CliState, target: str) -> None:
     manager.upsert_entry(manager.packs_toml_path(state.root), entry)
     click.echo(f"  added {entry.name}")
     regenerate_settings(state)
+
+
+@pack.command(name="attach")
+@click.argument("directory")
+def pack_attach(directory: str) -> None:
+    """Register a plugin's pack for the current session (reads the SessionStart JSON on stdin).
+
+    A Claude plugin wires this to a SessionStart hook so its pack loads under the byte-identical
+    canonical ``uvx capt-hook run <Event>`` commands, letting Claude Code's exact-command dedup
+    collapse plugin and project wiring into one process per event. Writes nothing to stdout on
+    success (SessionStart stdout is injected into the model context); a missing or invalid
+    manifest exits 1 with a stderr message.
+    """
+    raw = json.loads(sys.stdin.read())
+    session_dir = ensure_session(SessionId(raw["session_id"]))
+    root = Path(directory).resolve()
+    try:
+        manifest = manager.PackManifest.load(manager.manifest_in(root))
+    except manager.PackError as e:
+        raise click.ClickException(str(e)) from e
+    manager.upsert_attached(
+        session_dir, manager.AttachedPack(name=manifest.name, dir=str(root), version=manifest.version)
+    )
 
 
 @pack.command(name="list")

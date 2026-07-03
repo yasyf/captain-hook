@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Claude plugins can ship a capt-hook pack by session attachment. A plugin wires a
+  SessionStart hook to `uvx capt-hook pack attach <dir>` (which reads the SessionStart
+  JSON on stdin, validates the pack manifest, and records it under the session, printing
+  nothing) and wires every per-event command to the byte-identical canonical
+  `uvx capt-hook run <Event>`. Claude Code's exact-command-string dedup then collapses the
+  plugin's wiring and the project's own into one process per event, instead of spawning a
+  second `uvx` that re-resolves and double-dispatches the project's `packs.toml` packs.
+  Attached packs resolve after `packs.toml` — a builtin or `packs.toml` pack of the same
+  name wins over an attach — and a new `[packs.<name>] disabled = true` entry declines a
+  pack from any source (builtin, `packs.toml`, or attach). Events subscribed only by
+  attached packs are excluded from the settings-drift warning, since a plugin wires them in
+  its own `hooks.json` rather than the project's settings. New guide: "Ship a pack in a
+  Claude plugin".
+
 ## [8.2.0] - 2026-07-03
 
 ### Changed
