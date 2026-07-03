@@ -56,8 +56,7 @@ class PackSource:
 
     @classmethod
     def parse(cls, raw: str) -> PackSource:
-        pattern = re.compile(r"^github:(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+?)(?:@(?P<ref>[\w./-]+))?$")
-        if not (m := pattern.match(raw)):
+        if not (m := re.match(r"^github:(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+?)(?:@(?P<ref>[\w./-]+))?$", raw)):
             raise PackError(f"invalid pack source {raw!r}; expected github:owner/repo[@ref]")
         return cls(owner=m["owner"], repo=m["repo"], ref=m["ref"])
 
