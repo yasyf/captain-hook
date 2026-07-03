@@ -19,9 +19,7 @@ WARNING_NO = logger.level("WARNING").no
 
 @pytest.fixture(autouse=True)
 def isolate_failure_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from captain_hook.primitives import llm as llm_mod
-
-    monkeypatch.setattr(llm_mod, "FAILURE_ROOT", tmp_path / "captain-hook-failures")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
 
 
 class TestSetupLogging:
@@ -269,7 +267,7 @@ class TestPromptCheckDiagnostics:
         assert "_PROMPT_TAIL_" in log_text
         assert "prompt (tail 1KB):" in log_text
 
-        failure_files = list((tmp_path / "captain-hook-failures").rglob("*.json"))
+        failure_files = list((tmp_path / "captain-hook" / "failures").rglob("*.json"))
         assert len(failure_files) == 1
         payload = _json.loads(failure_files[0].read_text())
         assert payload["argv"] == argv
@@ -298,7 +296,7 @@ class TestPromptCheckDiagnostics:
         result = prompt_check(evt, "Check {thing}", {"thing": "quality"}, prefix="TEST QUALITY")
 
         assert result is None
-        failure_files = list((tmp_path / "captain-hook-failures").rglob("*.json"))
+        failure_files = list((tmp_path / "captain-hook" / "failures").rglob("*.json"))
         assert len(failure_files) == 1
         payload = _json.loads(failure_files[0].read_text())
         assert payload["exception_type"] == "RuntimeError"

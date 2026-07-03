@@ -9,11 +9,11 @@ from typing import TYPE_CHECKING, Any, Literal
 from loguru import logger
 from pydantic import BaseModel
 
-from captain_hook import state
 from captain_hook.app import on
 from captain_hook.contexts import apply_contexts, with_defaults
 from captain_hook.primitives.nudge import DEFAULT_FIRES
 from captain_hook.prompt import Prompt
+from captain_hook.settings import resolve_cache_dir
 from captain_hook.signals import extract_signal_context, resolve_signals, transcript_texts
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import (
@@ -26,8 +26,6 @@ from captain_hook.types import (
     TCondition,
     Waiting,
 )
-
-FAILURE_ROOT = state.CACHE_ROOT / "failures"
 
 if TYPE_CHECKING:
     from spawnllm import TModel, TSpecialty
@@ -362,7 +360,9 @@ def record_prompt_check_failure(
         case _:
             argv, exit_code, stdout, stderr = None, None, "", ""
 
-    failure_path = FAILURE_ROOT / (p.stem if (p := evt.ctx.t.path) else "unknown") / f"{timestamp}.json"
+    failure_path = (
+        resolve_cache_dir() / "failures" / (p.stem if (p := evt.ctx.t.path) else "unknown") / f"{timestamp}.json"
+    )
     failure_path.parent.mkdir(parents=True, exist_ok=True)
     failure_path.write_text(
         json.dumps(

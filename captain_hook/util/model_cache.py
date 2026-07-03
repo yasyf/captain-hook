@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import functools
 import hashlib
-import os
 import re
 import shutil
 import zipfile
@@ -12,6 +11,7 @@ from typing import Any
 
 from filelock import FileLock
 
+from captain_hook.settings import resolve_cache_home
 from captain_hook.util import http
 
 MODEL_NAME = "en_core_web_sm"
@@ -19,9 +19,8 @@ WN_LEXICON = "oewn:2025"
 WHEEL_CHECKSUM = re.compile(r"Checksum \.whl:\*\*\s*`([0-9a-f]{64})`")
 
 
-@functools.cache
 def cache_root() -> Path:
-    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "spacy" / "models"
+    return resolve_cache_home() / "spacy" / "models"
 
 
 @functools.cache

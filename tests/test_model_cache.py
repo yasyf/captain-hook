@@ -18,9 +18,7 @@ MODEL_VERSION = "3.9.5"
 @pytest.fixture
 def cache_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-    model_cache.cache_root.cache_clear()
     yield tmp_path / "spacy" / "models"
-    model_cache.cache_root.cache_clear()
 
 
 @pytest.fixture

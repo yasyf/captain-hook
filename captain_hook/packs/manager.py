@@ -32,7 +32,7 @@ from typing import Any
 
 from filelock import FileLock
 
-from captain_hook import state
+from captain_hook.settings import resolve_cache_dir
 from captain_hook.util import http
 
 PACK_MANIFEST = "capt-hook.toml"
@@ -209,7 +209,7 @@ def delete_entry(path: Path, name: str) -> None:
 
 
 def packs_cache_root() -> Path:
-    return state.CACHE_ROOT / "packs"
+    return resolve_cache_dir() / "packs"
 
 
 def meta_path(name: str) -> Path:

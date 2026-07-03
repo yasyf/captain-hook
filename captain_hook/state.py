@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-import os
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -24,7 +23,6 @@ if TYPE_CHECKING:
 
 FRAMEWORK_DIR = str(Path(__file__).resolve().parent)
 PACKS_DIR = str(Path(FRAMEWORK_DIR) / "packs")
-CACHE_ROOT = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "captain-hook"
 SPACY_MODEL = "en_core_web_sm"
 
 
