@@ -51,7 +51,10 @@ hook(
     only_if=[
         Tool("Agent|Task"),
         ToolInput("model", r"(?i)\b(haiku|sonnet|opus)\b"),
-        ToolInput("prompt", r"(?i)\b(writ(e|es|ing|ten)|draft|redraft|rewrit|revis|polish|copyedit|compose|author|update|edit)"),
+        ToolInput(
+            "prompt",
+            r"(?i)\b(writ(e|es|ing|ten)|draft|redraft|rewrit|revis|polish|copyedit|compose|author|update|edit)",
+        ),
         ToolInput(
             "prompt",
             r"(?i)\b(readme|docs?|documentation|blog|changelog|release notes|announcement"
