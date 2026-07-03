@@ -649,6 +649,28 @@ class TestInferTool:
         assert len(results) == 1
         assert results[0][2], f"Failed: {results}"
 
+    def test_variadic_non_inferable_tool_condition_pins_first_name(self):
+        # Regression: Tool("WebFetch", "WebSearch") over an Input whose shape infer_tool can't
+        # map (the tool_input escape hatch) must pin the FIRST named tool, not fall through to
+        # Bash and miss the hook's own Tool condition — leaving Block tests vacuously unfired.
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Block, Input
+
+        reset()
+
+        @on(
+            Event.PreToolUse,
+            only_if=[Tool("WebFetch", "WebSearch")],
+            tests={Input(tool_input={"url": "https://example.com"}): Block(pattern="^WebFetch$")},
+        )
+        def echo_tool(evt):
+            return HookResult(action=Action.block, message=evt.tool_name)
+
+        results = run_inline_tests()
+        assert len(results) == 1
+        assert results[0][2], f"Failed: {results}"
+
     def test_content_not_dropped_when_no_tool_condition(self):
         # Regression: Input(file, content) with only a FilePath condition must synthesize a
         # Write (not a bare Bash that drops file/content), so the Allow can actually fail.

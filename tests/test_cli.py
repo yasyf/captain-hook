@@ -6,12 +6,15 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
+import wn
 
 from captain_hook.app import (
     hook as register_hook,
 )
 from captain_hook.types import Event
+from captain_hook.util import http
 from tests.helpers import (
     raw_assistant,
     raw_text,
@@ -1001,16 +1004,29 @@ class TestNlpProvisioning:
         provision_nlp(self.pin_resolved_packs(tmp_path, monkeypatch, nlp=False))
         provision_mock.assert_not_called()
 
-    def test_provision_nlp_defers_on_fetch_error(
+    @pytest.mark.parametrize(
+        "make_exc",
+        [
+            pytest.param(lambda: http.GitHubFetchError("offline"), id="github_fetch_error"),
+            pytest.param(lambda: wn.Error("corrupt lexicon"), id="wn_error"),
+            pytest.param(
+                lambda: httpx.HTTPStatusError(
+                    "500", request=httpx.Request("GET", "https://x"), response=httpx.Response(500)
+                ),
+                id="httpx_status_error",
+            ),
+        ],
+    )
+    def test_provision_nlp_defers_on_provisioning_error(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         provision_mock: Any,
         capsys: pytest.CaptureFixture[str],
+        make_exc: Any,
     ) -> None:
         from captain_hook.cli import provision_nlp
-        from captain_hook.util import http
 
-        provision_mock.side_effect = http.GitHubFetchError("offline")
+        provision_mock.side_effect = make_exc()
         provision_nlp(self.pin_resolved_packs(tmp_path, monkeypatch, nlp=True))
         assert "deferred" in capsys.readouterr().out

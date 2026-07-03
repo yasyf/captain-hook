@@ -552,13 +552,16 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
                 test_name = f"{entry.name}:{key!r}"
                 try:
                     if isinstance(key, Input):
-                        # A Tool condition pins the tool only when it names exactly one; a
-                        # multi-name condition falls back to infer_tool's shape-based derivation.
+                        # A Tool condition honors infer_tool's shape derivation when it lands on a
+                        # named tool, else pins the first named tool (families infer_tool can't
+                        # shape, e.g. WebFetch/WebSearch). No Tool condition => pure inference.
                         spec_tools = [p for c in entry.spec.only_if if isinstance(c, Tool) for p in c.names]
                         evt = input_to_event(
                             next(iter(entry.spec.events)),
                             key,
-                            spec_tools[0] if len(spec_tools) == 1 else None,
+                            (inferred if (inferred := infer_tool(key)) in spec_tools else spec_tools[0])
+                            if spec_tools
+                            else None,
                         )
                         evt.ctx.call_llm = stub_call_llm  # type: ignore[assignment]
                         hook_result = (

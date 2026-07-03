@@ -227,6 +227,9 @@ def print_hook_summary(label: str, summary: dict[str, str], deferred_to: str) ->
 
 
 def provision_nlp(resolved: Sequence[manager.ResolvedPack]) -> None:
+    import httpx
+    import wn
+
     from captain_hook.util import http
     from captain_hook.util.model_cache import ensure_nlp_resources
 
@@ -235,7 +238,7 @@ def provision_nlp(resolved: Sequence[manager.ResolvedPack]) -> None:
     click.echo("Provisioning NLP resources (spaCy en_core_web_sm ~13MB + oewn:2025 lexicon ~231MB, cached)...")
     try:
         ensure_nlp_resources()
-    except (http.GitHubFetchError, OSError) as e:
+    except (http.GitHubFetchError, OSError, wn.Error, httpx.HTTPError) as e:
         click.echo(f"  deferred (offline?): {e} — the SessionStart hook will retry at session start")
 
 
