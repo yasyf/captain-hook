@@ -8,9 +8,9 @@ A review hook that reads only the transcript sees scattered edit blocks, and it 
 
 <!-- gd-embed: diff_review.py -->
 
-::: {.callout-note title="Verified by replay"}
+::: {.callout-note title="What the inline tests cover"}
 
-The model verdict carries no inline test. An LLM judgment needs a recorded fixture or a live session, so you exercise it by replaying real sessions under `uvx capt-hook test` rather than asserting it deterministically here.
+The inline tests pin the deterministic gate: a session that edited Python source reaches the model, one that didn't stays silent. Under `uvx capt-hook test` the model verdict itself is stubbed to always confirm — exercise the real judgment by replaying live sessions.
 
 :::
 
@@ -19,12 +19,12 @@ The model verdict carries no inline test. An LLM judgment needs a recorded fixtu
 `diff=True` resolves to `evt.ctx.diff()`, which prefers cc-context's token-budgeted `ccx diff` and falls back to `git diff` when `ccx` is unavailable. The result is wrapped in a `<diff>` block alongside the recent-transcript window, so the model reviews the change directly.
 
 ```python
-diff=True                 # attach a compact <diff> of the uncommitted change
-only_if=[SourceEdits()]   # cheap pre-filter: only Python source edits reach the model
-events=Event.Stop         # review once, right before the agent stops
+diff=True                          # attach a compact <diff> of the uncommitted change
+only_if=[TouchedFile("**/*.py")]   # cheap pre-filter: only sessions that edited Python source
+events=Event.Stop                  # review once, right before the agent stops
 ```
 
-Deterministic conditions run first, so the model only sees a turn that edited source. Diff against something other than the working tree with `diff="staged"` or `diff="HEAD~1"`.
+Stop carries no tool input, so the pre-filter is a transcript-history condition rather than a tool-input one. Deterministic conditions run first, so the model only sees a session that edited source. Diff against something other than the working tree with `diff="staged"` or `diff="HEAD~1"`.
 
 ## Run it yourself
 
