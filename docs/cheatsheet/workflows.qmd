@@ -16,7 +16,7 @@ workflow(label="QA-GATE", marker="QA COMPLETE", steps=[...], artifacts=[...])
 **Step** — one checkpoint: a `check` predicate plus stop and next messages
 ```python
 Step(name="run tests", check=text_matches(r"pytest.*passed"),
-     stopped_at="Tests have not run.", next_step="Run: pytest -x")
+     message="Tests have not run. Run: pytest -x")
 ```
 
 **Artifact** — a file that must exist and parse against a Pydantic model

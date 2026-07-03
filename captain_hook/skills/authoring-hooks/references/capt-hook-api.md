@@ -19,18 +19,17 @@ Distilled surface for writing `.claude/hooks/*.py`. Everything here is importabl
 from __future__ import annotations
 
 from captain_hook import (
-    Allow, BaseHookEvent, Block, Event, HookResult, InlineTests, Input, Prompt,
-    RanCommand, Rewrite, Signal, Signals, SourceEdits, TestFile, Tool, ToolInput, TouchedFile,
-    TranscriptFixture, Warn, WorkflowScript,
+    Allow, And, Agent, BaseHookEvent, Block, Command, Event, FilePath, HookResult, InlineTests,
+    Input, Not, Or, Prompt, RanCommand, ReadFile, Rewrite, Runs, Signal, Signals, SourceEdits,
+    TestFile, Tool, ToolInput, TouchedFile, TranscriptFixture, UsedSkill, Warn, WorkflowScript,
     block_command, gate, hook, lint, llm_gate, llm_nudge, nudge, on,
     prompt_check, rewrite_command, set_tool_input, warn_command, workflow, Artifact, Step, text_matches,
 )
-from captain_hook.types import Command
 ```
 
-Gotcha: the `Command` regex **condition** lives in `captain_hook.types`. Top-level
-`captain_hook.Command` is the parsed-command dataclass (what `evt.command_line` yields) —
-passing it to `only_if` raises `TypeError: missing 2 required positional arguments`.
+`Command` is the regex **condition** (`Command(r"git\s+push")`). The parsed-shell dataclass
+that `evt.command_line` yields is `ParsedCommand` (`captain_hook.command.ParsedCommand`) — you
+rarely import it directly.
 
 ## Events
 
@@ -67,13 +66,13 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 
 | Primitive | Signature (keyword-only after `*`) | Defaults |
 |---|---|---|
-| `block_command` | `(pattern, *, reason, hint=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; message `"BLOCKED: {reason}. {hint}."` |
-| `warn_command` | `(pattern, *, message, tests=None, events=Event.PostToolUse)` | warns, never blocks |
-| `rewrite_command` | `(pattern, replace, *, note=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; `re.sub(pattern, replace, command)` then allows with the rewritten command |
+| `block_command` | `(pattern, *, reason, hint=None, only_if=(), skip_if=(), tests=None)` | `PreToolUse` + `Tool("Bash")`; message `"BLOCKED: {reason}. {hint}."` |
+| `warn_command` | `(pattern, *, message, only_if=(), skip_if=(), tests=None, events=Event.PostToolUse)` | warns, never blocks |
+| `rewrite_command` | `(pattern, replace, *, only_if=(), skip_if=(), note=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; `re.sub(pattern, replace, command)` then allows with the rewritten command |
 | `set_tool_input` | `(field, value, *, tool, only_if=(), skip_if=(), note=None, tests=None)` | `PreToolUse` + `Tool(tool)`; fills a **missing** top-level input field with `value` and allows, never clobbering a present one |
-| `gate` | `(message, *, when=None, only_if=(), skip_if=(), events=None, max_fires=None, tests=None)` | `Stop \| SubagentStop`, `max_fires=1`; blocks |
-| `nudge` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), block=False, events=None, max_fires=None, tests=None)` | `PostToolUse` (with signals) else `PreToolUse`; `max_fires` 3 / 1; warns |
-| `lint` | `(check, *, message, trigger=None, sep=", ", block=False, events=None, tests=None, max_shown=5)` | `PostToolUse`, `Tool("Edit\|Write")` + `*.py`, skips test files |
+| `gate` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), events=None, max_fires=…, tests=None)` | `Stop \| SubagentStop`; blocks, defaults to **unlimited** fires (keeps enforcing); `skip_if` is additive with an automatic `Waiting()` |
+| `nudge` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), block=False, events=None, max_fires=…, tests=None)` | `PostToolUse` (with signals) else `PreToolUse`; default fires 3 / 1; `when` vetoes even with `signals`; warns |
+| `lint` | `(check, *, message, lang="py", trigger=None, sep=", ", block=False, events=None, tests=None, max_shown=5)` | `PostToolUse`, `Tool("Edit\|Write")` + the `lang` globs, skips test files; `trigger` pre-filters string **and** ast checks |
 | `workflow` | `(*, label, marker, steps, artifacts=None, only_if=(), skip_if=(), tests=None)` | guard on `SubagentStop`, `max_fires=1` |
 | `llm_gate` | `(prompt, *, message, signals=None, when=None, only_if=(), skip_if=(), events=None, max_fires=None, tests=None, max_context=2000, model="small", agent=True, transcript=True)` | `Stop \| SubagentStop`, `max_fires=1`; blocks on `GateVerdict.block` |
 | `llm_nudge` | same as `llm_gate` | `PostToolUse`, `max_fires=3`; warns on `NudgeVerdict.fire` |
@@ -125,20 +124,22 @@ evaluated first.
 
 | Need | Use |
 |---|---|
-| Filter by tool name | `Tool("Bash")` or `Tool("Edit\|Write")` (aliases auto-expand: Bash=Execute, Write=Create, Agent=Task) |
+| Filter by tool name | `Tool("Bash")` or `Tool("Edit", "Write")` — exact names (not regex), aliases auto-expand (Bash=Execute, Write=Create, Agent=Task), MCP suffixes match |
 | Filter by file path | `FilePath("*.py", "*.pyi")` |
-| Filter by bash command text | `Command(r"git\s+push")` — from `captain_hook.types` |
+| Filter by bash command text | `Command(r"git\s+push")` — regex over the raw line and each parsed command |
+| Bash argv prefix (structural, no false positives) | `Runs("git", "stash")` — matches `git stash [...]`, not `echo git stash` |
 | Filter by file content being written | `Content(r"print\(")` (multiline regex over Edit new / Write content) |
-| Filter by one raw tool-input field | `ToolInput("model", r"(?i)\bhaiku\b")` (multiline regex over one top-level field of any tool) |
-| Filter by a Workflow script | `WorkflowScript(model="haiku")` (inline `script`, or the `script_path` file's contents) |
-| Filter by subagent type | `Agent("cleanup")` |
-| Match only test files | `TestFile()` (`test_*.py`, `conftest.py`) |
+| Filter by raw tool-input fields | `ToolInput(model=r"(?i)\bhaiku\b")` (kwargs AND across fields; scalar values coerced to text) |
+| Filter by a Workflow script | `WorkflowScript(model="haiku")` — any `agent()` opt as a kwarg (`effort=`, `agentType=`, …), all AND |
+| Filter by subagent type | `Agent("cleanup")` or `Agent("Explore", "claude-code-guide")` |
+| Match only test files | `TestFile()` (`test_*.py`, `conftest.py`, any `.py` under `tests/`) |
 | Python source edits (skips tests by default) | `SourceEdits(lang="py")`; `lang` also `ts`, `go`, `rs`, ... |
-| File was previously read | `ReadFile("TESTING.md")` |
+| File was previously read | `ReadFile("TESTING.md")` — fnmatch globs; anchor dirs with `**/` |
 | File was previously edited | `TouchedFile("**/*.py")` |
 | Command was previously run | `RanCommand(r"uv\s+run\s+pytest")` |
-| Skill was invoked | `UsedSkill("codex")` |
+| Skill was invoked | `UsedSkill("codex")` — bare name also matches `plugin:name` |
 | During plan mode | `InPlanMode()` |
+| Combine across types | `Or(...)`, `And(...)`, `Not(...)` |
 | Custom logic | implement `CustomCondition` |
 
 `ReadFile`/`TouchedFile`/`RanCommand`/`UsedSkill` inspect the session transcript — they are

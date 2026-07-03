@@ -12,13 +12,14 @@ These match the event being processed right now.
 
 | Condition | Matches when | Pattern | Example |
 |-----------|--------------|---------|---------|
-| `Tool(p)` | The tool name matches | Pipe-separated names (aliases auto-expand) | `Tool("Bash\|Execute")` |
+| `Tool(*names)` | The tool name is one of `names` | Exact names (aliases + MCP suffixes auto-match); a `\|`-joined string still works | `Tool("Edit", "Write")` |
 | `FilePath(*p, project_only=True)` | The event's file path matches any glob | Glob | `FilePath("**/*.py")` |
-| `Command(p)` | The Bash command text matches | Regex | `Command(r"git\s+stash")` |
+| `Command(p)` | The raw Bash line or any parsed command matches | Regex | `Command(r"curl.*\|.*sh")` |
+| `Runs(*argv)` | Any parsed command's argv starts with `argv` | Argv prefix (structural) | `Runs("git", "stash")` |
 | `Content(p, project_only=True)` | The written/edited file content matches | Regex (multiline) | `Content(r"print\(")` |
-| `ToolInput(field, p)` | One top-level field of the raw tool input matches (any tool) | Regex (multiline) | `ToolInput("model", r"(?i)\bhaiku\b")` |
-| `WorkflowScript(pattern=…)` or `WorkflowScript(model=…)` | A `Workflow` tool's inline `script` (or `script_path` file): `pattern` searches the raw source, `model` matches the model names pinned in `agent()` opts | Regex | `WorkflowScript(model="haiku")` |
-| `Agent(p)` | The subagent type matches | Pipe-separated names | `Agent("cleanup\|refactor")` |
+| `ToolInput(**fields)` | Every named top-level tool-input field matches (any tool; scalars coerced to text) | Regex per field (multiline) | `ToolInput(model=r"(?i)\bhaiku\b")` |
+| `WorkflowScript(pattern=None, **opts)` | A `Workflow` tool's inline `script` (or `script_path` file): `pattern` searches the raw source, each opt key's regex matches a value pinned for that `agent()` opt; all AND | Regex | `WorkflowScript(model="haiku")` |
+| `Agent(*names)` | The subagent type is one of `names` | Exact names; a `\|`-joined string still works | `Agent("cleanup", "refactor")` |
 | `TestFile(project_only=True)` | The file is a test file (`test_*.py`, `conftest.py`, or any `.py` under a `tests/` directory) | — | `TestFile()` |
 | `SourceEdits(lang="py", include_tests=False, paths=None)` | The event edits/writes a source file in `lang` (and not a test, unless `include_tests`) | Language glob | `SourceEdits(lang="ts", paths="src/**")` |
 
@@ -34,7 +35,7 @@ These check what happened earlier in the session, from the transcript.
 | `ReadFile(*p, subagents=True)` | A file matching the glob was read | Glob | `ReadFile("TESTING.md")` |
 | `TouchedFile(*p, subagents=False)` | A file matching the glob was edited or written | Glob | `TouchedFile("**/*.py")` |
 | `RanCommand(p, subagents=True)` | A Bash command matching the regex ran | Regex | `RanCommand(r"uv\s+run\s+pytest")` |
-| `UsedSkill(p, subagents=True)` | A skill with a matching name was invoked | Pipe-separated names | `UsedSkill("codex\|codex:codex")` |
+| `UsedSkill(*names, subagents=True)` | A skill named one of `names` was invoked (a bare name also matches `plugin:name`) | Exact names; a `\|`-joined string still works | `UsedSkill("codex")` |
 | `InPlanMode()` | The agent is in plan mode | — | `InPlanMode()` |
 | `Waiting()` | A background or async tool is still pending. Durable `Workflow` and async sub-agent launches count across turns until their completion notification lands | — | `Waiting()` |
 
@@ -49,8 +50,9 @@ skip_if=[X, Y]      # X OR Y — any match skips the hook
 ```
 
 A matching `skip_if` skips the hook even when every `only_if` condition matches.
-For OR within a single condition, use pipe-alternation
-(`Tool("Bash|Execute")`) rather than separate entries.
+For OR *within* one condition, list the names (`Tool("Bash", "Execute")`). To combine across
+condition types, wrap them: `Or(*conds)` (any), `And(*conds)` (all — useful nested inside
+`Or`), and `Not(cond)` (negate). All three are exported from `captain_hook`.
 
 ## Custom conditions
 

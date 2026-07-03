@@ -6,6 +6,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-07-02
+
+A DX-audit release: the condition and primitive vocabularies were reshaped so the obvious
+spelling is the correct one. Majors are free here — the fleet consumes `capt-hook@latest`
+via uvx — so back-compat shims were not kept where a clean signature reads better.
+
+### Changed (BREAKING)
+- `captain_hook.Command` is now the **condition** (`Command(pattern)`); the parsed-shell
+  dataclass it previously named is now `ParsedCommand` (still reachable as
+  `captain_hook.command.ParsedCommand`). Every `from captain_hook import Command` guard
+  now resolves to the condition the docs always showed.
+- `ReadFile(*globs)` matches with `fnmatch` globs (like its twin `TouchedFile`) instead of
+  substring containment — `ReadFile("*.md")` now works; anchor a directory match with a
+  leading `**/`.
+- `register()` is removed. Use `hook()` for declarative hooks and `@on()` for handlers.
+- `hook(events, message, ...)` takes `message` as a required positional-or-keyword argument
+  (it was a keyword that raised at runtime when omitted). Keyword call sites are unaffected.
+- `Step(check=..., message=...)`: `stopped_at`/`next_step` collapse into one `message`, and
+  `name` is optional (labeling only).
+- A blocking `gate()`/`llm_gate()` now defaults to **unlimited** fires (it must keep
+  enforcing across turns); `max_fires=None` means unlimited everywhere.
+
+### Added
+- `WorkflowScript(pattern=None, **opts)` — any `agent()` opts key is matchable
+  (`WorkflowScript(model="haiku")`, `WorkflowScript(effort=r"^low$")`, …); `pattern` and
+  multiple opts AND together.
+- `Runs(*argv)` — structural Bash condition matching an argv prefix (`Runs("git", "stash")`),
+  no whitespace-regex and no `echo git stash` false positives.
+- `And(*conds)` / `Not(cond)` combinators, and `Or` is now exported.
+- Variadic `Tool(*names)`, `Agent(*names)`, `UsedSkill(*names)` (pipe strings still accepted);
+  `UsedSkill` matches plugin-qualified skills (`UsedSkill("codex")` matches `codex:codex`).
+- `ToolInput(**fields)` — kwargs form ANDing multiple fields, with scalar coercion so
+  `ToolInput(run_in_background="true")` matches a JSON `true`.
+- `Input` gains `script=` (synthesizes a Workflow call), `output=`/`error=` (tool results for
+  PostToolUse/PostToolUseFailure), and a working `prompt=` for Agent/Task; its tool is inferred
+  from the fields set instead of silently defaulting to Bash, and its `repr` shows only set
+  fields. Testing `Rewrite(**fields)` substring-matches `updated_input`.
+- `block_command`/`warn_command` gain `only_if=`/`skip_if=`; `rewrite_code`/`rewrite_command`
+  gain `skip_if=`. `when=` composes with `signals=` as a veto. `gate()` has a full explicit
+  signature. `gate`/`llm_gate` `skip_if` is additive with the automatic `Waiting()` guard.
+- Registration validates event compatibility: a tool-input condition on a non-tool event
+  (e.g. `Command(...)` on `Event.Stop`) raises instead of silently never matching. Regex
+  conditions compile at construction rather than at dispatch.
+
+### Fixed
+- `capt-hook test` fails (non-zero) when a hook file errors on import, reporting the
+  traceback, instead of swallowing it as a warning and passing green.
+- Inline-test `Block(pattern=)`/`Warn(pattern=)` with no produced message now fails the
+  assertion instead of passing vacuously.
+- `Command` matches the raw command line, so a pattern spanning pipes/operators/redirects
+  (`curl … | sh`) fires. `lint()` honors its `trigger=` and `lang` in string mode.
+
 ## [4.5.0] - 2026-07-02
 
 ### Added

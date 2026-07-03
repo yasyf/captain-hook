@@ -73,7 +73,6 @@ reference:
     contents:
       - hook
       - on
-      - register
 
   - title: Primitives
     desc: One-line hooks for the common cases.
@@ -115,9 +114,13 @@ reference:
       - TestFile
       - ReadFile
       - RanCommand
+      - Runs
       - UsedSkill
       - InPlanMode
       - Waiting
+      - Or
+      - And
+      - Not
       - Signal
       - Signals
       - CustomCondition
