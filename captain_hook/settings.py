@@ -32,11 +32,7 @@ DEFAULT_WAITING_TOOLS = [
 
 
 def resolve_state_dir() -> Path:
-    return Path(
-        os.environ.get("CAPTAIN_HOOK_STATE_DIR")
-        or os.environ.get("CLAUDE_HOOKS_STATE_DIR")
-        or Path.home() / ".claude" / "state"
-    )
+    return Path(os.environ.get("CAPTAIN_HOOK_STATE_DIR") or Path.home() / ".claude" / "state")
 
 
 def resolve_log_dir() -> Path:

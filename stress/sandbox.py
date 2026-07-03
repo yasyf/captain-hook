@@ -26,7 +26,7 @@ CHECKOUT = Path(__file__).resolve().parents[1]
 DROPPED_ENV = (
     "CAPT_HOOK_SPAWNED",
     "UV_EXCLUDE_NEWER",
-    "CLAUDE_HOOKS_STATE_DIR",
+    "CAPTAIN_HOOK_STATE_DIR",
     "CAPT_HOOK_DECISIONS_DB",
     "CLAUDE_PROJECT_DIR",
 )

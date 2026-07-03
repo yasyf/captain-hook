@@ -27,11 +27,11 @@ def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mo
     # root under resolve_state_dir(), which defaults to the real ~/.claude/state.
     # Without this, run_cli subprocesses sharing a stdin session_id share one session
     # dir, so fire-state leaks across tests under random ordering.
-    # CLAUDE_HOOKS_STATE_DIR is the lower-precedence var that TestStateRoot
-    # manages, so this stays compatible with its default-path test. The decision
-    # ledger defaults to the real ~/.cc-transcript/decisions.db, so it gets its own
-    # per-test override (inherited by run_cli subprocesses).
-    monkeypatch.setenv("CLAUDE_HOOKS_STATE_DIR", str(tmp_path_factory.mktemp("hook-state")))
+    # TestStateRoot monkeypatches CAPTAIN_HOOK_STATE_DIR over this autouse value;
+    # composition is safe because the test-local monkeypatch tears down first. The
+    # decision ledger defaults to the real ~/.cc-transcript/decisions.db, so it gets
+    # its own per-test override (inherited by run_cli subprocesses).
+    monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path_factory.mktemp("hook-state")))
     monkeypatch.setenv("CAPT_HOOK_DECISIONS_DB", str(tmp_path_factory.mktemp("decisions") / "decisions.db"))
     # The SessionEnd reviewer skips headless entrypoints (sdk-*); scrub it so tests don't
     # inherit the ambient CLAUDE_CODE_ENTRYPOINT of a pytest run launched inside claude.

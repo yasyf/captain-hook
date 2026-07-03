@@ -80,7 +80,7 @@ ALL_CATEGORIES = (
 
 
 def state_dir() -> Path:
-    return Path(os.environ["CLAUDE_HOOKS_STATE_DIR"])
+    return Path(os.environ["CAPTAIN_HOOK_STATE_DIR"])
 
 
 def run_review(stdin: bytes, *, env: dict[str, str] | None = None, cwd: Path | None = None):

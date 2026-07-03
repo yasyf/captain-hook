@@ -39,7 +39,7 @@ class TestSessionManagement:
     def test_ensure_session_creates_directory_keyed_by_session_id(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("CLAUDE_HOOKS_STATE_DIR", str(tmp_path))
+        monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
 
         sd = ensure_session(SessionId(SESSION_ID))
         assert sd.is_dir()
@@ -50,7 +50,7 @@ class TestSessionManagement:
     def test_cleanup_stale_removes_old_dir_without_transcript(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("CLAUDE_HOOKS_STATE_DIR", str(tmp_path))
+        monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
         monkeypatch.setattr("captain_hook.session.find_transcript_sync", lambda session_id: None)
 
         sd = ensure_session(SessionId(SESSION_ID))
@@ -59,7 +59,7 @@ class TestSessionManagement:
         assert not sd.exists()
 
     def test_cleanup_stale_preserves_recent_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("CLAUDE_HOOKS_STATE_DIR", str(tmp_path))
+        monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
         monkeypatch.setattr("captain_hook.session.find_transcript_sync", lambda session_id: None)
 
         sd = ensure_session(SessionId(SESSION_ID))
@@ -69,7 +69,7 @@ class TestSessionManagement:
     def test_cleanup_stale_preserves_old_dir_with_living_transcript(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("CLAUDE_HOOKS_STATE_DIR", str(tmp_path))
+        monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
         transcript = tmp_path / f"{SESSION_ID}.jsonl"
         transcript.touch()
         seen: list[str] = []
@@ -395,11 +395,11 @@ class TestContextState:
 
 class TestStateRoot:
     def test_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("CLAUDE_HOOKS_STATE_DIR", "/custom/state")
+        monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", "/custom/state")
         assert state_root() == Path("/custom/state")
 
     def test_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("CLAUDE_HOOKS_STATE_DIR", raising=False)
+        monkeypatch.delenv("CAPTAIN_HOOK_STATE_DIR", raising=False)
         result = state_root()
         assert result == Path.home() / ".claude" / "state"
 
