@@ -28,6 +28,8 @@ Exceptions: trivial single-file edits, single file reads, and single targeted `s
 
 These are defaults with standing permission to escalate any agent whose output misses the bar — escalation means fable; judge the output, not the price tag. Route by task type — context-window pressure is not a routing cue. `general-purpose`/`Plan` subagents inherit the session model; pass `model` whenever the table disagrees.
 
+**Check back on the unexpected.** Delegated agents never improvise a detour. When something unexpected changes the task's shape — a scope surprise, an invalidated assumption, a plan that doesn't survive contact with the code, a task that turns out different than described — the agent stops and returns early with findings plus 2-4 concrete options; the fable orchestrator picks the next step (AGENTS.md § Ask Before Assuming, one level up). Transient friction is not shape-change: retries, rate limits, and external failures stay autonomous per AGENTS.md § General Rules. Deciding next steps is never delegated downward — a wrapper doesn't ask codex/sonnet what to do next. Claude subagents and workflow agents inherit this file; gpt-5.5 does not, so codex prompts carry the contract (the codex skill embeds it).
+
 **Effort**: `xhigh` by default; fable implementation may run `high`. `max` only after an xhigh attempt falls short. Verification runs at the same or higher model + effort tier than the work it checks.
 
 **Phase intermediates may be broken.** In a phased plan, only the final state must be coherent. Shims, dual-mode params, and interphase adapters exist to be deleted next phase — skip them.
