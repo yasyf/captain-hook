@@ -87,6 +87,12 @@ def is_waiting(evt: BaseHookEvent) -> bool:
 
 
 def workflow_script_source(evt: BaseHookEvent) -> str | None:
+    """The pending ``Workflow`` call's script source, or ``None``.
+
+    Returns the inline ``script`` when present, else reads the file at
+    ``scriptPath``. A non-Workflow event, a missing/unreadable path, or a file
+    over ~1 MiB yields ``None``; never raises.
+    """
     if not (call := evt.as_input(WorkflowCall)):
         return None
     if call.script is not None:

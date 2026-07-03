@@ -126,6 +126,8 @@ reference:
       - CustomCondition
       - CustomCommandLineCondition
       - CustomInputTypeCondition
+      - workflow_script_source
+      - workflow_opt_values
 
   - title: Events & Results
     desc: Typed lifecycle events and hook outcomes.

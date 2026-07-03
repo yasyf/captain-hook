@@ -23,6 +23,7 @@ from captain_hook import file, style, util
 from captain_hook.app import hook, on
 from captain_hook.ast_grep import COMMENT_TYPES
 from captain_hook.command import CommandLine, ParsedCommand, Redirect
+from captain_hook.conditions import workflow_opt_values, workflow_script_source
 from captain_hook.context import HookContext
 from captain_hook.contexts import AfterEdit, BeforeEdit, Introduced, PromptContext, apply_contexts
 from captain_hook.durable import DurableSlot, DurableState, DurableStore
