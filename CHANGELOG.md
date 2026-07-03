@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.0] - 2026-07-03
+
 ### Added
 - General-pack main-loop implementation nudge (pack 0.9.0): a substantial routine
   Edit/Write on the main loop — fable implementing directly instead of delegating —
