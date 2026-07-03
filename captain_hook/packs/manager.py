@@ -70,13 +70,21 @@ class PackManifest:
     version: str
     description: str
     hooks: str
+    nlp: bool = False
 
     @classmethod
     def load(cls, path: Path) -> PackManifest:
         if not path.is_file():
             raise PackError(f"pack manifest {PACK_MANIFEST} missing at {path.parent}")
         data = tomllib.loads(path.read_text())
-        manifest = cls(name=data["name"], version=data["version"], description=data["description"], hooks=data["hooks"])
+        manifest = cls(
+            name=data["name"],
+            version=data["version"],
+            description=data["description"],
+            hooks=data["hooks"],
+            # .get is deliberate: `nlp` is a schema addition and existing manifests predate it.
+            nlp=data.get("nlp", False),
+        )
         if not PACK_NAME_RE.fullmatch(manifest.name):
             raise PackError(f"pack name {manifest.name!r} must match {PACK_NAME_RE.pattern}")
         return manifest

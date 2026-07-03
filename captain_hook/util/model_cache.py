@@ -15,6 +15,7 @@ from filelock import FileLock
 from captain_hook.util import http
 
 MODEL_NAME = "en_core_web_sm"
+WN_LEXICON = "oewn:2025"
 WHEEL_CHECKSUM = re.compile(r"Checksum \.whl:\*\*\s*`([0-9a-f]{64})`")
 
 
@@ -88,3 +89,26 @@ def ensure_spacy_model() -> Path:
         wheel.unlink()
         (extract / ".sha256").write_text(expected)
     return extract / MODEL_NAME / extract.name
+
+
+def ensure_wn_lexicon() -> None:
+    import wn
+
+    if wn.lexicons(lexicon=WN_LEXICON):
+        return
+    data_dir = Path(wn.config.data_directory)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(data_dir / f"{WN_LEXICON.replace(':', '-')}.lock")):
+        if wn.lexicons(lexicon=WN_LEXICON):
+            return
+        wn.download(WN_LEXICON, progress_handler=None)
+
+
+def ensure_nlp_resources() -> None:
+    """Provision the NLP resources hooks need: the pinned spaCy pipeline (~13MB) and the oewn:2025 wn lexicon (~231MB).
+
+    Idempotent and cheap once cached; downloads are filelock-guarded so concurrent
+    sessions never race a fetch.
+    """
+    ensure_spacy_model()
+    ensure_wn_lexicon()

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import sys
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -228,3 +230,56 @@ def test_model_sha256_raises_when_checksum_absent(monkeypatch: pytest.MonkeyPatc
         model_cache.model_sha256("3.9.5")
 
     model_cache.model_sha256.cache_clear()
+
+
+class FakeWn:
+    def __init__(self, data_dir: Path, *, installed: bool) -> None:
+        self.config = SimpleNamespace(data_directory=str(data_dir))
+        self.installed = installed
+        self.downloads: list[str] = []
+
+    def lexicons(self, lexicon: str) -> list[str]:
+        assert lexicon == model_cache.WN_LEXICON
+        return ["oewn"] if self.installed else []
+
+    def download(self, spec: str, progress_handler: object = None) -> None:
+        self.downloads.append(spec)
+        self.installed = True
+
+
+@pytest.fixture
+def fake_wn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeWn:
+    fake = FakeWn(tmp_path / "wn-data", installed=False)
+    monkeypatch.setitem(sys.modules, "wn", fake)
+    return fake
+
+
+def test_wn_lexicon_cached_skips_download(fake_wn: FakeWn) -> None:
+    fake_wn.installed = True
+
+    model_cache.ensure_wn_lexicon()
+
+    assert fake_wn.downloads == []
+
+
+def test_wn_lexicon_downloads_once_under_filelock(
+    tmp_path: Path, fake_wn: FakeWn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    locks: list[str] = []
+    monkeypatch.setattr(model_cache, "FileLock", lambda path: (locks.append(path), contextlib.nullcontext())[1])
+
+    model_cache.ensure_wn_lexicon()
+    model_cache.ensure_wn_lexicon()
+
+    assert fake_wn.downloads == [model_cache.WN_LEXICON]
+    assert locks == [str(tmp_path / "wn-data" / "oewn-2025.lock")]
+
+
+def test_ensure_nlp_resources_composes(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(model_cache, "ensure_spacy_model", lambda: calls.append("spacy"))
+    monkeypatch.setattr(model_cache, "ensure_wn_lexicon", lambda: calls.append("wn"))
+
+    model_cache.ensure_nlp_resources()
+
+    assert calls == ["spacy", "wn"]

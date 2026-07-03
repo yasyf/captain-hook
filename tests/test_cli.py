@@ -919,3 +919,98 @@ class TestDefaultResolution:
         )
         assert result.returncode == 0
         assert "default hooks dir resolved" not in result.stdout
+
+
+class TestNlpProvisioning:
+    @staticmethod
+    def pin_resolved_packs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, nlp: bool) -> list[Any]:
+        from captain_hook.packs import manager
+
+        pack_dir = tmp_path / "fake-pack"
+        pack_dir.mkdir(exist_ok=True)
+        resolved = [
+            manager.ResolvedPack(
+                entry=manager.BuiltinPack(name="fake"),
+                path=pack_dir,
+                manifest=manager.PackManifest(name="fake", version="0.1.0", description="d", hooks=".", nlp=nlp),
+            )
+        ]
+        monkeypatch.setattr(manager, "resolve_enabled_packs", lambda _root: (resolved, []))
+        return resolved
+
+    @pytest.fixture
+    def provision_mock(self, monkeypatch: pytest.MonkeyPatch) -> Any:
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        monkeypatch.setattr("captain_hook.util.model_cache.ensure_nlp_resources", mock)
+        return mock
+
+    def test_nlp_pack_wires_session_start_async_entry(
+        self, tmp_path: Path, hooks_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from captain_hook.cli import CliState, generate_settings
+
+        resolved = self.pin_resolved_packs(tmp_path, monkeypatch, nlp=True)
+        assert CliState(root=tmp_path, hooks=str(hooks_dir)).discover() == resolved
+        entries = generate_settings()["hooks"]["SessionStart"][0]["hooks"]
+        assert entries == [{"type": "command", "command": "uvx capt-hook run SessionStart --async", "async": True}]
+
+    def test_non_nlp_pack_omits_session_start(
+        self, tmp_path: Path, hooks_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from captain_hook.cli import CliState, generate_settings
+
+        self.pin_resolved_packs(tmp_path, monkeypatch, nlp=False)
+        CliState(root=tmp_path, hooks=str(hooks_dir)).discover()
+        assert "SessionStart" not in generate_settings()["hooks"]
+
+    def test_register_hooks_provisions_nlp(
+        self, tmp_path: Path, hooks_dir: Path, monkeypatch: pytest.MonkeyPatch, provision_mock: Any
+    ) -> None:
+        from click.testing import CliRunner
+
+        from captain_hook.cli import cli
+
+        self.pin_resolved_packs(tmp_path, monkeypatch, nlp=True)
+        result = CliRunner().invoke(cli, ["--hooks", str(hooks_dir), "--root", str(tmp_path), "register-hooks"])
+        assert result.exit_code == 0, result.output
+        provision_mock.assert_called_once_with()
+        assert "Provisioning NLP resources" in result.output
+        assert "SessionStart" in json.loads((tmp_path / ".claude" / "settings.json").read_text())["hooks"]
+
+    def test_register_hooks_dry_run_skips_provisioning(
+        self, tmp_path: Path, hooks_dir: Path, monkeypatch: pytest.MonkeyPatch, provision_mock: Any
+    ) -> None:
+        from click.testing import CliRunner
+
+        from captain_hook.cli import cli
+
+        self.pin_resolved_packs(tmp_path, monkeypatch, nlp=True)
+        result = CliRunner().invoke(
+            cli, ["--hooks", str(hooks_dir), "--root", str(tmp_path), "register-hooks", "--dry-run"]
+        )
+        assert result.exit_code == 0, result.output
+        provision_mock.assert_not_called()
+
+    def test_provision_nlp_skips_without_nlp_packs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provision_mock: Any
+    ) -> None:
+        from captain_hook.cli import provision_nlp
+
+        provision_nlp(self.pin_resolved_packs(tmp_path, monkeypatch, nlp=False))
+        provision_mock.assert_not_called()
+
+    def test_provision_nlp_defers_on_fetch_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        provision_mock: Any,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from captain_hook.cli import provision_nlp
+        from captain_hook.util import http
+
+        provision_mock.side_effect = http.GitHubFetchError("offline")
+        provision_nlp(self.pin_resolved_packs(tmp_path, monkeypatch, nlp=True))
+        assert "deferred" in capsys.readouterr().out

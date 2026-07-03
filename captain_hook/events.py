@@ -384,6 +384,20 @@ class NotificationEvent(BaseHookEvent):
 
 
 @dataclass
+class SessionStartEvent(BaseHookEvent):
+    """Fires when a session starts, providing what triggered it. Warns inject context; it cannot block.
+
+    ``source`` is one of ``"startup"``, ``"resume"``, ``"clear"``, or ``"compact"``.
+    """
+
+    event_name: ClassVar[Event] = Event.SessionStart
+
+    @property
+    def source(self) -> str:
+        return self._raw["source"]
+
+
+@dataclass
 class SessionEndEvent(BaseHookEvent):
     """Fires when the session ends, providing the termination reason. Output is ignored, so it cannot block."""
 

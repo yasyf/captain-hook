@@ -204,6 +204,21 @@ def test_manifest_missing_field_fails_loud(tmp_path: Path) -> None:
         manager.PackManifest.load(tmp_path / manager.PACK_MANIFEST)
 
 
+@pytest.mark.parametrize(
+    ("nlp_line", "expected"),
+    [
+        pytest.param("", False, id="absent_defaults_false"),
+        pytest.param("nlp = true\n", True, id="true_parses"),
+        pytest.param("nlp = false\n", False, id="false_parses"),
+    ],
+)
+def test_manifest_nlp_flag(tmp_path: Path, nlp_line: str, expected: bool) -> None:
+    (tmp_path / manager.PACK_MANIFEST).write_text(
+        f'name = "x"\nversion = "0"\ndescription = "d"\nhooks = "."\n{nlp_line}'
+    )
+    assert manager.PackManifest.load(tmp_path / manager.PACK_MANIFEST).nlp is expected
+
+
 def test_manifest_in_prefers_claude(tmp_path: Path) -> None:
     (tmp_path / manager.PACK_MANIFEST).write_text("root")
     assert manager.manifest_in(tmp_path) == tmp_path / manager.PACK_MANIFEST

@@ -103,6 +103,7 @@ class Input:
         output: The tool result surfaced to ``PostToolUse`` as ``evt.tool_response``.
         error: The failure text surfaced to ``PostToolUseFailure`` as ``evt.error``.
         reason: ``SessionEnd`` reason.
+        source: ``SessionStart`` source (``startup``/``resume``/``clear``/``compact``).
         permission_mode: Permission mode, e.g. ``"plan"`` for plan-mode gating.
         offset: ``Read`` call offset.
         limit: ``Read`` call limit.
@@ -124,6 +125,7 @@ class Input:
     output: str | None = None
     error: str | None = None
     reason: str | None = None
+    source: str | None = None
     permission_mode: str | None = None
     offset: int | None = None
     limit: int | None = None

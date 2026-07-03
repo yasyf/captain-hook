@@ -9,11 +9,16 @@ import re
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from captain_hook.app import State, _state
+from captain_hook.app import State, _state, on
 from captain_hook.settings import build_settings
+from captain_hook.types import Event
+
+if TYPE_CHECKING:
+    from captain_hook.events import BaseHookEvent
 
 CONF_MODULE = "conf"
 PACK_PACKAGE_PREFIX = "captain_hook._packs"
@@ -103,6 +108,20 @@ def import_pack_module(fqn: str, path: Path) -> ModuleType:
         sys.modules.pop(fqn, None)
         raise
     return module
+
+
+def register_nlp_provisioning() -> None:
+    """Register the shared SessionStart hook that eagerly provisions NLP resources.
+
+    Called once per discovery pass when any resolved pack manifest declares ``nlp``,
+    so both event dispatch and settings generation see the async hook.
+    """
+
+    @on(Event.SessionStart, async_=True)
+    def provision_nlp_resources(evt: BaseHookEvent) -> None:
+        from captain_hook.util.model_cache import ensure_nlp_resources
+
+        ensure_nlp_resources()
 
 
 def discover_pack(name: str, pack_dir: Path) -> None:

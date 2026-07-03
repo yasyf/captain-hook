@@ -147,6 +147,11 @@ class TestInit:
         raw = settings.read_text()
         assert "uvx capt-hook" in raw
 
+    def test_bare_init_omits_session_start(self, project_dir: Path) -> None:
+        # No packs enabled means no NLP provisioning hook, so no SessionStart wiring.
+        data = json.loads((project_dir / ".claude" / "settings.json").read_text())
+        assert "SessionStart" not in data["hooks"]
+
 
 class TestDiscoverAndDispatch:
     def test_discovers_hooks_from_init(self, project_dir: Path) -> None:

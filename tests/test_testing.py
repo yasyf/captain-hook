@@ -568,6 +568,49 @@ class TestInferTool:
 
         assert infer_tool(Input(**inp_kwargs)) == expected_tool
 
+    def test_variadic_tool_condition_infers_tool_from_shape(self):
+        # Regression: under Tool("Edit", "Write", "MultiEdit"), an implicit Input must infer
+        # its tool from field shape via infer_tool, not build as the condition's first name.
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Block, Input
+
+        reset()
+
+        @on(
+            Event.PreToolUse,
+            only_if=[Tool("Edit", "Write", "MultiEdit")],
+            tests={
+                Input(file="a.py", old="x", content="y"): Block(pattern="^Edit$"),
+                Input(file="b.py", content="y"): Block(pattern="^Write$"),
+            },
+        )
+        def echo_tool(evt):
+            return HookResult(action=Action.block, message=evt.tool_name)
+
+        results = run_inline_tests()
+        assert len(results) == 2
+        assert all(r[2] for r in results), f"Failed: {results}"
+
+    def test_single_name_tool_condition_still_pins_tool(self):
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Block, Input
+
+        reset()
+
+        @on(
+            Event.PreToolUse,
+            only_if=[Tool("Write")],
+            tests={Input(file="a.py", old="x", content="y"): Block(pattern="^Write$")},
+        )
+        def echo_tool(evt):
+            return HookResult(action=Action.block, message=evt.tool_name)
+
+        results = run_inline_tests()
+        assert len(results) == 1
+        assert results[0][2], f"Failed: {results}"
+
     def test_content_not_dropped_when_no_tool_condition(self):
         # Regression: Input(file, content) with only a FilePath condition must synthesize a
         # Write (not a bare Bash that drops file/content), so the Allow can actually fail.

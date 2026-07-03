@@ -37,15 +37,16 @@ class NlpResources:
 
         if spacy.util.is_package(SPACY_MODEL):
             return spacy.load(SPACY_MODEL)
-        # We refuse to auto-download from a live hook: it's a ~100MB silent fetch behind
-        # the agent's back. If a previous run / explicit install already populated the
-        # cache, use that; otherwise, raise with an actionable install hint.
+        # We refuse to auto-download from a live hook: it's a silent fetch behind the
+        # agent's back (~13MB for spaCy; the oewn lexicon is the ~231MB heavyweight).
+        # If a previous run / explicit install already populated the cache, use that;
+        # otherwise, raise with an actionable install hint.
         if cached := cached_pipeline():
             return spacy.load(cached)
         raise RuntimeError(
             f"spaCy model {SPACY_MODEL!r} is not installed. "
-            f"Install it explicitly before running hooks that use NLP signals: "
-            f"`python -m spacy download {SPACY_MODEL}` "
+            "Run `uvx capt-hook register-hooks` to provision NLP resources, or install the model "
+            f"explicitly: `python -m spacy download {SPACY_MODEL}` "
             f'or `python -c "from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()"`.'
         )
 
@@ -53,8 +54,9 @@ class NlpResources:
     def wn(self) -> ModuleType:
         import wn
 
-        if not wn.lexicons(lexicon="oewn:2025"):
-            wn.download("oewn:2025", progress_handler=None)
+        from captain_hook.util.model_cache import ensure_wn_lexicon
+
+        ensure_wn_lexicon()
         return wn
 
 

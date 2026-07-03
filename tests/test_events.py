@@ -14,6 +14,7 @@ from captain_hook.events import (
     PreCompactEvent,
     PreToolUseEvent,
     SessionEndEvent,
+    SessionStartEvent,
     StopEvent,
     SubagentStartEvent,
     SubagentStopEvent,
@@ -42,6 +43,7 @@ class TestEventClassVar:
             SubagentStartEvent: Event.SubagentStart,
             PreCompactEvent: Event.PreCompact,
             NotificationEvent: Event.Notification,
+            SessionStartEvent: Event.SessionStart,
             SessionEndEvent: Event.SessionEnd,
         }
         for cls, expected_event in mapping.items():
@@ -277,6 +279,34 @@ class TestNotificationEvent:
         assert evt.message is None
         assert evt.title is None
         assert evt.notification_type is None
+
+
+class TestSessionStartEvent:
+    @pytest.mark.parametrize("source", ["startup", "resume", "clear", "compact"])
+    def test_source_from_raw(self, source: str) -> None:
+        evt = SessionStartEvent(_raw={"source": source}, ctx=make_ctx())
+        assert evt.source == source
+
+    def test_source_raises_key_error_when_missing(self) -> None:
+        evt = SessionStartEvent(_raw={}, ctx=make_ctx())
+        with pytest.raises(KeyError):
+            evt.source
+
+    def test_full_payload_parses(self) -> None:
+        evt = SessionStartEvent(
+            _raw={
+                "session_id": "abc123",
+                "transcript_path": "/tmp/t.jsonl",
+                "cwd": "/tmp",
+                "hook_event_name": "SessionStart",
+                "source": "resume",
+            },
+            ctx=make_ctx(),
+        )
+        assert evt.event is Event.SessionStart
+        assert evt.session_id == "abc123"
+        assert evt.transcript_path == Path("/tmp/t.jsonl")
+        assert evt.source == "resume"
 
 
 class TestSessionEndEvent:

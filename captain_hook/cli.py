@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ from cc_transcript.ids import SessionId
 from captain_hook.app import _state, load_gitignore, reset
 from captain_hook.context import HookContext, load_transcript
 from captain_hook.dispatch import dispatch
-from captain_hook.loader import CONF_MODULE, discover_hooks, discover_pack, is_skip_marked
+from captain_hook.loader import CONF_MODULE, discover_hooks, discover_pack, is_skip_marked, register_nlp_provisioning
 from captain_hook.log import setup_logging
 from captain_hook.packs import manager
 from captain_hook.review.cli import review
@@ -35,19 +36,22 @@ class CliState:
     root: Path
     hooks: str
 
-    def discover(self) -> None:
+    def discover(self) -> list[manager.ResolvedPack]:
         reset()
         load_gitignore(self.root)
         discover_hooks(self.hooks)
         resolved, missing = manager.resolve_enabled_packs(self.root)
         for pack_ in resolved:
             discover_pack(pack_.entry.name, pack_.path)
+        if any(pack_.manifest.nlp for pack_ in resolved):
+            register_nlp_provisioning()
         if missing:
             print(
                 f"capt-hook: packs unavailable (offline and not cached): {', '.join(missing)} "
                 "— run `capt-hook pack update` when online",
                 file=sys.stderr,
             )
+        return resolved
 
 
 def example_hook_source() -> str:
@@ -222,12 +226,26 @@ def print_hook_summary(label: str, summary: dict[str, str], deferred_to: str) ->
         click.echo(f"  deferred to {deferred_to}: {', '.join(deferred)}")
 
 
+def provision_nlp(resolved: Sequence[manager.ResolvedPack]) -> None:
+    from captain_hook.util import http
+    from captain_hook.util.model_cache import ensure_nlp_resources
+
+    if not any(pack_.manifest.nlp for pack_ in resolved):
+        return
+    click.echo("Provisioning NLP resources (spaCy en_core_web_sm ~13MB + oewn:2025 lexicon ~231MB, cached)...")
+    try:
+        ensure_nlp_resources()
+    except (http.GitHubFetchError, OSError) as e:
+        click.echo(f"  deferred (offline?): {e} — the SessionStart hook will retry at session start")
+
+
 def regenerate_settings(state: CliState) -> None:
-    state.discover()
+    resolved = state.discover()
     settings_path = state.root / ".claude" / "settings.json"
     merged, summary = merge_settings(".claude/hooks", settings_path)
     write_settings(settings_path, merged)
     print_hook_summary(str(settings_path.relative_to(state.root)), summary, sibling_settings(settings_path).name)
+    provision_nlp(resolved)
 
 
 def settings_drift(root: Path) -> set[str]:
@@ -320,9 +338,10 @@ def init_project(root: Path, *, review: bool = True) -> None:
         example.write_text(example_hook_source())
 
     settings_path = root / ".claude" / "settings.json"
-    CliState(root=root, hooks=str(hooks_dir)).discover()
+    resolved = CliState(root=root, hooks=str(hooks_dir)).discover()
     merged, summary = merge_settings(".claude/hooks", settings_path)
     write_settings(settings_path, merged)
+    provision_nlp(resolved)
 
     register_marketplace(root)
 
@@ -507,7 +526,7 @@ def run(state: CliState, event: str, async_: bool) -> None:
 @click.pass_obj
 def register_hooks_cmd(state: CliState, hooks_dir: str, dry_run: bool, from_source: str) -> None:
     """Register captain-hook's event hooks into .claude/settings.json."""
-    state.discover()
+    resolved = state.discover()
     settings_path = state.root / ".claude" / "settings.json"
     merged, summary = merge_settings(hooks_dir, settings_path, from_source=from_source)
     if dry_run:
@@ -515,6 +534,7 @@ def register_hooks_cmd(state: CliState, hooks_dir: str, dry_run: bool, from_sour
         return
     write_settings(settings_path, merged)
     print_hook_summary(str(settings_path), summary, sibling_settings(settings_path).name)
+    provision_nlp(resolved)
 
 
 @cli.command()

@@ -32,6 +32,7 @@ from captain_hook.events import (
     PreCompactEvent,
     PreToolUseEvent,
     SessionEndEvent,
+    SessionStartEvent,
     StopEvent,
     SubagentStartEvent,
     SubagentStopEvent,

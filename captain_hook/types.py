@@ -62,6 +62,7 @@ class Event(Flag):
     SubagentStart = auto()
     PreCompact = auto()
     Notification = auto()
+    SessionStart = auto()
     SessionEnd = auto()
 
     @property
@@ -73,6 +74,7 @@ class Event(Flag):
             PreCompactEvent,
             PreToolUseEvent,
             SessionEndEvent,
+            SessionStartEvent,
             StopEvent,
             SubagentStartEvent,
             SubagentStopEvent,
@@ -89,6 +91,7 @@ class Event(Flag):
             Event.SubagentStart: SubagentStartEvent,
             Event.PreCompact: PreCompactEvent,
             Event.Notification: NotificationEvent,
+            Event.SessionStart: SessionStartEvent,
             Event.SessionEnd: SessionEndEvent,
         }
         if cls := mapping.get(self):

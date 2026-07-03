@@ -19,6 +19,7 @@ from captain_hook.dispatch import execute_hook
 from captain_hook.events import (
     BaseHookEvent,
     SessionEndEvent,
+    SessionStartEvent,
     StopEvent,
     SubagentStartEvent,
     SubagentStopEvent,
@@ -221,6 +222,20 @@ def mock_session_end_event(
     )
 
 
+def mock_session_start_event(
+    source: str = "startup",
+    *,
+    permission_mode: str | None = None,
+    transcript: Session | None = None,
+    transcript_path: str | Path | None = None,
+    session_dir: Path | None = None,
+) -> SessionStartEvent:
+    return SessionStartEvent(
+        _raw={"source": source} | ({"permission_mode": permission_mode} if permission_mode else {}),
+        ctx=build_context(transcript, transcript_path, session_dir),
+    )
+
+
 def mock_subagent_stop_event(
     agent_type: str = "",
     *,
@@ -294,6 +309,8 @@ def mock_event(
     match ev:
         case Event.Stop:
             return mock_stop_event(stop_hook_active=stop_hook_active, **ctx_kw)
+        case Event.SessionStart:
+            return mock_session_start_event(source=extra.pop("source", "startup"), **ctx_kw)
         case Event.SessionEnd:
             return mock_session_end_event(reason=extra.pop("reason", "other"), **ctx_kw)
         case Event.SubagentStop:
@@ -353,6 +370,8 @@ def input_to_event(
             evt = mock_user_prompt_event(prompt=inp.prompt or "", **ctx_kw)
         case Event.Stop:
             evt = mock_stop_event(**ctx_kw)
+        case Event.SessionStart:
+            evt = mock_session_start_event(source=inp.source or "startup", **ctx_kw)
         case Event.SessionEnd:
             evt = mock_session_end_event(reason=inp.reason or "other", **ctx_kw)
         case _:
@@ -423,6 +442,8 @@ def transcript_event_payloads(
             )
         case Event.UserPromptSubmit:
             yield from (base | {"prompt": turn.prompt} for turn in transcript.turns if turn.prompt)
+        case Event.SessionStart:
+            yield base | {"source": "startup"}
         case Event.SessionEnd:
             yield base | {"reason": "other"}
         case Event.Stop | Event.SubagentStop | Event.SubagentStart | Event.Notification | Event.PreCompact:
@@ -515,11 +536,13 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
             test_name = f"{entry.name}:{key!r}"
             try:
                 if isinstance(key, Input):
+                    # A Tool condition pins the tool only when it names exactly one; a
+                    # multi-name condition falls back to infer_tool's shape-based derivation.
                     spec_tools = [p for c in entry.spec.only_if if isinstance(c, Tool) for p in c.names]
                     evt = input_to_event(
                         next(iter(entry.spec.events)),
                         key,
-                        spec_tools[0] if spec_tools else None,
+                        spec_tools[0] if len(spec_tools) == 1 else None,
                     )
                     from captain_hook.app import is_planning_agent_skip
 
