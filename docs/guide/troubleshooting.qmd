@@ -89,7 +89,8 @@ python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensur
 You add a hook that blocks `git stash`, because your team uses `jj` instead.
 
 ```python
-from captain_hook import hook, Event, Tool, Command
+from captain_hook import hook, Event, Tool
+from captain_hook.types import Command
 
 hook(
     Event.PreToolUse,

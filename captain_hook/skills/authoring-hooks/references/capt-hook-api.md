@@ -19,18 +19,20 @@ Distilled surface for writing `.claude/hooks/*.py`. Everything here is importabl
 from __future__ import annotations
 
 from captain_hook import (
-    Allow, And, Agent, Ask, BaseHookEvent, Block, Command, Event, FilePath, FromSubagent,
+    Allow, And, Agent, Ask, BaseHookEvent, Block, Event, FilePath, FromSubagent,
     HookResult, InlineTests, Input, Not, Or, Prompt, RanCommand, ReadFile, Rewrite, Runs,
     Signal, Signals, SkipPermissions, SourceEdits, TestFile, Tool, ToolInput, TouchedFile,
     TranscriptFixture, UsedSkill, Warn, WorkflowScript,
     approve, block_command, deny, gate, hook, lint, llm_approve, llm_gate, llm_nudge, nudge, on,
     prompt_check, rewrite_command, set_tool_input, warn_command, workflow, Artifact, Step, text_matches,
 )
+from captain_hook.types import Command as CommandCondition
 ```
 
-`Command` is the regex **condition** (`Command(r"git\s+push")`). The parsed-shell dataclass
-that `evt.command_line` yields is `ParsedCommand` (`captain_hook.command.ParsedCommand`) — you
-rarely import it directly.
+Top-level `Command` is the parsed-shell dataclass (`cc_transcript.command.Command`) that
+`evt.command_line` yields — you rarely import it directly. The regex **condition**
+(`CommandCondition(r"git\s+push")`) lives at `captain_hook.types.Command`; import it under
+the `CommandCondition` alias to keep the two apart.
 
 ## Events
 
@@ -71,7 +73,7 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 |---|---|---|
 | `block_command` | `(pattern, *, reason, hint=None, only_if=(), skip_if=(), tests=None)` | `PreToolUse` + `Tool("Bash")`; message `"BLOCKED: {reason}. {hint}."` |
 | `warn_command` | `(pattern, *, message, only_if=(), skip_if=(), tests=None, events=Event.PostToolUse)` | warns, never blocks |
-| `rewrite_command` | `(pattern, replace, *, only_if=(), skip_if=(), note=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; `re.sub(pattern, replace, command)` then allows with the rewritten command |
+| `rewrite_command` | `(pattern, replace, *, only_if=(), skip_if=(), note=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; a pattern with an ast-grep metavar (`cat $$$ARGS`) rewrites structurally via `ast_grep.rewrite`, otherwise `re.sub(pattern, replace, command)`; allows with the rewritten command |
 | `set_tool_input` | `(field, value, *, tool, only_if=(), skip_if=(), note=None, tests=None)` | `PreToolUse` + `Tool(tool)`; fills a **missing** top-level input field with `value` and allows, never clobbering a present one |
 | `gate` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), events=None, max_fires=…, tests=None)` | `Stop \| SubagentStop`; blocks, defaults to **unlimited** fires (keeps enforcing); `skip_if` is additive with an automatic `Waiting()` |
 | `nudge` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), block=False, events=None, max_fires=…, tests=None)` | `PostToolUse` (with signals) else `PreToolUse`; default fires 3 / 1; `when` vetoes even with `signals`; warns |
@@ -148,7 +150,7 @@ evaluated first.
 |---|---|
 | Filter by tool name | `Tool("Bash")` or `Tool("Edit", "Write")` — exact names (not regex), aliases auto-expand (Bash=Execute, Write=Create, Agent=Task), MCP suffixes match |
 | Filter by file path | `FilePath("*.py", "*.pyi")` |
-| Filter by bash command text | `Command(r"git\s+push")` — regex over the raw line and each parsed command |
+| Filter by bash command text | `CommandCondition(r"git\s+push")` (`captain_hook.types.Command`) — regex over the raw line and each parsed command |
 | Bash argv prefix (structural, no false positives) | `Runs("git", "stash")` — matches `git stash [...]`, not `echo git stash` |
 | Filter by file content being written | `Content(r"print\(")` (multiline regex over Edit new / Write content) |
 | Filter by raw tool-input fields | `ToolInput(model=r"(?i)\bhaiku\b")` (kwargs AND across fields; scalar values coerced to text) |
@@ -158,7 +160,7 @@ evaluated first.
 | Python source edits (skips tests by default) | `SourceEdits(lang="py")`; `lang` also `ts`, `go`, `rs`, ... |
 | File was previously read | `ReadFile("TESTING.md")` — fnmatch globs; anchor dirs with `**/` |
 | File was previously edited | `TouchedFile("**/*.py")` |
-| Command was previously run | `RanCommand(r"uv\s+run\s+pytest")` |
+| Command was previously run | `RanCommand("uv", "run", "pytest")` — argv-prefix tokens, wrapper-transparent (`sudo`/`env`/`timeout` stripped) but launcher-literal (`uv run pytest` ≠ `pytest`; list each spelling as its own entry) |
 | Skill was invoked | `UsedSkill("codex")` — bare name also matches `plugin:name` |
 | During plan mode | `InPlanMode()` |
 | Event comes from a subagent/teammate | `FromSubagent()` — the payload carries an `agent_id`; matches the ask's *origin*, where `Agent` matches its *type* |
@@ -205,6 +207,17 @@ Glob caveat: patterns match the full relative path. `**/*.py` matches `src/main.
 - `.has_subcommand("push")` — token appears in any command's arguments.
 - `.contains_token("--force")` — exact argv element anywhere.
 - `.uses_redirect()` — any pipe or file redirect in the line.
+
+Structural (ast-grep) matching over a command line goes through the `captain_hook.ast_grep`
+free functions with the raw text and the `"bash"` language:
+
+```python
+from captain_hook import ast_grep
+
+ast_grep.matches(cl.raw, "bash", "cat $$$ARGS")                 # bool
+ast_grep.rewrite(cl.raw, "bash", "cat $$$ARGS", "bat $$$ARGS")  # rewritten str (unchanged when no match)
+ast_grep.capture(cl.raw, "bash", "sed -n $R $F")                # {"R": ..., "F": ...} | None
+```
 
 ## CLI
 

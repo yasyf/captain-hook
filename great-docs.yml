@@ -112,6 +112,7 @@ reference:
     contents:
       - Tool
       - FilePath
+      - types.Command
       - Content
       - Pattern
       - TouchedFile

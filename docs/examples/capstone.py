@@ -27,8 +27,10 @@ block_command(
 )
 
 # 2. Workflow: don't finish a Python change without running the tests.
+# RanCommand matches parsed argv prefixes (launcher-literal), so each spelling
+# of the test runner gets its own entry — skip_if is OR.
 gate(
     "You edited Python files but never ran the tests. Run `uv run pytest` before finishing.",
     only_if=[TouchedFile("**/*.py")],
-    skip_if=[RanCommand(r"\bpytest\b")],
+    skip_if=[RanCommand("uv", "run", "pytest"), RanCommand("pytest")],
 )

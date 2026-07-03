@@ -6,6 +6,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+- **cc-transcript v8: the command-parsing core moved upstream.** `captain_hook/command.py`
+  is deleted; `Command` (né `ParsedCommand`), `CommandLine`, `CommandLineQuery`, and
+  `Redirect` now live in `cc_transcript.command` and are re-exported at the root. The
+  top-level `Command` export is therefore the parsed-shell dataclass, no longer the regex
+  condition — the condition stays at `captain_hook.types.Command` (packs import it as
+  `Command as CommandCondition`). `CommandLine.primary`/`head` return `Command | None`, and
+  `evt.command_line` rides upstream's lru-cached `parse_command_line`.
+- **Structural matching goes through the `ast_grep` seam.** `CommandLine.matches`/
+  `rewrite`/`capture` went with the moved module; call the `captain_hook.ast_grep` free
+  functions instead: `ast_grep.matches(cl.raw, "bash", pattern)`, `ast_grep.rewrite(cl.raw,
+  "bash", pattern, replace)`, `ast_grep.capture(cl.raw, "bash", pattern)`. `rewrite_command`'s
+  structural form is unchanged in behavior.
+- **`RanCommand` takes variadic argv tokens instead of a regex.**
+  `RanCommand("uv", "run", "pytest", subagents=True)` matches via upstream
+  `Session.has_command`/`Command.runs`: wrapper-transparent (`sudo`/`env`/`timeout` stripped)
+  and launcher-literal (`uv run pytest` ≠ `pytest` — list each spelling as its own `skip_if`
+  entry). Packs enumerate launcher variants explicitly; regex matching of the *current*
+  event's command stays on `captain_hook.types.Command`/`Command.matches`.
+- Dependencies: `cc-transcript>=8,<9`; the direct `tree-sitter`/`tree-sitter-bash` pins are
+  dropped (they arrive transitively via cc-transcript). `ast-grep-py` stays.
+
 ## [6.5.0] - 2026-07-03
 
 ### Added

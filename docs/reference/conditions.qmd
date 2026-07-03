@@ -35,7 +35,7 @@ These check what happened earlier in the session, from the transcript.
 |-----------|--------------|---------|---------|
 | `ReadFile(*p, subagents=True)` | A file matching the glob was read | Glob | `ReadFile("TESTING.md")` |
 | `TouchedFile(*p, subagents=False)` | A file matching the glob was edited or written | Glob | `TouchedFile("**/*.py")` |
-| `RanCommand(p, subagents=True)` | A Bash command matching the regex ran | Regex | `RanCommand(r"uv\s+run\s+pytest")` |
+| `RanCommand(*argv, subagents=True)` | A Bash command running the argv prefix ran (wrapper-transparent, launcher-literal) | Argv tokens | `RanCommand("uv", "run", "pytest")` |
 | `UsedSkill(*names, subagents=True)` | A skill named one of `names` was invoked (a bare name also matches `plugin:name`) | Exact names; a `\|`-joined string still works | `UsedSkill("codex")` |
 | `InPlanMode()` | The agent is in plan mode | — | `InPlanMode()` |
 | `Waiting()` | A background or async tool is still pending. Durable `Workflow` and async sub-agent launches count across turns until their completion notification lands | — | `Waiting()` |

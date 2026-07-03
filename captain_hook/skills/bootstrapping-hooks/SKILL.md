@@ -125,7 +125,7 @@ for each approved hook, invoke the `captain-hook:authoring-hooks` skill via the 
   agent being blocked learns *why*),
 - the approved **primitive and severity** from Step 4,
 - the surveyed repo's *exact* commands (e.g. `make test` vs `uv run pytest` vs
-  `npm test`) for messages and `RanCommand` regexes,
+  `npm test`) for messages and `RanCommand` argv tokens,
 - the **target category file** so related hooks stay grouped.
 
 `authoring-hooks` owns the rest — primitive-choice pitfalls, the narrowest matching
@@ -198,7 +198,7 @@ gate(
     "CONTRIBUTING.md requires `make lint` before pushing.",
     events=Event.PreToolUse,
     only_if=[Tool("Bash"), Command(r"git\s+push")],
-    skip_if=[RanCommand(r"make\s+lint")],
+    skip_if=[RanCommand("make", "lint")],
     tests={
         Input(command="git push origin main"): Block(pattern="make lint"),
         Input(command="git status"): Allow(),

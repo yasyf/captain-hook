@@ -7,14 +7,15 @@ registration. `only_if` requires every condition to match. `skip_if` skips the h
 when any condition matches.
 
 ```python
-from captain_hook import hook, Event, Tool, Command, RanCommand
+from captain_hook import hook, Event, Tool, RanCommand
+from captain_hook.types import Command
 
 hook(
     Event.PreToolUse,
     message="git stash is not allowed; use jj",
     block=True,
     only_if=[Tool("Bash"), Command(r"git\s+stash")],
-    skip_if=[RanCommand(r"jj\s+shelve")],
+    skip_if=[RanCommand("jj", "shelve")],
 )
 ```
 
@@ -39,7 +40,7 @@ Start from what you want to match.
 | An edit to a source file in a language | `SourceEdits(lang="ts")` |
 | The current tool | `Tool("Bash")` |
 | A file edited earlier this session | `TouchedFile("**/*.py")` |
-| A command run earlier this session | `RanCommand(r"uv\s+run\s+mtest")` |
+| A command run earlier this session | `RanCommand("uv", "run", "mtest")` |
 | A typed tool call's fields | `CustomInputTypeCondition[ReadCall]` |
 | A parsed Bash command line | `CustomCommandLineCondition` |
 
@@ -57,7 +58,8 @@ default. Pass `project_only=False` to target external scratch files, attachments
 logs.
 
 ```python
-from captain_hook import hook, Event, FilePath, Command, SourceEdits, Tool, ToolInput, WorkflowScript
+from captain_hook import hook, Event, FilePath, SourceEdits, Tool, ToolInput, WorkflowScript
+from captain_hook.types import Command
 
 # Fire only for Python files
 hook(Event.PostToolUse, message="Check imports", only_if=[FilePath("*.py", "*.pyi")])
@@ -97,7 +99,7 @@ hook(Event.Stop, message="Run tests before stopping", block=True,
 
 # Skip the gate once the agent ran the test suite
 hook(Event.Stop, message="Run tests before stopping", block=True,
-     skip_if=[RanCommand(r"uv\s+run\s+mtest")])
+     skip_if=[RanCommand("uv", "run", "mtest")])
 
 # Fire only if the codex skill was consulted
 hook(Event.Stop, message="codex was consulted", only_if=[UsedSkill("codex")])
@@ -190,14 +192,15 @@ hook(
     message="Source files changed; run tests before stopping",
     block=True,
     only_if=[TouchedFile("src/**/*.py")],
-    skip_if=[RanCommand(r"uv\s+run\s+mtest")],
+    skip_if=[RanCommand("uv", "run", "mtest")],
 )
 ```
 
 Warn about history-rewriting commands, except during plan mode.
 
 ```python
-from captain_hook import hook, Event, Tool, Command, InPlanMode
+from captain_hook import hook, Event, Tool, InPlanMode
+from captain_hook.types import Command
 
 hook(
     Event.PreToolUse,
@@ -222,8 +225,10 @@ hook(
 ```
 
 ::: {.callout-tip title="Regex patterns"}
-`Tool`, `Command`, `Content`, and `RanCommand` match with regex. Escape special
-characters and use raw strings (`r"..."`) to avoid backslash issues.
+`Tool`, `Command`, and `Content` match with regex — escape special characters and use
+raw strings (`r"..."`) to avoid backslash issues. `RanCommand` takes argv tokens instead:
+matching is wrapper-transparent (`sudo`/`env`/`timeout` are stripped) but launcher-literal,
+so list `RanCommand("uv", "run", "pytest")` and `RanCommand("pytest")` as separate entries.
 :::
 
 ::: {.callout-note title="Related"}

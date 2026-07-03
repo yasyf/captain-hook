@@ -15,7 +15,7 @@ block_command(["git", "stash"], reason="Use the team VCS workflow")
 
 **gate** — refuse to let the agent stop until a condition holds
 ```python
-gate("Run the tests before finishing", skip_if=[RanCommand(r"pytest")])
+gate("Run the tests before finishing", skip_if=[RanCommand("pytest"), RanCommand("uv", "run", "pytest")])
 ```
 
 **hook(..., block=True)** — a hand-rolled always-on guard when no primitive fits
@@ -119,7 +119,7 @@ SourceEdits(lang="py", include_tests=False)
 
 **RanCommand** / **ReadFile** / **TouchedFile** — something already happened this session
 ```python
-RanCommand(r"uv\s+run\s+pytest")
+RanCommand("uv", "run", "pytest")
 ```
 
 **UsedSkill** / **InPlanMode** / **Waiting** — session mode and history

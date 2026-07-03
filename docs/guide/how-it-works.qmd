@@ -94,7 +94,8 @@ One captain-hook process handles every event the same way, in four stages.
 Take the same hook in its full declarative form, so every part the pipeline reads is visible:
 
 ```python
-from captain_hook import hook, Event, Tool, Command
+from captain_hook import hook, Event, Tool
+from captain_hook.types import Command
 
 hook(
     Event.PreToolUse,

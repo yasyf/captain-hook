@@ -189,7 +189,7 @@ Adaptation notes:
 
 Signals: a `tests/` dir plus a CI test job; "never skip tests"; coverage rules. Substitute
 the *surveyed* test command (from CI or the Makefile) into both the gate message and the
-`RanCommand` regex.
+`RanCommand` argv tokens.
 
 ```python
 from __future__ import annotations
@@ -232,7 +232,7 @@ EDITED_THEN_TESTED = TranscriptFixture(messages=[
 gate(
     "Source files were edited but the test suite has not run. Run `uv run pytest` before stopping.",
     only_if=[TouchedFile("**/*.py")],
-    skip_if=[RanCommand(r"uv\s+run\s+pytest")],
+    skip_if=[RanCommand("uv", "run", "pytest"), RanCommand("pytest")],
     tests={
         Input(transcript=EDITED_SOURCE): Block(pattern="pytest"),
         Input(transcript=EDITED_THEN_TESTED): Allow(),
@@ -277,8 +277,10 @@ Adaptation notes:
   `{"type": "assistant", "message": {"content": [tool_use, ...]}}`.
 - `TouchedFile("**/*.py")` matches `src/main.py`; `src/**/*.py` would not (the `**` segment
   wants an intermediate directory). Prefer `**/*.py` or `src/*.py`.
-- Make the `RanCommand` regex match what the agent will actually type: for a `make test`
-  repo use `r"make\s+test"`, for npm `r"npm\s+(run\s+)?test"`.
+- Make the `RanCommand` argv match what the agent will actually type — matching is
+  wrapper-transparent (`sudo`/`env`/`timeout` stripped) but launcher-literal, so list each
+  spelling: for a `make test` repo `RanCommand("make", "test")`, for npm both
+  `RanCommand("npm", "test")` and `RanCommand("npm", "run", "test")` (`skip_if` is OR).
 
 ## D — Workflow rituals (`workflow.py`)
 
@@ -308,7 +310,7 @@ gate(
     "CONTRIBUTING.md requires `make lint` before pushing.",
     events=Event.PreToolUse,
     only_if=[Tool("Bash"), Command(r"git\s+push")],
-    skip_if=[RanCommand(r"make\s+lint")],
+    skip_if=[RanCommand("make", "lint")],
     tests={
         Input(command="git push origin main"): Block(pattern="make lint"),
         Input(command="git status"): Allow(),
