@@ -5,11 +5,12 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, overload
 
 from cc_transcript.parser import parse_event
 from cc_transcript.query import Session
@@ -28,6 +29,7 @@ from captain_hook.events import (
     ToolHookEvent,
     UserPromptSubmitEvent,
 )
+from captain_hook.prompt import Prompt
 from captain_hook.session import SessionStore
 from captain_hook.testing.session_cache import SessionCache
 from captain_hook.testing.types import Allow, Block, FileFixture, Input, Rewrite, TranscriptFixture, Warn
@@ -43,6 +45,44 @@ STUB_FIELD_VALUES: dict[str, Any] = {
 
 FIXTURE_FILE_DIR: list[Path] = []
 FIXTURE_FILE_COUNTER = count()
+
+
+@dataclass
+class StubbedContext(HookContext):
+    """HookContext for inline tests: ``call_llm`` fabricates a deterministic verdict from
+    ``STUB_FIELD_VALUES`` merged with the per-test ``Input.llm`` overrides."""
+
+    llm: dict[str, Any] = field(default_factory=dict)
+
+    @overload
+    def call_llm[M: BaseModel](
+        self, template: str | Prompt, *args: Any, response_model: type[M], **kwargs: Any
+    ) -> M: ...
+    @overload
+    def call_llm(self, template: str | Prompt, *args: Any, response_model: None = None, **kwargs: Any) -> str: ...
+    def call_llm(
+        self, template: str | Prompt, *args: Any, response_model: type[BaseModel] | None = None, **kwargs: Any
+    ) -> str | BaseModel:
+        if response_model is None:
+            return "stubbed"
+        values = STUB_FIELD_VALUES | self.llm
+        return response_model(
+            **{
+                name: values.get(name, "")
+                for name, info in response_model.model_fields.items()
+                if name in values or info.default is None
+            }
+        )
+
+    @classmethod
+    def wrapping(cls, ctx: HookContext, llm: dict[str, Any] | None = None) -> StubbedContext:
+        return cls(
+            session=ctx.session,
+            transcript=ctx.transcript,
+            settings=ctx.settings,
+            project_root=ctx.project_root,
+            llm=llm or {},
+        )
 
 
 def fixture_file_dir() -> Path:
@@ -404,13 +444,13 @@ def input_to_event(
         # injected list in inline tests — no native task store / session_id required.
         evt.__dict__["tasks"] = Tasks(tuple(Task.from_raw(t) for t in inp.tasks))
 
+    evt.ctx = StubbedContext.wrapping(evt.ctx, inp.llm)
     return evt
 
 
 def replay_session(entry: Any, jsonl: Path) -> Iterator[HookResult | None]:
     transcript = load_transcript(jsonl)
-    ctx = HookContext(session=SessionStore(None), transcript=transcript, settings=None)
-    ctx.call_llm = stub_call_llm  # type: ignore[method-assign]
+    ctx = StubbedContext(session=SessionStore(None), transcript=transcript, settings=None)
     transcript_path = str(jsonl)
 
     for ev_type in entry.spec.events:
@@ -509,31 +549,6 @@ def assert_result(
                 assert val in actual, f"{prefix}Rewrite {key}={actual!r} doesn't contain '{val}'"
 
 
-def make_stub_call_llm(overrides: dict[str, Any] | None = None) -> Callable[..., str | BaseModel]:
-    values = STUB_FIELD_VALUES | (overrides or {})
-
-    def stub_call_llm(
-        _template: Any,
-        *args: Any,
-        response_model: type[BaseModel] | None = None,
-        **kwargs: Any,
-    ) -> str | BaseModel:
-        if response_model is None:
-            return "stubbed"
-        return response_model(
-            **{
-                name: values.get(name, "")
-                for name, info in response_model.model_fields.items()
-                if name in values or info.default is None
-            }
-        )
-
-    return stub_call_llm
-
-
-stub_call_llm = make_stub_call_llm()
-
-
 @contextmanager
 def isolated_state_root() -> Iterator[Path]:
     """Point the whole capt-hook state root at a throwaway dir so inline tests never touch real state."""
@@ -574,7 +589,6 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
                             if spec_tools
                             else None,
                         )
-                        evt.ctx.call_llm = make_stub_call_llm(key.llm)  # type: ignore[assignment]
                         hook_result = (
                             execute_hook(entry, evt)
                             if matches_conditions(entry.spec, evt) and not is_planning_agent_skip(entry.spec, evt)

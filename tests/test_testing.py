@@ -624,6 +624,44 @@ class TestRunInlineTests:
         assert all(r[2] for r in results), f"Failed: {results}"
 
 
+class TestStubbedContext:
+    def test_input_to_event_ctx_is_stubbed(self):
+        from captain_hook.testing.helpers import StubbedContext
+        from captain_hook.testing.types import Input
+        from tests.helpers import input_to_event
+
+        evt = input_to_event(Event.PreToolUse, Input(tool="Bash", command="ls"))
+        assert isinstance(evt.ctx, StubbedContext)
+
+    def test_call_llm_without_model_returns_stub_string(self):
+        from captain_hook.testing.helpers import StubbedContext, build_context
+
+        ctx = StubbedContext.wrapping(build_context())
+        assert ctx.call_llm("anything") == "stubbed"
+
+    def test_call_llm_fabricates_model_honoring_stub_field_values(self):
+        from pydantic import BaseModel
+
+        from captain_hook.testing.helpers import StubbedContext, build_context
+
+        class Verdict(BaseModel):
+            block: bool
+
+        ctx = StubbedContext.wrapping(build_context())
+        assert ctx.call_llm("judge", response_model=Verdict).block is True
+
+    def test_call_llm_applies_per_input_llm_overrides(self):
+        from pydantic import BaseModel
+
+        from captain_hook.testing.helpers import StubbedContext, build_context
+
+        class Verdict(BaseModel):
+            fire: bool
+
+        ctx = StubbedContext.wrapping(build_context(), {"fire": False})
+        assert ctx.call_llm("judge", response_model=Verdict).fire is False
+
+
 class TestIsolatedStateRoot:
     def test_state_dir_points_at_yielded_root_inside(self):
         from captain_hook.settings import resolve_state_dir
