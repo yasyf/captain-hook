@@ -110,6 +110,9 @@ class Input:
         transcript: Session history for transcript conditions — a path, a
             ``TranscriptFixture``, or a raw list of transcript-line dicts.
         tasks: The native task list read via ``evt.tasks``.
+        llm: Per-test LLM stub overrides merged over the default stub verdict
+            (``fire``/``block``/``action``/``reasoning``), e.g. ``llm={"fire": False}``
+            to exercise an LLM hook's judge-declines path.
     """
 
     command: str | None = None
@@ -131,6 +134,7 @@ class Input:
     limit: int | None = None
     transcript: Path | TranscriptFixture | list[dict[str, Any]] | None = None
     tasks: list[dict[str, Any]] | None = None
+    llm: dict[str, Any] | None = None
 
     @field_validator("transcript", mode="before")
     @classmethod

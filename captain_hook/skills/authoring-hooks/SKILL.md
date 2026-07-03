@@ -94,7 +94,9 @@ registration gets:
 - Inline `tests = {...}` from Step 1: the offending shape expecting `Block(...)` or
   `Warn(...)` (match the chosen severity), the benign neighbor expecting `Allow()`.
   LLM hooks (`llm_gate`, `llm_nudge`) ship without `tests=` — their inline tests would
-  only exercise a stubbed model.
+  only exercise a stubbed model. Exception: with a required `contexts=` provider, ship
+  `tests=`, and use `Input(llm={"fire": False})` (or `{"block": False}`) to wire-test the
+  judge-declines path; the default stub still always fires.
 
 ### 4. Verify
 

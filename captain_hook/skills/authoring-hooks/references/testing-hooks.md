@@ -13,8 +13,11 @@ hook's conditions and handler, and asserts the outcome. Exit code 1 on any failu
    (first alternative of the pattern: `Tool("Edit|Write")` infers `Edit`), else `Bash`.
 3. `skip_if`/`only_if` are evaluated; a non-matching input yields `Allow()`.
 4. LLM calls are stubbed: `GateVerdict(block=True)`, `NudgeVerdict(fire=True)`,
-   `PromptCheckVerdict(action="block")`. The stub always fires, so inline tests on LLM hooks
-   assert nothing real — ship LLM hooks without `tests=`.
+   `PromptCheckVerdict(action="block")`. The default stub always fires, so inline tests on
+   LLM hooks assert only conditions and wiring, never judgment — ship LLM hooks without
+   `tests=` unless a required `contexts=` provider makes them meaningful.
+   `Input(llm={"fire": False})` / `Input(llm={"block": False})` overrides the stub verdict
+   per test, wire-testing the judge-declines path.
 
 ## Input fields
 
@@ -89,4 +92,4 @@ Statuses: `pass`, `fail` (wrong outcome), `error` (exception in hook or test), `
 | `@on` handler on a piped command never fires | `evt.command_line.q.runs(...)` checks the pipeline's *last* command. Use `.any_command(lambda c: c.program == "...")`. |
 | Edit/Write hook gets `None` content | The `Input` set `command=` but the hook's first event/tool is Edit — set `file=` and `content=` (and `tool=` if the hook matches several). |
 | `Input(command=...)` ignored | The hook's first event is `Stop` — the runner builds a Stop event without tool input. Encode the command as a Bash `tool_use` in `transcript=` instead. |
-| LLM hook test always blocks | The stub verdict always fires. Remove `tests=` from LLM hooks; test their static `only_if` narrowing on a deterministic sibling hook instead. |
+| LLM hook test always blocks | The default stub verdict always fires. Pass `Input(llm={"fire": False})` / `{"block": False}` to exercise the declines path, or remove `tests=` and test the static `only_if` narrowing on a deterministic sibling hook. |

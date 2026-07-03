@@ -4,7 +4,7 @@ import atexit
 import re
 import shutil
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from itertools import count
 from pathlib import Path
@@ -508,21 +508,29 @@ def assert_result(
                 assert val in actual, f"{prefix}Rewrite {key}={actual!r} doesn't contain '{val}'"
 
 
-def stub_call_llm(
-    _template: Any,
-    *args: Any,
-    response_model: type[BaseModel] | None = None,
-    **kwargs: Any,
-) -> str | BaseModel:
-    if response_model is None:
-        return "stubbed"
-    return response_model(
-        **{
-            name: STUB_FIELD_VALUES.get(name, "")
-            for name, info in response_model.model_fields.items()
-            if name in STUB_FIELD_VALUES or info.default is None
-        }
-    )
+def make_stub_call_llm(overrides: dict[str, Any] | None = None) -> Callable[..., str | BaseModel]:
+    values = STUB_FIELD_VALUES | (overrides or {})
+
+    def stub_call_llm(
+        _template: Any,
+        *args: Any,
+        response_model: type[BaseModel] | None = None,
+        **kwargs: Any,
+    ) -> str | BaseModel:
+        if response_model is None:
+            return "stubbed"
+        return response_model(
+            **{
+                name: values.get(name, "")
+                for name, info in response_model.model_fields.items()
+                if name in values or info.default is None
+            }
+        )
+
+    return stub_call_llm
+
+
+stub_call_llm = make_stub_call_llm()
 
 
 @contextmanager
@@ -563,7 +571,7 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
                             if spec_tools
                             else None,
                         )
-                        evt.ctx.call_llm = stub_call_llm  # type: ignore[assignment]
+                        evt.ctx.call_llm = make_stub_call_llm(key.llm)  # type: ignore[assignment]
                         hook_result = (
                             execute_hook(entry, evt)
                             if matches_conditions(entry.spec, evt) and not is_planning_agent_skip(entry.spec, evt)

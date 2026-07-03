@@ -34,7 +34,8 @@ guard a non-Python language structurally.
 ## LLM hooks are non-deterministic and cost money
 
 An `llm_gate` or `llm_nudge` calls a model, so its verdict varies run to run, adds seconds of
-latency, and bills tokens. Inline tests stub the model and never exercise its judgment. Bound
+latency, and bills tokens. Inline tests stub the model and never exercise its judgment (an
+`Input(llm=...)` override picks the stub's verdict, still not the model's). Bound
 the cost with `max_fires`, a narrow `only_if`, and `signals` short-circuiting, then validate
 the judgment by replaying real sessions. When a regex or matcher can answer the question, it is
 the better tool every time.

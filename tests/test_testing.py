@@ -385,6 +385,52 @@ class TestSetToolInput:
         assert result.note == "upgraded to sonnet"
 
 
+class TestInlineLlmOverrides:
+    def test_nudge_judge_declines_path(self):
+        from captain_hook.primitives.llm import llm_nudge
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Input
+
+        reset()
+        llm_nudge(
+            "Should this fire?",
+            message="nudged",
+            events=Event.PreToolUse,
+            only_if=[Tool("Bash")],
+            agent=False,
+            transcript=False,
+            tests={
+                Input(command="ls", llm={"fire": False}): Allow(),
+                Input(command="ls"): Warn(pattern="nudged"),
+            },
+        )
+        results = run_inline_tests()
+        assert len(results) == 2
+        assert all(r[2] for r in results), f"Failed: {results}"
+
+    def test_gate_judge_declines_path(self):
+        from captain_hook.primitives.llm import llm_gate
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Input
+
+        reset()
+        llm_gate(
+            "Should this block?",
+            message="gated",
+            events=Event.PreToolUse,
+            only_if=[Tool("Bash")],
+            agent=False,
+            transcript=False,
+            tests={
+                Input(command="ls", llm={"block": False}): Allow(),
+                Input(command="ls"): Block(pattern="gated"),
+            },
+        )
+        results = run_inline_tests()
+        assert len(results) == 2
+        assert all(r[2] for r in results), f"Failed: {results}"
+
+
 class TestDispatchTest:
     def test_dispatch_test_returns_result(self):
         from tests.helpers import dispatch_test

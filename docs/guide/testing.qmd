@@ -181,9 +181,11 @@ exit code when you want a gate.
 Legacy string-key tests are the only ones that report `SKIP`. They replay a recorded
 session, so they skip when no fixture or local Claude session exists for that key.
 LLM-backed primitives such as `llm_gate` and `llm_nudge` never skip. The runner stubs the
-model with a verdict that always fires, so their inline tests exercise the deterministic
+model with a verdict that fires by default, so their inline tests exercise the deterministic
 narrowing, the `only_if` and `skip_if` conditions, instead of the model's judgment; see
-[LLM hooks](llm-hooks.qmd) for that split.
+[LLM hooks](llm-hooks.qmd) for that split. A test can override the stub verdict with
+`Input(llm={"fire": False})` (or `{"block": False}`) to wire-test the judge-declines path —
+still wiring, never judgment.
 
 ## See also
 
