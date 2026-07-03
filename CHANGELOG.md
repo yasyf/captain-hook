@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.0] - 2026-07-03
+
 ### Added
 - General-pack `comments` nudge (pack 0.11.0): a language-agnostic `PreToolUse` warn that
   discourages verbose comments. A `LongCommentIntroduced` custom condition diffs the edit's
