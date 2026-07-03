@@ -55,6 +55,13 @@ class DriftedFromTasks(CustomCondition):
         return since.tool_calls.named("Bash|Grep|Glob|WebSearch|WebFetch|LSP|Skill").count() >= TASK_DRIFT_THRESHOLD
 
 
+class TaskNotification(CustomCondition):
+    """Matches when the prompt is a system-injected background-task report, not free-form user text."""
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return (evt.user_prompt or "").strip().startswith("<task-notification>")
+
+
 gate(
     "Open tasks remain. Before stopping, mark each finished task status='completed' via the "
     "TaskUpdate tool (add a note if you're deliberately deferring one), or output "
@@ -120,7 +127,7 @@ nudge(
 nudge(
     "This message has several distinct requests. Use the TaskCreate tool for each item "
     "before starting work, so none gets dropped. See: CLAUDE.md § Task Tracking.",
-    skip_if=[InPlanMode()],
+    skip_if=[InPlanMode(), TaskNotification()],
     events=Event.UserPromptSubmit,
     signals=Signals(
         [
@@ -141,5 +148,12 @@ nudge(
         Input(prompt="1. add foo\n2. fix bar\n3. update baz"): Warn(),
         Input(prompt="just fix the typo"): Allow(),
         Input(prompt="1. add foo\n2. fix bar\n3. update baz", permission_mode="plan"): Allow(),
+        Input(
+            prompt=(
+                "<task-notification>\n<task-id>abc</task-id>\n<status>completed</status>\n"
+                "<summary>Agent finished</summary>\n<result>\n- `cc-transcript` -> version 7.0.1\n"
+                "- `spawnllm` -> version 0.5.2\n</result>\n</task-notification>"
+            )
+        ): Allow(),
     },
 )
