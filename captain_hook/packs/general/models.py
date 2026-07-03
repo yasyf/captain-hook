@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from captain_hook import (
@@ -7,8 +8,10 @@ from captain_hook import (
     Allow,
     BaseHookEvent,
     Block,
+    Clause,
     Event,
     Input,
+    Phrase,
     Rewrite,
     TaskCall,
     Tool,
@@ -23,6 +26,7 @@ from captain_hook import (
     workflow_opt_values,
     workflow_script_source,
 )
+from captain_hook.signals.nlp import nlp_scan
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,12 +43,84 @@ class DelegatedSpawn:
         return f"model: {model}\nagent_type: {call.agent_type or '(default)'}\nprompt:\n{call.prompt}"
 
 
-WORKFLOW_SCRIPT_CAP = 14_000  # below the workflow prose nudge's max_context=16_000, so truncation stays ours
+WORKFLOW_SCRIPT_CAP = 14_000  # below the prose hooks' max_context=16_000, so truncation stays ours
+
+
+def prose_deliverable_sentences(text: str) -> list[str]:
+    """Sentences where a writing verb governs a prose artifact, minus negated asks ("do NOT edit CHANGELOG.md").
+
+    The text is de-noised for the tagger first: path/URL tokens dropped, brackets and
+    word-edge quotes blanked (so `agent('write …')` doesn't glue into one token; intra-word
+    apostrophes survive for "n't" negations), readme/changelog extensions stripped, intra-word
+    hyphens split, writing verbs lowercased, and imperative writing verbs given a determiner —
+    "Update CHANGELOG.md" otherwise parses as a noun compound.
+    """
+    verbs = r"write|draft|redraft|rewrite|revise|reword|polish|copyedit|compose|author|update|edit"
+    text = re.sub(r"\S+/\S+", " ", text)
+    text = re.sub(r"[(){}\[\]<>]|(?<![A-Za-z])['\"`]|['\"`](?![A-Za-z])", " ", text)
+    text = re.sub(r"(?i)\b(readme|changelog)\.(?:md|rst|txt)\b", r"\1", text)
+    text = re.sub(r"(?<=\w)-(?=\w)", " ", text)
+    text = re.sub(rf"(?i)\b({verbs})\b", lambda m: m.group(1).lower(), text)
+    text = re.sub(rf"\b({verbs})[ \t]+((?i:readme|changelog|docs))\b", r"\1 the \2", text)
+    artifact = Phrase(
+        "readme",
+        "readme.md",
+        "doc",
+        "docs",
+        "documentation",
+        "changelog",
+        "changelog.md",
+        "blog",
+        "blog post",
+        "release note",
+        "announcement",
+        "tutorial",
+        "guide",
+        "prose",
+        "marketing copy",
+        "article",
+        "newsletter",
+        "email",
+        "pr description",
+        "commit message",
+    )
+    writing = Phrase(
+        "write",
+        "draft",
+        "redraft",
+        "rewrite",
+        "revise",
+        "reword",
+        "polish",
+        "copyedit",
+        "compose",
+        "author",
+        "update",
+        "edit",
+    )
+    if not (matched := nlp_scan([Clause(noun=artifact, verb=writing)], text)):
+        return []
+    negated = set(nlp_scan([Clause(noun=artifact, verb=writing, negated=True)], text))
+    return [s for s in matched if s not in negated]
+
+
+@dataclass(frozen=True, slots=True)
+class ProseSpawn(DelegatedSpawn):
+    """Gating context: the pending spawn, present only when its prompt asks to produce a prose artifact."""
+
+    def content(self, evt: BaseHookEvent) -> str | None:
+        # zero-arg super() breaks under @dataclass(slots=True) — the decorator rebuilds the class
+        if (base := DelegatedSpawn.content(self, evt)) is None or (call := evt.as_input(TaskCall)) is None:
+            return None
+        if not (sentences := prose_deliverable_sentences((call.prompt or "")[:WORKFLOW_SCRIPT_CAP])):
+            return None
+        matched = "\n".join(f"  {s[:300]}" for s in sentences)
+        return f"{base}\n\nsentences the prose prefilter matched:\n{matched}"
 
 
 @dataclass(frozen=True, slots=True)
 class WorkflowScriptSource:
-    """Gating context: the pending Workflow call's script source, headed by its model pins."""
+    """Gating context: the pending Workflow call's script source, headed by its model pins and prose asks."""
 
     tag: str = "workflow_script"
     required: bool = True
@@ -62,9 +138,13 @@ class WorkflowScriptSource:
                 f"… [script truncated: {len(source):,} chars total; every model pin is quoted above] …\n"
                 f"{source[-tail:]}"
             )
+        if not (sentences := prose_deliverable_sentences(source)):
+            return None
+        matched = "\n".join(f"  {s[:300]}" for s in sentences)
         return (
             "lines that pin a model in this script (a stage not quoted here inherits the "
-            f"session model, fable):\n{pin_lines or '  (none)'}\n\n{source}"
+            f"session model, fable):\n{pin_lines or '  (none)'}\n\n"
+            f"sentences the prose prefilter matched:\n{matched}\n\n{source}"
         )
 
 
@@ -103,9 +183,10 @@ llm_gate(
 deliverable is prose.
 
 <delegated_spawn> holds the pending Agent/Task call: its model pin, agent type, and
-prompt. A regex prefilter already found a haiku/sonnet/opus pin plus a writing verb
-near a prose noun in the prompt; your job is precision: is a prose artifact what this
-subagent is asked to PRODUCE?
+prompt, ending with the sentences a clause prefilter matched — each asks a writing
+verb of a prose artifact, with negated asks ("do NOT edit the docs") already
+screened out. Your job is precision: is a prose artifact what this subagent is
+asked to PRODUCE?
 
 The Models rubric: all writing a user reads — READMEs, docs, changelogs, release
 notes, blog posts, PR descriptions, any user-facing text — routes to fable. Work
@@ -145,22 +226,11 @@ Review findings go to the orchestrator; the subagent writes no user-facing prose
         "to fable: drop model to inherit the session model, or pass model='fable'. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
-    contexts=[DelegatedSpawn()],
+    contexts=[ProseSpawn()],
     events=Event.PreToolUse,
     only_if=[
         Tool("Agent|Task"),
         ToolInput("model", r"(?i)\b(haiku|sonnet|opus)\b"),
-        ToolInput(
-            "prompt",
-            r"(?i)\b(?:writ(?:e|es|ing|ten)|draft|redraft|rewrit|revis|polish|copyedit|compose|author|update|edit)\w*"
-            r"\W+(?:\w+\W+){0,4}(?:readme|docs?|documentation|blog|changelog|release notes|announcement"
-            r"|tutorial|guide|prose|copywrit|marketing copy|article|newsletter|email"
-            r"|pr description|commit message)\b"
-            r"|\b(?:readme|docs?|documentation|blog|changelog|release notes|announcement"
-            r"|tutorial|guide|prose|copywrit|marketing copy|article|newsletter|email"
-            r"|pr description|commit message)\b"
-            r"\W+(?:\w+\W+){0,4}(?:writ(?:e|es|ing|ten)|draft|redraft|rewrit|revis|polish|copyedit|compose|author|update|edit)",
-        ),
     ],
     skip_if=[
         ToolInput("prompt", r"(?i)\b(classif|label|tag|categoriz|count|extract|mechanical)"),
@@ -168,6 +238,7 @@ Review findings go to the orchestrator; the subagent writes no user-facing prose
     ],
     agent=False,
     transcript=False,
+    max_context=16_000,
     tests={
         Input(model="sonnet", prompt="Write the README quickstart for this repo"): Block(),
         Input(model="opus", prompt="draft the release notes for v2"): Block(),
@@ -183,6 +254,10 @@ Review findings go to the orchestrator; the subagent writes no user-facing prose
         Input(
             model="opus",
             prompt="Fix the failing test in cli.py. Do NOT edit the CHANGELOG — a sibling owns updating it",
+        ): Allow(),
+        Input(
+            model="opus",
+            prompt="Fix the failing test in cli.py; do NOT edit CHANGELOG.md. Then draft the release notes.",
             llm={"block": False},
         ): Allow(),
     },
@@ -289,11 +364,12 @@ llm_nudge(
 deliverable is prose.
 
 <workflow_script> holds the pending Workflow call's script source. Its header quotes
-every line of the script that pins a model; a stage that is not quoted there carries
+every line of the script that pins a model — a stage that is not quoted there carries
 no pin and inherits the session model, fable — already correctly routed, whatever it
-writes. A regex prefilter already found both a haiku/sonnet/opus pin and a writing
-verb near a prose noun somewhere in the script; your job is precision: does a
-PINNED stage have prose as its own deliverable?
+writes — followed by the sentences a clause prefilter matched: each asks a writing
+verb of a prose artifact, with negated asks ("do NOT edit CHANGELOG.md") already
+screened out. Your job is precision: does a PINNED stage have prose as its own
+deliverable?
 
 The Models rubric: all writing a user reads — READMEs, docs, changelogs, release
 notes, blog posts, announcements, any user-facing text — routes to fable. A stage's
@@ -350,13 +426,7 @@ Reading and classifying docs is analysis, not a prose deliverable.
     events=Event.PreToolUse,
     only_if=[
         Tool("Workflow"),
-        WorkflowScript(
-            pattern=r"(?i)\b(?:writ(?:e|es|ing|ten)|draft|redraft|rewrit|revis|polish|copyedit|compose|author|update|edit)\w*"
-            r"\W+(?:\w+\W+){0,4}(?:readme|docs?|documentation|blog|changelog|release notes|prose)\b"
-            r"|\b(?:readme|docs?|documentation|blog|changelog|release notes|prose)\b"
-            r"\W+(?:\w+\W+){0,4}(?:writ(?:e|es|ing|ten)|draft|redraft|rewrit|revis|polish|copyedit|compose|author|update|edit)",
-            model="haiku|sonnet|opus",
-        ),
+        WorkflowScript(model="haiku|sonnet|opus"),
     ],
     max_fires=2,
     max_context=16_000,
@@ -372,7 +442,6 @@ Reading and classifying docs is analysis, not a prose deliverable.
         ): Allow(),
         Input(
             script="agent('Fix the import in cli.py. Do NOT edit CHANGELOG.md — a sibling owns it', {model: 'opus'})",
-            llm={"fire": False},
         ): Allow(),
     },
 )

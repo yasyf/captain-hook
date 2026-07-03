@@ -8,7 +8,12 @@ import pytest
 
 from captain_hook.ast_grep import COMMENT_TYPES
 from captain_hook.contexts import AfterEdit, BeforeEdit, Introduced, apply_contexts, with_defaults
-from captain_hook.packs.general.models import WORKFLOW_SCRIPT_CAP, WorkflowScriptSource
+from captain_hook.packs.general.models import (
+    WORKFLOW_SCRIPT_CAP,
+    ProseSpawn,
+    WorkflowScriptSource,
+    prose_deliverable_sentences,
+)
 from captain_hook.prompt import Prompt
 from captain_hook.testing import FileFixture, Input
 from captain_hook.testing.helpers import input_to_event, mock_event, mock_tool_event
@@ -212,34 +217,86 @@ class TestWithDefaults:
         assert with_defaults([mine]) == (mine, AfterEdit())
 
 
+class TestProseDeliverableSentences:
+    def test_writing_verb_governing_artifact_matches(self) -> None:
+        assert prose_deliverable_sentences("Write the README quickstart for this repo")
+        assert prose_deliverable_sentences("draft the release notes for v2")
+        assert prose_deliverable_sentences("Update CHANGELOG.md with an entry for the retry fix")
+
+    def test_negated_ask_is_screened_out(self) -> None:
+        assert not prose_deliverable_sentences("Fix the test in cli.py. Do NOT edit the CHANGELOG — a sibling owns it")
+
+    def test_mixed_prompt_keeps_the_positive_ask(self) -> None:
+        got = prose_deliverable_sentences("Fix cli.py; do NOT edit CHANGELOG.md. Then draft the release notes.")
+        assert got == ["Then draft the release notes."]
+
+    def test_path_tokens_and_mere_mentions_do_not_match(self) -> None:
+        assert not prose_deliverable_sentences("Update the retry backoff config per the spec in docs/plan.md")
+        assert not prose_deliverable_sentences("Audit docs/architecture.md for stale claims")
+        assert not prose_deliverable_sentences("all prose stays with the main agent on fable")
+        assert not prose_deliverable_sentences("review the README for factual errors")
+
+
+class TestProseSpawn:
+    def test_prose_ask_renders_matched_sentences(self) -> None:
+        evt = mock_tool_event(
+            "Task", tool_input={"prompt": "Write the README quickstart for this repo", "model": "sonnet"}
+        )
+        content = ProseSpawn().content(evt)
+        assert content is not None
+        assert content.startswith("model: sonnet\n")
+        assert "sentences the prose prefilter matched:\n  write the README quickstart" in content
+
+    def test_non_prose_prompt_yields_none(self) -> None:
+        evt = mock_tool_event("Task", tool_input={"prompt": "update the retry backoff config", "model": "opus"})
+        assert ProseSpawn().content(evt) is None
+
+    def test_negated_ask_yields_none(self) -> None:
+        evt = mock_tool_event(
+            "Task",
+            tool_input={"prompt": "Fix cli.py. Do NOT edit the CHANGELOG — a sibling owns it", "model": "opus"},
+        )
+        assert ProseSpawn().content(evt) is None
+
+
 class TestWorkflowScriptSource:
-    def test_inline_script_quotes_pin_lines(self) -> None:
-        script = "agent('write the intro', {label: 'docs', model: 'opus'})\nagent('fix the test')\n"
+    def test_inline_script_quotes_pin_lines_and_prose(self) -> None:
+        script = "agent('write the README intro', {label: 'docs', model: 'opus'})\nagent('fix the test')\n"
         evt = mock_tool_event("Workflow", tool_input={"script": script})
         content = WorkflowScriptSource().content(evt)
         assert content is not None
         assert content.startswith("lines that pin a model in this script")
-        assert "  agent('write the intro', {label: 'docs', model: 'opus'})" in content
+        assert "  agent('write the README intro', {label: 'docs', model: 'opus'})" in content
+        assert "sentences the prose prefilter matched:" in content
         assert content.endswith(f"\n\n{script}")
 
     def test_no_pins_says_none(self) -> None:
-        evt = mock_tool_event("Workflow", tool_input={"script": "agent('fix the test')"})
+        evt = mock_tool_event("Workflow", tool_input={"script": "agent('write the README intro')"})
         content = WorkflowScriptSource().content(evt)
         assert content is not None
         assert "  (none)" in content
 
+    def test_no_prose_ask_yields_none(self) -> None:
+        evt = mock_tool_event("Workflow", tool_input={"script": "agent('fix the test', {model: 'opus'})"})
+        assert WorkflowScriptSource().content(evt) is None
+
+    def test_negated_prose_ask_yields_none(self) -> None:
+        script = "agent('Fix the import. Do NOT edit CHANGELOG.md — a sibling owns it', {model: 'opus'})"
+        evt = mock_tool_event("Workflow", tool_input={"script": script})
+        assert WorkflowScriptSource().content(evt) is None
+
     def test_script_path_reads_file(self, tmp_path: Any) -> None:
         p = tmp_path / "wf.js"
-        p.write_text("agent('fix it', {model: 'sonnet'})")
+        p.write_text("agent('write the README intro', {model: 'sonnet'})")
         evt = mock_tool_event("Workflow", tool_input={"scriptPath": str(p)})
         content = WorkflowScriptSource().content(evt)
         assert content is not None
-        assert "  agent('fix it', {model: 'sonnet'})" in content
+        assert "  agent('write the README intro', {model: 'sonnet'})" in content
 
     def test_truncation_keeps_marker_and_all_pin_lines(self) -> None:
         filler = "x = 1\n" * (WORKFLOW_SCRIPT_CAP // 6)
         script = (
-            "agent('start', {model: 'opus'})\n"
+            "agent('write the README intro', {model: 'opus'})\n"
             f"{filler}agent('mid', {{model: 'haiku'}})\nconst midMarker = 'ZZZMID'\n{filler}"
             "agent('end', {model: 'sonnet'})\n"
         )
@@ -247,7 +304,7 @@ class TestWorkflowScriptSource:
         content = WorkflowScriptSource().content(evt)
         assert content is not None
         assert "script truncated" in content
-        assert "agent('start'" in content
+        assert "agent('write the README intro'" in content
         assert "agent('end'" in content
         assert "  agent('mid', {model: 'haiku'})" in content
         assert "ZZZMID" not in content

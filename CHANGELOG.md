@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- General-pack prose-routing prefilters upgraded from proximity regex to dependency-parsed
+  clause matching (pack 0.8.0): the judge is consulted only when a sentence asks a writing
+  verb (matched by lemma, so "updating" and "rewriting" now count) of a prose artifact as
+  its grammatical object, and negated asks ("do NOT edit CHANGELOG.md") are subtracted
+  outright — that false positive no longer needs the judge at all. Scanned text is de-noised
+  for the tagger first: path/URL tokens dropped, brackets and word-edge quotes blanked,
+  readme/changelog extensions stripped, intra-word hyphens split, and imperative writing
+  verbs given a determiner ("Update CHANGELOG.md" otherwise parses as a noun compound).
+  Matched sentences are quoted to the judge as evidence in both contexts; the gate wraps
+  `DelegatedSpawn` in a new prose-gated `ProseSpawn` context.
+
 ## [6.2.0] - 2026-07-03
 
 ### Changed
