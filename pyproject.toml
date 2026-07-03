@@ -21,7 +21,7 @@ classifiers = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "cc-transcript>=7,<8",
+    "cc-transcript>=7.1,<8",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "tree-sitter>=0.24",
