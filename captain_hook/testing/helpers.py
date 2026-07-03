@@ -5,6 +5,7 @@ import re
 import shutil
 import tempfile
 from collections.abc import Iterator
+from contextlib import contextmanager
 from itertools import count
 from pathlib import Path
 from typing import Any, cast
@@ -524,46 +525,59 @@ def stub_call_llm(
     )
 
 
+@contextmanager
+def isolated_durable_root() -> Iterator[Path]:
+    """Point ``DurableState`` at a throwaway root so tests never read or write the real store."""
+    from captain_hook.durable import DURABLE_ROOT_OVERRIDE
+
+    root = Path(tempfile.mkdtemp(prefix="capt-hook-durable-"))
+    DURABLE_ROOT_OVERRIDE.append(root)
+    try:
+        yield root
+    finally:
+        DURABLE_ROOT_OVERRIDE.remove(root)
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def run_inline_tests() -> list[tuple[str, str, bool, str]]:
-    from captain_hook.app import _state
+    from captain_hook.app import _state, is_planning_agent_skip
 
     results: list[tuple[str, str, bool, str]] = []
 
-    for entry in _state.hooks:
-        if not entry.spec.tests:
-            continue
-        for key, expected in entry.spec.tests.items():
-            test_name = f"{entry.name}:{key!r}"
-            try:
-                if isinstance(key, Input):
-                    # A Tool condition pins the tool only when it names exactly one; a
-                    # multi-name condition falls back to infer_tool's shape-based derivation.
-                    spec_tools = [p for c in entry.spec.only_if if isinstance(c, Tool) for p in c.names]
-                    evt = input_to_event(
-                        next(iter(entry.spec.events)),
-                        key,
-                        spec_tools[0] if len(spec_tools) == 1 else None,
-                    )
-                    from captain_hook.app import is_planning_agent_skip
-
-                    evt.ctx.call_llm = stub_call_llm  # type: ignore[assignment]
-                    hook_result = (
-                        execute_hook(entry, evt)
-                        if matches_conditions(entry.spec, evt) and not is_planning_agent_skip(entry.spec, evt)
-                        else None
-                    )
-                    assert_result(hook_result, expected, entry.name)
-                elif jsonl := SessionCache.for_root().load(key):
-                    replays = list(replay_session(entry, jsonl))
-                    if not any(matches_expected(r, expected) for r in replays):
-                        assert_result(replays[-1] if replays else None, expected, entry.name)
-                else:
-                    results.append((test_name, "skip", True, f"no fixture or local Claude session for {key}"))
-                    continue
-                results.append((test_name, "pass", True, ""))
-            except AssertionError as e:
-                results.append((test_name, "fail", False, str(e)))
-            except Exception as e:
-                results.append((test_name, "error", False, f"{type(e).__name__}: {e}"))
+    with isolated_durable_root():
+        for entry in _state.hooks:
+            if not entry.spec.tests:
+                continue
+            for key, expected in entry.spec.tests.items():
+                test_name = f"{entry.name}:{key!r}"
+                try:
+                    if isinstance(key, Input):
+                        # A Tool condition pins the tool only when it names exactly one; a
+                        # multi-name condition falls back to infer_tool's shape-based derivation.
+                        spec_tools = [p for c in entry.spec.only_if if isinstance(c, Tool) for p in c.names]
+                        evt = input_to_event(
+                            next(iter(entry.spec.events)),
+                            key,
+                            spec_tools[0] if len(spec_tools) == 1 else None,
+                        )
+                        evt.ctx.call_llm = stub_call_llm  # type: ignore[assignment]
+                        hook_result = (
+                            execute_hook(entry, evt)
+                            if matches_conditions(entry.spec, evt) and not is_planning_agent_skip(entry.spec, evt)
+                            else None
+                        )
+                        assert_result(hook_result, expected, entry.name)
+                    elif jsonl := SessionCache.for_root().load(key):
+                        replays = list(replay_session(entry, jsonl))
+                        if not any(matches_expected(r, expected) for r in replays):
+                            assert_result(replays[-1] if replays else None, expected, entry.name)
+                    else:
+                        results.append((test_name, "skip", True, f"no fixture or local Claude session for {key}"))
+                        continue
+                    results.append((test_name, "pass", True, ""))
+                except AssertionError as e:
+                    results.append((test_name, "fail", False, str(e)))
+                except Exception as e:
+                    results.append((test_name, "error", False, f"{type(e).__name__}: {e}"))
 
     return results
