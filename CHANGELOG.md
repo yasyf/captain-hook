@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- General-pack `detours` nudge (pack 0.10.0): an LLM-judged `PostToolUse` warn that catches
+  the agent veering onto side work nobody asked for — gated cheaply on detour phrasing
+  ("while I'm here", "might as well", "let me also") co-occurring with an action-shaped tool
+  call, then judged against the user's actual request in the transcript. Prerequisites,
+  pre-authorized asides, and small stewardship fixes stay silent, as does anything uncertain.
+  The warn tells the agent to stop, surface what it noticed, and offer 2-4 concrete options —
+  or, for a delegated agent, to return early with findings plus options for its orchestrator.
+
 ## [6.4.0] - 2026-07-03
 
 ### Added

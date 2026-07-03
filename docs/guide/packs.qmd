@@ -12,9 +12,11 @@ and the loader imports them alongside your own `.claude/hooks/` modules.
 `capt-hook` ships four builtin packs: `general` (language-agnostic guards for git
 safety, code stewardship, task and plan discipline, a review gate, a
 docs-freshness gate that blocks a stop once when the session's diff changed
-user-facing behavior that README.md or `docs/` don't reflect, and a
+user-facing behavior that README.md or `docs/` don't reflect, a
 tombstone-comment nudge that flags a comment narrating the edit itself, such
-as `# removed the retry logic`, before it lands), `python`
+as `# removed the retry logic`, before it lands, and an LLM-judged detour
+nudge that catches side work nobody asked for and tells the agent to check in
+with 2-4 options instead of improvising), `python`
 (a pytest-before-commit gate, AST style rules, and a `uv` missing-dependency nudge),
 `go` (a go-test-before-commit gate and a `go.mod` nudge on module-resolution
 errors), and `steering` (three judgment nudges — it flags a plan-mode plan that
@@ -49,7 +51,7 @@ uvx capt-hook pack list
 ```
 
 ```
-  general                  builtin  -                    v0.4.0    8 hooks
+  general                  builtin  -                    v0.10.0   9 hooks
   python                   builtin  -                    v0.1.0    3 hooks
   go                       builtin  -                    v0.1.0    2 hooks
   steering                 builtin  -                    v0.3.0    1 hooks
