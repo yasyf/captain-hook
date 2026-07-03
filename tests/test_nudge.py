@@ -173,8 +173,8 @@ class TestGateWaitAwareDefault:
         [
             pytest.param((), (Waiting(),), id="stop_gate_without_skip_if_gets_waiting"),
             pytest.param(
-                [RanCommand(r"pytest")],
-                (Waiting(), RanCommand(r"pytest")),
+                [RanCommand("pytest")],
+                (Waiting(), RanCommand("pytest")),
                 id="stop_gate_skip_if_is_additive_with_waiting",
             ),
         ],

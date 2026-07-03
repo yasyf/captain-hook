@@ -6,7 +6,6 @@ from typing import Any
 import pytest
 
 from captain_hook import ast_grep, rewrite_code, rewrite_command
-from captain_hook.command import CommandLine
 from captain_hook.dispatch import dispatch
 from captain_hook.events import PreToolUseEvent
 from captain_hook.types import Event
@@ -185,10 +184,10 @@ class TestRewriteCode:
         assert updated_input(dispatch(Event.PreToolUse, evt))["new_string"] == 'subprocess.run(["ls"], check=True)\n'
 
 
-class TestCommandLineStructural:
+class TestBashStructural:
     def test_matches(self) -> None:
-        assert CommandLine.parse("cat -n foo.txt").matches("cat $$$ARGS")
-        assert not CommandLine.parse("ls -la").matches("cat $$$ARGS")
+        assert ast_grep.matches("cat -n foo.txt", "bash", "cat $$$ARGS")
+        assert not ast_grep.matches("ls -la", "bash", "cat $$$ARGS")
 
     @pytest.mark.parametrize(
         ("raw", "pattern", "replacement", "expected"),
@@ -201,7 +200,7 @@ class TestCommandLineStructural:
         ],
     )
     def test_rewrite(self, raw: str, pattern: str, replacement: str, expected: str) -> None:
-        assert CommandLine.parse(raw).rewrite(pattern, replacement) == expected
+        assert ast_grep.rewrite(raw, "bash", pattern, replacement) == expected
 
 
 class TestRewriteCommandDispatch:

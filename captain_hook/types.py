@@ -17,9 +17,9 @@ from typing import (
 )
 
 if TYPE_CHECKING:
+    from cc_transcript.command import CommandLine
     from cc_transcript.tools import ToolCallBase
 
-    from captain_hook.command import CommandLine
     from captain_hook.events import BaseHookEvent
     from captain_hook.signals.nlp import NlpSignal
 
@@ -446,16 +446,22 @@ class TouchedFile(PatternsCondition):
 
 @dataclass(frozen=True, slots=True)
 class RanCommand:
-    """Transcript-history condition: true when a Bash tool use with a matching command exists.
+    """Transcript-history condition: true when a Bash tool use running ``argv`` exists.
 
-    ``pattern`` is a regex, compiled at construction so a malformed pattern raises immediately.
+    ``argv`` is matched as a leading token prefix of a parsed command's argv via
+    ``Session.has_command`` — wrapper-transparent (``sudo``/``env``/``timeout`` are
+    stripped) and quote-exact, so ``RanCommand("git", "push")`` matches
+    ``sudo git push -f`` but not ``echo "git push"``. Launchers are literal:
+    ``RanCommand("pytest")`` does not match ``uv run pytest`` — list each spelling
+    as its own entry.
     """
 
-    pattern: str
-    subagents: bool = True
+    argv: tuple[str, ...]
+    subagents: bool
 
-    def __post_init__(self) -> None:
-        re.compile(self.pattern)
+    def __init__(self, *argv: str, subagents: bool = True) -> None:
+        object.__setattr__(self, "argv", argv)
+        object.__setattr__(self, "subagents", subagents)
 
 
 @dataclass(frozen=True, slots=True)

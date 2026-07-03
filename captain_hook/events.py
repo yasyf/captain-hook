@@ -25,10 +25,10 @@ from captain_hook.types import Event
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from cc_transcript.command import CommandLine as CommandLineType
     from cc_transcript.ids import ToolDigest
     from cc_transcript.tools import ToolCall
 
-    from captain_hook.command import CommandLine as CommandLineType
     from captain_hook.context import HookContext
     from captain_hook.tasks import Tasks
     from captain_hook.types import HookResult
@@ -137,7 +137,7 @@ class BaseHookEvent:
     def command(self) -> str | None:
         return self.input.command if isinstance(self.input, BashCall) else None
 
-    @cached_property
+    @property
     def command_line(self) -> CommandLineType | None:
         return None
 
@@ -225,11 +225,11 @@ class ToolHookEvent(BaseHookEvent):
     def _tool_input(self) -> dict[str, Any]:
         return self._raw.get("tool_input", {})
 
-    @cached_property
+    @property
     def command_line(self) -> CommandLineType | None:
-        from captain_hook.command import CommandLine
+        from cc_transcript.command import parse_command_line
 
-        return CommandLine.parse(cmd) if (cmd := self.command) else None
+        return parse_command_line(cmd) if (cmd := self.command) else None
 
     @property
     def content(self) -> str | None:
@@ -279,9 +279,9 @@ class ToolHookEvent(BaseHookEvent):
         return call.agent_type if isinstance(call := self.input, TaskCall) else None
 
     def command_matches(self, *patterns: str) -> bool:
-        if not (cl := self.command_line):
+        if not (cl := self.command_line) or (cmd := cl.primary) is None:
             return False
-        return any(cl.primary.matches(p) for p in patterns)
+        return any(cmd.matches(p) for p in patterns)
 
     def file_matches(self, *globs: str) -> bool:
         return bool(self.file) and self.file.matches(*globs)

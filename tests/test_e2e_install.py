@@ -313,7 +313,8 @@ def write_hooks(tmp_path: Path, *files: tuple[str, str]) -> Path:
 
 
 FORCE_PUSH_HOOK = """\
-    from captain_hook import hook, Event, Tool, Command
+    from captain_hook import hook, Event, Tool
+    from captain_hook.types import Command
 
     hook(
         Event.PreToolUse,

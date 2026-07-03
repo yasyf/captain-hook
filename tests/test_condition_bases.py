@@ -10,7 +10,7 @@ from captain_hook.testing.helpers import mock_tool_event
 from captain_hook.types import CustomCommandLineCondition, CustomInputTypeCondition
 
 if TYPE_CHECKING:
-    from captain_hook.command import CommandLine
+    from cc_transcript.command import CommandLine
 
 
 class ReadOfPython(CustomInputTypeCondition[ReadCall]):

@@ -180,7 +180,15 @@ nudge(
     "overriding `property`, minor override mismatches, descriptor protocol). Only fix type "
     "issues that indicate actual bugs. Don't check git history to see if you introduced "
     "them — move on.",
-    skip_if=[RanCommand(r"(?:uv run ty check|uvx ty check|(?:uvx )?prek run (?:ty\b|--all-files)|uvx pyright)")],
+    skip_if=[
+        RanCommand("uv", "run", "ty", "check"),
+        RanCommand("uvx", "ty", "check"),
+        RanCommand("prek", "run", "ty"),
+        RanCommand("prek", "run", "--all-files"),
+        RanCommand("uvx", "prek", "run", "ty"),
+        RanCommand("uvx", "prek", "run", "--all-files"),
+        RanCommand("uvx", "pyright"),
+    ],
     signals=TRIVIAL_TYPE_SIGNALS,
     tests={
         Input(

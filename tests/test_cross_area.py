@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from cc_transcript.activity import SessionActivity
+from cc_transcript.command import CommandLine
 
 from captain_hook.app import (
     _state,
@@ -16,7 +17,6 @@ from captain_hook.app import (
 from captain_hook.app import (
     hook as register_hook,
 )
-from captain_hook.command import CommandLine
 from captain_hook.dispatch import dispatch
 from captain_hook.events import (
     BaseHookEvent,
@@ -268,7 +268,7 @@ class TestRanCommandCondition:
             ]
         )
         register_hook(
-            Event.PreToolUse, message="run mtest first", block=True, skip_if=[RanCommand(r"uv\s+run\s+mtest")]
+            Event.PreToolUse, message="run mtest first", block=True, skip_if=[RanCommand("uv", "run", "mtest")]
         )
         assert dispatch_pre({"command": "echo hi"}, transcript=transcript) is None
 
@@ -280,7 +280,7 @@ class TestRanCommandCondition:
             ]
         )
         register_hook(
-            Event.PreToolUse, message="run mtest first", block=True, skip_if=[RanCommand(r"uv\s+run\s+mtest")]
+            Event.PreToolUse, message="run mtest first", block=True, skip_if=[RanCommand("uv", "run", "mtest")]
         )
         assert dispatch_pre({"command": "echo hi"}, transcript=transcript) is not None
 
@@ -682,6 +682,7 @@ class TestCommandLineRedirects:
     def test_redirect_to_cleanup_file(self) -> None:
         cl = CommandLine.parse("echo hello > .context/cleanup/code-issues.jsonl")
         assert len(cl.commands) >= 1
+        assert cl.primary is not None
         assert cl.primary.program == "echo"
         assert any(".context/cleanup/code-issues.jsonl" in r.target for r in cl.primary.redirects)
 
@@ -691,6 +692,7 @@ class TestCommandLineRedirects:
 
     def test_redirect_target_extractable(self) -> None:
         cl = CommandLine.parse("cat data.json >> output.log")
+        assert cl.primary is not None
         assert any(r.target == "output.log" for r in cl.primary.redirects)
         assert any(r.op == ">>" for r in cl.primary.redirects)
 

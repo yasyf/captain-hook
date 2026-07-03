@@ -138,7 +138,8 @@ def rewrite_command(
         def structural_handler(evt: PreToolUseEvent) -> HookResponse:
             if not (cl := evt.command_line):
                 return None
-            return evt.rewrite_command(new, note=note) if (new := cl.rewrite(pattern, replace)) != cl.raw else None
+            new = ast_grep.rewrite(cl.raw, "bash", pattern, replace)
+            return evt.rewrite_command(new, note=note) if new != cl.raw else None
 
         on(Event.PreToolUse, only_if=[Tool("Bash"), *only_if], skip_if=skip_if, tests=tests)(structural_handler)
         return

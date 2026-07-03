@@ -469,7 +469,7 @@ class TestConditionsWithNoneTranscript:
             _raw={"tool_name": "Bash", "tool_input": {"command": "echo"}},
             ctx=build_ctx(transcript=None, session_dir=tmp_path),
         )
-        assert check_condition(RanCommand(r"uv run mtest"), evt) is False
+        assert check_condition(RanCommand("uv", "run", "mtest"), evt) is False
 
     def test_e2e_082_used_skill_condition_safe_with_none(self, tmp_path: Path) -> None:
         from captain_hook.conditions import check_condition

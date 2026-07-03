@@ -339,8 +339,8 @@ class TestLlmGateWaitAwareDefault:
         assert _state.hooks[0].spec.skip_if == (Waiting(),)
 
     def test_stop_llm_gate_skip_if_is_additive_with_waiting(self) -> None:
-        register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True, skip_if=[RanCommand(r"pytest")])
-        assert _state.hooks[0].spec.skip_if == (Waiting(), RanCommand(r"pytest"))
+        register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True, skip_if=[RanCommand("pytest")])
+        assert _state.hooks[0].spec.skip_if == (Waiting(), RanCommand("pytest"))
 
     def test_posttooluse_llm_gate_is_not_wait_aware(self) -> None:
         register_llm_gate("Check this", message="BLOCKED", when=lambda evt: True, events=Event.PostToolUse)

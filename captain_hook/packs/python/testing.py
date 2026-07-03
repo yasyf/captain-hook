@@ -4,7 +4,6 @@ from captain_hook import (
     Allow,
     BaseHookEvent,
     Block,
-    Command,
     CustomCondition,
     Event,
     Input,
@@ -15,6 +14,7 @@ from captain_hook import (
     gate,
     nudge,
 )
+from captain_hook.types import Command as CommandCondition
 
 nudge(
     """
@@ -50,14 +50,15 @@ class CommitsPython(CustomCondition):
     """Matches when the git command explicitly names a Python path."""
 
     def check(self, evt: BaseHookEvent) -> bool:
-        return bool(cl := evt.command_line) and ".py" in str(cl.primary)
+        return bool(cl := evt.command_line) and (cmd := cl.primary) is not None and ".py" in str(cmd)
 
 
 gate(
     "No `uv run pytest` execution found. Run tests before committing Python changes.",
-    only_if=[Tool("Bash"), Command(r"git\s+commit"), CommitsPython()],
+    only_if=[Tool("Bash"), CommandCondition(r"git\s+commit"), CommitsPython()],
     skip_if=[
-        RanCommand(r"uv run pytest"),
+        RanCommand("uv", "run", "pytest"),
+        RanCommand("pytest"),
         UserSaid("commit", "just commit"),
         AllEditsUnder("docs/", ".claude/", ".github/"),
     ],
@@ -72,9 +73,10 @@ gate(
 nudge(
     "No `uv run pytest` execution detected in this session. If you changed Python files, run "
     "tests before committing. If this is a docs/config-only change, proceed.",
-    only_if=[Tool("Bash"), Command(r"git\s+commit")],
+    only_if=[Tool("Bash"), CommandCondition(r"git\s+commit")],
     skip_if=[
-        RanCommand(r"uv run pytest"),
+        RanCommand("uv", "run", "pytest"),
+        RanCommand("pytest"),
         UserSaid("commit", "just commit"),
         AllEditsUnder("docs/", ".claude/", ".github/"),
         CommitsPython(),

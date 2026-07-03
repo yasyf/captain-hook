@@ -759,14 +759,14 @@ class TestRanCommandCondition:
 
         ctx = make_transcript_ctx(has_command_result=True)
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(RanCommand(r"codex exec"), evt) is True
-        ctx.transcript.has_command.assert_called_once_with("codex exec", subagents=True)
+        assert check_condition(RanCommand("codex", "exec"), evt) is True
+        ctx.transcript.has_command.assert_called_once_with("codex", "exec", subagents=True)
 
     def test_rancommand_rejects(self) -> None:
 
         ctx = make_transcript_ctx(has_command_result=False)
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(RanCommand(r"codex exec"), evt) is False
+        assert check_condition(RanCommand("codex", "exec"), evt) is False
 
 
 class TestInPlanModeCondition:
@@ -1202,8 +1202,8 @@ class TestSubagentFlags:
             ),
             pytest.param(
                 {"type": "tool_use", "name": "Bash", "input": {"command": "codex exec -p 'hi'"}, "id": "tu_b"},
-                RanCommand(r"codex exec"),
-                RanCommand(r"codex exec", subagents=False),
+                RanCommand("codex", "exec"),
+                RanCommand("codex", "exec", subagents=False),
                 True,
                 False,
                 id="RanCommand",

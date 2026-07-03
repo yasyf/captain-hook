@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from cc_transcript.command import Command, CommandLine, Redirect
 from cc_transcript.tools import (
     BashCall,
     EditCall,
@@ -22,7 +23,6 @@ from cc_transcript.tools import (
 from captain_hook import file, style, util
 from captain_hook.app import hook, on
 from captain_hook.ast_grep import COMMENT_TYPES
-from captain_hook.command import CommandLine, ParsedCommand, Redirect
 from captain_hook.conditions import workflow_opt_values, workflow_script_source
 from captain_hook.context import HookContext
 from captain_hook.contexts import AfterEdit, BeforeEdit, Introduced, PromptContext, apply_contexts
@@ -84,7 +84,6 @@ from captain_hook.types import (
     Action,
     Agent,
     And,
-    Command,
     Content,
     CustomCommandLineCondition,
     CustomCondition,

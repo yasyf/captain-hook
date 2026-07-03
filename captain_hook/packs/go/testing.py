@@ -4,7 +4,6 @@ from captain_hook import (
     Allow,
     BaseHookEvent,
     Block,
-    Command,
     CustomCondition,
     Event,
     FilePath,
@@ -15,6 +14,7 @@ from captain_hook import (
     gate,
     nudge,
 )
+from captain_hook.types import Command as CommandCondition
 
 nudge(
     """
@@ -50,14 +50,14 @@ class CommitsGo(CustomCondition):
     """Matches when the git command explicitly names a Go path."""
 
     def check(self, evt: BaseHookEvent) -> bool:
-        return bool(cl := evt.command_line) and ".go" in str(cl.primary)
+        return bool(cl := evt.command_line) and (cmd := cl.primary) is not None and ".go" in str(cmd)
 
 
 gate(
     "No `go test` execution found. Run tests before committing Go changes.",
-    only_if=[Tool("Bash"), Command(r"git\s+commit"), CommitsGo()],
+    only_if=[Tool("Bash"), CommandCondition(r"git\s+commit"), CommitsGo()],
     skip_if=[
-        RanCommand(r"go test"),
+        RanCommand("go", "test"),
         UserSaid("commit", "just commit"),
         AllEditsUnder("docs/", ".claude/", ".github/"),
     ],
@@ -72,9 +72,9 @@ gate(
 nudge(
     "No `go test` execution detected in this session. If you changed Go files, run tests "
     "before committing. If this is a docs/config-only change, proceed.",
-    only_if=[Tool("Bash"), Command(r"git\s+commit")],
+    only_if=[Tool("Bash"), CommandCondition(r"git\s+commit")],
     skip_if=[
-        RanCommand(r"go test"),
+        RanCommand("go", "test"),
         UserSaid("commit", "just commit"),
         AllEditsUnder("docs/", ".claude/", ".github/"),
         CommitsGo(),
