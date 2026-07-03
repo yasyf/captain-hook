@@ -35,23 +35,13 @@ from filelock import FileLock
 from captain_hook import state
 from captain_hook.util import http
 
-PACKS_TOML = "packs.toml"
 PACK_MANIFEST = "capt-hook.toml"
-# A pack's manifest may sit in .claude/ (preferred) or at the repo root.
-MANIFEST_MEMBERS = (f".claude/{PACK_MANIFEST}", PACK_MANIFEST)
 SHA_MARKER = ".sha"
-META_SUFFIX = ".meta"
-FASTPATH_NAME = ".resolve-fastpath"
 LATEST_REF = "latest"
 # Moving refs (@latest / a branch / a bare default-branch source) re-resolve to a fresh
 # commit at most once per this window; within it the cached commit is used with no network.
 REFRESH_TTL_SECONDS = 24 * 60 * 60
-SOURCE_RE = re.compile(r"^github:(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+?)(?:@(?P<ref>[\w./-]+))?$")
 PACK_NAME_RE = re.compile(r"[a-z][a-z0-9-]*")
-GITHUB_REPO = "https://api.github.com/repos/{owner}/{repo}"
-GITHUB_COMMIT = "https://api.github.com/repos/{owner}/{repo}/commits/{ref}"
-GITHUB_LATEST_RELEASE = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
-GITHUB_TARBALL = "https://github.com/{owner}/{repo}/archive/{sha}.tar.gz"
 
 
 class PackError(Exception):
@@ -66,7 +56,8 @@ class PackSource:
 
     @classmethod
     def parse(cls, raw: str) -> PackSource:
-        if not (m := SOURCE_RE.match(raw)):
+        pattern = re.compile(r"^github:(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+?)(?:@(?P<ref>[\w./-]+))?$")
+        if not (m := pattern.match(raw)):
             raise PackError(f"invalid pack source {raw!r}; expected github:owner/repo[@ref]")
         return cls(owner=m["owner"], repo=m["repo"], ref=m["ref"])
 
@@ -147,7 +138,7 @@ class PackMeta:
 
 
 def packs_toml_path(root: Path) -> Path:
-    return root / ".claude" / "hooks" / PACKS_TOML
+    return root / ".claude" / "hooks" / "packs.toml"
 
 
 def manifest_in(root: Path) -> Path:
@@ -215,24 +206,25 @@ def packs_cache_root() -> Path:
 
 
 def meta_path(name: str) -> Path:
-    return packs_cache_root() / f"{name}{META_SUFFIX}"
+    return packs_cache_root() / f"{name}.meta"
 
 
 def resolve_ref(source: PackSource) -> str:
     """Resolve a source's effective git ref: @latest via the latest release, else the ref or default branch."""
     match source.ref:
         case None:
-            return http.github_get_json(GITHUB_REPO.format(owner=source.owner, repo=source.repo))["default_branch"]
+            url = f"https://api.github.com/repos/{source.owner}/{source.repo}"
+            return http.github_get_json(url)["default_branch"]
         case ref if ref == LATEST_REF:
-            return http.github_get_json(GITHUB_LATEST_RELEASE.format(owner=source.owner, repo=source.repo))["tag_name"]
+            url = f"https://api.github.com/repos/{source.owner}/{source.repo}/releases/latest"
+            return http.github_get_json(url)["tag_name"]
         case ref:
             return ref
 
 
 def resolve_commit(source: PackSource) -> str:
-    return http.github_get_json(GITHUB_COMMIT.format(owner=source.owner, repo=source.repo, ref=resolve_ref(source)))[
-        "sha"
-    ]
+    url = f"https://api.github.com/repos/{source.owner}/{source.repo}/commits/{resolve_ref(source)}"
+    return http.github_get_json(url)["sha"]
 
 
 def strip_top_level(tf: tarfile.TarFile) -> Iterator[tarfile.TarInfo]:
@@ -266,14 +258,17 @@ def fetch_commit(source: PackSource, sha: str) -> ResolvedPack:
     root.mkdir(parents=True, exist_ok=True)
     with FileLock(str(root / f"{sha}.lock")):
         tarball = root / f".tarball-{sha}.tar.gz"
-        http.github_download(GITHUB_TARBALL.format(owner=source.owner, repo=source.repo, sha=sha), tarball)
+        url = f"https://github.com/{source.owner}/{source.repo}/archive/{sha}.tar.gz"
+        http.github_download(url, tarball)
         staging = root / f".staging-{sha}"
         if staging.exists():
             shutil.rmtree(staging)
         with tarfile.open(tarball) as tf:
             members = list(strip_top_level(tf))
             by_path = {m.path: m for m in members}
-            manifest_member = next((by_path[p] for p in MANIFEST_MEMBERS if p in by_path), None)
+            manifest_member = next(
+                (by_path[p] for p in (f".claude/{PACK_MANIFEST}", PACK_MANIFEST) if p in by_path), None
+            )
             if manifest_member is None:
                 raise PackError(f"pack manifest {PACK_MANIFEST} missing in {source}")
             tf.extract(manifest_member, staging, filter="data")
@@ -414,7 +409,7 @@ def all_cached_and_fresh(entries: Sequence[PackEntry], now: float) -> bool:
 
 
 def fastpath_path(root: Path) -> Path:
-    return packs_cache_root() / f"{sha256(str(root.resolve()).encode()).hexdigest()[:16]}{FASTPATH_NAME}"
+    return packs_cache_root() / f"{sha256(str(root.resolve()).encode()).hexdigest()[:16]}.resolve-fastpath"
 
 
 def fastpath_unchanged(root: Path, entries: Sequence[PackEntry], now: float) -> bool:

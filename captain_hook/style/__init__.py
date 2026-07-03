@@ -23,9 +23,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-GUARD_ONLY_IF: tuple[TCondition, ...] = (Tool("Edit|Write"), FilePath("*.py", project_only=False))
-GUARD_SKIP_IF: tuple[TCondition, ...] = (TestFile(),)
-
 
 def styleguide(
     *rules: type[StyleRule],
@@ -70,8 +67,8 @@ def styleguide(
 
     on(
         events or Event.PostToolUse,
-        only_if=(*GUARD_ONLY_IF, *only_if),
-        skip_if=(*GUARD_SKIP_IF, *skip_if),
+        only_if=(Tool("Edit|Write"), FilePath("*.py", project_only=False), *only_if),
+        skip_if=(TestFile(), *skip_if),
         tests={key: expected for inst in instances for key, expected in type(inst).tests.items()},
     )(handler)
 

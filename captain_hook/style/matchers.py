@@ -28,11 +28,6 @@ class Positioned(Protocol):
     lineno: int
 
 
-CONTROL_FLOW = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith, ast.Try, ast.ExceptHandler)
-FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
-ASSIGNMENTS = (ast.Assign, ast.AnnAssign)
-
-
 def parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
     return {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
 
@@ -320,12 +315,14 @@ def following(boundary: Matcher) -> Matcher:
 
 module: Matcher = kind(ast.Module, label="module")
 cls: Matcher = kind(ast.ClassDef, label="class")
-func: Matcher = kind(*FUNCTIONS, label="function")
+func: Matcher = kind(ast.FunctionDef, ast.AsyncFunctionDef, label="function")
 definition: Matcher = cls | func
 imports: Matcher = kind(ast.Import, ast.ImportFrom, label="import")
 call: Matcher = kind(ast.Call, label="call")
-assignment: Matcher = kind(*ASSIGNMENTS, label="assignment")
-control_flow: Matcher = kind(*CONTROL_FLOW, label="control-flow")
+assignment: Matcher = kind(ast.Assign, ast.AnnAssign, label="assignment")
+control_flow: Matcher = kind(
+    ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith, ast.Try, ast.ExceptHandler, label="control-flow"
+)
 type_checking: Matcher = Matcher(lambda node, _parents: is_type_checking(node), "type-checking")
 future_annotations: Matcher = Matcher(lambda node, _parents: has_future_annotations(node), "future-annotations")
 forward_ref: Matcher = Matcher(

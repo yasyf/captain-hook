@@ -10,16 +10,16 @@ if TYPE_CHECKING:
 
     from cc_transcript.models import TranscriptEvent
 
-SYNTHETIC_PREFIXES = (
-    "<system_instruction>",
-    "<task-notification>",
-    "<local-command-caveat>",
-    "<command-name>",
-)
-
 
 def classifier(event: UserEvent) -> bool:
-    return native_user_classifier(event) and not event.text.strip().startswith(SYNTHETIC_PREFIXES)
+    return native_user_classifier(event) and not event.text.strip().startswith(
+        (
+            "<system_instruction>",
+            "<task-notification>",
+            "<local-command-caveat>",
+            "<command-name>",
+        )
+    )
 
 
 def detect(

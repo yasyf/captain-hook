@@ -27,7 +27,6 @@ from captain_hook.types import Event
 
 DIST_NAME = "capt-hook"
 EVENT_NAMES = ", ".join(n for e in Event if (n := e.name))
-MARKETPLACE = {"captain-hook": {"source": {"source": "github", "repo": "yasyf/captain-hook"}}}
 PLUGIN_ID = "captain-hook@captain-hook"
 
 
@@ -79,7 +78,8 @@ def register_marketplace(root: Path) -> None:
         settings_path,
         existing
         | {
-            "extraKnownMarketplaces": existing.get("extraKnownMarketplaces", {}) | MARKETPLACE,
+            "extraKnownMarketplaces": existing.get("extraKnownMarketplaces", {})
+            | {"captain-hook": {"source": {"source": "github", "repo": "yasyf/captain-hook"}}},
             "enabledPlugins": existing.get("enabledPlugins", {}) | {PLUGIN_ID: True},
         },
     )

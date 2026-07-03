@@ -62,11 +62,7 @@ HOOK_COMPLAINT = SourceKind("hook_complaint")
 PROXIMITY_TURNS = 3
 TIGHT_PROXIMITY_TURNS = 1
 STOP_FEEDBACK_PREFIX = "Stop hook feedback:\n"
-PRIMITIVES_DIR = "captain_hook/primitives/"
-HOOKS_DIR = ".claude/hooks"
 PACKS_DIR = "captain_hook/packs"
-
-HOOK_VOCAB_RE = re.compile(r"\b(?:hook|reminder|nudge|gate|guard)s?\b", re.IGNORECASE)
 
 STRONG_MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     (misfire_class, re.compile(pattern, re.IGNORECASE))
@@ -80,12 +76,6 @@ STRONG_MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("spurious", r"\bspurious\b"),
         ("unnecessary", r"\bunnecessar(?:y|ily)\b"),
     )
-)
-
-HEDGED_MARKER_RE = re.compile(
-    r"(?:\bi think\b|\bseems?\b|\bmay\b|\bmight\b|\blooks like\b)"
-    r"[\s\S]{0,80}?(?:false[ -]positive|misfir|re-?fir|shouldn'?t have fired|spurious|unnecessar|wrong(?:ly)?)",
-    re.IGNORECASE,
 )
 
 COMPLIANCE_RE = re.compile(
@@ -127,9 +117,14 @@ class Fingerprint:
 
 
 def classify_marker(text: str) -> Marker | None:
-    if not HOOK_VOCAB_RE.search(text):
+    if not re.search(r"\b(?:hook|reminder|nudge|gate|guard)s?\b", text, re.IGNORECASE):
         return None
-    hedged = HEDGED_MARKER_RE.search(text)
+    hedged = re.search(
+        r"(?:\bi think\b|\bseems?\b|\bmay\b|\bmight\b|\blooks like\b)"
+        r"[\s\S]{0,80}?(?:false[ -]positive|misfir|re-?fir|shouldn'?t have fired|spurious|unnecessar|wrong(?:ly)?)",
+        text,
+        re.IGNORECASE,
+    )
     strong = next(((cls, m) for cls, rx in STRONG_MARKERS if (m := rx.search(text))), None)
     if strong is not None and hedged is None:
         return Marker("strong", strong[0], strong[1].group(0))
@@ -207,7 +202,7 @@ def attribute_fingerprint(
 def resolve_target(decision: Decision) -> tuple[str, str] | None:
     from captain_hook.packs.manager import builtin_packs
 
-    if PRIMITIVES_DIR not in decision.source_file:
+    if "captain_hook/primitives/" not in decision.source_file:
         return decision.source_file, decision.kind
     module, sep, _ = decision.kind.partition(":")
     if not sep or not module:
@@ -216,7 +211,7 @@ def resolve_target(decision: Decision) -> tuple[str, str] | None:
         case [pack, mod] if (pack_dir := builtin_packs().get(pack)) and (pack_dir / f"{mod}.py").is_file():
             return f"{PACKS_DIR}/{pack}/{mod}.py", decision.kind
         case parts if all(part.isidentifier() for part in parts):
-            return f"{HOOKS_DIR}/{parts[-1]}.py", decision.kind
+            return f".claude/hooks/{parts[-1]}.py", decision.kind
         case _:
             return None
 

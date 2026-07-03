@@ -22,8 +22,6 @@ from captain_hook import (
 OVERRIDE_TOKEN = "REMAINING_TASKS_ACKNOWLEDGED"
 TASK_DRIFT_THRESHOLD = 8
 
-EXPLORATION_TOOLS = "Bash|Grep|Glob|WebSearch|WebFetch|LSP|Skill"
-
 IMPERATIVES = (
     r"\b(?:add|fix|update|change|remove|create|implement|refactor|"
     r"move|rename|delete|replace|extract|split|merge|convert|migrate)\b"
@@ -54,7 +52,7 @@ class DriftedFromTasks(CustomCondition):
         if not evt.tasks.open:
             return False
         since = evt.ctx.t.after(tool="TaskCreate|TaskUpdate|TaskList|TaskGet")
-        return since.tool_calls.named(EXPLORATION_TOOLS).count() >= TASK_DRIFT_THRESHOLD
+        return since.tool_calls.named("Bash|Grep|Glob|WebSearch|WebFetch|LSP|Skill").count() >= TASK_DRIFT_THRESHOLD
 
 
 gate(

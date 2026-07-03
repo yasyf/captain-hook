@@ -27,7 +27,6 @@ CONDUCTOR_WORKSTREAM_HEADER_RE = re.compile(
     r"^### (?P<id>[A-Z][\w-]*\d*)\s*\[(?P<kind>[A-Z]+)\]\s*—\s*(?P<title>.+)$",
     re.MULTILINE,
 )
-WORKSTREAM_BODY_RE = re.compile(r"^(?:FIX|Tests): .+$", re.MULTILINE)
 CONDUCTOR_FINDING_FMT = RegexReviewFormat(
     name="conductor-finding",
     groups=(
@@ -70,7 +69,10 @@ def extract_conductor_workstream(text: str) -> tuple[ReviewComment, ...]:
             line_end=None,
             comment=" ".join(
                 [f"{header.group('id')} [{header.group('kind')}] {header.group('title').strip()}"]
-                + [line.group(0).strip() for line in WORKSTREAM_BODY_RE.finditer(text[header.end() : end])]
+                + [
+                    line.group(0).strip()
+                    for line in re.finditer(r"^(?:FIX|Tests): .+$", text[header.end() : end], re.MULTILINE)
+                ]
             ),
         )
         for header, end in zip(

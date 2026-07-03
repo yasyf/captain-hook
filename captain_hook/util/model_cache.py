@@ -15,11 +15,6 @@ from filelock import FileLock
 from captain_hook.util import http
 
 MODEL_NAME = "en_core_web_sm"
-COMPATIBILITY_URL = "https://raw.githubusercontent.com/explosion/spacy-models/master/compatibility.json"
-RELEASE_URL = "https://api.github.com/repos/explosion/spacy-models/releases/tags/{model}-{version}"
-MODEL_URL = (
-    "https://github.com/explosion/spacy-models/releases/download/{model}-{version}/{model}-{version}-py3-none-any.whl"
-)
 WHEEL_CHECKSUM = re.compile(r"Checksum \.whl:\*\*\s*`([0-9a-f]{64})`")
 
 
@@ -40,12 +35,16 @@ def fetch_json(url: str) -> Any:
 
 @functools.cache
 def model_version() -> str:
-    return fetch_json(COMPATIBILITY_URL)["spacy"][spacy_minor()][MODEL_NAME][0]
+    return fetch_json("https://raw.githubusercontent.com/explosion/spacy-models/master/compatibility.json")["spacy"][
+        spacy_minor()
+    ][MODEL_NAME][0]
 
 
 @functools.cache
 def model_sha256(version: str) -> str:
-    body = fetch_json(RELEASE_URL.format(model=MODEL_NAME, version=version))["body"]
+    body = fetch_json(f"https://api.github.com/repos/explosion/spacy-models/releases/tags/{MODEL_NAME}-{version}")[
+        "body"
+    ]
     if not (match := WHEEL_CHECKSUM.search(body)):
         raise RuntimeError(f"no wheel checksum in release notes for {MODEL_NAME}-{version}")
     return match.group(1)
@@ -75,7 +74,11 @@ def ensure_spacy_model() -> Path:
         if cached := cached_pipeline():
             return cached
         wheel = extract.parent / f"{extract.name}.whl"
-        http.github_download(MODEL_URL.format(model=MODEL_NAME, version=version), wheel)
+        http.github_download(
+            f"https://github.com/explosion/spacy-models/releases/download/"
+            f"{MODEL_NAME}-{version}/{MODEL_NAME}-{version}-py3-none-any.whl",
+            wheel,
+        )
         if (digest := hashlib.sha256(wheel.read_bytes()).hexdigest()) != expected:
             raise RuntimeError(f"sha256 mismatch for {MODEL_NAME}-{version}: got {digest}, expected {expected}")
         if extract.exists():

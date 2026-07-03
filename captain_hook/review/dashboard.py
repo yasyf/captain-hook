@@ -31,8 +31,6 @@ if TYPE_CHECKING:
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import CandidateView, SpawnHealth
 
-BAR_FILLED = "█"
-BAR_EMPTY = "░"
 DETAIL_WIDTH = 80
 KIND_STYLE = {CandidateKind.CREATE: "cyan", CandidateKind.FIX: "magenta"}
 SPAWN_STALE_AFTER = timedelta(days=7)
@@ -81,7 +79,7 @@ def trim(text: str, *, width: int = DETAIL_WIDTH) -> str:
 def bar(done: int, need: int, *, width: int = 5) -> str:
     cells = min(need, width)
     filled = min(cells, round(done / need * cells)) if need else cells
-    return BAR_FILLED * filled + BAR_EMPTY * (cells - filled)
+    return "█" * filled + "░" * (cells - filled)
 
 
 def targets(view: CandidateView, settings: ReviewSettings) -> tuple[tuple[str, int, int], ...]:

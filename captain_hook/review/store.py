@@ -36,131 +36,12 @@ if TYPE_CHECKING:
 
     from captain_hook.review.settings import ReviewSettings
 
-REVIEW_DDL = """
-CREATE TABLE IF NOT EXISTS candidates (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  repo_key TEXT NOT NULL,
-  candidate_kind TEXT NOT NULL CHECK (candidate_kind IN ('create', 'fix')),
-  rule TEXT NOT NULL,
-  source_kind TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('watching', 'pr_open', 'stale', 'accepted', 'rejected')),
-  pr_url TEXT,
-  pr_opened_at TEXT,
-  target_source_file TEXT,
-  target_hook_name TEXT,
-  misfire_class TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  CHECK (
-    (candidate_kind = 'create' AND target_source_file IS NULL AND target_hook_name IS NULL
-      AND misfire_class IS NULL)
-    OR (candidate_kind = 'fix' AND target_source_file IS NOT NULL AND target_hook_name IS NOT NULL)
-  )
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_create_key
-  ON candidates(repo_key, rule) WHERE candidate_kind = 'create';
-CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_fix_key
-  ON candidates(repo_key, target_hook_name, target_source_file) WHERE candidate_kind = 'fix';
-CREATE INDEX IF NOT EXISTS idx_candidates_repo_status ON candidates(repo_key, status);
-CREATE TABLE IF NOT EXISTS candidate_observations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  candidate_id INTEGER NOT NULL REFERENCES candidates(id),
-  dedup_key TEXT NOT NULL REFERENCES feedback_events(dedup_key),
-  session_id TEXT NOT NULL,
-  occurred_at TEXT NOT NULL,
-  UNIQUE(candidate_id, dedup_key)
-);
-CREATE INDEX IF NOT EXISTS idx_observations_dedup ON candidate_observations(dedup_key);
-CREATE TABLE IF NOT EXISTS repos (
-  repo_key TEXT PRIMARY KEY,
-  watching INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS spawn_runs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  started_at TEXT NOT NULL,
-  finished_at TEXT NOT NULL,
-  transcript TEXT NOT NULL,
-  ok INTEGER NOT NULL,
-  error TEXT,
-  report_json TEXT,
-  CHECK ((ok = 1) = (error IS NULL))
-);
-"""
-
-INSERT_CANDIDATE = """
-INSERT INTO candidates (
-  repo_key, candidate_kind, rule, source_kind, status,
-  target_source_file, target_hook_name, misfire_class, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
-"""
-
-INSERT_OBSERVATION = """
-INSERT INTO candidate_observations (candidate_id, dedup_key, session_id, occurred_at)
-VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
-"""
-
-ACCEPTED_OBSERVATIONS_QUERY = """
-WITH latest AS (
-  SELECT v.dedup_key, v.{accepted} AS accepted, v.confidence, ROW_NUMBER() OVER (
-    PARTITION BY v.dedup_key ORDER BY v.judged_at DESC, v.id DESC
-  ) AS rn
-  FROM {table} v
-  WHERE v.role = 'judge' AND v.prompt_version = ?
-)
-SELECT o.session_id, substr(o.occurred_at, 1, 10) AS day, e.payload_json
-FROM candidate_observations o
-JOIN latest l ON l.dedup_key = o.dedup_key AND l.rn = 1
-JOIN feedback_events e ON e.dedup_key = o.dedup_key
-WHERE o.candidate_id = ? AND l.accepted = 1 AND l.confidence >= ?
-"""
-
-OPEN_PRS_QUERY = "SELECT COUNT(*) AS n FROM candidates WHERE repo_key = ? AND status = ? AND pr_opened_at > ?"
-
-OBSERVATION_ANCHORS_QUERY = """
-SELECT DISTINCT e.session_id, e.event_uuid
-FROM candidate_observations o
-JOIN feedback_events e ON e.dedup_key = o.dedup_key
-WHERE o.candidate_id = ? AND e.session_id IS NOT NULL AND e.event_uuid IS NOT NULL
-ORDER BY o.id
-"""
-
 CANDIDATES_QUERY = """
 SELECT c.*,
   (SELECT e.text FROM candidate_observations o JOIN feedback_events e ON e.dedup_key = o.dedup_key
    WHERE o.candidate_id = c.id ORDER BY o.id LIMIT 1) AS sample_text,
   (SELECT COUNT(*) FROM candidate_observations o WHERE o.candidate_id = c.id) AS observations
 FROM candidates c
-"""
-
-PR_SUMMARY_QUERY = """
-WITH latest AS (
-  SELECT v.dedup_key, v.{accepted} AS accepted, v.{summary} AS summary, v.confidence, ROW_NUMBER() OVER (
-    PARTITION BY v.dedup_key ORDER BY v.judged_at DESC, v.id DESC
-  ) AS rn
-  FROM {table} v
-  WHERE v.role = 'judge' AND v.prompt_version = ?
-)
-SELECT l.summary AS summary
-FROM candidate_observations o
-JOIN latest l ON l.dedup_key = o.dedup_key AND l.rn = 1
-WHERE o.candidate_id = ? AND l.accepted = 1 AND l.confidence >= ?
-ORDER BY l.confidence DESC, o.id DESC
-LIMIT 1
-"""
-
-INSERT_SPAWN_RUN = """
-INSERT INTO spawn_runs (started_at, finished_at, transcript, ok, error, report_json)
-VALUES (?, ?, ?, ?, ?, ?)
-"""
-
-SPAWN_STREAK_QUERY = """
-WITH streak AS (
-  SELECT id, started_at FROM spawn_runs
-  WHERE id > COALESCE((SELECT MAX(id) FROM spawn_runs WHERE ok = 1), 0)
-)
-SELECT
-  (SELECT COUNT(*) FROM streak) AS consecutive_failures,
-  (SELECT started_at FROM streak ORDER BY id LIMIT 1) AS failing_since
 """
 
 
@@ -299,7 +180,63 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
     @classmethod
     async def open(cls, path: Path) -> Self:
         """Opens (creating if needed) the review database at ``path``."""
-        return cls(await FileStateStore.open(path, extra_schema=FEEDBACK_DDL + cls.verdicts_ddl() + REVIEW_DDL))
+        return cls(
+            await FileStateStore.open(
+                path,
+                extra_schema=FEEDBACK_DDL
+                + cls.verdicts_ddl()
+                + """
+CREATE TABLE IF NOT EXISTS candidates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  repo_key TEXT NOT NULL,
+  candidate_kind TEXT NOT NULL CHECK (candidate_kind IN ('create', 'fix')),
+  rule TEXT NOT NULL,
+  source_kind TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('watching', 'pr_open', 'stale', 'accepted', 'rejected')),
+  pr_url TEXT,
+  pr_opened_at TEXT,
+  target_source_file TEXT,
+  target_hook_name TEXT,
+  misfire_class TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK (
+    (candidate_kind = 'create' AND target_source_file IS NULL AND target_hook_name IS NULL
+      AND misfire_class IS NULL)
+    OR (candidate_kind = 'fix' AND target_source_file IS NOT NULL AND target_hook_name IS NOT NULL)
+  )
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_create_key
+  ON candidates(repo_key, rule) WHERE candidate_kind = 'create';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_fix_key
+  ON candidates(repo_key, target_hook_name, target_source_file) WHERE candidate_kind = 'fix';
+CREATE INDEX IF NOT EXISTS idx_candidates_repo_status ON candidates(repo_key, status);
+CREATE TABLE IF NOT EXISTS candidate_observations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  candidate_id INTEGER NOT NULL REFERENCES candidates(id),
+  dedup_key TEXT NOT NULL REFERENCES feedback_events(dedup_key),
+  session_id TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,
+  UNIQUE(candidate_id, dedup_key)
+);
+CREATE INDEX IF NOT EXISTS idx_observations_dedup ON candidate_observations(dedup_key);
+CREATE TABLE IF NOT EXISTS repos (
+  repo_key TEXT PRIMARY KEY,
+  watching INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS spawn_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT NOT NULL,
+  transcript TEXT NOT NULL,
+  ok INTEGER NOT NULL,
+  error TEXT,
+  report_json TEXT,
+  CHECK ((ok = 1) = (error IS NULL))
+);
+""",
+            )
+        )
 
     async def enable(self, repo: RepoKey) -> None:
         """Marks ``repo`` watched, allowing its candidates to become eligible."""
@@ -350,7 +287,12 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
         """
         stamp = now()
         await self.store.conn.execute(
-            INSERT_CANDIDATE,
+            """
+INSERT INTO candidates (
+  repo_key, candidate_kind, rule, source_kind, status,
+  target_source_file, target_hook_name, misfire_class, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
+""",
             (
                 repo,
                 kind,
@@ -393,7 +335,10 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
             occurred_at: When the feedback was given.
         """
         await self.store.conn.execute(
-            INSERT_OBSERVATION,
+            """
+INSERT INTO candidate_observations (candidate_id, dedup_key, session_id, occurred_at)
+VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
+""",
             (candidate_id, dedup_key, session_id, occurred_at.astimezone(UTC).isoformat()),
         )
 
@@ -496,13 +441,29 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
         status = CandidateStatus(str(candidates[0]["status"]))
 
         accepted_cur = await conn.execute(
-            ACCEPTED_OBSERVATIONS_QUERY.format(table=self.VERDICT_TABLE, accepted=self.ACCEPTED_COLUMN),
+            f"""
+WITH latest AS (
+  SELECT v.dedup_key, v.{self.ACCEPTED_COLUMN} AS accepted, v.confidence, ROW_NUMBER() OVER (
+    PARTITION BY v.dedup_key ORDER BY v.judged_at DESC, v.id DESC
+  ) AS rn
+  FROM {self.VERDICT_TABLE} v
+  WHERE v.role = 'judge' AND v.prompt_version = ?
+)
+SELECT o.session_id, substr(o.occurred_at, 1, 10) AS day, e.payload_json
+FROM candidate_observations o
+JOIN latest l ON l.dedup_key = o.dedup_key AND l.rn = 1
+JOIN feedback_events e ON e.dedup_key = o.dedup_key
+WHERE o.candidate_id = ? AND l.accepted = 1 AND l.confidence >= ?
+""",
             (prompt_version, candidate_id, settings.min_judge_confidence),
         )
         accepted = [dict(row) async for row in accepted_cur]
 
         cutoff = (datetime.now(UTC) - timedelta(days=settings.stale_after_days)).isoformat()
-        prs_cur = await conn.execute(OPEN_PRS_QUERY, (repo, CandidateStatus.PR_OPEN, cutoff))
+        prs_cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM candidates WHERE repo_key = ? AND status = ? AND pr_opened_at > ?",
+            (repo, CandidateStatus.PR_OPEN, cutoff),
+        )
 
         return ThresholdStatus(
             kind=kind,
@@ -546,9 +507,22 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
             prompt_version: The judge prompt version whose verdicts apply.
         """
         cur = await self.store.conn.execute(
-            PR_SUMMARY_QUERY.format(
-                table=self.VERDICT_TABLE, accepted=self.ACCEPTED_COLUMN, summary=self.SUMMARY_COLUMN
-            ),
+            f"""
+WITH latest AS (
+  SELECT v.dedup_key, v.{self.ACCEPTED_COLUMN} AS accepted, v.{self.SUMMARY_COLUMN} AS summary, v.confidence,
+    ROW_NUMBER() OVER (
+      PARTITION BY v.dedup_key ORDER BY v.judged_at DESC, v.id DESC
+    ) AS rn
+  FROM {self.VERDICT_TABLE} v
+  WHERE v.role = 'judge' AND v.prompt_version = ?
+)
+SELECT l.summary AS summary
+FROM candidate_observations o
+JOIN latest l ON l.dedup_key = o.dedup_key AND l.rn = 1
+WHERE o.candidate_id = ? AND l.accepted = 1 AND l.confidence >= ?
+ORDER BY l.confidence DESC, o.id DESC
+LIMIT 1
+""",
             (prompt_version, candidate_id, settings.min_judge_confidence),
         )
         return str(rows[0]["summary"]) if (rows := [dict(row) async for row in cur]) else None
@@ -565,7 +539,16 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
         from cc_transcript.corrections import CorrectionLog
         from cc_transcript.ids import EventUuid, SessionId
 
-        cur = await self.store.conn.execute(OBSERVATION_ANCHORS_QUERY, (candidate_id,))
+        cur = await self.store.conn.execute(
+            """
+SELECT DISTINCT e.session_id, e.event_uuid
+FROM candidate_observations o
+JOIN feedback_events e ON e.dedup_key = o.dedup_key
+WHERE o.candidate_id = ? AND e.session_id IS NOT NULL AND e.event_uuid IS NOT NULL
+ORDER BY o.id
+""",
+            (candidate_id,),
+        )
         log = CorrectionLog.open()
         return tuple(
             correction
@@ -622,7 +605,10 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
             report_json: The run's serialized ``SpawnReport`` (clean runs only).
         """
         await self.store.conn.execute(
-            INSERT_SPAWN_RUN,
+            """
+INSERT INTO spawn_runs (started_at, finished_at, transcript, ok, error, report_json)
+VALUES (?, ?, ?, ?, ?, ?)
+""",
             (started_at.astimezone(UTC).isoformat(), now(), transcript, int(ok), error, report_json),
         )
 
@@ -633,7 +619,17 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
         success resets both ``consecutive_failures`` and ``failing_since``.
         """
         last_cur = await self.store.conn.execute("SELECT * FROM spawn_runs ORDER BY id DESC LIMIT 1")
-        streak_cur = await self.store.conn.execute(SPAWN_STREAK_QUERY)
+        streak_cur = await self.store.conn.execute(
+            """
+WITH streak AS (
+  SELECT id, started_at FROM spawn_runs
+  WHERE id > COALESCE((SELECT MAX(id) FROM spawn_runs WHERE ok = 1), 0)
+)
+SELECT
+  (SELECT COUNT(*) FROM streak) AS consecutive_failures,
+  (SELECT started_at FROM streak ORDER BY id LIMIT 1) AS failing_since
+"""
+        )
         streak = [dict(row) async for row in streak_cur][0]
         return SpawnHealth(
             last=rows[0] if (rows := [dict(row) async for row in last_cur]) else None,

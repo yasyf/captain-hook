@@ -8,8 +8,6 @@ from typing import Any, get_type_hints
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-INFERRABLE_PRIMITIVES = (str, int, float, bool)
-
 DEFAULT_PLANNING_AGENTS = [
     "Explore",
     "Plan",
@@ -32,18 +30,20 @@ DEFAULT_WAITING_TOOLS = [
     "SendMessage",
 ]
 
-DEFAULT_STATE_DIR = Path.home() / ".claude" / "state"
-DEFAULT_LOG_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "captain-hook" / "logs"
-
 
 def resolve_state_dir() -> Path:
     return Path(
-        os.environ.get("CAPTAIN_HOOK_STATE_DIR") or os.environ.get("CLAUDE_HOOKS_STATE_DIR") or DEFAULT_STATE_DIR
+        os.environ.get("CAPTAIN_HOOK_STATE_DIR")
+        or os.environ.get("CLAUDE_HOOKS_STATE_DIR")
+        or Path.home() / ".claude" / "state"
     )
 
 
 def resolve_log_dir() -> Path:
-    return Path(os.environ.get("CAPTAIN_HOOK_LOG_DIR") or DEFAULT_LOG_DIR)
+    return Path(
+        os.environ.get("CAPTAIN_HOOK_LOG_DIR")
+        or Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "captain-hook" / "logs"
+    )
 
 
 class HooksSettings(BaseSettings):
@@ -101,7 +101,7 @@ class AutoConf:
                     fields[name] = (list, Field(default_factory=lambda v=val: list(v)))
                 case False, _ if isinstance(val, tuple):
                     fields[name] = (tuple, Field(default_factory=lambda v=val: tuple(v)))
-                case False, _ if isinstance(val, INFERRABLE_PRIMITIVES):
+                case False, _ if isinstance(val, (str, int, float, bool)):
                     fields[name] = (type(val), Field(default=val))
                 case _:
                     pass

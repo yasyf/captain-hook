@@ -83,11 +83,6 @@ if TYPE_CHECKING:
 REVIEWER_MARKER = "capt-hook-session-reviewer"
 """The token the reviewer's own headless sessions carry in their first user message."""
 
-CAPTAIN_HOOK_REPO = RepoKey("github.com/yasyf/captain-hook")
-"""Captain-hook's own repo key: fix candidates targeting a builtin pack file open upstream here."""
-
-SPEC_DETECTORS = frozenset({"transcript_message", "plan_reentry", "review_comment"})
-
 REVIEWER_MINING_SPEC = MiningSpec(review=review_spec())
 """The reviewer's mining policy: all six core detectors with the reviewer's review formats.
 
@@ -128,7 +123,9 @@ class ScanReport:
 
 
 def survives(events: Sequence[TranscriptEvent], sig: MiningSignal) -> bool:
-    if sig.detector in SPEC_DETECTORS and not keep(events[sig.event_index], STRICT_USER):
+    if sig.detector in {"transcript_message", "plan_reentry", "review_comment"} and not keep(
+        events[sig.event_index], STRICT_USER
+    ):
         return False
     return not (sig.detector == "transcript_message" and sig.trigger_index is None)
 
@@ -241,7 +238,7 @@ def transcript_repo(events: Sequence[TranscriptEvent]) -> RepoKey | None:
 
 
 def fix_repo(repo_key: RepoKey, target_source_file: str) -> RepoKey:
-    return CAPTAIN_HOOK_REPO if target_source_file.startswith(f"{PACKS_DIR}/") else repo_key
+    return RepoKey("github.com/yasyf/captain-hook") if target_source_file.startswith(f"{PACKS_DIR}/") else repo_key
 
 
 def transcript_cwd(events: Sequence[TranscriptEvent]) -> Path | None:

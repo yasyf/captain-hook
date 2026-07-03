@@ -17,8 +17,6 @@ from captain_hook.settings import build_settings
 
 CONF_MODULE = "conf"
 PACK_PACKAGE_PREFIX = "captain_hook._packs"
-SKIP_MARKER = "__capt_hook_skip__"
-SKIP_MARKER_RE = re.compile(rf"^{SKIP_MARKER}\s*=\s*True\b", re.MULTILINE)
 
 
 def is_test_module(fqn: str) -> bool:
@@ -28,7 +26,7 @@ def is_test_module(fqn: str) -> bool:
 
 def is_skip_marked(path: Path) -> bool:
     """True when the module declares ``__capt_hook_skip__ = True`` — a library, not an auto-loaded hook."""
-    return path.is_file() and bool(SKIP_MARKER_RE.search(path.read_text()))
+    return path.is_file() and bool(re.search(r"^__capt_hook_skip__\s*=\s*True\b", path.read_text(), re.MULTILINE))
 
 
 def import_or_reload(fqn: str, fresh_this_pass: set[str]) -> ModuleType:

@@ -24,8 +24,6 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pathlib import Path
 
-GITHUB_ACCEPT = "application/vnd.github+json"
-USER_AGENT = "capt-hook"
 GH_TOKEN_TIMEOUT = 5
 MAX_ATTEMPTS = 5
 BACKOFF_BASE = 1.0
@@ -53,7 +51,7 @@ def github_token() -> str | None:
 
 
 def github_headers() -> dict[str, str]:
-    return {"Accept": GITHUB_ACCEPT, "User-Agent": USER_AGENT} | (
+    return {"Accept": "application/vnd.github+json", "User-Agent": "capt-hook"} | (
         {"Authorization": f"Bearer {token}"} if (token := github_token()) else {}
     )
 

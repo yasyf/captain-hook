@@ -38,8 +38,6 @@ STUB_FIELD_VALUES: dict[str, Any] = {
     "reason": "inline test stub",
 }
 
-FIXTURE_ENVELOPE: dict[str, Any] = {"sessionId": "fixture", "timestamp": "2026-01-01T00:00:00Z"}
-
 FIXTURE_FILE_DIR: list[Path] = []
 FIXTURE_FILE_COUNTER = count()
 
@@ -59,7 +57,7 @@ def materialize_file(fixture: FileFixture) -> str:
 
 
 def fixture_line(index: int, message: dict[str, Any]) -> dict[str, Any]:
-    line = FIXTURE_ENVELOPE | {"uuid": f"fixture-{index}"} | dict(message)
+    line = {"sessionId": "fixture", "timestamp": "2026-01-01T00:00:00Z"} | {"uuid": f"fixture-{index}"} | dict(message)
     match line:
         case {"type": "assistant", "message": dict() as inner} if "model" not in inner:
             return line | {"message": {"model": "<fixture>"} | inner}
