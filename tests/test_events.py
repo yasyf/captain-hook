@@ -187,6 +187,29 @@ class TestToolHookEvent:
         raw = {"tool_name": "Write", "tool_input": {"file_path": str(tmp_path / "missing.py"), "content": "new"}}
         assert make_event(PreToolUseEvent, raw).replaced == ""
 
+    def test_replaced_for_write_none_at_post_tool_use(self, tmp_path: Path) -> None:
+        path = tmp_path / "b.py"
+        path.write_text("already the new text")
+        raw = {"tool_name": "Write", "tool_input": {"file_path": str(path), "content": "already the new text"}}
+        assert make_event(PostToolUseEvent, raw).replaced is None
+
+    def test_replaced_for_write_decodes_non_utf8_lossily(self, tmp_path: Path) -> None:
+        path = tmp_path / "b.py"
+        path.write_bytes("café".encode("latin-1"))
+        raw = {"tool_name": "Write", "tool_input": {"file_path": str(path), "content": "new"}}
+        assert make_event(PreToolUseEvent, raw).replaced == "caf�"
+
+    def test_replaced_for_write_to_directory_is_none(self, tmp_path: Path) -> None:
+        raw = {"tool_name": "Write", "tool_input": {"file_path": str(tmp_path), "content": "new"}}
+        assert make_event(PreToolUseEvent, raw).replaced is None
+
+    def test_replaced_for_write_unreadable_file_is_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "b.py"
+        path.write_text("hidden")
+        path.chmod(0)
+        raw = {"tool_name": "Write", "tool_input": {"file_path": str(path), "content": "new"}}
+        assert make_event(PreToolUseEvent, raw).replaced is None
+
     def test_replaced_none_for_bash(self) -> None:
         assert make_event(PreToolUseEvent, {"tool_name": "Bash", "tool_input": {"command": "ls"}}).replaced is None
 

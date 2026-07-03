@@ -231,7 +231,9 @@ def llm_gate(
     block — you own context assembly. The ambient defaults
     (:class:`~captain_hook.contexts.BeforeEdit`/:class:`~captain_hook.contexts.AfterEdit`)
     attach to every gate without suppressing it, carrying the pending edit's
-    before/after text on edit-shaped events and nothing elsewhere.
+    before/after text on edit-shaped events and nothing elsewhere. A Write's
+    pre-image is only knowable at ``PreToolUse``, so contexts reading it over Writes
+    (``Introduced``, ``BeforeEdit(required=True)``) need ``events=Event.PreToolUse``.
 
     Example:
         >>> llm_gate("Is the agent making excuses?",
@@ -305,7 +307,10 @@ def llm_nudge(
     block — you own context assembly. The ambient defaults
     (:class:`~captain_hook.contexts.BeforeEdit`/:class:`~captain_hook.contexts.AfterEdit`)
     attach to every nudge without suppressing it, carrying the pending edit's
-    before/after text on edit-shaped events and nothing elsewhere.
+    before/after text on edit-shaped events and nothing elsewhere. A Write's
+    pre-image is only knowable at ``PreToolUse``, so contexts reading it over Writes
+    (``Introduced``, ``BeforeEdit(required=True)``) need ``events=Event.PreToolUse``
+    — the nudge default of ``PostToolUse`` leaves them empty on Writes.
 
     Example:
         >>> llm_nudge("Is the agent speculating instead of observing?",

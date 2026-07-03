@@ -43,12 +43,13 @@ class PromptContext(Protocol):
 class BeforeEdit:
     """The pending edit's pre-image, as a ``<before_edit>`` block.
 
-    Reads :attr:`~captain_hook.events.ToolHookEvent.replaced` — an Edit's old text, a
-    MultiEdit's joined olds, or a Write's current on-disk content — so it carries
-    content only at ``PreToolUse`` on edit-shaped events. Attached to every LLM
-    primitive as a default context; ``required=False`` because it is ambient
-    enrichment, empty (and omitted) on non-edit events. Pass ``BeforeEdit(required=True)``
-    explicitly to gate a hook on a non-empty pre-image.
+    Reads :attr:`~captain_hook.events.ToolHookEvent.replaced` — an Edit's old text or
+    a MultiEdit's joined olds at any event, a Write's current on-disk content only at
+    ``PreToolUse`` (after the Write lands, disk holds the new text). The block is
+    omitted whenever the pre-image is unknowable: non-edit events, Writes off
+    ``PreToolUse``, unreadable paths. Attached to every LLM primitive as a default
+    context; ``required=False`` because it is ambient enrichment. Pass
+    ``BeforeEdit(required=True)`` explicitly to gate a hook on a non-empty pre-image.
     """
 
     tag: str = "before_edit"
@@ -84,6 +85,10 @@ class Introduced:
     see :data:`~captain_hook.ast_grep.COMMENT_TYPES`), ``pattern`` is an ast-grep
     pattern. Extraction diffs the event's before/after text, so only constructs
     absent before the edit appear; files without a supported language yield nothing.
+    The pre-image comes from ``evt.replaced``, so hooks covering Writes need
+    ``events=Event.PreToolUse`` — at any other event a Write's pre-image is
+    unknowable, the context yields ``None``, and (being ``required``) the LLM call
+    skips rather than misreporting every construct as introduced.
 
     ``required`` defaults to ``True``: a context you attach explicitly IS the
     evidence — no evidence, no LLM call. ``tag`` auto-derives from the class name in

@@ -36,6 +36,18 @@ if TYPE_CHECKING:
 T = TypeVar("T", bound=ToolCallBase)
 
 
+def disk_pre_image(path: Path) -> str | None:
+    if not path.exists():
+        return ""
+    if not path.is_file():
+        return None
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    return data.decode(errors="replace")
+
+
 @dataclass
 class BaseHookEvent:
     """Base class for all hook events, providing access to raw payload, context, and convenience methods."""
@@ -233,18 +245,20 @@ class ToolHookEvent(BaseHookEvent):
 
     @property
     def replaced(self) -> str | None:
-        """The pre-image of the text this call overwrites.
+        """The pre-image of the text this call overwrites, when knowable.
 
-        An Edit's ``old``, a MultiEdit's newline-joined olds, or — for a Write — the
-        file's current on-disk content (``""`` for a new file). ``None`` for other
-        tools. The Write arm reads the disk, so it is only meaningful at
-        ``PreToolUse``: once the Write lands, disk already holds the new text.
+        An Edit's ``old`` and a MultiEdit's newline-joined olds carry the pre-image at
+        any event. A Write's pre-image is the file's current on-disk content — ``""``
+        for a new file, lossily decoded for non-UTF-8 bytes, ``None`` for a directory
+        or unreadable path — and only at ``PreToolUse``: once the Write lands, disk
+        already holds the new text, so any other event yields ``None``. ``None`` for
+        other tools.
         """
         match self.input:
             case EditCall() | MultiEditCall():
                 return self.old
-            case WriteCall(file_path=path):
-                return p.read_text() if (p := Path(path)).exists() else ""
+            case WriteCall(file_path=path) if self.event is Event.PreToolUse:
+                return disk_pre_image(Path(path))
             case _:
                 return None
 

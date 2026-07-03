@@ -139,6 +139,12 @@ class TestIntroduced:
         evt = mock_event("PreToolUse", tool="Write", file=str(tmp_path / "new.py"), content="# note\nx = 1\n")
         assert Introduced(kind=COMMENT_TYPES).content(evt) == "# note"
 
+    def test_write_at_post_tool_use_yields_none(self, tmp_path: Any) -> None:
+        path = tmp_path / "landed.py"
+        path.write_text("# note\nx = 1\n")
+        evt = mock_event("PostToolUse", tool="Write", file=str(path), content="# note\nx = 1\n")
+        assert Introduced(kind=COMMENT_TYPES).content(evt) is None
+
     def test_multi_edit_diffs_joined_spans(self) -> None:
         evt = mock_tool_event(
             "MultiEdit",

@@ -101,6 +101,9 @@ Notes:
   extracts comments across languages; subclass and override `keep(text)` to filter. A
   `required` context (the `Introduced` default) with no evidence skips the LLM call
   entirely, consuming no fire — the extraction is the cheap trigger, the LLM the confirmer.
+  Hooks using `Introduced` or `BeforeEdit` over Writes must set `events=Event.PreToolUse`:
+  at `PostToolUse` a Write's pre-image is unknowable (disk already holds the new text),
+  so the block is omitted and `required` contexts skip the call.
   Passing your own `contexts` with no `signals`/`when` suppresses the implicit transcript
   `<context>` block.
 - LLM cost controls: `signals` pre-filter (LLM only called past the score threshold),
