@@ -8,6 +8,7 @@ import pytest
 
 from captain_hook.ast_grep import COMMENT_TYPES
 from captain_hook.contexts import AfterEdit, BeforeEdit, Introduced, apply_contexts, with_defaults
+from captain_hook.packs.general.models import WORKFLOW_SCRIPT_CAP, WorkflowScriptSource
 from captain_hook.prompt import Prompt
 from captain_hook.testing import FileFixture, Input
 from captain_hook.testing.helpers import input_to_event, mock_event, mock_tool_event
@@ -209,3 +210,48 @@ class TestWithDefaults:
     def test_user_instance_replaces_default_of_same_type(self) -> None:
         mine = BeforeEdit(required=True)
         assert with_defaults([mine]) == (mine, AfterEdit())
+
+
+class TestWorkflowScriptSource:
+    def test_inline_script_quotes_pin_lines(self) -> None:
+        script = "agent('write the intro', {label: 'docs', model: 'opus'})\nagent('fix the test')\n"
+        evt = mock_tool_event("Workflow", tool_input={"script": script})
+        content = WorkflowScriptSource().content(evt)
+        assert content is not None
+        assert content.startswith("lines that pin a model in this script")
+        assert "  agent('write the intro', {label: 'docs', model: 'opus'})" in content
+        assert content.endswith(f"\n\n{script}")
+
+    def test_no_pins_says_none(self) -> None:
+        evt = mock_tool_event("Workflow", tool_input={"script": "agent('fix the test')"})
+        content = WorkflowScriptSource().content(evt)
+        assert content is not None
+        assert "  (none)" in content
+
+    def test_script_path_reads_file(self, tmp_path: Any) -> None:
+        p = tmp_path / "wf.js"
+        p.write_text("agent('fix it', {model: 'sonnet'})")
+        evt = mock_tool_event("Workflow", tool_input={"scriptPath": str(p)})
+        content = WorkflowScriptSource().content(evt)
+        assert content is not None
+        assert "  agent('fix it', {model: 'sonnet'})" in content
+
+    def test_truncation_keeps_marker_and_all_pin_lines(self) -> None:
+        filler = "x = 1\n" * (WORKFLOW_SCRIPT_CAP // 6)
+        script = (
+            "agent('start', {model: 'opus'})\n"
+            f"{filler}agent('mid', {{model: 'haiku'}})\nconst midMarker = 'ZZZMID'\n{filler}"
+            "agent('end', {model: 'sonnet'})\n"
+        )
+        evt = mock_tool_event("Workflow", tool_input={"script": script})
+        content = WorkflowScriptSource().content(evt)
+        assert content is not None
+        assert "script truncated" in content
+        assert "agent('start'" in content
+        assert "agent('end'" in content
+        assert "  agent('mid', {model: 'haiku'})" in content
+        assert "ZZZMID" not in content
+
+    def test_missing_script_path_yields_none(self, tmp_path: Any) -> None:
+        evt = mock_tool_event("Workflow", tool_input={"scriptPath": str(tmp_path / "missing.js")})
+        assert WorkflowScriptSource().content(evt) is None

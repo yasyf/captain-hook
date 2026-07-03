@@ -6,7 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- General-pack prose-routing hooks are judge-confirmed (pack 0.7.0). Both the Agent/Task
+  prose block and the workflow-script prose nudge keep their regex conditions as a recall
+  prefilter, but a small-model judge now decides whether the prose mention is the pinned
+  stage's *deliverable* — a constraint ("do NOT edit CHANGELOG.md"), an ownership note, a
+  meta.description, recon over docs, or prose the orchestrator writes itself no longer
+  fires. The block became an `llm_gate` (still blocking, now fail-open on LLM error), and
+  `Explore`/`claude-code-guide` recon skips it entirely — it previously fought the
+  Explore→sonnet auto-pin. The prefilters themselves tightened from keyword-anywhere to a
+  writing verb within four words of a prose noun, so bare `docs/` paths, audit stages, and
+  routing-rationale comments never reach the judge. Workflow scripts reach the judge via a
+  new `WorkflowScriptSource` context (inline `script` or `scriptPath`, model-pin header,
+  14KB cap).
+
 ### Added
+- `Input(llm={...})` per-test LLM stub overrides: inline tests can wire-test an LLM hook's
+  judge-declines path (`llm={"fire": False}` / `llm={"block": False}`); the default stub
+  still always fires. `workflow_script_source` and `workflow_opt_values` are exported for
+  pack-authored contexts over workflow scripts.
 - General-pack docs-freshness Stop gate (pack 0.6.0): after source edits, an `llm_gate` reads
   the uncommitted diff before the agent stops and blocks once when a user-facing change — a new
   flag, a renamed command, changed output, a new feature — isn't reflected in README.md or
