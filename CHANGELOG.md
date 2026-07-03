@@ -6,7 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [6.0.0] - 2026-07-03
+## [6.1.0] - 2026-07-03
 
 ### Changed
 - General-pack prose-routing hooks are judge-confirmed (pack 0.7.0). Both the Agent/Task
@@ -33,6 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/`. Stands down when the session already touched markdown, used the writing-docs skill,
   or runs headless (new `Headless` condition on `CLAUDE_CODE_ENTRYPOINT`). `EditedSource` and
   `NON_SOURCE_SUFFIXES` moved to a shared `packs/general/_lib.py`; review.py re-exports them.
+
+### Fixed
+- Inline-test tool resolution under a multi-tool `Tool` condition: `run_inline_tests` built
+  every implicit `Input` as the first named tool. A single-name `Tool` condition still pins
+  that tool; under a multi-name condition the tool inferred from the Input's field shape
+  (`old` + `content` → Edit, `content` alone → Write) wins when it is among the named tools,
+  and the first named tool pins otherwise. With no `Tool` condition, inference alone decides.
+
+## [6.0.0] - 2026-07-03
+
+### Added
 - General-pack `models` fable-implementation nudge (pack 0.5.0): an `Agent`/`Task` spawn that
   would run on fable (unpinned or `model='fable'`) with a routine-implementation prompt gets an
   LLM-judged warn pointing at opus `xhigh` (or the codex skill behind a sonnet wrapper for
@@ -72,13 +83,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   retry logic`, `// no longer needed`) is caught at PreToolUse — an introduced-comments AST
   gate feeds an NLP tombstone matcher whose survivors reach a small-model judge; the warn says
   to delete the comment, not restore the removed code.
-
-### Fixed
-- Inline-test tool resolution under a multi-tool `Tool` condition: `run_inline_tests` built
-  every implicit `Input` as the first named tool. A single-name `Tool` condition still pins
-  that tool; under a multi-name condition the tool inferred from the Input's field shape
-  (`old` + `content` → Edit, `content` alone → Write) wins when it is among the named tools,
-  and the first named tool pins otherwise. With no `Tool` condition, inference alone decides.
 
 ## [5.1.1] - 2026-07-02
 
