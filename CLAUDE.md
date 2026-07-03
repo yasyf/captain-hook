@@ -20,15 +20,15 @@ Exceptions: trivial single-file edits, single file reads, and single targeted `s
 
 | Model | Cost | Int | Taste | Route here |
 |---|---|---|---|---|
-| fable-5 | 2 | 9 | 9 | Orchestration, review, hard planning/design/diagnosis, all prose/writing (docs, READMEs, release notes, any user-facing text — never down-route writing), and implementation that is very sensitive or error-prone. The escalation target when opus output misses the bar. |
-| opus-4.8 | 4 | 8 | 8 | Default — when in doubt, opus. Implementation runs here at `xhigh` unless it belongs to fable per the row above. ~2x cheaper than fable and nearly as capable: delegate aggressively. Never "escalate" fable→opus — that's a down-route. |
-| sonnet-5 | 8 | 6 | 6 | Recon and routine subagent work. Pass `model: sonnet` to `Explore` — it silently defaults to haiku. |
-| haiku-4.5 | 10 | 2 | 1 | Only truly mechanical single-fact steps (classify/label one thing per item). Never judgment work. |
-| gpt-5.5 | 9 | 8 | 5 | Via the codex skill: well-scoped edits to existing code (little net-new code), plateau second opinions, imagegen, rote throwaway scripts. From workflows/subagents, `model` takes only Claude models — spawn a thin `model: sonnet`, `effort: low` wrapper that writes a self-contained codex prompt and runs the codex skill. |
+| fable-5 | 2 | 9 | 9 | Orchestration, design/architecture review, hard planning, all prose/writing (docs, READMEs, release notes, any user-facing text — never down-route writing), very sensitive or error-prone implementation, and the synthesis/accept-reject pass over review findings. The escalation target for every other lane. |
+| opus-4.8 | 4 | 8 | 8 | Default — when in doubt, opus. Implementation runs here at `xhigh`: delegate it rather than editing inline on fable. ~2x cheaper than fable and nearly as capable. |
+| sonnet-5 | 8 | 6 | 6 | Recon and routine subagent work; the low-effort wrapper for codex runs. Pass `model: sonnet` to `Explore` — it silently defaults to haiku. |
+| haiku-4.5 | 10 | 2 | 1 | Single-fact mechanical steps only (classify/label one thing per item). |
+| gpt-5.5 | 9 | 8 | 5 | Via the codex skill: code/diff review (finder and refuter passes), bug diagnosis, well-scoped edits to existing code (little net-new code), plateau second opinions, imagegen, rote throwaway scripts. From workflows/subagents, `model` takes only Claude models — spawn a `model: sonnet`, `effort: low` wrapper that writes a self-contained codex prompt and runs the codex skill. |
 
-These are defaults, not limits: standing permission to escalate any agent whose output misses the bar — escalation means fable; judge the output, not the price tag. Intelligence > taste > cost for anything that ships. Delegating to protect the context window is not a routing cue: route by task type. `general-purpose`/`Plan` subagents inherit the session model; pass `model` whenever the table disagrees.
+These are defaults with standing permission to escalate any agent whose output misses the bar — escalation means fable; judge the output, not the price tag. Route by task type — context-window pressure is not a routing cue. `general-purpose`/`Plan` subagents inherit the session model; pass `model` whenever the table disagrees.
 
-**Effort**: `xhigh` by default; the one exception is fable implementation, which may run `high`. `max` only after an xhigh attempt falls short. Verification runs at the same or higher model + effort tier than the work it checks.
+**Effort**: `xhigh` by default; fable implementation may run `high`. `max` only after an xhigh attempt falls short. Verification runs at the same or higher model + effort tier than the work it checks.
 
 **Phase intermediates may be broken.** In a phased plan, only the final state must be coherent. Shims, dual-mode params, and interphase adapters exist to be deleted next phase — skip them.
 
