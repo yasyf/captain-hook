@@ -150,12 +150,6 @@ class SessionStore:
             cls.TRACKED.append(model)
 
     @classmethod
-    def untrack(cls, model: type[BaseModel]) -> None:
-        """Reverse ``track`` — primarily for test isolation."""
-        if model in cls.TRACKED:
-            cls.TRACKED.remove(model)
-
-    @classmethod
     def tracked_models(cls) -> Sequence[type[BaseModel]]:
         """Return the registered tracked-state models as an immutable tuple."""
         return tuple(cls.TRACKED)

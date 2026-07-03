@@ -97,11 +97,6 @@ class DurableStore:
             cls.TRACKED.append(model)
 
     @classmethod
-    def untrack(cls, model: type[BaseModel]) -> None:
-        if model in cls.TRACKED:
-            cls.TRACKED.remove(model)
-
-    @classmethod
     def tracked_models(cls) -> Sequence[type[BaseModel]]:
         return tuple(cls.TRACKED)
 

@@ -13,6 +13,8 @@ from loguru import logger
 
 from captain_hook.app import reset
 from captain_hook.decisions import open_decision_log
+from captain_hook.durable import DurableStore
+from captain_hook.session import SessionStore
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -41,6 +43,14 @@ def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mo
     yield
     open_decision_log.cache_clear()
     reset()
+
+
+@pytest.fixture(autouse=True)
+def isolate_tracked_models():
+    session_tracked, durable_tracked = SessionStore.TRACKED[:], DurableStore.TRACKED[:]
+    yield
+    SessionStore.TRACKED[:] = session_tracked
+    DurableStore.TRACKED[:] = durable_tracked
 
 
 @dataclass

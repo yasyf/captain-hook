@@ -11,6 +11,7 @@ from pydantic import BaseModel
 import captain_hook
 from captain_hook import app
 from captain_hook.dispatch import HookState, execute_hook
+from captain_hook.durable import DurableStore
 from captain_hook.loader import import_pack_module
 from captain_hook.session import SessionSlot, SessionStore, session_state
 from captain_hook.state import (
@@ -414,7 +415,6 @@ class TestSessionStateTracking:
         assert Tracked in SessionStore.tracked_models()
         assert Tracked not in before
         assert Tracked.model_validate({"x": 1}).x == 1
-        SessionStore.untrack(Tracked)
 
     def test_tracked_models_returns_immutable_view(self) -> None:
         snapshot = SessionStore.tracked_models()
@@ -436,7 +436,6 @@ class TestSessionStateTracking:
         paths = store.tracked_paths()
         assert "Tracked" in paths
         assert paths["Tracked"] == store[Tracked].path
-        SessionStore.untrack(Tracked)
 
     def test_tracked_paths_omits_models_without_session_dir(self) -> None:
         @session_state
@@ -444,7 +443,6 @@ class TestSessionStateTracking:
             v: int = 0
 
         assert "Tracked" not in SessionStore(None).tracked_paths()
-        SessionStore.untrack(Tracked)
 
     def test_tracked_paths_keyed_by_class_name(self, tmp_path: Path) -> None:
         @session_state
@@ -454,7 +452,16 @@ class TestSessionStateTracking:
         paths = SessionStore(tmp_path).tracked_paths()
         assert "CustomScope" in paths
         assert paths["CustomScope"].name == "custom_scope.json"
-        SessionStore.untrack(CustomScope)
+
+    def test_no_test_local_models_leak_into_tracked_registries(self) -> None:
+        # The autouse isolate_tracked_models fixture snapshots and restores TRACKED per test, so a
+        # throwaway model defined inside a test body never survives into another test's registry.
+        leaked = [
+            f"{m.__module__}.{m.__qualname__}"
+            for m in (*SessionStore.TRACKED, *DurableStore.TRACKED)
+            if "<locals>" in m.__qualname__
+        ]
+        assert leaked == [], f"test-local models leaked into TRACKED: {leaked}"
 
 
 class TestSeenKeys:

@@ -571,7 +571,7 @@ class TestRunInlineTests:
         # once-per-project hook passed its Warn test on the first run and failed every rerun.
         from captain_hook import Deque, DurableState
         from captain_hook.app import on
-        from captain_hook.durable import DurableStore, durable_root
+        from captain_hook.durable import durable_root
         from captain_hook.testing.helpers import run_inline_tests
         from captain_hook.testing.types import Input, Warn
         from tests.helpers import input_to_event
@@ -593,16 +593,13 @@ class TestRunInlineTests:
                 state.paths.append(".env")
             return evt.warn("sensitive file")
 
-        try:
-            # Project-scoped durable state only persists with a repo_root; guard against a
-            # vacuous pass where mutate never writes anywhere.
-            assert input_to_event(Event.PreToolUse, Input(tool="Edit", file=".env", content="x")).ctx.repo_root
-            for run in (1, 2):
-                results = run_inline_tests()
-                assert [(r[1], r[3]) for r in results] == [("pass", "")], f"Run {run} failed: {results}"
-            assert not durable_root().exists()
-        finally:
-            DurableStore.untrack(WarnedOnce)
+        # Project-scoped durable state only persists with a repo_root; guard against a
+        # vacuous pass where mutate never writes anywhere.
+        assert input_to_event(Event.PreToolUse, Input(tool="Edit", file=".env", content="x")).ctx.repo_root
+        for run in (1, 2):
+            results = run_inline_tests()
+            assert [(r[1], r[3]) for r in results] == [("pass", "")], f"Run {run} failed: {results}"
+        assert not durable_root().exists()
 
     def test_rewrite_expectation_passes_against_rewriting_hook(self):
         from captain_hook.primitives.commands import rewrite_command
