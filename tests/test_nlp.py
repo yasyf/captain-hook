@@ -163,6 +163,9 @@ class TestPastPredicate:
             pytest.param("should be removed eventually", "removed", False, id="modal_should"),
             pytest.param("can be removed once v2 ships", "removed", False, id="modal_can"),
             pytest.param("the removed entries were stale", "removed", False, id="attributive_amod"),
+            pytest.param("retry logic has been moved to utils.py", "moved", True, id="present_perfect_passive_moved"),
+            pytest.param("this function has been removed", "removed", True, id="present_perfect_passive_removed"),
+            pytest.param("the fallback path has been deleted", "deleted", True, id="present_perfect_passive_deleted"),
         ],
     )
     def test_predicate(self, text: str, word: str, expected: bool) -> None:
@@ -179,6 +182,7 @@ class TestSubjectGate:
             pytest.param("we removed it", "removed", False, id="pronoun_subject"),
             pytest.param("was moved to utils.py", "moved", False, id="passive_nsubjpass"),
             pytest.param("# removed the retry logic", "removed", False, id="delimiter_nsubj_not_letter_bearing"),
+            pytest.param("# config moved to settings.py", "moved", True, id="elliptical_passive_nsubj"),
         ],
     )
     def test_subject(self, text: str, word: str, expected: bool) -> None:
@@ -204,6 +208,15 @@ class TestVerbAnchoredScan:
             pytest.param("skips removed entries", False, id="nominal_subject_skips"),
             pytest.param("handles removed entries", False, id="nominal_subject_handles"),
             pytest.param("the parser removed the node", False, id="nominal_subject_parser"),
+            pytest.param("retry logic has been moved to utils.py", True, id="present_perfect_moved"),
+            pytest.param("this function has been removed", True, id="present_perfect_removed"),
+            pytest.param("the fallback path has been deleted", True, id="present_perfect_deleted"),
+            pytest.param("config moved to settings.py", True, id="elliptical_config_moved"),
+            pytest.param("helpers moved to utils.py", True, id="elliptical_helpers_moved"),
+            pytest.param("retry handling migrated to backoff.py", True, id="elliptical_handling_migrated"),
+            pytest.param("old handler removed", True, id="elliptical_handler_removed"),
+            pytest.param("retry logic removed", True, id="elliptical_logic_removed"),
+            pytest.param("logic migrated to the worker", True, id="elliptical_logic_migrated"),
         ],
     )
     def test_scan(self, leader: str, text: str, expected: bool) -> None:

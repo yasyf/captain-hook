@@ -44,7 +44,14 @@ def past_reference_advmod(sent: Span) -> bool:
 
 
 def used_to_idiom(sent: Span) -> bool:
-    return any(t.lemma_.lower() == "use" and any(c.dep_ == "xcomp" for c in t.children) for t in sent)
+    return any(
+        t.lemma_.lower() == "use"
+        and t.tag_ in {"VBD", "VBN"}
+        and any(c.dep_ == "xcomp" for c in t.children)
+        and not any(c.dep_ in {"dobj", "auxpass"} for c in t.children)
+        and not (t.dep_ == "acl" and any(ch.isalpha() for ch in t.head.text))
+        for t in sent
+    )
 
 
 def is_marker(text: str) -> bool:

@@ -66,9 +66,11 @@ class Clause:
         completed: Only match verbs reported as done (see ``is_past_predicate``) —
             "removed the retry logic" but not "remove the node" or
             "will be removed later".
-        subject: ``"no_nominal"`` vetoes verbs with a substantive active subject
-            (see ``has_nominal_subject``) — "the parser removed the node" is
-            vetoed while "we removed it" and passives still match.
+        subject: ``"no_nominal"`` vetoes verbs with both a substantive active
+            subject (see ``has_nominal_subject``) and a direct object — "the
+            parser removed the node" is vetoed while "we removed it", passives,
+            and objectless elliptical passives ("config moved to settings.py",
+            "logic migrated to the worker") still match.
 
     Example:
         >>> Clause(verb=Phrase("remove", "delete"), completed=True, subject="no_nominal")
@@ -135,15 +137,17 @@ def is_past_predicate(tok: Token) -> bool:
 
     True for a past-tense or participial predicate (tag ``VBD``/``VBN``) used
     predicatively (``dep_`` is not ``amod``) with no present-tense or modal
-    auxiliary child — so "removed the retry logic" and "was moved to utils.py"
-    qualify while "removes stale entries", "is removed when it expires", and
+    auxiliary child, exempting perfect "have" — so "removed the retry logic",
+    "was moved to utils.py", and "has been removed" qualify while
+    "removes stale entries", "is removed when it expires", and
     "will be moved later" do not.
     """
     return (
         tok.tag_ in {"VBD", "VBN"}
         and tok.dep_ != "amod"
         and not any(
-            c.dep_ in {"aux", "auxpass"} and (c.morph.get("Tense") == ["Pres"] or c.tag_ == "MD") for c in tok.children
+            c.dep_ in {"aux", "auxpass"} and c.lemma_ != "have" and (c.morph.get("Tense") == ["Pres"] or c.tag_ == "MD")
+            for c in tok.children
         )
     )
 
@@ -179,7 +183,8 @@ def verb_candidates(clause: Clause, sent: Span) -> list[Token]:
     return [
         v
         for v in find_lemma_matches(clause.verb, sent, {"VERB", "AUX"})
-        if (not clause.completed or is_past_predicate(v)) and (clause.subject == "any" or not has_nominal_subject(v))
+        if (not clause.completed or is_past_predicate(v))
+        and (clause.subject == "any" or not (has_nominal_subject(v) and any(c.dep_ == "dobj" for c in v.children)))
     ]
 
 
