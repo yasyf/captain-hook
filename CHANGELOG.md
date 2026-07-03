@@ -6,7 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [6.1.0] - 2026-07-03
+## [6.2.0] - 2026-07-03
 
 ### Changed
 - General-pack prose-routing hooks are judge-confirmed (pack 0.7.0). Both the Agent/Task
@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   judge-declines path (`llm={"fire": False}` / `llm={"block": False}`); the default stub
   still always fires. `workflow_script_source` and `workflow_opt_values` are exported for
   pack-authored contexts over workflow scripts.
+
+## [6.1.0] - 2026-07-03
+
+### Added
 - General-pack docs-freshness Stop gate (pack 0.6.0): after source edits, an `llm_gate` reads
   the uncommitted diff before the agent stops and blocks once when a user-facing change — a new
   flag, a renamed command, changed output, a new feature — isn't reflected in README.md or
