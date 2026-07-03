@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -621,6 +622,38 @@ class TestRunInlineTests:
         results = run_inline_tests()
         assert len(results) == 2
         assert all(r[2] for r in results), f"Failed: {results}"
+
+
+class TestIsolatedStateRoot:
+    def test_state_dir_points_at_yielded_root_inside(self):
+        from captain_hook.settings import resolve_state_dir
+        from captain_hook.testing.helpers import isolated_state_root
+
+        with isolated_state_root() as root:
+            assert resolve_state_dir() == root
+
+    def test_restores_prior_value_after_exit(self, monkeypatch: pytest.MonkeyPatch):
+        from captain_hook.testing.helpers import isolated_state_root
+
+        monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", "/sentinel/state")
+        with isolated_state_root():
+            assert os.environ["CAPTAIN_HOOK_STATE_DIR"] != "/sentinel/state"
+        assert os.environ["CAPTAIN_HOOK_STATE_DIR"] == "/sentinel/state"
+
+    def test_restores_unset_after_exit(self, monkeypatch: pytest.MonkeyPatch):
+        from captain_hook.testing.helpers import isolated_state_root
+
+        monkeypatch.delenv("CAPTAIN_HOOK_STATE_DIR", raising=False)
+        with isolated_state_root():
+            assert "CAPTAIN_HOOK_STATE_DIR" in os.environ
+        assert "CAPTAIN_HOOK_STATE_DIR" not in os.environ
+
+    def test_temp_root_removed_after_exit(self):
+        from captain_hook.testing.helpers import isolated_state_root
+
+        with isolated_state_root() as root:
+            assert root.exists()
+        assert not root.exists()
 
 
 class TestInputRepr:

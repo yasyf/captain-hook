@@ -26,13 +26,11 @@ if TYPE_CHECKING:
 
 Scope = Literal["project", "global"]
 
-DURABLE_ROOT_OVERRIDE: list[Path] = []
-
 
 def durable_root() -> Path:
     from captain_hook.settings import resolve_state_dir
 
-    return DURABLE_ROOT_OVERRIDE[-1] if DURABLE_ROOT_OVERRIDE else resolve_state_dir() / "hooks" / "durable"
+    return resolve_state_dir() / "hooks" / "durable"
 
 
 def project_key(repo_root: Path) -> str:

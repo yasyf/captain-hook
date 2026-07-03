@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import os
 import re
 import shutil
 import tempfile
@@ -534,16 +535,18 @@ stub_call_llm = make_stub_call_llm()
 
 
 @contextmanager
-def isolated_durable_root() -> Iterator[Path]:
-    """Point ``DurableState`` at a throwaway root so tests never read or write the real store."""
-    from captain_hook.durable import DURABLE_ROOT_OVERRIDE
-
-    root = Path(tempfile.mkdtemp(prefix="capt-hook-durable-"))
-    DURABLE_ROOT_OVERRIDE.append(root)
+def isolated_state_root() -> Iterator[Path]:
+    """Point the whole capt-hook state root at a throwaway dir so inline tests never touch real state."""
+    root = Path(tempfile.mkdtemp(prefix="capt-hook-state-"))
+    saved = os.environ.get("CAPTAIN_HOOK_STATE_DIR")
+    os.environ["CAPTAIN_HOOK_STATE_DIR"] = str(root)
     try:
         yield root
     finally:
-        DURABLE_ROOT_OVERRIDE.remove(root)
+        if saved is None:
+            del os.environ["CAPTAIN_HOOK_STATE_DIR"]
+        else:
+            os.environ["CAPTAIN_HOOK_STATE_DIR"] = saved
         shutil.rmtree(root, ignore_errors=True)
 
 
@@ -552,7 +555,7 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
 
     results: list[tuple[str, str, bool, str]] = []
 
-    with isolated_durable_root():
+    with isolated_state_root():
         for entry in _state.hooks:
             if not entry.spec.tests:
                 continue
