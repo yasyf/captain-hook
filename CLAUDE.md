@@ -20,7 +20,7 @@ Exceptions: trivial single-file edits, single file reads, and single targeted `s
 
 | Model | Cost | Int | Taste | Route here |
 |---|---|---|---|---|
-| fable-5 | 2 | 9 | 9 | Default — when in doubt, fable. Orchestration, implementation, review, docs — and hard planning/design/diagnosis subagents: delegating to protect the context window keeps the session's intelligence, it is not an escalation cue. |
+| fable-5 | 2 | 9 | 9 | Default — when in doubt, fable. Orchestration, implementation, review, and all prose/writing (docs, READMEs, release notes, any user-facing text — never down-route writing) — and hard planning/design/diagnosis subagents: delegating to protect the context window keeps the session's intelligence, it is not an escalation cue. |
 | opus-4.8 | 3 | 8 | 8 | Independent second perspective on correctness-critical work, or escalation after fable misses the bar — not the default for hard subagent tasks. |
 | sonnet-5 | 8 | 6 | 6 | Recon and routine subagent work. `Explore` silently defaults to haiku — pass `model: sonnet` (a capt-hook rewrite backstops this). |
 | haiku-4.5 | 10 | 2 | 1 | Only truly mechanical single-fact steps (classify/label one thing per item). Never judgment work. |
