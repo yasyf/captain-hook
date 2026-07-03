@@ -19,9 +19,11 @@ nudge that catches side work nobody asked for and tells the agent to check in
 with 2-4 options instead of improvising), `python`
 (a pytest-before-commit gate, AST style rules, and a `uv` missing-dependency nudge),
 `go` (a go-test-before-commit gate and a `go.mod` nudge on module-resolution
-errors), `steering` (three judgment nudges — it flags a plan-mode plan that
+errors), `steering` (four judgment hooks — it flags a plan-mode plan that
 band-aids the symptom instead of fixing the root cause, pushes back when you dismiss
-a real pre-existing issue, and stops the chase after trivial type-checker noise),
+a real pre-existing issue, stops the chase after trivial type-checker noise, and
+blocks a turn-end that swaps the requested fix for docs or a follow-up the user
+never asked for),
 and `fixes` (workarounds for upstream Claude Code issues, currently one hook that
 auto-approves a teammate's Bash permission dialogs when the process tree shows the
 session was launched with `--dangerously-skip-permissions` available, so bypass-consented
@@ -58,7 +60,7 @@ uvx capt-hook pack list
   general                  builtin  -                    v0.11.0   10 hooks
   python                   builtin  -                    v0.1.0    3 hooks
   go                       builtin  -                    v0.1.0    2 hooks
-  steering                 builtin  -                    v0.3.0    1 hooks
+  steering                 builtin  -                    v0.4.0    1 hooks
   fixes                    builtin  -                    v0.1.0    1 hooks
 ```
 

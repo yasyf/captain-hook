@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Steering-pack deferral gate: an LLM-judged `Stop`/`SubagentStop` gate that blocks a
+  turn-end where the agent names the correct fix, declares it blocked on a release, a
+  version bump, or an upstream or cross-repo change, and silently substitutes docs, help
+  text, README copy, or a follow-up issue the user never asked for. A weighted signal
+  pre-filter keeps the judge off honest stops, and asking the user how to proceed
+  suppresses it, since asking is the sanctioned escape hatch. The band-aid plan judge
+  gained the same two tells: the fix-for-docs swap and "requires a release" framed as a
+  blocker. Steering pack bumped to 0.4.0.
+
 ## [8.0.0] - 2026-07-03
 
 ### Added

@@ -6,6 +6,7 @@ from typing import ClassVar
 from captain_hook import (
     Allow,
     BaseHookEvent,
+    Block,
     Clause,
     CustomCondition,
     Event,
@@ -17,49 +18,9 @@ from captain_hook import (
     Signals,
     Tool,
     Warn,
+    llm_gate,
     llm_nudge,
     nudge,
-)
-
-PRE_EXISTING_SIGNALS = Signals(
-    [
-        Signal(pattern=r"(?i)(?:pre-existing|preexisting)", weight=1),
-        Signal(pattern=r"(?i)(?:outside|beyond) (?:the )?scope", weight=1),
-        NlpSignal(
-            clauses=[
-                Clause(noun=Phrase.expand("change"), verb=Phrase("cause", "introduce"), negated=True),
-                Clause(noun=Phrase.expand("issue"), verb=Phrase("leave")),
-            ],
-            weight=2,
-        ),
-        NlpSignal(
-            clauses=[
-                Clause(noun=Phrase.expand("issue"), adj=Phrase("existing", "present", "previous")),
-            ],
-            weight=1,
-        ),
-    ],
-    threshold=2,
-    window=15,
-)
-
-TRIVIAL_TYPE_SIGNALS = Signals(
-    [
-        Signal(pattern=r"(?i)check\s+(?:the\s+)?git\s+(?:history|log|blame)", weight=2),
-        Signal(pattern=r"(?i)(?:something|warnings?|errors?)\s+i\s+(?:introduced|added|caused)", weight=2),
-        Signal(
-            pattern=(r"(?i)(?:existed|were\s+there|present)\s+(?:before|prior\s+to)\s+(?:my\s+)?(?:changes?|edits?)"),
-            weight=2,
-        ),
-        Signal(
-            pattern=(r"(?i)warnings?\s+(?:are|is)?\s*(?:showing\s+up|appearing|popping\s+up)\s+(?:again|now|in)"),
-            weight=2,
-        ),
-        Signal(pattern=r"(?i)(?:actual|real|genuine)\s+(?:bug|error)", weight=-3),
-        Signal(pattern=r"(?i)wrong\s+(?:type|signature|return\s+type)", weight=-3),
-    ],
-    threshold=4,
-    window=10,
 )
 
 
@@ -83,7 +44,27 @@ nudge(
     "violation, or broken test in code you're touching, fix it. Don't rationalize "
     "skipping it as out of scope. See: AGENTS.md § Code Stewardship.",
     skip_if=[TypeCheckerContext()],
-    signals=PRE_EXISTING_SIGNALS,
+    signals=Signals(
+        [
+            Signal(pattern=r"(?i)(?:pre-existing|preexisting)", weight=1),
+            Signal(pattern=r"(?i)(?:outside|beyond) (?:the )?scope", weight=1),
+            NlpSignal(
+                clauses=[
+                    Clause(noun=Phrase.expand("change"), verb=Phrase("cause", "introduce"), negated=True),
+                    Clause(noun=Phrase.expand("issue"), verb=Phrase("leave")),
+                ],
+                weight=2,
+            ),
+            NlpSignal(
+                clauses=[
+                    Clause(noun=Phrase.expand("issue"), adj=Phrase("existing", "present", "previous")),
+                ],
+                weight=1,
+            ),
+        ],
+        threshold=2,
+        window=15,
+    ),
     tests={
         Input(
             transcript=[
@@ -189,7 +170,26 @@ nudge(
         RanCommand("uvx", "prek", "run", "--all-files"),
         RanCommand("uvx", "pyright"),
     ],
-    signals=TRIVIAL_TYPE_SIGNALS,
+    signals=Signals(
+        [
+            Signal(pattern=r"(?i)check\s+(?:the\s+)?git\s+(?:history|log|blame)", weight=2),
+            Signal(pattern=r"(?i)(?:something|warnings?|errors?)\s+i\s+(?:introduced|added|caused)", weight=2),
+            Signal(
+                pattern=(
+                    r"(?i)(?:existed|were\s+there|present)\s+(?:before|prior\s+to)\s+(?:my\s+)?(?:changes?|edits?)"
+                ),
+                weight=2,
+            ),
+            Signal(
+                pattern=(r"(?i)warnings?\s+(?:are|is)?\s*(?:showing\s+up|appearing|popping\s+up)\s+(?:again|now|in)"),
+                weight=2,
+            ),
+            Signal(pattern=r"(?i)(?:actual|real|genuine)\s+(?:bug|error)", weight=-3),
+            Signal(pattern=r"(?i)wrong\s+(?:type|signature|return\s+type)", weight=-3),
+        ],
+        threshold=4,
+        window=10,
+    ),
     tests={
         Input(
             transcript=[
@@ -318,7 +318,11 @@ the one failing input; bolting a new parallel form/flag/mode onto a primitive in
 the capability on the shared abstraction; changing a test to match buggy behavior or stubbing
 the broken function; defensive theater that hides rather than removes the cause (the real fix
 often DELETES code); deferral language used to dodge the fix ("for now", "stopgap", "out of
-scope", "TODO", "revisit later"); hand-waving a symptom away with the environment.
+scope", "TODO", "revisit later"); hand-waving a symptom away with the environment; swapping the
+requested fix for a softer deliverable (docs, help text, README, error-message copy) the user
+never asked for; declaring the fix blocked because it "requires a release", a version bump, or a
+change in another repo — releases are tag-driven and routine here, that is work to plan, not a
+blocker.
 
 Root-cause signs (lean fire=false): names the actual cause first; propagates/classifies errors
 so callers fail fast; consolidates/removes code instead of adding a guarded branch; puts the
@@ -347,4 +351,227 @@ decided it) in `reasoning`.""",
     only_if=[Tool("ExitPlanMode")],
     events=Event.PostToolUse,
     max_fires=1,
+)
+
+
+llm_gate(
+    """You are a senior engineer. Another engineer ("the agent") is trying to end its turn. You
+are running in agent mode in the project's working directory, with read tools. Your one job:
+decide whether the agent DELIVERED the fix the user asked for, or silently DOWNGRADED the
+deliverable while the real fix stays undone.
+
+Read first, judge second:
+- The session transcript is rendered above inside `<transcript path="...">`; long content is
+  clipped (you'll see `…(+Nch)` markers). Read the FULL exchange from that path (prefer
+  `cc-transcript show`/`grep`; else read the file). You need: (1) what the user actually asked
+  for, (2) what the agent actually changed this turn, and (3) the agent's closing justification
+  (the flagged lines are in `<context>`).
+- Then inspect the working directory enough to confirm whether the requested fix was made or
+  only a softer substitute (docs, help text, error copy) shipped.
+
+Discriminator: Did the agent do the fix the user asked for (or get the user's explicit go-ahead
+for something smaller) — or did it declare the real fix out of reach and substitute a softer
+deliverable without asking, leaving the reported problem in place? Delivered or user-approved
+-> block=false. Silent downgrade -> block=true.
+
+Deferral tells (lean block=true): names the correct fix, then declares it blocked because it
+"requires a release", a version bump, or an upstream/cross-repo change — in this ecosystem
+releases are tag-driven and routine, so that is work to plan, not a blocker; swaps the fix for
+documentation, help text, README, or error-message copy the user never asked for;
+"practical"/"pragmatic" framing used to justify the smaller deliverable; "for now" / "as a
+workaround" / "stopgap" / "interim" language around what shipped; punts to a follow-up PR,
+future work, or "file an issue" the user didn't request; declares the work done while the
+reported failure still reproduces.
+
+Legitimate-deferral signs (lean block=false): the agent surfaced the blocker and ASKED the user
+how to proceed before substituting anything; the softer deliverable IS the task the user
+requested; a genuine hard blockage the agent reported plainly (no access to the other repo,
+missing credentials, an API that does not exist); the agent shipped the real fix AND improved
+docs alongside it.
+
+Do NOT fire when: the user explicitly asked for the docs/help-text/error-copy change; the turn
+ends in a question to the user about the blocker (asking is the sanctioned escape hatch, not
+laziness); the deferral language refers to genuinely optional extras after the requested fix
+landed; or the blockage is real, outside the agent's reach, and clearly reported rather than
+papered over.
+
+When uncertain, return block=false. A missed deferral costs one nag; a false alarm on an honest
+stop teaches the agent to ignore this gate. Fire only when a specific tell is clearly present
+and no "do not fire" condition applies. Put your reasoning (under 60 words, ending with the one
+tell that decided it) in `reasoning`.""",
+    message=lambda r: (
+        "You appear to be deferring the real fix — declaring it out of reach and "
+        f"substituting a softer deliverable without asking. Why: {r.reasoning} "
+        "Do the fix the user asked for: a release, version bump, or cross-repo change is "
+        "routine work here, not a blocker — plan it and do it. If you are genuinely blocked, "
+        "stop and ask the user how to proceed instead of substituting docs, help text, or a "
+        "follow-up issue they never asked for."
+    ),
+    signals=Signals(
+        [
+            Signal(
+                pattern=(
+                    r"(?i)(?:requires?|needs?|blocked\s+on|waiting\s+(?:for|on))\s+(?:a\s+|an\s+)?(?:new\s+)?"
+                    r"(?:[\w.-]+\s+)?(?:release|version\s+bump|upstream\s+(?:change|fix|release))"
+                ),
+                weight=2,
+            ),
+            Signal(
+                pattern=(
+                    r"(?i)(?:fix|change)\s+(?:lives?|belongs?|is)\s+in\s+(?:another|a\s+(?:different|separate)|the\s+"
+                    r"[\w.-]+)\s+(?:repo(?:sitory)?|package|project|codebase)"
+                ),
+                weight=2,
+            ),
+            Signal(pattern=r"(?i)(?:practical|pragmatic|expedient)\s+(?:solution|approach|fix|option|path)", weight=2),
+            Signal(
+                pattern=(
+                    r"(?i)\b(?:improv|updat|expand|clarif|document|add)\w*\s+(?:the\s+|this\s+|that\s+|a\s+)?"
+                    r"(?:documentation|docs\b|help\s+text|readme|error\s+(?:message|copy|text)|limitation)"
+                ),
+                weight=1,
+            ),
+            Signal(pattern=r"(?i)(?:instead\s+of|rather\s+than)\s+(?:fix|chang|touch|releas)\w*", weight=1),
+            Signal(
+                pattern=r"(?i)(?:as\s+a\s+workaround|stop-?gap|interim\s+(?:fix|solution|measure)|band-?aid)",
+                weight=2,
+            ),
+            Signal(pattern=r"(?i)\bfor\s+now\b", weight=1),
+            Signal(
+                pattern=(
+                    r"(?i)(?:follow-?up\s+(?:pr|work|issue|task|change)|future\s+(?:pr|work|release)"
+                    r"|file\s+(?:an?\s+)?issue|(?:separate|later)\s+(?:pr|patch)|out\s+of\s+scope\s+for\s+this)"
+                ),
+                weight=2,
+            ),
+            NlpSignal(
+                clauses=[Clause(noun=Phrase.expand("fix"), verb=Phrase("defer", "postpone", "punt"))],
+                weight=2,
+            ),
+            Signal(
+                pattern=(
+                    r"(?i)(?:ask(?:ed|ing)?\s+the\s+user|how\s+would\s+you\s+like\s+to\s+proceed|should\s+i\s+proceed"
+                    r"|do\s+you\s+want\s+me\s+to|would\s+you\s+(?:prefer|rather|like)|which\s+(?:option|approach)\b)"
+                ),
+                weight=-3,
+            ),
+            Signal(pattern=r"(?i)(?:as\s+(?:you\s+)?requested|you\s+asked\s+(?:for|me)\b)", weight=-2),
+        ],
+        threshold=3,
+        window=10,
+    ),
+    tests={
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Since fixing this requires a cc-interact release, the practical "
+                                    "solution is to improve the documentation and help text."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "The vcs.Root error still happens outside a repo. For now, as a "
+                                    "workaround, I've added a note to the help text telling users to "
+                                    "run these commands from the repo root."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Fixing this properly requires an upstream release of cc-interact, "
+                                    "so the pragmatic approach is to document the limitation in the README."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Fixing this properly requires a cc-interact release. Do you want "
+                                    "me to cut that release, or would you prefer to just document the "
+                                    "limitation for now?"
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": "Please improve the documentation for the release commands."}
+                        ]
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Done — I improved the documentation and help text as you asked me to.",
+                            }
+                        ]
+                    },
+                },
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "I refactored the signal scoring in state.py and all 42 tests pass.",
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+    },
 )

@@ -23,7 +23,18 @@ from captain_hook.util import http
 
 PACKS_DIR = Path(captain_hook.__file__).parent / "packs"
 EXPECTED_BUILTINS = {"general", "python", "go", "steering", "fixes"}
-GENERAL_HOOKS = {"commands", "comments", "detours", "docs", "models", "plans", "prompts", "review", "tasks", "tombstones"}
+GENERAL_HOOKS = {
+    "commands",
+    "comments",
+    "detours",
+    "docs",
+    "models",
+    "plans",
+    "prompts",
+    "review",
+    "tasks",
+    "tombstones",
+}
 PYTHON_HOOKS = {"style", "testing", "toolchain"}
 GO_HOOKS = {"testing", "toolchain"}
 # lib.py carries __capt_hook_skip__ so it is a non-underscore file the loader skips; the
@@ -552,11 +563,11 @@ def test_import_pack_module_sets_file(tmp_path: Path) -> None:
 # --- steering pack: enabled registration --------------------------------------------
 
 
-def test_enabling_steering_pack_registers_nudges() -> None:
+def test_enabling_steering_pack_registers_hooks() -> None:
     resolved = manager.resolve_builtin("steering")
     discover_pack("steering", resolved.path)
-    # Three: steering.py registers the two signal nudges plus the band-aid-plan llm_nudge.
-    assert len(app._state.hooks) == 3
+    # Four: steering.py registers the two signal nudges, the band-aid-plan llm_nudge, and the deferral llm_gate.
+    assert len(app._state.hooks) == 4
     assert "captain_hook._packs.steering.steering" in sys.modules
 
 
