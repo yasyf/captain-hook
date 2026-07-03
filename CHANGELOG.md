@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.1.1] - 2026-07-02
+
+### Fixed
+- Tightened the `cc-transcript` pin to `>=7.1,<8`: 5.0.0 started importing `WorkflowCall`,
+  which only exists in cc-transcript 7.1+, so a resolver landing on 7.0.x failed with an
+  `ImportError` at `captain_hook` import time.
+
 ## [5.1.0] - 2026-07-02
 
 ### Added
