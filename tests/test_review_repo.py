@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from captain_hook.review.repo import normalize_origin, repo_key, resolve_repo_key
+from captain_hook.review.repo import normalize_origin, repo_key
 
 
 def git(cwd: Path, *args: str) -> None:
@@ -15,13 +15,6 @@ def git(cwd: Path, *args: str) -> None:
         capture_output=True,
         text=True,
     )
-
-
-@pytest.fixture(autouse=True)
-def clear_repo_cache():
-    resolve_repo_key.cache_clear()
-    yield
-    resolve_repo_key.cache_clear()
 
 
 class TestNormalizeOrigin:

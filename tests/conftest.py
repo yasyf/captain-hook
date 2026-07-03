@@ -14,7 +14,10 @@ from loguru import logger
 from captain_hook.app import reset
 from captain_hook.decisions import open_decision_log
 from captain_hook.durable import DurableStore
+from captain_hook.review.repo import resolve_repo_key
 from captain_hook.session import SessionStore
+from captain_hook.util.http import github_token
+from captain_hook.util.model_cache import model_sha256, model_version
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -38,11 +41,19 @@ def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mo
     # The SessionEnd reviewer skips headless entrypoints (sdk-*); scrub it so tests don't
     # inherit the ambient CLAUDE_CODE_ENTRYPOINT of a pytest run launched inside claude.
     monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
-    open_decision_log.cache_clear()
     reset()
     yield
-    open_decision_log.cache_clear()
     reset()
+
+
+@pytest.fixture(autouse=True)
+def clear_global_caches():
+    caches = (open_decision_log, github_token, model_version, model_sha256, resolve_repo_key)
+    for cached in caches:
+        cached.cache_clear()
+    yield
+    for cached in caches:
+        cached.cache_clear()
 
 
 @pytest.fixture(autouse=True)

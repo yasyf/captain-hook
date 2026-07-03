@@ -202,32 +202,23 @@ def test_model_version_resolves_from_compatibility_table(monkeypatch: pytest.Mon
         "fetch_json",
         lambda _url: {"spacy": {"3.9": {model_cache.MODEL_NAME: ["3.9.5", "3.9.4"]}}},
     )
-    model_cache.model_version.cache_clear()
 
     assert model_cache.model_version() == "3.9.5"
-
-    model_cache.model_version.cache_clear()
 
 
 def test_model_sha256_parses_release_notes(monkeypatch: pytest.MonkeyPatch) -> None:
     sha = "ab" * 32
     body = f"> **Checksum .tar.gz:** `{'cd' * 32}`<br />**Checksum .whl:** `{sha}`"
     monkeypatch.setattr(model_cache, "fetch_json", lambda _url: {"body": body})
-    model_cache.model_sha256.cache_clear()
 
     assert model_cache.model_sha256("3.9.5") == sha
-
-    model_cache.model_sha256.cache_clear()
 
 
 def test_model_sha256_raises_when_checksum_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(model_cache, "fetch_json", lambda _url: {"body": "no checksums here"})
-    model_cache.model_sha256.cache_clear()
 
     with pytest.raises(RuntimeError, match="no wheel checksum"):
         model_cache.model_sha256("3.9.5")
-
-    model_cache.model_sha256.cache_clear()
 
 
 class FakeWn:

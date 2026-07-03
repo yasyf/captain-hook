@@ -11,11 +11,6 @@ import pytest
 from captain_hook.util import http
 
 
-@pytest.fixture(autouse=True)
-def clear_token_cache() -> None:
-    http.github_token.cache_clear()
-
-
 @pytest.fixture
 def no_real_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     slept: list[float] = []
