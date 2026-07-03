@@ -332,8 +332,9 @@ fail on today's code.
 Do NOT fire when: the plan genuinely IS the root-cause fix; the task is small/cosmetic and a
 direct fix is correctly sized (don't demand over-engineering); the plan adds a legitimate default
 for a genuinely-unhandled case (a graceful default the user wanted is not symptom suppression —
-e.g. "add a final fallback to launch in a new window instead of erroring"); or the user
-explicitly asked for this approach.
+e.g. "add a final fallback to launch in a new window instead of erroring"); the user explicitly
+asked for this approach; or the plan reports a genuine hard blockage plainly (no access to the
+other repo, missing credentials, an API that does not exist) and asks the user how to proceed.
 
 When uncertain, return fire=false. A missed band-aid costs nothing; a false alarm on a sound plan
 trains the agent to ignore this nudge. Fire only when a specific tell is clearly present and no
@@ -346,7 +347,9 @@ decided it) in `reasoning`.""",
         "impossible (propagate/classify the error, fix the general computation, or delete the "
         "code that creates it) rather than catching, defaulting, retrying, suppressing, or "
         "special-casing it. If a small/direct fix is genuinely correct here, or the user asked "
-        "for this approach, proceed."
+        "for this approach, proceed. If the blocker is a release, version bump, or cross-repo "
+        "change, that is routine work here — plan it as part of the fix rather than designing "
+        "around it."
     ),
     only_if=[Tool("ExitPlanMode")],
     events=Event.PostToolUse,
@@ -364,8 +367,8 @@ Read first, judge second:
 - The session transcript is rendered above inside `<transcript path="...">`; long content is
   clipped (you'll see `…(+Nch)` markers). Read the FULL exchange from that path (prefer
   `cc-transcript show`/`grep`; else read the file). You need: (1) what the user actually asked
-  for, (2) what the agent actually changed this turn, and (3) the agent's closing justification
-  (the flagged lines are in `<context>`).
+  for (including any later approval of a reduced scope), (2) what the agent actually changed
+  this turn, and (3) the agent's closing justification (the flagged lines are in `<context>`).
 - Then inspect the working directory enough to confirm whether the requested fix was made or
   only a softer substitute (docs, help text, error copy) shipped.
 
@@ -380,14 +383,15 @@ releases are tag-driven and routine, so that is work to plan, not a blocker; swa
 documentation, help text, README, or error-message copy the user never asked for;
 "practical"/"pragmatic" framing used to justify the smaller deliverable; "for now" / "as a
 workaround" / "stopgap" / "interim" language around what shipped; punts to a follow-up PR,
-future work, or "file an issue" the user didn't request; declares the work done while the
-reported failure still reproduces.
+future work, or "file an issue" the user didn't request; declares the work done while its own
+transcript shows the reported failure unaddressed and untested.
 
 Legitimate-deferral signs (lean block=false): the agent surfaced the blocker and ASKED the user
 how to proceed before substituting anything; the softer deliverable IS the task the user
-requested; a genuine hard blockage the agent reported plainly (no access to the other repo,
-missing credentials, an API that does not exist); the agent shipped the real fix AND improved
-docs alongside it.
+requested; the user approved a plan or message that explicitly named the smaller deliverable (an
+approved ExitPlanMode plan counts as the go-ahead); a genuine hard blockage the agent reported
+plainly (no access to the other repo, missing credentials, an API that does not exist); the
+agent shipped the real fix AND improved docs alongside it.
 
 Do NOT fire when: the user explicitly asked for the docs/help-text/error-copy change; the turn
 ends in a question to the user about the blocker (asking is the sanctioned escape hatch, not
@@ -418,12 +422,26 @@ tell that decided it) in `reasoning`.""",
             ),
             Signal(
                 pattern=(
-                    r"(?i)(?:fix|change)\s+(?:lives?|belongs?|is)\s+in\s+(?:another|a\s+(?:different|separate)|the\s+"
-                    r"[\w.-]+)\s+(?:repo(?:sitory)?|package|project|codebase)"
+                    r"(?i)(?:(?:until|once|unless|before)\s+(?:\w+[\w.'-]*\s+){0,3}?|(?:ha(?:s|ve)|need(?:s)?)\s+to\s+"
+                    r"|(?:fix|solution|answer)\s+(?:is|would\s+be)\s+to\s+)(?:cut|ship|tag|publish|releas|bump)\w*"
                 ),
                 weight=2,
             ),
-            Signal(pattern=r"(?i)(?:practical|pragmatic|expedient)\s+(?:solution|approach|fix|option|path)", weight=2),
+            Signal(
+                pattern=(
+                    r"(?i)(?:fix|change)\s+(?:really\s+)?(?:lives?|belongs?|is|sits?|happens?"
+                    r"|would\s+have\s+to\s+happen)\s+(?:in|on)\s+(?:another|a\s+(?:different|separate)|the\s+[\w.-]+)"
+                    r"\s+(?:repo(?:sitory)?|package|project|codebase|side|library|end)"
+                ),
+                weight=2,
+            ),
+            Signal(pattern=r"(?i)upstream\s+(?:problem|issue|bug|limitation)", weight=2),
+            Signal(
+                pattern=(
+                    r"(?i)(?:practical|pragmatic|expedient|sensible|simplest)\s+(?:solution|approach|fix|option|path)"
+                ),
+                weight=2,
+            ),
             Signal(
                 pattern=(
                     r"(?i)\b(?:improv|updat|expand|clarif|document|add)\w*\s+(?:the\s+|this\s+|that\s+|a\s+)?"
@@ -431,18 +449,60 @@ tell that decided it) in `reasoning`.""",
                 ),
                 weight=1,
             ),
-            Signal(pattern=r"(?i)(?:instead\s+of|rather\s+than)\s+(?:fix|chang|touch|releas)\w*", weight=1),
             Signal(
-                pattern=r"(?i)(?:as\s+a\s+workaround|stop-?gap|interim\s+(?:fix|solution|measure)|band-?aid)",
+                pattern=(
+                    r"(?i)\b(?:document\w*|not(?:e|es|ed|ing)|record\w*)\s+(?:the\s+|this\s+|that\s+|a\s+|its\s+)?"
+                    r"(?:limitation|caveat|constraint|shortcoming|known\s+issue|behavior)"
+                ),
+                weight=2,
+            ),
+            Signal(
+                pattern=(
+                    r"(?i)(?:(?:left|leaves?|leaving)\s+(?:the\s+|it\s+|this\s+|that\s+)?"
+                    r"(?:code|implementation|behavior|bug|issue|it)?\s*(?:as-?is|untouched|unchanged|in\s+place)"
+                    r"|still\s+(?:present|broken|unfixed|unaddressed|reproduc\w+)"
+                    r"|remains?\s+(?:broken|unfixed|in\s+place))"
+                ),
+                weight=2,
+            ),
+            Signal(
+                pattern=(
+                    r"(?i)(?:instead\s+of|rather\s+than)\s+"
+                    r"(?:fix|chang|touch|releas|rewrit|redesign|refactor|overhaul)\w*"
+                ),
+                weight=1,
+            ),
+            Signal(
+                pattern=(
+                    r"(?i)(?:as\s+a\s+workaround|stop-?gap|interim\s+(?:fix|solution|measure)|band-?aid"
+                    r"|(?:as\s+a\s+)?temporary\s+(?:measure|fix|solution|patch|guard)"
+                    r"|in\s+the\s+meantime|for\s+the\s+time\s+being)"
+                ),
                 weight=2,
             ),
             Signal(pattern=r"(?i)\bfor\s+now\b", weight=1),
             Signal(
                 pattern=(
                     r"(?i)(?:follow-?up\s+(?:pr|work|issue|task|change)|future\s+(?:pr|work|release)"
-                    r"|file\s+(?:an?\s+)?issue|(?:separate|later)\s+(?:pr|patch)|out\s+of\s+scope\s+for\s+this)"
+                    r"|file\s+(?:an?\s+)?issue|(?:separate|later|subsequent)\s+(?:pr|patch|pass|iteration)|backlog"
+                    r"|out\s+of\s+scope\s+for\s+this)"
                 ),
                 weight=2,
+            ),
+            Signal(
+                pattern=(
+                    r"(?i)(?:out\s+of\s+my\s+(?:hands|control)|nothing\s+(?:i|we)\s+can\s+(?:do|change|fix)"
+                    r"|left\s+a\s+(?:short\s+)?note)"
+                ),
+                weight=1,
+            ),
+            Signal(
+                pattern=(
+                    r"(?i)(?:(?:smaller|minimal|narrow)\s+(?:change|patch|fix)|silenc\w*\s+the\s+(?:warning|error)"
+                    r"|so\s+(?:it|this|that|the\s+\w+)\s+(?:no\s+longer|doesn['’]t|does\s+not|won['’]t)\s+"
+                    r"(?:crash|die|fail|error)\w*)"
+                ),
+                weight=1,
             ),
             NlpSignal(
                 clauses=[Clause(noun=Phrase.expand("fix"), verb=Phrase("defer", "postpone", "punt"))],
@@ -453,9 +513,14 @@ tell that decided it) in `reasoning`.""",
                     r"(?i)(?:ask(?:ed|ing)?\s+the\s+user|how\s+would\s+you\s+like\s+to\s+proceed|should\s+i\s+proceed"
                     r"|do\s+you\s+want\s+me\s+to|would\s+you\s+(?:prefer|rather|like)|which\s+(?:option|approach)\b)"
                 ),
-                weight=-3,
+                weight=-4,
             ),
-            Signal(pattern=r"(?i)(?:as\s+(?:you\s+)?requested|you\s+asked\s+(?:for|me)\b)", weight=-2),
+            Signal(
+                pattern=(
+                    r"(?i)(?:as\s+(?:you\s+)?requested|you\s+asked\s+(?:for|me)\b|(?:as\s+)?we\s+(?:discussed|agreed))"
+                ),
+                weight=-2,
+            ),
         ],
         threshold=3,
         window=10,
@@ -567,6 +632,95 @@ tell that decided it) in `reasoning`.""",
                             {
                                 "type": "text",
                                 "text": "I refactored the signal scoring in state.py and all 42 tests pass.",
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "The underlying bug is in the wheel we publish, so the clean fix is "
+                                    "to ship a new version to PyPI. I've left the code as-is for callers "
+                                    "to pin around."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "I documented the limitation and moved on to the next task.",
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Fixing this properly needs an upstream release and the pragmatic "
+                                    "approach is to document the limitation — do you want me to just "
+                                    "leave that as-is?"
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "I expanded the README troubleshooting section as we discussed and "
+                                    "filed a follow-up task to document the new error codes."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Fixing this cleanly needs a new cc-transcript release. Do you want "
+                                    "me to cut that release, or handle it another way?"
+                                ),
                             }
                         ]
                     },
