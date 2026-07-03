@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -20,7 +18,7 @@ from captain_hook.util.http import github_token
 from captain_hook.util.model_cache import model_sha256, model_version
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncIterator
 
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
@@ -140,14 +138,12 @@ def git_repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def work_dir() -> Iterator[Path]:
-    path = Path(tempfile.mkdtemp(prefix="src_"))
-    yield path
-    shutil.rmtree(path, ignore_errors=True)
+def work_dir(tmp_path: Path) -> Path:
+    (d := tmp_path / "src").mkdir()
+    return d
 
 
 @pytest.fixture
-def session_dir() -> Iterator[Path]:
-    path = Path(tempfile.mkdtemp(prefix="session_"))
-    yield path
-    shutil.rmtree(path, ignore_errors=True)
+def session_dir(tmp_path: Path) -> Path:
+    (d := tmp_path / "session").mkdir()
+    return d

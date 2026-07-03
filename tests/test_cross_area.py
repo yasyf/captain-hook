@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import tempfile
 import textwrap
 from pathlib import Path
 from typing import Any
@@ -289,7 +288,7 @@ class TestRanCommandCondition:
 class TestNudgeSignalScoring:
     """VAL-CROSS-007"""
 
-    def test_nudge_signal_fires_and_cites(self) -> None:
+    def test_nudge_signal_fires_and_cites(self, tmp_path: Path) -> None:
         transcript = make_transcript(
             [
                 msg("assistant", "let me retry this"),
@@ -297,7 +296,7 @@ class TestNudgeSignalScoring:
                 msg("assistant", "I will retry the approach"),
             ]
         )
-        session_dir = Path(tempfile.mkdtemp())
+        session_dir = tmp_path
         from captain_hook.primitives.nudge import nudge
 
         nudge(
@@ -322,14 +321,14 @@ class TestNudgeSignalScoring:
 class TestEchoSuppression:
     """VAL-CROSS-008"""
 
-    def test_suppresses_second_dispatch_same_content(self) -> None:
+    def test_suppresses_second_dispatch_same_content(self, tmp_path: Path) -> None:
         transcript = make_transcript(
             [
                 msg("assistant", "let me retry this approach"),
                 msg("assistant", "let me retry again with a different method"),
             ]
         )
-        session_dir = Path(tempfile.mkdtemp())
+        session_dir = tmp_path
         from captain_hook.primitives.nudge import nudge
 
         nudge(
@@ -379,8 +378,8 @@ class TestEchoSuppression:
 class TestMaxFiresSessionStore:
     """VAL-CROSS-009"""
 
-    def test_max_fires_limits_execution(self) -> None:
-        session_dir = Path(tempfile.mkdtemp())
+    def test_max_fires_limits_execution(self, tmp_path: Path) -> None:
+        session_dir = tmp_path
         register_hook(Event.PreToolUse, message="limited", block=True, max_fires=2)
         for i in range(3):
             output = dispatch_pre({"command": f"echo {i}"}, session_dir=session_dir)
@@ -389,8 +388,8 @@ class TestMaxFiresSessionStore:
             else:
                 assert output is None, f"Dispatch {i} should be suppressed"
 
-    def test_fire_count_persisted(self) -> None:
-        session_dir = Path(tempfile.mkdtemp())
+    def test_fire_count_persisted(self, tmp_path: Path) -> None:
+        session_dir = tmp_path
         register_hook(Event.PreToolUse, message="counted", block=True, max_fires=5)
         dispatch_pre({"command": "echo hi"}, session_dir=session_dir)
 
@@ -560,13 +559,13 @@ class TestClassifierTranscript:
 class TestNlpSignalNudge:
     """VAL-CROSS-014"""
 
-    def test_nlp_signal_scoring_through_nudge(self) -> None:
+    def test_nlp_signal_scoring_through_nudge(self, tmp_path: Path) -> None:
         nlp_sig = NlpSignal(clauses=[Clause(noun=Phrase("test"), verb=Phrase("run"))], weight=3)
         score = score_signals([nlp_sig], "I will run the test suite now.")
         assert score >= 3
 
         transcript = make_transcript([msg("assistant", "I will run the test suite now.")])
-        session_dir = Path(tempfile.mkdtemp())
+        session_dir = tmp_path
         from captain_hook.primitives.nudge import nudge
 
         nudge("do not run tests yet", signals=Signals(patterns=[nlp_sig], threshold=3, window=5))
