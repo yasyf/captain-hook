@@ -5,17 +5,16 @@ import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 
+from captain_hook.state import FRAMEWORK_DIR
+
 
 def dedent_text(text: str) -> str:
     return textwrap.dedent(text).strip()
 
 
-_FRAMEWORK_DIR = Path(__file__).resolve().parent
-
-
-def _caller_dir() -> Path:
+def caller_dir() -> Path:
     frame = inspect.currentframe()
-    while frame and Path(frame.f_code.co_filename).resolve().is_relative_to(_FRAMEWORK_DIR):
+    while frame and Path(frame.f_code.co_filename).resolve().is_relative_to(FRAMEWORK_DIR):
         frame = frame.f_back
     return Path(frame.f_code.co_filename).resolve().parent if frame else Path.cwd()
 
@@ -83,7 +82,7 @@ class Prompt:
             FileNotFoundError: If no matching file exists in any searched directory.
             KeyError: If the file references a placeholder not supplied in ``**vars``.
         """
-        dirs = [Path(base) if base else _caller_dir() / "prompts", _FRAMEWORK_DIR / "prompts"]
+        dirs = [Path(base) if base else caller_dir() / "prompts", Path(FRAMEWORK_DIR) / "prompts"]
         for path in (d / f"{name}.md" for d in dirs):
             if path.is_file():
                 return cls.from_template(path.read_text(), **vars)

@@ -276,7 +276,7 @@ class TestPromptLoad:
         (framework / "prompts" / "sp.md").write_text("FW {x}")
         empty = tmp_path / "empty"
         empty.mkdir()
-        monkeypatch.setattr(prompt_module, "_FRAMEWORK_DIR", framework)
+        monkeypatch.setattr(prompt_module, "FRAMEWORK_DIR", str(framework))
         assert str(Prompt.load("sp", base=empty, x="Y")) == "FW Y"
 
     def test_missing_name_raises_file_not_found_listing_both_dirs(self, tmp_path: Path) -> None:
@@ -286,7 +286,7 @@ class TestPromptLoad:
             Prompt.load("does_not_exist", base=empty)
         msg = str(exc.value)
         assert str(empty) in msg
-        assert str(prompt_module._FRAMEWORK_DIR / "prompts") in msg
+        assert str(Path(prompt_module.FRAMEWORK_DIR) / "prompts") in msg
 
     def test_missing_placeholder_raises_key_error(self, tmp_path: Path) -> None:
         (tmp_path / "k.md").write_text("Hello {who}")
