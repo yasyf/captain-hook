@@ -21,11 +21,9 @@ classifiers = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "cc-transcript>=7.1,<8",
+    "cc-transcript>=8,<9",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
-    "tree-sitter>=0.24",
-    "tree-sitter-bash>=0.23",
     "ast-grep-py>=0.39,<1",
     "funcy>=2.0",
     "spacy>=3.7",
@@ -61,6 +59,12 @@ Changelog = "https://github.com/yasyf/captain-hook/blob/main/CHANGELOG.md"
 [build-system]
 requires = ["uv_build>=0.11,<0.12"]
 build-backend = "uv_build"
+
+# cc-transcript v8 (and its tree-sitter deps) ship no Windows wheels, so scope the
+# universal lock to the platforms it supports; keeps `uv lock` from resolving an
+# uninstallable win32 split and drops pywinpty/win32-setctime from the lock.
+[tool.uv]
+environments = ["sys_platform == 'darwin'", "sys_platform == 'linux'"]
 
 [tool.uv.build-backend]
 module-name = "captain_hook"
