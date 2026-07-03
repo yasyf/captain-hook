@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.5.0] - 2026-07-03
+
 ### Added
 - General-pack `detours` nudge (pack 0.10.0): an LLM-judged `PostToolUse` warn that catches
   the agent veering onto side work nobody asked for — gated cheaply on detour phrasing
