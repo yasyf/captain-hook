@@ -10,7 +10,9 @@ and the loader imports them alongside your own `.claude/hooks/` modules.
 ## Enable a builtin pack
 
 `capt-hook` ships four builtin packs: `general` (language-agnostic guards for git
-safety, code stewardship, task and plan discipline, a review gate, and a
+safety, code stewardship, task and plan discipline, a review gate, a
+docs-freshness gate that blocks a stop once when the session's diff changed
+user-facing behavior that README.md or `docs/` don't reflect, and a
 tombstone-comment nudge that flags a comment narrating the edit itself, such
 as `# removed the retry logic`, before it lands), `python`
 (a pytest-before-commit gate, AST style rules, and a `uv` missing-dependency nudge),

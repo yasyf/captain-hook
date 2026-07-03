@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- General-pack docs-freshness Stop gate (pack 0.6.0): after source edits, an `llm_gate` reads
+  the uncommitted diff before the agent stops and blocks once when a user-facing change — a new
+  flag, a renamed command, changed output, a new feature — isn't reflected in README.md or
+  `docs/`. Stands down when the session already touched markdown, used the writing-docs skill,
+  or runs headless (new `Headless` condition on `CLAUDE_CODE_ENTRYPOINT`). `EditedSource` and
+  `NON_SOURCE_SUFFIXES` moved to a shared `packs/general/_lib.py`; review.py re-exports them.
 - General-pack `models` fable-implementation nudge (pack 0.5.0): an `Agent`/`Task` spawn that
   would run on fable (unpinned or `model='fable'`) with a routine-implementation prompt gets an
   LLM-judged warn pointing at opus `xhigh` (or the codex skill behind a sonnet wrapper for

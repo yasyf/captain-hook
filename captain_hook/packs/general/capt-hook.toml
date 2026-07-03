@@ -1,5 +1,5 @@
 name = "general"
-version = "0.5.0"
-description = "Language-agnostic guards: git/command safety, doc & prompt nudges, task & plan discipline, and a code-review gate."
+version = "0.6.0"
+description = "Language-agnostic guards: git/command safety, doc & prompt nudges, task & plan discipline, and code-review + docs-freshness gates."
 hooks = "."
 nlp = true

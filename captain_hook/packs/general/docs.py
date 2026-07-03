@@ -1,6 +1,32 @@
 from __future__ import annotations
 
-from captain_hook import Allow, FilePath, Input, Tool, UsedSkill, Warn, nudge
+import os
+
+from captain_hook import (
+    Allow,
+    BaseHookEvent,
+    Block,
+    CustomCondition,
+    Event,
+    FilePath,
+    Input,
+    Tool,
+    TouchedFile,
+    UsedSkill,
+    Waiting,
+    Warn,
+    llm_gate,
+    nudge,
+)
+from captain_hook.packs.general._lib import EditedSource
+
+
+class Headless(CustomCondition):
+    """True in a headless ``claude -p`` / SDK run (``CLAUDE_CODE_ENTRYPOINT`` in the ``sdk-*`` family)."""
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk")
+
 
 # Advisory reminder to consult the writing-docs skill (and run slop-cop) before
 # editing documentation. Fires once per session on the first doc edit and stands
@@ -21,5 +47,112 @@ nudge(
     tests={
         Input(tool="Write", file="docs/guide/x.qmd", content="# X"): Warn(pattern="writing-docs"),
         Input(tool="Edit", file="src/app.py", content="x = 1"): Allow(),
+    },
+)
+
+
+# Docs-freshness gate: after source edits, an LLM reads the uncommitted diff before the
+# agent stops and blocks once when a user-facing change isn't reflected in README.md or
+# docs/. Complements review.py's gate, which reviews correctness — this one reviews
+# documentation. Stands down when the session already touched markdown/docs or used the
+# writing-docs skill, and in headless (cron/CI) runs.
+llm_gate(
+    "You are checking documentation freshness before the agent stops. The compact diff of "
+    "the uncommitted changes is in <diff>. Decide whether the session changed anything "
+    "user-facing — a new flag or option, a renamed command, changed output or behavior, a "
+    "new feature — that README.md or the pages under docs/ don't reflect. Set block=true "
+    "ONLY for a concrete gap, naming exactly which file and section to update in "
+    "`reasoning`. Otherwise block=false. Do not block on internal refactors, test or "
+    "tooling changes, or speculative staleness.",
+    message=lambda r: (
+        f"Docs freshness check found a gap to close before stopping: {r.reasoning} "
+        "Update README.md or docs/ via the writing-docs skill, or state that nothing "
+        "user-facing changed and finish."
+    ),
+    diff=True,
+    only_if=[EditedSource()],
+    skip_if=[
+        Waiting(),
+        TouchedFile("**/*.md", "**/*.qmd"),
+        UsedSkill("writing-docs|writing-docs:writing-docs"),
+        Headless(),
+    ],
+    events=Event.Stop,
+    max_fires=1,
+    tests={
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "name": "Edit",
+                                "id": "e1",
+                                "input": {"file_path": "/repo/src/app.py", "old_string": "a", "new_string": "b"},
+                            }
+                        ]
+                    },
+                },
+            ]
+        ): Block(pattern="writing-docs"),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "name": "Edit",
+                                "id": "e1",
+                                "input": {"file_path": "/repo/src/app.py", "old_string": "a", "new_string": "b"},
+                            },
+                            {
+                                "type": "tool_use",
+                                "name": "Edit",
+                                "id": "e2",
+                                "input": {"file_path": "/repo/README.md", "old_string": "a", "new_string": "b"},
+                            },
+                        ]
+                    },
+                },
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "name": "Edit",
+                                "id": "e1",
+                                "input": {"file_path": "/repo/README.md", "old_string": "a", "new_string": "b"},
+                            }
+                        ]
+                    },
+                },
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "name": "Edit",
+                                "id": "e1",
+                                "input": {"file_path": "/repo/tests/test_app.py", "old_string": "a", "new_string": "b"},
+                            }
+                        ]
+                    },
+                },
+            ]
+        ): Allow(),
     },
 )

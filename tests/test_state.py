@@ -375,8 +375,9 @@ class TestHookName:
 
     def test_pack_module_hook_name_is_pack_qualified(self, isolate_modules: None) -> None:
         import_pack_module("captain_hook._packs.general.docs", PACKS_DIR / "general" / "docs.py")
-        [entry] = app._state.hooks
-        assert re.fullmatch(r"general\.docs:nudge_[0-9a-f]{8}", entry.name)
+        names = sorted(entry.name for entry in app._state.hooks)
+        assert re.fullmatch(r"general\.docs:llm_gate_[0-9a-f]{8}", names[0])
+        assert re.fullmatch(r"general\.docs:nudge_[0-9a-f]{8}", names[1])
 
     def test_non_framework_hook_name_keeps_bare_stem(self, tmp_path: Path, isolate_modules: None) -> None:
         (tmp_path / "my_hook.py").write_text("from captain_hook import nudge\n\nnudge('remember the tests')\n")
