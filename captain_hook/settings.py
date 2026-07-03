@@ -35,6 +35,10 @@ def resolve_state_dir() -> Path:
     return Path(os.environ.get("CAPTAIN_HOOK_STATE_DIR") or Path.home() / ".claude" / "state")
 
 
+def resolve_project_dir() -> str | None:
+    return os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR")
+
+
 def resolve_log_dir() -> Path:
     return Path(
         os.environ.get("CAPTAIN_HOOK_LOG_DIR")

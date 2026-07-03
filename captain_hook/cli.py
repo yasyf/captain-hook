@@ -501,7 +501,9 @@ def run_tests(json_output: bool = False) -> None:
 @click.pass_context
 def cli(ctx: click.Context, hooks: str | None, root_path: str | None) -> None:
     """Captain Hook — declarative hook framework for Claude Code lifecycle events."""
-    root = Path(root_path) if root_path else Path(env) if (env := os.environ.get("CLAUDE_PROJECT_DIR")) else Path.cwd()
+    from captain_hook.settings import resolve_project_dir
+
+    root = Path(root_path) if root_path else Path(p) if (p := resolve_project_dir()) else Path.cwd()
     ctx.obj = CliState(root=root, hooks=hooks or str(root / ".claude" / "hooks"))
 
 

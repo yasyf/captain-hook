@@ -21,6 +21,7 @@ from spawnllm.proc import run_cli
 from captain_hook.classifiers import detect
 from captain_hook.prompt import Prompt
 from captain_hook.session import SessionStore
+from captain_hook.settings import resolve_project_dir
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -78,7 +79,7 @@ def lift_session(events: Sequence[TranscriptEvent], *, path: Path | None = None)
     from captain_hook.app import _state
 
     classifier = _state.classifier or detect(
-        cwd=os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR"),
+        cwd=resolve_project_dir(),
         transcript_path=str(path) if path else None,
         events=events,
     )
@@ -185,7 +186,7 @@ class HookContext:
                 input=input,
                 timeout=timeout,
                 env=os.environ | (env or {}),
-                cwd=os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR"),
+                cwd=resolve_project_dir(),
             )
         except (OSError, subprocess.SubprocessError):
             if throw:
@@ -309,7 +310,7 @@ class HookContext:
     ) -> str | BaseModel:
         diff_text = self.diff("uncommitted" if diff is True else diff) if diff else None
         prompt = self.assemble_prompt(template, args, kwargs, transcript=transcript, diff_text=diff_text)
-        cwd = os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR")
+        cwd = resolve_project_dir()
         if response_model is not None:
             return extract_sync(
                 prompt, response_model, specialty=specialty, model=model, agent=agent, cwd=cwd, timeout=timeout

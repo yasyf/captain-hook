@@ -6,6 +6,8 @@ import shutil
 from pathlib import Path
 from typing import ClassVar
 
+from captain_hook.settings import resolve_project_dir
+
 
 class SessionCache:
     """Resolves UUID-keyed inline-test fixtures to a cached transcript jsonl.
@@ -24,7 +26,7 @@ class SessionCache:
 
     @classmethod
     def for_root(cls, root: Path | str | None = None) -> SessionCache:
-        return cls(Path(root or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()))
+        return cls(Path(root or resolve_project_dir() or os.getcwd()))
 
     def path(self, uuid: str) -> Path:
         return self.dir / f"{uuid}.jsonl"
