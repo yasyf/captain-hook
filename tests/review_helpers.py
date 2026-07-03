@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import itertools
 import json
-import subprocess
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from cc_transcript import parse_events_from_bytes
+from cc_transcript.judge import JudgeError
 
 from captain_hook.review.judge import ReviewVerdict
 from captain_hook.review.repo import RepoKey
@@ -134,7 +134,7 @@ def install_judge(
     async def judge(prompt: str) -> ReviewVerdict:
         calls.append(prompt)
         if fail_on is not None and fail_on in prompt:
-            raise subprocess.CalledProcessError(1, ["claude"])
+            raise JudgeError("claude exited 1")
         return ReviewVerdict(category=category, summary="states a durable rule", confidence=0.9, rationale="r")
 
     monkeypatch.setattr("captain_hook.review.judge.structured_judge", lambda *_, **__: judge)
