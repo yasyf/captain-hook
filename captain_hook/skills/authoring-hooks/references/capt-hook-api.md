@@ -19,10 +19,11 @@ Distilled surface for writing `.claude/hooks/*.py`. Everything here is importabl
 from __future__ import annotations
 
 from captain_hook import (
-    Allow, And, Agent, BaseHookEvent, Block, Command, Event, FilePath, HookResult, InlineTests,
-    Input, Not, Or, Prompt, RanCommand, ReadFile, Rewrite, Runs, Signal, Signals, SourceEdits,
-    TestFile, Tool, ToolInput, TouchedFile, TranscriptFixture, UsedSkill, Warn, WorkflowScript,
-    block_command, gate, hook, lint, llm_gate, llm_nudge, nudge, on,
+    Allow, And, Agent, Ask, BaseHookEvent, Block, Command, Event, FilePath, FromSubagent,
+    HookResult, InlineTests, Input, Not, Or, Prompt, RanCommand, ReadFile, Rewrite, Runs,
+    Signal, Signals, SkipPermissions, SourceEdits, TestFile, Tool, ToolInput, TouchedFile,
+    TranscriptFixture, UsedSkill, Warn, WorkflowScript,
+    approve, block_command, deny, gate, hook, lint, llm_approve, llm_gate, llm_nudge, nudge, on,
     prompt_check, rewrite_command, set_tool_input, warn_command, workflow, Artifact, Step, text_matches,
 )
 ```
@@ -38,6 +39,7 @@ rarely import it directly.
 | Event | When it fires | Typical use |
 |---|---|---|
 | `PreToolUse` | Before a tool runs | Block dangerous commands |
+| `PermissionRequest` | A permission dialog would be shown | Auto-answer dialogs (allow/deny/rewrite); no decision means the dialog shows |
 | `PostToolUse` | After a tool succeeds | Lint output, nudge conventions |
 | `PostToolUseFailure` | After a tool fails | Suggest debugging steps |
 | `UserPromptSubmit` | User sends a message | Detect request patterns |
@@ -79,6 +81,9 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 | `llm_nudge` | same as `llm_gate` (default `response_model=NudgeVerdict`), plus `async_=False` | `PostToolUse`, `max_fires=3`; warns when `verdict(result)` — default `NudgeVerdict.fire` |
 | `prompt_check` | `(evt, template, fmt=None, *, prefix, suffix="", timeout=45)` | call inside an `@on` handler; returns `HookResult \| None` from `PromptCheckVerdict` |
 | `styleguide` | `(*rules, block=False, only_if=(), skip_if=(), events=None)` | AST style rules — owned by the `translating-styleguides` skill |
+| `approve` | `(label, *, only_if=(), skip_if=(), tests=None)` | `PermissionRequest`; answers matching dialogs with allow; **no fire cap**. Unconditioned == a permanent `--dangerously-skip-permissions`; always scope with conditions |
+| `deny` | `(reason, *, only_if=(), skip_if=(), tests=None)` | `PermissionRequest`; answers with deny, `reason` shown to the user; no fire cap. Unconditioned bricks every prompting tool |
+| `llm_approve` | `(label, *, rubric=None, only_if=(), skip_if=(), model="small", tests=None)` | `PermissionRequest`; LLM safety judge seeded from `claude auto-mode defaults` (+ your `rubric`); a safe verdict allows, an unsafe verdict or LLM failure returns `None` so the dialog shows, never an auto-deny. One LLM round-trip per matching ask |
 
 Notes:
 
@@ -117,9 +122,11 @@ Notes:
 | Expectation | Passes when | `pattern` |
 |---|---|---|
 | `Allow()` | result is `None` or `allow` | — |
+| `Allow(explicit=True)` | result is an actual `allow`; `None` fails, so a `PermissionRequest` hook must have answered the dialog itself | — |
 | `Block(pattern=...)` | result is `block` | regex over the block message |
 | `Warn(pattern=...)` | result is `warn` | regex over the warning message |
 | `Rewrite(pattern=...)` | result is `rewrite` | **substring** of the rewritten `updated_input["command"]` |
+| `Ask()` | result is `None`; for `PermissionRequest` the dialog shows, and a `warn` fails | — |
 
 `Rewrite`'s `pattern` is a substring (not a regex), so an absolute-path prefix in the
 rewritten command (e.g. `/abs/bin/ccx read x --full`) still matches `Rewrite(pattern="ccx
@@ -154,6 +161,8 @@ evaluated first.
 | Command was previously run | `RanCommand(r"uv\s+run\s+pytest")` |
 | Skill was invoked | `UsedSkill("codex")` — bare name also matches `plugin:name` |
 | During plan mode | `InPlanMode()` |
+| Event comes from a subagent/teammate | `FromSubagent()` — the payload carries an `agent_id`; matches the ask's *origin*, where `Agent` matches its *type* |
+| Session launched with bypass available | `SkipPermissions()` — walks to the nearest `claude` ancestor process and matches `--dangerously-skip-permissions` **or** `--allow-dangerously-skip-permissions`; availability counts as consent, whatever the active `permission_mode` |
 | Combine across types | `Or(...)`, `And(...)`, `Not(...)` |
 | Custom logic | implement `CustomCondition` |
 
@@ -185,8 +194,8 @@ Glob caveat: patterns match the full relative path. `**/*.py` matches `src/main.
 | `evt.permission_mode` | e.g. `"plan"` |
 | `evt.ctx.t` | the session as a `cc_transcript.query.Session` (turns, tool calls, text) |
 | `evt.block(msg)` / `evt.warn(msg)` / `evt.allow()` | build the `HookResult` to return |
-| `evt.rewrite_command(new_command, *, note=None)` | **PreToolUse only** — rewrite a Bash command in place (keeps the rest of the tool input), allowing it; `note` surfaces as `additionalContext` |
-| `evt.rewrite(updated_input, *, note=None)` | **PreToolUse only** — replace the tool input wholesale with `updated_input` (same tool schema), allowing it |
+| `evt.rewrite_command(new_command, *, note=None)` | **PreToolUse and PermissionRequest** — rewrite a Bash command in place (keeps the rest of the tool input), allowing it; `note` surfaces as `additionalContext` (dropped on `PermissionRequest`) |
+| `evt.rewrite(updated_input, *, note=None)` | **PreToolUse and PermissionRequest** — replace the tool input wholesale with `updated_input` (same tool schema), allowing it |
 
 `evt.command_line.q` predicates for compound commands:
 

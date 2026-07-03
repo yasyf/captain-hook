@@ -20,6 +20,7 @@ These match the event being processed right now.
 | `ToolInput(**fields)` | Every named top-level tool-input field matches (any tool; scalars coerced to text) | Regex per field (multiline) | `ToolInput(model=r"(?i)\bhaiku\b")` |
 | `WorkflowScript(pattern=None, **opts)` | A `Workflow` tool's inline `script` (or `script_path` file): `pattern` searches the raw source, each opt key's regex matches a value pinned for that `agent()` opt; all AND | Regex | `WorkflowScript(model="haiku")` |
 | `Agent(*names)` | The subagent type is one of `names` | Exact names; a `\|`-joined string still works | `Agent("cleanup", "refactor")` |
+| `FromSubagent()` | The event originates from a subagent or teammate, i.e. the payload carries an `agent_id`; matches the event's *origin*, where `Agent` matches its *type* | — | `FromSubagent()` |
 | `TestFile(project_only=True)` | The file is a test file (`test_*.py`, `conftest.py`, or any `.py` under a `tests/` directory) | — | `TestFile()` |
 | `SourceEdits(lang="py", include_tests=False, paths=None)` | The event edits/writes a source file in `lang` (and not a test, unless `include_tests`) | Language glob | `SourceEdits(lang="ts", paths="src/**")` |
 
@@ -38,6 +39,7 @@ These check what happened earlier in the session, from the transcript.
 | `UsedSkill(*names, subagents=True)` | A skill named one of `names` was invoked (a bare name also matches `plugin:name`) | Exact names; a `\|`-joined string still works | `UsedSkill("codex")` |
 | `InPlanMode()` | The agent is in plan mode | — | `InPlanMode()` |
 | `Waiting()` | A background or async tool is still pending. Durable `Workflow` and async sub-agent launches count across turns until their completion notification lands | — | `Waiting()` |
+| `SkipPermissions()` | The session's `claude` process was launched with `--dangerously-skip-permissions` **or** `--allow-dangerously-skip-permissions`, found by walking the process tree to the nearest `claude` ancestor. Either spelling means the user made bypass *available* at launch, which counts as consent even while the active `permission_mode` is something else, such as `plan` | — | `SkipPermissions()` |
 
 `subagents=True` also searches subagent transcripts; `TouchedFile` defaults to `False` (the
 main agent's edits only).

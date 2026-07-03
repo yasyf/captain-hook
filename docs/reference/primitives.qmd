@@ -20,9 +20,14 @@ The [Guide](../guide/index.qmd) how-tos teach which one to reach for.
 | `llm_nudge` | warn | `PostToolUse` | SKIP | judgment |
 | `prompt_check` | warn/block | called in a handler | SKIP | handler |
 | `workflow` | block | `SubagentStop` | ✓ | checklist |
+| `approve` | allow | `PermissionRequest` | ✓ | permission dialog |
+| `deny` | block (deny) | `PermissionRequest` | ✓ | permission dialog |
+| `llm_approve` | allow | `PermissionRequest` | ✓ | permission judgment |
 
 Deterministic primitives carry inline `tests={...}`; LLM-backed ones show `SKIP` under
-`uvx capt-hook test` because they need a live model. `nudge` defaults to `PreToolUse` with a `when=`
+`uvx capt-hook test` because they need a live model. The exception is `llm_approve`: its
+stubbed judge always answers `safe=False`, so its inline tests deterministically expect
+`Ask()`. `nudge` defaults to `PreToolUse` with a `when=`
 predicate, `PostToolUse` with `signals=`, and `Stop | SubagentStop` when `block=True`.
 [Deterministic primitives](../guide/primitives.qmd) and [LLM Hooks](../guide/llm-hooks.qmd) show
 which one to reach for, with worked examples.
@@ -112,6 +117,40 @@ workflow(*, label: str, marker: str, steps: list[Step], artifacts: list[Artifact
 `SubagentStart` hook. `Step` and `Artifact` are keyword-only dataclasses; `text_matches(pattern)`
 builds a transcript check for `Step.check`.
 
+## Permissions
+
+```python
+approve(label: str, *, only_if: Sequence[TCondition] = (), skip_if: Sequence[TCondition] = (),
+        tests: InlineTests | None = None) -> None
+
+deny(reason: str, *, only_if: Sequence[TCondition] = (), skip_if: Sequence[TCondition] = (),
+     tests: InlineTests | None = None) -> None
+
+llm_approve(label: str, *, rubric: str | None = None, only_if: Sequence[TCondition] = (),
+            skip_if: Sequence[TCondition] = (), model: TModel = "small",
+            tests: InlineTests | None = None) -> None
+```
+
+All three register on `PermissionRequest`, which fires when a permission dialog would be
+shown, and none carries a fire cap, so a matching dialog is always answered. `approve`
+answers with *allow*, so the tool runs and the user never sees the dialog. `deny` answers
+with *deny*, surfacing `reason` as the message. `llm_approve` consults an LLM safety judge
+whose rubric is seeded from `claude auto-mode defaults` plus your `rubric` text; the seeded
+rules are cached globally, keyed by `claude --version`, and a static built-in rubric stands
+in when the binary or the verb is unavailable. A `safe` verdict allows, and an unsafe
+verdict or any LLM failure returns `None` so the real dialog shows; it never auto-denies.
+
+::: {.callout-warning title="Scope these with conditions"}
+An unconditioned `approve()` answers every dialog, the equivalent of a permanent
+`--dangerously-skip-permissions`. An unconditioned `deny()` rejects every dialog, bricking
+every prompting tool. Always narrow with `only_if`/`skip_if`.
+:::
+
+Among `PermissionRequest` hooks, the first decisive result in registration order wins:
+local hooks load alphabetically before packs, so your own `deny` beats a pack's `approve`,
+but within one hooks directory `a_allow.py` shadows `z_guards.py`. `skip_if` on the
+approving hook is the supported way to carve out exceptions.
+
 ## Inline test inputs
 
 Each deterministic primitive accepts `tests={Input(...): expectation}`. `Input` models one
@@ -124,10 +163,18 @@ event payload; set the fields the target event reads. All fields default to `Non
 | `content` | `str` | New file content for `Edit`/`Write` |
 | `old` | `str` | Pre-edit content for `Edit`/`diff_lint` |
 | `tool` | `str` | Tool name when no condition pins it |
-| `prompt` | `str` | `UserPromptSubmit` text |
-| `agent_type` | `str` | Subagent type |
+| `tool_input` | `dict` | Verbatim raw tool input; an escape hatch that wins over the input synthesized from the other fields |
+| `prompt` | `str` | An Agent/Task call's prompt, or `UserPromptSubmit` text |
+| `script` | `str` | A `Workflow` tool's script source; synthesizes a Workflow call |
+| `agent_type` | `str` | Subagent type, an Agent/Task call's `subagent_type` |
+| `agent_id` | `str` | Subagent/teammate id; presence makes `evt.is_subagent` and `FromSubagent()` true |
+| `model` | `str` | An Agent/Task call's `model` input field |
+| `output` | `str` | The tool result surfaced to `PostToolUse` as `evt.tool_response` |
+| `error` | `str` | The failure text surfaced to `PostToolUseFailure` as `evt.error` |
 | `reason` | `str` | `SessionEnd` reason |
+| `source` | `str` | `SessionStart` source, one of `startup`, `resume`, `clear`, `compact` |
 | `permission_mode` | `str` | Plan-mode and permission gating |
+| `skip_permissions` | `bool` | Pre-seeds `evt.skip_permissions`, replacing the process-tree walk; `None` keeps the real walk |
 | `offset` | `int` | `Read` call offset |
 | `limit` | `int` | `Read` call limit |
 | `transcript` | `Path \| TranscriptFixture \| list[dict]` | Session history for transcript conditions |
@@ -141,9 +188,11 @@ it.
 | Expectation | Asserts | Optional `pattern` |
 |-------------|---------|--------------------|
 | `Allow()` | The hook returned `None` or action `allow` | none |
+| `Allow(explicit=True)` | The hook returned an actual allow result; `None` fails, so a `PermissionRequest` hook must have answered the dialog itself | none |
 | `Block(pattern=...)` | The hook blocked | Regex against the block message |
 | `Warn(pattern=...)` | The hook warned | Regex against the warning message |
 | `Rewrite(pattern=...)` | The hook rewrote the command | Substring of `updated_input["command"]` |
+| `Ask()` | The hook returned no result (`None`); for `PermissionRequest`, the dialog shows, and a warn fails | none |
 
 ## Verdict types
 
@@ -152,6 +201,7 @@ it.
 | `GateVerdict` | `block: bool`, `reasoning: str` | `llm_gate` |
 | `NudgeVerdict` | `fire: bool`, `reasoning: str` | `llm_nudge` |
 | `PromptCheckVerdict` | `action: "ok" \| "warning" \| "block"`, `reason: str` | `prompt_check` |
+| `SafetyVerdict` | `safe: bool`, `reasoning: str` | `llm_approve` |
 
 ## Prompt builder
 

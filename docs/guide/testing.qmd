@@ -41,14 +41,14 @@ uvx capt-hook test
 Each test prints one line, then a summary:
 
 ```
-  PASS  declarative_1:Input(command='git stash', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, reason=None, permission_mode=None, offset=None, limit=None, transcript=None, tasks=None)
-  PASS  declarative_1:Input(command='git status', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, reason=None, permission_mode=None, offset=None, limit=None, transcript=None, tasks=None)
+  PASS  declarative_1:Input(command='git stash')
+  PASS  declarative_1:Input(command='git status')
 
 2 tests: 2 passed, 0 failed, 0 errors, 0 skipped
 ```
 
 The id on each line is the hook's registered name, then a colon and the repr of the
-`Input` that produced the case. Declarative primitives such as `block_command` register as
+`Input` that produced the case; the repr prints only the fields you set. Declarative primitives such as `block_command` register as
 `declarative_N` in definition order. The command exits `0` when every test passes and `1`
 when any test fails or errors.
 
@@ -64,15 +64,16 @@ Input(command="git stash"): Block(pattern="mercurial"),
 Run `uvx capt-hook test` again:
 
 ```
-  FAIL  declarative_1:Input(command='git stash', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, reason=None, permission_mode=None, offset=None, limit=None, transcript=None, tasks=None): [declarative_1] Block message doesn't match 'mercurial'
-  PASS  declarative_1:Input(command='git status', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, reason=None, permission_mode=None, offset=None, limit=None, transcript=None, tasks=None)
+  FAIL  declarative_1:Input(command='git stash'): [declarative_1] Block message 'BLOCKED: Use jj instead of git stash.' doesn't match 'mercurial'
+  PASS  declarative_1:Input(command='git status')
 
 2 tests: 1 passed, 1 failed, 0 errors, 0 skipped
 ```
 
-The `FAIL` line names the test and the assertion that broke. The hook still blocked, so the
-outcome was right, but the message read `BLOCKED: Use jj instead of git stash.` and the
-regex `mercurial` did not appear in it. Restore the pattern to `jj` and the run goes green.
+The `FAIL` line names the test, quotes the rendered message, and shows the pattern that
+missed. The hook still blocked, so the outcome was right, but `mercurial` does not appear
+in `BLOCKED: Use jj instead of git stash.` Restore the pattern to `jj` and the run goes
+green.
 
 ## What `Block(pattern=...)` matches
 
@@ -87,8 +88,11 @@ Input(command="git stash"): Block(),   # any block message passes
 ```
 
 `Warn(pattern=...)` works the same way against a warning message. `Allow()` takes no
-pattern; it asserts the hook returned nothing or an explicit allow. The full result-type
-contract lives in the [Primitives reference](../reference/primitives.qmd).
+pattern; it asserts the hook returned nothing or an explicit allow. Two expectations
+sharpen that for `PermissionRequest` hooks, where "returned nothing" and "answered the
+dialog" are different outcomes. `Allow(explicit=True)` requires an actual allow result, so
+`None` fails, and `Ask()` requires no result at all, meaning the dialog shows. The full
+result-type contract lives in the [Primitives reference](../reference/primitives.qmd).
 
 ## Input fields {#input-fields}
 
@@ -166,8 +170,8 @@ jobs:
 single line you can pipe into `jq` or read in another tool:
 
 ```json
-{"id": "declarative_1:Input(command='git stash', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, reason=None, permission_mode=None, offset=None, limit=None, transcript=None, tasks=None)", "status": "pass", "expected": "block", "reason": ""}
-{"id": "declarative_1:Input(command='git status', file=None, content=None, old=None, tool=None, prompt=None, agent_type=None, reason=None, permission_mode=None, offset=None, limit=None, transcript=None, tasks=None)", "status": "pass", "expected": "allow", "reason": ""}
+{"id": "declarative_1:Input(command='git stash')", "status": "pass", "expected": "block", "reason": ""}
+{"id": "declarative_1:Input(command='git status')", "status": "pass", "expected": "allow", "reason": ""}
 ```
 
 The fields are the test `id`, its `status` of `pass`, `fail`, `error`, or `skip`, the

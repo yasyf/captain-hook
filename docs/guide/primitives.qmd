@@ -17,6 +17,9 @@ Start from what you want to enforce.
 - Check a Python edit against a rule, go to [`lint`](#lint).
 - Flag only what an edit changed, go to [`diff_lint`](#diff_lint).
 
+To answer a permission dialog before the user sees it, go to [`approve`](#approve);
+to refuse one outright, go to [`deny`](#deny).
+
 Each primitive accepts `tests={...}` mapping an `Input` to a `Block`, `Warn`, or
 `Allow` expectation. Run them with `uvx capt-hook test`. The
 [primitives reference](../reference/primitives.qmd) holds every full signature.
@@ -261,6 +264,55 @@ A `to` callable that returns `None` blocks with `block`; otherwise it returns th
 string, rewritten or unchanged to leave it alone. `note` may itself be a callable computed
 from the event when the conditional form needs a per-command message. Passing both
 `(pattern, replace)` and `to=`, or neither, raises `TypeError`.
+
+## approve {#approve}
+
+Answer a permission dialog with *allow* before the user sees it. The hook fires on
+`PermissionRequest`, the event Claude Code raises when a dialog would appear, and carries
+no fire cap, so every matching dialog is answered. In the tests, `Allow(explicit=True)`
+asserts the hook actually answered the dialog, and `Ask()` asserts it stayed out of the
+way so the dialog shows.
+
+```python
+from captain_hook import Allow, Ask, FromSubagent, Input, SkipPermissions, Tool, approve
+
+approve(
+    "teammate bash under skip-permissions",
+    only_if=[Tool("Bash"), FromSubagent(), SkipPermissions()],
+    tests={
+        Input(command="ls -la", agent_id="tm1", skip_permissions=True): Allow(explicit=True),
+        Input(command="ls -la", skip_permissions=True): Ask(),
+    },
+)
+```
+
+::: {.callout-warning title="An unconditioned approve is a permanent bypass"}
+`approve()` with no conditions answers every dialog, the equivalent of running with
+`--dangerously-skip-permissions` forever. Always scope it with `only_if`/`skip_if`.
+:::
+
+## deny {#deny}
+
+Answer a permission dialog with *deny*. The first argument is both the hook's label and
+the message the user sees. Like `approve`, it fires on every matching `PermissionRequest`
+with no cap.
+
+```python
+from captain_hook import Ask, Block, Command, FromSubagent, Input, deny
+
+deny(
+    "No force pushes from subagents",
+    only_if=[FromSubagent(), Command(r"push\s+--force")],
+    tests={
+        Input(command="git push --force origin main", agent_id="tm1"): Block(pattern="force"),
+        Input(command="git push origin main", agent_id="tm1"): Ask(),
+    },
+)
+```
+
+An unconditioned `deny()` rejects every dialog, which bricks every prompting tool, so
+scope it the same way. For the LLM-judged variant that approves only what a safety rubric
+clears, see [`llm_approve`](llm-hooks.qmd#llm_approve).
 
 ---
 

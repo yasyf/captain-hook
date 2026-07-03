@@ -79,6 +79,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [6.1.0] - 2026-07-03
 
 ### Added
+- `Event.PermissionRequest` + `PermissionRequestEvent`: fires when a permission dialog would
+  be shown; a hook's allow/block/rewrite answers the dialog (block maps to a deny with the
+  message shown to the user), while `None` and warn fall through so the dialog shows. The
+  event carries the full tool payload plus `permission_suggestions` and the asking teammate's
+  `agent_type`; the `rewrite*` helpers moved to a new `ToolRewriteEvent` base shared with
+  `PreToolUseEvent`, and every event gained a `skip_permissions` accessor (a process-tree walk
+  for `--dangerously-skip-permissions` at launch).
+- Permission primitives `approve`, `deny`, and `llm_approve` (+ `SafetyVerdict`): answer
+  matching `PermissionRequest` dialogs with allow or deny, with no fire cap. `llm_approve` is
+  an LLM safety judge replicating Claude Code's non-invocable auto-mode classifier, with a
+  rubric seeded from `claude auto-mode defaults`, cached globally and keyed by
+  `claude --version`, plus a static fallback; an unsafe verdict or LLM failure falls through
+  to the real dialog, never an auto-deny.
+- Conditions `FromSubagent()`, matching when the event payload carries an `agent_id` (a
+  subagent/teammate origin, distinct from `Agent`'s type match), and `SkipPermissions()`,
+  matching when the nearest `claude` ancestor process was launched with
+  `--dangerously-skip-permissions` or `--allow-dangerously-skip-permissions`; bypass
+  availability counts as consent.
+- Testing surface for permission hooks: `Input` gained `agent_id` and `skip_permissions`
+  seams, `Allow(explicit=True)` rejects a `None` result, and the new `Ask()` expectation
+  asserts the hook returned no result (the dialog shows).
+- Builtin pack `fixes` (0.1.0) for upstream Claude Code workarounds, seeded with a
+  `teammate_permissions` hook for anthropics/claude-code#73176: teammates don't inherit the
+  leader's `--dangerously-skip-permissions` consent, so their Bash calls pop dialogs in the
+  lead UI. The hook auto-approves teammate Bash only when the process tree shows the flag,
+  with a denylist covering `rm`, `sudo`, `git reset`, force pushes, and pipe-to-shell that
+  falls back to the dialog.
 - General-pack docs-freshness Stop gate (pack 0.6.0): after source edits, an `llm_gate` reads
   the uncommitted diff before the agent stops and blocks once when a user-facing change — a new
   flag, a renamed command, changed output, a new feature — isn't reflected in README.md or

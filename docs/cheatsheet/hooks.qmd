@@ -31,6 +31,13 @@ hook(Event.PreToolUse, only_if=[Tool("Bash"), Command(r"curl.*\|.*sh")],
 rewrite_command(r"^pip install ", replace="uv pip install ")
 ```
 
+## 🔑 Answer permission dialogs
+
+**approve** — auto-answer a permission dialog for a scoped, consented case
+```python
+approve("teammate bash", only_if=[Tool("Bash"), FromSubagent(), SkipPermissions()])
+```
+
 ## 💬 Nudge in the moment
 
 **nudge** — advisory message on an edit or stop, no block

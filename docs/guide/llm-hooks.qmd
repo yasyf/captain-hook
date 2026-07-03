@@ -104,6 +104,24 @@ def review_test_quality(evt):
 
 `Prompt.from_template` raises `KeyError` when a placeholder has no matching keyword, so a typo fails loud instead of leaking braces into the prompt. The full `Prompt` builder API lives in [the primitives reference](../reference/primitives.qmd).
 
+## Auto-answer permission dialogs {#llm_approve}
+
+`llm_approve` is the fourth LLM primitive, and it answers whether a pending tool call is safe to run without asking. It fires on `PermissionRequest`, the event Claude Code raises when a permission dialog would appear, and sends the pending tool call to a safety judge. A `safe` verdict answers the dialog with *allow*, so the tool runs silently. An unsafe verdict, or any LLM failure, returns nothing, and the real dialog shows; it never auto-denies on a model's say-so.
+
+```python
+from captain_hook import FromSubagent, SkipPermissions, Tool, llm_approve
+
+llm_approve(
+    "safe teammate commands",
+    rubric="Approve read-only inspection. Never approve anything that writes outside the repo.",
+    only_if=[Tool("Bash"), FromSubagent(), SkipPermissions()],
+)
+```
+
+The judge's rubric is seeded from `claude auto-mode defaults`, the rule set behind Claude Code's own auto-approve mode. That native classifier isn't programmatically invocable, so captain-hook replicates it. The seeded rules are cached globally and refreshed when `claude --version` changes; when the binary or the verb is unavailable, a static built-in rubric stands in. Your `rubric` text appends to whichever base is used.
+
+Where `llm_gate` and `llm_nudge` carry fire caps and a per-turn guard, `llm_approve` has neither, so a matching dialog is always judged. That makes `only_if`/`skip_if` the whole cost story. Every matching ask is an LLM round-trip and a few seconds of latency before the dialog either disappears or shows. Scope it to the tools and origins you actually want silenced, and put the cheap deterministic conditions first. For dialogs a regex can already classify, prefer the free [`approve`/`deny`](primitives.qmd#approve) pair.
+
 ## Attach the working-tree diff
 
 A review hook that reads only the transcript sees scattered `Edit` blocks, never the cumulative change, and never edits made outside the agent. Pass `diff=True` to attach a compact diff of the uncommitted change as a `<diff>` block, so the model reviews the real change:
