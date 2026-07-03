@@ -203,12 +203,10 @@ class TestExitZeroInvariant:
             time.sleep(0.2)
         pytest.fail(f"detached child never finished: {log.read_text()!r}")
 
-    def test_non_interactive_reason_exits_zero_without_spawning(self, tmp_path: Path) -> None:
+    def test_sdk_entrypoint_exits_zero_without_spawning(self, tmp_path: Path) -> None:
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
-        payload = json.dumps(
-            {"transcript_path": str(transcript), "cwd": str(tmp_path), "reason": "prompt_input_exit"}
-        ).encode()
-        proc = run_review(payload, cwd=tmp_path)
+        payload = json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path), "reason": "other"}).encode()
+        proc = run_review(payload, env={"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}, cwd=tmp_path)
         assert proc.returncode == 0
         assert proc.stdout == b""
         assert not (state_dir() / "review").exists()
@@ -264,16 +262,29 @@ class TestGuardAndSpawn:
         guard_and_spawn(json.dumps({"transcript_path": str(transcript)}).encode())
         assert popen_calls == []
 
-    def test_non_interactive_reason_skips_spawn(
-        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
+    @pytest.mark.parametrize(
+        ("entrypoint", "spawns"),
+        [
+            pytest.param("cli", True, id="interactive-cli"),
+            pytest.param("vscode", True, id="interactive-vscode"),
+            pytest.param("sdk-cli", False, id="headless-sdk-cli"),
+            pytest.param("sdk-py", False, id="headless-sdk-py"),
+        ],
+    )
+    def test_entrypoint_gates_spawn(
+        self,
+        popen_calls: list[tuple[list[str], dict[str, Any]]],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        entrypoint: str,
+        spawns: bool,
     ) -> None:
+        monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", entrypoint)
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
         guard_and_spawn(
-            json.dumps(
-                {"transcript_path": str(transcript), "cwd": str(tmp_path), "reason": "prompt_input_exit"}
-            ).encode()
+            json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path), "reason": "other"}).encode()
         )
-        assert popen_calls == []
+        assert bool(popen_calls) is spawns
 
 
 class TestJudgePass:

@@ -57,6 +57,11 @@ via uvx — so back-compat shims were not kept where a clean signature reads bet
   assertion instead of passing vacuously.
 - `Command` matches the raw command line, so a pattern spanning pipes/operators/redirects
   (`curl … | sh`) fires. `lint()` honors its `trigger=` and `lang` in string mode.
+- The SessionEnd reviewer now fires on interactive session ends. It gated on
+  `reason == "prompt_input_exit"`, but that reason is the interactive quit (Ctrl+C/Ctrl+D at
+  the prompt) — a headless `claude -p` run emits `reason: "other"` — so the guard was inverted
+  and never ran for real sessions. It now skips headless/SDK runs by `CLAUDE_CODE_ENTRYPOINT`
+  (the `sdk-*` family) instead.
 
 ## [4.5.0] - 2026-07-02
 

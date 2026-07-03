@@ -33,6 +33,9 @@ def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mo
     # per-test override (inherited by run_cli subprocesses).
     monkeypatch.setenv("CLAUDE_HOOKS_STATE_DIR", str(tmp_path_factory.mktemp("hook-state")))
     monkeypatch.setenv("CAPT_HOOK_DECISIONS_DB", str(tmp_path_factory.mktemp("decisions") / "decisions.db"))
+    # The SessionEnd reviewer skips headless entrypoints (sdk-*); scrub it so tests don't
+    # inherit the ambient CLAUDE_CODE_ENTRYPOINT of a pytest run launched inside claude.
+    monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
     open_decision_log.cache_clear()
     reset()
     yield

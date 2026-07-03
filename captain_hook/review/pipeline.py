@@ -33,7 +33,6 @@ if TYPE_CHECKING:
     from captain_hook.review.settings import ReviewSettings
 
 SPAWNED_ENV = "CAPT_HOOK_SPAWNED"
-NON_INTERACTIVE_REASONS = frozenset({"prompt_input_exit"})
 BRAIN_TIER: TModel = "medium"
 BRAIN_ALLOWED_TOOLS = ("Read", "Grep", "Glob", "Write", "Edit", "Bash", "Skill", "Agent")
 
@@ -96,16 +95,20 @@ def guard_and_spawn(raw: bytes) -> None:
     """Parses the SessionEnd hook payload and detaches the reviewer child.
 
     Every path returns normally so the wired hook always exits 0: a set
-    ``CAPT_HOOK_SPAWNED`` (the reviewer's own spawned sessions), malformed
-    stdin, a missing transcript, a non-interactive session end (a headless
-    ``-p`` run, whose ``reason`` is in :data:`NON_INTERACTIVE_REASONS`), and a
-    failed spawn all fall through silently. The child runs with
-    ``CAPT_HOOK_SPAWNED=1`` and its output appended to :func:`review_log_path`.
+    ``CAPT_HOOK_SPAWNED`` (the reviewer's own spawned sessions), a headless
+    ``claude -p`` / SDK session (``CLAUDE_CODE_ENTRYPOINT`` in the ``sdk-*``
+    family; an interactive quit is ``cli``), malformed stdin, a missing
+    transcript, and a failed spawn all fall through silently. The child runs
+    with ``CAPT_HOOK_SPAWNED=1`` and its output appended to
+    :func:`review_log_path`.
 
     Args:
         raw: The hook's stdin bytes, holding the SessionEnd JSON payload.
     """
     if os.environ.get(SPAWNED_ENV):
+        return
+    # headless `claude -p` / SDK run — not an interactive session
+    if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
         return
     if (payload := parse_payload(raw)) is None:
         return
@@ -117,8 +120,6 @@ def guard_and_spawn(raw: bytes) -> None:
     except ValueError:
         return
     if missing:
-        return
-    if payload["reason"] in NON_INTERACTIVE_REASONS:
         return
     cwd = payload.get("cwd")
     try:
