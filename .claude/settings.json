@@ -82,6 +82,16 @@
         ]
       }
     ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run PermissionRequest"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
