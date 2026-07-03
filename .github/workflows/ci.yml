@@ -71,6 +71,7 @@ jobs:
           unzip -l dist/*.whl | grep -q 'captain_hook/.claude-plugin/plugin.json'
           unzip -l dist/*.whl | grep -q 'captain_hook/packs/general/capt-hook.toml'
           unzip -l dist/*.whl | grep -q 'captain_hook/packs/python/capt-hook.toml'
+          unzip -l dist/*.whl | grep -q 'captain_hook/packs/fixes/capt-hook.toml'
           unzip -l dist/*.whl | grep -qE 'captain_hook/packs/general/[^/]+\.py'
           ! unzip -l dist/*.whl | grep -q 'stress/'
           ! tar tzf dist/*.tar.gz | grep -q '/stress/'
