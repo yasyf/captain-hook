@@ -24,6 +24,7 @@ nudge(
     skip_if=[
         UsedSkill("llm-prompts"),
         UsedSkill("slop-cop-check", "slop-cop-prose"),
+        Content(r"\.count_tokens\(", project_only=False),
     ],
     tests={
         Input(
@@ -31,5 +32,14 @@ nudge(
         ): Warn(),
         Input(file="prompt.md", content="<instruction>\nSummarize the document.\n</instruction>\n"): Warn(),
         Input(file="util.py", content="def add(a, b):\n    return a + b\n"): Allow(),
+        Input(
+            file="tokens.py",
+            content=(
+                "def api_count(text: str, model: str) -> int:\n"
+                "    resp = client.messages.count_tokens(\n"
+                '        model=model,\n        messages=[{"role": "user", "content": text or " "}],\n'
+                "    )\n    return int(resp.input_tokens)\n"
+            ),
+        ): Allow(),
     },
 )
