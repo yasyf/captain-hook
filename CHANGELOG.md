@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-07-03
+
 ### Changed
 - General-pack prose-routing hooks are judge-confirmed (pack 0.7.0). Both the Agent/Task
   prose block and the workflow-script prose nudge keep their regex conditions as a recall
