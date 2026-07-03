@@ -107,6 +107,8 @@ def make_tool_input(
     limit: int | None = None,
     agent_type: str | None = None,
     model: str | None = None,
+    prompt: str | None = None,
+    script: str | None = None,
     tool_input: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if tool_input is not None:
@@ -123,9 +125,33 @@ def make_tool_input(
         case "Read":
             return omit_none({"file_path": file or "", "limit": limit, "offset": offset})
         case "Agent" | "Task":
-            return omit_none({"prompt": content or "", "subagent_type": agent_type, "model": model})
+            return omit_none({"prompt": prompt or content or "", "subagent_type": agent_type, "model": model})
+        case "Workflow":
+            return omit_none({"script": script})
         case _:
             return omit_none({"command": command, "file_path": file, "new_string": content, "old_string": old})
+
+
+def infer_tool(inp: Input) -> str:
+    """Infer the tool for a tool event from which ``Input`` fields are populated.
+
+    Used only when neither ``Input.tool`` nor a ``Tool`` condition pins it — so a field the
+    author set (``content``, ``script``, …) is never silently dropped onto a default ``Bash``
+    input. Falls back to ``Bash`` when no tool-shaping field is set (nothing to drop).
+    """
+    if inp.script is not None:
+        return "Workflow"
+    if inp.old is not None:
+        return "Edit"
+    if inp.content is not None:
+        return "Write"
+    if inp.prompt is not None or inp.model is not None or inp.agent_type is not None:
+        return "Task"
+    if inp.offset is not None or inp.limit is not None:
+        return "Read"
+    if inp.command is not None:
+        return "Bash"
+    return "Read" if inp.file is not None else "Bash"
 
 
 def mock_tool_event(
@@ -140,6 +166,10 @@ def mock_tool_event(
     limit: int | None = None,
     agent_type: str | None = None,
     model: str | None = None,
+    prompt: str | None = None,
+    script: str | None = None,
+    output: str | None = None,
+    error: str | None = None,
     tool_input: dict[str, Any] | None = None,
     permission_mode: str | None = None,
     transcript: Session | None = None,
@@ -153,11 +183,13 @@ def mock_tool_event(
             _raw={
                 "tool_name": tool,
                 "tool_input": make_tool_input(
-                    tool, command, file, content, old, offset, limit, agent_type, model, tool_input
+                    tool, command, file, content, old, offset, limit, agent_type, model, prompt, script, tool_input
                 ),
             }
             | ({"agent_type": agent_type} if agent_type else {})
-            | ({"permission_mode": permission_mode} if permission_mode else {}),
+            | ({"permission_mode": permission_mode} if permission_mode else {})
+            | ({"tool_response": output} if output is not None else {})
+            | ({"error": error} if error is not None else {}),
             ctx=build_context(transcript, transcript_path, session_dir, project_root),
         ),
     )
@@ -328,7 +360,7 @@ def input_to_event(
         case _:
             file = materialize_file(inp.file) if isinstance(inp.file, FileFixture) else inp.file
             evt = mock_tool_event(
-                tool=inp.tool or spec_tool or "Bash",
+                tool=inp.tool or spec_tool or infer_tool(inp),
                 event=ev,
                 command=inp.command,
                 file=file,
@@ -338,6 +370,10 @@ def input_to_event(
                 limit=inp.limit,
                 agent_type=inp.agent_type,
                 model=inp.model,
+                prompt=inp.prompt,
+                script=inp.script,
+                output=inp.output,
+                error=inp.error,
                 tool_input=inp.tool_input,
                 **ctx_kw,
             )
@@ -403,17 +439,21 @@ def matches_expected(result: HookResult | None, expected: Block | Warn | Allow |
             return (
                 result is not None
                 and result.action == "block"
-                and (not pat or not result.message or bool(re.search(pat, result.message)))
+                and (not pat or bool(result.message and re.search(pat, result.message)))
             )
         case Warn(pattern=pat):
             return (
                 result is not None
                 and result.action == "warn"
-                and (not pat or not result.message or bool(re.search(pat, result.message)))
+                and (not pat or bool(result.message and re.search(pat, result.message)))
             )
-        case Rewrite(pattern=pat):
-            command = (result.updated_input or {}).get("command", "") if result else ""
-            return result is not None and result.action == "rewrite" and (not pat or pat in command)
+        case Rewrite(pattern=pat, fields=fields):
+            if result is None or result.action != "rewrite":
+                return False
+            ui = result.updated_input or {}
+            return (not pat or pat in str(ui.get("command", ""))) and all(
+                val in str(ui.get(key, "")) for key, val in fields
+            )
 
 
 def assert_result(
@@ -427,17 +467,25 @@ def assert_result(
             assert result is None or result.action == "allow", f"{prefix}Expected Allow, got {result}"
         case Block(pattern=pat):
             assert result is not None and result.action == "block", f"{prefix}Expected Block, got {result}"
-            if pat and result.message:
-                assert re.search(pat, result.message), f"{prefix}Block message doesn't match '{pat}'"
+            if pat:
+                assert result.message and re.search(pat, result.message), (
+                    f"{prefix}Block message {result.message!r} doesn't match '{pat}'"
+                )
         case Warn(pattern=pat):
             assert result is not None and result.action == "warn", f"{prefix}Expected Warn, got {result}"
-            if pat and result.message:
-                assert re.search(pat, result.message), f"{prefix}Warn message doesn't match '{pat}'"
-        case Rewrite(pattern=pat):
-            assert result is not None and result.action == "rewrite", f"{prefix}Expected Rewrite, got {result}"
             if pat:
-                command = (result.updated_input or {}).get("command", "")
+                assert result.message and re.search(pat, result.message), (
+                    f"{prefix}Warn message {result.message!r} doesn't match '{pat}'"
+                )
+        case Rewrite(pattern=pat, fields=fields):
+            assert result is not None and result.action == "rewrite", f"{prefix}Expected Rewrite, got {result}"
+            ui = result.updated_input or {}
+            if pat:
+                command = str(ui.get("command", ""))
                 assert pat in command, f"{prefix}Rewrite command {command!r} doesn't contain '{pat}'"
+            for key, val in fields:
+                actual = str(ui.get(key, ""))
+                assert val in actual, f"{prefix}Rewrite {key}={actual!r} doesn't contain '{val}'"
 
 
 def stub_call_llm(

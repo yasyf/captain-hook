@@ -402,10 +402,23 @@ def expected_kinds_from_state() -> dict[str, str]:
 
 
 def run_tests(json_output: bool = False) -> None:
+    from captain_hook.app import _state
     from captain_hook.testing.helpers import run_inline_tests
+
+    load_errors = list(_state.load_errors)
+    for source, exc in load_errors:
+        line = f"{type(exc).__name__}: {exc}"
+        if json_output:
+            print(json.dumps({"id": source, "status": "load_error", "reason": line}))
+        else:
+            print(f"  ERROR {source} failed to import: {line}")
 
     results = run_inline_tests()
     if not results:
+        if load_errors:
+            if not json_output:
+                print(f"\n{len(load_errors)} hook file(s) failed to import.")
+            sys.exit(1)
         if json_output:
             print(json.dumps({"status": "empty", "reason": "no inline tests"}))
         else:
@@ -448,8 +461,11 @@ def run_tests(json_output: bool = False) -> None:
 
     if not json_output:
         total = passed + failed + errors + skipped
-        print(f"\n{total} tests: {passed} passed, {failed} failed, {errors} errors, {skipped} skipped")
-    if failed or errors:
+        summary = f"\n{total} tests: {passed} passed, {failed} failed, {errors} errors, {skipped} skipped"
+        if load_errors:
+            summary += f", {len(load_errors)} import errors"
+        print(summary)
+    if failed or errors or load_errors:
         sys.exit(1)
 
 

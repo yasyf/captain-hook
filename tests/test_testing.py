@@ -16,7 +16,7 @@ from captain_hook.events import (
     UserPromptSubmitEvent,
 )
 from captain_hook.testing.types import Allow, Block, Rewrite, Warn
-from captain_hook.types import Action, Event, HookResult, Tool
+from captain_hook.types import Action, Event, FilePath, HookResult, Tool
 from tests.helpers import assert_result, mock_event
 
 
@@ -537,3 +537,104 @@ class TestRunInlineTests:
         results = run_inline_tests()
         assert len(results) == 2
         assert all(r[2] for r in results), f"Failed: {results}"
+
+
+class TestInputRepr:
+    def test_repr_shows_only_non_none_fields(self):
+        from captain_hook.testing.types import Input
+
+        assert repr(Input(command="git stash")) == "Input(command='git stash')"
+        # Fields render in declaration order (prompt precedes model), regardless of kwarg order.
+        assert repr(Input(model="haiku", prompt="p")) == "Input(prompt='p', model='haiku')"
+        assert repr(Input()) == "Input()"
+
+
+class TestInferTool:
+    @pytest.mark.parametrize(
+        ("inp_kwargs", "expected_tool"),
+        [
+            pytest.param({"script": "log('x')"}, "Workflow", id="script_workflow"),
+            pytest.param({"old": "a", "content": "b"}, "Edit", id="old_edit"),
+            pytest.param({"content": "x"}, "Write", id="content_write"),
+            pytest.param({"model": "haiku"}, "Task", id="model_task"),
+            pytest.param({"prompt": "do it"}, "Task", id="prompt_task"),
+            pytest.param({"command": "ls"}, "Bash", id="command_bash"),
+            pytest.param({"file": "a.py"}, "Read", id="bare_file_read"),
+        ],
+    )
+    def test_infer_tool(self, inp_kwargs, expected_tool):
+        from captain_hook.testing.helpers import infer_tool
+        from captain_hook.testing.types import Input
+
+        assert infer_tool(Input(**inp_kwargs)) == expected_tool
+
+    def test_content_not_dropped_when_no_tool_condition(self):
+        # Regression: Input(file, content) with only a FilePath condition must synthesize a
+        # Write (not a bare Bash that drops file/content), so the Allow can actually fail.
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Block, Input
+
+        reset()
+        register_hook(
+            Event.PreToolUse,
+            "no secrets",
+            only_if=[FilePath("*.env")],
+            block=True,
+            tests={Input(file="x.env", content="API_KEY=x"): Block()},
+        )
+        results = run_inline_tests()
+        assert len(results) == 1 and results[0][2], f"Failed: {results}"
+
+
+class TestWorkflowSynthesis:
+    def test_script_synthesizes_workflow_call(self):
+        from captain_hook.testing.types import Input
+        from tests.helpers import input_to_event
+
+        evt = input_to_event(Event.PreToolUse, Input(script="log('probe')"))
+        assert evt.tool_name == "Workflow"
+        assert evt.input.raw["script"] == "log('probe')"
+
+
+class TestOutputError:
+    def test_output_populates_tool_response(self):
+        from captain_hook.testing.types import Input
+        from tests.helpers import input_to_event
+
+        evt = input_to_event(Event.PostToolUse, Input(command="uv run pytest", output="3 passed"))
+        assert evt.tool_response == "3 passed"
+
+    def test_error_populates_evt_error(self):
+        from captain_hook.testing.types import Input
+        from tests.helpers import input_to_event
+
+        evt = input_to_event(Event.PostToolUseFailure, Input(command="uv run pytest", error="ModuleNotFoundError"))
+        assert evt.error == "ModuleNotFoundError"
+
+
+class TestBlockPatternRequiresMessage:
+    def test_block_pattern_fails_when_no_message(self):
+        from captain_hook.testing.helpers import matches_expected
+        from captain_hook.testing.types import Block
+
+        result = HookResult(action=Action.block, message=None)
+        assert matches_expected(result, Block()) is True
+        assert matches_expected(result, Block(pattern="dangerous")) is False
+
+    def test_warn_pattern_fails_when_no_message(self):
+        from captain_hook.testing.helpers import matches_expected
+        from captain_hook.testing.types import Warn
+
+        result = HookResult(action=Action.warn, message=None)
+        assert matches_expected(result, Warn(pattern="careful")) is False
+
+
+class TestRewriteFieldsMatching:
+    def test_rewrite_field_kwargs_match_updated_input(self):
+        from captain_hook.testing.helpers import matches_expected
+        from captain_hook.testing.types import Rewrite
+
+        result = HookResult(action=Action.rewrite, updated_input={"model": "sonnet", "prompt": "p"})
+        assert matches_expected(result, Rewrite(model="sonnet")) is True
+        assert matches_expected(result, Rewrite(model="haiku")) is False
+        assert matches_expected(result, Rewrite(model="sonnet", prompt="p")) is True

@@ -105,6 +105,7 @@ class State:
     gitignore_patterns: list[str] = field(default_factory=list)
     settings: HooksSettings | None = None
     classifier: UserClassifier | None = None
+    load_errors: list[tuple[str, BaseException]] = field(default_factory=list)
     counter: int = field(default=0, repr=False)
 
 
@@ -114,6 +115,7 @@ _state = State()
 def reset() -> None:
     _state.hooks.clear()
     _state.gitignore_patterns.clear()
+    _state.load_errors.clear()
     _state.counter = 0
     _state.settings = None
     _state.classifier = None

@@ -28,10 +28,10 @@ hook(
     ),
     block=True,
     tests={
-        Input(model="haiku", content="implement the retry backoff in the client"): Block(),
-        Input(model="haiku", content="classify each file's language"): Allow(),
-        Input(content="implement the retry backoff in the client"): Allow(),
-        Input(model="sonnet", content="implement the retry backoff in the client"): Allow(),
+        Input(model="haiku", prompt="implement the retry backoff in the client"): Block(),
+        Input(model="haiku", prompt="classify each file's language"): Allow(),
+        Input(prompt="implement the retry backoff in the client"): Allow(),
+        Input(model="sonnet", prompt="implement the retry backoff in the client"): Allow(),
     },
 )
 
@@ -45,7 +45,7 @@ set_tool_input(
         "table in CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
     tests={
-        Input(agent_type="Explore"): Rewrite(),
+        Input(agent_type="Explore"): Rewrite(model="sonnet"),
         Input(agent_type="Explore", model="haiku"): Allow(),
         Input(agent_type="general-purpose"): Allow(),
     },
@@ -61,7 +61,7 @@ nudge(
     events=Event.PreToolUse,
     max_fires=2,
     tests={
-        Input(tool="Workflow", tool_input={"script": "steps:\n  - agent: reviewer\n    model: 'haiku'\n"}): Warn(),
-        Input(tool="Workflow", tool_input={"script": "steps:\n  - agent: reviewer\n    model: 'sonnet'\n"}): Allow(),
+        Input(script="steps:\n  - agent: reviewer\n    model: 'haiku'\n"): Warn(),
+        Input(script="steps:\n  - agent: reviewer\n    model: 'sonnet'\n"): Allow(),
     },
 )

@@ -55,16 +55,24 @@ class Allow:
     pass
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, init=False)
 class Rewrite:
-    """Inline test expectation: the hook should rewrite the command.
+    """Inline test expectation: the hook should rewrite the tool input.
 
-    Optional ``pattern`` is a substring matched against the rewritten command
+    ``pattern`` is a substring matched against the rewritten command
     (``updated_input["command"]``) — substring, not regex, so an absolute path
-    prefix in the rewritten command does not break the match.
+    prefix in the rewritten command does not break the match. Additional keyword
+    arguments substring-match against the named ``updated_input`` field, so an
+    Agent auto-upgrade can assert ``Rewrite(model="sonnet")``; all given fields
+    (and ``pattern``) must match.
     """
 
-    pattern: str | None = None
+    pattern: str | None
+    fields: tuple[tuple[str, str], ...]
+
+    def __init__(self, pattern: str | None = None, **fields: str) -> None:
+        object.__setattr__(self, "pattern", pattern)
+        object.__setattr__(self, "fields", tuple(sorted(fields.items())))
 
 
 @pyd_dataclass(
@@ -87,10 +95,13 @@ class Input:
         tool: Tool name when no condition pins it.
         tool_input: Verbatim raw tool-input mapping — an escape hatch that wins
             over the input synthesized from the other fields.
-        prompt: ``UserPromptSubmit`` text.
+        prompt: An Agent/Task call's prompt, or ``UserPromptSubmit`` text.
+        script: A ``Workflow`` tool's script source (synthesizes a Workflow call).
         agent_type: Subagent type for subagent events (an Agent/Task call's
             ``subagent_type``).
         model: Model for an Agent/Task call's ``model`` input field.
+        output: The tool result surfaced to ``PostToolUse`` as ``evt.tool_response``.
+        error: The failure text surfaced to ``PostToolUseFailure`` as ``evt.error``.
         reason: ``SessionEnd`` reason.
         permission_mode: Permission mode, e.g. ``"plan"`` for plan-mode gating.
         offset: ``Read`` call offset.
@@ -107,8 +118,11 @@ class Input:
     tool: str | None = None
     tool_input: dict[str, Any] | None = None
     prompt: str | None = None
+    script: str | None = None
     agent_type: str | None = None
     model: str | None = None
+    output: str | None = None
+    error: str | None = None
     reason: str | None = None
     permission_mode: str | None = None
     offset: int | None = None
@@ -122,6 +136,12 @@ class Input:
         cls, value: Path | TranscriptFixture | list[dict[str, Any]] | None
     ) -> Path | TranscriptFixture | None:
         return TranscriptFixture(value) if isinstance(value, list) else value
+
+    def __repr__(self) -> str:
+        set_fields = ", ".join(
+            f"{name}={value!r}" for name in self.__dataclass_fields__ if (value := getattr(self, name)) is not None
+        )
+        return f"Input({set_fields})"
 
 
 type InlineTests = dict[str | Input, Block | Warn | Allow | Rewrite]

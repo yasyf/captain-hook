@@ -71,11 +71,13 @@ def discover_hooks(hooks_dir: str | Path, state: State | None = None) -> None:
 
     for fqn in sorted(all_modules - {f"{pkg}.{CONF_MODULE}"}):
         # Broad catch is deliberate (see discover_pack): a single bad module must
-        # not abort discovery. Logged loudly at WARNING, never swallowed.
+        # not abort discovery. Logged loudly at WARNING and recorded in
+        # ``state.load_errors`` so ``capt-hook test`` fails on it, never silently swallowed.
         try:
             import_or_reload(fqn, fresh_this_pass)
-        except Exception:
+        except Exception as exc:
             logger.bind(module=fqn).opt(exception=True).warning("skipped unloadable hook module")
+            target.load_errors.append((fqn, exc))
 
 
 def ensure_pack_package(fqn: str, search_paths: list[str]) -> ModuleType:
@@ -115,8 +117,10 @@ def discover_pack(name: str, pack_dir: Path) -> None:
         if is_skip_marked(path):
             continue
         # Broad catch is deliberate: one unloadable or non-hook .py must not abort
-        # the whole pack. The failure is logged loudly at WARNING, never swallowed.
+        # the whole pack. Logged loudly at WARNING and recorded in ``load_errors`` so
+        # ``capt-hook test`` fails on it, never silently swallowed.
         try:
             import_pack_module(f"{pkg}.{path.stem}", path)
-        except Exception:
+        except Exception as exc:
             logger.bind(file=str(path)).opt(exception=True).warning("skipped unloadable hook file")
+            _state.load_errors.append((str(path), exc))
