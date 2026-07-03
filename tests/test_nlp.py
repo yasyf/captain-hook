@@ -1,8 +1,46 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 import pytest
 
-from captain_hook.signals.nlp import Clause, NlpSignal, Phrase, dep_related, nlp_scan
+from captain_hook.signals.nlp import (
+    Clause,
+    NlpSignal,
+    Phrase,
+    dep_related,
+    has_nominal_subject,
+    is_past_predicate,
+    nlp_scan,
+    parse,
+)
+
+if TYPE_CHECKING:
+    from spacy.tokens import Token
+
+TOMBSTONE_CLAUSE = Clause(
+    verb=Phrase("remove", "delete", "drop", "move", "migrate", "rename"),
+    completed=True,
+    subject="no_nominal",
+)
+
+BE_ADVERB_CLAUSE = Clause(
+    verb=Phrase("be"),
+    adj=Phrase("previously", "formerly", "originally", "here"),
+    completed=True,
+)
+
+COMMENT_LEADERS = [
+    pytest.param("", id="bare"),
+    pytest.param("# ", id="hash"),
+    pytest.param("// ", id="double_slash"),
+    pytest.param("/// ", id="triple_slash"),
+    pytest.param("/* ", id="slash_star"),
+]
+
+
+def token_named(text: str, word: str) -> Token:
+    return next(t for t in parse(text) if t.text == word)
 
 
 class TestPhrase:
@@ -59,15 +97,27 @@ class TestPhraseExpand:
 
 class TestClauseValidation:
     @pytest.mark.parametrize(
-        "noun",
+        ("kwargs", "match"),
         [
-            pytest.param(Phrase("quota"), id="bare_single_noun_rejected"),
-            pytest.param(Phrase("api", "service"), id="multi_word_noun_with_single_words_rejected"),
+            pytest.param({"noun": Phrase("quota")}, "second constraint or a compound", id="bare_single_noun_rejected"),
+            pytest.param(
+                {"noun": Phrase("api", "service")},
+                "second constraint or a compound",
+                id="multi_word_noun_with_single_words_rejected",
+            ),
+            pytest.param({"verb": Phrase("remove")}, "second constraint or a compound", id="bare_single_verb_rejected"),
+            pytest.param({}, "noun or verb anchor", id="no_anchor_rejected"),
+            pytest.param(
+                {"noun": Phrase("quota"), "completed": True}, "require a verb", id="completed_without_verb_rejected"
+            ),
+            pytest.param(
+                {"noun": Phrase("quota"), "subject": "no_nominal"}, "require a verb", id="subject_without_verb_rejected"
+            ),
         ],
     )
-    def test_rejected(self, noun: Phrase) -> None:
-        with pytest.raises(ValueError, match="verb, adj, negated, or a compound"):
-            Clause(noun=noun)
+    def test_rejected(self, kwargs: dict[str, Any], match: str) -> None:
+        with pytest.raises(ValueError, match=match):
+            Clause(**kwargs)
 
     def test_verb_clause_valid(self) -> None:
         c = Clause(noun=Phrase("quota"), verb=Phrase("exceed"))
@@ -83,7 +133,98 @@ class TestClauseValidation:
 
     def test_compound_noun_valid(self) -> None:
         c = Clause(noun=Phrase("billing issue"))
+        assert c.noun is not None
         assert " " in c.noun.lemmas[0]
+
+    def test_verb_completed_valid(self) -> None:
+        c = Clause(verb=Phrase("remove"), completed=True)
+        assert c.completed is True
+
+    def test_verb_subject_valid(self) -> None:
+        c = Clause(verb=Phrase("remove"), subject="no_nominal")
+        assert c.subject == "no_nominal"
+
+    def test_compound_verb_valid(self) -> None:
+        c = Clause(verb=Phrase("garbage collect"))
+        assert c.verb is not None
+        assert " " in c.verb.lemmas[0]
+
+
+class TestPastPredicate:
+    @pytest.mark.parametrize(
+        ("text", "word", "expected"),
+        [
+            pytest.param("removed the retry logic", "removed", True, id="past_tense_root"),
+            pytest.param("was moved to utils.py", "moved", True, id="passive_participle"),
+            pytest.param("remove the node", "remove", False, id="imperative_infinitive"),
+            pytest.param("removes stale entries", "removes", False, id="present_habitual"),
+            pytest.param("is removed when it expires", "removed", False, id="present_passive_aux"),
+            pytest.param("will be moved to utils.py later", "moved", False, id="modal_future_will"),
+            pytest.param("should be removed eventually", "removed", False, id="modal_should"),
+            pytest.param("can be removed once v2 ships", "removed", False, id="modal_can"),
+            pytest.param("the removed entries were stale", "removed", False, id="attributive_amod"),
+        ],
+    )
+    def test_predicate(self, text: str, word: str, expected: bool) -> None:
+        assert is_past_predicate(token_named(text, word)) is expected
+
+
+class TestSubjectGate:
+    @pytest.mark.parametrize(
+        ("text", "word", "expected"),
+        [
+            pytest.param("the parser removed the node", "removed", True, id="nominal_subject"),
+            pytest.param("skips removed entries", "removed", True, id="misparsed_propn_subject"),
+            pytest.param("handles removed entries", "removed", True, id="misparsed_noun_subject"),
+            pytest.param("we removed it", "removed", False, id="pronoun_subject"),
+            pytest.param("was moved to utils.py", "moved", False, id="passive_nsubjpass"),
+            pytest.param("# removed the retry logic", "removed", False, id="delimiter_nsubj_not_letter_bearing"),
+        ],
+    )
+    def test_subject(self, text: str, word: str, expected: bool) -> None:
+        assert has_nominal_subject(token_named(text, word)) is expected
+
+
+class TestVerbAnchoredScan:
+    @pytest.mark.parametrize("leader", COMMENT_LEADERS)
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            pytest.param("removed the retry logic", True, id="past_tense_active"),
+            pytest.param("was moved to utils.py", True, id="passive_was_moved"),
+            pytest.param("deleted the fallback path", True, id="past_tense_deleted"),
+            pytest.param("we removed it", True, id="pronoun_subject_passes"),
+            pytest.param("moved to utils.py", True, id="bare_participle"),
+            pytest.param("remove the node", False, id="imperative"),
+            pytest.param("removes stale entries", False, id="present_habitual"),
+            pytest.param("is removed when it expires", False, id="present_passive"),
+            pytest.param("will be moved to utils.py later", False, id="modal_future_will"),
+            pytest.param("should be removed eventually", False, id="modal_should"),
+            pytest.param("can be removed once v2 ships", False, id="modal_can"),
+            pytest.param("skips removed entries", False, id="nominal_subject_skips"),
+            pytest.param("handles removed entries", False, id="nominal_subject_handles"),
+            pytest.param("the parser removed the node", False, id="nominal_subject_parser"),
+        ],
+    )
+    def test_scan(self, leader: str, text: str, expected: bool) -> None:
+        assert bool(nlp_scan([TOMBSTONE_CLAUSE], leader + text)) is expected
+
+
+class TestBeAdverbClause:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            pytest.param("the auth check was previously here", True, id="was_previously_here"),
+            pytest.param("this was originally here", True, id="was_originally_here"),
+            pytest.param("validation was formerly here", True, id="was_formerly_here"),
+            pytest.param("was previously handled here", True, id="bare_passive_was"),
+            pytest.param("the auth check is here", False, id="present_copula"),
+            pytest.param("the config will be here later", False, id="modal_future"),
+            pytest.param("handle the case here", False, id="imperative_no_be"),
+        ],
+    )
+    def test_scan(self, text: str, expected: bool) -> None:
+        assert bool(nlp_scan([BE_ADVERB_CLAUSE], text)) is expected
 
 
 class TestNlpSignal:
