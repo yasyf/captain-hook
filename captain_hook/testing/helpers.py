@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import functools
 import os
 import re
 import shutil
@@ -43,7 +44,6 @@ STUB_FIELD_VALUES: dict[str, Any] = {
     "reason": "inline test stub",
 }
 
-FIXTURE_FILE_DIR: list[Path] = []
 FIXTURE_FILE_COUNTER = count()
 
 
@@ -85,12 +85,11 @@ class StubbedContext(HookContext):
         )
 
 
+@functools.cache
 def fixture_file_dir() -> Path:
-    if not FIXTURE_FILE_DIR:
-        root = Path(tempfile.mkdtemp(prefix="capt-hook-fixture-"))
-        FIXTURE_FILE_DIR.append(root)
-        atexit.register(shutil.rmtree, root, ignore_errors=True)
-    return FIXTURE_FILE_DIR[0]
+    root = Path(tempfile.mkdtemp(prefix="capt-hook-fixture-"))
+    atexit.register(shutil.rmtree, root, ignore_errors=True)
+    return root
 
 
 def materialize_file(fixture: FileFixture) -> str:
