@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.2.0] - 2026-07-03
+
+### Changed
+
+- The general pack's review/diagnosis→gpt-5.5 nudges (pack 0.13.0) now also route
+  security review/audit and verification of security-sensitive code (auth, input
+  validation, crypto, secrets) to gpt-5.5 via the codex skill. Both prefilters
+  match security/vulnerability language, and verification prompts only when a
+  security noun sits nearby — plain verification spawns never invoke the judge
+  (inline-tested). Security-sensitive implementation stays on fable per the
+  Models table, whose Effort line now counts table-routed gpt-5.5 lanes as
+  same-tier.
+
 ## [8.1.0] - 2026-07-03
 
 ### Added

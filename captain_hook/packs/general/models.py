@@ -321,7 +321,8 @@ The Models rubric: implementation delegates to opus-4.8 at xhigh — opus is ~2x
 than fable and nearly as capable. Fable's lanes are orchestration, design/architecture
 review, hard planning, all prose/writing, and implementation that is very sensitive or
 error-prone (auth, migrations, concurrency, data loss, crypto, subtle algorithms).
-Code/diff review and bug diagnosis have their own gpt-5.5 lane with a separate nudge.
+Code/diff review, security review/audit, and bug diagnosis have their own gpt-5.5
+lanes with separate nudges.
 
 Set fire=true only when the prompt is clearly routine implementation — building, fixing,
 wiring, or refactoring code — with no fable-lane signal. A prompt that reviews, plans,
@@ -476,20 +477,25 @@ Auth plus concurrency is a sensitive surface — fable's inline lane.
 )
 
 llm_nudge(
-    """Decide whether this delegated subagent runs code review or bug diagnosis that
-should route to gpt-5.5 instead of fable.
+    """Decide whether this delegated subagent runs code review, a security review/audit
+or verification of security-sensitive code, or bug diagnosis that should route to
+gpt-5.5 instead of fable.
 
 <delegated_spawn> holds the pending Agent/Task call: its model pin (or that it inherits
 the session model, fable), agent type, and prompt.
 
 The Models rubric: code/diff review — sweeping a diff or codebase for bugs,
-correctness, or cleanups; finder and refuter passes over findings — and bug diagnosis
-route to gpt-5.5 via the codex skill; fable is the escalation target when gpt-5.5's
-output misses. Fable keeps design/architecture review, "is this the right approach"
-judgment, prose review, and the synthesis/accept-reject pass over review findings.
+correctness, or cleanups; finder and refuter passes over findings — security
+review/audit and verification of security-sensitive code (auth, input validation,
+crypto, secrets), and bug diagnosis route to gpt-5.5 via the codex skill; fable is
+the escalation target when gpt-5.5's output misses. Fable keeps design/architecture
+review, "is this the right approach" judgment, prose review, the synthesis/
+accept-reject pass over review findings — and security-sensitive implementation,
+which is not review.
 
-Set fire=true only when the prompt clearly reviews code or diffs for defects, or
-diagnoses a bug, and the spawn would run on fable. Design review, approach judgment,
+Set fire=true only when the prompt clearly reviews code or diffs for defects, audits
+or verifies security-sensitive code, or diagnoses a bug, and the spawn would run on
+fable. Design review, approach judgment,
 synthesis over findings, and prose review are fable's lanes: fire=false. When
 uncertain, fire=false — the agent may have chosen fable deliberately, and a false
 alarm teaches it to ignore this nudge. Keep reasoning under 40 words.
@@ -519,10 +525,23 @@ The accept-reject pass over findings stays on fable.
 Review the README draft for factual errors.
 Prose review stays on fable.
 </example>
+<example fire="true">
+Audit the session-token handling in auth/middleware.py for vulnerabilities.
+Security review/audit of code — gpt-5.5's lane via codex.
+</example>
+<example fire="true">
+Verify the new input-validation layer rejects path traversal and injection payloads.
+Verification of security-sensitive code routes to gpt-5.5.
+</example>
+<example fire="false">
+Implement mitigations for the security-audit findings in auth.py.
+Security-sensitive implementation, not review — the implementation lanes apply.
+</example>
 </examples>""",
     message=lambda r: (
         f"This review/diagnosis delegation would run on fable. {r.reasoning} "
-        "Code/diff review and bug diagnosis route to gpt-5.5: run the codex skill (from a "
+        "Code/diff review, security review/audit and verification of security-sensitive code, "
+        "and bug diagnosis route to gpt-5.5: run the codex skill (from a "
         "workflow or subagent, spawn a model='sonnet', effort='low' wrapper that writes a "
         "self-contained codex prompt), and escalate to fable only when gpt-5.5's output misses. "
         "Design review and findings synthesis stay on fable. "
@@ -532,7 +551,11 @@ Prose review stays on fable.
     events=Event.PreToolUse,
     only_if=[
         Tool("Agent|Task"),
-        ToolInput("prompt", r"(?i)\b(review|refut|adversari|audit|correctness|diagnos|root.?caus)"),
+        ToolInput(
+            "prompt",
+            r"(?i)(\b(review|refut|adversari|audit|correctness|diagnos|root.?caus|secur|vuln|pentest)"
+            r"|\bverif\w*[\s\S]{0,160}?\b(auth|crypt|secret|sanitiz|inject|input.?valid|token|session))",
+        ),
     ],
     skip_if=[
         ToolInput("model", r"(?i)\b(opus|sonnet|haiku)\b"),
@@ -550,6 +573,13 @@ Prose review stays on fable.
         Input(agent_type="Explore", prompt="find where the review pipeline lives"): Allow(),
         Input(
             prompt="Synthesize the confirmed review findings and decide which to fix",
+            llm={"fire": False},
+        ): Allow(),
+        Input(prompt="Audit auth/session.py for security vulnerabilities"): Warn(pattern="gpt-5.5"),
+        Input(prompt="Verify the input-validation change blocks path traversal"): Warn(pattern="codex"),
+        Input(prompt="Verify the pagination change renders the last page correctly"): Allow(),
+        Input(
+            prompt="Implement mitigations for the security audit findings in auth.py",
             llm={"fire": False},
         ): Allow(),
     },
@@ -666,10 +696,13 @@ line that pins a model — a stage not quoted there carries no pin and inherits 
 session model, fable.
 
 The Models rubric: code/diff review stages — finder sweeps over a diff or codebase,
-adversarial refuters over findings — and bug diagnosis route to gpt-5.5 via the codex
-skill. A stage does that correctly when it pins model 'sonnet' at low effort and its
-prompt writes a self-contained codex prompt and runs the codex skill. Fable keeps the
-synthesis/accept-reject stage over findings and design/architecture judgment.
+adversarial refuters over findings — security review/audit stages and verification
+of security-sensitive code (auth, input validation, crypto, secrets), and bug
+diagnosis route to gpt-5.5 via the codex skill. A stage does that correctly when it
+pins model 'sonnet' at low effort and its prompt writes a self-contained codex prompt
+and runs the codex skill. Fable keeps the synthesis/accept-reject stage over findings
+and design/architecture judgment — and security-sensitive implementation, which is
+not review.
 
 Set fire=true only when at least one review or diagnosis stage would run on fable —
 unpinned, or pinned 'fable'. Stages already wrapped for codex, synthesis stages, and
@@ -695,10 +728,14 @@ Already the codex wrapper — correctly routed.
 agent(`Synthesize the confirmed findings and decide which to fix`)
 Synthesis/accept-reject stays on fable.
 </example>
+<example fire="true">
+agent(`Audit the auth flow for injection and session-fixation issues; return findings as JSON`)
+An unpinned security audit inherits fable; security review/audit is the codex-wrapper lane.
+</example>
 </examples>""",
     message=lambda r: (
         f"This workflow runs review/diagnosis stages on fable. {r.reasoning} "
-        "Route finder, refuter, and diagnosis stages to gpt-5.5: make each a model: 'sonnet', "
+        "Route finder, refuter, security-audit, and diagnosis stages to gpt-5.5: make each a model: 'sonnet', "
         "effort: 'low' stage that writes a self-contained codex prompt and runs the codex skill; "
         "keep the synthesis/accept-reject stage on fable (inherit the session model). "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
@@ -707,7 +744,10 @@ Synthesis/accept-reject stays on fable.
     events=Event.PreToolUse,
     only_if=[
         Tool("Workflow"),
-        WorkflowScript(pattern=r"(?i)\b(review|refut|adversari|audit|correctness|diagnos)"),
+        WorkflowScript(
+            pattern=r"(?i)(\b(review|refut|adversari|audit|correctness|diagnos|root.?caus|secur|vuln|pentest)"
+            r"|\bverif\w*[\s\S]{0,160}?\b(auth|crypt|secret|sanitiz|inject|input.?valid|token|session))",
+        ),
     ],
     max_fires=2,
     max_context=16_000,
@@ -730,6 +770,10 @@ Synthesis/accept-reject stays on fable.
             script="agent(`Synthesize the confirmed review findings and decide which to fix`)",
             llm={"fire": False},
         ): Allow(),
+        Input(
+            script="agent(`Audit the login flow for auth bypass and injection; return findings as JSON`)"
+        ): Warn(pattern="gpt-5.5"),
+        Input(script="agent('Verify the CLI renders the last page correctly')"): Allow(),
     },
 )
 
