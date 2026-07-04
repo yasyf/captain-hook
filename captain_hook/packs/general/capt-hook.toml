@@ -1,5 +1,5 @@
 name = "general"
-version = "0.11.0"
-description = "Language-agnostic guards: git/command safety, doc & prompt nudges, task & plan discipline, code-review + docs-freshness gates, a detour check-in nudge, and a verbose-comment nudge."
+version = "0.12.0"
+description = "Language-agnostic guards: git/command safety, doc & prompt nudges, task & plan discipline, code-review + docs-freshness gates, a detour check-in nudge, a verbose-comment nudge, and delegated-prose nudges that catch doc writing handed to a subagent or workflow without the writing-docs skill."
 hooks = "."
 nlp = true

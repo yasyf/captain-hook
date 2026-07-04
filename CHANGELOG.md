@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- General-pack delegated-prose nudges (pack 0.12.0): a `PreToolUse` pair over Agent/Task
+  prompts and Workflow scripts that delegate doc writing — a README, docs page, CHANGELOG,
+  release notes, tutorial — without directing the subagent to read the writing-docs skill.
+  Both reuse the `ProseSpawn`/`ProseWorkflowScript` clause prefilter (so an LLM only judges
+  prompts whose deliverable is prose) and stand down when the prompt already references the
+  skill. Restated style rules ("technical-builder voice", "no hype adjectives") are exactly
+  the drift they catch — a paraphrase silently overrides the skill.
 - Steering-pack deferral gate: an LLM-judged `Stop`/`SubagentStop` gate that blocks a
   turn-end where the agent names the correct fix, declares it blocked on a release, a
   version bump, or an upstream or cross-repo change, and silently substitutes docs, help

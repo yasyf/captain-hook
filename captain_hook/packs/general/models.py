@@ -732,3 +732,148 @@ Synthesis/accept-reject stays on fable.
         ): Allow(),
     },
 )
+
+llm_nudge(
+    """Decide whether this delegated subagent call delegates documentation or prose
+writing without directing the subagent to read the writing-docs skill.
+
+<delegated_spawn> holds the pending Agent/Task call: its model pin, agent type, and
+prompt, ending with the sentences a clause prefilter matched — each asks a writing verb
+of a prose artifact, with negated asks ("do NOT edit the docs") already screened out.
+
+You are watching an orchestrating agent spawn a subagent. Decide whether the pending
+prompt delegates documentation or prose writing — a README, docs page, CHANGELOG,
+tutorial, release notes, or similar deliverable — without directing the subagent to
+read the writing-docs skill. Restated style rules ('technical-builder voice', 'no hype
+adjectives', 'first person, confident') do not count as reading the skill; that
+paraphrase is exactly the failure to catch. Fire only when the prompt's deliverable is
+prose the writing-docs skill governs. Do not fire for code work that incidentally
+mentions a doc file, for reading or reviewing docs without writing them, or for a prompt
+that already tells the agent to read the skill or its references.
+
+When uncertain, fire=false — a false alarm teaches the agent to ignore this nudge. Keep
+reasoning under 40 words.
+
+<examples>
+<example fire="true">
+Rewrite the README for this repo. You are fable; technical-builder voice, no hype adjectives.
+README prose with the style rules paraphrased in place of the skill — the drift this catches.
+</example>
+<example fire="true">
+Draft the release notes for v2. Keep it first-person and confident, no marketing fluff.
+Release-notes prose; restated voice rules, no pointer to the writing-docs skill.
+</example>
+<example fire="false">
+Fix the failing test in cli.py; the README already documents the new flag.
+Code work that only mentions the README — no prose is produced.
+</example>
+<example fire="false">
+Rewrite the README, but read the doc-writing skill and its references first.
+Already directs the subagent to the skill — nothing to nudge.
+</example>
+</examples>""",
+    message=lambda r: (
+        "This prompt delegates prose but paraphrases the writing rules instead of pointing at them. "
+        f"{r.reasoning} A paraphrase drifts and silently overrides the skill — rewrite the prompt to "
+        "direct the agent to READ the writing-docs skill and its references (the installed plugin under "
+        "~/.claude/plugins/cache/skills/writing-docs, or plugins/writing-docs in the cc-skills repo) "
+        "before it writes."
+    ),
+    contexts=[ProseSpawn()],
+    events=Event.PreToolUse,
+    only_if=[Tool("Agent|Task")],
+    skip_if=[
+        ToolInput("prompt", r"(?i)writing-docs"),
+        Agent("Explore|claude-code-guide"),
+    ],
+    max_context=16_000,
+    agent=False,
+    transcript=False,
+    tests={
+        Input(
+            prompt="Rewrite the README of /repo. You are fable; technical-builder voice, no hype "
+            "adjectives. Verify commands against the binary."
+        ): Warn(pattern="writing-docs"),
+        Input(
+            prompt="Rewrite the README of /repo; technical-builder voice, no hype adjectives. Read "
+            "the writing-docs skill at ~/.claude/plugins/cache/skills/writing-docs first."
+        ): Allow(),
+        Input(prompt="Fix the race in daemon.go; update the failing test"): Allow(),
+        Input(
+            prompt="Rewrite the README, but read the doc-writing skill and its references first",
+            llm={"fire": False},
+        ): Allow(),
+    },
+)
+
+llm_nudge(
+    """Decide whether this workflow script delegates documentation or prose writing to an
+agent() stage without directing that subagent to read the writing-docs skill.
+
+<workflow_script> holds the pending Workflow call's script source, headed by every line
+that pins a model, followed by the sentences a clause prefilter matched — each asks a
+writing verb of a prose artifact, with negated asks ("do NOT edit CHANGELOG.md") already
+screened out.
+
+Decide whether an agent() prompt delegates documentation or prose writing — a README,
+docs page, CHANGELOG, tutorial, release notes, or similar deliverable — without
+directing that subagent to read the writing-docs skill. Restated style rules
+('technical-builder voice', 'no hype adjectives', 'first person, confident') do not
+count as reading the skill; that paraphrase is exactly the failure to catch. Fire only
+when a stage's deliverable is prose the writing-docs skill governs. Do not fire for code
+work that incidentally mentions a doc file, for reading or reviewing docs without writing
+them, or for a stage that already tells its subagent to read the skill or its references.
+
+When uncertain, fire=false — a false alarm teaches the agent to ignore this nudge. Keep
+reasoning under 40 words and name the offending stage.
+
+<examples>
+<example fire="true">
+agent('Rewrite the README for the new CLI. Technical-builder voice, no hype adjectives', {model: 'opus'})
+The stage's deliverable is README prose with the style rules paraphrased in place of the skill.
+</example>
+<example fire="true">
+agent(`Draft the docs-site page for ${feature}. First-person, confident, no marketing fluff`)
+A docs page delegated with restated voice rules and no pointer to the writing-docs skill.
+</example>
+<example fire="false">
+agent('Fix the failing import in cli.py; the README already documents the flag', {model: 'opus'})
+Code work that only mentions the README — no prose is produced.
+</example>
+<example fire="false">
+agent('Rewrite the troubleshooting guide, but read the doc-writing skill and its references first')
+The stage already directs its subagent to the skill — nothing to nudge.
+</example>
+</examples>""",
+    message=lambda r: (
+        "This workflow script delegates prose but paraphrases the writing rules instead of pointing at "
+        f"them. {r.reasoning} A paraphrase drifts and silently overrides the skill — rewrite the offending "
+        "agent() prompt to direct its subagent to READ the writing-docs skill and its references (the "
+        "installed plugin under ~/.claude/plugins/cache/skills/writing-docs, or plugins/writing-docs in "
+        "the cc-skills repo) before it writes."
+    ),
+    contexts=[ProseWorkflowScript()],
+    events=Event.PreToolUse,
+    only_if=[Tool("Workflow")],
+    skip_if=[WorkflowScript(pattern=r"(?i)writing-docs")],
+    max_fires=2,
+    max_context=16_000,
+    agent=False,
+    transcript=False,
+    tests={
+        Input(
+            script="agent('Rewrite the README. You are fable; technical-builder voice, no hype "
+            "adjectives', {model: 'opus'})"
+        ): Warn(pattern="writing-docs"),
+        Input(
+            script="agent('Rewrite the README per the writing-docs skill at "
+            "~/.claude/plugins/cache/skills/writing-docs', {model: 'opus'})"
+        ): Allow(),
+        Input(script="agent('Fix the race in daemon.go; update the failing test')"): Allow(),
+        Input(
+            script="agent('Rewrite the README, but read the doc-writing skill and its references "
+            "first', {model: 'opus'})",
+            llm={"fire": False},
+        ): Allow(),
+    },
+)
