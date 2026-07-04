@@ -770,9 +770,9 @@ An unpinned security audit inherits fable; security review/audit is the codex-wr
             script="agent(`Synthesize the confirmed review findings and decide which to fix`)",
             llm={"fire": False},
         ): Allow(),
-        Input(
-            script="agent(`Audit the login flow for auth bypass and injection; return findings as JSON`)"
-        ): Warn(pattern="gpt-5.5"),
+        Input(script="agent(`Audit the login flow for auth bypass and injection; return findings as JSON`)"): Warn(
+            pattern="gpt-5.5"
+        ),
         Input(script="agent('Verify the CLI renders the last page correctly')"): Allow(),
     },
 )
