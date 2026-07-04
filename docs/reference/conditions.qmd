@@ -86,4 +86,4 @@ cumulative score crosses the threshold. See [Score patterns with signals](../gui
 | Type | Purpose | Example |
 |------|---------|---------|
 | `Signal(pattern=..., weight=1, flags=0)` | A regex worth `weight` points per match (fields are keyword-only) | `Signal(pattern=r"\bretry\b", weight=2)` |
-| `Signals(patterns, threshold, window=15)` | A bundle that fires at `threshold` over the last `window` messages | `Signals([Signal(pattern=r"retry")], threshold=3)` |
+| `Signals(patterns, threshold, window=15)` | A bundle that fires at `threshold` over the last `window` messages; `window="turn"` scores the whole current turn | `Signals([Signal(pattern=r"retry")], threshold=3)` |

@@ -358,17 +358,21 @@ decided it) in `reasoning`.""",
 
 
 llm_gate(
-    """You are a senior engineer. Another engineer ("the agent") is trying to end its turn. You
-are running in agent mode in the project's working directory, with read tools. Your one job:
-decide whether the agent DELIVERED the fix the user asked for, or silently DOWNGRADED the
-deliverable while the real fix stays undone.
+    """You are a senior engineer. Another engineer ("the agent") is ending its turn or has just
+produced deferral-shaped content mid-work (a thinking block, a review finding, a task or todo it
+filed). You are running in agent mode in the project's working directory, with read tools. Your
+one job: decide whether the agent DELIVERED the fix the user asked for, or silently DOWNGRADED
+the deliverable while the real fix stays undone.
 
 Read first, judge second:
 - The session transcript is rendered above inside `<transcript path="...">`; long content is
   clipped (you'll see `…(+Nch)` markers). Read the FULL exchange from that path (prefer
   `cc-transcript show`/`grep`; else read the file). You need: (1) what the user actually asked
   for (including any later approval of a reduced scope), (2) what the agent actually changed
-  this turn, and (3) the agent's closing justification (the flagged lines are in `<context>`).
+  this turn, and (3) the agent's justification (the flagged lines are in `<context>`). On a
+  mid-turn firing the flagged content may be deliberation in flight — check whether the agent
+  has COMMITTED to the downgrade (substitute edits landed, a softer task filed as the plan of
+  record, the real fix abandoned), not merely weighed it.
 - Then inspect the working directory enough to confirm whether the requested fix was made or
   only a softer substitute (docs, help text, error copy) shipped.
 
@@ -391,21 +395,28 @@ how to proceed before substituting anything; the softer deliverable IS the task 
 requested; the user approved a plan or message that explicitly named the smaller deliverable (an
 approved ExitPlanMode plan counts as the go-ahead); a genuine hard blockage the agent reported
 plainly (no access to the other repo, missing credentials, an API that does not exist); the
-agent shipped the real fix AND improved docs alongside it.
+agent shipped the real fix AND improved docs alongside it; deliberation that names the softer
+option in order to reject it and commits to the real fix; a finding or quoted text reporting
+the codebase's or someone else's existing deferral debt or a genuine upstream bug — reporting
+is not deferring, UNLESS the same content prescribes the downgrade as the remediation (e.g.
+"fix requires a release, so document the constraint instead"); a task recording a genuine
+environmental constraint that replaces no requested fix.
 
 Do NOT fire when: the user explicitly asked for the docs/help-text/error-copy change; the turn
 ends in a question to the user about the blocker (asking is the sanctioned escape hatch, not
 laziness); the deferral language refers to genuinely optional extras after the requested fix
-landed; or the blockage is real, outside the agent's reach, and clearly reported rather than
-papered over.
+landed; the flagged content is mid-turn deliberation where no substitute has been executed yet;
+or the blockage is real, outside the agent's reach, and clearly reported rather than papered
+over.
 
 When uncertain, return block=false. A missed deferral costs one nag; a false alarm on an honest
 stop teaches the agent to ignore this gate. Fire only when a specific tell is clearly present
 and no "do not fire" condition applies. Put your reasoning (under 60 words, ending with the one
 tell that decided it) in `reasoning`.""",
     message=lambda r: (
-        "You appear to be deferring the real fix — declaring it out of reach and "
-        f"substituting a softer deliverable without asking. Why: {r.reasoning} "
+        "You appear to be deferring the real fix — whether closing the turn or still mid-work, "
+        "you have declared it out of reach and substituted a softer deliverable (or filed one "
+        f"as the plan of record) without asking. Why: {r.reasoning} "
         "Do the fix the user asked for: a release, version bump, or cross-repo change is "
         "routine work here, not a blocker — plan it and do it. If you are genuinely blocked, "
         "stop and ask the user how to proceed instead of substituting docs, help text, or a "
@@ -445,14 +456,14 @@ tell that decided it) in `reasoning`.""",
             Signal(
                 pattern=(
                     r"(?i)\b(?:improv|updat|expand|clarif|document|add)\w*\s+(?:the\s+|this\s+|that\s+|a\s+)?"
-                    r"(?:documentation|docs\b|help\s+text|readme|error\s+(?:message|copy|text)|limitation)"
+                    r"(?:documentation|docs\b|help\s+text|readme|error\s+(?:message|copy|text))"
                 ),
                 weight=1,
             ),
             Signal(
                 pattern=(
                     r"(?i)\b(?:document\w*|not(?:e|es|ed|ing)|record\w*)\s+(?:the\s+|this\s+|that\s+|a\s+|its\s+)?"
-                    r"(?:limitation|caveat|constraint|shortcoming|known\s+issue|behavior)"
+                    r"(?:[\w'-]+\s+){0,2}?(?:limitation|caveat|constraint|shortcoming|known\s+issue|behavior)"
                 ),
                 weight=2,
             ),
@@ -460,7 +471,7 @@ tell that decided it) in `reasoning`.""",
                 pattern=(
                     r"(?i)(?:(?:left|leaves?|leaving)\s+(?:the\s+|it\s+|this\s+|that\s+)?"
                     r"(?:code|implementation|behavior|bug|issue|it)?\s*(?:as-?is|untouched|unchanged|in\s+place)"
-                    r"|still\s+(?:present|broken|unfixed|unaddressed|reproduc\w+)"
+                    r"|still\s+(?:present|broken|unfixed|unaddressed|there\b|reproduc\w+)"
                     r"|remains?\s+(?:broken|unfixed|in\s+place))"
                 ),
                 weight=2,
@@ -474,7 +485,7 @@ tell that decided it) in `reasoning`.""",
             ),
             Signal(
                 pattern=(
-                    r"(?i)(?:as\s+a\s+workaround|stop-?gap|interim\s+(?:fix|solution|measure)|band-?aid"
+                    r"(?i)(?:workaround|stop-?gap|interim\s+(?:fix|solution|measure)|band-?aid"
                     r"|(?:as\s+a\s+)?temporary\s+(?:measure|fix|solution|patch|guard)"
                     r"|in\s+the\s+meantime|for\s+the\s+time\s+being)"
                 ),
@@ -483,7 +494,8 @@ tell that decided it) in `reasoning`.""",
             Signal(pattern=r"(?i)\bfor\s+now\b", weight=1),
             Signal(
                 pattern=(
-                    r"(?i)(?:follow-?up\s+(?:pr|work|issue|task|change)|future\s+(?:pr|work|release)"
+                    r"(?i)(?:follow-?up\s+(?:pr|work|issue|task|change)|(?:in|as)\s+a\s+follow-?up\b"
+                    r"|future\s+(?:pr|work|release)"
                     r"|file\s+(?:an?\s+)?issue|(?:separate|later|subsequent)\s+(?:pr|patch|pass|iteration)|backlog"
                     r"|out\s+of\s+scope\s+for\s+this)"
                 ),
@@ -502,8 +514,20 @@ tell that decided it) in `reasoning`.""",
                     r"|so\s+(?:it|this|that|the\s+\w+)\s+(?:no\s+longer|doesn['’]t|does\s+not|won['’]t)\s+"
                     r"(?:crash|die|fail|error)\w*)"
                 ),
+                weight=2,
+            ),
+            Signal(
+                pattern=(
+                    r"(?i)\b(?:punt|defer|postpon)\w*\s+(?:the|this|that|it)\b"
+                    r"|\bskip\w*\s+the\s+(?:real|proper|actual|root)\b"
+                ),
+                weight=2,
+            ),
+            Signal(
+                pattern=r"(?i)\brevisit\s+(?:it\s+|this\s+)?later\b|\bcome\s+back\s+to\s+(?:it|this)\b",
                 weight=1,
             ),
+            Signal(pattern=r"(?i)\bmov(?:e[ds]?|ing)\s+on\b", weight=1),
             NlpSignal(
                 clauses=[Clause(noun=Phrase.expand("fix"), verb=Phrase("defer", "postpone", "punt"))],
                 weight=2,
@@ -523,8 +547,9 @@ tell that decided it) in `reasoning`.""",
             ),
         ],
         threshold=3,
-        window=10,
+        window="turn",
     ),
+    events=Event.PostToolUse | Event.Stop | Event.SubagentStop,
     tests={
         Input(
             transcript=[
@@ -721,6 +746,299 @@ tell that decided it) in `reasoning`.""",
                                     "Fixing this cleanly needs a new cc-transcript release. Do you want "
                                     "me to cut that release, or handle it another way?"
                                 ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_findings",
+                                "name": "ReportFindings",
+                                "input": {
+                                    "findings": [
+                                        {
+                                            "file": "internal/daemon/daemon.go",
+                                            "line": 105,
+                                            "summary": (
+                                                "OpClose --stale and OpList are documented as cross-repo "
+                                                "commands, but cc-interact's dispatch runs ScopeResolve "
+                                                "(vcs.Root) on the caller's cwd for every domain op with a "
+                                                "hardcoded exemption set, so both error when invoked "
+                                                "outside a git/jj repo."
+                                            ),
+                                            "failure_scenario": (
+                                                "User cd ~ && cc-review list → error from vcs.Root instead "
+                                                "of the cross-repo listing; fix requires a cc-interact "
+                                                "release, so cc-review documents the run-inside-a-repo "
+                                                "constraint instead."
+                                            ),
+                                            "verdict": "CONFIRMED",
+                                        }
+                                    ]
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "thinking",
+                                "thinking": (
+                                    "I'm seeing that cc-interact has hardcoded exemptions for certain "
+                                    "operations, which means any domain operation without an exemption "
+                                    "gets an error when the scope can't be resolved. The issue is that "
+                                    "`cc-review list` and `close --stale` commands don't have consumer "
+                                    "hooks to exempt them, so running these from outside a repo directory "
+                                    "triggers a vcs.Root error. Since fixing this requires a cc-interact "
+                                    "release, the practical solution is to improve the documentation and "
+                                    "help text to guide users on where to run these commands from."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Since fixing this requires a cc-interact release, the practical "
+                                    "solution is to document the limitation in the help text."
+                                ),
+                            }
+                        ]
+                    },
+                },
+                *(
+                    block
+                    for i in range(6)
+                    for block in (
+                        {
+                            "type": "assistant",
+                            "message": {
+                                "content": [
+                                    {
+                                        "type": "tool_use",
+                                        "id": f"tu_{i}",
+                                        "name": "Read",
+                                        "input": {"file_path": f"/tmp/f{i}.py"},
+                                    }
+                                ]
+                            },
+                        },
+                        {
+                            "type": "user",
+                            "message": {
+                                "content": [{"type": "tool_result", "tool_use_id": f"tu_{i}", "content": "ok"}]
+                            },
+                        },
+                    )
+                ),
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_findings",
+                                "name": "ReportFindings",
+                                "input": {
+                                    "findings": [
+                                        {
+                                            "file": "captain_hook/signals/__init__.py",
+                                            "line": 46,
+                                            "summary": (
+                                                "Off-by-one in windowed() drops the final event when stop "
+                                                "lands on a turn boundary."
+                                            ),
+                                            "failure_scenario": (
+                                                "Session.recent(1) on a three-event transcript returns an "
+                                                "empty window, so signal scoring sees no text."
+                                            ),
+                                            "verdict": "CONFIRMED",
+                                        }
+                                    ]
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_todos",
+                                "name": "TodoWrite",
+                                "input": {
+                                    "todos": [
+                                        {
+                                            "content": "Add SSE reconnect test",
+                                            "status": "pending",
+                                            "activeForm": "Adding SSE reconnect test",
+                                        },
+                                        {
+                                            "content": "Wire the backoff cap into the client config",
+                                            "status": "in_progress",
+                                            "activeForm": "Wiring the backoff cap",
+                                        },
+                                    ]
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_task_workaround",
+                                "name": "TaskCreate",
+                                "input": {
+                                    "subject": "Workaround for the crash",
+                                    "description": (
+                                        "Wrap the call in try/except so the session survives; revisit later."
+                                    ),
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_todo_defer",
+                                "name": "TodoWrite",
+                                "input": {
+                                    "todos": [
+                                        {
+                                            "content": "Defer the parser rewrite to a later pass",
+                                            "status": "pending",
+                                            "activeForm": "Deferring the parser rewrite",
+                                        },
+                                    ]
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_task_skip",
+                                "name": "TaskCreate",
+                                "input": {
+                                    "subject": "Skip the real fix",
+                                    "description": (
+                                        "Too big for this pass; just note it somewhere and come back to it."
+                                    ),
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_findings_deadcode",
+                                "name": "ReportFindings",
+                                "input": {
+                                    "findings": [
+                                        {
+                                            "file": "captain_hook/signals/__init__.py",
+                                            "line": 90,
+                                            "summary": (
+                                                "The `document the limitation` fallback branch in "
+                                                "cite_message is dead code — no caller reaches it."
+                                            ),
+                                            "failure_scenario": (
+                                                "extract_signal_context always returns a non-empty list "
+                                                "for these patterns, so the else arm never runs."
+                                            ),
+                                            "verdict": "CONFIRMED",
+                                        }
+                                    ]
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_task_spacy_docs",
+                                "name": "TaskCreate",
+                                "input": {
+                                    "subject": "Document the limitation",
+                                    "description": (
+                                        "Note in the README that NLP scoring needs the spaCy "
+                                        "en_core_web_sm model provisioned."
+                                    ),
+                                },
                             }
                         ]
                     },

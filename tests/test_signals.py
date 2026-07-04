@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any, Literal
 
 import pytest
 
@@ -10,13 +11,19 @@ from captain_hook.session import SessionStore
 from captain_hook.state import PrimitiveState
 from captain_hook.testing.helpers import fixture_session
 from captain_hook.types import Signal, Signals
-from tests.helpers import raw_text
+from tests.helpers import raw_msg, raw_text, raw_text_block, raw_tool_msg, raw_tool_result
 
 
-def make_ctx(tmp_path: Path | None = None, texts: list[str] | None = None) -> HookContext:
+def make_ctx(
+    tmp_path: Path | None = None,
+    texts: list[str] | None = None,
+    messages: list[dict[str, Any]] | None = None,
+) -> HookContext:
     return HookContext(
         session=SessionStore(tmp_path),
-        transcript=fixture_session([raw_text("assistant", t) for t in (texts or [])]),
+        transcript=fixture_session(
+            messages if messages is not None else [raw_text("assistant", t) for t in (texts or [])]
+        ),
         settings=None,
     )
 
@@ -53,9 +60,14 @@ class TestSignalsBundle:
                 10,
                 id="custom_window",
             ),
+            pytest.param(
+                Signals(patterns=[Signal(pattern=r"test", weight=1)], threshold=3, window="turn"),
+                "turn",
+                id="turn_window",
+            ),
         ],
     )
-    def test_window(self, sig: Signals, window: int) -> None:
+    def test_window(self, sig: Signals, window: int | str) -> None:
         assert sig.window == window
 
     def test_accepts_mixed_signal_types(self) -> None:
@@ -247,6 +259,81 @@ class TestTranscriptTexts:
         result = transcript_texts(evt, 10)
         assert "" not in result
         assert len(result) == 2
+
+
+class TestTranscriptTextsProse:
+    @staticmethod
+    def texts_for(messages: list[dict[str, Any]], window: int | Literal["turn"] = 10) -> list[str]:
+        from captain_hook.events import PostToolUseEvent
+        from captain_hook.signals import transcript_texts
+
+        return transcript_texts(PostToolUseEvent(_raw={"tool_name": "Edit"}, ctx=make_ctx(messages=messages)), window)
+
+    def test_thinking_block_is_own_entry(self) -> None:
+        messages = [raw_msg("assistant", [raw_text_block("visible"), {"type": "thinking", "thinking": "hidden plan"}])]
+        assert self.texts_for(messages) == ["visible", "hidden plan"]
+
+    @pytest.mark.parametrize(
+        ("name", "payload", "expected"),
+        [
+            pytest.param(
+                "ReportFindings",
+                {
+                    "findings": [
+                        {"file": "a.py", "summary": "Bug in parser", "failure_scenario": "Crash on empty input"},
+                        {"file": "b.py", "summary": "Race in writer", "failure_scenario": "Lost update"},
+                    ]
+                },
+                ["Bug in parser Crash on empty input", "Race in writer Lost update"],
+                id="report_findings_per_finding",
+            ),
+            pytest.param(
+                "TaskCreate",
+                {"subject": "Fix flaky test", "description": "Stabilize the retry loop"},
+                ["Fix flaky test Stabilize the retry loop"],
+                id="task_create_subject_description",
+            ),
+            pytest.param(
+                "TaskUpdate",
+                {"taskId": "1", "description": "Deferred to a follow-up"},
+                ["Deferred to a follow-up"],
+                id="task_update_partial_fields",
+            ),
+            pytest.param(
+                "TodoWrite",
+                {
+                    "todos": [
+                        {"content": "Add SSE reconnect test", "status": "pending"},
+                        {"content": "Wire the backoff cap", "status": "pending"},
+                    ]
+                },
+                ["Add SSE reconnect test", "Wire the backoff cap"],
+                id="todo_write_per_todo",
+            ),
+            pytest.param("Read", {"file_path": "/tmp/x.py"}, [], id="non_prose_tool_ignored"),
+        ],
+    )
+    def test_tool_payload_prose(self, name: str, payload: dict[str, Any], expected: list[str]) -> None:
+        assert self.texts_for([raw_tool_msg(name, payload)]) == expected
+
+    def test_turn_window_scopes_to_current_turn(self) -> None:
+        messages = [
+            raw_text("user", "first question"),
+            raw_text("assistant", "old answer"),
+            raw_text("user", "second question"),
+            raw_text("assistant", "new answer"),
+        ]
+        assert self.texts_for(messages, "turn") == ["second question", "new answer"]
+        assert self.texts_for(messages, 10) == ["first question", "old answer", "second question", "new answer"]
+
+    def test_turn_window_out_reaches_int_window(self) -> None:
+        messages = [raw_text("assistant", "early deferral")] + [
+            line
+            for i in range(6)
+            for line in (raw_tool_msg("Read", {"file_path": f"/tmp/f{i}.py"}, id=f"tu_{i}"), raw_tool_result(f"tu_{i}"))
+        ]
+        assert "early deferral" not in self.texts_for(messages, 10)
+        assert self.texts_for(messages, "turn") == ["early deferral"]
 
 
 class TestCiteMessage:

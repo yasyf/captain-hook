@@ -9,6 +9,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Generic,
+    Literal,
     Protocol,
     TypeVar,
     get_args,
@@ -657,11 +658,17 @@ class Signals:
     When a bare ``list[Signal]`` is passed to a primitive, ``resolve_signals``
     wraps it with ``threshold=1`` — meaning *any* single signal match triggers.
     Pass a higher threshold to require multiple signals to fire together.
+
+    ``window`` bounds how much transcript each scoring pass reads: the last
+    ``window`` events by default, or the whole current turn with the ``"turn"``
+    sentinel. Use ``"turn"`` when the tell can sit hundreds of events before the
+    turn ends — a fixed window at ``Stop`` only reaches the last few tool
+    exchanges.
     """
 
     patterns: Sequence[Signal | NlpSignal]
     threshold: int
-    window: int = 15
+    window: int | Literal["turn"] = 15
 
 
 @dataclass(frozen=True, kw_only=True)

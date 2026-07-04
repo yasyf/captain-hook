@@ -75,8 +75,8 @@ Clause(noun=Phrase.expand("change"), verb=Phrase("cause", "introduce"), negated=
 ## Bundle signals with a threshold and window
 
 A `Signals` bundle groups patterns, sets the score `threshold` that triggers the
-hook, and bounds the `window` of recent messages to score. The window is a rolling
-slice of the last N transcript messages, so old matches age out as the conversation
+hook, and bounds the `window` of recent transcript events to score. The window is a
+rolling slice of the last N events, so old matches age out as the conversation
 moves on.
 
 ```python
@@ -85,26 +85,35 @@ from captain_hook import Signals, Signal
 Signals(
     patterns=[
         Signal(r"retry", weight=2),
+        Signal(r"again", weight=1),
         Signal(r"investigating", weight=-3),
     ],
-    threshold=3,  # fire once the summed weight reaches 3
-    window=10,    # score only the last 10 messages
+    threshold=3,  # fire once a single message's summed weight reaches 3
+    window=10,    # score only the last 10 events
 )
 ```
 
-The threshold is a sum, not a count. With `window=10` above, three "retry" matches
-score 6 and fire, but a single "investigating" inside the window subtracts 3 and can
-hold the hook back.
+Each message in the window is scored on its own: every pattern that matches adds
+its weight once, and the hook fires when a single message reaches the threshold.
+"Let me retry that again" scores 3 and fires; add "investigating" to the same
+message and it drops to 0, which holds the hook back.
+
+Set `window="turn"` instead of a count to score the whole current turn. Tool calls
+and their results eat window slots, so a fixed window at `Stop` reaches only the
+last few tool exchanges. The `"turn"` sentinel reaches back to the prompt that
+opened the turn and catches a tell dropped hundreds of events earlier.
 
 You can also pass a bare `list[Signal]` to a primitive. The framework wraps it with
 `threshold=1`, so any single match triggers.
 
 ## Wire a bundle into nudge
 
-Pass the bundle to `nudge(signals=...)`. The primitive extracts text from the last
-`window` messages, scores it against every pattern, and warns when the total crosses
-the threshold. It also deduplicates by content, so the same triggering text doesn't
-fire the nudge twice in a row.
+Pass the bundle to `nudge(signals=...)`. The primitive pulls every prose source from
+the window — each message's visible text, each thinking block, and the prose fields
+of `ReportFindings`, `TaskCreate`/`TaskUpdate`, and `TodoWrite` calls — scores each
+entry against every pattern, and warns when one crosses the threshold. It also
+deduplicates by content, so the same triggering text doesn't fire the nudge twice in
+a row.
 
 ```python
 import re

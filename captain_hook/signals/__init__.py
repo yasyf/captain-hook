@@ -1,16 +1,27 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Literal
 
-from cc_transcript.models import AssistantEvent, UserEvent
+from cc_transcript.models import AssistantEvent, ThinkingBlock, ToolUseBlock, UserEvent
 
 from captain_hook.signals.nlp import NlpSignal
 from captain_hook.types import Event, Signal, Signals
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
+
+PROSE_TOOLS: dict[str, Callable[[Mapping[str, Any]], list[str]]] = {
+    "ReportFindings": lambda inp: [
+        " ".join(filter(None, (f.get("summary"), f.get("failure_scenario")))) for f in inp.get("findings", ())
+    ],
+    "TaskCreate": lambda inp: [" ".join(filter(None, (inp.get("subject"), inp.get("description"))))],
+    "TaskUpdate": lambda inp: [" ".join(filter(None, (inp.get("subject"), inp.get("description"))))],
+    "TodoWrite": lambda inp: [
+        " ".join(filter(None, (t.get("content"), t.get("subject")))) for t in inp.get("todos", ())
+    ],
+}
 
 TSignalPattern = Signal | NlpSignal
 
@@ -43,21 +54,37 @@ def extract_signal_context(patterns: Sequence[TSignalPattern], text: str) -> lis
     return result
 
 
-def transcript_texts(evt: BaseHookEvent, window: int) -> list[str]:
-    """Extract text from recent transcript events for signal scoring.
+def block_texts(event: UserEvent | AssistantEvent) -> Iterator[str]:
+    for block in event.blocks:
+        match block:
+            case ThinkingBlock(thinking=thinking):
+                yield thinking
+            case ToolUseBlock(name=name, input=payload) if extract := PROSE_TOOLS.get(name):
+                yield from extract(payload)
+            case _:
+                pass
 
-    For ``UserPromptSubmit`` events, returns just the user prompt.
-    Otherwise returns ``.text`` from the last ``window`` events.
+
+def transcript_texts(evt: BaseHookEvent, window: int | Literal["turn"]) -> list[str]:
+    """Extract prose from recent transcript events for signal scoring.
+
+    For ``UserPromptSubmit`` events, returns just the user prompt. Otherwise scans
+    the last ``window`` events — the whole current turn when ``window`` is
+    ``"turn"`` — and returns one entry per prose source: each event's ``.text``,
+    each thinking block, and the prose fields of prose-carrying tool calls
+    (``ReportFindings`` findings, ``TaskCreate``/``TaskUpdate`` subjects and
+    descriptions, ``TodoWrite`` todos).
     """
-    return (
-        [evt.user_prompt]
-        if evt.event == Event.UserPromptSubmit and evt.user_prompt
-        else [
-            text
-            for event in evt.ctx.t.recent(window).events
-            if isinstance(event, UserEvent | AssistantEvent) and (text := event.text)
-        ]
-    )
+    if evt.event == Event.UserPromptSubmit and evt.user_prompt:
+        return [evt.user_prompt]
+    scope = evt.ctx.turn if window == "turn" else evt.ctx.t.recent(window)
+    return [
+        text
+        for event in scope.events
+        if isinstance(event, UserEvent | AssistantEvent)
+        for text in (event.text, *block_texts(event))
+        if text
+    ]
 
 
 def cite_message(sig: Signals, triggering: list[str], message: str) -> str:

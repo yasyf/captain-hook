@@ -51,7 +51,8 @@ class ReviewState(WorkflowState):
 Signal(pattern=r"\bretry\b", weight=2)
 ```
 
-**Signals** — a bundle that fires at `threshold` over the last `window` messages
+**Signals** — a bundle that fires at `threshold` over the last `window` messages;
+`window="turn"` scores the whole current turn
 ```python
 Signals([Signal(pattern=r"retry")], threshold=3, window=15)
 ```

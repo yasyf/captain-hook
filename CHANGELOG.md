@@ -4,6 +4,26 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Signal scoring reads all transcript prose, not just visible text: `transcript_texts`
+  yields each thinking block and the prose fields of prose-carrying tool calls
+  (`ReportFindings` findings, `TaskCreate`/`TaskUpdate` subjects and descriptions,
+  `TodoWrite` todos) as separately scored entries, so a tell buried in extended thinking
+  or a tool payload trips a signal hook. `Signals.window` accepts a `"turn"` sentinel
+  that scores the whole current turn instead of a fixed slice of recent events — tool
+  calls eat fixed-window slots, so `window=10` at `Stop` reaches only the last few tool
+  exchanges.
+- The steering deferral gate fires mid-turn: `PostToolUse`/`Stop`/`SubagentStop` with
+  `window="turn"`. The motivating miss carried its deferral only in a thinking block and
+  a `ReportFindings` payload, hundreds of events before the turn ended, with no
+  turn-final text footprint — the gate now catches both at the moment of utterance. The
+  judge distinguishes deliberation from commitment (naming a band-aid in order to reject
+  it is not deferral, and deferral debt a review finding reports is not the reviewer's
+  own), and new signals close the terse task-punt evasions ("Punt the real fix", "Defer
+  the rewrite to a later pass", bare "workaround"). Steering pack bumped to 0.5.0.
+
 ## [8.3.0] - 2026-07-03
 
 ### Added
