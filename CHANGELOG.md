@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.1.0] - 2026-07-03
+
 ### Added
 - General-pack delegated-prose nudges (pack 0.12.0): a `PreToolUse` pair over Agent/Task
   prompts and Workflow scripts that delegate doc writing — a README, docs page, CHANGELOG,
