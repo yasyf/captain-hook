@@ -20,8 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The builtin multi-request nudge judges the user's prompt alone (`window=0`).
   Its old `window=1` was inert under the short-circuit, and would otherwise have
   read the prior assistant turn's numbered lists as "several distinct requests".
-- Dependency floors moved to the latest cc-family releases
-  (`cc-transcript>=8.1`).
 
 ### Fixed
 - **Review-backend LLM verdicts run in untrusted and non-git directories
@@ -32,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read-only sandbox already confines the run. Regression tests pin the
   wall-of-text gate math on the motivating rubric shape at both `PostToolUse`
   and `UserPromptSubmit`.
+
+## [8.4.1] - 2026-07-05
+
+### Changed
+- Dependency floors moved to the latest cc-family releases
+  (`cc-transcript>=8.1`).
 
 ## [8.4.0] - 2026-07-05
 
