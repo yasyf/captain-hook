@@ -24,7 +24,7 @@ from captain_hook import (
     llm_nudge,
     nudge,
     set_tool_input,
-    workflow_opt_values,
+    workflow_opt_matches,
     workflow_script_source,
 )
 from captain_hook.signals.nlp import nlp_scan
@@ -58,6 +58,7 @@ class InlineEdit:
 
 
 WORKFLOW_SCRIPT_CAP = 14_000  # below the prose hooks' max_context=16_000, so truncation stays ours
+PIN_EXCERPT_CAP = 2_000  # the pin header must not crowd out the source under the enclosing max_context slice
 
 
 def prose_deliverable_sentences(text: str) -> list[str]:
@@ -132,6 +133,27 @@ class ProseSpawn(DelegatedSpawn):
         return f"{base}\n\nsentences the prose prefilter matched:\n{matched}"
 
 
+def _pin_windows(line: str) -> list[tuple[str, int]]:
+    """Verbatim excerpt(s) around each model pin on `line`, paired with the pin count each covers.
+
+    Empty when the line pins no model. A line at/under 200 chars yields one window quoting it
+    whole; a longer line yields one window per merged run of pins, each an exact substring of the
+    line bracketed by ``…`` only where text is actually elided.
+    """
+    if not (matches := workflow_opt_matches(line, "model")):
+        return []
+    if len(line) <= 200:
+        return [(f"  {line}", len(matches))]
+    windows: list[list[int]] = []  # [start, end, pins covered]
+    for m in matches:  # window back over the opts (label precedes model) and forward past effort
+        start, end = max(0, m.start() - 160), min(len(line), m.end() + 60)
+        if windows and start <= windows[-1][1]:
+            windows[-1][1], windows[-1][2] = end, windows[-1][2] + 1
+        else:
+            windows.append([start, end, 1])
+    return [(f"  {'…' if s else ''}{line[s:e]}{'…' if e < len(line) else ''}", n) for s, e, n in windows]
+
+
 @dataclass(frozen=True, slots=True)
 class WorkflowScriptSource:
     """Gating context: the pending Workflow call's script source, headed by its model pins."""
@@ -143,21 +165,36 @@ class WorkflowScriptSource:
     def pins_and_source(evt: BaseHookEvent) -> tuple[str, str] | None:
         if (source := workflow_script_source(evt)) is None:
             return None
-        pin_lines = "\n".join(
-            f"  {line.strip()[:200]}" for line in source.splitlines() if workflow_opt_values(line, "model")
-        )
+        excerpts: list[str] = []
+        budget = quoted = dropped = 0
+        capped = False
+        for line in source.splitlines():
+            for excerpt, pins in _pin_windows(line):
+                if capped or (excerpts and budget + 1 + len(excerpt) > PIN_EXCERPT_CAP):
+                    capped, dropped = True, dropped + pins
+                    continue
+                budget += (1 if excerpts else 0) + len(excerpt)
+                excerpts.append(excerpt)
+                quoted += pins
+        if capped:
+            excerpts.append(f"  … [+{dropped} more model pins not excerpted]")
+        pin_lines = "\n".join(excerpts) or "  (none)"
         if len(source) > WORKFLOW_SCRIPT_CAP:
             head, tail = WORKFLOW_SCRIPT_CAP * 3 // 4, WORKFLOW_SCRIPT_CAP // 4
-            source = (
-                f"{source[:head]}\n"
-                f"… [script truncated: {len(source):,} chars total; every model pin is quoted above] …\n"
-                f"{source[-tail:]}"
+            claim = (
+                f"{quoted} of {quoted + dropped} model pins quoted above"
+                if capped
+                else "every model pin is quoted above"
             )
-        header = (
-            "lines that pin a model in this script (a stage not quoted here inherits the "
-            f"session model, fable):\n{pin_lines or '  (none)'}"
+            source = f"{source[:head]}\n… [script truncated: {len(source):,} chars total; {claim}] …\n{source[-tail:]}"
+        lead = (
+            f"excerpts around the first model pins in this script (+{dropped} more noted below; "
+            "a stage not quoted here is NOT necessarily unpinned):"
+            if capped
+            else "excerpts around every model pin in this script (a stage not quoted here inherits the "
+            "session model, fable):"
         )
-        return header, source
+        return f"{lead}\n{pin_lines}", source
 
     def content(self, evt: BaseHookEvent) -> str | None:
         if (parts := self.pins_and_source(evt)) is None:
@@ -223,7 +260,9 @@ asked to PRODUCE?
 The Models rubric: all writing a user reads — READMEs, docs, changelogs, release
 notes, blog posts, PR descriptions, any user-facing text — routes to fable. Work
 that merely mentions a prose file — as a constraint ("do NOT touch the docs"), as
-reading material, as the subject of recon or review — is not prose work.
+reading material, as the subject of recon or review — is not prose work; findings
+reports, status reports, and verbatim relays of another tool's output returned to the
+caller are not prose work either.
 
 Set block=true only when the prompt clearly asks the subagent to write, draft,
 revise, or polish a prose artifact. Recon, review, classification, and code work
@@ -250,6 +289,11 @@ Read-only recon that mentions docs; nothing user-facing is produced.
 <example block="false">
 model: sonnet — Review the README draft for factual errors and list them.
 Review findings go to the orchestrator; the subagent writes no user-facing prose.
+</example>
+<example block="false">
+model: sonnet — You are a low-cost wrapper: write a self-contained codex prompt reviewing this diff,
+run the codex skill, and relay its findings verbatim.
+Writing a codex prompt is tool input and the relay returns findings; nothing user-facing is produced.
 </example>
 </examples>""",
     message=lambda r: (
@@ -605,17 +649,28 @@ llm_nudge(
 deliverable is prose.
 
 <workflow_script> holds the pending Workflow call's script source. Its header quotes
-every line of the script that pins a model — a stage that is not quoted there carries
-no pin and inherits the session model, fable — already correctly routed, whatever it
+an excerpt around every model pin in the script (… marks elided text) — a stage that is
+not quoted there carries no pin and inherits the session model, fable — already correctly routed, whatever it
 writes — followed by the sentences a clause prefilter matched: each asks a writing
 verb of a prose artifact, with negated asks ("do NOT edit CHANGELOG.md") already
 screened out. Your job is precision: does a PINNED stage have prose as its own
-deliverable?
+deliverable? When the header ends with a '+N more model pins not excerpted' marker it
+was capped: absence from the header no longer proves a stage is unpinned — check the
+source before concluding a stage inherits fable.
 
 The Models rubric: all writing a user reads — READMEs, docs, changelogs, release
 notes, blog posts, announcements, any user-facing text — routes to fable. A stage's
 deliverable is prose when its agent() prompt asks it to write, draft, revise, or
 polish such an artifact.
+
+Prose means text a user will read as an artifact. A stage whose output is returned to
+the orchestrator — structured findings (file:line, severity, scenario), a PASS/FAIL or
+status report, or a verbatim relay of another tool's output — is a data deliverable, not
+prose, whatever writing verbs its prompt uses; writing a self-contained codex prompt
+writes tool input, not user-facing text. The rubric itself routes code/diff review,
+security audit, and diagnosis through model: 'sonnet', effort: 'low' stages that write a
+self-contained codex prompt and run the codex skill — those pins are mandated (a sibling
+nudge enforces them): fire=false.
 
 Set fire=true only when at least one agent() call both pins haiku/sonnet/opus and
 has prose as its deliverable. A prose stage with no pin of its own is fine, even
@@ -656,6 +711,16 @@ The orchestrator writes the prose; the pinned stage only fixes tests.
 agent('Read docs/architecture.md and list the sections that are stale', {model: 'sonnet'})
 Reading and classifying docs is analysis, not a prose deliverable.
 </example>
+<example fire="false">
+agent(`You are a low-cost wrapper: run one codex (gpt-5.5) review via the codex skill and relay verbatim.
+Report file:line + severity + defect + concrete scenario. RETURN codex's findings verbatim prefixed "CODEX SAYS:"`,
+{label: 'review', model: 'sonnet', effort: 'low'})
+The codex-wrapper relay returns findings data to the orchestrator; this sonnet/low shape is the mandated review routing.
+</example>
+<example fire="false">
+agent('Run the smoke suite and RETURN a PASS/FAIL report with findings and git status', {model: 'opus'})
+A status report returned to the orchestrator is data for the caller, not user-facing prose.
+</example>
 </examples>""",
     message=lambda r: (
         f"This workflow script pins a non-fable model on a stage whose deliverable is prose. {r.reasoning} "
@@ -691,9 +756,11 @@ llm_nudge(
     """Decide whether this workflow script runs code review or bug diagnosis stages on
 fable that should route to gpt-5.5.
 
-<workflow_script> holds the pending Workflow call's script source, headed by every
-line that pins a model — a stage not quoted there carries no pin and inherits the
-session model, fable.
+<workflow_script> holds the pending Workflow call's script source, headed by an
+excerpt around every model pin (… marks elided text) — a stage not quoted there
+carries no pin and inherits the session model, fable. When that header ends with a
+'+N more model pins not excerpted' marker it was capped: absence from the header no
+longer proves a stage is unpinned — check the source before concluding it inherits fable.
 
 The Models rubric: code/diff review stages — finder sweeps over a diff or codebase,
 adversarial refuters over findings — security review/audit stages and verification

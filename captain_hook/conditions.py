@@ -113,16 +113,17 @@ def workflow_script_source(evt: BaseHookEvent) -> str | None:
 _WF_OPT_VALUE = r"""(?:'([^'\n]*)'|"([^"\n]*)"|`([^`\n]*)`|([$\w][\w.$]*))"""
 
 
+def workflow_opt_matches(source: str, key: str) -> list[re.Match[str]]:
+    return list(re.finditer(rf"\b{re.escape(key)}[ \t]*:[ \t]*{_WF_OPT_VALUE}", source))
+
+
 def workflow_opt_values(source: str, key: str) -> list[str]:
     """Best-effort raw-source scan for values pinned to `key` in agent() opts. Never raises.
 
     Values are single-line: the whitespace around the colon is horizontal only, so a valueless
     ``key:`` at end of line does not swallow the next line's token.
     """
-    return [
-        next(g for g in m.groups() if g is not None)
-        for m in re.finditer(rf"\b{re.escape(key)}[ \t]*:[ \t]*{_WF_OPT_VALUE}", source)
-    ]
+    return [next(g for g in m.groups() if g is not None) for m in workflow_opt_matches(source, key)]
 
 
 def matches_workflow_script(cond: WorkflowScript, evt: BaseHookEvent) -> bool:

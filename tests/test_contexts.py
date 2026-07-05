@@ -9,6 +9,7 @@ import pytest
 from captain_hook.ast_grep import COMMENT_TYPES
 from captain_hook.contexts import AfterEdit, BeforeEdit, Introduced, apply_contexts, with_defaults
 from captain_hook.packs.general.models import (
+    PIN_EXCERPT_CAP,
     WORKFLOW_SCRIPT_CAP,
     ProseSpawn,
     ProseWorkflowScript,
@@ -266,10 +267,99 @@ class TestWorkflowScriptSource:
         evt = mock_tool_event("Workflow", tool_input={"script": script})
         content = ProseWorkflowScript().content(evt)
         assert content is not None
-        assert content.startswith("lines that pin a model in this script")
+        assert content.startswith("excerpts around every model pin in this script")
         assert "  agent('write the README intro', {label: 'docs', model: 'opus'})" in content
         assert "sentences the prose prefilter matched:" in content
         assert content.endswith(f"\n\n{script}")
+
+    def test_long_line_pin_excerpt_shows_opts(self) -> None:
+        script = (
+            f"await agent('do a big thing with {'x' * 400}', "
+            "{label: 'r4-find-codex', model: 'sonnet', effort: 'low'})"
+        )
+        assert len(script) > 200
+        evt = mock_tool_event("Workflow", tool_input={"script": script})
+        content = WorkflowScriptSource().content(evt)
+        assert content is not None
+        header = content.split("\n\n", 1)[0]
+        assert "label: 'r4-find-codex'" in header
+        assert "model: 'sonnet'" in header
+        assert "effort: 'low'" in header
+
+    def test_minified_multi_pin_line_keeps_separate_windows(self) -> None:
+        gap = "z" * 400
+        script = (
+            f"await agent('a {gap}', {{label: 'a', model: 'haiku'}}); "
+            f"await agent('b {gap}', {{label: 'b', model: 'opus'}})"
+        )
+        evt = mock_tool_event("Workflow", tool_input={"script": script})
+        content = WorkflowScriptSource().content(evt)
+        assert content is not None
+        header = content.split("\n\n", 1)[0]
+        assert "label: 'a'" in header and "model: 'haiku'" in header
+        assert "label: 'b'" in header and "model: 'opus'" in header
+        assert len([line for line in header.splitlines() if line.startswith("  ")]) == 2
+
+    def test_pin_near_line_start_windows_forward_to_label(self) -> None:
+        script = "agent('fix', {model: 'sonnet', label: 'lead'}) // " + "q" * 300
+        evt = mock_tool_event("Workflow", tool_input={"script": script})
+        content = WorkflowScriptSource().content(evt)
+        assert content is not None
+        header = content.split("\n\n", 1)[0]
+        excerpt = next(line for line in header.splitlines() if line.startswith("  agent("))
+        assert excerpt.endswith("…")
+        assert "label: 'lead'" in excerpt
+        assert excerpt[2:-1] in script  # body is a verbatim substring; only the trailing … is inserted
+
+    def test_indented_line_kept_verbatim(self) -> None:
+        script = "  agent('write the README intro', {model: 'opus'})\n"
+        evt = mock_tool_event("Workflow", tool_input={"script": script})
+        content = WorkflowScriptSource().content(evt)
+        assert content is not None
+        assert "    agent('write the README intro', {model: 'opus'})" in content  # 2-space prefix + source indent
+
+    def test_indented_windowed_line_body_is_verbatim(self) -> None:
+        line = "    await agent('do a thing with " + "x" * 400 + "', {label: 'deep', model: 'sonnet', effort: 'low'})"
+        script = line + "\n"
+        evt = mock_tool_event("Workflow", tool_input={"script": script})
+        content = WorkflowScriptSource().content(evt)
+        assert content is not None
+        header = content.split("\n\n", 1)[0]
+        excerpt = next(hl for hl in header.splitlines() if "model: 'sonnet'" in hl)
+        assert excerpt.startswith("  ")
+        assert excerpt[2:].strip("…") in script  # body between prefix and elision markers is an exact substring
+        assert "label: 'deep'" in excerpt
+
+    def test_header_capped_with_marker_and_correct_count(self) -> None:
+        pins = "".join(f"agent('s{i} {'q' * 400}', {{model: 'sonnet', label: 'p{i:02d}'}}); " for i in range(20))
+        assert len(pins) < WORKFLOW_SCRIPT_CAP  # isolate the header cap from source truncation
+        evt = mock_tool_event("Workflow", tool_input={"script": pins})
+        content = WorkflowScriptSource().content(evt)
+        assert content is not None
+        header = content.split("\n\n", 1)[0]
+        lead, pin_block = header.split("\n", 1)
+        assert lead.startswith("excerpts around the first model pins in this script")
+        assert "NOT necessarily unpinned" in lead
+        block_lines = pin_block.splitlines()
+        marker = block_lines[-1]
+        excerpt_lines = block_lines[:-1]
+        assert marker.startswith("  … [+") and marker.endswith(" more model pins not excerpted]")
+        dropped = int(marker[len("  … [+") : marker.index(" more")])
+        assert dropped == 20 - len(excerpt_lines)  # non-adjacent pins → one pin per window
+        assert 0 < dropped < 20
+        assert len("\n".join(excerpt_lines)) <= PIN_EXCERPT_CAP
+        assert "label: 'p00'" in excerpt_lines[0]  # first windows intact
+
+    def test_uncapped_header_is_byte_identical_no_marker(self) -> None:
+        script = "agent('write the README intro', {label: 'docs', model: 'opus'})\n"
+        evt = mock_tool_event("Workflow", tool_input={"script": script})
+        content = WorkflowScriptSource().content(evt)
+        assert content is not None
+        assert "more model pins not excerpted" not in content
+        assert content.startswith(
+            "excerpts around every model pin in this script "
+            "(a stage not quoted here inherits the session model, fable):"
+        )
 
     def test_no_pins_says_none(self) -> None:
         evt = mock_tool_event("Workflow", tool_input={"script": "agent('write the README intro')"})

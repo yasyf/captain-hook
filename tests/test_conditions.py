@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from captain_hook.app import on
-from captain_hook.conditions import check_condition, matches_conditions
+from captain_hook.conditions import check_condition, matches_conditions, workflow_opt_matches
 from captain_hook.context import load_transcript
 from captain_hook.events import (
     BaseHookEvent,
@@ -450,6 +450,12 @@ class TestWorkflowScriptCondition:
         assert WorkflowScript(model="a", effort="b") == WorkflowScript(effort="b", model="a")
         assert hash(WorkflowScript(model="a", effort="b")) == hash(WorkflowScript(effort="b", model="a"))
         assert len({WorkflowScript(model="a", effort="b"), WorkflowScript(effort="b", model="a")}) == 1
+
+    def test_workflow_opt_matches_reports_spans(self) -> None:
+        source = "agent('x', {model: 'haiku'}); agent('y', {model: 'opus'})"
+        matches = workflow_opt_matches(source, "model")
+        assert [m.group(1) for m in matches] == ["haiku", "opus"]
+        assert [source[m.start() : m.end()] for m in matches] == ["model: 'haiku'", "model: 'opus'"]
 
     @pytest.mark.parametrize(
         ("cond", "pinned", "expected"),
