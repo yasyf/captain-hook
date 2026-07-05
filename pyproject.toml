@@ -21,7 +21,7 @@ classifiers = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "cc-transcript>=8,<9",
+    "cc-transcript>=8.1,<9",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "ast-grep-py>=0.39,<1",
@@ -34,7 +34,7 @@ dependencies = [
     "lazy-object-proxy>=1.12.0",
     "filelock>=3",
     "loguru>=0.7.3",
-    "spawnllm>=0.5.2,<0.6",
+    "spawnllm>=0.5.4,<0.6",
 ]
 
 [project.optional-dependencies]
@@ -110,9 +110,6 @@ docs = [
     # `griffe` module layout that great-docs imports, overriding the legacy
     # griffe<2 pin great-docs itself declares.
     "griffelib>=2.0",
-    # Tracking great-docs main until they cut a release newer than 0.13.0: the
-    # pinned commit carries build-time GitHub stats (802a5c9d), which drop the
-    # widget's client-side API calls (the source of the navbar 403s).
-    "great-docs @ git+https://github.com/posit-dev/great-docs@d8540ae2",
+    "great-docs>=0.14",
 ]
 

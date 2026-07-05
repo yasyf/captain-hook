@@ -298,7 +298,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "ast-grep-py", specifier = ">=0.39,<1" },
-    { name = "cc-transcript", specifier = ">=8,<9" },
+    { name = "cc-transcript", specifier = ">=8.1,<9" },
     { name = "click", specifier = ">=8" },
     { name = "filelock", specifier = ">=3" },
     { name = "funcy", specifier = ">=2.0" },
@@ -314,14 +314,14 @@ requires-dist = [
     { name = "rich", specifier = ">=13" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "spacy", specifier = ">=3.7" },
-    { name = "spawnllm", specifier = ">=0.5.2,<0.6" },
+    { name = "spawnllm", specifier = ">=0.5.4,<0.6" },
     { name = "wn", specifier = ">=1.1.0" },
 ]
 provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 docs = [
-    { name = "great-docs", git = "https://github.com/posit-dev/great-docs?rev=d8540ae2" },
+    { name = "great-docs", specifier = ">=0.14" },
     { name = "griffelib", specifier = ">=2.0" },
 ]
 
@@ -620,8 +620,8 @@ wheels = [
 
 [[package]]
 name = "great-docs"
-version = "0.13.1.dev10+gd8540ae24"
-source = { git = "https://github.com/posit-dev/great-docs?rev=d8540ae2#d8540ae249c367f467851a95cbf02453f8464d65" }
+version = "0.14.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "griffe", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -631,6 +631,10 @@ dependencies = [
     { name = "pygments", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "requests", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "ruff", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e4/1f/8e56546184763f3bca4d45a1d3455201b1a41c6cdbc6656e04078fa3958a/great_docs-0.14.1.tar.gz", hash = "sha256:891f0461b13143f35515202d06df8abd2a22b2e25a19f04728868bb8f182069e", size = 30994450, upload-time = "2026-06-25T20:59:53.338Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/60/68/ea67105323646c2c595172a6ec89267fc22a9d5a957ff7ec3f117eb8b6d6/great_docs-0.14.1-py3-none-any.whl", hash = "sha256:b91b569fa3173819b34b2c0fdff4277686ae3ddbe235c8d840445095d0e5fddb", size = 961301, upload-time = "2026-06-25T20:59:50.784Z" },
 ]
 
 [[package]]
