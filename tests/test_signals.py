@@ -261,6 +261,45 @@ class TestTranscriptTexts:
         assert len(result) == 2
 
 
+class TestTranscriptTextsUserPrompt:
+    """UserPromptSubmit scans the prior assistant turn, not just the prompt.
+
+    The canonical miss: the assistant dumps options as prose, the user replies "hmm".
+    The tells live in the prior ASSISTANT turn — not yet joined by the new prompt in the
+    transcript — so the UPS scan must reach back into the recent window. Uses the verbatim
+    wall_of_text signals and the f08 writeup already pinned in test_wall_of_text_f08.
+    """
+
+    @staticmethod
+    def ups_event(messages: list[dict[str, Any]], prompt: str) -> Any:
+        from captain_hook.events import UserPromptSubmitEvent
+
+        return UserPromptSubmitEvent(_raw={"prompt": prompt}, ctx=make_ctx(messages=messages))
+
+    def test_prepends_prompt_to_recent_assistant_window(self) -> None:
+        from captain_hook.signals import transcript_texts
+        from tests.test_wall_of_text_f08 import F08_WRITEUP
+
+        evt = self.ups_event([raw_msg("assistant", F08_WRITEUP)], "hmm")
+        assert transcript_texts(evt, 6) == ["hmm", F08_WRITEUP]
+
+    def test_assistant_entry_passes_wall_gate(self) -> None:
+        from captain_hook.signals import transcript_texts
+        from tests.test_wall_of_text_f08 import F08_WRITEUP, WALL_OF_TEXT
+
+        evt = self.ups_event([raw_msg("assistant", F08_WRITEUP)], "hmm")
+        entries = transcript_texts(evt, WALL_OF_TEXT.window)
+        triggering = PrimitiveState().match_signals(WALL_OF_TEXT, entries)
+        assert triggering == [F08_WRITEUP]
+
+    def test_window_zero_scores_prompt_alone(self) -> None:
+        from captain_hook.signals import transcript_texts
+        from tests.test_wall_of_text_f08 import F08_WRITEUP
+
+        evt = self.ups_event([raw_msg("assistant", F08_WRITEUP)], "hmm")
+        assert transcript_texts(evt, 0) == ["hmm"]
+
+
 class TestTranscriptTextsProse:
     @staticmethod
     def texts_for(messages: list[dict[str, Any]], window: int | Literal["turn"] = 10) -> list[str]:

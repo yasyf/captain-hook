@@ -68,23 +68,34 @@ def block_texts(event: UserEvent | AssistantEvent) -> Iterator[str]:
 def transcript_texts(evt: BaseHookEvent, window: int | Literal["turn"]) -> list[str]:
     """Extract prose from recent transcript events for signal scoring.
 
-    For ``UserPromptSubmit`` events, returns just the user prompt. Otherwise scans
-    the last ``window`` events — the whole current turn when ``window`` is
+    Scans the last ``window`` events — the whole current turn when ``window`` is
     ``"turn"`` — and returns one entry per prose source: each event's ``.text``,
     each thinking block, and the prose fields of prose-carrying tool calls
     (``ReportFindings`` findings, ``TaskCreate``/``TaskUpdate`` subjects and
     descriptions, ``TodoWrite`` todos).
+
+    A fixed ``window`` counts raw JSONL events, not turns, so tool-call traffic
+    between a target assistant message and the triggering event can crowd that
+    text out of a small window (a writeup then four ``Read`` pairs drops the
+    writeup at ``window=6``); pass ``window="turn"`` for whole-prior-turn semantics.
+
+    On ``UserPromptSubmit`` the just-submitted prompt is not yet in the transcript,
+    so it is prepended as its own entry ahead of that window: a UPS-scored hook
+    scores the prior assistant turn (e.g. an option dump the user is replying to)
+    alongside the new prompt. Use ``window=0`` for a UPS hook that must score the
+    prompt alone.
     """
-    if evt.event == Event.UserPromptSubmit and evt.user_prompt:
-        return [evt.user_prompt]
     scope = evt.ctx.turn if window == "turn" else evt.ctx.t.recent(window)
-    return [
+    texts = [
         text
         for event in scope.events
         if isinstance(event, UserEvent | AssistantEvent)
         for text in (event.text, *block_texts(event))
         if text
     ]
+    if evt.event == Event.UserPromptSubmit and evt.user_prompt:
+        return [evt.user_prompt, *texts]
+    return texts
 
 
 def cite_message(sig: Signals, triggering: list[str], message: str) -> str:

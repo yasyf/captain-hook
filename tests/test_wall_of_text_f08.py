@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 
 from captain_hook.context import HookContext
-from captain_hook.events import PostToolUseEvent
+from captain_hook.events import PostToolUseEvent, UserPromptSubmitEvent
 from captain_hook.session import SessionStore
 from captain_hook.signals import score_signals, transcript_texts
 from captain_hook.state import PrimitiveState
@@ -53,6 +53,11 @@ F08_WRITEUP = (
 def post_tool_event(messages: list[dict[str, object]], tmp_path: Path) -> PostToolUseEvent:
     ctx = HookContext(session=SessionStore(tmp_path), transcript=fixture_session(messages), settings=None)
     return PostToolUseEvent(_raw={"tool_name": "Read", "tool_input": {"file_path": "/x/ARCH.md"}}, ctx=ctx)
+
+
+def ups_event(messages: list[dict[str, object]], prompt: str, tmp_path: Path) -> UserPromptSubmitEvent:
+    ctx = HookContext(session=SessionStore(tmp_path), transcript=fixture_session(messages), settings=None)
+    return UserPromptSubmitEvent(_raw={"prompt": prompt}, ctx=ctx)
 
 
 class TestF08GatePasses:
@@ -109,3 +114,22 @@ class TestSplitAcrossMessagesMisses:
         scores = [score_signals(WALL_OF_TEXT.patterns, e) for e in entries]
         assert scores == [0, 1, 2]
         assert PrimitiveState().match_signals(WALL_OF_TEXT, entries) is None
+
+
+class TestF08UserPromptSubmitGatePasses:
+    """The f08 writeup sits in the PRIOR assistant turn and the user replies 'hmm' (cc-notes 9285107).
+
+    UserPromptSubmit no longer short-circuits to the bare prompt: the writeup is scanned as its own
+    entry and trips the gate. These fail if the short-circuit is reverted (entries collapse to ['hmm'],
+    which scores 0 and yields no match).
+    """
+
+    def test_prompt_is_prepended_to_prior_writeup(self, tmp_path: Path) -> None:
+        evt = ups_event([raw_msg("assistant", F08_WRITEUP)], "hmm", tmp_path)
+        assert transcript_texts(evt, WALL_OF_TEXT.window) == ["hmm", F08_WRITEUP]
+
+    def test_gate_passes_on_writeup_entry(self, tmp_path: Path) -> None:
+        evt = ups_event([raw_msg("assistant", F08_WRITEUP)], "hmm", tmp_path)
+        entries = transcript_texts(evt, WALL_OF_TEXT.window)
+        assert [score_signals(WALL_OF_TEXT.patterns, e) for e in entries] == [0, 3]
+        assert PrimitiveState().match_signals(WALL_OF_TEXT, entries) == [F08_WRITEUP]
