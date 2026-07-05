@@ -7,7 +7,9 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from cc_transcript import parse_events_from_bytes
+from cc_transcript.filterspec import ANSWERED_PREFIX, ANSWERED_TRAILER
 from cc_transcript.judge import JudgeError
+from cc_transcript.mining.signals import NO_OPTION_SELECTED
 
 from captain_hook.review.judge import ReviewVerdict
 from captain_hook.review.repo import RepoKey
@@ -96,6 +98,41 @@ def correction_entries(*, session: str = "sess-1", timestamp: str = BASE_TS, **o
     return [
         assistant_text("I'll wrap the parser in a bare except", sessionId=session, timestamp=timestamp, **overrides),
         user_text(CORRECTION, sessionId=session, timestamp=timestamp, **overrides),
+    ]
+
+
+def ask_user_question_round(
+    question: str,
+    *,
+    notes: str | None = None,
+    selected: str | None = None,
+    options: tuple[str, ...] = (),
+    header: str = "Choice",
+    multi_select: bool = False,
+    tool_id: str = "q1",
+    session: str = "sess-1",
+    timestamp: str = BASE_TS,
+) -> list[dict[str, Any]]:
+    value = f'"{selected}"' if selected is not None else NO_OPTION_SELECTED
+    body = f'"{question}"={value}' + (f" notes: {notes}" if notes is not None else "")
+    return [
+        assistant_tool_use(
+            tool_id,
+            "AskUserQuestion",
+            {
+                "questions": [
+                    {
+                        "question": question,
+                        "header": header,
+                        "multiSelect": multi_select,
+                        "options": [{"label": label} for label in options],
+                    }
+                ]
+            },
+            sessionId=session,
+            timestamp=timestamp,
+        ),
+        tool_result(tool_id, ANSWERED_PREFIX + body + ANSWERED_TRAILER, sessionId=session, timestamp=timestamp),
     ]
 
 

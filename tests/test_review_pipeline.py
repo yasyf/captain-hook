@@ -26,8 +26,10 @@ from captain_hook.review.judge import (
     REVIEW_PROMPT_VERSION,
     JudgeReport,
     ReviewVerdict,
+    build_create_prompt,
     build_prompt,
     judge_pass,
+    question_answer_block,
 )
 from captain_hook.review.pipeline import (
     BRAIN_ALLOWED_TOOLS,
@@ -42,12 +44,13 @@ from captain_hook.review.pipeline import (
     spawn_session,
 )
 from captain_hook.review.repo import RepoKey
-from captain_hook.review.scan import REVIEWER_MARKER, scan_transcript
+from captain_hook.review.scan import REVIEWER_MARKER, ScanReport, scan_transcript
 from captain_hook.review.settings import ReviewSettings, resolve_review_db_path
 from captain_hook.review.store import ReviewStore
 from tests.review_helpers import (
     CORRECTION,
     REPO,
+    ask_user_question_round,
     assistant_text,
     assistant_tool_use,
     correction_entries,
@@ -67,6 +70,9 @@ if TYPE_CHECKING:
 
 GIT_REPO_KEY = RepoKey("github.com/yasyf/scratch")
 SECOND_CORRECTION = "never run pip directly, always go through uv in this repo"
+QUESTION = "Which HTML parser should we standardize on?"
+OTHER_QUESTION = "Which cache backend should we use for the session store?"
+ANSWER = "use selectolax everywhere, it is much faster than lxml for our workload"
 ALL_CATEGORIES = (
     "durable_style_rule",
     "workflow_rule",
@@ -373,6 +379,94 @@ class TestJudgePass:
         assert "pip install foo" in prompt
         assert CORRECTION in prompt
         assert "DURABLE correction worth encoding as an" in prompt
+
+
+class TestQuestionAnswer:
+    async def test_answered_round_scans_to_one_candidate_with_question_digest(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path
+    ) -> None:
+        transcript = write_transcript(
+            tmp_path / "s.jsonl",
+            [
+                user_text("decide the parser"),
+                *ask_user_question_round(QUESTION, notes=ANSWER, options=("lxml", "html.parser (Recommended)")),
+            ],
+        )
+        report = await scan_transcript(store, transcript, settings=settings, repo_key=REPO)
+        assert report == ScanReport(scanned=1, inserted=1)
+        [row] = await store.candidates(REPO)
+        assert row["source_kind"] == "question_answer"
+        assert row["rule"] == dedup_key("question_answer", QUESTION, ANSWER)
+        assert row["observations"] == 1
+        assert row["sample_text"] == ANSWER
+
+    async def test_same_question_coalesces_across_sessions_but_distinct_questions_do_not(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path
+    ) -> None:
+        for session in ("s1", "s2"):
+            await scan_transcript(
+                store,
+                write_transcript(
+                    tmp_path / f"{session}.jsonl", ask_user_question_round(QUESTION, notes=ANSWER, session=session)
+                ),
+                settings=settings,
+                repo_key=REPO,
+            )
+        [coalesced] = await store.candidates(REPO)
+        assert coalesced["rule"] == dedup_key("question_answer", QUESTION, ANSWER)
+        assert coalesced["observations"] == 2
+        await scan_transcript(
+            store,
+            write_transcript(
+                tmp_path / "s3.jsonl", ask_user_question_round(OTHER_QUESTION, notes=ANSWER, session="s3")
+            ),
+            settings=settings,
+            repo_key=REPO,
+        )
+        assert {row["rule"] for row in await store.candidates(REPO)} == {
+            dedup_key("question_answer", QUESTION, ANSWER),
+            dedup_key("question_answer", OTHER_QUESTION, ANSWER),
+        }
+
+    def test_build_create_prompt_renders_question_block_for_question_answer_only(self) -> None:
+        payload = {"question": QUESTION, "picked_labels": [], "multi_select": False, "recommended_pick": False}
+        qa_row = {
+            "source_kind": "question_answer",
+            "payload_json": json.dumps(payload),
+            "text": ANSWER,
+            "context_json": "{}",
+        }
+        qa_prompt = build_create_prompt(qa_row, "CONTEXT")
+        assert "=== QUESTION THE ASSISTANT ASKED ===" in qa_prompt
+        assert QUESTION in qa_prompt
+        assert "developer's answer to that question" in qa_prompt
+        assert qa_prompt.endswith(f"=== FEEDBACK TO CLASSIFY ===\n{ANSWER}")
+        tm_row = {
+            "source_kind": "transcript_message",
+            "payload_json": "null",
+            "text": CORRECTION,
+            "context_json": "{}",
+        }
+        tm_prompt = build_create_prompt(tm_row, "CONTEXT")
+        assert "QUESTION THE ASSISTANT ASKED" not in tm_prompt
+        assert CORRECTION in tm_prompt
+
+    def test_question_block_marks_recommended_pick_and_multi_select(self) -> None:
+        payload = {
+            "question": QUESTION,
+            "picked_labels": ["lxml", "html.parser (Recommended)"],
+            "multi_select": True,
+            "recommended_pick": True,
+        }
+        row = {
+            "source_kind": "question_answer",
+            "payload_json": json.dumps(payload),
+            "text": ANSWER,
+            "context_json": "{}",
+        }
+        block = question_answer_block(row)
+        assert "options lxml; html.parser (Recommended)" in block
+        assert "the option the assistant marked (Recommended)" in block
 
 
 @requires_llm_backend

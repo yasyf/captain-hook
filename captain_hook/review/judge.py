@@ -26,6 +26,7 @@ from cc_transcript.judge.llm import resolved_model, structured_judge
 from cc_transcript.judge.verdicts import run_verdicts
 from cc_transcript.mining.candidates import DedupKey
 from cc_transcript.mining.confidence import NOISE_FLOOR
+from cc_transcript.mining.sourcekind import QUESTION_ANSWER
 from cc_transcript.render import Budget
 from pydantic import BaseModel, Field
 
@@ -131,6 +132,27 @@ async def render_context(window: ContextWindow) -> tuple[str, Fidelity]:
     )
 
 
+def question_answer_block(row: Mapping[str, object]) -> str:
+    if str(row["source_kind"]) != QUESTION_ANSWER:
+        return ""
+    payload: dict[str, object] = json.loads(str(row["payload_json"]))
+    match payload["picked_labels"]:
+        case []:
+            resolved = "The developer picked none of the offered options and wrote a freeform answer."
+        case [*labels]:
+            choice = "options" if payload["multi_select"] else "option"
+            standing = (
+                "which is the option the assistant marked (Recommended)"
+                if payload["recommended_pick"]
+                else "which is not the recommended option"
+            )
+            resolved = f"The answer resolves to the {choice} {'; '.join(map(str, labels))} — {standing}."
+    return (
+        f"=== QUESTION THE ASSISTANT ASKED ===\n{payload['question']}\n{resolved}\n"
+        "The feedback below is the developer's answer to that question.\n"
+    )
+
+
 def build_create_prompt(row: Mapping[str, object], context: str) -> str:
     return f"""\
 You are auditing one piece of feedback a developer gave an AI coding assistant
@@ -170,7 +192,7 @@ Respond with strict JSON matching the schema — no extra keys, no prose.
 
 [source: {row["source_kind"]}]
 {context}
-=== FEEDBACK TO CLASSIFY ===
+{question_answer_block(row)}=== FEEDBACK TO CLASSIFY ===
 {row["text"]}"""
 
 

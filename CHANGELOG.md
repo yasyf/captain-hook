@@ -4,7 +4,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [8.4.0] - 2026-07-05
+
+### Added
+- The session reviewer ingests cc-transcript 8.1's `ask_user_question` detector instead
+  of crashing on it: answered `AskUserQuestion` rounds mine as `question_answer`
+  correction candidates, keyed by question + answer text so multi-question rounds never
+  collide and identical freeform answers coalesce across sessions. The judge prompt
+  renders the question and the resolved pick above the answer under judgment. Previously
+  any session containing an answered question round crashed the scan with
+  `AssertionError: ask_user_question`.
 
 ### Changed
 - Signal scoring reads all transcript prose, not just visible text: `transcript_texts`
