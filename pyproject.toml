@@ -34,7 +34,7 @@ dependencies = [
     "lazy-object-proxy>=1.12.0",
     "filelock>=3",
     "loguru>=0.7.3",
-    "spawnllm>=0.5.4,<0.6",
+    "spawnllm>=0.5.5,<0.6",
 ]
 
 [project.optional-dependencies]

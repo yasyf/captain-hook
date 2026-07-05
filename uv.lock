@@ -314,7 +314,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "spacy", specifier = ">=3.7" },
-    { name = "spawnllm", specifier = ">=0.5.4,<0.6" },
+    { name = "spawnllm", specifier = ">=0.5.5,<0.6" },
     { name = "wn", specifier = ">=1.1.0" },
 ]
 provides-extras = ["dev"]
@@ -2237,7 +2237,7 @@ wheels = [
 
 [[package]]
 name = "spawnllm"
-version = "0.5.4"
+version = "0.5.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anthropic", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -2246,9 +2246,9 @@ dependencies = [
     { name = "openai", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "pydantic", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1d/fb/fe05941fad408c6d34576a2cd5c57ad98ac8a377858869e9de2c0b369d8f/spawnllm-0.5.4.tar.gz", hash = "sha256:6ce81fb481497d7e4109cace54bbf6e119cabda795ec1e7b3c90cc0d0dbb7ada", size = 29283, upload-time = "2026-07-02T11:23:28.804Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a2/4b/cc657752f7494a4d031a5874ce12a2540cbd44460eb4fdf7011393f1283c/spawnllm-0.5.5.tar.gz", hash = "sha256:be78ff46ac56df54edca94d2385f8602ea854231d9414fe1adb0a2aa5b2075c3", size = 29378, upload-time = "2026-07-05T09:32:01.958Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ff/dd/850867936187376924367d8aa0a4923a47ddc23b0117fa9067833bca637c/spawnllm-0.5.4-py3-none-any.whl", hash = "sha256:b13f16805537c072d51ccd08dd5d75c82bd8b62a95069f28b1a9036af0baca61", size = 40294, upload-time = "2026-07-02T11:23:27.48Z" },
+    { url = "https://files.pythonhosted.org/packages/98/76/7049b76c50cc461b4dd0c02dc55ef9730f6cf004339c1146d2b83a484cba/spawnllm-0.5.5-py3-none-any.whl", hash = "sha256:7e2c66a089a66296ea4c59c316634e52f377ade7666bde4a58451a2961df97e4", size = 40335, upload-time = "2026-07-05T09:32:00.684Z" },
 ]
 
 [[package]]
