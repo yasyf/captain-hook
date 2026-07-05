@@ -4,6 +4,35 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.5.0] - 2026-07-05
+
+### Changed
+- **`UserPromptSubmit` signal hooks now scan recent conversation, not just the
+  prompt.** `transcript_texts` used to short-circuit `UserPromptSubmit` to the
+  user's prompt alone, so a signal nudge could never fire on "assistant dumps
+  options as prose, user replies 'hmm'" — the wall lived in the prior assistant
+  turn, which the prefilter never saw, and coverage rode entirely on
+  `PostToolUse`. The prompt is now prepended as its own entry to the same
+  `Signals.window` scan every other event gets; `window=0` keeps a hook
+  prompt-only, and `window="turn"` scans the whole prior turn (a fixed window
+  counts raw events, so tool traffic can crowd the target text out of a small
+  one). Per-entry scoring is unchanged.
+- The builtin multi-request nudge judges the user's prompt alone (`window=0`).
+  Its old `window=1` was inert under the short-circuit, and would otherwise have
+  read the prior assistant turn's numbered lists as "several distinct requests".
+- Dependency floors moved to the latest cc-family releases
+  (`cc-transcript>=8.1`).
+
+### Fixed
+- **Review-backend LLM verdicts run in untrusted and non-git directories
+  again.** spawnllm's codex backend refused such cwds ("Not inside a trusted
+  directory"), and `llm_evaluate`'s fail-safe swallowed the error — every
+  review-backend `llm_nudge`/`llm_gate` silently no-opped there. The dependency
+  floor moves to spawnllm 0.5.5, which passes `--skip-git-repo-check`; the
+  read-only sandbox already confines the run. Regression tests pin the
+  wall-of-text gate math on the motivating rubric shape at both `PostToolUse`
+  and `UserPromptSubmit`.
+
 ## [8.4.0] - 2026-07-05
 
 ### Added
