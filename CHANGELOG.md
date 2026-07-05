@@ -31,6 +31,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wall-of-text gate math on the motivating rubric shape at both `PostToolUse`
   and `UserPromptSubmit`.
 
+- **Model-pin headers quote the pin, not the line head.** `WorkflowScriptSource`'s
+  header truncated each pinning line to its first 200 characters, so a long
+  single-line `agent()` call with opts at the end showed neither its `label:` nor
+  its `model:` — the routing classifier read the stage as unpinned and nudged
+  already-correct workflows. Excerpts are now verbatim windows around every
+  `model:` match, `…`-marked only where text is elided, and the header is budgeted
+  (`PIN_EXCERPT_CAP`) with an explicit `+N more model pins not excerpted` marker so
+  a minified many-pin line cannot crowd the script out of the context cap.
+- **Findings relays are no longer "prose."** The workflow prose nudge and the spawn
+  prose gate read codex-wrapper review relays and PASS/FAIL status reports as prose
+  deliverables and nudged them toward fable, contradicting the sibling nudge that
+  mandates the sonnet/low codex-wrapper shape for review stages. Both rubrics now
+  state that output returned to the orchestrator — structured findings, status
+  reports, verbatim relays — is a data deliverable, with contrastive examples.
+  Replayed against the captured misfires: codex-relay 4/5 → 0/5, smoke-report
+  3/3 → 0/3; a genuinely pinned prose stage still fires 3/3.
 ## [8.4.1] - 2026-07-05
 
 ### Changed
