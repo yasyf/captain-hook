@@ -142,12 +142,25 @@ nudge(
             Signal(pattern=rf"(?s)(?:.*?{IMPERATIVES}){{2}}", weight=1, flags=re.I),
         ],
         threshold=2,
-        window=1,
+        window=0,
     ),
     tests={
         Input(prompt="1. add foo\n2. fix bar\n3. update baz"): Warn(),
         Input(prompt="just fix the typo"): Allow(),
         Input(prompt="1. add foo\n2. fix bar\n3. update baz", permission_mode="plan"): Allow(),
+        Input(
+            prompt="thanks, that works",
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": "Done. I made three changes:\n1. Fixed X\n2. Added Y\n3. Updated Z"}
+                        ]
+                    },
+                }
+            ],
+        ): Allow(),
         Input(
             prompt=(
                 "<task-notification>\n<task-id>abc</task-id>\n<status>completed</status>\n"
