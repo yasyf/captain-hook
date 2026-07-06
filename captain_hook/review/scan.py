@@ -108,6 +108,9 @@ stop-hook output, command echoes, trivial acknowledgements, very short control
 messages, and sidechain/meta/compacted/empty turns.
 """
 
+COLLAPSE_DETECTORS = frozenset({"exit_plan_rejection", "plan_reentry", "denial", "interrupt", "review_comment"})
+"""CREATE detectors whose surviving signal shadows an equal-text ``transcript_message`` at the same event."""
+
 
 @dataclass(frozen=True, slots=True)
 class ScanReport:
@@ -278,6 +281,21 @@ async def record_corrections(
         )
 
 
+def collapse_cross_detector(
+    kept: Sequence[tuple[MiningSignal, FeedbackCandidate]],
+) -> list[tuple[MiningSignal, FeedbackCandidate]]:
+    shadowed = {
+        (sig.session_id, sig.event_uuid, sig.text)
+        for sig, _ in kept
+        if sig.detector in COLLAPSE_DETECTORS and sig.event_uuid is not None
+    }
+    return [
+        (sig, candidate)
+        for sig, candidate in kept
+        if not (sig.detector == "transcript_message" and (sig.session_id, sig.event_uuid, sig.text) in shadowed)
+    ]
+
+
 async def ingest(
     store: ReviewStore, parsed: ParsedTranscript, *, settings: ReviewSettings, repo_key: RepoKey | None
 ) -> ScanReport:
@@ -289,27 +307,28 @@ async def ingest(
         iter_hook_complaint_signals(parsed.events, decisions=open_decision_log(decisions_db_path())),
         detect(parsed.events),
     )
-    kept = list(candidates_from(parsed.events, signals, settings=settings))
+    kept = collapse_cross_detector(list(candidates_from(parsed.events, signals, settings=settings)))
     inserted = await store.record_file_scan(str(parsed.path), parsed.mtime, [candidate for _, candidate in kept])
     for sig, candidate in kept:
-        candidate_id = (
-            await store.ensure_candidate(
-                fix_repo(repo_key, str(sig.evidence["target_source_file"])),
-                kind=CandidateKind.FIX,
-                rule=dedup_key(*rule_parts(sig)),
-                source_kind=sig.kind,
-                target_source_file=str(sig.evidence["target_source_file"]),
-                target_hook_name=str(sig.evidence["target_hook_name"]),
-                misfire_class=str(sig.evidence["misfire_class"]),
+        async with store.store.transaction():
+            candidate_id = (
+                await store.ensure_candidate(
+                    fix_repo(repo_key, str(sig.evidence["target_source_file"])),
+                    kind=CandidateKind.FIX,
+                    rule=dedup_key(*rule_parts(sig)),
+                    source_kind=sig.kind,
+                    target_source_file=str(sig.evidence["target_source_file"]),
+                    target_hook_name=str(sig.evidence["target_hook_name"]),
+                    misfire_class=str(sig.evidence["misfire_class"]),
+                )
+                if sig.kind == HOOK_COMPLAINT
+                else await store.ensure_candidate(
+                    repo_key, kind=CandidateKind.CREATE, rule=dedup_key(*rule_parts(sig)), source_kind=sig.kind
+                )
             )
-            if sig.kind == HOOK_COMPLAINT
-            else await store.ensure_candidate(
-                repo_key, kind=CandidateKind.CREATE, rule=dedup_key(*rule_parts(sig)), source_kind=sig.kind
+            await store.record_observation(
+                candidate_id, dedup_key=candidate.dedup_key, session_id=sig.session_id, occurred_at=sig.occurred_at
             )
-        )
-        await store.record_observation(
-            candidate_id, dedup_key=candidate.dedup_key, session_id=sig.session_id, occurred_at=sig.occurred_at
-        )
     await record_corrections(parsed.events, kept, repo=transcript_cwd(parsed.events))
     return ScanReport(scanned=1, inserted=inserted)
 

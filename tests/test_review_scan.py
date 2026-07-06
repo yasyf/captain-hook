@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+import contextlib
 import json
+import sqlite3
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from cc_transcript import keep
-from cc_transcript.mining.candidates import DedupKey, dedup_key
+from cc_transcript.context import ContextWindow
+from cc_transcript.ids import EventRef, EventUuid, SessionId
+from cc_transcript.mining.candidates import DedupKey, FeedbackCandidate, dedup_key
+from cc_transcript.mining.signals import CandidateSignal, MiningSignal
 
 from captain_hook.review.scan import (
     REVIEWER_MARKER,
     STRICT_USER,
     ScanReport,
+    collapse_cross_detector,
     detect,
     parts,
     rule_parts,
@@ -35,6 +42,38 @@ from tests.review_helpers import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+WHEN = datetime(2026, 6, 1, tzinfo=UTC)
+PLACEHOLDER_REF = EventRef(SessionId("s1"), EventUuid("u0"))
+PLACEHOLDER_CANDIDATE = FeedbackCandidate(
+    dedup_key=DedupKey("k"),
+    source_kind="transcript_message",
+    occurred_at=WHEN,
+    text="t",
+    window=ContextWindow(anchor=PLACEHOLDER_REF, before=(), trigger=None, after=(), fidelity="full", preview_chars=0),
+    ref=PLACEHOLDER_REF,
+    signal=CandidateSignal(0.9),
+)
+
+
+def signal_pair(
+    detector: str, text: str, *, event_uuid: EventUuid | None = EventUuid("u1"), session: str = "s1"
+) -> tuple[MiningSignal, FeedbackCandidate]:
+    return (
+        MiningSignal(
+            kind="transcript_message",
+            detector=detector,
+            session_id=SessionId(session),
+            event_index=0,
+            event_uuid=event_uuid,
+            occurred_at=WHEN,
+            text=text,
+            cc_version=None,
+            trigger_index=0,
+            signal=CandidateSignal(0.9),
+        ),
+        PLACEHOLDER_CANDIDATE,
+    )
 
 
 async def rows(store: ReviewStore, query: str) -> list[dict[str, Any]]:
@@ -104,6 +143,41 @@ class TestDedupDesign:
         assert len(await rows(store, "SELECT * FROM feedback_events")) == 1
         assert len(await rows(store, "SELECT * FROM candidates")) == 1
         assert len(await rows(store, "SELECT * FROM candidate_observations")) == 1
+
+
+class TestSweepIngestRace:
+    async def test_ingest_pair_survives_concurrent_regroup_sweep(
+        self, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db = tmp_path / "review.db"
+        path = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        async with await ReviewStore.open(db) as ingesting, await ReviewStore.open(db) as sweeping:
+            # A short busy_timeout so the fix's held write lock fails the sweep's
+            # BEGIN IMMEDIATE fast instead of stalling on the default 5s timeout.
+            await sweeping.store.conn.execute("PRAGMA busy_timeout = 200")
+            record = ingesting.record_observation
+            fired = False
+
+            async def racing_record(*args: Any, **kwargs: Any) -> None:
+                # Fire a concurrent regroup sweep in the exact window between the
+                # ingest loop's ensure_candidate and record_observation — the
+                # cross-process interleaving the per-pair transaction must defeat.
+                nonlocal fired
+                if not fired:
+                    fired = True
+                    with contextlib.suppress(sqlite3.OperationalError):
+                        await sweeping.regroup_create(prompt_version=PROMPT_VERSION)
+                await record(*args, **kwargs)
+
+            monkeypatch.setattr(ingesting, "record_observation", racing_record)
+            report = await scan_transcript(ingesting, path, settings=settings, repo_key=REPO)
+
+            assert fired
+            assert report == ScanReport(scanned=1, inserted=1)
+            [candidate] = await rows(ingesting, "SELECT * FROM candidates")
+            observations = await rows(ingesting, "SELECT * FROM candidate_observations")
+            assert len(observations) == 1
+            assert observations[0]["candidate_id"] == candidate["id"]
 
 
 class TestStrictUser:
@@ -250,3 +324,62 @@ class TestReviewCommentFormats:
         assert observation["dedup_key"] == dedup_key(
             "review_comment", "sess-1", "src/foo.py", "10", "", "use a frozen dataclass here instead"
         )
+
+
+class TestCollapseCrossDetector:
+    @pytest.mark.parametrize(
+        "detector",
+        ["exit_plan_rejection", "plan_reentry", "denial", "interrupt", "review_comment"],
+    )
+    def test_equal_text_same_event_drops_transcript_message(self, detector: str) -> None:
+        kept = [signal_pair(detector, CORRECTION), signal_pair("transcript_message", CORRECTION)]
+        assert [sig.detector for sig, _ in collapse_cross_detector(kept)] == [detector]
+
+    def test_different_text_keeps_both(self) -> None:
+        kept = [
+            signal_pair("plan_reentry", CORRECTION),
+            signal_pair("transcript_message", "always run the linter before you push"),
+        ]
+        assert [sig.detector for sig, _ in collapse_cross_detector(kept)] == ["plan_reentry", "transcript_message"]
+
+    def test_different_event_uuid_keeps_both(self) -> None:
+        kept = [
+            signal_pair("plan_reentry", CORRECTION, event_uuid=EventUuid("ua")),
+            signal_pair("transcript_message", CORRECTION, event_uuid=EventUuid("ub")),
+        ]
+        assert [sig.detector for sig, _ in collapse_cross_detector(kept)] == ["plan_reentry", "transcript_message"]
+
+    def test_null_event_uuid_keeps_both(self) -> None:
+        kept = [
+            signal_pair("plan_reentry", CORRECTION, event_uuid=None),
+            signal_pair("transcript_message", CORRECTION, event_uuid=None),
+        ]
+        assert [sig.detector for sig, _ in collapse_cross_detector(kept)] == ["plan_reentry", "transcript_message"]
+
+    def test_transcript_message_alone_kept(self) -> None:
+        kept = [signal_pair("transcript_message", CORRECTION)]
+        assert [sig.detector for sig, _ in collapse_cross_detector(kept)] == ["transcript_message"]
+
+    @pytest.mark.parametrize("detector", ["ask_user_question", "hook_complaint"])
+    def test_question_answer_and_hook_complaint_never_shadow(self, detector: str) -> None:
+        kept = [signal_pair(detector, CORRECTION), signal_pair("transcript_message", CORRECTION)]
+        assert [sig.detector for sig, _ in collapse_cross_detector(kept)] == [detector, "transcript_message"]
+
+
+class TestCrossDetectorCollapseIngest:
+    async def test_plan_reentry_shadows_transcript_message_to_one_candidate(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path
+    ) -> None:
+        entries = [
+            assistant_tool_use("t1", "Edit", {"file_path": "foo.py", "old_string": "a", "new_string": "b"}),
+            {"type": "mode", "sessionId": "sess-1", "mode": "plan"},
+            user_text(CORRECTION),
+        ]
+        path = write_transcript(tmp_path / "s.jsonl", entries)
+        report = await scan_transcript(store, path, settings=settings, repo_key=REPO)
+        assert report == ScanReport(scanned=1, inserted=1)
+
+        [candidate] = await rows(store, "SELECT * FROM candidates")
+        assert candidate["source_kind"] == "plan_review"
+        assert candidate["rule"] == dedup_key("plan_review", "plan_reentry", CORRECTION)
+        assert len(await rows(store, "SELECT * FROM feedback_events")) == 1
