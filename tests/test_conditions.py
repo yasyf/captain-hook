@@ -52,14 +52,19 @@ from tests.helpers import (
     make_event,
     make_messages_ctx,
     make_transcript_ctx,
+    notification_text,
     raw_assistant,
     raw_notification,
+    raw_notification_attachment,
+    raw_notification_enqueued,
+    raw_queue_op,
     raw_text,
     raw_tool_msg,
     raw_tool_result,
     raw_tool_use,
     text_msg,
     waiting_evt,
+    waiting_stop_evt,
     workflow_launch,
 )
 
@@ -865,12 +870,12 @@ class TestWaitingCondition:
 
     def test_async_launched_then_notified_is_not_waiting(self) -> None:
 
-        raw = [*async_agent_launch(id="tu_x"), raw_notification("tu_x")]
+        raw = [*async_agent_launch(id="tu_x"), *raw_notification("tu_x")]
         assert check_condition(Waiting(), waiting_evt(raw)) is False
 
     def test_async_launched_then_unrelated_notification_still_waiting(self) -> None:
 
-        raw = [*async_agent_launch(id="tu_x"), raw_notification("tu_other")]
+        raw = [*async_agent_launch(id="tu_x"), *raw_notification("tu_other")]
         assert check_condition(Waiting(), waiting_evt(raw)) is True
 
     def test_workflow_launched_is_waiting(self) -> None:
@@ -879,12 +884,12 @@ class TestWaitingCondition:
 
     def test_workflow_then_notified_is_not_waiting(self) -> None:
 
-        raw = [*workflow_launch(id="toolu_wf"), raw_notification("toolu_wf", task_id="waux9o41y")]
+        raw = [*workflow_launch(id="toolu_wf"), *raw_notification("toolu_wf", task_id="waux9o41y")]
         assert check_condition(Waiting(), waiting_evt(raw)) is False
 
     def test_workflow_then_unrelated_notification_still_waiting(self) -> None:
 
-        raw = [*workflow_launch(id="toolu_wf"), raw_notification("toolu_other", task_id="other-task")]
+        raw = [*workflow_launch(id="toolu_wf"), *raw_notification("toolu_other", task_id="other-task")]
         assert check_condition(Waiting(), waiting_evt(raw)) is True
 
     def test_async_in_progress_with_sync_followup_still_waiting(self) -> None:
@@ -906,7 +911,7 @@ class TestWaitingCondition:
         raw = [
             *workflow_launch(id="toolu_wf"),
             raw_text("user", "actually, also update the changelog"),
-            raw_notification("toolu_wf", task_id="waux9o41y"),
+            *raw_notification("toolu_wf", task_id="waux9o41y"),
         ]
         assert check_condition(Waiting(), waiting_evt(raw)) is False
 
@@ -926,6 +931,110 @@ class TestWaitingCondition:
         ctx = make_messages_ctx(None)
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(Waiting(), evt) is False
+
+    @pytest.mark.parametrize(
+        ("messages", "expected"),
+        [
+            pytest.param(
+                [*async_agent_launch(id="tu_x"), *raw_notification_enqueued("tu_x")],
+                True,
+                id="async_enqueue_only_is_waiting",
+            ),
+            pytest.param(
+                [
+                    *async_agent_launch(id="tu_x"),
+                    *raw_notification_enqueued("tu_x"),
+                    *raw_notification_attachment("tu_x"),
+                ],
+                False,
+                id="async_enqueue_remove_attachment_delivered",
+            ),
+            pytest.param(
+                [*async_agent_launch(id="tu_x"), *raw_notification_enqueued("tu_x"), raw_queue_op("remove")],
+                False,
+                id="async_enqueue_remove_dropped",
+            ),
+            pytest.param(
+                [
+                    *async_agent_launch(id="tu_x"),
+                    raw_queue_op("enqueue", notification_text("tu_x")),
+                    raw_queue_op("enqueue", "run the tests please"),
+                    raw_queue_op("popAll", "run the tests please"),
+                ],
+                True,
+                id="popall_drains_user_message_notification_survives",
+            ),
+            pytest.param(
+                [
+                    *async_agent_launch(id="tu_1"),
+                    *async_agent_launch(id="tu_2"),
+                    *raw_notification("tu_1"),
+                    *raw_notification_enqueued("tu_2"),
+                ],
+                True,
+                id="two_launches_second_still_enqueued",
+            ),
+            pytest.param(
+                [*raw_notification_enqueued("tu_ghost")],
+                True,
+                id="resumed_orphan_no_launch_enqueued_notification",
+            ),
+            pytest.param(
+                [*async_agent_launch(id="tu_x"), raw_text("user", notification_text("tu_x"))],
+                False,
+                id="subagent_plain_user_delivery_no_queue_ops",
+            ),
+            pytest.param(
+                [*async_agent_launch(id="tu_x")],
+                True,
+                id="subagent_launch_without_delivery",
+            ),
+            pytest.param(
+                [
+                    raw_assistant(
+                        raw_tool_use("Workflow", {"script": "return 1"}, "toolu_wf", caller={"type": "direct"})
+                    ),
+                    raw_tool_result("toolu_wf", content="boom", is_error=True, tool_use_result={"status": "failed"}),
+                ],
+                False,
+                id="workflow_errored_launch_not_waiting",
+            ),
+        ],
+    )
+    def test_notification_lifecycle_regressions(self, messages: list[dict[str, Any]], expected: bool) -> None:
+        assert check_condition(Waiting(), waiting_evt(messages)) is expected
+
+    @pytest.mark.parametrize(
+        ("raw", "raw_messages", "expected"),
+        [
+            pytest.param(
+                {
+                    "background_tasks": [
+                        {"id": "t1", "type": "shell", "status": "running", "description": "build", "command": "make"}
+                    ]
+                },
+                [],
+                True,
+                id="background_tasks_nonempty_clean_transcript",
+            ),
+            pytest.param(
+                {"session_crons": [{"id": "c1", "schedule": "0 9 * * *", "recurring": True, "prompt": "daily digest"}]},
+                [],
+                True,
+                id="session_crons_nonempty_clean_transcript",
+            ),
+            pytest.param({"background_tasks": [], "session_crons": []}, [], False, id="empty_arrays_clean_transcript"),
+            pytest.param(
+                {},
+                [*async_agent_launch(id="tu_x")],
+                True,
+                id="arrays_absent_falls_through_to_transcript_pending",
+            ),
+            pytest.param({}, [], False, id="arrays_absent_clean_transcript"),
+        ],
+    )
+    def test_stop_payload_layer(self, raw: dict[str, Any], raw_messages: list[dict[str, Any]], expected: bool) -> None:
+        assert check_condition(Waiting(), waiting_stop_evt(raw, raw_messages)) is expected
 
 
 class TestFromSubagentCondition:

@@ -277,21 +277,58 @@ def raw_tool_result(
     return raw_msg("user", [raw_tool_result_block(tool_use_id, content, is_error)], **extra)
 
 
-def raw_notification(
-    tool_use_id: str,
-    task_id: str = "task-1",
-    status: str = "completed",
-    **extra: Any,
-) -> dict[str, Any]:
-    """A raw ``queue-operation`` line carrying a ``<task-notification>`` for ``tool_use_id``."""
-    content = (
+def notification_text(tool_use_id: str, task_id: str = "task-1", status: str = "completed") -> str:
+    """The ``<task-notification>`` payload text for ``tool_use_id``."""
+    return (
         "<task-notification>"
         f"<task-id>{task_id}</task-id>"
         f"<tool-use-id>{tool_use_id}</tool-use-id>"
         f"<status>{status}</status>"
         "</task-notification>"
     )
-    return {"type": "queue-operation", "operation": "enqueue", "content": content, **extra}
+
+
+def raw_queue_op(operation: str, content: str = "") -> dict[str, Any]:
+    """A raw ``queue-operation`` audit line — one of ``enqueue``/``dequeue``/``remove``/``popAll``."""
+    return {"type": "queue-operation", "operation": operation, "content": content}
+
+
+def raw_notification(
+    tool_use_id: str,
+    task_id: str = "task-1",
+    status: str = "completed",
+) -> list[dict[str, Any]]:
+    """The realistic notification lifecycle: enqueue, dequeue, then user-event delivery.
+
+    Models a completion notification that reached the agent — enqueued, drained
+    from the queue, and delivered as a user turn carrying the ``<task-notification>``.
+    """
+    text = notification_text(tool_use_id, task_id, status)
+    return [raw_queue_op("enqueue", text), raw_queue_op("dequeue"), raw_text("user", text)]
+
+
+def raw_notification_enqueued(
+    tool_use_id: str,
+    task_id: str = "task-1",
+    status: str = "completed",
+) -> list[dict[str, Any]]:
+    """An enqueue-only notification: queued for delivery but never drained (the misfire shape)."""
+    return [raw_queue_op("enqueue", notification_text(tool_use_id, task_id, status))]
+
+
+def raw_notification_attachment(
+    tool_use_id: str,
+    task_id: str = "task-1",
+    status: str = "completed",
+) -> list[dict[str, Any]]:
+    """Delivery via a ``queued_command`` attachment: a ``remove`` queue op then the attachment event."""
+    return [
+        raw_queue_op("remove"),
+        {
+            "type": "attachment",
+            "attachment": {"type": "queued_command", "prompt": notification_text(tool_use_id, task_id, status)},
+        },
+    ]
 
 
 def async_agent_launch(id: str = "tu_x", input: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -341,6 +378,15 @@ def waiting_evt(raw_messages: list[dict[str, Any]]) -> PreToolUseEvent:
     """A Bash ``echo`` PreToolUse event over the given raw transcript, ready for ``check_condition``."""
     ctx = build_ctx(transcript=fixture_session(raw_messages))
     return make_pre_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+
+
+def waiting_stop_evt(
+    raw: dict[str, Any] | None = None,
+    raw_messages: list[dict[str, Any]] | None = None,
+) -> StopEvent:
+    """A ``StopEvent`` carrying ``raw`` (e.g. ``background_tasks``/``session_crons``) over the given transcript."""
+    ctx = build_ctx(transcript=fixture_session(raw_messages or []))
+    return StopEvent(_raw=raw or {}, ctx=ctx)
 
 
 # --- Single-line message factories -------------------------------------------

@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from cc_transcript.models import OtherEvent
 from cc_transcript.tools import SkillCall, WorkflowCall, tool_name_matches
 
 from captain_hook.types import (
@@ -38,19 +37,11 @@ from captain_hook.types import (
 
 if TYPE_CHECKING:
     from cc_transcript.activity import ToolUse
+    from cc_transcript.notifications import Notifications
     from cc_transcript.query import Session
 
     from captain_hook.events import BaseHookEvent
     from captain_hook.types import HookSpec
-
-
-def has_completion_notification(t: Session, tool_use_id: str) -> bool:
-    return any(
-        isinstance(event, OtherEvent)
-        and event.type == "queue-operation"
-        and f"<tool-use-id>{tool_use_id}</tool-use-id>" in str(event.raw.get("content", ""))
-        for event in t.events
-    )
 
 
 def waiting_tool_names(evt: BaseHookEvent) -> set[str]:
@@ -70,21 +61,26 @@ def ephemeral_wait(use: ToolUse, waiting_names: set[str]) -> bool:
     return False
 
 
-def pending_async(use: ToolUse, t: Session) -> bool:
+def pending_async(use: ToolUse, notifications: Notifications) -> bool:
     match use.call.name:
         case "Agent" | "Task" if use.result and use.result.is_async:
-            return not has_completion_notification(t, use.ref.tool_use_id)
-        case "Workflow":
-            return not has_completion_notification(t, use.ref.tool_use_id)
+            return not notifications.completed(use.ref.tool_use_id)
+        case "Workflow" if not (use.result and use.result.is_error):
+            return not notifications.completed(use.ref.tool_use_id)
     return False
 
 
 def is_waiting(evt: BaseHookEvent) -> bool:
+    if evt.background_tasks or evt.session_crons:
+        return True
     if not (t := evt.ctx.transcript):
         return False
+    notifications = t.notifications
+    if notifications.has_pending:
+        return True
     waiting_names = waiting_tool_names(evt)
     return any(ephemeral_wait(use, waiting_names) for use in t.current_turn.tool_calls) or any(
-        pending_async(use, t) for use in t.tool_calls
+        pending_async(use, notifications) for use in t.tool_calls
     )
 
 
