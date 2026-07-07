@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- General-pack block on jj operation time-travel (pack 0.14.0): `jj op restore`, `jj operation
+  restore`, and `jj undo` are denied at `PreToolUse`, with the message steering to read-only
+  inspection (`jj op show`, `jj op diff --op`, any read command via `--at-op`), file recovery
+  (`jj restore --from <commit> <path>`), or a throwaway workspace
+  (`jj --at-op=<op> workspace add <dir> -r <rev>`).
+
 ## [8.8.0] - 2026-07-07
 
 ### Changed

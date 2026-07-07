@@ -9,7 +9,7 @@ and the loader imports them alongside your own `.claude/hooks/` modules.
 
 ## Enable a builtin pack
 
-`capt-hook` ships five builtin packs: `general` (language-agnostic guards for git
+`capt-hook` ships five builtin packs: `general` (language-agnostic guards for git/jj
 safety, code stewardship, task and plan discipline, a review gate, a
 docs-freshness gate that blocks a stop once when the session's diff changed
 user-facing behavior that README.md or `docs/` don't reflect, a
@@ -57,7 +57,7 @@ uvx capt-hook pack list
 ```
 
 ```
-  general                  builtin  -                    v0.11.0   10 hooks
+  general                  builtin  -                    v0.14.0   10 hooks
   python                   builtin  -                    v0.1.0    3 hooks
   go                       builtin  -                    v0.1.0    2 hooks
   steering                 builtin  -                    v0.5.0    1 hooks

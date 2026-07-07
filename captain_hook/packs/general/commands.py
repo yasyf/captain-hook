@@ -5,6 +5,7 @@ from captain_hook import (
     Block,
     Event,
     Input,
+    Or,
     Runs,
     Tool,
     UsedSkill,
@@ -25,6 +26,33 @@ hook(
         Input(command="git stash"): Block(),
         Input(command="git stash pop"): Block(),
         Input(command="git status"): Allow(),
+    },
+)
+
+hook(
+    Event.PreToolUse,
+    only_if=[
+        Tool("Bash"),
+        Or(Runs("jj", "op", "restore"), Runs("jj", "operation", "restore"), Runs("jj", "undo")),
+    ],
+    message=(
+        "BLOCKED: jj op restore and jj undo rewrite the whole repo to an earlier operation and can "
+        "clobber everything since. Inspect instead: `jj op log` to find the operation, `jj op show <op>` "
+        "or `jj op diff --op <op>` to see what it changed, and any read command against that state via "
+        "`jj --at-op=<op> ...` (e.g. `jj --at-op=<op> st`, `jj --at-op=<op> file show -r <rev> <path>`). "
+        "To recover content without time-travel: `jj restore --from <commit> <path>` for one file (hidden "
+        "commits stay addressable by full ID via `jj --at-op=<op> log`), or materialize the old state in "
+        "a throwaway workspace: `jj --at-op=<op> workspace add <dir> -r <rev>`. If a true restore is "
+        "needed, stop and ask the user to run it."
+    ),
+    block=True,
+    tests={
+        Input(command="jj op restore abc123"): Block(),
+        Input(command="jj operation restore abc123"): Block(),
+        Input(command="jj undo"): Block(),
+        Input(command="jj op log"): Allow(),
+        Input(command="jj op show"): Allow(),
+        Input(command="jj --at-op=abc123 log"): Allow(),
     },
 )
 
