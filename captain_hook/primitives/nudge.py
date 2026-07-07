@@ -59,6 +59,7 @@ def nudge(
             ...       signals=Signals([Signal(r"retry", weight=2)], threshold=2, window=5))
     """
     sig = resolve_signals(signals)
+    name = hook_name("gate" if block else "nudge", None, message)
 
     def handler(evt: BaseHookEvent) -> HookResult | None:
         if block and fired_this_turn(evt):
@@ -70,7 +71,7 @@ def nudge(
             ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
             tracker = EchoTracker()
             candidates = [t for t in transcript_texts(evt, sig.window) if not tracker.saw(t, evt=evt)]
-            if not (triggering := ps.match_signals(sig, candidates)):
+            if not (triggering := ps.match_signals(sig, candidates, name)):
                 evt.ctx.s[PrimitiveState].set(ps)
                 return None
             ps.last_fired_at = len(evt.ctx.t)
@@ -85,11 +86,7 @@ def nudge(
             return HookResult.of(Action.block, cited)
         return HookResult.of(Action.warn, cited)
 
-    handler.__name__ = handler.__qualname__ = hook_name(
-        "gate" if block else "nudge",
-        None,
-        message,
-    )
+    handler.__name__ = handler.__qualname__ = name
 
     resolved = events or (
         (Event.Stop | Event.SubagentStop) if block else Event.PostToolUse if sig else Event.PreToolUse

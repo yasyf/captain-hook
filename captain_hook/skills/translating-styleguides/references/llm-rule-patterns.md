@@ -59,10 +59,10 @@ llm_gate(
         patterns=[
             Signal(pattern=r"except Exception", weight=2),
             Signal(pattern=r"fallback|fall back|default to", weight=1),
-            Signal(pattern=r"\braise\b", weight=-2),
         ],
         threshold=2,
         window=10,
+        vetoes=[Signal(pattern=r"\braise\b")],
     ),
     events=Event.PostToolUse,
     only_if=[SourceEdits(lang="py")],
@@ -71,8 +71,8 @@ llm_gate(
 )
 ```
 
-- Negative weights suppress false positives (a nearby `raise` suggests the code is not
-  swallowing).
+- `vetoes` suppress false positives by presence (a nearby `raise` suggests the code is not
+  swallowing); any veto match cancels the fire. Pattern weights must be positive.
 - `llm_gate` defaults to `Stop | SubagentStop` and `max_fires=1`; here it is retargeted
   at edits.
 - `message` receives a `GateVerdict(block, reasoning)`.

@@ -163,6 +163,7 @@ class TestLlmLogging:
                 evt,
                 "test prompt for evaluation",
                 GateVerdict,
+                hook="test",
                 when=lambda _: True,
             )
 

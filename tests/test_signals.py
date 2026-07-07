@@ -8,7 +8,7 @@ import pytest
 
 from captain_hook.context import HookContext
 from captain_hook.session import SessionStore
-from captain_hook.state import PrimitiveState
+from captain_hook.state import PrimitiveState, text_hash
 from captain_hook.testing.helpers import fixture_session
 from captain_hook.types import Signal, Signals
 from tests.helpers import raw_msg, raw_text, raw_text_block, raw_tool_msg, raw_tool_result
@@ -77,6 +77,32 @@ class TestSignalsBundle:
         )
         assert len(sig.patterns) == 1
 
+    def test_vetoes_default_empty(self) -> None:
+        sig = Signals(patterns=[Signal(pattern=r"test", weight=1)], threshold=1)
+        assert sig.vetoes == ()
+
+    def test_accepts_vetoes(self) -> None:
+        sig = Signals(
+            patterns=[Signal(pattern=r"test", weight=1)],
+            threshold=1,
+            vetoes=[Signal(pattern=r"actually a bug")],
+        )
+        assert len(sig.vetoes) == 1
+
+    @pytest.mark.parametrize("bad_weight", [0, -1, -3])
+    def test_nonpositive_pattern_weight_raises(self, bad_weight: int) -> None:
+        with pytest.raises(ValueError, match="weight must be positive"):
+            Signals(patterns=[Signal(pattern=r"x", weight=bad_weight)], threshold=1)
+
+    @pytest.mark.parametrize("veto_weight", [2, -1])
+    def test_nondefault_veto_weight_raises(self, veto_weight: int) -> None:
+        with pytest.raises(ValueError, match="weight is meaningless"):
+            Signals(
+                patterns=[Signal(pattern=r"x", weight=1)],
+                threshold=1,
+                vetoes=[Signal(pattern=r"y", weight=veto_weight)],
+            )
+
 
 class TestScoreSignals:
     @pytest.mark.parametrize(
@@ -115,30 +141,6 @@ class TestScoreSignalsFlags:
                 id="case_insensitive_flag",
             ),
             pytest.param([Signal(pattern=r"RETRY", weight=2)], "let me retry", 0, id="no_flag_case_sensitive"),
-        ],
-    )
-    def test_score(self, patterns: list[Signal], text: str, expected: int) -> None:
-        from captain_hook.signals import score_signals
-
-        assert score_signals(patterns, text) == expected
-
-
-class TestScoreSignalsNegativeWeights:
-    @pytest.mark.parametrize(
-        ("patterns", "text", "expected"),
-        [
-            pytest.param(
-                [Signal(pattern=r"retry", weight=3), Signal(pattern=r"investigating", weight=-2)],
-                "retry after investigating",
-                1,
-                id="negative_weight_subtracts",
-            ),
-            pytest.param(
-                [Signal(pattern=r"retry", weight=1), Signal(pattern=r"evidence", weight=-5)],
-                "retry with evidence",
-                -4,
-                id="score_can_go_below_zero",
-            ),
         ],
     )
     def test_score(self, patterns: list[Signal], text: str, expected: int) -> None:
@@ -190,7 +192,7 @@ class TestMatchSignalsDedup:
         ps = PrimitiveState()
         sig = Signals(patterns=[Signal(pattern=r"pre-existing", weight=2)], threshold=2, window=10)
         texts = ["This is a pre-existing issue"]
-        result = ps.match_signals(sig, texts)
+        result = ps.match_signals(sig, texts, "h")
         assert result is not None
         assert len(result) == 1
 
@@ -198,8 +200,8 @@ class TestMatchSignalsDedup:
         ps = PrimitiveState()
         sig = Signals(patterns=[Signal(pattern=r"pre-existing", weight=2)], threshold=2, window=10)
         texts = ["This is a pre-existing issue"]
-        ps.match_signals(sig, texts)
-        result = ps.match_signals(sig, texts)
+        ps.match_signals(sig, texts, "h")
+        result = ps.match_signals(sig, texts, "h")
         assert result is None
 
 
@@ -208,7 +210,7 @@ class TestMatchSignalsContributing:
         ps = PrimitiveState()
         sig = Signals(patterns=[Signal(pattern=r"pre-existing", weight=2)], threshold=2, window=10)
         texts = ["This is a pre-existing issue", "Unrelated text without keywords"]
-        result = ps.match_signals(sig, texts)
+        result = ps.match_signals(sig, texts, "h")
         assert result is not None
         assert len(result) == 1
         assert "pre-existing" in result[0]
@@ -217,9 +219,89 @@ class TestMatchSignalsContributing:
         ps = PrimitiveState()
         sig = Signals(patterns=[Signal(pattern=r"retry", weight=2)], threshold=2, window=10)
         texts = ["retry this", "unrelated", "retry that"]
-        result = ps.match_signals(sig, texts)
+        result = ps.match_signals(sig, texts, "h")
         assert result is not None
         assert len(result) == 2
+
+
+class TestMatchSignalsAggregation:
+    """Presence-union scoring across window entries: cross-entry aggregation, vetoes, per-hook ledger."""
+
+    HOOK = "agg_hook"
+    SIG = Signals(
+        patterns=[Signal(pattern=r"list", weight=1), Signal(pattern=r"feedback", weight=2)],
+        threshold=3,
+    )
+    VETO_SIG = Signals(
+        patterns=[Signal(pattern=r"list", weight=1), Signal(pattern=r"feedback", weight=2)],
+        threshold=3,
+        vetoes=[Signal(pattern=r"you asked")],
+    )
+
+    def test_union_of_split_tells_fires(self) -> None:
+        ps = PrimitiveState()
+        texts = ["a list here", "unrelated", "some feedback"]
+        assert ps.match_signals(self.SIG, texts, self.HOOK) == ["a list here", "some feedback"]
+        assert ps.consumed == {self.HOOK: {text_hash("a list here"), text_hash("some feedback")}}
+
+    def test_same_signal_across_entries_counts_once(self) -> None:
+        ps = PrimitiveState()
+        sig = Signals(patterns=[Signal(pattern=r"list", weight=1)], threshold=2)
+        # both entries match only the weight-1 `list` signal: union weight is 1, not 2 → no fire
+        assert ps.match_signals(sig, ["first list", "second list"], self.HOOK) is None
+        assert ps.consumed == {}
+
+    def test_duplicate_contributor_deduped(self) -> None:
+        ps = PrimitiveState()
+        # the same text appears twice in the window
+        texts = ["a list here", "some feedback", "a list here"]
+        assert ps.match_signals(self.SIG, texts, self.HOOK) == ["a list here", "some feedback"]
+        assert ps.consumed == {self.HOOK: {text_hash("a list here"), text_hash("some feedback")}}
+
+    def test_veto_in_sibling_entry_suppresses(self) -> None:
+        ps = PrimitiveState()
+        texts = ["a list here", "some feedback", "you asked for this"]
+        assert ps.match_signals(self.VETO_SIG, texts, self.HOOK) is None
+        assert ps.consumed == {}
+
+    def test_veto_in_consumed_entry_still_suppresses(self) -> None:
+        ps = PrimitiveState()
+        ps.consumed_for(self.HOOK).add(text_hash("you asked for this"))
+        texts = ["a list here", "some feedback", "you asked for this"]
+        # the veto entry is already consumed, but the veto scan covers ALL entries → suppress,
+        # and the live candidates that would otherwise fire stay unconsumed
+        assert ps.match_signals(self.VETO_SIG, texts, self.HOOK) is None
+        assert ps.consumed == {self.HOOK: {text_hash("you asked for this")}}
+
+    def test_spent_contributor_cannot_reaggregate(self) -> None:
+        ps = PrimitiveState()
+        first = ["a list here", "some feedback"]
+        assert ps.match_signals(self.SIG, first, self.HOOK) == ["a list here", "some feedback"]
+        # both contributors spent; re-running with them plus one new weak entry does not re-fire
+        assert ps.match_signals(self.SIG, ["a list here", "some feedback", "another list"], self.HOOK) is None
+
+    def test_consumed_is_scoped_per_hook(self) -> None:
+        # hook A aggregate-fires and consumes its weak contributor; hook B (threshold 1) matching
+        # that same weak text still fires — A's consumption must not mute B.
+        ps = PrimitiveState()
+        weak = "a list here"
+        assert ps.match_signals(self.SIG, [weak, "some feedback"], "hook_a") == [weak, "some feedback"]
+        sig_b = Signals(patterns=[Signal(pattern=r"list", weight=1)], threshold=1)
+        assert ps.match_signals(sig_b, [weak], "hook_b") == [weak]
+
+    def test_user_prompt_submit_aggregate(self) -> None:
+        from captain_hook.events import UserPromptSubmitEvent
+        from captain_hook.signals import transcript_texts
+
+        ctx = make_ctx(messages=[raw_text("assistant", "here is some feedback")])
+        evt = UserPromptSubmitEvent(_raw={"prompt": "a list of items"}, ctx=ctx)
+        entries = transcript_texts(evt, self.SIG.window)
+        assert entries == ["a list of items", "here is some feedback"]
+        # the prompt's `list` tell (1) and the prior turn's `feedback` tell (2) sum across the union
+        assert PrimitiveState().match_signals(self.SIG, entries, self.HOOK) == [
+            "a list of items",
+            "here is some feedback",
+        ]
 
 
 class TestTranscriptTexts:
@@ -289,7 +371,7 @@ class TestTranscriptTextsUserPrompt:
 
         evt = self.ups_event([raw_msg("assistant", F08_WRITEUP)], "hmm")
         entries = transcript_texts(evt, WALL_OF_TEXT.window)
-        triggering = PrimitiveState().match_signals(WALL_OF_TEXT, entries)
+        triggering = PrimitiveState().match_signals(WALL_OF_TEXT, entries, "h")
         assert triggering == [F08_WRITEUP]
 
     def test_window_zero_scores_prompt_alone(self) -> None:

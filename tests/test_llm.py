@@ -1152,3 +1152,34 @@ class TestTombstones:
     )
     def test_keep(self, text: str, expected: bool) -> None:
         assert TombstoneComments().keep(text) is expected
+
+
+class TestMultiContributorConsume:
+    """The eager-consume -> revert -> consume_signals dance round-trips across N contributors."""
+
+    def test_round_trip_reconsumes_exactly_the_contributors(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict, consume_signals, llm_evaluate
+        from captain_hook.state import PrimitiveState, text_hash
+        from captain_hook.types import Signals
+
+        sig = Signals(
+            patterns=[Signal(pattern=r"list", weight=2), Signal(pattern=r"feedback", weight=2)],
+            threshold=4,
+            window=10,
+        )
+        ctx = make_ctx(
+            tmp_path,
+            texts=["a list here", "some feedback"],
+            call_llm_return=GateVerdict(block=True, reasoning="bad"),
+        )
+        evt = make_post_tool_event(ctx=ctx)
+
+        result = llm_evaluate(evt, "check", GateVerdict, hook="rt", signals=sig)
+        assert result is not None  # signals passed -> LLM consulted -> verdict returned
+        # the eager consume is reverted: nothing stays consumed until the verdict confirms the fire
+        assert (ps := evt.ctx.s[PrimitiveState].get()) is not None and ps.consumed == {}
+
+        consume_signals(evt, sig, "rt")
+        final = evt.ctx.s[PrimitiveState].get()
+        assert final is not None
+        assert final.consumed == {"rt": {text_hash("a list here"), text_hash("some feedback")}}

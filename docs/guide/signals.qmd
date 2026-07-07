@@ -14,16 +14,16 @@ text these signals score, see [Query the transcript](transcript.qmd).
 
 ## Match a literal phrase with a regex `Signal`
 
-A `Signal` is a regex worth `weight` points. Every match against a window message
-adds `weight` to the running score. Positive weights push toward the threshold;
-negative weights suppress false positives.
+A `Signal` is a regex worth `weight` points. A signal that matches anywhere in the
+window contributes `weight` to the score once, however many messages it matches.
+Pattern weights must be positive; suppress false positives with `vetoes` (shown
+below) instead of negative weights.
 
 ```python
 from captain_hook import Signal
 
 Signal(pattern=r"let me try again", weight=2)
 Signal(pattern=r"retry|retrying", weight=1)
-Signal(pattern=r"investigating", weight=-3)  # pulls the score back down
 ```
 
 Set `flags` when you need case-insensitive or multiline matching:
@@ -86,17 +86,18 @@ Signals(
     patterns=[
         Signal(r"retry", weight=2),
         Signal(r"again", weight=1),
-        Signal(r"investigating", weight=-3),
     ],
-    threshold=3,  # fire once a single message's summed weight reaches 3
+    threshold=3,  # fire once the window's union score reaches 3
     window=10,    # score only the last 10 events
+    vetoes=[Signal(r"investigating")],  # any match cancels the fire
 )
 ```
 
-Each message in the window is scored on its own: every pattern that matches adds
-its weight once, and the hook fires when a single message reaches the threshold.
-"Let me retry that again" scores 3 and fires; add "investigating" to the same
-message and it drops to 0, which holds the hook back.
+Signals are scored across the whole window by presence union: each pattern counts
+its weight once however many messages it matches, and the hook fires when the summed
+weight of the distinct matching patterns reaches the threshold. "Let me retry that
+again" scores 3 and fires — and it still fires when "retry" and "again" land in two
+separate messages. Any `vetoes` match anywhere in the window holds the hook back.
 
 Set `window="turn"` instead of a count to score the whole current turn. Tool calls
 and their results eat window slots, so a fixed window at `Stop` reaches only the
@@ -110,10 +111,10 @@ You can also pass a bare `list[Signal]` to a primitive. The framework wraps it w
 
 Pass the bundle to `nudge(signals=...)`. The primitive pulls every prose source from
 the window — each message's visible text, each thinking block, and the prose fields
-of `ReportFindings`, `TaskCreate`/`TaskUpdate`, and `TodoWrite` calls — scores each
-entry against every pattern, and warns when one crosses the threshold. It also
-deduplicates by content, so the same triggering text doesn't fire the nudge twice in
-a row.
+of `ReportFindings`, `TaskCreate`/`TaskUpdate`, and `TodoWrite` calls — scores the
+window by presence union, and warns when the distinct matching patterns' summed
+weight crosses the threshold. Each hook keeps its own consumed ledger, so the same
+triggering text doesn't fire that hook twice in a row.
 
 ```python
 import re
@@ -125,10 +126,10 @@ nudge(
         patterns=[
             Signal(r"let me try again", weight=2, flags=re.IGNORECASE),
             Signal(r"retry|retrying", weight=1, flags=re.IGNORECASE),
-            Signal(r"investigating", weight=-3, flags=re.IGNORECASE),
         ],
         threshold=3,
         window=10,
+        vetoes=[Signal(r"investigating", flags=re.IGNORECASE)],
     ),
 )
 ```

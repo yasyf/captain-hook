@@ -4,6 +4,44 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.8.0] - 2026-07-07
+
+### Changed
+- **Signal scores aggregate across window entries (presence-union).**
+  `match_signals` used to threshold each transcript entry alone, so tells split
+  across two assistant messages — each scoring below threshold — never fired even
+  when their sum crossed it (the constructed miss pinned in the wall_of_text f08
+  suite, now flipped to fire). Scoring is per-entry-then-union: each distinct
+  signal counts once toward the threshold however many entries it matches (entries
+  are never concatenated, so multiline regexes cannot match across entry
+  boundaries), an aggregate fire consumes every contributing entry, and
+  contributors return deduplicated in window order. Per-entry fires are a strict
+  subset of the new behavior for positive-weight hooks; expect a sensitivity gain
+  on low-threshold multi-entry windows (steering stewardship 2/15, general detours
+  2/8, show wall_of_text 3/"turn" are the predicted gainers).
+- **Negative signal weights are gone; suppression is a first-class `vetoes`
+  field.** `Signals` gains `vetoes: Sequence[Signal | NlpSignal]` — any veto match
+  in any window entry, including already-consumed ones, suppresses the fire and
+  consumes nothing. Pattern weights must now be positive and a veto's weight must
+  stay at its default (`Signals` raises otherwise). The steering pack's pyright
+  (−3) and deferral (−4/−2) dampers migrated to vetoes; the deferral migration is
+  deliberately stronger than the old arithmetic — any "asked the user…" /
+  "as requested" match now suppresses outright where enough positive tells could
+  previously outscore it.
+- **The consumed-signal ledger is scoped per hook.** `PrimitiveState.consumed` was
+  one session-wide set, so any hook's fire spent the triggering texts for every
+  other hook — and aggregation's consume-all-contributors would have let one
+  hook's weak contributor silently mute an unrelated hook for the rest of the
+  session. `consumed` is now keyed by hook name; `match_signals`, `llm_evaluate`,
+  and `consume_signals` take the hook identity explicitly (signature change).
+  Stale flat-shape `primitive_state.json` files fail validation and reset to fresh
+  defaults. The turn throttle (`last_fired_at`) and the echo window remain
+  session-global by design.
+
+### Removed
+- `PrimitiveState.consume_echoes` (dead code — `EchoTracker` is the live echo
+  path) and the negative-weight scoring tests.
+
 ## [8.7.0] - 2026-07-07
 
 ### Added

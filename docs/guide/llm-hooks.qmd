@@ -38,10 +38,10 @@ llm_gate(
         patterns=[
             Signal(pattern=r"external.*service", weight=2),
             Signal(pattern=r"impossible|cannot be done", weight=2),
-            Signal(pattern=r"investigating", weight=-3),
         ],
         threshold=2,
         window=15,
+        vetoes=[Signal(pattern=r"investigating")],
     ),
     max_fires=1,
 )

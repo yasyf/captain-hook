@@ -61,6 +61,7 @@ def llm_evaluate[M: BaseModel](
     prompt: str,
     response_model: type[M],
     *,
+    hook: str,
     signals: Sequence[Signal | NlpSignal] | Signals | None = None,
     when: Callable[[BaseHookEvent], bool] | None = None,
     contexts: Sequence[PromptContext] = (),
@@ -79,11 +80,14 @@ def llm_evaluate[M: BaseModel](
     if sig := resolve_signals(signals):
         ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
         texts = transcript_texts(evt, sig.window)
-        old_consumed = ps.consumed.copy()
-        if not (contributing_texts := ps.match_signals(sig, texts)):
+        old_consumed = ps.consumed.get(hook, set()).copy()
+        if not (contributing_texts := ps.match_signals(sig, texts, hook)):
             evt.ctx.s[PrimitiveState].set(ps)
             return None
-        ps.consumed = old_consumed
+        if old_consumed:
+            ps.consumed[hook] = old_consumed
+        else:
+            ps.consumed.pop(hook, None)
         evt.ctx.s[PrimitiveState].set(ps)
     elif contexts and when is None:
         contributing_texts = []
@@ -115,12 +119,12 @@ def llm_evaluate[M: BaseModel](
         return None
 
 
-def consume_signals(evt: BaseHookEvent, sig: Signals | None) -> None:
+def consume_signals(evt: BaseHookEvent, sig: Signals | None, hook: str) -> None:
     if not sig:
         return
     ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
     texts = transcript_texts(evt, sig.window)
-    ps.match_signals(sig, texts)
+    ps.match_signals(sig, texts, hook)
     evt.ctx.s[PrimitiveState].set(ps)
 
 
@@ -151,6 +155,7 @@ def llm_primitive[M: BaseModel](
     diff: bool | str = False,
 ) -> None:
     sig = resolve_signals(signals)
+    name = hook_name(label, None, prompt)
 
     def handler(evt: BaseHookEvent) -> HookResult | None:
         if not (
@@ -158,6 +163,7 @@ def llm_primitive[M: BaseModel](
                 evt,
                 prompt,
                 response_model,
+                hook=name,
                 signals=signals,
                 when=when,
                 contexts=contexts,
@@ -172,14 +178,14 @@ def llm_primitive[M: BaseModel](
             return None
         if not verdict(result):
             return None
-        consume_signals(evt, sig)
+        consume_signals(evt, sig, name)
         record_fire(evt)
         return HookResult(
             action=action,
             message=message(result) if callable(message) else message,
         )
 
-    handler.__name__ = handler.__qualname__ = hook_name(label, None, prompt)
+    handler.__name__ = handler.__qualname__ = name
 
     resolved = events or default_events
     guards_waiting = action is Action.block and bool(resolved & (Event.Stop | Event.SubagentStop))

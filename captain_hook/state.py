@@ -81,10 +81,18 @@ ECHO_MIN_OVERLAP = 2
 
 
 class PrimitiveState(BaseModel):
-    """Per-primitive state for nudges/gates: last fire index, consumed-signal hashes, and echo-window lemmas."""
+    """Per-primitive nudge/gate state shared across all hooks in a session.
+
+    ``last_fired_at`` (the session-global turn-throttle read by every LLM hook and
+    blocking gate) and the ``echo_lemmas``/``echo_window_end`` window (a global
+    last-write-wins "don't re-trigger on a parrot of the last nudge" filter) are
+    deliberately session-scoped, not per hook. ``consumed`` is a per-hook-name ledger
+    of signal-text hashes each hook has already scored, so one hook's aggregate fire
+    cannot mute another's signals — access it through :meth:`consumed_for`.
+    """
 
     last_fired_at: int = 0
-    consumed: set[str] = Field(default_factory=set)
+    consumed: dict[str, set[str]] = Field(default_factory=dict)
     echo_lemmas: set[str] = Field(default_factory=set)
     echo_window_end: int = 0
 
@@ -104,30 +112,43 @@ class PrimitiveState(BaseModel):
             and len(overlap) / len(text_lemmas) >= ECHO_THRESHOLD
         )
 
-    def consume_echoes(self, texts: list[str], transcript_len: int) -> None:
-        if not self.echo_lemmas or transcript_len >= self.echo_window_end:
-            return
-
-        for text in texts:
-            if (h := text_hash(text)) not in self.consumed and self.is_echo(text):
-                self.consumed.add(h)
-
     def seed_echo_window(self, triggering_texts: list[str], message: str, transcript_len: int) -> None:
         self.echo_lemmas = self.content_lemmas(" ".join(triggering_texts)) | self.content_lemmas(message)
         self.echo_window_end = transcript_len + ECHO_WINDOW
 
-    def match_signals(self, sig: Signals, texts: list[str]) -> list[str] | None:
-        from captain_hook.signals import score_signals
+    def consumed_for(self, hook: str) -> set[str]:
+        """The mutable set of signal-text hashes ``hook`` has already consumed (created on first use)."""
+        return self.consumed.setdefault(hook, set())
 
-        contributing_hashes = [
-            h
-            for text in texts
-            if (h := text_hash(text)) not in self.consumed and score_signals(sig.patterns, text) >= sig.threshold
-        ]
-        if not contributing_hashes:
+    def match_signals(self, sig: Signals, texts: list[str], hook: str) -> list[str] | None:
+        """Presence-union score ``hook``'s non-consumed ``texts`` against ``sig``; consume and return
+        the contributing texts (window order, deduped by text) on a fire, else ``None``.
+
+        A signal counts once toward ``threshold`` however many entries it matches (union over
+        per-entry matches, never a concatenation). Any veto matching any entry — consumed or not —
+        suppresses the fire and consumes nothing. Consumption is scoped to ``hook``'s own ledger.
+        """
+        from captain_hook.signals import matching_signals
+
+        if sig.vetoes and any(matching_signals(sig.vetoes, text) for text in texts):
             return None
-        self.consumed.update(contributing_hashes)
-        return [t for t in texts if text_hash(t) in set(contributing_hashes)]
+        spent = self.consumed.get(hook, frozenset[str]())
+        candidates = [
+            (text, set(matching_signals(sig.patterns, text)))
+            for text in texts
+            if text_hash(text) not in spent
+        ]
+        union = {i for _, matched in candidates for i in matched}
+        if sum(sig.patterns[i].weight for i in union) < sig.threshold:
+            return None
+        contributing: list[str] = []
+        seen: set[str] = set()
+        for text, matched in candidates:
+            if matched and (h := text_hash(text)) not in seen:
+                seen.add(h)
+                contributing.append(text)
+        self.consumed_for(hook).update(seen)
+        return contributing
 
 
 def text_hash(text: str) -> str:

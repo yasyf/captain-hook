@@ -336,7 +336,7 @@ class TestStateModelSerialization:
         store = SessionStore(tmp_path)
         original = PrimitiveState(
             last_fired_at=10,
-            consumed={"abc123", "def456"},
+            consumed={"hookA": {"abc123", "def456"}},
             echo_lemmas={"test", "code"},
             echo_window_end=20,
         )
@@ -344,7 +344,7 @@ class TestStateModelSerialization:
         loaded = store[PrimitiveState].get()
         assert loaded is not None
         assert loaded.last_fired_at == 10
-        assert loaded.consumed == {"abc123", "def456"}
+        assert loaded.consumed == {"hookA": {"abc123", "def456"}}
         assert loaded.echo_lemmas == {"test", "code"}
         assert loaded.echo_window_end == 20
 

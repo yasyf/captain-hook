@@ -106,6 +106,19 @@ class TestStateStore:
         slot.path.write_text("not valid json {{{")
         assert slot.get() is None
 
+    def test_stale_flat_consumed_shape_falls_back_to_default(self, tmp_path: Path) -> None:
+        # A primitive_state.json written before `consumed` became a per-hook dict carries the old
+        # flat list shape; SessionSlot.get must swallow the ValidationError and fall back, never
+        # crash or silently coerce (sessions are throwaway state, so a fresh default is correct).
+        from captain_hook.state import PrimitiveState
+
+        store = SessionStore(tmp_path)
+        slot = store[PrimitiveState]
+        slot.path.write_text('{"consumed": ["abc123"], "last_fired_at": 3, "echo_lemmas": [], "echo_window_end": 0}')
+        assert slot.get() is None
+        assert slot.get(PrimitiveState()) == PrimitiveState()
+        assert store.load(PrimitiveState) == PrimitiveState()
+
     def test_generic_type(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
         slot = store[MyModel]

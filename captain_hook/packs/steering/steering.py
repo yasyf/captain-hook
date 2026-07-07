@@ -184,11 +184,13 @@ nudge(
                 pattern=(r"(?i)warnings?\s+(?:are|is)?\s*(?:showing\s+up|appearing|popping\s+up)\s+(?:again|now|in)"),
                 weight=2,
             ),
-            Signal(pattern=r"(?i)(?:actual|real|genuine)\s+(?:bug|error)", weight=-3),
-            Signal(pattern=r"(?i)wrong\s+(?:type|signature|return\s+type)", weight=-3),
         ],
         threshold=4,
         window=10,
+        vetoes=[
+            Signal(pattern=r"(?i)(?:actual|real|genuine)\s+(?:bug|error)"),
+            Signal(pattern=r"(?i)wrong\s+(?:type|signature|return\s+type)"),
+        ],
     ),
     tests={
         Input(
@@ -532,22 +534,22 @@ tell that decided it) in `reasoning`.""",
                 clauses=[Clause(noun=Phrase.expand("fix"), verb=Phrase("defer", "postpone", "punt"))],
                 weight=2,
             ),
+        ],
+        threshold=3,
+        window="turn",
+        vetoes=[
             Signal(
                 pattern=(
                     r"(?i)(?:ask(?:ed|ing)?\s+the\s+user|how\s+would\s+you\s+like\s+to\s+proceed|should\s+i\s+proceed"
                     r"|do\s+you\s+want\s+me\s+to|would\s+you\s+(?:prefer|rather|like)|which\s+(?:option|approach)\b)"
                 ),
-                weight=-4,
             ),
             Signal(
                 pattern=(
                     r"(?i)(?:as\s+(?:you\s+)?requested|you\s+asked\s+(?:for|me)\b|(?:as\s+)?we\s+(?:discussed|agreed))"
                 ),
-                weight=-2,
             ),
         ],
-        threshold=3,
-        window="turn",
     ),
     events=Event.PostToolUse | Event.Stop | Event.SubagentStop,
     tests={
@@ -715,7 +717,7 @@ tell that decided it) in `reasoning`.""",
                     },
                 }
             ]
-        ): Block(),
+        ): Allow(),
         Input(
             transcript=[
                 {

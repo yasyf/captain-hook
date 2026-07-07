@@ -638,9 +638,10 @@ TCondition = (
 class Signal:
     """A regex-based signal pattern used in the scoring pipeline.
 
-    Signals are matched against transcript text via ``re.search``. Each match
-    contributes ``weight`` to the cumulative score. Use negative weights to
-    suppress false positives.
+    Signals are matched against transcript text via ``re.search``. In a
+    :class:`Signals` bundle each matched signal contributes ``weight`` once to the
+    threshold (presence-union scoring); pattern weights must be positive, and false
+    positives are suppressed with :attr:`Signals.vetoes`, not negative weights.
 
     Example:
         >>> Signal(pattern=r"retry", weight=2, flags=re.IGNORECASE)
@@ -659,6 +660,14 @@ class Signals:
     wraps it with ``threshold=1`` — meaning *any* single signal match triggers.
     Pass a higher threshold to require multiple signals to fire together.
 
+    Scoring is presence-union across window entries: a signal counts once toward
+    ``threshold`` no matter how many entries it matches, and the union score is the
+    sum of the distinct matching signals' weights. Pattern weights must be positive.
+
+    ``vetoes`` are presence-only suppressors: if any veto matches any window entry
+    — including already-consumed ones — the bundle does not fire and consumes
+    nothing. A veto's ``weight`` is meaningless and must be left at its default.
+
     ``window`` bounds how much transcript each scoring pass reads: the last
     ``window`` events by default, or the whole current turn with the ``"turn"``
     sentinel. Use ``"turn"`` when the tell can sit hundreds of events before the
@@ -669,6 +678,18 @@ class Signals:
     patterns: Sequence[Signal | NlpSignal]
     threshold: int
     window: int | Literal["turn"] = 15
+    vetoes: Sequence[Signal | NlpSignal] = ()
+
+    def __post_init__(self) -> None:
+        for p in self.patterns:
+            if p.weight <= 0:
+                raise ValueError(
+                    f"signal pattern weight must be positive (presence-union scoring has no "
+                    f"subtraction); got {p.weight}. Move suppressing patterns to `vetoes`."
+                )
+        for v in self.vetoes:
+            if v.weight != 1:
+                raise ValueError(f"veto signals match by presence; weight is meaningless — drop it (got {v.weight}).")
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from captain_hook.dispatch import dispatch
-from captain_hook.state import PrimitiveState, text_hash
+from captain_hook.state import PrimitiveState
 from captain_hook.types import Event, Signal, Signals
 from tests.helpers import make_ctx, make_post_tool_event
 
@@ -78,58 +78,29 @@ class TestSeedEchoWindow:
         assert "issue" in ps.echo_lemmas or "pre" in ps.echo_lemmas
 
 
-class TestConsumeEchoes:
-    @pytest.mark.parametrize(
-        ("ps", "text", "expected"),
-        [
-            pytest.param(
-                PrimitiveState(echo_lemmas={"issue", "pre-existing", "cause", "change", "fix"}, echo_window_end=20),
-                "I'll look at the pre-existing issue and fix it",
-                True,
-                id="marks_echoed_texts_consumed",
-            ),
-            pytest.param(
-                PrimitiveState(echo_lemmas={"issue", "pre-existing", "cause", "change", "fix"}, echo_window_end=5),
-                "I'll look at the pre-existing issue and fix it",
-                False,
-                id="does_not_consume_when_window_expired",
-            ),
-            pytest.param(
-                PrimitiveState(echo_window_end=20),
-                "some random text",
-                False,
-                id="does_not_consume_when_no_echo_lemmas",
-            ),
-        ],
-    )
-    def test_consume_echoes(self, ps: PrimitiveState, text: str, expected: bool) -> None:
-        ps.consume_echoes([text], transcript_len=10)
-        assert (text_hash(text) in ps.consumed) is expected
-
-
 class TestMatchSignals:
     def test_prevents_double_scoring(self) -> None:
         ps = PrimitiveState()
         sig = Signals(patterns=[Signal(pattern=r"pre-existing", weight=2)], threshold=2, window=10)
         texts = ["This is a pre-existing issue"]
 
-        result1 = ps.match_signals(sig, texts)
+        result1 = ps.match_signals(sig, texts, "h")
         assert result1 is not None
 
-        result2 = ps.match_signals(sig, texts)
+        result2 = ps.match_signals(sig, texts, "h")
         assert result2 is None
 
     def test_empty_texts_returns_none(self) -> None:
         ps = PrimitiveState()
         sig = Signals(patterns=[Signal(pattern=r"anything", weight=1)], threshold=1, window=10)
-        assert ps.match_signals(sig, []) is None
+        assert ps.match_signals(sig, [], "h") is None
 
     def test_returns_triggering_texts(self) -> None:
         ps = PrimitiveState()
         sig = Signals(patterns=[Signal(pattern=r"pre-existing", weight=2)], threshold=2, window=10)
         texts = ["This is a pre-existing issue", "Some unrelated text"]
 
-        result = ps.match_signals(sig, texts)
+        result = ps.match_signals(sig, texts, "h")
         assert result is not None
         assert len(result) == 1
         assert "pre-existing" in result[0]
@@ -216,24 +187,6 @@ class TestEchoIntegration:
         evt2 = make_post_tool_event(ctx=ctx2)
         r2 = dispatch(Event.PostToolUse, evt2, session_dir=tmp_path)
         assert r2 is not None
-
-
-# Regression: Echo window expiry boundary uses >= (not >)
-
-
-class TestEchoWindowBoundary:
-    @pytest.mark.parametrize(
-        ("transcript_len", "expected"),
-        [
-            pytest.param(10, False, id="window_expired_at_exact_boundary"),
-            pytest.param(9, True, id="window_active_just_before_boundary"),
-        ],
-    )
-    def test_window_boundary(self, transcript_len: int, expected: bool) -> None:
-        ps = PrimitiveState(echo_lemmas={"issue", "pre-existing", "cause", "change", "fix"}, echo_window_end=10)
-        echo_text = "I'll look at the pre-existing issue and fix it"
-        ps.consume_echoes([echo_text], transcript_len=transcript_len)
-        assert (text_hash(echo_text) in ps.consumed) is expected
 
 
 # Regression: Signal-triggered nudge reads/updates PrimitiveState across calls

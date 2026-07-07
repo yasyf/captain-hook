@@ -4,7 +4,8 @@ The rubric reported that f08 "passes the gate on paper but produces no verdict".
 demonstrate the discriminating fact: for the real f08 transcript the wall_of_text signal gate
 DOES pass (the writeup is one entry scoring S2(1)+S3(2)=3, and ``match_signals`` fires), so the
 no-verdict originates downstream of the gate (the LLM ``fire`` verdict), not in scoring. The
-split-message case pins the one shape where per-entry thresholding genuinely misses.
+split-message case pins the shape that per-entry thresholding used to miss and presence-union
+aggregation now catches: two entries scoring 1 and 2 separately fire together on the union.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from captain_hook.context import HookContext
 from captain_hook.events import PostToolUseEvent, UserPromptSubmitEvent
 from captain_hook.session import SessionStore
 from captain_hook.signals import score_signals, transcript_texts
-from captain_hook.state import PrimitiveState
+from captain_hook.state import PrimitiveState, text_hash
 from captain_hook.testing.helpers import fixture_session
 from captain_hook.types import Signal, Signals
 from tests.helpers import raw_msg
@@ -88,11 +89,11 @@ class TestF08GatePasses:
             tmp_path,
         )
         entries = transcript_texts(evt, WALL_OF_TEXT.window)
-        triggering = PrimitiveState().match_signals(WALL_OF_TEXT, entries)
+        triggering = PrimitiveState().match_signals(WALL_OF_TEXT, entries, "h")
         assert triggering == [F08_WRITEUP]
 
 
-class TestSplitAcrossMessagesMisses:
+class TestSplitAcrossMessagesAggregates:
     LIST_ONLY = (
         "Here's the design:\n"
         "1. Producers publish to a per-tenant topic.\n"
@@ -101,7 +102,7 @@ class TestSplitAcrossMessagesMisses:
     )
     FEEDBACK_ONLY = "That covers the shape end to end. Let me know what you think of it."
 
-    def test_per_entry_threshold_misses_when_tells_split(self, tmp_path: Path) -> None:
+    def test_aggregate_fires_when_tells_split(self, tmp_path: Path) -> None:
         evt = post_tool_event(
             [
                 raw_msg("user", "sketch the event-bus architecture"),
@@ -113,7 +114,9 @@ class TestSplitAcrossMessagesMisses:
         entries = transcript_texts(evt, WALL_OF_TEXT.window)
         scores = [score_signals(WALL_OF_TEXT.patterns, e) for e in entries]
         assert scores == [0, 1, 2]
-        assert PrimitiveState().match_signals(WALL_OF_TEXT, entries) is None
+        ps = PrimitiveState()
+        assert ps.match_signals(WALL_OF_TEXT, entries, "h") == [self.LIST_ONLY, self.FEEDBACK_ONLY]
+        assert ps.consumed == {"h": {text_hash(self.LIST_ONLY), text_hash(self.FEEDBACK_ONLY)}}
 
 
 class TestF08UserPromptSubmitGatePasses:
@@ -132,4 +135,4 @@ class TestF08UserPromptSubmitGatePasses:
         evt = ups_event([raw_msg("assistant", F08_WRITEUP)], "hmm", tmp_path)
         entries = transcript_texts(evt, WALL_OF_TEXT.window)
         assert [score_signals(WALL_OF_TEXT.patterns, e) for e in entries] == [0, 3]
-        assert PrimitiveState().match_signals(WALL_OF_TEXT, entries) == [F08_WRITEUP]
+        assert PrimitiveState().match_signals(WALL_OF_TEXT, entries, "h") == [F08_WRITEUP]

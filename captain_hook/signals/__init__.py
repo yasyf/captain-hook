@@ -26,19 +26,28 @@ PROSE_TOOLS: dict[str, Callable[[Mapping[str, Any]], list[str]]] = {
 TSignalPattern = Signal | NlpSignal
 
 
-def score_signals(patterns: Sequence[TSignalPattern], text: str) -> int:
+def matching_signals(patterns: Sequence[TSignalPattern], text: str) -> list[int]:
+    """Indices of ``patterns`` whose signal matches ``text`` (regex search or any clause hit).
+
+    Exposes per-signal attribution so presence-union scoring can count each distinct
+    signal once across window entries without double-weighting.
+    """
     from captain_hook.signals.nlp import nlp_scan
 
-    total = 0
-    for s in patterns:
+    matched: list[int] = []
+    for i, s in enumerate(patterns):
         match s:
             case NlpSignal(clauses=clauses) if nlp_scan(clauses, text):
-                total += s.weight
+                matched.append(i)
             case Signal() if re.search(s.pattern, text, s.flags):
-                total += s.weight
+                matched.append(i)
             case _:
                 pass
-    return total
+    return matched
+
+
+def score_signals(patterns: Sequence[TSignalPattern], text: str) -> int:
+    return sum(patterns[i].weight for i in matching_signals(patterns, text))
 
 
 def extract_signal_context(patterns: Sequence[TSignalPattern], text: str) -> list[str]:
