@@ -481,13 +481,21 @@ class InPlanMode:
 class Waiting:
     """Condition matching while the session is parked on out-of-band work.
 
-    True when an in-flight background or async tool has not yet reported back: a
-    ``Workflow`` or async sub-agent awaiting its completion ``<task-notification>``
-    (tracked across turns, so a launch in an earlier turn still counts), a
-    ``run_in_background`` Bash/Agent/Task, or a user-facing wait such as
-    ``ScheduleWakeup``/``Monitor``. Blocking Stop gates built with ``gate``/``llm_gate``
-    skip on it automatically, additively with any ``skip_if`` given, so the agent isn't
-    nagged for pausing on work it is correctly waiting on.
+    Any of three signals counts as waiting. The Stop payload's ``background_tasks``
+    and ``session_crons`` arrays (Claude Code 2.1.145+, ``Stop``/``SubagentStop``
+    only) report in-flight registry work: background shells, sub-agents, workflows,
+    monitors, teammates, and scheduled wake-ups — so a long-lived background shell
+    such as a dev server keeps the session waiting, by the platform's own "this will
+    wake the session back up" semantics. The transcript's notification queue holds a
+    ``<task-notification>`` that was enqueued but not yet delivered to the agent — a
+    finished task the agent hasn't seen. Or an async ``Agent``/``Task``/``Workflow``
+    launch (tracked across turns, so a launch in an earlier turn still counts) has no
+    delivered notification, and current-turn waits such as ``run_in_background`` Bash
+    or ``ScheduleWakeup``/``Monitor`` are in flight.
+
+    Blocking Stop gates built with ``gate``/``llm_gate`` skip on it automatically,
+    additively with any ``skip_if`` given, so the agent isn't nagged for pausing on
+    work it is correctly waiting on.
 
     Example:
         >>> gate("Run tests before stopping", skip_if=[Waiting()])

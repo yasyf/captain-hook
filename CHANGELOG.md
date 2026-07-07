@@ -4,6 +4,41 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.10.0] - 2026-07-07
+
+### Added
+- **Typed Stop-payload task registry.** `BackgroundTask` and `SessionCron`, with
+  `evt.background_tasks` / `evt.session_crons`, expose the arrays Claude Code
+  2.1.145+ sends on `Stop`/`SubagentStop` stdin — the harness's own answer to
+  "is this session parked on background work". Empty tuples on events that
+  don't carry them.
+
+### Changed
+- cc-transcript pin raised to `>=9.1.0` for the `Session.notifications` API.
+
+### Fixed
+- **`Waiting()` no longer mistakes an enqueued notification for a delivered
+  one.** The old check matched any `queue-operation` transcript record
+  containing the tool-use-id, so a completion notification that was enqueued
+  but not yet delivered counted as "arrived" — a Stop gate fired on a session
+  legitimately waiting for its third background agent, 63 seconds inside that
+  window. `is_waiting` is now a three-layer union: the Stop payload's task
+  registry, undelivered notifications still in the transcript queue
+  (`Session.notifications`), and per-launch async tracking with
+  delivered-or-popped completion. Also fixed on the way: an errored `Workflow`
+  launch no longer pins `Waiting()` for the rest of the session, and sub-agent
+  transcripts (which carry no queue-operations at all) no longer wedge
+  `SubagentStop` gates permanently open.
+- **The deferral gate skips plan mode (pack 0.5.1).** It judged "stayed in
+  plan mode, shipped no code" as a silent downgrade — but plan mode cannot
+  ship code, and the ExitPlanMode band-aid nudge already polices plan content.
+- **`workflow()` composes `Waiting()` additively with `skip_if`** instead of
+  dropping it when a custom `skip_if` is passed, matching `gate`/`llm_gate`.
+- **`evt.tasks` reads the current native store naming.** Claude Code writes
+  task lists to `~/.claude/tasks/session-<first8>/` now; the full-session-id
+  lookup read an empty list for every current session, leaving the
+  `TasksIncomplete` gate inert.
+
 ## [8.9.0] - 2026-07-07
 
 ### Added
