@@ -4,6 +4,40 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`packs.toml` takes a top-level `launcher` key** — a command prefix that
+  replaces the default `uvx capt-hook` in every hook command the CLI writes to
+  `.claude/settings.json`, for dev trees and monorepos that run `capt-hook`
+  from a checkout or subproject (e.g.
+  `launcher = "uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook"`). The
+  suffixes — `run <Event>`, `--async`, `review run` — stay generator-owned,
+  and `register-hooks --from` overrides the launcher for that invocation.
+  Launcher values render as TOML basic strings via a dedicated escaper
+  (`json.dumps` would emit spec-invalid surrogate escapes for non-BMP
+  characters, corrupting the file for the next read), and a non-string
+  `launcher` raises `PackError` at read instead of propagating downstream.
+- **Degraded pack loads are attributed and surfaced.** A hook module that
+  fails to import carries its pack (`LoadError(source, exc, pack)` on
+  `State.load_errors`): `capt-hook test` tags the failure line with the pack
+  and adds an additive `pack` field to the JSON record, `pack list` imports
+  each resolved pack and prints one line per failure, and both status
+  dashboards (`capt-hook status` and `capt-hook review status`) render a red
+  `HOOK LOAD FAILED` line per failure. Event dispatch is untouched — no
+  runtime surfacing.
+
+### Changed
+- **`register-hooks`, `pack add`, `pack remove`, and `pack update` merge
+  settings three-way.** Foreign (non-capt-hook) groups pass through untouched,
+  canonical capt-hook groups are refreshed or removed as before, and any
+  capt-hook command the generator would not render itself — hand-edited flags,
+  a different launcher prefix — is preserved verbatim as "custom". A custom
+  group owns its event: the generator writes no sibling group (nothing fires
+  twice) and the group survives deferral. Breaking for API callers:
+  `generate_settings` and `merge_settings` take a rendered `prefix` in place
+  of `from_source`; the CLI `--from` flag is unchanged.
+
 ## [8.6.0] - 2026-07-07
 
 ### Changed

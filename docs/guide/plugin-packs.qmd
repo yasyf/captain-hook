@@ -74,6 +74,14 @@ session and `run` picks it up during discovery. So keep the run command exactly
 does), and put per-plugin configuration in the attached pack's manifest and
 hooks, never in the run command's flags.
 
+A project that sets a `launcher` in its `packs.toml` (see
+[Set a custom launcher](packs.qmd#set-a-custom-launcher)) forfeits this dedup
+by construction: its generated commands start with the launcher prefix, which
+never matches the plugin's `uvx capt-hook run <Event>` string, so both commands
+run — two processes per event, each resolving and dispatching the project's
+packs. That is the documented cost of a custom launcher, not a bug: a dev tree
+or monorepo that needs one accepts the duplicate dispatch.
+
 Attach records the pack once, keyed by the session id. A subagent's hook events
 carry that same session id, so an attached pack loads for subagents too — the
 attach at SessionStart covers the whole session, sidechains included.

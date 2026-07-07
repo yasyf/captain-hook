@@ -35,7 +35,7 @@ uvx capt-hook pack add general
 ```
 
 This records the pack in `.claude/hooks/packs.toml` and wires the events its hooks
-subscribe to into `.claude/settings.local.json`:
+subscribe to into `.claude/settings.json`:
 
 ```toml
 [packs.general]
@@ -102,6 +102,52 @@ uvx capt-hook pack update acme-guards
 ```
 
 Run `pack update` with no name to refresh every external pack.
+
+## Set a custom launcher
+
+Every hook command the CLI writes to `.claude/settings.json` starts with
+`uvx capt-hook`. When the published wheel is the wrong thing to run — a dev
+tree hacking on capt-hook itself, or a monorepo whose Python project lives in
+a subdirectory — set the top-level `launcher` key in `packs.toml` to the
+command prefix that replaces it:
+
+```toml
+launcher = "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook"
+
+[packs.general]
+```
+
+That value is what this repo's own dev tree uses: every hook run imports the
+checkout instead of the published wheel. From then on, every command that
+`register-hooks`, `pack add`, `pack remove`, or `pack update` generates starts
+with the prefix; the suffixes — `run <Event>`, `--async`, `review run` — stay
+generator-owned, so the launcher never tracks which events are wired or how.
+In a monorepo, point the prefix at the subproject that declares `capt-hook`
+as a dependency:
+
+```toml
+launcher = "uv run --project \"$CLAUDE_PROJECT_DIR/services/api\" capt-hook"
+```
+
+`register-hooks --from <source>` outranks the launcher: that invocation
+renders `uvx --from <source> capt-hook` regardless of what `packs.toml` says.
+
+Any capt-hook command the generator would not render itself — hand-edited
+flags, a different prefix — is classified *custom* and preserved verbatim on
+every merge. A custom group owns its event: the generator writes no sibling
+group for it, so nothing fires twice, and it survives deferral. This cuts both
+ways when you add a launcher to a repo with existing wiring: the old canonical
+`uvx capt-hook` entries no longer match what the generator renders, so the
+merge preserves them as custom instead of rewriting them. Delete them from
+`.claude/settings.json` by hand once, then re-run `register-hooks`; the freed
+events regenerate with the launcher prefix.
+
+::: {.callout-warning title="A launcher forfeits plugin dedup"}
+Claude Code deduplicates hook commands by exact string match. A launcher
+changes the project's command strings, so they can no longer collapse with a
+plugin's `uvx capt-hook run <Event>` wiring — both run.
+[Ship a pack in a Claude plugin](plugin-packs.qmd) covers the tradeoff.
+:::
 
 ## How packs combine with your own hooks
 
