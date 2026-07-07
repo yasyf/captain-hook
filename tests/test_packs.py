@@ -323,6 +323,43 @@ def test_read_entries_rejects_unknown_keys(packs_toml: Path) -> None:
         manager.read_entries(packs_toml)
 
 
+# The canonical dogfood launcher embeds double quotes around $CLAUDE_PROJECT_DIR, so its TOML
+# rendering must escape them; LAUNCHER_LINE is the exact expected basic-string form.
+DOGFOOD_LAUNCHER = 'env -u UV_EXCLUDE_NEWER uv run --project "$CLAUDE_PROJECT_DIR" capt-hook'
+LAUNCHER_LINE = 'launcher = "env -u UV_EXCLUDE_NEWER uv run --project \\"$CLAUDE_PROJECT_DIR\\" capt-hook"'
+
+
+def test_read_launcher_absent_and_present(packs_toml: Path) -> None:
+    assert manager.read_launcher(packs_toml) is None  # file absent
+    packs_toml.write_text("[packs.general]\n")
+    assert manager.read_launcher(packs_toml) is None  # key absent
+
+    manager.atomic_write(packs_toml, manager.render_packs_toml([manager.BuiltinPack("general")], DOGFOOD_LAUNCHER))
+    assert packs_toml.read_text().startswith(LAUNCHER_LINE + "\n")  # launcher line rendered before the tables
+    assert manager.read_launcher(packs_toml) == DOGFOOD_LAUNCHER  # exact round-trip, embedded quotes intact
+
+
+def test_upsert_entry_preserves_launcher(packs_toml: Path) -> None:
+    manager.atomic_write(packs_toml, manager.render_packs_toml([], DOGFOOD_LAUNCHER))
+    manager.upsert_entry(packs_toml, manager.BuiltinPack("general"))
+
+    text = packs_toml.read_text()
+    assert text.index("launcher") < text.index("[packs.general]")  # launcher stays ahead of the tables
+    assert manager.read_launcher(packs_toml) == DOGFOOD_LAUNCHER
+    assert manager.read_entries(packs_toml) == [manager.BuiltinPack("general")]
+
+
+def test_delete_entry_preserves_launcher(packs_toml: Path) -> None:
+    manager.atomic_write(
+        packs_toml,
+        manager.render_packs_toml([manager.BuiltinPack("general"), manager.BuiltinPack("python")], DOGFOOD_LAUNCHER),
+    )
+    manager.delete_entry(packs_toml, "python")
+
+    assert manager.read_launcher(packs_toml) == DOGFOOD_LAUNCHER  # survives a wholesale rewrite
+    assert manager.read_entries(packs_toml) == [manager.BuiltinPack("general")]
+
+
 # --- fetch / cache -------------------------------------------------------------------
 
 

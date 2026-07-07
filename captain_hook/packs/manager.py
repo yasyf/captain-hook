@@ -208,6 +208,10 @@ def read_entries(path: Path) -> list[PackEntry]:
     return [parse_entry(name, table) for name, table in (tomllib.loads(path.read_text()).get("packs") or {}).items()]
 
 
+def read_launcher(path: Path) -> str | None:
+    return tomllib.loads(path.read_text()).get("launcher") if path.exists() else None
+
+
 def render_entry(entry: PackEntry) -> str:
     match entry:
         case BuiltinPack(name=name):
@@ -220,8 +224,9 @@ def render_entry(entry: PackEntry) -> str:
             return f'[packs.{name}]\nsource = "{source}"\ncommit = "{commit}"\n\n'
 
 
-def render_packs_toml(entries: Sequence[PackEntry]) -> str:
-    return "".join(render_entry(e) for e in sorted(entries, key=lambda e: e.name))
+def render_packs_toml(entries: Sequence[PackEntry], launcher: str | None = None) -> str:
+    head = "" if launcher is None else f"launcher = {json.dumps(launcher)}\n\n"
+    return head + "".join(render_entry(e) for e in sorted(entries, key=lambda e: e.name))
 
 
 def atomic_write(path: Path, text: str) -> None:
@@ -242,14 +247,17 @@ def atomic_write(path: Path, text: str) -> None:
 
 
 def upsert_entry(path: Path, entry: PackEntry) -> None:
-    atomic_write(path, render_packs_toml([*(e for e in read_entries(path) if e.name != entry.name), entry]))
+    atomic_write(
+        path,
+        render_packs_toml([*(e for e in read_entries(path) if e.name != entry.name), entry], read_launcher(path)),
+    )
 
 
 def delete_entry(path: Path, name: str) -> None:
     entries = read_entries(path)
     if name not in {e.name for e in entries}:
         raise PackError(f"pack {name!r} is not enabled in {path}")
-    atomic_write(path, render_packs_toml([e for e in entries if e.name != name]))
+    atomic_write(path, render_packs_toml([e for e in entries if e.name != name], read_launcher(path)))
 
 
 def packs_cache_root() -> Path:
