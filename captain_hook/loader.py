@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from captain_hook.app import _state, on
+from captain_hook.app import LoadError, _state, on
 from captain_hook.settings import build_settings
 from captain_hook.types import Event
 
@@ -79,7 +79,7 @@ def discover_hooks(hooks_dir: str | Path) -> None:
             import_or_reload(fqn, fresh_this_pass)
         except Exception as exc:
             logger.bind(module=fqn).opt(exception=True).warning("skipped unloadable hook module")
-            _state.load_errors.append((fqn, exc))
+            _state.load_errors.append(LoadError(fqn, exc))
 
 
 def ensure_pack_package(fqn: str, search_paths: list[str]) -> ModuleType:
@@ -139,4 +139,4 @@ def discover_pack(name: str, pack_dir: Path) -> None:
             import_pack_module(f"{pkg}.{path.stem}", path)
         except Exception as exc:
             logger.bind(file=str(path)).opt(exception=True).warning("skipped unloadable hook file")
-            _state.load_errors.append((str(path), exc))
+            _state.load_errors.append(LoadError(str(path), exc, pack=name))

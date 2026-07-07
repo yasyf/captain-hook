@@ -182,7 +182,9 @@ class TestDiscoverHooks:
         assert [h.spec.message for h in _state.hooks] == ["good"]
         assert any("bad_hook" in r.message and r.levelno >= WARNING_NO for r in logcap.records)
         # The failure is also recorded so `capt-hook test` fails instead of passing green.
-        assert any("bad_hook" in source and isinstance(exc, RuntimeError) for source, exc in _state.load_errors)
+        assert any(
+            "bad_hook" in e.source and isinstance(e.exc, RuntimeError) and e.pack is None for e in _state.load_errors
+        )
 
 
 class TestMultipleHooks:

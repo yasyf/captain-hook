@@ -16,6 +16,7 @@ from cc_transcript.mining.sourcekind import SourceKind
 from click.testing import CliRunner
 from rich.console import Console
 
+from captain_hook.app import LoadError
 from captain_hook.cli import cli
 from captain_hook.review.dashboard import (
     Stage,
@@ -271,6 +272,29 @@ class TestRenderFrame:
         assert "[not watching]" in out
         assert "No corrections tracked yet" in out
         assert "capt-hook review enable" in out
+
+
+class TestPackErrors:
+    def test_load_error_line_shows_pack_attribution(self) -> None:
+        errors = [LoadError(source="/x/.claude/hooks/boom.py", exc=RuntimeError("kaboom"), pack="badpack")]
+        out = plain(
+            render(
+                [],
+                repo=REPO,
+                settings=ReviewSettings(),
+                watching=True,
+                health=ok_health(),
+                judge=NO_JUDGE,
+                load_errors=errors,
+            )
+        )
+        assert "HOOK LOAD FAILED" in out
+        assert "[badpack] boom.py" in out
+        assert "RuntimeError: kaboom" in out
+
+    def test_zero_errors_renders_no_line(self) -> None:
+        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=ok_health(), judge=NO_JUDGE))
+        assert "HOOK LOAD FAILED" not in out
 
 
 class TestHealthLine:

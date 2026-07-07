@@ -99,13 +99,20 @@ def validate_handler_signature(fn: HookHandler) -> None:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class LoadError:
+    source: str
+    exc: BaseException
+    pack: str | None = None
+
+
 @dataclass
 class State:
     hooks: list[RegisteredHook] = field(default_factory=list)
     gitignore_patterns: list[str] = field(default_factory=list)
     settings: HooksSettings | None = None
     classifier: UserClassifier | None = None
-    load_errors: list[tuple[str, BaseException]] = field(default_factory=list)
+    load_errors: list[LoadError] = field(default_factory=list)
     # Events subscribed only by session-attached packs — excluded from settings-drift
     # warnings, since a plugin wires them in its own hooks.json, not the project's settings.
     attach_only_events: set[str] = field(default_factory=set)

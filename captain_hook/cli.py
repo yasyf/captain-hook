@@ -503,12 +503,12 @@ def run_tests(json_output: bool = False) -> None:
     from captain_hook.testing.helpers import run_inline_tests
 
     load_errors = list(_state.load_errors)
-    for source, exc in load_errors:
-        line = f"{type(exc).__name__}: {exc}"
+    for error in load_errors:
+        line = f"{type(error.exc).__name__}: {error.exc}"
         if json_output:
-            print(json.dumps({"id": source, "status": "load_error", "reason": line}))
+            print(json.dumps({"id": error.source, "status": "load_error", "reason": line, "pack": error.pack}))
         else:
-            print(f"  ERROR {source} failed to import: {line}")
+            print(f"  ERROR {f'[{error.pack}] ' if error.pack else ''}{error.source} failed to import: {line}")
 
     results = run_inline_tests()
     if not results:
@@ -652,7 +652,8 @@ def status(state: CliState, repo_: str | None, sync: bool) -> None:
     from captain_hook.review.cli import resolve_repo
     from captain_hook.review.dashboard import status_command
 
-    status_command(resolve_repo(repo_, state.root), sync=sync)
+    state.discover()
+    status_command(resolve_repo(repo_, state.root), sync=sync, load_errors=list(_state.load_errors))
 
 
 @cli.group()
@@ -719,6 +720,9 @@ def pack_attach(directory: str) -> None:
 def pack_list(state: CliState) -> None:
     """List the packs enabled in .claude/hooks/packs.toml."""
     resolved, missing = manager.resolve_enabled_packs(state.root)
+    reset()
+    for r in resolved:
+        discover_pack(r.entry.name, r.path)
     for r in resolved:
         match r.entry:
             case manager.BuiltinPack():
@@ -733,6 +737,11 @@ def pack_list(state: CliState) -> None:
         click.echo(f"  {r.entry.name:24} {kind:8} {ref:20} v{r.manifest.version:8} {count} hooks")
     for name in missing:
         click.echo(f"  {name:24} github   (unavailable — offline; run `capt-hook pack update` when online)")
+    for error in _state.load_errors:
+        click.echo(
+            f"!  {error.pack}: {Path(error.source).name} failed to import "
+            f"- {type(error.exc).__name__}: {error.exc}"
+        )
 
 
 @pack.command(name="remove")

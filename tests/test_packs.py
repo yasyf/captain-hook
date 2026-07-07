@@ -663,6 +663,25 @@ def test_cli_pack_add_preserves_custom_settings_under_launcher(tmp_path: Path) -
     assert all("uvx capt-hook" not in c for c in commands)
 
 
+def test_cli_pack_list_reports_import_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pack_dir = write_pack(tmp_path / "badpack", "badpack", hooks=".")
+    (pack_dir / "boom.py").write_text("raise RuntimeError('kaboom')\n")
+    resolved = [
+        manager.ResolvedPack(
+            entry=manager.BuiltinPack(name="badpack"),
+            path=pack_dir,
+            manifest=manager.PackManifest(name="badpack", version="0.1.0", description="d", hooks="."),
+        )
+    ]
+    monkeypatch.setattr(manager, "resolve_enabled_packs", lambda _root: (resolved, []))
+
+    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "list"])
+
+    assert result.exit_code == 0, result.output
+    assert "badpack" in result.output  # the pack still lists
+    assert "!  badpack: boom.py failed to import - RuntimeError: kaboom" in result.output
+
+
 # --- @latest / ref resolution --------------------------------------------------------
 
 

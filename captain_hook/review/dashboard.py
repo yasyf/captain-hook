@@ -15,6 +15,7 @@ import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.console import Console, Group
@@ -25,8 +26,11 @@ from captain_hook.review.pipeline import review_log_path
 from captain_hook.review.store import CandidateKind, CandidateStatus
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from rich.console import RenderableType
 
+    from captain_hook.app import LoadError
     from captain_hook.review.repo import RepoKey
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import CandidateView, JudgeHealth, SpawnHealth
@@ -202,6 +206,20 @@ def health_line(health: SpawnHealth, judge: JudgeHealth) -> RenderableType:
             )
 
 
+def pack_errors_lines(load_errors: Sequence[LoadError]) -> list[RenderableType]:
+    """One red line per degraded hook/pack load, tagged with its pack; empty when nothing failed."""
+    return [
+        Text.assemble(
+            ("HOOK LOAD FAILED", "bold red"),
+            (
+                f"   {f'[{e.pack}] ' if e.pack else ''}{Path(e.source).name}: {type(e.exc).__name__}: {e.exc}",
+                "red",
+            ),
+        )
+        for e in load_errors
+    ]
+
+
 def header(repo: RepoKey, views: list[CandidateView], settings: ReviewSettings, *, watching: bool) -> RenderableType:
     open_n = sum(1 for v in views if stage_of(v) is Stage.PR_OPEN)
     line = Text.assemble(
@@ -226,9 +244,10 @@ def render(
     watching: bool,
     health: SpawnHealth,
     judge: JudgeHealth,
+    load_errors: Sequence[LoadError] = (),
     syncing: bool = False,
 ) -> RenderableType:
-    """The whole dashboard frame: reviewer health, header, then a section per non-empty lifecycle stage."""
+    """The whole dashboard frame: reviewer health, degraded loads, header, then a section per lifecycle stage."""
     sections = [
         block
         for stage, title, desc, style in SECTIONS
@@ -243,6 +262,7 @@ def render(
     spinner = [Spinner("dots", text=Text("syncing open PRs with GitHub…", style="dim"))] if syncing else []
     return Group(
         health_line(health, judge),
+        *pack_errors_lines(load_errors),
         header(repo, views, settings, watching=watching),
         Text(""),
         *sections,
@@ -251,7 +271,7 @@ def render(
     )
 
 
-async def run_status(repo: RepoKey, *, sync: bool) -> None:
+async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadError] = ()) -> None:
     """Renders the dashboard for ``repo``, refreshing open-PR state in the background when ``sync``."""
     from rich.live import Live
 
@@ -268,17 +288,46 @@ async def run_status(repo: RepoKey, *, sync: bool) -> None:
         watching = await store.watching(repo)
         views = await store.overview(repo, settings=settings, prompt_version=REVIEW_PROMPT_VERSION)
         if not (sync and any(stage_of(v) is Stage.PR_OPEN for v in views)):
-            console.print(render(views, repo=repo, settings=settings, watching=watching, health=health, judge=judge))
+            console.print(
+                render(
+                    views,
+                    repo=repo,
+                    settings=settings,
+                    watching=watching,
+                    health=health,
+                    judge=judge,
+                    load_errors=load_errors,
+                )
+            )
             return
         with Live(
-            render(views, repo=repo, settings=settings, watching=watching, health=health, judge=judge, syncing=True),
+            render(
+                views,
+                repo=repo,
+                settings=settings,
+                watching=watching,
+                health=health,
+                judge=judge,
+                load_errors=load_errors,
+                syncing=True,
+            ),
             console=console,
         ) as live:
             await sync_open_prs(store, repo, settings=settings)
             fresh = await store.overview(repo, settings=settings, prompt_version=REVIEW_PROMPT_VERSION)
-            live.update(render(fresh, repo=repo, settings=settings, watching=watching, health=health, judge=judge))
+            live.update(
+                render(
+                    fresh,
+                    repo=repo,
+                    settings=settings,
+                    watching=watching,
+                    health=health,
+                    judge=judge,
+                    load_errors=load_errors,
+                )
+            )
 
 
-def status_command(repo: RepoKey, *, sync: bool) -> None:
+def status_command(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadError] = ()) -> None:
     """The synchronous CLI boundary for ``review status`` / ``capt-hook status``."""
-    asyncio.run(run_status(repo, sync=sync))
+    asyncio.run(run_status(repo, sync=sync, load_errors=load_errors))
