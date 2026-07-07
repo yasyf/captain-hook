@@ -1,5 +1,5 @@
 name = "steering"
-version = "0.5.0"
+version = "0.5.1"
 description = "Steer the agent's judgment on what's worth fixing: prefer fundamental, first-principles fixes over band-aids, don't dismiss a real pre-existing issue, don't chase trivial type noise, and don't defer the requested fix by swapping in docs or a follow-up nobody asked for."
 hooks = "."
 nlp = true
