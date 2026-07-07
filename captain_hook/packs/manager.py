@@ -209,7 +209,13 @@ def read_entries(path: Path) -> list[PackEntry]:
 
 
 def read_launcher(path: Path) -> str | None:
-    return tomllib.loads(path.read_text()).get("launcher") if path.exists() else None
+    match tomllib.loads(path.read_text()).get("launcher") if path.exists() else None:
+        case None:
+            return None
+        case str() as launcher:
+            return launcher
+        case other:
+            raise PackError(f"invalid launcher in {path}: expected a string, got {type(other).__name__}")
 
 
 def render_entry(entry: PackEntry) -> str:
@@ -224,8 +230,33 @@ def render_entry(entry: PackEntry) -> str:
             return f'[packs.{name}]\nsource = "{source}"\ncommit = "{commit}"\n\n'
 
 
+def toml_basic_string(value: str) -> str:
+    """Render ``value`` as a quoted TOML basic string, safe for non-BMP characters.
+
+    ``json.dumps`` escapes chars above the BMP (emoji, rare CJK) as surrogate-pair
+    ``\\uXXXX`` sequences, which the TOML spec rejects — ``tomllib`` then raises on the
+    next read. This escapes only backslash, double quote, and the ``U+0000``–``U+001F`` /
+    ``U+007F`` control chars, passing every other char through as literal UTF-8 so the
+    value round-trips. For ASCII values without control chars the output is byte-identical
+    to ``json.dumps``.
+    """
+
+    def escape(c: str) -> str:
+        match c:
+            case "\\":
+                return "\\\\"
+            case '"':
+                return '\\"'
+            case _ if ord(c) <= 0x1F or ord(c) == 0x7F:
+                return f"\\u{ord(c):04x}"
+            case _:
+                return c
+
+    return '"' + "".join(escape(c) for c in value) + '"'
+
+
 def render_packs_toml(entries: Sequence[PackEntry], launcher: str | None = None) -> str:
-    head = "" if launcher is None else f"launcher = {json.dumps(launcher)}\n\n"
+    head = "" if launcher is None else f"launcher = {toml_basic_string(launcher)}\n\n"
     return head + "".join(render_entry(e) for e in sorted(entries, key=lambda e: e.name))
 
 
