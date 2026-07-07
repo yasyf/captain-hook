@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from cc_transcript.ids import SessionId
+from cc_transcript.judge.similar import KeyOverlap
 from cc_transcript.mining.candidates import DedupKey
 from cc_transcript.mining.confidence import MEDIUM, CandidateSignal, Confidence, to_payload
 from cc_transcript.mining.sourcekind import SourceKind
@@ -31,6 +32,7 @@ from captain_hook.review.store import (
     CandidateKind,
     CandidateStatus,
     CandidateView,
+    JudgeHealth,
     ReviewStore,
     SpawnHealth,
     ThresholdStatus,
@@ -44,6 +46,7 @@ if TYPE_CHECKING:
 
 REPO = RepoKey("github.com/yasyf/scratch")
 PV = REVIEW_PROMPT_VERSION
+NO_JUDGE = JudgeHealth(pending=0, last_verdict_at=None, splits=())
 INSERT_EVENT = (
     "INSERT INTO feedback_events (dedup_key, source_kind, session_id, occurred_at, text, payload_json, "
     "context_json, ingested_at) VALUES (?, ?, ?, ?, ?, ?, '{}', '2026-06-01T00:00:00+00:00')"
@@ -57,6 +60,7 @@ class FakeVerdict:
     category: str = "durable_style_rule"
     summary: str = "summary"
     rationale: str = "because"
+    canonical_key: str | None = None
 
 
 def view(
@@ -251,7 +255,9 @@ class TestRenderFrame:
                 pr_opened_at="2026-06-10T00:00:00+00:00",
             ),
         ]
-        out = plain(render(views, repo=REPO, settings=ReviewSettings(), watching=True, health=ok_health()))
+        out = plain(
+            render(views, repo=REPO, settings=ReviewSettings(), watching=True, health=ok_health(), judge=NO_JUDGE)
+        )
         assert "WATCHING" in out and "ELIGIBLE" in out and "PR OPEN" in out
         assert "#1" in out and "#2" in out and "#3" in out
         assert 'would add a hook: "block force-push"' in out
@@ -259,7 +265,9 @@ class TestRenderFrame:
         assert "[watching]" in out and "PR slots 1/2" in out
 
     def test_empty_repo_shows_hint(self) -> None:
-        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=False, health=ok_health()))
+        out = plain(
+            render([], repo=REPO, settings=ReviewSettings(), watching=False, health=ok_health(), judge=NO_JUDGE)
+        )
         assert "[not watching]" in out
         assert "No corrections tracked yet" in out
         assert "capt-hook review enable" in out
@@ -276,7 +284,7 @@ class TestHealthLine:
             consecutive_failures=34,
             failing_since="2026-06-01T09:00:00+00:00",
         )
-        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=health))
+        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=health, judge=NO_JUDGE))
         assert out.splitlines()[0].startswith("REVIEWER FAILING")
         assert "34 consecutive since 2026-06-01T09:00:00+00:00" in out
         assert "OperationalError: no such column: fidelity" in out
@@ -290,12 +298,29 @@ class TestHealthLine:
                 settings=ReviewSettings(),
                 watching=True,
                 health=ok_health(ago=timedelta(hours=2), judged=7),
+                judge=NO_JUDGE,
             )
         )
         assert "reviewer ok" in out
         assert "last run 2h ago" in out
         assert "judged 7" in out
         assert "REVIEWER FAILING" not in out
+
+    def test_healthy_reviewer_appends_judge_segment_and_splits(self) -> None:
+        judge = JudgeHealth(
+            pending=3,
+            last_verdict_at=(datetime.now(UTC) - timedelta(minutes=5)).isoformat(),
+            splits=(KeyOverlap("prefer-uv", "use-uv-not-pip", 0.93),),
+        )
+        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=ok_health(), judge=judge))
+        assert "judge: 3 pending · last verdict 5m ago" in out
+        assert "1 possible slug splits" in out
+
+    def test_judge_segment_hides_verdict_and_splits_when_absent(self) -> None:
+        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=ok_health(), judge=NO_JUDGE))
+        assert "judge: 0 pending" in out
+        assert "last verdict" not in out
+        assert "possible slug splits" not in out
 
     @pytest.mark.parametrize(
         ("health", "expected"),
@@ -313,7 +338,7 @@ class TestHealthLine:
         ],
     )
     def test_stale_reviewer_renders_yellow_warning(self, health: SpawnHealth, expected: str) -> None:
-        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=health))
+        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=health, judge=NO_JUDGE))
         assert expected in out
         assert "reviewer ok" not in out
 

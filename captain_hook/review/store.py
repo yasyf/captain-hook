@@ -17,7 +17,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Self
 
 from cc_transcript.judge.verdicts import VerdictStoreMixin
-from cc_transcript.mining.confidence import from_payload
+from cc_transcript.mining.confidence import NOISE_FLOOR, from_payload
 from cc_transcript.mining.store import FEEDBACK_DDL, FeedbackStore, now
 from cc_transcript.store import FileStateStore
 
@@ -30,11 +30,14 @@ if TYPE_CHECKING:
 
     from cc_transcript.corrections import Correction
     from cc_transcript.ids import SessionId
+    from cc_transcript.judge.similar import KeyOverlap
     from cc_transcript.mining.candidates import DedupKey
     from cc_transcript.mining.confidence import Confidence
     from cc_transcript.mining.sourcekind import SourceKind
 
     from captain_hook.review.settings import ReviewSettings
+
+SPLIT_THRESHOLD = 0.9
 
 CANDIDATES_QUERY = """
 SELECT c.*,
@@ -67,7 +70,7 @@ class CandidateStatus(StrEnum):
 
 
 TRANSITIONS: Mapping[CandidateStatus, frozenset[CandidateStatus]] = {
-    CandidateStatus.WATCHING: frozenset({CandidateStatus.PR_OPEN}),
+    CandidateStatus.WATCHING: frozenset({CandidateStatus.PR_OPEN, CandidateStatus.REJECTED}),
     CandidateStatus.PR_OPEN: frozenset({CandidateStatus.STALE, CandidateStatus.ACCEPTED, CandidateStatus.REJECTED}),
     CandidateStatus.STALE: frozenset({CandidateStatus.ACCEPTED, CandidateStatus.REJECTED}),
     CandidateStatus.ACCEPTED: frozenset(),
@@ -78,6 +81,10 @@ TRANSITIONS: Mapping[CandidateStatus, frozenset[CandidateStatus]] = {
 def signal_confidence(payload_json: object) -> Confidence:
     payload: dict[str, Any] = json.loads(str(payload_json)) if payload_json else {}
     return from_payload(payload["signal"]).confidence
+
+
+def judge_worthy(row: Mapping[str, object]) -> bool:
+    return signal_confidence(row["payload_json"]) >= NOISE_FLOOR
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +167,24 @@ class SpawnHealth:
     last: dict[str, object] | None
     consecutive_failures: int
     failing_since: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class JudgeHealth:
+    """The judge lane's dashboard health: backlog, recency, and the slug-split signal.
+
+    Attributes:
+        pending: How many judge-worthy corrections still lack a verdict at the
+            current prompt version.
+        last_verdict_at: The newest judge verdict's timestamp at the current
+            prompt version, or ``None`` before any verdict lands.
+        splits: Distinct canonical-key pairs whose evidence centroids nearly
+            coincide — possible slug splits the reviewer may want to reconcile.
+    """
+
+    pending: int
+    last_verdict_at: str | None
+    splits: tuple[KeyOverlap, ...]
 
 
 class ReviewStore(VerdictStoreMixin, FeedbackStore):
@@ -410,6 +435,100 @@ VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
             (to, now(), pr_url, pr_opened_at.astimezone(UTC).isoformat() if pr_opened_at else None, candidate_id),
         )
 
+    async def regroup_create(self, *, prompt_version: int) -> tuple[int, int]:
+        """Re-parents, retires, and sweeps watching create candidates onto their durable slugs.
+
+        The treadmill that turns the scanner's per-session digest candidates into
+        durable rule candidates, run once at the close of each judge pass under a
+        single transaction. In order:
+
+        1. **Re-parent** every observation on a watching create candidate whose
+           judge verdict at ``prompt_version`` is accepted and names a
+           ``canonical_key`` different from the candidate's rule, onto the create
+           candidate keyed by that slug — created on first need, taking the
+           observation's source kind — earliest observation first so the slug
+           candidate keeps earliest-evidence order.
+        2. **Retire** every watching create candidate all of whose observations
+           are judged with none accepted to :attr:`CandidateStatus.REJECTED`.
+        3. **Sweep** every watching create candidate left with no observations
+           whose ``updated_at`` predates this pass, deleting it; a candidate a
+           concurrent ingest just created is newer and survives.
+
+        Fix candidates and terminal or PR-open create candidates are never touched.
+
+        Args:
+            prompt_version: The judge prompt version whose verdicts decide acceptance.
+
+        Returns:
+            ``(merged, retired)`` — observations re-parented and candidates rejected.
+        """
+        from cc_transcript.ids import SessionId
+        from cc_transcript.mining.candidates import DedupKey
+        from cc_transcript.mining.sourcekind import SourceKind
+
+        started = now()
+        async with self.store.transaction() as conn:
+            reparent = [
+                dict(row)
+                async for row in await conn.execute(
+                    f"""
+SELECT o.id AS obs_id, o.dedup_key, o.session_id, o.occurred_at, c.repo_key, e.source_kind, v.canonical_key
+FROM candidate_observations o
+JOIN candidates c ON c.id = o.candidate_id
+JOIN feedback_events e ON e.dedup_key = o.dedup_key
+JOIN {self.VERDICT_TABLE} v ON v.dedup_key = o.dedup_key AND v.role = 'judge' AND v.prompt_version = ?
+WHERE c.candidate_kind = 'create' AND c.status = ?
+  AND v.{self.ACCEPTED_COLUMN} = 1 AND v.canonical_key IS NOT NULL AND v.canonical_key != c.rule
+ORDER BY o.id
+""",
+                    (prompt_version, CandidateStatus.WATCHING),
+                )
+            ]
+            for row in reparent:
+                new_id = await self.ensure_candidate(
+                    RepoKey(str(row["repo_key"])),
+                    kind=CandidateKind.CREATE,
+                    rule=str(row["canonical_key"]),
+                    source_kind=SourceKind(str(row["source_kind"])),
+                )
+                await self.record_observation(
+                    new_id,
+                    dedup_key=DedupKey(str(row["dedup_key"])),
+                    session_id=SessionId(str(row["session_id"])),
+                    occurred_at=datetime.fromisoformat(str(row["occurred_at"])),
+                )
+                await conn.execute("DELETE FROM candidate_observations WHERE id = ?", (row["obs_id"],))
+
+            retire = [
+                int(row["id"])
+                async for row in await conn.execute(
+                    f"""
+SELECT c.id FROM candidates c
+WHERE c.candidate_kind = 'create' AND c.status = ?
+  AND EXISTS (SELECT 1 FROM candidate_observations o WHERE o.candidate_id = c.id)
+  AND NOT EXISTS (
+    SELECT 1 FROM candidate_observations o
+    LEFT JOIN {self.VERDICT_TABLE} v
+      ON v.dedup_key = o.dedup_key AND v.role = 'judge' AND v.prompt_version = ?
+    WHERE o.candidate_id = c.id AND (v.id IS NULL OR v.{self.ACCEPTED_COLUMN} = 1)
+  )
+""",
+                    (CandidateStatus.WATCHING, prompt_version),
+                )
+            ]
+            for candidate_id in retire:
+                await self.transition(candidate_id, CandidateStatus.REJECTED)
+
+            await conn.execute(
+                """
+DELETE FROM candidates
+WHERE candidate_kind = 'create' AND status = ? AND updated_at < ?
+  AND NOT EXISTS (SELECT 1 FROM candidate_observations o WHERE o.candidate_id = candidates.id)
+""",
+                (CandidateStatus.WATCHING, started),
+            )
+        return len(reparent), len(retire)
+
     async def threshold_status(
         self, candidate_id: int, *, settings: ReviewSettings, prompt_version: int
     ) -> ThresholdStatus:
@@ -442,18 +561,11 @@ VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
 
         accepted_cur = await conn.execute(
             f"""
-WITH latest AS (
-  SELECT v.dedup_key, v.{self.ACCEPTED_COLUMN} AS accepted, v.confidence, ROW_NUMBER() OVER (
-    PARTITION BY v.dedup_key ORDER BY v.judged_at DESC, v.id DESC
-  ) AS rn
-  FROM {self.VERDICT_TABLE} v
-  WHERE v.role = 'judge' AND v.prompt_version = ?
-)
 SELECT o.session_id, substr(o.occurred_at, 1, 10) AS day, e.payload_json
 FROM candidate_observations o
-JOIN latest l ON l.dedup_key = o.dedup_key AND l.rn = 1
+JOIN {self.VERDICT_TABLE} v ON v.dedup_key = o.dedup_key AND v.role = 'judge' AND v.prompt_version = ?
 JOIN feedback_events e ON e.dedup_key = o.dedup_key
-WHERE o.candidate_id = ? AND l.accepted = 1 AND l.confidence >= ?
+WHERE o.candidate_id = ? AND v.{self.ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
 """,
             (prompt_version, candidate_id, settings.min_judge_confidence),
         )
@@ -635,4 +747,65 @@ SELECT
             last=rows[0] if (rows := [dict(row) async for row in last_cur]) else None,
             consecutive_failures=int(streak["consecutive_failures"]),
             failing_since=str(since) if (since := streak["failing_since"]) is not None else None,
+        )
+
+    async def judge_backlog(self, *, prompt_version: int) -> int:
+        """Counts judge-worthy corrections still lacking a verdict at ``prompt_version``.
+
+        The dashboard's pending count: every :meth:`unjudged` row (summary-refresh
+        included) that clears :func:`judge_worthy` — the same noise-floor predicate
+        the judge pass sends rows on, so the count matches what the next pass judges.
+        """
+        return sum(
+            judge_worthy(row)
+            for row in await self.unjudged(role="judge", prompt_version=prompt_version, refresh_summary=True)
+        )
+
+    async def has_verdict_evidence(self, *, prompt_version: int) -> bool:
+        """Whether any canonical-key evidence is stored at ``prompt_version`` to suggest from.
+
+        Gates the judge pass's per-row slug suggestions: with the companion
+        ``verdict_evidence`` table absent or empty at this version, no suggestion
+        is possible by construction, so the pass skips the embedder load entirely.
+        """
+        cur = await self.store.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'verdict_evidence'"
+        )
+        if await cur.fetchone() is None:
+            return False
+        cur = await self.store.conn.execute(
+            "SELECT 1 FROM verdict_evidence WHERE prompt_version = ? LIMIT 1", (prompt_version,)
+        )
+        return await cur.fetchone() is not None
+
+    async def slug_splits(self, *, prompt_version: int, threshold: float = SPLIT_THRESHOLD) -> list[KeyOverlap]:
+        """Returns canonical-key pairs whose evidence centroids nearly coincide — possible slug splits.
+
+        Delegates to :func:`cc_transcript.judge.near_duplicate_keys` over this
+        store's verdict-evidence vectors; nothing merges automatically, the caller
+        decides what to do with a flagged pair.
+
+        Args:
+            prompt_version: The prompt version whose evidence to compare.
+            threshold: The exclusive cosine-similarity floor a pair must clear.
+        """
+        from cc_transcript.judge.similar import near_duplicate_keys
+
+        return await near_duplicate_keys(self, prompt_version=prompt_version, threshold=threshold)
+
+    async def judge_health(self, *, prompt_version: int) -> JudgeHealth:
+        """Returns the judge lane's dashboard health at ``prompt_version`` — the only judge-health read.
+
+        Bundles the backlog count, the newest verdict's timestamp, and the
+        slug-split signal so the status dashboard reads them in one call.
+        """
+        cur = await self.store.conn.execute(
+            f"SELECT MAX(judged_at) AS last FROM {self.VERDICT_TABLE} WHERE role = 'judge' AND prompt_version = ?",
+            (prompt_version,),
+        )
+        last = [row["last"] async for row in cur][0]
+        return JudgeHealth(
+            pending=await self.judge_backlog(prompt_version=prompt_version),
+            last_verdict_at=str(last) if last is not None else None,
+            splits=tuple(await self.slug_splits(prompt_version=prompt_version)),
         )

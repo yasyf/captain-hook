@@ -67,6 +67,7 @@ class Verdict:
     category: str = "misfire_confirmed"
     summary: str = "claude dismissed the fire"
     rationale: str = "explicit dismissal"
+    canonical_key: str | None = None
 
 
 def fixture_events(name: str) -> list[TranscriptEvent]:

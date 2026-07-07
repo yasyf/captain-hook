@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
     from captain_hook.review.repo import RepoKey
     from captain_hook.review.settings import ReviewSettings
-    from captain_hook.review.store import CandidateView, SpawnHealth
+    from captain_hook.review.store import CandidateView, JudgeHealth, SpawnHealth
 
 DETAIL_WIDTH = 80
 KIND_STYLE = {CandidateKind.CREATE: "cyan", CandidateKind.FIX: "magenta"}
@@ -52,7 +52,7 @@ SECTIONS: tuple[tuple[Stage, str, str, str], ...] = (
     (Stage.ELIGIBLE, "ELIGIBLE", "a PR opens next session", "green"),
     (Stage.PR_OPEN, "PR OPEN", "pull request awaiting your review", "blue"),
     (Stage.ACCEPTED, "ACCEPTED", "PR merged", "green"),
-    (Stage.REJECTED, "REJECTED", "PR closed", "red"),
+    (Stage.REJECTED, "REJECTED", "PR closed or judge-retired", "red"),
     (Stage.STALE, "STALE", "PR open too long", "bright_black"),
 )
 
@@ -167,7 +167,13 @@ def spawn_stale(stamp: str) -> bool:
     return datetime.now(UTC) - datetime.fromisoformat(stamp) > SPAWN_STALE_AFTER
 
 
-def health_line(health: SpawnHealth) -> RenderableType:
+def judge_segment(judge: JudgeHealth) -> str:
+    verdict = f" · last verdict {relative(judge.last_verdict_at)}" if judge.last_verdict_at else ""
+    splits = f"  ·  {n} possible slug splits" if (n := len(judge.splits)) else ""
+    return f"judge: {judge.pending} pending{verdict}{splits}"
+
+
+def health_line(health: SpawnHealth, judge: JudgeHealth) -> RenderableType:
     match health.last:
         case None:
             return Text("reviewer has never run — check the SessionEnd hook wiring", style="yellow")
@@ -190,7 +196,8 @@ def health_line(health: SpawnHealth) -> RenderableType:
         case last:
             return Text(
                 f"reviewer ok  ·  last run {relative(str(last['finished_at']))}"
-                f"  ·  judged {json.loads(str(last['report_json']))['judged']}",
+                f"  ·  judged {json.loads(str(last['report_json']))['judged']}"
+                f"  ·  {judge_segment(judge)}",
                 style="dim",
             )
 
@@ -218,6 +225,7 @@ def render(
     settings: ReviewSettings,
     watching: bool,
     health: SpawnHealth,
+    judge: JudgeHealth,
     syncing: bool = False,
 ) -> RenderableType:
     """The whole dashboard frame: reviewer health, header, then a section per non-empty lifecycle stage."""
@@ -234,7 +242,12 @@ def render(
     empty = [] if views else [Text("No corrections tracked yet — they appear here as you correct Claude.", style="dim")]
     spinner = [Spinner("dots", text=Text("syncing open PRs with GitHub…", style="dim"))] if syncing else []
     return Group(
-        health_line(health), header(repo, views, settings, watching=watching), Text(""), *sections, *empty, *spinner
+        health_line(health, judge),
+        header(repo, views, settings, watching=watching),
+        Text(""),
+        *sections,
+        *empty,
+        *spinner,
     )
 
 
@@ -251,18 +264,19 @@ async def run_status(repo: RepoKey, *, sync: bool) -> None:
     console = Console()
     async with await ReviewStore.open(settings.db_path) as store:
         health = await store.spawn_health()
+        judge = await store.judge_health(prompt_version=REVIEW_PROMPT_VERSION)
         watching = await store.watching(repo)
         views = await store.overview(repo, settings=settings, prompt_version=REVIEW_PROMPT_VERSION)
         if not (sync and any(stage_of(v) is Stage.PR_OPEN for v in views)):
-            console.print(render(views, repo=repo, settings=settings, watching=watching, health=health))
+            console.print(render(views, repo=repo, settings=settings, watching=watching, health=health, judge=judge))
             return
         with Live(
-            render(views, repo=repo, settings=settings, watching=watching, health=health, syncing=True),
+            render(views, repo=repo, settings=settings, watching=watching, health=health, judge=judge, syncing=True),
             console=console,
         ) as live:
             await sync_open_prs(store, repo, settings=settings)
             fresh = await store.overview(repo, settings=settings, prompt_version=REVIEW_PROMPT_VERSION)
-            live.update(render(fresh, repo=repo, settings=settings, watching=watching, health=health))
+            live.update(render(fresh, repo=repo, settings=settings, watching=watching, health=health, judge=judge))
 
 
 def status_command(repo: RepoKey, *, sync: bool) -> None:

@@ -5,6 +5,7 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+from cc_transcript.judge.similar import KeyOverlap
 from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE
 from click.testing import CliRunner
 
@@ -219,10 +220,20 @@ class TestScanAndTriage:
         calls = install_judge(monkeypatch)
         result = invoke("triage", root=scanned_repo)
         assert result.exit_code == 0, result.output
-        assert "judged 1, failed 0, pending 0" in result.output
+        assert "judged 1, failed 0, pending 0, merged 1, retired 0" in result.output
         assert len(calls) == 1
         again = invoke("triage", "--limit", "5", root=scanned_repo)
-        assert "judged 0, failed 0, pending 0" in again.output
+        assert "judged 0, failed 0, pending 0, merged 0, retired 0" in again.output
+
+    def test_triage_reports_possible_slug_splits(self, git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def fake_splits(store: object, *, prompt_version: int, threshold: float) -> list[KeyOverlap]:
+            return [KeyOverlap("prefer-uv", "use-uv-not-pip", 0.93)]
+
+        monkeypatch.setattr("cc_transcript.judge.similar.near_duplicate_keys", fake_splits)
+        result = invoke("triage", root=git_repo)
+        assert result.exit_code == 0, result.output
+        assert "judged 0, failed 0, pending 0, merged 0, retired 0" in result.output
+        assert "possible split: prefer-uv ~ use-uv-not-pip (0.93)" in result.output
 
 
 class TestListShowThreshold:

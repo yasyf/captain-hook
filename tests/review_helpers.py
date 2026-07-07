@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 from dataclasses import dataclass
@@ -8,10 +9,10 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from cc_transcript import parse_events_from_bytes
 from cc_transcript.filterspec import ANSWERED_PREFIX, ANSWERED_TRAILER
-from cc_transcript.judge import JudgeError
+from cc_transcript.judge import JudgeError, canonical_slug
 from cc_transcript.mining.signals import NO_OPTION_SELECTED
 
-from captain_hook.review.judge import ReviewVerdict
+from captain_hook.review.judge import DURABLE_CATEGORIES, ReviewVerdict
 from captain_hook.review.repo import RepoKey
 
 if TYPE_CHECKING:
@@ -36,6 +37,7 @@ class Verdict:
     category: str = "durable_correction"
     summary: str = "user corrected approach"
     rationale: str = "explicit correction"
+    canonical_key: str | None = None
 
 
 def next_uuid() -> str:
@@ -163,8 +165,20 @@ requires_llm_backend = pytest.mark.skipif(
 )
 
 
+def default_slug_for(text: str) -> str:
+    return canonical_slug(" ".join(text.split()[:4]))
+
+
+def default_slug(prompt: str) -> str:
+    return default_slug_for(prompt.split("=== FEEDBACK TO CLASSIFY ===\n", 1)[-1])
+
+
 def install_judge(
-    monkeypatch: pytest.MonkeyPatch, *, category: Category = "durable_style_rule", fail_on: str | None = None
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    category: Category = "durable_style_rule",
+    fail_on: str | None = None,
+    slug: str | None = None,
 ) -> list[str]:
     calls: list[str] = []
 
@@ -172,7 +186,30 @@ def install_judge(
         calls.append(prompt)
         if fail_on is not None and fail_on in prompt:
             raise JudgeError("claude exited 1")
-        return ReviewVerdict(category=category, summary="states a durable rule", confidence=0.9, rationale="r")
+        rule_slug = slug if slug is not None else (default_slug(prompt) if category in DURABLE_CATEGORIES else None)
+        return ReviewVerdict(
+            category=category, summary="states a durable rule", confidence=0.9, rationale="r", rule_slug=rule_slug
+        )
 
     monkeypatch.setattr("captain_hook.review.judge.structured_judge", lambda *_, **__: judge)
     return calls
+
+
+def install_fake_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Swaps the ``[judge]`` static embedder for a deterministic numpy stand-in.
+
+    Patches the loader the whole ``cc_transcript.judge.similar`` surface reads —
+    :func:`~cc_transcript.judge.verdicts.VerdictStoreMixin.record_verdict`'s
+    evidence embed and ``suggest_canonical_keys``'s query embed — so slug
+    suggestions round-trip through the real sqlite-vec store without downloading
+    ``potion-retrieval-32M``. Each text maps to a stable L2-normalized vector.
+    """
+    import numpy as np
+    from cc_transcript.judge.similar import EMBED_DIM
+
+    def embed(text: str) -> np.ndarray:
+        seed = int.from_bytes(hashlib.sha256(text.encode()).digest()[:4], "big")
+        vector = np.random.default_rng(seed).standard_normal(EMBED_DIM).astype(np.float32)
+        return vector / np.linalg.norm(vector)
+
+    monkeypatch.setattr("cc_transcript.judge.similar.default_embedder", lambda: embed)

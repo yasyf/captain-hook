@@ -19,30 +19,31 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Self
 
+import anyio.to_thread
 from cc_transcript.context import ContextWindow, HydratedWindow
 from cc_transcript.judge.llm import resolved_model, structured_judge
-from cc_transcript.judge.verdicts import run_verdicts
+from cc_transcript.judge.verdicts import SLUG_PATTERN, JudgeError, canonical_slug, run_verdicts
 from cc_transcript.mining.candidates import DedupKey
-from cc_transcript.mining.confidence import NOISE_FLOOR
 from cc_transcript.mining.sourcekind import QUESTION_ANSWER
 from cc_transcript.render import Budget
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from captain_hook.review.fix import HOOK_COMPLAINT
-from captain_hook.review.store import signal_confidence
+from captain_hook.review.store import judge_worthy
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
 
     from cc_transcript.activity import Turn
     from cc_transcript.context import Fidelity
+    from cc_transcript.judge.similar import Suggestion
 
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
 
-REVIEW_PROMPT_VERSION = 2
+REVIEW_PROMPT_VERSION = 3
 JUDGE_ROLE = "judge"
 TRIGGER_BUDGET = Budget(turn_chars=2000, tool_chars=6000)
 CONTEXT_BUDGET = Budget()
@@ -72,17 +73,46 @@ class ReviewVerdict(BaseModel):
         summary: One neutral sentence naming the rule the feedback implies.
         confidence: The model's probability that its durable-vs-not call is right.
         rationale: One short clause explaining the call.
+        rule_slug: The durable rule's canonical kebab-case key, or ``None`` for a
+            non-durable category. A supplied string is normalized through
+            :func:`~cc_transcript.judge.canonical_slug` and must then match
+            :data:`~cc_transcript.judge.SLUG_PATTERN`; every durable category
+            requires one and every non-durable category must omit it.
     """
 
     category: Category
     summary: str
     confidence: float = Field(ge=0, le=1)
     rationale: str
+    rule_slug: str | None = None
+
+    @field_validator("rule_slug", mode="before")
+    @classmethod
+    def normalize_slug(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        if SLUG_PATTERN.fullmatch(slug := canonical_slug(str(value))):
+            return slug
+        raise ValueError(f"rule_slug {value!r} does not normalize to a canonical slug")
+
+    @model_validator(mode="after")
+    def enforce_slug_durability(self) -> Self:
+        durable = self.category in DURABLE_CATEGORIES
+        if durable and self.rule_slug is None:
+            raise ValueError(f"durable category {self.category!r} requires a rule_slug")
+        if not durable and self.rule_slug is not None:
+            raise ValueError(f"non-durable category {self.category!r} must not carry rule_slug {self.rule_slug!r}")
+        return self
 
     @property
     def accepted(self) -> bool:
         """Whether the category marks a durable correction or a confirmed misfire."""
         return self.category in DURABLE_CATEGORIES | {"misfire_confirmed"}
+
+    @property
+    def canonical_key(self) -> str | None:
+        """The durable rule's canonical key — :attr:`rule_slug` under the alias ``record_verdict`` reads."""
+        return self.rule_slug
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,11 +123,17 @@ class JudgeReport:
         judged: How many rows received a verdict this pass.
         failed: How many rows failed (timeout, parse error) and stay pending.
         pending: How many judge-worthy rows remain unjudged after this pass.
+        merged: How many observations the closing regroup re-parented onto their
+            durable slug candidate.
+        retired: How many watching create candidates the closing regroup rejected
+            (every observation judged, none accepted).
     """
 
     judged: int
     failed: int
     pending: int
+    merged: int
+    retired: int
 
 
 def section(window: ContextWindow, label: str, turns: tuple[Turn, ...], budget: Budget) -> str:
@@ -153,7 +189,13 @@ def question_answer_block(row: Mapping[str, object]) -> str:
     )
 
 
-def build_create_prompt(row: Mapping[str, object], context: str) -> str:
+def render_suggestions(suggestions: Sequence[Suggestion]) -> str:
+    return (
+        "\n".join(f'- {s.canonical_key} ({s.score:.2f}) — "{s.sentences[0]}"' for s in suggestions) or "(none similar)"
+    )
+
+
+def build_create_prompt(row: Mapping[str, object], context: str, suggestions: Sequence[Suggestion] = ()) -> str:
     return f"""\
 You are auditing one piece of feedback a developer gave an AI coding assistant
 (Claude), deciding whether it is a DURABLE correction worth encoding as an
@@ -187,6 +229,14 @@ summary: ONE neutral sentence naming the rule the feedback implies (or what the
 user reacted to when there is no rule). Write it for every category.
 confidence: your probability (0 to 1) that your durable-vs-not call is correct.
 rationale: one short clause.
+rule_slug: a canonical kebab-case name for the rule, 2-6 words (e.g.
+"never-bare-except", "prefer-uv-over-pip"). Reuse a suggested slug VERBATIM if
+this feedback states the same underlying rule — even paraphrased, misspelled, or
+captured by a different detector; mint a new slug only for a genuinely new rule;
+if several fit, reuse the first listed. null for every non-durable category.
+
+Suggested slugs (existing durable rules, most similar first):
+{render_suggestions(suggestions)}
 
 Respond with strict JSON matching the schema — no extra keys, no prose.
 
@@ -233,21 +283,36 @@ Respond with strict JSON matching the schema — no extra keys, no prose.
 {row["text"]}"""
 
 
-async def build_prompt(row: Mapping[str, object]) -> tuple[str, Fidelity]:
+async def build_prompt(row: Mapping[str, object], *, suggestions: Sequence[Suggestion] = ()) -> tuple[str, Fidelity]:
     """Builds one row's judge prompt, hydrating its context window first.
 
     Returns:
         The prompt under the row's taxonomy (FIX for ``hook_complaint`` rows,
-        CREATE otherwise) and the fidelity its context rendered at.
+        CREATE otherwise, the latter carrying the suggested slugs) and the
+        fidelity its context rendered at.
     """
     context, fidelity = await render_context(ContextWindow.from_json(str(row["context_json"])))
-    builder = build_fix_prompt if str(row["source_kind"]) == HOOK_COMPLAINT else build_create_prompt
-    return builder(row, context), fidelity
+    if str(row["source_kind"]) == HOOK_COMPLAINT:
+        return build_fix_prompt(row, context), fidelity
+    return build_create_prompt(row, context, suggestions), fidelity
 
 
-def prompt_builder(fidelities: dict[str, Fidelity]) -> Callable[[Mapping[str, object]], Awaitable[str]]:
+def prompt_builder(
+    fidelities: dict[str, Fidelity], store: ReviewStore, *, suggesting: bool
+) -> Callable[[Mapping[str, object]], Awaitable[str]]:
+    from cc_transcript.judge.similar import suggest_canonical_keys
+
+    async def suggestions_for(row: Mapping[str, object]) -> Sequence[Suggestion]:
+        if not suggesting or str(row["source_kind"]) == HOOK_COMPLAINT:
+            return ()
+        try:
+            ranked = await suggest_canonical_keys(store, str(row["text"]), prompt_version=REVIEW_PROMPT_VERSION, k=5)
+        except Exception as exc:
+            raise JudgeError(f"slug suggestion retrieval failed: {exc}") from exc
+        return [suggestion for suggestion in ranked if SLUG_PATTERN.fullmatch(suggestion.canonical_key)]
+
     async def build(row: Mapping[str, object]) -> str:
-        prompt, fidelity = await build_prompt(row)
+        prompt, fidelity = await build_prompt(row, suggestions=await suggestions_for(row))
         fidelities[str(row["dedup_key"])] = fidelity
         return prompt
 
@@ -279,7 +344,14 @@ async def judge_pass(
     completes, a failed row stays unjudged and is retried on the next pass, and
     re-running over a fully judged corpus is a no-op. Rows whose heuristic
     signal confidence sits below :data:`~cc_transcript.mining.NOISE_FLOOR` are
-    never sent.
+    never sent. Slug suggestions are drawn only when prior evidence exists, and a
+    per-row retrieval failure surfaces as a
+    :class:`~cc_transcript.judge.JudgeError`, counting the row failed for the next
+    pass rather than cancelling this one. The static embedder pre-warms off the
+    event loop whenever suggestions are drawn or the dispatched slice holds a
+    create row that could yield a durable verdict — each such verdict embeds its
+    evidence through the process-wide cached loader, which is not single-flight —
+    so only a fix-only or empty pass skips it entirely.
 
     Args:
         store: The open review store.
@@ -292,19 +364,26 @@ async def judge_pass(
             summary one once the row's window hydrates again.
 
     Returns:
-        The pass's judged/failed/pending counts over judge-worthy rows.
+        The pass's judged/failed/pending counts over judge-worthy rows, plus the
+        merged/retired counts from the closing
+        :meth:`~captain_hook.review.store.ReviewStore.regroup_create`.
     """
+    from cc_transcript.judge.similar import default_embedder
+
     model = resolved_model(settings.judge_tier)
-    rows = await store.unjudged(
-        role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION, model=model, refresh_summary=refresh_summary
-    )
-    worthy = [row for row in rows if signal_confidence(row["payload_json"]) >= NOISE_FLOOR]
+    rows = await store.unjudged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION, refresh_summary=refresh_summary)
+    worthy = [row for row in rows if judge_worthy(row)]
+    dispatch = worthy[: limit if limit is not None else settings.max_judge_calls_per_session]
     fidelities: dict[str, Fidelity] = {}
+    suggesting = await store.has_verdict_evidence(prompt_version=REVIEW_PROMPT_VERSION)
+    if suggesting or any(str(row["source_kind"]) != HOOK_COMPLAINT for row in dispatch):
+        await anyio.to_thread.run_sync(default_embedder)
     judged, failed = await run_verdicts(
-        worthy[: limit if limit is not None else settings.max_judge_calls_per_session],
-        prompt_builder(fidelities),
+        dispatch,
+        prompt_builder(fidelities, store, suggesting=suggesting),
         structured_judge(ReviewVerdict, tier=settings.judge_tier, timeout=settings.judge_timeout),
         persist_verdict(store, model=model, fidelities=fidelities),
         concurrency=settings.judge_concurrency,
     )
-    return JudgeReport(judged=judged, failed=failed, pending=len(worthy) - judged)
+    merged, retired = await store.regroup_create(prompt_version=REVIEW_PROMPT_VERSION)
+    return JudgeReport(judged=judged, failed=failed, pending=len(worthy) - judged, merged=merged, retired=retired)

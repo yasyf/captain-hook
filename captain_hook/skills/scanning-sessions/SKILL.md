@@ -140,7 +140,12 @@ Follow [references/pr-workflow.md](references/pr-workflow.md) exactly:
    body: the rule, the hook's behavior, and an Evidence section quoting each verbatim
    correction with its session id and date.
 5. **Record** — `uvx capt-hook review update <ID> pr_open --pr-url <url>`, then remove
-   the worktree.
+   the worktree. If that update fails with `no candidate with id <ID>` or a transition
+   error like `rejected -> pr_open`, a concurrent judge pass regrouped the candidate
+   (realistic when sessions share one review database) — **do not abort the run**.
+   Re-run `uvx capt-hook review list --repo <key>` and stamp the successor create
+   candidate whose `rule` equals the branch's slug; if none exists (judge-retired), note
+   the already-opened PR in the final report and continue.
 
 ### 8. Final report
 

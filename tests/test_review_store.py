@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import pytest
 from cc_transcript.ids import SessionId
@@ -21,8 +23,16 @@ from captain_hook.review.store import (
     ReviewStore,
 )
 
+if TYPE_CHECKING:
+    from cc_transcript.context import Fidelity
+
 REPO = RepoKey("github.com/yasyf/captain-hook")
 PROMPT_VERSION = 1
+
+
+def digest_rule(seed: str) -> str:
+    return hashlib.sha256(seed.encode()).hexdigest()
+
 
 INSERT_EVENT = (
     "INSERT INTO feedback_events (dedup_key, source_kind, session_id, occurred_at, text, payload_json, "
@@ -31,6 +41,7 @@ INSERT_EVENT = (
 
 ALLOWED_MOVES = {
     (CandidateStatus.WATCHING, CandidateStatus.PR_OPEN),
+    (CandidateStatus.WATCHING, CandidateStatus.REJECTED),
     (CandidateStatus.PR_OPEN, CandidateStatus.STALE),
     (CandidateStatus.PR_OPEN, CandidateStatus.ACCEPTED),
     (CandidateStatus.PR_OPEN, CandidateStatus.REJECTED),
@@ -54,6 +65,7 @@ class Verdict:
     category: str = "durable_correction"
     summary: str = "user corrected approach"
     rationale: str = "explicit correction"
+    canonical_key: str | None = None
 
 
 async def create_candidate(store: ReviewStore, *, rule: str = "no-force-push") -> int:
@@ -89,16 +101,38 @@ async def seed(
 
 
 async def judge(
-    store: ReviewStore, key: str, *, accepted: bool = True, confidence: float = 0.9, model: str = "m1"
+    store: ReviewStore,
+    key: str,
+    *,
+    accepted: bool = True,
+    confidence: float = 0.9,
+    model: str = "m1",
+    slug: str | None = None,
+    fidelity: Fidelity = "full",
 ) -> None:
     await store.record_verdict(
         DedupKey(key),
-        Verdict(accepted=accepted, confidence=confidence),
+        Verdict(accepted=accepted, confidence=confidence, canonical_key=slug),
         role="judge",
         prompt_version=PROMPT_VERSION,
         model=model,
-        fidelity="full",
+        fidelity=fidelity,
     )
+
+
+async def seed_merge_pair(store: ReviewStore, *, slug: str = "shared-slug") -> tuple[int, int]:
+    first = await create_candidate(store, rule=digest_rule("a"))
+    second = await create_candidate(store, rule=digest_rule("b"))
+    await seed(store, first, "ka", session="s1", occurred="2026-06-01T10:00:00+00:00")
+    await seed(store, second, "kb", session="s2", occurred="2026-06-02T10:00:00+00:00")
+    await judge(store, "ka", slug=slug)
+    await judge(store, "kb", slug=slug)
+    return first, second
+
+
+async def dump_table(store: ReviewStore, table: str) -> list[dict[str, object]]:
+    cur = await store.store.conn.execute(f"SELECT * FROM {table} ORDER BY id")
+    return [dict(row) async for row in cur]
 
 
 async def eligible_create_candidate(store: ReviewStore) -> int:
@@ -344,11 +378,11 @@ class TestCreateEligibility:
     @pytest.mark.parametrize(
         ("first", "second", "sessions"),
         [
-            pytest.param(True, False, 0, id="acceptance-overridden-by-rejection"),
-            pytest.param(False, True, 1, id="rejection-overridden-by-acceptance"),
+            pytest.param(True, False, 1, id="first-full-acceptance-wins"),
+            pytest.param(False, True, 0, id="first-full-rejection-wins"),
         ],
     )
-    async def test_latest_judge_verdict_wins(
+    async def test_first_full_verdict_wins_regardless_of_model(
         self, store: ReviewStore, settings: ReviewSettings, first: bool, second: bool, sessions: int
     ) -> None:
         await store.enable(REPO)
@@ -514,3 +548,115 @@ class TestThresholdStatus:
     async def test_unknown_candidate_raises(self, store: ReviewStore, settings: ReviewSettings) -> None:
         with pytest.raises(LookupError, match="no candidate with id 999"):
             await store.threshold_status(999, settings=settings, prompt_version=PROMPT_VERSION)
+
+
+class TestRegroup:
+    async def test_merge_reparents_shared_slug_and_sweeps_husks(self, store: ReviewStore) -> None:
+        first, second = await seed_merge_pair(store)
+        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (2, 0)
+        [survivor] = await store.candidates()
+        assert (survivor["rule"], survivor["status"], survivor["observations"]) == ("shared-slug", "watching", 2)
+        assert survivor["sample_text"] == "text ka"
+        assert survivor["id"] not in (first, second)
+        for husk in (first, second):
+            with pytest.raises(LookupError, match=f"no candidate with id {husk}"):
+                await store.candidate(husk)
+
+    async def test_second_regroup_is_idempotent_and_byte_identical(self, store: ReviewStore) -> None:
+        await seed_merge_pair(store)
+        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (2, 0)
+        candidates, observations = (
+            await dump_table(store, "candidates"),
+            await dump_table(store, "candidate_observations"),
+        )
+        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (0, 0)
+        assert await dump_table(store, "candidates") == candidates
+        assert await dump_table(store, "candidate_observations") == observations
+
+    @pytest.mark.parametrize(
+        "terminal",
+        [CandidateStatus.PR_OPEN, CandidateStatus.STALE, CandidateStatus.ACCEPTED, CandidateStatus.REJECTED],
+        ids=lambda s: s.value,
+    )
+    async def test_terminal_candidates_are_immune(self, store: ReviewStore, terminal: CandidateStatus) -> None:
+        candidate_id = await create_candidate(store, rule=digest_rule("term"))
+        await seed(store, candidate_id, "kt", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        await judge(store, "kt", slug="different-slug")
+        for step in PATHS[terminal]:
+            await store.transition(candidate_id, step, pr_opened_at=datetime.now(UTC))
+        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (0, 0)
+        [row] = await store.candidates()
+        assert (row["id"], row["rule"], row["status"], row["observations"]) == (
+            candidate_id,
+            digest_rule("term"),
+            terminal.value,
+            1,
+        )
+
+    async def test_fidelity_upgrade_moves_observation_never_duplicates(self, store: ReviewStore) -> None:
+        digest = await create_candidate(store, rule=digest_rule("f"))
+        await seed(store, digest, "kf", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        await judge(store, "kf", slug="slug-a", fidelity="summary")
+        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (1, 0)
+        [on_a] = await store.candidates()
+        assert (on_a["rule"], on_a["observations"]) == ("slug-a", 1)
+        await judge(store, "kf", slug="slug-b", fidelity="full")
+        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (1, 0)
+        [on_b] = await store.candidates()
+        assert (on_b["rule"], on_b["observations"]) == ("slug-b", 1)
+        assert len(await dump_table(store, "candidate_observations")) == 1
+
+    async def test_fix_lane_and_unjudged_create_are_immune(self, store: ReviewStore) -> None:
+        fix_id = await fix_candidate(store)
+        await seed(store, fix_id, "kf", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        await judge(store, "kf", slug="would-be-slug")
+        create_id = await create_candidate(store, rule=digest_rule("unj"))
+        await seed(store, create_id, "kc", session="s2", occurred="2026-06-01T10:00:00+00:00")
+        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (0, 0)
+        rows = {int(str(r["id"])): r for r in await store.candidates()}
+        assert set(rows) == {fix_id, create_id}
+        assert (rows[fix_id]["candidate_kind"], rows[fix_id]["status"], rows[fix_id]["observations"]) == (
+            "fix",
+            "watching",
+            1,
+        )
+        assert (rows[create_id]["rule"], rows[create_id]["status"], rows[create_id]["observations"]) == (
+            digest_rule("unj"),
+            "watching",
+            1,
+        )
+
+    async def test_all_rejected_retires_while_mixed_stays_watching(self, store: ReviewStore) -> None:
+        assert CandidateStatus.REJECTED in TRANSITIONS[CandidateStatus.WATCHING]
+        rejected_id = await create_candidate(store, rule=digest_rule("rej"))
+        for i, (session, day) in enumerate([("s1", "2026-06-01"), ("s2", "2026-06-02")]):
+            await seed(store, rejected_id, f"r{i}", session=session, occurred=f"{day}T10:00:00+00:00")
+            await judge(store, f"r{i}", accepted=False)
+        mixed_id = await create_candidate(store, rule=digest_rule("mix"))
+        await seed(store, mixed_id, "m0", session="s3", occurred="2026-06-01T10:00:00+00:00")
+        await seed(store, mixed_id, "m1", session="s4", occurred="2026-06-02T10:00:00+00:00")
+        await judge(store, "m0", accepted=False)
+        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (0, 1)
+        retired = await store.candidate(rejected_id)
+        assert (retired["status"], retired["observations"], retired["sample_text"]) == ("rejected", 2, "text r0")
+        assert (await candidate_row(store, mixed_id))["status"] == "watching"
+
+    async def test_new_observation_attaches_to_terminal_and_stays_ineligible(
+        self, store: ReviewStore, settings: ReviewSettings
+    ) -> None:
+        await store.enable(REPO)
+        slug = "durable-rule"
+        candidate_id = await create_candidate(store, rule=slug)
+        for i, (session, day) in enumerate([("s1", "2026-06-01"), ("s2", "2026-06-01"), ("s3", "2026-06-02")]):
+            await seed(store, candidate_id, f"e{i}", session=session, occurred=f"{day}T10:00:00+00:00")
+            await judge(store, f"e{i}", slug=slug)
+        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is True
+        await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_opened_at=datetime.now(UTC))
+        await store.transition(candidate_id, CandidateStatus.ACCEPTED)
+        assert await create_candidate(store, rule=slug) == candidate_id
+        await seed(store, candidate_id, "fresh", session="s9", occurred="2026-06-05T10:00:00+00:00")
+        await judge(store, "fresh", slug=slug)
+        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        assert (status.status, status.sessions, status.days) == (CandidateStatus.ACCEPTED, 4, 3)
+        assert (await candidate_row(store, candidate_id))["status"] == "accepted"
+        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is False

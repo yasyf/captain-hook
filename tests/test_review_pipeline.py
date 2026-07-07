@@ -13,7 +13,9 @@ import pytest
 from cc_transcript.activity import SessionActivity
 from cc_transcript.context import SUMMARY_LABEL, ContextWindow, TurnRef, capture_window
 from cc_transcript.ids import EventRef, EventUuid, SessionId
+from cc_transcript.judge import canonical_slug
 from cc_transcript.judge.llm import resolved_model
+from cc_transcript.judge.similar import Suggestion, suggest_canonical_keys
 from cc_transcript.mining.candidates import FeedbackCandidate, dedup_key
 from cc_transcript.mining.confidence import firm, noise
 from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE
@@ -27,6 +29,7 @@ from captain_hook.review.judge import (
     JudgeReport,
     ReviewVerdict,
     build_create_prompt,
+    build_fix_prompt,
     build_prompt,
     judge_pass,
     question_answer_block,
@@ -50,10 +53,13 @@ from captain_hook.review.store import ReviewStore
 from tests.review_helpers import (
     CORRECTION,
     REPO,
+    Verdict,
     ask_user_question_round,
     assistant_text,
     assistant_tool_use,
     correction_entries,
+    default_slug_for,
+    install_fake_embedder,
     install_judge,
     parse,
     requires_llm_backend,
@@ -70,6 +76,7 @@ if TYPE_CHECKING:
 
 GIT_REPO_KEY = RepoKey("github.com/yasyf/scratch")
 SECOND_CORRECTION = "never run pip directly, always go through uv in this repo"
+THIRD_CORRECTION = "never use os.path in this repo, always use pathlib for filesystem work"
 QUESTION = "Which HTML parser should we standardize on?"
 OTHER_QUESTION = "Which cache backend should we use for the session store?"
 ANSWER = "use selectolax everywhere, it is much faster than lxml for our workload"
@@ -301,12 +308,14 @@ class TestJudgePass:
         calls = install_judge(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
         report = await judge_pass(store, settings=settings)
-        assert report == JudgeReport(judged=2, failed=0, pending=0)
+        assert report == JudgeReport(judged=2, failed=0, pending=0, merged=2, retired=0)
         assert len(calls) == 2
         judged = await store.judged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION)
         assert {bool(row["accepted"]) for row in judged} == {True}
         assert {str(row["model"]) for row in judged} == {resolved_model(settings.judge_tier)}
-        assert await judge_pass(store, settings=settings) == JudgeReport(judged=0, failed=0, pending=0)
+        assert await judge_pass(store, settings=settings) == JudgeReport(
+            judged=0, failed=0, pending=0, merged=0, retired=0
+        )
         assert len(calls) == 2
 
     @requires_llm_backend
@@ -316,9 +325,13 @@ class TestJudgePass:
         settings = ReviewSettings(db_path=tmp_path / "review.db", max_judge_calls_per_session=1)
         calls = install_judge(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
-        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=1)
+        assert await judge_pass(store, settings=settings) == JudgeReport(
+            judged=1, failed=0, pending=1, merged=1, retired=0
+        )
         assert len(calls) == 1
-        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
+        assert await judge_pass(store, settings=settings) == JudgeReport(
+            judged=1, failed=0, pending=0, merged=1, retired=0
+        )
 
     @requires_llm_backend
     async def test_limit_overrides_the_session_cap(
@@ -327,7 +340,9 @@ class TestJudgePass:
         settings = ReviewSettings(db_path=tmp_path / "review.db", max_judge_calls_per_session=1)
         calls = install_judge(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
-        assert await judge_pass(store, settings=settings, limit=2) == JudgeReport(judged=2, failed=0, pending=0)
+        assert await judge_pass(store, settings=settings, limit=2) == JudgeReport(
+            judged=2, failed=0, pending=0, merged=2, retired=0
+        )
         assert len(calls) == 2
 
     @requires_llm_backend
@@ -338,12 +353,12 @@ class TestJudgePass:
         await store.record_file_scan(
             "synthetic", 1.0, [synthetic("structural junk", noise("bare_marker")), synthetic(CORRECTION, firm())]
         )
-        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
+        assert await judge_pass(store, settings=settings) == JudgeReport(
+            judged=1, failed=0, pending=0, merged=0, retired=0
+        )
         assert len(calls) == 1
         assert "structural junk" not in calls[0]
-        unjudged = await store.unjudged(
-            role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION, model=resolved_model(settings.judge_tier)
-        )
+        unjudged = await store.unjudged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION)
         assert [row["text"] for row in unjudged] == ["structural junk"]
 
     @requires_llm_backend
@@ -352,14 +367,88 @@ class TestJudgePass:
     ) -> None:
         install_judge(monkeypatch, fail_on=f"FEEDBACK TO CLASSIFY ===\n{SECOND_CORRECTION}")
         await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
-        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=1, pending=1)
+        assert await judge_pass(store, settings=settings) == JudgeReport(
+            judged=1, failed=1, pending=1, merged=1, retired=0
+        )
         install_judge(monkeypatch)
-        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
+        assert await judge_pass(store, settings=settings) == JudgeReport(
+            judged=1, failed=0, pending=0, merged=1, retired=0
+        )
+
+    @requires_llm_backend
+    async def test_suggestion_retrieval_failure_counts_row_failed_not_crash(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        install_judge(monkeypatch)
+        await seed_corrections(store, settings, tmp_path, [CORRECTION])
+
+        async def boom(*_: object, **__: object) -> list[object]:
+            raise RuntimeError("sqlite-vec extension failed to load")
+
+        async def has_evidence(self: ReviewStore, *, prompt_version: int) -> bool:
+            return True
+
+        monkeypatch.setattr("cc_transcript.judge.similar.suggest_canonical_keys", boom)
+        monkeypatch.setattr("cc_transcript.judge.similar.default_embedder", lambda: lambda text: text)
+        monkeypatch.setattr(ReviewStore, "has_verdict_evidence", has_evidence)
+        assert await judge_pass(store, settings=settings) == JudgeReport(
+            judged=0, failed=1, pending=1, merged=0, retired=0
+        )
+        assert [row["text"] for row in await store.unjudged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION)] == [
+            CORRECTION
+        ]
+
+    @requires_llm_backend
+    async def test_cold_corpus_prewarms_the_embedder_once_for_durable_creates(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import numpy as np
+        from cc_transcript.judge.similar import EMBED_DIM, Embedder
+
+        install_judge(monkeypatch)
+        loads: list[None] = []
+
+        def embedder(_text: str) -> np.ndarray:
+            return np.ones(EMBED_DIM, dtype=np.float32)
+
+        def loader() -> Embedder:
+            if not loads:
+                time.sleep(0.1)  # widen the concurrent-miss window the cached loader leaves open
+                loads.append(None)
+            return embedder
+
+        monkeypatch.setattr("cc_transcript.judge.similar.default_embedder", loader)
+        await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
+        assert not await store.has_verdict_evidence(prompt_version=REVIEW_PROMPT_VERSION)
+        assert await judge_pass(store, settings=settings) == JudgeReport(
+            judged=2, failed=0, pending=0, merged=2, retired=0
+        )
+        assert loads == [None]
 
     @pytest.mark.parametrize("category", ALL_CATEGORIES)
     def test_accepted_derives_from_durable_categories(self, category: Category) -> None:
-        verdict = ReviewVerdict(category=category, summary="s", confidence=0.5, rationale="r")
+        slug = "a-durable-rule" if category in DURABLE_CATEGORIES else None
+        verdict = ReviewVerdict(category=category, summary="s", confidence=0.5, rationale="r", rule_slug=slug)
         assert verdict.accepted is (category in DURABLE_CATEGORIES)
+
+    def test_non_durable_category_rejects_a_rule_slug(self) -> None:
+        with pytest.raises(ValidationError):
+            ReviewVerdict(
+                category="one_off_correction", summary="s", confidence=0.5, rationale="r", rule_slug="poisoned-rule"
+            )
+
+    def test_fix_category_rejects_a_rule_slug(self) -> None:
+        with pytest.raises(ValidationError):
+            ReviewVerdict(
+                category="misfire_confirmed", summary="s", confidence=0.5, rationale="r", rule_slug="poisoned-rule"
+            )
+
+    def test_durable_category_accepts_a_rule_slug(self) -> None:
+        verdict = ReviewVerdict(
+            category="tooling_rule", summary="s", confidence=0.5, rationale="r", rule_slug="prefer-uv-over-pip"
+        )
+        assert verdict.rule_slug == "prefer-uv-over-pip"
+        assert verdict.canonical_key == "prefer-uv-over-pip"
 
     async def test_build_prompt_renders_context_trigger_and_text(self) -> None:
         events = parse(
@@ -481,7 +570,9 @@ class TestFidelity:
     ) -> None:
         calls = install_judge(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION])
-        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
+        assert await judge_pass(store, settings=settings) == JudgeReport(
+            judged=1, failed=0, pending=0, merged=1, retired=0
+        )
         assert await verdict_fidelities(store) == ["full"]
         assert SUMMARY_LABEL not in calls[0]
         assert "the turn the feedback arrived in" in calls[0]
@@ -497,7 +588,9 @@ class TestFidelity:
         calls = install_judge(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION])
         (tmp_path / "s1.jsonl").unlink()
-        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
+        assert await judge_pass(store, settings=settings) == JudgeReport(
+            judged=1, failed=0, pending=0, merged=1, retired=0
+        )
         assert await verdict_fidelities(store) == ["summary"]
         assert SUMMARY_LABEL in calls[0]
 
@@ -514,17 +607,21 @@ class TestFidelity:
         transcript = tmp_path / "s1.jsonl"
         content = transcript.read_text()
         transcript.unlink()
-        assert await judge_pass(store, settings=settings) == JudgeReport(judged=1, failed=0, pending=0)
+        assert await judge_pass(store, settings=settings) == JudgeReport(
+            judged=1, failed=0, pending=0, merged=1, retired=0
+        )
         assert await verdict_fidelities(store) == ["summary"]
-        assert await judge_pass(store, settings=settings) == JudgeReport(judged=0, failed=0, pending=0)
+        assert await judge_pass(store, settings=settings) == JudgeReport(
+            judged=0, failed=0, pending=0, merged=0, retired=0
+        )
         transcript.write_text(content)
         assert await judge_pass(store, settings=settings, refresh_summary=True) == JudgeReport(
-            judged=1, failed=0, pending=0
+            judged=1, failed=0, pending=0, merged=0, retired=0
         )
         assert await verdict_fidelities(store) == ["full"]
         assert len(calls) == 2
         assert await judge_pass(store, settings=settings, refresh_summary=True) == JudgeReport(
-            judged=0, failed=0, pending=0
+            judged=0, failed=0, pending=0, merged=0, retired=0
         )
 
 
@@ -704,3 +801,227 @@ class TestReviewSession:
         if expect_brain:
             assert reports[2].eligible != ()
             assert brains[0][1] == Path(str(git_repo))
+
+
+class TestReviewVerdictValidation:
+    def test_durable_category_without_slug_raises(self) -> None:
+        with pytest.raises(ValidationError):
+            ReviewVerdict(category="durable_style_rule", summary="s", confidence=0.5, rationale="r")
+
+    def test_non_durable_slug_none_yields_null_canonical_key(self) -> None:
+        verdict = ReviewVerdict(category="one_off_correction", summary="s", confidence=0.5, rationale="r")
+        assert (verdict.rule_slug, verdict.canonical_key, verdict.accepted) == (None, None, False)
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            pytest.param("Use UV, not pip!", "use-uv-not-pip", id="strips-punctuation-and-lowercases"),
+            pytest.param("  Always Frozen Dataclasses  ", "always-frozen-dataclasses", id="trims-and-collapses-runs"),
+            pytest.param("prefer-uv-over-pip", "prefer-uv-over-pip", id="canonical-slug-is-idempotent"),
+        ],
+    )
+    def test_slug_normalizes_through_canonical_slug(self, raw: str, expected: str) -> None:
+        verdict = ReviewVerdict(category="tooling_rule", summary="s", confidence=0.5, rationale="r", rule_slug=raw)
+        assert verdict.rule_slug == expected == canonical_slug(raw)
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            pytest.param("word", id="single-word-below-two-group-floor"),
+            pytest.param("deadbeef" * 8, id="sixty-four-hex-digest"),
+            pytest.param("one two three four five six seven", id="seven-words-above-six-group-ceiling"),
+        ],
+    )
+    def test_non_slug_pattern_rejected_not_coerced(self, bad: str) -> None:
+        with pytest.raises(ValidationError):
+            ReviewVerdict(category="workflow_rule", summary="s", confidence=0.5, rationale="r", rule_slug=bad)
+
+
+class TestSlugPromptRendering:
+    def test_create_prompt_renders_seeded_suggestion_lines(self) -> None:
+        suggestions = (
+            Suggestion("prefer-uv-over-pip", 0.87, ("always use uv, never pip",)),
+            Suggestion("never-bare-except", 0.42, ("catch the specific parser error",)),
+        )
+        row = {"source_kind": "transcript_message", "text": CORRECTION}
+        prompt = build_create_prompt(row, "CONTEXT", suggestions)
+        assert '- prefer-uv-over-pip (0.87) — "always use uv, never pip"' in prompt
+        assert '- never-bare-except (0.42) — "catch the specific parser error"' in prompt
+        assert "(none similar)" not in prompt
+
+    def test_create_prompt_without_suggestions_renders_none_similar(self) -> None:
+        row = {"source_kind": "transcript_message", "text": CORRECTION}
+        prompt = build_create_prompt(row, "CONTEXT")
+        assert "Suggested slugs (existing durable rules, most similar first):\n(none similar)" in prompt
+
+    def test_fix_prompt_carries_no_slug_instruction(self) -> None:
+        row = {
+            "source_kind": "hook_complaint",
+            "payload_json": json.dumps(
+                {
+                    "target_hook_name": "status_nudge:nudge_c424798f",
+                    "event": "PreToolUse",
+                    "action": "warn",
+                    "fire_message": "Remember to use the project's task tracker.",
+                }
+            ),
+            "text": "that reminder re-fired on text I already handled",
+        }
+        prompt = build_fix_prompt(row, "CONTEXT")
+        assert "[hook: status_nudge:nudge_c424798f (PreToolUse/warn)]" in prompt
+        assert "rule_slug" not in prompt
+        assert "Suggested slugs" not in prompt
+        assert "kebab-case" not in prompt
+
+
+class TestParaphraseGrouping:
+    async def test_same_emitted_slug_groups_to_one_candidate(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        install_fake_embedder(monkeypatch)
+        install_judge(monkeypatch, slug="prefer-uv-over-pip")
+        for session, text in (("s1", CORRECTION), ("s2", SECOND_CORRECTION)):
+            await seed_corrections(store, settings, tmp_path, [text], session=session)
+            await judge_pass(store, settings=settings)
+        [candidate] = await store.candidates(REPO)
+        assert (candidate["rule"], candidate["source_kind"]) == ("prefer-uv-over-pip", "transcript_message")
+        assert candidate["observations"] == 2
+        status = await store.threshold_status(
+            int(str(candidate["id"])), settings=settings, prompt_version=REVIEW_PROMPT_VERSION
+        )
+        assert status.sessions == 2
+
+    async def test_distinct_slugs_yield_two_candidates(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        install_fake_embedder(monkeypatch)
+        install_judge(monkeypatch)
+        for session, text in (("s1", CORRECTION), ("s2", SECOND_CORRECTION)):
+            await seed_corrections(store, settings, tmp_path, [text], session=session)
+            await judge_pass(store, settings=settings)
+        candidates = await store.candidates(REPO)
+        assert len(candidates) == 2
+        assert {str(c["rule"]) for c in candidates} == {
+            default_slug_for(CORRECTION),
+            default_slug_for(SECOND_CORRECTION),
+        }
+        assert {int(str(c["observations"])) for c in candidates} == {1}
+
+
+class TestSlugRegroupE2E:
+    async def test_cross_detector_collapse_hides_shadowed_row_from_the_judge(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        install_fake_embedder(monkeypatch)
+        calls = install_judge(monkeypatch, slug="prefer-specific-except")
+        entries = [
+            assistant_tool_use("t1", "Edit", {"file_path": "foo.py", "old_string": "a", "new_string": "b"}),
+            {"type": "mode", "sessionId": "sess-1", "mode": "plan"},
+            user_text(CORRECTION),
+        ]
+        path = write_transcript(tmp_path / "s.jsonl", entries)
+        assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
+        report = await judge_pass(store, settings=settings)
+        assert len(calls) == 1
+        assert report.judged == 1
+        [candidate] = await store.candidates(REPO)
+        assert (candidate["rule"], candidate["source_kind"]) == ("prefer-specific-except", "plan_review")
+        assert candidate["observations"] == 1
+        status = await store.threshold_status(
+            int(str(candidate["id"])), settings=settings, prompt_version=REVIEW_PROMPT_VERSION
+        )
+        assert status.sessions == 1
+
+    async def test_answered_question_regroups_under_the_durable_slug(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        install_fake_embedder(monkeypatch)
+        transcript = write_transcript(
+            tmp_path / "s.jsonl",
+            [
+                user_text("decide the parser"),
+                *ask_user_question_round(QUESTION, notes=ANSWER, options=("lxml", "selectolax (Recommended)")),
+            ],
+        )
+        assert await scan_transcript(store, transcript, settings=settings, repo_key=REPO) == ScanReport(
+            scanned=1, inserted=1
+        )
+        [before] = await store.candidates(REPO)
+        assert before["rule"] == dedup_key("question_answer", QUESTION, ANSWER)
+        calls = install_judge(monkeypatch, slug="prefer-selectolax-parser")
+        report = await judge_pass(store, settings=settings)
+        assert (report.judged, report.merged, len(calls)) == (1, 1, 1)
+        [after] = await store.candidates(REPO)
+        assert (after["rule"], after["source_kind"]) == ("prefer-selectolax-parser", "question_answer")
+        assert after["observations"] == 1
+        status = await store.threshold_status(
+            int(str(after["id"])), settings=settings, prompt_version=REVIEW_PROMPT_VERSION
+        )
+        assert status.sessions == 1
+
+
+class TestSuggestionPlumbing:
+    async def test_prior_slug_evidence_ranks_the_matching_slug_first(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        install_fake_embedder(monkeypatch)
+        await seed_corrections(store, settings, tmp_path, [CORRECTION], session="s1")
+        await store.record_verdict(
+            dedup_key("transcript_message", "s1", CORRECTION),
+            Verdict(canonical_key="prefer-uv-over-pip", summary="always use uv"),
+            role=JUDGE_ROLE,
+            prompt_version=REVIEW_PROMPT_VERSION,
+            model="m1",
+            fidelity="full",
+        )
+        await seed_corrections(store, settings, tmp_path, [SECOND_CORRECTION], session="s2")
+        await store.record_verdict(
+            dedup_key("transcript_message", "s2", SECOND_CORRECTION),
+            Verdict(canonical_key="prefer-frozen-dataclasses", summary="always freeze config"),
+            role=JUDGE_ROLE,
+            prompt_version=REVIEW_PROMPT_VERSION,
+            model="m1",
+            fidelity="full",
+        )
+        assert await store.has_verdict_evidence(prompt_version=REVIEW_PROMPT_VERSION)
+        query = f"{CORRECTION}\nalways use uv"
+        await seed_corrections(store, settings, tmp_path, [query], session="s3")
+        calls = install_judge(monkeypatch, slug="prefer-uv-over-pip")
+        await judge_pass(store, settings=settings)
+        [prompt] = calls
+        assert "- prefer-uv-over-pip (1.00) — " in prompt
+        assert f'— "{CORRECTION}"' in prompt
+        assert "- prefer-frozen-dataclasses (" in prompt
+        assert prompt.index("- prefer-uv-over-pip (") < prompt.index("- prefer-frozen-dataclasses (")
+
+    async def test_digest_era_key_is_filtered_while_a_valid_slug_reaches_the_prompt(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        install_fake_embedder(monkeypatch)
+        await seed_corrections(store, settings, tmp_path, [CORRECTION], session="s1")
+        await store.record_verdict(
+            dedup_key("transcript_message", "s1", CORRECTION),
+            Verdict(canonical_key="prefer-uv-over-pip"),
+            role=JUDGE_ROLE,
+            prompt_version=REVIEW_PROMPT_VERSION,
+            model="m1",
+            fidelity="full",
+        )
+        await seed_corrections(store, settings, tmp_path, [SECOND_CORRECTION], session="s2")
+        digest_key = "deadbeef" * 8
+        await store.record_verdict(
+            dedup_key("transcript_message", "s2", SECOND_CORRECTION),
+            Verdict(canonical_key=digest_key),
+            role=JUDGE_ROLE,
+            prompt_version=REVIEW_PROMPT_VERSION,
+            model="m1",
+            fidelity="full",
+        )
+        raw = await suggest_canonical_keys(store, THIRD_CORRECTION, prompt_version=REVIEW_PROMPT_VERSION, k=5)
+        assert {"prefer-uv-over-pip", digest_key} <= {suggestion.canonical_key for suggestion in raw}
+        await seed_corrections(store, settings, tmp_path, [THIRD_CORRECTION], session="s3")
+        calls = install_judge(monkeypatch, slug="prefer-uv-over-pip")
+        await judge_pass(store, settings=settings)
+        [prompt] = calls
+        assert "- prefer-uv-over-pip (" in prompt
+        assert digest_key not in prompt

@@ -222,8 +222,8 @@ def plan_reentry(
             {"type": "mode", "sessionId": session, "mode": "plan"},
             user_text(text, sessionId=session),
         ),
-        expected_kinds=frozenset({"plan_review", "transcript_message"}),
-        expected_inserted=2,
+        expected_kinds=frozenset({"plan_review"}),
+        expected_inserted=1,
     )
 
 

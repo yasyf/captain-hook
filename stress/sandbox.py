@@ -19,7 +19,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from stress.shims import install_base_shims, install_gh_stub, install_judge_stub
+from stress.shims import install_base_shims, install_codex_stub, install_gh_stub, install_judge_stub
 
 RUN_ROOT = Path("/tmp/capt-stress")
 CHECKOUT = Path(__file__).resolve().parents[1]
@@ -119,6 +119,7 @@ def create_sandbox(
     *,
     env_overrides: dict[str, str] | None = None,
     judge_stub: bool = True,
+    codex_stub: bool = True,
     gh_stub: bool = True,
 ) -> Sandbox:
     root = run_dir / name
@@ -131,6 +132,8 @@ def create_sandbox(
     install_base_shims(sandbox.bin)
     if judge_stub:
         install_judge_stub(sandbox.bin)
+    if codex_stub:
+        install_codex_stub(sandbox.bin)
     if gh_stub:
         install_gh_stub(sandbox.bin)
     return sandbox

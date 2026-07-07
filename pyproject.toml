@@ -21,7 +21,7 @@ classifiers = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "cc-transcript>=8.1,<9",
+    "cc-transcript>=8.1,<9", "cc-transcript[judge]>=9,<10",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "ast-grep-py>=0.39,<1",

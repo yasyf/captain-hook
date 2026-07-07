@@ -61,14 +61,21 @@ def write_sessions(sandbox: Sandbox, slug: str, *, days: tuple[int, ...], text: 
 
 
 def inject_all(
-    sandbox: Sandbox, *, category: Category, confidence: float = 0.9, model: str = "stress-injected"
+    sandbox: Sandbox,
+    *,
+    category: Category,
+    confidence: float = 0.9,
+    model: str = "stress-injected",
+    fidelity: str = "full",
 ) -> list[str]:
     keys = [str(row["dedup_key"]) for row in query(sandbox.review_db, "SELECT dedup_key FROM feedback_events")]
 
     async def go() -> None:
         async with await ReviewStore.open(sandbox.review_db) as store:
             for key in keys:
-                await inject_verdict(store, key, category=category, confidence=confidence, model=model)
+                await inject_verdict(
+                    store, key, category=category, confidence=confidence, model=model, fidelity=fidelity
+                )
 
     asyncio.run(go())
     return keys
@@ -159,19 +166,19 @@ def confidence_floor(sandbox: Sandbox) -> ScenarioResult:
 def rejected_verdict_overrides(sandbox: Sandbox) -> ScenarioResult:
     enable(sandbox)
     scan_transcripts(sandbox, *write_sessions(sandbox, "flip", days=(1, 1, 2)))
-    inject_all(sandbox, category="tooling_rule")
+    inject_all(sandbox, category="tooling_rule", fidelity="summary")
     cid = candidate_id(sandbox, TEXT_A)
     accepted_line = threshold_line(sandbox, cid)
-    inject_all(sandbox, category="one_off_correction", model="stress-injected-2")
+    inject_all(sandbox, category="one_off_correction", model="stress-injected-2", fidelity="full")
     return ScenarioResult(
         (
             expect(
-                "accepted verdicts make the candidate eligible",
+                "a summary-fidelity accepted verdict makes the candidate eligible",
                 accepted_line,
                 f"#{cid} eligible=True sessions=3/3 days=2/2 open_prs=0/2 watching=True",
             ),
             expect(
-                "later rejected verdicts win as latest",
+                "a full-fidelity rejected verdict upgrades over the summary accept and revokes eligibility",
                 threshold_line(sandbox, cid),
                 f"#{cid} eligible=False sessions=0/3 days=0/2 open_prs=0/2 watching=True",
             ),

@@ -5,9 +5,12 @@ lives outside the repo (under capt-hook's state dir), so every command sees the 
 candidates regardless of cwd; commands taking `--repo` default to the repo containing
 the current directory.
 
-Candidate statuses: `watching → pr_open → {stale, accepted, rejected}` (`stale` can
-still move to `accepted`/`rejected`; `accepted`/`rejected` are terminal). Illegal moves
-fail with an error — there is no transition back to `watching`.
+Candidate statuses: `watching → pr_open → {stale, accepted, rejected}`, plus a direct
+`watching → rejected` edge. That edge is the judge retiring a candidate whose evidence
+it rejected, so `rejected` no longer implies a closed PR — a judge-retired candidate
+never had one. `stale` can still move to `accepted`/`rejected`; `accepted`/`rejected`
+are terminal. Illegal moves fail with an error — there is no transition back to
+`watching`.
 
 ## Commands
 
@@ -40,8 +43,29 @@ no-op.
 
 Judges stored corrections lacking an LLM verdict at the current prompt version
 (manual/backfill path; the detached child already runs this per session). `--limit`
-overrides the per-session call cap. Prints `judged N, failed N, pending N`; failed rows
-stay pending and retry next pass.
+overrides the per-session call cap. Prints one report line, then one line per
+near-duplicate slug pair the pass surfaced:
+
+```
+judged N, failed N, pending N, merged M, retired R
+possible split: <slug-a> ~ <slug-b> (0.93)
+```
+
+`merged` counts observations the closing regroup re-parented onto their canonical slug
+candidate; `retired` counts watching create candidates it rejected (every observation
+judged, none accepted). Failed rows stay pending and retry next pass. Each `possible
+split` line names two canonical slugs whose evidence nearly coincides — the judge may
+have minted two names for one rule — with their cosine similarity; nothing merges
+automatically.
+
+### `review status [--repo <key>] [--no-sync]`
+
+The rich human dashboard (also `capt-hook status`): the funnel of tracked candidates by
+lifecycle stage, topped by a reviewer-health line. When the detached reviewer is
+healthy that line carries a judge segment — `judge: N pending · last verdict <age>`,
+where `N` is the judge-worthy backlog at the current prompt version — and, when the
+pass surfaced any, an `S possible slug splits` count. `--no-sync` skips the background
+`gh` refresh of open PRs.
 
 ### `review list [--repo <key>]`
 
@@ -63,6 +87,14 @@ plus its threshold line:
 ```
 thresholds: sessions=3 days=2 open_prs=0 single_observation=False eligible=True
 ```
+
+`rule` is the candidate's grouping key, and it never upgrades in place. A scan keys every
+new candidate by a content digest. At the close of a judge pass, the regroup re-parents
+each judge-accepted observation onto a slug-keyed candidate (minted on first need) and
+sweeps the emptied digest candidate; a candidate whose observations are all judged with
+none accepted retires with its digest key, and a mixed or still-unjudged candidate stays
+watching with its digest key. A slug-keyed `rule` therefore always matches `SLUG_PATTERN` —
+two to six hyphenated `[a-z0-9]` groups — while a 64-char content digest never does.
 
 Fix candidates (`candidate_kind=fix`, `source_kind=hook_complaint`) additionally carry
 `target_source_file` (the hook file to amend), `target_hook_name` (its registered

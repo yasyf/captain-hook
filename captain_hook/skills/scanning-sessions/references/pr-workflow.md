@@ -14,11 +14,15 @@ all three.
 
 ## Worktree + branch
 
-Branch naming: `capt-hook/review/<rule-slug>`, where `<rule-slug>` is the short
-kebab-case name of the rule (it should match the hook file's slug:
-`.claude/hooks/no_force_push.py` → `capt-hook/review/no-force-push`). Fix
-candidates use `capt-hook/review/fix-<slug>`, where `<slug>` is the target hook
-file's stem (`.claude/hooks/status_nudge.py` → `capt-hook/review/fix-status-nudge`).
+Branch naming: `capt-hook/review/<rule-slug>`, where `<rule-slug>` is the candidate's
+`rule` field, used verbatim. Post-judging, a create candidate's `rule` IS a canonical
+kebab-case slug — the judge assigns it and the closing regroup re-parents evidence onto
+it — so the branch name comes straight from that field, not from re-deriving a slug off
+a hook filename. It lines up with the hook file's slug by construction: a candidate
+whose `rule` is `no-force-push` writes `.claude/hooks/no_force_push.py` on branch
+`capt-hook/review/no-force-push`. Fix candidates use `capt-hook/review/fix-<slug>`,
+where `<slug>` is the target hook file's stem (so `.claude/hooks/status_nudge.py`
+becomes `capt-hook/review/fix-status-nudge`).
 
 ```bash
 default=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
@@ -103,3 +107,15 @@ git worktree remove "$worktree" --force
 
 A merged PR later moves the candidate to `accepted`, a closed one to `rejected` — both
 via `review sync-prs`, not by you.
+
+**If `review update` fails, recover in place — never abort the run over it.** A concurrent
+judge pass regrouped the candidate out from under you, realistic when several sessions
+share one review database. Two shapes: `no candidate with id <ID>` means a summary-to-full
+re-judge re-parented the candidate's observations onto a fresh slug candidate and the
+emptied original was swept; a transition error like `rejected -> pr_open` means the
+candidate was judge-retired (every observation re-judged, none accepted). Re-run
+`uvx capt-hook review list --repo <key>` and stamp the successor create candidate whose
+`rule` equals the branch's slug — `uvx capt-hook review update <successor-ID> pr_open
+--pr-url <url>`. If no such candidate exists (the rule was judge-retired), note the
+already-opened PR in the final report and move on; the PR stands and `sync-prs` still
+tracks its fate.

@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from typing import Any
 
     from cc_transcript.corrections import Correction
+    from cc_transcript.judge.similar import KeyOverlap
 
     from captain_hook.cli import CliState
     from captain_hook.review.judge import JudgeReport
@@ -182,12 +183,22 @@ def scan(transcripts: tuple[Path, ...], dirs: tuple[Path, ...]) -> None:
 @click.option("--limit", type=int, default=None, help="Judge at most this many rows (default: the per-session cap)")
 def triage(limit: int | None) -> None:
     """Judge stored corrections lacking a verdict (manual/backfill)."""
-    from captain_hook.review.judge import judge_pass
+    from captain_hook.review.judge import REVIEW_PROMPT_VERSION, judge_pass
     from captain_hook.review.settings import ReviewSettings
 
     settings = ReviewSettings()
-    report: JudgeReport = run_store(lambda store: judge_pass(store, settings=settings, limit=limit))
-    click.echo(f"judged {report.judged}, failed {report.failed}, pending {report.pending}")
+
+    async def body(store: ReviewStore) -> tuple[JudgeReport, list[KeyOverlap]]:
+        report = await judge_pass(store, settings=settings, limit=limit)
+        return report, await store.slug_splits(prompt_version=REVIEW_PROMPT_VERSION)
+
+    report, splits = run_store(body)
+    click.echo(
+        f"judged {report.judged}, failed {report.failed}, pending {report.pending}, "
+        f"merged {report.merged}, retired {report.retired}"
+    )
+    for split in splits:
+        click.echo(f"possible split: {split.key_a} ~ {split.key_b} ({split.similarity:.2f})")
 
 
 @review.command(name="status")

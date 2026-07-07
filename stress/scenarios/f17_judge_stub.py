@@ -117,9 +117,11 @@ def cap_respected(sandbox: Sandbox) -> ScenarioResult:
     return ScenarioResult(
         (
             expect("first pass (scanned, inserted, judged)", (first.scanned, first.inserted, first.judged), (1, 7, 3)),
-            expect("stub calls after first pass", first_calls, 3),
+            # select_backend fires one `claude auth status` readiness probe per fresh detached reviewer
+            # process (cached via default_backend), on top of the 3 capped judge calls — 4 stub calls per pass.
+            expect("stub calls after first pass (1 auth probe + 3 judge)", first_calls, 4),
             expect("second pass judges the cap again", second.judged, 3),
-            expect("stub calls after second pass", len(stub_log.read_text().splitlines()), 6),
+            expect("stub calls after second pass (2 auth probes + 6 judge)", len(stub_log.read_text().splitlines()), 8),
         )
     )
 
@@ -132,31 +134,38 @@ def triage_idempotent(sandbox: Sandbox) -> ScenarioResult:
     second = review_cli(sandbox, "triage")
     return ScenarioResult(
         (
-            expect("first triage", first.stdout.strip(), "judged 2, failed 0, pending 0"),
-            expect("triage re-run is a no-op", second.stdout.strip(), "judged 0, failed 0, pending 0"),
+            expect("first triage", first.stdout.strip(), "judged 2, failed 0, pending 0, merged 0, retired 2"),
+            expect(
+                "triage re-run is a no-op", second.stdout.strip(), "judged 0, failed 0, pending 0, merged 0, retired 0"
+            ),
             expect("verdict rows", count(sandbox.review_db, VERDICT_COUNT), 2),
         )
     )
 
 
-def tier_switch_rejudges(sandbox: Sandbox) -> ScenarioResult:
+def tier_switch_reuses_verdicts(sandbox: Sandbox) -> ScenarioResult:
     enable(sandbox)
     paths = write_live_corrections(sandbox, "tier", n=3)
     review_cli(sandbox, "scan", *[arg for path in paths for arg in ("--transcript", str(path))])
     baseline = review_cli(sandbox, "triage")
-    rejudged = review_cli(sandbox, "triage", HOOKS_REVIEW_JUDGE_TIER="large")
+    switched = review_cli(sandbox, "triage", HOOKS_REVIEW_JUDGE_TIER="large")
     models = sorted({str(row["model"]) for row in query(sandbox.review_db, "SELECT DISTINCT model FROM verdicts")})
     return ScenarioResult(
         (
-            expect("baseline triage", baseline.stdout.strip(), "judged 3, failed 0, pending 0"),
-            expect("tier-switch triage re-judges every row", rejudged.stdout.strip(), "judged 3, failed 0, pending 0"),
-            expect("verdict rows doubled across models", count(sandbox.review_db, VERDICT_COUNT), 6),
-            expect("distinct verdict models", len(models), 2),
+            expect("baseline triage", baseline.stdout.strip(), "judged 3, failed 0, pending 0, merged 0, retired 3"),
+            expect(
+                "tier flip re-judges nothing",
+                switched.stdout.strip(),
+                "judged 0, failed 0, pending 0, merged 0, retired 0",
+            ),
+            expect("verdict rows stay put (no per-tier duplication)", count(sandbox.review_db, VERDICT_COUNT), 3),
+            expect("one provenance model, unchanged by the flip", len(models), 1),
         ),
         finding=(
-            "flipping HOOKS_REVIEW_JUDGE_TIER re-judges the entire stored corpus: verdicts key on the resolved "
-            "model string, so a tier change re-runs one LLM call per already-judged row (cost amplification) "
-            "instead of reusing existing verdicts"
+            "flipping HOOKS_REVIEW_JUDGE_TIER is a no-op: cc-transcript 9 keys verdicts on "
+            "(dedup_key, role, prompt_version) with the resolved model recorded as provenance only, so "
+            "already-judged rows are reused rather than re-judged — no duplicate rows, no second LLM call, "
+            "and the model column keeps the original tier's provenance"
         ),
     )
 
@@ -169,6 +178,6 @@ def scenarios() -> tuple[Scenario, ...]:
             ("garbage-output", garbage_output, ENV),
             ("cap-respected", cap_respected, CAP_ENV),
             ("triage-idempotent", triage_idempotent, ENV),
-            ("tier-switch-rejudges", tier_switch_rejudges, ENV),
+            ("tier-switch-reuses-verdicts", tier_switch_reuses_verdicts, ENV),
         )
     )
