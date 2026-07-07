@@ -4,6 +4,33 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.6.0] - 2026-07-07
+
+### Changed
+- **The session reviewer's CREATE lane groups semantically.** The judge now names
+  every durable correction with a canonical kebab-case rule slug
+  (`ReviewVerdict.rule_slug`, prompt v3), grounded by retrieval: each judged
+  event's evidence embeds into the review store, and the prompt carries the
+  nearest existing slugs with their linked sentences so paraphrases, typos, and
+  cross-detector duplicates of one rule reuse one slug instead of freezing as
+  separate candidates. After every judge pass, `regroup_create` re-parents
+  observations onto slug-keyed candidates (the `rule` field is a content digest
+  before judging and the canonical slug after), retires watching candidates whose
+  evidence the judge fully rejected (new `watching → rejected` edge — `rejected`
+  no longer implies a closed PR), and sweeps emptied husks. `review triage`
+  reports the new counts (`judged N, failed N, pending N, merged M, retired R`)
+  plus a `possible split:` line per near-duplicate slug pair, and `capt-hook
+  status` gains a judge segment (pending backlog, last-verdict age, slug splits).
+- A user message ingested by both `transcript_message` and a more specific
+  detector (`plan_review`, `interrupt_rejection`, `review_comment`) under one
+  `event_uuid` now collapses to the specific detector's signal at scan time,
+  halving judge spend on doubled messages. Ingest writes each candidate and its
+  observation in one transaction, so a concurrent reviewer's regroup sweep can
+  no longer strand a half-written pair.
+- Depends on `cc-transcript[judge]>=9.0.1`: model-free verdict identity (a judge
+  backend flip no longer re-judges the stored corpus), native `canonical_key`
+  storage, and the sqlite-vec retrieval layer.
+
 ## [8.5.1] - 2026-07-05
 
 ### Fixed

@@ -7,7 +7,15 @@ readme = "README.md"
 license = "PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Yasyf Mohamedali", email = "yasyfm@gmail.com" }]
-keywords = ["claude", "claude-code", "hooks", "llm", "agents", "guardrails", "cli"]
+keywords = [
+    "claude",
+    "claude-code",
+    "hooks",
+    "llm",
+    "agents",
+    "guardrails",
+    "cli",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -21,7 +29,7 @@ classifiers = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "cc-transcript>=8.1,<9", "cc-transcript[judge]>=9,<10",
+    "cc-transcript[judge]>=9.0.1,<10",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "ast-grep-py>=0.39,<1",
@@ -74,10 +82,7 @@ module-root = ""
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = ["-ra", "--strict-markers", "--tb=short", "-q"]
-markers = [
-    "unit: Pure unit tests",
-    "integration: Integration tests",
-]
+markers = ["unit: Pure unit tests", "integration: Integration tests"]
 
 [tool.pyright]
 pythonVersion = "3.13"
@@ -112,4 +117,3 @@ docs = [
     "griffelib>=2.0",
     "great-docs>=0.14",
 ]
-
