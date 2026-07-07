@@ -63,9 +63,19 @@ class Tasks(Sequence[Task]):
 
     @classmethod
     def for_session(cls, session_id: str, *, root: Path | None = None) -> Tasks:
-        """Load the task list stored under ``session_id``, empty when absent."""
-        list_dir = (root or cls.resolve_root()) / session_id
-        if not session_id or not list_dir.is_dir():
+        """Load the task list for ``session_id``, empty when absent.
+
+        Claude Code names the store dir either by the exact session id (legacy) or
+        ``session-<first-8-chars>`` (current); an exact-id dir wins over the truncated one.
+        """
+        if not session_id:
+            return cls()
+        base = root or cls.resolve_root()
+        list_dir = next(
+            (d for name in (session_id, f"session-{session_id[:8]}") if (d := base / name).is_dir()),
+            None,
+        )
+        if list_dir is None:
             return cls()
         tasks: list[Task] = []
         for path in list_dir.glob("*.json"):

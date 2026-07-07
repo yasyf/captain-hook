@@ -105,6 +105,23 @@ class TestTasksForSession:
         write_task(tmp_path / "custom" / "s", "1", "completed")
         assert len(Tasks.for_session("s", root=tmp_path / "custom")) == 1
 
+    def test_loads_truncated_session_dir(self, tasks_root: Path) -> None:
+        # Current Claude Code names the store session-<first 8 chars of the session id>.
+        session_id = "c7b2de52-4222-4089-a2a2-14f3e9844d8f"
+        write_task(tasks_root / "session-c7b2de52", "1", "pending")
+        tasks = Tasks.for_session(session_id)
+        assert len(tasks) == 1
+        assert not tasks.all_completed
+
+    def test_prefers_exact_id_over_truncated(self, tasks_root: Path) -> None:
+        # Both namings on disk: the exact-session-id dir (legacy) wins over session-<first8>.
+        session_id = "c7b2de52-4222-4089-a2a2-14f3e9844d8f"
+        write_task(tasks_root / session_id, "1", "completed")
+        write_task(tasks_root / "session-c7b2de52", "1", "pending")
+        tasks = Tasks.for_session(session_id)
+        assert len(tasks) == 1
+        assert tasks.all_completed  # the pending task in the truncated dir is never read
+
 
 class TestTasksQuerying:
     def make(self, *statuses: str) -> Tasks:
