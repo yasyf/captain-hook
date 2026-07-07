@@ -23,7 +23,7 @@ from captain_hook.file import File
 from captain_hook.types import Event
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from cc_transcript.command import CommandLine as CommandLineType
     from cc_transcript.ids import ToolDigest
@@ -46,6 +46,60 @@ def disk_pre_image(path: Path) -> str | None:
     except OSError:
         return None
     return data.decode(errors="replace")
+
+
+@dataclass(frozen=True, slots=True)
+class BackgroundTask:
+    """A background task keeping the session alive, from a ``Stop``/``SubagentStop`` payload.
+
+    Since Claude Code v2.1.145 a stopping session reports the work still running so a
+    hook can tell "the session is done" from "the session is paused waiting for
+    background work to wake it back up". Each task carries the common fields below
+    plus type-specific extras — a ``shell`` task's ``command``, a ``subagent``'s
+    ``agent_type``, an ``MCP task``'s ``server`` and ``tool`` — preserved in ``raw``.
+
+    Attributes:
+        id: The task's stable identifier.
+        type: The task kind, one of ``shell``, ``subagent``, ``monitor``,
+            ``workflow``, ``teammate``, ``cloud session``, or ``MCP task``.
+        status: The task's reported lifecycle status.
+        description: A human-readable summary of the task.
+        raw: The full task mapping, including the type-specific fields.
+    """
+
+    id: str
+    type: str
+    status: str
+    description: str
+    raw: Mapping[str, Any]
+
+    @classmethod
+    def from_raw(cls, raw: Mapping[str, Any]) -> BackgroundTask:
+        return cls(id=raw["id"], type=raw["type"], status=raw["status"], description=raw["description"], raw=raw)
+
+
+@dataclass(frozen=True, slots=True)
+class SessionCron:
+    """A scheduled prompt registered on the session, from a ``Stop``/``SubagentStop`` payload.
+
+    A cron keeps a session alive to re-run ``prompt`` on ``schedule``; its presence
+    means the session is paused for future scheduled work rather than finished.
+
+    Attributes:
+        id: The cron's stable identifier.
+        schedule: The cron schedule expression.
+        recurring: Whether the cron fires repeatedly rather than once.
+        prompt: The prompt replayed to the agent when the cron fires.
+    """
+
+    id: str
+    schedule: str
+    recurring: bool
+    prompt: str
+
+    @classmethod
+    def from_raw(cls, raw: Mapping[str, Any]) -> SessionCron:
+        return cls(id=raw["id"], schedule=raw["schedule"], recurring=raw["recurring"], prompt=raw["prompt"])
 
 
 @dataclass
@@ -100,6 +154,26 @@ class BaseHookEvent:
     @property
     def stop_hook_active(self) -> bool:
         return self._raw.get("stop_hook_active", False)
+
+    @property
+    def background_tasks(self) -> tuple[BackgroundTask, ...]:
+        """The background tasks keeping this session alive, ``()`` when the payload omits them.
+
+        Populated only on ``Stop`` and ``SubagentStop`` events from Claude Code
+        v2.1.145+; a non-empty tuple means the session is paused waiting for
+        background work to wake it, not done.
+        """
+        return tuple(BackgroundTask.from_raw(t) for t in self._raw.get("background_tasks", ()))
+
+    @property
+    def session_crons(self) -> tuple[SessionCron, ...]:
+        """The scheduled prompts registered on this session, ``()`` when the payload omits them.
+
+        Populated only on ``Stop`` and ``SubagentStop`` events from Claude Code
+        v2.1.145+; a non-empty tuple means the session is paused for future
+        scheduled work.
+        """
+        return tuple(SessionCron.from_raw(c) for c in self._raw.get("session_crons", ()))
 
     @property
     def transcript_path(self) -> Path | None:

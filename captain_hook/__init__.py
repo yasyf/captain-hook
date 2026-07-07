@@ -28,6 +28,7 @@ from captain_hook.context import HookContext
 from captain_hook.contexts import AfterEdit, BeforeEdit, Introduced, PromptContext, apply_contexts
 from captain_hook.durable import DurableSlot, DurableState, DurableStore
 from captain_hook.events import (
+    BackgroundTask,
     BaseHookEvent,
     NotificationEvent,
     PermissionRequestEvent,
@@ -35,6 +36,7 @@ from captain_hook.events import (
     PostToolUseFailureEvent,
     PreCompactEvent,
     PreToolUseEvent,
+    SessionCron,
     SessionEndEvent,
     SessionStartEvent,
     StopEvent,

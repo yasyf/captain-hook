@@ -151,6 +151,8 @@ reference:
       - StopEvent
       - SubagentStartEvent
       - SubagentStopEvent
+      - BackgroundTask
+      - SessionCron
       - PreCompactEvent
       - NotificationEvent
       - SessionStartEvent
