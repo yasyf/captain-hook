@@ -28,6 +28,7 @@ from captain_hook.session import SessionStore, ensure_session
 from captain_hook.types import Event
 
 DIST_NAME = "capt-hook"
+DEFAULT_PREFIX = f"uvx {DIST_NAME}"
 EVENT_NAMES = ", ".join(n for e in Event if (n := e.name))
 PLUGIN_ID = "captain-hook@captain-hook"
 
@@ -161,28 +162,38 @@ def subscribed_events() -> set[str]:
     return {name for entry in _state.hooks for name in event_names(entry.spec.events)}
 
 
-def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str = DIST_NAME) -> dict[str, Any]:
+def command_prefix(root: Path, from_source: str = DIST_NAME) -> str:
+    if from_source != DIST_NAME:
+        return f"uvx --from {from_source} capt-hook"
+    return manager.read_launcher(manager.packs_toml_path(root)) or DEFAULT_PREFIX
+
+
+def hooks_flag(hooks_dir: str) -> str:
+    return "" if hooks_dir == ".claude/hooks" else f" --hooks $CLAUDE_PROJECT_DIR/{hooks_dir}"
+
+
+def run_command(prefix: str, flag: str, event: str, *, async_: bool) -> str:
+    return f"{prefix}{flag} run {event}{' --async' if async_ else ''}"
+
+
+def review_command(prefix: str) -> str:
+    return f"{prefix} review run"
+
+
+def generate_settings(hooks_dir: str = ".claude/hooks", prefix: str = DEFAULT_PREFIX) -> dict[str, Any]:
     events_by_async: defaultdict[bool, set[str]] = defaultdict(set)
     for entry in _state.hooks:
         events_by_async[entry.spec.async_] |= event_names(entry.spec.events)
 
-    from_flag = "" if from_source == DIST_NAME else f" --from {from_source}"
-    hooks_flag = "" if hooks_dir == ".claude/hooks" else f" --hooks $CLAUDE_PROJECT_DIR/{hooks_dir}"
+    flag = hooks_flag(hooks_dir)
 
     def commands(event: str) -> list[dict[str, Any]]:
         return [
-            {
-                "type": "command",
-                "command": (f"uvx{from_flag} capt-hook{hooks_flag} run {event}{' --async' if is_async else ''}"),
-            }
+            {"type": "command", "command": run_command(prefix, flag, event, async_=is_async)}
             | ({"async": True} if is_async else {})
             for is_async, events in sorted(events_by_async.items())
             if event in events
-        ] + (
-            [{"type": "command", "command": f"uvx{from_flag} capt-hook review run", "async": True}]
-            if event == "SessionEnd"
-            else []
-        )
+        ] + ([{"type": "command", "command": review_command(prefix), "async": True}] if event == "SessionEnd" else [])
 
     return {
         "hooks": {
@@ -192,8 +203,24 @@ def generate_settings(hooks_dir: str = ".claude/hooks", from_source: str = DIST_
     }
 
 
+def rendered_commands(hooks_dir: str, prefix: str) -> frozenset[str]:
+    flag = hooks_flag(hooks_dir)
+    return frozenset(
+        {run_command(prefix, flag, name, async_=async_) for e in Event if (name := e.name) for async_ in (False, True)}
+        | {review_command(prefix)}
+    )
+
+
 def is_captain_hook_group(group: dict[str, Any]) -> bool:
     return any("capt-hook" in (h.get("command") or "") for h in group.get("hooks") or [])
+
+
+def classify_group(group: dict[str, Any], rendered: frozenset[str]) -> str:
+    if not is_captain_hook_group(group):
+        return "foreign"
+    if set(group) == {"hooks"} and all(h.get("command") in rendered for h in group.get("hooks") or []):
+        return "own"
+    return "custom"
 
 
 def capt_hook_events(path: Path) -> set[str]:
@@ -211,9 +238,10 @@ def sibling_settings(path: Path) -> Path:
 
 
 def merge_settings(
-    hooks_dir: str, settings_path: Path, from_source: str = DIST_NAME
+    hooks_dir: str, settings_path: Path, prefix: str = DEFAULT_PREFIX
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    new_hooks: dict[str, list[dict[str, Any]]] = generate_settings(hooks_dir, from_source=from_source)["hooks"]
+    new_hooks: dict[str, list[dict[str, Any]]] = generate_settings(hooks_dir, prefix=prefix)["hooks"]
+    rendered = rendered_commands(hooks_dir, prefix)
     existing = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     existing_hooks: dict[str, list[dict[str, Any]]] = existing.get("hooks") or {}
     deferred = capt_hook_events(sibling_settings(settings_path))
@@ -221,22 +249,20 @@ def merge_settings(
     summary: dict[str, str] = {}
     merged_hooks: dict[str, list[dict[str, Any]]] = {}
     for event in sorted(existing_hooks.keys() | new_hooks.keys()):
-        foreign = [g for g in existing_hooks.get(event, []) if not is_captain_hook_group(g)]
-        old_own = [g for g in existing_hooks.get(event, []) if is_captain_hook_group(g)]
-        fresh_own = [] if event in deferred else new_hooks.get(event, [])
-        if event in deferred and (old_own or new_hooks.get(event)):
+        classified = [(g, classify_group(g, rendered)) for g in existing_hooks.get(event, [])]
+        kept = [g for g, kind in classified if kind != "own"]
+        own = [g for g, kind in classified if kind == "own"]
+        custom = any(kind == "custom" for _, kind in classified)
+        fresh_own = [] if (custom or event in deferred) else new_hooks.get(event, [])
+        if custom:
+            summary[event] = "custom"
+        elif event in deferred and (own or new_hooks.get(event)):
             summary[event] = "deferred"
-        elif old_own or fresh_own:
+        elif own or fresh_own:
             summary[event] = (
-                "unchanged"
-                if old_own == fresh_own
-                else "added"
-                if not old_own
-                else "removed"
-                if not fresh_own
-                else "updated"
+                "unchanged" if own == fresh_own else "added" if not own else "removed" if not fresh_own else "updated"
             )
-        if groups := foreign + fresh_own:
+        if groups := kept + fresh_own:
             merged_hooks[event] = groups
     return existing | {"hooks": merged_hooks}, summary
 
@@ -263,6 +289,8 @@ def print_hook_summary(label: str, summary: dict[str, str], deferred_to: str) ->
         click.echo(f"  - removed {event}")
     if unchanged := by_status["unchanged"]:
         click.echo(f"  unchanged: {', '.join(unchanged)} (already present)")
+    if custom := by_status["custom"]:
+        click.echo(f"  = custom: {', '.join(custom)} (non-canonical capt-hook command preserved)")
     if deferred := by_status["deferred"]:
         click.echo(f"  deferred to {deferred_to}: {', '.join(deferred)}")
 
@@ -286,7 +314,7 @@ def provision_nlp(resolved: Sequence[manager.ResolvedPack]) -> None:
 def regenerate_settings(state: CliState) -> None:
     resolved = state.discover()
     settings_path = state.root / ".claude" / "settings.json"
-    merged, summary = merge_settings(".claude/hooks", settings_path)
+    merged, summary = merge_settings(".claude/hooks", settings_path, command_prefix(state.root))
     write_settings(settings_path, merged)
     print_hook_summary(str(settings_path.relative_to(state.root)), summary, sibling_settings(settings_path).name)
     provision_nlp(resolved)
@@ -389,7 +417,7 @@ def init_project(root: Path, *, review: bool = True) -> None:
 
     settings_path = root / ".claude" / "settings.json"
     resolved = CliState(root=root, hooks=str(hooks_dir)).discover()
-    merged, summary = merge_settings(".claude/hooks", settings_path)
+    merged, summary = merge_settings(".claude/hooks", settings_path, command_prefix(root))
     write_settings(settings_path, merged)
     provision_nlp(resolved)
 
@@ -579,7 +607,7 @@ def register_hooks_cmd(state: CliState, hooks_dir: str, dry_run: bool, from_sour
     """Register captain-hook's event hooks into .claude/settings.json."""
     resolved = state.discover()
     settings_path = state.root / ".claude" / "settings.json"
-    merged, summary = merge_settings(hooks_dir, settings_path, from_source=from_source)
+    merged, summary = merge_settings(hooks_dir, settings_path, command_prefix(state.root, from_source))
     if dry_run:
         click.echo(json.dumps(merged, indent=2))
         return

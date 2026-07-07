@@ -358,6 +358,99 @@ class TestMergeSettings:
         assert merged["hooks"]["PreToolUse"] == [foreign]
         assert summary["PreToolUse"] == "deferred"
 
+    @staticmethod
+    def write_launcher(tmp_path: Path, launcher: str) -> None:
+        from captain_hook.packs import manager
+
+        manager.atomic_write(manager.packs_toml_path(tmp_path), manager.render_packs_toml([], launcher))
+
+    def test_cli_033_preserves_noncanonical_capt_hook_group(self, tmp_path: Path) -> None:
+        from captain_hook.cli import merge_settings
+
+        register_hook(Event.PreToolUse, message="pre")
+        dogfood = 'env -u UV_EXCLUDE_NEWER uv run --project "$CLAUDE_PROJECT_DIR" capt-hook run PreToolUse'
+        group = {"hooks": [{"type": "command", "command": dogfood}]}
+        sp = tmp_path / "settings.json"
+        self.seed(sp, {"PreToolUse": [group]})
+
+        merged, summary = merge_settings(".claude/hooks", sp)
+        assert merged["hooks"]["PreToolUse"] == [group]  # byte-identical, no freshly-generated duplicate
+        assert summary["PreToolUse"] == "custom"
+
+    def test_cli_034_renders_launcher_prefix(self, tmp_path: Path) -> None:
+        from captain_hook.cli import command_prefix, generate_settings
+
+        register_hook(Event.PreToolUse, message="pre")
+        self.write_launcher(tmp_path, "uv run capt-hook")
+
+        settings = generate_settings(prefix=command_prefix(tmp_path))
+        assert settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == "uv run capt-hook run PreToolUse"
+
+    def test_cli_035_launcher_shape_refreshes_async(self, tmp_path: Path) -> None:
+        from captain_hook.cli import command_prefix, merge_settings
+
+        register_hook(Event.PreToolUse, message="pre", async_=True)
+        self.write_launcher(tmp_path, "uv run capt-hook")
+        sp = tmp_path / "settings.local.json"
+        self.seed(sp, {"PreToolUse": [{"hooks": [{"type": "command", "command": "uv run capt-hook run PreToolUse"}]}]})
+
+        merged, summary = merge_settings(".claude/hooks", sp, command_prefix(tmp_path))
+        commands = [h["command"] for g in merged["hooks"]["PreToolUse"] for h in g["hooks"]]
+        assert commands == ["uv run capt-hook run PreToolUse --async"]
+        assert summary["PreToolUse"] == "updated"
+
+    def test_cli_036_custom_uvx_review_preserved_under_launcher(self, tmp_path: Path) -> None:
+        from captain_hook.cli import command_prefix, merge_settings
+
+        register_hook(Event.SessionEnd, message="end")
+        self.write_launcher(tmp_path, "uv run capt-hook")
+        sp = tmp_path / "settings.local.json"
+        review = {"hooks": [{"type": "command", "command": "uvx capt-hook review run", "async": True}]}
+        self.seed(sp, {"SessionEnd": [review]})
+
+        merged, summary = merge_settings(".claude/hooks", sp, command_prefix(tmp_path))
+        assert merged["hooks"]["SessionEnd"] == [review]  # canonical uvx review is non-canonical under a launcher
+        assert summary["SessionEnd"] == "custom"
+
+    def test_cli_037_idempotent_with_launcher_and_custom(self, tmp_path: Path) -> None:
+        from captain_hook.cli import command_prefix, merge_settings, write_settings
+
+        register_hook(Event.PreToolUse, message="pre")
+        register_hook(Event.SessionEnd, message="end")
+        self.write_launcher(tmp_path, "uv run capt-hook")
+        sp = tmp_path / "settings.local.json"
+        review = {"hooks": [{"type": "command", "command": "uvx capt-hook review run", "async": True}]}
+        self.seed(sp, {"SessionEnd": [review]})
+        prefix = command_prefix(tmp_path)
+
+        write_settings(sp, merge_settings(".claude/hooks", sp, prefix)[0])
+        first = sp.read_text()
+        merged2, summary2 = merge_settings(".claude/hooks", sp, prefix)
+        write_settings(sp, merged2)
+        assert sp.read_text() == first
+        assert summary2["SessionEnd"] == "custom"
+        assert summary2["PreToolUse"] == "unchanged"
+
+    def test_cli_038_removes_stale_canonical_keeps_custom(self, tmp_path: Path) -> None:
+        from captain_hook.cli import merge_settings
+
+        register_hook(Event.PreToolUse, message="pre")
+        sp = tmp_path / "settings.local.json"
+        stale = {"hooks": [{"type": "command", "command": "uvx capt-hook run PostToolUse"}]}
+        custom = {"hooks": [{"type": "command", "command": "uvx capt-hook run PostToolUse --verbose"}]}
+        self.seed(sp, {"PostToolUse": [stale, custom]})
+
+        merged, summary = merge_settings(".claude/hooks", sp)
+        assert merged["hooks"]["PostToolUse"] == [custom]  # stale own removed, custom survives
+        assert summary["PostToolUse"] == "custom"
+
+    def test_cli_039_from_flag_overrides_launcher(self, tmp_path: Path) -> None:
+        from captain_hook.cli import command_prefix
+
+        self.write_launcher(tmp_path, "uv run capt-hook")
+        assert command_prefix(tmp_path, "/local/pkg") == "uvx --from /local/pkg capt-hook"
+        assert command_prefix(tmp_path) == "uv run capt-hook"
+
 
 class TestSettingsDrift:
     @staticmethod

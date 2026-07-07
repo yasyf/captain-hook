@@ -76,7 +76,7 @@ class TestSettingsTemplate:
     def test_review_run_command_honors_from_source(self) -> None:
         [command] = [
             entry["command"]
-            for group in generate_settings(from_source="/local/captain-hook")["hooks"]["SessionEnd"]
+            for group in generate_settings(prefix="uvx --from /local/captain-hook capt-hook")["hooks"]["SessionEnd"]
             for entry in group["hooks"]
         ]
         assert command == "uvx --from /local/captain-hook capt-hook review run"
