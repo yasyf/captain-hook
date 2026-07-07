@@ -1,3 +1,5 @@
+launcher = "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook"
+
 [packs.general]
 
 [packs.python]

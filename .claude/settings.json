@@ -42,22 +42,12 @@
     "captain-hook@captain-hook": true
   },
   "hooks": {
-    "UserPromptSubmit": [
+    "PermissionRequest": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run UserPromptSubmit"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run PreToolUse"
+            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run PermissionRequest"
           }
         ]
       }
@@ -82,12 +72,34 @@
         ]
       }
     ],
-    "PermissionRequest": [
+    "PreToolUse": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run PermissionRequest"
+            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run PreToolUse"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx capt-hook review run",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run SessionStart --async",
+            "async": true
           }
         ]
       }
@@ -112,24 +124,12 @@
         ]
       }
     ],
-    "SessionStart": [
+    "UserPromptSubmit": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run SessionStart --async",
-            "async": true
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uvx capt-hook review run",
-            "async": true
+            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run UserPromptSubmit"
           }
         ]
       }
