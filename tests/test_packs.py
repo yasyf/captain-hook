@@ -625,6 +625,16 @@ def test_enabling_steering_pack_registers_hooks() -> None:
     assert "captain_hook._packs.steering.steering" in sys.modules
 
 
+def test_steering_deferral_gate_skips_in_plan_mode() -> None:
+    from captain_hook.types import InPlanMode, Waiting
+
+    discover_pack("steering", manager.resolve_builtin("steering").path)
+    # The lone Stop-gate is the deferral gate; plan mode cannot ship code, so it must skip there
+    # (additively with the auto Waiting() guard), leaving plan-content policing to the ExitPlanMode nudge.
+    (gate,) = (h for h in app._state.hooks if h.spec.events & (Event.Stop | Event.SubagentStop))
+    assert gate.spec.skip_if == (Waiting(), InPlanMode())
+
+
 # --- CLI -----------------------------------------------------------------------------
 
 

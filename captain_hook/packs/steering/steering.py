@@ -10,6 +10,7 @@ from captain_hook import (
     Clause,
     CustomCondition,
     Event,
+    InPlanMode,
     Input,
     NlpSignal,
     Phrase,
@@ -552,6 +553,7 @@ tell that decided it) in `reasoning`.""",
         ],
     ),
     events=Event.PostToolUse | Event.Stop | Event.SubagentStop,
+    skip_if=[InPlanMode()],
     tests={
         Input(
             transcript=[
