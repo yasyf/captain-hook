@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [8.7.0] - 2026-07-07
 
 ### Added
 - **`packs.toml` takes a top-level `launcher` key** — a command prefix that
@@ -1064,7 +1064,7 @@ compatibility shims.
 - Claude Code event types, condition types, transcript query API, workflows,
   session/workflow state, inline test harness, and the `captain-hook` CLI.
 
-[Unreleased]: https://github.com/yasyf/captain-hook/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/yasyf/captain-hook/compare/v8.7.0...HEAD
 [0.9.1]: https://github.com/yasyf/captain-hook/releases/tag/v0.9.1
 [0.9.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.9.0
 [0.8.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.8.0
