@@ -127,11 +127,11 @@ gate(
 
 A gate is the same as `nudge(message, block=True, ...)`.
 
-Stop gates are wait-aware by default. Give a gate no `skip_if` and it skips while the
-agent waits on background work such as a running `Workflow`, an async sub-agent, or a
-`ScheduleWakeup` loop, then re-fires once that work resumes. Pass any `skip_if` and that
-default switches off, so include [`Waiting()`](../reference/conditions.qmd) yourself, as
-the example in this section does.
+Stop gates are wait-aware by default. They skip while the agent waits on background work
+such as a running `Workflow`, an async sub-agent, or a `ScheduleWakeup` loop, then re-fire
+once that work resumes. A `skip_if` you pass composes additively with that automatic
+[`Waiting()`](../reference/conditions.qmd) guard instead of replacing it, so the gate
+stays wait-aware alongside whatever else you skip on.
 
 ## lint {#lint}
 

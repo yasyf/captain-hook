@@ -486,8 +486,8 @@ class Waiting:
     (tracked across turns, so a launch in an earlier turn still counts), a
     ``run_in_background`` Bash/Agent/Task, or a user-facing wait such as
     ``ScheduleWakeup``/``Monitor``. Blocking Stop gates built with ``gate``/``llm_gate``
-    skip on it automatically when no ``skip_if`` is given, so the agent isn't nagged
-    for pausing on work it is correctly waiting on.
+    skip on it automatically, additively with any ``skip_if`` given, so the agent isn't
+    nagged for pausing on work it is correctly waiting on.
 
     Example:
         >>> gate("Run tests before stopping", skip_if=[Waiting()])
