@@ -164,7 +164,7 @@ class TestWorkflowFunction:
 
     def test_passes_skip_if_to_hook_spec(self) -> None:
         from captain_hook.primitives.workflow import Step, workflow
-        from captain_hook.types import Agent
+        from captain_hook.types import Agent, Waiting
 
         workflow(
             label="TEST",
@@ -172,7 +172,8 @@ class TestWorkflowFunction:
             steps=[Step(check=lambda _: True, message="Step 1: Do it.")],
             skip_if=[Agent("Explore")],
         )
-        assert _state.hooks[-1].spec.skip_if == (Agent("Explore"),)
+        # A custom skip_if composes additively with the wait-aware guard, never replacing it.
+        assert _state.hooks[-1].spec.skip_if == (Waiting(), Agent("Explore"))
 
     def test_default_only_if_empty_and_skip_if_wait_aware(self) -> None:
         from captain_hook.primitives.workflow import Step, workflow
