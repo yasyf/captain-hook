@@ -357,3 +357,12 @@ class TestCallerDirPackFrame:
             namespace,
         )
         assert namespace["result"] == Path(PACKS_DIR) / "general"
+
+    def test_unresolved_frame_spelling_still_classifies(self) -> None:
+        packs_path = Path(PACKS_DIR) / "python" / ".." / "general" / "spoofed_caller.py"
+        namespace: dict[str, object] = {}
+        exec(  # noqa: S102
+            compile("from captain_hook.prompt import caller_dir\nresult = caller_dir()\n", str(packs_path), "exec"),
+            namespace,
+        )
+        assert namespace["result"] == Path(PACKS_DIR) / "general"

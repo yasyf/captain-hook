@@ -167,7 +167,8 @@ def package_aware_stem(p: Path) -> str:
 
 
 def framework_frame(filename: str) -> bool:
-    return filename.startswith(FRAMEWORK_DIR) and not filename.startswith(PACKS_DIR)
+    resolved = Path(filename).resolve()
+    return resolved.is_relative_to(FRAMEWORK_DIR) and not resolved.is_relative_to(PACKS_DIR)
 
 
 def caller_stem() -> str:
