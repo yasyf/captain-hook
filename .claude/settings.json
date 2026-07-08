@@ -35,12 +35,18 @@
         "source": "github",
         "repo": "yasyf/captain-hook"
       }
+    },
+    "cc-context": {
+      "source": {
+        "source": "github",
+        "repo": "yasyf/cc-context"
+      }
     }
   },
   "enabledPlugins": {
     "codex@skills": true,
     "captain-hook@captain-hook": true,
-    "cc-context@skills": true
+    "cc-context@cc-context": true
   },
   "hooks": {
     "PermissionRequest": [
