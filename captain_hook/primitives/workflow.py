@@ -55,7 +55,7 @@ class Workflow:
     label: str
     marker: str
     steps: list[Step]
-    artifacts: list[Artifact[BaseModel]] = field(default_factory=lambda: [])
+    artifacts: list[Artifact[BaseModel]] = field(default_factory=list)
     post_complete: Callable[[BaseHookEvent], HookResult | None] | None = None
     on_start: Callable[[BaseHookEvent], HookResult | None] | None = None
 
