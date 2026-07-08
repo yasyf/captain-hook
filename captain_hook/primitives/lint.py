@@ -261,7 +261,8 @@ def format_result(
 ) -> HookResult | None:
     if not violations:
         return None
-    formatted = sep.join(violations[:max_shown])
+    shown = violations[:max_shown]
+    formatted = sep.join((*shown, f"…(+{len(violations) - max_shown} more)") if len(violations) > max_shown else shown)
     return HookResult(
         action=Action.block if block else Action.warn,
         message=message.format(violations=formatted),

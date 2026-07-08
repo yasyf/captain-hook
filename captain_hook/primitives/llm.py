@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
+from cc_transcript.render import clip
 from loguru import logger
 from pydantic import BaseModel
 
@@ -94,24 +95,30 @@ def llm_evaluate[M: BaseModel](
     else:
         contributing_texts = transcript_texts(evt, 5)
 
-    context = "\n".join(
-        [line for text in contributing_texts for line in extract_signal_context(sig.patterns, text)]
-        if sig
-        else contributing_texts
-    )[:max_context]
+    context = clip(
+        "\n".join(
+            [line for text in contributing_texts for line in extract_signal_context(sig.patterns, text)]
+            if sig
+            else contributing_texts
+        ),
+        max_context,
+    )
 
     base = Prompt().system(prompt).context("context", context or None)
     if (built := apply_contexts(base, evt, with_defaults(contexts), max_len=max_context)) is None:
         return None
 
+    diff_text = evt.ctx.diff("uncommitted" if diff is True else diff) if diff else None
+    if diff and not (diff_text or "").strip():
+        return None
+
     try:
         return evt.ctx.call_llm(
-            built,
+            built.context("diff", diff_text),
             specialty=specialty,
             model=model,
             agent=agent,
             transcript=transcript,
-            diff=diff,
             response_model=response_model,
         )
     except Exception:
@@ -129,7 +136,7 @@ def consume_signals(evt: BaseHookEvent, sig: Signals | None, hook: str) -> None:
 
 
 def llm_primitive[M: BaseModel](
-    prompt: str,
+    prompt: str | Prompt,
     *,
     action: Action,
     label: str,
@@ -154,6 +161,7 @@ def llm_primitive[M: BaseModel](
     transcript: bool | int | Literal["recent", "full"] = False,
     diff: bool | str = False,
 ) -> None:
+    prompt = str(prompt)
     sig = resolve_signals(signals)
     name = hook_name(label, None, prompt)
 
@@ -200,7 +208,7 @@ def llm_primitive[M: BaseModel](
 
 
 def llm_gate(
-    prompt: str,
+    prompt: str | Prompt,
     *,
     message: str | Callable[[GateVerdict], str],
     response_model: type[GateVerdict] = GateVerdict,
@@ -226,6 +234,7 @@ def llm_gate(
     so the gate has tool access and a recent transcript window (the path lets the agent
     read full history). Pass ``diff=True`` to attach a compact working-tree diff as a
     ``<diff>`` block, or ``agent=False, transcript=False`` for cheap, stateless yes/no checks.
+    An empty diff (or no repo) skips the LLM call entirely, consuming no fire.
 
     ``contexts`` attaches declarative evidence blocks
     (:class:`~captain_hook.contexts.PromptContext`), each rendered as an XML block
@@ -275,7 +284,7 @@ def llm_gate(
 
 
 def llm_nudge(
-    prompt: str,
+    prompt: str | Prompt,
     *,
     message: str | Callable[[NudgeVerdict], str],
     response_model: type[NudgeVerdict] = NudgeVerdict,
@@ -302,6 +311,7 @@ def llm_nudge(
     so the nudge has tool access and a recent transcript window (the path lets the agent
     read full history). Pass ``diff=True`` to attach a compact working-tree diff as a
     ``<diff>`` block, or ``agent=False, transcript=False`` for cheap, stateless yes/no checks.
+    An empty diff (or no repo) skips the LLM call entirely, consuming no fire.
 
     ``contexts`` attaches declarative evidence blocks
     (:class:`~captain_hook.contexts.PromptContext`), each rendered as an XML block

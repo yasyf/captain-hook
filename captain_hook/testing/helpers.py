@@ -75,6 +75,9 @@ class StubbedContext(HookContext):
             }
         )
 
+    def diff(self, source: str = "uncommitted", **kwargs: Any) -> str:
+        return "diff --git a/inline-test b/inline-test\n@@ -1 +1 @@\n-before\n+after"
+
     @classmethod
     def wrapping(cls, ctx: HookContext, llm: dict[str, Any] | None = None) -> StubbedContext:
         return cls(

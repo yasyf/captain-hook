@@ -137,7 +137,7 @@ llm_gate(
 )
 ```
 
-`diff=True` calls `evt.ctx.diff()`, which prefers cc-context's token-budgeted `ccx diff` and falls back to a plain `git diff` when `ccx` is unavailable, so the hook works in any repo. Diff against another source with `diff="staged"` or `diff="HEAD~1"`. For a scoped or custom-budget diff, call `evt.ctx.diff(scope="pkg/", budget=2000)` directly and fold the result into your prompt.
+`diff=True` calls `evt.ctx.diff()`, which prefers cc-context's token-budgeted `ccx diff` and falls back to a plain `git diff` when `ccx` is unavailable, so the hook works in any repo. Diff against another source with `diff="staged"` or `diff="HEAD~1"`. For a scoped or custom-budget diff, call `evt.ctx.diff(scope="pkg/", budget=2000)` directly and fold the result into your prompt. An empty diff skips the model call entirely and consumes no fire, so a clean tree costs nothing.
 
 A gate or nudge also attaches a recent window of the transcript by default, not the whole session, since the diff already carries the full change. Pass `transcript="full"` when a check needs the entire history, or `transcript=30` to size the window in events.
 

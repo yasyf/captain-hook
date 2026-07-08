@@ -241,6 +241,23 @@ class TestMaxShown:
         assert "v1" in msg
         assert "v2" in msg
         assert "v3" not in msg
+        assert "…(+7 more)" in msg
+
+    def test_no_marker_at_exactly_max_shown(self, session_dir: Path) -> None:
+
+        def check(content: str) -> list[str]:
+            return ["v0", "v1", "v2"]
+
+        result = lint_and_dispatch(
+            session_dir,
+            check,
+            tool_input={"file_path": "foo.py", "old_string": "", "new_string": "content"},
+            max_shown=3,
+        )
+        assert result is not None
+        msg = result["hookSpecificOutput"]["additionalContext"]
+        assert "v2" in msg
+        assert "more)" not in msg
 
     def test_default_max_shown_is_5(self, session_dir: Path) -> None:
 

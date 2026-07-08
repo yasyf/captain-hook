@@ -17,7 +17,9 @@ hook's conditions and handler, and asserts the outcome. Exit code 1 on any failu
    LLM hooks assert only conditions and wiring, never judgment — ship LLM hooks without
    `tests=` unless a required `contexts=` provider makes them meaningful.
    `Input(llm={"fire": False})` / `Input(llm={"block": False})` overrides the stub verdict
-   per test, wire-testing the judge-declines path.
+   per test, wire-testing the judge-declines path. `evt.ctx.diff` is stubbed to a canned
+   non-empty diff, so `diff=True` hooks stay deterministic instead of reading the real
+   working tree.
 
 ## Input fields
 

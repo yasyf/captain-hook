@@ -869,7 +869,14 @@ class TestReviewGateDiff:
             events=Event.Stop,
         )
 
-    def _edited_ctx(self, session_dir: Path, *, file_path: str, block: bool) -> Any:
+    def _edited_ctx(
+        self,
+        session_dir: Path,
+        *,
+        file_path: str,
+        block: bool,
+        diff_text: str | None = "diff --git a/src/app.py b/src/app.py\n@@ -1 +1 @@\n-a\n+b",
+    ) -> Any:
         from captain_hook.primitives.llm import GateVerdict
 
         ctx = build_ctx(
@@ -879,6 +886,7 @@ class TestReviewGateDiff:
             session_dir=session_dir,
         )
         ctx.call_llm = MagicMock(return_value=GateVerdict(block=block, reasoning="r"))
+        ctx.diff = MagicMock(return_value=diff_text)
         return ctx
 
     def test_blocks_on_bad_diff(self, tmp_path: Path) -> None:
@@ -900,6 +908,46 @@ class TestReviewGateDiff:
         result = dispatch(Event.Stop, make_stop_event(ctx=ctx), session_dir=tmp_path)
         assert result is None
         ctx.call_llm.assert_not_called()
+
+    def test_skips_llm_on_empty_diff(self, tmp_path: Path) -> None:
+        ctx = self._edited_ctx(tmp_path, file_path="src/app.py", block=True, diff_text="")
+        self._register()
+        result = dispatch(Event.Stop, make_stop_event(ctx=ctx), session_dir=tmp_path)
+        assert result is None
+        ctx.call_llm.assert_not_called()
+
+    def test_skips_llm_when_diff_unavailable(self, tmp_path: Path) -> None:
+        ctx = self._edited_ctx(tmp_path, file_path="src/app.py", block=True, diff_text=None)
+        self._register()
+        result = dispatch(Event.Stop, make_stop_event(ctx=ctx), session_dir=tmp_path)
+        assert result is None
+        ctx.call_llm.assert_not_called()
+
+
+class TestPromptObjectAccepted:
+    def test_llm_nudge_accepts_prompt_and_fires_like_str(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import NudgeVerdict, llm_nudge
+        from captain_hook.prompt import Prompt
+
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=NudgeVerdict(fire=True, reasoning="issue"))
+        llm_nudge(Prompt().system("Check this"), message="WARNING", when=lambda evt: True)
+        result = dispatch(Event.PostToolUse, make_post_tool_event(ctx=ctx), session_dir=tmp_path)
+
+        assert result is not None
+        assert "additionalContext" in result["hookSpecificOutput"]
+
+    def test_prompt_and_str_derive_same_hook_name(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import llm_gate
+        from captain_hook.prompt import Prompt
+
+        prompt = Prompt().system("Check this")
+        llm_gate(str(prompt), message="BLOCKED", when=lambda evt: True)
+        str_name = _state.hooks[-1].name
+
+        reset()
+        llm_gate(prompt, message="BLOCKED", when=lambda evt: True)
+
+        assert _state.hooks[-1].name == str_name
 
 
 class TestLlmContexts:
