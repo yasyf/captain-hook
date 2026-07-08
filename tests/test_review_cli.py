@@ -225,6 +225,7 @@ class TestScanAndTriage:
         again = invoke("triage", "--limit", "5", root=scanned_repo)
         assert "judged 0, failed 0, pending 0, merged 0, retired 0" in again.output
 
+    @requires_llm_backend
     def test_triage_reports_possible_slug_splits(self, git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         async def fake_splits(store: object, *, prompt_version: int, threshold: float) -> list[KeyOverlap]:
             return [KeyOverlap("prefer-uv", "use-uv-not-pip", 0.93)]

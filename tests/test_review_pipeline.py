@@ -425,6 +425,7 @@ class TestJudgePass:
         )
         assert loads == [None]
 
+    @requires_llm_backend
     async def test_persists_each_lane_at_its_bound_version(
         self, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -932,6 +933,7 @@ class TestSlugPromptRendering:
         assert "kebab-case" not in prompt
 
 
+@requires_llm_backend
 class TestParaphraseGrouping:
     async def test_same_emitted_slug_groups_to_one_candidate(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -964,6 +966,7 @@ class TestParaphraseGrouping:
         assert {int(str(c["observations"])) for c in candidates} == {1}
 
 
+@requires_llm_backend
 class TestSlugRegroupE2E:
     async def test_cross_detector_collapse_hides_shadowed_row_from_the_judge(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1012,6 +1015,7 @@ class TestSlugRegroupE2E:
         assert status.sessions == 1
 
 
+@requires_llm_backend
 class TestSuggestionPlumbing:
     async def test_prior_slug_evidence_ranks_the_matching_slug_first(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
