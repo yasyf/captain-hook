@@ -1,0 +1,34 @@
+name: Guides
+
+# Rendered-artifact freshness (check on push/PR) + fleet re-render (on
+# cc-guides release dispatch / weekly belt / manual). Stub scaffolded by
+# repo-bootstrap; the machinery lives in yasyf/cc-guides.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  repository_dispatch:
+    types: [cc-guides-render]
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+jobs:
+  check:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: yasyf/cc-guides@action-v1
+
+  re-render:
+    if: github.event_name == 'repository_dispatch' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    concurrency:
+      group: cc-guides-render
+      cancel-in-progress: false
+    uses: yasyf/cc-guides/.github/workflows/re-render.yml@action-v1
