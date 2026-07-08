@@ -739,8 +739,7 @@ def pack_list(state: CliState) -> None:
         click.echo(f"  {name:24} github   (unavailable — offline; run `capt-hook pack update` when online)")
     for error in _state.load_errors:
         click.echo(
-            f"!  {error.pack}: {Path(error.source).name} failed to import "
-            f"- {type(error.exc).__name__}: {error.exc}"
+            f"!  {error.pack}: {Path(error.source).name} failed to import - {type(error.exc).__name__}: {error.exc}"
         )
 
 

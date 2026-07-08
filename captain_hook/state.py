@@ -134,9 +134,7 @@ class PrimitiveState(BaseModel):
             return None
         spent = self.consumed.get(hook, frozenset[str]())
         candidates = [
-            (text, set(matching_signals(sig.patterns, text)))
-            for text in texts
-            if text_hash(text) not in spent
+            (text, set(matching_signals(sig.patterns, text))) for text in texts if text_hash(text) not in spent
         ]
         union = {i for _, matched in candidates for i in matched}
         if sum(sig.patterns[i].weight for i in union) < sig.threshold:

@@ -155,7 +155,10 @@ nudge(
                     "type": "assistant",
                     "message": {
                         "content": [
-                            {"type": "text", "text": "Done. I made three changes:\n1. Fixed X\n2. Added Y\n3. Updated Z"}
+                            {
+                                "type": "text",
+                                "text": "Done. I made three changes:\n1. Fixed X\n2. Added Y\n3. Updated Z",
+                            }
                         ]
                     },
                 }
