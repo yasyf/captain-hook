@@ -365,6 +365,8 @@ class SourceEdits:
         include_tests: Include test files too (default ``False`` excludes them).
         paths: One or more ``fnmatch`` globs the file must also match (e.g. ``("src/**", "lib/**")``);
             ``None`` (default) imposes no path restriction.
+        project_only: Restrict matches to files inside the repository root (default ``True``); pass
+            ``False`` to also match external scratch files, attachments, or logs.
 
     Example:
         >>> hook(Event.PostToolUse, only_if=[SourceEdits(lang="ts", paths=("src/**", "lib/**"))], message="...")
@@ -373,11 +375,19 @@ class SourceEdits:
     lang: str
     include_tests: bool
     paths: tuple[str, ...]
+    project_only: bool = True
 
-    def __init__(self, lang: str = "py", include_tests: bool = False, paths: str | Sequence[str] | None = None) -> None:
+    def __init__(
+        self,
+        lang: str = "py",
+        include_tests: bool = False,
+        paths: str | Sequence[str] | None = None,
+        project_only: bool = True,
+    ) -> None:
         object.__setattr__(self, "lang", lang)
         object.__setattr__(self, "include_tests", include_tests)
         object.__setattr__(self, "paths", (paths,) if isinstance(paths, str) else tuple(paths or ()))
+        object.__setattr__(self, "project_only", project_only)
 
     @property
     def globs(self) -> tuple[str, ...]:

@@ -90,7 +90,7 @@ llm_gate(
                                 "type": "tool_use",
                                 "name": "Edit",
                                 "id": "e1",
-                                "input": {"file_path": "/repo/src/app.py", "old_string": "a", "new_string": "b"},
+                                "input": {"file_path": "src/app.py", "old_string": "a", "new_string": "b"},
                             }
                         ]
                     },
@@ -107,13 +107,13 @@ llm_gate(
                                 "type": "tool_use",
                                 "name": "Edit",
                                 "id": "e1",
-                                "input": {"file_path": "/repo/src/app.py", "old_string": "a", "new_string": "b"},
+                                "input": {"file_path": "src/app.py", "old_string": "a", "new_string": "b"},
                             },
                             {
                                 "type": "tool_use",
                                 "name": "Edit",
                                 "id": "e2",
-                                "input": {"file_path": "/repo/README.md", "old_string": "a", "new_string": "b"},
+                                "input": {"file_path": "docs/index.md", "old_string": "a", "new_string": "b"},
                             },
                         ]
                     },
@@ -130,7 +130,7 @@ llm_gate(
                                 "type": "tool_use",
                                 "name": "Edit",
                                 "id": "e1",
-                                "input": {"file_path": "/repo/README.md", "old_string": "a", "new_string": "b"},
+                                "input": {"file_path": "README.md", "old_string": "a", "new_string": "b"},
                             }
                         ]
                     },
@@ -147,7 +147,29 @@ llm_gate(
                                 "type": "tool_use",
                                 "name": "Edit",
                                 "id": "e1",
-                                "input": {"file_path": "/repo/tests/test_app.py", "old_string": "a", "new_string": "b"},
+                                "input": {"file_path": "tests/test_app.py", "old_string": "a", "new_string": "b"},
+                            }
+                        ]
+                    },
+                },
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "name": "Write",
+                                "id": "e1",
+                                "input": {
+                                    "file_path": (
+                                        "/tmp/claude-scratch/wf_0be55dd2/r4-judge-continuation-wf_0be55dd2-432.js"
+                                    ),
+                                    "content": "if (input.judgePrompt.length < 1000) throw new Error('tripwire')",
+                                },
                             }
                         ]
                     },

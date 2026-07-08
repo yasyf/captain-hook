@@ -22,7 +22,7 @@ These match the event being processed right now.
 | `Agent(*names)` | The subagent type is one of `names` | Exact names; a `\|`-joined string still works | `Agent("cleanup", "refactor")` |
 | `FromSubagent()` | The event originates from a subagent or teammate, i.e. the payload carries an `agent_id`; matches the event's *origin*, where `Agent` matches its *type* | — | `FromSubagent()` |
 | `TestFile(project_only=True)` | The file is a test file (`test_*.py`, `conftest.py`, or any `.py` under a `tests/` directory) | — | `TestFile()` |
-| `SourceEdits(lang="py", include_tests=False, paths=None)` | The event edits/writes a source file in `lang` (and not a test, unless `include_tests`) | Language glob | `SourceEdits(lang="ts", paths="src/**")` |
+| `SourceEdits(lang="py", include_tests=False, paths=None, project_only=True)` | The event edits/writes a source file in `lang` (and not a test, unless `include_tests`) | Language glob | `SourceEdits(lang="ts", paths="src/**")` |
 
 `FilePath`, `Content`, `TestFile`, and `SourceEdits` match project files only by default. Pass
 `project_only=False` to target external scratch files, attachments, or logs.

@@ -166,14 +166,26 @@ def has_used_skill(t: Session, names: tuple[str, ...], *, subagents: bool = True
     ) or (subagents and any(has_used_skill(sub, names) for sub in sidechain_sessions(t.path)))
 
 
+def is_project_path(path: str | Path, root: Path | None) -> bool:
+    """Whether ``path`` lies inside the repository ``root``.
+
+    A relative path is always in-project; a ``None`` root (no repository detected) treats every
+    path as in-project. An absolute path is in-project only when it resolves under ``root``.
+
+    Args:
+        path: A filesystem path as a ``str`` or ``Path`` — transcript ``FileRef`` paths are plain
+            strings, hence the union.
+        root: The repository root to test against, or ``None`` when unknown.
+    """
+    if not (p := Path(path)).is_absolute():
+        return True
+    if root is None:
+        return True
+    return p.resolve().is_relative_to(root.resolve())
+
+
 def is_project_file(evt: BaseHookEvent) -> bool:
-    if not (file := evt.file):
-        return False
-    if not file.path.is_absolute():
-        return True
-    if not (root := evt.ctx.repo_root):
-        return True
-    return file.path.resolve().is_relative_to(root.resolve())
+    return bool((file := evt.file) and is_project_path(file.path, evt.ctx.repo_root))
 
 
 def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
@@ -212,11 +224,12 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
             return bool(evt.agent_type) and evt.agent_type in names
         case TestFile(project_only):
             return bool(evt.file and (not project_only or is_project_file(evt)) and evt.file.is_test)
-        case SourceEdits(lang, include_tests, paths):
+        case SourceEdits(lang, include_tests, paths, project_only):
             return bool(
                 evt.tool_name
                 and tool_name_matches(evt.tool_name, "Edit|Write")
                 and (f := evt.file)
+                and (not project_only or is_project_file(evt))
                 and f.matches(*SourceEdits(lang=lang).globs)
                 and (include_tests or not f.is_test)
                 and (not paths or f.matches(*paths))

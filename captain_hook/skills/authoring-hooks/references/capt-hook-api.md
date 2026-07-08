@@ -157,7 +157,7 @@ evaluated first.
 | Filter by a Workflow script | `WorkflowScript(model="haiku")` — any `agent()` opt as a kwarg (`effort=`, `agentType=`, …), all AND |
 | Filter by subagent type | `Agent("cleanup")` or `Agent("Explore", "claude-code-guide")` |
 | Match only test files | `TestFile()` (`test_*.py`, `conftest.py`, any `.py` under `tests/`) |
-| Python source edits (skips tests by default) | `SourceEdits(lang="py")`; `lang` also `ts`, `go`, `rs`, ... |
+| Python source edits (skips tests by default, in-repo only) | `SourceEdits(lang="py")`; `lang` also `ts`, `go`, `rs`, ...; `project_only=False` to also match out-of-repo files |
 | File was previously read | `ReadFile("TESTING.md")` — fnmatch globs; anchor dirs with `**/` |
 | File was previously edited | `TouchedFile("**/*.py")` |
 | Command was previously run | `RanCommand("uv", "run", "pytest")` — argv-prefix tokens, wrapper-transparent (`sudo`/`env`/`timeout` stripped) but launcher-literal (`uv run pytest` ≠ `pytest`; list each spelling as its own entry) |

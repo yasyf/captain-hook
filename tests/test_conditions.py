@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from captain_hook.app import on
-from captain_hook.conditions import check_condition, matches_conditions, workflow_opt_matches
+from captain_hook.conditions import check_condition, is_project_path, matches_conditions, workflow_opt_matches
 from captain_hook.context import load_transcript
 from captain_hook.events import (
     BaseHookEvent,
@@ -18,6 +18,7 @@ from captain_hook.events import (
     StopEvent,
     UserPromptSubmitEvent,
 )
+from captain_hook.packs.general._lib import EditedSource
 from captain_hook.primitives.commands import block_command_pattern
 from captain_hook.types import (
     Agent,
@@ -36,6 +37,7 @@ from captain_hook.types import (
     ReadFile,
     Runs,
     SkipPermissions,
+    SourceEdits,
     TCondition,
     TestFile,
     Tool,
@@ -51,6 +53,7 @@ from tests.helpers import (
     build_ctx,
     make_event,
     make_messages_ctx,
+    make_transcript,
     make_transcript_ctx,
     notification_text,
     raw_assistant,
@@ -703,6 +706,105 @@ class TestTestFileCondition:
             ctx=build_ctx(project_root=tmp_path),
         )
         assert check_condition(cond, evt) is expected
+
+
+class TestIsProjectPath:
+    def test_relative_paths_always_in_project(self, tmp_path: Path) -> None:
+        assert is_project_path("a.py", tmp_path) is True
+        assert is_project_path(Path("src/a.py"), tmp_path) is True
+
+    def test_absolute_inside_root(self, tmp_path: Path) -> None:
+        inside = tmp_path / "src" / "a.py"
+        assert is_project_path(str(inside), tmp_path) is True
+        assert is_project_path(inside, tmp_path) is True
+
+    def test_absolute_outside_root(self, tmp_path: Path) -> None:
+        assert is_project_path("/tmp/claude-scratch/x.js", tmp_path) is False
+        assert is_project_path(Path("/tmp/claude-scratch/x.js"), tmp_path) is False
+
+    def test_no_root_always_in_project(self) -> None:
+        assert is_project_path("/tmp/claude-scratch/x.js", None) is True
+        assert is_project_path(Path("a.py"), None) is True
+
+
+class TestSourceEditsCondition:
+    def test_relative_source_matches(self, tmp_path: Path) -> None:
+        evt = make_tool_event(
+            "Edit",
+            {"file_path": "a.py", "old_string": "", "new_string": ""},
+            ctx=build_ctx(project_root=tmp_path),
+        )
+        assert check_condition(SourceEdits(), evt) is True
+
+    @pytest.mark.parametrize(
+        ("cond", "file_path", "expected"),
+        [
+            pytest.param(SourceEdits(), "a.py", True, id="matches_absolute_inside_project"),
+            pytest.param(SourceEdits(), "/tmp/scratch/a.py", False, id="rejects_absolute_outside_project"),
+            pytest.param(
+                SourceEdits(project_only=False),
+                "/tmp/scratch/a.py",
+                True,
+                id="opt_out_matches_absolute_outside_project",
+            ),
+        ],
+    )
+    def test_sourceedits_absolute(
+        self, cond: TCondition, file_path: str, expected: bool, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        # Root basename must not start with "test_": the ``.py`` test-file glob matches any path
+        # under a "test_"-prefixed ancestor, and pytest names the ``tmp_path`` dir after the test.
+        root = tmp_path_factory.mktemp("repo")
+        path = file_path if file_path.startswith("/") else str(root / file_path)
+        evt = make_tool_event(
+            "Edit",
+            {"file_path": path, "old_string": "", "new_string": ""},
+            ctx=build_ctx(project_root=root),
+        )
+        assert check_condition(cond, evt) is expected
+
+    def test_project_only_default_true(self) -> None:
+        assert SourceEdits().project_only is True
+        assert SourceEdits(project_only=False).project_only is False
+
+    def test_include_tests_paths_and_langs(self, tmp_path: Path) -> None:
+        ctx = build_ctx(project_root=tmp_path)
+        test_evt = make_tool_event(
+            "Edit", {"file_path": "tests/test_a.py", "old_string": "", "new_string": ""}, ctx=ctx
+        )
+        assert check_condition(SourceEdits(), test_evt) is False
+        assert check_condition(SourceEdits(include_tests=True), test_evt) is True
+
+        src_evt = make_tool_event("Edit", {"file_path": "src/app.py", "old_string": "", "new_string": ""}, ctx=ctx)
+        assert check_condition(SourceEdits(paths="src/**"), src_evt) is True
+        assert check_condition(SourceEdits(paths="lib/**"), src_evt) is False
+
+        ts_evt = make_tool_event("Edit", {"file_path": "a.ts", "old_string": "", "new_string": ""}, ctx=ctx)
+        assert check_condition(SourceEdits(lang="ts"), ts_evt) is True
+        assert check_condition(SourceEdits(lang="py"), ts_evt) is False
+
+
+class TestEditedSourceScoping:
+    def _check(self, tool: str, tool_input: dict[str, Any], root: Path) -> bool:
+        ctx = build_ctx(transcript=make_transcript(raw_tool_msg(tool, tool_input)), project_root=root)
+        return EditedSource().check(make_event(StopEvent, ctx=ctx))
+
+    def test_scratchpad_write_excluded(self, tmp_path: Path) -> None:
+        tool_input = {
+            "file_path": "/tmp/claude-scratch/wf_0be55dd2/r4.js",
+            "content": "if (x.length < 1000) throw new Error('tripwire')",
+        }
+        assert self._check("Write", tool_input, tmp_path) is False
+
+    def test_repo_relative_edit_included(self, tmp_path: Path) -> None:
+        tool_input = {"file_path": "src/app.py", "old_string": "", "new_string": "x"}
+        assert self._check("Edit", tool_input, tmp_path) is True
+
+    def test_absolute_under_root_edit_included(self, tmp_path_factory: pytest.TempPathFactory) -> None:
+        # Root basename must not start with "test_" (see TestSourceEditsCondition.test_sourceedits_absolute).
+        root = tmp_path_factory.mktemp("repo")
+        tool_input = {"file_path": str(root / "src" / "app.py"), "old_string": "", "new_string": "x"}
+        assert self._check("Edit", tool_input, root) is True
 
 
 def skill_evt(skill: str) -> BaseHookEvent:
