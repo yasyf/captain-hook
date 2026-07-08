@@ -1,5 +1,5 @@
 name = "general"
-version = "0.14.0"
+version = "0.15.0"
 description = "Language-agnostic guards: git/jj command safety, doc & prompt nudges, task & plan discipline, model-routing nudges (review, security audit, and diagnosis route to gpt-5.5), code-review + docs-freshness gates, a detour check-in nudge, a verbose-comment nudge, and delegated-prose nudges that catch doc writing handed to a subagent or workflow without the writing-docs skill."
 hooks = "."
 nlp = true

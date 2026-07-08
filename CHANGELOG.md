@@ -4,6 +4,87 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.12.0] - 2026-07-08
+
+### Added
+- **`excerpt_around()` and `Excerpts` — one excerpting vocabulary for the whole
+  framework.** Verbatim windowed excerpts around character spans: windows merge
+  per line, `…` brackets only where text was actually elided, and a character
+  budget drops overflow into an explicit `… [+N more <noun> not excerpted]`
+  marker instead of losing it silently. This is the general-purpose home for the
+  hand-rolled pin-header logic 8.5.1 patched into the general pack;
+  `WorkflowScriptSource.pins_and_source` is now ~10 lines on top of it.
+- **`WorkflowScriptSource` is a framework prompt context.** Lifted from
+  `packs/general/models.py` into `captain_hook.contexts` (root-exported); the
+  pack's `ProseWorkflowScript` subclasses it. The framework header says
+  "inherits the session model" — naming that model (fable) moved to the pack's
+  rubric fragment, where project-specific facts belong.
+- **General-pack judge rubrics live in `Prompt.load()` `.md` files.** The eight
+  LLM rubric prompts moved from inline string literals to
+  `packs/general/prompts/models/*.md` (991 → 558 lines in `models.py`), with
+  the two texts that kept drifting single-sourced as fragments:
+  `deliverable_rubric.md` (the "output returned to the orchestrator is a data
+  deliverable, not prose" taxonomy plus its contrastive examples, templated on
+  the verdict attribute) and `workflow_script_header.md` (how to read the
+  pin-excerpt header). The review-routing workflow nudge gains the taxonomy it
+  never had, and the writing-docs workflow nudge sheds a header description
+  that had been stale since 8.5.1. Replayed against the recovered live-misfire
+  corpus: codex-relay relays 0/5 fires, smoke reports 0/3, spawn-side relays
+  0/5 blocks, with pinned-prose positive controls 3/3 on both sides (9 of the
+  14 negatives now die at the NLP prefilter before any LLM call).
+
+### Changed
+- **`Prompt.from_template` substitutes only `{identifier}` placeholders.** Code
+  braces (`{model: 'sonnet'}`), `${...}`, and bare `{}` pass through literally,
+  so `.md` prompt files can quote JavaScript without escaping. The strict
+  missing-variable `KeyError` is kept; `{{x}}` is no longer an escape and
+  format specs are no longer placeholders (neither had in-tree users).
+  `caller_dir()` now honors the packs carve-out, so `Prompt.load` from a
+  builtin pack resolves the pack's own `prompts/` directory.
+- **`llm_gate` and `llm_nudge` accept a `Prompt`** as well as a string,
+  matching `prompt_check`.
+- **Review-store prompt versions derive from prompt content.** Each judge
+  lane's `prompt_version` is a sha256-derived int of that lane's static
+  template (new leaf module `review/prompts.py`); editing a prompt IS the
+  bump, so "forgot to bump the constant" is unrepresentable. Stale-verdict
+  purging runs once at `ReviewStore.open` — read paths self-heal too — which
+  retires 8.11.0's per-pass sweep and its `purged P stale verdicts` triage
+  line, and the judge queue is a plain create-then-fix concatenation, which
+  retires 8.11.0's diverged-lane round-robin (a divergence that never occurred
+  and self-heals on the next pass). On first deploy every existing verdict
+  goes stale and the next pass re-judges the backlog: the corpus re-judge
+  doubles as the data migration, as with the v2→v3 bump. `FIX_CATEGORIES` is
+  gone — the stress seeds resolve a verdict's lane through
+  `store.versions.for_row`, the same path `persist_verdict` uses. General pack
+  bumped to 0.15.0.
+
+### Fixed
+- **The Stop reviewer reviews the diff, not the transcript.** It blocked a
+  session by flagging a deliberate length tripwire in a spent one-shot workflow
+  continuation script sitting in a session scratchpad — a file that was never
+  in the `<diff>` and reached the judge only through the transcript window. The
+  rubric now names `<diff>` as the only review subject, the transcript as
+  intent context, out-of-tree files (scratchpads, temp dirs, one-shot
+  continuation scripts) as never reviewable, and a deliberate guard in a
+  completed one-shot as not a bug. Inline regression fixtures reproduce the
+  misfire on both the review and docs-freshness gates.
+- **`EditedSource` and `SourceEdits` are repo-scoped.** `EditedSource` (the
+  review/docs gate condition) counted any session Edit/Write anywhere — a
+  scratchpad `.js` armed the Stop reviewer for the rest of the session.
+  `SourceEdits` gains `project_only=True`, closing the drift with
+  `docs/guide/conditions.qmd`, which had claimed it all along; both share the
+  new `is_project_path()`.
+- **An empty diff skips the review.** `llm_evaluate` with `diff=True` resolves
+  the diff once and skips the model call entirely (consuming no fire) when
+  there is nothing to review, the same contract as a required-context miss —
+  previously a clean tree left the judge staring at the transcript, exactly
+  the misfire channel above. Inline hook tests get a canned non-empty diff
+  from `StubbedContext`.
+- **Truncation is marker-honest everywhere.** `apply_contexts` and the LLM
+  context block clip with `…(+Nch)` markers instead of silent head-slices, and
+  `lint`'s `format_result` appends `…(+N more)` for violations beyond
+  `max_shown`.
+
 ## [8.11.0] - 2026-07-07
 
 ### Added
