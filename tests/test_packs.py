@@ -5,6 +5,7 @@ import sys
 import tarfile
 import tomllib
 from dataclasses import dataclass, field
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -173,6 +174,26 @@ def test_builtin_pack_layout(name: str, hook_stems: set[str]) -> None:
     manifest = manager.PackManifest.load(pack_dir / manager.PACK_MANIFEST)
     assert manifest.name == name
     assert {p.stem for p in pack_dir.glob("*.py") if not p.stem.startswith("_")} == hook_stems
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "fragments/deliverable_rubric.md",
+        "fragments/workflow_script_header.md",
+        "models/prose_spawn_gate.md",
+        "models/prose_workflow_nudge.md",
+        "models/review_routing_spawn_nudge.md",
+        "models/review_routing_workflow_nudge.md",
+        "models/writing_docs_spawn_nudge.md",
+        "models/writing_docs_workflow_nudge.md",
+        "models/implementation_spawn_nudge.md",
+        "models/inline_edit_nudge.md",
+    ],
+)
+def test_general_pack_prompts_are_packaged(name: str) -> None:
+    """The general pack's Prompt.load .md files must ship as package data (wheel/plugin)."""
+    assert (resources.files(captain_hook) / "packs/general/prompts" / name).is_file()
 
 
 def test_fixes_pack_scopes_to_native_bash(isolate_modules: None, tmp_path: Path) -> None:

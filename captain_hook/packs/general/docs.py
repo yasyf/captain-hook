@@ -58,7 +58,9 @@ nudge(
 # writing-docs skill, and in headless (cron/CI) runs.
 llm_gate(
     "You are checking documentation freshness before the agent stops. The compact diff of "
-    "the uncommitted changes is in <diff>. Decide whether the session changed anything "
+    "the uncommitted changes is in <diff>. Judge only the change shown in <diff>; the "
+    "transcript is context for intent, and files outside the repository working tree are "
+    "never in scope. Decide whether the session changed anything "
     "user-facing — a new flag or option, a renamed command, changed output or behavior, a "
     "new feature — that README.md or the pages under docs/ don't reflect. Set block=true "
     "ONLY for a concrete gap, naming exactly which file and section to update in "

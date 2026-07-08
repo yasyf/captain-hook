@@ -13,21 +13,43 @@ from captain_hook import (
     FilePath,
     Input,
     Phrase,
+    Prompt,
     Rewrite,
     TaskCall,
     Tool,
     ToolInput,
     Warn,
     WorkflowScript,
+    WorkflowScriptSource,
     hook,
     llm_gate,
     llm_nudge,
     nudge,
     set_tool_input,
-    workflow_opt_matches,
-    workflow_script_source,
 )
+from captain_hook.contexts import WORKFLOW_SCRIPT_CAP
 from captain_hook.signals.nlp import nlp_scan
+
+DELIVERABLE_GATE_RUBRIC = str(Prompt.load("fragments/deliverable_rubric", verdict_attr="block"))
+DELIVERABLE_NUDGE_RUBRIC = str(Prompt.load("fragments/deliverable_rubric", verdict_attr="fire"))
+WORKFLOW_HEADER = str(Prompt.load("fragments/workflow_script_header"))
+
+PROSE_SPAWN_GATE = Prompt.load("models/prose_spawn_gate", deliverable_rubric=DELIVERABLE_GATE_RUBRIC)
+IMPLEMENTATION_SPAWN_NUDGE = Prompt.load("models/implementation_spawn_nudge")
+INLINE_EDIT_NUDGE = Prompt.load("models/inline_edit_nudge")
+REVIEW_ROUTING_SPAWN_NUDGE = Prompt.load("models/review_routing_spawn_nudge")
+PROSE_WORKFLOW_NUDGE = Prompt.load(
+    "models/prose_workflow_nudge",
+    workflow_script_header=WORKFLOW_HEADER,
+    deliverable_rubric=DELIVERABLE_NUDGE_RUBRIC,
+)
+REVIEW_ROUTING_WORKFLOW_NUDGE = Prompt.load(
+    "models/review_routing_workflow_nudge",
+    workflow_script_header=WORKFLOW_HEADER,
+    deliverable_rubric=DELIVERABLE_NUDGE_RUBRIC,
+)
+WRITING_DOCS_SPAWN_NUDGE = Prompt.load("models/writing_docs_spawn_nudge")
+WRITING_DOCS_WORKFLOW_NUDGE = Prompt.load("models/writing_docs_workflow_nudge", workflow_script_header=WORKFLOW_HEADER)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,10 +77,6 @@ class InlineEdit:
         if not evt.file or evt.content is None:
             return None
         return f"file: {evt.file.path}\nincoming text: {len(evt.content):,} chars"
-
-
-WORKFLOW_SCRIPT_CAP = 14_000  # below the prose hooks' max_context=16_000, so truncation stays ours
-PIN_EXCERPT_CAP = 2_000  # the pin header must not crowd out the source under the enclosing max_context slice
 
 
 def prose_deliverable_sentences(text: str) -> list[str]:
@@ -133,76 +151,6 @@ class ProseSpawn(DelegatedSpawn):
         return f"{base}\n\nsentences the prose prefilter matched:\n{matched}"
 
 
-def _pin_windows(line: str) -> list[tuple[str, int]]:
-    """Verbatim excerpt(s) around each model pin on `line`, paired with the pin count each covers.
-
-    Empty when the line pins no model. A line at/under 200 chars yields one window quoting it
-    whole; a longer line yields one window per merged run of pins, each an exact substring of the
-    line bracketed by ``…`` only where text is actually elided.
-    """
-    if not (matches := workflow_opt_matches(line, "model")):
-        return []
-    if len(line) <= 200:
-        return [(f"  {line}", len(matches))]
-    windows: list[list[int]] = []  # [start, end, pins covered]
-    for m in matches:  # window back over the opts (label precedes model) and forward past effort
-        start, end = max(0, m.start() - 160), min(len(line), m.end() + 60)
-        if windows and start <= windows[-1][1]:
-            windows[-1][1], windows[-1][2] = end, windows[-1][2] + 1
-        else:
-            windows.append([start, end, 1])
-    return [(f"  {'…' if s else ''}{line[s:e]}{'…' if e < len(line) else ''}", n) for s, e, n in windows]
-
-
-@dataclass(frozen=True, slots=True)
-class WorkflowScriptSource:
-    """Gating context: the pending Workflow call's script source, headed by its model pins."""
-
-    tag: str = "workflow_script"
-    required: bool = True
-
-    @staticmethod
-    def pins_and_source(evt: BaseHookEvent) -> tuple[str, str] | None:
-        if (source := workflow_script_source(evt)) is None:
-            return None
-        excerpts: list[str] = []
-        budget = quoted = dropped = 0
-        capped = False
-        for line in source.splitlines():
-            for excerpt, pins in _pin_windows(line):
-                if capped or (excerpts and budget + 1 + len(excerpt) > PIN_EXCERPT_CAP):
-                    capped, dropped = True, dropped + pins
-                    continue
-                budget += (1 if excerpts else 0) + len(excerpt)
-                excerpts.append(excerpt)
-                quoted += pins
-        if capped:
-            excerpts.append(f"  … [+{dropped} more model pins not excerpted]")
-        pin_lines = "\n".join(excerpts) or "  (none)"
-        if len(source) > WORKFLOW_SCRIPT_CAP:
-            head, tail = WORKFLOW_SCRIPT_CAP * 3 // 4, WORKFLOW_SCRIPT_CAP // 4
-            claim = (
-                f"{quoted} of {quoted + dropped} model pins quoted above"
-                if capped
-                else "every model pin is quoted above"
-            )
-            source = f"{source[:head]}\n… [script truncated: {len(source):,} chars total; {claim}] …\n{source[-tail:]}"
-        lead = (
-            f"excerpts around the first model pins in this script (+{dropped} more noted below; "
-            "a stage not quoted here is NOT necessarily unpinned):"
-            if capped
-            else "excerpts around every model pin in this script (a stage not quoted here inherits the "
-            "session model, fable):"
-        )
-        return f"{lead}\n{pin_lines}", source
-
-    def content(self, evt: BaseHookEvent) -> str | None:
-        if (parts := self.pins_and_source(evt)) is None:
-            return None
-        header, source = parts
-        return f"{header}\n\n{source}"
-
-
 @dataclass(frozen=True, slots=True)
 class ProseWorkflowScript(WorkflowScriptSource):
     """Gating context: the script source, present only when its prose asks survive the prefilter."""
@@ -248,54 +196,7 @@ hook(
 )
 
 llm_gate(
-    """Decide whether this delegated subagent call pins a non-fable model on work whose
-deliverable is prose.
-
-<delegated_spawn> holds the pending Agent/Task call: its model pin, agent type, and
-prompt, ending with the sentences a clause prefilter matched — each asks a writing
-verb of a prose artifact, with negated asks ("do NOT edit the docs") already
-screened out. Your job is precision: is a prose artifact what this subagent is
-asked to PRODUCE?
-
-The Models rubric: all writing a user reads — READMEs, docs, changelogs, release
-notes, blog posts, PR descriptions, any user-facing text — routes to fable. Work
-that merely mentions a prose file — as a constraint ("do NOT touch the docs"), as
-reading material, as the subject of recon or review — is not prose work; findings
-reports, status reports, and verbatim relays of another tool's output returned to the
-caller are not prose work either.
-
-Set block=true only when the prompt clearly asks the subagent to write, draft,
-revise, or polish a prose artifact. Recon, review, classification, and code work
-that references docs stay allowed: block=false. When uncertain, block=false — a
-wrong block stops legitimate work cold. Keep reasoning under 40 words.
-
-<examples>
-<example block="true">
-model: sonnet — Write the README quickstart for this repo.
-The deliverable is README prose on a non-fable pin.
-</example>
-<example block="true">
-model: opus — Update CHANGELOG.md with an entry for the retry fix.
-The subagent itself writes the changelog prose.
-</example>
-<example block="false">
-model: opus — Fix the failing test in cli.py. Do NOT edit CHANGELOG.md — a sibling owns it.
-CHANGELOG is a constraint, not the deliverable; this is code work.
-</example>
-<example block="false">
-model: sonnet — Explore the cc-interact building blocks and report where the docs pipeline is written.
-Read-only recon that mentions docs; nothing user-facing is produced.
-</example>
-<example block="false">
-model: sonnet — Review the README draft for factual errors and list them.
-Review findings go to the orchestrator; the subagent writes no user-facing prose.
-</example>
-<example block="false">
-model: sonnet — You are a low-cost wrapper: write a self-contained codex prompt reviewing this diff,
-run the codex skill, and relay its findings verbatim.
-Writing a codex prompt is tool input and the relay returns findings; nothing user-facing is produced.
-</example>
-</examples>""",
+    PROSE_SPAWN_GATE,
     message=lambda r: (
         "This subagent is pinned to a non-fable model but its deliverable is prose/writing work. "
         f"{r.reasoning} All writing — docs, READMEs, release notes, any user-facing text — routes "
@@ -356,47 +257,7 @@ set_tool_input(
 )
 
 llm_nudge(
-    """Decide whether this delegated subagent should run on opus-4.8 instead of fable-5.
-
-<delegated_spawn> holds the pending Agent/Task call: its model pin (or that it inherits
-the session model, fable), agent type, and prompt.
-
-The Models rubric: implementation delegates to opus-4.8 at xhigh — opus is ~2x cheaper
-than fable and nearly as capable. Fable's lanes are orchestration, design/architecture
-review, hard planning, all prose/writing, and implementation that is very sensitive or
-error-prone (auth, migrations, concurrency, data loss, crypto, subtle algorithms).
-Code/diff review, security review/audit, and bug diagnosis have their own gpt-5.5
-lanes with separate nudges.
-
-Set fire=true only when the prompt is clearly routine implementation — building, fixing,
-wiring, or refactoring code — with no fable-lane signal. A prompt that reviews, plans,
-designs, diagnoses a bug, writes prose, or touches a sensitive surface is not an
-implementation prompt: fire=false. When uncertain, fire=false — the agent may have
-chosen fable deliberately, and a false alarm teaches it to ignore this nudge. Keep
-reasoning under 40 words.
-
-<examples>
-<example fire="true">
-Implement the pagination endpoint in api/users.py per the spec in the plan.
-Routine implementation with no sensitivity signal — the opus xhigh lane.
-</example>
-<example fire="true">
-Add a --json flag to the export command and thread it through the formatter.
-Well-scoped feature wiring; the default implementation lane.
-</example>
-<example fire="false">
-Review the diff for correctness and concurrency issues.
-Not implementation — review routes via its own nudge (gpt-5.5's lane), not to opus.
-</example>
-<example fire="false">
-Design the migration strategy for the sharded session store.
-Hard planning/design stays on fable.
-</example>
-<example fire="false">
-Implement the token-refresh race fix in the auth middleware.
-Auth plus concurrency: sensitive, error-prone implementation stays on fable.
-</example>
-</examples>""",
+    IMPLEMENTATION_SPAWN_NUDGE,
     message=lambda r: (
         f"This delegation would run on fable, but it reads as routine implementation. {r.reasoning} "
         "Implementation defaults to model='opus' + effort='xhigh' (~2x cheaper, nearly as capable); "
@@ -423,44 +284,7 @@ Auth plus concurrency: sensitive, error-prone implementation stays on fable.
 )
 
 llm_nudge(
-    """Decide whether the main agent should delegate this inline edit instead of making
-it itself.
-
-The main loop runs on fable-5; this pending edit is fable implementing directly.
-<edit_target> names the file; <before_edit>/<after_edit> hold the text being replaced
-and written.
-
-The Models rubric: implementation belongs to a delegated opus-4.8 subagent at xhigh —
-~2x cheaper than fable and nearly as capable — or, for a well-scoped edit to existing
-code, to gpt-5.5 via the codex skill. Fable edits inline when the change is small or
-judgment-bound: a fix-up finishing work it just reasoned through, a subtle algorithm,
-or a sensitive surface (auth, migrations, concurrency, data loss, crypto).
-
-Set fire=true only when this edit is clearly substantial routine implementation —
-building out a feature, wiring components, refactoring — that a subagent could own end
-to end. A small fix-up, a sensitive surface, or a change entangled with judgment the
-main agent just exercised stays inline: fire=false. When uncertain, fire=false — the
-agent may be editing inline deliberately, and a false alarm teaches it to ignore this
-nudge. Keep reasoning under 40 words.
-
-<examples>
-<example fire="true">
-after_edit: a new 180-line pagination module written to src/api/pagination.py.
-Substantial net-new feature code — a delegated opus xhigh subagent's lane.
-</example>
-<example fire="true">
-after_edit: rewiring three call sites and adding a formatter class in export.py.
-Routine multi-part refactor a subagent could own end to end.
-</example>
-<example fire="false">
-after_edit: a two-line fix to the retry counter the agent just diagnosed.
-Small fix-up entangled with judgment already exercised — inline is right.
-</example>
-<example fire="false">
-after_edit: reworking the token-refresh lock in auth/middleware.py.
-Auth plus concurrency is a sensitive surface — fable's inline lane.
-</example>
-</examples>""",
+    INLINE_EDIT_NUDGE,
     message=lambda r: (
         f"This inline edit reads as routine implementation on fable. {r.reasoning} "
         "Implementation delegates: spawn a model='opus', effort='xhigh' subagent to own the change, "
@@ -521,67 +345,7 @@ Auth plus concurrency is a sensitive surface — fable's inline lane.
 )
 
 llm_nudge(
-    """Decide whether this delegated subagent runs code review, a security review/audit
-or verification of security-sensitive code, or bug diagnosis that should route to
-gpt-5.5 instead of fable.
-
-<delegated_spawn> holds the pending Agent/Task call: its model pin (or that it inherits
-the session model, fable), agent type, and prompt.
-
-The Models rubric: code/diff review — sweeping a diff or codebase for bugs,
-correctness, or cleanups; finder and refuter passes over findings — security
-review/audit and verification of security-sensitive code (auth, input validation,
-crypto, secrets), and bug diagnosis route to gpt-5.5 via the codex skill; fable is
-the escalation target when gpt-5.5's output misses. Fable keeps design/architecture
-review, "is this the right approach" judgment, prose review, the synthesis/
-accept-reject pass over review findings — and security-sensitive implementation,
-which is not review.
-
-Set fire=true only when the prompt clearly reviews code or diffs for defects, audits
-or verifies security-sensitive code, or diagnoses a bug, and the spawn would run on
-fable. Design review, approach judgment,
-synthesis over findings, and prose review are fable's lanes: fire=false. When
-uncertain, fire=false — the agent may have chosen fable deliberately, and a false
-alarm teaches it to ignore this nudge. Keep reasoning under 40 words.
-
-<examples>
-<example fire="true">
-Review the diff for correctness and concurrency issues; report findings as JSON.
-Diff review for defects — gpt-5.5's lane via codex.
-</example>
-<example fire="true">
-Adversarially refute this finding: the retry loop double-increments the counter.
-A refuter pass over a code finding is review work.
-</example>
-<example fire="true">
-Diagnose why the exporter hangs when two workers flush concurrently.
-Bug diagnosis starts on gpt-5.5; fable is the escalation target.
-</example>
-<example fire="false">
-Judge these three sharding designs and recommend one.
-Design/architecture judgment is fable's lane.
-</example>
-<example fire="false">
-Synthesize the confirmed findings and decide which to fix before release.
-The accept-reject pass over findings stays on fable.
-</example>
-<example fire="false">
-Review the README draft for factual errors.
-Prose review stays on fable.
-</example>
-<example fire="true">
-Audit the session-token handling in auth/middleware.py for vulnerabilities.
-Security review/audit of code — gpt-5.5's lane via codex.
-</example>
-<example fire="true">
-Verify the new input-validation layer rejects path traversal and injection payloads.
-Verification of security-sensitive code routes to gpt-5.5.
-</example>
-<example fire="false">
-Implement mitigations for the security-audit findings in auth.py.
-Security-sensitive implementation, not review — the implementation lanes apply.
-</example>
-</examples>""",
+    REVIEW_ROUTING_SPAWN_NUDGE,
     message=lambda r: (
         f"This review/diagnosis delegation would run on fable. {r.reasoning} "
         "Code/diff review, security review/audit and verification of security-sensitive code, "
@@ -645,83 +409,7 @@ nudge(
 )
 
 llm_nudge(
-    """Decide whether this workflow script pins a non-fable model on a stage whose
-deliverable is prose.
-
-<workflow_script> holds the pending Workflow call's script source. Its header quotes
-an excerpt around every model pin in the script (… marks elided text) — a stage that is
-not quoted there carries no pin and inherits the session model, fable — already correctly routed, whatever it
-writes — followed by the sentences a clause prefilter matched: each asks a writing
-verb of a prose artifact, with negated asks ("do NOT edit CHANGELOG.md") already
-screened out. Your job is precision: does a PINNED stage have prose as its own
-deliverable? When the header ends with a '+N more model pins not excerpted' marker it
-was capped: absence from the header no longer proves a stage is unpinned — check the
-source before concluding a stage inherits fable.
-
-The Models rubric: all writing a user reads — READMEs, docs, changelogs, release
-notes, blog posts, announcements, any user-facing text — routes to fable. A stage's
-deliverable is prose when its agent() prompt asks it to write, draft, revise, or
-polish such an artifact.
-
-Prose means text a user will read as an artifact. A stage whose output is returned to
-the orchestrator — structured findings (file:line, severity, scenario), a PASS/FAIL or
-status report, or a verbatim relay of another tool's output — is a data deliverable, not
-prose, whatever writing verbs its prompt uses; writing a self-contained codex prompt
-writes tool input, not user-facing text. The rubric itself routes code/diff review,
-security audit, and diagnosis through model: 'sonnet', effort: 'low' stages that write a
-self-contained codex prompt and run the codex skill — those pins are mandated (a sibling
-nudge enforces them): fire=false.
-
-Set fire=true only when at least one agent() call both pins haiku/sonnet/opus and
-has prose as its deliverable. A prose stage with no pin of its own is fine, even
-when other stages pin opus. A prose keyword that appears as a constraint ("do NOT
-edit CHANGELOG.md"), an ownership note, a file the stage merely reads, a
-meta.description, or prose the orchestrator script assembles itself outside any
-pinned agent() call is not that stage's deliverable: fire=false. When uncertain,
-fire=false — a false alarm teaches the agent to ignore this nudge. Keep reasoning
-under 40 words and name the offending stage.
-
-<examples>
-<example fire="true">
-agent('Write the README quickstart section for the new CLI', {model: 'opus'})
-The stage's deliverable is README prose, pinned to opus.
-</example>
-<example fire="true">
-stages.push(agent(`Draft the docs-site page for ${feature}`, {model: 'sonnet'}))
-A docs page is user-facing prose; the pin is non-fable.
-</example>
-<example fire="false">
-agent('Fix the failing import in cli.py. Do NOT edit CHANGELOG.md — a sibling owns it', {model: 'opus'})
-CHANGELOG appears only as a constraint; the deliverable is a code fix.
-</example>
-<example fire="false">
-agent('Fix the CLI error handling', {label: 'fix:cli', model: 'opus'}) alongside
-agent('Reword the troubleshooting guide and CHANGELOG bullet', {label: 'fix:docs'})
-The prose stage carries no pin — it inherits fable; the opus pin is on code.
-</example>
-<example fire="false">
-meta: {description: 'verify the doc claims against actual behavior'}, then agent('run the test matrix', {model: 'opus'})
-"doc claims" lives in the description, not in any pinned stage's deliverable.
-</example>
-<example fire="false">
-agent('fix the three failing tests', {model: 'opus'}), then the script itself assembles CHANGELOG.md from the results
-The orchestrator writes the prose; the pinned stage only fixes tests.
-</example>
-<example fire="false">
-agent('Read docs/architecture.md and list the sections that are stale', {model: 'sonnet'})
-Reading and classifying docs is analysis, not a prose deliverable.
-</example>
-<example fire="false">
-agent(`You are a low-cost wrapper: run one codex (gpt-5.5) review via the codex skill and relay verbatim.
-Report file:line + severity + defect + concrete scenario. RETURN codex's findings verbatim prefixed "CODEX SAYS:"`,
-{label: 'review', model: 'sonnet', effort: 'low'})
-The codex-wrapper relay returns findings data to the orchestrator; this sonnet/low shape is the mandated review routing.
-</example>
-<example fire="false">
-agent('Run the smoke suite and RETURN a PASS/FAIL report with findings and git status', {model: 'opus'})
-A status report returned to the orchestrator is data for the caller, not user-facing prose.
-</example>
-</examples>""",
+    PROSE_WORKFLOW_NUDGE,
     message=lambda r: (
         f"This workflow script pins a non-fable model on a stage whose deliverable is prose. {r.reasoning} "
         "All writing — docs, READMEs, release notes, any user-facing text — routes to fable: inherit the "
@@ -753,53 +441,7 @@ A status report returned to the orchestrator is data for the caller, not user-fa
 )
 
 llm_nudge(
-    """Decide whether this workflow script runs code review or bug diagnosis stages on
-fable that should route to gpt-5.5.
-
-<workflow_script> holds the pending Workflow call's script source, headed by an
-excerpt around every model pin (… marks elided text) — a stage not quoted there
-carries no pin and inherits the session model, fable. When that header ends with a
-'+N more model pins not excerpted' marker it was capped: absence from the header no
-longer proves a stage is unpinned — check the source before concluding it inherits fable.
-
-The Models rubric: code/diff review stages — finder sweeps over a diff or codebase,
-adversarial refuters over findings — security review/audit stages and verification
-of security-sensitive code (auth, input validation, crypto, secrets), and bug
-diagnosis route to gpt-5.5 via the codex skill. A stage does that correctly when it
-pins model 'sonnet' at low effort and its prompt writes a self-contained codex prompt
-and runs the codex skill. Fable keeps the synthesis/accept-reject stage over findings
-and design/architecture judgment — and security-sensitive implementation, which is
-not review.
-
-Set fire=true only when at least one review or diagnosis stage would run on fable —
-unpinned, or pinned 'fable'. Stages already wrapped for codex, synthesis stages, and
-design judgment are routed right: fire=false. When uncertain, fire=false — a false
-alarm teaches the agent to ignore this nudge. Keep reasoning under 40 words and name
-the offending stage.
-
-<examples>
-<example fire="true">
-agent(`Sweep the diff for go-correctness issues; return findings as JSON`)
-An unpinned finder inherits fable; finder sweeps are the codex-wrapper lane.
-</example>
-<example fire="true">
-findings.map(f => agent(`Adversarially refute: ${f.title}`, {effort: 'max'}))
-Refuters over code findings inherit fable — route them through codex wrappers.
-</example>
-<example fire="false">
-agent(`Write a self-contained codex prompt reviewing this diff for correctness,
-then run the codex skill`, {model: 'sonnet', effort: 'low'})
-Already the codex wrapper — correctly routed.
-</example>
-<example fire="false">
-agent(`Synthesize the confirmed findings and decide which to fix`)
-Synthesis/accept-reject stays on fable.
-</example>
-<example fire="true">
-agent(`Audit the auth flow for injection and session-fixation issues; return findings as JSON`)
-An unpinned security audit inherits fable; security review/audit is the codex-wrapper lane.
-</example>
-</examples>""",
+    REVIEW_ROUTING_WORKFLOW_NUDGE,
     message=lambda r: (
         f"This workflow runs review/diagnosis stages on fable. {r.reasoning} "
         "Route finder, refuter, security-audit, and diagnosis stages to gpt-5.5: make each a model: 'sonnet', "
@@ -845,44 +487,7 @@ An unpinned security audit inherits fable; security review/audit is the codex-wr
 )
 
 llm_nudge(
-    """Decide whether this delegated subagent call delegates documentation or prose
-writing without directing the subagent to read the writing-docs skill.
-
-<delegated_spawn> holds the pending Agent/Task call: its model pin, agent type, and
-prompt, ending with the sentences a clause prefilter matched — each asks a writing verb
-of a prose artifact, with negated asks ("do NOT edit the docs") already screened out.
-
-You are watching an orchestrating agent spawn a subagent. Decide whether the pending
-prompt delegates documentation or prose writing — a README, docs page, CHANGELOG,
-tutorial, release notes, or similar deliverable — without directing the subagent to
-read the writing-docs skill. Restated style rules ('technical-builder voice', 'no hype
-adjectives', 'first person, confident') do not count as reading the skill; that
-paraphrase is exactly the failure to catch. Fire only when the prompt's deliverable is
-prose the writing-docs skill governs. Do not fire for code work that incidentally
-mentions a doc file, for reading or reviewing docs without writing them, or for a prompt
-that already tells the agent to read the skill or its references.
-
-When uncertain, fire=false — a false alarm teaches the agent to ignore this nudge. Keep
-reasoning under 40 words.
-
-<examples>
-<example fire="true">
-Rewrite the README for this repo. You are fable; technical-builder voice, no hype adjectives.
-README prose with the style rules paraphrased in place of the skill — the drift this catches.
-</example>
-<example fire="true">
-Draft the release notes for v2. Keep it first-person and confident, no marketing fluff.
-Release-notes prose; restated voice rules, no pointer to the writing-docs skill.
-</example>
-<example fire="false">
-Fix the failing test in cli.py; the README already documents the new flag.
-Code work that only mentions the README — no prose is produced.
-</example>
-<example fire="false">
-Rewrite the README, but read the doc-writing skill and its references first.
-Already directs the subagent to the skill — nothing to nudge.
-</example>
-</examples>""",
+    WRITING_DOCS_SPAWN_NUDGE,
     message=lambda r: (
         "This prompt delegates prose but paraphrases the writing rules instead of pointing at them. "
         f"{r.reasoning} A paraphrase drifts and silently overrides the skill — rewrite the prompt to "
@@ -918,44 +523,7 @@ Already directs the subagent to the skill — nothing to nudge.
 )
 
 llm_nudge(
-    """Decide whether this workflow script delegates documentation or prose writing to an
-agent() stage without directing that subagent to read the writing-docs skill.
-
-<workflow_script> holds the pending Workflow call's script source, headed by every line
-that pins a model, followed by the sentences a clause prefilter matched — each asks a
-writing verb of a prose artifact, with negated asks ("do NOT edit CHANGELOG.md") already
-screened out.
-
-Decide whether an agent() prompt delegates documentation or prose writing — a README,
-docs page, CHANGELOG, tutorial, release notes, or similar deliverable — without
-directing that subagent to read the writing-docs skill. Restated style rules
-('technical-builder voice', 'no hype adjectives', 'first person, confident') do not
-count as reading the skill; that paraphrase is exactly the failure to catch. Fire only
-when a stage's deliverable is prose the writing-docs skill governs. Do not fire for code
-work that incidentally mentions a doc file, for reading or reviewing docs without writing
-them, or for a stage that already tells its subagent to read the skill or its references.
-
-When uncertain, fire=false — a false alarm teaches the agent to ignore this nudge. Keep
-reasoning under 40 words and name the offending stage.
-
-<examples>
-<example fire="true">
-agent('Rewrite the README for the new CLI. Technical-builder voice, no hype adjectives', {model: 'opus'})
-The stage's deliverable is README prose with the style rules paraphrased in place of the skill.
-</example>
-<example fire="true">
-agent(`Draft the docs-site page for ${feature}. First-person, confident, no marketing fluff`)
-A docs page delegated with restated voice rules and no pointer to the writing-docs skill.
-</example>
-<example fire="false">
-agent('Fix the failing import in cli.py; the README already documents the flag', {model: 'opus'})
-Code work that only mentions the README — no prose is produced.
-</example>
-<example fire="false">
-agent('Rewrite the troubleshooting guide, but read the doc-writing skill and its references first')
-The stage already directs its subagent to the skill — nothing to nudge.
-</example>
-</examples>""",
+    WRITING_DOCS_WORKFLOW_NUDGE,
     message=lambda r: (
         "This workflow script delegates prose but paraphrases the writing rules instead of pointing at "
         f"them. {r.reasoning} A paraphrase drifts and silently overrides the skill — rewrite the offending "
