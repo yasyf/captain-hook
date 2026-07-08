@@ -10,37 +10,20 @@ from __future__ import annotations
 from captain_hook import (
     Allow,
     Ask,
-    BaseHookEvent,
-    CustomCondition,
     FromSubagent,
     Input,
+    McpTool,
     SkipPermissions,
     Tool,
     ToolInput,
     approve,
 )
-
-
-class McpTool(CustomCondition):
-    """Matches MCP-server tools (``mcp__<server>__<tool>``), which Tool() suffix-matching also accepts."""
-
-    def check(self, evt: BaseHookEvent) -> bool:
-        return bool(evt.tool_name) and evt.tool_name.startswith("mcp__")
-
+from captain_hook.primitives.permissions import DESTRUCTIVE_COMMANDS
 
 approve(
     "teammate bash under skip-permissions",
     only_if=[Tool("Bash"), ToolInput("command", r"[\s\S]"), FromSubagent(), SkipPermissions()],
-    skip_if=[
-        McpTool(),
-        ToolInput(
-            "command",
-            r"\b(rm|dd|shred|truncate|sudo|mkfs[.\w]*)\b"
-            r"|\bgit\s+(-[Cc]\s+\S+\s+|--?\S+\s+)*(reset|clean|restore)\b"
-            r"|\bgit\s+(-[Cc]\s+\S+\s+|--?\S+\s+)*push\b[^\n]*(\s--?force(-with-lease)?\b|\s--delete\b)"
-            r"|\b(curl|wget)\b[^|\n]*\|\s*((\S*/)?env\s+)?(\S*/)?(ba|z|da)?sh\b",
-        ),
-    ],
+    skip_if=[McpTool(), ToolInput("command", DESTRUCTIVE_COMMANDS)],
     tests={
         Input(command="python3 - <<'EOF'\nprint(1)\nEOF", agent_id="tm1", skip_permissions=True): Allow(explicit=True),
         Input(command="echo 'x = 1' > /tmp/conf.py", agent_id="tm1", skip_permissions=True): Allow(explicit=True),

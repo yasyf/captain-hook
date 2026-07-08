@@ -120,6 +120,8 @@ reference:
       - ReadFile
       - RanCommand
       - Runs
+      - ReadOnlyCommand
+      - McpTool
       - UsedSkill
       - InPlanMode
       - Waiting

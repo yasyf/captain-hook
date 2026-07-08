@@ -533,6 +533,40 @@ class Runs:
         object.__setattr__(self, "argv", argv)
 
 
+@dataclass(frozen=True, slots=True)
+class ReadOnlyCommand:
+    """Structural Bash condition: true when every command in the line only reads state.
+
+    Proves read-only-ness structurally rather than by regex. The line must carry no shell
+    substitution (``$(…)``, backticks, or process substitution), and every segment must be a
+    bare, allowlisted read-only program (``ls``, ``cat``, ``grep``, ``git log``, ``jj diff``, …)
+    with only safe redirects (``<``, or ``>`` to ``/dev/null``/``/dev/stdout``/``/dev/stderr``),
+    no environment prefix, and no privilege wrapper (``sudo``, ``doas``). Anything it cannot prove
+    read-only fails closed — a path-invoked binary, an unlisted program, or a write-capable flag
+    all fall through. Only relevant for Bash/Execute events.
+
+    Example:
+        >>> approve("read-only bash", only_if=[Tool("Bash"), ReadOnlyCommand()], skip_if=[McpTool()])
+    """
+
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class McpTool:
+    """Condition matching MCP-server tools, whose names are spelled ``mcp__<server>__<tool>``.
+
+    Most useful as a ``skip_if`` guard: :class:`Tool` suffix-matches MCP names (``Tool("Bash")``
+    also matches ``mcp__srv__Bash``), so pair it with ``skip_if=[McpTool()]`` to scope a hook to
+    the native tool alone.
+
+    Example:
+        >>> approve("read-only bash", only_if=[Tool("Bash"), ReadOnlyCommand()], skip_if=[McpTool()])
+    """
+
+    pass
+
+
 @dataclass(frozen=True)
 class ConditionList:
     """Container for a tuple of conditions; base class for combinators like ``Or``/``And``."""
@@ -643,6 +677,8 @@ TCondition = (
     | TouchedFile
     | RanCommand
     | Runs
+    | ReadOnlyCommand
+    | McpTool
     | InPlanMode
     | Waiting
     | Or

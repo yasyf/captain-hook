@@ -17,6 +17,13 @@ if TYPE_CHECKING:
 
     from captain_hook.events import BaseHookEvent
 
+DESTRUCTIVE_COMMANDS = (
+    r"\b(rm|dd|shred|truncate|sudo|mkfs[.\w]*)\b"
+    r"|\bgit\s+(-[Cc]\s+\S+\s+|--?\S+\s+)*(reset|clean|restore)\b"
+    r"|\bgit\s+(-[Cc]\s+\S+\s+|--?\S+\s+)*push\b[^\n]*(\s--?force(-with-lease)?\b|\s--delete\b)"
+    r"|\b(curl|wget)\b[^|\n]*\|\s*((\S*/)?env\s+)?(\S*/)?(ba|z|da)?sh\b"
+)
+
 
 class SafetyVerdict(BaseModel):
     """LLM response model for ``llm_approve``. The LLM sets ``safe=True`` to auto-approve."""

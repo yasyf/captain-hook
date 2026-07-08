@@ -30,11 +30,13 @@ from captain_hook.types import (
     FromSubagent,
     HookSpec,
     InPlanMode,
+    McpTool,
     Not,
     Or,
     Pattern,
     RanCommand,
     ReadFile,
+    ReadOnlyCommand,
     Runs,
     SkipPermissions,
     SourceEdits,
@@ -271,6 +273,75 @@ class TestCommandCondition:
         evt = make_tool_event("Bash", {"command": "uv run mtest run bioqa/"})
         assert check_condition(Command(r"mtest\s+run"), evt) is True
         assert check_condition(Command(r"git"), evt) is False
+
+
+class TestReadOnlyCommand:
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [
+            pytest.param(
+                "ls -la /Users/yasyf/.claude/tasks/session-0f5939c7/ | head -15; "
+                "echo ---; ls -la /Users/yasyf/.claude/tasks/session-49a624c9/",
+                True,
+                id="offending_multi_segment_ls",
+            ),
+            pytest.param("git -C . log --oneline && git status", True, id="git_C_log_and_status"),
+            pytest.param("grep -rn TODO src | sort | uniq -c | head", True, id="grep_sort_uniq_head"),
+            pytest.param("timeout 30 cat notes.txt 2>/dev/null", True, id="timeout_cat_devnull"),
+            pytest.param("find . -name '*.py' | wc -l", True, id="find_no_write_pipe_wc"),
+            pytest.param("jj log --no-pager", True, id="jj_log"),
+            pytest.param("git --no-pager log", True, id="git_leading_no_pager"),
+            pytest.param("uniq -c", True, id="uniq_flag_only"),
+            pytest.param("xargs cat", True, id="xargs_unwraps_to_cat"),
+            pytest.param("echo hi 2>&1", True, id="fd_dup_allowed"),
+            pytest.param("cat f > /dev/null", True, id="redirect_devnull_allowed"),
+            pytest.param("diff a b", True, id="diff_plain"),
+            pytest.param("echo $(rm -rf /)", False, id="command_substitution"),
+            pytest.param("cat `whoami`", False, id="backtick_substitution"),
+            pytest.param("diff <(ls) <(ls)", False, id="input_process_substitution"),
+            pytest.param("cat >(tee x)", False, id="output_process_substitution"),
+            pytest.param("sudo cat /etc/passwd", False, id="sudo_wrapper"),
+            pytest.param("FOO=bar ls", False, id="env_assignment_prefix"),
+            pytest.param("env LD_PRELOAD=/tmp/e.so ls", False, id="env_wrapper_poison"),
+            pytest.param("git -c core.pager='rm -rf /' log", False, id="git_config_injection"),
+            pytest.param("git log --output=/tmp/x", False, id="git_log_output_flag"),
+            pytest.param("git push origin main", False, id="git_push_not_read_only"),
+            pytest.param("cat f | tee out.txt", False, id="tee_not_allowlisted"),
+            pytest.param("/bin/ls", False, id="path_invoked_binary"),
+            pytest.param("fd -x rm .", False, id="fd_exec_flag"),
+            pytest.param("rg --pre=/tmp/evil foo", False, id="rg_pre_flag"),
+            pytest.param("sort -o f f", False, id="sort_output_flag"),
+            pytest.param("uniq input output", False, id="uniq_two_operand_write"),
+            pytest.param("rm -rf build", False, id="rm_not_allowlisted"),
+            pytest.param("echo x > /tmp/f", False, id="write_redirect_to_file"),
+            pytest.param("cat a >> log", False, id="append_redirect_to_file"),
+            pytest.param("cat a >| f", False, id="clobber_redirect"),
+            pytest.param("cat a >& f", False, id="fd_dup_to_file"),
+            pytest.param("(rm x)", False, id="subshell_recurses"),
+            pytest.param("if [ -f x ]; then rm x; fi", False, id="if_statement_recurses"),
+            pytest.param("f() { rm x; }; f", False, id="function_def_recurses"),
+            pytest.param("$FOO -la", False, id="variable_executable"),
+            pytest.param("", False, id="empty_string"),
+            pytest.param("# just a comment", False, id="comment_only"),
+            pytest.param("env", False, id="bare_env_empty_after_unwrap"),
+            pytest.param("jj op undo", False, id="jj_op_not_read_only"),
+        ],
+    )
+    def test_read_only(self, command: str, expected: bool) -> None:
+        assert check_condition(ReadOnlyCommand(), make_tool_event("Bash", {"command": command})) is expected
+
+    def test_read_only_ignores_non_tool_event(self) -> None:
+        assert check_condition(ReadOnlyCommand(), make_event(StopEvent)) is False
+
+    @pytest.mark.parametrize(
+        ("tool_name", "expected"),
+        [
+            pytest.param("mcp__srv__Bash", True, id="mcp_bash"),
+            pytest.param("Bash", False, id="native_bash"),
+        ],
+    )
+    def test_mcp_tool(self, tool_name: str, expected: bool) -> None:
+        assert check_condition(McpTool(), make_tool_event(tool_name, {"command": "ls"})) is expected
 
 
 class TestContentCondition:
