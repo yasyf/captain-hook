@@ -6,12 +6,14 @@ from dataclasses import dataclass
 from captain_hook import (
     Agent,
     Allow,
+    And,
     BaseHookEvent,
     Block,
     Clause,
     Event,
     FilePath,
     Input,
+    Not,
     Phrase,
     Prompt,
     Rewrite,
@@ -261,8 +263,8 @@ llm_nudge(
     message=lambda r: (
         f"This delegation would run on fable, but it reads as routine implementation. {r.reasoning} "
         "Implementation defaults to model='opus' + effort='xhigh' (~2x cheaper, nearly as capable); "
-        "a well-scoped edit to existing code can also go to gpt-5.5 via the codex skill behind a "
-        "model='sonnet' low-effort wrapper. Keep fable if this genuinely is sensitive or error-prone. "
+        "a well-scoped edit to existing code can also go to gpt-5.5: spawn the codex:codex-wrapper "
+        "agent with a self-contained prompt. Keep fable if this genuinely is sensitive or error-prone. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
     contexts=[DelegatedSpawn()],
@@ -270,7 +272,7 @@ llm_nudge(
     only_if=[Tool("Agent|Task")],
     skip_if=[
         ToolInput("model", r"(?i)\b(opus|sonnet|haiku)\b"),
-        Agent("Explore|claude-code-guide"),
+        Agent("Explore|claude-code-guide|codex-wrapper|codex:codex-wrapper"),
     ],
     agent=False,
     transcript=False,
@@ -280,6 +282,7 @@ llm_nudge(
         Input(model="opus", prompt="implement the pagination endpoint in api/users.py"): Allow(),
         Input(model="sonnet", prompt="scan the repo for TODO markers"): Allow(),
         Input(agent_type="Explore", prompt="find where the config loader lives"): Allow(),
+        Input(agent_type="codex:codex-wrapper", prompt="Apply the edit described here to utils/backoff.py"): Allow(),
     },
 )
 
@@ -349,9 +352,9 @@ llm_nudge(
     message=lambda r: (
         f"This review/diagnosis delegation would run on fable. {r.reasoning} "
         "Code/diff review, security review/audit and verification of security-sensitive code, "
-        "and bug diagnosis route to gpt-5.5: run the codex skill (from a "
-        "workflow or subagent, spawn a model='sonnet', effort='low' wrapper that writes a "
-        "self-contained codex prompt), and escalate to fable only when gpt-5.5's output misses. "
+        "and bug diagnosis route to gpt-5.5: spawn the codex:codex-wrapper agent with the "
+        "self-contained question as its prompt (from the main conversation, run the codex skill "
+        "directly), and escalate to fable only when gpt-5.5's output misses. "
         "Design review and findings synthesis stay on fable. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
@@ -366,8 +369,11 @@ llm_nudge(
         ),
     ],
     skip_if=[
-        ToolInput("model", r"(?i)\b(opus|sonnet|haiku)\b"),
-        Agent("Explore|claude-code-guide"),
+        And(
+            ToolInput("model", r"(?i)\b(opus|sonnet|haiku)\b"),
+            Not(ToolInput("prompt", r"(?i)\bcodex\b")),
+        ),
+        Agent("Explore|claude-code-guide|codex-wrapper|codex:codex-wrapper"),
     ],
     agent=False,
     transcript=False,
@@ -376,7 +382,13 @@ llm_nudge(
         Input(model="fable", prompt="Adversarially refute this finding: the retry loop is wrong"): Warn(
             pattern="codex"
         ),
-        Input(model="sonnet", prompt="Review the diff for correctness via the codex skill"): Allow(),
+        Input(model="sonnet", prompt="Review the diff for correctness via the codex skill"): Warn(
+            pattern="codex-wrapper"
+        ),
+        Input(
+            agent_type="codex:codex-wrapper", prompt="Review the diff for correctness; return findings as JSON"
+        ): Allow(),
+        Input(model="sonnet", prompt="Review the diff for correctness and concurrency"): Allow(),
         Input(prompt="fix the failing import in cli.py"): Allow(),
         Input(agent_type="Explore", prompt="find where the review pipeline lives"): Allow(),
         Input(
@@ -444,8 +456,8 @@ llm_nudge(
     REVIEW_ROUTING_WORKFLOW_NUDGE,
     message=lambda r: (
         f"This workflow runs review/diagnosis stages on fable. {r.reasoning} "
-        "Route finder, refuter, security-audit, and diagnosis stages to gpt-5.5: make each a model: 'sonnet', "
-        "effort: 'low' stage that writes a self-contained codex prompt and runs the codex skill; "
+        "Route finder, refuter, security-audit, and diagnosis stages to gpt-5.5: give each stage "
+        "agentType: 'codex:codex-wrapper' with the self-contained question as its prompt; "
         "keep the synthesis/accept-reject stage on fable (inherit the session model). "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
@@ -472,6 +484,10 @@ llm_nudge(
         Input(
             script="agent('Write a self-contained codex prompt reviewing this diff, "
             "then run the codex skill', {model: 'sonnet', effort: 'low'})",
+        ): Warn(pattern="codex-wrapper"),
+        Input(
+            script="agent(`Review the diff hunks in src/ for correctness; return findings as JSON`, "
+            "{agentType: 'codex:codex-wrapper'})",
             llm={"fire": False},
         ): Allow(),
         Input(script="agent('fix the failing import in cli.py')"): Allow(),

@@ -8,7 +8,8 @@ the session model, fable), agent type, and prompt.
 The Models rubric: code/diff review — sweeping a diff or codebase for bugs,
 correctness, or cleanups; finder and refuter passes over findings — security
 review/audit and verification of security-sensitive code (auth, input validation,
-crypto, secrets), and bug diagnosis route to gpt-5.5 via the codex skill; fable is
+crypto, secrets), and bug diagnosis route to gpt-5.5 via the codex-wrapper agent —
+spawn agent type 'codex:codex-wrapper' with the self-contained question; fable is
 the escalation target when gpt-5.5's output misses. Fable keeps design/architecture
 review, "is this the right approach" judgment, prose review, the synthesis/
 accept-reject pass over review findings — and security-sensitive implementation,
@@ -18,13 +19,14 @@ Set fire=true only when the prompt clearly reviews code or diffs for defects, au
 or verifies security-sensitive code, or diagnoses a bug, and the spawn would run on
 fable. Design review, approach judgment, synthesis over findings, and prose review
 are fable's lanes: fire=false. When uncertain, fire=false — the agent may have
-chosen fable deliberately, and a false alarm teaches it to ignore this nudge. Keep
-reasoning under 40 words.
+chosen fable deliberately, and a false alarm teaches it to ignore this nudge. A
+model-pinned spawn whose prompt runs the codex skill itself is the retired wrapper
+shape: fire=true. Keep reasoning under 40 words.
 
 <examples>
 <example fire="true">
 Review the diff for correctness and concurrency issues; report findings as JSON.
-Diff review for defects — gpt-5.5's lane via codex.
+Diff review for defects — gpt-5.5's lane via the codex-wrapper agent.
 </example>
 <example fire="true">
 Adversarially refute this finding: the retry loop double-increments the counter.
@@ -33,6 +35,10 @@ A refuter pass over a code finding is review work.
 <example fire="true">
 Diagnose why the exporter hangs when two workers flush concurrently.
 Bug diagnosis starts on gpt-5.5; fable is the escalation target.
+</example>
+<example fire="true">
+You are a low-cost wrapper: write a self-contained codex prompt reviewing this diff, then run the codex skill.
+The retired wrapper shape — spawn the codex:codex-wrapper agent with the question instead.
 </example>
 <example fire="false">
 Judge these three sharding designs and recommend one.
@@ -48,7 +54,7 @@ Prose review stays on fable.
 </example>
 <example fire="true">
 Audit the session-token handling in auth/middleware.py for vulnerabilities.
-Security review/audit of code — gpt-5.5's lane via codex.
+Security review/audit of code — gpt-5.5's lane via the codex-wrapper agent.
 </example>
 <example fire="true">
 Verify the new input-validation layer rejects path traversal and injection payloads.

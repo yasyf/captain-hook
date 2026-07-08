@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.13.0] - 2026-07-08
 
+### Changed
+- **General-pack codex routing targets the codex-wrapper agent.** The
+  implementation and review-routing nudges (and their judge rubrics) now steer
+  delegated codex runs to the `codex:codex-wrapper` agent — `agentType:
+  'codex:codex-wrapper'` on workflow stages, `subagent_type` on Agent/Task
+  spawns, prompt = the self-contained question — retiring the model 'sonnet'
+  stage/spawn that "runs the codex skill" (that shape now fires the nudges; the
+  codex skill stays the main-conversation lane, and runs inline everywhere since
+  codex plugin 0.10.0). The deliverable-rubric fragment and worked examples
+  score the new shape compliant, and codex-wrapper spawns are skip-listed on
+  the spawn-side nudges. General pack bumped to 0.16.0.
+
 ### Fixed
 - **`framework_frame` resolves frame paths before classifying.** `caller_dir()`
   compared raw `co_filename` spellings against `FRAMEWORK_DIR`, so a symlinked
