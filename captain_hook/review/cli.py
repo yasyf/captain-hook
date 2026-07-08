@@ -199,8 +199,6 @@ def triage(limit: int | None) -> None:
     )
     for split in splits:
         click.echo(f"possible split: {split.key_a} ~ {split.key_b} ({split.similarity:.2f})")
-    if report.purged > 0:
-        click.echo(f"purged {report.purged} stale verdicts")
 
 
 @review.command(name="status")

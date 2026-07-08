@@ -15,7 +15,7 @@ from cc_transcript.ids import SessionId, ToolDigest, tool_digest
 from cc_transcript.judge import canonical_slug
 from cc_transcript.mining.candidates import DedupKey
 
-from captain_hook.review.judge import DURABLE_CATEGORIES, FIX_CATEGORIES, ReviewVerdict
+from captain_hook.review.judge import DURABLE_CATEGORIES, ReviewVerdict
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -67,13 +67,14 @@ async def inject_verdict(
     slug: str | None = None,
 ) -> None:
     rule_slug = slug if slug is not None else (canonical_slug(category) if category in DURABLE_CATEGORIES else None)
+    cur = await store.store.conn.execute("SELECT source_kind FROM feedback_events WHERE dedup_key = ?", (dedup_key,))
     await store.record_verdict(
         DedupKey(dedup_key),
         ReviewVerdict(
             category=category, summary="injected", confidence=confidence, rationale="injected", rule_slug=rule_slug
         ),
         role="judge",
-        prompt_version=store.versions.fix if category in FIX_CATEGORIES else store.versions.create,
+        prompt_version=store.versions.for_row(await cur.fetchone()),
         model=model,
         fidelity=fidelity,  # type: ignore[arg-type]
     )

@@ -308,13 +308,13 @@ class TestJudgePass:
         calls = install_judge(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
         report = await judge_pass(store, settings=settings)
-        assert report == JudgeReport(judged=2, failed=0, pending=0, merged=2, retired=0, purged=0)
+        assert report == JudgeReport(judged=2, failed=0, pending=0, merged=2, retired=0)
         assert len(calls) == 2
         judged = await store.judged(role=JUDGE_ROLE, prompt_version=store.versions.create)
         assert {bool(row["accepted"]) for row in judged} == {True}
         assert {str(row["model"]) for row in judged} == {resolved_model(settings.judge_tier)}
         assert await judge_pass(store, settings=settings) == JudgeReport(
-            judged=0, failed=0, pending=0, merged=0, retired=0, purged=0
+            judged=0, failed=0, pending=0, merged=0, retired=0
         )
         assert len(calls) == 2
 
@@ -326,11 +326,11 @@ class TestJudgePass:
         calls = install_judge(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
         assert await judge_pass(store, settings=settings) == JudgeReport(
-            judged=1, failed=0, pending=1, merged=1, retired=0, purged=0
+            judged=1, failed=0, pending=1, merged=1, retired=0
         )
         assert len(calls) == 1
         assert await judge_pass(store, settings=settings) == JudgeReport(
-            judged=1, failed=0, pending=0, merged=1, retired=0, purged=0
+            judged=1, failed=0, pending=0, merged=1, retired=0
         )
 
     @requires_llm_backend
@@ -341,7 +341,7 @@ class TestJudgePass:
         calls = install_judge(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
         assert await judge_pass(store, settings=settings, limit=2) == JudgeReport(
-            judged=2, failed=0, pending=0, merged=2, retired=0, purged=0
+            judged=2, failed=0, pending=0, merged=2, retired=0
         )
         assert len(calls) == 2
 
@@ -354,7 +354,7 @@ class TestJudgePass:
             "synthetic", 1.0, [synthetic("structural junk", noise("bare_marker")), synthetic(CORRECTION, firm())]
         )
         assert await judge_pass(store, settings=settings) == JudgeReport(
-            judged=1, failed=0, pending=0, merged=0, retired=0, purged=0
+            judged=1, failed=0, pending=0, merged=0, retired=0
         )
         assert len(calls) == 1
         assert "structural junk" not in calls[0]
@@ -368,11 +368,11 @@ class TestJudgePass:
         install_judge(monkeypatch, fail_on=f"FEEDBACK TO CLASSIFY ===\n{SECOND_CORRECTION}")
         await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
         assert await judge_pass(store, settings=settings) == JudgeReport(
-            judged=1, failed=1, pending=1, merged=1, retired=0, purged=0
+            judged=1, failed=1, pending=1, merged=1, retired=0
         )
         install_judge(monkeypatch)
         assert await judge_pass(store, settings=settings) == JudgeReport(
-            judged=1, failed=0, pending=0, merged=1, retired=0, purged=0
+            judged=1, failed=0, pending=0, merged=1, retired=0
         )
 
     @requires_llm_backend
@@ -392,7 +392,7 @@ class TestJudgePass:
         monkeypatch.setattr("cc_transcript.judge.similar.default_embedder", lambda: lambda text: text)
         monkeypatch.setattr(ReviewStore, "has_verdict_evidence", has_evidence)
         assert await judge_pass(store, settings=settings) == JudgeReport(
-            judged=0, failed=1, pending=1, merged=0, retired=0, purged=0
+            judged=0, failed=1, pending=1, merged=0, retired=0
         )
         assert [row["text"] for row in await store.unjudged(role=JUDGE_ROLE, prompt_version=store.versions.create)] == [
             CORRECTION
@@ -421,28 +421,9 @@ class TestJudgePass:
         await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
         assert not await store.has_verdict_evidence()
         assert await judge_pass(store, settings=settings) == JudgeReport(
-            judged=2, failed=0, pending=0, merged=2, retired=0, purged=0
+            judged=2, failed=0, pending=0, merged=2, retired=0
         )
         assert loads == [None]
-
-    async def test_closing_sweep_purges_stale_version_verdicts_and_keeps_live_rows(
-        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        install_fake_embedder(monkeypatch)
-        install_judge(monkeypatch)
-        await seed_corrections(store, settings, tmp_path, [CORRECTION])
-        await store.record_verdict(
-            dedup_key("transcript_message", "s1", CORRECTION),
-            Verdict(canonical_key="prefer-uv-over-pip", summary="always use uv"),
-            role=JUDGE_ROLE,
-            prompt_version=store.versions.create - 1,
-            model="m1",
-            fidelity="full",
-        )
-        report = await judge_pass(store, settings=settings)
-        assert report.purged == 1
-        cur = await store.store.conn.execute("SELECT prompt_version FROM verdicts ORDER BY id")
-        assert [int(row["prompt_version"]) async for row in cur] == [store.versions.create]
 
     async def test_persists_each_lane_at_its_bound_version(
         self, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -648,7 +629,7 @@ class TestFidelity:
         calls = install_judge(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION])
         assert await judge_pass(store, settings=settings) == JudgeReport(
-            judged=1, failed=0, pending=0, merged=1, retired=0, purged=0
+            judged=1, failed=0, pending=0, merged=1, retired=0
         )
         assert await verdict_fidelities(store) == ["full"]
         assert SUMMARY_LABEL not in calls[0]
@@ -666,7 +647,7 @@ class TestFidelity:
         await seed_corrections(store, settings, tmp_path, [CORRECTION])
         (tmp_path / "s1.jsonl").unlink()
         assert await judge_pass(store, settings=settings) == JudgeReport(
-            judged=1, failed=0, pending=0, merged=1, retired=0, purged=0
+            judged=1, failed=0, pending=0, merged=1, retired=0
         )
         assert await verdict_fidelities(store) == ["summary"]
         assert SUMMARY_LABEL in calls[0]
@@ -685,20 +666,20 @@ class TestFidelity:
         content = transcript.read_text()
         transcript.unlink()
         assert await judge_pass(store, settings=settings) == JudgeReport(
-            judged=1, failed=0, pending=0, merged=1, retired=0, purged=0
+            judged=1, failed=0, pending=0, merged=1, retired=0
         )
         assert await verdict_fidelities(store) == ["summary"]
         assert await judge_pass(store, settings=settings) == JudgeReport(
-            judged=0, failed=0, pending=0, merged=0, retired=0, purged=0
+            judged=0, failed=0, pending=0, merged=0, retired=0
         )
         transcript.write_text(content)
         assert await judge_pass(store, settings=settings, refresh_summary=True) == JudgeReport(
-            judged=1, failed=0, pending=0, merged=0, retired=0, purged=0
+            judged=1, failed=0, pending=0, merged=0, retired=0
         )
         assert await verdict_fidelities(store) == ["full"]
         assert len(calls) == 2
         assert await judge_pass(store, settings=settings, refresh_summary=True) == JudgeReport(
-            judged=0, failed=0, pending=0, merged=0, retired=0, purged=0
+            judged=0, failed=0, pending=0, merged=0, retired=0
         )
 
 

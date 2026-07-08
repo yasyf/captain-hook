@@ -45,21 +45,16 @@ Judges stored corrections lacking an LLM verdict at their taxonomy's current pro
 version (manual/backfill path; the detached child already runs this per session).
 The CREATE and FIX prompts version independently, so bumping one never re-judges the
 other lane. `--limit` overrides the per-session call cap. Prints one report line,
-then one line per near-duplicate slug pair the pass surfaced, then a purge line when
-the closing sweep deleted anything:
+then one line per near-duplicate slug pair the pass surfaced:
 
 ```
 judged N, failed N, pending N, merged M, retired R
 possible split: <slug-a> ~ <slug-b> (0.93)
-purged P stale verdicts
 ```
 
 `merged` counts observations the closing regroup re-parented onto their canonical slug
 candidate; `retired` counts watching create candidates it rejected (every observation
-judged, none accepted). Failed rows stay pending and retry next pass. The purge line
-appears only when nonzero. Each pass's closing sweep deletes verdicts and their
-slug-suggestion evidence once a prompt bump strands them at a version their lane no
-longer runs, so the count spikes once after a bump and then falls silent. Each `possible
+judged, none accepted). Failed rows stay pending and retry next pass. Each `possible
 split` line names two canonical slugs whose evidence nearly coincides — the judge may
 have minted two names for one rule — with their cosine similarity; nothing merges
 automatically.

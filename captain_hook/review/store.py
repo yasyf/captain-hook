@@ -14,7 +14,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from itertools import zip_longest
+from hashlib import sha256
 from typing import TYPE_CHECKING, Self
 
 from cc_transcript.judge.verdicts import VerdictStoreMixin
@@ -23,6 +23,7 @@ from cc_transcript.mining.store import FEEDBACK_DDL, FeedbackStore, now
 from cc_transcript.store import FileStateStore
 
 from captain_hook.review.fix import HOOK_COMPLAINT
+from captain_hook.review.prompts import CREATE_TEMPLATE, FIX_TEMPLATE
 from captain_hook.review.repo import RepoKey
 
 if TYPE_CHECKING:
@@ -65,12 +66,10 @@ class CandidateKind(StrEnum):
 class PromptVersions:
     """The judge's per-taxonomy prompt versions — one per candidate kind.
 
-    Bump ``create`` when :func:`~captain_hook.review.judge.build_create_prompt`
-    changes meaningfully and ``fix`` when
-    :func:`~captain_hook.review.judge.build_fix_prompt` does. A bump invalidates
-    that lane's verdicts — the next pass lazily re-judges the lane at full
-    fidelity — and :meth:`ReviewStore.purge_stale_verdicts` sweeps the orphaned
-    rows the lane no longer runs.
+    Each version is a content hash of that lane's static prompt template, so
+    editing a template is its own version bump: the old verdicts fall out of the
+    lane's version, the next pass lazily re-judges it at full fidelity, and
+    :meth:`ReviewStore.open` sweeps the orphaned rows the lane no longer runs.
 
     Attributes:
         create: The prompt version for CREATE-taxonomy durable-correction rows.
@@ -93,7 +92,11 @@ class PromptVersions:
         return self.fix if str(row["source_kind"]) == HOOK_COMPLAINT else self.create
 
 
-PROMPT_VERSIONS = PromptVersions(create=3, fix=3)
+def prompt_version(template: str) -> int:
+    return int(sha256(template.encode()).hexdigest()[:8], 16)
+
+
+PROMPT_VERSIONS = PromptVersions(create=prompt_version(CREATE_TEMPLATE), fix=prompt_version(FIX_TEMPLATE))
 
 
 class CandidateStatus(StrEnum):
@@ -245,8 +248,13 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
 
     @classmethod
     async def open(cls, path: Path, *, versions: PromptVersions = PROMPT_VERSIONS) -> Self:
-        """Opens (creating if needed) the review database at ``path`` under ``versions``."""
-        return cls(
+        """Opens the review database at ``path`` under ``versions``, self-healing stale verdicts.
+
+        Creates the schema if needed, then sweeps any verdict rows recorded at a
+        version their lane no longer runs — the single purge codepath, so
+        ``list``/``show``/``status``/``threshold-check`` never count orphans.
+        """
+        store = cls(
             await FileStateStore.open(
                 path,
                 extra_schema=FEEDBACK_DDL
@@ -304,6 +312,8 @@ CREATE TABLE IF NOT EXISTS spawn_runs (
             ),
             versions,
         )
+        await store.purge_stale_verdicts()
+        return store
 
     async def enable(self, repo: RepoKey) -> None:
         """Marks ``repo`` watched, allowing its candidates to become eligible."""
@@ -781,22 +791,16 @@ SELECT
     async def judge_queue(self, *, refresh_summary: bool = False) -> list[dict[str, object]]:
         """Returns the rows one judge pass judges, each under its taxonomy's bound version.
 
-        When both lanes carry the same version, one :meth:`unjudged` call yields
-        the whole queue in event order. When the versions diverge, each lane is
-        fetched at its own version and post-filtered to its taxonomy — the
-        create-version call keeps every non-``hook_complaint`` row, the fix-version
-        call keeps the ``hook_complaint`` rows — and the lanes interleave
-        round-robin, each call's internal order preserved, so one lane's
-        post-bump backlog never starves the other under the per-session cap.
+        Each lane is fetched at its own version and post-filtered to its
+        taxonomy — the create-version call keeps every non-``hook_complaint`` row,
+        the fix-version call keeps the ``hook_complaint`` rows — then the two
+        concatenate create-then-fix, each call's event order preserved, capped
+        per session by the judge pass.
 
         Args:
             refresh_summary: When True, also re-yields summary-fidelity rows for a
                 full-fidelity re-judge once their windows hydrate again.
         """
-        if self.versions.create == self.versions.fix:
-            return await self.unjudged(
-                role="judge", prompt_version=self.versions.create, refresh_summary=refresh_summary
-            )
         create_lane = [
             row
             for row in await self.unjudged(
@@ -811,7 +815,7 @@ SELECT
             )
             if str(row["source_kind"]) == HOOK_COMPLAINT
         ]
-        return [row for pair in zip_longest(create_lane, fix_lane) for row in pair if row is not None]
+        return create_lane + fix_lane
 
     async def judge_backlog(self) -> int:
         """Counts judge-worthy corrections still lacking a verdict at their lane's bound version.
@@ -858,9 +862,9 @@ SELECT
     async def purge_stale_verdicts(self) -> int:
         """Deletes verdict and evidence rows recorded at a version their lane no longer runs.
 
-        The only verdict-delete codepath, run at the close of each judge pass: a
-        lane bumped past its recorded version orphans that lane's verdicts, and
-        this sweeps them lane-aware — a ``hook_complaint`` verdict is stale unless
+        The only verdict-delete codepath, run once on :meth:`open`: an edited
+        prompt template moves its lane's hash version, orphaning that lane's
+        verdicts, and this sweeps them lane-aware — a ``hook_complaint`` verdict is stale unless
         it carries the fix version, every other verdict is stale unless it carries
         the create version (so with ``create=4 fix=3`` the stale create rows at 3
         die while the live fix rows at 3 survive). Only the judge role's rows are

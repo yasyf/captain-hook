@@ -12,15 +12,18 @@ from cc_transcript.mining.candidates import DedupKey
 from cc_transcript.mining.confidence import MEDIUM, VERY_HIGH, CandidateSignal, Confidence, to_payload
 from cc_transcript.mining.sourcekind import SourceKind
 
+from captain_hook.review.prompts import CREATE_TEMPLATE, FIX_TEMPLATE
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import (
+    PROMPT_VERSIONS,
     TRANSITIONS,
     CandidateKind,
     CandidateStatus,
     InvalidTransition,
     PromptVersions,
     ReviewStore,
+    prompt_version,
 )
 from tests.review_helpers import Verdict
 
@@ -492,7 +495,15 @@ class TestFixEligibility:
     ) -> None:
         await store.enable(REPO)
         candidate_id = await fix_candidate(store)
-        await seed(store, candidate_id, "k0", session="s0", occurred="2026-06-01T10:00:00+00:00", heuristic=heuristic)
+        await seed(
+            store,
+            candidate_id,
+            "k0",
+            session="s0",
+            occurred="2026-06-01T10:00:00+00:00",
+            heuristic=heuristic,
+            source_kind="hook_complaint",
+        )
         if accepted is not None:
             await judge(store, "k0", accepted=accepted, confidence=judge_confidence)
         status = await store.threshold_status(candidate_id, settings=settings)
@@ -506,7 +517,13 @@ class TestFixEligibility:
         candidate_id = await fix_candidate(store)
         for i in range(2):
             await seed(
-                store, candidate_id, f"k{i}", session=f"s{i}", occurred=f"2026-06-01T1{i}:00:00+00:00", heuristic=MEDIUM
+                store,
+                candidate_id,
+                f"k{i}",
+                session=f"s{i}",
+                occurred=f"2026-06-01T1{i}:00:00+00:00",
+                heuristic=MEDIUM,
+                source_kind="hook_complaint",
             )
             await judge(store, f"k{i}")
         status = await store.threshold_status(candidate_id, settings=settings)
@@ -520,7 +537,13 @@ class TestFixEligibility:
         candidate_id = await fix_candidate(store)
         for i in range(2):
             await seed(
-                store, candidate_id, f"k{i}", session="s0", occurred=f"2026-06-01T1{i}:00:00+00:00", heuristic=MEDIUM
+                store,
+                candidate_id,
+                f"k{i}",
+                session="s0",
+                occurred=f"2026-06-01T1{i}:00:00+00:00",
+                heuristic=MEDIUM,
+                source_kind="hook_complaint",
             )
             await judge(store, f"k{i}")
         status = await store.threshold_status(candidate_id, settings=settings)
@@ -530,7 +553,15 @@ class TestFixEligibility:
     async def test_cap_applies_to_fix_candidates(self, store: ReviewStore, settings: ReviewSettings) -> None:
         await store.enable(REPO)
         candidate_id = await fix_candidate(store)
-        await seed(store, candidate_id, "k0", session="s0", occurred="2026-06-01T10:00:00+00:00", heuristic=VERY_HIGH)
+        await seed(
+            store,
+            candidate_id,
+            "k0",
+            session="s0",
+            occurred="2026-06-01T10:00:00+00:00",
+            heuristic=VERY_HIGH,
+            source_kind="hook_complaint",
+        )
         await judge(store, "k0")
         await open_pr(store, rule="other-a", opened_at=datetime.now(UTC))
         await open_pr(store, rule="other-b", opened_at=datetime.now(UTC))
@@ -684,7 +715,8 @@ class TestPerLaneVersions:
         await judge(store, "kf")
         create_id = await eligible_create_candidate(store)
 
-        async with await ReviewStore.open(tmp_path / "review.db", versions=PromptVersions(create=4, fix=3)) as lanes:
+        bumped_create = PromptVersions(create=store.versions.create + 1, fix=store.versions.fix)
+        async with await ReviewStore.open(tmp_path / "review.db", versions=bumped_create) as lanes:
             fix_status = await lanes.threshold_status(fix_id, settings=settings)
             assert fix_status.single_observation is True
             assert await lanes.eligible(fix_id, settings=settings) is True
@@ -699,7 +731,7 @@ class TestPerLaneVersions:
             assert (live.sessions, live.days) == (3, 2)
             assert await lanes.eligible(create_id, settings=settings) is True
 
-    async def test_divergent_lanes_interleave_in_judge_queue(self, store: ReviewStore, tmp_path: Path) -> None:
+    async def test_judge_queue_concatenates_create_then_fix(self, store: ReviewStore) -> None:
         for key in ("ka", "kb", "kc"):
             candidate_id = await create_candidate(store, rule=digest_rule(key))
             await seed(store, candidate_id, key, session="s0", occurred="2026-06-01T10:00:00+00:00")
@@ -712,16 +744,15 @@ class TestPerLaneVersions:
             occurred="2026-06-01T11:00:00+00:00",
             source_kind="hook_complaint",
         )
-
-        async with await ReviewStore.open(tmp_path / "review.db", versions=PromptVersions(create=4, fix=3)) as lanes:
-            assert [str(row["dedup_key"]) for row in await lanes.judge_queue()] == ["ka", "kh", "kb", "kc"]
+        assert [str(row["dedup_key"]) for row in await store.judge_queue()] == ["ka", "kb", "kc", "kh"]
 
     async def test_judge_health_recency_is_lane_exact(self, store: ReviewStore, tmp_path: Path) -> None:
         candidate_id = await create_candidate(store, rule=digest_rule("ka"))
         await seed(store, candidate_id, "ka", session="s0", occurred="2026-06-01T10:00:00+00:00")
         await judge(store, "ka")
 
-        async with await ReviewStore.open(tmp_path / "review.db", versions=PromptVersions(create=4, fix=3)) as bumped:
+        bumped_both = PromptVersions(create=store.versions.create + 1, fix=store.versions.fix + 1)
+        async with await ReviewStore.open(tmp_path / "review.db", versions=bumped_both) as bumped:
             assert (await bumped.judge_health()).last_verdict_at is None
             complaint_id = await fix_candidate(bumped)
             await seed(
@@ -736,26 +767,42 @@ class TestPerLaneVersions:
             assert (await bumped.judge_health()).last_verdict_at is not None
 
 
-class TestPurgeStaleVerdicts:
-    async def test_deletes_stale_version_rows_and_spares_live(self, store: ReviewStore, tmp_path: Path) -> None:
-        for i, key in enumerate(("ka", "kb")):
-            candidate_id = await create_candidate(store, rule=digest_rule(key))
-            await seed(store, candidate_id, key, session=f"s{i}", occurred="2026-06-01T10:00:00+00:00")
-            await judge(store, key)
+class TestHashVersions:
+    def test_versions_derive_from_prompt_templates_and_the_lanes_differ(self) -> None:
+        assert PROMPT_VERSIONS.create == prompt_version(CREATE_TEMPLATE)
+        assert PROMPT_VERSIONS.fix == prompt_version(FIX_TEMPLATE)
+        assert PROMPT_VERSIONS.create != PROMPT_VERSIONS.fix
 
-        async with await ReviewStore.open(tmp_path / "review.db", versions=PromptVersions(create=4, fix=3)) as bumped:
-            for key in ("ka", "kb"):
-                await judge(bumped, key)
-            before = {(str(r["dedup_key"]), int(r["prompt_version"])) for r in await dump_table(bumped, "verdicts")}
-            assert before == {("ka", 3), ("ka", 4), ("kb", 3), ("kb", 4)}
-            assert await bumped.purge_stale_verdicts() == 2
-            after = {(str(r["dedup_key"]), int(r["prompt_version"])) for r in await dump_table(bumped, "verdicts")}
-            assert after == {("ka", 4), ("kb", 4)}
 
-    async def test_purge_spares_other_roles(self, store: ReviewStore, tmp_path: Path) -> None:
+class TestOpenPurgesStaleVerdicts:
+    async def test_open_deletes_stale_version_rows_and_spares_live(self, store: ReviewStore, tmp_path: Path) -> None:
         candidate_id = await create_candidate(store, rule=digest_rule("ka"))
         await seed(store, candidate_id, "ka", session="s0", occurred="2026-06-01T10:00:00+00:00")
-        await judge(store, "ka")
+        for version in (store.versions.create, store.versions.create - 1):
+            await store.record_verdict(
+                DedupKey("ka"),
+                Verdict(accepted=True, confidence=0.9, canonical_key=None),
+                role="judge",
+                prompt_version=version,
+                model="m1",
+                fidelity="full",
+            )
+
+        async with await ReviewStore.open(tmp_path / "review.db") as reopened:
+            after = {(str(r["dedup_key"]), int(r["prompt_version"])) for r in await dump_table(reopened, "verdicts")}
+            assert after == {("ka", store.versions.create)}
+
+    async def test_open_spares_other_roles(self, store: ReviewStore, tmp_path: Path) -> None:
+        candidate_id = await create_candidate(store, rule=digest_rule("ka"))
+        await seed(store, candidate_id, "ka", session="s0", occurred="2026-06-01T10:00:00+00:00")
+        await store.record_verdict(
+            DedupKey("ka"),
+            Verdict(accepted=True, confidence=0.9, canonical_key=None),
+            role="judge",
+            prompt_version=store.versions.create - 1,
+            model="m1",
+            fidelity="full",
+        )
         await store.record_verdict(
             DedupKey("ka"),
             Verdict(accepted=True, confidence=0.9, canonical_key=None),
@@ -765,12 +812,11 @@ class TestPurgeStaleVerdicts:
             fidelity="full",
         )
 
-        async with await ReviewStore.open(tmp_path / "review.db", versions=PromptVersions(create=4, fix=3)) as bumped:
-            assert await bumped.purge_stale_verdicts() == 1
-            after = {(str(r["role"]), int(r["prompt_version"])) for r in await dump_table(bumped, "verdicts")}
+        async with await ReviewStore.open(tmp_path / "review.db") as reopened:
+            after = {(str(r["role"]), int(r["prompt_version"])) for r in await dump_table(reopened, "verdicts")}
             assert after == {("auditor", 1)}
 
-    async def test_purge_is_lane_aware_between_create_and_fix(self, store: ReviewStore, tmp_path: Path) -> None:
+    async def test_open_purge_is_lane_aware_between_create_and_fix(self, store: ReviewStore, tmp_path: Path) -> None:
         correction_id = await create_candidate(store, rule="corr-rule")
         await seed(store, correction_id, "kc", session="s0", occurred="2026-06-01T10:00:00+00:00")
         complaint_id = await fix_candidate(store)
@@ -782,10 +828,16 @@ class TestPurgeStaleVerdicts:
             occurred="2026-06-01T10:00:00+00:00",
             source_kind="hook_complaint",
         )
-        await judge(store, "kc")
-        await judge(store, "kh")
+        for key in ("kc", "kh"):
+            await store.record_verdict(
+                DedupKey(key),
+                Verdict(accepted=True, confidence=0.9, canonical_key=None),
+                role="judge",
+                prompt_version=store.versions.create,
+                model="m1",
+                fidelity="full",
+            )
 
-        async with await ReviewStore.open(tmp_path / "review.db", versions=PromptVersions(create=4, fix=3)) as bumped:
-            assert await bumped.purge_stale_verdicts() == 1
-            after = {(str(r["dedup_key"]), int(r["prompt_version"])) for r in await dump_table(bumped, "verdicts")}
-            assert after == {("kh", 3)}
+        async with await ReviewStore.open(tmp_path / "review.db") as reopened:
+            after = {(str(r["dedup_key"]), int(r["prompt_version"])) for r in await dump_table(reopened, "verdicts")}
+            assert after == {("kc", store.versions.create)}
