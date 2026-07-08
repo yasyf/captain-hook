@@ -1,8 +1,9 @@
 """Structural proof that a Bash command line only reads — never mutates — state.
 
 Backs the public ``ReadOnlyCommand`` condition: a line passes only when it carries no
-shell substitution anywhere in its raw text and every segment is a bare, allowlisted
-read-only program with safe redirects, no environment prefix, and no privilege wrapper.
+shell expansion anywhere in its raw text (``$``, backticks, braces, process
+substitution) and every segment's literal executable — wrappers included — is a bare,
+allowlisted read-only program with safe redirects and no environment prefix.
 Anything it cannot prove read-only fails closed.
 """
 
@@ -14,7 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from cc_transcript.command import Command, CommandLine, Redirect
 
-SUBSTITUTION = re.compile(r"`|\$\(|<\(|>\(")
+UNSAFE_EXPANSION = re.compile(r"[`${]|<\(|>\(")
 EXECUTABLE = re.compile(r"[A-Za-z0-9][\w.+-]*")
 SAFE_REDIRECT_TARGETS = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr"})
 
@@ -26,7 +27,7 @@ READ_ONLY_COMMANDS: dict[str, tuple[str, ...]] = {
     "wc": (),
     "pwd": (),
     "echo": (),
-    "printf": (),
+    "printf": (r"^-v",),
     "grep": (),
     "true": (),
     "false": (),
@@ -44,7 +45,6 @@ READ_ONLY_COMMANDS: dict[str, tuple[str, ...]] = {
     "uname": (),
     "id": (),
     "whoami": (),
-    "hostname": (),
     "groups": (),
     "ps": (),
     "pgrep": (),
@@ -64,9 +64,8 @@ READ_ONLY_COMMANDS: dict[str, tuple[str, ...]] = {
     "rg": (r"^--pre(=|$)", r"^--hostname-bin(=|$)"),
     "fd": (r"^-[A-Za-z]*[xX]", r"^--exec"),
     "find": (r"^-delete$", r"^-exec", r"^-ok", r"^-fls$", r"^-fprint"),
-    "sort": (r"^-o$", r"^--output(=|$)"),
+    "sort": (r"^-[A-Za-z]*o", r"^--output"),
     "tree": (r"^-o$",),
-    "date": (r"^-s$", r"^--set(=|$)"),
 }
 
 GIT_SUBCOMMANDS = frozenset(
@@ -93,19 +92,22 @@ GIT_SUBCOMMANDS = frozenset(
 )
 GIT_LEADING_BARE = frozenset({"--no-pager", "-P"})
 GIT_LEADING_VALUED = frozenset({"-C"})
-GIT_FORBIDDEN = (r"^--output(=|$)", r"^-o$", r"^-O", r"^--open-files-in-pager$", r"^--ext-diff$", r"^--textconv$")
+GIT_FORBIDDEN = (r"^--output", r"^-o", r"^-O", r"^--open-files-in-pager", r"^--ext-diff", r"^--textconv")
 
 JJ_SUBCOMMANDS = frozenset({"log", "status", "st", "diff", "show"})
 JJ_LEADING_BARE = frozenset({"--no-pager", "--ignore-working-copy"})
 JJ_LEADING_VALUED = frozenset({"-R", "--repository", "--at-operation", "--at-op", "--color"})
+JJ_FORBIDDEN = (r"^--tool", r"^--config")
 
 
 def safe_redirect(redirect: Redirect) -> bool:
     match redirect.op:
-        case "<" | "<<":
+        case "<":
+            return not redirect.target.startswith(("/dev/tcp/", "/dev/udp/"))
+        case "<<" | "<<<":
             return True
         case ">&" | "<&":
-            return redirect.target.isdigit() or redirect.target == "-"
+            return redirect.target in ("0", "1", "2", "-")
         case ">" | ">>":
             return redirect.target in SAFE_REDIRECT_TARGETS
         case _:
@@ -138,9 +140,13 @@ def read_only_program(name: str, cmd: Command) -> bool:
         case "git":
             return read_only_subcommand(cmd.args, GIT_LEADING_BARE, GIT_LEADING_VALUED, GIT_SUBCOMMANDS, GIT_FORBIDDEN)
         case "jj":
-            return read_only_subcommand(cmd.args, JJ_LEADING_BARE, JJ_LEADING_VALUED, JJ_SUBCOMMANDS, ())
+            return read_only_subcommand(cmd.args, JJ_LEADING_BARE, JJ_LEADING_VALUED, JJ_SUBCOMMANDS, JJ_FORBIDDEN)
         case "uniq":
             return sum(not a.startswith("-") for a in cmd.args) <= 1
+        case "date":
+            return not cmd.has_arg(r"^-s", r"^--set") and all(a.startswith(("-", "+")) for a in cmd.args)
+        case "hostname":
+            return all(a.startswith("-") for a in cmd.args)
         case _ if (forbidden := READ_ONLY_COMMANDS.get(name)) is not None:
             return not cmd.has_arg(*forbidden)
         case _:
@@ -150,15 +156,12 @@ def read_only_program(name: str, cmd: Command) -> bool:
 def read_only_command(cmd: Command) -> bool:
     if cmd.env or any(not safe_redirect(r) for r in cmd.redirects):
         return False
-    unwrapped = cmd.unwrapped
-    if any(tok in ("sudo", "doas") or "=" in tok for tok in cmd.argv[: len(cmd.argv) - len(unwrapped.argv)]):
+    if not EXECUTABLE.fullmatch(cmd.executable):
         return False
-    if not EXECUTABLE.fullmatch(unwrapped.executable):
-        return False
-    return read_only_program(unwrapped.executable, unwrapped)
+    return read_only_program(cmd.executable, cmd)
 
 
 def is_read_only(cl: CommandLine) -> bool:
-    if not cl or SUBSTITUTION.search(cl.raw):
+    if not cl or UNSAFE_EXPANSION.search(cl.raw):
         return False
     return all(read_only_command(c) for c in cl.commands)
