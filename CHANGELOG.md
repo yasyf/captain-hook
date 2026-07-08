@@ -4,6 +4,31 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.11.0] - 2026-07-07
+
+### Added
+- **Stale judge verdicts are swept.** Each judge pass now closes with
+  `ReviewStore.purge_stale_verdicts()` — a lane-aware, judge-role-scoped delete
+  of verdict and slug-evidence rows recorded at a prompt version their lane no
+  longer runs. Before, every version bump silently orphaned the old rows
+  forever. `review triage` reports the sweep with a trailing
+  `purged P stale verdicts` line, printed only when nonzero (additive to the
+  parsed output contract).
+
+### Changed
+- **The CREATE and FIX judge prompts version independently.** The single
+  `REVIEW_PROMPT_VERSION` constant threaded through every `ReviewStore` method
+  is replaced by a frozen `PromptVersions(create, fix)` bound once at
+  `ReviewStore.open`; store methods resolve their lane internally
+  (`hook_complaint` rows are the FIX lane, everything else CREATE). Editing one
+  prompt no longer forces a full re-judge of the other taxonomy. Both lanes
+  start at the previous shared version, so existing verdicts stay live.
+- When lane versions diverge, the judge queue interleaves the two lanes
+  round-robin so a bumped lane's backlog never starves the other under the
+  per-session call cap, and the status dashboard's `last verdict` recency is
+  lane-exact — stale rows at another lane's version no longer masquerade as
+  fresh judge activity.
+
 ## [8.10.0] - 2026-07-07
 
 ### Added
