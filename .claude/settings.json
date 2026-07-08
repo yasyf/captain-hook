@@ -26,7 +26,7 @@
     "skills": {
       "source": {
         "source": "github",
-        "repo": "yasyf/skills"
+        "repo": "yasyf/cc-skills"
       },
       "autoUpdate": true
     },
@@ -39,7 +39,8 @@
   },
   "enabledPlugins": {
     "codex@skills": true,
-    "captain-hook@captain-hook": true
+    "captain-hook@captain-hook": true,
+    "cc-context@skills": true
   },
   "hooks": {
     "PermissionRequest": [
