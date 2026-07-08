@@ -8,6 +8,7 @@ import pytest
 
 import captain_hook.prompt as prompt_module
 from captain_hook.prompt import Prompt
+from captain_hook.state import PACKS_DIR
 
 
 class TestPromptBasicConstruction:
@@ -326,3 +327,33 @@ class TestPromptLoad:
         with pytest.raises(KeyError) as exc:
             Prompt.load("k", base=tmp_path)
         assert "who" in exc.value.args[0]
+
+
+class TestTemplateGrammar:
+    def test_js_object_braces_pass_through(self) -> None:
+        assert str(Prompt.from_template("route to {model: 'sonnet'}")) == "route to {model: 'sonnet'}"
+
+    def test_dollar_brace_stays_literal_even_when_var_supplied(self) -> None:
+        assert str(Prompt.from_template("enable ${feature}", feature="X")) == "enable ${feature}"
+
+    def test_empty_and_doubled_braces_are_literal(self) -> None:
+        assert str(Prompt.from_template("empty {} and {{who}}", who="Bob")) == "empty {} and {{who}}"
+
+    def test_placeholder_renders_while_code_braces_stay_intact(self) -> None:
+        assert str(Prompt.from_template("use {model} not {opts: 1}", model="sonnet")) == "use sonnet not {opts: 1}"
+
+    def test_missing_identifier_placeholder_raises_key_error(self) -> None:
+        with pytest.raises(KeyError) as exc:
+            Prompt.from_template("Hello {who}")
+        assert exc.value.args[0] == "template variable 'who' not supplied"
+
+
+class TestCallerDirPackFrame:
+    def test_frame_under_packs_dir_is_treated_as_caller(self) -> None:
+        packs_path = Path(PACKS_DIR) / "general" / "spoofed_caller.py"
+        namespace: dict[str, object] = {}
+        exec(  # noqa: S102
+            compile("from captain_hook.prompt import caller_dir\nresult = caller_dir()\n", str(packs_path), "exec"),
+            namespace,
+        )
+        assert namespace["result"] == Path(PACKS_DIR) / "general"

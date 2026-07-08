@@ -6,7 +6,9 @@ import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 
-from captain_hook.state import FRAMEWORK_DIR
+from captain_hook.state import FRAMEWORK_DIR, framework_frame
+
+PLACEHOLDER = re.compile(r"(?<![{$])\{([A-Za-z_]\w*)\}(?!\})")
 
 
 def dedent_text(text: str) -> str:
@@ -24,7 +26,7 @@ def escape_tag_delimiters(tag: str, content: str) -> str:
 
 def caller_dir() -> Path:
     frame = inspect.currentframe()
-    while frame and Path(frame.f_code.co_filename).resolve().is_relative_to(FRAMEWORK_DIR):
+    while frame and framework_frame(frame.f_code.co_filename):
         frame = frame.f_back
     return Path(frame.f_code.co_filename).resolve().parent if frame else Path.cwd()
 
@@ -69,10 +71,31 @@ class Prompt:
 
     @classmethod
     def from_template(cls, text: str, **vars: object) -> Prompt:
-        try:
-            return cls(system_text=textwrap.dedent(text).strip().format_map(vars))
-        except KeyError as exc:
-            raise KeyError(f"template variable {exc.args[0]!r} not supplied") from exc
+        """Render ``text`` into a system-only prompt, substituting ``{identifier}`` placeholders from ``vars``.
+
+        Only ``{identifier}`` (a brace-wrapped Python identifier) is a placeholder; every other
+        brace is literal. JavaScript object braces (``{model: 'sonnet'}``), ``${shell}``
+        interpolations, empty ``{}``, and doubled ``{{x}}`` braces all pass through unchanged —
+        there is no escape sequence and format specs are not placeholders. Substitution is
+        single-pass, so inserted values are never re-scanned for further placeholders.
+
+        Args:
+            text: Template text; ``{identifier}`` placeholders are replaced, all other braces stay literal.
+            **vars: Values for the ``{identifier}`` placeholders.
+
+        Returns:
+            A :class:`Prompt` whose system text is the rendered template.
+
+        Raises:
+            KeyError: If an ``{identifier}`` placeholder has no matching entry in ``vars``.
+        """
+
+        def repl(match: re.Match[str]) -> str:
+            if (name := match.group(1)) not in vars:
+                raise KeyError(f"template variable {name!r} not supplied")
+            return str(vars[name])
+
+        return cls(system_text=PLACEHOLDER.sub(repl, dedent_text(text)))
 
     @classmethod
     def load(cls, name: str, *, base: str | Path | None = None, **vars: object) -> Prompt:
@@ -86,14 +109,15 @@ class Prompt:
         Args:
             name: Prompt name without the ``.md`` suffix; may include ``/`` for nesting.
             base: Optional directory to search instead of the caller-relative ``prompts/``.
-            **vars: Template variables substituted into the file via ``str.format_map``.
+            **vars: Values for the file's ``{identifier}`` placeholders; every other brace (JS
+                objects, ``${...}``, ``{{...}}``) stays literal (see :meth:`from_template`).
 
         Returns:
             A :class:`Prompt` whose system text is the rendered file contents.
 
         Raises:
             FileNotFoundError: If no matching file exists in any searched directory.
-            KeyError: If the file references a placeholder not supplied in ``**vars``.
+            KeyError: If the file references an ``{identifier}`` placeholder not supplied in ``**vars``.
         """
         dirs = [Path(base) if base else caller_dir() / "prompts", Path(FRAMEWORK_DIR) / "prompts"]
         for path in (d / f"{name}.md" for d in dirs):
