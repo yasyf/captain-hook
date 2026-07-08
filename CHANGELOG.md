@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [8.13.0] - 2026-07-08
+## [8.14.0] - 2026-07-08
 
 ### Changed
 - **General-pack codex routing targets the codex-wrapper agent.** The
@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   codex plugin 0.10.0). The deliverable-rubric fragment and worked examples
   score the new shape compliant, and codex-wrapper spawns are skip-listed on
   the spawn-side nudges. General pack bumped to 0.16.0.
+
+### Fixed
+- **Review LLM-backend tests skip when no backend is authenticated.** The
+  review-pipeline and review-CLI tests that call a live LLM now skip instead of
+  failing when no authenticated `spawnllm` backend is present, so CI stays green
+  on runners that lack one.
+
+## [8.13.0] - 2026-07-08
 
 ### Fixed
 - **`framework_frame` resolves frame paths before classifying.** `caller_dir()`
