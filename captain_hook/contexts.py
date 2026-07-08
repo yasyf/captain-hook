@@ -14,7 +14,10 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Protocol
 
+from cc_transcript.render import clip
+
 from captain_hook.ast_grep import find_all, find_kinds, introduced, lang_for_path
+from captain_hook.conditions import workflow_opt_matches, workflow_script_source
 
 if TYPE_CHECKING:
     from collections.abc import Sequence, Set
@@ -23,6 +26,108 @@ if TYPE_CHECKING:
     from captain_hook.prompt import Prompt
 
 SNAKE_CASE = re.compile(r"(?<!^)(?=[A-Z])")
+WORKFLOW_SCRIPT_CAP = 14_000  # below the prose hooks' max_context=16_000, so truncation stays ours
+PIN_EXCERPT_CAP = 2_000  # the pin header must not crowd out the source under the enclosing max_context slice
+
+
+@dataclass(frozen=True, slots=True)
+class Excerpts:
+    """Verbatim excerpts pulled from a text under a character budget.
+
+    ``excerpts`` are the kept windows in source order; ``quoted`` counts the spans
+    they cover and ``dropped`` the spans excluded once the budget filled. Render with
+    :meth:`block`.
+
+    Attributes:
+        excerpts: The kept excerpt strings, in source order, without indentation.
+        quoted: How many input spans the kept excerpts cover.
+        dropped: How many input spans the budget excluded.
+    """
+
+    excerpts: tuple[str, ...]
+    quoted: int
+    dropped: int
+
+    @property
+    def capped(self) -> bool:
+        """Whether the budget excluded at least one span."""
+        return self.dropped > 0
+
+    def block(self, noun: str, *, indent: str = "  ", empty: str = "(none)") -> str:
+        """Render the excerpts as an ``indent``-prefixed block.
+
+        A capped block ends in a ``… [+N more <noun> not excerpted]`` marker line; an
+        empty one renders the ``empty`` placeholder.
+
+        Args:
+            noun: Plural noun for the dropped-count marker, e.g. ``"model pins"``.
+            indent: Prefix applied to every line, the marker and placeholder included.
+            empty: Placeholder rendered when there are no excerpts.
+        """
+        lines = [f"{indent}{e}" for e in self.excerpts]
+        if self.capped:
+            lines.append(f"{indent}… [+{self.dropped} more {noun} not excerpted]")
+        return "\n".join(lines) if lines else f"{indent}{empty}"
+
+
+def excerpt_around(
+    text: str,
+    spans: Sequence[tuple[int, int]],
+    *,
+    before: int = 160,
+    after: int = 60,
+    whole_line_at: int = 200,
+    budget: int = 2000,
+) -> Excerpts:
+    """Verbatim excerpts of ``text`` around each ``(start, end)`` character span.
+
+    Spans are whole-``text`` character offsets — ``re.Match.span()`` is the natural
+    producer, and ast-grep callers can pass ``node.range().start.index`` /
+    ``node.range().end.index``. Spans group by line: a line at or under
+    ``whole_line_at`` characters is quoted whole in one window; a longer line yields
+    one window per span, clamped to the line as ``[start - before, end + after]`` and
+    merged when windows overlap or touch, each bracketed by ``…`` only where text was
+    actually elided. Excerpts accumulate in source order under a greedy character
+    ``budget`` — the first excerpt is always kept, and once the budget fills every
+    later span is dropped.
+
+    Args:
+        text: The source text to excerpt from.
+        spans: ``(start, end)`` character spans into ``text``, in source order.
+        before: Characters of context kept before each span on a long line.
+        after: Characters of context kept after each span on a long line.
+        whole_line_at: Lines at or under this length are quoted whole.
+        budget: Character budget across the kept excerpts.
+    """
+    windows: list[tuple[str, int]] = []
+    offset = 0
+    for line in text.split("\n"):
+        local = [(s - offset, e - offset) for s, e in spans if offset <= s < offset + len(line) + 1]
+        offset += len(line) + 1
+        if not local:
+            continue
+        if len(line) <= whole_line_at:
+            windows.append((line, len(local)))
+            continue
+        merged: list[list[int]] = []
+        for s, e in local:
+            lo, hi = max(0, s - before), min(len(line), e + after)
+            if merged and lo <= merged[-1][1]:
+                merged[-1][1], merged[-1][2] = hi, merged[-1][2] + 1
+            else:
+                merged.append([lo, hi, 1])
+        windows += [(f"{'…' if lo else ''}{line[lo:hi]}{'…' if hi < len(line) else ''}", n) for lo, hi, n in merged]
+    used = quoted = dropped = 0
+    capped = False
+    kept: list[str] = []
+    for excerpt, covered in windows:
+        if capped or (kept and used + 1 + len(excerpt) > budget):
+            capped, dropped = True, dropped + covered
+            continue
+        used += (1 if kept else 0) + len(excerpt)
+        kept.append(excerpt)
+        quoted += covered
+    return Excerpts(tuple(kept), quoted, dropped)
 
 
 class PromptContext(Protocol):
@@ -134,6 +239,48 @@ class Introduced:
         return "\n".join(m.text for m in introduced(extract(old), extract(new)) if self.keep(m.text))
 
 
+@dataclass(frozen=True, slots=True)
+class WorkflowScriptSource:
+    """Gating context: the pending ``Workflow`` call's script source, headed by its model pins.
+
+    Resolves the script via :func:`~captain_hook.conditions.workflow_script_source`,
+    excerpts the text around every ``model:`` pin into a header capped at
+    :data:`PIN_EXCERPT_CAP`, and truncates the body past :data:`WORKFLOW_SCRIPT_CAP`
+    with an explicit marker. Yields ``None`` off a Workflow event or an unreadable
+    script.
+    """
+
+    tag: str = "workflow_script"
+    required: bool = True
+
+    @staticmethod
+    def pins_and_source(evt: BaseHookEvent) -> tuple[str, str] | None:
+        if (source := workflow_script_source(evt)) is None:
+            return None
+        pins = excerpt_around(source, [m.span() for m in workflow_opt_matches(source, "model")], budget=PIN_EXCERPT_CAP)
+        if len(source) > WORKFLOW_SCRIPT_CAP:
+            head, tail = WORKFLOW_SCRIPT_CAP * 3 // 4, WORKFLOW_SCRIPT_CAP // 4
+            claim = (
+                f"{pins.quoted} of {pins.quoted + pins.dropped} model pins quoted above"
+                if pins.capped
+                else "every model pin is quoted above"
+            )
+            source = f"{source[:head]}\n… [script truncated: {len(source):,} chars total; {claim}] …\n{source[-tail:]}"
+        lead = (
+            f"excerpts around the first model pins in this script (+{pins.dropped} more noted below; "
+            "a stage not quoted here is NOT necessarily unpinned):"
+            if pins.capped
+            else "excerpts around every model pin in this script (a stage not quoted here inherits the session model):"
+        )
+        return f"{lead}\n{pins.block('model pins')}", source
+
+    def content(self, evt: BaseHookEvent) -> str | None:
+        if (parts := self.pins_and_source(evt)) is None:
+            return None
+        header, source = parts
+        return f"{header}\n\n{source}"
+
+
 def with_defaults(contexts: Sequence[PromptContext]) -> tuple[PromptContext, ...]:
     defaults: tuple[PromptContext, ...] = (BeforeEdit(), AfterEdit())
     return (*contexts, *(d for d in defaults if not any(isinstance(c, type(d)) for c in contexts)))
@@ -142,15 +289,16 @@ def with_defaults(contexts: Sequence[PromptContext]) -> tuple[PromptContext, ...
 def apply_contexts(
     prompt: Prompt, evt: BaseHookEvent, contexts: Sequence[PromptContext], *, max_len: int = 2000
 ) -> Prompt | None:
-    """Append each context's block to ``prompt`` in order, each capped at ``max_len`` characters.
+    """Append each context's block to ``prompt`` in order, each clipped to ``max_len`` characters.
 
-    A context yielding ``None`` or whitespace-only content has its block omitted;
-    when that context is ``required``, returns ``None`` instead — the caller must
-    skip the LLM call entirely.
+    Over-long content is clipped with an explicit ``…(+Nch)`` marker, never a silent
+    truncation. A context yielding ``None`` or whitespace-only content has its block
+    omitted; when that context is ``required``, returns ``None`` instead — the caller
+    must skip the LLM call entirely.
     """
     for c in contexts:
         text = c.content(evt)
         if c.required and not (text and text.strip()):
             return None
-        prompt = prompt.context(c.tag, text and text[:max_len])
+        prompt = prompt.context(c.tag, text and clip(text, max_len))
     return prompt

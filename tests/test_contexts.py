@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Set
 from dataclasses import dataclass
 from typing import Any
@@ -7,13 +8,21 @@ from typing import Any
 import pytest
 
 from captain_hook.ast_grep import COMMENT_TYPES
-from captain_hook.contexts import AfterEdit, BeforeEdit, Introduced, apply_contexts, with_defaults
-from captain_hook.packs.general.models import (
+from captain_hook.contexts import (
     PIN_EXCERPT_CAP,
     WORKFLOW_SCRIPT_CAP,
+    AfterEdit,
+    BeforeEdit,
+    Excerpts,
+    Introduced,
+    WorkflowScriptSource,
+    apply_contexts,
+    excerpt_around,
+    with_defaults,
+)
+from captain_hook.packs.general.models import (
     ProseSpawn,
     ProseWorkflowScript,
-    WorkflowScriptSource,
     prose_deliverable_sentences,
 )
 from captain_hook.prompt import Prompt
@@ -205,6 +214,12 @@ class TestApplyContexts:
         assert "y" * 100 in str(prompt)
         assert "y" * 101 not in str(prompt)
 
+    def test_clipped_block_shows_elision_marker(self) -> None:
+        evt = edit_event(old="y" * 500 + "\n", content="x = 2\n")  # 501-char pre-image
+        prompt = apply_contexts(Prompt().system("s"), evt, [BeforeEdit()], max_len=100)
+        assert prompt is not None
+        assert "…(+401ch)" in str(prompt)
+
 
 class TestWithDefaults:
     def test_defaults_appended_after_user_contexts(self) -> None:
@@ -357,8 +372,7 @@ class TestWorkflowScriptSource:
         assert content is not None
         assert "more model pins not excerpted" not in content
         assert content.startswith(
-            "excerpts around every model pin in this script "
-            "(a stage not quoted here inherits the session model, fable):"
+            "excerpts around every model pin in this script (a stage not quoted here inherits the session model):"
         )
 
     def test_no_pins_says_none(self) -> None:
@@ -406,3 +420,86 @@ class TestWorkflowScriptSource:
     def test_missing_script_path_yields_none(self, tmp_path: Any) -> None:
         evt = mock_tool_event("Workflow", tool_input={"scriptPath": str(tmp_path / "missing.js")})
         assert WorkflowScriptSource().content(evt) is None
+
+
+def model_spans(text: str) -> list[tuple[int, int]]:
+    return [m.span() for m in re.finditer(r"model: '\w+'", text)]
+
+
+class TestExcerptAround:
+    def test_short_line_quoted_whole(self) -> None:
+        text = "agent('x', {model: 'opus'})"
+        assert len(text) <= 200
+        ex = excerpt_around(text, model_spans(text))
+        assert ex.excerpts == (text,)
+        assert ex.quoted == 1
+        assert ex.dropped == 0
+        assert not ex.capped
+
+    def test_short_line_covers_all_its_spans_in_one_window(self) -> None:
+        text = "alpha model: 'x' beta model: 'y' gamma"
+        assert len(text) <= 200
+        ex = excerpt_around(text, model_spans(text))
+        assert ex.excerpts == (text,)  # one whole-line window covering both pins
+        assert ex.quoted == 2
+
+    def test_nearby_spans_on_long_line_merge(self) -> None:
+        text = "x" * 250 + " model: 'a' model: 'b'"
+        spans = model_spans(text)
+        assert len(text) > 200 and len(spans) == 2
+        ex = excerpt_around(text, spans)
+        assert len(ex.excerpts) == 1
+        assert ex.quoted == 2
+        assert "model: 'a'" in ex.excerpts[0] and "model: 'b'" in ex.excerpts[0]
+        assert ex.excerpts[0].startswith("…")  # text elided before the window
+
+    def test_distant_spans_on_long_line_stay_separate(self) -> None:
+        text = "model: 'a' " + "z" * 400 + " model: 'b'"
+        spans = model_spans(text)
+        assert len(text) > 200 and len(spans) == 2
+        ex = excerpt_around(text, spans)
+        assert len(ex.excerpts) == 2
+        assert ex.quoted == 2
+        assert "model: 'a'" in ex.excerpts[0]
+        assert "model: 'b'" in ex.excerpts[1]
+        assert ex.excerpts[0].endswith("…") and ex.excerpts[1].startswith("…")
+
+    def test_windowed_excerpt_body_is_verbatim_substring(self) -> None:
+        text = "model: 'lead' " + "q" * 300
+        (ex,) = excerpt_around(text, model_spans(text)).excerpts
+        assert not ex.startswith("…")  # window reaches the line start
+        assert ex.endswith("…")
+        assert ex.rstrip("…") in text
+
+    def test_budget_caps_and_counts_dropped(self) -> None:
+        text = "\n".join(f"model: 's{i}'" for i in range(10))
+        spans = model_spans(text)
+        assert len(spans) == 10
+        ex = excerpt_around(text, spans, budget=30)
+        assert ex.capped
+        assert ex.quoted + ex.dropped == 10
+        assert ex.quoted == 2 and ex.dropped == 8  # 11 + 1 + 11 = 23 fits; the third overflows 30
+        block = ex.block("model pins")
+        lines = block.splitlines()
+        assert lines[0] == "  model: 's0'"
+        assert lines[-1] == "  … [+8 more model pins not excerpted]"
+
+    def test_first_excerpt_always_kept_even_over_budget(self) -> None:
+        text = "\n".join(["model: 'first'", "model: 'second'"])
+        ex = excerpt_around(text, model_spans(text), budget=1)
+        assert ex.excerpts == ("model: 'first'",)
+        assert ex.quoted == 1 and ex.dropped == 1
+
+    def test_block_empty_renders_placeholder(self) -> None:
+        ex = excerpt_around("no pins anywhere in this text", [])
+        assert ex.excerpts == () and not ex.capped
+        assert ex.block("model pins") == "  (none)"
+
+    def test_block_custom_indent_and_empty(self) -> None:
+        assert Excerpts((), 0, 0).block("things", indent="    ", empty="<empty>") == "    <empty>"
+
+    def test_spans_from_re_finditer_group_by_line(self) -> None:
+        text = "agent('a', {model: 'opus'})\nagent('b', {model: 'haiku'})"
+        ex = excerpt_around(text, [m.span() for m in re.finditer(r"model: '\w+'", text)])
+        assert ex.excerpts == ("agent('a', {model: 'opus'})", "agent('b', {model: 'haiku'})")
+        assert ex.quoted == 2 and ex.dropped == 0

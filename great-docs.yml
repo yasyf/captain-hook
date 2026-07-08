@@ -258,4 +258,7 @@ reference:
       - BeforeEdit
       - AfterEdit
       - Introduced
+      - WorkflowScriptSource
+      - Excerpts
+      - excerpt_around
       - COMMENT_TYPES
