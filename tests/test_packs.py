@@ -43,7 +43,7 @@ GO_HOOKS = {"testing", "toolchain"}
 # lib.py carries __capt_hook_skip__ so it is a non-underscore file the loader skips; the
 # layout test counts .py files, so it appears here, but only steering.py registers hooks.
 STEERING_HOOKS = {"steering"}
-FIXES_HOOKS = {"teammate_permissions", "readonly_bash"}
+FIXES_HOOKS = {"teammate_permissions"}
 HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 SRC_USES_FILE = (
     "from pathlib import Path\n"

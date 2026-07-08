@@ -6,24 +6,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.13.0] - 2026-07-08
 
-### Added
-- **`ReadOnlyCommand` — a structural read-only proof for Bash, plus a fixes-pack
-  auto-approver.** A shipped condition that holds only when every command in a
-  parsed line — including the ones nested inside `( )`, `if`, and function
-  bodies — is provably read-only: each executable is on a curated allowlist
-  (`ls`, `cat`, `grep`, `rg`, `find`, `git`/`jj` read subcommands, and the rest)
-  with per-command forbidden-argument guards (`find -delete`/`-exec`, `sort -o`,
-  `rg --pre`, `git -c`, and their kin), no write redirects (only `<`, file-
-  descriptor dups, and `>` to `/dev/null`), no `sudo`/`env VAR=…` wrapper, and
-  no command substitution — the last rejected by scanning the raw text, since
-  the parser drops `$(…)` from the argv it exposes. The `fixes` pack wires this
-  into `approve("read-only bash")`, so a read-only line like
-  `ls … | head; echo ---; ls …` is auto-approved from any caller instead of
-  prompting once per segment the native allowlist doesn't cover. A second
-  `llm_approve("bash safety judge")` fallback — which finally wires the existing
-  primitive — judges whatever the static pass can't prove, under skip-permissions
-  consent. `McpTool` is promoted to a shipped condition alongside it.
-
 ### Fixed
 - **`framework_frame` resolves frame paths before classifying.** `caller_dir()`
   compared raw `co_filename` spellings against `FRAMEWORK_DIR`, so a symlinked

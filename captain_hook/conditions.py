@@ -17,13 +17,11 @@ from captain_hook.types import (
     FilePath,
     FromSubagent,
     InPlanMode,
-    McpTool,
     Not,
     Or,
     Pattern,
     RanCommand,
     ReadFile,
-    ReadOnlyCommand,
     Runs,
     SkipPermissions,
     SourceEdits,
@@ -246,12 +244,6 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
             return evt.ctx.transcript.has_command(*argv, subagents=subagents)
         case Runs(argv):
             return bool(argv and (cl := evt.command_line) and any(cmd.argv[: len(argv)] == argv for cmd in cl.commands))
-        case ReadOnlyCommand():
-            from captain_hook.readonly import is_read_only
-
-            return bool((cl := evt.command_line) and is_read_only(cl))
-        case McpTool():
-            return bool(evt.tool_name) and evt.tool_name.startswith("mcp__")
         case InPlanMode():
             return evt.permission_mode == "plan" or (
                 (t := evt.ctx.transcript).tool_calls.named("EnterPlanMode").count()
