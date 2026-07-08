@@ -142,7 +142,9 @@ def read_only_program(name: str, cmd: Command) -> bool:
         case "jj":
             return read_only_subcommand(cmd.args, JJ_LEADING_BARE, JJ_LEADING_VALUED, JJ_SUBCOMMANDS, JJ_FORBIDDEN)
         case "uniq":
-            return sum(not a.startswith("-") for a in cmd.args) <= 1
+            cut = cmd.args.index("--") if "--" in cmd.args else len(cmd.args)
+            operands = [a for a in cmd.args[:cut] if not a.startswith("-")] + list(cmd.args[cut + 1 :])
+            return len(operands) <= 1
         case "date":
             return not cmd.has_arg(r"^-s", r"^--set") and all(a.startswith(("-", "+")) for a in cmd.args)
         case "hostname":
