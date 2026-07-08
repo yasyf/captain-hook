@@ -41,19 +41,25 @@ no-op.
 
 ### `review triage [--limit N]`
 
-Judges stored corrections lacking an LLM verdict at the current prompt version
-(manual/backfill path; the detached child already runs this per session). `--limit`
-overrides the per-session call cap. Prints one report line, then one line per
-near-duplicate slug pair the pass surfaced:
+Judges stored corrections lacking an LLM verdict at their taxonomy's current prompt
+version (manual/backfill path; the detached child already runs this per session).
+The CREATE and FIX prompts version independently, so bumping one never re-judges the
+other lane. `--limit` overrides the per-session call cap. Prints one report line,
+then one line per near-duplicate slug pair the pass surfaced, then a purge line when
+the closing sweep deleted anything:
 
 ```
 judged N, failed N, pending N, merged M, retired R
 possible split: <slug-a> ~ <slug-b> (0.93)
+purged P stale verdicts
 ```
 
 `merged` counts observations the closing regroup re-parented onto their canonical slug
 candidate; `retired` counts watching create candidates it rejected (every observation
-judged, none accepted). Failed rows stay pending and retry next pass. Each `possible
+judged, none accepted). Failed rows stay pending and retry next pass. The purge line
+appears only when nonzero. Each pass's closing sweep deletes verdicts and their
+slug-suggestion evidence once a prompt bump strands them at a version their lane no
+longer runs, so the count spikes once after a bump and then falls silent. Each `possible
 split` line names two canonical slugs whose evidence nearly coincides — the judge may
 have minted two names for one rule — with their cosine similarity; nothing merges
 automatically.
@@ -63,7 +69,7 @@ automatically.
 The rich human dashboard (also `capt-hook status`): the funnel of tracked candidates by
 lifecycle stage, topped by a reviewer-health line. When the detached reviewer is
 healthy that line carries a judge segment — `judge: N pending · last verdict <age>`,
-where `N` is the judge-worthy backlog at the current prompt version — and, when the
+where `N` is the judge-worthy backlog at each lane's current prompt version — and, when the
 pass surfaced any, an `S possible slug splits` count. `--no-sync` skips the background
 `gh` refresh of open PRs.
 

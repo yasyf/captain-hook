@@ -2,9 +2,10 @@
 
 The deterministic scan is tuned for recall; this module supplies the precision.
 The :func:`cc_transcript.judge.run_verdicts` mechanism fans a structured judge
-over every stored row lacking a verdict at the current prompt version — under
-the CREATE taxonomy ("is this correction durable enough to encode as a hook?")
-for user-correction rows and the FIX taxonomy (``misfire_confirmed`` /
+over every stored row lacking a verdict at its taxonomy's bound prompt version
+(the store's :class:`~captain_hook.review.store.PromptVersions`) — under the
+CREATE taxonomy ("is this correction durable enough to encode as a hook?") for
+user-correction rows and the FIX taxonomy (``misfire_confirmed`` /
 ``compliance`` / ``ambient_mention``) for ``hook_complaint`` rows — and each
 verdict persists idempotently through
 :meth:`~captain_hook.review.store.ReviewStore.record_verdict`. Prompts render
@@ -13,6 +14,8 @@ the transcript lives and fall back to the labeled summary previews once it
 expires; each verdict records the fidelity it was judged at. Rows whose
 heuristic confidence sits below :data:`~cc_transcript.mining.NOISE_FLOOR`
 never reach the LLM, and each pass is capped so verdicts amortize per session.
+Each pass closes by sweeping verdicts a lane was bumped past through
+:meth:`~captain_hook.review.store.ReviewStore.purge_stale_verdicts`.
 """
 
 from __future__ import annotations
@@ -43,12 +46,12 @@ if TYPE_CHECKING:
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
 
-REVIEW_PROMPT_VERSION = 3
 JUDGE_ROLE = "judge"
 TRIGGER_BUDGET = Budget(turn_chars=2000, tool_chars=6000)
 CONTEXT_BUDGET = Budget()
 
 DURABLE_CATEGORIES = frozenset({"durable_style_rule", "workflow_rule", "tooling_rule", "safety_guard"})
+FIX_CATEGORIES = frozenset({"misfire_confirmed", "compliance", "ambient_mention"})
 
 Category = Literal[
     "durable_style_rule",
@@ -127,6 +130,8 @@ class JudgeReport:
             durable slug candidate.
         retired: How many watching create candidates the closing regroup rejected
             (every observation judged, none accepted).
+        purged: How many stale-version verdict rows the closing sweep deleted —
+            rows recorded at a version their lane no longer runs.
     """
 
     judged: int
@@ -134,6 +139,7 @@ class JudgeReport:
     pending: int
     merged: int
     retired: int
+    purged: int
 
 
 def section(window: ContextWindow, label: str, turns: tuple[Turn, ...], budget: Budget) -> str:
@@ -306,7 +312,7 @@ def prompt_builder(
         if not suggesting or str(row["source_kind"]) == HOOK_COMPLAINT:
             return ()
         try:
-            ranked = await suggest_canonical_keys(store, str(row["text"]), prompt_version=REVIEW_PROMPT_VERSION, k=5)
+            ranked = await suggest_canonical_keys(store, str(row["text"]), prompt_version=store.versions.create, k=5)
         except Exception as exc:
             raise JudgeError(f"slug suggestion retrieval failed: {exc}") from exc
         return [suggestion for suggestion in ranked if SLUG_PATTERN.fullmatch(suggestion.canonical_key)]
@@ -327,7 +333,7 @@ def persist_verdict(
             DedupKey(str(row["dedup_key"])),
             verdict,
             role=JUDGE_ROLE,
-            prompt_version=REVIEW_PROMPT_VERSION,
+            prompt_version=store.versions.for_row(row),
             model=model,
             fidelity=fidelities[str(row["dedup_key"])],
         )
@@ -338,7 +344,12 @@ def persist_verdict(
 async def judge_pass(
     store: ReviewStore, *, settings: ReviewSettings, limit: int | None = None, refresh_summary: bool = False
 ) -> JudgeReport:
-    """Judges stored corrections lacking a verdict at :data:`REVIEW_PROMPT_VERSION`.
+    """Judges stored corrections lacking a verdict at their taxonomy's bound prompt version.
+
+    The version comes from the store's
+    :class:`~captain_hook.review.store.PromptVersions` — the create lane for
+    user-correction rows, the fix lane for ``hook_complaint`` rows — fetched as
+    one queue by :meth:`~captain_hook.review.store.ReviewStore.judge_queue`.
 
     Incremental and idempotent: each verdict persists as soon as its call
     completes, a failed row stays unjudged and is retried on the next pass, and
@@ -364,18 +375,20 @@ async def judge_pass(
             summary one once the row's window hydrates again.
 
     Returns:
-        The pass's judged/failed/pending counts over judge-worthy rows, plus the
+        The pass's judged/failed/pending counts over judge-worthy rows, the
         merged/retired counts from the closing
-        :meth:`~captain_hook.review.store.ReviewStore.regroup_create`.
+        :meth:`~captain_hook.review.store.ReviewStore.regroup_create`, and the
+        purged count from the closing
+        :meth:`~captain_hook.review.store.ReviewStore.purge_stale_verdicts` sweep.
     """
     from cc_transcript.judge.similar import default_embedder
 
     model = resolved_model(settings.judge_tier)
-    rows = await store.unjudged(role=JUDGE_ROLE, prompt_version=REVIEW_PROMPT_VERSION, refresh_summary=refresh_summary)
+    rows = await store.judge_queue(refresh_summary=refresh_summary)
     worthy = [row for row in rows if judge_worthy(row)]
     dispatch = worthy[: limit if limit is not None else settings.max_judge_calls_per_session]
     fidelities: dict[str, Fidelity] = {}
-    suggesting = await store.has_verdict_evidence(prompt_version=REVIEW_PROMPT_VERSION)
+    suggesting = await store.has_verdict_evidence()
     if suggesting or any(str(row["source_kind"]) != HOOK_COMPLAINT for row in dispatch):
         await anyio.to_thread.run_sync(default_embedder)
     judged, failed = await run_verdicts(
@@ -385,5 +398,8 @@ async def judge_pass(
         persist_verdict(store, model=model, fidelities=fidelities),
         concurrency=settings.judge_concurrency,
     )
-    merged, retired = await store.regroup_create(prompt_version=REVIEW_PROMPT_VERSION)
-    return JudgeReport(judged=judged, failed=failed, pending=len(worthy) - judged, merged=merged, retired=retired)
+    merged, retired = await store.regroup_create()
+    purged = await store.purge_stale_verdicts()
+    return JudgeReport(
+        judged=judged, failed=failed, pending=len(worthy) - judged, merged=merged, retired=retired, purged=purged
+    )

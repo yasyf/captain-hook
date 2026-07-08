@@ -28,7 +28,6 @@ from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import ReviewStore
 from tests.review_helpers import (
     CORRECTION,
-    PROMPT_VERSION,
     REPO,
     Verdict,
     assistant_text,
@@ -83,7 +82,7 @@ async def rows(store: ReviewStore, query: str) -> list[dict[str, Any]]:
 
 async def judge(store: ReviewStore, key: str) -> None:
     await store.record_verdict(
-        DedupKey(key), Verdict(), role="judge", prompt_version=PROMPT_VERSION, model="m1", fidelity="full"
+        DedupKey(key), Verdict(), role="judge", prompt_version=store.versions.create, model="m1", fidelity="full"
     )
 
 
@@ -124,9 +123,9 @@ class TestDedupDesign:
         await store.enable(REPO)
         for row in observations:
             await judge(store, str(row["dedup_key"]))
-        status = await store.threshold_status(int(candidate["id"]), settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(int(candidate["id"]), settings=settings)
         assert (status.sessions, status.days) == (3, 2)
-        assert await store.eligible(int(candidate["id"]), settings=settings, prompt_version=PROMPT_VERSION) is True
+        assert await store.eligible(int(candidate["id"]), settings=settings) is True
 
     async def test_same_correction_twice_in_one_session_is_one_observation(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path
@@ -166,7 +165,7 @@ class TestSweepIngestRace:
                 if not fired:
                     fired = True
                     with contextlib.suppress(sqlite3.OperationalError):
-                        await sweeping.regroup_create(prompt_version=PROMPT_VERSION)
+                        await sweeping.regroup_create()
                 await record(*args, **kwargs)
 
             monkeypatch.setattr(ingesting, "record_observation", racing_record)

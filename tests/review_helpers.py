@@ -25,7 +25,6 @@ if TYPE_CHECKING:
 REPO = RepoKey("github.com/yasyf/captain-hook")
 BASE_TS = "2026-06-01T12:00:00+00:00"
 CORRECTION = "no, never use a bare except here, always catch the specific parser error"
-PROMPT_VERSION = 1
 
 REVIEW_UUIDS = itertools.count()
 

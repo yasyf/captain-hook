@@ -25,7 +25,7 @@ from captain_hook.review.fix import (
     iter_hook_complaint_signals,
     resolve_target,
 )
-from captain_hook.review.judge import REVIEW_PROMPT_VERSION, ReviewVerdict, build_prompt
+from captain_hook.review.judge import ReviewVerdict, build_prompt
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.scan import ScanReport, scan_transcript
 from captain_hook.review.settings import ReviewSettings
@@ -510,15 +510,13 @@ class TestFixGroupingAndStore:
             DedupKey(str(observation["dedup_key"])),
             Verdict(),
             role="judge",
-            prompt_version=REVIEW_PROMPT_VERSION,
+            prompt_version=store.versions.fix,
             model="m1",
             fidelity="full",
         )
-        status = await store.threshold_status(
-            int(candidate["id"]), settings=settings, prompt_version=REVIEW_PROMPT_VERSION
-        )
+        status = await store.threshold_status(int(candidate["id"]), settings=settings)
         assert (status.sessions, status.single_observation) == (1, True)
-        assert await store.eligible(int(candidate["id"]), settings=settings, prompt_version=REVIEW_PROMPT_VERSION)
+        assert await store.eligible(int(candidate["id"]), settings=settings)
 
     async def test_two_sessions_complaints_about_one_hook_group_under_one_candidate(
         self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog, tmp_path: Path
@@ -542,15 +540,13 @@ class TestFixGroupingAndStore:
                 DedupKey(str(observation["dedup_key"])),
                 Verdict(),
                 role="judge",
-                prompt_version=REVIEW_PROMPT_VERSION,
+                prompt_version=store.versions.fix,
                 model="m1",
                 fidelity="full",
             )
-        status = await store.threshold_status(
-            int(candidate["id"]), settings=settings, prompt_version=REVIEW_PROMPT_VERSION
-        )
+        status = await store.threshold_status(int(candidate["id"]), settings=settings)
         assert status.sessions == 2
-        assert await store.eligible(int(candidate["id"]), settings=settings, prompt_version=REVIEW_PROMPT_VERSION)
+        assert await store.eligible(int(candidate["id"]), settings=settings)
 
 
 class TestPackTargetRouting:

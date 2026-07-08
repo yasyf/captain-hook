@@ -216,7 +216,7 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
     Returns:
         The :class:`SpawnReport` for this pass.
     """
-    from captain_hook.review.judge import REVIEW_PROMPT_VERSION, judge_pass
+    from captain_hook.review.judge import judge_pass
     from captain_hook.review.scan import scan_transcript
     from captain_hook.review.store import CandidateStatus, ReviewStore
     from captain_hook.review.sync import sync_open_prs
@@ -233,9 +233,7 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
             [
                 candidate_id
                 for row in await store.candidates(repo, status=CandidateStatus.WATCHING)
-                if await store.eligible(
-                    candidate_id := int(str(row["id"])), settings=settings, prompt_version=REVIEW_PROMPT_VERSION
-                )
+                if await store.eligible(candidate_id := int(str(row["id"])), settings=settings)
             ]
         )
     if eligible:

@@ -275,7 +275,6 @@ async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadErr
     """Renders the dashboard for ``repo``, refreshing open-PR state in the background when ``sync``."""
     from rich.live import Live
 
-    from captain_hook.review.judge import REVIEW_PROMPT_VERSION
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
     from captain_hook.review.sync import sync_open_prs
@@ -284,9 +283,9 @@ async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadErr
     console = Console()
     async with await ReviewStore.open(settings.db_path) as store:
         health = await store.spawn_health()
-        judge = await store.judge_health(prompt_version=REVIEW_PROMPT_VERSION)
+        judge = await store.judge_health()
         watching = await store.watching(repo)
-        views = await store.overview(repo, settings=settings, prompt_version=REVIEW_PROMPT_VERSION)
+        views = await store.overview(repo, settings=settings)
         if not (sync and any(stage_of(v) is Stage.PR_OPEN for v in views)):
             console.print(
                 render(
@@ -314,7 +313,7 @@ async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadErr
             console=console,
         ) as live:
             await sync_open_prs(store, repo, settings=settings)
-            fresh = await store.overview(repo, settings=settings, prompt_version=REVIEW_PROMPT_VERSION)
+            fresh = await store.overview(repo, settings=settings)
             live.update(
                 render(
                     fresh,

@@ -15,7 +15,7 @@ from cc_transcript.ids import SessionId, ToolDigest, tool_digest
 from cc_transcript.judge import canonical_slug
 from cc_transcript.mining.candidates import DedupKey
 
-from captain_hook.review.judge import DURABLE_CATEGORIES, REVIEW_PROMPT_VERSION, ReviewVerdict
+from captain_hook.review.judge import DURABLE_CATEGORIES, FIX_CATEGORIES, ReviewVerdict
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -73,7 +73,7 @@ async def inject_verdict(
             category=category, summary="injected", confidence=confidence, rationale="injected", rule_slug=rule_slug
         ),
         role="judge",
-        prompt_version=REVIEW_PROMPT_VERSION,
+        prompt_version=store.versions.fix if category in FIX_CATEGORIES else store.versions.create,
         model=model,
         fidelity=fidelity,  # type: ignore[arg-type]
     )

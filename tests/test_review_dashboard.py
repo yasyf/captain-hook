@@ -26,7 +26,6 @@ from captain_hook.review.dashboard import (
     stage_of,
     targets,
 )
-from captain_hook.review.judge import REVIEW_PROMPT_VERSION
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import (
@@ -46,7 +45,6 @@ if TYPE_CHECKING:
     from click.testing import Result
 
 REPO = RepoKey("github.com/yasyf/scratch")
-PV = REVIEW_PROMPT_VERSION
 NO_JUDGE = JudgeHealth(pending=0, last_verdict_at=None, splits=())
 INSERT_EVENT = (
     "INSERT INTO feedback_events (dedup_key, source_kind, session_id, occurred_at, text, payload_json, "
@@ -395,7 +393,7 @@ async def judge_obs(
         DedupKey(key),
         FakeVerdict(accepted=accepted, summary=summary),
         role="judge",
-        prompt_version=PV,
+        prompt_version=store.versions.create,
         model=model,
         fidelity="full",
     )
@@ -422,8 +420,8 @@ class TestEligibilityParity:
         await seed_obs(store, watching, "early0", session="x1", occurred="2026-06-01T10:00:00+00:00")
         await judge_obs(store, "early0")
         for candidate_id, expected in ((ready, True), (watching, False)):
-            status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PV)
-            direct = await store.eligible(candidate_id, settings=settings, prompt_version=PV)
+            status = await store.threshold_status(candidate_id, settings=settings)
+            direct = await store.eligible(candidate_id, settings=settings)
             assert crosses_thresholds(status, settings=settings) == direct == expected
 
 
@@ -432,7 +430,7 @@ class TestOverview:
         settings = ReviewSettings()
         await store.enable(REPO)
         await eligible_create(store, rule="ready", summary="run the suite before committing")
-        views = await store.overview(REPO, settings=settings, prompt_version=PV)
+        views = await store.overview(REPO, settings=settings)
         assert [v.eligible for v in views] == [True]
         assert views[0].summary == "run the suite before committing"
 

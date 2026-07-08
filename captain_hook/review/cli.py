@@ -183,14 +183,14 @@ def scan(transcripts: tuple[Path, ...], dirs: tuple[Path, ...]) -> None:
 @click.option("--limit", type=int, default=None, help="Judge at most this many rows (default: the per-session cap)")
 def triage(limit: int | None) -> None:
     """Judge stored corrections lacking a verdict (manual/backfill)."""
-    from captain_hook.review.judge import REVIEW_PROMPT_VERSION, judge_pass
+    from captain_hook.review.judge import judge_pass
     from captain_hook.review.settings import ReviewSettings
 
     settings = ReviewSettings()
 
     async def body(store: ReviewStore) -> tuple[JudgeReport, list[KeyOverlap]]:
         report = await judge_pass(store, settings=settings, limit=limit)
-        return report, await store.slug_splits(prompt_version=REVIEW_PROMPT_VERSION)
+        return report, await store.slug_splits()
 
     report, splits = run_store(body)
     click.echo(
@@ -199,6 +199,8 @@ def triage(limit: int | None) -> None:
     )
     for split in splits:
         click.echo(f"possible split: {split.key_a} ~ {split.key_b} ({split.similarity:.2f})")
+    if report.purged > 0:
+        click.echo(f"purged {report.purged} stale verdicts")
 
 
 @review.command(name="status")
@@ -255,7 +257,6 @@ def correction_block(correction: Correction) -> str:
 @click.argument("candidate_id", type=int)
 def show(candidate_id: int) -> None:
     """Show one candidate's row, its threshold status, and the shared ledger's faulted edits."""
-    from captain_hook.review.judge import REVIEW_PROMPT_VERSION
     from captain_hook.review.settings import ReviewSettings
 
     settings = ReviewSettings()
@@ -263,8 +264,8 @@ def show(candidate_id: int) -> None:
     async def body(store: ReviewStore) -> tuple[dict[str, object], ThresholdStatus, bool, tuple[Correction, ...]]:
         return (
             await store.candidate(candidate_id),
-            await store.threshold_status(candidate_id, settings=settings, prompt_version=REVIEW_PROMPT_VERSION),
-            await store.eligible(candidate_id, settings=settings, prompt_version=REVIEW_PROMPT_VERSION),
+            await store.threshold_status(candidate_id, settings=settings),
+            await store.eligible(candidate_id, settings=settings),
             await store.correction_evidence(candidate_id),
         )
 
@@ -290,7 +291,6 @@ def show(candidate_id: int) -> None:
 @click.pass_obj
 def threshold_check(state: CliState, candidate_id: int | None, repo_: str | None) -> None:
     """Report which candidates cross their PR thresholds."""
-    from captain_hook.review.judge import REVIEW_PROMPT_VERSION
     from captain_hook.review.settings import ReviewSettings
 
     settings = ReviewSettings()
@@ -302,11 +302,11 @@ def threshold_check(state: CliState, candidate_id: int | None, repo_: str | None
             else [int(str(row["id"])) for row in await store.candidates(resolve_repo(repo_, state.root))]
         )
         return [
-            f"#{cid} eligible={await store.eligible(cid, settings=settings, prompt_version=REVIEW_PROMPT_VERSION)}"
+            f"#{cid} eligible={await store.eligible(cid, settings=settings)}"
             f" sessions={status.sessions}/{settings.min_sessions} days={status.days}/{settings.min_days}"
             f" open_prs={status.open_prs}/{settings.max_open_prs} watching={status.watching}"
             for cid in ids
-            if (status := await store.threshold_status(cid, settings=settings, prompt_version=REVIEW_PROMPT_VERSION))
+            if (status := await store.threshold_status(cid, settings=settings))
         ]
 
     try:

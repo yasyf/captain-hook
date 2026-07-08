@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -20,14 +19,17 @@ from captain_hook.review.store import (
     CandidateKind,
     CandidateStatus,
     InvalidTransition,
+    PromptVersions,
     ReviewStore,
 )
+from tests.review_helpers import Verdict
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from cc_transcript.context import Fidelity
 
 REPO = RepoKey("github.com/yasyf/captain-hook")
-PROMPT_VERSION = 1
 
 
 def digest_rule(seed: str) -> str:
@@ -36,7 +38,7 @@ def digest_rule(seed: str) -> str:
 
 INSERT_EVENT = (
     "INSERT INTO feedback_events (dedup_key, source_kind, session_id, occurred_at, text, payload_json, "
-    "context_json, ingested_at) VALUES (?, 'transcript_message', ?, ?, ?, ?, '{}', '2026-06-01T00:00:00+00:00')"
+    "context_json, ingested_at) VALUES (?, ?, ?, ?, ?, ?, '{}', '2026-06-01T00:00:00+00:00')"
 )
 
 ALLOWED_MOVES = {
@@ -56,16 +58,6 @@ PATHS: dict[CandidateStatus, tuple[CandidateStatus, ...]] = {
     CandidateStatus.ACCEPTED: (CandidateStatus.PR_OPEN, CandidateStatus.ACCEPTED),
     CandidateStatus.REJECTED: (CandidateStatus.PR_OPEN, CandidateStatus.REJECTED),
 }
-
-
-@dataclass(frozen=True, slots=True)
-class Verdict:
-    accepted: bool = True
-    confidence: float = 0.9
-    category: str = "durable_correction"
-    summary: str = "user corrected approach"
-    rationale: str = "explicit correction"
-    canonical_key: str | None = None
 
 
 async def create_candidate(store: ReviewStore, *, rule: str = "no-force-push") -> int:
@@ -88,10 +80,17 @@ async def fix_candidate(
 
 
 async def seed(
-    store: ReviewStore, candidate_id: int, key: str, *, session: str, occurred: str, heuristic: float = MEDIUM
+    store: ReviewStore,
+    candidate_id: int,
+    key: str,
+    *,
+    session: str,
+    occurred: str,
+    heuristic: float = MEDIUM,
+    source_kind: str = "transcript_message",
 ) -> None:
     payload = json.dumps({"signal": to_payload(CandidateSignal(Confidence(heuristic), ("marker",)))})
-    await store.store.conn.execute(INSERT_EVENT, (key, session, occurred, f"text {key}", payload))
+    await store.store.conn.execute(INSERT_EVENT, (key, source_kind, session, occurred, f"text {key}", payload))
     await store.record_observation(
         candidate_id,
         dedup_key=DedupKey(key),
@@ -110,11 +109,12 @@ async def judge(
     slug: str | None = None,
     fidelity: Fidelity = "full",
 ) -> None:
+    cur = await store.store.conn.execute("SELECT source_kind FROM feedback_events WHERE dedup_key = ?", (key,))
     await store.record_verdict(
         DedupKey(key),
         Verdict(accepted=accepted, confidence=confidence, canonical_key=slug),
         role="judge",
-        prompt_version=PROMPT_VERSION,
+        prompt_version=store.versions.for_row(await cur.fetchone()),
         model=model,
         fidelity=fidelity,
     )
@@ -282,9 +282,9 @@ class TestCreateEligibility:
         candidate_id = await create_candidate(store)
         for i, day in enumerate(("2026-06-01", "2026-06-02", "2026-06-03")):
             await seed(store, candidate_id, f"k{i}", session=f"s{i}", occurred=f"{day}T10:00:00+00:00")
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert (status.sessions, status.days) == (0, 0)
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is False
+        assert await store.eligible(candidate_id, settings=settings) is False
 
     @pytest.mark.parametrize(
         ("accepted", "confidence", "counts"),
@@ -303,9 +303,9 @@ class TestCreateEligibility:
         for i, day in enumerate(("2026-06-01", "2026-06-02", "2026-06-03")):
             await seed(store, candidate_id, f"k{i}", session=f"s{i}", occurred=f"{day}T10:00:00+00:00")
             await judge(store, f"k{i}", accepted=accepted, confidence=confidence)
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert (status.sessions, status.days) == ((3, 3) if counts else (0, 0))
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is counts
+        assert await store.eligible(candidate_id, settings=settings) is counts
 
     async def test_three_observations_in_one_session_are_one_session(
         self, store: ReviewStore, settings: ReviewSettings
@@ -315,9 +315,9 @@ class TestCreateEligibility:
         for i, day in enumerate(("2026-06-01", "2026-06-02", "2026-06-03")):
             await seed(store, candidate_id, f"k{i}", session="s1", occurred=f"{day}T10:00:00+00:00")
             await judge(store, f"k{i}")
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert (status.sessions, status.days) == (1, 3)
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is False
+        assert await store.eligible(candidate_id, settings=settings) is False
 
     async def test_three_sessions_on_one_utc_day_are_one_day(
         self, store: ReviewStore, settings: ReviewSettings
@@ -327,9 +327,9 @@ class TestCreateEligibility:
         for i in range(3):
             await seed(store, candidate_id, f"k{i}", session=f"s{i}", occurred=f"2026-06-01T1{i}:00:00+00:00")
             await judge(store, f"k{i}")
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert (status.sessions, status.days) == (3, 1)
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is False
+        assert await store.eligible(candidate_id, settings=settings) is False
 
     async def test_days_count_in_utc(self, store: ReviewStore, settings: ReviewSettings) -> None:
         await store.enable(REPO)
@@ -338,7 +338,7 @@ class TestCreateEligibility:
         await seed(store, candidate_id, "k1", session="s1", occurred="2026-06-02T01:00:00+03:00")
         await judge(store, "k0")
         await judge(store, "k1")
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert (status.sessions, status.days) == (2, 1)
 
     async def test_eligible_when_sessions_and_days_cross_thresholds(
@@ -346,10 +346,10 @@ class TestCreateEligibility:
     ) -> None:
         await store.enable(REPO)
         candidate_id = await eligible_create_candidate(store)
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert (status.kind, status.watching) == (CandidateKind.CREATE, True)
         assert (status.sessions, status.days, status.open_prs) == (3, 2, 0)
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is True
+        assert await store.eligible(candidate_id, settings=settings) is True
 
     @pytest.mark.parametrize(
         "terminal",
@@ -364,16 +364,16 @@ class TestCreateEligibility:
         await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_opened_at=datetime.now(UTC))
         if terminal != CandidateStatus.PR_OPEN:
             await store.transition(candidate_id, terminal)
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert (status.status, status.sessions, status.days) == (terminal, 3, 2)
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is False
+        assert await store.eligible(candidate_id, settings=settings) is False
 
     async def test_unwatched_repo_never_eligible(self, store: ReviewStore, settings: ReviewSettings) -> None:
         candidate_id = await eligible_create_candidate(store)
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is False
+        assert await store.eligible(candidate_id, settings=settings) is False
         await store.enable(REPO)
         await store.disable(REPO)
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is False
+        assert await store.eligible(candidate_id, settings=settings) is False
 
     @pytest.mark.parametrize(
         ("first", "second", "sessions"),
@@ -390,17 +390,21 @@ class TestCreateEligibility:
         await seed(store, candidate_id, "k0", session="s0", occurred="2026-06-01T10:00:00+00:00")
         await judge(store, "k0", accepted=first, model="m1")
         await judge(store, "k0", accepted=second, model="m2")
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert status.sessions == sessions
 
     async def test_other_prompt_version_verdicts_never_count(
-        self, store: ReviewStore, settings: ReviewSettings
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path
     ) -> None:
         await store.enable(REPO)
         candidate_id = await eligible_create_candidate(store)
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION + 1)
-        assert (status.sessions, status.days) == (0, 0)
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION + 1) is False
+        async with await ReviewStore.open(
+            tmp_path / "review.db",
+            versions=PromptVersions(create=store.versions.create + 1, fix=store.versions.fix + 1),
+        ) as bumped:
+            status = await bumped.threshold_status(candidate_id, settings=settings)
+            assert (status.sessions, status.days) == (0, 0)
+            assert await bumped.eligible(candidate_id, settings=settings) is False
 
     async def test_record_observation_is_idempotent(self, store: ReviewStore, settings: ReviewSettings) -> None:
         await store.enable(REPO)
@@ -415,7 +419,7 @@ class TestCreateEligibility:
         await judge(store, "k0")
         cur = await store.store.conn.execute("SELECT COUNT(*) AS n FROM candidate_observations")
         assert [int(row["n"]) async for row in cur] == [1]
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert (status.sessions, status.days) == (1, 1)
 
 
@@ -425,9 +429,9 @@ class TestPrCap:
         candidate_id = await eligible_create_candidate(store)
         await open_pr(store, rule="other-a", opened_at=datetime.now(UTC))
         await open_pr(store, rule="other-b", opened_at=datetime.now(UTC))
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert status.open_prs == 2
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is False
+        assert await store.eligible(candidate_id, settings=settings) is False
 
     async def test_stale_transition_frees_a_slot(self, store: ReviewStore, settings: ReviewSettings) -> None:
         await store.enable(REPO)
@@ -435,9 +439,9 @@ class TestPrCap:
         stale_one = await open_pr(store, rule="other-a", opened_at=datetime.now(UTC))
         await open_pr(store, rule="other-b", opened_at=datetime.now(UTC))
         await store.transition(stale_one, CandidateStatus.STALE)
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert status.open_prs == 1
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is True
+        assert await store.eligible(candidate_id, settings=settings) is True
 
     async def test_pr_older_than_stale_after_days_frees_a_slot(
         self, store: ReviewStore, settings: ReviewSettings
@@ -446,9 +450,9 @@ class TestPrCap:
         candidate_id = await eligible_create_candidate(store)
         await open_pr(store, rule="other-a", opened_at=datetime.now(UTC) - timedelta(days=31))
         await open_pr(store, rule="other-b", opened_at=datetime.now(UTC))
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert status.open_prs == 1
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is True
+        assert await store.eligible(candidate_id, settings=settings) is True
 
     async def test_other_repos_prs_never_count(self, store: ReviewStore, settings: ReviewSettings) -> None:
         await store.enable(REPO)
@@ -461,9 +465,9 @@ class TestPrCap:
                 source_kind=SourceKind("transcript_message"),
             )
             await store.transition(other, CandidateStatus.PR_OPEN, pr_opened_at=datetime.now(UTC))
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert status.open_prs == 0
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is True
+        assert await store.eligible(candidate_id, settings=settings) is True
 
 
 class TestFixEligibility:
@@ -491,9 +495,9 @@ class TestFixEligibility:
         await seed(store, candidate_id, "k0", session="s0", occurred="2026-06-01T10:00:00+00:00", heuristic=heuristic)
         if accepted is not None:
             await judge(store, "k0", accepted=accepted, confidence=judge_confidence)
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert status.single_observation is expected
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is expected
+        assert await store.eligible(candidate_id, settings=settings) is expected
 
     async def test_two_accepted_sessions_suffice_without_very_high(
         self, store: ReviewStore, settings: ReviewSettings
@@ -505,9 +509,9 @@ class TestFixEligibility:
                 store, candidate_id, f"k{i}", session=f"s{i}", occurred=f"2026-06-01T1{i}:00:00+00:00", heuristic=MEDIUM
             )
             await judge(store, f"k{i}")
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert (status.sessions, status.days, status.single_observation) == (2, 1, False)
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is True
+        assert await store.eligible(candidate_id, settings=settings) is True
 
     async def test_two_accepted_observations_in_one_session_are_not_enough(
         self, store: ReviewStore, settings: ReviewSettings
@@ -519,9 +523,9 @@ class TestFixEligibility:
                 store, candidate_id, f"k{i}", session="s0", occurred=f"2026-06-01T1{i}:00:00+00:00", heuristic=MEDIUM
             )
             await judge(store, f"k{i}")
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert (status.sessions, status.single_observation) == (1, False)
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is False
+        assert await store.eligible(candidate_id, settings=settings) is False
 
     async def test_cap_applies_to_fix_candidates(self, store: ReviewStore, settings: ReviewSettings) -> None:
         await store.enable(REPO)
@@ -530,7 +534,7 @@ class TestFixEligibility:
         await judge(store, "k0")
         await open_pr(store, rule="other-a", opened_at=datetime.now(UTC))
         await open_pr(store, rule="other-b", opened_at=datetime.now(UTC))
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is False
+        assert await store.eligible(candidate_id, settings=settings) is False
 
 
 class TestThresholdStatus:
@@ -540,20 +544,20 @@ class TestThresholdStatus:
         for i in range(2):
             await seed(store, candidate_id, f"k{i}", session=f"s{i}", occurred=f"2026-06-01T1{i}:00:00+00:00")
             await judge(store, f"k{i}")
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert (status.sessions, settings.min_sessions) == (2, 3)
         assert (status.days, settings.min_days) == (1, 2)
         assert (status.open_prs, settings.max_open_prs) == (0, 2)
 
     async def test_unknown_candidate_raises(self, store: ReviewStore, settings: ReviewSettings) -> None:
         with pytest.raises(LookupError, match="no candidate with id 999"):
-            await store.threshold_status(999, settings=settings, prompt_version=PROMPT_VERSION)
+            await store.threshold_status(999, settings=settings)
 
 
 class TestRegroup:
     async def test_merge_reparents_shared_slug_and_sweeps_husks(self, store: ReviewStore) -> None:
         first, second = await seed_merge_pair(store)
-        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (2, 0)
+        assert await store.regroup_create() == (2, 0)
         [survivor] = await store.candidates()
         assert (survivor["rule"], survivor["status"], survivor["observations"]) == ("shared-slug", "watching", 2)
         assert survivor["sample_text"] == "text ka"
@@ -564,12 +568,12 @@ class TestRegroup:
 
     async def test_second_regroup_is_idempotent_and_byte_identical(self, store: ReviewStore) -> None:
         await seed_merge_pair(store)
-        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (2, 0)
+        assert await store.regroup_create() == (2, 0)
         candidates, observations = (
             await dump_table(store, "candidates"),
             await dump_table(store, "candidate_observations"),
         )
-        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (0, 0)
+        assert await store.regroup_create() == (0, 0)
         assert await dump_table(store, "candidates") == candidates
         assert await dump_table(store, "candidate_observations") == observations
 
@@ -584,7 +588,7 @@ class TestRegroup:
         await judge(store, "kt", slug="different-slug")
         for step in PATHS[terminal]:
             await store.transition(candidate_id, step, pr_opened_at=datetime.now(UTC))
-        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (0, 0)
+        assert await store.regroup_create() == (0, 0)
         [row] = await store.candidates()
         assert (row["id"], row["rule"], row["status"], row["observations"]) == (
             candidate_id,
@@ -597,11 +601,11 @@ class TestRegroup:
         digest = await create_candidate(store, rule=digest_rule("f"))
         await seed(store, digest, "kf", session="s1", occurred="2026-06-01T10:00:00+00:00")
         await judge(store, "kf", slug="slug-a", fidelity="summary")
-        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (1, 0)
+        assert await store.regroup_create() == (1, 0)
         [on_a] = await store.candidates()
         assert (on_a["rule"], on_a["observations"]) == ("slug-a", 1)
         await judge(store, "kf", slug="slug-b", fidelity="full")
-        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (1, 0)
+        assert await store.regroup_create() == (1, 0)
         [on_b] = await store.candidates()
         assert (on_b["rule"], on_b["observations"]) == ("slug-b", 1)
         assert len(await dump_table(store, "candidate_observations")) == 1
@@ -612,7 +616,7 @@ class TestRegroup:
         await judge(store, "kf", slug="would-be-slug")
         create_id = await create_candidate(store, rule=digest_rule("unj"))
         await seed(store, create_id, "kc", session="s2", occurred="2026-06-01T10:00:00+00:00")
-        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (0, 0)
+        assert await store.regroup_create() == (0, 0)
         rows = {int(str(r["id"])): r for r in await store.candidates()}
         assert set(rows) == {fix_id, create_id}
         assert (rows[fix_id]["candidate_kind"], rows[fix_id]["status"], rows[fix_id]["observations"]) == (
@@ -636,7 +640,7 @@ class TestRegroup:
         await seed(store, mixed_id, "m0", session="s3", occurred="2026-06-01T10:00:00+00:00")
         await seed(store, mixed_id, "m1", session="s4", occurred="2026-06-02T10:00:00+00:00")
         await judge(store, "m0", accepted=False)
-        assert await store.regroup_create(prompt_version=PROMPT_VERSION) == (0, 1)
+        assert await store.regroup_create() == (0, 1)
         retired = await store.candidate(rejected_id)
         assert (retired["status"], retired["observations"], retired["sample_text"]) == ("rejected", 2, "text r0")
         assert (await candidate_row(store, mixed_id))["status"] == "watching"
@@ -650,13 +654,138 @@ class TestRegroup:
         for i, (session, day) in enumerate([("s1", "2026-06-01"), ("s2", "2026-06-01"), ("s3", "2026-06-02")]):
             await seed(store, candidate_id, f"e{i}", session=session, occurred=f"{day}T10:00:00+00:00")
             await judge(store, f"e{i}", slug=slug)
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is True
+        assert await store.eligible(candidate_id, settings=settings) is True
         await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_opened_at=datetime.now(UTC))
         await store.transition(candidate_id, CandidateStatus.ACCEPTED)
         assert await create_candidate(store, rule=slug) == candidate_id
         await seed(store, candidate_id, "fresh", session="s9", occurred="2026-06-05T10:00:00+00:00")
         await judge(store, "fresh", slug=slug)
-        status = await store.threshold_status(candidate_id, settings=settings, prompt_version=PROMPT_VERSION)
+        status = await store.threshold_status(candidate_id, settings=settings)
         assert (status.status, status.sessions, status.days) == (CandidateStatus.ACCEPTED, 4, 3)
         assert (await candidate_row(store, candidate_id))["status"] == "accepted"
-        assert await store.eligible(candidate_id, settings=settings, prompt_version=PROMPT_VERSION) is False
+        assert await store.eligible(candidate_id, settings=settings) is False
+
+
+class TestPerLaneVersions:
+    async def test_create_and_fix_lanes_resolve_verdicts_independently(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path
+    ) -> None:
+        await store.enable(REPO)
+        fix_id = await fix_candidate(store)
+        await seed(
+            store,
+            fix_id,
+            "kf",
+            session="s0",
+            occurred="2026-06-01T10:00:00+00:00",
+            heuristic=VERY_HIGH,
+            source_kind="hook_complaint",
+        )
+        await judge(store, "kf")
+        create_id = await eligible_create_candidate(store)
+
+        async with await ReviewStore.open(tmp_path / "review.db", versions=PromptVersions(create=4, fix=3)) as lanes:
+            fix_status = await lanes.threshold_status(fix_id, settings=settings)
+            assert fix_status.single_observation is True
+            assert await lanes.eligible(fix_id, settings=settings) is True
+
+            stale = await lanes.threshold_status(create_id, settings=settings)
+            assert (stale.sessions, stale.days) == (0, 0)
+            assert await lanes.eligible(create_id, settings=settings) is False
+
+            for i in range(3):
+                await judge(lanes, f"k{i}")
+            live = await lanes.threshold_status(create_id, settings=settings)
+            assert (live.sessions, live.days) == (3, 2)
+            assert await lanes.eligible(create_id, settings=settings) is True
+
+    async def test_divergent_lanes_interleave_in_judge_queue(self, store: ReviewStore, tmp_path: Path) -> None:
+        for key in ("ka", "kb", "kc"):
+            candidate_id = await create_candidate(store, rule=digest_rule(key))
+            await seed(store, candidate_id, key, session="s0", occurred="2026-06-01T10:00:00+00:00")
+        complaint_id = await fix_candidate(store)
+        await seed(
+            store,
+            complaint_id,
+            "kh",
+            session="s1",
+            occurred="2026-06-01T11:00:00+00:00",
+            source_kind="hook_complaint",
+        )
+
+        async with await ReviewStore.open(tmp_path / "review.db", versions=PromptVersions(create=4, fix=3)) as lanes:
+            assert [str(row["dedup_key"]) for row in await lanes.judge_queue()] == ["ka", "kh", "kb", "kc"]
+
+    async def test_judge_health_recency_is_lane_exact(self, store: ReviewStore, tmp_path: Path) -> None:
+        candidate_id = await create_candidate(store, rule=digest_rule("ka"))
+        await seed(store, candidate_id, "ka", session="s0", occurred="2026-06-01T10:00:00+00:00")
+        await judge(store, "ka")
+
+        async with await ReviewStore.open(tmp_path / "review.db", versions=PromptVersions(create=4, fix=3)) as bumped:
+            assert (await bumped.judge_health()).last_verdict_at is None
+            complaint_id = await fix_candidate(bumped)
+            await seed(
+                bumped,
+                complaint_id,
+                "kh",
+                session="s1",
+                occurred="2026-06-01T11:00:00+00:00",
+                source_kind="hook_complaint",
+            )
+            await judge(bumped, "kh")
+            assert (await bumped.judge_health()).last_verdict_at is not None
+
+
+class TestPurgeStaleVerdicts:
+    async def test_deletes_stale_version_rows_and_spares_live(self, store: ReviewStore, tmp_path: Path) -> None:
+        for i, key in enumerate(("ka", "kb")):
+            candidate_id = await create_candidate(store, rule=digest_rule(key))
+            await seed(store, candidate_id, key, session=f"s{i}", occurred="2026-06-01T10:00:00+00:00")
+            await judge(store, key)
+
+        async with await ReviewStore.open(tmp_path / "review.db", versions=PromptVersions(create=4, fix=3)) as bumped:
+            for key in ("ka", "kb"):
+                await judge(bumped, key)
+            before = {(str(r["dedup_key"]), int(r["prompt_version"])) for r in await dump_table(bumped, "verdicts")}
+            assert before == {("ka", 3), ("ka", 4), ("kb", 3), ("kb", 4)}
+            assert await bumped.purge_stale_verdicts() == 2
+            after = {(str(r["dedup_key"]), int(r["prompt_version"])) for r in await dump_table(bumped, "verdicts")}
+            assert after == {("ka", 4), ("kb", 4)}
+
+    async def test_purge_spares_other_roles(self, store: ReviewStore, tmp_path: Path) -> None:
+        candidate_id = await create_candidate(store, rule=digest_rule("ka"))
+        await seed(store, candidate_id, "ka", session="s0", occurred="2026-06-01T10:00:00+00:00")
+        await judge(store, "ka")
+        await store.record_verdict(
+            DedupKey("ka"),
+            Verdict(accepted=True, confidence=0.9, canonical_key=None),
+            role="auditor",
+            prompt_version=1,
+            model="m1",
+            fidelity="full",
+        )
+
+        async with await ReviewStore.open(tmp_path / "review.db", versions=PromptVersions(create=4, fix=3)) as bumped:
+            assert await bumped.purge_stale_verdicts() == 1
+            after = {(str(r["role"]), int(r["prompt_version"])) for r in await dump_table(bumped, "verdicts")}
+            assert after == {("auditor", 1)}
+
+    async def test_purge_is_lane_aware_between_create_and_fix(self, store: ReviewStore, tmp_path: Path) -> None:
+        correction_id = await create_candidate(store, rule="corr-rule")
+        await seed(store, correction_id, "kc", session="s0", occurred="2026-06-01T10:00:00+00:00")
+        complaint_id = await fix_candidate(store)
+        await seed(
+            store,
+            complaint_id,
+            "kh",
+            session="s1",
+            occurred="2026-06-01T10:00:00+00:00",
+            source_kind="hook_complaint",
+        )
+        await judge(store, "kc")
+        await judge(store, "kh")
+
+        async with await ReviewStore.open(tmp_path / "review.db", versions=PromptVersions(create=4, fix=3)) as bumped:
+            assert await bumped.purge_stale_verdicts() == 1
+            after = {(str(r["dedup_key"]), int(r["prompt_version"])) for r in await dump_table(bumped, "verdicts")}
+            assert after == {("kh", 3)}

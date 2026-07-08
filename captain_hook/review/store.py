@@ -14,6 +14,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from itertools import zip_longest
 from typing import TYPE_CHECKING, Self
 
 from cc_transcript.judge.verdicts import VerdictStoreMixin
@@ -21,6 +22,7 @@ from cc_transcript.mining.confidence import NOISE_FLOOR, from_payload
 from cc_transcript.mining.store import FEEDBACK_DDL, FeedbackStore, now
 from cc_transcript.store import FileStateStore
 
+from captain_hook.review.fix import HOOK_COMPLAINT
 from captain_hook.review.repo import RepoKey
 
 if TYPE_CHECKING:
@@ -57,6 +59,41 @@ class CandidateKind(StrEnum):
 
     CREATE = "create"
     FIX = "fix"
+
+
+@dataclass(frozen=True, slots=True)
+class PromptVersions:
+    """The judge's per-taxonomy prompt versions — one per candidate kind.
+
+    Bump ``create`` when :func:`~captain_hook.review.judge.build_create_prompt`
+    changes meaningfully and ``fix`` when
+    :func:`~captain_hook.review.judge.build_fix_prompt` does. A bump invalidates
+    that lane's verdicts — the next pass lazily re-judges the lane at full
+    fidelity — and :meth:`ReviewStore.purge_stale_verdicts` sweeps the orphaned
+    rows the lane no longer runs.
+
+    Attributes:
+        create: The prompt version for CREATE-taxonomy durable-correction rows.
+        fix: The prompt version for FIX-taxonomy ``hook_complaint`` rows.
+    """
+
+    create: int
+    fix: int
+
+    def of(self, kind: CandidateKind) -> int:
+        """Returns the prompt version bound to a candidate ``kind``."""
+        match kind:
+            case CandidateKind.CREATE:
+                return self.create
+            case CandidateKind.FIX:
+                return self.fix
+
+    def for_row(self, row: Mapping[str, object]) -> int:
+        """Returns the prompt version for a feedback row, keyed by its ``source_kind``."""
+        return self.fix if str(row["source_kind"]) == HOOK_COMPLAINT else self.create
+
+
+PROMPT_VERSIONS = PromptVersions(create=3, fix=3)
 
 
 class CandidateStatus(StrEnum):
@@ -174,10 +211,10 @@ class JudgeHealth:
     """The judge lane's dashboard health: backlog, recency, and the slug-split signal.
 
     Attributes:
-        pending: How many judge-worthy corrections still lack a verdict at the
-            current prompt version.
-        last_verdict_at: The newest judge verdict's timestamp at the current
-            prompt version, or ``None`` before any verdict lands.
+        pending: How many judge-worthy corrections still lack a verdict at their
+            lane's bound version.
+        last_verdict_at: The newest judge verdict's timestamp across both lanes'
+            bound versions, or ``None`` before any verdict lands.
         splits: Distinct canonical-key pairs whose evidence centroids nearly
             coincide — possible slug splits the reviewer may want to reconcile.
     """
@@ -199,12 +236,16 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
 
     Example:
         >>> async with await ReviewStore.open(settings.db_path) as store:
-        ...     await store.eligible(candidate_id, settings=settings, prompt_version=1)
+        ...     await store.eligible(candidate_id, settings=settings)
     """
 
+    def __init__(self, store: FileStateStore, versions: PromptVersions) -> None:
+        super().__init__(store)
+        self.versions = versions
+
     @classmethod
-    async def open(cls, path: Path) -> Self:
-        """Opens (creating if needed) the review database at ``path``."""
+    async def open(cls, path: Path, *, versions: PromptVersions = PROMPT_VERSIONS) -> Self:
+        """Opens (creating if needed) the review database at ``path`` under ``versions``."""
         return cls(
             await FileStateStore.open(
                 path,
@@ -260,7 +301,8 @@ CREATE TABLE IF NOT EXISTS spawn_runs (
   CHECK ((ok = 1) = (error IS NULL))
 );
 """,
-            )
+            ),
+            versions,
         )
 
     async def enable(self, repo: RepoKey) -> None:
@@ -435,7 +477,7 @@ VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
             (to, now(), pr_url, pr_opened_at.astimezone(UTC).isoformat() if pr_opened_at else None, candidate_id),
         )
 
-    async def regroup_create(self, *, prompt_version: int) -> tuple[int, int]:
+    async def regroup_create(self) -> tuple[int, int]:
         """Re-parents, retires, and sweeps watching create candidates onto their durable slugs.
 
         The treadmill that turns the scanner's per-session digest candidates into
@@ -443,8 +485,8 @@ VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
         single transaction. In order:
 
         1. **Re-parent** every observation on a watching create candidate whose
-           judge verdict at ``prompt_version`` is accepted and names a
-           ``canonical_key`` different from the candidate's rule, onto the create
+           judge verdict at the create lane's bound version is accepted and names
+           a ``canonical_key`` different from the candidate's rule, onto the create
            candidate keyed by that slug — created on first need, taking the
            observation's source kind — earliest observation first so the slug
            candidate keeps earliest-evidence order.
@@ -455,9 +497,6 @@ VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
            concurrent ingest just created is newer and survives.
 
         Fix candidates and terminal or PR-open create candidates are never touched.
-
-        Args:
-            prompt_version: The judge prompt version whose verdicts decide acceptance.
 
         Returns:
             ``(merged, retired)`` — observations re-parented and candidates rejected.
@@ -481,7 +520,7 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
   AND v.{self.ACCEPTED_COLUMN} = 1 AND v.canonical_key IS NOT NULL AND v.canonical_key != c.rule
 ORDER BY o.id
 """,
-                    (prompt_version, CandidateStatus.WATCHING),
+                    (self.versions.create, CandidateStatus.WATCHING),
                 )
             ]
             for row in reparent:
@@ -513,7 +552,7 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
     WHERE o.candidate_id = c.id AND (v.id IS NULL OR v.{self.ACCEPTED_COLUMN} = 1)
   )
 """,
-                    (CandidateStatus.WATCHING, prompt_version),
+                    (CandidateStatus.WATCHING, self.versions.create),
                 )
             ]
             for candidate_id in retire:
@@ -529,20 +568,17 @@ WHERE candidate_kind = 'create' AND status = ? AND updated_at < ?
             )
         return len(reparent), len(retire)
 
-    async def threshold_status(
-        self, candidate_id: int, *, settings: ReviewSettings, prompt_version: int
-    ) -> ThresholdStatus:
+    async def threshold_status(self, candidate_id: int, *, settings: ReviewSettings) -> ThresholdStatus:
         """Returns the judge-accepted evidence counts behind one candidate's eligibility.
 
         An observation counts only when its dedup key's latest judge verdict at
-        ``prompt_version`` accepts it with confidence at or above
+        the candidate kind's bound version accepts it with confidence at or above
         ``settings.min_judge_confidence``; unjudged observations count as
         not-yet, so they retry on the next session's pass.
 
         Args:
             candidate_id: The candidate to inspect.
             settings: The thresholds and judge knobs to count under.
-            prompt_version: The judge prompt version whose verdicts apply.
 
         Returns:
             The counts the eligibility call (and the CLI's explanation) reads.
@@ -567,7 +603,7 @@ JOIN {self.VERDICT_TABLE} v ON v.dedup_key = o.dedup_key AND v.role = 'judge' AN
 JOIN feedback_events e ON e.dedup_key = o.dedup_key
 WHERE o.candidate_id = ? AND v.{self.ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
 """,
-            (prompt_version, candidate_id, settings.min_judge_confidence),
+            (self.versions.of(kind), candidate_id, settings.min_judge_confidence),
         )
         accepted = [dict(row) async for row in accepted_cur]
 
@@ -589,7 +625,7 @@ WHERE o.candidate_id = ? AND v.{self.ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
             ),
         )
 
-    async def eligible(self, candidate_id: int, *, settings: ReviewSettings, prompt_version: int) -> bool:
+    async def eligible(self, candidate_id: int, *, settings: ReviewSettings) -> bool:
         """Returns whether a candidate's judge-accepted evidence crosses its thresholds.
 
         Delegates to :func:`crosses_thresholds` over the candidate's
@@ -599,14 +635,10 @@ WHERE o.candidate_id = ? AND v.{self.ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
         Args:
             candidate_id: The candidate to check.
             settings: The thresholds and judge knobs to check under.
-            prompt_version: The judge prompt version whose verdicts apply.
         """
-        return crosses_thresholds(
-            await self.threshold_status(candidate_id, settings=settings, prompt_version=prompt_version),
-            settings=settings,
-        )
+        return crosses_thresholds(await self.threshold_status(candidate_id, settings=settings), settings=settings)
 
-    async def pr_summary(self, candidate_id: int, *, settings: ReviewSettings, prompt_version: int) -> str | None:
+    async def pr_summary(self, candidate_id: int, *, settings: ReviewSettings) -> str | None:
         """Returns the candidate's most-confident accepted verdict summary — what its PR would do.
 
         Reads the same judge-accepted observations the thresholds count and
@@ -616,8 +648,13 @@ WHERE o.candidate_id = ? AND v.{self.ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
         Args:
             candidate_id: The candidate to describe.
             settings: The judge knobs supplying ``min_judge_confidence``.
-            prompt_version: The judge prompt version whose verdicts apply.
+
+        Raises:
+            LookupError: If no candidate carries ``candidate_id``.
         """
+        kind_cur = await self.store.conn.execute("SELECT candidate_kind FROM candidates WHERE id = ?", (candidate_id,))
+        if not (kinds := [str(row["candidate_kind"]) async for row in kind_cur]):
+            raise LookupError(f"no candidate with id {candidate_id}")
         cur = await self.store.conn.execute(
             f"""
 WITH latest AS (
@@ -635,7 +672,7 @@ WHERE o.candidate_id = ? AND l.accepted = 1 AND l.confidence >= ?
 ORDER BY l.confidence DESC, o.id DESC
 LIMIT 1
 """,
-            (prompt_version, candidate_id, settings.min_judge_confidence),
+            (self.versions.of(CandidateKind(kinds[0])), candidate_id, settings.min_judge_confidence),
         )
         return str(rows[0]["summary"]) if (rows := [dict(row) async for row in cur]) else None
 
@@ -668,33 +705,25 @@ ORDER BY o.id
             for correction in log.for_anchor(SessionId(str(row["session_id"])), EventUuid(str(row["event_uuid"])))
         )
 
-    async def candidate_view(
-        self, row: dict[str, object], *, settings: ReviewSettings, prompt_version: int
-    ) -> CandidateView:
+    async def candidate_view(self, row: dict[str, object], *, settings: ReviewSettings) -> CandidateView:
         """Assembles one :class:`CandidateView` from a :meth:`candidates` row."""
         candidate_id = int(str(row["id"]))
-        threshold = await self.threshold_status(candidate_id, settings=settings, prompt_version=prompt_version)
+        threshold = await self.threshold_status(candidate_id, settings=settings)
         return CandidateView(
             row=row,
             threshold=threshold,
             eligible=crosses_thresholds(threshold, settings=settings),
-            summary=await self.pr_summary(candidate_id, settings=settings, prompt_version=prompt_version),
+            summary=await self.pr_summary(candidate_id, settings=settings),
         )
 
-    async def overview(
-        self, repo: RepoKey | None = None, *, settings: ReviewSettings, prompt_version: int
-    ) -> list[CandidateView]:
+    async def overview(self, repo: RepoKey | None = None, *, settings: ReviewSettings) -> list[CandidateView]:
         """Returns a :class:`CandidateView` per candidate — the status dashboard's whole read.
 
         Args:
             repo: When set, restrict to this repo.
             settings: The thresholds and judge knobs to evaluate under.
-            prompt_version: The judge prompt version whose verdicts apply.
         """
-        return [
-            await self.candidate_view(row, settings=settings, prompt_version=prompt_version)
-            for row in await self.candidates(repo)
-        ]
+        return [await self.candidate_view(row, settings=settings) for row in await self.candidates(repo)]
 
     async def record_spawn_run(
         self,
@@ -749,24 +778,58 @@ SELECT
             failing_since=str(since) if (since := streak["failing_since"]) is not None else None,
         )
 
-    async def judge_backlog(self, *, prompt_version: int) -> int:
-        """Counts judge-worthy corrections still lacking a verdict at ``prompt_version``.
+    async def judge_queue(self, *, refresh_summary: bool = False) -> list[dict[str, object]]:
+        """Returns the rows one judge pass judges, each under its taxonomy's bound version.
 
-        The dashboard's pending count: every :meth:`unjudged` row (summary-refresh
+        When both lanes carry the same version, one :meth:`unjudged` call yields
+        the whole queue in event order. When the versions diverge, each lane is
+        fetched at its own version and post-filtered to its taxonomy — the
+        create-version call keeps every non-``hook_complaint`` row, the fix-version
+        call keeps the ``hook_complaint`` rows — and the lanes interleave
+        round-robin, each call's internal order preserved, so one lane's
+        post-bump backlog never starves the other under the per-session cap.
+
+        Args:
+            refresh_summary: When True, also re-yields summary-fidelity rows for a
+                full-fidelity re-judge once their windows hydrate again.
+        """
+        if self.versions.create == self.versions.fix:
+            return await self.unjudged(
+                role="judge", prompt_version=self.versions.create, refresh_summary=refresh_summary
+            )
+        create_lane = [
+            row
+            for row in await self.unjudged(
+                role="judge", prompt_version=self.versions.create, refresh_summary=refresh_summary
+            )
+            if str(row["source_kind"]) != HOOK_COMPLAINT
+        ]
+        fix_lane = [
+            row
+            for row in await self.unjudged(
+                role="judge", prompt_version=self.versions.fix, refresh_summary=refresh_summary
+            )
+            if str(row["source_kind"]) == HOOK_COMPLAINT
+        ]
+        return [row for pair in zip_longest(create_lane, fix_lane) for row in pair if row is not None]
+
+    async def judge_backlog(self) -> int:
+        """Counts judge-worthy corrections still lacking a verdict at their lane's bound version.
+
+        The dashboard's pending count: every :meth:`judge_queue` row (summary-refresh
         included) that clears :func:`judge_worthy` — the same noise-floor predicate
         the judge pass sends rows on, so the count matches what the next pass judges.
         """
-        return sum(
-            judge_worthy(row)
-            for row in await self.unjudged(role="judge", prompt_version=prompt_version, refresh_summary=True)
-        )
+        return sum(judge_worthy(row) for row in await self.judge_queue(refresh_summary=True))
 
-    async def has_verdict_evidence(self, *, prompt_version: int) -> bool:
-        """Whether any canonical-key evidence is stored at ``prompt_version`` to suggest from.
+    async def has_verdict_evidence(self) -> bool:
+        """Whether any canonical-key evidence is stored at the create lane's bound version to suggest from.
 
         Gates the judge pass's per-row slug suggestions: with the companion
-        ``verdict_evidence`` table absent or empty at this version, no suggestion
+        ``verdict_evidence`` table absent or empty at that version, no suggestion
         is possible by construction, so the pass skips the embedder load entirely.
+        FIX verdicts never carry a ``canonical_key``, so the evidence store is
+        create-lane-only and this reads the create version.
         """
         cur = await self.store.conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'verdict_evidence'"
@@ -774,38 +837,88 @@ SELECT
         if await cur.fetchone() is None:
             return False
         cur = await self.store.conn.execute(
-            "SELECT 1 FROM verdict_evidence WHERE prompt_version = ? LIMIT 1", (prompt_version,)
+            "SELECT 1 FROM verdict_evidence WHERE prompt_version = ? LIMIT 1", (self.versions.create,)
         )
         return await cur.fetchone() is not None
 
-    async def slug_splits(self, *, prompt_version: int, threshold: float = SPLIT_THRESHOLD) -> list[KeyOverlap]:
+    async def slug_splits(self, *, threshold: float = SPLIT_THRESHOLD) -> list[KeyOverlap]:
         """Returns canonical-key pairs whose evidence centroids nearly coincide — possible slug splits.
 
         Delegates to :func:`cc_transcript.judge.near_duplicate_keys` over this
-        store's verdict-evidence vectors; nothing merges automatically, the caller
-        decides what to do with a flagged pair.
+        store's create-lane verdict-evidence vectors; nothing merges automatically,
+        the caller decides what to do with a flagged pair.
 
         Args:
-            prompt_version: The prompt version whose evidence to compare.
             threshold: The exclusive cosine-similarity floor a pair must clear.
         """
         from cc_transcript.judge.similar import near_duplicate_keys
 
-        return await near_duplicate_keys(self, prompt_version=prompt_version, threshold=threshold)
+        return await near_duplicate_keys(self, prompt_version=self.versions.create, threshold=threshold)
 
-    async def judge_health(self, *, prompt_version: int) -> JudgeHealth:
-        """Returns the judge lane's dashboard health at ``prompt_version`` — the only judge-health read.
+    async def purge_stale_verdicts(self) -> int:
+        """Deletes verdict and evidence rows recorded at a version their lane no longer runs.
 
-        Bundles the backlog count, the newest verdict's timestamp, and the
-        slug-split signal so the status dashboard reads them in one call.
+        The only verdict-delete codepath, run at the close of each judge pass: a
+        lane bumped past its recorded version orphans that lane's verdicts, and
+        this sweeps them lane-aware — a ``hook_complaint`` verdict is stale unless
+        it carries the fix version, every other verdict is stale unless it carries
+        the create version (so with ``create=4 fix=3`` the stale create rows at 3
+        die while the live fix rows at 3 survive). Only the judge role's rows are
+        swept — the lanes' versions say nothing about any other role's. The
+        create-lane evidence vectors follow, since FIX verdicts never carry a
+        ``canonical_key``.
+
+        Purging forecloses a retroactive cross-version flip report (cc_transcript's
+        eval harness compares two passes' verdicts): export :meth:`judged` for the
+        outgoing version before bumping a lane if one is wanted.
+
+        Returns:
+            The number of verdict rows deleted.
+        """
+        from cc_transcript.judge.similar import prepare_evidence_removal
+
+        removable = await prepare_evidence_removal(self.store)
+        async with self.store.transaction() as conn:
+            purged = (
+                await conn.execute(
+                    f"""
+DELETE FROM {self.VERDICT_TABLE} WHERE id IN (
+  SELECT v.id FROM {self.VERDICT_TABLE} v
+  JOIN feedback_events e ON e.dedup_key = v.dedup_key
+  WHERE v.role = 'judge' AND v.prompt_version != CASE WHEN e.source_kind = ? THEN ? ELSE ? END
+)
+""",
+                    (HOOK_COMPLAINT, self.versions.fix, self.versions.create),
+                )
+            ).rowcount
+            if removable:
+                await conn.execute(
+                    "DELETE FROM verdict_vectors WHERE vector_id IN "
+                    "(SELECT vector_id FROM verdict_evidence WHERE prompt_version != ?)",
+                    (self.versions.create,),
+                )
+                await conn.execute("DELETE FROM verdict_evidence WHERE prompt_version != ?", (self.versions.create,))
+        return purged
+
+    async def judge_health(self) -> JudgeHealth:
+        """Returns the judge lane's dashboard health at each lane's bound version — the only judge-health read.
+
+        Bundles the backlog count, the newest live verdict's timestamp across both
+        lanes — lane-exact, so a bumped lane's stale rows never masquerade as
+        recency — and the slug-split signal so the status dashboard reads them in
+        one call.
         """
         cur = await self.store.conn.execute(
-            f"SELECT MAX(judged_at) AS last FROM {self.VERDICT_TABLE} WHERE role = 'judge' AND prompt_version = ?",
-            (prompt_version,),
+            f"""
+SELECT MAX(v.judged_at) AS last FROM {self.VERDICT_TABLE} v
+JOIN feedback_events e ON e.dedup_key = v.dedup_key
+WHERE v.role = 'judge' AND v.prompt_version = CASE WHEN e.source_kind = ? THEN ? ELSE ? END
+""",
+            (HOOK_COMPLAINT, self.versions.fix, self.versions.create),
         )
         last = [row["last"] async for row in cur][0]
         return JudgeHealth(
-            pending=await self.judge_backlog(prompt_version=prompt_version),
+            pending=await self.judge_backlog(),
             last_verdict_at=str(last) if last is not None else None,
-            splits=tuple(await self.slug_splits(prompt_version=prompt_version)),
+            splits=tuple(await self.slug_splits()),
         )
