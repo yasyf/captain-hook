@@ -208,11 +208,10 @@ class HookContext:
         scope: str | None = None,
         budget: int = 4000,
     ) -> str | None:
-        """A compact diff via ``ccx diff`` when available, else plain ``git``.
+        """A compact diff via ``ccx vcs diff`` when available, else plain ``git``.
 
-        Prefers cc-context's token-budgeted ``ccx diff`` and falls back to ``git`` when ``ccx`` is
-        absent, fails, or returns a hunkless symbol-outline (no ``@@`` / ``diff --git`` lines, as in
-        jj-colocated repos), so a hook gets a real diff in any repo. The git fallback is bounded to
+        Prefers cc-context's token-budgeted ``ccx vcs diff`` and falls back to ``git`` when ``ccx``
+        is absent or failing, so a hook gets a real diff in any repo. The git fallback is bounded to
         roughly ``budget`` tokens with a trailing marker when truncated, so a large diff can't blow
         the caller's context.
 
@@ -241,7 +240,7 @@ class HookContext:
         return self.bounded_git(budget, *args, *git_scope)
 
     def ccx_diff(self, target: str, *, scope: str | None, budget: int) -> str | None:
-        cmd = ["ccx", "diff", target, "--budget", str(budget), *(("--scope", scope) if scope else ())]
+        cmd = ["ccx", "vcs", "diff", target, "--budget", str(budget), *(("--scope", scope) if scope else ())]
         out = self.call_cli(cmd, throw=False)
         return out if out is not None and ("@@" in out or "diff --git" in out) else None
 

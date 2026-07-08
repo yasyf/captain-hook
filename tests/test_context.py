@@ -460,13 +460,13 @@ class TestDiff:
         ccx_out = "# Diff: uncommitted\n@@ -1 +1 @@\n-body\n+body2\n"
         with patch("captain_hook.context.run_cli", return_value=ccx_out) as mock:
             assert ctx.diff() == ccx_out
-        assert mock.call_args.args[0] == ["ccx", "diff", "uncommitted", "--budget", "4000"]
+        assert mock.call_args.args[0] == ["ccx", "vcs", "diff", "uncommitted", "--budget", "4000"]
 
     def test_passes_scope_and_budget_to_ccx(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         ctx = make_ctx_in(tmp_path, monkeypatch)
         with patch("captain_hook.context.run_cli", return_value="diff --git a/f b/f\nccx out") as mock:
             ctx.diff("HEAD~1", scope="src/", budget=800)
-        assert mock.call_args.args[0] == ["ccx", "diff", "HEAD~1", "--budget", "800", "--scope", "src/"]
+        assert mock.call_args.args[0] == ["ccx", "vcs", "diff", "HEAD~1", "--budget", "800", "--scope", "src/"]
 
     def test_falls_back_to_git_when_ccx_absent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from spawnllm.proc import run_cli as real_run_cli
@@ -553,13 +553,13 @@ class TestDiff:
         with patch("captain_hook.context.run_cli", return_value="diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b\n") as mock:
             out = ctx.diff(commit="abc123", budget=800)
         assert out == "diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b\n"
-        assert mock.call_args.args[0] == ["ccx", "diff", "abc123~1..abc123", "--budget", "800"]
+        assert mock.call_args.args[0] == ["ccx", "vcs", "diff", "abc123~1..abc123", "--budget", "800"]
 
     def test_commit_ccx_threads_scope(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         ctx = make_ctx_in(tmp_path, monkeypatch)
         with patch("captain_hook.context.run_cli", return_value="diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b\n") as mock:
             ctx.diff(commit="abc", scope="pkg/", budget=800)
-        assert mock.call_args.args[0] == ["ccx", "diff", "abc~1..abc", "--budget", "800", "--scope", "pkg/"]
+        assert mock.call_args.args[0] == ["ccx", "vcs", "diff", "abc~1..abc", "--budget", "800", "--scope", "pkg/"]
 
     def test_commit_hunkless_ccx_threads_scope_into_git_show(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

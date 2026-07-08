@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from captain_hook import Allow, Block, Event, Input, TouchedFile, llm_gate
 
-# `diff=True` attaches a compact `ccx diff` (a plain `git diff` when ccx is absent) as a
+# `diff=True` attaches a compact `ccx vcs diff` (a plain `git diff` when ccx is absent) as a
 # <diff> block, so the model reviews the actual change instead of reconstructing it from
 # the transcript. Stop carries no tool input, so the cheap pre-filter is the
 # transcript-history condition TouchedFile — "did this session edit Python source?" —
