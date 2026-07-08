@@ -1031,6 +1031,24 @@ class TestWaitingCondition:
                 id="arrays_absent_falls_through_to_transcript_pending",
             ),
             pytest.param({}, [], False, id="arrays_absent_clean_transcript"),
+            pytest.param(
+                {"background_tasks": [{"id": "t1", "type": "shell", "status": "running"}]},
+                [],
+                True,
+                id="background_task_missing_description_still_counts",
+            ),
+            pytest.param(
+                {"background_tasks": None, "session_crons": None},
+                [],
+                False,
+                id="null_arrays_read_as_empty",
+            ),
+            pytest.param(
+                {"session_crons": [{"id": "c1", "schedule": "* * * * *"}]},
+                [],
+                True,
+                id="session_cron_missing_fields_still_counts",
+            ),
         ],
     )
     def test_stop_payload_layer(self, raw: dict[str, Any], raw_messages: list[dict[str, Any]], expected: bool) -> None:

@@ -75,7 +75,13 @@ class BackgroundTask:
 
     @classmethod
     def from_raw(cls, raw: Mapping[str, Any]) -> BackgroundTask:
-        return cls(id=raw["id"], type=raw["type"], status=raw["status"], description=raw["description"], raw=raw)
+        return cls(
+            id=str(raw.get("id", "")),
+            type=str(raw.get("type", "")),
+            status=str(raw.get("status", "")),
+            description=str(raw.get("description", "")),
+            raw=raw,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +105,12 @@ class SessionCron:
 
     @classmethod
     def from_raw(cls, raw: Mapping[str, Any]) -> SessionCron:
-        return cls(id=raw["id"], schedule=raw["schedule"], recurring=raw["recurring"], prompt=raw["prompt"])
+        return cls(
+            id=str(raw.get("id", "")),
+            schedule=str(raw.get("schedule", "")),
+            recurring=bool(raw.get("recurring", False)),
+            prompt=str(raw.get("prompt", "")),
+        )
 
 
 @dataclass
@@ -163,7 +174,7 @@ class BaseHookEvent:
         v2.1.145+; a non-empty tuple means the session is paused waiting for
         background work to wake it, not done.
         """
-        return tuple(BackgroundTask.from_raw(t) for t in self._raw.get("background_tasks", ()))
+        return tuple(BackgroundTask.from_raw(t) for t in self._raw.get("background_tasks") or ())
 
     @property
     def session_crons(self) -> tuple[SessionCron, ...]:
@@ -173,7 +184,7 @@ class BaseHookEvent:
         v2.1.145+; a non-empty tuple means the session is paused for future
         scheduled work.
         """
-        return tuple(SessionCron.from_raw(c) for c in self._raw.get("session_crons", ()))
+        return tuple(SessionCron.from_raw(c) for c in self._raw.get("session_crons") or ())
 
     @property
     def transcript_path(self) -> Path | None:
