@@ -1,4 +1,4 @@
-<!-- cc-guides 0.1.7 src=AGENTS.src.md | GENERATED — do not edit: change AGENTS.src.md and run 'cc-guides render'. Everything below is in force. -->
+<!-- cc-guides 0.1.8 src=AGENTS.src.md | GENERATED — do not edit: change AGENTS.src.md and run 'cc-guides render'. Everything below is in force. -->
 # captain-hook Development Guide
 
 Declarative hook framework for Claude Code. Published to PyPI as `capt-hook`; the CLI is `capt-hook`, run as `uvx capt-hook`.
@@ -70,12 +70,12 @@ When you write a plan — in plan mode, or any "here's what I'll do" before you 
 
 ## Compact Context (ccx)
 
-`cc-context` — the `ccx` CLI and the `cc-context` MCP (its `mcp__cc-context__*` tools mirror the query surface — read, search, symbol, outline, diff, edit — plus `ccx_exec`/`ccx_exec_tools` for multi-call composition and `BashFormat` for JSON re-encoding) — is the DEFAULT for reading code, finding symbols, searching, and reviewing diffs. It returns token-bounded output (signatures + line numbers, explicit overflow, never silent truncation) instead of raw dumps, and the capt-hook `ccx` guard pack BLOCKS the token-heavy primitives — so reach for ccx first.
+`cc-context` — the `ccx` CLI and the `cc-context` MCP (its `mcp__cc-context__*` tools mirror the query surface — read, search, symbol, outline, diff, edit — plus `ccx_exec`/`ccx_exec_tools` for multi-call composition and `BashFormat` for JSON re-encoding) — is the DEFAULT for reading code, finding symbols, searching, and reviewing diffs. It returns token-bounded output (signatures + line numbers, explicit overflow, never silent truncation) instead of raw dumps, and the capt-hook `ccx` guard pack rewrites the mappable token-heavy commands (raw `grep`, bare `git diff`/`git show`, page-dump `curl`, oversized `Read`s) to their ccx equivalents in place and BLOCKS the rest — so reach for ccx first.
 
 1. **Orient a repo** → `ccx repo overview`
 2. **"How does X work / where is Y" (intent)** → `ccx code search "<question>"` (semantic, semble-backed)
 3. **A specific symbol (def + callers + callees)** → `ccx code symbol <name>` (alias `ccx code grok`)
-4. **Literal / structural text** → `ccx code grep <text> [--glob G]`
+4. **Literal / structural text** → `ccx code grep <text> [--glob G] [--scope dir] [-i] [-w]` (`-i`/`-w` run on ripgrep; system `grep` fills in when `rg` is missing)
 5. **List files** → `ccx repo find "<glob>"`
 6. **Read a file** → `ccx code outline <file-or-dir>` first (ast-grep structural map for the languages it outlines and any directory, tilth signatures otherwise), then `ccx code read <file> --section A-B` for the part you need (whole file: `ccx code read <file> --full`)
 7. **Edit a file** → `ccx code edit <file> --at A-B#hash --content <text>` (hash-verified write: refuses on anchor mismatch, re-anchors moved content, returns the new anchor so edits chain; `--content -` reads stdin, `--delete` removes the range)
