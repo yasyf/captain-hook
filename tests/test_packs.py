@@ -42,7 +42,7 @@ PYTHON_HOOKS = {"style", "testing", "toolchain"}
 GO_HOOKS = {"testing", "toolchain"}
 # lib.py carries __capt_hook_skip__ so it is a non-underscore file the loader skips; the
 # layout test counts .py files, so it appears here, but only steering.py registers hooks.
-STEERING_HOOKS = {"steering"}
+STEERING_HOOKS = {"steering", "teammates"}
 FIXES_HOOKS = {"teammate_permissions"}
 HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 SRC_USES_FILE = (
@@ -641,9 +641,11 @@ def test_import_pack_module_sets_file(tmp_path: Path) -> None:
 def test_enabling_steering_pack_registers_hooks() -> None:
     resolved = manager.resolve_builtin("steering")
     discover_pack("steering", resolved.path)
-    # Four: steering.py registers the two signal nudges, the band-aid-plan llm_nudge, and the deferral llm_gate.
-    assert len(app._state.hooks) == 4
+    # Five: steering.py registers the two signal nudges, the band-aid-plan llm_nudge, and the
+    # deferral llm_gate; teammates.py registers the teammate-digest SubagentStart nudge.
+    assert len(app._state.hooks) == 5
     assert "captain_hook._packs.steering.steering" in sys.modules
+    assert "captain_hook._packs.steering.teammates" in sys.modules
 
 
 def test_steering_deferral_gate_skips_in_plan_mode() -> None:
