@@ -1,0 +1,3 @@
+fragments = [
+  "claude-specific-rules",
+]
