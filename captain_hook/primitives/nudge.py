@@ -42,6 +42,7 @@ def nudge(
     max_fires: int | None = DEFAULT_FIRES,
     tests: InlineTests | None = None,
     async_: bool = False,
+    skip_planning_agents: bool = True,
 ) -> None:
     """Register a nudge that warns (or blocks) when conditions or signals match.
 
@@ -99,6 +100,7 @@ def nudge(
         max_fires=(None if block else 3 if sig else 1) if max_fires == DEFAULT_FIRES else max_fires,
         tests=tests,
         async_=async_,
+        skip_planning_agents=skip_planning_agents,
     )(handler)
 
 
@@ -113,6 +115,7 @@ def gate(
     max_fires: int | None = DEFAULT_FIRES,
     tests: InlineTests | None = None,
     async_: bool = False,
+    skip_planning_agents: bool = True,
 ) -> None:
     """Register a blocking gate — ``nudge(message, block=True, ...)`` with an explicit signature.
 
@@ -133,4 +136,5 @@ def gate(
         max_fires=max_fires,
         tests=tests,
         async_=async_,
+        skip_planning_agents=skip_planning_agents,
     )

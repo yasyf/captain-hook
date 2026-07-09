@@ -5,9 +5,10 @@ from typing import Any
 
 import pytest
 
-from captain_hook.app import _state
+from captain_hook.app import _state, get_matching_hooks
 from captain_hook.dispatch import dispatch
 from captain_hook.primitives.nudge import DEFAULT_FIRES
+from captain_hook.testing.helpers import mock_subagent_start_event
 from captain_hook.types import Event, RanCommand, Signal, Signals, Tool, Waiting
 from tests.helpers import (
     build_ctx,
@@ -32,6 +33,7 @@ def register_nudge(
     max_fires: int | None = DEFAULT_FIRES,
     tests: Any = None,
     async_: bool = False,
+    skip_planning_agents: bool = True,
 ) -> None:
     from captain_hook.primitives.nudge import nudge
 
@@ -46,6 +48,7 @@ def register_nudge(
         max_fires=max_fires,
         tests=tests,
         async_=async_,
+        skip_planning_agents=skip_planning_agents,
     )
 
 
@@ -334,3 +337,17 @@ class TestNudgeUnconditional:
 
         assert result is not None
         assert result["hookSpecificOutput"]["additionalContext"] == "Always fires"
+
+
+class TestNudgePlanningAgentSkip:
+    def test_subagent_start_opt_out_fires_on_planning_agent(self) -> None:
+        register_nudge("start check", events=Event.SubagentStart, skip_planning_agents=False)
+        assert len(get_matching_hooks(mock_subagent_start_event(agent_type="general-purpose"))) == 1
+
+    def test_subagent_start_default_skips_planning_agent(self) -> None:
+        register_nudge("start check", events=Event.SubagentStart)
+        assert get_matching_hooks(mock_subagent_start_event(agent_type="general-purpose")) == []
+
+    def test_gate_subagent_start_opt_out_fires_on_planning_agent(self) -> None:
+        register_gate("gate check", events=Event.SubagentStart, skip_planning_agents=False)
+        assert len(get_matching_hooks(mock_subagent_start_event(agent_type="general-purpose"))) == 1
