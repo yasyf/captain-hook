@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from cc_transcript.tools import SkillCall, WorkflowCall, tool_name_matches
+from cc_transcript.tools import BashCall, SkillCall, TaskCall, WorkflowCall, matches_names, tool_name_matches
 
 from captain_hook.types import (
     Agent,
@@ -51,21 +51,21 @@ def waiting_tool_names(evt: BaseHookEvent) -> set[str]:
 
 
 def ephemeral_wait(use: ToolUse, waiting_names: set[str]) -> bool:
-    if use.call.name in waiting_names:
+    if matches_names(use.call.name, waiting_names):
         return True
-    match use.call.name:
-        case "Agent" | "Task" | "Bash" if use.call.raw.get("run_in_background"):
+    match use.call:
+        case BashCall(run_in_background=True) | TaskCall(run_in_background=True):
             return True
-        case "Agent" | "Task" if "subagent_type" not in use.call.raw:
+        case TaskCall(agent_type=None):
             return True
     return False
 
 
 def pending_async(use: ToolUse, notifications: Notifications) -> bool:
-    match use.call.name:
-        case "Agent" | "Task" if use.result and use.result.is_async:
+    match use.call:
+        case TaskCall() if use.result and use.result.is_async:
             return not notifications.completed(use.ref.tool_use_id)
-        case "Workflow" if not (use.result and use.result.is_error):
+        case WorkflowCall() if not (use.result and use.result.is_error):
             return not notifications.completed(use.ref.tool_use_id)
     return False
 

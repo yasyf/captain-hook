@@ -917,11 +917,15 @@ class TestWaitingCondition:
             pytest.param("Task", {"name": "x", "prompt": "y"}, True, id="fork_bare_task"),
             pytest.param("Task", {"subagent_type": "general-purpose", "prompt": "y"}, False, id="typed_task"),
             pytest.param("Bash", {"command": "build", "run_in_background": True}, True, id="bash_run_in_background"),
+            pytest.param(
+                "Execute", {"command": "build", "run_in_background": True}, True, id="execute_alias_run_in_background"
+            ),
             pytest.param("Bash", {"command": "ls"}, False, id="bash_sync"),
             pytest.param("Monitor", {"name": "build"}, True, id="monitor"),
             pytest.param("TeamCreate", {"members": []}, True, id="team_create"),
             pytest.param("ScheduleWakeup", {"delaySeconds": 600}, True, id="schedule_wakeup"),
             pytest.param("SendMessage", {"to": "agent-1", "message": "go"}, True, id="send_message"),
+            pytest.param("mcp__pool__SendMessage", {"to": "agent-1", "message": "go"}, True, id="mcp_send_message"),
         ],
     )
     def test_single_tool_matches(self, tool: str, tool_input: dict[str, Any], expected: bool) -> None:
