@@ -6,7 +6,8 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from cc_transcript.tools import BashCall, SkillCall, TaskCall, WorkflowCall, matches_names, tool_name_matches
+from cc_transcript.activity_probe import probe_events
+from cc_transcript.tools import SkillCall, WorkflowCall, tool_name_matches
 
 from captain_hook.types import (
     Agent,
@@ -36,38 +37,16 @@ from captain_hook.types import (
 )
 
 if TYPE_CHECKING:
-    from cc_transcript.activity import ToolUse
-    from cc_transcript.notifications import Notifications
     from cc_transcript.query import Session
 
     from captain_hook.events import BaseHookEvent
     from captain_hook.types import HookSpec
 
 
-def waiting_tool_names(evt: BaseHookEvent) -> set[str]:
+def waiting_tool_names(evt: BaseHookEvent) -> frozenset[str]:
     from captain_hook.settings import DEFAULT_WAITING_TOOLS
 
-    return set(settings.waiting_tools) if (settings := evt.ctx.settings) else set(DEFAULT_WAITING_TOOLS)
-
-
-def ephemeral_wait(use: ToolUse, waiting_names: set[str]) -> bool:
-    if matches_names(use.call.name, waiting_names):
-        return True
-    match use.call:
-        case BashCall(run_in_background=True) | TaskCall(run_in_background=True):
-            return True
-        case TaskCall(agent_type=None):
-            return True
-    return False
-
-
-def pending_async(use: ToolUse, notifications: Notifications) -> bool:
-    match use.call:
-        case TaskCall() if use.result and use.result.is_async:
-            return not notifications.completed(use.ref.tool_use_id)
-        case WorkflowCall() if not (use.result and use.result.is_error):
-            return not notifications.completed(use.ref.tool_use_id)
-    return False
+    return frozenset(settings.waiting_tools if (settings := evt.ctx.settings) else DEFAULT_WAITING_TOOLS)
 
 
 def is_waiting(evt: BaseHookEvent) -> bool:
@@ -75,13 +54,7 @@ def is_waiting(evt: BaseHookEvent) -> bool:
         return True
     if not (t := evt.ctx.transcript):
         return False
-    notifications = t.notifications
-    if notifications.has_pending:
-        return True
-    waiting_names = waiting_tool_names(evt)
-    return any(ephemeral_wait(use, waiting_names) for use in t.current_turn.tool_calls) or any(
-        pending_async(use, notifications) for use in t.tool_calls
-    )
+    return probe_events(t.events, waiting_tools=waiting_tool_names(evt)).is_waiting
 
 
 def workflow_script_source(evt: BaseHookEvent) -> str | None:
