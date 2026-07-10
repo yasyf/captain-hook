@@ -5,7 +5,15 @@ from typing import TYPE_CHECKING, Final
 
 from captain_hook.app import on
 from captain_hook.signals import cite_message, resolve_signals, transcript_texts
-from captain_hook.state import EchoTracker, PrimitiveState, fired_this_turn, hook_name, record_fire
+from captain_hook.state import (
+    ECHO_WINDOW,
+    TURN_ECHO_LOOKBACK,
+    EchoTracker,
+    PrimitiveState,
+    fired_this_turn,
+    hook_name,
+    record_fire,
+)
 from captain_hook.types import (
     Action,
     Event,
@@ -69,7 +77,9 @@ def nudge(
             return None
 
         if sig:
-            tracker = EchoTracker()
+            tracker = EchoTracker(
+                window=ECHO_WINDOW + (sig.window if isinstance(sig.window, int) else TURN_ECHO_LOOKBACK)
+            )
             candidates = [t for t in transcript_texts(evt, sig.window, sig.origin) if not tracker.saw(t, evt=evt)]
             with evt.ctx.s[PrimitiveState].mutate() as ps:
                 if not (triggering := ps.match_signals(sig, candidates, name)):

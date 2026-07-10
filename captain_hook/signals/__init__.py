@@ -105,6 +105,11 @@ def transcript_texts(
     Harness-injected events — skill loads and other meta events, and compact
     summaries — are excluded: they carry the harness's prose, not the agent's, and
     scoring them lets an unrelated skill's boilerplate trip a signal gate.
+
+    Agent-injected user events — teammate-message relay banners, scheduled-task
+    prompts, and role reminders (``UserEvent.is_agent_injected``) — are dropped even
+    under ``origin="any"``: a relay banner echoes another agent's prose into this
+    transcript, so scoring it would let one agent's words trip this agent's gate.
     """
     scope = evt.ctx.turn if window == "turn" else evt.ctx.t.recent(window)
     texts = [
@@ -112,6 +117,7 @@ def transcript_texts(
         for event in scope.events
         if isinstance(event, UserEvent | AssistantEvent)
         and not (event.meta.is_meta or event.meta.is_compact_summary)
+        and not (isinstance(event, UserEvent) and event.is_agent_injected)
         and (origin == "any" or isinstance(event, AssistantEvent))
         for text in (event.text, *block_texts(event))
         if text

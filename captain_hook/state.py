@@ -76,9 +76,16 @@ class HookState(BaseModel):
 # agent is parroting".
 # ECHO_MIN_OVERLAP: absolute minimum overlap to count, so short messages don't pass the
 # fractional threshold trivially (e.g. a 2-token message would otherwise hit 0.5).
+# TURN_ECHO_LOOKBACK: assumed event span of a window="turn" pass, added to ECHO_WINDOW to size
+# forward echo damping when the turn's real length is unknown at fire time (a sum, not a max).
+# ECHO_VERBATIM_CAP: fired-warn sentences kept for verbatim-quote damping, FIFO session-wide; oldest evict.
+# ECHO_VERBATIM_MIN_CHARS: shortest warn sentence seeded, so a generic fragment can't damp by containment.
 ECHO_WINDOW = 5
 ECHO_THRESHOLD = 0.4
 ECHO_MIN_OVERLAP = 2
+TURN_ECHO_LOOKBACK = 40
+ECHO_VERBATIM_CAP = 40
+ECHO_VERBATIM_MIN_CHARS = 20
 
 
 class PrimitiveState(BaseModel):
@@ -87,15 +94,18 @@ class PrimitiveState(BaseModel):
     ``last_fired_at`` (the session-global turn-throttle read by every LLM hook and
     blocking gate) and the ``echo_lemmas``/``echo_window_end`` window (a global
     last-write-wins "don't re-trigger on a parrot of the last nudge" filter) are
-    deliberately session-scoped, not per hook. ``consumed`` is a per-hook-name ledger
-    of signal-text hashes each hook has already scored, so one hook's aggregate fire
-    cannot mute another's signals — access it through :meth:`consumed_for`.
+    deliberately session-scoped, not per hook. ``echo_verbatim`` is the session-wide,
+    cross-hook FIFO of fired-warn sentences that damps a later verbatim quote of any
+    hook's warning, independent of the lemma window. ``consumed`` is a per-hook-name
+    ledger of signal-text hashes each hook has already scored, so one hook's aggregate
+    fire cannot mute another's signals — access it through :meth:`consumed_for`.
     """
 
     last_fired_at: int = 0
     consumed: dict[str, set[str]] = Field(default_factory=dict)
     echo_lemmas: set[str] = Field(default_factory=set)
     echo_window_end: int = 0
+    echo_verbatim: list[str] = Field(default_factory=list)
 
     @staticmethod
     def content_lemmas(text: str) -> set[str]:
@@ -113,9 +123,24 @@ class PrimitiveState(BaseModel):
             and len(overlap) / len(text_lemmas) >= ECHO_THRESHOLD
         )
 
+    def quotes_fired_output(self, text: str) -> bool:
+        return bool(
+            self.echo_verbatim
+            and (normalized := normalize_ws(text))
+            and any(sentence in normalized for sentence in self.echo_verbatim)
+        )
+
     def seed_echo_window(self, triggering_texts: list[str], message: str, transcript_len: int) -> None:
         self.echo_lemmas = self.content_lemmas(" ".join(triggering_texts)) | self.content_lemmas(message)
         self.echo_window_end = transcript_len + ECHO_WINDOW
+
+    def seed_echo_verbatim(self, message: str) -> None:
+        fresh = [
+            norm
+            for sent in RESOURCES.spacy(message).sents
+            if len(norm := normalize_ws(sent.text)) >= ECHO_VERBATIM_MIN_CHARS and norm not in self.echo_verbatim
+        ]
+        self.echo_verbatim = (self.echo_verbatim + fresh)[-ECHO_VERBATIM_CAP:]
 
     def consumed_for(self, hook: str) -> set[str]:
         """The mutable set of signal-text hashes ``hook`` has already consumed (created on first use)."""
@@ -163,6 +188,10 @@ class PrimitiveState(BaseModel):
                 contributing.append(text)
         self.consumed_for(hook).update(seen)
         return contributing
+
+
+def normalize_ws(text: str) -> str:
+    return " ".join(text.split())
 
 
 def text_hash(text: str) -> str:
@@ -221,12 +250,17 @@ class EchoTracker:
 
     def saw(self, text: str, *, evt: BaseHookEvent) -> bool:
         ps = evt.ctx.s[PrimitiveState].get()
-        return ps is not None and bool(ps.echo_lemmas) and len(evt.ctx.t) < ps.echo_window_end and ps.is_echo(text)
+        if ps is None:
+            return False
+        return ps.quotes_fired_output(text) or (
+            bool(ps.echo_lemmas) and len(evt.ctx.t) < ps.echo_window_end and ps.is_echo(text)
+        )
 
     def record(self, text: str, triggering: Iterable[str], *, evt: BaseHookEvent) -> None:
         with evt.ctx.s[PrimitiveState].mutate() as ps:
             ps.echo_lemmas = PrimitiveState.content_lemmas(" ".join(triggering)) | PrimitiveState.content_lemmas(text)
             ps.echo_window_end = len(evt.ctx.t) + self.window
+            ps.seed_echo_verbatim(text)
 
 
 class WorkflowState(BaseModel):

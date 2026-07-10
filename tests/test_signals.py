@@ -468,6 +468,16 @@ class TestTranscriptTextsOrigin:
         msgs = [raw_msg("user", "the user says leave it"), raw_msg("assistant", "the assistant plan")]
         assert self.texts_for(msgs, origin="any") == ["the user says leave it", "the assistant plan"]
 
+    def test_agent_injected_dropped_under_both_origins(self) -> None:
+        # An agent-injected user banner is dropped under "assistant" (it is a UserEvent) and under
+        # "any" (the is_agent_injected conjunct) — the second layer covers origin="any" hooks.
+        msgs = [
+            raw_msg("user", '<teammate-message from="A">the relayed plan</teammate-message>'),
+            raw_msg("assistant", "the assistant plan"),
+        ]
+        assert self.texts_for(msgs, origin="any") == ["the assistant plan"]
+        assert self.texts_for(msgs, origin="assistant") == ["the assistant plan"]
+
 
 class TestTranscriptTextsOriginUserPrompt:
     """The just-submitted prompt is prepended only under ``origin="any"``; ``"assistant"`` excludes it."""
@@ -513,6 +523,15 @@ class TestTranscriptTextsProse:
         assert self.texts_for([raw_msg("user", same, isMeta=True)]) == []
         assert self.texts_for([raw_msg("user", same, isCompactSummary=True)]) == []
         assert self.texts_for([raw_msg("user", same)]) == [same]
+
+    def test_agent_injected_user_events_excluded(self) -> None:
+        # A teammate-message relay banner is a UserEvent with is_agent_injected=True: it echoes
+        # another agent's prose into this transcript, so it drops even under the default origin="any"
+        # (which otherwise keeps user prose). Genuine human prose with the same tells stays.
+        tells = "these pre-existing lines are outside the scope"
+        banner = f'<teammate-message from="A">{tells}</teammate-message>'
+        assert self.texts_for([raw_msg("user", banner)]) == []
+        assert self.texts_for([raw_msg("user", tells)]) == [tells]
 
     def test_thinking_block_is_own_entry(self) -> None:
         messages = [raw_msg("assistant", [raw_text_block("visible"), {"type": "thinking", "thinking": "hidden plan"}])]
