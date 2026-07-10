@@ -49,8 +49,10 @@ def execute_hook(
     Each hook event is a separate ``capt-hook run`` process, so a plain read-check-write of the
     fire count lets batched parallel tool calls all read the pre-increment count and over-fire a
     capped hook. Instead, the count is incremented under an exclusive file lock *before* the
-    handler runs (reserve); a handler that declines (falsy result) or raises gives the slot back
-    under a second lock (release). Uncapped hooks (``max_fires is None``) skip the lock entirely.
+    handler runs (reserve); anything but a delivered truthy result gives the slot back under a
+    second lock (release) — a falsy result, an ``Exception``, or an abnormal ``BaseException``
+    (``SystemExit``/``KeyboardInterrupt``), which releases and then re-propagates so the abort is
+    not silently swallowed. Uncapped hooks (``max_fires is None``) skip the lock entirely.
     """
     hook_session_dir = (session_dir / entry.name / (evt.agent_id or "main")) if session_dir else None
     if hook_session_dir:
@@ -67,13 +69,17 @@ def execute_hook(
             return None
         hook_state.fire_count += 1
 
-    if result := run_handler(entry, evt):
-        record_fire(entry, evt, result)
-        return result
-
-    with store[HookState].mutate() as hook_state:
-        hook_state.fire_count -= 1
-    return None
+    delivered = False
+    try:
+        if result := run_handler(entry, evt):
+            delivered = True
+            record_fire(entry, evt, result)
+            return result
+        return None
+    finally:
+        if not delivered:
+            with store[HookState].mutate() as hook_state:
+                hook_state.fire_count -= 1
 
 
 def format_permission_decision(result: HookResult) -> dict[str, Any] | None:
