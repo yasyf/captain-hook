@@ -11,7 +11,7 @@ on:
   repository_dispatch:
     types: [cc-guides-render]
   schedule:
-    - cron: "17 9 * * 1"
+    - cron: "17 9 * * *"
   workflow_dispatch:
 
 jobs:

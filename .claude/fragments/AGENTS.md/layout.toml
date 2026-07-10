@@ -3,3 +3,6 @@ fragments = [
   "cc-skills:ccx",
   "python-style",
 ]
+
+[sources.cc-skills]
+source = "github:yasyf/cc-skills@main"

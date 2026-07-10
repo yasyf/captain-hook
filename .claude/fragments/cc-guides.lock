@@ -1,0 +1,8 @@
+# Written by 'cc-guides render' — do not edit.
+schema = 1
+version = "0.1.13"
+artifacts = ["AGENTS.md", "CLAUDE.md"]
+
+[sources.cc-skills]
+spec = "github:yasyf/cc-skills@main"
+commit = "fac2cd6d940d54f3fb8f778b63df4be233de2818"
