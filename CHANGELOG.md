@@ -4,6 +4,53 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.18.0] - 2026-07-10
+
+### Fixed
+- **Capped hooks no longer over-fire under parallel hook events.** Every hook
+  event runs in its own `capt-hook run` process, so a batch of parallel tool
+  calls all read the pre-increment fire count and blew past `max_fires` (one
+  session delivered 12 warns against a cap of 3). `max_fires` is now
+  reserve-then-release: the fire is reserved under a file lock before the
+  handler runs, and a handler that declines or raises releases the
+  reservation. Suppressed and released fires record no ledger decision —
+  decision-ledger consumers see only delivered fires, matching the capped
+  behavior to date.
+- **Signal hooks no longer score the user's words.** `Signals` gained a
+  keyword-only `origin` field, an upstream candidate filter orthogonal to
+  `scope`. The new default `origin="assistant"` keeps only the agent's own
+  prose — assistant messages, thinking blocks, prose-carrying tool calls —
+  so a stance nudge no longer fires when the user's message carries the
+  trigger vocabulary. **Default flip:** every un-stamped `Signals` bundle
+  becomes assistant-only. Stamp `origin="any"` on hooks that legitimately
+  score user text; a `UserPromptSubmit` hook that scores the just-submitted
+  prompt must stamp it — the prompt joins the scan only under `"any"`, and a
+  `window=0` bundle without the stamp has no candidates at all. The general
+  pack's distinct-requests nudge and the corrections example are stamped
+  accordingly.
+- **Relayed and quoted hook output no longer re-triggers signal hooks.**
+  `transcript_texts()` drops agent-injected user events — teammate-message
+  relay banners, scheduled-task injections, role reminders — under either
+  origin, via cc-transcript's `UserEvent.is_agent_injected`. A session-wide
+  verbatim echo ledger (`PrimitiveState.echo_verbatim`) damps any text that
+  quotes a fired warning's sentences, by whitespace-normalized containment,
+  across hooks and independent of the lemma echo window; the lemma window's
+  forward horizon now also covers the bundle's lookback span. Requires
+  cc-transcript >= 10.5.
+
+### Added
+- **`SessionSlot.mutate()`.** Transactional get→edit→set on session state
+  under a sibling file lock, ported up from `DurableSlot` (which now inherits
+  it). Every whole-model session-state write — fire counts, consumed ledgers,
+  echo state — routes through it, closing the lost-update race between
+  concurrent hook processes. `WorkflowState` gained an opt-in `mutate(evt)`
+  classmethod.
+
+### Changed
+- **cc-transcript 10.5.** Pin bumped to `>=10.5,<11` for
+  `UserEvent.is_agent_injected` (the relay-banner marker) and the
+  turn-segmentation fix that keeps a relay banner from opening a fake turn.
+
 ## [8.17.0] - 2026-07-10
 
 ### Changed
