@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.17.0] - 2026-07-10
+
+### Changed
+- **`Waiting()` consults the shared cc-transcript activity oracle.** `is_waiting` keeps its Stop-payload short-circuit (`background_tasks`/`session_crons`) and no-transcript guard, then delegates every transcript judgment to `probe_events` over the already-loaded transcript — the same oracle cc-vigil consumes, replacing the local `ephemeral_wait`/`pending_async` reimplementation. The oracle brings delivery-aware completion (a pending async task clears only when its notification is delivered or drained), compaction-safe turn boundaries, and alias-/MCP-aware tool-name matching: an `Execute` background command counts as backgrounded Bash, and `mcp__<server>__SendMessage` matches a configured `SendMessage`. Requires cc-transcript >= 10.4.
+
 ## [8.16.0] - 2026-07-10
 
 ### Changed
