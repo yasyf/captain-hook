@@ -49,10 +49,15 @@ print(json.dumps([name for name in json.loads(sys.argv[1]) if not hasattr(module
 
 
 def exported_names() -> set[str]:
+    type_checking = next(
+        node
+        for node in ast.parse(ROOT_INIT.read_text()).body
+        if isinstance(node, ast.If) and ast.unparse(node.test) == "TYPE_CHECKING"
+    )
     return {
         alias.asname or alias.name
-        for node in ast.parse(ROOT_INIT.read_text()).body
-        if isinstance(node, ast.ImportFrom) and node.module != "__future__"
+        for node in type_checking.body
+        if isinstance(node, ast.ImportFrom)
         for alias in node.names
     }
 

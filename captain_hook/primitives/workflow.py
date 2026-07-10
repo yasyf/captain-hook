@@ -9,12 +9,13 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 from cc_transcript.models import AssistantEvent, UserEvent
 from pydantic import BaseModel
 
-from captain_hook.types import Action, Event, HookResult, InlineTests, TCondition, Waiting
+from captain_hook.types import Action, Event, HookResult, TCondition, Waiting
 
 if TYPE_CHECKING:
     from cc_transcript.query import Session
 
     from captain_hook.events import BaseHookEvent
+    from captain_hook.types import InlineTests
 
 M = TypeVar("M", bound=BaseModel)
 

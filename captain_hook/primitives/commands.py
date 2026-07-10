@@ -6,13 +6,13 @@ from typing import TYPE_CHECKING
 from captain_hook import ast_grep
 from captain_hook.app import hook as register_hook
 from captain_hook.app import on
-from captain_hook.types import Command, Event, HookResponse, InlineTests, Tool
+from captain_hook.types import Command, Event, HookResponse, Tool
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from captain_hook.events import PreToolUseEvent
-    from captain_hook.types import TCondition
+    from captain_hook.types import InlineTests, TCondition
 
 
 def block_command_pattern(tokens: list[str]) -> str:

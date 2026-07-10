@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
     from captain_hook.events import BaseHookEvent
     from captain_hook.signals.nlp import NlpSignal
+    from captain_hook.testing.types import InlineTests
 
 T = TypeVar("T", bound="ToolCallBase")
 
@@ -752,9 +753,6 @@ class HookResult:
 
 type HookResponse = HookResult | None
 """Return type of a hook handler: a :class:`HookResult`, or None to take no action."""
-
-
-from captain_hook.testing.types import InlineTests as InlineTests  # noqa: E402
 
 
 @dataclass(frozen=True, kw_only=True)

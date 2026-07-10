@@ -18,7 +18,6 @@ from captain_hook.types import (
     Action,
     Event,
     HookResult,
-    InlineTests,
     Signal,
     Signals,
     TCondition,
@@ -28,6 +27,7 @@ from captain_hook.types import (
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
     from captain_hook.signals.nlp import NlpSignal
+    from captain_hook.types import InlineTests
 
 DEFAULT_FIRES: Final = -1
 """Sentinel for ``max_fires``: apply the primitive's own default cap rather than a number.
