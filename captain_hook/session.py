@@ -5,12 +5,14 @@ import re
 import shutil
 import tempfile
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import ClassVar, Generic, TypeVar, overload
 
 from cc_transcript.discovery import find_transcript_sync
 from cc_transcript.ids import SessionId
+from filelock import FileLock
 from loguru import logger
 from pydantic import BaseModel
 
@@ -95,6 +97,25 @@ class SessionSlot(Generic[M]):  # noqa: UP046
         if self._path:
             self._path.unlink(missing_ok=True)
 
+    @contextmanager
+    def mutate(self) -> Iterator[M]:
+        """Yield the loaded model under an exclusive file lock; persist it on clean exit.
+
+        The lock is held for the whole ``with`` block, so concurrent writers — separate
+        ``capt-hook run`` processes racing one session's state, or threads within a process —
+        serialize rather than clobber. The body must be short: no slow work under the lock.
+        A null slot (no session directory) yields an in-memory model and persists nothing.
+        """
+        if self._path is None:
+            yield self.get(self._model())
+            return
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        lock = self._path.with_name(self._path.name + ".lock")
+        with FileLock(str(lock)):
+            obj = self.get(self._model())
+            yield obj
+            self.set(obj)
+
 
 class SessionStore:
     """Class-keyed store providing typed ``SessionSlot`` access via ``store[ModelClass]``."""
@@ -135,13 +156,16 @@ class SessionStore:
         """
         from captain_hook.state import SeenKeys
 
-        blob = self.load(SeenKeys)
-        seen = blob.seen.setdefault(scope or "", [])
-        if not (fresh := [key for key in dict.fromkeys(keys) if key not in seen]):
+        deduped = list(dict.fromkeys(keys))
+        prior = self.load(SeenKeys).seen.get(scope or "", [])
+        if not [key for key in deduped if key not in prior]:
             return []
-        seen.extend(fresh)
-        self[SeenKeys].set(blob)
-        return fresh
+        with self[SeenKeys].mutate() as blob:
+            seen = blob.seen.setdefault(scope or "", [])
+            if not (fresh := [key for key in deduped if key not in seen]):
+                return []
+            seen.extend(fresh)
+            return fresh
 
     @classmethod
     def track(cls, model: type[BaseModel]) -> None:

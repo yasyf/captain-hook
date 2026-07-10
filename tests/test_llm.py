@@ -1203,7 +1203,7 @@ class TestTombstones:
 
 
 class TestMultiContributorConsume:
-    """The eager-consume -> revert -> consume_signals dance round-trips across N contributors."""
+    """llm_evaluate reads without consuming; consume_signals then consumes exactly the contributors."""
 
     def test_round_trip_reconsumes_exactly_the_contributors(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import GateVerdict, consume_signals, llm_evaluate
@@ -1225,8 +1225,9 @@ class TestMultiContributorConsume:
 
         result = llm_evaluate(evt, "check", GateVerdict, hook="rt", signals=sig)
         assert result is not None  # signals passed -> LLM consulted -> verdict returned
-        # the eager consume is reverted: nothing stays consumed until the verdict confirms the fire
-        assert (ps := evt.ctx.s[PrimitiveState].get()) is not None and ps.consumed == {}
+        # llm_evaluate is read-only: it consults the LLM without persisting any consumption,
+        # so nothing stays consumed until consume_signals confirms the fire post-verdict
+        assert (evt.ctx.s[PrimitiveState].get() or PrimitiveState()).consumed == {}
 
         consume_signals(evt, sig, "rt")
         final = evt.ctx.s[PrimitiveState].get()

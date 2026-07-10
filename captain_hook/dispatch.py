@@ -23,16 +23,16 @@ def run_declarative(spec: HookSpec, evt: BaseHookEvent) -> HookResult | None:
     )
 
 
-def record_fire(
-    entry: RegisteredHook,
-    evt: BaseHookEvent,
-    result: HookResult,
-    store: SessionStore,
-    hook_state: HookState,
-) -> None:
-    """React to a hook firing: bump and persist the fire count, then record the decision."""
-    hook_state.fire_count += 1
-    store[HookState].set(hook_state)
+def run_handler(entry: RegisteredHook, evt: BaseHookEvent) -> HookResult | None:
+    try:
+        return entry.handler(evt) if entry.handler else run_declarative(entry.spec, evt)
+    except Exception:
+        logger.bind(hook=entry.name).exception("hook handler failed")
+        return None
+
+
+def record_fire(entry: RegisteredHook, evt: BaseHookEvent, result: HookResult) -> None:
+    """Record the ledger decision for a hook that fired (the count is reserved under lock upstream)."""
     try:
         record_decision(entry, evt, result)
     except Exception:
@@ -44,27 +44,36 @@ def execute_hook(
     evt: BaseHookEvent,
     session_dir: Path | None = None,
 ) -> HookResult | None:
-    """Execute a single registered hook, respecting ``max_fires`` and persisting fire count."""
+    """Execute a single registered hook under a reserve-then-release ``max_fires`` protocol.
+
+    Each hook event is a separate ``capt-hook run`` process, so a plain read-check-write of the
+    fire count lets batched parallel tool calls all read the pre-increment count and over-fire a
+    capped hook. Instead, the count is incremented under an exclusive file lock *before* the
+    handler runs (reserve); a handler that declines (falsy result) or raises gives the slot back
+    under a second lock (release). Uncapped hooks (``max_fires is None``) skip the lock entirely.
+    """
     hook_session_dir = (session_dir / entry.name / (evt.agent_id or "main")) if session_dir else None
     if hook_session_dir:
         hook_session_dir.mkdir(parents=True, exist_ok=True)
-
     store = SessionStore(hook_session_dir)
-    hook_state = store[HookState].get(HookState())
 
-    if entry.spec.max_fires is not None and hook_state.fire_count >= entry.spec.max_fires:
-        return None
+    if entry.spec.max_fires is None:
+        if result := run_handler(entry, evt):
+            record_fire(entry, evt, result)
+        return result
 
-    try:
-        result = entry.handler(evt) if entry.handler else run_declarative(entry.spec, evt)
-    except Exception:
-        logger.bind(hook=entry.name).exception("hook handler failed")
-        return None
+    with store[HookState].mutate() as hook_state:
+        if hook_state.fire_count >= entry.spec.max_fires:
+            return None
+        hook_state.fire_count += 1
 
-    if result:
-        record_fire(entry, evt, result, store, hook_state)
+    if result := run_handler(entry, evt):
+        record_fire(entry, evt, result)
+        return result
 
-    return result
+    with store[HookState].mutate() as hook_state:
+        hook_state.fire_count -= 1
+    return None
 
 
 def format_permission_decision(result: HookResult) -> dict[str, Any] | None:

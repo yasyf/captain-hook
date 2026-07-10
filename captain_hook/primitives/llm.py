@@ -81,15 +81,8 @@ def llm_evaluate[M: BaseModel](
     if sig := resolve_signals(signals):
         ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
         texts = transcript_texts(evt, sig.window)
-        old_consumed = ps.consumed.get(hook, set()).copy()
         if not (contributing_texts := ps.match_signals(sig, texts, hook)):
-            evt.ctx.s[PrimitiveState].set(ps)
             return None
-        if old_consumed:
-            ps.consumed[hook] = old_consumed
-        else:
-            ps.consumed.pop(hook, None)
-        evt.ctx.s[PrimitiveState].set(ps)
     elif contexts and when is None:
         contributing_texts = []
     else:
@@ -129,10 +122,9 @@ def llm_evaluate[M: BaseModel](
 def consume_signals(evt: BaseHookEvent, sig: Signals | None, hook: str) -> None:
     if not sig:
         return
-    ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
     texts = transcript_texts(evt, sig.window)
-    ps.match_signals(sig, texts, hook)
-    evt.ctx.s[PrimitiveState].set(ps)
+    with evt.ctx.s[PrimitiveState].mutate() as ps:
+        ps.match_signals(sig, texts, hook)
 
 
 def llm_primitive[M: BaseModel](

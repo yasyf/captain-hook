@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import inspect
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cached_property
 from hashlib import sha256
@@ -201,9 +202,8 @@ def hook_name(prefix: str, label: str | None, message: str) -> str:
 
 
 def record_fire(evt: BaseHookEvent) -> None:
-    ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
-    ps.last_fired_at = len(evt.ctx.t)
-    evt.ctx.s[PrimitiveState].set(ps)
+    with evt.ctx.s[PrimitiveState].mutate() as ps:
+        ps.last_fired_at = len(evt.ctx.t)
 
 
 def fired_this_turn(evt: BaseHookEvent) -> bool:
@@ -224,10 +224,9 @@ class EchoTracker:
         return ps is not None and bool(ps.echo_lemmas) and len(evt.ctx.t) < ps.echo_window_end and ps.is_echo(text)
 
     def record(self, text: str, triggering: Iterable[str], *, evt: BaseHookEvent) -> None:
-        ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
-        ps.echo_lemmas = PrimitiveState.content_lemmas(" ".join(triggering)) | PrimitiveState.content_lemmas(text)
-        ps.echo_window_end = len(evt.ctx.t) + self.window
-        evt.ctx.s[PrimitiveState].set(ps)
+        with evt.ctx.s[PrimitiveState].mutate() as ps:
+            ps.echo_lemmas = PrimitiveState.content_lemmas(" ".join(triggering)) | PrimitiveState.content_lemmas(text)
+            ps.echo_window_end = len(evt.ctx.t) + self.window
 
 
 class WorkflowState(BaseModel):
@@ -255,6 +254,17 @@ class WorkflowState(BaseModel):
     @classmethod
     def reset(cls, evt: BaseHookEvent) -> None:
         evt.ctx.s[cls].delete()
+
+    @classmethod
+    @contextmanager
+    def mutate(cls, evt: BaseHookEvent) -> Iterator[Self]:
+        """Yield the stored workflow state under an exclusive lock; persist it on clean exit.
+
+        Reach for this over ``load``/``save`` when several hooks race the same workflow record
+        within a session and a lost update would corrupt it.
+        """
+        with evt.ctx.s[cls].mutate() as obj:
+            yield obj
 
 
 T = TypeVar("T", bound=WorkflowState)

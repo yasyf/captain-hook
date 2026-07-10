@@ -13,7 +13,6 @@ from contextlib import contextmanager
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self
 
-from filelock import FileLock
 from loguru import logger
 from pydantic import BaseModel
 
@@ -51,26 +50,7 @@ def durable_dir(scope: Scope, repo_root: Path | None) -> Path | None:
 
 
 class DurableSlot[M: BaseModel](SessionSlot[M]):
-    """A :class:`SessionSlot` rooted in a durable directory, with a locked :meth:`mutate`."""
-
-    @contextmanager
-    def mutate(self) -> Iterator[M]:
-        """Yield the loaded model under an exclusive file lock; persist it on clean exit.
-
-        The lock is held for the whole ``with`` block, so concurrent writers across sessions
-        serialize rather than clobber. The body must be short — no slow work under the lock.
-        A null slot (project scope with no ``repo_root``) yields an in-memory model and
-        persists nothing.
-        """
-        if self._path is None:
-            yield self.get(self._model())
-            return
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        lock = self._path.with_name(self._path.name + ".lock")
-        with FileLock(str(lock)):
-            obj = self.get(self._model())
-            yield obj
-            self.set(obj)
+    """A :class:`SessionSlot` rooted in a durable directory; inherits the locked :meth:`mutate`."""
 
 
 class DurableStore:

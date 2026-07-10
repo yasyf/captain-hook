@@ -69,14 +69,12 @@ def nudge(
             return None
 
         if sig:
-            ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
             tracker = EchoTracker()
             candidates = [t for t in transcript_texts(evt, sig.window) if not tracker.saw(t, evt=evt)]
-            if not (triggering := ps.match_signals(sig, candidates, name)):
-                evt.ctx.s[PrimitiveState].set(ps)
-                return None
-            ps.last_fired_at = len(evt.ctx.t)
-            evt.ctx.s[PrimitiveState].set(ps)
+            with evt.ctx.s[PrimitiveState].mutate() as ps:
+                if not (triggering := ps.match_signals(sig, candidates, name)):
+                    return None
+                ps.last_fired_at = len(evt.ctx.t)
             tracker.record(message, triggering=triggering, evt=evt)
             cited = cite_message(sig, triggering, message)
         else:

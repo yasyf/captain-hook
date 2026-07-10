@@ -26,6 +26,7 @@ def all_scenarios() -> tuple[Scenario, ...]:
         f16_selfref,
         f17_judge_stub,
         f18_paraphrase,
+        f19_fire_race,
     )
 
     modules = (
@@ -45,5 +46,6 @@ def all_scenarios() -> tuple[Scenario, ...]:
         f16_selfref,
         f17_judge_stub,
         f18_paraphrase,
+        f19_fire_race,
     )
     return tuple(scenario for module in modules for scenario in module.scenarios())
