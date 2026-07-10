@@ -4,6 +4,31 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.16.0] - 2026-07-10
+
+### Changed
+- **`max_fires` budgets count per agent context.** One shared session ledger
+  meant a single subagent's fire consumed the whole session's `max_fires`
+  budget — every other agent (and the orchestrator) then saw nothing, however
+  many violations followed. The `HookState` ledger now lives at
+  `sessions/<sid>/<hook>/<agent_id|main>/`, so the main agent and each
+  subagent spend their own allowance; a missing, null, or empty `agent_id`
+  all mean the main agent. Session-scoped `PrimitiveState` (the turn throttle
+  and echo window) stays global by design. Note: a `SubagentStop` guard with
+  `max_fires=1` now fires once per subagent rather than once per session.
+
+### Added
+- **`BaseHookEvent.agent_id`.** The subagent id attached to the event, `None`
+  for main-agent events; `is_subagent` is now derived from it.
+
+### Fixed
+- **cc-context MCP edits now hit `Tool("Edit"/"Write")` conditions.** Via
+  cc-transcript ≥10.3, `mcp__cc-context__ccx_code_edit` / `ccx_code_replace`
+  alias to `Edit` / `Write` in tool-name matching, so name-gated hooks no
+  longer miss edits routed through the cc-context MCP. Payload-shape
+  conditions (e.g. diff-gated comment budgets) still see an untyped call —
+  typed lowering is tracked upstream.
+
 ## [8.15.0] - 2026-07-09
 
 ### Fixed
