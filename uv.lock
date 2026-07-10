@@ -346,10 +346,12 @@ dependencies = [
     { name = "tree-sitter", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "tree-sitter-bash", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/41/6b/a2f45e9b970130d21bb31b981a4cd4ab4a2bfe264b00b0b67010403487ec/cc_transcript-10.6.0.tar.gz", hash = "sha256:a4ebb17251f034e5bdbb45c7d022c18f8e7eb7787c3421a9acbced2e0a690b08", size = 189362, upload-time = "2026-07-10T18:31:07.289Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d3/53/0abcf865ada02f12c98da61e897094ee0d47fe1c1893b24e70ff61597aeb/cc_transcript-10.6.0-cp313-abi3-macosx_11_0_arm64.whl", hash = "sha256:6fc4e8df6d96a7e0c162a0e73ff45390ecb9e7c0c3f4b6e329ca6ba7f6a93f79", size = 2564265, upload-time = "2026-07-10T18:31:00.088Z" },
     { url = "https://files.pythonhosted.org/packages/c0/b3/1c71dad85caedeb2c427098e66ed4423af986af0ebeb392d016bad508a3c/cc_transcript-10.6.0-cp313-abi3-macosx_11_0_x86_64.whl", hash = "sha256:facbdeb19f65faaa949e2ea43828c49db017b852e2e77a33992356a634333691", size = 2710653, upload-time = "2026-07-10T18:31:02.089Z" },
     { url = "https://files.pythonhosted.org/packages/75/17/0e47e674e486f5bd0eea4dcd77b2051967f9ef27a71aecfc77e58eec580a/cc_transcript-10.6.0-cp313-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:da1b7953eaa985ab94a669bd81e84865fa23e13359157cf2dce4865082929dfe", size = 2706802, upload-time = "2026-07-10T18:31:03.755Z" },
+    { url = "https://files.pythonhosted.org/packages/59/ee/8c5296056c6c096ee4f632dafef38fc682f16693b0873ad92e6fdc22f063/cc_transcript-10.6.0-cp313-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:efc0459dd18caceb202b6bd7988567f71ff4784bc39e8a1faf355565c34d8a2a", size = 2847048, upload-time = "2026-07-10T18:31:05.689Z" },
 ]
 
 [package.optional-dependencies]
