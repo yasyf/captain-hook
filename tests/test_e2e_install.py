@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import textwrap
 from pathlib import Path
@@ -301,6 +302,45 @@ class TestRegisterHooks:
         data = json.loads(result.stdout)
         assert data["customKey"] == "preserved"
         assert "hooks" in data
+
+    def test_register_hooks_installs_shim_and_migrates_uvx(self, tmp_path: Path) -> None:
+        from captain_hook.packs import manager
+
+        fake_bin = tmp_path / "toolbin"
+        fake_bin.mkdir()
+        stub_dir = tmp_path / "stub"
+        stub_dir.mkdir()
+        uv = stub_dir / "uv"
+        uv.write_text(
+            "#!/bin/sh\n"
+            'case "$*" in\n'
+            f'  "tool dir --bin") echo "{fake_bin}" ;;\n'
+            f'  "tool install capt-hook"|"tool upgrade capt-hook") : > "{fake_bin}/capt-hook" ;;\n'
+            "  *) exit 1 ;;\n"
+            "esac\n"
+        )
+        uv.chmod(0o755)
+        hooks_dir = write_hooks(tmp_path, ("force_push.py", FORCE_PUSH_HOOK))
+        settings_path = tmp_path / ".claude" / "settings.json"
+        settings_path.parent.mkdir()
+        old = {"hooks": [{"type": "command", "command": "uvx capt-hook run PreToolUse"}]}
+        settings_path.write_text(json.dumps({"hooks": {"PreToolUse": [old]}}))
+
+        result = run_cli(
+            "register-hooks",
+            hooks_dir=str(hooks_dir),
+            root_dir=str(tmp_path),
+            env={"CAPT_HOOK_NO_TOOL_LAUNCHER": "", "PATH": f"{stub_dir}{os.pathsep}{os.environ['PATH']}"},
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+
+        shim = str(fake_bin / "capt-hook")
+        assert manager.read_launcher(manager.packs_toml_path(tmp_path)) == shim  # installed shim pinned
+        committed = json.loads(settings_path.read_text())
+        commands = [h["command"] for g in committed["hooks"]["PreToolUse"] for h in g["hooks"]]
+        assert commands
+        assert all(c.startswith(shim) for c in commands)  # old uvx group rewritten to the shim, not stranded custom
+        assert all("uvx capt-hook" not in c for c in commands)
 
 
 def write_hooks(tmp_path: Path, *files: tuple[str, str]) -> Path:

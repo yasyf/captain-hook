@@ -36,6 +36,9 @@ def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mo
     # its own per-test override (inherited by run_cli subprocesses).
     monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path_factory.mktemp("hook-state")))
     monkeypatch.setenv("CAPT_HOOK_DECISIONS_DB", str(tmp_path_factory.mktemp("decisions") / "decisions.db"))
+    # register-hooks/init auto-install a uv-tool shim launcher; suppress that global
+    # side-effect across the subprocess CLI tests. ensure_tool_launcher tests opt back in.
+    monkeypatch.setenv("CAPT_HOOK_NO_TOOL_LAUNCHER", "1")
     # The SessionEnd reviewer skips headless entrypoints (sdk-*); scrub it so tests don't
     # inherit the ambient CLAUDE_CODE_ENTRYPOINT of a pytest run launched inside claude.
     monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)

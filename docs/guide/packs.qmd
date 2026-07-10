@@ -103,13 +103,31 @@ uvx capt-hook pack update acme-guards
 
 Run `pack update` with no name to refresh every external pack.
 
+## The default launcher
+
+`register-hooks` and `init` install capt-hook as a
+[uv tool](https://docs.astral.sh/uv/guides/tools/) and pin the resulting shim as
+the `launcher`, so every hook command runs a resolved binary —
+`~/.local/bin/capt-hook run <Event>` — instead of paying `uvx`'s per-event
+environment resolution. The install is idempotent: the first `register-hooks`
+runs `uv tool install capt-hook`, and each later run upgrades it with
+`uv tool upgrade capt-hook`. When the repo already has `uvx capt-hook` wiring,
+the same run rewrites those entries to the shim in place, so no manual cleanup
+is needed. Move to a newer release anytime by re-running `register-hooks` or
+`uv tool upgrade capt-hook` directly.
+
+Two cases keep the `uvx capt-hook` prefix instead: a `launcher` you set by hand
+(the next section) always wins and suppresses the install, and a host without
+`uv` on `PATH` falls back to `uvx`. `register-hooks --from <source>` likewise
+keeps its own `uvx --from <source>` spelling.
+
 ## Set a custom launcher
 
-Every hook command the CLI writes to `.claude/settings.json` starts with
-`uvx capt-hook`. When the published wheel is the wrong thing to run — a dev
-tree hacking on capt-hook itself, or a monorepo whose Python project lives in
-a subdirectory — set the top-level `launcher` key in `packs.toml` to the
-command prefix that replaces it:
+When the installed shim is the wrong thing to run — a dev tree hacking on
+capt-hook itself, or a monorepo whose Python project lives in a subdirectory —
+set the top-level `launcher` key in `packs.toml` to the command prefix that
+replaces it. A hand-set `launcher` also suppresses the uv-tool install, so the
+value you write is exactly what runs:
 
 ```toml
 launcher = "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook"
@@ -136,11 +154,13 @@ Any capt-hook command the generator would not render itself — hand-edited
 flags, a different prefix — is classified *custom* and preserved verbatim on
 every merge. A custom group owns its event: the generator writes no sibling
 group for it, so nothing fires twice, and it survives deferral. This cuts both
-ways when you add a launcher to a repo with existing wiring: the old canonical
-`uvx capt-hook` entries no longer match what the generator renders, so the
-merge preserves them as custom instead of rewriting them. Delete them from
-`.claude/settings.json` by hand once, then re-run `register-hooks`; the freed
-events regenerate with the launcher prefix.
+ways when you hand-set a launcher on a repo with existing wiring: the old
+canonical entries no longer match what the generator renders, so the merge
+preserves them as custom instead of rewriting them. The installed-shim default
+above migrates old `uvx capt-hook` entries for you; a hand-set launcher does
+not, so delete the stale entries from `.claude/settings.json` by hand once,
+then re-run `register-hooks`; the freed events regenerate with the launcher
+prefix.
 
 ::: {.callout-warning title="A launcher forfeits plugin dedup"}
 Claude Code deduplicates hook commands by exact string match. A launcher

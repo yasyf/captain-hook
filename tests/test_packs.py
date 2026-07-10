@@ -398,6 +398,19 @@ def test_read_launcher_rejects_non_string(packs_toml: Path) -> None:
         manager.read_launcher(packs_toml)
 
 
+def test_write_launcher_sets_and_replaces_preserving_entries(packs_toml: Path) -> None:
+    manager.atomic_write(packs_toml, manager.render_packs_toml([manager.BuiltinPack("general")]))
+    assert manager.read_launcher(packs_toml) is None
+
+    manager.write_launcher(packs_toml, "/home/me/.local/bin/capt-hook")  # set on an entry-only file
+    assert manager.read_launcher(packs_toml) == "/home/me/.local/bin/capt-hook"
+    assert manager.read_entries(packs_toml) == [manager.BuiltinPack("general")]  # entries intact
+
+    manager.write_launcher(packs_toml, DOGFOOD_LAUNCHER)  # replace the launcher line in place
+    assert manager.read_launcher(packs_toml) == DOGFOOD_LAUNCHER
+    assert manager.read_entries(packs_toml) == [manager.BuiltinPack("general")]
+
+
 # --- fetch / cache -------------------------------------------------------------------
 
 
