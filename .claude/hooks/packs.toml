@@ -1,4 +1,4 @@
-launcher = "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook"
+launcher = "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook"
 
 [packs.general]
 

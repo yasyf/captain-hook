@@ -19,6 +19,8 @@ captain-hook/
 
 Great Docs generates the API reference with Griffe from the root `captain_hook/__init__.py` re-exports (there is no `__all__`) and the CLI reference from the Click app. Example hooks in `docs/examples/*.py` embed into their `.qmd` pages via `<!-- gd-embed: name.py -->` markers that `docs/scripts/embed_examples.py` expands at pre-render, and carry inline `tests = {...}` runnable with `capt-hook --hooks docs/examples test`.
 
+This repo's own hooks run `"$CLAUDE_PROJECT_DIR"/.venv/bin/capt-hook` directly (the packs.toml `launcher`) — no per-event `uv run` sync check, so after a dependency change run `uv sync --extra dev` or live hooks execute against the stale `.venv`.
+
 ## Ask Before Assuming
 
 When the user's request has ambiguity — unclear scope, multiple plausible interpretations, undefined edge cases, or unspecified tradeoffs — stop and ask. Propose 2-4 concrete options and let the user pick, or list the assumptions you'd otherwise make and ask which ones hold. There is no such thing as too many questions; one wrong implementation costs more than ten clarifying exchanges. Default to interrogating the user when in doubt — multiple short questions early beat a wrong direction later.

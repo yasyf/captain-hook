@@ -54,7 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run PermissionRequest"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook run PermissionRequest"
           }
         ]
       }
@@ -64,7 +64,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run PostToolUse"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook run PostToolUse"
           }
         ]
       }
@@ -74,7 +74,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run PostToolUseFailure"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook run PostToolUseFailure"
           }
         ]
       }
@@ -84,7 +84,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run PreToolUse"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook run PreToolUse"
           }
         ]
       }
@@ -105,7 +105,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run SessionStart --async",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook run SessionStart --async",
             "async": true
           }
         ]
@@ -116,7 +116,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run Stop"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook run Stop"
           }
         ]
       }
@@ -126,7 +126,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run SubagentStart"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook run SubagentStart"
           }
         ]
       }
@@ -136,7 +136,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run SubagentStop"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook run SubagentStop"
           }
         ]
       }
@@ -146,7 +146,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook run UserPromptSubmit"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook run UserPromptSubmit"
           }
         ]
       }
