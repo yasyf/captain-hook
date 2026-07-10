@@ -361,7 +361,7 @@ def warn_settings_drift(
 
 def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None:
     from captain_hook.context import HookContext
-    from captain_hook.transcripts import load_transcript
+    from captain_hook.transcripts import lazy_transcript
 
     try:
         event = Event[event_name]
@@ -393,7 +393,7 @@ def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None
     state.discover(session_dir=session_dir)
     ctx = HookContext(
         session=SessionStore(session_dir),
-        transcript=load_transcript(resolved_path),
+        transcript=lazy_transcript(resolved_path),
         settings=_state.settings,
         project_root=state.root,
     )

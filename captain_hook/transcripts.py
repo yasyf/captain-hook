@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from cc_transcript.activity import SessionActivity
 from cc_transcript.filterspec import event_meta
@@ -11,6 +12,7 @@ from cc_transcript.models import AssistantEvent, ToolUseBlock
 from cc_transcript.parser import parse_events_from_bytes
 from cc_transcript.query import Session
 from cc_transcript.tools import parse_tool_call
+from lazy_object_proxy import Proxy
 
 from captain_hook.classifiers import detect
 from captain_hook.util.paths import resolve_project_dir
@@ -75,3 +77,11 @@ def load_transcript(path: str | Path | None) -> Session:
     if not path or not (path := Path(path)).exists():
         return Session(())
     return lift_session(parse_events_from_bytes(path.read_bytes()), path=path)
+
+
+def lazy_transcript(path: str | Path | None) -> Session:
+    """A ``Session`` proxy that defers parsing until an attribute is first touched.
+
+    Events whose hooks never read the transcript never pay the parse.
+    """
+    return cast("Session", Proxy(partial(load_transcript, path)))
