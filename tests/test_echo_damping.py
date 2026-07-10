@@ -31,25 +31,34 @@ def banner_ctx(session_dir: Path, messages: list[tuple[str, str]], *, n_pad: int
     return HookContext(session=SessionStore(session_dir), transcript=fixture_session(lines), settings=None)
 
 
-# --- quotes_fired_output: whitespace-normalized substring containment ------------------
+# --- strip_fired_output: whitespace-normalized substring containment, strip-and-score --------
 
 
-class TestQuotesFiredOutput:
+class TestStripFiredOutput:
     SENTENCE = "Leave the codebase better than you found it"
 
-    def test_matches_verbatim_quote_ignoring_whitespace(self) -> None:
+    def test_quoted_warn_with_new_prose_strips_to_scored_remainder(self) -> None:
         ps = PrimitiveState(echo_verbatim=[self.SENTENCE])
-        # A quote embedded in surrounding prose, with collapsed/newlined whitespace, still contains.
-        assert ps.quotes_fired_output(f"As the hook said: {self.SENTENCE}. Moving on.") is True
-        assert ps.quotes_fired_output("Leave   the\n codebase  better than\tyou found it here") is True
+        # A quote embedded in surrounding prose, with collapsed/newlined whitespace, is stripped; the
+        # >=20-char remainder survives to be scored and no longer contains the seeded sentence.
+        remainder = ps.strip_fired_output(f"As the hook said: {self.SENTENCE}. Moving on.")
+        assert remainder == "As the hook said: . Moving on."
+        assert self.SENTENCE not in remainder
 
-    def test_word_overlap_without_full_substring_does_not_match(self) -> None:
+    def test_pure_quote_strips_below_floor_to_empty(self) -> None:
         ps = PrimitiveState(echo_verbatim=[self.SENTENCE])
-        # Shares "codebase"/"found"/"leave" but never the full sentence substring.
-        assert ps.quotes_fired_output("I found the codebase; leave it as is.") is False
+        # Nothing survives past the >=20-char floor, so it returns "" and callers drop it (pure quote).
+        assert ps.strip_fired_output("Leave   the\n codebase  better than\tyou found it here") == ""
 
-    def test_empty_ledger_never_matches(self) -> None:
-        assert PrimitiveState().quotes_fired_output("Leave the codebase better than you found it") is False
+    def test_word_overlap_without_full_substring_is_untouched(self) -> None:
+        ps = PrimitiveState(echo_verbatim=[self.SENTENCE])
+        # Shares "codebase"/"found"/"leave" but never the full sentence substring: returned verbatim.
+        text = "I found the codebase; leave it as is."
+        assert ps.strip_fired_output(text) == text
+
+    def test_empty_ledger_leaves_text_untouched(self) -> None:
+        text = "Leave the codebase better than you found it"
+        assert PrimitiveState().strip_fired_output(text) == text
 
 
 # --- seed_echo_verbatim: message sentences only, >=20 char floor, FIFO cap -------------
@@ -79,7 +88,8 @@ class TestSeedEchoVerbatim:
             s.startswith("You appear") for s in ps.echo_verbatim if "dismissing" in s
         )
         # The excerpt phrase never appears verbatim unless it was in the message itself.
-        assert ps.quotes_fired_output("Pre-existing, not caused by my changes.") is False
+        excerpt = "Pre-existing, not caused by my changes."
+        assert ps.strip_fired_output(excerpt) == excerpt
 
     def test_fifo_cap_evicts_oldest(self) -> None:
         ps = PrimitiveState(echo_verbatim=[f"old durable reminder sentence number {i:02d}" for i in range(39)])

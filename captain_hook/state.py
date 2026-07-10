@@ -143,9 +143,6 @@ class PrimitiveState(BaseModel):
             return text
         return stripped if len(stripped) >= ECHO_VERBATIM_MIN_CHARS else ""
 
-    def quotes_fired_output(self, text: str) -> bool:
-        return bool(self.echo_verbatim) and self.strip_fired_output(text) != text
-
     def unechoed_candidates(self, texts: list[str]) -> list[str]:
         """Map *texts* through fired-output stripping, dropping pure quotes — the containment-only
         candidate filter shared by the llm pre-gate and post-verdict consumption so the two agree on
