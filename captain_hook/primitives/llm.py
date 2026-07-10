@@ -80,7 +80,7 @@ def llm_evaluate[M: BaseModel](
 
     if sig := resolve_signals(signals):
         ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
-        texts = transcript_texts(evt, sig.window)
+        texts = transcript_texts(evt, sig.window, sig.origin)
         if not (contributing_texts := ps.match_signals(sig, texts, hook)):
             return None
     elif contexts and when is None:
@@ -122,7 +122,7 @@ def llm_evaluate[M: BaseModel](
 def consume_signals(evt: BaseHookEvent, sig: Signals | None, hook: str) -> None:
     if not sig:
         return
-    texts = transcript_texts(evt, sig.window)
+    texts = transcript_texts(evt, sig.window, sig.origin)
     with evt.ctx.s[PrimitiveState].mutate() as ps:
         ps.match_signals(sig, texts, hook)
 

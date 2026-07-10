@@ -74,7 +74,9 @@ def block_texts(event: UserEvent | AssistantEvent) -> Iterator[str]:
                 pass
 
 
-def transcript_texts(evt: BaseHookEvent, window: int | Literal["turn"]) -> list[str]:
+def transcript_texts(
+    evt: BaseHookEvent, window: int | Literal["turn"], origin: Literal["assistant", "any"] = "any"
+) -> list[str]:
     """Extract prose from recent transcript events for signal scoring.
 
     Scans the last ``window`` events — the whole current turn when ``window`` is
@@ -82,6 +84,12 @@ def transcript_texts(evt: BaseHookEvent, window: int | Literal["turn"]) -> list[
     each thinking block, and the prose fields of prose-carrying tool calls
     (``ReportFindings`` findings, ``TaskCreate``/``TaskUpdate`` subjects and
     descriptions, ``TodoWrite`` todos).
+
+    ``origin`` filters candidates by author: the default ``"any"`` keeps user and
+    assistant prose alike, while ``"assistant"`` drops user messages (and, on
+    ``UserPromptSubmit``, the just-submitted prompt) so a stance hook scores only the
+    agent's own words. Signal-driven hooks thread ``Signals.origin`` here, which
+    defaults to ``"assistant"``.
 
     A fixed ``window`` counts raw JSONL events, not turns, so tool-call traffic
     between a target assistant message and the triggering event can crowd that
@@ -102,11 +110,13 @@ def transcript_texts(evt: BaseHookEvent, window: int | Literal["turn"]) -> list[
     texts = [
         text
         for event in scope.events
-        if isinstance(event, UserEvent | AssistantEvent) and not (event.meta.is_meta or event.meta.is_compact_summary)
+        if isinstance(event, UserEvent | AssistantEvent)
+        and not (event.meta.is_meta or event.meta.is_compact_summary)
+        and (origin == "any" or isinstance(event, AssistantEvent))
         for text in (event.text, *block_texts(event))
         if text
     ]
-    if evt.event == Event.UserPromptSubmit and evt.user_prompt:
+    if origin == "any" and evt.event == Event.UserPromptSubmit and evt.user_prompt:
         return [evt.user_prompt, *texts]
     return texts
 

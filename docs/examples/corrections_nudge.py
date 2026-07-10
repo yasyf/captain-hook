@@ -16,6 +16,7 @@ CORRECTION_SIGNALS = Signals(
     ],
     threshold=3,
     window=6,
+    origin="any",
 )
 
 

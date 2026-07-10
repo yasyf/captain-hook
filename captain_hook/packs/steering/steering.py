@@ -218,6 +218,42 @@ nudge(
                 },
             ]
         ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Let's just leave the login issue for now; it's pre-existing "
+                                    "and beyond the scope of my change."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Let's just leave the login issue for now; it's pre-existing "
+                                    "and beyond the scope of my change."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Warn(),
     },
 )
 

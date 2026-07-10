@@ -687,6 +687,15 @@ class Signals:
     when one tell is deliberately split across turns (a checklist in one message, its
     sign-off in the next). Pattern weights must be positive under either scope.
 
+    ``origin`` selects which candidate texts are eligible before scoring — an
+    upstream filter orthogonal to ``scope`` (which decides how ``threshold`` is met
+    among the eligible texts). The default ``"assistant"`` scores only the agent's own
+    prose (assistant messages, thinking blocks, prose-carrying tool calls), so a stance
+    nudge never fires on the user's words quoted back into the transcript. Pass
+    ``"any"`` to also score user messages — required for a hook that scores the user's
+    prompt or correction (a ``UserPromptSubmit`` nudge, say), where the just-submitted
+    prompt is prepended to the scan only under ``"any"``.
+
     ``vetoes`` are presence-only suppressors: if any veto matches any window entry
     — including already-consumed ones — the bundle does not fire and consumes
     nothing. A veto's ``weight`` is meaningless and must be left at its default.
@@ -702,6 +711,7 @@ class Signals:
     threshold: int
     window: int | Literal["turn"] = 15
     scope: Literal["text", "window"] = field(default="text", kw_only=True)
+    origin: Literal["assistant", "any"] = field(default="assistant", kw_only=True)
     vetoes: Sequence[Signal | NlpSignal] = ()
 
     def __post_init__(self) -> None:

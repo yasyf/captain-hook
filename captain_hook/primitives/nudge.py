@@ -70,7 +70,7 @@ def nudge(
 
         if sig:
             tracker = EchoTracker()
-            candidates = [t for t in transcript_texts(evt, sig.window) if not tracker.saw(t, evt=evt)]
+            candidates = [t for t in transcript_texts(evt, sig.window, sig.origin) if not tracker.saw(t, evt=evt)]
             with evt.ctx.s[PrimitiveState].mutate() as ps:
                 if not (triggering := ps.match_signals(sig, candidates, name)):
                     return None

@@ -81,6 +81,22 @@ class TestSignalsBundle:
         sig = Signals(patterns=[Signal(pattern=r"test", weight=1)], threshold=1)
         assert sig.vetoes == ()
 
+    def test_origin_defaults_to_assistant(self) -> None:
+        assert Signals(patterns=[Signal(pattern=r"x", weight=1)], threshold=1).origin == "assistant"
+
+    def test_origin_accepts_any(self) -> None:
+        assert Signals(patterns=[Signal(pattern=r"x", weight=1)], threshold=1, origin="any").origin == "any"
+
+    def test_origin_is_keyword_only(self) -> None:
+        import dataclasses
+
+        assert next(f for f in dataclasses.fields(Signals) if f.name == "origin").kw_only is True
+
+    def test_origin_is_frozen(self) -> None:
+        sig = Signals(patterns=[Signal(pattern=r"x", weight=1)], threshold=1)
+        with pytest.raises(AttributeError):
+            sig.origin = "any"  # type: ignore[misc]
+
     def test_accepts_vetoes(self) -> None:
         sig = Signals(
             patterns=[Signal(pattern=r"test", weight=1)],
@@ -425,6 +441,63 @@ class TestTranscriptTextsUserPrompt:
 
         evt = self.ups_event([raw_msg("assistant", F08_WRITEUP)], "hmm")
         assert transcript_texts(evt, 0) == ["hmm"]
+
+
+class TestTranscriptTextsOrigin:
+    """``origin`` filters candidate authorship: ``"assistant"`` (the ``Signals`` default) drops user prose."""
+
+    @staticmethod
+    def texts_for(
+        messages: list[dict[str, Any]], window: int | Literal["turn"] = 10, origin: Literal["assistant", "any"] = "any"
+    ) -> list[str]:
+        from captain_hook.events import PostToolUseEvent
+        from captain_hook.signals import transcript_texts
+
+        evt = PostToolUseEvent(_raw={"tool_name": "Edit"}, ctx=make_ctx(messages=messages))
+        return transcript_texts(evt, window, origin)
+
+    def test_default_keeps_user_and_assistant(self) -> None:
+        msgs = [raw_msg("user", "the user says leave it"), raw_msg("assistant", "the assistant plan")]
+        assert self.texts_for(msgs) == ["the user says leave it", "the assistant plan"]
+
+    def test_assistant_origin_drops_user(self) -> None:
+        msgs = [raw_msg("user", "the user says leave it"), raw_msg("assistant", "the assistant plan")]
+        assert self.texts_for(msgs, origin="assistant") == ["the assistant plan"]
+
+    def test_any_origin_keeps_user(self) -> None:
+        msgs = [raw_msg("user", "the user says leave it"), raw_msg("assistant", "the assistant plan")]
+        assert self.texts_for(msgs, origin="any") == ["the user says leave it", "the assistant plan"]
+
+
+class TestTranscriptTextsOriginUserPrompt:
+    """The just-submitted prompt is prepended only under ``origin="any"``; ``"assistant"`` excludes it."""
+
+    @staticmethod
+    def ups_event(messages: list[dict[str, Any]], prompt: str) -> Any:
+        from captain_hook.events import UserPromptSubmitEvent
+
+        return UserPromptSubmitEvent(_raw={"prompt": prompt}, ctx=make_ctx(messages=messages))
+
+    def test_prompt_prepended_under_any(self) -> None:
+        from captain_hook.signals import transcript_texts
+
+        evt = self.ups_event([raw_msg("assistant", "prior plan")], "the new prompt")
+        assert transcript_texts(evt, 6, "any") == ["the new prompt", "prior plan"]
+
+    def test_prompt_excluded_under_assistant(self) -> None:
+        from captain_hook.signals import transcript_texts
+
+        evt = self.ups_event([raw_msg("assistant", "prior plan")], "the new prompt")
+        assert transcript_texts(evt, 6, "assistant") == ["prior plan"]
+
+    def test_window_zero_assistant_is_inert(self) -> None:
+        # window=0 + origin="assistant" leaves a UPS hook nothing to score (no prior events, no
+        # prompt prepend) — why the distinct-requests nudge must opt into origin="any".
+        from captain_hook.signals import transcript_texts
+
+        evt = self.ups_event([raw_msg("assistant", "prior plan")], "1. add foo\n2. fix bar")
+        assert transcript_texts(evt, 0, "assistant") == []
+        assert transcript_texts(evt, 0, "any") == ["1. add foo\n2. fix bar"]
 
 
 class TestTranscriptTextsProse:

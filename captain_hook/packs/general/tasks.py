@@ -143,6 +143,7 @@ nudge(
         ],
         threshold=2,
         window=0,
+        origin="any",
     ),
     tests={
         Input(prompt="1. add foo\n2. fix bar\n3. update baz"): Warn(),
