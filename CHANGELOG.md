@@ -4,6 +4,34 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.15.0] - 2026-07-09
+
+### Fixed
+- **Signal scoring no longer misfires on harness-injected or scattered prose.**
+  Two root-cause fixes to the signal engine, prompted by the steering
+  stewardship nudge warning about "dismissing a pre-existing issue" when the
+  trigger vocabulary came from skill reference docs (34 ledger fires in one
+  day, one of them drawing its entire threshold from a single skill-load
+  event):
+  - `transcript_texts()` excludes harness-injected transcript events — skill
+    loads (`isMeta`) and compact summaries — from scoring candidates. Human
+    prompts, assistant text, thinking, and prose-tool inputs still count.
+  - `Signals` gained a keyword-only `scope` field. The new default
+    `scope="text"` requires the threshold to be met within a single candidate
+    text, with `window` only bounding how far back that text may sit;
+    `scope="window"` keeps the old presence-union pooling across the window
+    for hooks whose tells legitimately split across messages — the steering
+    deferral gate, the steering typing-warnings nudge, and the detours nudge
+    are stamped accordingly. `threshold` below 1 now raises at construction.
+- **Ephemeral waits match on typed calls, not raw tool names.**
+
+### Added
+- **`skip_planning_agents` opt-out on `nudge()` and `gate()`.**
+- **Steering: teammate tight-digest nudge on SubagentStart.**
+
+### Changed
+- **cc-transcript 10.** Typed `TaskCall.agent_name` and alias-aware matching.
+
 ## [8.14.0] - 2026-07-08
 
 ### Changed
