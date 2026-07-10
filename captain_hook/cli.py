@@ -20,6 +20,7 @@ from captain_hook.app import _state, load_gitignore, reset
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import CONF_MODULE, discover_hooks, discover_pack, is_skip_marked, register_nlp_provisioning
 from captain_hook.log import setup_logging
+from captain_hook.once import claim_once
 from captain_hook.packs import manager
 from captain_hook.review.cli import review
 from captain_hook.session import SessionStore, ensure_session
@@ -375,6 +376,12 @@ def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None
 
     raw_text = sys.stdin.read()
     if not raw_text.strip():
+        return
+
+    # Collapse the N byte-identical siblings Claude Code spawns per event to one
+    # dispatch. PreToolUse is exempt: its gate decisions are idempotent, and agents
+    # legitimately repeat identical tool calls, which the guard would wrongly suppress.
+    if event is not Event.PreToolUse and not claim_once(event_name, raw_text.encode()):
         return
 
     try:
