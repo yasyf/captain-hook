@@ -93,12 +93,16 @@ def transcript_texts(evt: BaseHookEvent, window: int | Literal["turn"]) -> list[
     scores the prior assistant turn (e.g. an option dump the user is replying to)
     alongside the new prompt. Use ``window=0`` for a UPS hook that must score the
     prompt alone.
+
+    Harness-injected events — skill loads and other meta events, and compact
+    summaries — are excluded: they carry the harness's prose, not the agent's, and
+    scoring them lets an unrelated skill's boilerplate trip a signal gate.
     """
     scope = evt.ctx.turn if window == "turn" else evt.ctx.t.recent(window)
     texts = [
         text
         for event in scope.events
-        if isinstance(event, UserEvent | AssistantEvent)
+        if isinstance(event, UserEvent | AssistantEvent) and not (event.meta.is_meta or event.meta.is_compact_summary)
         for text in (event.text, *block_texts(event))
         if text
     ]

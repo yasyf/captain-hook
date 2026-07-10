@@ -121,12 +121,16 @@ class PrimitiveState(BaseModel):
         return self.consumed.setdefault(hook, set())
 
     def match_signals(self, sig: Signals, texts: list[str], hook: str) -> list[str] | None:
-        """Presence-union score ``hook``'s non-consumed ``texts`` against ``sig``; consume and return
-        the contributing texts (window order, deduped by text) on a fire, else ``None``.
+        """Score ``hook``'s non-consumed ``texts`` against ``sig``; consume and return the
+        contributing texts (window order, deduped by text) on a fire, else ``None``.
 
-        A signal counts once toward ``threshold`` however many entries it matches (union over
-        per-entry matches, never a concatenation). Any veto matching any entry — consumed or not —
-        suppresses the fire and consumes nothing. Consumption is scoped to ``hook``'s own ledger.
+        Under the default ``scope="text"`` an entry qualifies when the weights of its own
+        matched signals reach ``threshold``, and only qualifying entries are consumed —
+        sub-threshold matches stay live for a later pass. Under ``scope="window"`` a signal
+        counts once toward ``threshold`` however many entries it matches (presence-union over
+        the window), and every matching entry is consumed on a fire. Any veto matching any
+        entry — consumed or not — suppresses the fire and consumes nothing under either scope.
+        Consumption is scoped to ``hook``'s own ledger.
         """
         from captain_hook.signals import matching_signals
 
@@ -136,13 +140,24 @@ class PrimitiveState(BaseModel):
         candidates = [
             (text, set(matching_signals(sig.patterns, text))) for text in texts if text_hash(text) not in spent
         ]
-        union = {i for _, matched in candidates for i in matched}
-        if sum(sig.patterns[i].weight for i in union) < sig.threshold:
-            return None
+        match sig.scope:
+            case "window":
+                union = {i for _, matched in candidates for i in matched}
+                if sum(sig.patterns[i].weight for i in union) < sig.threshold:
+                    return None
+                qualifying = [(text, matched) for text, matched in candidates if matched]
+            case "text":
+                qualifying = [
+                    (text, matched)
+                    for text, matched in candidates
+                    if sum(sig.patterns[i].weight for i in matched) >= sig.threshold
+                ]
+                if not qualifying:
+                    return None
         contributing: list[str] = []
         seen: set[str] = set()
-        for text, matched in candidates:
-            if matched and (h := text_hash(text)) not in seen:
+        for text, _ in qualifying:
+            if (h := text_hash(text)) not in seen:
                 seen.add(h)
                 contributing.append(text)
         self.consumed_for(hook).update(seen)

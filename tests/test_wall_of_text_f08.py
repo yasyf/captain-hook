@@ -22,7 +22,9 @@ from captain_hook.testing.helpers import fixture_session
 from captain_hook.types import Signal, Signals
 from tests.helpers import raw_msg
 
-# Verbatim from cc-skills/plugins/show/hooks/wall_of_text.py (signals=Signals(...)). S1..S5.
+# Mirrors cc-skills/plugins/show/hooks/wall_of_text.py (signals=Signals(...)), S1..S5, with
+# scope="window" added to pin the presence-union semantic this fixture relies on. The shipped
+# hook still omits scope (it predates the field) and gets the same stamp post-release.
 WALL_OF_TEXT = Signals(
     [
         Signal(pattern=r"(?im)^\s*(?:\*\*)?(?:option|approach|alternative|path)\s*[A-D1-4]\b", weight=2),
@@ -37,6 +39,7 @@ WALL_OF_TEXT = Signals(
     ],
     threshold=3,
     window=6,
+    scope="window",
 )
 
 # Verbatim assistant writeup from f08_architecture_writeup_feedback/transcript.jsonl.

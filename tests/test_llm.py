@@ -1214,6 +1214,7 @@ class TestMultiContributorConsume:
             patterns=[Signal(pattern=r"list", weight=2), Signal(pattern=r"feedback", weight=2)],
             threshold=4,
             window=10,
+            scope="window",
         )
         ctx = make_ctx(
             tmp_path,

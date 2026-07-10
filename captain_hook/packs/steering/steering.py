@@ -152,6 +152,72 @@ nudge(
                 }
             ]
         ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "user",
+                    "isMeta": True,
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "These are pre-existing lines, and cleaning them is beyond the scope of my change."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "These are pre-existing lines, and cleaning them is beyond the scope of my change."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Warn(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "When you edit an existing doc, fix tells only in the lines you're "
+                                    "already changing — never reflow pre-existing untouched lines to "
+                                    "satisfy the linter, which is scope creep over the author's "
+                                    "deliberate voice."
+                                ),
+                            }
+                        ]
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "That refactor is beyond the scope of this task.",
+                            }
+                        ]
+                    },
+                },
+            ]
+        ): Allow(),
     },
 )
 
@@ -188,6 +254,7 @@ nudge(
         ],
         threshold=4,
         window=10,
+        scope="window",
         vetoes=[
             Signal(pattern=r"(?i)(?:actual|real|genuine)\s+(?:bug|error)"),
             Signal(pattern=r"(?i)wrong\s+(?:type|signature|return\s+type)"),
@@ -228,6 +295,18 @@ nudge(
                         ]
                     },
                 }
+            ]
+        ): Warn(),
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "Let me check the git history."}]},
+                },
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "The warnings are appearing again."}]},
+                },
             ]
         ): Warn(),
         Input(
@@ -538,6 +617,7 @@ tell that decided it) in `reasoning`.""",
         ],
         threshold=3,
         window="turn",
+        scope="window",
         vetoes=[
             Signal(
                 pattern=(

@@ -96,6 +96,7 @@ words, naming the detour and the requested task) in `reasoning`.""",
         ],
         threshold=2,
         window=8,
+        scope="window",
     ),
     tests={
         Input(

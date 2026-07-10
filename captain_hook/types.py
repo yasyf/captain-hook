@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Flag, StrEnum, auto
 from textwrap import dedent
 from typing import (
@@ -657,9 +657,9 @@ class Signal:
     """A regex-based signal pattern used in the scoring pipeline.
 
     Signals are matched against transcript text via ``re.search``. In a
-    :class:`Signals` bundle each matched signal contributes ``weight`` once to the
-    threshold (presence-union scoring); pattern weights must be positive, and false
-    positives are suppressed with :attr:`Signals.vetoes`, not negative weights.
+    :class:`Signals` bundle each matched signal contributes ``weight`` once toward
+    the threshold; pattern weights must be positive, and false positives are
+    suppressed with :attr:`Signals.vetoes`, not negative weights.
 
     Example:
         >>> Signal(pattern=r"retry", weight=2, flags=re.IGNORECASE)
@@ -678,9 +678,14 @@ class Signals:
     wraps it with ``threshold=1`` — meaning *any* single signal match triggers.
     Pass a higher threshold to require multiple signals to fire together.
 
-    Scoring is presence-union across window entries: a signal counts once toward
-    ``threshold`` no matter how many entries it matches, and the union score is the
-    sum of the distinct matching signals' weights. Pattern weights must be positive.
+    ``scope`` selects how ``threshold`` is met across the scored candidate texts.
+    The default ``"text"`` requires a single candidate text to meet ``threshold`` on
+    its own; ``window`` then only bounds how far back a qualifying text may sit.
+    ``"window"`` instead sums by presence-union across the window: each signal counts
+    once toward ``threshold`` however many entries it matches, and the union score is
+    the sum of the distinct matching signals' weights. Reach for ``"window"`` only
+    when one tell is deliberately split across turns (a checklist in one message, its
+    sign-off in the next). Pattern weights must be positive under either scope.
 
     ``vetoes`` are presence-only suppressors: if any veto matches any window entry
     — including already-consumed ones — the bundle does not fire and consumes
@@ -696,14 +701,20 @@ class Signals:
     patterns: Sequence[Signal | NlpSignal]
     threshold: int
     window: int | Literal["turn"] = 15
+    scope: Literal["text", "window"] = field(default="text", kw_only=True)
     vetoes: Sequence[Signal | NlpSignal] = ()
 
     def __post_init__(self) -> None:
+        if self.threshold < 1:
+            raise ValueError(
+                f"signals threshold must be at least 1 (a threshold below 1 fires on zero matches); "
+                f"got {self.threshold}."
+            )
         for p in self.patterns:
             if p.weight <= 0:
                 raise ValueError(
-                    f"signal pattern weight must be positive (presence-union scoring has no "
-                    f"subtraction); got {p.weight}. Move suppressing patterns to `vetoes`."
+                    f"signal pattern weight must be positive (weights are additive, never "
+                    f"subtractive); got {p.weight}. Move suppressing patterns to `vetoes`."
                 )
         for v in self.vetoes:
             if v.weight != 1:

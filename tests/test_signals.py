@@ -103,6 +103,11 @@ class TestSignalsBundle:
                 vetoes=[Signal(pattern=r"y", weight=veto_weight)],
             )
 
+    @pytest.mark.parametrize("bad_threshold", [0, -1])
+    def test_nonpositive_threshold_raises(self, bad_threshold: int) -> None:
+        with pytest.raises(ValueError, match="threshold must be at least 1"):
+            Signals(patterns=[Signal(pattern=r"x", weight=1)], threshold=bad_threshold)
+
 
 class TestScoreSignals:
     @pytest.mark.parametrize(
@@ -231,10 +236,12 @@ class TestMatchSignalsAggregation:
     SIG = Signals(
         patterns=[Signal(pattern=r"list", weight=1), Signal(pattern=r"feedback", weight=2)],
         threshold=3,
+        scope="window",
     )
     VETO_SIG = Signals(
         patterns=[Signal(pattern=r"list", weight=1), Signal(pattern=r"feedback", weight=2)],
         threshold=3,
+        scope="window",
         vetoes=[Signal(pattern=r"you asked")],
     )
 
@@ -302,6 +309,44 @@ class TestMatchSignalsAggregation:
             "a list of items",
             "here is some feedback",
         ]
+
+
+class TestMatchSignalsPerText:
+    """Default ``scope="text"`` thresholding: a fire needs one candidate text to meet threshold alone."""
+
+    HOOK = "per_text_hook"
+
+    def test_scope_defaults_to_text(self) -> None:
+        assert Signals(patterns=[Signal(pattern=r"x", weight=1)], threshold=1).scope == "text"
+
+    def test_split_weak_tells_do_not_fire(self) -> None:
+        ps = PrimitiveState()
+        sig = Signals(patterns=[Signal(pattern=r"alpha", weight=1), Signal(pattern=r"beta", weight=1)], threshold=2)
+        assert ps.match_signals(sig, ["alpha only", "beta only"], self.HOOK) is None
+        assert ps.consumed == {}
+
+    def test_qualifying_entry_consumes_only_itself(self) -> None:
+        ps = PrimitiveState()
+        sig = Signals(patterns=[Signal(pattern=r"alpha", weight=2), Signal(pattern=r"beta", weight=1)], threshold=2)
+        assert ps.match_signals(sig, ["alpha strong", "beta weak"], self.HOOK) == ["alpha strong"]
+        assert ps.consumed == {self.HOOK: {text_hash("alpha strong")}}
+        # the sub-threshold sibling was never consumed → a threshold-1 sig still fires on it
+        sig1 = Signals(patterns=[Signal(pattern=r"beta", weight=1)], threshold=1)
+        assert ps.match_signals(sig1, ["beta weak"], self.HOOK) == ["beta weak"]
+
+    def test_two_qualifying_entries_returned_in_window_order(self) -> None:
+        ps = PrimitiveState()
+        sig = Signals(patterns=[Signal(pattern=r"alpha", weight=2)], threshold=2)
+        assert ps.match_signals(sig, ["first alpha", "middle", "second alpha"], self.HOOK) == [
+            "first alpha",
+            "second alpha",
+        ]
+
+    def test_veto_suppresses_even_when_an_entry_qualifies(self) -> None:
+        ps = PrimitiveState()
+        sig = Signals(patterns=[Signal(pattern=r"alpha", weight=2)], threshold=2, vetoes=[Signal(pattern=r"nope")])
+        assert ps.match_signals(sig, ["alpha strong", "nope veto here"], self.HOOK) is None
+        assert ps.consumed == {}
 
 
 class TestTranscriptTexts:
@@ -389,6 +434,12 @@ class TestTranscriptTextsProse:
         from captain_hook.signals import transcript_texts
 
         return transcript_texts(PostToolUseEvent(_raw={"tool_name": "Edit"}, ctx=make_ctx(messages=messages)), window)
+
+    def test_meta_injected_events_excluded(self) -> None:
+        same = "these pre-existing lines are outside the scope"
+        assert self.texts_for([raw_msg("user", same, isMeta=True)]) == []
+        assert self.texts_for([raw_msg("user", same, isCompactSummary=True)]) == []
+        assert self.texts_for([raw_msg("user", same)]) == [same]
 
     def test_thinking_block_is_own_entry(self) -> None:
         messages = [raw_msg("assistant", [raw_text_block("visible"), {"type": "thinking", "thinking": "hidden plan"}])]
