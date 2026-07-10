@@ -102,7 +102,8 @@ prompt_check(evt, template: str | Prompt, fmt=None, *, prefix: str, suffix="", t
              include_reasoning=True, response_model=PromptCheckVerdict) -> HookResult | None
 ```
 
-`llm_gate` defaults to `max_fires=1`, `llm_nudge` to `max_fires=3`. `prompt_check` is called
+`llm_gate` defaults to `max_fires=1`, `llm_nudge` to `max_fires=3`; budgets count per agent
+context, so the main agent and each subagent get the full allowance. `prompt_check` is called
 from a handler and returns a `HookResult` (or `None`). `max_fires`, a narrow `only_if`, and
 `model="small"` bound the cost.
 

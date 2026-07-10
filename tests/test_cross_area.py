@@ -27,7 +27,7 @@ from captain_hook.primitives.workflow import Step, text_matches, workflow
 from captain_hook.signals import score_signals
 from captain_hook.signals.nlp import Clause, NlpSignal, Phrase
 from captain_hook.state import HookState
-from captain_hook.testing.helpers import run_inline_tests
+from captain_hook.testing.helpers import input_to_event, run_inline_tests
 from captain_hook.testing.types import Allow, Block, Input
 from captain_hook.types import (
     Action,
@@ -388,12 +388,35 @@ class TestMaxFiresSessionStore:
             else:
                 assert output is None, f"Dispatch {i} should be suppressed"
 
+    def test_max_fires_budget_is_per_agent(self, tmp_path: Path) -> None:
+        session_dir = tmp_path
+        register_hook(Event.PreToolUse, message="limited", block=True, max_fires=1)
+
+        def fire(agent_id: str | None) -> dict[str, Any] | None:
+            evt = input_to_event(
+                Event.PreToolUse,
+                Input(tool="Bash", tool_input={"command": f"echo {agent_id or 'main'}"}, agent_id=agent_id),
+            )
+            return dispatch(Event.PreToolUse, evt, session_dir=session_dir)
+
+        assert fire(None) is not None
+        assert fire("a1") is not None
+        assert fire("a2") is not None
+        assert fire("a1") is None
+        assert fire("") is None, "empty agent_id spends the main budget"
+
+        hook_dir = session_dir / _state.hooks[0].name
+        for agent_slot in ("main", "a1", "a2"):
+            state_file = hook_dir / agent_slot / "hook_state.json"
+            state = HookState.model_validate_json(state_file.read_text())
+            assert state.fire_count == 1
+
     def test_fire_count_persisted(self, tmp_path: Path) -> None:
         session_dir = tmp_path
         register_hook(Event.PreToolUse, message="counted", block=True, max_fires=5)
         dispatch_pre({"command": "echo hi"}, session_dir=session_dir)
 
-        hook_dir = session_dir / _state.hooks[0].name
+        hook_dir = session_dir / _state.hooks[0].name / "main"
         state_file = hook_dir / "hook_state.json"
         assert state_file.exists()
         state = HookState.model_validate_json(state_file.read_text())

@@ -112,8 +112,9 @@ class Input:
         script: A ``Workflow`` tool's script source (synthesizes a Workflow call).
         agent_type: Subagent type for subagent events (an Agent/Task call's
             ``subagent_type``).
-        agent_id: Subagent/teammate id — presence makes ``evt.is_subagent`` true
-            (and fills subagent events' ``agent_id``).
+        agent_id: Subagent/teammate id — a non-empty value makes ``evt.is_subagent``
+            true (and fills subagent events' ``agent_id``); each id also gets its
+            own ``max_fires`` budget.
         model: Model for an Agent/Task call's ``model`` input field.
         output: The tool result surfaced to ``PostToolUse`` as ``evt.tool_response``.
         error: The failure text surfaced to ``PostToolUseFailure`` as ``evt.error``.

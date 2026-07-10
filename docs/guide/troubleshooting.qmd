@@ -48,7 +48,7 @@ A hook that fires on every event, or twice per event, is matching too broadly. T
 
 Narrow the conditions. Add a `skip_if` for the cases you want to spare, or a tighter `only_if` glob. A `FilePath("**/*.py")` matches every Python file in the project; `FilePath("src/**/*.py")` matches only your source tree. See the [conditions cheatsheet](../reference/conditions.qmd) for every condition and the [conditions guide](conditions.qmd) for how to combine them.
 
-Cap the count. A `nudge` already defaults to one fire per session, or three when signal-scored; pass `max_fires=N` to change the cap. The LLM primitives also default low, with `llm_gate` at 1 and `llm_nudge` at 3. See the [primitives reference](../reference/primitives.qmd).
+Cap the count. A `nudge` already defaults to one fire, or three when signal-scored, and budgets count per agent context — the main agent and each subagent get their own allowance; pass `max_fires=N` to change the cap. The LLM primitives also default low, with `llm_gate` at 1 and `llm_nudge` at 3. See the [primitives reference](../reference/primitives.qmd).
 
 Check the event set. A hook registered with `Event.Stop | Event.SubagentStop` fires on both. Confirm that both belong by reading the [events reference](../reference/events.qmd).
 

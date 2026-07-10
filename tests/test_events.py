@@ -62,10 +62,21 @@ class TestBaseHookEvent:
     @pytest.mark.parametrize(
         ("cls", "raw", "attr", "expected"),
         [
-            pytest.param(UserPromptSubmitEvent, {"prompt": "hello"}, "user_prompt", "hello", id="user_prompt_from_raw"),
+            pytest.param(
+                UserPromptSubmitEvent,
+                {"prompt": "hello"},
+                "user_prompt",
+                "hello",
+                id="user_prompt_from_raw",
+            ),
             pytest.param(UserPromptSubmitEvent, {}, "user_prompt", None, id="user_prompt_none_when_missing"),
+            pytest.param(StopEvent, {"agent_id": "sub-1"}, "agent_id", "sub-1", id="agent_id_from_raw"),
+            pytest.param(StopEvent, {}, "agent_id", None, id="agent_id_none_when_missing"),
+            pytest.param(StopEvent, {"agent_id": None}, "agent_id", None, id="agent_id_none_when_null"),
+            pytest.param(StopEvent, {"agent_id": ""}, "agent_id", None, id="agent_id_none_when_empty"),
             pytest.param(StopEvent, {"agent_id": "sub-1"}, "is_subagent", True, id="is_subagent_true"),
             pytest.param(StopEvent, {}, "is_subagent", False, id="is_subagent_false"),
+            pytest.param(StopEvent, {"agent_id": ""}, "is_subagent", False, id="is_subagent_false_when_empty"),
             pytest.param(StopEvent, {}, "stop_hook_active", False, id="stop_hook_active_default_false"),
             pytest.param(StopEvent, {"stop_hook_active": True}, "stop_hook_active", True, id="stop_hook_active_true"),
             pytest.param(StopEvent, {"agent_type": "worker"}, "parent_agent_type", "worker", id="parent_agent_type"),

@@ -113,7 +113,7 @@ The store then reports every registered model:
 
 Registration does not change slot access. `evt.ctx.s[Snapshot].get()` still works the same way. Both `@workflow_state` and `@session_state` register the model, so a workflow model shows up in `tracked_models()` too.
 
-The framework reserves two slots of its own. `HookState` counts how many times a hook fired and backs `max_fires` enforcement, and `PrimitiveState` backs the LLM primitives. You read them at most, never write them.
+The framework reserves two slots of its own. `HookState` counts how many times a hook fired and backs `max_fires` enforcement — counted per agent context, so a subagent spends its own budget, not the session's. `PrimitiveState` backs the LLM primitives. You read them at most, never write them.
 
 ## Persist across sessions with `DurableState`
 

@@ -204,7 +204,7 @@ class TestFireCounting:
         )
 
         execute_hook(entry, mock_edit_event(), tmp_path)
-        hook_dir = tmp_path / "persist_test"
+        hook_dir = tmp_path / "persist_test" / "main"
         store = SessionStore(hook_dir)
         state = store[HookState].get()
         assert state is not None

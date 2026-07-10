@@ -127,8 +127,17 @@ class BaseHookEvent:
         return self.event_name
 
     @property
+    def agent_id(self) -> str | None:
+        """The subagent id attached to this event, or None for main-agent events.
+
+        A missing, null, or empty ``agent_id`` all mean the main agent.
+        """
+        return self._raw.get("agent_id") or None
+
+    @property
     def is_subagent(self) -> bool:
-        return "agent_id" in self._raw
+        """Whether this event came from a subagent payload."""
+        return self.agent_id is not None
 
     @property
     def session_id(self) -> str:

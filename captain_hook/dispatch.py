@@ -45,7 +45,7 @@ def execute_hook(
     session_dir: Path | None = None,
 ) -> HookResult | None:
     """Execute a single registered hook, respecting ``max_fires`` and persisting fire count."""
-    hook_session_dir = (session_dir / entry.name) if session_dir else None
+    hook_session_dir = (session_dir / entry.name / (evt.agent_id or "main")) if session_dir else None
     if hook_session_dir:
         hook_session_dir.mkdir(parents=True, exist_ok=True)
 

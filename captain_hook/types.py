@@ -412,9 +412,9 @@ class Agent:
 class FromSubagent:
     """Condition matching when the current event originates from a subagent or teammate.
 
-    True when the event payload carries an ``agent_id``, which Claude Code sends only for
-    subagent and teammate events. Distinct from :class:`Agent`, which matches the subagent
-    *type*: this matches the event's *origin*.
+    True when the event payload carries a non-empty ``agent_id``, which Claude Code sends
+    only for subagent and teammate events. Distinct from :class:`Agent`, which matches the
+    subagent *type*: this matches the event's *origin*.
 
     Example:
         >>> approve("teammate bash", only_if=[Tool("Bash"), FromSubagent(), SkipPermissions()])
