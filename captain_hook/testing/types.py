@@ -4,10 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import pydantic
-from pydantic import field_validator
-from pydantic.dataclasses import dataclass as pyd_dataclass
-
 
 class TranscriptFixture:
     """A lightweight transcript stub for use in inline tests.
@@ -88,12 +84,7 @@ class Rewrite:
         object.__setattr__(self, "fields", tuple(sorted(fields.items())))
 
 
-@pyd_dataclass(
-    frozen=True,
-    kw_only=True,
-    eq=False,
-    config=pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid"),
-)
+@dataclass(frozen=True, kw_only=True, eq=False)
 class Input:
     """Inline test input descriptor modeling an event payload.
 
@@ -157,12 +148,9 @@ class Input:
     tasks: list[dict[str, Any]] | None = None
     llm: dict[str, Any] | None = None
 
-    @field_validator("transcript", mode="before")
-    @classmethod
-    def coerce_transcript(
-        cls, value: Path | TranscriptFixture | list[dict[str, Any]] | None
-    ) -> Path | TranscriptFixture | None:
-        return TranscriptFixture(value) if isinstance(value, list) else value
+    def __post_init__(self) -> None:
+        if isinstance(self.transcript, list):
+            object.__setattr__(self, "transcript", TranscriptFixture(self.transcript))
 
     def __repr__(self) -> str:
         set_fields = ", ".join(
