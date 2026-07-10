@@ -353,6 +353,11 @@ def evict_stale_commits(name: str, keep: str) -> None:
     Keeps the just-resolved ``keep`` sha plus the ``KEEP_COMMITS`` most-recent other
     commit dirs by mtime, removing the rest. Never touches other packs or the dir just
     resolved; ignores every error, since a missed eviction only costs disk.
+
+    No lock guards a sibling mid-read of an evicted dir. Recency is by mtime, which
+    load_cached bumps on every cache hit, so eviction only reaches a commit that stayed
+    idle past the KEEP_COMMITS buffer across intervening fetches — a >buffer-deep pin
+    left unused. Racing that window is possible but accepted as best-effort.
     """
     current = f"{name}@{keep}"
     dated: list[tuple[float, Path]] = []
@@ -450,6 +455,11 @@ def resolve_builtin(name: str) -> ResolvedPack:
 def load_cached(entry: ExternalPack, sha: str) -> ResolvedPack | None:
     if not (cached := find_cached(entry.name, sha)):
         return None
+    # A cache hit never re-fetches, so touch the dir to record continued use; otherwise
+    # its mtime only reflects fetch time and evict_stale_commits could reclaim a commit
+    # that is long-pinned and actively loaded.
+    with contextlib.suppress(OSError):
+        os.utime(cached, None)
     manifest = PackManifest.load(manifest_in(cached))
     return ResolvedPack(entry, manifest.hooks_dir(cached), manifest)
 

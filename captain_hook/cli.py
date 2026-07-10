@@ -31,6 +31,12 @@ DEFAULT_PREFIX = f"uvx {DIST_NAME}"
 EVENT_NAMES = ", ".join(n for e in Event if (n := e.name))
 PLUGIN_ID = "captain-hook@captain-hook"
 
+# Decision-capable events: their hooks can return an allow/deny/block verdict, so
+# collapsing a byte-identical sibling could swallow a legitimate event and bypass its
+# gate. They are never guarded — the duplicate-dispatch guard covers only pure
+# side-effect events, where a missed sibling costs at most one repeated effect.
+DECISION_EVENTS = frozenset({Event.PreToolUse, Event.Stop, Event.SubagentStop, Event.PermissionRequest})
+
 
 @dataclass(frozen=True, slots=True)
 class CliState:
@@ -379,9 +385,9 @@ def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None
         return
 
     # Collapse the N byte-identical siblings Claude Code spawns per event to one
-    # dispatch. PreToolUse is exempt: its gate decisions are idempotent, and agents
-    # legitimately repeat identical tool calls, which the guard would wrongly suppress.
-    if event is not Event.PreToolUse and not claim_once(event_name, raw_text.encode()):
+    # dispatch. Decision-capable events (DECISION_EVENTS) are exempt: swallowing a
+    # sibling there could bypass a gate, which outweighs a duplicated side effect.
+    if event not in DECISION_EVENTS and not claim_once(event_name, raw_text.encode()):
         return
 
     try:
