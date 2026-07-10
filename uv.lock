@@ -298,7 +298,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "ast-grep-py", specifier = ">=0.39,<1" },
-    { name = "cc-transcript", extras = ["judge"], specifier = ">=10.3,<11" },
+    { name = "cc-transcript", extras = ["judge"], specifier = ">=10,<11" },
     { name = "click", specifier = ">=8" },
     { name = "filelock", specifier = ">=3" },
     { name = "funcy", specifier = ">=2.0" },
@@ -336,7 +336,7 @@ wheels = [
 
 [[package]]
 name = "cc-transcript"
-version = "10.3.0"
+version = "10.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -346,12 +346,12 @@ dependencies = [
     { name = "tree-sitter", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "tree-sitter-bash", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7d/c6/522e39f15fe23a4733a6bc991051f9ed76bcc43757e047cda31113596322/cc_transcript-10.3.0.tar.gz", hash = "sha256:39fa7c07829a51da872b868ac8a67a61188e5bf83f97bf08e1c604c650b852de", size = 187619, upload-time = "2026-07-10T08:45:03.545Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/24/ba/5061081812fa8bada64b05866cb819c6cc14cef3b3c31dd292dbc3e0bbad/cc_transcript-10.2.0.tar.gz", hash = "sha256:bb487ebe10c3e3d73837e16c6011575a8475938e90f4ff92b49bc75d9adf0886", size = 187234, upload-time = "2026-07-10T07:16:19.12Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/81/ba/99816222ac3d89bb8e5fb334337028fb5ec5f1740ba0d78620557da64945/cc_transcript-10.3.0-cp313-abi3-macosx_11_0_arm64.whl", hash = "sha256:d516dac66584506983913241100452d60407175860e35f5fe4b0e372134dcc3d", size = 2564685, upload-time = "2026-07-10T08:44:55.074Z" },
-    { url = "https://files.pythonhosted.org/packages/a8/94/bbf229b7a6bbcf193f8d2e6048e2a0d22d9134762e631977dc5b49b92dfc/cc_transcript-10.3.0-cp313-abi3-macosx_11_0_x86_64.whl", hash = "sha256:83bf87e310bf180ec95e8cf355aa1300521b5bb42fa94aa0d5c3c22734fcece4", size = 2709385, upload-time = "2026-07-10T08:44:57.24Z" },
-    { url = "https://files.pythonhosted.org/packages/9e/64/a9c41f607600e811125b3232c157e30dc3f3f58aa1a59e9af7818287db08/cc_transcript-10.3.0-cp313-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:53520d989e7c3f48d3d01000af099bcc3a66d32cf03150ce3150c6b85b0c6104", size = 2703680, upload-time = "2026-07-10T08:44:59.663Z" },
-    { url = "https://files.pythonhosted.org/packages/ec/24/e0b12ab11cca061b15c88d745b774c74046a59c4908149ada0af3e89c322/cc_transcript-10.3.0-cp313-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:22e8bbddd3223482c6ecf462ed0018a7b1915881ce76e60bd30fde9ded6d26a3", size = 2845521, upload-time = "2026-07-10T08:45:01.94Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/72/378e065f3d45d3bdbfdbe52b04459fb340ac239438ee31a51894084d1cd1/cc_transcript-10.2.0-cp313-abi3-macosx_11_0_arm64.whl", hash = "sha256:1b363a5229e1c21c52580f368c9ef2735bc004bd283f0765df7878bd9cb26dc0", size = 2564379, upload-time = "2026-07-10T07:16:12.83Z" },
+    { url = "https://files.pythonhosted.org/packages/23/25/7cad5931bcfc989b520864b09a86e21947bf2052caca0e3ad636a9a22882/cc_transcript-10.2.0-cp313-abi3-macosx_11_0_x86_64.whl", hash = "sha256:974104df2695295d707758cb734d03a17141e2d18962b875129521e330773a22", size = 2709165, upload-time = "2026-07-10T07:16:14.726Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/b1/10a08807d908643b83509f84e6603b8cfabfac0752c58cd212a8fd4d12c6/cc_transcript-10.2.0-cp313-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:d98fba92cd683090e6c5bbabc75bb6df365fc0f20daf4f909982f6697747b48e", size = 2703956, upload-time = "2026-07-10T07:16:16.128Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/87/44740cd8a90013580c9a56306c34d3f61b02c912b5506fe631f0cb614b6e/cc_transcript-10.2.0-cp313-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:f347f86b054eb9d0d84a98be3951088560c30ecf67e9f3742f4c65496f1463d7", size = 2845645, upload-time = "2026-07-10T07:16:17.564Z" },
 ]
 
 [package.optional-dependencies]
