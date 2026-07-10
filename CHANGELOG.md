@@ -12,10 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   calls all read the pre-increment fire count and blew past `max_fires` (one
   session delivered 12 warns against a cap of 3). `max_fires` is now
   reserve-then-release: the fire is reserved under a file lock before the
-  handler runs, and a handler that declines or raises releases the
-  reservation. Suppressed and released fires record no ledger decision —
-  decision-ledger consumers see only delivered fires, matching the capped
-  behavior to date.
+  handler runs, and a handler that declines, raises, or aborts abnormally
+  (`SystemExit`/`KeyboardInterrupt`) releases the reservation before the
+  exception re-propagates — an abnormal exit no longer leaks the slot and
+  permanently mutes the hook. Suppressed and released fires record no ledger
+  decision — decision-ledger consumers see only delivered fires, matching the
+  capped behavior to date.
 - **Signal hooks no longer score the user's words.** `Signals` gained a
   keyword-only `origin` field, an upstream candidate filter orthogonal to
   `scope`. The new default `origin="assistant"` keeps only the agent's own
@@ -32,11 +34,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `transcript_texts()` drops agent-injected user events — teammate-message
   relay banners, scheduled-task injections, role reminders — under either
   origin, via cc-transcript's `UserEvent.is_agent_injected`. A session-wide
-  verbatim echo ledger (`PrimitiveState.echo_verbatim`) damps any text that
-  quotes a fired warning's sentences, by whitespace-normalized containment,
-  across hooks and independent of the lemma echo window; the lemma window's
-  forward horizon now also covers the bundle's lookback span. Requires
-  cc-transcript >= 10.5.
+  verbatim echo ledger (`PrimitiveState.echo_verbatim`), seeded from each fired
+  warning's sentences and deduplicated so a warning that repeats one sentence
+  cannot flood and evict the ledger, damps text that quotes a fired warning:
+  the seeded sentences are stripped from the candidate and only the remainder
+  is scored, so a pure quote is damped while a quote that also carries a fresh
+  violation still fires on the remainder. Damping is whitespace-normalized,
+  shared across hooks, and independent of the lemma echo window, whose forward
+  horizon now also covers the bundle's lookback span. Requires cc-transcript
+  >= 10.6.
+- **Signal consumption is the authoritative fire claim.** A signal-scored LLM
+  hook read its candidates lock-free before the verdict, so two concurrent
+  hook processes could both clear the pre-gate on one signal and both deliver.
+  Consumption now re-matches under the state lock after the verdict, through
+  the same candidate filter the pre-gate uses; an empty locked re-match — the
+  signal already consumed by a peer, or absorbed by a quote or veto — aborts
+  the fire rather than delivering a signal it never claimed.
 
 ### Added
 - **`SessionSlot.mutate()`.** Transactional get→edit→set on session state
@@ -47,8 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   classmethod.
 
 ### Changed
-- **cc-transcript 10.5.** Pin bumped to `>=10.5,<11` for
-  `UserEvent.is_agent_injected` (the relay-banner marker) and the
+- **cc-transcript 10.6.** Pin bumped to `>=10.6,<11` for
+  `UserEvent.is_agent_injected` (the relay-banner marker, now start-anchored so
+  a mid-message mention of a banner tag no longer reads as an injection) and the
   turn-segmentation fix that keeps a relay banner from opening a fake turn.
 
 ## [8.17.0] - 2026-07-10
