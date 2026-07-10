@@ -116,12 +116,55 @@ opened the turn and catches a tell dropped hundreds of events earlier.
 You can also pass a bare `list[Signal]` to a primitive. The framework wraps it with
 `threshold=1`, so any single match triggers.
 
+## Choose whose words count with `origin`
+
+`origin` selects which texts become scoring candidates in the first place — an
+upstream filter, orthogonal to `scope`, which decides how the threshold is met among
+the candidates. The default `origin="assistant"` keeps only the agent's own prose:
+assistant messages, thinking blocks, and prose-carrying tool calls. User messages
+drop out before scoring, so a stance hook watching the agent's behavior doesn't fire
+because the user quoted the trigger vocabulary back at it. Harness-injected events —
+teammate-message relay banners, scheduled-task injections — never count under either
+origin.
+
+Stamp `origin="any"` when the hook exists to score the human's words. A correction
+detector reads the user's prose by definition, and a `UserPromptSubmit` hook that
+scores the just-submitted prompt needs the stamp, because the prompt joins the scan
+only under `"any"`:
+
+```python
+import re
+from captain_hook import Event, Signal, Signals, nudge
+
+nudge(
+    "That reads like a durable correction — run `uvx capt-hook status` to mine it into a hook.",
+    events=Event.UserPromptSubmit,
+    signals=Signals(
+        patterns=[
+            Signal(r"\bno\b|actually", weight=1, flags=re.IGNORECASE),
+            Signal(r"\b(never|always)\b", weight=1, flags=re.IGNORECASE),
+        ],
+        threshold=2,
+        window=0,
+        origin="any",  # the prompt is user prose; the default drops it
+    ),
+)
+```
+
+::: {.callout-warning title="An un-stamped `UserPromptSubmit` hook is silently dead"}
+Under the default `origin`, the just-submitted prompt is excluded from the scan. A
+`UserPromptSubmit` bundle with `window=0` then has no candidates at all — it never
+fires and never errors. Stamp `origin="any"` on any bundle that scores the prompt.
+:::
+
 ## Wire a bundle into nudge
 
-Pass the bundle to `nudge(signals=...)`. The primitive pulls every prose source from
-the window — each message's visible text, each thinking block, and the prose fields
-of `ReportFindings`, `TaskCreate`/`TaskUpdate`, and `TodoWrite` calls — scores each
-one, and warns when a single text's matching signals sum to the threshold. Each
+Pass the bundle to `nudge(signals=...)`. The primitive pulls every prose source the
+bundle's `origin` allows from the window — each assistant message's visible text,
+each thinking block, and the prose fields of `ReportFindings`,
+`TaskCreate`/`TaskUpdate`, and `TodoWrite` calls, plus user messages under
+`origin="any"` — scores each one, and warns when a single text's matching signals
+sum to the threshold. Each
 hook keeps its own consumed ledger, so the same
 triggering text doesn't fire that hook twice in a row.
 
