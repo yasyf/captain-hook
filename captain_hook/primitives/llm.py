@@ -80,7 +80,7 @@ def llm_evaluate[M: BaseModel](
 
     if sig := resolve_signals(signals):
         ps = evt.ctx.s[PrimitiveState].get(PrimitiveState())
-        texts = [t for t in transcript_texts(evt, sig.window, sig.origin) if not ps.quotes_fired_output(t)]
+        texts = ps.unechoed_candidates(transcript_texts(evt, sig.window, sig.origin))
         if not (contributing_texts := ps.match_signals(sig, texts, hook)):
             return None
     elif contexts and when is None:
@@ -119,12 +119,19 @@ def llm_evaluate[M: BaseModel](
         return None
 
 
-def consume_signals(evt: BaseHookEvent, sig: Signals | None, hook: str) -> None:
+def consume_signals(evt: BaseHookEvent, sig: Signals | None, hook: str) -> list[str] | None:
+    """Re-match and consume ``sig`` under the state lock, returning the contributing texts or None.
+
+    Consumption is the authoritative claim: the locked re-match runs the same candidate filter as
+    the pre-gate, so when a concurrent process has already consumed the signal (or a quote/veto
+    absorbs it) the re-match finds no contributors and returns None — the caller must then abort the
+    fire rather than deliver a signal it did not actually claim.
+    """
     if not sig:
-        return
+        return None
     texts = transcript_texts(evt, sig.window, sig.origin)
     with evt.ctx.s[PrimitiveState].mutate() as ps:
-        ps.match_signals(sig, texts, hook)
+        return ps.match_signals(sig, ps.unechoed_candidates(texts), hook)
 
 
 def llm_primitive[M: BaseModel](
@@ -178,7 +185,8 @@ def llm_primitive[M: BaseModel](
             return None
         if not verdict(result):
             return None
-        consume_signals(evt, sig, name)
+        if sig and consume_signals(evt, sig, name) is None:
+            return None
         record_fire(evt)
         return HookResult(
             action=action,

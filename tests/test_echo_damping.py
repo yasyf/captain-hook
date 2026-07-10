@@ -95,6 +95,15 @@ class TestSeedEchoVerbatim:
         ps.seed_echo_verbatim("Leave the codebase better than you found it here.")
         assert ps.echo_verbatim.count("Leave the codebase better than you found it here.") == 1
 
+    def test_dedupes_within_one_batch(self) -> None:
+        # A warn that repeats one sentence many times must seed it once, not flood the FIFO and
+        # evict distinct entries: the comprehension dedupes within the batch, not only against
+        # the existing ledger.
+        ps = PrimitiveState(echo_verbatim=["A distinct earlier reminder sentence here."])
+        ps.seed_echo_verbatim("This repeated reminder sentence is long enough. " * 40)
+        assert ps.echo_verbatim.count("This repeated reminder sentence is long enough.") == 1
+        assert "A distinct earlier reminder sentence here." in ps.echo_verbatim
+
 
 class TestEchoVerbatimRoundTrip:
     def test_persists_across_serialization(self) -> None:
@@ -141,6 +150,43 @@ class TestVerbatimQuoteDamping:
 
         quote = "Reminder from the hook: Stop dismissing the failing tests as flaky. Moving on now."
         ctx2 = make_ctx(tmp_path, texts=[quote], n_messages=40)
+        assert dispatch_pt(ctx2, tmp_path) is None
+
+
+# --- e2e: strip-and-score — a quoted warn + a genuinely new violation fires on the remainder --
+
+
+class TestMixedEchoMessage:
+    """A candidate carrying a seeded warn sentence AND a genuinely new violation must not be dropped
+    whole: the seeded sentences are stripped and the remainder is scored, so the new violation still
+    fires. A pure quote of the warn (nothing left after stripping) stays damped. Both cases sit at
+    fire+30 (past the summed lemma horizon of 30) so only verbatim containment is in play."""
+
+    SIG = Signals(patterns=[Signal(pattern=r"flaky", weight=2)], threshold=2, window=15)
+
+    def test_new_violation_after_quoted_warn_fires(self, tmp_path: Path) -> None:
+        register_nudge("Stop dismissing the failing tests as flaky.", signals=self.SIG)
+
+        ctx1 = make_ctx(tmp_path, texts=["The failing tests are just flaky, ignore them."], n_messages=10)
+        assert dispatch_pt(ctx1, tmp_path) is not None
+
+        # The seeded warn sentence carries "flaky"; the NEW second sentence also does. Dropping the
+        # whole candidate (pre-fix) loses the new violation; stripping the seeded sentence keeps it.
+        mixed = (
+            "As the reminder said: Stop dismissing the failing tests as flaky. "
+            "But the new integration suite is also flaky and needs a real fix."
+        )
+        ctx2 = make_ctx(tmp_path, texts=[mixed], n_messages=40)
+        assert dispatch_pt(ctx2, tmp_path) is not None
+
+    def test_pure_quote_stays_damped(self, tmp_path: Path) -> None:
+        register_nudge("Stop dismissing the failing tests as flaky.", signals=self.SIG)
+
+        ctx1 = make_ctx(tmp_path, texts=["The failing tests are just flaky, ignore them."], n_messages=10)
+        assert dispatch_pt(ctx1, tmp_path) is not None
+
+        pure = "Reminder: Stop dismissing the failing tests as flaky."
+        ctx2 = make_ctx(tmp_path, texts=[pure], n_messages=40)
         assert dispatch_pt(ctx2, tmp_path) is None
 
 

@@ -80,7 +80,11 @@ def nudge(
             tracker = EchoTracker(
                 window=ECHO_WINDOW + (sig.window if isinstance(sig.window, int) else TURN_ECHO_LOOKBACK)
             )
-            candidates = [t for t in transcript_texts(evt, sig.window, sig.origin) if not tracker.saw(t, evt=evt)]
+            candidates = [
+                c
+                for t in transcript_texts(evt, sig.window, sig.origin)
+                if (c := tracker.surviving(t, evt=evt)) is not None
+            ]
             with evt.ctx.s[PrimitiveState].mutate() as ps:
                 if not (triggering := ps.match_signals(sig, candidates, name)):
                     return None

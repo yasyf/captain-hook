@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -14,7 +15,7 @@ from captain_hook.dispatch import dispatch
 from captain_hook.packs.general.review import EditedSource
 from captain_hook.packs.general.tombstones import TombstoneComments, is_marker, is_tombstone
 from captain_hook.testing.helpers import fixture_session
-from captain_hook.types import Action, Event, RanCommand, Signal, Tool, Waiting
+from captain_hook.types import Action, Event, RanCommand, Signal, Signals, Tool, Waiting
 from tests.helpers import (
     build_ctx,
     make_ctx,
@@ -776,6 +777,76 @@ class TestSignalConsumptionNotSuppressLaterHooks:
         ps = ctx.s[PrimitiveState].get()
         consumed = ps.consumed if ps else set()
         assert len(consumed) == 0, f"Consumed hashes should be empty after no-action verdict, got {consumed}"
+
+
+class TestLlmDoubleFireRace:
+    def test_concurrent_positive_verdicts_deliver_once(self, tmp_path: Path) -> None:
+        """Two processes race one signal nudge over a shared session dir: both pass the lock-free
+        pre-gate and both get a positive verdict, but consumption is the authoritative claim. The
+        loser's locked re-match finds the signal already consumed and must abort, so exactly one
+        delivery survives — pre-fix, the ignored empty re-match lets both fire (two deliveries)."""
+        from captain_hook.primitives.llm import NudgeVerdict, llm_nudge
+
+        barrier = threading.Barrier(2)
+
+        def mock_llm(*_a: Any, **_k: Any) -> NudgeVerdict:
+            barrier.wait(timeout=5)  # both threads cleared the lock-free pre-gate; now race to consume
+            return NudgeVerdict(fire=True, reasoning="yes")
+
+        llm_nudge(
+            "check",
+            message="WARN",
+            signals=Signals(patterns=[Signal(pattern=r"critical", weight=1)], threshold=1, window=10),
+            max_fires=None,
+        )
+
+        results: list[dict[str, Any] | None] = []
+        guard = threading.Lock()
+
+        def worker() -> None:
+            ctx = make_ctx(tmp_path, texts=["critical error found"])
+            ctx.call_llm = mock_llm  # type: ignore[method-assign]
+            r = dispatch(Event.PostToolUse, make_post_tool_event(ctx=ctx), session_dir=tmp_path)
+            with guard:
+                results.append(r)
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        delivered = [r for r in results if r is not None]
+        assert len(delivered) == 1, f"expected exactly one delivery under the consumption claim, got {len(delivered)}"
+
+
+class TestConsumeSignalsPreGateMirror:
+    def test_quoted_veto_does_not_absorb_a_real_violation(self, tmp_path: Path) -> None:
+        """The pre-gate drops quote-of-fired-output candidates before scoring; post-verdict
+        consumption must apply the identical filter. Here a quoted warn also matches a veto: without
+        the mirror, consumption sees the quote, the veto suppresses everything, and the genuine
+        violation the pre-gate already scored is neither consumed nor (with abort-on-empty) fired."""
+        from captain_hook.primitives.llm import consume_signals
+        from captain_hook.state import PrimitiveState, text_hash
+
+        warn = "Do not silence the failing check to make the suite pass."  # also matches veto r"silence"
+        violation = "This module still has a pre-existing bug I will not fix here."
+
+        ctx = make_ctx(tmp_path, texts=[warn, violation])
+        with ctx.s[PrimitiveState].mutate() as ps:
+            ps.echo_verbatim = [warn]  # the warn is fired output; the transcript's copy is a pure quote
+
+        sig = Signals(
+            patterns=[Signal(pattern=r"pre-existing", weight=2)],
+            vetoes=[Signal(pattern=r"silence")],
+            threshold=2,
+            window=15,
+        )
+        evt = make_post_tool_event(ctx=ctx)
+
+        assert consume_signals(evt, sig, "hook") == [violation]
+        stored = ctx.s[PrimitiveState].get()
+        assert stored is not None and text_hash(violation) in stored.consumed_for("hook")
 
 
 class TestLlmPrimitiveHelper:

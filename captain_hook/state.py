@@ -79,7 +79,8 @@ class HookState(BaseModel):
 # TURN_ECHO_LOOKBACK: assumed event span of a window="turn" pass, added to ECHO_WINDOW to size
 # forward echo damping when the turn's real length is unknown at fire time (a sum, not a max).
 # ECHO_VERBATIM_CAP: fired-warn sentences kept for verbatim-quote damping, FIFO session-wide; oldest evict.
-# ECHO_VERBATIM_MIN_CHARS: shortest warn sentence seeded, so a generic fragment can't damp by containment.
+# ECHO_VERBATIM_MIN_CHARS: shortest warn sentence seeded, so a generic fragment can't damp by
+# containment; also the floor below which a strip-and-score remainder counts as a pure echo.
 ECHO_WINDOW = 5
 ECHO_THRESHOLD = 0.4
 ECHO_MIN_OVERLAP = 2
@@ -123,22 +124,46 @@ class PrimitiveState(BaseModel):
             and len(overlap) / len(text_lemmas) >= ECHO_THRESHOLD
         )
 
+    def strip_fired_output(self, text: str) -> str:
+        """The candidate content after removing any seeded fired-warn sentences.
+
+        Returns *text* unchanged when the ledger is empty or no seeded sentence is contained
+        (Allow-side precision — shared words alone never touch it). When a seeded sentence is
+        contained it is deleted from the whitespace-normalized text and the remainder returned;
+        an empty or sub-floor remainder means a pure quote of fired output, returned as ``""`` so
+        callers drop it. A genuinely new violation riding alongside a quoted warn survives as the
+        stripped remainder and is still scored.
+        """
+        if not self.echo_verbatim or not (normalized := normalize_ws(text)):
+            return text
+        stripped = normalized
+        for sentence in self.echo_verbatim:
+            stripped = stripped.replace(sentence, " ")
+        if (stripped := normalize_ws(stripped)) == normalized:
+            return text
+        return stripped if len(stripped) >= ECHO_VERBATIM_MIN_CHARS else ""
+
     def quotes_fired_output(self, text: str) -> bool:
-        return bool(
-            self.echo_verbatim
-            and (normalized := normalize_ws(text))
-            and any(sentence in normalized for sentence in self.echo_verbatim)
-        )
+        return bool(self.echo_verbatim) and self.strip_fired_output(text) != text
+
+    def unechoed_candidates(self, texts: list[str]) -> list[str]:
+        """Map *texts* through fired-output stripping, dropping pure quotes — the containment-only
+        candidate filter shared by the llm pre-gate and post-verdict consumption so the two agree on
+        which texts are eligible (a divergence would let a quote veto or absorb a real violation)."""
+        return [stripped for text in texts if (stripped := self.strip_fired_output(text))]
 
     def seed_echo_window(self, triggering_texts: list[str], message: str, transcript_len: int) -> None:
         self.echo_lemmas = self.content_lemmas(" ".join(triggering_texts)) | self.content_lemmas(message)
         self.echo_window_end = transcript_len + ECHO_WINDOW
 
     def seed_echo_verbatim(self, message: str) -> None:
+        seen = set(self.echo_verbatim)
         fresh = [
             norm
             for sent in RESOURCES.spacy(message).sents
-            if len(norm := normalize_ws(sent.text)) >= ECHO_VERBATIM_MIN_CHARS and norm not in self.echo_verbatim
+            if len(norm := normalize_ws(sent.text)) >= ECHO_VERBATIM_MIN_CHARS
+            and norm not in seen
+            and not seen.add(norm)
         ]
         self.echo_verbatim = (self.echo_verbatim + fresh)[-ECHO_VERBATIM_CAP:]
 
@@ -248,13 +273,18 @@ class EchoTracker:
     threshold: float = ECHO_THRESHOLD
     min_overlap: int = ECHO_MIN_OVERLAP
 
-    def saw(self, text: str, *, evt: BaseHookEvent) -> bool:
+    def surviving(self, text: str, *, evt: BaseHookEvent) -> str | None:
+        """The echo-stripped remainder of *text* to score, or ``None`` when it is a pure verbatim
+        quote of fired output or a lemma echo of the last nudge within the forward window. A quoted
+        warn carrying a genuinely new violation survives as the stripped remainder."""
         ps = evt.ctx.s[PrimitiveState].get()
         if ps is None:
-            return False
-        return ps.quotes_fired_output(text) or (
-            bool(ps.echo_lemmas) and len(evt.ctx.t) < ps.echo_window_end and ps.is_echo(text)
-        )
+            return text
+        if not (remainder := ps.strip_fired_output(text)):
+            return None
+        if ps.echo_lemmas and len(evt.ctx.t) < ps.echo_window_end and ps.is_echo(remainder):
+            return None
+        return remainder
 
     def record(self, text: str, triggering: Iterable[str], *, evt: BaseHookEvent) -> None:
         with evt.ctx.s[PrimitiveState].mutate() as ps:
@@ -295,7 +325,9 @@ class WorkflowState(BaseModel):
         """Yield the stored workflow state under an exclusive lock; persist it on clean exit.
 
         Reach for this over ``load``/``save`` when several hooks race the same workflow record
-        within a session and a lost update would corrupt it.
+        within a session and a lost update would corrupt it. Non-reentrant: nesting ``mutate()`` on
+        the same slot within one process deadlocks — the file lock is held for the whole block and a
+        second acquire of the same path (default ``timeout=-1``) blocks forever.
         """
         with evt.ctx.s[cls].mutate() as obj:
             yield obj
