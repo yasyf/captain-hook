@@ -80,10 +80,12 @@ methods are `runs`, `has_subcommand`, `contains_token`, and `uses_redirect`. See
 ## Signals (scoring)
 
 `Signal` and `Signals` aren't `only_if`/`skip_if` filters — they pass to a primitive's
-`signals=` parameter to score patterns across a rolling transcript window. A hook fires when the
-cumulative score crosses the threshold. See [Score patterns with signals](../guide/signals.qmd).
+`signals=` parameter to score patterns against recent transcript prose. By default (`scope="text"`)
+a single message must meet the threshold on its own matched weights, and the window only bounds how
+far back it may sit. Under `scope="window"` the score pools distinct signals across the window
+instead, counting each once. See [Score patterns with signals](../guide/signals.qmd).
 
 | Type | Purpose | Example |
 |------|---------|---------|
-| `Signal(pattern=..., weight=1, flags=0)` | A regex worth `weight` points per match (fields are keyword-only) | `Signal(pattern=r"\bretry\b", weight=2)` |
-| `Signals(patterns, threshold, window=15)` | A bundle that fires at `threshold` over the last `window` messages; `window="turn"` scores the whole current turn | `Signals([Signal(pattern=r"retry")], threshold=3)` |
+| `Signal(pattern=..., weight=1, flags=0)` | A regex worth `weight` points when it matches (fields are keyword-only) | `Signal(pattern=r"\bretry\b", weight=2)` |
+| `Signals(patterns, threshold, window=15, scope="text")` | A bundle that fires at `threshold`; `scope="text"` (default) requires a single text in the window to meet the threshold alone, `scope="window"` counts each matching signal once across the whole window; vetoes match window-wide under either scope; `window="turn"` scores the whole current turn | `Signals([Signal(pattern=r"retry", weight=2), Signal(pattern=r"again")], threshold=3)` |

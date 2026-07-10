@@ -14,10 +14,10 @@ text these signals score, see [Query the transcript](transcript.qmd).
 
 ## Match a literal phrase with a regex `Signal`
 
-A `Signal` is a regex worth `weight` points. A signal that matches anywhere in the
-window contributes `weight` to the score once, however many messages it matches.
-Pattern weights must be positive; suppress false positives with `vetoes` (shown
-below) instead of negative weights.
+A `Signal` is a regex worth `weight` points. A matching signal contributes
+`weight` to the score once, however many times its pattern hits. Pattern weights
+must be positive; suppress false positives with `vetoes` (shown below) instead of
+negative weights.
 
 ```python
 from captain_hook import Signal
@@ -87,17 +87,26 @@ Signals(
         Signal(r"retry", weight=2),
         Signal(r"again", weight=1),
     ],
-    threshold=3,  # fire once the window's union score reaches 3
-    window=10,    # score only the last 10 events
-    vetoes=[Signal(r"investigating")],  # any match cancels the fire
+    threshold=3,  # fire when a single message scores 3
+    window=10,    # look back over the last 10 events
+    vetoes=[Signal(r"investigating")],  # any match in the window cancels the fire
 )
 ```
 
-Signals are scored across the whole window by presence union: each pattern counts
-its weight once however many messages it matches, and the hook fires when the summed
-weight of the distinct matching patterns reaches the threshold. "Let me retry that
-again" scores 3 and fires — and it still fires when "retry" and "again" land in two
-separate messages. Any `vetoes` match anywhere in the window holds the hook back.
+By default (`scope="text"`) each text is scored on its own: every signal that
+matches contributes its weight once, and the hook fires when a single text reaches
+the threshold. The window only bounds how far back that text may sit. "Let me retry
+that again" scores 3 and fires; "retry" in one message and "again" in another does
+not, because neither message reaches 3 alone. That's deliberate. Pooling matches
+across unrelated turns lets quoted or referenced vocabulary sum to the threshold
+and misfire.
+
+When one tell legitimately splits across adjacent messages — a wall-of-text option
+dump whose preamble lands in one message and the options in the next — opt into
+pooling with `scope="window"`. Union scoring counts each distinct matching signal's
+weight once across the whole window, however many entries it matches, so "retry"
+and "again" in two separate messages now sum to 3 and fire. Under either scope, a
+`vetoes` match anywhere in the window holds the hook back.
 
 Set `window="turn"` instead of a count to score the whole current turn. Tool calls
 and their results eat window slots, so a fixed window at `Stop` reaches only the
@@ -111,9 +120,9 @@ You can also pass a bare `list[Signal]` to a primitive. The framework wraps it w
 
 Pass the bundle to `nudge(signals=...)`. The primitive pulls every prose source from
 the window — each message's visible text, each thinking block, and the prose fields
-of `ReportFindings`, `TaskCreate`/`TaskUpdate`, and `TodoWrite` calls — scores the
-window by presence union, and warns when the distinct matching patterns' summed
-weight crosses the threshold. Each hook keeps its own consumed ledger, so the same
+of `ReportFindings`, `TaskCreate`/`TaskUpdate`, and `TodoWrite` calls — scores each
+one, and warns when a single text's matching signals sum to the threshold. Each
+hook keeps its own consumed ledger, so the same
 triggering text doesn't fire that hook twice in a row.
 
 ```python
@@ -134,7 +143,7 @@ nudge(
 )
 ```
 
-When the score crosses 3, the nudge warns and appends a "Triggered by: ..." line
+When one message's score crosses 3, the nudge warns and appends a "Triggered by: ..." line
 naming the text that set it off, so the agent sees why it fired.
 
 The same `signals=` parameter works on `gate()`, `llm_gate()`, and `llm_nudge()`.
