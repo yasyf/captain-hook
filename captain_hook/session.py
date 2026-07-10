@@ -10,7 +10,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import ClassVar, Generic, TypeVar, overload
 
-from cc_transcript.discovery import find_transcript_sync
 from cc_transcript.ids import SessionId
 from filelock import FileLock
 from loguru import logger
@@ -22,7 +21,7 @@ STALE_AGE_SECONDS = 30 * 24 * 60 * 60
 
 
 def state_root() -> Path:
-    from captain_hook.settings import resolve_state_dir
+    from captain_hook.util.paths import resolve_state_dir
 
     return resolve_state_dir()
 
@@ -34,6 +33,8 @@ def ensure_session(session_id: SessionId) -> Path:
 
 
 def cleanup_stale() -> None:
+    from cc_transcript.discovery import find_transcript_sync
+
     sessions = state_root() / "hooks" / "sessions"
     if not sessions.exists():
         return

@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from captain_hook.app import get_matching_hooks
-from captain_hook.decisions import record_decision
 from captain_hook.session import SessionStore
 from captain_hook.state import HookState
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
@@ -33,6 +32,8 @@ def run_handler(entry: RegisteredHook, evt: BaseHookEvent) -> HookResult | None:
 
 def record_fire(entry: RegisteredHook, evt: BaseHookEvent, result: HookResult) -> None:
     """Record the ledger decision for a hook that fired (the count is reserved under lock upstream)."""
+    from captain_hook.decisions import record_decision
+
     try:
         record_decision(entry, evt, result)
     except Exception:

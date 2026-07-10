@@ -829,7 +829,7 @@ class TestCallLlmIntegration:
 
     @staticmethod
     def capture_call(monkeypatch: pytest.MonkeyPatch, returns: object) -> dict[str, Any]:
-        import captain_hook.context as context_mod
+        import spawnllm
 
         captured: dict[str, Any] = {}
 
@@ -844,8 +844,8 @@ class TestCallLlmIntegration:
             captured.update(kwargs)
             return returns
 
-        monkeypatch.setattr(context_mod, "call_sync", fake_call)
-        monkeypatch.setattr(context_mod, "extract_sync", fake_extract)
+        monkeypatch.setattr(spawnllm, "call_sync", fake_call)
+        monkeypatch.setattr(spawnllm, "extract_sync", fake_extract)
         return captured
 
     def test_call_llm_forwards_review_specialty(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

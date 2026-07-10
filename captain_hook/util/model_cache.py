@@ -11,8 +11,8 @@ from typing import Any
 
 from filelock import FileLock
 
-from captain_hook.settings import resolve_cache_home
 from captain_hook.util import http
+from captain_hook.util.paths import resolve_cache_home
 
 MODEL_NAME = "en_core_web_sm"
 WN_LEXICON = "oewn:2025"

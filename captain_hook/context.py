@@ -2,33 +2,19 @@ from __future__ import annotations
 
 import os
 import subprocess
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
-from cc_transcript.activity import SessionActivity
-from cc_transcript.filterspec import event_meta
-from cc_transcript.ids import SessionId
-from cc_transcript.models import AssistantEvent, ToolUseBlock
-from cc_transcript.parser import parse_events_from_bytes
-from cc_transcript.query import Session
-from cc_transcript.render import Budget, render_turn
-from cc_transcript.tools import parse_tool_call
-from pydantic import BaseModel
-from spawnllm import TModel, TSpecialty, call_sync, extract_sync
-from spawnllm.proc import run_cli
-
-from captain_hook.classifiers import detect
 from captain_hook.prompt import Prompt
 from captain_hook.session import SessionStore
-from captain_hook.settings import resolve_project_dir
+from captain_hook.util.paths import resolve_project_dir
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from cc_transcript.models import TranscriptEvent
-    from cc_transcript.tools import ToolCall
+    from cc_transcript.query import Session
+    from pydantic import BaseModel
+    from spawnllm import TModel, TSpecialty
 
     from captain_hook.settings import HooksSettings
 
@@ -44,61 +30,6 @@ def transcript_window(transcript: bool | int | Literal["recent", "full"]) -> int
             return RECENT_WINDOW
         case int() as events:
             return events
-
-
-class LenientToolUseBlock(ToolUseBlock):
-    """A ``ToolUseBlock`` whose typed parse degrades to ``OtherCall`` instead of raising.
-
-    The hook runtime lifts every transcript on every event, so a Claude Code
-    tool-shape change must degrade — with a still-correct digest — rather
-    than crash every hook fire.
-    """
-
-    @property
-    def call(self) -> ToolCall:
-        return parse_tool_call(self.name, self.input, on_error="other")
-
-
-def lenient_event(event: TranscriptEvent) -> TranscriptEvent:
-    match event:
-        case AssistantEvent(blocks=blocks) if any(isinstance(block, ToolUseBlock) for block in blocks):
-            return replace(
-                event,
-                blocks=tuple(
-                    LenientToolUseBlock(id=block.id, name=block.name, input=block.input)
-                    if isinstance(block, ToolUseBlock)
-                    else block
-                    for block in blocks
-                ),
-            )
-        case _:
-            return event
-
-
-def lift_session(events: Sequence[TranscriptEvent], *, path: Path | None = None) -> Session:
-    """Lift parsed transcript events into a query ``Session``, injecting the detected user classifier."""
-    from captain_hook.app import _state
-
-    classifier = _state.classifier or detect(
-        cwd=resolve_project_dir(),
-        transcript_path=str(path) if path else None,
-        events=events,
-    )
-    session_id = next(
-        (meta.session_id for event in events if (meta := event_meta(event)) is not None),
-        SessionId(path.stem if path else "unknown"),
-    )
-    return Session.from_activity(
-        SessionActivity.from_events(session_id, [lenient_event(e) for e in events], user_classifier=classifier),
-        path=path,
-    )
-
-
-def load_transcript(path: str | Path | None) -> Session:
-    """Parse and lift the transcript at ``path``; a missing path yields an empty ``Session``."""
-    if not path or not (path := Path(path)).exists():
-        return Session(())
-    return lift_session(parse_events_from_bytes(path.read_bytes()), path=path)
 
 
 @dataclass
@@ -154,6 +85,8 @@ class HookContext:
         Args:
             window: Render only the most recent ``window`` events; ``None`` renders the whole session.
         """
+        from cc_transcript.render import Budget, render_turn
+
         src = self.transcript if window is None else self.transcript.recent(window)
         return "\n\n".join(rendered for turn in src.turns if (rendered := render_turn(turn, budget=Budget())))
 
@@ -181,6 +114,8 @@ class HookContext:
         env: dict[str, str] | None = None,
         throw: bool = True,
     ) -> str | None:
+        from spawnllm.proc import run_cli
+
         try:
             return run_cli(
                 args,
@@ -308,6 +243,8 @@ class HookContext:
         response_model: type[BaseModel] | None = None,
         **kwargs: Any,
     ) -> str | BaseModel:
+        from spawnllm import call_sync, extract_sync
+
         diff_text = self.diff("uncommitted" if diff is True else diff) if diff else None
         prompt = self.assemble_prompt(template, args, kwargs, transcript=transcript, diff_text=diff_text)
         cwd = resolve_project_dir()

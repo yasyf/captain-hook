@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.resources
 import json
 import os
 import shutil
@@ -18,7 +17,6 @@ from cc_transcript.ids import SessionId
 from loguru import logger
 
 from captain_hook.app import _state, load_gitignore, reset
-from captain_hook.context import HookContext, load_transcript
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import CONF_MODULE, discover_hooks, discover_pack, is_skip_marked, register_nlp_provisioning
 from captain_hook.log import setup_logging
@@ -98,6 +96,8 @@ class CliState:
 
 def example_hook_source() -> str:
     """Read the bundled ``example.py`` scaffold from ``templates/example_hook.py.tmpl``."""
+    import importlib.resources
+
     return (importlib.resources.files("captain_hook") / "templates" / "example_hook.py.tmpl").read_text()
 
 
@@ -107,6 +107,8 @@ def plugin_dir() -> Path:
     Holds ``.claude-plugin/plugin.json`` and ``skills/``, so ``claude --plugin-dir``
     can load the skills in-place from the installed wheel without a marketplace clone.
     """
+    import importlib.resources
+
     return Path(str(importlib.resources.files("captain_hook")))
 
 
@@ -358,6 +360,9 @@ def warn_settings_drift(
 
 
 def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None:
+    from captain_hook.context import HookContext
+    from captain_hook.transcripts import load_transcript
+
     try:
         event = Event[event_name]
     except KeyError:
@@ -463,7 +468,7 @@ def show_logs(session: str | None = None, tail: int | None = None) -> None:
             modified log is shown.
         tail: When set, print only the last ``tail`` lines.
     """
-    from captain_hook.settings import resolve_log_dir
+    from captain_hook.util.paths import resolve_log_dir
 
     log_dir = resolve_log_dir()
     if not log_dir.exists():
@@ -576,7 +581,7 @@ def run_tests(json_output: bool = False) -> None:
 @click.pass_context
 def cli(ctx: click.Context, hooks: str | None, root_path: str | None) -> None:
     """Captain Hook — declarative hook framework for Claude Code lifecycle events."""
-    from captain_hook.settings import resolve_project_dir
+    from captain_hook.util.paths import resolve_project_dir
 
     root = Path(root_path) if root_path else Path(p) if (p := resolve_project_dir()) else Path.cwd()
     ctx.obj = CliState(root=root, hooks=hooks or str(root / ".claude" / "hooks"))

@@ -34,8 +34,8 @@ from typing import Any
 from filelock import FileLock
 from loguru import logger
 
-from captain_hook.settings import resolve_cache_dir
 from captain_hook.util import http
+from captain_hook.util.paths import resolve_cache_dir
 
 PACK_MANIFEST = "capt-hook.toml"
 ATTACHED_FILE = "attached_packs.json"

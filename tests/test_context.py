@@ -51,7 +51,7 @@ class TestSessionManagement:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
-        monkeypatch.setattr("captain_hook.session.find_transcript_sync", lambda session_id: None)
+        monkeypatch.setattr("cc_transcript.discovery.find_transcript_sync", lambda session_id: None)
 
         sd = ensure_session(SessionId(SESSION_ID))
         age_dir(sd, seconds=STALE_AGE_SECONDS + 60)
@@ -60,7 +60,7 @@ class TestSessionManagement:
 
     def test_cleanup_stale_preserves_recent_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
-        monkeypatch.setattr("captain_hook.session.find_transcript_sync", lambda session_id: None)
+        monkeypatch.setattr("cc_transcript.discovery.find_transcript_sync", lambda session_id: None)
 
         sd = ensure_session(SessionId(SESSION_ID))
         cleanup_stale()
@@ -78,7 +78,7 @@ class TestSessionManagement:
             seen.append(str(session_id))
             return transcript
 
-        monkeypatch.setattr("captain_hook.session.find_transcript_sync", fake_find)
+        monkeypatch.setattr("cc_transcript.discovery.find_transcript_sync", fake_find)
 
         sd = ensure_session(SessionId(SESSION_ID))
         age_dir(sd, seconds=STALE_AGE_SECONDS + 60)
@@ -176,7 +176,7 @@ class TestCallCli:
     ) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
-        with patch("captain_hook.context.run_cli", side_effect=side_effect):
+        with patch("spawnllm.proc.run_cli", side_effect=side_effect):
             assert ctx.call_cli(argv, throw=False) is None
 
     def test_throw_false_returns_output_on_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -212,7 +212,7 @@ class TestCallCli:
     ) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
-        with patch("captain_hook.context.run_cli", side_effect=side_effect):
+        with patch("spawnllm.proc.run_cli", side_effect=side_effect):
             with pytest.raises(exc_type):
                 ctx.call_cli(argv)
 
@@ -236,7 +236,7 @@ class TestCallLlm:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
 
-        with patch("captain_hook.context.call_sync", return_value="mocked response") as mock_call:
+        with patch("spawnllm.call_sync", return_value="mocked response") as mock_call:
             result = ctx.call_llm("test prompt", specialty="review")
         assert result == "mocked response"
         assert mock_call.call_args.kwargs["specialty"] == "review"
@@ -246,7 +246,7 @@ class TestCallLlm:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
 
-        with patch("captain_hook.context.call_sync", return_value="mocked response") as mock_call:
+        with patch("spawnllm.call_sync", return_value="mocked response") as mock_call:
             result = ctx.call_llm("test prompt", specialty="general")
         assert result == "mocked response"
         assert mock_call.call_args.kwargs["specialty"] == "general"
@@ -259,7 +259,7 @@ class TestCallLlm:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=transcript, settings=None)
 
-        with patch("captain_hook.context.call_sync", return_value="mocked") as mock_call:
+        with patch("spawnllm.call_sync", return_value="mocked") as mock_call:
             ctx.call_llm("analyze this", transcript=True)
         prompt = mock_call.call_args.args[0]
         assert "transcript content here" in prompt
@@ -292,7 +292,7 @@ class TestCallLlm:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
 
-        with patch("captain_hook.context.call_sync", return_value="mocked") as mock_call:
+        with patch("spawnllm.call_sync", return_value="mocked") as mock_call:
             ctx.call_llm("test", agent=True, specialty="general")
         assert mock_call.call_args.kwargs["agent"] is True
 
@@ -305,7 +305,7 @@ class TestCallLlm:
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
         verdict = Verdict(should_block=True, reason="bad")
 
-        with patch("captain_hook.context.extract_sync", return_value=verdict) as mock_extract:
+        with patch("spawnllm.extract_sync", return_value=verdict) as mock_extract:
             result = ctx.call_llm("test", response_model=Verdict, specialty="review")
         assert result is verdict
         assert mock_extract.call_args.args[1] is Verdict
@@ -317,7 +317,7 @@ class TestCallLlm:
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
         monkeypatch.setattr(ctx, "diff", lambda *a, **k: "DIFF BODY HERE")
 
-        with patch("captain_hook.context.call_sync", return_value="ok") as mock_call:
+        with patch("spawnllm.call_sync", return_value="ok") as mock_call:
             ctx.call_llm(Prompt().system("review the change"), diff=True)
         prompt = mock_call.call_args.args[0]
         assert "<diff>\nDIFF BODY HERE\n</diff>" in prompt
@@ -328,7 +328,7 @@ class TestCallLlm:
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
         monkeypatch.setattr(ctx, "diff", lambda *a, **k: "DIFF BODY HERE")
 
-        with patch("captain_hook.context.call_sync", return_value="ok") as mock_call:
+        with patch("spawnllm.call_sync", return_value="ok") as mock_call:
             ctx.call_llm("review {item}", item="the change", diff=True)
         prompt = mock_call.call_args.args[0]
         assert prompt.startswith("<diff>\nDIFF BODY HERE\n</diff>")
@@ -341,7 +341,7 @@ class TestCallLlm:
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
         spy = MagicMock(return_value="d")
         monkeypatch.setattr(ctx, "diff", spy)
-        with patch("captain_hook.context.call_sync", return_value="ok") as mock_call:
+        with patch("spawnllm.call_sync", return_value="ok") as mock_call:
             ctx.call_llm(Prompt().system("no diff here"))
         assert "<diff>" not in mock_call.call_args.args[0]
         spy.assert_not_called()
@@ -353,7 +353,7 @@ class TestCallLlm:
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
         spy = MagicMock(return_value="d")
         monkeypatch.setattr(ctx, "diff", spy)
-        with patch("captain_hook.context.call_sync", return_value="ok"):
+        with patch("spawnllm.call_sync", return_value="ok"):
             ctx.call_llm(Prompt().system("x"), diff="staged")
         spy.assert_called_once_with("staged")
 
@@ -364,7 +364,7 @@ class TestCallLlm:
         events = [raw_text("user" if i % 2 == 0 else "assistant", f"evt-{i:02d}") for i in range(30)]
         ctx = HookContext(session=SessionStore(None), transcript=fixture_session(events), settings=None)
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
-        with patch("captain_hook.context.call_sync", return_value="ok") as mock_call:
+        with patch("spawnllm.call_sync", return_value="ok") as mock_call:
             ctx.call_llm("analyze", transcript=True)
         prompt = mock_call.call_args.args[0]
         assert "evt-29" in prompt
@@ -377,7 +377,7 @@ class TestCallLlm:
         events = [raw_text("user" if i % 2 == 0 else "assistant", f"evt-{i:02d}") for i in range(30)]
         ctx = HookContext(session=SessionStore(None), transcript=fixture_session(events), settings=None)
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
-        with patch("captain_hook.context.call_sync", return_value="ok") as mock_call:
+        with patch("spawnllm.call_sync", return_value="ok") as mock_call:
             ctx.call_llm("analyze", transcript="full")
         prompt = mock_call.call_args.args[0]
         assert "evt-00" in prompt
@@ -458,13 +458,13 @@ class TestDiff:
     def test_prefers_ccx_when_available(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         ctx = make_ctx_in(tmp_path, monkeypatch)
         ccx_out = "# Diff: uncommitted\n@@ -1 +1 @@\n-body\n+body2\n"
-        with patch("captain_hook.context.run_cli", return_value=ccx_out) as mock:
+        with patch("spawnllm.proc.run_cli", return_value=ccx_out) as mock:
             assert ctx.diff() == ccx_out
         assert mock.call_args.args[0] == ["ccx", "vcs", "diff", "uncommitted", "--budget", "4000"]
 
     def test_passes_scope_and_budget_to_ccx(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         ctx = make_ctx_in(tmp_path, monkeypatch)
-        with patch("captain_hook.context.run_cli", return_value="diff --git a/f b/f\nccx out") as mock:
+        with patch("spawnllm.proc.run_cli", return_value="diff --git a/f b/f\nccx out") as mock:
             ctx.diff("HEAD~1", scope="src/", budget=800)
         assert mock.call_args.args[0] == ["ccx", "vcs", "diff", "HEAD~1", "--budget", "800", "--scope", "src/"]
 
@@ -480,7 +480,7 @@ class TestDiff:
                 raise FileNotFoundError(2, "No such file or directory", "ccx")
             return real_run_cli(args, **kwargs)
 
-        with patch("captain_hook.context.run_cli", side_effect=fake):
+        with patch("spawnllm.proc.run_cli", side_effect=fake):
             out = ctx.diff()
         assert out is not None
         assert "changed by diff test" in out
@@ -498,7 +498,7 @@ class TestDiff:
                 raise subprocess.CalledProcessError(1, args)
             return real_run_cli(args, **kwargs)
 
-        with patch("captain_hook.context.run_cli", side_effect=fake):
+        with patch("spawnllm.proc.run_cli", side_effect=fake):
             out = ctx.diff()
         assert out is not None
         assert "error fallback diff" in out
@@ -529,7 +529,7 @@ class TestDiff:
             return ""
 
         ctx = make_ctx_in(tmp_path, monkeypatch)
-        with patch("captain_hook.context.run_cli", side_effect=fake):
+        with patch("spawnllm.proc.run_cli", side_effect=fake):
             ctx.diff(source, scope=scope)
         assert captured == [expected]
 
@@ -543,21 +543,21 @@ class TestDiff:
             return "diff --git a/f b/f\n@@ -0,0 +1 @@\n+x\n"
 
         ctx = make_ctx_in(tmp_path, monkeypatch)
-        with patch("captain_hook.context.run_cli", side_effect=fake):
+        with patch("spawnllm.proc.run_cli", side_effect=fake):
             out = ctx.diff(commit="HEAD")
         assert captured == [["git", "show", "--stat", "-p", "HEAD"]]
         assert out == "diff --git a/f b/f\n@@ -0,0 +1 @@\n+x\n"
 
     def test_commit_prefers_ccx_when_it_has_hunks(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         ctx = make_ctx_in(tmp_path, monkeypatch)
-        with patch("captain_hook.context.run_cli", return_value="diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b\n") as mock:
+        with patch("spawnllm.proc.run_cli", return_value="diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b\n") as mock:
             out = ctx.diff(commit="abc123", budget=800)
         assert out == "diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b\n"
         assert mock.call_args.args[0] == ["ccx", "vcs", "diff", "abc123~1..abc123", "--budget", "800"]
 
     def test_commit_ccx_threads_scope(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         ctx = make_ctx_in(tmp_path, monkeypatch)
-        with patch("captain_hook.context.run_cli", return_value="diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b\n") as mock:
+        with patch("spawnllm.proc.run_cli", return_value="diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b\n") as mock:
             ctx.diff(commit="abc", scope="pkg/", budget=800)
         assert mock.call_args.args[0] == ["ccx", "vcs", "diff", "abc~1..abc", "--budget", "800", "--scope", "pkg/"]
 
@@ -573,7 +573,7 @@ class TestDiff:
             return "diff --git a/f b/f\n@@ -0,0 +1 @@\n+x\n"
 
         ctx = make_ctx_in(tmp_path, monkeypatch)
-        with patch("captain_hook.context.run_cli", side_effect=fake):
+        with patch("spawnllm.proc.run_cli", side_effect=fake):
             ctx.diff(commit="abc", scope="pkg/")
         assert captured == [["git", "show", "--stat", "-p", "abc", "--", "pkg/"]]
 
@@ -587,7 +587,7 @@ class TestDiff:
             return oversized
 
         ctx = make_ctx_in(tmp_path, monkeypatch)
-        with patch("captain_hook.context.run_cli", side_effect=fake):
+        with patch("spawnllm.proc.run_cli", side_effect=fake):
             out = ctx.diff(budget=budget)
         assert out is not None
         marker = f"... [diff truncated to ~{budget} tokens] ..."
@@ -605,7 +605,7 @@ class TestDiff:
             return exact
 
         ctx = make_ctx_in(tmp_path, monkeypatch)
-        with patch("captain_hook.context.run_cli", side_effect=fake):
+        with patch("spawnllm.proc.run_cli", side_effect=fake):
             out = ctx.diff(budget=budget)
         assert out == exact
         assert "truncated" not in out
@@ -620,7 +620,7 @@ class TestDiff:
             return over
 
         ctx = make_ctx_in(tmp_path, monkeypatch)
-        with patch("captain_hook.context.run_cli", side_effect=fake):
+        with patch("spawnllm.proc.run_cli", side_effect=fake):
             out = ctx.diff(budget=budget)
         assert out is not None
         assert out.endswith(f"\n... [diff truncated to ~{budget} tokens] ...")
@@ -637,7 +637,7 @@ class TestDiff:
                 raise FileNotFoundError(2, "No such file or directory", "ccx")
             return real_run_cli(args, **kwargs)
 
-        with patch("captain_hook.context.run_cli", side_effect=fake):
+        with patch("spawnllm.proc.run_cli", side_effect=fake):
             out = ctx.diff(commit=root)
         assert out is not None
         assert "README.md" in out

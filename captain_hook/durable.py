@@ -27,7 +27,7 @@ Scope = Literal["project", "global"]
 
 
 def durable_root() -> Path:
-    from captain_hook.settings import resolve_state_dir
+    from captain_hook.util.paths import resolve_state_dir
 
     return resolve_state_dir() / "hooks" / "durable"
 

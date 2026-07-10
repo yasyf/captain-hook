@@ -132,12 +132,12 @@ class TestDispatchIntegration:
         assert row.tool_digest == evt.tool_digest
 
     def test_dispatch_survives_decision_write_failure(self, db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        import captain_hook.dispatch as dispatch_mod
+        import captain_hook.decisions as decisions_mod
 
         def boom(*_a: Any, **_k: Any) -> None:
             raise RuntimeError("db locked")
 
-        monkeypatch.setattr(dispatch_mod, "record_decision", boom)
+        monkeypatch.setattr(decisions_mod, "record_decision", boom)
         nudge("kept", when=lambda evt: True)
 
         evt = mock_tool_event(tool="Edit", file="a.py")

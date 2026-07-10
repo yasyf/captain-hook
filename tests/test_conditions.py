@@ -11,7 +11,6 @@ from cc_transcript.activity_probe import SessionActivityProbe, probe_events
 
 from captain_hook.app import on
 from captain_hook.conditions import check_condition, is_project_path, matches_conditions, workflow_opt_matches
-from captain_hook.context import load_transcript
 from captain_hook.events import (
     BaseHookEvent,
     PermissionRequestEvent,
@@ -21,6 +20,7 @@ from captain_hook.events import (
 )
 from captain_hook.packs.general._lib import EditedSource
 from captain_hook.primitives.commands import block_command_pattern
+from captain_hook.transcripts import load_transcript
 from captain_hook.types import (
     Agent,
     And,

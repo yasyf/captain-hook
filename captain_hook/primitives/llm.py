@@ -6,7 +6,6 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
-from cc_transcript.render import clip
 from loguru import logger
 from pydantic import BaseModel
 
@@ -14,7 +13,6 @@ from captain_hook.app import on
 from captain_hook.contexts import apply_contexts, with_defaults
 from captain_hook.primitives.nudge import DEFAULT_FIRES
 from captain_hook.prompt import Prompt
-from captain_hook.settings import resolve_cache_dir
 from captain_hook.signals import extract_signal_context, resolve_signals, transcript_texts
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import (
@@ -27,6 +25,7 @@ from captain_hook.types import (
     TCondition,
     Waiting,
 )
+from captain_hook.util.paths import resolve_cache_dir
 
 if TYPE_CHECKING:
     from spawnllm import TModel, TSpecialty
@@ -73,6 +72,8 @@ def llm_evaluate[M: BaseModel](
     transcript: bool | int | Literal["recent", "full"] = False,
     diff: bool | str = False,
 ) -> M | None:
+    from cc_transcript.render import clip
+
     if fired_this_turn(evt):
         return None
     if when is not None and not when(evt):

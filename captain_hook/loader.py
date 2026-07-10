@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from captain_hook.app import LoadError, _state, on
-from captain_hook.settings import build_settings
 from captain_hook.types import Event
 
 if TYPE_CHECKING:
@@ -48,6 +47,8 @@ def import_or_reload(fqn: str, fresh_this_pass: set[str]) -> ModuleType:
 
 
 def discover_hooks(hooks_dir: str | Path) -> None:
+    from captain_hook.settings import build_settings
+
     hooks_path = Path(hooks_dir).resolve()
     if str(hooks_path.parent) not in sys.path:
         sys.path.insert(0, str(hooks_path.parent))

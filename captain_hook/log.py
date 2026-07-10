@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from captain_hook.settings import resolve_log_dir
+from captain_hook.util.paths import resolve_log_dir
 
 if TYPE_CHECKING:
     from collections.abc import Callable

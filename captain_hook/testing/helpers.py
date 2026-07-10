@@ -18,7 +18,7 @@ from cc_transcript.query import Session
 from pydantic import BaseModel
 
 from captain_hook.conditions import matches_conditions
-from captain_hook.context import HookContext, lift_session, load_transcript
+from captain_hook.context import HookContext
 from captain_hook.dispatch import execute_hook
 from captain_hook.events import (
     BaseHookEvent,
@@ -34,6 +34,7 @@ from captain_hook.prompt import Prompt
 from captain_hook.session import SessionStore
 from captain_hook.testing.session_cache import SessionCache
 from captain_hook.testing.types import Allow, Ask, Block, FileFixture, Input, Rewrite, TranscriptFixture, Warn
+from captain_hook.transcripts import lift_session, load_transcript
 from captain_hook.types import Event, HookResult, Tool
 
 STUB_FIELD_VALUES: dict[str, Any] = {

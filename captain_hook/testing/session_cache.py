@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from typing import ClassVar
 
-from captain_hook.settings import resolve_project_dir
+from captain_hook.util.paths import resolve_project_dir
 
 
 class SessionCache:

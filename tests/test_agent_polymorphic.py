@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 
 from captain_hook.conditions import check_condition
-from captain_hook.context import load_transcript
 from captain_hook.events import BaseHookEvent, PreToolUseEvent, SubagentStopEvent
+from captain_hook.transcripts import load_transcript
 from captain_hook.types import Agent, Or, Tool
 from tests.helpers import (
     build_ctx,

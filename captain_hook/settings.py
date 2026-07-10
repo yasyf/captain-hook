@@ -1,12 +1,27 @@
 from __future__ import annotations
 
-import os
 import types
 from pathlib import Path
 from typing import Any, get_type_hints
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from captain_hook.util.paths import (
+    resolve_cache_dir as resolve_cache_dir,
+)
+from captain_hook.util.paths import (
+    resolve_cache_home as resolve_cache_home,
+)
+from captain_hook.util.paths import (
+    resolve_log_dir as resolve_log_dir,
+)
+from captain_hook.util.paths import (
+    resolve_project_dir as resolve_project_dir,
+)
+from captain_hook.util.paths import (
+    resolve_state_dir as resolve_state_dir,
+)
 
 DEFAULT_PLANNING_AGENTS = [
     "Explore",
@@ -29,26 +44,6 @@ DEFAULT_WAITING_TOOLS = [
     "ScheduleWakeup",
     "SendMessage",
 ]
-
-
-def resolve_state_dir() -> Path:
-    return Path(os.environ.get("CAPTAIN_HOOK_STATE_DIR") or Path.home() / ".claude" / "state")
-
-
-def resolve_project_dir() -> str | None:
-    return os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR")
-
-
-def resolve_cache_home() -> Path:
-    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
-
-
-def resolve_cache_dir() -> Path:
-    return resolve_cache_home() / "captain-hook"
-
-
-def resolve_log_dir() -> Path:
-    return Path(os.environ.get("CAPTAIN_HOOK_LOG_DIR") or resolve_cache_dir() / "logs")
 
 
 class HooksSettings(BaseSettings):

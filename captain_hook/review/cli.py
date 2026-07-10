@@ -8,7 +8,6 @@ machinery lazily once it actually runs, and async store calls bridge with
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import sys
@@ -81,6 +80,8 @@ def ensure_review_wiring(settings_path: Path) -> bool:
 
 def run_store[T](fn: Callable[[ReviewStore], Awaitable[T]]) -> T:
     """Open the review store, run ``fn`` against it, and bridge with ``asyncio.run`` at the command boundary."""
+    import asyncio
+
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
 
@@ -125,6 +126,8 @@ def run_hook() -> None:
 @click.option("--cwd", "cwd", default=None, help="The session's working directory (default: the process cwd)")
 def spawn(transcript: Path, cwd: str | None) -> None:
     """Run the detached reviewer pass over one ended session (spawned by ``review run``)."""
+    import asyncio
+
     from captain_hook.review.pipeline import spawn_session
 
     click.echo(asyncio.run(spawn_session(transcript, cwd=cwd or os.getcwd())))
