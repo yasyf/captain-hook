@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from cc_transcript.activity_probe import probe_events
 from cc_transcript.tools import SkillCall, WorkflowCall, tool_name_matches
 
 from captain_hook.types import (
@@ -50,6 +49,8 @@ def waiting_tool_names(evt: BaseHookEvent) -> frozenset[str]:
 
 
 def is_waiting(evt: BaseHookEvent) -> bool:
+    from cc_transcript.activity_probe import probe_events
+
     if evt.background_tasks or evt.session_crons:
         return True
     if not (t := evt.ctx.transcript):

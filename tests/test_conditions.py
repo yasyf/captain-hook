@@ -1169,7 +1169,7 @@ class TestWaitingCondition:
         def forbidden_probe(*args: Any, **kwargs: Any) -> SessionActivityProbe:
             raise AssertionError("probe consulted despite a populated stop payload")
 
-        monkeypatch.setattr("captain_hook.conditions.probe_events", forbidden_probe)
+        monkeypatch.setattr("cc_transcript.activity_probe.probe_events", forbidden_probe)
         raw = {
             "background_tasks": [
                 {"id": "t1", "type": "shell", "status": "running", "description": "build", "command": "make"}
@@ -1184,7 +1184,7 @@ class TestWaitingCondition:
             probes.append(probe)
             return probe
 
-        monkeypatch.setattr("captain_hook.conditions.probe_events", spy_probe)
+        monkeypatch.setattr("cc_transcript.activity_probe.probe_events", spy_probe)
         result = check_condition(Waiting(), StopEvent(_raw={}, ctx=ctx))
         assert len(probes) == 1
         assert result is probes[0].is_waiting is False

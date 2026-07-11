@@ -21,7 +21,6 @@ from typing import Any
 import pytest
 
 import captain_hook
-from captain_hook import transcripts
 from captain_hook.testing.types import FileFixture, Input, TranscriptFixture
 from captain_hook.transcripts import lazy_transcript, load_transcript
 
@@ -543,14 +542,16 @@ def test_proxy_matches_eager_session(transcript_path: Path, accessor: tuple[str,
 
 
 def test_parse_is_deferred_until_first_touch(transcript_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from cc_transcript import parser
+
     calls = {"n": 0}
-    real = transcripts.parse_events_from_bytes
+    real = parser.parse_events_from_bytes
 
     def counting(data: bytes) -> Any:
         calls["n"] += 1
         return real(data)
 
-    monkeypatch.setattr(transcripts, "parse_events_from_bytes", counting)
+    monkeypatch.setattr(parser, "parse_events_from_bytes", counting)
     proxy = lazy_transcript(transcript_path)
     assert calls["n"] == 0, "parse ran before the proxy was touched"
     assert bool(proxy) is True
