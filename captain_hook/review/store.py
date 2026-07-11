@@ -31,6 +31,8 @@ if TYPE_CHECKING:
     from pathlib import Path
     from typing import Any
 
+    import aiosqlite
+
     from cc_transcript.corrections import Correction
     from cc_transcript.ids import SessionId
     from cc_transcript.judge.similar import KeyOverlap
@@ -368,15 +370,27 @@ CREATE TABLE IF NOT EXISTS pr_states (
         table lacks is added and its backfill runs exactly once, in the branch that
         just added it, so a database already at this schema is untouched and a fresh
         one takes the columns against an empty table.
+
+        A lock-free pre-check keeps the already-migrated hot path (the SessionStart
+        announcer's open) from ever taking the write lock. When any column is
+        missing, the re-check, ``ALTER``, and backfill run inside one
+        ``BEGIN IMMEDIATE`` transaction so concurrent first opens serialize on the
+        committed schema — the loser re-reads it and skips every ``ALTER`` — and an
+        interrupted migration rolls back its column and backfill together.
         """
-        cur = await self.store.conn.execute(f"PRAGMA table_info({table})")
-        existing = {str(row["name"]) async for row in cur}
-        for migration in migrations:
-            if migration.column in existing:
-                continue
-            await self.store.conn.execute(f"ALTER TABLE {table} ADD COLUMN {migration.ddl}")
-            if migration.backfill is not None:
-                await self.store.conn.execute(migration.backfill)
+
+        async def pending(conn: aiosqlite.Connection) -> list[ColumnMigration]:
+            cur = await conn.execute(f"PRAGMA table_info({table})")
+            existing = {str(row["name"]) async for row in cur}
+            return [migration for migration in migrations if migration.column not in existing]
+
+        if not await pending(self.store.conn):
+            return
+        async with self.store.transaction() as conn:
+            for migration in await pending(conn):
+                await conn.execute(f"ALTER TABLE {table} ADD COLUMN {migration.ddl}")
+                if migration.backfill is not None:
+                    await conn.execute(migration.backfill)
 
     async def enable(self, repo: RepoKey) -> None:
         """Marks ``repo`` watched, allowing its candidates to become eligible."""
