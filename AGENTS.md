@@ -77,7 +77,7 @@ When you write a plan — in plan mode, or any "here's what I'll do" before you 
 1. **Orient a repo** → `ccx repo overview`
 2. **"How does X work / where is Y" (intent)** → `ccx code search "<question>"` (semantic, semble-backed)
 3. **A specific symbol (def + callers + callees)** → `ccx code symbol <name>` (alias `ccx code grok`)
-4. **Literal / structural text** → `ccx code grep <text> [--glob G] [--scope dir] [-i] [-w]` (`-i`/`-w` run on ripgrep; system `grep` fills in when `rg` is missing; a glob or scope anchored at a real path — `.venv/…/pkg/*.py` — is searched even where ignore rules would hide it)
+4. **Literal or regex text** → `ccx code grep <text> [paths...] [--regex] [--glob G] [--scope dir] [-i] [-w]` (`--regex`/`-i`/`-w` and explicit file operands run on ripgrep; system `grep` fills in when `rg` is missing; a glob or scope anchored at a real path — `.venv/…/pkg/*.py` — is searched even where ignore rules would hide it)
 5. **List files** → `ccx repo find "<glob>"`
 6. **Read a file** → `ccx code outline <file-or-dir>` first (ast-grep structural map for the languages it outlines and any directory, tilth signatures otherwise), then `ccx code read <file> --section A-B` for the part you need (whole file: `ccx code read <file> --full`)
 7. **Edit a file** → `ccx code edit <file> --at A-B#hash --content <text>` (hash-verified write: refuses on anchor mismatch, re-anchors moved content, returns the new anchor so edits chain; `--content -` reads stdin, `--delete` removes the range)
