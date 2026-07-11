@@ -4,6 +4,109 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.20.0] - 2026-07-11
+
+### Fixed
+- **The pre-existing-issue steering nudge stops firing on itself.** The
+  predicate double-counted "pre-existing" (a regex signal and an NlpSignal both
+  scored the same phrase, reaching the threshold alone), WordNet expansion of
+  "issue" over-matched everyday nouns like "results", and the leave clause
+  matched past-tense completion reports ("left the flaky one documented").
+  The adjective signal is merged into the regex, the nouns are a curated
+  literal set, and the leave clause requires prospective tense. The message
+  string is byte-identical, so `nudge_1ebed8c4` keeps its fire history and
+  attribution; a ten-case inline regression matrix pins the four misfire
+  classes reproduced live plus the 8.18.0 origin/echo mechanisms. Steering
+  pack 0.7.0.
+- **Recurring misfires of an already-"fixed" hook re-propose the fix.** Fix
+  candidates are unique per hook, so once a fix PR merged, new judge-confirmed
+  misfires attached as observations to a closed candidate and died there
+  (candidate #6 collected two post-merge confirmations at 0.98/0.88 and stayed
+  ineligible forever). Accepted fix candidates now reopen to watching with a
+  generation bump when a judge-accepted observation lands after `resolved_at`
+  (stamped on acceptance; merged-PR sync backfills it), counting only
+  post-resolution evidence toward thresholds — a single strong-marker
+  recurrence re-qualifies.
+- **Sessions that never end get reviewed.** The reviewer was SessionEnd-only,
+  so a complaint in a long-lived session sat invisible for days. Ending any
+  session now sweeps the repo's still-open sibling transcripts through the
+  mtime-watermark scan, and `review enable` wires the same detached run on
+  SessionStart for the overnight case.
+- **Complaints that name a hook attribute without a fingerprint.** Attribution
+  required a fire fingerprint within three turns; "the task-tracking hook keeps
+  firing" with no nearby fire never ingested. A named-hook fallback matches a
+  unique decision-ledger kind within thirty minutes (failing closed on
+  ambiguity), and the strong-marker vocabulary gains verb-anchored
+  incorrectly/mistakenly/erroneously × fired/triggered/flagged.
+
+### Added
+- **Pack hooks have a continuous-improvement story.** Misfires of pack hooks
+  route their fix candidates to the pack's home repo (builtins to captain-hook,
+  cached GitHub packs to their own repo — network-free, cache-miss falls back
+  to repo-local) while staying visible from the observing repo: candidates
+  carry `origin_repo_key`/`pack_name`, every listing matches either key, and
+  eligibility gates on the *origin* repo's watching flag. The scanning brain
+  learned the three-way dispatch — repo-local worktree, builtin-pack clone
+  verified with `uv run --project . capt-hook test`, external-pack clone with
+  `uvx capt-hook --hooks <dir> test` — and never falls back to committing a
+  pack fix in the watched repo.
+- **CREATE candidates classify before the PR opens.** Generic behavioral rules
+  (the "wait for plan approval" shape) PR against `captain_hook/packs/general/`
+  in a captain-hook clone instead of the watched repo; `seen_in_repos: N` in
+  `review show` (rules observed across repos) feeds the call, and repo-specific
+  rules stay in `.claude/hooks/`, the default when uncertain.
+- **You hear about reviewer PRs.** In reviewer-wired repos, SessionStart
+  surfaces unannounced PR lifecycle changes as additionalContext one-liners
+  (cross-repo lines name the pack and target repo; merged/closed/stale get
+  follow-ups, each announced once), and the brain fires a macOS notification
+  when it opens a PR.
+- **`hook()`-authored hooks are attributable.** They register as
+  `<stem>:hook_<sha8>` with the caller's real file instead of `declarative_N`
+  with an empty source path, external-pack modules get pack-qualified stems,
+  and wheel/pack-cache sources resolve to module stems at attribution like
+  primitives always did. Old `declarative_N` ledger rows stop resolving
+  (precision over recall).
+- **Junk CREATE candidates get filtered before they burn judge calls.** Six
+  deterministic classes (teammate relays, agent-stop notices, @path handoffs,
+  limits-reset notices, bare plan-approval go-aheads, shell-command leads) and
+  paste-only quote/fence events drop at scan — a measured 29% of the historical
+  rejected-create corpus with zero false drops, junk-lead-with-real-tail
+  preserved. Survivors get a keep-biased small-tier LLM triage inside the
+  already-detached review spawn, recorded per dedup key so nothing re-triages;
+  the judge stays the backstop for everything kept.
+- **The brain run is observable.** `spawn_brain` returns exit code, duration,
+  and log path; the report records PRs the run opened plus per-sync
+  merged/closed/kept counts; the status health line renders
+  `brain: exit 0 · 142s · 1 PR` and goes red when eligible work produced no PR
+  — the silent-failure surface that hid keychain and text-only-reply deaths.
+  Every PR-state sync transition is logged with its provenance
+  (`gh` now reports merged-at, which backfills `resolved_at`).
+
+### Changed
+- **`capt-hook status` renders in under a second.** Previously 16.4s on a
+  live-size database locally — and minutes through a cold `uvx` plus gh
+  round-trips: the backlog count no longer probes transcript hydration per row
+  (cc-transcript 10.8.0's `probe_hydration=False`, with by-UUID discovery
+  memoized upstream), `overview()` collapses its per-candidate N+1 into
+  set-based queries (`crosses_thresholds` remains the sole eligibility
+  predicate), gh PR states cache in a `pr_states` table with a 15-minute TTL
+  (`review sync-prs` forces refresh; gh-down serves the last known state),
+  `purge_stale_verdicts` runs only when the prompt fingerprint changes
+  (store reopen ~2ms), and pack import no longer loads WordNet or spaCy —
+  `Phrase.expand` is lazy until a predicate actually runs. The dashboard also
+  collapses the rejected wall to a count line beyond five entries.
+- **`Clause.completed` is now `Clause.tense`.** The boolean became
+  `"any" | "completed" | "prospective"` — "prospective" rejects past
+  predicates, which the boolean could not express. `completed=True` maps to
+  `tense="completed"`; the default is unchanged in behavior. No external
+  callers passed `completed=`.
+- **Candidate rows carry lifecycle provenance.** A guarded in-place migration
+  adds `generation`, `resolved_at`, `origin_repo_key`, `pack_name`, and
+  `announced_status` on first open — historical terminal candidates are
+  baselined as already-announced; open PRs deliberately are not, so existing
+  unnoticed PRs announce once.
+- cc-transcript floor is 10.8.
+
 ## [8.19.0] - 2026-07-10
 
 ### Changed
