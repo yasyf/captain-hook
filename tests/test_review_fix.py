@@ -23,6 +23,7 @@ from captain_hook.review.fix import (
     classify_marker,
     fingerprint_of,
     iter_hook_complaint_signals,
+    named_hook_target,
     resolve_target,
 )
 from captain_hook.review.judge import ReviewVerdict, build_prompt
@@ -57,6 +58,9 @@ STOP_MESSAGE = "Before you finish: leave a one-line summary of what changed."
 STRONG_COMPLAINT = "**Note**: The task tracker reminder re-fired on a sequence I already completed - ignoring it."
 HEDGED_COMPLAINT = "The lint reminder seems to have misfired here - the file is generated output, not source."
 STOP_COMPLAINT = "That stop gate shouldn't have fired - I had already addressed every open task"
+TASK_TRACKING_COMPLAINT = (
+    "The task-tracking hook keeps re-firing even though I've been updating the tracker - this is a misfire."
+)
 GIT_STATUS_DIGEST = tool_digest("Bash", {"command": "git status"})
 
 
@@ -184,9 +188,34 @@ class TestMarkers:
                 id="strong-dismissal-overrides-compliance",
             ),
             pytest.param(
+                "the hook fired incorrectly on text I never wrote",
+                "strong",
+                "incorrect_fire",
+                id="verb-anchored-fired-incorrectly",
+            ),
+            pytest.param(
+                "the hook incorrectly fired here", "strong", "incorrect_fire", id="verb-anchored-incorrectly-fired"
+            ),
+            pytest.param(
+                "that nudge mistakenly triggered on a benign edit",
+                "strong",
+                "incorrect_fire",
+                id="verb-anchored-mistakenly-triggered",
+            ),
+            pytest.param(
+                "the gate erroneously flagged a clean file", "strong", "incorrect_fire", id="verb-anchored-erroneously"
+            ),
+            pytest.param(
                 "I think the hook may be a false positive here", "hedged", "false_positive", id="hedged-known-class"
             ),
             pytest.param("the gate seems to have misfired", "hedged", "misfire", id="hedged-misfire"),
+            pytest.param(
+                "I think the reminder fired incorrectly here",
+                "hedged",
+                "incorrect_fire",
+                id="hedged-verb-anchored-downgrades",
+            ),
+            pytest.param("the nudge seems incorrect here", "hedged", "suspected", id="hedged-adjective-only"),
         ],
     )
     def test_marker_classification(self, text: str, strength: str, misfire_class: str) -> None:
@@ -204,6 +233,8 @@ class TestMarkers:
             pytest.param("the user pointed out a false positive in my analysis", id="no-hook-vocabulary"),
             pytest.param("the policy hook blocked the force-delete, so I removed files individually", id="ambient"),
             pytest.param("the hook reminder about the task tracker has fired again", id="fired-again-not-refired"),
+            pytest.param("I corrected the incorrect path the hook flagged", id="incorrect-adjective-no-hedge"),
+            pytest.param("mistakenly deleted the file, then the hook ran", id="adverb-far-from-fire-verb"),
         ],
     )
     def test_non_complaints_yield_no_marker(self, text: str) -> None:
@@ -305,6 +336,49 @@ class TestResolveTarget:
         assert resolve_target(decision) == expected
 
 
+class TestNamedHookTarget:
+    def test_unique_kind_match_attributes(self, decisions: DecisionLog) -> None:
+        seed_decision(decisions, kind="task_tracking:nudge_abc12345")
+        fire = named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS)
+        assert fire is not None
+        assert fire.kind == "task_tracking:nudge_abc12345"
+
+    def test_same_kind_twice_returns_nearest(self, decisions: DecisionLog) -> None:
+        seed_decision(decisions, kind="task_tracking:nudge_abc12345", ts_ms=BASE_MS - 120_000)
+        seed_decision(decisions, kind="task_tracking:nudge_abc12345", ts_ms=BASE_MS - 4_000)
+        fire = named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS)
+        assert fire is not None
+        assert fire.ts_ms == BASE_MS - 4_000
+
+    def test_two_kinds_sharing_a_stem_fail_closed(self, decisions: DecisionLog) -> None:
+        seed_decision(decisions, kind="task_tracking:nudge_aaaa1111", ts_ms=BASE_MS - 8_000)
+        seed_decision(decisions, kind="task_tracking:gate_bbbb2222", ts_ms=BASE_MS - 6_000)
+        assert named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS) is None
+
+    def test_two_named_hooks_both_fired_fail_closed(self, decisions: DecisionLog) -> None:
+        seed_decision(decisions, kind="task_tracking:nudge_abc12345", ts_ms=BASE_MS - 8_000)
+        seed_decision(decisions, kind="lint_guard:nudge_def67890", ts_ms=BASE_MS - 6_000)
+        text = "the task-tracking hook and the lint-guard hook both misfired on me"
+        assert named_hook_target(text, decisions, SessionId("sess-1"), BASE_MS) is None
+
+    def test_no_match_outside_the_window(self, decisions: DecisionLog) -> None:
+        seed_decision(decisions, kind="task_tracking:nudge_abc12345", ts_ms=BASE_MS - 3_600_000)
+        assert named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS) is None
+
+    def test_no_match_when_named_hook_never_fired(self, decisions: DecisionLog) -> None:
+        seed_decision(decisions, kind="lint_guard:nudge_abc12345")
+        assert named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS) is None
+
+    def test_no_match_when_complaint_names_no_hook(self, decisions: DecisionLog) -> None:
+        seed_decision(decisions, kind="task_tracking:nudge_abc12345")
+        text = "the task tracker reminder misfired again on a done task"
+        assert named_hook_target(text, decisions, SessionId("sess-1"), BASE_MS) is None
+
+    def test_fileless_decision_is_excluded(self, decisions: DecisionLog) -> None:
+        seed_decision(decisions, kind="task_tracking:nudge_abc12345", source_file="")
+        assert named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS) is None
+
+
 class TestDetector:
     def test_real_misfire_complaint_attributes_to_user_hook_not_primitive(self, decisions: DecisionLog) -> None:
         seed_fixture_decisions(decisions, MISFIRE_FIXTURE)
@@ -338,6 +412,43 @@ class TestDetector:
         ]
         write_transcript(path, entries)
         seed_decision(decisions)
+        events = parse_events_from_bytes(path.read_bytes())
+        assert list(iter_hook_complaint_signals(events, decisions=decisions)) == []
+
+    def test_named_hook_fallback_attributes_when_no_fingerprint_lands(
+        self, decisions: DecisionLog, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "s.jsonl"
+        entries = [
+            user_text("update the task tracker and keep working"),
+            assistant_text("marking the current task done"),
+            assistant_text("continuing with the next change"),
+            assistant_text(TASK_TRACKING_COMPLAINT),
+        ]
+        write_transcript(path, entries)
+        seed_decision(decisions, kind="task_tracking:nudge_abc12345")
+        events = parse_events_from_bytes(path.read_bytes())
+        [sig] = iter_hook_complaint_signals(events, decisions=decisions)
+        assert sig.evidence["attribution"] == "hook_name"
+        assert sig.evidence["target_source_file"] == ".claude/hooks/task_tracking.py"
+        assert sig.evidence["target_hook_name"] == "task_tracking:nudge_abc12345"
+        assert (sig.evidence["marker"], sig.evidence["misfire_class"]) == ("misfire", "misfire")
+        assert sig.trigger_index is None
+        assert sig.signal is not None
+        assert sig.signal.confidence == VERY_HIGH
+        assert sig.signal.reasons == ("strong_marker", "misfire")
+
+    def test_named_hook_fallback_stays_closed_when_no_hook_is_named(
+        self, decisions: DecisionLog, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "s.jsonl"
+        entries = [
+            user_text("update the task tracker and keep working"),
+            assistant_text("marking the current task done"),
+            assistant_text(STRONG_COMPLAINT),
+        ]
+        write_transcript(path, entries)
+        seed_decision(decisions, kind="task_tracking:nudge_abc12345")
         events = parse_events_from_bytes(path.read_bytes())
         assert list(iter_hook_complaint_signals(events, decisions=decisions)) == []
 

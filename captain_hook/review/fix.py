@@ -24,7 +24,12 @@ the tool call's content digest via
 shapes (Stop feedback, blocking errors) fall back to
 :meth:`~cc_transcript.decisions.DecisionLog.attribute_nearest` with the
 decision's recorded message as the tiebreak — the only place message-substring
-matching survives. The PR target resolves primitive-aware: a ``nudge()``/``gate()``
+matching survives. When no fingerprint lands within :data:`PROXIMITY_TURNS` — the
+harness rendered no trace the ledger can join — a complaint that names a hook
+(``"the X hook"``) falls back to :func:`named_hook_target`, attributing to a
+ledger row whose ``kind`` stem uniquely matches the named hook within
+:data:`NAMED_HOOK_WINDOW_MS`, failing closed on zero or ambiguous matches.
+The PR target resolves primitive-aware: a ``nudge()``/``gate()``
 fire records the primitive file as its ``source_file``, so the real hook comes
 from the decision ``kind``'s module prefix — a ``<pack>.<module>`` prefix naming
 a module the installed builtin pack actually ships targets the pack source inside
@@ -63,6 +68,8 @@ PROXIMITY_TURNS = 3
 TIGHT_PROXIMITY_TURNS = 1
 STOP_FEEDBACK_PREFIX = "Stop hook feedback:\n"
 PACKS_DIR = "captain_hook/packs"
+NAMED_HOOK_WINDOW_MS = 1_800_000
+NAMED_HOOK_RE = re.compile(r"\b(?:the\s+)?([a-z][\w-]*(?:[\s-][a-z][\w-]*)?)\s+hooks?\b", re.IGNORECASE)
 
 STRONG_MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     (misfire_class, re.compile(pattern, re.IGNORECASE))
@@ -73,6 +80,11 @@ STRONG_MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("ignored_repeat", r"\bignoring (?:it|the repeats?)\b"),
         ("already_addressed", r"\balready (?:fixed|resolved|addressed)\b"),
         ("should_not_have_fired", r"\bshouldn'?t have fired\b"),
+        (
+            "incorrect_fire",
+            r"\b(?:(?:incorrect|mistaken|erroneous)ly\b(?:\W+\w+){0,3}?\W+(?:fired|triggered|flagged)\b"
+            r"|(?:fired|triggered|flagged)\b(?:\W+\w+){0,3}?\W+(?:incorrect|mistaken|erroneous)ly\b)",
+        ),
         ("spurious", r"\bspurious\b"),
         ("unnecessary", r"\bunnecessar(?:y|ily)\b"),
     )
@@ -121,7 +133,8 @@ def classify_marker(text: str) -> Marker | None:
         return None
     hedged = re.search(
         r"(?:\bi think\b|\bseems?\b|\bmay\b|\bmight\b|\blooks like\b)"
-        r"[\s\S]{0,80}?(?:false[ -]positive|misfir|re-?fir|shouldn'?t have fired|spurious|unnecessar|wrong(?:ly)?)",
+        r"[\s\S]{0,80}?(?:false[ -]positive|misfir|re-?fir|shouldn'?t have fired|spurious|unnecessar|wrong(?:ly)?"
+        r"|incorrect(?:ly)?|mistaken(?:ly)?|erroneous(?:ly)?)",
         text,
         re.IGNORECASE,
     )
@@ -199,6 +212,51 @@ def attribute_fingerprint(
     return found
 
 
+def attribute_from_fingerprints(
+    decisions: DecisionLog,
+    uses: Mapping[ToolUseId, ToolUseBlock],
+    session_id: SessionId,
+    near_ts_ms: int,
+    fingerprints: Sequence[tuple[int, int, Fingerprint]],
+) -> tuple[int, int, Decision] | None:
+    attributed = [
+        (index, turns_back, found)
+        for index, turns_back, fingerprint in fingerprints
+        if (found := attribute_fingerprint(decisions, uses, session_id, near_ts_ms, fingerprint)) is not None
+    ]
+    if not attributed or len({(found.source_file, found.kind) for _, _, found in attributed}) > 1:
+        return None
+    return attributed[0]
+
+
+def hook_stem(kind: str) -> str | None:
+    module, sep, _ = kind.partition(":")
+    if not sep or not module:
+        return None
+    parts = module.split(".")
+    return parts[-1] if all(part.isidentifier() for part in parts) else None
+
+
+def name_slug(name: str) -> str:
+    return re.sub(r"[-_\s]+", "", name.lower())
+
+
+def named_hook_target(text: str, decisions: DecisionLog, session_id: SessionId, near_ts_ms: int) -> Decision | None:
+    if not (names := {name_slug(match.group(1)) for match in NAMED_HOOK_RE.finditer(text)}):
+        return None
+    matched = [
+        decision
+        for decision in decisions.for_session(session_id)
+        if decision.source_file
+        and abs(decision.ts_ms - near_ts_ms) <= NAMED_HOOK_WINDOW_MS
+        and (stem := hook_stem(decision.kind)) is not None
+        and name_slug(stem) in names
+    ]
+    if len({decision.kind for decision in matched}) != 1:
+        return None
+    return min(matched, key=lambda decision: abs(decision.ts_ms - near_ts_ms))
+
+
 def resolve_target(decision: Decision) -> tuple[str, str] | None:
     from captain_hook.packs.manager import builtin_packs
 
@@ -216,12 +274,13 @@ def resolve_target(decision: Decision) -> tuple[str, str] | None:
             return None
 
 
-def complaint_signal(marker: Marker, turns_back: int) -> CandidateSignal:
+def complaint_signal(marker: Marker, turns_back: int | None) -> CandidateSignal:
     base = CandidateSignal(
         VERY_HIGH if marker.strength == "strong" else MEDIUM,
         (f"{marker.strength}_marker", marker.misfire_class),
     )
-    return bump(base, CONFIDENCE_STEP, "tight_proximity") if turns_back <= TIGHT_PROXIMITY_TURNS else base
+    tight = turns_back is not None and turns_back <= TIGHT_PROXIMITY_TURNS
+    return bump(base, CONFIDENCE_STEP, "tight_proximity") if tight else base
 
 
 def iter_hook_complaint_signals(events: Sequence[TranscriptEvent], *, decisions: DecisionLog) -> Iterator[MiningSignal]:
@@ -238,7 +297,8 @@ def iter_hook_complaint_signals(events: Sequence[TranscriptEvent], *, decisions:
     Returns:
         Signals of kind :data:`HOOK_COMPLAINT` whose ``evidence`` stashes the
         attribution (``hook_name``, ``source_file``, ``event``, ``action``,
-        ``fire_ts_ms``, ``fire_message``, ``marker``) plus the resolved
+        ``fire_ts_ms``, ``fire_message``, ``marker``, ``attribution`` — either
+        ``fingerprint`` or ``hook_name``) plus the resolved
         ``target_source_file``/``target_hook_name``/``misfire_class``.
     """
     uses = tool_uses(events)
@@ -247,25 +307,26 @@ def iter_hook_complaint_signals(events: Sequence[TranscriptEvent], *, decisions:
             continue
         if (marker := classify_marker(event.text)) is None:
             continue
-        if not (fingerprints := preceding_fingerprints(events, index)):
-            continue
         near_ts_ms = int(event.meta.timestamp.timestamp() * 1000)
-        attributed = [
-            (i, turns_back, found)
-            for i, turns_back, fingerprint in fingerprints
-            if (found := attribute_fingerprint(decisions, uses, event.meta.session_id, near_ts_ms, fingerprint))
-            is not None
-        ]
-        if not attributed or len({(found.source_file, found.kind) for _, _, found in attributed}) > 1:
+        session_id = event.meta.session_id
+        if (
+            primary := attribute_from_fingerprints(
+                decisions, uses, session_id, near_ts_ms, preceding_fingerprints(events, index)
+            )
+        ) is not None:
+            trigger_index, turns_back, fire = primary
+            attribution = "fingerprint"
+        elif (fire := named_hook_target(event.text, decisions, session_id, near_ts_ms)) is not None:
+            trigger_index, turns_back, attribution = None, None, "hook_name"
+        else:
             continue
-        trigger_index, turns_back, fire = attributed[0]
         if (target := resolve_target(fire)) is None:
             continue
         target_source_file, target_hook_name = target
         yield MiningSignal(
             kind=HOOK_COMPLAINT,
             detector="hook_complaint",
-            session_id=event.meta.session_id,
+            session_id=session_id,
             event_index=index,
             event_uuid=event.meta.uuid,
             occurred_at=event.meta.timestamp,
@@ -280,6 +341,7 @@ def iter_hook_complaint_signals(events: Sequence[TranscriptEvent], *, decisions:
                 "fire_ts_ms": fire.ts_ms,
                 "fire_message": fire.message,
                 "marker": marker.matched,
+                "attribution": attribution,
                 "misfire_class": marker.misfire_class,
                 "target_source_file": target_source_file,
                 "target_hook_name": target_hook_name,
