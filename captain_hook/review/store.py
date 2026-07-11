@@ -157,7 +157,8 @@ class ThresholdStatus:
         kind: The candidate's PR shape.
         status: The candidate's lifecycle status; only ``watching`` candidates
             can become eligible.
-        watching: Whether the candidate's repo is watched.
+        watching: Whether the repo gating eligibility is watched — the origin repo
+            the misfire fired in for a pack fix, else the candidate's own repo.
         sessions: How many distinct sessions carry a judge-accepted observation.
         days: How many distinct UTC days carry a judge-accepted observation.
         open_prs: How many of the repo's candidates hold a live, non-stale PR.
@@ -385,20 +386,27 @@ CREATE TABLE IF NOT EXISTS spawn_runs (
         target_source_file: str | None = None,
         target_hook_name: str | None = None,
         misfire_class: str | None = None,
+        origin_repo_key: RepoKey | None = None,
+        pack_name: str | None = None,
     ) -> int:
         """Finds or creates the candidate for a grouping key, returning its id.
 
         New candidates start in :attr:`CandidateStatus.WATCHING`; an existing
-        candidate with the same grouping key is returned untouched.
+        candidate with the same grouping key is returned untouched, so the
+        provenance a pack-hook candidate takes is the one from its first misfire.
 
         Args:
-            repo: The candidate's repo.
+            repo: The candidate's repo — the pack's home repo for a pack hook, so its
+                fix PR opens there rather than in the watched repo.
             kind: The candidate's PR shape.
             rule: The slug grouping equivalent corrections.
             source_kind: The detector that produced the first evidence.
             target_source_file: The misfiring hook's file (fix candidates only).
             target_hook_name: The misfiring hook's registered name (fix candidates only).
             misfire_class: The misfire taxonomy label, when classified (fix candidates only).
+            origin_repo_key: The watched repo the misfire was observed in, when it differs
+                from ``repo`` (a pack hook); ``None`` for a hook living in ``repo`` itself.
+            pack_name: The pack the hook belongs to (pack fix candidates only).
 
         Returns:
             The candidate's id.
@@ -408,8 +416,8 @@ CREATE TABLE IF NOT EXISTS spawn_runs (
             """
 INSERT INTO candidates (
   repo_key, candidate_kind, rule, source_kind, status,
-  target_source_file, target_hook_name, misfire_class, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
+  target_source_file, target_hook_name, misfire_class, origin_repo_key, pack_name, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
 """,
             (
                 repo,
@@ -420,6 +428,8 @@ INSERT INTO candidates (
                 target_source_file,
                 target_hook_name,
                 misfire_class,
+                origin_repo_key,
+                pack_name,
                 stamp,
                 stamp,
             ),
@@ -467,23 +477,28 @@ VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
 
         Each row carries the ``candidates`` columns plus ``sample_text`` (the
         earliest observation's verbatim correction) and ``observations`` (the
-        evidence count).
+        evidence count). The repo filter matches a candidate whose PR targets ``repo``
+        *or* whose misfire was observed there (``origin_repo_key``), so a pack fix routed
+        to the pack's repo stays visible from the watched repo it fired in.
 
         Args:
-            repo: When set, restrict to this repo.
+            repo: When set, restrict to candidates targeting or originating in this repo.
             status: When set, restrict to this status.
         """
         filters = [
-            (clause, value)
-            for clause, value in (("c.repo_key = ?", repo), ("c.status = ?", status))
-            if value is not None
+            (clause, values)
+            for clause, values in (
+                ("(c.repo_key = ? OR c.origin_repo_key = ?)", (repo, repo) if repo is not None else None),
+                ("c.status = ?", (status,) if status is not None else None),
+            )
+            if values is not None
         ]
         query = (
             CANDIDATES_QUERY
             + (f"WHERE {' AND '.join(clause for clause, _ in filters)}\n" if filters else "")
             + "ORDER BY c.id DESC"
         )
-        cur = await self.store.conn.execute(query, tuple(value for _, value in filters))
+        cur = await self.store.conn.execute(query, tuple(value for _, values in filters for value in values))
         return [dict(row) async for row in cur]
 
     async def candidate(self, candidate_id: int) -> dict[str, object]:
@@ -496,6 +511,23 @@ VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
         if not (rows := [dict(row) async for row in cur]):
             raise LookupError(f"no candidate with id {candidate_id}")
         return rows[0]
+
+    async def cross_repo_rules(self) -> dict[str, int]:
+        """Returns each slug-keyed rule tracked under more than one repo, with its distinct-repo count.
+
+        Exact-slug matches only: a rule counts when the same canonical slug was
+        minted independently under multiple ``repo_key`` values, which is strong
+        evidence the rule is generic rather than repo-specific. Digest-keyed
+        (pre-judge) candidates never match :data:`~cc_transcript.judge.SLUG_PATTERN`
+        and are excluded.
+        """
+        from cc_transcript.judge.verdicts import SLUG_PATTERN
+
+        cur = await self.store.conn.execute(
+            "SELECT rule, COUNT(DISTINCT repo_key) AS repos FROM candidates "
+            "GROUP BY rule HAVING COUNT(DISTINCT repo_key) > 1"
+        )
+        return {rule: int(row["repos"]) async for row in cur if SLUG_PATTERN.fullmatch(rule := str(row["rule"]))}
 
     async def transition(
         self,
@@ -692,13 +724,15 @@ WHERE c.candidate_kind = 'fix' AND c.status = ? AND c.resolved_at IS NOT NULL
         """
         conn = self.store.conn
         cur = await conn.execute(
-            "SELECT repo_key, candidate_kind, status, generation, resolved_at FROM candidates WHERE id = ?",
+            "SELECT repo_key, origin_repo_key, candidate_kind, status, generation, resolved_at "
+            "FROM candidates WHERE id = ?",
             (candidate_id,),
         )
         if not (candidates := [dict(row) async for row in cur]):
             raise LookupError(f"no candidate with id {candidate_id}")
         repo, kind = RepoKey(str(candidates[0]["repo_key"])), CandidateKind(str(candidates[0]["candidate_kind"]))
         status = CandidateStatus(str(candidates[0]["status"]))
+        watching_repo = RepoKey(str(origin)) if (origin := candidates[0]["origin_repo_key"]) else repo
         since = candidates[0]["resolved_at"] if int(candidates[0]["generation"]) > 1 else None
 
         accepted_cur = await conn.execute(
@@ -723,7 +757,7 @@ WHERE o.candidate_id = ? AND v.{self.ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
         return ThresholdStatus(
             kind=kind,
             status=status,
-            watching=await self.watching(repo),
+            watching=await self.watching(watching_repo),
             sessions=len({row["session_id"] for row in accepted}),
             days=len({row["day"] for row in accepted}),
             open_prs=[int(row["n"]) async for row in prs_cur][0],

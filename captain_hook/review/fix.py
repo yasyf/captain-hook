@@ -29,13 +29,19 @@ harness rendered no trace the ledger can join — a complaint that names a hook
 (``"the X hook"``) falls back to :func:`named_hook_target`, attributing to a
 ledger row whose ``kind`` stem uniquely matches the named hook within
 :data:`NAMED_HOOK_WINDOW_MS`, failing closed on zero or ambiguous matches.
-The PR target resolves primitive-aware: a ``nudge()``/``gate()``
-fire records the primitive file as its ``source_file``, so the real hook comes
-from the decision ``kind``'s module prefix — a ``<pack>.<module>`` prefix naming
-a module the installed builtin pack actually ships targets the pack source inside
-captain-hook itself (``captain_hook/packs/<pack>/<module>.py``), while any other
-module prefix — including a packaged user hook whose package merely shares a
-builtin pack's name — targets the repo-local ``.claude/hooks/<module>.py``.
+The PR target resolves by source location into a :class:`~captain_hook.review.routing.Target`
+naming the file, the hook, and the repo the fix belongs to: a watched-repo hook file is the
+target verbatim (``repo`` ``None`` — fixed in place), but an installed-wheel or pack-cache
+``source_file`` carries no repo path, so the real hook comes from the decision ``kind``'s
+module prefix routed through the scan's :class:`~captain_hook.review.routing.PackIndex`. A
+``nudge()``/``gate()`` fire records the primitive file, and a ``hook()`` bundled in a pack
+records the wheel or cache file — all of these route through the ``kind``: a
+``<pack>.<module>`` prefix naming a module the installed builtin pack actually ships targets
+the pack source inside captain-hook itself (``captain_hook/packs/<pack>/<module>.py``, repo
+captain-hook), a prefix naming a cached external pack the project declares targets that pack's
+``github.com/<owner>/<repo>`` at the file's in-repo path, and any other module prefix —
+including a packaged user hook whose package merely shares a builtin pack's name — targets the
+repo-local ``.claude/hooks/<module>.py``.
 Unattributable or unresolvable complaints (including legacy kinds whose prefix is
 not a module path, e.g. ``<frozen importlib``) are dropped — precision over recall.
 """
@@ -53,6 +59,8 @@ from cc_transcript.mining.sourcekind import SourceKind
 from cc_transcript.mining.spec import CONFIDENCE_STEP, bump
 from cc_transcript.models import AssistantEvent, OtherEvent, ToolResultBlock, UserEvent
 
+from captain_hook.review.routing import CAPTAIN_HOOK_REPO, Target
+
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
     from typing import Any
@@ -61,6 +69,8 @@ if TYPE_CHECKING:
     from cc_transcript.ids import SessionId, ToolUseId
     from cc_transcript.models import ToolUseBlock, TranscriptEvent
 
+    from captain_hook.review.routing import PackIndex
+
 HOOK_COMPLAINT = SourceKind("hook_complaint")
 """The source kind for an assistant turn dismissing a hook fire as a misfire."""
 
@@ -68,6 +78,8 @@ PROXIMITY_TURNS = 3
 TIGHT_PROXIMITY_TURNS = 1
 STOP_FEEDBACK_PREFIX = "Stop hook feedback:\n"
 PACKS_DIR = "captain_hook/packs"
+WHEEL_PACKAGE = "captain_hook/"
+PACK_CACHE_SEGMENT = "captain-hook/packs/"
 NAMED_HOOK_WINDOW_MS = 1_800_000
 NAMED_HOOK_RE = re.compile(r"\b(?:the\s+)?([a-z][\w-]*(?:[\s-][a-z][\w-]*)?)\s+hooks?\b", re.IGNORECASE)
 
@@ -257,19 +269,41 @@ def named_hook_target(text: str, decisions: DecisionLog, session_id: SessionId, 
     return min(matched, key=lambda decision: abs(decision.ts_ms - near_ts_ms))
 
 
-def resolve_target(decision: Decision) -> tuple[str, str] | None:
-    from captain_hook.packs.manager import builtin_packs
+def user_repo_source(source_file: str) -> bool:
+    """A hook file living in the watched repo, not the installed wheel or the pack cache.
 
-    if "captain_hook/primitives/" not in decision.source_file:
-        return decision.source_file, decision.kind
+    Installed-wheel source (a ``nudge()``/``gate()`` primitive fire, or a ``hook()`` bundled
+    in a builtin pack) carries ``captain_hook/`` in its path; a cached external pack carries
+    the ``captain-hook/packs/`` cache segment. Neither is a repo path, so both resolve through
+    the decision ``kind``'s module prefix instead of being returned verbatim.
+    """
+    return WHEEL_PACKAGE not in source_file and PACK_CACHE_SEGMENT not in source_file
+
+
+def external_target_path(source_file: str) -> str | None:
+    """The in-repo path for a cached external pack's ``source_file``.
+
+    A cached external pack lives at ``.../captain-hook/packs/<name>@<sha>/<path>``, so
+    the path within the pack's own repo is everything past the ``<name>@<sha>/`` segment.
+    """
+    return source_file.partition(PACK_CACHE_SEGMENT)[2].partition("/")[2] or None
+
+
+def resolve_target(decision: Decision, index: PackIndex) -> Target | None:
+    if user_repo_source(decision.source_file):
+        return Target(decision.source_file, decision.kind, repo=None, pack=None)
     module, sep, _ = decision.kind.partition(":")
     if not sep or not module:
         return None
     match module.split("."):
-        case [pack, mod] if (pack_dir := builtin_packs().get(pack)) and (pack_dir / f"{mod}.py").is_file():
-            return f"{PACKS_DIR}/{pack}/{mod}.py", decision.kind
+        case [pack, mod] if (pack_dir := index.builtins.get(pack)) and (pack_dir / f"{mod}.py").is_file():
+            return Target(f"{PACKS_DIR}/{pack}/{mod}.py", decision.kind, CAPTAIN_HOOK_REPO, pack)
+        case [pack, _mod] if (repo := index.externals.get(pack)) and (
+            path := external_target_path(decision.source_file)
+        ):
+            return Target(path, decision.kind, repo, pack)
         case parts if all(part.isidentifier() for part in parts):
-            return f".claude/hooks/{parts[-1]}.py", decision.kind
+            return Target(f".claude/hooks/{parts[-1]}.py", decision.kind, repo=None, pack=None)
         case _:
             return None
 
@@ -283,7 +317,9 @@ def complaint_signal(marker: Marker, turns_back: int | None) -> CandidateSignal:
     return bump(base, CONFIDENCE_STEP, "tight_proximity") if tight else base
 
 
-def iter_hook_complaint_signals(events: Sequence[TranscriptEvent], *, decisions: DecisionLog) -> Iterator[MiningSignal]:
+def iter_hook_complaint_signals(
+    events: Sequence[TranscriptEvent], *, decisions: DecisionLog, index: PackIndex
+) -> Iterator[MiningSignal]:
     """Yields one :class:`~cc_transcript.mining.MiningSignal` per attributed misfire complaint.
 
     Fires are joined by the events' own session UUID — the only session key —
@@ -293,16 +329,18 @@ def iter_hook_complaint_signals(events: Sequence[TranscriptEvent], *, decisions:
     Args:
         events: The transcript's full ordered event stream.
         decisions: The decision ledger joining fingerprint traces to the firing hook.
+        index: The project's pack-to-repo map, routing a pack hook's fix to the
+            pack's repo (see :class:`~captain_hook.review.routing.PackIndex`).
 
     Returns:
         Signals of kind :data:`HOOK_COMPLAINT` whose ``evidence`` stashes the
         attribution (``hook_name``, ``source_file``, ``event``, ``action``,
         ``fire_ts_ms``, ``fire_message``, ``marker``, ``attribution`` — either
         ``fingerprint`` or ``hook_name``) plus the resolved
-        ``target_source_file``/``target_hook_name``/``misfire_class``.
+        ``target_source_file``/``target_hook_name``/``target_repo``/``pack_name``/``misfire_class``.
     """
     uses = tool_uses(events)
-    for index, event in enumerate(events):
+    for event_index, event in enumerate(events):
         if not isinstance(event, AssistantEvent) or event.meta.is_sidechain or not event.text.strip():
             continue
         if (marker := classify_marker(event.text)) is None:
@@ -311,7 +349,7 @@ def iter_hook_complaint_signals(events: Sequence[TranscriptEvent], *, decisions:
         session_id = event.meta.session_id
         if (
             primary := attribute_from_fingerprints(
-                decisions, uses, session_id, near_ts_ms, preceding_fingerprints(events, index)
+                decisions, uses, session_id, near_ts_ms, preceding_fingerprints(events, event_index)
             )
         ) is not None:
             trigger_index, turns_back, fire = primary
@@ -320,14 +358,13 @@ def iter_hook_complaint_signals(events: Sequence[TranscriptEvent], *, decisions:
             trigger_index, turns_back, attribution = None, None, "hook_name"
         else:
             continue
-        if (target := resolve_target(fire)) is None:
+        if (target := resolve_target(fire, index)) is None:
             continue
-        target_source_file, target_hook_name = target
         yield MiningSignal(
             kind=HOOK_COMPLAINT,
             detector="hook_complaint",
             session_id=session_id,
-            event_index=index,
+            event_index=event_index,
             event_uuid=event.meta.uuid,
             occurred_at=event.meta.timestamp,
             text=event.text,
@@ -343,8 +380,10 @@ def iter_hook_complaint_signals(events: Sequence[TranscriptEvent], *, decisions:
                 "marker": marker.matched,
                 "attribution": attribution,
                 "misfire_class": marker.misfire_class,
-                "target_source_file": target_source_file,
-                "target_hook_name": target_hook_name,
+                "target_source_file": target.source_file,
+                "target_hook_name": target.hook_name,
+                "target_repo": target.repo,
+                "pack_name": target.pack,
             },
             signal=complaint_signal(marker, turns_back),
         )

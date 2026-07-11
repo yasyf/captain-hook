@@ -17,10 +17,12 @@ from cc_transcript.mining.candidates import DedupKey, dedup_key
 from cc_transcript.mining.confidence import HIGH, MEDIUM, VERY_HIGH
 
 from captain_hook.decisions import decisions_db_path, open_decision_log
+from captain_hook.packs import manager
 from captain_hook.review.fix import (
     COMPLIANCE_RE,
     HOOK_COMPLAINT,
     classify_marker,
+    external_target_path,
     fingerprint_of,
     iter_hook_complaint_signals,
     named_hook_target,
@@ -28,6 +30,7 @@ from captain_hook.review.fix import (
 )
 from captain_hook.review.judge import ReviewVerdict, build_prompt
 from captain_hook.review.repo import RepoKey
+from captain_hook.review.routing import CAPTAIN_HOOK_REPO, PackIndex, Target
 from captain_hook.review.scan import ScanReport, scan_transcript
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import ReviewStore
@@ -62,6 +65,29 @@ TASK_TRACKING_COMPLAINT = (
     "The task-tracking hook keeps re-firing even though I've been updating the tracker - this is a misfire."
 )
 GIT_STATUS_DIGEST = tool_digest("Bash", {"command": "git status"})
+INDEX = PackIndex.load(None)
+NOTIFY_REPO = RepoKey("github.com/acme/notify-hooks")
+NOTIFY_KIND = "notify.alerts:hook_deadbeef"
+NOTIFY_SOURCE = "/home/u/.cache/captain-hook/packs/notify@abc1234/hooks/alerts.py"
+
+
+def cache_external_pack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, name: str = "notify", sha: str = "abc1234"
+) -> Path:
+    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
+    cached = tmp_path / "cache" / f"{name}@{sha}"
+    cached.mkdir(parents=True)
+    (cached / manager.SHA_MARKER).write_text(sha)
+    return cached
+
+
+def write_external_packs_toml(
+    root: Path, *, name: str = "notify", source: str = "github:acme/notify-hooks@v1", commit: str = "abc1234"
+) -> Path:
+    path = manager.packs_toml_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'[packs.{name}]\nsource = "{source}"\ncommit = "{commit}"\n')
+    return root
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,6 +308,19 @@ class TestFingerprints:
         assert [fingerprint_of(event) for event in events] == [None, None, None]
 
 
+def make_decision(*, kind: str, source_file: str) -> Decision:
+    return Decision(
+        ts_ms=BASE_MS,
+        session_id=SessionId("sess-1"),
+        source="captain-hook",
+        kind=kind,
+        source_file=source_file,
+        event="PreToolUse",
+        action="warn",
+        message="m",
+    )
+
+
 class TestResolveTarget:
     @pytest.mark.parametrize(
         ("source_file", "kind", "expected"),
@@ -289,26 +328,42 @@ class TestResolveTarget:
             pytest.param(
                 PRIMITIVE_NUDGE,
                 "status_nudge:nudge_c424798f",
-                (".claude/hooks/status_nudge.py", "status_nudge:nudge_c424798f"),
+                Target(".claude/hooks/status_nudge.py", "status_nudge:nudge_c424798f", None, None),
                 id="primitive-resolves-from-module-stem",
             ),
             pytest.param(
                 PRIMITIVE_NUDGE,
                 "hooks.tasks:nudge_9cf8ea99",
-                (".claude/hooks/tasks.py", "hooks.tasks:nudge_9cf8ea99"),
+                Target(".claude/hooks/tasks.py", "hooks.tasks:nudge_9cf8ea99", None, None),
                 id="primitive-strips-package-prefix",
             ),
             pytest.param(PRIMITIVE_NUDGE, "declarative_1", None, id="primitive-anonymous-unresolvable"),
             pytest.param(
                 PRIMITIVE_NUDGE,
                 "general.docs:nudge_1a2b3c4d",
-                ("captain_hook/packs/general/docs.py", "general.docs:nudge_1a2b3c4d"),
+                Target(
+                    "captain_hook/packs/general/docs.py", "general.docs:nudge_1a2b3c4d", CAPTAIN_HOOK_REPO, "general"
+                ),
                 id="builtin-pack-resolves-into-captain-hook",
+            ),
+            pytest.param(
+                "/x/site-packages/captain_hook/packs/general/docs.py",
+                "general.docs:hook_1a2b3c4d",
+                Target(
+                    "captain_hook/packs/general/docs.py", "general.docs:hook_1a2b3c4d", CAPTAIN_HOOK_REPO, "general"
+                ),
+                id="wheel-pack-hook-resolves-into-captain-hook",
+            ),
+            pytest.param(
+                NOTIFY_SOURCE,
+                NOTIFY_KIND,
+                Target(".claude/hooks/alerts.py", NOTIFY_KIND, None, None),
+                id="undeclared-external-pack-cache-hook-falls-back-local",
             ),
             pytest.param(
                 PRIMITIVE_NUDGE,
                 "python.my_thing:nudge_1a2b3c4d",
-                (".claude/hooks/my_thing.py", "python.my_thing:nudge_1a2b3c4d"),
+                Target(".claude/hooks/my_thing.py", "python.my_thing:nudge_1a2b3c4d", None, None),
                 id="packaged-user-hook-shadowing-builtin-pack-name-stays-local",
             ),
             pytest.param(
@@ -317,23 +372,54 @@ class TestResolveTarget:
             pytest.param(
                 "/repo/.claude/hooks/guard.py",
                 "guard:warn_deadbeef",
-                ("/repo/.claude/hooks/guard.py", "guard:warn_deadbeef"),
+                Target("/repo/.claude/hooks/guard.py", "guard:warn_deadbeef", None, None),
                 id="user-file-passes-through",
             ),
         ],
     )
-    def test_resolve_target(self, source_file: str, kind: str, expected: tuple[str, str] | None) -> None:
-        decision = Decision(
-            ts_ms=BASE_MS,
-            session_id=SessionId("sess-1"),
-            source="captain-hook",
-            kind=kind,
-            source_file=source_file,
-            event="PreToolUse",
-            action="warn",
-            message="m",
-        )
-        assert resolve_target(decision) == expected
+    def test_resolve_target(self, source_file: str, kind: str, expected: Target | None) -> None:
+        assert resolve_target(make_decision(kind=kind, source_file=source_file), INDEX) == expected
+
+    def test_declared_external_pack_routes_to_its_repo(self) -> None:
+        index = PackIndex(builtins=INDEX.builtins, externals={"notify": NOTIFY_REPO})
+        target = resolve_target(make_decision(kind=NOTIFY_KIND, source_file=NOTIFY_SOURCE), index)
+        assert target == Target("hooks/alerts.py", NOTIFY_KIND, NOTIFY_REPO, "notify")
+
+    @pytest.mark.parametrize(
+        ("source_file", "expected"),
+        [
+            pytest.param(NOTIFY_SOURCE, "hooks/alerts.py", id="nested-hooks-dir"),
+            pytest.param("/c/.cache/captain-hook/packs/notify@sha/alerts.py", "alerts.py", id="hooks-beside-manifest"),
+            pytest.param(PRIMITIVE_NUDGE, None, id="not-a-pack-cache-path"),
+        ],
+    )
+    def test_external_target_path(self, source_file: str, expected: str | None) -> None:
+        assert external_target_path(source_file) == expected
+
+
+class TestPackIndex:
+    def test_load_maps_builtin_packs_to_captain_hook(self) -> None:
+        index = PackIndex.load(None)
+        assert "general" in index.builtins
+        assert index.externals == {}
+        target = resolve_target(make_decision(kind="general.docs:hook_1", source_file=PRIMITIVE_NUDGE), index)
+        assert target is not None
+        assert target.repo == CAPTAIN_HOOK_REPO
+
+    def test_load_maps_a_cached_external_pack_to_its_repo(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cache_external_pack(tmp_path, monkeypatch)
+        root = write_external_packs_toml(tmp_path / "proj")
+        index = PackIndex.load(root)
+        assert index.externals == {"notify": NOTIFY_REPO}
+
+    def test_load_drops_a_declared_external_pack_that_is_not_cached(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
+        root = write_external_packs_toml(tmp_path / "proj")
+        assert PackIndex.load(root).externals == {}
 
 
 class TestNamedHookTarget:
@@ -382,7 +468,7 @@ class TestNamedHookTarget:
 class TestDetector:
     def test_real_misfire_complaint_attributes_to_user_hook_not_primitive(self, decisions: DecisionLog) -> None:
         seed_fixture_decisions(decisions, MISFIRE_FIXTURE)
-        [sig] = iter_hook_complaint_signals(fixture_events(MISFIRE_FIXTURE), decisions=decisions)
+        [sig] = iter_hook_complaint_signals(fixture_events(MISFIRE_FIXTURE), decisions=decisions, index=INDEX)
         assert sig.kind == HOOK_COMPLAINT
         assert "re-fired unnecessarily and I am ignoring the repeats" in sig.text
         assert sig.evidence["target_source_file"] == ".claude/hooks/status_nudge.py"
@@ -399,7 +485,7 @@ class TestDetector:
     @pytest.mark.parametrize("name", ["fire-compliance.jsonl", "fire-block.jsonl", "fire-stop.jsonl"])
     def test_compliance_and_working_fire_fixtures_yield_nothing(self, decisions: DecisionLog, name: str) -> None:
         seed_fixture_decisions(decisions, name)
-        assert list(iter_hook_complaint_signals(fixture_events(name), decisions=decisions)) == []
+        assert list(iter_hook_complaint_signals(fixture_events(name), decisions=decisions, index=INDEX)) == []
 
     def test_complaint_with_no_preceding_fingerprint_yields_nothing(
         self, decisions: DecisionLog, tmp_path: Path
@@ -413,7 +499,7 @@ class TestDetector:
         write_transcript(path, entries)
         seed_decision(decisions)
         events = parse_events_from_bytes(path.read_bytes())
-        assert list(iter_hook_complaint_signals(events, decisions=decisions)) == []
+        assert list(iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)) == []
 
     def test_named_hook_fallback_attributes_when_no_fingerprint_lands(
         self, decisions: DecisionLog, tmp_path: Path
@@ -428,7 +514,7 @@ class TestDetector:
         write_transcript(path, entries)
         seed_decision(decisions, kind="task_tracking:nudge_abc12345")
         events = parse_events_from_bytes(path.read_bytes())
-        [sig] = iter_hook_complaint_signals(events, decisions=decisions)
+        [sig] = iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)
         assert sig.evidence["attribution"] == "hook_name"
         assert sig.evidence["target_source_file"] == ".claude/hooks/task_tracking.py"
         assert sig.evidence["target_hook_name"] == "task_tracking:nudge_abc12345"
@@ -450,11 +536,11 @@ class TestDetector:
         write_transcript(path, entries)
         seed_decision(decisions, kind="task_tracking:nudge_abc12345")
         events = parse_events_from_bytes(path.read_bytes())
-        assert list(iter_hook_complaint_signals(events, decisions=decisions)) == []
+        assert list(iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)) == []
 
     def test_complaint_with_no_decision_row_yields_nothing(self, decisions: DecisionLog) -> None:
         events = fixture_events(MISFIRE_FIXTURE)
-        assert list(iter_hook_complaint_signals(events, decisions=decisions)) == []
+        assert list(iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)) == []
 
     def test_fingerprints_attributing_to_two_targets_drop(self, decisions: DecisionLog, tmp_path: Path) -> None:
         other_message = "Prefer `eza` over `ls` in this repo."
@@ -477,7 +563,7 @@ class TestDetector:
             tool_digest=tool_digest("Bash", {"command": "ls"}),
         )
         events = parse_events_from_bytes(path.read_bytes())
-        assert list(iter_hook_complaint_signals(events, decisions=decisions)) == []
+        assert list(iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)) == []
 
     def test_anonymous_declarative_fire_drops(self, decisions: DecisionLog, tmp_path: Path) -> None:
         deny = "BLOCKED: recursive force-delete (rm -rf) is forbidden in this repo."
@@ -497,7 +583,7 @@ class TestDetector:
             tool_digest=tool_digest("Bash", {"command": "rm -rf scratch"}),
         )
         events = parse_events_from_bytes(path.read_bytes())
-        assert list(iter_hook_complaint_signals(events, decisions=decisions)) == []
+        assert list(iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)) == []
 
     def test_tight_proximity_bumps_hedged_to_high(self, decisions: DecisionLog, tmp_path: Path) -> None:
         path = tmp_path / "s.jsonl"
@@ -510,7 +596,7 @@ class TestDetector:
         write_transcript(path, entries)
         seed_decision(decisions)
         events = parse_events_from_bytes(path.read_bytes())
-        [sig] = iter_hook_complaint_signals(events, decisions=decisions)
+        [sig] = iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)
         assert sig.signal is not None
         assert sig.signal.confidence == MEDIUM + 0.25
         assert sig.signal.reasons == ("hedged_marker", "misfire", "tight_proximity")
@@ -533,7 +619,7 @@ class TestDetector:
             tool_digest=None,
         )
         events = parse_events_from_bytes(path.read_bytes())
-        [sig] = iter_hook_complaint_signals(events, decisions=decisions)
+        [sig] = iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)
         assert sig.evidence["target_source_file"] == ".claude/hooks/stop_reminder.py"
         assert sig.evidence["target_hook_name"] == "stop_reminder:gate_e76ccd07"
         assert (sig.evidence["event"], sig.evidence["action"]) == ("Stop", "block")
@@ -557,7 +643,7 @@ class TestDetector:
             tool_digest=None,
         )
         events = parse_events_from_bytes(path.read_bytes())
-        assert list(iter_hook_complaint_signals(events, decisions=decisions)) == []
+        assert list(iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)) == []
 
 
 class TestStrictFixPartition:
@@ -661,7 +747,7 @@ class TestFixGroupingAndStore:
 
 
 class TestPackTargetRouting:
-    async def test_pack_targeted_complaint_ingests_under_the_captain_hook_repo(
+    async def test_builtin_pack_complaint_routes_to_captain_hook_with_origin_provenance(
         self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog, tmp_path: Path
     ) -> None:
         path = write_transcript(tmp_path / "s.jsonl", complaint_entries(STRONG_COMPLAINT))
@@ -669,8 +755,37 @@ class TestPackTargetRouting:
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
         [candidate] = await rows(store, "SELECT * FROM candidates")
         assert candidate["repo_key"] == "github.com/yasyf/captain-hook"
+        assert candidate["origin_repo_key"] == REPO
+        assert candidate["pack_name"] == "general"
         assert candidate["target_source_file"] == "captain_hook/packs/general/docs.py"
         assert candidate["target_hook_name"] == "general.docs:nudge_1a2b3c4d"
+
+    async def test_cached_external_pack_complaint_routes_to_the_pack_repo(
+        self,
+        store: ReviewStore,
+        settings: ReviewSettings,
+        decisions: DecisionLog,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cache_external_pack(tmp_path, monkeypatch)
+        root = write_external_packs_toml(tmp_path / "proj")
+        entries = [
+            user_text("run a status check, then commit", cwd=str(root)),
+            assistant_tool_use("t1", "Bash", {"command": "git status"}, cwd=str(root)),
+            nudge_attachment(NUDGE_MESSAGE, cwd=str(root)),
+            tool_result("t1", "clean", cwd=str(root)),
+            assistant_text(STRONG_COMPLAINT, cwd=str(root)),
+        ]
+        path = write_transcript(tmp_path / "s.jsonl", entries)
+        seed_decision(decisions, kind=NOTIFY_KIND, source_file=NOTIFY_SOURCE)
+        assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
+        [candidate] = await rows(store, "SELECT * FROM candidates")
+        assert candidate["repo_key"] == NOTIFY_REPO
+        assert candidate["origin_repo_key"] == REPO
+        assert candidate["pack_name"] == "notify"
+        assert candidate["target_source_file"] == "hooks/alerts.py"
+        assert candidate["target_hook_name"] == NOTIFY_KIND
 
     async def test_hooks_targeted_complaint_keeps_the_session_repo(
         self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog, tmp_path: Path
@@ -680,6 +795,8 @@ class TestPackTargetRouting:
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
         [candidate] = await rows(store, "SELECT * FROM candidates")
         assert candidate["repo_key"] == REPO
+        assert candidate["origin_repo_key"] is None
+        assert candidate["pack_name"] is None
         assert candidate["target_source_file"] == ".claude/hooks/status_nudge.py"
 
 

@@ -5,6 +5,14 @@ lives outside the repo (under capt-hook's state dir), so every command sees the 
 candidates regardless of cwd; commands taking `--repo` default to the repo containing
 the current directory.
 
+A misfire of a *pack* hook opens its fix PR against the pack's own repo (a builtin pack
+routes to captain-hook; a declared external pack routes to `github.com/<owner>/<repo>`),
+so such a candidate's `repo_key` is the pack's repo while its `origin_repo_key` records
+the watched repo the misfire fired in. Every `--repo <key>` filter matches a candidate
+whose `repo_key` **or** `origin_repo_key` is `<key>`, so a rerouted pack fix stays visible
+from the repo it fired in, and its eligibility is gated on *that* origin repo's watching
+flag — the pack's repo need not itself be watched.
+
 Candidate statuses: `watching → pr_open → {stale, accepted, rejected}`, plus a direct
 `watching → rejected` edge and an `accepted → watching` reopen edge. The `watching →
 rejected` edge is the judge retiring a candidate whose evidence it rejected, so
@@ -82,10 +90,13 @@ One line per candidate, newest first:
 
 ```
 #12 [watching] create/transcript_message x3: never force-push to main, use --force-with-lease
+#31 [watching] fix/hook_complaint x2 -> github.com/yasyf/captain-hook: the docs nudge re-fired…
 ```
 
 — id, status, `candidate_kind/source_kind`, observation count, and the first 80 chars
-of the earliest observation's verbatim text.
+of the earliest observation's verbatim text. A cross-repo pack fix (one whose PR targets a
+different repo than the one it fired in) carries a ` -> <repo_key>` suffix after the count,
+naming the repo its PR opens against.
 
 ### `review show <ID>`
 
@@ -96,6 +107,13 @@ Every column of one candidate's row (`repo_key`, `candidate_kind`, `rule`,
 ```
 thresholds: sessions=3 days=2 open_prs=0 single_observation=False eligible=True
 ```
+
+A candidate whose exact rule slug is tracked under more than one repo additionally
+prints `seen_in_repos: N` (the distinct-repo count) after the threshold line. The same
+slug minted independently in several repos is strong evidence the rule is generic
+rather than repo-specific — the signal the brain's CREATE-target classification weighs
+when deciding between `.claude/hooks/` and the general pack. The line is absent for a
+single-repo rule and for digest-keyed (pre-judge) candidates.
 
 `rule` is the candidate's grouping key, and it never upgrades in place. A scan keys every
 new candidate by a content digest. At the close of a judge pass, the regroup re-parents
@@ -111,6 +129,15 @@ name), and `misfire_class` (e.g. `refire`, `false_positive`); `sample_text` is
 Claude's verbatim complaint. Fix thresholds are looser: `min_sessions_fix` distinct
 sessions, or one observation that is both judge-accepted and heuristically VERY_HIGH
 (`single_observation=True`).
+
+A pack-hook fix carries `origin_repo_key` (the watched repo the misfire fired in) and
+`pack_name` (the pack), and its `repo_key` is the pack's own repo. For such a candidate
+`show` prints an extra routing line — the repo its PR opens against, the pack, and the
+origin repo — so you clone the right repo before drafting the fix:
+
+```
+routing: target_repo=github.com/yasyf/captain-hook pack=general origin_repo=github.com/yasyf/scratch
+```
 
 ### `review threshold-check [ID] [--repo <key>]`
 

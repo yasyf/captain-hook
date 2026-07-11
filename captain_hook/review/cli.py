@@ -116,9 +116,10 @@ def watch_repo(repo: RepoKey) -> None:
 
 def candidate_line(row: dict[str, object]) -> str:
     text = str(row["sample_text"] or "").replace("\n", " ")
+    cross_repo = f" -> {row['repo_key']}" if row["origin_repo_key"] else ""
     return (
         f"#{row['id']} [{row['status']}] {row['candidate_kind']}/{row['source_kind']} "
-        f"x{row['observations']}: {text[:80]}"
+        f"x{row['observations']}{cross_repo}: {text[:80]}"
     )
 
 
@@ -276,16 +277,19 @@ def show(candidate_id: int) -> None:
 
     settings = ReviewSettings()
 
-    async def body(store: ReviewStore) -> tuple[dict[str, object], ThresholdStatus, bool, tuple[Correction, ...]]:
+    async def body(
+        store: ReviewStore,
+    ) -> tuple[dict[str, object], ThresholdStatus, bool, tuple[Correction, ...], dict[str, int]]:
         return (
             await store.candidate(candidate_id),
             await store.threshold_status(candidate_id, settings=settings),
             await store.eligible(candidate_id, settings=settings),
             await store.correction_evidence(candidate_id),
+            await store.cross_repo_rules(),
         )
 
     try:
-        row, status, ok, evidence = run_store(body)
+        row, status, ok, evidence, cross_repo = run_store(body)
     except LookupError as exc:
         raise click.ClickException(str(exc)) from exc
     for key, value in row.items():
@@ -294,6 +298,12 @@ def show(candidate_id: int) -> None:
         f"thresholds: sessions={status.sessions} days={status.days} open_prs={status.open_prs} "
         f"single_observation={status.single_observation} eligible={ok}"
     )
+    if repos := cross_repo.get(str(row["rule"])):
+        click.echo(f"seen_in_repos: {repos}")
+    if row["pack_name"]:
+        click.echo(
+            f"routing: target_repo={row['repo_key']} pack={row['pack_name']} origin_repo={row['origin_repo_key']}"
+        )
     if evidence:
         click.echo("correction_evidence:")
         for correction in evidence:

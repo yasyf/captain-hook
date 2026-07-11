@@ -105,6 +105,7 @@ def pr_description(view: CandidateView) -> str:
     """The one-line summary of what this candidate's PR would (or did) do."""
     row = view.row
     detail = trim(view.summary or str(row["sample_text"] or ""))
+    pack = f"[{row['pack_name']}] " if row["pack_name"] else ""
     match CandidateKind(str(row["candidate_kind"])):
         case CandidateKind.CREATE:
             return f'would add a hook: "{detail}"' if detail else "would add a hook for this correction"
@@ -114,7 +115,7 @@ def pr_description(view: CandidateView) -> str:
                 if row["misfire_class"]
                 else "regression test for the misfire"
             )
-            return f"would fix {row['target_hook_name']} ({row['target_source_file']}): {trim(str(tail))}"
+            return f"{pack}would fix {row['target_hook_name']} ({row['target_source_file']}): {trim(str(tail))}"
 
 
 def age_days(row: dict[str, object]) -> int | None:

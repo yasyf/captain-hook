@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from cc_transcript.context import Fidelity
 
 REPO = RepoKey("github.com/yasyf/captain-hook")
+ORIGIN_REPO = RepoKey("github.com/yasyf/scratch")
 
 
 def digest_rule(seed: str) -> str:
@@ -81,6 +82,20 @@ async def fix_candidate(
         source_kind=SourceKind("hook_complaint"),
         target_source_file=file,
         target_hook_name=hook,
+    )
+
+
+async def pack_fix_candidate(store: ReviewStore, *, origin: RepoKey = ORIGIN_REPO, pack: str = "general") -> int:
+    return await store.ensure_candidate(
+        REPO,
+        kind=CandidateKind.FIX,
+        rule="misfire",
+        source_kind=SourceKind("hook_complaint"),
+        target_source_file="captain_hook/packs/general/docs.py",
+        target_hook_name="general.docs:nudge_1",
+        misfire_class="refire",
+        origin_repo_key=origin,
+        pack_name=pack,
     )
 
 
@@ -1132,3 +1147,75 @@ class TestJudgePassReopenWiring:
             judged=0, failed=0, pending=0, merged=0, retired=0, reopened=1
         )
         assert (await candidate_row(store, candidate_id))["status"] == "watching"
+
+
+class TestCrossRepoVisibility:
+    async def test_pack_fix_visible_from_both_origin_and_target_repo(self, store: ReviewStore) -> None:
+        candidate_id = await pack_fix_candidate(store)
+        assert [int(str(row["id"])) for row in await store.candidates(ORIGIN_REPO)] == [candidate_id]
+        assert [int(str(row["id"])) for row in await store.candidates(REPO)] == [candidate_id]
+        assert await store.candidates(RepoKey("github.com/other/thing")) == []
+
+    async def test_row_carries_routing_provenance(self, store: ReviewStore) -> None:
+        await pack_fix_candidate(store)
+        [row] = await store.candidates(ORIGIN_REPO)
+        assert (row["repo_key"], row["origin_repo_key"], row["pack_name"]) == (REPO, ORIGIN_REPO, "general")
+
+    async def test_repo_local_fix_has_no_origin_and_hides_cross_repo(self, store: ReviewStore) -> None:
+        local_id = await fix_candidate(store)
+        assert (await candidate_row(store, local_id))["origin_repo_key"] is None
+        assert [int(str(row["id"])) for row in await store.candidates(REPO)] == [local_id]
+        assert await store.candidates(ORIGIN_REPO) == []
+
+
+class TestCrossRepoRules:
+    async def test_slug_in_two_repos_counts_both(self, store: ReviewStore) -> None:
+        await create_candidate(store)
+        await store.ensure_candidate(
+            ORIGIN_REPO, kind=CandidateKind.CREATE, rule="no-force-push", source_kind=SourceKind("transcript_message")
+        )
+        assert await store.cross_repo_rules() == {"no-force-push": 2}
+
+    async def test_single_repo_slug_is_absent(self, store: ReviewStore) -> None:
+        await create_candidate(store)
+        assert await store.cross_repo_rules() == {}
+
+    async def test_digest_rule_in_two_repos_is_excluded(self, store: ReviewStore) -> None:
+        for repo in (REPO, ORIGIN_REPO):
+            await store.ensure_candidate(
+                repo,
+                kind=CandidateKind.CREATE,
+                rule=digest_rule("same correction"),
+                source_kind=SourceKind("transcript_message"),
+            )
+        assert await store.cross_repo_rules() == {}
+
+
+class TestOriginWatchingGate:
+    async def seed_strong_observation(self, store: ReviewStore, candidate_id: int) -> None:
+        await seed(
+            store,
+            candidate_id,
+            "k0",
+            session="s0",
+            occurred="2026-06-01T10:00:00+00:00",
+            heuristic=VERY_HIGH,
+            source_kind="hook_complaint",
+        )
+        await judge(store, "k0")
+
+    async def test_eligibility_follows_the_origin_repo_not_the_pack_repo(
+        self, store: ReviewStore, settings: ReviewSettings
+    ) -> None:
+        candidate_id = await pack_fix_candidate(store)
+        await self.seed_strong_observation(store, candidate_id)
+
+        await store.enable(REPO)
+        gated = await store.threshold_status(candidate_id, settings=settings)
+        assert (gated.watching, gated.single_observation) == (False, True)
+        assert await store.eligible(candidate_id, settings=settings) is False
+
+        await store.enable(ORIGIN_REPO)
+        watched = await store.threshold_status(candidate_id, settings=settings)
+        assert watched.watching is True
+        assert await store.eligible(candidate_id, settings=settings) is True

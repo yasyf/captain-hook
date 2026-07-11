@@ -64,9 +64,10 @@ from cc_transcript.models import UserEvent
 from cc_transcript.parser import TranscriptParser
 
 from captain_hook.decisions import decisions_db_path, open_decision_log
-from captain_hook.review.fix import HOOK_COMPLAINT, PACKS_DIR, iter_hook_complaint_signals
+from captain_hook.review.fix import HOOK_COMPLAINT, iter_hook_complaint_signals
 from captain_hook.review.formats import review_spec
 from captain_hook.review.repo import RepoKey, resolve_repo_key
+from captain_hook.review.routing import PackIndex
 from captain_hook.review.store import CandidateKind
 
 if TYPE_CHECKING:
@@ -244,10 +245,6 @@ def transcript_repo(events: Sequence[TranscriptEvent]) -> RepoKey | None:
     )
 
 
-def fix_repo(repo_key: RepoKey, target_source_file: str) -> RepoKey:
-    return RepoKey("github.com/yasyf/captain-hook") if target_source_file.startswith(f"{PACKS_DIR}/") else repo_key
-
-
 def transcript_cwd(events: Sequence[TranscriptEvent]) -> Path | None:
     return next(
         (Path(meta.cwd) for event in events if (meta := event_meta(event)) is not None if meta.cwd is not None),
@@ -304,7 +301,11 @@ async def ingest(
         await store.record_file_scan(str(parsed.path), parsed.mtime, [])
         return ScanReport(scanned=1, inserted=0)
     signals = chain(
-        iter_hook_complaint_signals(parsed.events, decisions=open_decision_log(decisions_db_path())),
+        iter_hook_complaint_signals(
+            parsed.events,
+            decisions=open_decision_log(decisions_db_path()),
+            index=PackIndex.load(transcript_cwd(parsed.events)),
+        ),
         detect(parsed.events),
     )
     kept = collapse_cross_detector(list(candidates_from(parsed.events, signals, settings=settings)))
@@ -313,13 +314,15 @@ async def ingest(
         async with store.store.transaction():
             candidate_id = (
                 await store.ensure_candidate(
-                    fix_repo(repo_key, str(sig.evidence["target_source_file"])),
+                    RepoKey(target_repo) if (target_repo := sig.evidence["target_repo"]) else repo_key,
                     kind=CandidateKind.FIX,
                     rule=dedup_key(*rule_parts(sig)),
                     source_kind=sig.kind,
                     target_source_file=str(sig.evidence["target_source_file"]),
                     target_hook_name=str(sig.evidence["target_hook_name"]),
                     misfire_class=str(sig.evidence["misfire_class"]),
+                    origin_repo_key=repo_key if target_repo else None,
+                    pack_name=sig.evidence["pack_name"],
                 )
                 if sig.kind == HOOK_COMPLAINT
                 else await store.ensure_candidate(

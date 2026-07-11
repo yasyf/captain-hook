@@ -11,6 +11,7 @@ from click.testing import CliRunner
 
 from captain_hook.cli import cli, generate_settings
 from captain_hook.review.cli import REVIEW_RUN_COMMAND, STATUS_CHOICES
+from captain_hook.review.fix import HOOK_COMPLAINT
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import CandidateKind, CandidateStatus, ReviewStore
@@ -58,6 +59,29 @@ async def seed_pr_open(url: str) -> int:
         )
         await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=url)
         return candidate_id
+
+
+async def seed_cross_repo_rule(rule: str, *repos: RepoKey) -> int:
+    async with await ReviewStore.open(db_path()) as store:
+        return [
+            await store.ensure_candidate(repo, kind=CandidateKind.CREATE, rule=rule, source_kind=TRANSCRIPT_MESSAGE)
+            for repo in repos
+        ][0]
+
+
+async def seed_pack_fix() -> int:
+    async with await ReviewStore.open(db_path()) as store:
+        return await store.ensure_candidate(
+            RepoKey("github.com/yasyf/captain-hook"),
+            kind=CandidateKind.FIX,
+            rule="misfire",
+            source_kind=HOOK_COMPLAINT,
+            target_source_file="captain_hook/packs/general/docs.py",
+            target_hook_name="general.docs:nudge_1",
+            misfire_class="refire",
+            origin_repo_key=GIT_REPO_KEY,
+            pack_name="general",
+        )
 
 
 @pytest.fixture
@@ -261,11 +285,37 @@ class TestListShowThreshold:
         assert result.exit_code == 0, result.output
         assert "status: watching" in result.output
         assert "thresholds: sessions=0 days=0 open_prs=0 single_observation=False eligible=False" in result.output
+        assert "seen_in_repos" not in result.output
+
+    def test_show_prints_seen_in_repos_for_a_cross_repo_rule(self, git_repo: Path) -> None:
+        candidate_id = asyncio.run(
+            seed_cross_repo_rule("no-force-push", GIT_REPO_KEY, RepoKey("github.com/yasyf/other"))
+        )
+        result = invoke("show", str(candidate_id), root=git_repo)
+        assert result.exit_code == 0, result.output
+        assert "seen_in_repos: 2" in result.output
 
     def test_show_unknown_candidate_fails(self, git_repo: Path) -> None:
         result = invoke("show", "99", root=git_repo)
         assert result.exit_code != 0
         assert "no candidate with id 99" in result.output
+
+    def test_list_shows_cross_repo_suffix_for_a_pack_fix(self, git_repo: Path) -> None:
+        candidate_id = asyncio.run(seed_pack_fix())
+        result = invoke("list", root=git_repo)
+        assert result.exit_code == 0, result.output
+        assert f"#{candidate_id} [watching] fix/hook_complaint x0 -> github.com/yasyf/captain-hook:" in result.output
+
+    def test_show_prints_routing_line_for_a_pack_fix(self, git_repo: Path) -> None:
+        candidate_id = asyncio.run(seed_pack_fix())
+        result = invoke("show", str(candidate_id), root=git_repo)
+        assert result.exit_code == 0, result.output
+        assert "origin_repo_key: github.com/yasyf/scratch" in result.output
+        assert "pack_name: general" in result.output
+        assert (
+            "routing: target_repo=github.com/yasyf/captain-hook pack=general origin_repo=github.com/yasyf/scratch"
+            in result.output
+        )
 
     def test_threshold_check_reports_eligibility(self, scanned_repo: Path) -> None:
         result = invoke("threshold-check", root=scanned_repo)

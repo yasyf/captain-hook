@@ -81,6 +81,8 @@ def view(
     target_hook: str | None = None,
     target_file: str | None = None,
     misfire: str | None = None,
+    pack: str | None = None,
+    origin: str | None = None,
 ) -> CandidateView:
     row: dict[str, object] = {
         "id": id,
@@ -88,6 +90,9 @@ def view(
         "status": status,
         "source_kind": "transcript_message",
         "rule": "r",
+        "repo_key": "github.com/yasyf/captain-hook" if pack else str(REPO),
+        "origin_repo_key": origin,
+        "pack_name": pack,
         "pr_url": pr_url,
         "pr_opened_at": pr_opened_at,
         "sample_text": sample_text,
@@ -214,6 +219,20 @@ class TestPrDescription:
                 ),
                 "would fix h:n (f.py): regression test for refire_on_own_text",
                 id="fix_falls_back_to_misfire_class",
+            ),
+            pytest.param(
+                view(
+                    kind="fix",
+                    status="watching",
+                    summary="stop the docs nudge firing on its own text",
+                    target_hook="general.docs:nudge_1",
+                    target_file="captain_hook/packs/general/docs.py",
+                    misfire="refire",
+                    pack="general",
+                ),
+                "[general] would fix general.docs:nudge_1 (captain_hook/packs/general/docs.py): "
+                "stop the docs nudge firing on its own text",
+                id="pack_fix_prefixes_the_pack_name",
             ),
         ],
     )
