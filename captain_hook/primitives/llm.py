@@ -19,6 +19,7 @@ from captain_hook.types import (
     Action,
     Event,
     HookResult,
+    InlineTests,
     Signal,
     Signals,
     TCondition,
@@ -32,7 +33,6 @@ if TYPE_CHECKING:
     from captain_hook.contexts import PromptContext
     from captain_hook.events import BaseHookEvent
     from captain_hook.signals.nlp import NlpSignal
-    from captain_hook.types import InlineTests
 
 
 class GateVerdict(BaseModel):

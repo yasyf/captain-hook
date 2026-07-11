@@ -14,6 +14,7 @@ from captain_hook.types import (
     Event,
     FilePath,
     HookResult,
+    InlineTests,
     SourceEdits,
     TCondition,
     TestFile,
@@ -22,7 +23,6 @@ from captain_hook.types import (
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
-    from captain_hook.types import InlineTests
 
 StringCheck = Callable[[str], list[str]]
 AstCheck = Callable[[ast.AST], Iterator[str]]

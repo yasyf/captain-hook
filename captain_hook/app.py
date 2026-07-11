@@ -16,6 +16,7 @@ from captain_hook.types import (
     Event,
     FilePath,
     HookSpec,
+    InlineTests,
     Pattern,
     RegisteredHook,
     Runs,
@@ -32,7 +33,7 @@ if TYPE_CHECKING:
 
     from captain_hook.events import BaseHookEvent
     from captain_hook.settings import HooksSettings
-    from captain_hook.types import HookResult, InlineTests
+    from captain_hook.types import HookResult
 
 HookHandler = Callable[["BaseHookEvent"], "HookResult | None"]
 
