@@ -183,16 +183,20 @@ def brain_segment(report: dict[str, object]) -> tuple[str, str] | None:
     """The PR-drafting brain's ``exit · duration · PRs`` segment, red on a silent failure.
 
     ``None`` when the reviewer pass never spawned the brain (no eligible
-    candidate). Otherwise renders red when the pass had eligible candidates yet
-    the brain exited non-zero or opened no PR — the keychain / text-only-reply
-    silent-failure surface — and dim when it did its job.
+    candidate). Otherwise renders red when the brain exited non-zero or left
+    eligible candidates neither PR'd nor watching-skipped — the keychain /
+    text-only-reply silent-failure surface — and dim when every eligible
+    candidate got a PR or a logged skip (``brain_skips``; reports predating the
+    field count skips as zero).
     """
     if report.get("brain_exit") is None:
         return None
     exit_code = int(str(report["brain_exit"]))
     prs = int(str(report["brain_prs"]))
+    skips = int(str(report.get("brain_skips", 0)))
     seconds = float(str(report["brain_seconds"]))
-    failing = bool(report["eligible"]) and (exit_code != 0 or prs == 0)
+    eligible = report["eligible"]
+    failing = exit_code != 0 or (isinstance(eligible, list) and prs + skips < len(eligible))
     return f"brain: exit {exit_code} · {seconds:.0f}s · {prs} PR{'' if prs == 1 else 's'}", "red" if failing else "dim"
 
 

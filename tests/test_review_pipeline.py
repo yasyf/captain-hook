@@ -800,6 +800,7 @@ class TestSpawnSession:
             "brain_exit": None,
             "brain_seconds": None,
             "brain_prs": 0,
+            "brain_skips": 0,
             "synced_merged": 0,
             "synced_closed": 0,
             "synced_kept": 0,
@@ -972,6 +973,19 @@ class TestReviewSession:
         transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
         report = await review_session(transcript, cwd=str(git_repo), settings=settings)
         assert (report.brain, report.brain_exit, report.brain_prs) == (True, 0, 1)
+
+    async def test_brain_skips_counts_eligible_candidates_left_watching(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        install_brain(monkeypatch)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
+            candidate_id = await seed_eligible_fix(store, repo=GIT_REPO_KEY)
+        transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
+        report = await review_session(transcript, cwd=str(git_repo), settings=settings)
+        assert report.eligible == (candidate_id,)
+        assert (report.brain, report.brain_exit, report.brain_prs, report.brain_skips) == (True, 0, 0, 1)
 
     @pytest.mark.parametrize(
         ("category", "expect_brain"),

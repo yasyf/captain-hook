@@ -185,8 +185,10 @@ Follow [references/pr-workflow.md](references/pr-workflow.md) exactly:
    error like `rejected -> pr_open`, a concurrent judge pass regrouped the candidate
    (realistic when sessions share one review database) — **do not abort the run**.
    Re-run `uvx capt-hook review list --repo <key>` and stamp the successor create
-   candidate whose `rule` equals the branch's slug; if none exists (judge-retired), note
-   the already-opened PR in the final report and continue.
+   candidate whose `rule` equals the branch's slug; if none exists (judge-retired),
+   close the just-opened PR with the `gh pr close` command in
+   [pr-workflow.md](references/pr-workflow.md) — an unstamped PR is invisible to
+   `sync-prs` — then note the closed PR in the final report and continue.
 
 ### 8. Final report
 

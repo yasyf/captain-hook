@@ -162,6 +162,13 @@ emptied original was swept; a transition error like `rejected -> pr_open` means 
 candidate was judge-retired (every observation re-judged, none accepted). Re-run
 `uvx capt-hook review list --repo <key>` and stamp the successor create candidate whose
 `rule` equals the branch's slug — `uvx capt-hook review update <successor-ID> pr_open
---pr-url <url>`. If no such candidate exists (the rule was judge-retired), note the
-already-opened PR in the final report and move on; the PR stands and `sync-prs` still
-tracks its fate.
+--pr-url <url>`. If no such candidate exists (the rule was judge-retired), close the PR
+you just opened — `sync-prs` only follows PRs a `pr_open` candidate row points at, so an
+unstamped PR would sit open forever with nothing tracking its fate:
+
+```bash
+gh pr close <url> --delete-branch \
+  --comment "capt-hook: the backing candidate was judge-retired before this PR could be tracked; closing rather than leaving it orphaned."
+```
+
+Note the closed PR in the final report and move on.

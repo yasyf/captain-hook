@@ -57,6 +57,8 @@ class SpawnReport:
         brain_exit: The brain subprocess's exit code, or ``None`` when it did not run.
         brain_seconds: The brain's wall-clock runtime in seconds, or ``None`` when it did not run.
         brain_prs: How many candidates the brain moved into ``pr_open`` this pass.
+        brain_skips: How many eligible candidates the brain left ``watching`` — a
+            logged skip (vanished target, no verifiable evidence), not a failure.
         synced_merged: How many open PRs merged, accepting their candidate.
         synced_closed: How many open PRs closed, rejecting their candidate.
         synced_kept: How many open PRs stayed open (fresh or ``gh``-unreachable).
@@ -76,6 +78,7 @@ class SpawnReport:
     brain_exit: int | None = None
     brain_seconds: float | None = None
     brain_prs: int = 0
+    brain_skips: int = 0
     synced_merged: int = 0
     synced_closed: int = 0
     synced_kept: int = 0
@@ -248,6 +251,12 @@ async def pr_open_ids(store: ReviewStore, repo: RepoKey) -> set[int]:
     return {int(str(row["id"])) for row in await store.candidates(repo, status=CandidateStatus.PR_OPEN)}
 
 
+async def watching_ids(store: ReviewStore, repo: RepoKey) -> set[int]:
+    from captain_hook.review.store import CandidateStatus
+
+    return {int(str(row["id"])) for row in await store.candidates(repo, status=CandidateStatus.WATCHING)}
+
+
 async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings) -> SpawnReport:
     """Runs the detached reviewer pass over one ended session.
 
@@ -291,10 +300,11 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
         )
         opened_before = await pr_open_ids(store, repo)
     outcome = spawn_brain(transcript, repo_root=Path(cwd), settings=settings) if eligible else None
-    brain_prs = 0
+    brain_prs = brain_skips = 0
     if outcome is not None:
         async with await ReviewStore.open(settings.db_path) as store:
             brain_prs = len(await pr_open_ids(store, repo) - opened_before)
+            brain_skips = len(set(eligible) & await watching_ids(store, repo))
     return SpawnReport(
         repo=repo,
         watching=True,
@@ -310,6 +320,7 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
         brain_exit=outcome.exit_code if outcome else None,
         brain_seconds=outcome.seconds if outcome else None,
         brain_prs=brain_prs,
+        brain_skips=brain_skips,
         synced_merged=sync.accepted,
         synced_closed=sync.rejected,
         synced_kept=sync.kept + sync.unreachable,

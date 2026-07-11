@@ -488,7 +488,27 @@ class TestBrainSegment:
             pytest.param(
                 {"eligible": [1], "brain_exit": 0, "brain_seconds": 5.0, "brain_prs": 0},
                 ("brain: exit 0 · 5s · 0 PRs", "red"),
-                id="eligible-but-no-pr-opened-is-red",
+                id="legacy-report-without-skips-and-no-pr-is-red",
+            ),
+            pytest.param(
+                {"eligible": [1], "brain_exit": 0, "brain_seconds": 5.0, "brain_prs": 0, "brain_skips": 1},
+                ("brain: exit 0 · 5s · 0 PRs", "dim"),
+                id="skip-only-run-is-dim",
+            ),
+            pytest.param(
+                {"eligible": [1, 2], "brain_exit": 0, "brain_seconds": 5.0, "brain_prs": 1, "brain_skips": 1},
+                ("brain: exit 0 · 5s · 1 PR", "dim"),
+                id="pr-plus-skip-covering-eligible-is-dim",
+            ),
+            pytest.param(
+                {"eligible": [1, 2], "brain_exit": 0, "brain_seconds": 5.0, "brain_prs": 1, "brain_skips": 0},
+                ("brain: exit 0 · 5s · 1 PR", "red"),
+                id="unaccounted-eligible-candidate-is-red",
+            ),
+            pytest.param(
+                {"eligible": [1], "brain_exit": 2, "brain_seconds": 5.0, "brain_prs": 0, "brain_skips": 1},
+                ("brain: exit 2 · 5s · 0 PRs", "red"),
+                id="nonzero-exit-red-even-with-skips",
             ),
         ],
     )
