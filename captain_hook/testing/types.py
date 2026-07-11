@@ -4,6 +4,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+FIELD_TYPES: dict[str, tuple[type, ...]] = {
+    "command": (str,),
+    "content": (str,),
+    "old": (str,),
+    "tool": (str,),
+    "prompt": (str,),
+    "script": (str,),
+    "agent_type": (str,),
+    "agent_id": (str,),
+    "model": (str,),
+    "output": (str,),
+    "error": (str,),
+    "reason": (str,),
+    "source": (str,),
+    "permission_mode": (str,),
+    "offset": (int,),
+    "limit": (int,),
+    "skip_permissions": (bool,),
+    "tool_input": (dict,),
+    "llm": (dict,),
+    "tasks": (list,),
+}
+
 
 class TranscriptFixture:
     """A lightweight transcript stub for use in inline tests.
@@ -149,8 +172,18 @@ class Input:
     llm: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
-        if isinstance(self.transcript, list):
-            object.__setattr__(self, "transcript", TranscriptFixture(self.transcript))
+        match self.transcript:
+            case list():
+                object.__setattr__(self, "transcript", TranscriptFixture(self.transcript))
+            case str():
+                object.__setattr__(self, "transcript", Path(self.transcript))
+        checks = FIELD_TYPES | {"file": (str, FileFixture), "transcript": (Path, TranscriptFixture)}
+        for name, types in checks.items():
+            if (value := getattr(self, name)) is not None and not isinstance(value, types):
+                raise TypeError(
+                    f"Input field {name!r} must be {' or '.join(t.__name__ for t in types)} or None, "
+                    f"got {type(value).__name__}"
+                )
 
     def __repr__(self) -> str:
         set_fields = ", ".join(

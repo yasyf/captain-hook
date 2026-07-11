@@ -1,0 +1,559 @@
+"""Public-API parity gate for the Phase-1 performance work (baseline commit ee9f7ca3).
+
+The Phase-1 diet lazily re-exports the root package (PEP 562), defers the transcript
+parse behind a proxy, and drops pydantic from the inline-test ``Input``. None of that
+may change or degrade the public surface. This module pins:
+
+* the exact set of root exports, derived from the pre-diet ``captain_hook/__init__.py``
+  import block, each still ``is``-identical to the object in its defining module;
+* the submodule import paths real consumers use;
+* the behavioural contract of ``Input`` (validation, coercion, identity, immutability);
+* the lazy-transcript proxy's equivalence to an eager ``Session`` and its deferred parse.
+"""
+
+from __future__ import annotations
+
+import importlib
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+import captain_hook
+from captain_hook import transcripts
+from captain_hook.testing.types import FileFixture, Input, TranscriptFixture
+from captain_hook.transcripts import lazy_transcript, load_transcript
+
+# The root-package export surface pinned to baseline ee9f7ca3 — the sorted set of names
+# bound at module level by that revision's captain_hook/__init__.py import block.
+PINNED_EXPORTS: tuple[str, ...] = (
+    "Action",
+    "AfterEdit",
+    "Agent",
+    "Allow",
+    "And",
+    "Artifact",
+    "Ask",
+    "BackgroundTask",
+    "BaseHookEvent",
+    "BashCall",
+    "BeforeEdit",
+    "Block",
+    "COMMENT_TYPES",
+    "Clause",
+    "Command",
+    "CommandLine",
+    "Content",
+    "CustomCommandLineCondition",
+    "CustomCondition",
+    "CustomInputTypeCondition",
+    "Deque",
+    "DurableSlot",
+    "DurableState",
+    "DurableStore",
+    "EditCall",
+    "Event",
+    "Excerpts",
+    "ExitPlanModeCall",
+    "File",
+    "FileFixture",
+    "FilePath",
+    "FromSubagent",
+    "GateVerdict",
+    "GlobCall",
+    "GrepCall",
+    "HookContext",
+    "HookResponse",
+    "HookResult",
+    "HookState",
+    "HooksSettings",
+    "InPlanMode",
+    "InlineTests",
+    "Input",
+    "Introduced",
+    "MultiEditCall",
+    "NlpSignal",
+    "Not",
+    "NotebookEditCall",
+    "NotificationEvent",
+    "NudgeVerdict",
+    "Or",
+    "OtherCall",
+    "Pattern",
+    "PermissionRequestEvent",
+    "Phrase",
+    "PostToolUseEvent",
+    "PostToolUseFailureEvent",
+    "PreCompactEvent",
+    "PreToolUseEvent",
+    "PrimitiveState",
+    "Prompt",
+    "PromptCheckVerdict",
+    "PromptContext",
+    "RanCommand",
+    "ReadCall",
+    "ReadFile",
+    "Redirect",
+    "Rewrite",
+    "Runs",
+    "SafetyVerdict",
+    "SessionCron",
+    "SessionEndEvent",
+    "SessionSlot",
+    "SessionStartEvent",
+    "SessionStore",
+    "Signal",
+    "Signals",
+    "SkillCall",
+    "SkipPermissions",
+    "SourceEdits",
+    "Step",
+    "StopEvent",
+    "SubagentStartEvent",
+    "SubagentStopEvent",
+    "TCondition",
+    "Task",
+    "TaskCall",
+    "TaskCreateCall",
+    "TaskUpdateCall",
+    "Tasks",
+    "TestFile",
+    "Tool",
+    "ToolCall",
+    "ToolCallBase",
+    "ToolHookEvent",
+    "ToolInput",
+    "ToolRewriteEvent",
+    "TouchedFile",
+    "TranscriptFixture",
+    "UsedSkill",
+    "UserPromptSubmitEvent",
+    "Waiting",
+    "Warn",
+    "Workflow",
+    "WorkflowScript",
+    "WorkflowScriptSource",
+    "WorkflowState",
+    "WriteCall",
+    "apply_contexts",
+    "approve",
+    "block_command",
+    "build_settings",
+    "categorize_files",
+    "deny",
+    "diff_lint",
+    "excerpt_around",
+    "file",
+    "gate",
+    "has_nominal_subject",
+    "hook",
+    "is_past_predicate",
+    "lint",
+    "llm_approve",
+    "llm_evaluate",
+    "llm_gate",
+    "llm_nudge",
+    "nudge",
+    "on",
+    "prompt_check",
+    "read_json",
+    "resolve_binary",
+    "rewrite_code",
+    "rewrite_command",
+    "session_state",
+    "set_tool_input",
+    "style",
+    "text_matches",
+    "util",
+    "warn_command",
+    "workflow",
+    "workflow_opt_matches",
+    "workflow_opt_values",
+    "workflow_script_source",
+    "workflow_state",
+)
+
+# Each pinned name mapped to the module baseline imported it from. Resolved independently
+# of HEAD's private ``_EXPORTS`` table, so a drifted _EXPORTS entry (a name repointed at a
+# module holding a different object) fails the ``is``-identity check below.
+DEFINING_MODULE: dict[str, str] = {
+    "Action": "captain_hook.types",
+    "AfterEdit": "captain_hook.contexts",
+    "Agent": "captain_hook.types",
+    "Allow": "captain_hook.testing",
+    "And": "captain_hook.types",
+    "Artifact": "captain_hook.primitives.workflow",
+    "Ask": "captain_hook.testing",
+    "BackgroundTask": "captain_hook.events",
+    "BaseHookEvent": "captain_hook.events",
+    "BashCall": "cc_transcript.tools",
+    "BeforeEdit": "captain_hook.contexts",
+    "Block": "captain_hook.testing",
+    "COMMENT_TYPES": "captain_hook.ast_grep",
+    "Clause": "captain_hook.signals.nlp",
+    "Command": "cc_transcript.command",
+    "CommandLine": "cc_transcript.command",
+    "Content": "captain_hook.types",
+    "CustomCommandLineCondition": "captain_hook.types",
+    "CustomCondition": "captain_hook.types",
+    "CustomInputTypeCondition": "captain_hook.types",
+    "Deque": "captain_hook.fields",
+    "DurableSlot": "captain_hook.durable",
+    "DurableState": "captain_hook.durable",
+    "DurableStore": "captain_hook.durable",
+    "EditCall": "cc_transcript.tools",
+    "Event": "captain_hook.types",
+    "Excerpts": "captain_hook.contexts",
+    "ExitPlanModeCall": "cc_transcript.tools",
+    "File": "captain_hook.file",
+    "FileFixture": "captain_hook.testing",
+    "FilePath": "captain_hook.types",
+    "FromSubagent": "captain_hook.types",
+    "GateVerdict": "captain_hook.primitives",
+    "GlobCall": "cc_transcript.tools",
+    "GrepCall": "cc_transcript.tools",
+    "HookContext": "captain_hook.context",
+    "HookResponse": "captain_hook.types",
+    "HookResult": "captain_hook.types",
+    "HookState": "captain_hook.state",
+    "HooksSettings": "captain_hook.settings",
+    "InPlanMode": "captain_hook.types",
+    "InlineTests": "captain_hook.testing",
+    "Input": "captain_hook.testing",
+    "Introduced": "captain_hook.contexts",
+    "MultiEditCall": "cc_transcript.tools",
+    "NlpSignal": "captain_hook.signals.nlp",
+    "Not": "captain_hook.types",
+    "NotebookEditCall": "cc_transcript.tools",
+    "NotificationEvent": "captain_hook.events",
+    "NudgeVerdict": "captain_hook.primitives",
+    "Or": "captain_hook.types",
+    "OtherCall": "cc_transcript.tools",
+    "Pattern": "captain_hook.types",
+    "PermissionRequestEvent": "captain_hook.events",
+    "Phrase": "captain_hook.signals.nlp",
+    "PostToolUseEvent": "captain_hook.events",
+    "PostToolUseFailureEvent": "captain_hook.events",
+    "PreCompactEvent": "captain_hook.events",
+    "PreToolUseEvent": "captain_hook.events",
+    "PrimitiveState": "captain_hook.state",
+    "Prompt": "captain_hook.prompt",
+    "PromptCheckVerdict": "captain_hook.primitives",
+    "PromptContext": "captain_hook.contexts",
+    "RanCommand": "captain_hook.types",
+    "ReadCall": "cc_transcript.tools",
+    "ReadFile": "captain_hook.types",
+    "Redirect": "cc_transcript.command",
+    "Rewrite": "captain_hook.testing",
+    "Runs": "captain_hook.types",
+    "SafetyVerdict": "captain_hook.primitives",
+    "SessionCron": "captain_hook.events",
+    "SessionEndEvent": "captain_hook.events",
+    "SessionSlot": "captain_hook.session",
+    "SessionStartEvent": "captain_hook.events",
+    "SessionStore": "captain_hook.session",
+    "Signal": "captain_hook.types",
+    "Signals": "captain_hook.types",
+    "SkillCall": "cc_transcript.tools",
+    "SkipPermissions": "captain_hook.types",
+    "SourceEdits": "captain_hook.types",
+    "Step": "captain_hook.primitives.workflow",
+    "StopEvent": "captain_hook.events",
+    "SubagentStartEvent": "captain_hook.events",
+    "SubagentStopEvent": "captain_hook.events",
+    "TCondition": "captain_hook.types",
+    "Task": "captain_hook.tasks",
+    "TaskCall": "cc_transcript.tools",
+    "TaskCreateCall": "cc_transcript.tools",
+    "TaskUpdateCall": "cc_transcript.tools",
+    "Tasks": "captain_hook.tasks",
+    "TestFile": "captain_hook.types",
+    "Tool": "captain_hook.types",
+    "ToolCall": "cc_transcript.tools",
+    "ToolCallBase": "cc_transcript.tools",
+    "ToolHookEvent": "captain_hook.events",
+    "ToolInput": "captain_hook.types",
+    "ToolRewriteEvent": "captain_hook.events",
+    "TouchedFile": "captain_hook.types",
+    "TranscriptFixture": "captain_hook.testing",
+    "UsedSkill": "captain_hook.types",
+    "UserPromptSubmitEvent": "captain_hook.events",
+    "Waiting": "captain_hook.types",
+    "Warn": "captain_hook.testing",
+    "Workflow": "captain_hook.primitives.workflow",
+    "WorkflowScript": "captain_hook.types",
+    "WorkflowScriptSource": "captain_hook.contexts",
+    "WorkflowState": "captain_hook.state",
+    "WriteCall": "cc_transcript.tools",
+    "apply_contexts": "captain_hook.contexts",
+    "approve": "captain_hook.primitives",
+    "block_command": "captain_hook.primitives",
+    "build_settings": "captain_hook.settings",
+    "categorize_files": "captain_hook.file",
+    "deny": "captain_hook.primitives",
+    "diff_lint": "captain_hook.primitives.lint",
+    "excerpt_around": "captain_hook.contexts",
+    "file": "captain_hook",
+    "gate": "captain_hook.primitives",
+    "has_nominal_subject": "captain_hook.signals.nlp",
+    "hook": "captain_hook.app",
+    "is_past_predicate": "captain_hook.signals.nlp",
+    "lint": "captain_hook.primitives.lint",
+    "llm_approve": "captain_hook.primitives",
+    "llm_evaluate": "captain_hook.primitives",
+    "llm_gate": "captain_hook.primitives",
+    "llm_nudge": "captain_hook.primitives",
+    "nudge": "captain_hook.primitives.nudge",
+    "on": "captain_hook.app",
+    "prompt_check": "captain_hook.primitives",
+    "read_json": "captain_hook.util",
+    "resolve_binary": "captain_hook.util",
+    "rewrite_code": "captain_hook.primitives",
+    "rewrite_command": "captain_hook.primitives",
+    "session_state": "captain_hook.session",
+    "set_tool_input": "captain_hook.primitives",
+    "style": "captain_hook",
+    "text_matches": "captain_hook.primitives.workflow",
+    "util": "captain_hook",
+    "warn_command": "captain_hook.primitives",
+    "workflow": "captain_hook.primitives.workflow",
+    "workflow_opt_matches": "captain_hook.conditions",
+    "workflow_opt_values": "captain_hook.conditions",
+    "workflow_script_source": "captain_hook.conditions",
+    "workflow_state": "captain_hook.state",
+}
+
+# Submodule import paths exactly as real consumers spell them (repo hooks, cc-skills
+# bootstrap templates, downstream packs). Each entry: (module, names it must expose).
+CONSUMER_IMPORT_PATHS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("captain_hook.prompt", ("Prompt",)),
+    ("captain_hook.types", ("Command", "Agent", "Or")),
+    ("captain_hook.style", ("StyleDiffRule", "StyleRule", "matchers", "styleguide")),
+    ("captain_hook.settings", ("HooksSettings",)),
+    ("captain_hook.file", ("File", "PathMatcher")),
+    ("captain_hook.events", ("PostToolUseFailureEvent",)),
+    ("captain_hook.command", ("Command", "CommandLine")),
+    ("cc_transcript.command", ("Command", "CommandLine")),
+    ("captain_hook.util.model_cache", ("ensure_spacy_model",)),
+)
+
+
+def test_pinned_and_defining_module_stay_in_sync() -> None:
+    assert tuple(sorted(DEFINING_MODULE)) == PINNED_EXPORTS
+
+
+def test_export_table_matches_pinned_surface() -> None:
+    assert set(captain_hook._EXPORTS) == set(PINNED_EXPORTS)
+
+
+def test_dir_lists_the_pinned_surface() -> None:
+    listed = dir(captain_hook)
+    assert set(PINNED_EXPORTS) <= set(listed)
+    assert listed == sorted(listed)
+
+
+@pytest.mark.parametrize("name", PINNED_EXPORTS, ids=PINNED_EXPORTS)
+def test_pinned_name_imports_and_is_listed(name: str) -> None:
+    obj = getattr(captain_hook, name)
+    assert name in dir(captain_hook)
+    assert obj is getattr(captain_hook, name)
+
+
+@pytest.mark.parametrize("name", PINNED_EXPORTS, ids=PINNED_EXPORTS)
+def test_pinned_name_is_object_from_defining_module(name: str) -> None:
+    defining = importlib.import_module(DEFINING_MODULE[name])
+    assert getattr(captain_hook, name) is getattr(defining, name)
+
+
+def test_unknown_attribute_raises_attribute_error() -> None:
+    with pytest.raises(AttributeError, match="has no attribute 'DefinitelyNotAThing'"):
+        captain_hook.DefinitelyNotAThing  # noqa: B018
+
+
+@pytest.mark.parametrize(
+    ("module", "names"),
+    [(m, n) for m, n in CONSUMER_IMPORT_PATHS if m != "captain_hook.command"],
+    ids=[m for m, _ in CONSUMER_IMPORT_PATHS if m != "captain_hook.command"],
+)
+def test_consumer_import_path_resolves(module: str, names: tuple[str, ...]) -> None:
+    imported = importlib.import_module(module)
+    for name in names:
+        assert getattr(imported, name) is not None
+
+
+def test_captain_hook_command_module_absent_both_revisions() -> None:
+    # `captain_hook.command` was folded into cc_transcript.command long before Phase 1
+    # (commit 9c33ff50); it exists in neither baseline nor HEAD. Consumers reach Command
+    # and CommandLine through the root package, captain_hook.types (Command only), or
+    # cc_transcript.command. Pinned so a future re-add is a deliberate choice, not drift.
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("captain_hook.command")
+    assert captain_hook.Command is importlib.import_module("cc_transcript.command").Command
+    assert captain_hook.CommandLine is importlib.import_module("cc_transcript.command").CommandLine
+
+
+# --- Input behavioural parity (de-pydantic) --------------------------------------------
+
+# Wrong-typed fields the pydantic baseline rejected and a plain dataclass would silently
+# accept. Each must still raise a clear TypeError naming the offending field.
+WRONG_TYPED: tuple[tuple[str, dict[str, Any]], ...] = (
+    ("command_int", {"command": 123}),
+    ("content_int", {"content": 5}),
+    ("tool_str", {"tool": 7}),
+    ("tool_input_list", {"tool_input": ["not", "a", "dict"]}),
+    ("tool_input_str", {"tool_input": "nope"}),
+    ("llm_list", {"llm": ["x"]}),
+    ("tasks_dict", {"tasks": {"a": 1}}),
+    ("tasks_str", {"tasks": "nope"}),
+    ("file_int", {"file": 5}),
+    ("model_int", {"model": 7}),
+    ("agent_id_int", {"agent_id": 9}),
+    ("offset_float", {"offset": 1.5}),
+    ("offset_list", {"offset": [1]}),
+    ("transcript_dict", {"transcript": {"a": 1}}),
+)
+
+VALID_FIELDS: tuple[tuple[str, dict[str, Any]], ...] = (
+    ("command", {"command": "ls"}),
+    ("tool_input", {"tool_input": {"command": "ls"}}),
+    ("offset_limit", {"offset": 10, "limit": 50}),
+    ("skip_permissions", {"skip_permissions": True}),
+    ("file_str", {"file": "x.py"}),
+    ("file_fixture", {"file": FileFixture(size=10)}),
+    ("tasks_list", {"tasks": [{"id": "1"}]}),
+    ("llm_dict", {"llm": {"fire": False}}),
+)
+
+
+@pytest.mark.parametrize(("field", "kwargs"), WRONG_TYPED, ids=[c[0] for c in WRONG_TYPED])
+def test_input_rejects_wrong_typed_field(field: str, kwargs: dict[str, Any]) -> None:
+    key = next(iter(kwargs))
+    with pytest.raises(TypeError, match=key):
+        Input(**kwargs)
+
+
+def test_input_rejects_unknown_keyword() -> None:
+    with pytest.raises(TypeError, match="bogus"):
+        Input(bogus=1)  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize(("field", "kwargs"), VALID_FIELDS, ids=[c[0] for c in VALID_FIELDS])
+def test_input_accepts_valid_field(field: str, kwargs: dict[str, Any]) -> None:
+    assert isinstance(Input(**kwargs), Input)
+
+
+def test_input_transcript_list_coerced_to_fixture() -> None:
+    msgs = [{"type": "user", "message": {"content": "hi"}}]
+    inp = Input(transcript=msgs)
+    assert isinstance(inp.transcript, TranscriptFixture)
+    assert inp.transcript.messages == msgs
+
+
+def test_input_transcript_str_coerced_to_path() -> None:
+    # Baseline's pydantic model coerced a str transcript to Path; the plain dataclass
+    # must do the same, else input_to_event's `case Path()` drops the transcript.
+    inp = Input(transcript="/tmp/x.jsonl")
+    assert isinstance(inp.transcript, Path)
+    assert inp.transcript == Path("/tmp/x.jsonl")
+
+
+def test_input_str_transcript_is_loaded_end_to_end(tmp_path: Path) -> None:
+    from captain_hook.types import Event
+    from tests.helpers import input_to_event
+
+    p = tmp_path / "t.jsonl"
+    p.write_text(
+        '{"type": "user", "uuid": "u", "sessionId": "s",'
+        ' "timestamp": "2026-01-01T00:00:00Z", "message": {"content": "hi"}}\n'
+    )
+    evt = input_to_event(Event.PreToolUse, Input(tool="Bash", command="ls", transcript=str(p)))
+    assert len(evt.ctx.transcript) == 1
+
+
+def test_input_dict_key_identity_semantics() -> None:
+    # eq=False keeps identity hashing: two equal-valued Inputs stay distinct dict keys.
+    keyed = {Input(command="x"): 1, Input(command="x"): 2}
+    assert len(keyed) == 2
+    assert Input(command="x") != Input(command="x")
+
+
+def test_input_is_frozen() -> None:
+    import dataclasses
+
+    inp = Input(command="ls")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        inp.command = "rm"  # type: ignore[misc]
+
+
+def test_input_repr_lists_only_set_fields() -> None:
+    # Guards against internal machinery (e.g. a validation table) leaking into repr.
+    assert repr(Input(command="ls", tool="Bash")) == "Input(command='ls', tool='Bash')"
+
+
+# --- Lazy-transcript proxy parity ------------------------------------------------------
+
+TRANSCRIPT_LINES = (
+    '{"type": "user", "uuid": "u1", "sessionId": "s", "timestamp": "2026-01-01T00:00:00Z",'
+    ' "message": {"content": "hello"}}\n'
+    '{"type": "assistant", "uuid": "a1", "parentUuid": "u1", "sessionId": "s",'
+    ' "timestamp": "2026-01-01T00:00:01Z",'
+    ' "message": {"model": "claude-opus-4", "content": [{"type": "text", "text": "hi"}]}}\n'
+)
+
+# Session accessors that conditions.py and context.py invoke on ctx.transcript.
+ACCESSORS: tuple[tuple[str, Callable[[Any], Any]], ...] = (
+    ("truthiness", bool),
+    ("len", len),
+    ("events_count", lambda t: len(t.events)),
+    ("path", lambda t: str(t.path)),
+    ("tool_calls_count", lambda t: t.tool_calls.count()),
+    ("edit_calls", lambda t: t.tool_calls.named("Edit|Write").count()),
+    ("exit_plan_mode", lambda t: t.tool_calls.named("ExitPlanMode").count()),
+    ("has_edit_to_py", lambda t: t.has_edit_to("**/*.py")),
+    ("has_command_git", lambda t: t.has_command("git")),
+    ("assistant_text", lambda t: t.assistant_text(n=10)),
+    ("current_turn_len", lambda t: len(t.current_turn)),
+    ("prior_len", lambda t: len(t.prior())),
+    ("recent_len", lambda t: len(t.recent(5))),
+)
+
+
+@pytest.fixture
+def transcript_path(tmp_path: Path) -> Path:
+    p = tmp_path / "session.jsonl"
+    p.write_text(TRANSCRIPT_LINES)
+    return p
+
+
+def test_proxy_is_a_session_instance(transcript_path: Path) -> None:
+    from cc_transcript.query import Session
+
+    proxy = lazy_transcript(transcript_path)
+    assert isinstance(proxy, Session)
+    assert proxy.__class__ is Session
+
+
+@pytest.mark.parametrize("accessor", ACCESSORS, ids=[a[0] for a in ACCESSORS])
+def test_proxy_matches_eager_session(transcript_path: Path, accessor: tuple[str, Callable[[Any], Any]]) -> None:
+    _, fn = accessor
+    proxy = lazy_transcript(transcript_path)
+    eager = load_transcript(transcript_path)
+    assert fn(proxy) == fn(eager)
+
+
+def test_parse_is_deferred_until_first_touch(transcript_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"n": 0}
+    real = transcripts.parse_events_from_bytes
+
+    def counting(data: bytes) -> Any:
+        calls["n"] += 1
+        return real(data)
+
+    monkeypatch.setattr(transcripts, "parse_events_from_bytes", counting)
+    proxy = lazy_transcript(transcript_path)
+    assert calls["n"] == 0, "parse ran before the proxy was touched"
+    assert bool(proxy) is True
+    assert calls["n"] == 1, "first touch did not parse exactly once"
+    assert len(proxy) == 2
+    assert calls["n"] == 1, "a second touch re-parsed the transcript"
