@@ -34,6 +34,45 @@ git worktree add -b "capt-hook/review/<rule-slug>" "$worktree" "origin/$default"
 Hand `$worktree` to the `authoring-hooks` skill as the directory to write
 `.claude/hooks/<slug>.py` in, and run all verification there.
 
+## Cross-repo (pack) fix
+
+When `review show` prints a `routing:` line, the PR opens against `target_repo` — the
+pack's own repo — never the watched repo the misfire fired in. The same procedure
+carries a create candidate classified as generic: its target is captain-hook and its
+hook lands under `captain_hook/packs/general/`.
+
+The watched repo's checkout has no remote for the pack repo, so clone instead of
+adding a worktree:
+
+```bash
+clone=$(mktemp -d)/pack-repo
+gh repo clone <target_repo> "$clone"
+default=$(gh repo view <target_repo> --json defaultBranchRef -q .defaultBranchRef.name)
+git -C "$clone" switch -c "capt-hook/review/pack-<slug>" "origin/$default"
+```
+
+Branch naming: `capt-hook/review/pack-<slug>`, where `<slug>` is the target hook
+file's stem (kebab-case) for a fix, or the candidate's `rule` for a general-pack
+create. Run the fix candidate's target-hook re-verification (`git cat-file -e`, the
+registration `rg`) against this clone's `origin/$default` — the file lives here.
+
+Verification runs in the clone and differs by pack kind:
+
+- **Builtin pack** (`target_repo` is captain-hook): the hook lives under
+  `captain_hook/packs/<pack>/`; verify with `uv run --project . capt-hook test`.
+- **External pack**: the hook lives in the directory named by the `hooks` key of the
+  clone's `capt-hook.toml` manifest; verify with `uvx capt-hook --hooks <dir> test`
+  against that directory.
+
+Commit, push, and `gh pr create` run inside the clone with the same templates as
+below — the fix commit message and PR body shapes carry over unchanged, and the
+post-create stamp (`review update <ID> pr_open --pr-url <url>`) is identical. If the
+push is **denied** (no write access to the pack repo), log the skip with its reason in
+the final report and leave the candidate `watching` — never commit the fix into the
+watched repo instead: a pack hook patched locally diverges from the pack and re-breaks
+on its next update. Clean up with `rm -rf` on the temp dir; there is no worktree to
+remove.
+
 ## Verify, commit, push
 
 ```bash

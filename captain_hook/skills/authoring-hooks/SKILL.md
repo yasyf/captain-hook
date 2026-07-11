@@ -158,6 +158,14 @@ skill hands you a fix candidate carrying the target hook file, the hook's regist
 name, the misfire class, and Claude's verbatim complaint — you **amend the existing
 hook file**, never write a new one.
 
+A pack hook is amended in the **pack's own repo**: the invoking skill hands you a
+clone and the hook file's path there (`captain_hook/packs/<pack>/…` for a builtin
+pack), never a copy under the watched repo's `.claude/hooks/`. Keep the hook's message
+string **byte-identical** unless the amendment is the message itself — fire history
+and complaint attribution key on a hash of the message, so a reword orphans both. The
+regression matrix lives inline on the hook: the amended file's `tests = {...}` is
+where the misfire and genuine-case pairs go, never a separate test file.
+
 ### 1. Reproduce the misfire
 
 From the complaint and its context, extract the **offending input**: the exact tool
