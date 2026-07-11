@@ -63,9 +63,12 @@ class Clause:
             constraint dependency-related to the noun anchor.
         adj: Adjective/adverb phrase (pos ADJ/ADV/PART) related to the anchor.
         negated: Require a negation (``neg`` dependency) related to the anchor.
-        completed: Only match verbs reported as done (see ``is_past_predicate``) —
-            "removed the retry logic" but not "remove the node" or
-            "will be removed later".
+        tense: Constrain the verb's tense (see ``is_past_predicate``). ``"any"``
+            (default) applies no constraint; ``"completed"`` matches only verbs
+            reported as done — "removed the retry logic" but not "remove the node"
+            or "will be removed later"; ``"prospective"`` matches only verbs that
+            are *not* past predicates — "will leave"/"leaving"/"leave it" but not
+            "left the workspace" or "left to clean up".
         subject: ``"no_nominal"`` vetoes verbs with both a substantive active
             subject (see ``has_nominal_subject``) and a direct object — "the
             parser removed the node" is vetoed while "we removed it", passives,
@@ -73,26 +76,26 @@ class Clause:
             "logic migrated to the worker") still match.
 
     Example:
-        >>> Clause(verb=Phrase("remove", "delete"), completed=True, subject="no_nominal")
+        >>> Clause(verb=Phrase("remove", "delete"), tense="completed", subject="no_nominal")
     """
 
     noun: Phrase | None = None
     verb: Phrase | None = None
     adj: Phrase | None = None
     negated: bool = False
-    completed: bool = False
+    tense: Literal["any", "completed", "prospective"] = "any"
     subject: Literal["any", "no_nominal"] = "any"
 
     def __post_init__(self) -> None:
         if (anchor := self.noun or self.verb) is None:
             raise ValueError("Clause needs a noun or verb anchor")
-        if self.verb is None and (self.completed or self.subject != "any"):
-            raise ValueError("Clause completed and subject constraints require a verb")
+        if self.verb is None and (self.tense != "any" or self.subject != "any"):
+            raise ValueError("Clause tense and subject constraints require a verb")
         if not (
             (self.noun and self.verb)
             or self.adj
             or self.negated
-            or self.completed
+            or self.tense != "any"
             or self.subject != "any"
             or any(" " in lemma for lemma in anchor.lemmas)
         ):
@@ -177,13 +180,23 @@ def find_lemma_matches(phrase: Phrase, sent: Span, pos: set[str]) -> list[Token]
     ]
 
 
+def tense_matches(tense: Literal["any", "completed", "prospective"], tok: Token) -> bool:
+    match tense:
+        case "any":
+            return True
+        case "completed":
+            return is_past_predicate(tok)
+        case "prospective":
+            return not is_past_predicate(tok)
+
+
 def verb_candidates(clause: Clause, sent: Span) -> list[Token]:
     if clause.verb is None:
         return []
     return [
         v
         for v in find_lemma_matches(clause.verb, sent, {"VERB", "AUX"})
-        if (not clause.completed or is_past_predicate(v))
+        if tense_matches(clause.tense, v)
         and (clause.subject == "any" or not (has_nominal_subject(v) and any(c.dep_ == "dobj" for c in v.children)))
     ]
 

@@ -81,10 +81,12 @@ def is_tombstone(text: str) -> bool:
                         "retire",
                         "deprecate",
                     ),
-                    completed=True,
+                    tense="completed",
                     subject="no_nominal",
                 ),
-                Clause(verb=Phrase("be"), adj=Phrase("previously", "formerly", "originally", "here"), completed=True),
+                Clause(
+                    verb=Phrase("be"), adj=Phrase("previously", "formerly", "originally", "here"), tense="completed"
+                ),
             ],
             text,
         )

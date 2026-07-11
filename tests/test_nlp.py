@@ -20,15 +20,17 @@ if TYPE_CHECKING:
 
 TOMBSTONE_CLAUSE = Clause(
     verb=Phrase("remove", "delete", "drop", "move", "migrate", "rename"),
-    completed=True,
+    tense="completed",
     subject="no_nominal",
 )
 
 BE_ADVERB_CLAUSE = Clause(
     verb=Phrase("be"),
     adj=Phrase("previously", "formerly", "originally", "here"),
-    completed=True,
+    tense="completed",
 )
+
+LEAVE_PROSPECTIVE_CLAUSE = Clause(verb=Phrase("leave"), tense="prospective")
 
 COMMENT_LEADERS = [
     pytest.param("", id="bare"),
@@ -108,7 +110,12 @@ class TestClauseValidation:
             pytest.param({"verb": Phrase("remove")}, "second constraint or a compound", id="bare_single_verb_rejected"),
             pytest.param({}, "noun or verb anchor", id="no_anchor_rejected"),
             pytest.param(
-                {"noun": Phrase("quota"), "completed": True}, "require a verb", id="completed_without_verb_rejected"
+                {"noun": Phrase("quota"), "tense": "completed"}, "require a verb", id="completed_without_verb_rejected"
+            ),
+            pytest.param(
+                {"noun": Phrase("quota"), "tense": "prospective"},
+                "require a verb",
+                id="prospective_without_verb_rejected",
             ),
             pytest.param(
                 {"noun": Phrase("quota"), "subject": "no_nominal"}, "require a verb", id="subject_without_verb_rejected"
@@ -137,8 +144,16 @@ class TestClauseValidation:
         assert " " in c.noun.lemmas[0]
 
     def test_verb_completed_valid(self) -> None:
-        c = Clause(verb=Phrase("remove"), completed=True)
-        assert c.completed is True
+        c = Clause(verb=Phrase("remove"), tense="completed")
+        assert c.tense == "completed"
+
+    def test_verb_prospective_valid(self) -> None:
+        c = Clause(verb=Phrase("leave"), tense="prospective")
+        assert c.tense == "prospective"
+
+    def test_tense_defaults_to_any(self) -> None:
+        c = Clause(noun=Phrase("quota"), verb=Phrase("exceed"))
+        assert c.tense == "any"
 
     def test_verb_subject_valid(self) -> None:
         c = Clause(verb=Phrase("remove"), subject="no_nominal")
@@ -221,6 +236,22 @@ class TestVerbAnchoredScan:
     )
     def test_scan(self, leader: str, text: str, expected: bool) -> None:
         assert bool(nlp_scan([TOMBSTONE_CLAUSE], leader + text)) is expected
+
+
+class TestProspectiveScan:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            pytest.param("I'll leave the broken test as is", True, id="modal_will_base"),
+            pytest.param("leaving the flaky test documented", True, id="gerund"),
+            pytest.param("leave the failing test alone", True, id="imperative_base"),
+            pytest.param("left the workspace in a broken state", False, id="past_tense_vbd"),
+            pytest.param("the test was left to clean up later", False, id="passive_participle_vbn"),
+            pytest.param("has left the retry logic in place", False, id="present_perfect_vbn"),
+        ],
+    )
+    def test_scan(self, text: str, expected: bool) -> None:
+        assert bool(nlp_scan([LEAVE_PROSPECTIVE_CLAUSE], text)) is expected
 
 
 class TestBeAdverbClause:
