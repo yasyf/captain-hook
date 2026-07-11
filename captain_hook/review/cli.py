@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
 REVIEW_RUN_COMMAND = "capt-hook review run"
 STATUS_CHOICES = ("watching", "pr_open", "stale", "accepted", "rejected")
+REVIEW_EVENTS = ("SessionEnd", "SessionStart")
 
 
 def current_repo(root: Path) -> RepoKey:
@@ -56,25 +57,38 @@ def group_commands(group: dict[str, Any]) -> list[str]:
     return [str(entry.get("command") or "") for entry in entries]
 
 
-def review_wired(hooks: dict[str, Any]) -> bool:
-    groups: list[dict[str, Any]] = hooks.get("SessionEnd") or []
+def review_wired(hooks: dict[str, Any], event: str) -> bool:
+    groups: list[dict[str, Any]] = hooks.get(event) or []
     return any(REVIEW_RUN_COMMAND in command for group in groups for command in group_commands(group))
 
 
 def ensure_review_wiring(settings_path: Path) -> bool:
+    """Wires ``capt-hook review run`` into every :data:`REVIEW_EVENTS` group, per event, idempotently.
+
+    SessionEnd runs the reviewer when a session ends; SessionStart runs it again
+    on the next session start, so an overnight-still-open session is swept the
+    moment work resumes. Each event is wired independently and skipped when
+    either this settings file or its sibling already carries the command, so an
+    already-wired or sibling-deferred event is left alone.
+
+    Returns:
+        Whether any event was newly wired.
+    """
     from captain_hook.cli import sibling_settings, write_settings
 
     existing: dict[str, Any] = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     sibling = sibling_settings(settings_path)
     sibling_hooks: dict[str, Any] = (json.loads(sibling.read_text()).get("hooks") or {}) if sibling.exists() else {}
     hooks: dict[str, Any] = existing.get("hooks") or {}
-    if review_wired(hooks) or review_wired(sibling_hooks):
-        return False
     group = {"hooks": [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}", "async": True}]}
-    write_settings(
-        settings_path,
-        existing | {"hooks": hooks | {"SessionEnd": [*(hooks.get("SessionEnd") or []), group]}},
-    )
+    additions = {
+        event: [*(hooks.get(event) or []), group]
+        for event in REVIEW_EVENTS
+        if not (review_wired(hooks, event) or review_wired(sibling_hooks, event))
+    }
+    if not additions:
+        return False
+    write_settings(settings_path, existing | {"hooks": hooks | additions})
     return True
 
 
@@ -143,7 +157,7 @@ def enable(state: CliState) -> None:
     watch_repo(repo)
     register_marketplace(state.root)
     wired = ensure_review_wiring(state.root / ".claude" / "settings.json")
-    click.echo(f"watching {repo}" + (" (SessionEnd hook wired into .claude/settings.json)" if wired else ""))
+    click.echo(f"watching {repo}" + (" (reviewer hooks wired into .claude/settings.json)" if wired else ""))
 
 
 @review.command()
@@ -198,7 +212,7 @@ def triage(limit: int | None) -> None:
     report, splits = run_store(body)
     click.echo(
         f"judged {report.judged}, failed {report.failed}, pending {report.pending}, "
-        f"merged {report.merged}, retired {report.retired}"
+        f"merged {report.merged}, retired {report.retired}, reopened {report.reopened}"
     )
     for split in splits:
         click.echo(f"possible split: {split.key_a} ~ {split.key_b} ({split.similarity:.2f})")

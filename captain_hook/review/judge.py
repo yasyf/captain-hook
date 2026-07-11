@@ -128,6 +128,8 @@ class JudgeReport:
             durable slug candidate.
         retired: How many watching create candidates the closing regroup rejected
             (every observation judged, none accepted).
+        reopened: How many accepted fix candidates the closing pass returned to
+            watching because their merged fix misfired again.
     """
 
     judged: int
@@ -135,6 +137,7 @@ class JudgeReport:
     pending: int
     merged: int
     retired: int
+    reopened: int
 
 
 def section(window: ContextWindow, label: str, turns: tuple[Turn, ...], budget: Budget) -> str:
@@ -304,9 +307,11 @@ async def judge_pass(
             summary one once the row's window hydrates again.
 
     Returns:
-        The pass's judged/failed/pending counts over judge-worthy rows and the
+        The pass's judged/failed/pending counts over judge-worthy rows, the
         merged/retired counts from the closing
-        :meth:`~captain_hook.review.store.ReviewStore.regroup_create`.
+        :meth:`~captain_hook.review.store.ReviewStore.regroup_create`, and the
+        reopened count from
+        :meth:`~captain_hook.review.store.ReviewStore.reopen_recurrent_fixes`.
     """
     from cc_transcript.judge.similar import default_embedder
 
@@ -326,4 +331,7 @@ async def judge_pass(
         concurrency=settings.judge_concurrency,
     )
     merged, retired = await store.regroup_create()
-    return JudgeReport(judged=judged, failed=failed, pending=len(worthy) - judged, merged=merged, retired=retired)
+    reopened = await store.reopen_recurrent_fixes()
+    return JudgeReport(
+        judged=judged, failed=failed, pending=len(worthy) - judged, merged=merged, retired=retired, reopened=reopened
+    )

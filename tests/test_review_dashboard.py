@@ -20,6 +20,7 @@ from captain_hook.app import LoadError
 from captain_hook.cli import cli
 from captain_hook.review.dashboard import (
     Stage,
+    brain_segment,
     pr_description,
     progress_text,
     render,
@@ -38,6 +39,7 @@ from captain_hook.review.store import (
     ThresholdStatus,
     crosses_thresholds,
 )
+from captain_hook.review.sync import PrState
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -110,6 +112,24 @@ def plain(renderable: object, *, width: int = 200) -> str:
     buf = StringIO()
     Console(file=buf, no_color=True, width=width).print(renderable)
     return buf.getvalue()
+
+
+def colored(renderable: object, *, width: int = 200) -> str:
+    buf = StringIO()
+    Console(file=buf, force_terminal=True, color_system="standard", width=width).print(renderable)
+    return buf.getvalue()
+
+
+def brain_health(*, exit_code: int, prs: int, seconds: float = 142.0, eligible: tuple[int, ...] = (1,)) -> SpawnHealth:
+    stamp = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    report = json.dumps(
+        {"judged": 4, "eligible": list(eligible), "brain_exit": exit_code, "brain_seconds": seconds, "brain_prs": prs}
+    )
+    return SpawnHealth(
+        last=spawn_row(ok=True, started_at=stamp, finished_at=stamp, report_json=report),
+        consecutive_failures=0,
+        failing_since=None,
+    )
 
 
 def spawn_row(
@@ -344,6 +364,39 @@ class TestHealthLine:
         assert "last verdict" not in out
         assert "possible slug splits" not in out
 
+    def test_healthy_reviewer_renders_brain_segment_when_the_brain_ran(self) -> None:
+        out = plain(
+            render(
+                [],
+                repo=REPO,
+                settings=ReviewSettings(),
+                watching=True,
+                health=brain_health(exit_code=0, prs=1),
+                judge=NO_JUDGE,
+            )
+        )
+        assert "reviewer ok" in out
+        assert "brain: exit 0 · 142s · 1 PR" in out
+
+    def test_no_brain_segment_when_the_brain_did_not_run(self) -> None:
+        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=ok_health(), judge=NO_JUDGE))
+        assert "reviewer ok" in out
+        assert "brain:" not in out
+
+    def test_failing_brain_renders_red_segment(self) -> None:
+        out = colored(
+            render(
+                [],
+                repo=REPO,
+                settings=ReviewSettings(),
+                watching=True,
+                health=brain_health(exit_code=1, prs=0),
+                judge=NO_JUDGE,
+            )
+        )
+        assert "brain: exit 1 · 142s · 0 PRs" in out
+        assert "\x1b[31m" in out
+
     @pytest.mark.parametrize(
         ("health", "expected"),
         [
@@ -363,6 +416,39 @@ class TestHealthLine:
         out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=health, judge=NO_JUDGE))
         assert expected in out
         assert "reviewer ok" not in out
+
+
+class TestBrainSegment:
+    def test_no_brain_run_returns_none(self) -> None:
+        assert brain_segment({"judged": 4}) is None
+
+    @pytest.mark.parametrize(
+        ("report", "expected"),
+        [
+            pytest.param(
+                {"eligible": [1], "brain_exit": 0, "brain_seconds": 142.0, "brain_prs": 1},
+                ("brain: exit 0 · 142s · 1 PR", "dim"),
+                id="one-pr-opened-is-dim",
+            ),
+            pytest.param(
+                {"eligible": [1, 2], "brain_exit": 0, "brain_seconds": 88.6, "brain_prs": 2},
+                ("brain: exit 0 · 89s · 2 PRs", "dim"),
+                id="two-prs-plural-and-rounded",
+            ),
+            pytest.param(
+                {"eligible": [1], "brain_exit": 2, "brain_seconds": 3.0, "brain_prs": 0},
+                ("brain: exit 2 · 3s · 0 PRs", "red"),
+                id="nonzero-exit-is-red",
+            ),
+            pytest.param(
+                {"eligible": [1], "brain_exit": 0, "brain_seconds": 5.0, "brain_prs": 0},
+                ("brain: exit 0 · 5s · 0 PRs", "red"),
+                id="eligible-but-no-pr-opened-is-red",
+            ),
+        ],
+    )
+    def test_segment_text_and_style(self, report: dict[str, object], expected: tuple[str, str]) -> None:
+        assert brain_segment(report) == expected
 
 
 async def seed_obs(
@@ -536,7 +622,9 @@ class TestStatusCommand:
         self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         candidate_id = asyncio.run(seed_db("pr_open"))
-        monkeypatch.setattr("captain_hook.review.sync.gh_pr_state", lambda _url: "MERGED")
+        monkeypatch.setattr(
+            "captain_hook.review.sync.gh_pr_state", lambda _url: PrState("MERGED", "2026-07-08T15:06:25Z")
+        )
         result = review_status(root=git_repo)
         assert result.exit_code == 0, result.output
 

@@ -177,6 +177,23 @@ def judge_segment(judge: JudgeHealth) -> str:
     return f"judge: {judge.pending} pending{verdict}{splits}"
 
 
+def brain_segment(report: dict[str, object]) -> tuple[str, str] | None:
+    """The PR-drafting brain's ``exit · duration · PRs`` segment, red on a silent failure.
+
+    ``None`` when the reviewer pass never spawned the brain (no eligible
+    candidate). Otherwise renders red when the pass had eligible candidates yet
+    the brain exited non-zero or opened no PR — the keychain / text-only-reply
+    silent-failure surface — and dim when it did its job.
+    """
+    if report.get("brain_exit") is None:
+        return None
+    exit_code = int(str(report["brain_exit"]))
+    prs = int(str(report["brain_prs"]))
+    seconds = float(str(report["brain_seconds"]))
+    failing = bool(report["eligible"]) and (exit_code != 0 or prs == 0)
+    return f"brain: exit {exit_code} · {seconds:.0f}s · {prs} PR{'' if prs == 1 else 's'}", "red" if failing else "dim"
+
+
 def health_line(health: SpawnHealth, judge: JudgeHealth) -> RenderableType:
     match health.last:
         case None:
@@ -198,12 +215,16 @@ def health_line(health: SpawnHealth, judge: JudgeHealth) -> RenderableType:
                 f"reviewer last ran {relative(str(finished))} — check the SessionEnd hook wiring", style="yellow"
             )
         case last:
-            return Text(
+            report = json.loads(str(last["report_json"]))
+            line = (
                 f"reviewer ok  ·  last run {relative(str(last['finished_at']))}"
-                f"  ·  judged {json.loads(str(last['report_json']))['judged']}"
-                f"  ·  {judge_segment(judge)}",
-                style="dim",
+                f"  ·  judged {report['judged']}  ·  {judge_segment(judge)}"
             )
+            match brain_segment(report):
+                case None:
+                    return Text(line, style="dim")
+                case (segment, style):
+                    return Text.assemble((f"{line}  ·  ", "dim"), (segment, style))
 
 
 def pack_errors_lines(load_errors: Sequence[LoadError]) -> list[RenderableType]:

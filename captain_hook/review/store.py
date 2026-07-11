@@ -100,7 +100,7 @@ PROMPT_VERSIONS = PromptVersions(create=prompt_version(CREATE_TEMPLATE), fix=pro
 
 
 class CandidateStatus(StrEnum):
-    """A candidate's lifecycle state; ``ACCEPTED`` and ``REJECTED`` are terminal."""
+    """A candidate's lifecycle state; ``REJECTED`` is terminal and ``ACCEPTED`` reopens only on recurrence."""
 
     WATCHING = "watching"
     PR_OPEN = "pr_open"
@@ -113,9 +113,31 @@ TRANSITIONS: Mapping[CandidateStatus, frozenset[CandidateStatus]] = {
     CandidateStatus.WATCHING: frozenset({CandidateStatus.PR_OPEN, CandidateStatus.REJECTED}),
     CandidateStatus.PR_OPEN: frozenset({CandidateStatus.STALE, CandidateStatus.ACCEPTED, CandidateStatus.REJECTED}),
     CandidateStatus.STALE: frozenset({CandidateStatus.ACCEPTED, CandidateStatus.REJECTED}),
-    CandidateStatus.ACCEPTED: frozenset(),
+    CandidateStatus.ACCEPTED: frozenset({CandidateStatus.WATCHING}),
     CandidateStatus.REJECTED: frozenset(),
 }
+
+
+@dataclass(frozen=True, slots=True)
+class ColumnMigration:
+    column: str
+    ddl: str
+    backfill: str | None = None
+
+
+CANDIDATE_MIGRATIONS: tuple[ColumnMigration, ...] = (
+    ColumnMigration("generation", "generation INTEGER NOT NULL DEFAULT 1"),
+    ColumnMigration(
+        "resolved_at", "resolved_at TEXT", "UPDATE candidates SET resolved_at = updated_at WHERE status = 'accepted'"
+    ),
+    ColumnMigration("origin_repo_key", "origin_repo_key TEXT"),
+    ColumnMigration("pack_name", "pack_name TEXT"),
+    ColumnMigration(
+        "announced_status",
+        "announced_status TEXT",
+        "UPDATE candidates SET announced_status = status WHERE status NOT IN ('watching', 'pr_open')",
+    ),
+)
 
 
 def signal_confidence(payload_json: object) -> Confidence:
@@ -312,8 +334,27 @@ CREATE TABLE IF NOT EXISTS spawn_runs (
             ),
             versions,
         )
+        await store.migrate_candidates()
         await store.purge_stale_verdicts()
         return store
+
+    async def migrate_candidates(self) -> None:
+        """Adds this version's ``candidates`` columns to an older database, backfilling each once.
+
+        The guarded-ALTER migration, run on :meth:`open` before
+        :meth:`purge_stale_verdicts`: every column in :data:`CANDIDATE_MIGRATIONS`
+        the table lacks is added and its backfill runs exactly once, in the branch
+        that just added it, so a database already at this schema is untouched and a
+        fresh one takes the columns against an empty table.
+        """
+        cur = await self.store.conn.execute("PRAGMA table_info(candidates)")
+        existing = {str(row["name"]) async for row in cur}
+        for migration in CANDIDATE_MIGRATIONS:
+            if migration.column in existing:
+                continue
+            await self.store.conn.execute(f"ALTER TABLE candidates ADD COLUMN {migration.ddl}")
+            if migration.backfill is not None:
+                await self.store.conn.execute(migration.backfill)
 
     async def enable(self, repo: RepoKey) -> None:
         """Marks ``repo`` watched, allowing its candidates to become eligible."""
@@ -466,6 +507,10 @@ VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
     ) -> None:
         """Moves a candidate along :data:`TRANSITIONS` — the only status-write codepath.
 
+        Entering :attr:`CandidateStatus.ACCEPTED` stamps ``resolved_at``, the
+        watermark a later reopen counts fresh recurrences against; every other move
+        (the ``accepted -> watching`` reopen included) leaves it untouched.
+
         Args:
             candidate_id: The candidate to move.
             to: The target status.
@@ -481,10 +526,19 @@ VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
             raise LookupError(f"no candidate with id {candidate_id}")
         if to not in TRANSITIONS[current := CandidateStatus(rows[0])]:
             raise InvalidTransition(f"{current} -> {to}")
+        stamp = now()
         await self.store.conn.execute(
             "UPDATE candidates SET status = ?, updated_at = ?, "
-            "pr_url = COALESCE(?, pr_url), pr_opened_at = COALESCE(?, pr_opened_at) WHERE id = ?",
-            (to, now(), pr_url, pr_opened_at.astimezone(UTC).isoformat() if pr_opened_at else None, candidate_id),
+            "pr_url = COALESCE(?, pr_url), pr_opened_at = COALESCE(?, pr_opened_at), "
+            "resolved_at = COALESCE(?, resolved_at) WHERE id = ?",
+            (
+                to,
+                stamp,
+                pr_url,
+                pr_opened_at.astimezone(UTC).isoformat() if pr_opened_at else None,
+                stamp if to == CandidateStatus.ACCEPTED else None,
+                candidate_id,
+            ),
         )
 
     async def regroup_create(self) -> tuple[int, int]:
@@ -578,13 +632,53 @@ WHERE candidate_kind = 'create' AND status = ? AND updated_at < ?
             )
         return len(reparent), len(retire)
 
+    async def reopen_recurrent_fixes(self) -> int:
+        """Reopens accepted fix candidates whose merged fix still misfires — the recurrence treadmill.
+
+        Run once at the close of each judge pass beside :meth:`regroup_create`. An
+        accepted fix candidate carries a ``resolved_at`` stamp from the move that
+        accepted it; a judge-accepted ``hook_complaint`` observation at the fix
+        lane's bound version whose ``occurred_at`` is after that stamp means the
+        shipped fix was insufficient, so the candidate returns to
+        :attr:`CandidateStatus.WATCHING` with its ``generation`` bumped, keeping the
+        prior ``pr_url`` (the insufficient fix) until a new PR overwrites it. Create
+        candidates are never touched — a create recurrence arrives as a fresh
+        ``hook_complaint``, not a reopen.
+
+        Returns:
+            The number of fix candidates reopened.
+        """
+        async with self.store.transaction() as conn:
+            reopen = [
+                int(row["id"])
+                async for row in await conn.execute(
+                    f"""
+SELECT c.id FROM candidates c
+WHERE c.candidate_kind = 'fix' AND c.status = ? AND c.resolved_at IS NOT NULL
+  AND EXISTS (
+    SELECT 1 FROM candidate_observations o
+    JOIN {self.VERDICT_TABLE} v ON v.dedup_key = o.dedup_key AND v.role = 'judge' AND v.prompt_version = ?
+    WHERE o.candidate_id = c.id AND v.{self.ACCEPTED_COLUMN} = 1 AND o.occurred_at > c.resolved_at
+  )
+""",
+                    (CandidateStatus.ACCEPTED, self.versions.fix),
+                )
+            ]
+            for candidate_id in reopen:
+                await self.transition(candidate_id, CandidateStatus.WATCHING)
+                await conn.execute("UPDATE candidates SET generation = generation + 1 WHERE id = ?", (candidate_id,))
+        return len(reopen)
+
     async def threshold_status(self, candidate_id: int, *, settings: ReviewSettings) -> ThresholdStatus:
         """Returns the judge-accepted evidence counts behind one candidate's eligibility.
 
         An observation counts only when its dedup key's latest judge verdict at
         the candidate kind's bound version accepts it with confidence at or above
         ``settings.min_judge_confidence``; unjudged observations count as
-        not-yet, so they retry on the next session's pass.
+        not-yet, so they retry on the next session's pass. A reopened candidate
+        (``generation`` past 1) counts only evidence newer than its ``resolved_at``
+        watermark, so a single strong-marker recurrence re-qualifies it through the
+        ``single_observation`` path without the stale pre-fix evidence.
 
         Args:
             candidate_id: The candidate to inspect.
@@ -598,12 +692,14 @@ WHERE candidate_kind = 'create' AND status = ? AND updated_at < ?
         """
         conn = self.store.conn
         cur = await conn.execute(
-            "SELECT repo_key, candidate_kind, status FROM candidates WHERE id = ?", (candidate_id,)
+            "SELECT repo_key, candidate_kind, status, generation, resolved_at FROM candidates WHERE id = ?",
+            (candidate_id,),
         )
         if not (candidates := [dict(row) async for row in cur]):
             raise LookupError(f"no candidate with id {candidate_id}")
         repo, kind = RepoKey(str(candidates[0]["repo_key"])), CandidateKind(str(candidates[0]["candidate_kind"]))
         status = CandidateStatus(str(candidates[0]["status"]))
+        since = candidates[0]["resolved_at"] if int(candidates[0]["generation"]) > 1 else None
 
         accepted_cur = await conn.execute(
             f"""
@@ -612,8 +708,9 @@ FROM candidate_observations o
 JOIN {self.VERDICT_TABLE} v ON v.dedup_key = o.dedup_key AND v.role = 'judge' AND v.prompt_version = ?
 JOIN feedback_events e ON e.dedup_key = o.dedup_key
 WHERE o.candidate_id = ? AND v.{self.ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
+  AND (? IS NULL OR o.occurred_at > ?)
 """,
-            (self.versions.of(kind), candidate_id, settings.min_judge_confidence),
+            (self.versions.of(kind), candidate_id, settings.min_judge_confidence, since, since),
         )
         accepted = [dict(row) async for row in accepted_cur]
 
@@ -662,9 +759,12 @@ WHERE o.candidate_id = ? AND v.{self.ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
         Raises:
             LookupError: If no candidate carries ``candidate_id``.
         """
-        kind_cur = await self.store.conn.execute("SELECT candidate_kind FROM candidates WHERE id = ?", (candidate_id,))
-        if not (kinds := [str(row["candidate_kind"]) async for row in kind_cur]):
+        kind_cur = await self.store.conn.execute(
+            "SELECT candidate_kind, generation, resolved_at FROM candidates WHERE id = ?", (candidate_id,)
+        )
+        if not (rows := [dict(row) async for row in kind_cur]):
             raise LookupError(f"no candidate with id {candidate_id}")
+        since = rows[0]["resolved_at"] if int(rows[0]["generation"]) > 1 else None
         cur = await self.store.conn.execute(
             f"""
 WITH latest AS (
@@ -678,13 +778,19 @@ WITH latest AS (
 SELECT l.summary AS summary
 FROM candidate_observations o
 JOIN latest l ON l.dedup_key = o.dedup_key AND l.rn = 1
-WHERE o.candidate_id = ? AND l.accepted = 1 AND l.confidence >= ?
+WHERE o.candidate_id = ? AND l.accepted = 1 AND l.confidence >= ? AND (? IS NULL OR o.occurred_at > ?)
 ORDER BY l.confidence DESC, o.id DESC
 LIMIT 1
 """,
-            (self.versions.of(CandidateKind(kinds[0])), candidate_id, settings.min_judge_confidence),
+            (
+                self.versions.of(CandidateKind(str(rows[0]["candidate_kind"]))),
+                candidate_id,
+                settings.min_judge_confidence,
+                since,
+                since,
+            ),
         )
-        return str(rows[0]["summary"]) if (rows := [dict(row) async for row in cur]) else None
+        return str(summary_rows[0]["summary"]) if (summary_rows := [dict(row) async for row in cur]) else None
 
     async def correction_evidence(self, candidate_id: int) -> tuple[Correction, ...]:
         """Returns the shared-ledger code corrections grounding a candidate's observations.

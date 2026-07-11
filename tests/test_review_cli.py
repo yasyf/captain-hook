@@ -14,6 +14,7 @@ from captain_hook.review.cli import REVIEW_RUN_COMMAND, STATUS_CHOICES
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import CandidateKind, CandidateStatus, ReviewStore
+from captain_hook.review.sync import PrState
 from tests.helpers import run_cli
 from tests.review_helpers import (
     CORRECTION,
@@ -107,14 +108,16 @@ class TestGroupSurface:
 
 
 class TestEnableDisable:
-    def test_enable_watches_and_wires_session_end(self, git_repo: Path) -> None:
+    def test_enable_watches_and_wires_session_end_and_start(self, git_repo: Path) -> None:
         result = invoke("enable", root=git_repo)
         assert result.exit_code == 0, result.output
         assert f"watching {GIT_REPO_KEY}" in result.output
         assert asyncio.run(repo_watching(GIT_REPO_KEY)) is True
         data = json.loads((git_repo / ".claude" / "settings.json").read_text())
-        entries = [entry for group in data["hooks"]["SessionEnd"] for entry in group["hooks"]]
-        assert entries == [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}", "async": True}]
+        review_entry = {"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}", "async": True}
+        for event in ("SessionEnd", "SessionStart"):
+            entries = [entry for group in data["hooks"][event] for entry in group["hooks"]]
+            assert entries == [review_entry]
 
     def test_enable_registers_plugin(self, git_repo: Path) -> None:
         assert invoke("enable", root=git_repo).exit_code == 0
@@ -141,7 +144,7 @@ class TestEnableDisable:
         ]
         assert len(review_groups) == 1
 
-    def test_enable_defers_session_end_to_local_settings(self, git_repo: Path) -> None:
+    def test_enable_defers_session_end_to_local_settings_but_wires_session_start(self, git_repo: Path) -> None:
         claude = git_repo / ".claude"
         claude.mkdir(parents=True)
         (claude / "settings.local.json").write_text(
@@ -151,12 +154,16 @@ class TestEnableDisable:
         )
         result = invoke("enable", root=git_repo)
         assert result.exit_code == 0, result.output
-        assert "SessionEnd hook wired" not in result.output
         committed = claude / "settings.json"
-        groups = (
-            (json.loads(committed.read_text()).get("hooks") or {}).get("SessionEnd") or [] if committed.exists() else []
-        )
-        assert not any(REVIEW_RUN_COMMAND in entry["command"] for group in groups for entry in group["hooks"])
+        hooks = (json.loads(committed.read_text()).get("hooks") or {}) if committed.exists() else {}
+
+        def wired(event: str) -> bool:
+            return any(
+                REVIEW_RUN_COMMAND in entry["command"] for group in (hooks.get(event) or []) for entry in group["hooks"]
+            )
+
+        assert not wired("SessionEnd")
+        assert wired("SessionStart")
 
     def test_disable_unwatches(self, git_repo: Path) -> None:
         assert invoke("enable", root=git_repo).exit_code == 0
@@ -220,10 +227,10 @@ class TestScanAndTriage:
         calls = install_judge(monkeypatch)
         result = invoke("triage", root=scanned_repo)
         assert result.exit_code == 0, result.output
-        assert "judged 1, failed 0, pending 0, merged 1, retired 0" in result.output
+        assert "judged 1, failed 0, pending 0, merged 1, retired 0, reopened 0" in result.output
         assert len(calls) == 1
         again = invoke("triage", "--limit", "5", root=scanned_repo)
-        assert "judged 0, failed 0, pending 0, merged 0, retired 0" in again.output
+        assert "judged 0, failed 0, pending 0, merged 0, retired 0, reopened 0" in again.output
 
     @requires_llm_backend
     def test_triage_reports_possible_slug_splits(self, git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -233,7 +240,7 @@ class TestScanAndTriage:
         monkeypatch.setattr("cc_transcript.judge.similar.near_duplicate_keys", fake_splits)
         result = invoke("triage", root=git_repo)
         assert result.exit_code == 0, result.output
-        assert "judged 0, failed 0, pending 0, merged 0, retired 0" in result.output
+        assert "judged 0, failed 0, pending 0, merged 0, retired 0, reopened 0" in result.output
         assert "possible split: prefer-uv ~ use-uv-not-pip (0.93)" in result.output
 
 
@@ -284,7 +291,9 @@ class TestUpdateAndSyncPrs:
     def test_sync_prs_folds_gh_state(self, git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         url = "https://github.com/yasyf/scratch/pull/7"
         candidate_id = asyncio.run(seed_pr_open(url))
-        monkeypatch.setattr("captain_hook.review.sync.gh_pr_state", lambda _url: "MERGED")
+        monkeypatch.setattr(
+            "captain_hook.review.sync.gh_pr_state", lambda _url: PrState("MERGED", "2026-07-08T15:06:25Z")
+        )
         result = invoke("sync-prs", root=git_repo)
         assert result.exit_code == 0, result.output
         assert "accepted 1, rejected 0, stale 0, unreachable 0" in result.output

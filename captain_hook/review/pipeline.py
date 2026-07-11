@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
     from captain_hook.review.repo import RepoKey
     from captain_hook.review.settings import ReviewSettings
+    from captain_hook.review.store import ReviewStore
 
 SPAWNED_ENV = "CAPT_HOOK_SPAWNED"
 BRAIN_TIER: TModel = "medium"
@@ -50,6 +51,12 @@ class SpawnReport:
         failed: How many judge calls failed and stay pending.
         eligible: The candidate ids that crossed their PR thresholds.
         brain: Whether the headless brain was spawned.
+        brain_exit: The brain subprocess's exit code, or ``None`` when it did not run.
+        brain_seconds: The brain's wall-clock runtime in seconds, or ``None`` when it did not run.
+        brain_prs: How many candidates the brain moved into ``pr_open`` this pass.
+        synced_merged: How many open PRs merged, accepting their candidate.
+        synced_closed: How many open PRs closed, rejecting their candidate.
+        synced_kept: How many open PRs stayed open (fresh or ``gh``-unreachable).
     """
 
     repo: RepoKey | None
@@ -60,6 +67,27 @@ class SpawnReport:
     failed: int = 0
     eligible: tuple[int, ...] = ()
     brain: bool = False
+    brain_exit: int | None = None
+    brain_seconds: float | None = None
+    brain_prs: int = 0
+    synced_merged: int = 0
+    synced_closed: int = 0
+    synced_kept: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class BrainOutcome:
+    """The headless PR-drafting brain's run outcome for one reviewer pass.
+
+    Attributes:
+        exit_code: The brain subprocess's exit status.
+        seconds: The brain's wall-clock runtime in seconds.
+        log_path: The spawn log the brain's stdout and stderr appended to.
+    """
+
+    exit_code: int
+    seconds: float
+    log_path: Path
 
 
 def review_log_path() -> Path:
@@ -172,7 +200,7 @@ def brain_argv(*, max_turns: int, max_budget_usd: float) -> list[str]:
     ]
 
 
-def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) -> None:
+def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) -> BrainOutcome:
     """Runs the headless PR-drafting brain over the repo's eligible candidates.
 
     The argv comes from the spawnllm Claude backend with the permission mode
@@ -186,10 +214,15 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
         transcript: The just-ended session's transcript, named in the prompt.
         repo_root: The repo the brain works in.
         settings: The reviewer settings supplying the turn budget.
+
+    Returns:
+        The :class:`BrainOutcome` — exit code, runtime, and log path — the
+        status dashboard's health line reads to surface a silently failing brain.
     """
     (log_path := review_log_path()).parent.mkdir(parents=True, exist_ok=True)
+    started = datetime.now(UTC)
     with log_path.open("ab") as log:
-        subprocess.run(
+        proc = subprocess.run(
             brain_argv(max_turns=settings.brain_max_turns, max_budget_usd=settings.brain_max_budget_usd),
             input=brain_prompt(transcript).encode(),
             cwd=repo_root,
@@ -198,6 +231,15 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
             stderr=log,
             check=False,
         )
+    return BrainOutcome(
+        exit_code=proc.returncode, seconds=(datetime.now(UTC) - started).total_seconds(), log_path=log_path
+    )
+
+
+async def pr_open_ids(store: ReviewStore, repo: RepoKey) -> set[int]:
+    from captain_hook.review.store import CandidateStatus
+
+    return {int(str(row["id"])) for row in await store.candidates(repo, status=CandidateStatus.PR_OPEN)}
 
 
 async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings) -> SpawnReport:
@@ -206,7 +248,10 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
     Scan, judge, and PR sync run whenever the repo is watched — verdicts
     amortize per session, and summary-fidelity verdicts re-judge once their
     windows hydrate again — and the brain spawns only when at least one
-    candidate is eligible.
+    candidate is eligible. The scan sweeps the transcript's whole parent
+    directory through the mtime watermark, so ending one session also picks up
+    the corrections of every still-open sibling session in the same repo, while
+    the brain still acts only on the current cwd's eligible candidates.
 
     Args:
         transcript: The ended session's transcript file.
@@ -217,7 +262,7 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
         The :class:`SpawnReport` for this pass.
     """
     from captain_hook.review.judge import judge_pass
-    from captain_hook.review.scan import scan_transcript
+    from captain_hook.review.scan import scan
     from captain_hook.review.store import CandidateStatus, ReviewStore
     from captain_hook.review.sync import sync_open_prs
 
@@ -226,9 +271,9 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
     async with await ReviewStore.open(settings.db_path) as store:
         if not await store.watching(repo):
             return SpawnReport(repo=repo)
-        scan = await scan_transcript(store, transcript, settings=settings, repo_key=repo)
+        scan_report = await scan(store, settings=settings, transcripts=[transcript.parent])
         verdicts = await judge_pass(store, settings=settings, refresh_summary=True)
-        await sync_open_prs(store, repo, settings=settings)
+        sync = await sync_open_prs(store, repo, settings=settings)
         eligible = tuple(
             [
                 candidate_id
@@ -236,17 +281,27 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
                 if await store.eligible(candidate_id := int(str(row["id"])), settings=settings)
             ]
         )
-    if eligible:
-        spawn_brain(transcript, repo_root=Path(cwd), settings=settings)
+        opened_before = await pr_open_ids(store, repo)
+    outcome = spawn_brain(transcript, repo_root=Path(cwd), settings=settings) if eligible else None
+    brain_prs = 0
+    if outcome is not None:
+        async with await ReviewStore.open(settings.db_path) as store:
+            brain_prs = len(await pr_open_ids(store, repo) - opened_before)
     return SpawnReport(
         repo=repo,
         watching=True,
-        scanned=scan.scanned,
-        inserted=scan.inserted,
+        scanned=scan_report.scanned,
+        inserted=scan_report.inserted,
         judged=verdicts.judged,
         failed=verdicts.failed,
         eligible=eligible,
         brain=bool(eligible),
+        brain_exit=outcome.exit_code if outcome else None,
+        brain_seconds=outcome.seconds if outcome else None,
+        brain_prs=brain_prs,
+        synced_merged=sync.accepted,
+        synced_closed=sync.rejected,
+        synced_kept=sync.kept + sync.unreachable,
     )
 
 

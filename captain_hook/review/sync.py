@@ -29,6 +29,19 @@ GH_TIMEOUT = 30
 
 
 @dataclass(frozen=True, slots=True)
+class PrState:
+    """A PR's GitHub state as of one sync pass.
+
+    Attributes:
+        state: The ``gh`` state string — ``MERGED``, ``CLOSED``, or ``OPEN``.
+        merged_at: The merge timestamp when merged, else ``None``.
+    """
+
+    state: str
+    merged_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class SyncReport:
     """The outcome of one PR sync pass.
 
@@ -37,25 +50,28 @@ class SyncReport:
         rejected: How many candidates moved to rejected (PR closed).
         stale: How many candidates went stale (PR open too long).
         unreachable: How many PRs ``gh`` could not report on this pass.
+        kept: How many PRs stayed open, leaving their candidate untouched.
     """
 
     accepted: int
     rejected: int
     stale: int
     unreachable: int
+    kept: int = 0
 
 
-def gh_pr_state(url: str) -> str | None:
+def gh_pr_state(url: str) -> PrState | None:
     try:
         proc = subprocess.run(
-            ["gh", "pr", "view", url, "--json", "state"], capture_output=True, text=True, timeout=GH_TIMEOUT
+            ["gh", "pr", "view", url, "--json", "state,mergedAt"], capture_output=True, text=True, timeout=GH_TIMEOUT
         )
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
         return None
     try:
-        return str(json.loads(proc.stdout)["state"])
+        data = json.loads(proc.stdout)
+        return PrState(state=str(data["state"]), merged_at=data["mergedAt"])
     except (ValueError, KeyError):
         return None
 
@@ -78,21 +94,33 @@ async def sync_open_prs(store: ReviewStore, repo: RepoKey, *, settings: ReviewSe
     counts: Counter[str] = Counter()
     rows = await store.candidates(repo, status=CandidateStatus.PR_OPEN)
     states = await asyncio.gather(*(asyncio.to_thread(gh_pr_state, str(row["pr_url"])) for row in rows))
-    for row, state in zip(rows, states, strict=True):
+    for row, pr in zip(rows, states, strict=True):
         candidate_id, url = int(str(row["id"])), str(row["pr_url"])
-        match state:
-            case "MERGED":
+        match pr:
+            case PrState(state="MERGED", merged_at=merged_at):
                 await store.transition(candidate_id, CandidateStatus.ACCEPTED)
+                logger.bind(
+                    candidate_id=candidate_id, transition="pr_open->accepted", url=url, merged_at=merged_at
+                ).info("PR merged; candidate accepted")
                 counts["accepted"] += 1
-            case "CLOSED":
+            case PrState(state="CLOSED"):
                 await store.transition(candidate_id, CandidateStatus.REJECTED)
+                logger.bind(candidate_id=candidate_id, transition="pr_open->rejected", url=url).info(
+                    "PR closed; candidate rejected"
+                )
                 counts["rejected"] += 1
-            case "OPEN" if is_stale(str(row["pr_opened_at"]), days=settings.stale_after_days):
+            case PrState(state="OPEN") if is_stale(str(row["pr_opened_at"]), days=settings.stale_after_days):
                 await store.transition(candidate_id, CandidateStatus.STALE)
+                logger.bind(candidate_id=candidate_id, transition="pr_open->stale", url=url).info(
+                    "PR stale; candidate slot freed"
+                )
                 counts["stale"] += 1
-            case "OPEN":
-                pass
-            case state:
+            case PrState(state="OPEN"):
+                counts["kept"] += 1
+            case None:
+                logger.bind(url=url).warning("gh pr state unavailable; skipping")
+                counts["unreachable"] += 1
+            case PrState(state=state):
                 logger.bind(url=url, state=state).warning("gh pr state unavailable; skipping")
                 counts["unreachable"] += 1
     return SyncReport(
@@ -100,4 +128,5 @@ async def sync_open_prs(store: ReviewStore, repo: RepoKey, *, settings: ReviewSe
         rejected=counts["rejected"],
         stale=counts["stale"],
         unreachable=counts["unreachable"],
+        kept=counts["kept"],
     )

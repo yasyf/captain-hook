@@ -10,21 +10,23 @@ from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import CandidateKind, CandidateStatus, ReviewStore
-from captain_hook.review.sync import SyncReport, gh_pr_state, sync_open_prs
+from captain_hook.review.sync import PrState, SyncReport, gh_pr_state, sync_open_prs
 
 if TYPE_CHECKING:
     from typing import Any
 
 REPO = RepoKey("github.com/yasyf/captain-hook")
 OTHER_REPO = RepoKey("github.com/yasyf/other")
+MERGED_AT = "2026-07-08T15:06:25Z"
 
 
 def install_gh(monkeypatch: pytest.MonkeyPatch, states: dict[str, str | None]) -> list[str]:
     calls: list[str] = []
 
-    def fake(url: str) -> str | None:
+    def fake(url: str) -> PrState | None:
         calls.append(url)
-        return states[url]
+        state = states[url]
+        return None if state is None else PrState(state, merged_at=MERGED_AT if state == "MERGED" else None)
 
     monkeypatch.setattr("captain_hook.review.sync.gh_pr_state", fake)
     return calls
@@ -88,8 +90,29 @@ class TestSyncOpenPrs:
         url = "https://github.com/yasyf/captain-hook/pull/3"
         candidate_id = await open_pr(store, url, opened_days_ago=1)
         install_gh(monkeypatch, {url: "OPEN"})
-        assert await sync_open_prs(store, REPO, settings=settings) == SyncReport(0, 0, 0, 0)
+        assert await sync_open_prs(store, REPO, settings=settings) == SyncReport(0, 0, 0, 0, kept=1)
         assert await status_of(store, candidate_id) == CandidateStatus.PR_OPEN
+
+    async def test_merged_pr_stamps_resolved_at_on_the_accepted_candidate(
+        self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        url = "https://github.com/yasyf/captain-hook/pull/4"
+        candidate_id = await open_pr(store, url)
+        assert (await store.candidate(candidate_id))["resolved_at"] is None
+        install_gh(monkeypatch, {url: "MERGED"})
+        assert await sync_open_prs(store, REPO, settings=settings) == SyncReport(1, 0, 0, 0)
+        assert await status_of(store, candidate_id) == CandidateStatus.ACCEPTED
+        assert (await store.candidate(candidate_id))["resolved_at"] is not None
+
+    async def test_closed_pr_leaves_resolved_at_unstamped(
+        self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        url = "https://github.com/yasyf/captain-hook/pull/5"
+        candidate_id = await open_pr(store, url)
+        install_gh(monkeypatch, {url: "CLOSED"})
+        assert await sync_open_prs(store, REPO, settings=settings) == SyncReport(0, 1, 0, 0)
+        assert await status_of(store, candidate_id) == CandidateStatus.REJECTED
+        assert (await store.candidate(candidate_id))["resolved_at"] is None
 
     async def test_mixed_pass_counts_each_transition(
         self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
@@ -120,16 +143,27 @@ class TestSyncOpenPrs:
 
 
 class TestGhPrState:
-    def test_parses_state_from_gh_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_parses_state_and_merged_at_from_gh_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
         recorded: list[list[str]] = []
 
         def fake(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
             recorded.append(argv)
-            return subprocess.CompletedProcess(argv, 0, stdout='{"state": "MERGED"}', stderr="")
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=f'{{"state": "MERGED", "mergedAt": "{MERGED_AT}"}}', stderr=""
+            )
 
         monkeypatch.setattr("captain_hook.review.sync.subprocess.run", fake)
-        assert gh_pr_state("https://github.com/yasyf/captain-hook/pull/9") == "MERGED"
-        assert recorded == [["gh", "pr", "view", "https://github.com/yasyf/captain-hook/pull/9", "--json", "state"]]
+        assert gh_pr_state("https://github.com/yasyf/captain-hook/pull/9") == PrState("MERGED", MERGED_AT)
+        assert recorded == [
+            ["gh", "pr", "view", "https://github.com/yasyf/captain-hook/pull/9", "--json", "state,mergedAt"]
+        ]
+
+    def test_open_pr_reports_null_merged_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fake(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(argv, 0, stdout='{"state": "OPEN", "mergedAt": null}', stderr="")
+
+        monkeypatch.setattr("captain_hook.review.sync.subprocess.run", fake)
+        assert gh_pr_state("https://github.com/yasyf/captain-hook/pull/9") == PrState("OPEN", None)
 
     @pytest.mark.parametrize(
         ("behavior", "stdout"),

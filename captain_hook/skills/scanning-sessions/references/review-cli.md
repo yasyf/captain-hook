@@ -6,19 +6,24 @@ candidates regardless of cwd; commands taking `--repo` default to the repo conta
 the current directory.
 
 Candidate statuses: `watching → pr_open → {stale, accepted, rejected}`, plus a direct
-`watching → rejected` edge. That edge is the judge retiring a candidate whose evidence
-it rejected, so `rejected` no longer implies a closed PR — a judge-retired candidate
-never had one. `stale` can still move to `accepted`/`rejected`; `accepted`/`rejected`
-are terminal. Illegal moves fail with an error — there is no transition back to
-`watching`.
+`watching → rejected` edge and an `accepted → watching` reopen edge. The `watching →
+rejected` edge is the judge retiring a candidate whose evidence it rejected, so
+`rejected` no longer implies a closed PR — a judge-retired candidate never had one.
+`stale` can still move to `accepted`/`rejected`; `rejected` is terminal. An `accepted`
+fix candidate reopens to `watching` — its `generation` counter bumped and its `pr_url`
+(the prior, insufficient fix) kept — when a fresh judge-confirmed misfire lands after
+the fix merged; a reopened candidate then counts only evidence newer than the merge, so
+one strong recurrence re-qualifies it. Illegal moves fail with an error.
 
 ## Commands
 
 ### `review run`
 
-The wired SessionEnd hook entry, registered async (fire-and-forget). Reads the hook
-payload from stdin, guards, and detaches the reviewer child; always exits 0, and skips
-non-interactive `claude -p` session ends. Claude Code calls this — you never do.
+The wired SessionEnd and SessionStart hook entry, registered async (fire-and-forget).
+Reads the hook payload from stdin, guards, and detaches the reviewer child; always exits
+0, and skips non-interactive `claude -p` session ends. Wiring it to SessionStart as well
+means the next session start in a repo sweeps any still-open sibling session left running
+overnight. Claude Code calls this — you never do.
 
 ### `review spawn --transcript <path> [--cwd <dir>]` (hidden)
 
@@ -28,8 +33,9 @@ defaults to the process cwd. This is what spawned you; do not recurse into it.
 
 ### `review enable` / `review disable`
 
-`enable` marks the current repo watched and wires the SessionEnd hook into
-`.claude/settings.json` (idempotent), upgrading an already-wired hook to async.
+`enable` marks the current repo watched and wires the reviewer (`capt-hook review run`)
+into both the SessionEnd and SessionStart hooks in `.claude/settings.json` (idempotent,
+per event, deferring to a sibling `settings.local.json` that already carries either).
 `disable` stops watching; candidates stay recorded but never become eligible.
 
 ### `review scan [--transcript <file>]... [--dir <dir>]...`
@@ -48,13 +54,15 @@ other lane. `--limit` overrides the per-session call cap. Prints one report line
 then one line per near-duplicate slug pair the pass surfaced:
 
 ```
-judged N, failed N, pending N, merged M, retired R
+judged N, failed N, pending N, merged M, retired R, reopened R
 possible split: <slug-a> ~ <slug-b> (0.93)
 ```
 
 `merged` counts observations the closing regroup re-parented onto their canonical slug
 candidate; `retired` counts watching create candidates it rejected (every observation
-judged, none accepted). Failed rows stay pending and retry next pass. Each `possible
+judged, none accepted); `reopened` counts accepted fix candidates the pass returned to
+`watching` because a judge-confirmed misfire recurred after their fix merged. Failed rows
+stay pending and retry next pass. Each `possible
 split` line names two canonical slugs whose evidence nearly coincides — the judge may
 have minted two names for one rule — with their cosine similarity; nothing merges
 automatically.
@@ -82,8 +90,8 @@ of the earliest observation's verbatim text.
 ### `review show <ID>`
 
 Every column of one candidate's row (`repo_key`, `candidate_kind`, `rule`,
-`source_kind`, `status`, `pr_url`, `pr_opened_at`, `sample_text`, `observations`, ...)
-plus its threshold line:
+`source_kind`, `status`, `pr_url`, `pr_opened_at`, `generation`, `resolved_at`,
+`sample_text`, `observations`, ...) plus its threshold line:
 
 ```
 thresholds: sessions=3 days=2 open_prs=0 single_observation=False eligible=True
