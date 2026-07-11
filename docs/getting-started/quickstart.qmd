@@ -3,8 +3,8 @@ title: "Write your first hook in under five minutes"
 ---
 
 By the end, Claude Code stops your agent from finishing a UI change it never looked at, and you
-have a second hook that proves itself with a passing test — `uvx capt-hook test` prints two
-`PASS` lines and exits zero.
+have a second hook that proves itself with a passing test — `uvx capt-hook test` prints
+`5 passed` and exits zero.
 
 Before you begin, you need [uv installed](installation.qmd) and a project open in Claude Code.
 Every command runs through `uvx`, so nothing else is installed.
@@ -62,7 +62,8 @@ block_command(
 )
 ```
 
-Run the tests from your project root, where `--hooks` defaults to `.claude/hooks`:
+Run the tests from your project root, where `--hooks` defaults to `.claude/hooks`. The scaffolded
+`example.py` carries three cases of its own, so your two run alongside them:
 
 ```bash
 uvx capt-hook test
@@ -70,17 +71,21 @@ uvx capt-hook test
 
 ::: {.callout-tip title="Checkpoint"}
 ```
-  PASS  declarative_1:Input(command='git stash')
-  PASS  declarative_1:Input(command='git status')
+  PASS  example:hook_699f6d38:Input(command='rm -rf /', tool='Bash')
+  PASS  example:hook_699f6d38:Input(command='rm -rf build/', tool='Bash')
+  PASS  example:hook_699f6d38:Input(command='rm notes.txt', tool='Bash')
+  PASS  safety:hook_c10315f3:Input(command='git stash')
+  PASS  safety:hook_c10315f3:Input(command='git status')
 
-2 tests: 2 passed, 0 failed, 0 errors, 0 skipped
+5 tests: 5 passed, 0 failed, 0 errors, 0 skipped
 ```
 An import error instead means the hook file has a syntax problem — the traceback names the line.
 :::
 
+Each id is the hook file's stem plus a content hash, then the `Input` that produced the case.
 Break an expectation and the line flips to `FAIL` and the command exits non-zero. Drop the same
-check into CI and a regressed hook fails the build. LLM- and signal-based hooks can't run without
-a live model, so they report `SKIP` instead of failing.
+check into CI and a regressed hook fails the build. LLM-backed hooks run their tests against a
+stubbed verdict, so the whole suite stays deterministic.
 
 ## Next steps
 

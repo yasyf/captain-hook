@@ -41,15 +41,17 @@ uvx capt-hook test
 Each test prints one line, then a summary:
 
 ```
-  PASS  declarative_1:Input(command='git stash')
-  PASS  declarative_1:Input(command='git status')
+  PASS  no_stash:hook_9fd2dfd7:Input(command='git stash')
+  PASS  no_stash:hook_9fd2dfd7:Input(command='git status')
 
 2 tests: 2 passed, 0 failed, 0 errors, 0 skipped
 ```
 
 The id on each line is the hook's registered name, then a colon and the repr of the
-`Input` that produced the case; the repr prints only the fields you set. Declarative primitives such as `block_command` register as
-`declarative_N` in definition order. The command exits `0` when every test passes and `1`
+`Input` that produced the case; the repr prints only the fields you set. The registered
+name is the hook file's stem, the primitive kind, and eight hex characters of the
+message's SHA-256 — `no_stash:hook_9fd2dfd7` here — so it stays put when you reorder
+hooks or add new ones to the file. The command exits `0` when every test passes and `1`
 when any test fails or errors.
 
 ## Read a failure
@@ -64,8 +66,8 @@ Input(command="git stash"): Block(pattern="mercurial"),
 Run `uvx capt-hook test` again:
 
 ```
-  FAIL  declarative_1:Input(command='git stash'): [declarative_1] Block message 'BLOCKED: Use jj instead of git stash.' doesn't match 'mercurial'
-  PASS  declarative_1:Input(command='git status')
+  FAIL  no_stash:hook_9fd2dfd7:Input(command='git stash'): [no_stash:hook_9fd2dfd7] Block message 'BLOCKED: Use jj instead of git stash.' doesn't match 'mercurial'
+  PASS  no_stash:hook_9fd2dfd7:Input(command='git status')
 
 2 tests: 1 passed, 1 failed, 0 errors, 0 skipped
 ```
@@ -170,8 +172,8 @@ jobs:
 single line you can pipe into `jq` or read in another tool:
 
 ```json
-{"id": "declarative_1:Input(command='git stash')", "status": "pass", "expected": "block", "reason": ""}
-{"id": "declarative_1:Input(command='git status')", "status": "pass", "expected": "allow", "reason": ""}
+{"id": "no_stash:hook_9fd2dfd7:Input(command='git stash')", "status": "pass", "expected": "block", "reason": ""}
+{"id": "no_stash:hook_9fd2dfd7:Input(command='git status')", "status": "pass", "expected": "allow", "reason": ""}
 ```
 
 The fields are the test `id`, its `status` of `pass`, `fail`, `error`, or `skip`, the
