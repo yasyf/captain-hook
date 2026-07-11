@@ -144,6 +144,13 @@ uvx capt-hook review update <ID> pr_open --pr-url <url>
 git worktree remove "$worktree" --force
 ```
 
+Then tell the user — on macOS, fire a desktop notification carrying the PR url. Best-effort:
+a notification failure never fails the run.
+
+```bash
+[ "$(uname)" = Darwin ] && osascript -e 'display notification "<url>" with title "capt-hook review"' || true
+```
+
 A merged PR later moves the candidate to `accepted`, a closed one to `rejected` — both
 via `review sync-prs`, not by you.
 
