@@ -7,7 +7,7 @@ The Models rubric: implementation delegates to opus-4.8 at xhigh — opus is ~2x
 than fable and nearly as capable. Fable's lanes are orchestration, design/architecture
 review, hard planning, all prose/writing, and implementation that is very sensitive or
 error-prone (auth, migrations, concurrency, data loss, crypto, subtle algorithms).
-Code/diff review, security review/audit, and bug diagnosis have their own gpt-5.5
+Code/diff review, security review/audit, and bug diagnosis have their own gpt-5.6-sol
 lanes with separate nudges.
 
 Set fire=true only when the prompt is clearly routine implementation — building, fixing,
@@ -28,7 +28,7 @@ Well-scoped feature wiring; the default implementation lane.
 </example>
 <example fire="false">
 Review the diff for correctness and concurrency issues.
-Not implementation — review routes via its own nudge (gpt-5.5's lane), not to opus.
+Not implementation — review routes via its own nudge (gpt-5.6-sol's lane), not to opus.
 </example>
 <example fire="false">
 Design the migration strategy for the sharded session store.

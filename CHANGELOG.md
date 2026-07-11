@@ -4,6 +4,30 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A sync and an async dispatch of one event no longer race for a single once-token.**
+  The duplicate-dispatch guard keyed only on event name and payload, so the synchronous and
+  asynchronous `run <Event>` passes of one event — byte-identical stdin, but disjoint hook
+  sets, since `dispatch` filters on `spec.async_` — claimed the same token and one pass was
+  silently dropped. The claim key now carries the async variant, so each pass guards
+  independently and both run.
+- **`SessionEnd` dispatches async pack handlers.** The plugin's `hooks.json` wired
+  `SessionEnd` only to `uvx capt-hook review run`, which detaches the session reviewer and
+  never reaches `dispatch()`. A second entry, `uvx capt-hook run SessionEnd --async`, now
+  runs alongside it, so a pack's `async_=True` `SessionEnd` handler fires fleet-wide.
+
+## [9.1.0] - 2026-07-11
+
+### Changed
+- **The model-routing nudges route to gpt-5.6-sol (general pack 0.17.0).** OpenAI's
+  gpt-5.6 family replaces gpt-5.5 in the Models-table lanes: the review-routing,
+  workflow-routing, implementation-spawn, and inline-edit nudges (messages and LLM
+  rubrics) now name gpt-5.6-sol as the codex lane, and their declarative tests assert
+  the `gpt-5.6` family substring so a later variant swap doesn't churn them. The
+  security-noun prefilters are unchanged.
+
 ## [9.0.0] - 2026-07-10
 
 ### Changed (BREAKING)
@@ -1481,7 +1505,7 @@ compatibility shims.
 - Claude Code event types, condition types, transcript query API, workflows,
   session/workflow state, inline test harness, and the `captain-hook` CLI.
 
-[Unreleased]: https://github.com/yasyf/captain-hook/compare/v8.9.0...HEAD
+[Unreleased]: https://github.com/yasyf/captain-hook/compare/v9.0.0...HEAD
 [0.9.1]: https://github.com/yasyf/captain-hook/releases/tag/v0.9.1
 [0.9.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.9.0
 [0.8.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.8.0

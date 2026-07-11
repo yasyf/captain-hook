@@ -7,7 +7,7 @@ and written.
 
 The Models rubric: implementation belongs to a delegated opus-4.8 subagent at xhigh —
 ~2x cheaper than fable and nearly as capable — or, for a well-scoped edit to existing
-code, to gpt-5.5 via the codex skill. Fable edits inline when the change is small or
+code, to gpt-5.6-sol via the codex skill. Fable edits inline when the change is small or
 judgment-bound: a fix-up finishing work it just reasoned through, a subtle algorithm,
 or a sensitive surface (auth, migrations, concurrency, data loss, crypto).
 

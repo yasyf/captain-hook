@@ -1,5 +1,5 @@
 Decide whether this workflow script runs code review or bug diagnosis stages on
-fable that should route to gpt-5.5.
+fable that should route to gpt-5.6-sol.
 
 <workflow_script> holds the pending Workflow call's script source.
 {workflow_script_header}
@@ -7,7 +7,7 @@ fable that should route to gpt-5.5.
 The Models rubric: code/diff review stages — finder sweeps over a diff or codebase,
 adversarial refuters over findings — security review/audit stages and verification
 of security-sensitive code (auth, input validation, crypto, secrets), and bug
-diagnosis route to gpt-5.5 via the codex-wrapper agent. A stage does that correctly
+diagnosis route to gpt-5.6-sol via the codex-wrapper agent. A stage does that correctly
 when its agent() call pins agentType 'codex:codex-wrapper' and its prompt is the
 self-contained question (or pointers to the files/diff to gather plus the questions
 to answer). A stage that pins a Claude model and asks its agent to run the codex
