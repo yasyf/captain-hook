@@ -451,39 +451,7 @@ class TestMergeSettings:
         assert command_prefix(tmp_path, "/local/pkg") == "uvx --from /local/pkg capt-hook"
         assert command_prefix(tmp_path) == "uv run capt-hook"
 
-    def test_cli_040_migrate_from_rewrites_uvx_groups_to_shim(self, tmp_path: Path) -> None:
-        from captain_hook.cli import DEFAULT_PREFIX, command_prefix, merge_settings
-
-        register_hook(Event.PreToolUse, message="pre")
-        register_hook(Event.SessionEnd, message="end")
-        shim = "/home/me/.local/bin/capt-hook"
-        self.write_launcher(tmp_path, shim)  # ensure_tool_launcher just pinned the installed shim
-        sp = tmp_path / "settings.local.json"
-        self.seed(
-            sp,
-            {
-                "PreToolUse": [{"hooks": [{"type": "command", "command": "uvx capt-hook run PreToolUse"}]}],
-                "SessionEnd": [
-                    {
-                        "hooks": [
-                            {"type": "command", "command": "uvx capt-hook run SessionEnd"},
-                            {"type": "command", "command": "uvx capt-hook review run", "async": True},
-                        ]
-                    }
-                ],
-            },
-        )
-
-        merged, summary = merge_settings(".claude/hooks", sp, command_prefix(tmp_path), migrate_from=DEFAULT_PREFIX)
-        commands = [
-            h["command"] for ev in ("PreToolUse", "SessionEnd") for g in merged["hooks"][ev] for h in g["hooks"]
-        ]
-        assert commands
-        assert all(c.startswith(shim) for c in commands)
-        assert all("uvx capt-hook" not in c for c in commands)
-        assert summary["PreToolUse"] == "updated"  # canonical-under-DEFAULT rewritten, never "custom"
-
-    def test_cli_041_uvx_stays_custom_without_migrate_from(self, tmp_path: Path) -> None:
+    def test_cli_040_uvx_stays_custom_under_hand_set_launcher(self, tmp_path: Path) -> None:
         from captain_hook.cli import command_prefix, merge_settings
 
         register_hook(Event.PreToolUse, message="pre")
@@ -491,96 +459,11 @@ class TestMergeSettings:
         sp = tmp_path / "settings.local.json"
         self.seed(sp, {"PreToolUse": [{"hooks": [{"type": "command", "command": "uvx capt-hook run PreToolUse"}]}]})
 
-        merged, summary = merge_settings(".claude/hooks", sp, command_prefix(tmp_path))  # no migrate_from
+        merged, summary = merge_settings(".claude/hooks", sp, command_prefix(tmp_path))
         assert any(
             h["command"] == "uvx capt-hook run PreToolUse" for g in merged["hooks"]["PreToolUse"] for h in g["hooks"]
         )
-        assert summary["PreToolUse"] == "custom"  # classification is not widened without migrate_from
-
-
-class TestEnsureToolLauncher:
-    @staticmethod
-    def fake_uv(bin_dir: Path, calls: list[list[str]]):
-        import subprocess
-
-        def run(cmd: list[str], *args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-            calls.append(cmd)
-            if cmd[:4] == ["uv", "tool", "dir", "--bin"]:
-                return subprocess.CompletedProcess(cmd, 0, stdout=f"{bin_dir}\n", stderr="")
-            if cmd[:2] == ["uv", "tool"] and cmd[2] in ("install", "upgrade"):
-                (bin_dir / "capt-hook").write_text("#!shim\n")
-                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-            raise AssertionError(f"unexpected uv call: {cmd}")
-
-        return run
-
-    def wire_uv(self, monkeypatch: pytest.MonkeyPatch, bin_dir: Path, *, present: bool = True) -> list[list[str]]:
-        import captain_hook.cli as cli
-
-        monkeypatch.delenv("CAPT_HOOK_NO_TOOL_LAUNCHER", raising=False)
-        monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/uv" if present else None)
-        calls: list[list[str]] = []
-        monkeypatch.setattr(cli.subprocess, "run", self.fake_uv(bin_dir, calls))
-        return calls
-
-    def test_cli_042_installs_and_pins_shim(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from captain_hook.cli import ensure_tool_launcher
-        from captain_hook.packs import manager
-
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        calls = self.wire_uv(monkeypatch, bin_dir)
-
-        shim = ensure_tool_launcher(tmp_path)
-        assert shim == str(bin_dir / "capt-hook")
-        assert manager.read_launcher(manager.packs_toml_path(tmp_path)) == shim
-        assert ["uv", "tool", "install", "capt-hook"] in calls  # fresh shim → install, not upgrade
-
-    def test_cli_043_upgrades_when_shim_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from captain_hook.cli import ensure_tool_launcher
-
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        (bin_dir / "capt-hook").write_text("#!existing\n")
-        calls = self.wire_uv(monkeypatch, bin_dir)
-
-        ensure_tool_launcher(tmp_path)
-        assert ["uv", "tool", "upgrade", "capt-hook"] in calls
-        assert ["uv", "tool", "install", "capt-hook"] not in calls
-
-    def test_cli_044_custom_launcher_short_circuits(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from captain_hook.cli import ensure_tool_launcher
-        from captain_hook.packs import manager
-
-        launcher = 'uv run --project "$CLAUDE_PROJECT_DIR" capt-hook'
-        manager.write_launcher(manager.packs_toml_path(tmp_path), launcher)
-        calls = self.wire_uv(monkeypatch, tmp_path / "bin")
-
-        assert ensure_tool_launcher(tmp_path) is None  # this repo's .venv launcher stays untouched
-        assert calls == []  # never shells out to uv
-        assert manager.read_launcher(manager.packs_toml_path(tmp_path)) == launcher
-
-    def test_cli_045_returns_none_when_uv_absent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from captain_hook.cli import ensure_tool_launcher
-        from captain_hook.packs import manager
-
-        self.wire_uv(monkeypatch, tmp_path / "bin", present=False)
-
-        assert ensure_tool_launcher(tmp_path) is None  # keeps the uvx default
-        assert manager.read_launcher(manager.packs_toml_path(tmp_path)) is None
-
-    def test_cli_046_env_gate_short_circuits(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        import captain_hook.cli as cli
-        from captain_hook.cli import ensure_tool_launcher
-        from captain_hook.packs import manager
-
-        monkeypatch.setenv("CAPT_HOOK_NO_TOOL_LAUNCHER", "1")
-        monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/uv")
-        monkeypatch.setattr(cli.subprocess, "run", self.fake_uv(tmp_path / "bin", calls := []))
-
-        assert ensure_tool_launcher(tmp_path) is None
-        assert calls == []
-        assert manager.read_launcher(manager.packs_toml_path(tmp_path)) is None
+        assert summary["PreToolUse"] == "custom"  # old canonical entries are preserved, never rewritten
 
 
 class TestSettingsDrift:

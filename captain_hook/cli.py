@@ -170,26 +170,6 @@ def command_prefix(root: Path, from_source: str = DIST_NAME) -> str:
     return manager.read_launcher(manager.packs_toml_path(root)) or DEFAULT_PREFIX
 
 
-def ensure_tool_launcher(root: Path) -> str | None:
-    """Install capt-hook as a uv tool and pin its shim as the launcher, then return the shim path.
-
-    A no-op that keeps the ``uvx capt-hook`` default when a custom launcher already
-    wins or ``uv`` is absent (a capability difference, not a fallback) — returns None
-    in both cases. Re-running upgrades the tool in place. Never invoked under ``--dry-run``.
-    """
-    if os.environ.get("CAPT_HOOK_NO_TOOL_LAUNCHER") or manager.read_launcher(manager.packs_toml_path(root)):
-        return None
-    if not shutil.which("uv"):
-        return None
-    bin_dir = Path(
-        subprocess.run(["uv", "tool", "dir", "--bin"], capture_output=True, text=True, check=True).stdout.strip()
-    )
-    shim = bin_dir / DIST_NAME
-    subprocess.run(["uv", "tool", "upgrade" if shim.exists() else "install", DIST_NAME], check=True)
-    manager.write_launcher(manager.packs_toml_path(root), str(shim))
-    return str(shim)
-
-
 def hooks_flag(hooks_dir: str) -> str:
     return "" if hooks_dir == ".claude/hooks" else f" --hooks $CLAUDE_PROJECT_DIR/{hooks_dir}"
 
@@ -260,12 +240,10 @@ def sibling_settings(path: Path) -> Path:
 
 
 def merge_settings(
-    hooks_dir: str, settings_path: Path, prefix: str = DEFAULT_PREFIX, *, migrate_from: str | None = None
+    hooks_dir: str, settings_path: Path, prefix: str = DEFAULT_PREFIX
 ) -> tuple[dict[str, Any], dict[str, str]]:
     new_hooks: dict[str, list[dict[str, Any]]] = generate_settings(hooks_dir, prefix=prefix)["hooks"]
-    rendered = rendered_commands(hooks_dir, prefix) | (
-        rendered_commands(hooks_dir, migrate_from) if migrate_from else frozenset()
-    )
+    rendered = rendered_commands(hooks_dir, prefix)
     existing = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     existing_hooks: dict[str, list[dict[str, Any]]] = existing.get("hooks") or {}
     deferred = capt_hook_events(sibling_settings(settings_path))
@@ -444,10 +422,7 @@ def init_project(root: Path, *, review: bool = True) -> None:
 
     settings_path = root / ".claude" / "settings.json"
     resolved = CliState(root=root, hooks=str(hooks_dir)).discover()
-    shim = ensure_tool_launcher(root)
-    merged, summary = merge_settings(
-        ".claude/hooks", settings_path, command_prefix(root), migrate_from=DEFAULT_PREFIX if shim else None
-    )
+    merged, summary = merge_settings(".claude/hooks", settings_path, command_prefix(root))
     write_settings(settings_path, merged)
     provision_nlp(resolved)
 
@@ -637,10 +612,7 @@ def register_hooks_cmd(state: CliState, hooks_dir: str, dry_run: bool, from_sour
     """Register captain-hook's event hooks into .claude/settings.json."""
     resolved = state.discover()
     settings_path = state.root / ".claude" / "settings.json"
-    shim = None if dry_run or from_source != DIST_NAME else ensure_tool_launcher(state.root)
-    merged, summary = merge_settings(
-        hooks_dir, settings_path, command_prefix(state.root, from_source), migrate_from=DEFAULT_PREFIX if shim else None
-    )
+    merged, summary = merge_settings(hooks_dir, settings_path, command_prefix(state.root, from_source))
     if dry_run:
         click.echo(json.dumps(merged, indent=2))
         return

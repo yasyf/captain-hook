@@ -291,11 +291,6 @@ def delete_entry(path: Path, name: str) -> None:
     atomic_write(path, render_packs_toml([e for e in entries if e.name != name], read_launcher(path)))
 
 
-def write_launcher(path: Path, launcher: str) -> None:
-    """Set or replace the ``launcher`` line in ``path``, preserving its pack entries."""
-    atomic_write(path, render_packs_toml(read_entries(path), launcher))
-
-
 def packs_cache_root() -> Path:
     return resolve_cache_dir() / "packs"
 
