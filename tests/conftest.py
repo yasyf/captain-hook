@@ -108,9 +108,16 @@ def isolate_modules():
     snapshot_modules = set(sys.modules.keys())
     snapshot_path = sys.path[:]
     yield
-    for key in set(sys.modules.keys()) - snapshot_modules:
+    removed = set(sys.modules.keys()) - snapshot_modules
+    for key in removed:
         del sys.modules[key]
     sys.path[:] = snapshot_path
+    # Removing a submodule leaves the root package's PEP 562 __getattr__ cache pinned to the
+    # orphaned object; drop cached exports sourced from a removed module so they re-resolve.
+    if (root := sys.modules.get("captain_hook")) is not None:
+        for name, target in root._EXPORTS.items():
+            if target in removed:
+                root.__dict__.pop(name, None)
 
 
 @pytest.fixture
