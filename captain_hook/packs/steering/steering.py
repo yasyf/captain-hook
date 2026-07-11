@@ -47,20 +47,24 @@ nudge(
     skip_if=[TypeCheckerContext()],
     signals=Signals(
         [
-            Signal(pattern=r"(?i)(?:pre-existing|preexisting)", weight=1),
+            Signal(
+                pattern=(
+                    r"(?i)(?:pre-?existing|already (?:existed|present|broken)"
+                    r"|(?:existing|known|old) (?:issue|bug|problem|failure)s?)"
+                ),
+                weight=1,
+            ),
             Signal(pattern=r"(?i)(?:outside|beyond) (?:the )?scope", weight=1),
             NlpSignal(
                 clauses=[
                     Clause(noun=Phrase.expand("change"), verb=Phrase("cause", "introduce"), negated=True),
-                    Clause(noun=Phrase.expand("issue"), verb=Phrase("leave")),
+                    Clause(
+                        noun=Phrase("issue", "bug", "problem", "error", "failure", "test", "violation", "warning"),
+                        verb=Phrase("leave"),
+                        tense="prospective",
+                    ),
                 ],
                 weight=2,
-            ),
-            NlpSignal(
-                clauses=[
-                    Clause(noun=Phrase.expand("issue"), adj=Phrase("existing", "present", "previous")),
-                ],
-                weight=1,
             ),
         ],
         threshold=2,
@@ -250,6 +254,207 @@ nudge(
                                 ),
                             }
                         ]
+                    },
+                }
+            ]
+        ): Warn(),
+        # FIX-mode regression matrix (misfires watched live 2026-07-10); message byte-identical.
+        # m1 briefing-quote: dismissal quoted into a subagent briefing arrives user-role -> origin drop
+        Input(
+            transcript=[
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Review this transcript excerpt for whether the nudge should have fired:\n"
+                                    "> That's a pre-existing issue, not caused by my change. I'll leave the broken "
+                                    "test as is since it's beyond the scope of my change.\n"
+                                    "Report your assessment."
+                                ),
+                            }
+                        ]
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "Starting the review of that excerpt now."}]},
+                },
+            ]
+        ): Allow(),
+        # m2 TaskUpdate-description: misfire note (PROSE_TOOLS path) scores "pre-existing" once post-merge
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_upd",
+                                "name": "TaskUpdate",
+                                "input": {
+                                    "subject": "Investigate steering nudge misfire",
+                                    "description": (
+                                        "The pre-existing issue nudge fired again on a quoted transcript; "
+                                        "capturing the offending shape for the fix."
+                                    ),
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        # m3 salvage-assessment: salvage-vs-rerun reasoning naming the misfire scores "pre-existing" once
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Ignoring the pre-existing issue with the hook misfires for a moment — I'm "
+                                    "assessing the partial work to decide whether to salvage the existing progress "
+                                    "or rerun from scratch."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        # m4 quoted-fixture: this file's own fixtures read back arrive user-role -> origin drop
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "Reading the steering pack fixtures."}]},
+                },
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "steering.py fixtures:\n"
+                                    "  \"Let's just leave the login issue for now; it's pre-existing and beyond "
+                                    "the scope of my change.\"  -> Warn()\n"
+                                    "  \"That's a pre-existing issue, not caused by my change.\"  -> Warn()"
+                                ),
+                            }
+                        ]
+                    },
+                },
+            ]
+        ): Allow(),
+        # m5 self-echo: the nudge's own opening sentence echoed back scores "pre-existing" once post-merge
+        # (verbatim cross-turn echoes are additionally damped by echo_verbatim on a real dispatch, 8.18.0)
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "You appear to be dismissing a pre-existing issue rather than fixing it. "
+                                    "Acknowledged — I'll actually fix it."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        # m6 user-origin: full dismissal in a user message (scores 4 as assistant prose) -> origin drop
+        Input(
+            transcript=[
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "That's a pre-existing issue, not caused by my change, and it's beyond the "
+                                    "scope of my change — I'll leave the broken test as is."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        # fl1 fire-log completion: past-tense "left" (VBD) is not a prospective leave
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Fixed the failing test and left the flaky one documented in the tracking "
+                                    "issue so we can revisit it deliberately."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        # fl2 fire-log completion: real report, "pre-existing" scored once + past "left" not matched
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Landed the parser fix; I left the pre-existing lint warnings alone since they "
+                                    "predate this change, and all 42 tests pass."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        # tp_existing_issue: genuine dismissal pairing "pre-existing" with change-not-caused still warns
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "That's a pre-existing issue, not caused by my change — I'm not going to touch it."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Warn(),
+        # tp_prospective_leave: genuine prospective dismissal ("I'll leave the broken test") still warns
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [{"type": "text", "text": "I'll leave the broken test as is."}]
                     },
                 }
             ]
