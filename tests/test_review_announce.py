@@ -1,0 +1,282 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import pytest
+from cc_transcript.mining.sourcekind import SourceKind
+
+from captain_hook.review.announce import (
+    ANNOUNCE_PREFIX,
+    announcement_line,
+    collect_announcements,
+    pending_announcements,
+)
+from captain_hook.review.repo import RepoKey
+from captain_hook.review.store import CandidateKind, CandidateStatus, ReviewStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+REPO = RepoKey("github.com/yasyf/scratch")
+PACK_REPO = RepoKey("github.com/yasyf/captain-hook")
+PR_URL = "https://github.com/yasyf/scratch/pull/9"
+PACK_PR_URL = "https://github.com/yasyf/captain-hook/pull/3"
+
+
+async def create_pr_open(store: ReviewStore, *, repo: RepoKey = REPO, url: str = PR_URL) -> int:
+    candidate_id = await store.ensure_candidate(
+        repo, kind=CandidateKind.CREATE, rule="r", source_kind=SourceKind("transcript_message")
+    )
+    await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=url)
+    return candidate_id
+
+
+async def pack_fix_pr_open(store: ReviewStore) -> int:
+    candidate_id = await store.ensure_candidate(
+        PACK_REPO,
+        kind=CandidateKind.FIX,
+        rule="misfire",
+        source_kind=SourceKind("hook_complaint"),
+        target_source_file="captain_hook/packs/general/docs.py",
+        target_hook_name="general.docs:nudge_1",
+        misfire_class="refire",
+        origin_repo_key=REPO,
+        pack_name="general",
+    )
+    await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=PACK_PR_URL)
+    return candidate_id
+
+
+class TestAnnouncementLine:
+    @pytest.mark.parametrize(
+        ("row", "status", "expected"),
+        [
+            pytest.param(
+                {"pr_url": PR_URL, "origin_repo_key": None, "repo_key": REPO},
+                CandidateStatus.PR_OPEN,
+                f"{ANNOUNCE_PREFIX} a hook PR is awaiting your review — {PR_URL}",
+                id="same_repo_pr_open",
+            ),
+            pytest.param(
+                {
+                    "pr_url": PACK_PR_URL,
+                    "origin_repo_key": REPO,
+                    "repo_key": PACK_REPO,
+                    "pack_name": "general",
+                    "target_hook_name": "general.docs:nudge_1",
+                },
+                CandidateStatus.PR_OPEN,
+                f"{ANNOUNCE_PREFIX} a fix PR is open against {PACK_REPO} for pack 'general' "
+                f"hook general.docs:nudge_1, which misfired here — {PACK_PR_URL}",
+                id="cross_repo_pr_open",
+            ),
+            pytest.param(
+                {"pr_url": PR_URL, "origin_repo_key": None, "repo_key": REPO},
+                CandidateStatus.ACCEPTED,
+                f"{ANNOUNCE_PREFIX} the hook fix PR was merged — {PR_URL}",
+                id="accepted_merged",
+            ),
+            pytest.param(
+                {"pr_url": PR_URL, "origin_repo_key": None, "repo_key": REPO},
+                CandidateStatus.REJECTED,
+                f"{ANNOUNCE_PREFIX} the hook fix PR was closed without merging — {PR_URL}",
+                id="rejected_closed",
+            ),
+            pytest.param(
+                {"pr_url": PR_URL, "origin_repo_key": None, "repo_key": REPO},
+                CandidateStatus.STALE,
+                f"{ANNOUNCE_PREFIX} the hook fix PR has gone quiet with no decision yet — {PR_URL}",
+                id="stale_quiet",
+            ),
+        ],
+    )
+    def test_line_copy(self, row: dict[str, object], status: CandidateStatus, expected: str) -> None:
+        assert announcement_line(row, status) == expected
+
+
+class TestPendingAnnouncements:
+    async def test_same_repo_pr_open_announced_once(self, store: ReviewStore) -> None:
+        await create_pr_open(store)
+        assert await pending_announcements(store, REPO) == [
+            f"{ANNOUNCE_PREFIX} a hook PR is awaiting your review — {PR_URL}"
+        ]
+        assert await pending_announcements(store, REPO) == []
+
+    async def test_cross_repo_pack_fix_matched_by_origin(self, store: ReviewStore) -> None:
+        await pack_fix_pr_open(store)
+        [line] = await pending_announcements(store, REPO)
+        assert line == (
+            f"{ANNOUNCE_PREFIX} a fix PR is open against {PACK_REPO} for pack 'general' "
+            f"hook general.docs:nudge_1, which misfired here — {PACK_PR_URL}"
+        )
+        assert await pending_announcements(store, PACK_REPO) == []
+
+    async def test_status_change_reannounces(self, store: ReviewStore) -> None:
+        candidate_id = await create_pr_open(store)
+        assert len(await pending_announcements(store, REPO)) == 1
+        await store.transition(candidate_id, CandidateStatus.ACCEPTED)
+        assert await pending_announcements(store, REPO) == [f"{ANNOUNCE_PREFIX} the hook fix PR was merged — {PR_URL}"]
+
+    @pytest.mark.parametrize("status", [CandidateStatus.WATCHING, CandidateStatus.REJECTED])
+    async def test_no_pr_url_never_announced(self, store: ReviewStore, status: CandidateStatus) -> None:
+        candidate_id = await store.ensure_candidate(
+            REPO, kind=CandidateKind.CREATE, rule="r", source_kind=SourceKind("transcript_message")
+        )
+        if status is CandidateStatus.REJECTED:
+            await store.transition(candidate_id, CandidateStatus.REJECTED)
+        assert await pending_announcements(store, REPO) == []
+
+    async def test_mark_announced_persists_across_reopen(self, store: ReviewStore) -> None:
+        # A brand-new store baselines nothing, so a freshly-transitioned candidate is
+        # announced; a re-open of the same DB must still see it marked (single write path).
+        await create_pr_open(store)
+        assert len(await pending_announcements(store, REPO)) == 1
+        rows = await store.candidates(REPO)
+        assert rows[0]["announced_status"] == CandidateStatus.PR_OPEN
+
+
+class TestCollectAnnouncements:
+    @pytest.fixture
+    def review_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        db = tmp_path / "review.db"
+        monkeypatch.setenv("HOOKS_REVIEW_DB_PATH", str(db))
+        return db
+
+    async def _seed(self, db: Path) -> None:
+        async with await ReviewStore.open(db) as store:
+            await create_pr_open(store)
+
+    def test_returns_line_for_the_session_repo(self, review_db: Path, git_repo: Path) -> None:
+        import asyncio
+
+        asyncio.run(self._seed(review_db))
+        message = collect_announcements(git_repo)
+        assert message is not None
+        assert "awaiting your review" in message
+
+    def test_silent_when_no_review_db(self, review_db: Path, git_repo: Path) -> None:
+        assert not review_db.exists()
+        assert collect_announcements(git_repo) is None
+
+    def test_silent_outside_a_git_repo(self, review_db: Path, tmp_path: Path) -> None:
+        import asyncio
+
+        asyncio.run(self._seed(review_db))
+        assert collect_announcements(tmp_path) is None
+
+    def test_silent_when_spawned(self, review_db: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import asyncio
+
+        asyncio.run(self._seed(review_db))
+        monkeypatch.setenv("CAPT_HOOK_SPAWNED", "1")
+        assert collect_announcements(git_repo) is None
+
+
+class TestSessionStartDispatch:
+    def test_announcement_lands_in_additional_context(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import asyncio
+
+        from captain_hook.dispatch import dispatch
+        from captain_hook.events import SessionStartEvent
+        from captain_hook.loader import register_pr_announcements
+        from captain_hook.types import Event
+        from tests.helpers import build_ctx
+
+        db = tmp_path / "review.db"
+        monkeypatch.setenv("HOOKS_REVIEW_DB_PATH", str(db))
+
+        async def seed() -> None:
+            async with await ReviewStore.open(db) as store:
+                await create_pr_open(store)
+
+        asyncio.run(seed())
+
+        register_pr_announcements()
+        evt = SessionStartEvent(_raw={"source": "startup"}, ctx=build_ctx(project_root=git_repo))
+        output = dispatch(Event.SessionStart, evt, session_dir=tmp_path / "session")
+        assert output is not None
+        assert "awaiting your review" in output["hookSpecificOutput"]["additionalContext"]
+
+    def test_no_output_when_repo_has_no_review_db(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from captain_hook.dispatch import dispatch
+        from captain_hook.events import SessionStartEvent
+        from captain_hook.loader import register_pr_announcements
+        from captain_hook.types import Event
+        from tests.helpers import build_ctx
+
+        monkeypatch.setenv("HOOKS_REVIEW_DB_PATH", str(tmp_path / "absent.db"))
+        register_pr_announcements()
+        evt = SessionStartEvent(_raw={"source": "startup"}, ctx=build_ctx(project_root=git_repo))
+        assert dispatch(Event.SessionStart, evt, session_dir=tmp_path / "session") is None
+
+
+class TestReviewerWired:
+    @staticmethod
+    def write(root: Path, hooks: dict[str, object]) -> None:
+        import json
+
+        (claude := root / ".claude").mkdir(parents=True, exist_ok=True)
+        (claude / "settings.json").write_text(json.dumps({"hooks": hooks}))
+
+    def test_true_when_review_run_wired_on_session_start(self, tmp_path: Path) -> None:
+        from captain_hook.cli import reviewer_wired
+
+        self.write(
+            tmp_path,
+            {"SessionStart": [{"hooks": [{"type": "command", "command": "uvx capt-hook review run", "async": True}]}]},
+        )
+        assert reviewer_wired(tmp_path) is True
+
+    def test_false_when_review_run_only_on_session_end(self, tmp_path: Path) -> None:
+        from captain_hook.cli import reviewer_wired
+
+        self.write(
+            tmp_path,
+            {"SessionEnd": [{"hooks": [{"type": "command", "command": "uvx capt-hook review run", "async": True}]}]},
+        )
+        assert reviewer_wired(tmp_path) is False
+
+    def test_false_without_settings(self, tmp_path: Path) -> None:
+        from captain_hook.cli import reviewer_wired
+
+        assert reviewer_wired(tmp_path) is False
+
+
+class TestDiscoverRegistration:
+    @staticmethod
+    def make_repo(tmp_path: Path, *, review_wired: bool) -> Path:
+        import json
+
+        (hooks := tmp_path / ".claude" / "hooks").mkdir(parents=True)
+        (hooks / "__init__.py").write_text("")
+        if review_wired:
+            (tmp_path / ".claude" / "settings.json").write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            "SessionStart": [
+                                {"hooks": [{"type": "command", "command": "uvx capt-hook review run", "async": True}]}
+                            ]
+                        }
+                    }
+                )
+            )
+        return hooks
+
+    def test_discover_registers_sync_session_start_when_reviewer_wired(self, tmp_path: Path) -> None:
+        from captain_hook.cli import CliState, subscribed_modes
+
+        hooks = self.make_repo(tmp_path, review_wired=True)
+        CliState(root=tmp_path, hooks=str(hooks)).discover()
+        assert ("SessionStart", False) in subscribed_modes()
+
+    def test_discover_skips_announcer_without_reviewer(self, tmp_path: Path) -> None:
+        from captain_hook.cli import CliState, subscribed_modes
+
+        hooks = self.make_repo(tmp_path, review_wired=False)
+        CliState(root=tmp_path, hooks=str(hooks)).discover()
+        assert ("SessionStart", False) not in subscribed_modes()

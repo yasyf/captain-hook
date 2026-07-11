@@ -19,6 +19,7 @@ from captain_hook.types import Event
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
+    from captain_hook.types import HookResult
 
 CONF_MODULE = "conf"
 
@@ -122,6 +123,24 @@ def register_nlp_provisioning() -> None:
         from captain_hook.util.model_cache import ensure_nlp_resources
 
         ensure_nlp_resources()
+
+
+def register_pr_announcements() -> None:
+    """Register the shared sync SessionStart hook that surfaces changed PR outcomes to the user.
+
+    Called once per discovery pass when the repo has the reviewer wired, so both event
+    dispatch and settings generation see it. The detached reviewer opens and resolves
+    hook PRs on its own; this hook is how a session start tells the user what happened.
+    """
+
+    @on(Event.SessionStart, max_fires=1)
+    def announce_pr_status(evt: BaseHookEvent) -> HookResult | None:
+        from captain_hook.review.announce import collect_announcements
+        from captain_hook.types import Action, HookResult
+
+        if message := collect_announcements(evt.ctx.project_root):
+            return HookResult(action=Action.warn, message=message)
+        return None
 
 
 def discover_pack(name: str, pack_dir: Path) -> None:

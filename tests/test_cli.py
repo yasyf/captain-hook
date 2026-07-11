@@ -466,6 +466,53 @@ class TestMergeSettings:
         assert summary["PreToolUse"] == "custom"  # old canonical entries are preserved, never rewritten
 
 
+class TestReviewRunPreservation:
+    REVIEW_GROUP = {"hooks": [{"type": "command", "command": "uvx capt-hook review run", "async": True}]}
+
+    @staticmethod
+    def seed(path: Path, hooks: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"hooks": hooks}))
+
+    def test_session_start_review_run_survives_register_hooks(self, tmp_path: Path) -> None:
+        # `review enable` wires `review run` onto SessionStart; a later register-hooks must not strip it.
+        from captain_hook.cli import merge_settings
+
+        register_hook(Event.SessionStart, message="announce", async_=False)
+        sp = tmp_path / "settings.json"
+        self.seed(sp, {"SessionStart": [self.REVIEW_GROUP]})
+
+        merged, _ = merge_settings(".claude/hooks", sp)
+        commands = [h["command"] for g in merged["hooks"]["SessionStart"] for h in g["hooks"]]
+        assert "uvx capt-hook review run" in commands
+        assert "uvx capt-hook run SessionStart" in commands
+
+    def test_preservation_is_idempotent(self, tmp_path: Path) -> None:
+        from captain_hook.cli import merge_settings, write_settings
+
+        register_hook(Event.SessionStart, message="announce", async_=False)
+        sp = tmp_path / "settings.json"
+        self.seed(sp, {"SessionStart": [self.REVIEW_GROUP]})
+
+        write_settings(sp, merge_settings(".claude/hooks", sp)[0])
+        merged, summary = merge_settings(".claude/hooks", sp)
+        commands = [h["command"] for g in merged["hooks"]["SessionStart"] for h in g["hooks"]]
+        assert commands.count("uvx capt-hook review run") == 1
+        assert summary["SessionStart"] == "unchanged"
+
+    def test_session_end_review_run_not_duplicated(self, tmp_path: Path) -> None:
+        # SessionEnd's review-run is re-emitted by generate_settings, so preservation adds no second copy.
+        from captain_hook.cli import merge_settings
+
+        sp = tmp_path / "settings.json"
+        self.seed(sp, {"SessionEnd": [self.REVIEW_GROUP]})
+
+        merged, summary = merge_settings(".claude/hooks", sp)
+        commands = [h["command"] for g in merged["hooks"]["SessionEnd"] for h in g["hooks"]]
+        assert commands == ["uvx capt-hook review run"]
+        assert summary["SessionEnd"] == "unchanged"
+
+
 class TestSettingsDrift:
     @staticmethod
     def write_settings(root: Path, *wired_events: str) -> None:
@@ -519,6 +566,63 @@ class TestSettingsDrift:
         from captain_hook.cli import settings_drift
 
         register_hook(Event.UserPromptSubmit, message="ups")
+        assert settings_drift(tmp_path) == set()
+
+    def test_async_only_wiring_drifts_a_sync_subscriber(self, tmp_path: Path) -> None:
+        # A repo wired SessionStart async-only (the pre-announce review-enabled shape) still
+        # drifts once a sync SessionStart hook (the PR announcer) subscribes.
+        from captain_hook.cli import settings_drift
+
+        register_hook(Event.SessionStart, message="announce", async_=False)
+        claude = tmp_path / ".claude"
+        claude.mkdir(parents=True)
+        (claude / "settings.json").write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "uvx capt-hook run SessionStart --async",
+                                        "async": True,
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            )
+        )
+        assert settings_drift(tmp_path) == {"SessionStart"}
+
+    def test_no_drift_once_sync_command_is_wired(self, tmp_path: Path) -> None:
+        from captain_hook.cli import settings_drift
+
+        register_hook(Event.SessionStart, message="announce", async_=False)
+        claude = tmp_path / ".claude"
+        claude.mkdir(parents=True)
+        (claude / "settings.json").write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "uvx capt-hook run SessionStart --async",
+                                        "async": True,
+                                    },
+                                    {"type": "command", "command": "uvx capt-hook run SessionStart"},
+                                ]
+                            }
+                        ]
+                    }
+                }
+            )
+        )
         assert settings_drift(tmp_path) == set()
 
     def test_cli_031_no_drift_when_committed_covers_omitted_events(self, tmp_path: Path) -> None:

@@ -18,7 +18,14 @@ from loguru import logger
 
 from captain_hook.app import _state, load_gitignore, reset
 from captain_hook.dispatch import dispatch
-from captain_hook.loader import CONF_MODULE, discover_hooks, discover_pack, is_skip_marked, register_nlp_provisioning
+from captain_hook.loader import (
+    CONF_MODULE,
+    discover_hooks,
+    discover_pack,
+    is_skip_marked,
+    register_nlp_provisioning,
+    register_pr_announcements,
+)
 from captain_hook.log import setup_logging
 from captain_hook.packs import manager
 from captain_hook.review.cli import review
@@ -50,6 +57,9 @@ class CliState:
         project_nlp = any(pack_.manifest.nlp for pack_ in resolved)
         if project_nlp:
             register_nlp_provisioning()
+        # Registered before the attached span, so its SessionStart is project-owned, not attach-only.
+        if reviewer_wired(self.root):
+            register_pr_announcements()
         attached = self.attached_packs(resolved, session_dir)
         attached_start = len(_state.hooks)
         for pack_ in attached:
@@ -164,6 +174,11 @@ def subscribed_events() -> set[str]:
     return {name for entry in _state.hooks for name in event_names(entry.spec.events)}
 
 
+def subscribed_modes() -> set[tuple[str, bool]]:
+    """Each ``(event, is_async)`` a registered hook subscribes — a sync and async hook on one event are distinct."""
+    return {(name, entry.spec.async_) for entry in _state.hooks for name in event_names(entry.spec.events)}
+
+
 def command_prefix(root: Path, from_source: str = DIST_NAME) -> str:
     if from_source != DIST_NAME:
         return f"uvx --from {from_source} capt-hook"
@@ -235,6 +250,53 @@ def capt_hook_events(path: Path) -> set[str]:
     }
 
 
+def is_review_group(group: dict[str, Any]) -> bool:
+    """True for a group whose only commands are ``capt-hook review run`` — the reviewer's own entry."""
+    return bool(hooks := group.get("hooks") or []) and all("review run" in (h.get("command") or "") for h in hooks)
+
+
+def run_command_mode(command: str) -> tuple[str, bool] | None:
+    """Parse a wired ``capt-hook run <Event>`` command into ``(event, is_async)``; ``None`` for anything else.
+
+    ``endswith`` keeps ``PostToolUse`` from matching a ``PostToolUseFailure`` command and
+    keeps ``review run`` (a different subcommand) from matching any event.
+    """
+    for e in Event:
+        if (name := e.name) and command.endswith((f"run {name}", f"run {name} --async")):
+            return name, command.endswith("--async")
+    return None
+
+
+def wired_modes(path: Path) -> set[tuple[str, bool]]:
+    """Each ``(event, is_async)`` a capt-hook ``run`` command in ``path`` wires."""
+    if not path.exists():
+        return set()
+    return {
+        mode
+        for groups in (json.loads(path.read_text()).get("hooks") or {}).values()
+        for group in groups
+        if is_captain_hook_group(group)
+        for entry in (group.get("hooks") or [])
+        if (mode := run_command_mode(entry.get("command") or "")) is not None
+    }
+
+
+def reviewer_wired(root: Path) -> bool:
+    """True when ``review enable`` wired ``capt-hook review run`` onto SessionStart in this repo's settings.
+
+    SessionStart is the enable-only marker: ``generate_settings`` wires ``review run`` onto
+    SessionEnd for every repo, but only :func:`~captain_hook.review.cli.ensure_review_wiring`
+    wires it onto SessionStart — so it flags a repo whose reviewer is actually enabled.
+    """
+    from captain_hook.review.cli import review_wired
+
+    return any(
+        review_wired(json.loads(p.read_text()).get("hooks") or {}, "SessionStart")
+        for name in ("settings.json", "settings.local.json")
+        if (p := root / ".claude" / name).exists()
+    )
+
+
 def sibling_settings(path: Path) -> Path:
     return path.parent / ("settings.json" if path.name == "settings.local.json" else "settings.local.json")
 
@@ -256,15 +318,17 @@ def merge_settings(
         own = [g for g, kind in classified if kind == "own"]
         custom = any(kind == "custom" for _, kind in classified)
         fresh_own = [] if (custom or event in deferred) else new_hooks.get(event, [])
+        # Preserve a SessionStart `review run` group generate_settings won't re-emit (SessionEnd's is in fresh_own).
+        managed = [g for g in own if is_review_group(g) and not any(is_review_group(f) for f in fresh_own)] + fresh_own
         if custom:
             summary[event] = "custom"
         elif event in deferred and (own or new_hooks.get(event)):
             summary[event] = "deferred"
-        elif own or fresh_own:
+        elif own or managed:
             summary[event] = (
-                "unchanged" if own == fresh_own else "added" if not own else "removed" if not fresh_own else "updated"
+                "unchanged" if own == managed else "added" if not own else "removed" if not managed else "updated"
             )
-        if groups := kept + fresh_own:
+        if groups := kept + managed:
             merged_hooks[event] = groups
     return existing | {"hooks": merged_hooks}, summary
 
@@ -326,8 +390,12 @@ def settings_drift(root: Path) -> set[str]:
     paths = [p for name in ("settings.json", "settings.local.json") if (p := root / ".claude" / name).exists()]
     if not paths:
         return set()
-    wired = {event for p in paths for event in capt_hook_events(p)}
-    return subscribed_events() - _state.attach_only_events - wired
+    wired = {mode for p in paths for mode in wired_modes(p)}
+    return {
+        event
+        for event, is_async in subscribed_modes()
+        if event not in _state.attach_only_events and (event, is_async) not in wired
+    }
 
 
 def warn_settings_drift(
