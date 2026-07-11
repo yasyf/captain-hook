@@ -58,99 +58,8 @@ class TestInit:
         assert "Next:" in result.stdout
         assert "https://yasyf.github.io/captain-hook/" in result.stdout
         assert "capt-hook test" in result.stdout
-        assert "capt-hook register-hooks" in result.stdout
         assert "Scaffolded" in result.stdout
         assert "Session reviewer:" in result.stdout
-
-    def test_init_merge_preserves_existing_hook_entries(self, tmp_path: Path) -> None:
-        settings_dir = tmp_path / ".claude"
-        settings_dir.mkdir()
-        settings_path = settings_dir / "settings.json"
-        settings_path.write_text(
-            json.dumps(
-                {
-                    "permissions": {"allow": ["foo"]},
-                    "hooks": {
-                        "PreToolUse": [{"matcher": "custom", "hooks": [{"type": "command", "command": "echo legacy"}]}],
-                    },
-                }
-            )
-        )
-
-        result = run_cli("init", root_dir=str(tmp_path))
-        assert result.returncode == 0
-        data = json.loads(settings_path.read_text())
-        assert data["permissions"] == {"allow": ["foo"]}
-
-        pre = data["hooks"]["PreToolUse"]
-        assert any(any(h.get("command") == "echo legacy" for h in g.get("hooks", [])) for g in pre)
-        assert any(any("capt-hook" in (h.get("command") or "") for h in g.get("hooks", [])) for g in pre)
-
-    def test_init_merge_reports_unchanged_when_already_present(self, tmp_path: Path) -> None:
-        first = run_cli("init", root_dir=str(tmp_path))
-        assert first.returncode == 0
-        second = run_cli("init", root_dir=str(tmp_path))
-        assert second.returncode == 0
-        assert "unchanged:" in second.stdout
-        assert "PreToolUse" in second.stdout
-
-    def test_init_defers_to_local_settings_json(self, tmp_path: Path) -> None:
-        settings_dir = tmp_path / ".claude"
-        settings_dir.mkdir()
-        (settings_dir / "settings.local.json").write_text(
-            json.dumps(
-                {
-                    "hooks": {
-                        event: [{"hooks": [{"type": "command", "command": f"uvx capt-hook run {event}"}]}]
-                        for event in ("PreToolUse", "Stop")
-                    },
-                }
-            )
-        )
-
-        result = run_cli("init", root_dir=str(tmp_path))
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        assert "deferred to settings.local.json" in result.stdout
-
-        committed = json.loads((settings_dir / "settings.json").read_text())
-        assert "PreToolUse" not in committed["hooks"]
-        assert "Stop" not in committed["hooks"]
-        assert "SessionEnd" in committed["hooks"]
-
-    def test_init_strips_preexisting_committed_duplicate(self, tmp_path: Path) -> None:
-        settings_dir = tmp_path / ".claude"
-        settings_dir.mkdir()
-        group = {"hooks": [{"type": "command", "command": "uvx capt-hook run PreToolUse"}]}
-        (settings_dir / "settings.local.json").write_text(json.dumps({"hooks": {"PreToolUse": [group]}}))
-        (settings_dir / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [group]}}))
-
-        result = run_cli("init", root_dir=str(tmp_path))
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        committed = json.loads((settings_dir / "settings.json").read_text())
-        assert "PreToolUse" not in committed["hooks"]
-
-    def test_creates_settings_json(self, project_dir: Path) -> None:
-        settings = project_dir / ".claude" / "settings.json"
-        assert settings.exists()
-        data = json.loads(settings.read_text())
-        assert "hooks" in data
-        assert isinstance(data["hooks"], dict)
-        assert len(data["hooks"]) > 0
-
-    def test_settings_has_pretooluse(self, project_dir: Path) -> None:
-        settings = project_dir / ".claude" / "settings.json"
-        data = json.loads(settings.read_text())
-        assert "PreToolUse" in data["hooks"]
-
-    def test_settings_commands_use_uvx(self, project_dir: Path) -> None:
-        settings = project_dir / ".claude" / "settings.json"
-        raw = settings.read_text()
-        assert "uvx capt-hook" in raw
-
-    def test_bare_init_omits_session_start(self, project_dir: Path) -> None:
-        # No packs enabled means no NLP provisioning hook, so no SessionStart wiring.
-        data = json.loads((project_dir / ".claude" / "settings.json").read_text())
-        assert "SessionStart" not in data["hooks"]
 
 
 class TestDiscoverAndDispatch:
@@ -278,29 +187,6 @@ class TestCliTest:
         assert result.returncode != 0
         records = [json.loads(ln) for ln in result.stdout.splitlines() if ln.strip()]
         assert any(r["status"] == "fail" for r in records)
-
-
-class TestRegisterHooks:
-    def test_register_hooks_for_init_hooks(self, project_dir: Path) -> None:
-        hooks_dir = project_dir / ".claude" / "hooks"
-        result = run_cli("register-hooks", "--dry-run", hooks_dir=str(hooks_dir), root_dir=str(project_dir))
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        data = json.loads(result.stdout)
-        assert "hooks" in data
-        assert "PreToolUse" in data["hooks"]
-
-    def test_merge_preserves_existing_keys(self, project_dir: Path) -> None:
-        settings_path = project_dir / ".claude" / "settings.json"
-        existing = json.loads(settings_path.read_text())
-        existing["customKey"] = "preserved"
-        settings_path.write_text(json.dumps(existing))
-
-        hooks_dir = project_dir / ".claude" / "hooks"
-        result = run_cli("register-hooks", "--dry-run", hooks_dir=str(hooks_dir), root_dir=str(project_dir))
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
-        assert data["customKey"] == "preserved"
-        assert "hooks" in data
 
 
 def write_hooks(tmp_path: Path, *files: tuple[str, str]) -> Path:
@@ -751,29 +637,6 @@ class TestComplexInlineTests:
         assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
         assert "PASS" in result.stdout
         assert test_count in result.stdout
-
-
-class TestRegisterHooksMultiEvent:
-    def test_multi_event_hook_appears_in_all_event_sections(self, tmp_path: Path) -> None:
-        hooks_dir = write_hooks(
-            tmp_path,
-            (
-                "multi_event.py",
-                """\
-            from captain_hook import hook, Event
-
-            hook(
-                Event.PreToolUse | Event.PostToolUse,
-                message="Audit trail: tool invocation logged",
-            )
-        """,
-            ),
-        )
-        result = run_cli("register-hooks", "--dry-run", hooks_dir=str(hooks_dir), root_dir=str(tmp_path))
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        data = json.loads(result.stdout)
-        assert "PreToolUse" in data["hooks"]
-        assert "PostToolUse" in data["hooks"]
 
 
 class TestSkillsInstall:

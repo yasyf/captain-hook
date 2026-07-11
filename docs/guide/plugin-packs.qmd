@@ -62,25 +62,17 @@ event the pack subscribes.
 Claude Code deduplicates hook commands by exact string match: two hooks that wire
 the same command string for one event run that command once. A plugin that wired
 `uvx capt-hook --hooks ${CLAUDE_PLUGIN_ROOT}/hooks run PreToolUse` produces a
-different string from a project's own `uvx capt-hook run PreToolUse`, so Claude
-Code runs both — two `uvx` processes per event, and the project's `packs.toml`
-packs resolved and dispatched twice.
+different string from the captain-hook plugin's own `uvx capt-hook run PreToolUse`,
+so Claude Code runs both — two `uvx` processes per event, and the project's
+`packs.toml` packs resolved and dispatched twice.
 
-Wiring the plugin to the identical `uvx capt-hook run PreToolUse` collapses plugin
-and project into one process per event. The session-attached pack still loads
+Wiring your plugin to the identical `uvx capt-hook run PreToolUse` collapses the
+two plugins into one process per event. The session-attached pack still loads
 inside that one process, because `pack attach` already recorded it for the
 session and `run` picks it up during discovery. So keep the run command exactly
-`uvx capt-hook run <Event>` (add `--async` only where the project's own wiring
-does), and put per-plugin configuration in the attached pack's manifest and
-hooks, never in the run command's flags.
-
-A project that sets a `launcher` in its `packs.toml` (see
-[Set a custom launcher](packs.qmd#set-a-custom-launcher)) forfeits this dedup
-by construction: its generated commands start with the launcher prefix, which
-never matches the plugin's `uvx capt-hook run <Event>` string, so both commands
-run — two processes per event, each resolving and dispatching the project's
-packs. That is the documented cost of a custom launcher, not a bug: a dev tree
-or monorepo that needs one accepts the duplicate dispatch.
+`uvx capt-hook run <Event>` (add `--async` only where captain-hook's own
+`hooks.json` does), and put per-plugin configuration in the attached pack's
+manifest and hooks, never in the run command's flags.
 
 Attach records the pack once, keyed by the session id. A subagent's hook events
 carry that same session id, so an attached pack loads for subagents too — the

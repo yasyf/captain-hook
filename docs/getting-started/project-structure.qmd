@@ -2,7 +2,7 @@
 title: "Project structure and wiring"
 ---
 
-`uvx capt-hook init` already wired your project, scaffolding `.claude/hooks/`, the skills, and the `settings.json` that points Claude Code at them.
+`uvx capt-hook init` already wired your project: it scaffolds `.claude/hooks/` and the skills, and registers the captain-hook plugin in `.claude/settings.json` — the plugin wires every hook event by itself.
 
 ## What `init` creates
 
@@ -12,7 +12,7 @@ your-project/
 │   ├── hooks/
 │   │   └── example.py           # the starter hook
 │   ├── skills/                  # bootstrapping-hooks + translating-styleguides
-│   └── settings.json            # the wiring (below)
+│   └── settings.json            # the plugin registration (below)
 ```
 
 Hooks are just Python files under `.claude/hooks/`. An optional `conf.py` beside them holds
@@ -22,24 +22,25 @@ Hooks are just Python files under `.claude/hooks/`. An optional `conf.py` beside
 
 ## The wiring contract
 
-`init` writes the `hooks` block of `.claude/settings.json`, and `register-hooks`
-regenerates it. Each event maps to the one command Claude Code runs:
+`init` registers the captain-hook plugin in `.claude/settings.json`: an
+`extraKnownMarketplaces` entry naming the marketplace and an `enabledPlugins` entry
+turning the plugin on.
 
 ```json
 {
-  "hooks": {
-    "PreToolUse": [
-      { "hooks": [ { "type": "command", "command": "uvx capt-hook run PreToolUse" } ] }
-    ],
-    "Stop": [
-      { "hooks": [ { "type": "command", "command": "uvx capt-hook run Stop" } ] }
-    ]
-  }
+  "extraKnownMarketplaces": {
+    "captain-hook": { "source": { "source": "github", "repo": "yasyf/captain-hook" } }
+  },
+  "enabledPlugins": { "captain-hook@captain-hook": true }
 }
 ```
 
-Only the events your hooks listen on appear. `uvx capt-hook run <Event>` is the one
-place the `uvx` convention is baked into a file instead of typed by you.
+The event wiring lives in the plugin itself. Its `hooks.json` registers all twelve
+lifecycle events: `uvx capt-hook run <Event>` for the synchronous ones, an async
+`uvx capt-hook run SessionStart --async`, and an async `uvx capt-hook review run` on
+`SessionEnd` for the [session reviewer](../guide/session-reviewer.qmd). Every event is
+registered up front, whether or not a hook listens on it yet; dispatch runs the hooks
+that match and stays silent otherwise.
 
 ## How a hook runs
 
@@ -62,21 +63,10 @@ When an event fires, Claude Code runs `uvx capt-hook run <Event>` and talks to i
 3. Claude Code reads the verdict. `deny` blocks the tool, `allow` lets it through, and an
    advisory hook injects `additionalContext` instead.
 
-## When to re-wire
+## Adding hooks
 
-Editing a hook's body needs nothing. The same `uvx capt-hook run` command picks it up. Re-run
-`register-hooks` when you add a hook on a **new event**, or your first async hook on an
-already-wired one, so the event gets its own entry:
-
-```bash
-uvx capt-hook register-hooks           # writes settings.json
-uvx capt-hook register-hooks --dry-run # print the merged JSON without writing
-```
-
-Then reload the project so Claude Code reads the updated settings. `.claude/hooks/` is code, so
-commit it, and review hook changes in pull requests like anything else.
-
-The wired event set is derived from your registered hooks, not a fixed list, so a hook on an event
-no entry covers never fires. captain-hook catches this. On the next synchronous event it warns the
-agent through `additionalContext` to re-run `uvx capt-hook register-hooks`, so a forgotten re-wire
-surfaces instead of silently swallowing the hook.
+Editing a hook's body needs nothing. The same `uvx capt-hook run` command picks it up.
+A hook on a brand-new event needs nothing either: the plugin already registers every
+event, so the new file is live from the next session, with zero settings changes.
+`.claude/hooks/` is code, so commit it, and review hook changes in pull requests like
+anything else.

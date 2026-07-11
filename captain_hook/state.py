@@ -44,7 +44,7 @@ class NlpResources:
             return spacy.load(cached)
         raise RuntimeError(
             f"spaCy model {SPACY_MODEL!r} is not installed. "
-            "Run `uvx capt-hook register-hooks` to provision NLP resources, or install the model "
+            "Run `uvx capt-hook init` to provision NLP resources, or install the model "
             f"explicitly: `python -m spacy download {SPACY_MODEL}` "
             f'or `python -c "from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()"`.'
         )

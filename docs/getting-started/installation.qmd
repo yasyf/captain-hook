@@ -19,7 +19,7 @@ uvx capt-hook init
 
 ```bash
 uvx capt-hook test
-uvx capt-hook register-hooks
+uvx capt-hook status
 ```
 
 Run from your project root and `--hooks` defaults to `.claude/hooks`. You never add captain-hook to `pyproject.toml` and never manage a venv yourself.
@@ -68,11 +68,11 @@ uv run python -c "import captain_hook; print(captain_hook.__name__)"
 
 ## Project layout
 
-`uvx capt-hook init` scaffolds `.claude/hooks/` with a `conf.py` and a starter `example.py`, registers the captain-hook plugin and wires the hooks in `.claude/settings.json`. [Project Structure & Wiring](project-structure.qmd) walks the full layout. The exact layout is optional; `uvx capt-hook --hooks <any-dir> test` works on any directory of hooks, and the default lines up with what Claude Code looks for.
+`uvx capt-hook init` scaffolds `.claude/hooks/` with a `conf.py` and a starter `example.py`, and registers the captain-hook plugin in `.claude/settings.json` — the plugin wires every hook event by itself. [Project Structure & Wiring](project-structure.qmd) walks the full layout. The exact layout is optional; `uvx capt-hook --hooks <any-dir> test` works on any directory of hooks, and the default lines up with what Claude Code looks for.
 
 ## spaCy model
 
-Hooks that use NLP signals need the `en_core_web_sm` spaCy model and the oewn lexicon. Packs that declare `nlp = true` (general, steering) provision both automatically. `init`, `register-hooks`, and `pack add` download them on the spot, and an async `SessionStart` hook self-heals installs that were offline. Standalone hook directories outside any pack still install the model once with `python -m spacy download en_core_web_sm`. See [NlpSignal hooks need the spaCy model](../guide/troubleshooting.qmd#nlpsignal-hooks-need-the-spacy-model).
+Hooks that use NLP signals need the `en_core_web_sm` spaCy model and the oewn lexicon. Packs that declare `nlp = true` (general, steering) provision both automatically. `init` (and `pack add`) download them on the spot, and an async `SessionStart` hook self-heals installs that were offline. Standalone hook directories outside any pack still install the model once with `python -m spacy download en_core_web_sm`. See [NlpSignal hooks need the spaCy model](../guide/troubleshooting.qmd#nlpsignal-hooks-need-the-spacy-model).
 
 ## CI integration
 

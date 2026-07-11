@@ -16,7 +16,7 @@ PR, what it takes to run, and the knobs that decide what crosses the bar.
 
 The reviewer runs entirely on your machine, triggered by Claude Code's `SessionEnd` event:
 
-1. **`review run`** is the wired `SessionEnd` hook, registered async so Claude Code fires it
+1. **`review run`** is the `SessionEnd` hook the captain-hook plugin registers, async so Claude Code fires it
    without waiting; a utility command like `claude update` never blocks on it or cancels it. It
    returns immediately (always exit 0) after detaching a background pass, and skips a non-interactive
    `claude -p` session end, which carries no corrections worth mining.
@@ -37,18 +37,21 @@ actionable defect.
 
 ## Turn it on
 
-`uvx capt-hook init` arms the reviewer for the current repo. For a repo you have already wired by
-hand, or one that uses a committed `settings.json`, enable it directly:
+`uvx capt-hook init` arms the reviewer for the current repo. To arm a repo without re-running
+`init`, enable it directly:
 
 ```bash
 uvx capt-hook review enable
 ```
 
-Both paths set up the same three things the reviewer needs:
+Both paths set up what the reviewer needs:
 
-- the captain-hook plugin registered in `.claude/settings.json` (the brain loads its `scanning-sessions` and `authoring-hooks` skills directly);
-- an async `uvx capt-hook review run` entry on `SessionEnd` in your settings;
+- the captain-hook plugin registered in `.claude/settings.json` — its `hooks.json` fires the async `uvx capt-hook review run` on `SessionEnd`, and the brain loads its `scanning-sessions` and `authoring-hooks` skills directly;
 - a per-machine watching flag for this repo.
+
+`review enable` also writes the same `SessionEnd` entry into the committed
+`.claude/settings.json`, byte-identical to the plugin's, so Claude Code deduplicates the two
+and the hook runs once.
 
 Watching is stored once per machine, so each clone you want reviewed runs `review enable` (or
 `init`) once.

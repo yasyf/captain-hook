@@ -40,7 +40,7 @@ Third, read the session log.
 uvx capt-hook logs --tail 40
 ```
 
-A firing hook leaves a dispatch line here. If you see the event arrive but no line for your hook, a condition skipped it. If you see no event at all, the hook is wired to the wrong event or the settings never reached Claude Code.
+A firing hook leaves a dispatch line here. If you see the event arrive but no line for your hook, a condition skipped it. If you see no event at all, the hook targets the wrong event or the captain-hook plugin isn't enabled in this session.
 
 ## It fires too often
 
@@ -60,22 +60,18 @@ Wrong event. Each primitive picks a default event. `block_command` and a bare `n
 
 Unsatisfiable conditions. An `only_if` is AND, so every condition must match at once. A hook with `only_if=[Tool("Bash"), FilePath("**/*.py")]` never fires, because a Bash command carries no file path. Run `uvx capt-hook --hooks <dir> test` and read the `Input` each test built against your conditions.
 
-Settings not re-wired. After you add or change events, re-register the hooks so Claude Code knows to call your hook. This writes `.claude/settings.json` for you, merging non-destructively with what's already there.
+Plugin not enabled. The captain-hook plugin registers every hook event; without it, no event reaches dispatch at all. Confirm `.claude/settings.json` still enables `captain-hook`, and re-run `uvx capt-hook init` if the registration is missing.
 
-```bash
-uvx capt-hook --hooks <dir> register-hooks
-```
-
-Project not reloaded. Claude Code reads hook settings at session start. After you rewire settings, start a fresh session so the new wiring loads.
+Session not fresh. Claude Code loads plugin hooks at session start. A hook on a brand-new event, or a just-enabled plugin, takes effect when the next session starts.
 
 ## `NlpSignal` hooks need the spaCy model {#nlpsignal-hooks-need-the-spacy-model}
 
-Hooks that use `NlpSignal` need two downloads: the `en_core_web_sm` spaCy model (~13MB) and the `oewn:2025` WordNet lexicon (~231MB). Packs that declare `nlp = true` in their manifest — `general` and `steering` do — provision both eagerly: `init`, `register-hooks`, and `pack add` download them on the spot, and an async `SessionStart` hook re-checks at every session start, so an install that deferred the download (offline, say) heals itself the next session. Mid-session, the two resources behave differently. A live hook never downloads the spaCy model; that would be a silent network fetch behind the agent's back, so it raises a `RuntimeError` with an install hint instead. The oewn lexicon does self-heal lazily. If it's missing, the first hook that needs it downloads it on the spot, filelock-guarded against concurrent sessions, at the cost of latency on that first NLP hook.
+Hooks that use `NlpSignal` need two downloads: the `en_core_web_sm` spaCy model (~13MB) and the `oewn:2025` WordNet lexicon (~231MB). Packs that declare `nlp = true` in their manifest — `general` and `steering` do — provision both eagerly: `init` and `pack add` download them on the spot, and an async `SessionStart` hook re-checks at every session start, so an install that deferred the download (offline, say) heals itself the next session. Mid-session, the two resources behave differently. A live hook never downloads the spaCy model; that would be a silent network fetch behind the agent's back, so it raises a `RuntimeError` with an install hint instead. The oewn lexicon does self-heal lazily. If it's missing, the first hook that needs it downloads it on the spot, filelock-guarded against concurrent sessions, at the cost of latency on that first NLP hook.
 
-A hook that raises `RuntimeError: spaCy model 'en_core_web_sm' is not installed` means provisioning never ran for this project. Re-register the hooks; with an NLP pack enabled this downloads the resources and wires the `SessionStart` self-heal.
+A hook that raises `RuntimeError: spaCy model 'en_core_web_sm' is not installed` means provisioning never ran for this project. Re-run `init`; with an NLP pack enabled it downloads both resources on the spot, and the async `SessionStart` hook re-checks at every session start after that.
 
 ```bash
-uvx capt-hook register-hooks
+uvx capt-hook init
 ```
 
 A standalone hooks directory that uses NLP outside any pack skips eager provisioning. Provision the resources directly with the bundled helper.

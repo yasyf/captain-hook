@@ -4,6 +4,50 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.0.0] - 2026-07-10
+
+### Changed (BREAKING)
+- **The plugin registers every hook event itself.** captain-hook ships a static
+  `captain_hook/hooks/hooks.json` that wires all twelve lifecycle events under their
+  canonical commands: `uvx capt-hook run <Event>` for the synchronous events, `uvx
+  capt-hook run SessionStart --async`, and the always-on `uvx capt-hook review run`
+  (async) for `SessionEnd`. Enabling the plugin — which `init` and `skills install`
+  already do, via the `extraKnownMarketplaces` + `enabledPlugins` entries in
+  `.claude/settings.json` — is now the only wiring a repo needs. Claude Code picks up a
+  hook on a brand-new event the next session, with zero settings changes; the
+  re-registration step is gone.
+- **`init` and the `pack` commands no longer write hook wiring.** `init` still scaffolds
+  `.claude/hooks/`, registers the plugin, provisions NLP resources, and arms the session
+  reviewer, but it no longer merges a `hooks` block into `.claude/settings.json`. `pack
+  add`, `pack remove`, and `pack update` only edit `.claude/hooks/packs.toml`.
+- Upgrading: delete any captain-hook `hooks` entries from your committed
+  `.claude/settings.json` (and `.claude/settings.local.json`); the plugin registers them
+  now. Keep the `extraKnownMarketplaces` + `enabledPlugins` entries — that is what enables
+  the plugin. `uvx capt-hook init` or `uvx capt-hook skills install` writes them if they
+  are missing.
+
+### Removed (BREAKING)
+- **The `register-hooks` command and the settings-merge machinery behind it.** Gone with
+  it: `generate_settings`/`merge_settings`, the own/custom/foreign group classifier, the
+  `settings.local.json` deferral, and the settings-drift nag that pushed the agent to
+  re-run `register-hooks`. Repos no longer merge captain-hook commands into their own
+  `.claude/settings.json` — the plugin's `hooks.json` is the single source of the wiring.
+  The `launcher` key in `packs.toml` is still round-tripped across pack edits but no
+  longer rewrites hook commands; the plugin's canonical `uvx capt-hook` prefix is fixed.
+- Coordination: the resident-daemon rollout can no longer ride `register-hooks`. Because
+  the plugin's `hooks.json` is static and hardcodes the `uvx capt-hook` prefix, a
+  machine-local daemon launcher must use single-string shell dispatch or
+  `${CAPT_HOOK_LAUNCHER:-uvx capt-hook}` env indirection inside the plugin `hooks.json`
+  command.
+
+### Fixed
+- **Duplicate hook dispatch collapses under a once-guard.** Claude Code can spawn several
+  byte-identical hook processes for one event; non-decision events now claim a per-event
+  once-token so the work runs once. Decision-capable events (`PreToolUse`, `Stop`,
+  `SubagentStop`, `PermissionRequest`) stay exempt, so no gate is ever swallowed.
+- **Pack cache GC.** Stale content-addressed pack commit directories are pruned after a
+  fresh fetch, and pack-GC recency and the once-guard's races are hardened.
+
 ## [8.19.0] - 2026-07-10
 
 ### Changed

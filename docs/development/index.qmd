@@ -69,12 +69,6 @@ From a consumer project, point `uv run --project` at your clone:
 uv run --project path/to/captain-hook capt-hook test
 ```
 
-Or generate settings whose hook commands invoke your checkout instead of PyPI:
-
-```bash
-uvx capt-hook register-hooks --from path/to/captain-hook
-```
-
 ## Releasing
 
 Bump `version` in `pyproject.toml`, add the CHANGELOG entry, and commit them together with `uv.lock`, which pins the package's own version. Then tag the new version and push. `.github/workflows/release-pypi.yml` builds the sdist and wheel, publishes to PyPI via trusted publishing, and cuts a GitHub release:

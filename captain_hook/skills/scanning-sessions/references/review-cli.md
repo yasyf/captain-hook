@@ -16,7 +16,7 @@ are terminal. Illegal moves fail with an error — there is no transition back t
 
 ### `review run`
 
-The wired SessionEnd hook entry, registered async (fire-and-forget). Reads the hook
+The SessionEnd hook the captain-hook plugin registers, async (fire-and-forget). Reads the hook
 payload from stdin, guards, and detaches the reviewer child; always exits 0, and skips
 non-interactive `claude -p` session ends. Claude Code calls this — you never do.
 
@@ -28,8 +28,9 @@ defaults to the process cwd. This is what spawned you; do not recurse into it.
 
 ### `review enable` / `review disable`
 
-`enable` marks the current repo watched and wires the SessionEnd hook into
-`.claude/settings.json` (idempotent), upgrading an already-wired hook to async.
+`enable` marks the current repo watched and writes the plugin's exact SessionEnd entry
+into the committed `.claude/settings.json` (idempotent; Claude Code dedups the
+byte-identical strings, so the hook runs once).
 `disable` stops watching; candidates stay recorded but never become eligible.
 
 ### `review scan [--transcript <file>]... [--dir <dir>]...`

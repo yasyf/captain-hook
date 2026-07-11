@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sys
 import tarfile
 import tomllib
@@ -679,37 +678,6 @@ def test_cli_pack_add_rejects_invalid_target(tmp_path: Path) -> None:
     result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "add", "not-a-pack"])
     assert result.exit_code != 0
     assert not manager.packs_toml_path(tmp_path).exists()
-
-
-def test_cli_pack_add_preserves_custom_settings(tmp_path: Path) -> None:
-    settings_path = tmp_path / ".claude" / "settings.json"
-    settings_path.parent.mkdir(parents=True)
-    custom = {"hooks": [{"type": "command", "command": f"{DOGFOOD_LAUNCHER} run PreToolUse"}]}
-    settings_path.write_text(json.dumps({"hooks": {"PreToolUse": [custom]}}))
-
-    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "add", "general"])
-
-    assert result.exit_code == 0, result.output
-    # No launcher in packs.toml, so the dogfood command is non-canonical (custom): pack add's
-    # regenerate_settings must preserve it verbatim, not clobber it with a fresh `uvx` group.
-    assert json.loads(settings_path.read_text())["hooks"]["PreToolUse"] == [custom]
-
-
-def test_cli_pack_add_preserves_custom_settings_under_launcher(tmp_path: Path) -> None:
-    manager.atomic_write(manager.packs_toml_path(tmp_path), manager.render_packs_toml([], DOGFOOD_LAUNCHER))
-    settings_path = tmp_path / ".claude" / "settings.json"
-    group = {"hooks": [{"type": "command", "command": f"{DOGFOOD_LAUNCHER} run PreToolUse"}]}
-    settings_path.write_text(json.dumps({"hooks": {"PreToolUse": [group]}}))
-
-    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "add", "general"])
-
-    assert result.exit_code == 0, result.output
-    # The launcher makes the dogfood command canonical, so its group refreshes from the launcher
-    # prefix — every PreToolUse command stays launcher-prefixed, with no `uvx` duplicate.
-    commands = [h["command"] for g in json.loads(settings_path.read_text())["hooks"]["PreToolUse"] for h in g["hooks"]]
-    assert commands
-    assert all(c.startswith(DOGFOOD_LAUNCHER) for c in commands)
-    assert all("uvx capt-hook" not in c for c in commands)
 
 
 def test_cli_pack_list_reports_import_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

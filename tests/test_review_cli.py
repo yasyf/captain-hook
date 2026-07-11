@@ -9,7 +9,7 @@ from cc_transcript.judge.similar import KeyOverlap
 from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE
 from click.testing import CliRunner
 
-from captain_hook.cli import cli, generate_settings
+from captain_hook.cli import cli
 from captain_hook.review.cli import REVIEW_RUN_COMMAND, STATUS_CHOICES
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings
@@ -65,21 +65,6 @@ def scanned_repo(tmp_path: Path, git_repo: Path) -> Path:
     result = invoke("scan", "--transcript", str(transcript), root=git_repo)
     assert result.exit_code == 0, result.output
     return git_repo
-
-
-class TestSettingsTemplate:
-    def test_generate_settings_wires_session_end_to_review_run(self) -> None:
-        assert generate_settings()["hooks"]["SessionEnd"] == [
-            {"hooks": [{"type": "command", "command": "uvx capt-hook review run", "async": True}]}
-        ]
-
-    def test_review_run_command_honors_from_source(self) -> None:
-        [command] = [
-            entry["command"]
-            for group in generate_settings(prefix="uvx --from /local/captain-hook capt-hook")["hooks"]["SessionEnd"]
-            for entry in group["hooks"]
-        ]
-        assert command == "uvx --from /local/captain-hook capt-hook review run"
 
 
 class TestGroupSurface:

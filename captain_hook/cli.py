@@ -6,7 +6,6 @@ import shutil
 import subprocess
 import sys
 import time
-from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,32 +49,23 @@ class CliState:
         resolved, missing = manager.resolve_enabled_packs(self.root)
         for pack_ in resolved:
             discover_pack(pack_.entry.name, pack_.path)
-        # NLP provisioning is one shared SessionStart hook. Register it before the attached
-        # span when a project (packs.toml) pack needs it, so it counts as project-owned; only
-        # when solely an attached pack needs it does it register inside the span, so an
-        # attach-only NLP hook is attributed to the attach and never flagged as settings drift.
+        # NLP provisioning is one shared SessionStart hook; register it once, whether a
+        # project (packs.toml) pack or only a session-attached pack asks for it.
         project_nlp = any(pack_.manifest.nlp for pack_ in resolved)
         if project_nlp:
             register_nlp_provisioning()
         attached = self.attached_packs(resolved, session_dir)
-        attached_start = len(_state.hooks)
         for pack_ in attached:
             discover_pack(pack_.entry.name, pack_.path)
         if not project_nlp and any(pack_.manifest.nlp for pack_ in attached):
             register_nlp_provisioning()
-        attached_hooks = _state.hooks[attached_start:]
-        all_resolved = [*resolved, *attached]
-        attached_ids = {id(h) for h in attached_hooks}
-        _state.attach_only_events = {n for h in attached_hooks for n in event_names(h.spec.events)} - {
-            n for h in _state.hooks if id(h) not in attached_ids for n in event_names(h.spec.events)
-        }
         if missing:
             print(
                 f"capt-hook: packs unavailable (offline and not cached): {', '.join(missing)} "
                 "— run `capt-hook pack update` when online",
                 file=sys.stderr,
             )
-        return all_resolved
+        return [*resolved, *attached]
 
     def attached_packs(
         self, resolved: Sequence[manager.ResolvedPack], session_dir: Path | None
@@ -163,117 +153,16 @@ def maybe_launch_bootstrap(root: Path) -> bool:
     return True
 
 
-def event_names(events: Event) -> set[str]:
-    return {name for member in Event if member in events and (name := member.name)}
+def run_command(event: str, *, async_: bool) -> str:
+    return f"{DEFAULT_PREFIX} run {event}{' --async' if async_ else ''}"
 
 
-def subscribed_events() -> set[str]:
-    return {name for entry in _state.hooks for name in event_names(entry.spec.events)}
-
-
-def command_prefix(root: Path, from_source: str = DIST_NAME) -> str:
-    if from_source != DIST_NAME:
-        return f"uvx --from {from_source} capt-hook"
-    return manager.read_launcher(manager.packs_toml_path(root)) or DEFAULT_PREFIX
-
-
-def hooks_flag(hooks_dir: str) -> str:
-    return "" if hooks_dir == ".claude/hooks" else f" --hooks $CLAUDE_PROJECT_DIR/{hooks_dir}"
-
-
-def run_command(prefix: str, flag: str, event: str, *, async_: bool) -> str:
-    return f"{prefix}{flag} run {event}{' --async' if async_ else ''}"
-
-
-def review_command(prefix: str) -> str:
-    return f"{prefix} review run"
-
-
-def generate_settings(hooks_dir: str = ".claude/hooks", prefix: str = DEFAULT_PREFIX) -> dict[str, Any]:
-    events_by_async: defaultdict[bool, set[str]] = defaultdict(set)
-    for entry in _state.hooks:
-        events_by_async[entry.spec.async_] |= event_names(entry.spec.events)
-
-    flag = hooks_flag(hooks_dir)
-
-    def commands(event: str) -> list[dict[str, Any]]:
-        return [
-            {"type": "command", "command": run_command(prefix, flag, event, async_=is_async)}
-            | ({"async": True} if is_async else {})
-            for is_async, events in sorted(events_by_async.items())
-            if event in events
-        ] + ([{"type": "command", "command": review_command(prefix), "async": True}] if event == "SessionEnd" else [])
-
-    return {
-        "hooks": {
-            event: [{"hooks": commands(event)}]
-            for event in sorted(events_by_async[False] | events_by_async[True] | {"SessionEnd"})
-        }
-    }
-
-
-def rendered_commands(hooks_dir: str, prefix: str) -> frozenset[str]:
-    flag = hooks_flag(hooks_dir)
-    return frozenset(
-        {run_command(prefix, flag, name, async_=async_) for e in Event if (name := e.name) for async_ in (False, True)}
-        | {review_command(prefix)}
-    )
-
-
-def is_captain_hook_group(group: dict[str, Any]) -> bool:
-    return any("capt-hook" in (h.get("command") or "") for h in group.get("hooks") or [])
-
-
-def classify_group(group: dict[str, Any], rendered: frozenset[str]) -> str:
-    if not is_captain_hook_group(group):
-        return "foreign"
-    if set(group) == {"hooks"} and all(h.get("command") in rendered for h in group.get("hooks") or []):
-        return "own"
-    return "custom"
-
-
-def capt_hook_events(path: Path) -> set[str]:
-    if not path.exists():
-        return set()
-    return {
-        event
-        for event, groups in (json.loads(path.read_text()).get("hooks") or {}).items()
-        if any(is_captain_hook_group(g) for g in groups)
-    }
+def review_command() -> str:
+    return f"{DEFAULT_PREFIX} review run"
 
 
 def sibling_settings(path: Path) -> Path:
     return path.parent / ("settings.json" if path.name == "settings.local.json" else "settings.local.json")
-
-
-def merge_settings(
-    hooks_dir: str, settings_path: Path, prefix: str = DEFAULT_PREFIX
-) -> tuple[dict[str, Any], dict[str, str]]:
-    new_hooks: dict[str, list[dict[str, Any]]] = generate_settings(hooks_dir, prefix=prefix)["hooks"]
-    rendered = rendered_commands(hooks_dir, prefix)
-    existing = json.loads(settings_path.read_text()) if settings_path.exists() else {}
-    existing_hooks: dict[str, list[dict[str, Any]]] = existing.get("hooks") or {}
-    deferred = capt_hook_events(sibling_settings(settings_path))
-
-    summary: dict[str, str] = {}
-    merged_hooks: dict[str, list[dict[str, Any]]] = {}
-    for event in sorted(existing_hooks.keys() | new_hooks.keys()):
-        classified = [(g, classify_group(g, rendered)) for g in existing_hooks.get(event, [])]
-        kept = [g for g, kind in classified if kind != "own"]
-        own = [g for g, kind in classified if kind == "own"]
-        custom = any(kind == "custom" for _, kind in classified)
-        fresh_own = [] if (custom or event in deferred) else new_hooks.get(event, [])
-        if custom:
-            summary[event] = "custom"
-        elif event in deferred and (own or new_hooks.get(event)):
-            summary[event] = "deferred"
-        elif own or fresh_own:
-            summary[event] = (
-                "unchanged" if own == fresh_own else "added" if not own else "removed" if not fresh_own else "updated"
-            )
-        if groups := kept + fresh_own:
-            merged_hooks[event] = groups
-    return existing | {"hooks": merged_hooks}, summary
 
 
 def write_settings(settings_path: Path, data: dict[str, Any]) -> None:
@@ -281,27 +170,6 @@ def write_settings(settings_path: Path, data: dict[str, Any]) -> None:
     tmp = settings_path.with_suffix(f"{settings_path.suffix}.tmp")
     tmp.write_text(json.dumps(data, indent=2) + "\n")
     os.replace(tmp, settings_path)
-
-
-def print_hook_summary(label: str, summary: dict[str, str], deferred_to: str) -> None:
-    by_status: defaultdict[str, list[str]] = defaultdict(list)
-    for event, status in summary.items():
-        by_status[status].append(event)
-    click.echo(f"{label}:")
-    if not summary:
-        click.echo("  no hook entries")
-    for event in by_status["added"]:
-        click.echo(f"  + added {event}")
-    for event in by_status["updated"]:
-        click.echo(f"  ~ updated {event}")
-    for event in by_status["removed"]:
-        click.echo(f"  - removed {event}")
-    if unchanged := by_status["unchanged"]:
-        click.echo(f"  unchanged: {', '.join(unchanged)} (already present)")
-    if custom := by_status["custom"]:
-        click.echo(f"  = custom: {', '.join(custom)} (non-canonical capt-hook command preserved)")
-    if deferred := by_status["deferred"]:
-        click.echo(f"  deferred to {deferred_to}: {', '.join(deferred)}")
 
 
 def provision_nlp(resolved: Sequence[manager.ResolvedPack]) -> None:
@@ -318,52 +186,6 @@ def provision_nlp(resolved: Sequence[manager.ResolvedPack]) -> None:
         ensure_nlp_resources()
     except (http.GitHubFetchError, OSError, wn.Error, httpx.HTTPError) as e:
         click.echo(f"  deferred (offline?): {e} — the SessionStart hook will retry at session start")
-
-
-def regenerate_settings(state: CliState) -> None:
-    resolved = state.discover()
-    settings_path = state.root / ".claude" / "settings.json"
-    merged, summary = merge_settings(".claude/hooks", settings_path, command_prefix(state.root))
-    write_settings(settings_path, merged)
-    print_hook_summary(str(settings_path.relative_to(state.root)), summary, sibling_settings(settings_path).name)
-    provision_nlp(resolved)
-
-
-def settings_drift(root: Path) -> set[str]:
-    paths = [p for name in ("settings.json", "settings.local.json") if (p := root / ".claude" / name).exists()]
-    if not paths:
-        return set()
-    wired = {event for p in paths for event in capt_hook_events(p)}
-    return subscribed_events() - _state.attach_only_events - wired
-
-
-def warn_settings_drift(
-    output: dict[str, Any] | None, event: Event, root: Path | None, session_dir: Path | None, *, async_: bool
-) -> dict[str, Any] | None:
-    if (
-        async_
-        or root is None
-        or session_dir is None
-        or event in (Event.Stop | Event.SubagentStop | Event.PermissionRequest)
-    ):
-        return output
-    marker = session_dir / ".drift_surfaced"
-    if marker.exists():
-        return output
-    if not (drift := settings_drift(root)):
-        return output
-    marker.write_text("")
-    message = (
-        "captain-hook: these events have registered hooks but are not wired in .claude/settings, "
-        f"so the hooks never fire: {', '.join(sorted(drift))}. "
-        "Run `uvx capt-hook register-hooks` to wire them."
-    )
-    base = output or {"hookSpecificOutput": {"hookEventName": event.name}}
-    hso = base["hookSpecificOutput"]
-    hso["additionalContext"] = f"{prev}\n\n{message}" if (prev := hso.get("additionalContext")) else message
-    if event is Event.PreToolUse:
-        hso.setdefault("permissionDecision", "allow")
-    return base
 
 
 def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None:
@@ -412,13 +234,7 @@ def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None
     )
     evt = event.event_class(_raw=raw, ctx=ctx)
 
-    if output := warn_settings_drift(
-        dispatch(event, evt, session_dir=session_dir, async_=async_),
-        event,
-        state.root,
-        session_dir,
-        async_=async_,
-    ):
+    if output := dispatch(event, evt, session_dir=session_dir, async_=async_):
         print(json.dumps(output))
 
 
@@ -434,19 +250,13 @@ def init_project(root: Path, *, review: bool = True) -> None:
         example.write_text(example_hook_source())
 
     settings_path = root / ".claude" / "settings.json"
-    resolved = CliState(root=root, hooks=str(hooks_dir)).discover()
-    merged, summary = merge_settings(".claude/hooks", settings_path, command_prefix(root))
-    write_settings(settings_path, merged)
-    provision_nlp(resolved)
-
+    provision_nlp(CliState(root=root, hooks=str(hooks_dir)).discover())
     register_marketplace(root)
 
     click.echo(f"Scaffolded {example.relative_to(root)} + {settings_path.relative_to(root)}.")
     click.echo()
-    print_hook_summary(str(settings_path.relative_to(root)), summary, sibling_settings(settings_path).name)
-    click.echo()
     click.echo("Claude Code plugin:")
-    click.echo(f"  + registered {PLUGIN_ID} in .claude/settings.json (skills install on folder-trust)")
+    click.echo(f"  + registered {PLUGIN_ID} in .claude/settings.json (registers every hook event via the plugin)")
     click.echo()
     match (review, repo_key(root)):
         case (False, _):
@@ -466,8 +276,7 @@ def init_project(root: Path, *, review: bool = True) -> None:
     click.echo("  1. Read the quickstart: https://yasyf.github.io/captain-hook/")
     click.echo("  2. Edit example.py or add new files under .claude/hooks/")
     click.echo("  3. uvx capt-hook test               # verify inline tests")
-    click.echo("  4. uvx capt-hook register-hooks     # re-register after adding events")
-    click.echo('  5. Ask Claude "set up captain hook" # mine guardrails from this repo (the bootstrapping-hooks skill)')
+    click.echo('  4. Ask Claude "set up captain hook" # mine guardrails from this repo (the bootstrapping-hooks skill)')
     click.echo()
     maybe_launch_bootstrap(root)
 
@@ -611,29 +420,6 @@ def run(state: CliState, event: str, async_: bool) -> None:
     run_event(state, event, async_=async_)
 
 
-@cli.command(name="register-hooks")
-@click.option("--hooks-dir", default=".claude/hooks", help="Hooks directory relative to project root")
-@click.option("--dry-run", is_flag=True, default=False, help="Print the merged settings JSON without writing")
-@click.option(
-    "--from",
-    "from_source",
-    default=DIST_NAME,
-    help=f"Package source for uvx --from (local path or PyPI spec, default: {DIST_NAME})",
-)
-@click.pass_obj
-def register_hooks_cmd(state: CliState, hooks_dir: str, dry_run: bool, from_source: str) -> None:
-    """Register captain-hook's event hooks into .claude/settings.json."""
-    resolved = state.discover()
-    settings_path = state.root / ".claude" / "settings.json"
-    merged, summary = merge_settings(hooks_dir, settings_path, command_prefix(state.root, from_source))
-    if dry_run:
-        click.echo(json.dumps(merged, indent=2))
-        return
-    write_settings(settings_path, merged)
-    print_hook_summary(str(settings_path), summary, sibling_settings(settings_path).name)
-    provision_nlp(resolved)
-
-
 @cli.command()
 @click.option("--json", "json_output", is_flag=True, default=False, help="Emit one JSON record per test (CI mode)")
 @click.pass_obj
@@ -707,7 +493,6 @@ def pack_add(state: CliState, target: str) -> None:
         raise click.ClickException(str(e)) from e
     manager.upsert_entry(manager.packs_toml_path(state.root), entry)
     click.echo(f"  added {entry.name}")
-    regenerate_settings(state)
 
 
 @pack.command(name="attach")
@@ -771,7 +556,6 @@ def pack_remove(state: CliState, name: str) -> None:
     except manager.PackError as e:
         raise click.ClickException(str(e)) from e
     click.echo(f"  removed {name}")
-    regenerate_settings(state)
 
 
 @pack.command(name="update")
@@ -798,7 +582,6 @@ def pack_update(state: CliState, name: str | None) -> None:
                 click.echo(f"  updated {n} -> {sha[:7]}")
             case manager.BuiltinPack(name=n) if name == n:
                 click.echo(f"  {n} is builtin; it tracks the installed capt-hook version")
-    regenerate_settings(state)
 
 
 cli.add_command(review)

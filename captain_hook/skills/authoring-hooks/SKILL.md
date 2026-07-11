@@ -1,6 +1,6 @@
 ---
 name: authoring-hooks
-description: Drafts one capt-hook (captain-hook) hook from a durable correction — the user's verbatim feedback plus its context — as a new .claude/hooks/<slug>.py, or (FIX mode) amends an existing misfiring hook with a mandatory regression test reproducing the misfire. Picks the right primitive (nudge for one-shot advice, gate for one-shot stop checks, hook(block=True) for always-on enforcement), writes the narrowest condition that captures the correction, a message that cites the correction, and inline tests (one Input firing on the offending shape, one Allow() on a benign neighbor), then proves the file with uvx capt-hook test before any settings wiring. Use when the user says "author a hook", "draft a hook from feedback", "encode this correction as a hook", "fix this misfiring hook", or when the bootstrapping-hooks or scanning-sessions skill delegates a hook to write or amend.
+description: Drafts one capt-hook (captain-hook) hook from a durable correction — the user's verbatim feedback plus its context — as a new .claude/hooks/<slug>.py, or (FIX mode) amends an existing misfiring hook with a mandatory regression test reproducing the misfire. Picks the right primitive (nudge for one-shot advice, gate for one-shot stop checks, hook(block=True) for always-on enforcement), writes the narrowest condition that captures the correction, a message that cites the correction, and inline tests (one Input firing on the offending shape, one Allow() on a benign neighbor), then proves the file with uvx capt-hook test before it goes live. Use when the user says "author a hook", "draft a hook from feedback", "encode this correction as a hook", "fix this misfiring hook", or when the bootstrapping-hooks or scanning-sessions skill delegates a hook to write or amend.
 argument-hint: "[the correction to encode — verbatim user text + context]"
 allowed-tools: Read, Grep, Glob, Write, Edit, Bash(uvx capt-hook:*, capt-hook:*, ls:*, git log:*)
 ---
@@ -8,8 +8,8 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash(uvx capt-hook:*, capt-hook:*,
 # Authoring a Hook from a Correction
 
 capt-hook is a declarative hook framework for Claude Code. Hooks are Python files in
-`.claude/hooks/`, dispatched by `uvx capt-hook run <Event>` entries in
-`.claude/settings.json`. Each hook carries inline tests —
+`.claude/hooks/`, dispatched by the `uvx capt-hook run <Event>` entries the
+captain-hook plugin registers for every event. Each hook carries inline tests —
 `tests={Input(...): Block() | Warn() | Allow()}` — run with `uvx capt-hook test`. This
 skill turns **one durable correction** (the user's verbatim feedback plus the context it
 fired in) into **one new hook file** `.claude/hooks/<slug>.py`. Full API:
@@ -27,8 +27,9 @@ fired in) into **one new hook file** `.claude/hooks/<slug>.py`. Full API:
   into fix-PRs against your hook.
 - **Every deterministic hook ships inline tests** — one `Input` asserting the hook
   fires on the offending shape, one asserting it stays silent on a benign neighbor.
-- **`uvx capt-hook test` must be green before any wiring.** A hook command that fails
-  at dispatch blocks the user's session; wire only what is proven to run.
+- **`uvx capt-hook test` must be green before the hook goes live.** Every event is
+  already registered, so a hook file that fails at dispatch blocks the user's session;
+  ship only what is proven to run.
 
 ## Workflow
 
@@ -40,7 +41,6 @@ Authoring Progress:
 - [ ] Step 2: Pick the primitive (per references/pitfalls.md)
 - [ ] Step 3: Write the hook — condition, message, inline tests
 - [ ] Step 4: Verify (uvx capt-hook test, fix until green)
-- [ ] Step 5: Wire settings (only after green, only if needed)
 ```
 
 ### 1. Restate the correction as a rule
@@ -110,18 +110,9 @@ Add `--json` when parsing results. Fix failures until green — debugging recipe
 [testing hooks](references/testing-hooks.md). Never weaken a test to pass; fix the
 hook.
 
-### 5. Wire settings
-
-Only after Step 4 is green, and only when the hook targets an event no existing
-`.claude/settings.json` entry dispatches:
-
-```bash
-uvx capt-hook register-hooks
-```
-
-It merges non-destructively (add `--dry-run` to preview). If the hook's event is
-already wired, there is nothing to do — the new file is picked up on the next
-dispatch.
+Green is the finish line. The captain-hook plugin already registers every event, so
+the new file is picked up on the next session — there is no settings step, whatever
+event the hook targets.
 
 ## Worked mini-example
 
@@ -149,7 +140,7 @@ warn_command(
 )
 ```
 
-`uvx capt-hook test` → 2 passed; `PostToolUse` is already wired, so no Step 5.
+`uvx capt-hook test` → 2 passed; the hook is live from the next session — nothing to wire.
 
 ## FIX mode — amending a misfiring hook
 
@@ -204,4 +195,4 @@ the file is already dispatched.
 - [capt-hook API reference](references/capt-hook-api.md) — events, primitives, conditions, event object, CLI.
 - [Pattern catalog](references/pattern-catalog.md) — one validated hook file per taxonomy category.
 - [Testing hooks](references/testing-hooks.md) — inline test format, fixtures, debugging recipes.
-- [Pitfalls](references/pitfalls.md) — primitive-choice and wiring failure modes; read before Step 2.
+- [Pitfalls](references/pitfalls.md) — primitive-choice and dispatch failure modes; read before Step 2.

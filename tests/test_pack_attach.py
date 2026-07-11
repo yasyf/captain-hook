@@ -7,8 +7,7 @@ from pathlib import Path
 import pytest
 from cc_transcript.ids import SessionId
 
-from captain_hook.app import _state
-from captain_hook.cli import CliState, settings_drift, subscribed_events
+from captain_hook.cli import CliState
 from captain_hook.packs import manager
 from captain_hook.session import ensure_session
 from tests.helpers import run_cli
@@ -170,38 +169,6 @@ def test_discover_skips_attached_pack_with_bad_manifest(tmp_path: Path, manifest
     names = {r.entry.name for r in resolved}
     assert "good" in names  # the healthy attach still loads
     assert "bad" not in names  # the broken attach is skipped, not fatal
-
-
-# --- settings drift ------------------------------------------------------------------
-
-
-def test_drift_excludes_attach_only_events(tmp_path: Path) -> None:
-    hooks = tmp_path / ".claude" / "hooks"
-    hooks.mkdir(parents=True)
-    (hooks / "local.py").write_text("from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='local')\n")
-    (tmp_path / ".claude" / "settings.json").write_text("{}\n")  # exists but wires nothing
-    attach("sess-1", write_pack(tmp_path / "ambient", "ambient", event="SubagentStop"))
-
-    discover(tmp_path, "sess-1")
-    assert {"PreToolUse", "SubagentStop"} <= subscribed_events()
-    assert _state.attach_only_events == {"SubagentStop"}  # only the attach subscribes it
-    drift = settings_drift(tmp_path)
-    assert "PreToolUse" in drift  # a genuinely-unwired local event still nags
-    assert "SubagentStop" not in drift  # ...but the attach-only event does not (its wiring lives in the plugin)
-
-
-def test_attach_only_nlp_provisioning_not_flagged_as_drift(tmp_path: Path) -> None:
-    # An attached pack with nlp=true triggers the shared SessionStart provisioning hook. In an
-    # attach-only repo (no packs.toml) that hook is the plugin's, wired in its own hooks.json,
-    # so it must be attributed to the attach and not raise a false settings_drift nag.
-    (tmp_path / ".claude" / "hooks").mkdir(parents=True)
-    (tmp_path / ".claude" / "settings.json").write_text("{}\n")  # exists but wires nothing
-    attach("sess-1", write_pack(tmp_path / "ambient", "ambient", nlp=True))
-
-    discover(tmp_path, "sess-1")
-    assert "SessionStart" in subscribed_events()  # the nlp pack registers the provisioning hook
-    assert "SessionStart" in _state.attach_only_events  # ...attributed to the attach, not the project
-    assert "SessionStart" not in settings_drift(tmp_path)  # so no false drift nag
 
 
 # --- end-to-end run ------------------------------------------------------------------
