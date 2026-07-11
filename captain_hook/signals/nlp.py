@@ -33,19 +33,45 @@ class Phrase(PhraseFields):
     def expand(cls, *terms: str, pos: str = "n") -> Phrase:
         """Phrase covering ``terms`` plus their WordNet synonyms for ``pos``.
 
+        The WordNet expansion is deferred to the first predicate use of the
+        returned phrase (its :attr:`~ExpandedPhrase.lemmas` are computed once, on
+        first read), so building a signal — and importing the pack that builds
+        it — never loads the lexicon.
+
         Example:
             >>> Phrase.expand("issue")  # issue, consequence, effect, outcome, ...
         """
+        return ExpandedPhrase(*terms, pos=pos)
+
+
+class ExpandedPhrase(Phrase):
+    """A :class:`Phrase` whose WordNet synonyms are expanded lazily on first predicate use.
+
+    :meth:`Phrase.expand` returns one of these instead of expanding eagerly, so a
+    pack that builds NLP signals at import pays neither the WordNet load nor the
+    lexicon provisioning until a transcript scan actually reaches this phrase's
+    clause and reads :attr:`lemmas`.
+    """
+
+    terms: tuple[str, ...]
+    pos: str
+
+    def __init__(self, *terms: str, pos: str = "n") -> None:
+        object.__setattr__(self, "terms", tuple(t.lower() for t in terms))
+        object.__setattr__(self, "pos", pos)
+
+    @functools.cached_property
+    def lemmas(self) -> tuple[str, ...]:
         from captain_hook.state import RESOURCES
 
-        return cls(
-            *{
+        return tuple(
+            {
                 lemma.replace("_", " ")
-                for term in terms
-                for ss in RESOURCES.wn.synsets(term, pos=pos)
+                for term in self.terms
+                for ss in RESOURCES.wn.synsets(term, pos=self.pos)
                 for lemma in ss.lemmas()
             }
-            | {t.lower() for t in terms}
+            | set(self.terms)
         )
 
 

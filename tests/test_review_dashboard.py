@@ -565,6 +565,57 @@ class TestOverview:
         assert [v.eligible for v in views] == [True]
         assert views[0].summary == "run the suite before committing"
 
+    async def test_batched_overview_matches_per_candidate_computation(self, store: ReviewStore) -> None:
+        settings = ReviewSettings()
+        await store.enable(REPO)
+        await eligible_create(store, rule="ready", summary="run the suite before committing")
+
+        early = await store.ensure_candidate(
+            REPO, kind=CandidateKind.CREATE, rule="early", source_kind=SourceKind("transcript_message")
+        )
+        await seed_obs(store, early, "early0", session="x1", occurred="2026-06-01T10:00:00+00:00")
+        await judge_obs(store, "early0")
+
+        rejected = await store.ensure_candidate(
+            REPO, kind=CandidateKind.CREATE, rule="nope", source_kind=SourceKind("transcript_message")
+        )
+        await seed_obs(store, rejected, "nope0", session="x2", occurred="2026-06-02T10:00:00+00:00")
+        await judge_obs(store, "nope0", accepted=False)
+
+        fix = await store.ensure_candidate(
+            REPO,
+            kind=CandidateKind.FIX,
+            rule="fix-rule",
+            source_kind=SourceKind("hook_complaint"),
+            target_source_file="hooks/h.py",
+            target_hook_name="h",
+        )
+        await seed_obs(
+            store,
+            fix,
+            "fix0",
+            session="x3",
+            occurred="2026-06-03T10:00:00+00:00",
+            heuristic=0.95,
+            source="hook_complaint",
+        )
+        await store.record_verdict(
+            DedupKey("fix0"),
+            FakeVerdict(accepted=True, summary="tighten the guard"),
+            role="judge",
+            prompt_version=store.versions.fix,
+            model="m1",
+            fidelity="full",
+        )
+
+        views = await store.overview(REPO, settings=settings)
+        assert len(views) == 4
+        for v in views:
+            cid = int(str(v.row["id"]))
+            assert v.threshold == await store.threshold_status(cid, settings=settings)
+            assert v.eligible == await store.eligible(cid, settings=settings)
+            assert v.summary == await store.pr_summary(cid, settings=settings)
+
 
 async def seed_spawn_runs(store: ReviewStore, *oks: bool) -> None:
     for day, ok in enumerate(oks, start=1):

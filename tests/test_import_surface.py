@@ -47,6 +47,19 @@ module = importlib.import_module("captain_hook")
 print(json.dumps([name for name in json.loads(sys.argv[1]) if not hasattr(module, name)]))
 """
 
+PACK_IMPORT_PROBE = """
+import sys
+
+import captain_hook
+from captain_hook.loader import discover_pack
+from captain_hook.packs import manager
+
+for name, pack_dir in manager.builtin_packs().items():
+    discover_pack(name, pack_dir)
+
+print(",".join(name for name in ("wn", "spacy") if name in sys.modules))
+"""
+
 
 def exported_names() -> set[str]:
     type_checking = next(
@@ -81,3 +94,9 @@ def test_every_root_export_resolves() -> None:
 def test_legacy_transcript_surface_is_gone() -> None:
     assert not exported_names() & set(LEGACY_SURFACE)
     assert resolve_in_subprocess(set(LEGACY_SURFACE)) == sorted(LEGACY_SURFACE)
+
+
+def test_builtin_pack_discovery_does_not_load_nlp_models() -> None:
+    out = subprocess.run([sys.executable, "-c", PACK_IMPORT_PROBE], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == ""

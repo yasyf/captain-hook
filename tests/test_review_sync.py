@@ -142,6 +142,53 @@ class TestSyncOpenPrs:
         assert calls == []
 
 
+class TestPrStateCache:
+    async def test_cache_miss_fetches_and_records(
+        self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        url = "https://github.com/yasyf/captain-hook/pull/10"
+        await open_pr(store, url, opened_days_ago=1)
+        calls = install_gh(monkeypatch, {url: "OPEN"})
+        assert await sync_open_prs(store, REPO, settings=settings) == SyncReport(0, 0, 0, 0, kept=1)
+        assert calls == [url]
+        cached = await store.pr_state_cache(url)
+        assert cached is not None and cached.pr == PrState("OPEN", None)
+
+    async def test_warm_cache_within_ttl_skips_gh(
+        self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        url = "https://github.com/yasyf/captain-hook/pull/11"
+        candidate_id = await open_pr(store, url, opened_days_ago=1)
+        calls = install_gh(monkeypatch, {url: "OPEN"})
+        await sync_open_prs(store, REPO, settings=settings)
+        assert await sync_open_prs(store, REPO, settings=settings) == SyncReport(0, 0, 0, 0, kept=1)
+        assert calls == [url]
+        assert await status_of(store, candidate_id) == CandidateStatus.PR_OPEN
+
+    async def test_force_refresh_bypasses_a_warm_cache(
+        self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        url = "https://github.com/yasyf/captain-hook/pull/12"
+        candidate_id = await open_pr(store, url)
+        install_gh(monkeypatch, {url: "OPEN"})
+        await sync_open_prs(store, REPO, settings=settings)
+        calls = install_gh(monkeypatch, {url: "MERGED"})
+        assert await sync_open_prs(store, REPO, settings=settings, force_refresh=True) == SyncReport(1, 0, 0, 0)
+        assert calls == [url]
+        assert await status_of(store, candidate_id) == CandidateStatus.ACCEPTED
+
+    async def test_gh_down_falls_back_to_a_cached_state(
+        self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        url = "https://github.com/yasyf/captain-hook/pull/13"
+        candidate_id = await open_pr(store, url)
+        await store.cache_pr_state(url, PrState("MERGED", MERGED_AT))
+        calls = install_gh(monkeypatch, {url: None})
+        assert await sync_open_prs(store, REPO, settings=settings, force_refresh=True) == SyncReport(1, 0, 0, 0)
+        assert calls == [url]
+        assert await status_of(store, candidate_id) == CandidateStatus.ACCEPTED
+
+
 class TestGhPrState:
     def test_parses_state_and_merged_at_from_gh_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
         recorded: list[list[str]] = []

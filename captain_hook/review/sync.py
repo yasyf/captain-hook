@@ -14,7 +14,7 @@ import subprocess
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from loguru import logger
 
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from captain_hook.review.store import ReviewStore
 
 GH_TIMEOUT = 30
+PR_STATE_TTL = timedelta(minutes=15)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +40,18 @@ class PrState:
 
     state: str
     merged_at: str | None
+
+
+class CachedPrState(NamedTuple):
+    """A :class:`PrState` read back from the ``pr_states`` cache with its fetch time.
+
+    Attributes:
+        pr: The cached GitHub state.
+        fetched_at: When the state was last fetched from ``gh``.
+    """
+
+    pr: PrState
+    fetched_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,20 +93,41 @@ def is_stale(opened_at: str, *, days: int) -> bool:
     return datetime.fromisoformat(opened_at) < datetime.now(UTC) - timedelta(days=days)
 
 
-async def sync_open_prs(store: ReviewStore, repo: RepoKey, *, settings: ReviewSettings) -> SyncReport:
+async def sync_open_prs(
+    store: ReviewStore, repo: RepoKey, *, settings: ReviewSettings, force_refresh: bool = False
+) -> SyncReport:
     """Folds each of the repo's open PRs' GitHub state back into its candidate.
+
+    Each PR's state is served from the ``pr_states`` cache when its entry is younger
+    than :data:`PR_STATE_TTL`, so a status dashboard's background sync never re-hits
+    ``gh`` per open PR within the window; ``force_refresh`` (``review sync-prs``)
+    bypasses the cache. When ``gh`` is down on a forced or expired refresh, a stale
+    cached state is folded in rather than treating the PR as unreachable — only a PR
+    with no cached state at all counts unreachable and stays ``pr_open``.
 
     Args:
         store: The open review store.
         repo: The repo whose ``pr_open`` candidates to sync.
         settings: The reviewer settings supplying ``stale_after_days``.
+        force_refresh: When True, ignore the cache and re-fetch every PR from ``gh``.
 
     Returns:
         The pass's transition counts.
     """
+    cutoff = datetime.now(UTC) - PR_STATE_TTL
+
+    async def resolve(url: str) -> PrState | None:
+        cached = await store.pr_state_cache(url)
+        if not force_refresh and cached is not None and cached.fetched_at >= cutoff:
+            return cached.pr
+        if (pr := await asyncio.to_thread(gh_pr_state, url)) is not None:
+            await store.cache_pr_state(url, pr)
+            return pr
+        return cached.pr if cached is not None else None
+
     counts: Counter[str] = Counter()
     rows = await store.candidates(repo, status=CandidateStatus.PR_OPEN)
-    states = await asyncio.gather(*(asyncio.to_thread(gh_pr_state, str(row["pr_url"])) for row in rows))
+    states = await asyncio.gather(*(resolve(str(row["pr_url"])) for row in rows))
     for row, pr in zip(rows, states, strict=True):
         candidate_id, url = int(str(row["id"])), str(row["pr_url"])
         match pr:

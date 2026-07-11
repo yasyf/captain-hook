@@ -376,7 +376,7 @@ def sync_prs(state: CliState, repo_: str | None) -> None:
 
     settings = ReviewSettings()
     repo = resolve_repo(repo_, state.root)
-    report: SyncReport = run_store(lambda store: sync_open_prs(store, repo, settings=settings))
+    report: SyncReport = run_store(lambda store: sync_open_prs(store, repo, settings=settings, force_refresh=True))
     click.echo(
         f"accepted {report.accepted}, rejected {report.rejected}, "
         f"stale {report.stale}, unreachable {report.unreachable}"

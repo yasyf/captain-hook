@@ -27,7 +27,7 @@ from captain_hook.review.prompts import CREATE_TEMPLATE, FIX_TEMPLATE
 from captain_hook.review.repo import RepoKey
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
     from pathlib import Path
     from typing import Any
 
@@ -39,8 +39,11 @@ if TYPE_CHECKING:
     from cc_transcript.mining.sourcekind import SourceKind
 
     from captain_hook.review.settings import ReviewSettings
+    from captain_hook.review.sync import CachedPrState, PrState
 
 SPLIT_THRESHOLD = 0.9
+
+PROMPT_FINGERPRINT_KEY = "prompt_fingerprint"
 
 CANDIDATES_QUERY = """
 SELECT c.*,
@@ -336,13 +339,23 @@ CREATE TABLE IF NOT EXISTS spawn_runs (
   report_json TEXT,
   CHECK ((ok = 1) = (error IS NULL))
 );
+CREATE TABLE IF NOT EXISTS review_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pr_states (
+  pr_url TEXT PRIMARY KEY,
+  state TEXT NOT NULL,
+  merged_at TEXT,
+  fetched_at TEXT NOT NULL
+);
 """,
             ),
             versions,
         )
         await store.migrate_columns("candidates", CANDIDATE_MIGRATIONS)
         await store.migrate_columns("feedback_events", FEEDBACK_MIGRATIONS)
-        await store.purge_stale_verdicts()
+        await store.purge_stale_verdicts_if_changed()
         return store
 
     async def migrate_columns(self, table: str, migrations: tuple[ColumnMigration, ...]) -> None:
@@ -664,6 +677,38 @@ WHERE c.candidate_kind = ? AND c.status = ?
             ),
         )
 
+    async def pr_state_cache(self, url: str) -> CachedPrState | None:
+        """Returns the last-fetched GitHub state for ``url``, with its fetch time — or ``None`` if uncached.
+
+        The single read of the ``pr_states`` TTL cache: :func:`sync_open_prs` uses it
+        to skip a fresh ``gh`` call when the entry is young enough, and to fall back
+        to a stale state (better than treating the PR as unreachable) when ``gh`` is
+        down on a forced or expired refresh.
+        """
+        from captain_hook.review.sync import CachedPrState, PrState
+
+        cur = await self.store.conn.execute(
+            "SELECT state, merged_at, fetched_at FROM pr_states WHERE pr_url = ?", (url,)
+        )
+        if not (rows := [dict(row) async for row in cur]):
+            return None
+        return CachedPrState(
+            PrState(
+                state=str(rows[0]["state"]),
+                merged_at=str(m) if (m := rows[0]["merged_at"]) is not None else None,
+            ),
+            datetime.fromisoformat(str(rows[0]["fetched_at"])),
+        )
+
+    async def cache_pr_state(self, url: str, pr: PrState) -> None:
+        """Records ``url``'s freshly-fetched GitHub state — the only ``pr_states`` write."""
+        await self.store.conn.execute(
+            "INSERT INTO pr_states (pr_url, state, merged_at, fetched_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(pr_url) DO UPDATE SET state = excluded.state, "
+            "merged_at = excluded.merged_at, fetched_at = excluded.fetched_at",
+            (url, pr.state, pr.merged_at, now()),
+        )
+
     async def regroup_create(self) -> tuple[int, int]:
         """Re-parents, retires, and sweeps watching create candidates onto their durable slugs.
 
@@ -946,25 +991,125 @@ ORDER BY o.id
             for correction in log.for_anchor(SessionId(str(row["session_id"])), EventUuid(str(row["event_uuid"])))
         )
 
-    async def candidate_view(self, row: dict[str, object], *, settings: ReviewSettings) -> CandidateView:
-        """Assembles one :class:`CandidateView` from a :meth:`candidates` row."""
-        candidate_id = int(str(row["id"]))
-        threshold = await self.threshold_status(candidate_id, settings=settings)
-        return CandidateView(
-            row=row,
-            threshold=threshold,
-            eligible=crosses_thresholds(threshold, settings=settings),
-            summary=await self.pr_summary(candidate_id, settings=settings),
+    async def threshold_statuses(
+        self, rows: Sequence[Mapping[str, object]], *, settings: ReviewSettings
+    ) -> dict[int, ThresholdStatus]:
+        """Returns the :class:`ThresholdStatus` for every candidate in ``rows`` in a fixed number of queries.
+
+        The set-based sibling of :meth:`threshold_status`, built for :meth:`overview`
+        so the dashboard reads N candidates without N per-row round trips: one accepted-
+        evidence scan over all candidates (lane version by kind, evidence gated past a
+        reopened candidate's ``resolved_at``), one ``repos`` read, and one open-PR count
+        per repo. It computes the exact same fields as :meth:`threshold_status` — a
+        parity test pins the two together — so :func:`crosses_thresholds` stays the one
+        eligibility predicate over either.
+        """
+        if not rows:
+            return {}
+        ids = [int(str(row["id"])) for row in rows]
+        placeholders = ",".join("?" * len(ids))
+        accepted_cur = await self.store.conn.execute(
+            f"""
+SELECT o.candidate_id, o.session_id, substr(o.occurred_at, 1, 10) AS day, e.payload_json
+FROM candidate_observations o
+JOIN candidates c ON c.id = o.candidate_id
+JOIN {self.VERDICT_TABLE} v ON v.dedup_key = o.dedup_key AND v.role = 'judge'
+  AND v.prompt_version = CASE WHEN c.candidate_kind = ? THEN ? ELSE ? END
+JOIN feedback_events e ON e.dedup_key = o.dedup_key
+WHERE o.candidate_id IN ({placeholders}) AND v.{self.ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
+  AND (c.generation <= 1 OR o.occurred_at > c.resolved_at)
+""",
+            (CandidateKind.FIX, self.versions.fix, self.versions.create, *ids, settings.min_judge_confidence),
         )
+        accepted: dict[int, list[Mapping[str, object]]] = {}
+        async for row in accepted_cur:
+            accepted.setdefault(int(row["candidate_id"]), []).append(dict(row))
+
+        watching_cur = await self.store.conn.execute("SELECT repo_key, watching FROM repos")
+        watching = {str(row["repo_key"]): bool(row["watching"]) async for row in watching_cur}
+
+        cutoff = (datetime.now(UTC) - timedelta(days=settings.stale_after_days)).isoformat()
+        prs_cur = await self.store.conn.execute(
+            "SELECT repo_key, COUNT(*) AS n FROM candidates WHERE status = ? AND pr_opened_at > ? GROUP BY repo_key",
+            (CandidateStatus.PR_OPEN, cutoff),
+        )
+        open_prs = {str(row["repo_key"]): int(row["n"]) async for row in prs_cur}
+
+        def status_for(row: Mapping[str, object]) -> ThresholdStatus:
+            obs = accepted.get(int(str(row["id"])), [])
+            watching_repo = str(row["origin_repo_key"] or row["repo_key"])
+            return ThresholdStatus(
+                kind=CandidateKind(str(row["candidate_kind"])),
+                status=CandidateStatus(str(row["status"])),
+                watching=watching.get(watching_repo, False),
+                sessions=len({o["session_id"] for o in obs}),
+                days=len({o["day"] for o in obs}),
+                open_prs=open_prs.get(str(row["repo_key"]), 0),
+                single_observation=any(
+                    signal_confidence(o["payload_json"]) >= settings.min_confidence_fix_single for o in obs
+                ),
+            )
+
+        return {int(str(row["id"])): status_for(row) for row in rows}
+
+    async def pr_summaries(self, rows: Sequence[Mapping[str, object]], *, settings: ReviewSettings) -> dict[int, str]:
+        """Returns each candidate's highest-confidence accepted verdict summary in one query.
+
+        The set-based sibling of :meth:`pr_summary` for :meth:`overview`: candidates
+        with no judge-accepted evidence (post-``resolved_at`` for a reopened one) are
+        simply absent from the mapping.
+        """
+        if not rows:
+            return {}
+        ids = [int(str(row["id"])) for row in rows]
+        placeholders = ",".join("?" * len(ids))
+        cur = await self.store.conn.execute(
+            f"""
+WITH latest AS (
+  SELECT v.dedup_key, v.prompt_version, v.{self.ACCEPTED_COLUMN} AS accepted,
+    v.{self.SUMMARY_COLUMN} AS summary, v.confidence,
+    ROW_NUMBER() OVER (
+      PARTITION BY v.dedup_key, v.prompt_version ORDER BY v.judged_at DESC, v.id DESC
+    ) AS rn
+  FROM {self.VERDICT_TABLE} v WHERE v.role = 'judge'
+)
+SELECT o.candidate_id, l.summary AS summary,
+  ROW_NUMBER() OVER (PARTITION BY o.candidate_id ORDER BY l.confidence DESC, o.id DESC) AS pick
+FROM candidate_observations o
+JOIN candidates c ON c.id = o.candidate_id
+JOIN latest l ON l.dedup_key = o.dedup_key AND l.rn = 1
+  AND l.prompt_version = CASE WHEN c.candidate_kind = ? THEN ? ELSE ? END
+WHERE o.candidate_id IN ({placeholders}) AND l.accepted = 1 AND l.confidence >= ?
+  AND (c.generation <= 1 OR o.occurred_at > c.resolved_at)
+""",
+            (CandidateKind.FIX, self.versions.fix, self.versions.create, *ids, settings.min_judge_confidence),
+        )
+        return {int(row["candidate_id"]): str(row["summary"]) async for row in cur if int(row["pick"]) == 1}
 
     async def overview(self, repo: RepoKey | None = None, *, settings: ReviewSettings) -> list[CandidateView]:
         """Returns a :class:`CandidateView` per candidate — the status dashboard's whole read.
+
+        Assembles each view from the batched :meth:`threshold_statuses` and
+        :meth:`pr_summaries` — a fixed number of queries over the whole candidate set
+        rather than a per-row fan-out — then gates eligibility through the shared
+        :func:`crosses_thresholds`.
 
         Args:
             repo: When set, restrict to this repo.
             settings: The thresholds and judge knobs to evaluate under.
         """
-        return [await self.candidate_view(row, settings=settings) for row in await self.candidates(repo)]
+        rows = await self.candidates(repo)
+        statuses = await self.threshold_statuses(rows, settings=settings)
+        summaries = await self.pr_summaries(rows, settings=settings)
+        return [
+            CandidateView(
+                row=row,
+                threshold=(threshold := statuses[candidate_id := int(str(row["id"]))]),
+                eligible=crosses_thresholds(threshold, settings=settings),
+                summary=summaries.get(candidate_id),
+            )
+            for row in rows
+        ]
 
     async def record_spawn_run(
         self,
@@ -1019,7 +1164,9 @@ SELECT
             failing_since=str(since) if (since := streak["failing_since"]) is not None else None,
         )
 
-    async def judge_queue(self, *, refresh_summary: bool = False) -> list[dict[str, object]]:
+    async def judge_queue(
+        self, *, refresh_summary: bool = False, probe_hydration: bool = True
+    ) -> list[dict[str, object]]:
         """Returns the rows one judge pass judges, each under its taxonomy's bound version.
 
         Each lane is fetched at its own version and post-filtered to its
@@ -1031,19 +1178,28 @@ SELECT
         Args:
             refresh_summary: When True, also re-yields summary-fidelity rows for a
                 full-fidelity re-judge once their windows hydrate again.
+            probe_hydration: Forwarded to :meth:`unjudged`; the judging path leaves
+                it True so a dead-transcript summary row drops, while the display
+                backlog count passes False to skip the per-row transcript rglob.
         """
         junk = await self.junk_triaged_keys()
         create_lane = [
             row
             for row in await self.unjudged(
-                role="judge", prompt_version=self.versions.create, refresh_summary=refresh_summary
+                role="judge",
+                prompt_version=self.versions.create,
+                refresh_summary=refresh_summary,
+                probe_hydration=probe_hydration,
             )
             if str(row["source_kind"]) != HOOK_COMPLAINT and str(row["dedup_key"]) not in junk
         ]
         fix_lane = [
             row
             for row in await self.unjudged(
-                role="judge", prompt_version=self.versions.fix, refresh_summary=refresh_summary
+                role="judge",
+                prompt_version=self.versions.fix,
+                refresh_summary=refresh_summary,
+                probe_hydration=probe_hydration,
             )
             if str(row["source_kind"]) == HOOK_COMPLAINT
         ]
@@ -1055,8 +1211,11 @@ SELECT
         The dashboard's pending count: every :meth:`judge_queue` row (summary-refresh
         included) that clears :func:`judge_worthy` — the same noise-floor predicate
         the judge pass sends rows on, so the count matches what the next pass judges.
+        A display-only read, so ``probe_hydration=False`` skips the per-row transcript
+        rglob a summary-refresh probe would run — the backlog count over-counts a dead
+        transcript by at most one row rather than scanning the projects tree per row.
         """
-        return sum(judge_worthy(row) for row in await self.judge_queue(refresh_summary=True))
+        return sum(judge_worthy(row) for row in await self.judge_queue(refresh_summary=True, probe_hydration=False))
 
     async def has_verdict_evidence(self) -> bool:
         """Whether any canonical-key evidence is stored at the create lane's bound version to suggest from.
@@ -1090,6 +1249,31 @@ SELECT
         from cc_transcript.judge.similar import near_duplicate_keys
 
         return await near_duplicate_keys(self, prompt_version=self.versions.create, threshold=threshold)
+
+    async def purge_stale_verdicts_if_changed(self) -> int:
+        """Runs :meth:`purge_stale_verdicts` only when the prompt fingerprint moved since the last open.
+
+        The gate on the sole purge codepath, run on :meth:`open`: an unchanged
+        ``(create, fix)`` version pair means no template edit could have staled a
+        verdict since the last sweep, so the purge — and its evidence-vector scan —
+        is skipped, keeping a hot store-open (the SessionStart announcer's) cheap. A
+        database with no recorded fingerprint (fresh, or first open after this
+        upgrade) purges once and records the pair, then stays quiet until a lane's
+        template hash bumps.
+
+        Returns:
+            The number of verdict rows deleted, or ``0`` when the purge was skipped.
+        """
+        fingerprint = f"{self.versions.create}:{self.versions.fix}"
+        cur = await self.store.conn.execute("SELECT value FROM review_meta WHERE key = ?", (PROMPT_FINGERPRINT_KEY,))
+        if (stored := [str(row["value"]) async for row in cur]) and stored[0] == fingerprint:
+            return 0
+        purged = await self.purge_stale_verdicts()
+        await self.store.conn.execute(
+            "INSERT INTO review_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (PROMPT_FINGERPRINT_KEY, fingerprint),
+        )
+        return purged
 
     async def purge_stale_verdicts(self) -> int:
         """Deletes verdict and evidence rows recorded at a version their lane no longer runs.

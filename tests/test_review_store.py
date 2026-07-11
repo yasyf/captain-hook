@@ -828,6 +828,32 @@ class TestPerLaneVersions:
         )
         assert [str(row["dedup_key"]) for row in await store.judge_queue()] == ["ka", "kb", "kc", "kh"]
 
+    async def test_judge_backlog_skips_the_hydration_probe(
+        self, store: ReviewStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        probes: list[bool] = []
+
+        async def fake_unjudged(*, probe_hydration: bool = True, **_: object) -> list[dict[str, object]]:
+            probes.append(probe_hydration)
+            return []
+
+        monkeypatch.setattr(store, "unjudged", fake_unjudged)
+        await store.judge_backlog()
+        assert probes == [False, False]
+
+    async def test_judge_queue_probes_hydration_by_default(
+        self, store: ReviewStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        probes: list[bool] = []
+
+        async def fake_unjudged(*, probe_hydration: bool = True, **_: object) -> list[dict[str, object]]:
+            probes.append(probe_hydration)
+            return []
+
+        monkeypatch.setattr(store, "unjudged", fake_unjudged)
+        await store.judge_queue(refresh_summary=True)
+        assert probes == [True, True]
+
     async def test_judge_health_recency_is_lane_exact(self, store: ReviewStore, tmp_path: Path) -> None:
         candidate_id = await create_candidate(store, rule=digest_rule("ka"))
         await seed(store, candidate_id, "ka", session="s0", occurred="2026-06-01T10:00:00+00:00")
@@ -856,8 +882,8 @@ class TestHashVersions:
         assert PROMPT_VERSIONS.create != PROMPT_VERSIONS.fix
 
 
-class TestOpenPurgesStaleVerdicts:
-    async def test_open_deletes_stale_version_rows_and_spares_live(self, store: ReviewStore, tmp_path: Path) -> None:
+class TestPurgeStaleVerdicts:
+    async def test_purge_deletes_stale_version_rows_and_spares_live(self, store: ReviewStore) -> None:
         candidate_id = await create_candidate(store, rule=digest_rule("ka"))
         await seed(store, candidate_id, "ka", session="s0", occurred="2026-06-01T10:00:00+00:00")
         for version in (store.versions.create, store.versions.create - 1):
@@ -870,11 +896,11 @@ class TestOpenPurgesStaleVerdicts:
                 fidelity="full",
             )
 
-        async with await ReviewStore.open(tmp_path / "review.db") as reopened:
-            after = {(str(r["dedup_key"]), int(r["prompt_version"])) for r in await dump_table(reopened, "verdicts")}
-            assert after == {("ka", store.versions.create)}
+        await store.purge_stale_verdicts()
+        after = {(str(r["dedup_key"]), int(r["prompt_version"])) for r in await dump_table(store, "verdicts")}
+        assert after == {("ka", store.versions.create)}
 
-    async def test_open_spares_other_roles(self, store: ReviewStore, tmp_path: Path) -> None:
+    async def test_purge_spares_other_roles(self, store: ReviewStore) -> None:
         candidate_id = await create_candidate(store, rule=digest_rule("ka"))
         await seed(store, candidate_id, "ka", session="s0", occurred="2026-06-01T10:00:00+00:00")
         await store.record_verdict(
@@ -894,11 +920,11 @@ class TestOpenPurgesStaleVerdicts:
             fidelity="full",
         )
 
-        async with await ReviewStore.open(tmp_path / "review.db") as reopened:
-            after = {(str(r["role"]), int(r["prompt_version"])) for r in await dump_table(reopened, "verdicts")}
-            assert after == {("auditor", 1)}
+        await store.purge_stale_verdicts()
+        after = {(str(r["role"]), int(r["prompt_version"])) for r in await dump_table(store, "verdicts")}
+        assert after == {("auditor", 1)}
 
-    async def test_open_purge_is_lane_aware_between_create_and_fix(self, store: ReviewStore, tmp_path: Path) -> None:
+    async def test_purge_is_lane_aware_between_create_and_fix(self, store: ReviewStore) -> None:
         correction_id = await create_candidate(store, rule="corr-rule")
         await seed(store, correction_id, "kc", session="s0", occurred="2026-06-01T10:00:00+00:00")
         complaint_id = await fix_candidate(store)
@@ -920,9 +946,51 @@ class TestOpenPurgesStaleVerdicts:
                 fidelity="full",
             )
 
+        await store.purge_stale_verdicts()
+        after = {(str(r["dedup_key"]), int(r["prompt_version"])) for r in await dump_table(store, "verdicts")}
+        assert after == {("kc", store.versions.create)}
+
+
+class TestPurgeGating:
+    async def seed_stale_judge_row(self, store: ReviewStore) -> None:
+        candidate_id = await create_candidate(store, rule=digest_rule("ka"))
+        await seed(store, candidate_id, "ka", session="s0", occurred="2026-06-01T10:00:00+00:00")
+        await store.record_verdict(
+            DedupKey("ka"),
+            Verdict(accepted=True, confidence=0.9, canonical_key=None),
+            role="judge",
+            prompt_version=store.versions.create - 1,
+            model="m1",
+            fidelity="full",
+        )
+
+    async def test_same_fingerprint_reopen_skips_purge(self, store: ReviewStore, tmp_path: Path) -> None:
+        await self.seed_stale_judge_row(store)
         async with await ReviewStore.open(tmp_path / "review.db") as reopened:
-            after = {(str(r["dedup_key"]), int(r["prompt_version"])) for r in await dump_table(reopened, "verdicts")}
-            assert after == {("kc", store.versions.create)}
+            after = {int(r["prompt_version"]) for r in await dump_table(reopened, "verdicts")}
+            assert after == {store.versions.create - 1}
+
+    async def test_changed_fingerprint_reopen_purges(self, store: ReviewStore, tmp_path: Path) -> None:
+        await self.seed_stale_judge_row(store)
+        bumped = PromptVersions(create=store.versions.create + 1, fix=store.versions.fix)
+        async with await ReviewStore.open(tmp_path / "review.db", versions=bumped) as reopened:
+            assert await dump_table(reopened, "verdicts") == []
+
+    async def test_purge_runs_once_per_fingerprint_change(self, store: ReviewStore, tmp_path: Path) -> None:
+        await self.seed_stale_judge_row(store)
+        bumped = PromptVersions(create=store.versions.create + 5, fix=store.versions.fix)
+        async with await ReviewStore.open(tmp_path / "review.db", versions=bumped) as reopened:
+            assert await dump_table(reopened, "verdicts") == []
+            await reopened.record_verdict(
+                DedupKey("ka"),
+                Verdict(accepted=True, confidence=0.9, canonical_key=None),
+                role="judge",
+                prompt_version=bumped.create - 1,
+                model="m1",
+                fidelity="full",
+            )
+        async with await ReviewStore.open(tmp_path / "review.db", versions=bumped) as again:
+            assert {int(r["prompt_version"]) for r in await dump_table(again, "verdicts")} == {bumped.create - 1}
 
 
 class TestMigration:
