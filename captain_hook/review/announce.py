@@ -77,11 +77,17 @@ def collect_announcements(root: Path | None) -> str | None:
     outside a git repo with an ``origin`` remote, or when no review database exists
     yet, so a session start never opens or creates a store in an unrelated repo.
 
+    The announcer's ``mark_announced`` write runs with ``busy_timeout = 0``, so a
+    detached reviewer holding a write lock fails it immediately (``SQLITE_BUSY``)
+    rather than stalling the synchronous hook for SQLite's default five seconds; the
+    outcome is announced at the next uncontended session start instead.
+
     Args:
         root: The session's project root; the repo is resolved from it.
     """
     import asyncio
     import os
+    import sqlite3
 
     from captain_hook.review.pipeline import SPAWNED_ENV
     from captain_hook.review.repo import repo_key
@@ -97,6 +103,13 @@ def collect_announcements(root: Path | None) -> str | None:
 
     async def go() -> list[str]:
         async with await ReviewStore.open(db_path) as store:
+            await store.store.conn.execute("PRAGMA busy_timeout = 0")
             return await pending_announcements(store, repo)
 
-    return "\n".join(lines) if (lines := asyncio.run(go())) else None
+    try:
+        lines = asyncio.run(go())
+    except sqlite3.OperationalError as exc:
+        if exc.sqlite_errorcode != sqlite3.SQLITE_BUSY:
+            raise
+        return None
+    return "\n".join(lines) if lines else None

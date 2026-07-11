@@ -171,6 +171,29 @@ class TestCollectAnnouncements:
         monkeypatch.setenv("CAPT_HOOK_SPAWNED", "1")
         assert collect_announcements(git_repo) is None
 
+    def test_write_lock_fails_fast_then_retries_when_released(self, review_db: Path, git_repo: Path) -> None:
+        # A detached reviewer holding a write lock must not stall the synchronous SessionStart hook:
+        # collect_announcements fails the mark_announced write fast (busy_timeout=0) and returns None,
+        # leaving the announcement pending for the next uncontended session start.
+        import asyncio
+        import sqlite3
+        import time
+
+        asyncio.run(self._seed(review_db))
+        blocker = sqlite3.connect(str(review_db), isolation_level=None)
+        try:
+            blocker.execute("PRAGMA busy_timeout = 0")
+            blocker.execute("BEGIN IMMEDIATE")
+            start = time.monotonic()
+            assert collect_announcements(git_repo) is None
+            assert time.monotonic() - start < 1.0
+        finally:
+            blocker.execute("ROLLBACK")
+            blocker.close()
+        message = collect_announcements(git_repo)
+        assert message is not None
+        assert "awaiting your review" in message
+
 
 class TestSessionStartDispatch:
     def test_announcement_lands_in_additional_context(
