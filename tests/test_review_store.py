@@ -19,6 +19,8 @@ from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import (
     PROMPT_VERSIONS,
     TRANSITIONS,
+    TRIAGE_JUNK,
+    TRIAGE_KEEP,
     CandidateKind,
     CandidateStatus,
     InvalidTransition,
@@ -1219,3 +1221,93 @@ class TestOriginWatchingGate:
         watched = await store.threshold_status(candidate_id, settings=settings)
         assert watched.watching is True
         assert await store.eligible(candidate_id, settings=settings) is True
+
+
+async def feedback_columns(store: ReviewStore) -> set[str]:
+    cur = await store.store.conn.execute("PRAGMA table_info(feedback_events)")
+    return {str(row["name"]) async for row in cur}
+
+
+async def triage_of(store: ReviewStore, key: str) -> object:
+    cur = await store.store.conn.execute("SELECT triage FROM feedback_events WHERE dedup_key = ?", (key,))
+    return [row["triage"] async for row in cur][0]
+
+
+class TestFeedbackMigration:
+    async def test_open_adds_triage_column_to_a_fresh_db(self, store: ReviewStore) -> None:
+        assert "triage" in await feedback_columns(store)
+
+    async def test_prewave_feedback_events_gains_triage_column(self, tmp_path: Path) -> None:
+        from cc_transcript.mining.store import FEEDBACK_DDL
+
+        path = tmp_path / "prewave.db"
+        conn = sqlite3.connect(str(path))
+        conn.executescript(FEEDBACK_DDL)
+        conn.execute(
+            "INSERT INTO feedback_events (dedup_key, source_kind, occurred_at, text, context_json, ingested_at) "
+            "VALUES ('k', 'transcript_message', '2026-05-01T00:00:00+00:00', 'old', '{}', '2026-05-01T00:00:00+00:00')"
+        )
+        conn.commit()
+        conn.close()
+        async with await ReviewStore.open(path) as store:
+            assert "triage" in await feedback_columns(store)
+            assert await triage_of(store, "k") is None
+
+
+class TestJunkTriage:
+    async def test_record_triage_marks_the_junk_keys(self, store: ReviewStore) -> None:
+        candidate_id = await create_candidate(store)
+        await seed(store, candidate_id, "junk", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        await seed(store, candidate_id, "keep", session="s2", occurred="2026-06-02T10:00:00+00:00")
+        await store.record_triage(DedupKey("junk"), junk=True)
+        await store.record_triage(DedupKey("keep"), junk=False)
+        assert await store.junk_triaged_keys() == {"junk"}
+        assert (await triage_of(store, "junk"), await triage_of(store, "keep")) == (TRIAGE_JUNK, TRIAGE_KEEP)
+
+    async def test_reject_junk_triaged_retires_all_junk_and_spares_mixed(self, store: ReviewStore) -> None:
+        all_junk = await create_candidate(store, rule=digest_rule("all"))
+        await seed(store, all_junk, "a1", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        await seed(store, all_junk, "a2", session="s2", occurred="2026-06-02T10:00:00+00:00")
+        mixed = await create_candidate(store, rule=digest_rule("mix"))
+        await seed(store, mixed, "m1", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        await seed(store, mixed, "m2", session="s2", occurred="2026-06-02T10:00:00+00:00")
+        untriaged = await create_candidate(store, rule=digest_rule("untriaged"))
+        await seed(store, untriaged, "u1", session="s1", occurred="2026-06-01T10:00:00+00:00")
+
+        for key in ("a1", "a2", "m1"):
+            await store.record_triage(DedupKey(key), junk=True)
+        await store.record_triage(DedupKey("m2"), junk=False)
+
+        assert await store.reject_junk_triaged() == 1
+        assert (await candidate_row(store, all_junk))["status"] == CandidateStatus.REJECTED
+        assert (await candidate_row(store, mixed))["status"] == CandidateStatus.WATCHING
+        assert (await candidate_row(store, untriaged))["status"] == CandidateStatus.WATCHING
+
+    async def test_untriaged_create_events_scopes_to_watching_create(self, store: ReviewStore) -> None:
+        watching = await create_candidate(store, rule=digest_rule("w"))
+        await seed(store, watching, "w1", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        triaged = await create_candidate(store, rule=digest_rule("t"))
+        await seed(store, triaged, "t1", session="s2", occurred="2026-06-01T10:00:00+00:00")
+        await store.record_triage(DedupKey("t1"), junk=False)
+        rejected = await create_candidate(store, rule=digest_rule("r"))
+        await seed(store, rejected, "r1", session="s3", occurred="2026-06-01T10:00:00+00:00")
+        await store.transition(rejected, CandidateStatus.REJECTED)
+        fix = await fix_candidate(store)
+        await seed(store, fix, "f1", session="s4", occurred="2026-06-01T10:00:00+00:00", source_kind="hook_complaint")
+
+        rows = await store.untriaged_create_events(limit=10)
+        assert [row["dedup_key"] for row in rows] == ["w1"]
+
+    async def test_untriaged_create_events_respects_the_limit(self, store: ReviewStore) -> None:
+        candidate_id = await create_candidate(store)
+        for i in range(5):
+            await seed(store, candidate_id, f"k{i}", session=f"s{i}", occurred="2026-06-01T10:00:00+00:00")
+        assert len(await store.untriaged_create_events(limit=3)) == 3
+
+    async def test_judge_queue_excludes_junk_triaged_events(self, store: ReviewStore) -> None:
+        candidate_id = await create_candidate(store)
+        await seed(store, candidate_id, "junk", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        await seed(store, candidate_id, "keep", session="s2", occurred="2026-06-02T10:00:00+00:00")
+        await store.record_triage(DedupKey("junk"), junk=True)
+        keys = {str(row["dedup_key"]) for row in await store.judge_queue()}
+        assert keys == {"keep"}

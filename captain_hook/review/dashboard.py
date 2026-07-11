@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 DETAIL_WIDTH = 80
 KIND_STYLE = {CandidateKind.CREATE: "cyan", CandidateKind.FIX: "magenta"}
 SPAWN_STALE_AFTER = timedelta(days=7)
+REJECTED_COLLAPSE_N = 5
 
 
 class Stage(StrEnum):
@@ -258,6 +259,26 @@ def header(repo: RepoKey, views: list[CandidateView], settings: ReviewSettings, 
     return Group(line, Text("  run `capt-hook review enable` to start tracking this repo.", style="dim"))
 
 
+def section_blocks(
+    stage: Stage, title: str, desc: str, style: str, members: list[CandidateView], settings: ReviewSettings
+) -> tuple[RenderableType, ...]:
+    """One lifecycle section's blocks: its header, a block per candidate, then a spacer.
+
+    The ``rejected`` bucket is the junk graveyard — deterministic prefilters, junk-triage,
+    and judge-retire all land here — so beyond :data:`REJECTED_COLLAPSE_N` its members
+    collapse to a single ``… and N more rejected`` count line rather than burying the
+    live candidates above. Every other stage lists all its members.
+    """
+    shown = members[:REJECTED_COLLAPSE_N] if stage is Stage.REJECTED else members
+    hidden = len(members) - len(shown)
+    return (
+        Text.assemble((title, f"bold {style}"), (f"   {desc}", "dim")),
+        *(candidate_block(v, settings) for v in shown),
+        *((Text(f"      … and {hidden} more rejected", style="dim"),) if hidden else ()),
+        Text(""),
+    )
+
+
 def render(
     views: list[CandidateView],
     *,
@@ -274,11 +295,7 @@ def render(
         block
         for stage, title, desc, style in SECTIONS
         if (members := [v for v in views if stage_of(v) is stage])
-        for block in (
-            Text.assemble((title, f"bold {style}"), (f"   {desc}", "dim")),
-            *(candidate_block(v, settings) for v in members),
-            Text(""),
-        )
+        for block in section_blocks(stage, title, desc, style, members, settings)
     ]
     empty = [] if views else [Text("No corrections tracked yet — they appear here as you correct Claude.", style="dim")]
     spinner = [Spinner("dots", text=Text("syncing open PRs with GitHub…", style="dim"))] if syncing else []

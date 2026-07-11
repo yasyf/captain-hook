@@ -47,6 +47,9 @@ class SpawnReport:
         watching: Whether the repo is watched (nothing runs when it is not).
         scanned: How many transcripts the incremental scan parsed.
         inserted: How many new feedback events the scan recorded.
+        triaged: How many surviving create events the junk pre-screen classified.
+        triage_junk: How many of those the pre-screen marked junk.
+        triage_rejected: How many candidates the pre-screen retired without a judge call.
         judged: How many rows the judge pass verdicted.
         failed: How many judge calls failed and stay pending.
         eligible: The candidate ids that crossed their PR thresholds.
@@ -63,6 +66,9 @@ class SpawnReport:
     watching: bool = False
     scanned: int = 0
     inserted: int = 0
+    triaged: int = 0
+    triage_junk: int = 0
+    triage_rejected: int = 0
     judged: int = 0
     failed: int = 0
     eligible: tuple[int, ...] = ()
@@ -265,6 +271,7 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
     from captain_hook.review.scan import scan
     from captain_hook.review.store import CandidateStatus, ReviewStore
     from captain_hook.review.sync import sync_open_prs
+    from captain_hook.review.triage import triage_pass
 
     if (repo := resolve_repo_key(cwd)) is None:
         return SpawnReport(repo=None)
@@ -272,6 +279,7 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
         if not await store.watching(repo):
             return SpawnReport(repo=repo)
         scan_report = await scan(store, settings=settings, transcripts=[transcript.parent])
+        triage = await triage_pass(store, settings=settings)
         verdicts = await judge_pass(store, settings=settings, refresh_summary=True)
         sync = await sync_open_prs(store, repo, settings=settings)
         eligible = tuple(
@@ -292,6 +300,9 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
         watching=True,
         scanned=scan_report.scanned,
         inserted=scan_report.inserted,
+        triaged=triage.triaged,
+        triage_junk=triage.junk,
+        triage_rejected=triage.rejected,
         judged=verdicts.judged,
         failed=verdicts.failed,
         eligible=eligible,

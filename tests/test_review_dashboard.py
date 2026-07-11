@@ -19,6 +19,7 @@ from rich.console import Console
 from captain_hook.app import LoadError
 from captain_hook.cli import cli
 from captain_hook.review.dashboard import (
+    REJECTED_COLLAPSE_N,
     Stage,
     brain_segment,
     pr_description,
@@ -309,6 +310,31 @@ class TestRenderFrame:
         assert "[not watching]" in out
         assert "No corrections tracked yet" in out
         assert "capt-hook review enable" in out
+
+
+def rendered_stages(views: list[CandidateView]) -> str:
+    frame = render(views, repo=REPO, settings=ReviewSettings(), watching=True, health=ok_health(), judge=NO_JUDGE)
+    return plain(frame)
+
+
+class TestRejectedCollapse:
+    def test_rejected_beyond_the_cap_collapse_to_a_count_line(self) -> None:
+        extra = 3
+        out = rendered_stages([view(id=i, status="rejected") for i in range(1, REJECTED_COLLAPSE_N + extra + 1)])
+        assert all(f"#{i}" in out for i in range(1, REJECTED_COLLAPSE_N + 1))
+        assert all(f"#{i}" not in out for i in range(REJECTED_COLLAPSE_N + 1, REJECTED_COLLAPSE_N + extra + 1))
+        assert f"… and {extra} more rejected" in out
+
+    def test_rejected_at_the_cap_shows_all_with_no_count_line(self) -> None:
+        out = rendered_stages([view(id=i, status="rejected") for i in range(1, REJECTED_COLLAPSE_N + 1)])
+        assert all(f"#{i}" in out for i in range(1, REJECTED_COLLAPSE_N + 1))
+        assert "more rejected" not in out
+
+    def test_other_stages_never_collapse(self) -> None:
+        n = REJECTED_COLLAPSE_N + 4
+        out = rendered_stages([view(id=i, status="watching", sessions=1, days=1) for i in range(1, n)])
+        assert all(f"#{i}" in out for i in range(1, n))
+        assert "more rejected" not in out
 
 
 class TestPackErrors:

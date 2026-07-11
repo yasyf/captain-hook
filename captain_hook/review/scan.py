@@ -28,6 +28,7 @@ so two sessions' complaints about one hook collapse to one candidate.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
@@ -51,8 +52,11 @@ from cc_transcript.filterspec import (
     RESUME_PHRASE_SET,
     TRIVIAL_ACK_SET,
     USERS,
+    Clause,
     FilterSpec,
+    TextMatchesAny,
     event_meta,
+    event_text,
     keep,
 )
 from cc_transcript.ids import EventRef
@@ -92,6 +96,40 @@ defaults; only the review-comment policy (the three reviewer formats, ``typed``
 surfaces, no structured formats) is customized.
 """
 
+JUNK_CREATE_GROUPS: tuple[tuple[str, str], ...] = (
+    ("agent_relay", r"\A\s*Another Claude session sent a message:"),
+    (
+        "agent_stop_notice",
+        r"\A\s*(?:\d+\s+background agents?\s+(?:were|was)\s+stopped by the user|Background agent\s+\")",
+    ),
+    (
+        "at_path_handoff",
+        r"\A\s*@\S*/\S+\.\w+\s+(?:read it\b|read\b|pick(?:ing)? up\b|implement\w*|impl\b|go\s+ah\w*d"
+        r"|approv\w*|begin\b|beign\b|bgin\b|continue\b|resume\b|delete\b|do\s+(?:the|it)\b|let'?s\b|proceed\b)",
+    ),
+    (
+        "limits_reset",
+        r"\A\s*(?:\w+,?\s+)?(?:session\s+)?limits?\s+"
+        r"(?:have\s+|has\s+|were\s+|been\s+|have\s+been\s+)?reset(?:[,.]?\s+\w+)?\.?\s*\Z",
+    ),
+    (
+        "plan_approved_go",
+        r"\A\s*(?:plan\s+)?appro(?:ved?|ced?)\b[\s,.:!@-]*"
+        r"(?:@|begin|beign|bgin|bgn|begi\w*|go\b|implement\w*|impl\b|start\w*|work\b|do\b|proceed\w*|end\b|now\b|handoff|pick\b)",
+    ),
+    ("env_command_lead", r"\A\s*(?:[A-Z][A-Z0-9_]*=\S+\s+)+\S+[^\n]*--[^\n]*\n"),
+)
+"""Deterministic junk-create leads: agent lifecycle relays and stop notices, ``@path``
+plan handoffs, session-limit resume nudges, plan-approval advance directives, and
+pasted ``ENV=x cmd --flags`` invocations. Each pattern is start-anchored (and the
+whole-message classes end-anchored) so a junk lead trailed by real feedback keeps the
+tail — the survivor then rides the LLM triage and judge backstops."""
+
+QUOTE_PASTE_RE = re.compile(r">[^\n]*(?:\n(?![^\s>])[^\n]*)*\Z")
+"""A message that is a blockquote paste with no un-quoted feedback paragraph: the
+lead line quotes and every later column-0 line is itself a quote (wrapped
+continuation and blank lines allowed), so nothing outside the quote is the user's own."""
+
 STRICT_USER: FilterSpec = build_spec(
     keep_only("user"),
     drop_sidechain(),
@@ -99,18 +137,43 @@ STRICT_USER: FilterSpec = build_spec(
     drop_compacted(),
     drop_empty(only_from=USERS),
     drop_junk("structural", "agent_injection", "stop_hook", "continuation", "command_echo"),
+    Clause(TextMatchesAny(JUNK_CREATE_GROUPS), applies_to=USERS),
     drop_phrases(TRIVIAL_ACK_SET | RESUME_PHRASE_SET),
     drop_short(2),
 )
 """The event-level prefilter for user-authored corrections.
 
 Drops structural noise, agent-injected banners, approve-and-advance directives,
-stop-hook output, command echoes, trivial acknowledgements, very short control
-messages, and sidechain/meta/compacted/empty turns.
+stop-hook output, command echoes, the :data:`JUNK_CREATE_GROUPS` junk-create leads,
+trivial acknowledgements, very short control messages, and
+sidechain/meta/compacted/empty turns.
 """
+
+GATED_DETECTORS = frozenset({"transcript_message", "plan_reentry", "review_comment", "exit_plan_rejection"})
+"""CREATE detectors whose surviving signal must clear the :data:`STRICT_USER` prefilter
+and the paste-only structural check before it can become a candidate."""
 
 COLLAPSE_DETECTORS = frozenset({"exit_plan_rejection", "plan_reentry", "denial", "interrupt", "review_comment"})
 """CREATE detectors whose surviving signal shadows an equal-text ``transcript_message`` at the same event."""
+
+
+def is_paste_only(text: str) -> bool:
+    """Whether ``text`` is a verbatim paste — a fenced block or blockquote — with no feedback tail.
+
+    Pairs with :data:`STRICT_USER` as the structural half of the junk-create prefilter:
+    the regex leads there can't reason about a multi-line quote or fence closing before a
+    substantive tail, so this handles the two paste shapes in Python. A paste trailed by
+    the user's own feedback keeps the tail (this returns ``False``), matching the
+    continue-with-tail semantics the regex leads preserve by anchoring.
+    """
+    stripped = text.strip()
+    if QUOTE_PASTE_RE.match(stripped):
+        return True
+    if not stripped.startswith("```"):
+        return False
+    if (close := re.search(r"\n[ \t]*```[ \t]*(?:\n|\Z)", stripped[3:])) is None:
+        return True
+    return not stripped[3:][close.end() :].strip()
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,8 +190,8 @@ class ScanReport:
 
 
 def survives(events: Sequence[TranscriptEvent], sig: MiningSignal) -> bool:
-    if sig.detector in {"transcript_message", "plan_reentry", "review_comment"} and not keep(
-        events[sig.event_index], STRICT_USER
+    if sig.detector in GATED_DETECTORS and (
+        not keep(event := events[sig.event_index], STRICT_USER) or is_paste_only(event_text(event))
     ):
         return False
     return not (sig.detector == "transcript_message" and sig.trigger_index is None)

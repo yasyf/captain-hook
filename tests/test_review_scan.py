@@ -19,10 +19,12 @@ from captain_hook.review.scan import (
     ScanReport,
     collapse_cross_detector,
     detect,
+    is_paste_only,
     parts,
     rule_parts,
     scan,
     scan_transcript,
+    survives,
 )
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import ReviewStore
@@ -226,6 +228,108 @@ class TestStrictUser:
         report = await scan_transcript(store, path, settings=settings, repo_key=REPO)
         assert report == ScanReport(scanned=1, inserted=0)
         assert await rows(store, "SELECT * FROM feedback_events") == []
+
+
+def prefilter_drops(text: str) -> bool:
+    [event] = parse([user_text(text)])
+    return not keep(event, STRICT_USER) or is_paste_only(text)
+
+
+# Verbatim junk-create leads lifted from the live rejected-candidate corpus.
+JUNK_CREATE_TEXTS: tuple[tuple[str, str], ...] = (
+    ("agent_relay", 'Another Claude session sent a message:\n<teammate-message teammate_id="hook-finder">'),
+    ("agent_stop_notice_count", '6 background agents were stopped by the user: "Explore the local repo ..."'),
+    ("agent_stop_notice_named", 'Background agent "Re-organize cc-review chapters" was stopped by the user.'),
+    ("at_path_handoff_read", "@bench/PLAN.md read it, delete the file, and implement it."),
+    ("at_path_handoff_pickup", "@bench/HANDOFF.md pick up where we left off"),
+    ("at_path_handoff_typo", "@/Users/yasyf/plans/shimmying-waddling-porcupine.md go ahesd"),
+    ("limits_reset_typo", "conitnue, limits have been reset"),
+    ("limits_reset_lead", "Session limits reset, continue"),
+    ("plan_approved_begin", "Plan approved, begin"),
+    ("plan_approved_typo_verb", "Approced, begin implementing end to end"),
+    ("plan_approved_typo_begin", "Plan approved, bgin"),
+    ("plan_approved_go_ahead", "Approved, go ahead"),
+    ("plan_approved_at_path", "Plan approved, begin: @/Users/yasyf/plans/cookies.md"),
+    ("env_command_lead", "DEBUG=0 ccp run --permission-mode plan --resume\npanic: nil deref"),
+    ("quoted_paste_single", "> cc-transcript 6.0.0 backend mismatch (stdout vs -o file)"),
+    ("quoted_paste_wrapped", "> ⏺ Diagnosis is conclusive. The plumbing worked\n  - 15 cookies captured"),
+    ("fence_paste_unterminated", "```\n\n  The evidence\n\n  Yes, the panic is a real Apple kernel bug"),
+)
+
+# Genuine feedback that rides a junk lead (or inline code) and must keep its tail.
+GENUINE_TAIL_TEXTS: tuple[tuple[str, str], ...] = (
+    ("quote_then_correction", "> add a path field to Change\n\nisnt path aoways available? so dont default it"),
+    ("quote_then_hack_call", "> build_headless_argv(self, prompt, *, model, schema)\n\nthis is a hack, dont do this"),
+    ("fence_then_tail", "```\n  2 deferred items here\n```\n\nthe changes are done, go for it now. also fix the tests"),
+    ("approve_then_correction", "Approved. But the retry logic is wrong, fix the null check"),
+    ("at_path_then_correction", "@src/auth.py the null check is missing, add a guard here and validate the input"),
+    ("limits_then_correction", "limits reset, and while you're at it fix the broken auth test properly"),
+    ("inline_code_feedback", "`return backend.parse(rr.stdout)` seems like a weird abstraction, invert it"),
+)
+
+
+class TestJunkCreatePrefilter:
+    @pytest.mark.parametrize("text", [pytest.param(t, id=name) for name, t in JUNK_CREATE_TEXTS])
+    def test_deterministic_junk_lead_drops(self, text: str) -> None:
+        assert prefilter_drops(text) is True
+
+    @pytest.mark.parametrize("text", [pytest.param(t, id=name) for name, t in GENUINE_TAIL_TEXTS])
+    def test_genuine_feedback_survives(self, text: str) -> None:
+        assert prefilter_drops(text) is False
+
+    @pytest.mark.parametrize(
+        ("detector", "gated"),
+        [
+            pytest.param("transcript_message", True, id="transcript_message-gated"),
+            pytest.param("exit_plan_rejection", True, id="exit_plan_rejection-gated"),
+            pytest.param("denial", False, id="denial-ungated"),
+        ],
+    )
+    def test_paste_only_gate_scopes_to_the_create_detectors(self, detector: str, gated: bool) -> None:
+        events = parse([user_text("> a fully quoted paste line\n  wrapped continuation only")])
+        sig, _ = signal_pair(detector, events[0].text)
+        assert survives(events, sig) is (not gated)
+
+    async def test_junk_lead_never_persists_but_its_tail_does(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path
+    ) -> None:
+        junk = write_transcript(tmp_path / "junk.jsonl", [assistant_text("done"), user_text("Plan approved, begin")])
+        assert await scan_transcript(store, junk, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=0)
+        assert await rows(store, "SELECT * FROM candidates") == []
+
+        tail = write_transcript(
+            tmp_path / "tail.jsonl",
+            [assistant_text("done"), user_text("Approved. But the retry logic is wrong, fix the null check")],
+        )
+        assert await scan_transcript(store, tail, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
+        [candidate] = await rows(store, "SELECT * FROM candidates")
+        assert candidate["candidate_kind"] == "create"
+
+
+class TestPasteOnly:
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("> one quoted line", id="single-quote-line"),
+            pytest.param("> quote\n  indented wrap\n\n  more wrap", id="wrapped-quote-no-tail"),
+            pytest.param("```\ncode paste\n```", id="closed-fence-no-tail"),
+            pytest.param("```\nunterminated paste with no closing fence", id="unterminated-fence"),
+        ],
+    )
+    def test_paste_only_true(self, text: str) -> None:
+        assert is_paste_only(text) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("> quote\nreal feedback at column zero", id="quote-with-tail"),
+            pytest.param("```\ncode\n```\nreal feedback after the fence", id="fence-with-tail"),
+            pytest.param("this is a plain correction, no paste", id="plain-text"),
+            pytest.param("`inline code` and a real comment about it", id="inline-code-not-block"),
+        ],
+    )
+    def test_paste_only_false(self, text: str) -> None:
+        assert is_paste_only(text) is False
 
 
 class TestTranscriptGates:

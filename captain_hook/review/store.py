@@ -139,6 +139,11 @@ CANDIDATE_MIGRATIONS: tuple[ColumnMigration, ...] = (
     ),
 )
 
+FEEDBACK_MIGRATIONS: tuple[ColumnMigration, ...] = (ColumnMigration("triage", "triage TEXT"),)
+
+TRIAGE_JUNK = "junk"
+TRIAGE_KEEP = "keep"
+
 
 def signal_confidence(payload_json: object) -> Confidence:
     payload: dict[str, Any] = json.loads(str(payload_json)) if payload_json else {}
@@ -335,25 +340,28 @@ CREATE TABLE IF NOT EXISTS spawn_runs (
             ),
             versions,
         )
-        await store.migrate_candidates()
+        await store.migrate_columns("candidates", CANDIDATE_MIGRATIONS)
+        await store.migrate_columns("feedback_events", FEEDBACK_MIGRATIONS)
         await store.purge_stale_verdicts()
         return store
 
-    async def migrate_candidates(self) -> None:
-        """Adds this version's ``candidates`` columns to an older database, backfilling each once.
+    async def migrate_columns(self, table: str, migrations: tuple[ColumnMigration, ...]) -> None:
+        """Adds this version's ``table`` columns to an older database, backfilling each once.
 
         The guarded-ALTER migration, run on :meth:`open` before
-        :meth:`purge_stale_verdicts`: every column in :data:`CANDIDATE_MIGRATIONS`
-        the table lacks is added and its backfill runs exactly once, in the branch
-        that just added it, so a database already at this schema is untouched and a
-        fresh one takes the columns against an empty table.
+        :meth:`purge_stale_verdicts` over both the ``candidates`` table
+        (:data:`CANDIDATE_MIGRATIONS`) and the dedup-key-keyed ``feedback_events``
+        table (:data:`FEEDBACK_MIGRATIONS`): every column in ``migrations`` the
+        table lacks is added and its backfill runs exactly once, in the branch that
+        just added it, so a database already at this schema is untouched and a fresh
+        one takes the columns against an empty table.
         """
-        cur = await self.store.conn.execute("PRAGMA table_info(candidates)")
+        cur = await self.store.conn.execute(f"PRAGMA table_info({table})")
         existing = {str(row["name"]) async for row in cur}
-        for migration in CANDIDATE_MIGRATIONS:
+        for migration in migrations:
             if migration.column in existing:
                 continue
-            await self.store.conn.execute(f"ALTER TABLE candidates ADD COLUMN {migration.ddl}")
+            await self.store.conn.execute(f"ALTER TABLE {table} ADD COLUMN {migration.ddl}")
             if migration.backfill is not None:
                 await self.store.conn.execute(migration.backfill)
 
@@ -470,6 +478,80 @@ VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
             (candidate_id, dedup_key, session_id, occurred_at.astimezone(UTC).isoformat()),
         )
 
+    async def untriaged_create_events(self, *, limit: int) -> list[dict[str, object]]:
+        """Returns un-triaged create feedback events still evidencing a watching create candidate.
+
+        The rows one junk-triage pass classifies, oldest first, capped at ``limit``: a
+        create-kind feedback event whose ``triage`` is unset and which still evidences a
+        watching create candidate the judge would otherwise spend a call on. Fix
+        (``hook_complaint``) events are never triaged, and an event whose candidates all
+        left ``watching`` is skipped — its verdict no longer gates a PR.
+        """
+        cur = await self.store.conn.execute(
+            """
+SELECT e.dedup_key, e.text FROM feedback_events e
+WHERE e.triage IS NULL AND e.source_kind != ?
+  AND EXISTS (
+    SELECT 1 FROM candidate_observations o JOIN candidates c ON c.id = o.candidate_id
+    WHERE o.dedup_key = e.dedup_key AND c.candidate_kind = ? AND c.status = ?
+  )
+ORDER BY e.id LIMIT ?
+""",
+            (HOOK_COMPLAINT, CandidateKind.CREATE, CandidateStatus.WATCHING, limit),
+        )
+        return [dict(row) async for row in cur]
+
+    async def record_triage(self, dedup_key: DedupKey, *, junk: bool) -> None:
+        """Stamps one feedback event's junk-triage verdict, keyed by dedup key.
+
+        The single triage-write codepath: a ``junk`` verdict marks the event so the
+        judge queue skips it and :meth:`reject_junk_triaged` can retire its candidate
+        without an LLM call; a keep verdict marks it triaged so it is not re-triaged, and
+        leaves it for the judge as the backstop.
+        """
+        await self.store.conn.execute(
+            "UPDATE feedback_events SET triage = ? WHERE dedup_key = ?",
+            (TRIAGE_JUNK if junk else TRIAGE_KEEP, dedup_key),
+        )
+
+    async def reject_junk_triaged(self) -> int:
+        """Rejects every watching create candidate all of whose evidence junk-triaged.
+
+        Run once at the close of a triage pass, mirroring :meth:`regroup_create`'s
+        retire step but keyed on the deterministic triage verdict rather than a judge
+        verdict: a watching create candidate with at least one observation and no
+        observation left un-triaged or kept is retired to
+        :attr:`CandidateStatus.REJECTED` without ever reaching the judge. A candidate
+        holding one kept observation stays watching for the judge.
+
+        Returns:
+            The number of candidates rejected.
+        """
+        async with self.store.transaction() as conn:
+            reject = [
+                int(row["id"])
+                async for row in await conn.execute(
+                    """
+SELECT c.id FROM candidates c
+WHERE c.candidate_kind = ? AND c.status = ?
+  AND EXISTS (SELECT 1 FROM candidate_observations o WHERE o.candidate_id = c.id)
+  AND NOT EXISTS (
+    SELECT 1 FROM candidate_observations o JOIN feedback_events e ON e.dedup_key = o.dedup_key
+    WHERE o.candidate_id = c.id AND (e.triage IS NULL OR e.triage != ?)
+  )
+""",
+                    (CandidateKind.CREATE, CandidateStatus.WATCHING, TRIAGE_JUNK),
+                )
+            ]
+            for candidate_id in reject:
+                await self.transition(candidate_id, CandidateStatus.REJECTED)
+        return len(reject)
+
+    async def junk_triaged_keys(self) -> set[str]:
+        """Returns the dedup keys of every junk-triaged feedback event — the judge queue's skip set."""
+        cur = await self.store.conn.execute("SELECT dedup_key FROM feedback_events WHERE triage = ?", (TRIAGE_JUNK,))
+        return {str(row["dedup_key"]) async for row in cur}
+
     async def candidates(
         self, repo: RepoKey | None = None, *, status: CandidateStatus | None = None
     ) -> list[dict[str, object]]:
@@ -511,6 +593,15 @@ VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
         if not (rows := [dict(row) async for row in cur]):
             raise LookupError(f"no candidate with id {candidate_id}")
         return rows[0]
+
+    async def mark_announced(self, candidate_id: int, status: CandidateStatus) -> None:
+        """Stamps a candidate's ``announced_status``, so its PR outcome is surfaced at most once per change.
+
+        The single write path for the SessionStart announcer: after a candidate's
+        status is announced, its ``announced_status`` catches up to ``status`` and the
+        next session start stays silent until the PR outcome changes again.
+        """
+        await self.store.conn.execute("UPDATE candidates SET announced_status = ? WHERE id = ?", (status, candidate_id))
 
     async def cross_repo_rules(self) -> dict[str, int]:
         """Returns each slug-keyed rule tracked under more than one repo, with its distinct-repo count.
@@ -941,12 +1032,13 @@ SELECT
             refresh_summary: When True, also re-yields summary-fidelity rows for a
                 full-fidelity re-judge once their windows hydrate again.
         """
+        junk = await self.junk_triaged_keys()
         create_lane = [
             row
             for row in await self.unjudged(
                 role="judge", prompt_version=self.versions.create, refresh_summary=refresh_summary
             )
-            if str(row["source_kind"]) != HOOK_COMPLAINT
+            if str(row["source_kind"]) != HOOK_COMPLAINT and str(row["dedup_key"]) not in junk
         ]
         fix_lane = [
             row

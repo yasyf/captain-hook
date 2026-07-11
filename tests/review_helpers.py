@@ -16,6 +16,7 @@ from captain_hook.review.judge import DURABLE_CATEGORIES, ReviewVerdict
 from captain_hook.review.repo import RepoKey
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from cc_transcript.models import TranscriptEvent
@@ -191,6 +192,33 @@ def install_judge(
         )
 
     monkeypatch.setattr("captain_hook.review.judge.structured_judge", lambda *_, **__: judge)
+    return calls
+
+
+def install_triage(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    junk_when: Callable[[str], bool] | None = None,
+    fail_on: str | None = None,
+) -> list[str]:
+    """Stubs the junk-triage LLM boundary so no backend is touched.
+
+    Patches the ``structured_judge`` reference :mod:`captain_hook.review.triage` holds with
+    a fake classifier. ``junk_when`` decides the verdict from the prompt (default: keep
+    everything), and a prompt containing ``fail_on`` raises :class:`JudgeError`, exercising
+    the failed-triage retry path.
+    """
+    from captain_hook.review.triage import TriageVerdict
+
+    calls: list[str] = []
+
+    async def triage(prompt: str) -> TriageVerdict:
+        calls.append(prompt)
+        if fail_on is not None and fail_on in prompt:
+            raise JudgeError("backend down")
+        return TriageVerdict(junk=junk_when(prompt) if junk_when else False, reason="test")
+
+    monkeypatch.setattr("captain_hook.review.triage.structured_judge", lambda *_, **__: triage)
     return calls
 
 
