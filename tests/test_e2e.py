@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import textwrap
 from pathlib import Path
@@ -100,8 +101,8 @@ class TestHookDiscovery:
     def test_e2e_012_command_hook_discovered(self) -> None:
         discover_hooks(str(FIXTURES_DIR))
         hook_names = {h.name for h in _state.hooks}
-        assert any(n.startswith("declarative_") for n in hook_names), (
-            f"No declarative block_command hook found in {hook_names}"
+        assert any(re.fullmatch(r"commands:hook_[0-9a-f]{8}", n) for n in hook_names), (
+            f"No block_command hook found in {hook_names}"
         )
 
     def test_e2e_013_named_workflow_hook_discovered(self) -> None:

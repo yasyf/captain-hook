@@ -14,13 +14,13 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from captain_hook.app import LoadError, _state, on
+from captain_hook.state import PACK_PACKAGE_PREFIX
 from captain_hook.types import Event
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
 
 CONF_MODULE = "conf"
-PACK_PACKAGE_PREFIX = "captain_hook._packs"
 
 
 def is_test_module(fqn: str) -> bool:

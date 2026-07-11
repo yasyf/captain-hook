@@ -393,11 +393,13 @@ class TestHookName:
         assert re.fullmatch(r"general\.docs:llm_gate_[0-9a-f]{8}", names[0])
         assert re.fullmatch(r"general\.docs:nudge_[0-9a-f]{8}", names[1])
 
-    def test_non_framework_hook_name_keeps_bare_stem(self, tmp_path: Path, isolate_modules: None) -> None:
+    def test_pack_namespace_module_is_pack_qualified_off_disk(self, tmp_path: Path, isolate_modules: None) -> None:
+        # An external pack module loaded from the cache (off PACKS_DIR) is pack-qualified by its
+        # captain_hook._packs.<pack>.<stem> __name__, not the bare file stem package_aware_stem would give.
         (tmp_path / "my_hook.py").write_text("from captain_hook import nudge\n\nnudge('remember the tests')\n")
         import_pack_module("captain_hook._packs.local.my_hook", tmp_path / "my_hook.py")
         [entry] = app._state.hooks
-        assert re.fullmatch(r"my_hook:nudge_[0-9a-f]{8}", entry.name)
+        assert re.fullmatch(r"local\.my_hook:nudge_[0-9a-f]{8}", entry.name)
 
 
 class TestPackageAwareStem:

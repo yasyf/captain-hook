@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -92,9 +93,23 @@ class TestRegisteredHookMetadata:
         assert "my_handler" in entry.name
         assert entry.source_file.endswith(".py")
 
-    def test_declarative_has_nonempty_name(self) -> None:
+    def test_declarative_gets_stem_and_source_file(self) -> None:
         register_hook(Event.Stop, message="test")
-        assert _state.hooks[0].name != ""
+        [entry] = _state.hooks
+        assert re.fullmatch(r"[\w.]+:hook_[0-9a-f]{8}", entry.name)
+        assert entry.source_file.endswith("test_app.py")
+
+    def test_declarative_distinct_messages_get_distinct_names(self) -> None:
+        register_hook(Event.PreToolUse, message="first message")
+        register_hook(Event.PreToolUse, message="second message")
+        first, second = _state.hooks
+        assert first.name != second.name
+
+    def test_declarative_same_message_gets_stable_name(self) -> None:
+        register_hook(Event.PreToolUse, message="stable message")
+        register_hook(Event.Stop, message="stable message")
+        first, second = _state.hooks
+        assert first.name == second.name
 
 
 class TestDiscoverHooks:
@@ -282,7 +297,6 @@ class TestReset:
         assert _state.settings is None
         assert len(_state.gitignore_patterns) == 0
         assert _state.classifier is None
-        assert _state.counter == 0
 
     def test_clears_cached_state(self) -> None:
         register_hook(Event.PreToolUse, message="test")

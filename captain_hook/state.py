@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 FRAMEWORK_DIR = str(Path(__file__).resolve().parent)
 PACKS_DIR = str(Path(FRAMEWORK_DIR) / "packs")
 SPACY_MODEL = "en_core_web_sm"
+PACK_PACKAGE_PREFIX = "captain_hook._packs"
 
 
 class NlpResources:
@@ -238,13 +239,25 @@ def framework_frame(filename: str) -> bool:
     return resolved.is_relative_to(FRAMEWORK_DIR) and not resolved.is_relative_to(PACKS_DIR)
 
 
-def caller_stem() -> str:
+def caller_frame() -> FrameType | None:
     frame: FrameType | None = inspect.currentframe()
     if frame:
         frame = frame.f_back
     while frame and framework_frame(frame.f_code.co_filename):
         frame = frame.f_back
-    return package_aware_stem(Path(frame.f_code.co_filename)) if frame else "unknown"
+    return frame
+
+
+def caller_stem() -> str:
+    if (frame := caller_frame()) is None:
+        return "unknown"
+    if (name := frame.f_globals.get("__name__", "")).startswith(f"{PACK_PACKAGE_PREFIX}."):
+        return name.removeprefix(f"{PACK_PACKAGE_PREFIX}.")
+    return package_aware_stem(Path(frame.f_code.co_filename))
+
+
+def caller_file() -> str:
+    return frame.f_code.co_filename if (frame := caller_frame()) else ""
 
 
 def hook_name(prefix: str, label: str | None, message: str) -> str:

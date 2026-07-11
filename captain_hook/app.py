@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, get_args
 
 from captain_hook.conditions import matches_conditions
+from captain_hook.state import caller_file, hook_name
 from captain_hook.types import (
     Agent,
     Command,
@@ -116,7 +117,6 @@ class State:
     # Events subscribed only by session-attached packs — excluded from settings-drift
     # warnings, since a plugin wires them in its own hooks.json, not the project's settings.
     attach_only_events: set[str] = field(default_factory=set)
-    counter: int = field(default=0, repr=False)
 
 
 _state = State()
@@ -127,7 +127,6 @@ def reset() -> None:
     _state.gitignore_patterns.clear()
     _state.load_errors.clear()
     _state.attach_only_events.clear()
-    _state.counter = 0
     _state.settings = None
     _state.classifier = None
 
@@ -165,7 +164,6 @@ def hook(
 ) -> None:
     validate_conditions(only_if, "only_if", events)
     validate_conditions(skip_if, "skip_if", events)
-    _state.counter += 1
     _state.hooks.append(
         RegisteredHook(
             spec=HookSpec(
@@ -180,7 +178,8 @@ def hook(
                 async_=async_,
                 skip_planning_agents=skip_planning_agents,
             ),
-            name=f"declarative_{_state.counter}",
+            name=hook_name("hook", None, message),
+            source_file=caller_file(),
         )
     )
 
