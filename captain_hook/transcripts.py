@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -83,9 +82,26 @@ def load_transcript(path: str | Path | None) -> Session:
     return lift_session(parse_events_from_bytes(path.read_bytes()), path=path)
 
 
+class TranscriptLoadError(Exception):
+    """Raised when the lazy transcript proxy fails to parse or read a transcript.
+
+    The event path defers loading behind a proxy, so a corrupt or unreadable transcript
+    first surfaces when a handler touches ``evt.ctx.transcript``. Dispatch's handler-error
+    boundary re-raises this rather than swallowing it, so the process fails loudly — exactly
+    as the eager baseline load did before dispatch.
+    """
+
+
 def lazy_transcript(path: str | Path | None) -> Session:
     """A ``Session`` proxy that defers parsing until an attribute is first touched.
 
     Events whose hooks never read the transcript never pay the parse.
     """
-    return cast("Session", Proxy(partial(load_transcript, path)))
+
+    def load() -> Session:
+        try:
+            return load_transcript(path)
+        except Exception as e:
+            raise TranscriptLoadError(path) from e
+
+    return cast("Session", Proxy(load))

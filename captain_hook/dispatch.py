@@ -23,8 +23,12 @@ def run_declarative(spec: HookSpec, evt: BaseHookEvent) -> HookResult | None:
 
 
 def run_handler(entry: RegisteredHook, evt: BaseHookEvent) -> HookResult | None:
+    from captain_hook.transcripts import TranscriptLoadError
+
     try:
         return entry.handler(evt) if entry.handler else run_declarative(entry.spec, evt)
+    except TranscriptLoadError:
+        raise
     except Exception:
         logger.bind(hook=entry.name).exception("hook handler failed")
         return None

@@ -837,6 +837,34 @@ class TestTranscriptWiring:
         raw = json.dumps(output)
         assert "transcript has 4 messages" in raw, f"unexpected output: {raw}"
 
+    def test_cli_handler_transcript_load_failure_is_loud(self, tmp_path: Path, hooks_dir: Path) -> None:
+        # An unreadable transcript first touched inside a handler must exit nonzero, not be
+        # swallowed by dispatch's handler-error boundary into a silent empty stdout + exit 0.
+        transcript = tmp_path / "transcript.jsonl"
+        self._make_transcript_jsonl(transcript)
+        transcript.chmod(0)
+
+        write_hook(
+            hooks_dir,
+            """\
+            from captain_hook.app import on
+            from captain_hook.types import Event, Action, HookResult
+
+
+            @on(Event.PreToolUse)
+            def read_transcript(evt):
+                return HookResult(action=Action.warn, message=f"{len(evt.ctx.t)} messages")
+        """,
+        )
+
+        stdin = stdin_json(
+            tool_name="Bash",
+            tool_input={"command": "echo hi"},
+            transcript_path=str(transcript),
+        )
+        result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
+        assert result.returncode != 0, f"expected a loud failure; got stdout={result.stdout!r}"
+
     def test_cli_ctx_turn_accessible(self, tmp_path: Path, hooks_dir: Path) -> None:
         transcript = tmp_path / "transcript.jsonl"
         self._make_transcript_jsonl(transcript)
