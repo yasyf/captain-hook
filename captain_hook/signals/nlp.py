@@ -93,8 +93,9 @@ class Clause:
             (default) applies no constraint; ``"completed"`` matches only verbs
             reported as done — "removed the retry logic" but not "remove the node"
             or "will be removed later"; ``"prospective"`` matches only verbs that
-            are *not* past predicates — "will leave"/"leaving"/"leave it" but not
-            "left the workspace" or "left to clean up".
+            are *not* past predicates and *not* counterfactual modal-perfects —
+            "will leave"/"leaving"/"leave it"/"will have left" but not
+            "left the workspace", "left to clean up", or "should have left".
         subject: ``"no_nominal"`` vetoes verbs with both a substantive active
             subject (see ``has_nominal_subject``) and a direct object — "the
             parser removed the node" is vetoed while "we removed it", passives,
@@ -206,6 +207,19 @@ def find_lemma_matches(phrase: Phrase, sent: Span, pos: set[str]) -> list[Token]
     ]
 
 
+def is_modal_perfect(tok: Token) -> bool:
+    """Whether ``tok`` is a counterfactual modal-perfect ("should have left", "would have moved").
+
+    True for a participle with a perfect ``have`` auxiliary under a non-future modal
+    ("should"/"would"/"could"/"might" have + participle) — a hypothetical about a past
+    action, not a plan — while future-perfect ("will have left", "shall have moved")
+    stays outside so it still reads as prospective.
+    """
+    return any(c.dep_ == "aux" and c.lemma_ == "have" for c in tok.children) and not any(
+        c.tag_ == "MD" and c.lemma_ in {"will", "shall"} for c in tok.children
+    )
+
+
 def tense_matches(tense: Literal["any", "completed", "prospective"], tok: Token) -> bool:
     match tense:
         case "any":
@@ -213,7 +227,7 @@ def tense_matches(tense: Literal["any", "completed", "prospective"], tok: Token)
         case "completed":
             return is_past_predicate(tok)
         case "prospective":
-            return not is_past_predicate(tok)
+            return not is_past_predicate(tok) and not is_modal_perfect(tok)
 
 
 def verb_candidates(clause: Clause, sent: Span) -> list[Token]:
@@ -224,6 +238,11 @@ def verb_candidates(clause: Clause, sent: Span) -> list[Token]:
         for v in find_lemma_matches(clause.verb, sent, {"VERB", "AUX"})
         if tense_matches(clause.tense, v)
         and (clause.subject == "any" or not (has_nominal_subject(v) and any(c.dep_ == "dobj" for c in v.children)))
+        and not (
+            clause.tense == "prospective"
+            and not clause.negated
+            and any(t.dep_ == "neg" and dep_related(v, t) for t in sent)
+        )
     ]
 
 

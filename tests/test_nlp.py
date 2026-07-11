@@ -248,6 +248,9 @@ class TestProspectiveScan:
             pytest.param("left the workspace in a broken state", False, id="past_tense_vbd"),
             pytest.param("the test was left to clean up later", False, id="passive_participle_vbn"),
             pytest.param("has left the retry logic in place", False, id="present_perfect_vbn"),
+            pytest.param("I should have left the broken test alone", False, id="modal_perfect_counterfactual"),
+            pytest.param("I will have left the retry logic by then", True, id="future_perfect_prospective"),
+            pytest.param("I won't leave the broken test alone", False, id="negated_prospective"),
         ],
     )
     def test_scan(self, text: str, expected: bool) -> None:

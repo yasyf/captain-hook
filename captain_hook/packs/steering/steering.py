@@ -49,18 +49,24 @@ nudge(
         [
             Signal(
                 pattern=(
-                    r"(?i)(?:pre-?existing|already (?:existed|present|broken)"
-                    r"|(?:existing|known|old) (?:issue|bug|problem|failure)s?)"
+                    r"(?i)\b(?:pre-?existing|already (?:existed|present|broken)"
+                    r"|(?:existing|known|old|previous) (?:issue|bug|problem|failure)s?)\b"
                 ),
                 weight=1,
             ),
-            Signal(pattern=r"(?i)(?:outside|beyond) (?:the )?scope", weight=1),
+            Signal(pattern=r"(?i)(?<!no change )(?<!no changes )(?:outside|beyond) (?:the )?scope", weight=1),
             NlpSignal(
                 clauses=[
                     Clause(noun=Phrase.expand("change"), verb=Phrase("cause", "introduce"), negated=True),
                     Clause(
-                        noun=Phrase("issue", "bug", "problem", "error", "failure", "test", "violation", "warning"),
+                        noun=Phrase("issue", "bug", "problem", "error", "failure", "violation", "warning"),
                         verb=Phrase("leave"),
+                        tense="prospective",
+                    ),
+                    Clause(
+                        noun=Phrase("test"),
+                        verb=Phrase("leave"),
+                        adj=Phrase("broken", "failing", "flaky"),
                         tense="prospective",
                     ),
                 ],
@@ -459,6 +465,95 @@ nudge(
                 }
             ]
         ): Warn(),
+        # tp_leave_flaky_test: a flaky (ADJ) defect qualifier on "leave the test" still warns
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "I'll leave the flaky test as is."}]},
+                }
+            ]
+        ): Warn(),
+        # f16 leave-test-no-defect: prospective "leave the test" with no defect qualifier is benign
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "I'll leave the integration test running while I inspect its logs.",
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        # f17 negated-scope: "made no changes outside the scope" is scope compliance, not dismissal
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "I fixed all known issues and made no changes outside the scope of the task.",
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        # f18a modal-perfect counterfactual: "should have left ... but I fixed it" is not a prospective leave
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": "I should have left the broken test alone, but I fixed it."}
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        # f18b negated prospective: "Leaving ... was never an option, so I fixed it" is not a dismissal
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": "Leaving the test broken was never an option, so I fixed it."}
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        # f19 previous-issue dismissal: "the previous issue is beyond the scope" warns (regex arm restored)
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [{"type": "text", "text": "The previous issue is beyond the scope of this change."}]
+                    },
+                }
+            ]
+        ): Warn(),
+        # f21 word-boundary: "unknown bugs" must not match the "known bug" arm
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [{"type": "text", "text": "There are no unknown bugs left outside scope."}]
+                    },
+                }
+            ]
+        ): Allow(),
     },
 )
 
