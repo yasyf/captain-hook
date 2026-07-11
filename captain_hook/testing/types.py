@@ -184,6 +184,13 @@ class Input:
                     f"Input field {name!r} must be {' or '.join(t.__name__ for t in types)} or None, "
                     f"got {type(value).__name__}"
                 )
+        for task in self.tasks or ():
+            if not isinstance(task, dict):
+                raise TypeError(f"Input field 'tasks' must contain dict elements, got {type(task).__name__}")
+        for name in ("tool_input", "llm"):
+            for key in getattr(self, name) or ():
+                if not isinstance(key, str):
+                    raise TypeError(f"Input field {name!r} must have str keys, got {type(key).__name__}")
 
     def __repr__(self) -> str:
         set_fields = ", ".join(

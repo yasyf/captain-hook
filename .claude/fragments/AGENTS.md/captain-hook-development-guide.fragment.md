@@ -17,7 +17,7 @@ captain-hook/
 └── README.md         # Project overview
 ```
 
-Great Docs generates the API reference with Griffe from the root `captain_hook/__init__.py` re-exports (there is no `__all__`) and the CLI reference from the Click app. Example hooks in `docs/examples/*.py` embed into their `.qmd` pages via `<!-- gd-embed: name.py -->` markers that `docs/scripts/embed_examples.py` expands at pre-render, and carry inline `tests = {...}` runnable with `capt-hook --hooks docs/examples test`.
+Great Docs generates the API reference with Griffe from the root `captain_hook/__init__.py` re-exports (curated in `great-docs.yml`, not from `__all__`, which just mirrors the re-exports for `import *`) and the CLI reference from the Click app. Example hooks in `docs/examples/*.py` embed into their `.qmd` pages via `<!-- gd-embed: name.py -->` markers that `docs/scripts/embed_examples.py` expands at pre-render, and carry inline `tests = {...}` runnable with `capt-hook --hooks docs/examples test`.
 
 This repo's own hooks run `"$CLAUDE_PROJECT_DIR"/.venv/bin/capt-hook` directly (the packs.toml `launcher`) — no per-event `uv run` sync check, so after a dependency change run `uv sync --extra dev` or live hooks execute against the stale `.venv`.
 

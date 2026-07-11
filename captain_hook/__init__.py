@@ -287,6 +287,8 @@ _EXPORTS: dict[str, str] = {
     "WriteCall": "cc_transcript.tools",
 }
 
+__all__ = sorted(_EXPORTS)
+
 
 def __getattr__(name: str) -> object:
     if (target := _EXPORTS.get(name)) is None:

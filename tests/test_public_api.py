@@ -346,6 +346,14 @@ def test_export_table_matches_pinned_surface() -> None:
     assert set(captain_hook._EXPORTS) == set(PINNED_EXPORTS)
 
 
+def test_star_import_binds_exactly_the_exports() -> None:
+    # `from captain_hook import *` binds every name in `__all__` and nothing else; exec
+    # injects only __builtins__ into a fresh namespace.
+    ns: dict[str, object] = {}
+    exec("from captain_hook import *", ns)  # noqa: S102
+    assert set(ns) - {"__builtins__"} == set(captain_hook._EXPORTS)
+
+
 def test_dir_lists_the_pinned_surface() -> None:
     listed = dir(captain_hook)
     assert set(PINNED_EXPORTS) <= set(listed)
@@ -411,6 +419,11 @@ WRONG_TYPED: tuple[tuple[str, dict[str, Any]], ...] = (
     ("offset_float", {"offset": 1.5}),
     ("offset_list", {"offset": [1]}),
     ("transcript_dict", {"transcript": {"a": 1}}),
+    # Element/key checks: baseline pydantic rejected these; a plain dataclass whose
+    # __post_init__ only checked the container type would silently accept them.
+    ("tasks_bad_element", {"tasks": ["bad"]}),
+    ("tool_input_int_key", {"tool_input": {1: "x"}}),
+    ("llm_int_key", {"llm": {1: "x"}}),
 )
 
 VALID_FIELDS: tuple[tuple[str, dict[str, Any]], ...] = (
