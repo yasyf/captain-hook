@@ -4,6 +4,43 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.19.0] - 2026-07-10
+
+### Changed
+- **Per-event startup went on a diet.** Every `capt-hook run <Event>` paid a
+  ~350ms import bill before reading stdin; the bulk was
+  `captain_hook/__init__.py` eagerly importing the whole framework. The root
+  package now re-exports lazily via PEP 562 (`import captain_hook` dropped from
+  ~125ms to ~3ms), heavy dependencies — spawnllm and its backends,
+  pydantic-settings, `cc_transcript`'s parser/query/discovery/decisions stacks,
+  asyncio — load inside the functions that use them instead of at module
+  import, and the inline-test `Input` model is a plain frozen dataclass instead
+  of a pydantic one (~90ms to ~14ms for `captain_hook.testing.types`). A plain
+  PreToolUse event no longer imports `cc_transcript.parser` at all. The public
+  surface is unchanged and now pinned by `tests/test_public_api.py`: the full
+  144-name root export set (each name identity-equal to its defining-module
+  object), `from captain_hook import *` (the new `__all__` mirrors the
+  re-exports), consumer-observed submodule paths, and
+  `typing.get_type_hints` introspection over hook specs all behave exactly as
+  before.
+- **Transcript parsing is deferred to first use.** `HookContext.transcript` is
+  a lazy proxy; the full-session read and parse happen only when a condition or
+  handler actually touches the transcript. Events that never consult it —
+  the highest-frequency shapes — skip the cost entirely: attaching a 27MB
+  session transcript to an event now costs ~0ms unless read (previously ~140ms
+  on every event, growing with session length). A transcript that fails to
+  load mid-dispatch raises `TranscriptLoadError` through the handler boundary,
+  so a corrupt or unreadable transcript still fails loud instead of letting a
+  blocking hook silently fail open.
+- **`Input` keeps pydantic-grade validation.** The dataclass conversion
+  re-implements what pydantic enforced: unknown kwargs, wrong-typed fields,
+  wrong element/key types in container fields, and `str` transcript paths
+  coercing to `Path` (a string path previously loaded zero fixture events
+  silently) — each rejection is a `TypeError` naming the field.
+- This repo's own hooks launch `"$CLAUDE_PROJECT_DIR"/.venv/bin/capt-hook`
+  directly instead of resolving through `uv run` on every event; the
+  project-relative launcher recipe is documented in the packs guide.
+
 ## [8.18.0] - 2026-07-10
 
 ### Fixed
