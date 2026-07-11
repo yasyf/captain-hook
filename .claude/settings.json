@@ -45,7 +45,7 @@
   },
   "enabledPlugins": {
     "codex@skills": true,
-    "captain-hook@captain-hook": true,
+    "captain-hook@captain-hook": false,
     "cc-context@cc-context": true
   },
   "hooks": {
