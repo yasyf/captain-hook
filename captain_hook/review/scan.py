@@ -29,7 +29,7 @@ so two sessions' complaints about one hook collapse to one candidate.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -105,7 +105,8 @@ JUNK_CREATE_GROUPS: tuple[tuple[str, str], ...] = (
     (
         "at_path_handoff",
         r"\A\s*@\S*/\S+\.\w+\s+(?:read it\b|read\b|pick(?:ing)? up\b|implement\w*|impl\b|go\s+ah\w*d"
-        r"|approv\w*|begin\b|beign\b|bgin\b|continue\b|resume\b|delete\b|do\s+(?:the|it)\b|let'?s\b|proceed\b)",
+        r"|approv\w*|begin\b|beign\b|bgin\b|continue\b|resume\b|delete\b|do\s+(?:the|it)\b|let'?s\b|proceed\b)"
+        r"[\s.!?]*\Z",
     ),
     (
         "limits_reset",
@@ -119,11 +120,12 @@ JUNK_CREATE_GROUPS: tuple[tuple[str, str], ...] = (
     ),
     ("env_command_lead", r"\A\s*(?:[A-Z][A-Z0-9_]*=\S+\s+)+\S+[^\n]*--[^\n]*\n"),
 )
-"""Deterministic junk-create leads: agent lifecycle relays and stop notices, ``@path``
-plan handoffs, session-limit resume nudges, plan-approval advance directives, and
-pasted ``ENV=x cmd --flags`` invocations. Each pattern is start-anchored (and the
-whole-message classes end-anchored) so a junk lead trailed by real feedback keeps the
-tail — the survivor then rides the LLM triage and judge backstops."""
+"""Deterministic junk-create leads: agent lifecycle relays and stop notices, standalone
+``@path`` plan handoffs, session-limit resume nudges, plan-approval advance directives,
+and pasted ``ENV=x cmd --flags`` invocations. Each pattern is start-anchored, and the
+whole-message classes — ``at_path_handoff``, ``limits_reset`` — are end-anchored to a
+bare directive, so a junk lead trailed by real feedback keeps the tail and the survivor
+rides the LLM triage and judge backstops."""
 
 QUOTE_PASTE_RE = re.compile(r">[^\n]*(?:\n(?![^\s>])[^\n]*)*\Z")
 """A message that is a blockquote paste with no un-quoted feedback paragraph: the
@@ -189,9 +191,21 @@ class ScanReport:
     inserted: int
 
 
+def gated_event(event: TranscriptEvent, sig: MiningSignal) -> TranscriptEvent:
+    """The event the prefilter judges: the user-authored text under gate, not its envelope.
+
+    ``exit_plan_rejection`` fires on the tool-result turn that carries the rejection, whose
+    own ``text`` is empty — the miner lifts the user's reason into ``sig.text``. Gating the
+    empty envelope would drop every real rejection, so the prefilter runs against a copy of
+    the turn re-texted with the extracted reason; every other gated detector already fires
+    on the user turn whose text it screens.
+    """
+    return replace(event, text=sig.text) if sig.detector == "exit_plan_rejection" else event
+
+
 def survives(events: Sequence[TranscriptEvent], sig: MiningSignal) -> bool:
     if sig.detector in GATED_DETECTORS and (
-        not keep(event := events[sig.event_index], STRICT_USER) or is_paste_only(event_text(event))
+        not keep(event := gated_event(events[sig.event_index], sig), STRICT_USER) or is_paste_only(event_text(event))
     ):
         return False
     return not (sig.detector == "transcript_message" and sig.trigger_index is None)

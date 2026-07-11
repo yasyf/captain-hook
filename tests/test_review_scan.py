@@ -240,8 +240,6 @@ JUNK_CREATE_TEXTS: tuple[tuple[str, str], ...] = (
     ("agent_relay", 'Another Claude session sent a message:\n<teammate-message teammate_id="hook-finder">'),
     ("agent_stop_notice_count", '6 background agents were stopped by the user: "Explore the local repo ..."'),
     ("agent_stop_notice_named", 'Background agent "Re-organize cc-review chapters" was stopped by the user.'),
-    ("at_path_handoff_read", "@bench/PLAN.md read it, delete the file, and implement it."),
-    ("at_path_handoff_pickup", "@bench/HANDOFF.md pick up where we left off"),
     ("at_path_handoff_typo", "@/Users/yasyf/plans/shimmying-waddling-porcupine.md go ahesd"),
     ("limits_reset_typo", "conitnue, limits have been reset"),
     ("limits_reset_lead", "Session limits reset, continue"),
@@ -263,8 +261,24 @@ GENUINE_TAIL_TEXTS: tuple[tuple[str, str], ...] = (
     ("fence_then_tail", "```\n  2 deferred items here\n```\n\nthe changes are done, go for it now. also fix the tests"),
     ("approve_then_correction", "Approved. But the retry logic is wrong, fix the null check"),
     ("at_path_then_correction", "@src/auth.py the null check is missing, add a guard here and validate the input"),
+    ("at_path_handoff_then_correction", "@src/auth.py read it; the null check is missing, fix it"),
     ("limits_then_correction", "limits reset, and while you're at it fix the broken auth test properly"),
     ("inline_code_feedback", "`return backend.parse(rr.stdout)` seems like a weird abstraction, invert it"),
+)
+
+# Bare ``@path`` handoffs with no tail — end-anchored, so these still deterministically drop.
+AT_PATH_STANDALONE_HANDOFFS: tuple[tuple[str, str], ...] = (
+    ("read_it", "@bench/PLAN.md read it"),
+    ("pick_up", "@bench/HANDOFF.md pick up"),
+    ("go_ahead", "@/Users/yasyf/plans/floating-crescent.md go ahead."),
+)
+
+# Multi-directive ``@path`` handoffs lifted verbatim from the corpus: their trailing
+# directives now ride the LLM triage rather than deterministic-dropping (finding: a junk
+# lead must not swallow a substantive tail, so the pattern only anchors bare handoffs).
+AT_PATH_HANDOFF_TAILS: tuple[tuple[str, str], ...] = (
+    ("read_it_delete_implement", "@bench/PLAN.md read it, delete the file, and implement it."),
+    ("pick_up_where_we_left_off", "@bench/HANDOFF.md pick up where we left off"),
 )
 
 
@@ -276,6 +290,36 @@ class TestJunkCreatePrefilter:
     @pytest.mark.parametrize("text", [pytest.param(t, id=name) for name, t in GENUINE_TAIL_TEXTS])
     def test_genuine_feedback_survives(self, text: str) -> None:
         assert prefilter_drops(text) is False
+
+    @pytest.mark.parametrize("text", [pytest.param(t, id=name) for name, t in AT_PATH_STANDALONE_HANDOFFS])
+    def test_bare_at_path_handoff_drops(self, text: str) -> None:
+        assert prefilter_drops(text) is True
+
+    @pytest.mark.parametrize("text", [pytest.param(t, id=name) for name, t in AT_PATH_HANDOFF_TAILS])
+    def test_at_path_handoff_with_a_tail_rides_triage(self, text: str) -> None:
+        assert prefilter_drops(text) is False
+
+    def test_exit_plan_rejection_gates_the_extracted_reason_not_the_empty_envelope(self) -> None:
+        def rejection(said: str) -> tuple[Any, MiningSignal]:
+            denial = (
+                "The user doesn't want to proceed with this tool use. The tool use was rejected.\n"
+                f"To tell you how to proceed, the user said:\n{said}\nNote: The user's next message will follow."
+            )
+            events = parse(
+                [
+                    assistant_tool_use("t1", "ExitPlanMode", {"plan": "## Plan"}, sessionId="s1"),
+                    tool_result("t1", denial, is_error=True, sessionId="s1"),
+                ]
+            )
+            [sig] = [s for s in detect(events) if s.detector == "exit_plan_rejection"]
+            return events, sig
+
+        real_events, real_sig = rejection("the plan skips the data migration step")
+        assert real_events[real_sig.event_index].text == ""
+        assert survives(real_events, real_sig) is True
+
+        junk_events, junk_sig = rejection("Plan approved, begin")
+        assert survives(junk_events, junk_sig) is False
 
     @pytest.mark.parametrize(
         ("detector", "gated"),

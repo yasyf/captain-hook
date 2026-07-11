@@ -93,7 +93,7 @@ class TestSyncOpenPrs:
         assert await sync_open_prs(store, REPO, settings=settings) == SyncReport(0, 0, 0, 0, kept=1)
         assert await status_of(store, candidate_id) == CandidateStatus.PR_OPEN
 
-    async def test_merged_pr_stamps_resolved_at_on_the_accepted_candidate(
+    async def test_merged_pr_stamps_resolved_at_from_github_merge_time(
         self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         url = "https://github.com/yasyf/captain-hook/pull/4"
@@ -102,7 +102,9 @@ class TestSyncOpenPrs:
         install_gh(monkeypatch, {url: "MERGED"})
         assert await sync_open_prs(store, REPO, settings=settings) == SyncReport(1, 0, 0, 0)
         assert await status_of(store, candidate_id) == CandidateStatus.ACCEPTED
-        assert (await store.candidate(candidate_id))["resolved_at"] is not None
+        # resolved_at carries GitHub's merge time (normalized to UTC), not the sync wall-clock,
+        # so a complaint occurring after the merge but before the sync still counts as recurrence.
+        assert (await store.candidate(candidate_id))["resolved_at"] == "2026-07-08T15:06:25+00:00"
 
     async def test_closed_pr_leaves_resolved_at_unstamped(
         self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
@@ -177,16 +179,34 @@ class TestPrStateCache:
         assert calls == [url]
         assert await status_of(store, candidate_id) == CandidateStatus.ACCEPTED
 
-    async def test_gh_down_falls_back_to_a_cached_state(
-        self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("cached_state", ["OPEN", "MERGED", "CLOSED"])
+    async def test_gh_down_on_forced_refresh_never_applies_cached_state(
+        self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch, cached_state: str
     ) -> None:
+        # A gh outage during a forced refresh must never fold a stale cached state into a
+        # lifecycle transition: the PR counts unreachable and stays pr_open, whatever was cached.
         url = "https://github.com/yasyf/captain-hook/pull/13"
         candidate_id = await open_pr(store, url)
-        await store.cache_pr_state(url, PrState("MERGED", MERGED_AT))
+        await store.cache_pr_state(url, PrState(cached_state, MERGED_AT if cached_state == "MERGED" else None))
         calls = install_gh(monkeypatch, {url: None})
-        assert await sync_open_prs(store, REPO, settings=settings, force_refresh=True) == SyncReport(1, 0, 0, 0)
+        assert await sync_open_prs(store, REPO, settings=settings, force_refresh=True) == SyncReport(0, 0, 0, 1)
         assert calls == [url]
-        assert await status_of(store, candidate_id) == CandidateStatus.ACCEPTED
+        assert await status_of(store, candidate_id) == CandidateStatus.PR_OPEN
+
+    async def test_gh_down_on_expired_cache_keeps_stale_eligible_pr_open(
+        self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A PR past stale_after_days with an EXPIRED cached OPEN state and gh down stays pr_open
+        # (unreachable=1): an expired cache never authorizes the destructive OPEN->STALE transition.
+        url = "https://github.com/yasyf/captain-hook/pull/14"
+        candidate_id = await open_pr(store, url, opened_days_ago=settings.stale_after_days + 1)
+        await store.cache_pr_state(url, PrState("OPEN", None))
+        expired = (datetime.now(UTC) - timedelta(minutes=20)).isoformat()
+        await store.store.conn.execute("UPDATE pr_states SET fetched_at = ? WHERE pr_url = ?", (expired, url))
+        calls = install_gh(monkeypatch, {url: None})
+        assert await sync_open_prs(store, REPO, settings=settings) == SyncReport(0, 0, 0, 1)
+        assert calls == [url]
+        assert await status_of(store, candidate_id) == CandidateStatus.PR_OPEN
 
 
 class TestGhPrState:

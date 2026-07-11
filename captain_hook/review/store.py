@@ -32,7 +32,6 @@ if TYPE_CHECKING:
     from typing import Any
 
     import aiosqlite
-
     from cc_transcript.corrections import Correction
     from cc_transcript.ids import SessionId
     from cc_transcript.judge.similar import KeyOverlap
@@ -512,34 +511,48 @@ VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
         create-kind feedback event whose ``triage`` is unset and which still evidences a
         watching create candidate the judge would otherwise spend a call on. Fix
         (``hook_complaint``) events are never triaged, and an event whose candidates all
-        left ``watching`` is skipped — its verdict no longer gates a PR.
+        left ``watching`` is skipped — its verdict no longer gates a PR. An event the
+        judge already verdicted at the create lane's version is skipped too: the judge
+        is the authority once it has ruled, so a later junk retry must not overturn a
+        reparented acceptance.
         """
         cur = await self.store.conn.execute(
-            """
+            f"""
 SELECT e.dedup_key, e.text FROM feedback_events e
 WHERE e.triage IS NULL AND e.source_kind != ?
   AND EXISTS (
     SELECT 1 FROM candidate_observations o JOIN candidates c ON c.id = o.candidate_id
     WHERE o.dedup_key = e.dedup_key AND c.candidate_kind = ? AND c.status = ?
   )
+  AND NOT EXISTS (
+    SELECT 1 FROM {self.VERDICT_TABLE} v
+    WHERE v.dedup_key = e.dedup_key AND v.role = 'judge' AND v.prompt_version = ?
+  )
 ORDER BY e.id LIMIT ?
 """,
-            (HOOK_COMPLAINT, CandidateKind.CREATE, CandidateStatus.WATCHING, limit),
+            (HOOK_COMPLAINT, CandidateKind.CREATE, CandidateStatus.WATCHING, self.versions.create, limit),
         )
         return [dict(row) async for row in cur]
 
-    async def record_triage(self, dedup_key: DedupKey, *, junk: bool) -> None:
+    async def record_triage(self, dedup_key: DedupKey, *, junk: bool) -> bool:
         """Stamps one feedback event's junk-triage verdict, keyed by dedup key.
 
-        The single triage-write codepath: a ``junk`` verdict marks the event so the
-        judge queue skips it and :meth:`reject_junk_triaged` can retire its candidate
-        without an LLM call; a keep verdict marks it triaged so it is not re-triaged, and
-        leaves it for the judge as the backstop.
+        The single triage-write codepath, a compare-and-set against the still-untriaged
+        row: a ``junk`` verdict marks the event so the judge queue skips it and
+        :meth:`reject_junk_triaged` can retire its candidate without an LLM call; a keep
+        verdict marks it triaged so it is not re-triaged, and leaves it for the judge as
+        the backstop. The ``triage IS NULL`` guard makes the first concurrent pass win —
+        a losing pass cannot overwrite the verdict a peer already committed, so a keep and
+        a junk from two detached reviewers can never leave torn state.
+
+        Returns:
+            Whether this call claimed the row; ``False`` when a concurrent pass wrote first.
         """
-        await self.store.conn.execute(
-            "UPDATE feedback_events SET triage = ? WHERE dedup_key = ?",
+        cur = await self.store.conn.execute(
+            "UPDATE feedback_events SET triage = ? WHERE dedup_key = ? AND triage IS NULL",
             (TRIAGE_JUNK if junk else TRIAGE_KEEP, dedup_key),
         )
+        return cur.rowcount == 1
 
     async def reject_junk_triaged(self) -> int:
         """Rejects every watching create candidate all of whose evidence junk-triaged.
@@ -549,7 +562,10 @@ ORDER BY e.id LIMIT ?
         verdict: a watching create candidate with at least one observation and no
         observation left un-triaged or kept is retired to
         :attr:`CandidateStatus.REJECTED` without ever reaching the judge. A candidate
-        holding one kept observation stays watching for the judge.
+        holding one kept observation stays watching for the judge, and one already
+        carrying accepted judge evidence at the create lane's version is spared entirely
+        — a concurrent judge acceptance outranks a junk retry, so the terminal rejection
+        can never orphan a reparented acceptance.
 
         Returns:
             The number of candidates rejected.
@@ -558,7 +574,7 @@ ORDER BY e.id LIMIT ?
             reject = [
                 int(row["id"])
                 async for row in await conn.execute(
-                    """
+                    f"""
 SELECT c.id FROM candidates c
 WHERE c.candidate_kind = ? AND c.status = ?
   AND EXISTS (SELECT 1 FROM candidate_observations o WHERE o.candidate_id = c.id)
@@ -566,8 +582,13 @@ WHERE c.candidate_kind = ? AND c.status = ?
     SELECT 1 FROM candidate_observations o JOIN feedback_events e ON e.dedup_key = o.dedup_key
     WHERE o.candidate_id = c.id AND (e.triage IS NULL OR e.triage != ?)
   )
+  AND NOT EXISTS (
+    SELECT 1 FROM candidate_observations o
+    JOIN {self.VERDICT_TABLE} v ON v.dedup_key = o.dedup_key
+    WHERE o.candidate_id = c.id AND v.role = 'judge' AND v.prompt_version = ? AND v.{self.ACCEPTED_COLUMN} = 1
+  )
 """,
-                    (CandidateKind.CREATE, CandidateStatus.WATCHING, TRIAGE_JUNK),
+                    (CandidateKind.CREATE, CandidateStatus.WATCHING, TRIAGE_JUNK, self.versions.create),
                 )
             ]
             for candidate_id in reject:
@@ -654,18 +675,24 @@ WHERE c.candidate_kind = ? AND c.status = ?
         *,
         pr_url: str | None = None,
         pr_opened_at: datetime | None = None,
+        resolved_at: datetime | None = None,
     ) -> None:
         """Moves a candidate along :data:`TRANSITIONS` — the only status-write codepath.
 
         Entering :attr:`CandidateStatus.ACCEPTED` stamps ``resolved_at``, the
-        watermark a later reopen counts fresh recurrences against; every other move
-        (the ``accepted -> watching`` reopen included) leaves it untouched.
+        watermark a later reopen counts fresh recurrences against — from the
+        authoritative merge timestamp when the caller supplies one (a synced MERGED
+        PR passes GitHub's ``merged_at``), else the current time. Every other move
+        (the ``accepted -> watching`` reopen included) leaves it untouched, and
+        ``updated_at`` always records the wall-clock move time.
 
         Args:
             candidate_id: The candidate to move.
             to: The target status.
             pr_url: When set, stamped onto the candidate (the PR-opening move).
             pr_opened_at: When set, stamped in UTC alongside ``pr_url``.
+            resolved_at: The authoritative resolution time for an ``accepted`` move
+                (GitHub's merge time); defaults to now when unset. Ignored otherwise.
 
         Raises:
             InvalidTransition: If the move is not allowed from the current status.
@@ -677,6 +704,11 @@ WHERE c.candidate_kind = ? AND c.status = ?
         if to not in TRANSITIONS[current := CandidateStatus(rows[0])]:
             raise InvalidTransition(f"{current} -> {to}")
         stamp = now()
+        resolution = (
+            (resolved_at.astimezone(UTC).isoformat() if resolved_at is not None else stamp)
+            if to == CandidateStatus.ACCEPTED
+            else None
+        )
         await self.store.conn.execute(
             "UPDATE candidates SET status = ?, updated_at = ?, "
             "pr_url = COALESCE(?, pr_url), pr_opened_at = COALESCE(?, pr_opened_at), "
@@ -686,7 +718,7 @@ WHERE c.candidate_kind = ? AND c.status = ?
                 stamp,
                 pr_url,
                 pr_opened_at.astimezone(UTC).isoformat() if pr_opened_at else None,
-                stamp if to == CandidateStatus.ACCEPTED else None,
+                resolution,
                 candidate_id,
             ),
         )
@@ -695,9 +727,9 @@ WHERE c.candidate_kind = ? AND c.status = ?
         """Returns the last-fetched GitHub state for ``url``, with its fetch time — or ``None`` if uncached.
 
         The single read of the ``pr_states`` TTL cache: :func:`sync_open_prs` uses it
-        to skip a fresh ``gh`` call when the entry is young enough, and to fall back
-        to a stale state (better than treating the PR as unreachable) when ``gh`` is
-        down on a forced or expired refresh.
+        to skip a fresh ``gh`` call when the entry is young enough. A stale entry is
+        never folded into a lifecycle transition — when ``gh`` is down on a forced or
+        expired refresh the PR is treated as unreachable and left ``pr_open``.
         """
         from captain_hook.review.sync import CachedPrState, PrState
 

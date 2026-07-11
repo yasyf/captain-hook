@@ -360,6 +360,13 @@ class TestTransitions:
         with pytest.raises(LookupError, match="no candidate with id 999"):
             await store.transition(999, CandidateStatus.PR_OPEN)
 
+    async def test_accepted_stamps_supplied_merge_time_not_wall_clock(self, store: ReviewStore) -> None:
+        candidate_id = await create_candidate(store)
+        await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url="https://github.com/x/y/pull/1")
+        merged_at = datetime(2026, 7, 8, 15, 6, 25, tzinfo=UTC)
+        await store.transition(candidate_id, CandidateStatus.ACCEPTED, resolved_at=merged_at)
+        assert (await candidate_row(store, candidate_id))["resolved_at"] == "2026-07-08T15:06:25+00:00"
+
 
 class TestCreateEligibility:
     async def test_unjudged_observations_never_count(self, store: ReviewStore, settings: ReviewSettings) -> None:
@@ -1090,6 +1097,31 @@ class TestReopenRecurrentFixes:
         row = await candidate_row(store, candidate_id)
         assert (row["status"], int(row["generation"])) == ("accepted", 1)
 
+    async def test_merge_time_resolution_counts_between_merge_and_sync_recurrence(self, store: ReviewStore) -> None:
+        # An accepted fix resolved at its July-8 merge time reopens on a July-9 complaint: reopen keys on
+        # resolved_at, so the merge-time stamp (not a later sync wall-clock) is what gates the recurrence.
+        candidate_id = await fix_candidate(store)
+        await store.transition(
+            candidate_id,
+            CandidateStatus.PR_OPEN,
+            pr_url="https://github.com/x/y/pull/8",
+            pr_opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+        )
+        await store.transition(candidate_id, CandidateStatus.ACCEPTED, resolved_at=datetime(2026, 7, 8, tzinfo=UTC))
+        await seed(
+            store,
+            candidate_id,
+            "recur",
+            session="s-recur",
+            occurred="2026-07-09T10:00:00+00:00",
+            heuristic=VERY_HIGH,
+            source_kind="hook_complaint",
+        )
+        await judge(store, "recur")
+        assert await store.reopen_recurrent_fixes() == 1
+        row = await candidate_row(store, candidate_id)
+        assert (row["status"], int(row["generation"])) == ("watching", 2)
+
     async def test_post_resolution_but_judge_rejected_is_a_noop(self, store: ReviewStore) -> None:
         candidate_id = await accepted_fix(store, resolved_at="2026-06-15T00:00:00+00:00")
         await seed(
@@ -1379,3 +1411,42 @@ class TestJunkTriage:
         await store.record_triage(DedupKey("junk"), junk=True)
         keys = {str(row["dedup_key"]) for row in await store.judge_queue()}
         assert keys == {"keep"}
+
+    @pytest.mark.parametrize(
+        ("first_junk", "second_junk", "landed"),
+        [
+            pytest.param(True, False, TRIAGE_JUNK, id="keep-cannot-overwrite-committed-junk"),
+            pytest.param(False, True, TRIAGE_KEEP, id="junk-cannot-overwrite-committed-keep"),
+        ],
+    )
+    async def test_record_triage_is_a_compare_and_set(
+        self, store: ReviewStore, first_junk: bool, second_junk: bool, landed: str
+    ) -> None:
+        candidate_id = await create_candidate(store)
+        await seed(store, candidate_id, "e0", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        assert await store.record_triage(DedupKey("e0"), junk=first_junk) is True
+        assert await store.record_triage(DedupKey("e0"), junk=second_junk) is False
+        assert await triage_of(store, "e0") == landed
+
+    async def test_kept_evidence_is_never_rejected_by_a_losing_junk_write(self, store: ReviewStore) -> None:
+        candidate_id = await create_candidate(store)
+        await seed(store, candidate_id, "e0", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        assert await store.record_triage(DedupKey("e0"), junk=False) is True
+        assert await store.record_triage(DedupKey("e0"), junk=True) is False
+        assert await store.reject_junk_triaged() == 0
+        assert (await candidate_row(store, candidate_id))["status"] == CandidateStatus.WATCHING
+
+    async def test_untriaged_create_events_excludes_judge_ruled_events(self, store: ReviewStore) -> None:
+        candidate_id = await create_candidate(store, rule="canonical-slug")
+        await seed(store, candidate_id, "e0", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        assert [row["dedup_key"] for row in await store.untriaged_create_events(limit=10)] == ["e0"]
+        await judge(store, "e0")
+        assert await store.untriaged_create_events(limit=10) == []
+
+    async def test_reject_junk_triaged_spares_accepted_judge_evidence(self, store: ReviewStore) -> None:
+        candidate_id = await create_candidate(store, rule="canonical-slug")
+        await seed(store, candidate_id, "e0", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        await judge(store, "e0")
+        assert await store.record_triage(DedupKey("e0"), junk=True) is True
+        assert await store.reject_junk_triaged() == 0
+        assert (await candidate_row(store, candidate_id))["status"] == CandidateStatus.WATCHING

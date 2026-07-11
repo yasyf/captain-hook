@@ -93,6 +93,22 @@ class TestTriagePass:
         assert await store.junk_triaged_keys() == set()
         assert len(await store.untriaged_create_events(limit=10)) == 1
 
+    async def test_a_judge_verdict_blocks_a_later_junk_retry(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await scan_correction(store, settings, tmp_path)
+        install_triage(monkeypatch, fail_on=CORRECTION)
+        assert (await triage_pass(store, settings=settings)).triaged == 0
+
+        install_fake_embedder(monkeypatch)
+        install_judge(monkeypatch, category="durable_style_rule")
+        assert (await judge_pass(store, settings=settings)).judged == 1
+
+        install_triage(monkeypatch, junk_when=lambda prompt: True)
+        assert await triage_pass(store, settings=settings) == TriageReport(triaged=0, junk=0, rejected=0)
+        assert await store.junk_triaged_keys() == set()
+        assert CandidateStatus.REJECTED not in set((await statuses(store)).values())
+
     async def test_mixed_evidence_keeps_the_candidate_watching(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

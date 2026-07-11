@@ -101,9 +101,9 @@ async def sync_open_prs(
     Each PR's state is served from the ``pr_states`` cache when its entry is younger
     than :data:`PR_STATE_TTL`, so a status dashboard's background sync never re-hits
     ``gh`` per open PR within the window; ``force_refresh`` (``review sync-prs``)
-    bypasses the cache. When ``gh`` is down on a forced or expired refresh, a stale
-    cached state is folded in rather than treating the PR as unreachable — only a PR
-    with no cached state at all counts unreachable and stays ``pr_open``.
+    bypasses the cache. When ``gh`` is down on a forced or expired refresh, the PR
+    counts unreachable and stays ``pr_open`` — a stale cached state is never folded
+    into a lifecycle transition, so an outage can never move a candidate on its own.
 
     Args:
         store: The open review store.
@@ -123,7 +123,7 @@ async def sync_open_prs(
         if (pr := await asyncio.to_thread(gh_pr_state, url)) is not None:
             await store.cache_pr_state(url, pr)
             return pr
-        return cached.pr if cached is not None else None
+        return None
 
     counts: Counter[str] = Counter()
     rows = await store.candidates(repo, status=CandidateStatus.PR_OPEN)
@@ -132,7 +132,11 @@ async def sync_open_prs(
         candidate_id, url = int(str(row["id"])), str(row["pr_url"])
         match pr:
             case PrState(state="MERGED", merged_at=merged_at):
-                await store.transition(candidate_id, CandidateStatus.ACCEPTED)
+                await store.transition(
+                    candidate_id,
+                    CandidateStatus.ACCEPTED,
+                    resolved_at=datetime.fromisoformat(merged_at) if merged_at else None,
+                )
                 logger.bind(
                     candidate_id=candidate_id, transition="pr_open->accepted", url=url, merged_at=merged_at
                 ).info("PR merged; candidate accepted")
