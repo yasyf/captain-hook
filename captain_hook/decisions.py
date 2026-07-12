@@ -13,8 +13,12 @@ from cc_transcript.tools import OtherCall, ToolInputError, parse_tool_call
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from captain_hook.events import BaseHookEvent
     from captain_hook.types import HookResult, RegisteredHook
+
+_WRITER: Callable[[Decision], None] | None = None
 
 
 def decisions_db_path() -> Path | None:
@@ -45,18 +49,20 @@ def record_decision(entry: RegisteredHook, evt: BaseHookEvent, result: HookResul
     action, message = (
         ("note", result.note) if result.action is Action.rewrite else (result.action.value, result.message)
     )
-    open_decision_log(decisions_db_path()).append(
-        Decision(
-            ts_ms=int(time.time() * 1000),
-            session_id=session_id,
-            source="captain-hook",
-            kind=entry.name,
-            source_file=entry.source_file,
-            event=evt.event_name.name,
-            action=action,
-            tool_name=evt.tool_name,
-            tool_digest=evt.tool_digest,
-            message=message,
-            detail={"degraded": True} if parse_degraded(evt) else {},
-        )
+    decision = Decision(
+        ts_ms=int(time.time() * 1000),
+        session_id=session_id,
+        source="captain-hook",
+        kind=entry.name,
+        source_file=entry.source_file,
+        event=evt.event_name.name,
+        action=action,
+        tool_name=evt.tool_name,
+        tool_digest=evt.tool_digest,
+        message=message,
+        detail={"degraded": True} if parse_degraded(evt) else {},
     )
+    if _WRITER is not None:
+        _WRITER(decision)
+    else:
+        open_decision_log(decisions_db_path()).append(decision)

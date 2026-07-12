@@ -16,6 +16,7 @@ from captain_hook.review.repo import resolve_repo_key
 from captain_hook.session import SessionStore
 from captain_hook.util.http import github_token
 from captain_hook.util.model_cache import model_sha256, model_version
+from captain_hook.util.proc import _SKIP_CACHE, _cold_skip_permissions
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -46,7 +47,15 @@ def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mo
 
 @pytest.fixture(autouse=True)
 def clear_global_caches():
-    caches = (open_decision_log, github_token, model_version, model_sha256, resolve_repo_key)
+    caches = (
+        open_decision_log,
+        github_token,
+        model_version,
+        model_sha256,
+        resolve_repo_key,
+        _cold_skip_permissions,
+        _SKIP_CACHE,
+    )
     for cached in caches:
         cached.cache_clear()
     yield

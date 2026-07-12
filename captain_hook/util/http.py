@@ -9,7 +9,6 @@ exponential backoff, honor GitHub's rate-limit headers, and raise a clean
 
 from __future__ import annotations
 
-import functools
 import json
 import os
 import random
@@ -21,8 +20,12 @@ import urllib.request
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from captain_hook.util.caching import ttl_cache
+
 if TYPE_CHECKING:
     from pathlib import Path
+
+GH_TOKEN_TTL = 300
 
 GH_TOKEN_TIMEOUT = 5
 MAX_ATTEMPTS = 5
@@ -37,7 +40,7 @@ class GitHubFetchError(Exception):
     """A GitHub request failed after exhausting retries, or returned a non-retryable status."""
 
 
-@functools.cache
+@ttl_cache(GH_TOKEN_TTL)
 def github_token() -> str | None:
     if token := os.environ.get("GITHUB_TOKEN"):
         return token
