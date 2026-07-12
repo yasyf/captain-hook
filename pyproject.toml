@@ -56,6 +56,7 @@ dev = [
 
 [project.scripts]
 capt-hook = "captain_hook.cli:main"
+capt-hook-client = "capt_hook_client.client:main"
 
 [project.urls]
 Homepage = "https://github.com/yasyf/captain-hook"
@@ -75,7 +76,7 @@ build-backend = "uv_build"
 environments = ["sys_platform == 'darwin'", "sys_platform == 'linux'"]
 
 [tool.uv.build-backend]
-module-name = "captain_hook"
+module-name = ["captain_hook", "capt_hook_client"]
 module-root = ""
 
 [tool.pytest.ini_options]
@@ -87,7 +88,7 @@ markers = ["unit: Pure unit tests", "integration: Integration tests"]
 [tool.pyright]
 pythonVersion = "3.13"
 typeCheckingMode = "strict"
-include = ["captain_hook"]
+include = ["captain_hook", "capt_hook_client"]
 venvPath = "."
 venv = ".venv"
 
