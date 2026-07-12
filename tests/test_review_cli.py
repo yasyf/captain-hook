@@ -92,6 +92,12 @@ class TestGroupSurface:
 
 
 class TestEnableDisable:
+    def test_enable_watches_the_repo(self, git_repo: Path) -> None:
+        result = invoke("enable", root=git_repo)
+        assert result.exit_code == 0, result.output
+        assert f"watching {GIT_REPO_KEY}" in result.output
+        assert asyncio.run(repo_watching(GIT_REPO_KEY)) is True
+
     def test_enable_registers_plugin(self, git_repo: Path) -> None:
         assert invoke("enable", root=git_repo).exit_code == 0
         settings = json.loads((git_repo / ".claude" / "settings.json").read_text())
