@@ -89,10 +89,12 @@ value the type checker, your editor, and the test runner all read.
 
 ### The wiring is mechanical
 
-You don't hand-edit the matcher block in `settings.json`. captain-hook reads your hook
-definitions and generates the wiring for you, so the `settings.json` entry and the hook it points
-at cannot drift apart. The JSON becomes generated output, not a file you maintain by hand. One
-description of the hook lives in your Python; the JSON follows from it.
+You never hand-edit a matcher block in `settings.json` — it carries no hook wiring at all. The
+captain-hook plugin ships a static `hooks.json` that registers every Claude Code event once,
+globally, with the same `uvx capt-hook run <Event>` command on every machine. The wiring can't
+drift from your hook definitions because it doesn't vary with them: which hooks actually fire in a
+repo is decided by the packs subscribed in `.claude/hooks/packs.toml`, and an event no pack
+subscribes to dispatches as a clean no-op.
 
 ## What you give up with native `settings.json` hooks
 
