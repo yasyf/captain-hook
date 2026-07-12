@@ -344,6 +344,22 @@ def test_read_entries_rejects_unknown_keys(packs_toml: Path) -> None:
         manager.read_entries(packs_toml)
 
 
+def test_rewrite_drops_legacy_launcher_line(packs_toml: Path) -> None:
+    # A packs.toml from an older scaffold carries a top-level `launcher` line, inert since 9.0.0.
+    packs_toml.write_text('launcher = "uvx capt-hook run"\n[packs.general]\n')
+    # read_entries tolerates the stale line — it reads only the [packs.*] tables — and never raises.
+    assert manager.read_entries(packs_toml) == [manager.BuiltinPack("general")]
+
+    # The next manifest rewrite re-renders from entries alone, so the launcher line is dropped.
+    acme = manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@v1"), "a" * 40)
+    manager.upsert_entry(packs_toml, acme)
+
+    text = packs_toml.read_text()
+    assert "launcher" not in text  # the stale key is gone
+    assert manager.read_entries(packs_toml) == [acme, manager.BuiltinPack("general")]  # both survive
+    assert "[packs.general]" in text and 'source = "github:a/b@v1"' in text
+
+
 # --- fetch / cache -------------------------------------------------------------------
 
 

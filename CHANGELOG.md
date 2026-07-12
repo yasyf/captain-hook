@@ -4,13 +4,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [9.3.0] - 2026-07-12
 
 ### Removed
 - The `packs.toml` `launcher` key, `read_launcher`, and the `toml_basic_string` helper —
   inert since 9.0.0 went plugin-canonical (the plugin's `hooks.json` fixes the `uvx
   capt-hook` command prefix, so nothing builds hook commands from `launcher`). Its sole
   consumer was pack-manager line preservation across `pack add`/`remove`/`update`.
+  Manifest rewrites (`pack add`/`pack remove`/pinned `pack update`) now drop a stale
+  `launcher` line on their next write instead of preserving it.
 
 ## [9.2.1] - 2026-07-12
 
