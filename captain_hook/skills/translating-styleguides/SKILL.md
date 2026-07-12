@@ -2,7 +2,7 @@
 name: translating-styleguides
 description: Translates a prose style guide (STYLEGUIDE.md, CONTRIBUTING style sections, CLAUDE.md conventions) into enforced captain-hook rules — AST Matcher StyleRules where the rule is mechanical, custom check() logic for complex-but-deterministic rules, LLM gates/nudges for semantic rules — each with inline tests synthesized from the guide's own good/bad examples, plus a final report of what is and is not enforced. Use when the user says "enforce our style guide", "turn STYLEGUIDE.md into hooks", "make Claude follow our coding conventions", or when bootstrapping-hooks finds a style guide.
 argument-hint: "[path to styleguide .md] (auto-detects STYLEGUIDE.md / CONTRIBUTING.md / CLAUDE.md when omitted)"
-allowed-tools: Read, Grep, Glob, AskUserQuestion, Write, Edit, Bash(uvx capt-hook:*, capt-hook:*, ls:*)
+allowed-tools: Read, Grep, Glob, AskUserQuestion, Write, Edit, Bash(uvx capt-hook:*, uvx --isolated capt-hook:*, capt-hook:*, ls:*)
 ---
 
 # Translating Styleguides
@@ -17,14 +17,14 @@ are reported. Each `styleguide(...)` call registers exactly one hook; severity
 (warn vs `block=True`) is per call.
 
 This skill turns a prose guide into `.claude/hooks/style.py` (deterministic rules) and
-`.claude/hooks/style_llm.py` (semantic rules), then proves them with `uvx capt-hook test`.
+`.claude/hooks/style_llm.py` (semantic rules), then proves them with `uvx --isolated capt-hook test`.
 
 ## Hard Rules
 
 - Every guide statement lands in the final report — Tier 4 (unenforceable) rows included,
   each with a one-line reason. Never silently drop a rule.
 - Every Tier 1-2 rule carries inline `tests` with at least one firing and one allowing
-  input. `uvx capt-hook test` must pass before you report.
+  input. `uvx --isolated capt-hook test` must pass before you report.
 - Do not write hook files before the user confirms the classification (Step 4).
 - Default severity is warn. Propose `block=True` only where the guide says
   "never" / "forbidden", and only if the user opts in.
@@ -41,7 +41,7 @@ Translation Progress:
 - [ ] Step 4: Confirm classification with the user — nothing written before approval
 - [ ] Step 5: Write style.py (Tiers 1-2, with tests)
 - [ ] Step 6: Write style_llm.py (Tier 3, cost-controlled)
-- [ ] Step 7: Verify (uvx capt-hook test, fix until green)
+- [ ] Step 7: Verify (uvx --isolated capt-hook test, fix until green)
 - [ ] Step 8: Enforcement report (every rule, Tier 4 included)
 ```
 
@@ -159,7 +159,7 @@ file under `capt-hook test` still verifies the registrations import cleanly.
 
 ### 7. Verify
 
-Run: `uvx capt-hook test` (add `--json` when parsing). Iterate until green.
+Run: `uvx --isolated capt-hook test` (add `--json` when parsing). Iterate until green.
 
 **Gotcha:** all rules in one `styleguide()` call merge their tests onto a single hook,
 and every `Input` runs through the *whole* styleguide. A failing test usually means the

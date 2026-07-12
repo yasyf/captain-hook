@@ -91,7 +91,7 @@ value the type checker, your editor, and the test runner all read.
 
 You never hand-edit a matcher block in `settings.json` — it carries no hook wiring at all. The
 captain-hook plugin ships a static `hooks.json` that registers every Claude Code event once,
-globally, with the same `uvx capt-hook run <Event>` command on every machine. The wiring can't
+globally, with the same `uvx --isolated capt-hook run <Event>` command on every machine. The wiring can't
 drift from your hook definitions because it doesn't vary with them: which hooks actually fire in a
 repo is decided by the packs subscribed in `.claude/hooks/packs.toml`, and an event no pack
 subscribes to dispatches as a clean no-op.

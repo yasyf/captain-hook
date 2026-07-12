@@ -1,16 +1,16 @@
 ---
 name: authoring-hooks
-description: Drafts one capt-hook (captain-hook) hook from a durable correction — the user's verbatim feedback plus its context — as a new .claude/hooks/<slug>.py, or (FIX mode) amends an existing misfiring hook with a mandatory regression test reproducing the misfire. Picks the right primitive (nudge for one-shot advice, gate for one-shot stop checks, hook(block=True) for always-on enforcement), writes the narrowest condition that captures the correction, a message that cites the correction, and inline tests (one Input firing on the offending shape, one Allow() on a benign neighbor), then proves the file with uvx capt-hook test before it goes live. Use when the user says "author a hook", "draft a hook from feedback", "encode this correction as a hook", "fix this misfiring hook", or when the bootstrapping-hooks or scanning-sessions skill delegates a hook to write or amend.
+description: Drafts one capt-hook (captain-hook) hook from a durable correction — the user's verbatim feedback plus its context — as a new .claude/hooks/<slug>.py, or (FIX mode) amends an existing misfiring hook with a mandatory regression test reproducing the misfire. Picks the right primitive (nudge for one-shot advice, gate for one-shot stop checks, hook(block=True) for always-on enforcement), writes the narrowest condition that captures the correction, a message that cites the correction, and inline tests (one Input firing on the offending shape, one Allow() on a benign neighbor), then proves the file with uvx --isolated capt-hook test before it goes live. Use when the user says "author a hook", "draft a hook from feedback", "encode this correction as a hook", "fix this misfiring hook", or when the bootstrapping-hooks or scanning-sessions skill delegates a hook to write or amend.
 argument-hint: "[the correction to encode — verbatim user text + context]"
-allowed-tools: Read, Grep, Glob, Write, Edit, Bash(uvx capt-hook:*, capt-hook:*, ls:*, git log:*)
+allowed-tools: Read, Grep, Glob, Write, Edit, Bash(uvx capt-hook:*, uvx --isolated capt-hook:*, capt-hook:*, ls:*, git log:*)
 ---
 
 # Authoring a Hook from a Correction
 
 capt-hook is a declarative hook framework for Claude Code. Hooks are Python files in
-`.claude/hooks/`, dispatched by the `uvx capt-hook run <Event>` entries the
+`.claude/hooks/`, dispatched by the `uvx --isolated capt-hook run <Event>` entries the
 captain-hook plugin registers for every event. Each hook carries inline tests —
-`tests={Input(...): Block() | Warn() | Allow()}` — run with `uvx capt-hook test`. This
+`tests={Input(...): Block() | Warn() | Allow()}` — run with `uvx --isolated capt-hook test`. This
 skill turns **one durable correction** (the user's verbatim feedback plus the context it
 fired in) into **one new hook file** `.claude/hooks/<slug>.py`. Full API:
 [capt-hook API reference](references/capt-hook-api.md).
@@ -27,7 +27,7 @@ fired in) into **one new hook file** `.claude/hooks/<slug>.py`. Full API:
   into fix-PRs against your hook.
 - **Every deterministic hook ships inline tests** — one `Input` asserting the hook
   fires on the offending shape, one asserting it stays silent on a benign neighbor.
-- **`uvx capt-hook test` must be green before the hook goes live.** Every event is
+- **`uvx --isolated capt-hook test` must be green before the hook goes live.** Every event is
   already registered, so a hook file that fails at dispatch blocks the user's session;
   ship only what is proven to run.
 
@@ -40,7 +40,7 @@ Authoring Progress:
 - [ ] Step 1: Restate the correction as a rule
 - [ ] Step 2: Pick the primitive (per references/pitfalls.md)
 - [ ] Step 3: Write the hook — condition, message, inline tests
-- [ ] Step 4: Verify (uvx capt-hook test, fix until green)
+- [ ] Step 4: Verify (uvx --isolated capt-hook test, fix until green)
 ```
 
 ### 1. Restate the correction as a rule
@@ -103,7 +103,7 @@ registration gets:
 Run:
 
 ```bash
-uvx capt-hook test
+uvx --isolated capt-hook test
 ```
 
 Add `--json` when parsing results. Fix failures until green — debugging recipes in
@@ -140,7 +140,7 @@ warn_command(
 )
 ```
 
-`uvx capt-hook test` → 2 passed; the hook is live from the next session — nothing to wire.
+`uvx --isolated capt-hook test` → 2 passed; the hook is live from the next session — nothing to wire.
 
 ## FIX mode — amending a misfiring hook
 
@@ -193,7 +193,7 @@ same complaint from being mined again next session.
 
 ### 4. Verify
 
-`uvx capt-hook test` must be green, existing tests included. Never delete or weaken
+`uvx --isolated capt-hook test` must be green, existing tests included. Never delete or weaken
 the hook's existing tests to make the amendment pass; if the genuine-case test now
 fails, the amendment is too broad — go back to Step 2. No settings wiring changes:
 the file is already dispatched.

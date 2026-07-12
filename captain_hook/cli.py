@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from cc_transcript.query import Session
 
 DIST_NAME = "capt-hook"
-DEFAULT_PREFIX = f"uvx {DIST_NAME}"
+DEFAULT_PREFIX = f"uvx --isolated {DIST_NAME}"
 EVENT_NAMES = ", ".join(n for e in Event if (n := e.name))
 PLUGIN_ID = "captain-hook@captain-hook"
 
@@ -530,7 +530,7 @@ def pack_attach(directory: str) -> None:
     """Register a plugin's pack for the current session (reads the SessionStart JSON on stdin).
 
     A Claude plugin wires this to a SessionStart hook so its pack loads under the byte-identical
-    canonical ``uvx capt-hook run <Event>`` commands, letting Claude Code's exact-command dedup
+    canonical ``uvx --isolated capt-hook run <Event>`` commands, letting Claude Code's exact-command dedup
     collapse plugin and project wiring into one process per event. Writes nothing to stdout on
     success (SessionStart stdout is injected into the model context); a missing or invalid
     manifest exits 1 with a stderr message.
@@ -558,15 +558,19 @@ def pack_list(state: CliState) -> None:
     for r in resolved:
         match r.entry:
             case manager.BuiltinPack():
-                kind, ref = "builtin", "-"
+                kind, ref, version = "builtin", "-", f"v{r.manifest.version}"
             case manager.ExternalPack(source=source) as ext:
-                kind, ref = "github", f"{source.ref or 'HEAD'}@{(manager.resolved_commit(ext) or '???')[:7]}"
+                kind = "github"
+                ref = f"{source.ref or 'HEAD'}@{(manager.resolved_commit(ext) or '???')[:7]}"
+                # A moving pack shows the ref it resolved to (a release tag or a branch carries its
+                # own label); a pin, a pre-9.6 sidecar, or a builtin falls back to the manifest version.
+                version = manager.resolved_ref_name(ext) or f"v{r.manifest.version}"
         count = sum(
             1
             for p in r.path.glob("*.py")
             if not p.stem.startswith("_") and p.stem != CONF_MODULE and not is_skip_marked(p)
         )
-        click.echo(f"  {r.entry.name:24} {kind:8} {ref:20} v{r.manifest.version:8} {count} hooks")
+        click.echo(f"  {r.entry.name:24} {kind:8} {ref:20} {version:8} {count} hooks")
     for name in missing:
         click.echo(f"  {name:24} github   (unavailable — offline; run `capt-hook pack update` when online)")
     for error in _state.load_errors:
@@ -601,14 +605,17 @@ def pack_update(state: CliState, name: str | None) -> None:
         match entry:
             case manager.ExternalPack(name=n, source=source, commit=commit) if name in (None, n):
                 try:
-                    sha = manager.fetched_commit(manager.fetch_pack(source))
+                    fetched, resolved_ref = manager.fetch_pack(source)
+                    sha = manager.fetched_commit(fetched)
                 except manager.PackError as e:
                     raise click.ClickException(str(e)) from e
                 if commit is not None:
                     manager.upsert_entry(path, manager.ExternalPack(name=n, source=source, commit=sha))
                 else:
-                    manager.PackMeta(commit=sha, checked_at=time.time()).write(manager.meta_path(n))
-                click.echo(f"  updated {n} -> {sha[:7]}")
+                    manager.PackMeta(commit=sha, checked_at=time.time(), resolved_ref=resolved_ref).write(
+                        manager.meta_path(n)
+                    )
+                click.echo(f"  updated {n} -> {resolved_ref}@{sha[:7]}")
             case manager.BuiltinPack(name=n) if name == n:
                 click.echo(f"  {n} is builtin; it tracks the installed capt-hook version")
 

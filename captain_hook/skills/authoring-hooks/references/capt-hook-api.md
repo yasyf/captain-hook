@@ -223,9 +223,9 @@ ast_grep.capture(cl.raw, "bash", "sed -n $R $F")                # {"R": ..., "F"
 
 | Command | What it does |
 |---|---|
-| `uvx capt-hook init` | Scaffold `.claude/hooks/example.py` + register the captain-hook plugin |
-| `uvx capt-hook test [--json]` | Run all inline tests; exit 1 on failure; `--json` = one record per test |
-| `uvx capt-hook run <Event> [--async]` | Dispatch one event (Claude Code calls this, not you) |
-| `uvx capt-hook logs [--session S] [--tail N]` | View a recent capt-hook session log |
+| `uvx --isolated capt-hook init` | Scaffold `.claude/hooks/example.py` + register the captain-hook plugin |
+| `uvx --isolated capt-hook test [--json]` | Run all inline tests; exit 1 on failure; `--json` = one record per test |
+| `uvx --isolated capt-hook run <Event> [--async]` | Dispatch one event (Claude Code calls this, not you) |
+| `uvx --isolated capt-hook logs [--session S] [--tail N]` | View a recent capt-hook session log |
 
 Global flags: `--hooks <dir>` (default `.claude/hooks`), `--root <path>`.

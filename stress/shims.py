@@ -24,6 +24,10 @@ exec "{VENV_BIN}/capt-hook" "$@"
 """
 
 UVX_SHIM_TEMPLATE = """#!/bin/sh
+if [ "$1" = "--isolated" ] && [ "$2" = "capt-hook" ]; then
+  shift 2
+  exec "{capt_hook}" "$@"
+fi
 if [ "$1" = "capt-hook" ]; then
   shift
   exec "{capt_hook}" "$@"

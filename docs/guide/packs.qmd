@@ -50,19 +50,26 @@ uvx capt-hook test
 
 ## List, update, and remove packs
 
-List the enabled packs, their kind, pinned version, and hook count:
+List the enabled packs — kind, source ref, version, and hook count:
 
 ```bash
 uvx capt-hook pack list
 ```
 
 ```
-  general                  builtin  -                    v0.18.0   11 hooks
-  python                   builtin  -                    v0.1.0    3 hooks
-  go                       builtin  -                    v0.1.0    2 hooks
-  steering                 builtin  -                    v0.6.0    1 hooks
-  fixes                    builtin  -                    v0.1.0    1 hooks
+  general                  builtin  -                    v0.19.0  11 hooks
+  python                   builtin  -                    v0.1.0   3 hooks
+  go                       builtin  -                    v0.1.0   2 hooks
+  steering                 builtin  -                    v0.7.0   2 hooks
+  fixes                    builtin  -                    v0.1.0   1 hooks
+  acme-guards              github   latest@a1b2c3d       v1.4.0   4 hooks
 ```
+
+Builtin and pinned packs show their manifest `version`. A moving pack —
+`@latest` or a bare default-branch source — shows the ref it last resolved to
+instead: the release tag here, or the branch name for a bare source. That ref
+lives in the pack's per-machine sidecar, so a machine that has never resolved
+the pack falls back to the manifest version until its first `pack update`.
 
 Remove a pack by name. The entry leaves `packs.toml`, but its cache stays on disk
 for other projects:
@@ -106,8 +113,9 @@ Run `pack update` with no name to refresh every external pack.
 ## The hook command
 
 Hook commands are plugin-owned. The captain-hook plugin's `hooks.json` registers
-`uvx capt-hook run <Event>` for every event, and the string is identical on every
-machine, so a fresh clone gets working hooks with nothing installed beyond `uv`.
+`uvx --isolated capt-hook run <Event>` for every event, and the string is identical
+on every machine, so a fresh clone gets working hooks with nothing installed beyond
+`uv`.
 Nothing a pack does changes that: `pack add`, `pack remove`, and a pinned
 `pack update` edit `.claude/hooks/packs.toml`, a moving-ref `pack update` only
 refreshes its per-machine sidecar, and none of them touch the hook commands. A stale
@@ -135,6 +143,11 @@ version = "1.2.0"
 description = "Guards for ACME service conventions"
 hooks = "hooks"
 ```
+
+`version` is optional since capt-hook 9.6.0 and defaults to `0.0.0` — a pack
+consumed `@latest` shows its resolved release tag in `pack list` anyway. Keep
+the key while pre-9.6.0 capt-hook is in the wild, though: older releases crash
+on a manifest without it.
 
 The `hooks` path is relative to the repo root regardless of where the manifest
 sits, so moving the manifest into `.claude/` needs no other change. Set

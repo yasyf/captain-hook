@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 FAMILY = "env"
 REAL_CHECKOUT_KEY = "github.com/yasyf/captain-hook"
-EXPECTED_WIRING = "uvx capt-hook review run"
+EXPECTED_WIRING = "uvx --isolated capt-hook review run"
 PR_URL = "https://example.com/pr/1"
 SENTINEL_VARS = ("HOOKS_REVIEW_MIN_SESSIONS", "HOOKS_STRESS_SENTINEL", "CAPT_HOOK_SPAWNED")
 
@@ -31,8 +31,12 @@ def expected_repo(sandbox: Sandbox) -> str:
     return f"github.com/capt-hook-stress/{sandbox.root.name}"
 
 
-def session_end_commands(sandbox: Sandbox) -> list[str]:
-    hooks = json.loads((sandbox.repo / ".claude" / "settings.json").read_text()).get("hooks") or {}
+def session_end_commands() -> list[str]:
+    # `review enable` registers the captain-hook marketplace plugin, so the SessionEnd wiring lives in the
+    # plugin's committed hooks.json (not the project settings.json), which Claude Code loads on plugin enable.
+    from captain_hook.cli import plugin_dir
+
+    hooks = json.loads((plugin_dir() / "hooks" / "hooks.json").read_text()).get("hooks") or {}
     return [
         str(entry.get("command") or "") for group in hooks.get("SessionEnd") or [] for entry in group.get("hooks") or []
     ]
@@ -67,10 +71,10 @@ def no_cwd_footgun(sandbox: Sandbox) -> ScenarioResult:
 
 def uvx_wiring(sandbox: Sandbox) -> ScenarioResult:
     enable = capt_hook("review", "enable", sandbox=sandbox, cwd=sandbox.repo, env=cli_env(sandbox))
-    commands = session_end_commands(sandbox)
+    commands = session_end_commands()
     started = time.monotonic()
     help_proc = subprocess.run(
-        ["uvx", "capt-hook", "--help"],
+        ["uvx", "--isolated", "capt-hook", "--help"],
         env=sandbox.env(),
         cwd=str(sandbox.root),
         capture_output=True,
@@ -81,12 +85,12 @@ def uvx_wiring(sandbox: Sandbox) -> ScenarioResult:
     return ScenarioResult(
         checks=(
             check(
-                "enable wires the PyPI-resolving uvx command verbatim",
-                enable.returncode == 0 and commands == [EXPECTED_WIRING],
+                "enable registers the plugin whose SessionEnd wires the isolated uvx command verbatim",
+                enable.returncode == 0 and EXPECTED_WIRING in commands,
                 f"rc={enable.returncode} commands={commands} stdout={enable.stdout!r}",
             ),
             check(
-                "sandbox uvx shim intercepts capt-hook fast",
+                "sandbox uvx shim intercepts --isolated capt-hook fast",
                 help_proc.returncode == 0 and elapsed < 10 and "Captain Hook" in help_proc.stdout,
                 f"rc={help_proc.returncode} elapsed={elapsed:.2f}s stdout={help_proc.stdout[:200]!r}",
             ),
@@ -97,9 +101,10 @@ def uvx_wiring(sandbox: Sandbox) -> ScenarioResult:
             ),
         ),
         finding=(
-            "review enable wires SessionEnd as 'uvx capt-hook review run': every real session end resolves"
-            " capt-hook through uvx (PyPI wheel), never the local checkout, so live drivers must rewrite the"
-            " wired command; the sandbox uvx shim intercepts it here"
+            "review enable registers the captain-hook plugin, whose SessionEnd wires"
+            " 'uvx --isolated capt-hook review run': every real session end resolves capt-hook through uvx"
+            " (PyPI wheel), never the local checkout, so live drivers must rewrite the wired command; the"
+            " sandbox uvx shim intercepts it here"
         ),
     )
 

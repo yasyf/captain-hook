@@ -42,10 +42,10 @@ command wiring — the captain-hook plugin owns it — so the failure mode left 
 and the user cannot even ask Claude to fix it, because every turn re-fires the broken
 hook.
 
-`uvx capt-hook test` catches a broken module before it reaches a live session: an
+`uvx --isolated capt-hook test` catches a broken module before it reaches a live session: an
 import error fails the run and the traceback names the line.
 
-## 4. `uvx capt-hook test` green BEFORE the hook goes live — always
+## 4. `uvx --isolated capt-hook test` green BEFORE the hook goes live — always
 
 There is no wiring step to hide behind: every event is already registered, so a new
 file is dispatched as soon as a session loads it. The inline tests are what proves
@@ -54,7 +54,7 @@ renders — *before* the dispatcher runs it against live sessions. An untested h
 file is #3 waiting to happen. Run:
 
 ```bash
-uvx capt-hook test
+uvx --isolated capt-hook test
 ```
 
 and call the hook done only on a fully green run (exit code 0).

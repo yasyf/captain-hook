@@ -65,7 +65,7 @@ class TestPluginHooksJson:
                     assert "async" not in by_command[run_command(name, async_=False)]
                     assert by_command[run_command(name, async_=True)]["async"] is True
 
-    def test_canonical_prefix_is_uvx_capt_hook(self) -> None:
-        assert DEFAULT_PREFIX == "uvx capt-hook"
-        assert run_command("PreToolUse", async_=False) == "uvx capt-hook run PreToolUse"
-        assert review_command() == "uvx capt-hook review run"
+    def test_canonical_prefix_is_uvx_isolated_capt_hook(self) -> None:
+        assert DEFAULT_PREFIX == "uvx --isolated capt-hook"
+        assert run_command("PreToolUse", async_=False) == "uvx --isolated capt-hook run PreToolUse"
+        assert review_command() == "uvx --isolated capt-hook review run"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tarfile
 from dataclasses import dataclass, field
@@ -144,7 +145,7 @@ def go_offline(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def install_fetch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tarball: Path, sha: str) -> None:
     monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
-    monkeypatch.setattr(manager, "resolve_commit", lambda source: sha)
+    monkeypatch.setattr(manager, "resolve_commit", lambda source: (sha, "main"))
     monkeypatch.setattr(http, "github_download", lambda url, dest: dest.write_bytes(tarball.read_bytes()))
 
 
@@ -291,6 +292,12 @@ def test_manifest_missing_field_fails_loud(tmp_path: Path) -> None:
         manager.PackManifest.load(tmp_path / manager.PACK_MANIFEST)
 
 
+def test_manifest_version_optional_defaults(tmp_path: Path) -> None:
+    (tmp_path / manager.PACK_MANIFEST).write_text('name = "x"\ndescription = "d"\nhooks = "."\n')
+    manifest = manager.PackManifest.load(tmp_path / manager.PACK_MANIFEST)
+    assert manifest.version == "0.0.0"  # optional since 9.5; authors keep the key for older capt-hook
+
+
 @pytest.mark.parametrize(
     ("nlp_line", "expected"),
     [
@@ -403,7 +410,7 @@ def test_fetch_pack_caches_and_pins(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     sha = "d" * 40
     install_fetch(monkeypatch, tmp_path, tarball, sha)
 
-    resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
+    resolved, _ = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
 
     assert resolved.entry == manager.ExternalPack("acme-guards", manager.PackSource.parse("github:acme/guards@v1"), sha)
     assert resolved.manifest.name == "acme-guards"
@@ -428,7 +435,7 @@ def test_fetch_pack_caches_only_manifest_and_hooks_subdir(tmp_path: Path, monkey
     sha = "d" * 40
     install_fetch(monkeypatch, tmp_path, tarball, sha)
 
-    resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
+    resolved, _ = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
 
     cached = tmp_path / "cache" / f"acme-guards@{sha}"
     assert {p.name for p in cached.iterdir()} == {manager.PACK_MANIFEST, "plugin", manager.SHA_MARKER}
@@ -451,7 +458,7 @@ def test_fetch_pack_claude_manifest_caches_manifest_and_hooks(tmp_path: Path, mo
     sha = "d" * 40
     install_fetch(monkeypatch, tmp_path, tarball, sha)
 
-    resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
+    resolved, _ = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
 
     cached = tmp_path / "cache" / f"acme-guards@{sha}"
     assert {p.name for p in cached.iterdir()} == {".claude", "plugin", manager.SHA_MARKER}
@@ -476,7 +483,7 @@ def test_fetch_pack_prefers_claude_manifest_over_root(tmp_path: Path, monkeypatc
     sha = "a" * 40
     install_fetch(monkeypatch, tmp_path, tarball, sha)
 
-    resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
+    resolved, _ = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
     assert resolved.manifest.name == "claude-pack"
 
 
@@ -491,7 +498,7 @@ def test_fetch_pack_root_hooks_caches_full_tree(tmp_path: Path, monkeypatch: pyt
     sha = "e" * 40
     install_fetch(monkeypatch, tmp_path, tarball, sha)
 
-    resolved = manager.fetch_pack(manager.PackSource.parse("github:acme/flat@v1"))
+    resolved, _ = manager.fetch_pack(manager.PackSource.parse("github:acme/flat@v1"))
 
     cached = tmp_path / "cache" / f"acme-flat@{sha}"
     assert (cached / manager.PACK_MANIFEST).is_file()
@@ -712,7 +719,9 @@ def test_resolve_ref(
     expected_seen_refs: list[str],
 ) -> None:
     gh = fake_github(tmp_path, monkeypatch, name="acme", sha=sha, **gh_kwargs)
-    assert manager.resolve_commit(manager.PackSource.parse(f"github:acme/acme{ref_suffix}")) == sha
+    resolved_sha, resolved_ref = manager.resolve_commit(manager.PackSource.parse(f"github:acme/acme{ref_suffix}"))
+    assert resolved_sha == sha
+    assert resolved_ref == expected_seen_refs[0]  # the moving ref name it resolved through
     assert gh.seen_refs == expected_seen_refs
 
 
@@ -908,7 +917,7 @@ def test_pinned_lockfile_resolves_without_ref_resolution(tmp_path: Path, monkeyp
 
 def test_cli_pack_add_latest_is_source_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(manager.time, "time", Clock())
-    fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40, latest_tag="v1.0.0")
+    fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)  # FakeGitHub.latest_tag == "v9.9.9"
     result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "add", "github:acme/acme@latest"])
 
     assert result.exit_code == 0, result.output
@@ -918,6 +927,7 @@ def test_cli_pack_add_latest_is_source_only(tmp_path: Path, monkeypatch: pytest.
     assert entry == manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@latest"), commit=None)
     meta = manager.PackMeta.load(manager.meta_path("acme"))
     assert meta is not None and meta.commit == "a" * 40  # cache warmed + sidecar recorded
+    assert meta.resolved_ref == "v9.9.9"  # the @latest release tag, recorded for display
 
 
 def test_cli_pack_add_tag_freezes_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -937,7 +947,7 @@ def test_cli_pack_add_tag_freezes_commit(tmp_path: Path, monkeypatch: pytest.Mon
 def test_cli_pack_update_moving_refreshes_sidecar_not_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     clock = Clock()
     monkeypatch.setattr(manager.time, "time", clock)
-    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40, latest_tag="v1.0.0")
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)  # FakeGitHub.latest_tag == "v9.9.9"
     enable_moving(tmp_path)
     manager.resolve_enabled_packs(tmp_path)
 
@@ -945,9 +955,12 @@ def test_cli_pack_update_moving_refreshes_sidecar_not_toml(tmp_path: Path, monke
     result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "update", "acme"])
 
     assert result.exit_code == 0, result.output
+    # The message names the resolved ref alongside the sha, never the bare sha (FakeGitHub.latest_tag == v9.9.9).
+    assert "updated acme -> v9.9.9@ccccccc" in result.output
     assert "commit" not in manager.packs_toml_path(tmp_path).read_text()  # still source-only
     meta = manager.PackMeta.load(manager.meta_path("acme"))
     assert meta is not None and meta.commit == "c" * 40  # sidecar advanced to the new commit
+    assert meta.resolved_ref == "v9.9.9"  # @latest re-resolved the release tag into the sidecar
 
 
 def test_cli_pack_update_pinned_repins_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -967,13 +980,63 @@ def test_cli_pack_update_pinned_repins_toml(tmp_path: Path, monkeypatch: pytest.
 
 def test_cli_pack_list_shows_resolved_commit_for_moving(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(manager.time, "time", Clock())
-    fake_github(tmp_path, monkeypatch, name="acme", sha="abcdef1" + "0" * 33, latest_tag="v1.0.0")
+    fake_github(tmp_path, monkeypatch, name="acme", sha="abcdef1" + "0" * 33)  # FakeGitHub.latest_tag == "v9.9.9"
     enable_moving(tmp_path)
     manager.resolve_enabled_packs(tmp_path)
 
     listed = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "list"])
     assert listed.exit_code == 0, listed.output
     assert "acme" in listed.output and "latest@abcdef1" in listed.output  # honest resolved commit, not "None"
+    assert "v9.9.9" in listed.output  # the resolved @latest tag shows in the version column
+    assert "v0.1.0" not in listed.output  # not the one-behind manifest version
+
+
+def test_resolve_moving_records_resolved_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager.time, "time", Clock())
+    fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)  # FakeGitHub.latest_tag == "v9.9.9"
+    entry = manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@latest"), commit=None)
+
+    resolved = manager.resolve_moving(entry)
+
+    assert resolved is not None
+    meta = manager.PackMeta.load(manager.meta_path("acme"))
+    assert meta is not None and meta.commit == "a" * 40 and meta.resolved_ref == "v9.9.9"
+
+
+def test_resolve_moving_bare_source_records_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager.time, "time", Clock())
+    fake_github(tmp_path, monkeypatch, name="acme", sha="b" * 40, default_branch="trunk")
+    entry = manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme"), commit=None)
+
+    resolved = manager.resolve_moving(entry)
+
+    assert resolved is not None
+    meta = manager.PackMeta.load(manager.meta_path("acme"))
+    assert meta is not None and meta.resolved_ref == "trunk"  # a bare source records its default branch
+
+
+def test_pack_meta_load_pre_9_6_sidecar_defaults_none(tmp_path: Path) -> None:
+    path = tmp_path / "acme.meta"
+    path.write_text(json.dumps({"commit": "a" * 40, "checked_at": 1.0}))  # a pre-9.5 sidecar has no resolved_ref
+    meta = manager.PackMeta.load(path)
+    assert meta is not None
+    assert meta.commit == "a" * 40 and meta.checked_at == 1.0 and meta.resolved_ref is None
+
+
+def test_cli_pack_list_falls_back_to_manifest_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager.time, "time", Clock())
+    fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
+    enable_moving(tmp_path)
+    manager.resolve_enabled_packs(tmp_path)
+    # a pre-9.5 sidecar: same cached commit, but no resolved_ref recorded
+    meta = manager.PackMeta.load(manager.meta_path("acme"))
+    assert meta is not None
+    manager.atomic_write(manager.meta_path("acme"), json.dumps({"commit": meta.commit, "checked_at": meta.checked_at}))
+
+    listed = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "list"])
+
+    assert listed.exit_code == 0, listed.output
+    assert "v0.1.0" in listed.output  # no resolved_ref in the sidecar → falls back to the manifest version
 
 
 # --- disabled packs.toml entries -----------------------------------------------------

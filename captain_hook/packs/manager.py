@@ -79,9 +79,9 @@ class PackSource:
 @dataclass(frozen=True, slots=True)
 class PackManifest:
     name: str
-    version: str
     description: str
     hooks: str
+    version: str = "0.0.0"
     nlp: bool = False
 
     @classmethod
@@ -91,10 +91,11 @@ class PackManifest:
         data = tomllib.loads(path.read_text())
         manifest = cls(
             name=data["name"],
-            version=data["version"],
             description=data["description"],
             hooks=data["hooks"],
-            # .get is deliberate: `nlp` is a schema addition and existing manifests predate it.
+            # .get is deliberate: `version` is optional since 9.6 (authors keep the key while
+            # pre-9.6 capt-hook is in the wild), and `nlp` is a schema addition manifests predate.
+            version=data.get("version", "0.0.0"),
             nlp=data.get("nlp", False),
         )
         if not PACK_NAME_RE.fullmatch(manifest.name):
@@ -159,15 +160,17 @@ class ResolvedPack:
 
 @dataclass(frozen=True, slots=True)
 class PackMeta:
-    """Per-machine resolution sidecar for a moving-ref pack: the last-resolved commit and when.
+    """Per-machine resolution sidecar for a moving-ref pack: the last-resolved commit, ref, and when.
 
-    Stored as JSON next to the cache so the resolved ``commit`` and ``checked_at``
-    timestamp never enter the committed ``packs.toml``. ``checked_at`` gates the
-    24h re-resolution TTL.
+    Stored as JSON next to the cache so the resolved ``commit``, ``resolved_ref``, and
+    ``checked_at`` timestamp never enter the committed ``packs.toml``. ``checked_at`` gates
+    the 24h re-resolution TTL; ``resolved_ref`` (the moving ref that resolved — a release tag
+    or a branch) is display-only for ``pack list`` and is absent on pre-9.6 sidecars.
     """
 
     commit: str
     checked_at: float
+    resolved_ref: str | None = None
 
     def fresh(self, now: float) -> bool:
         return now - self.checked_at < REFRESH_TTL_SECONDS
@@ -177,10 +180,13 @@ class PackMeta:
         if not path.is_file():
             return None
         data = json.loads(path.read_text())
-        return cls(commit=data["commit"], checked_at=data["checked_at"])
+        # .get is deliberate: pre-9.6 sidecars lack resolved_ref (mirrors PackManifest.load).
+        return cls(commit=data["commit"], checked_at=data["checked_at"], resolved_ref=data.get("resolved_ref"))
 
     def write(self, path: Path) -> None:
-        atomic_write(path, json.dumps({"commit": self.commit, "checked_at": self.checked_at}))
+        atomic_write(
+            path, json.dumps({"commit": self.commit, "checked_at": self.checked_at, "resolved_ref": self.resolved_ref})
+        )
 
 
 def packs_toml_path(root: Path) -> Path:
@@ -285,9 +291,11 @@ def resolve_ref(source: PackSource) -> str:
             return ref
 
 
-def resolve_commit(source: PackSource) -> str:
-    url = f"https://api.github.com/repos/{source.owner}/{source.repo}/commits/{resolve_ref(source)}"
-    return http.github_get_json(url)["sha"]
+def resolve_commit(source: PackSource) -> tuple[str, str]:
+    """Resolve a source to its (commit sha, resolved ref) — the ref is the moving name it resolved through."""
+    ref = resolve_ref(source)
+    url = f"https://api.github.com/repos/{source.owner}/{source.repo}/commits/{ref}"
+    return http.github_get_json(url)["sha"], ref
 
 
 def strip_top_level(tf: tarfile.TarFile) -> Iterator[tarfile.TarInfo]:
@@ -379,9 +387,10 @@ def fetch_commit(source: PackSource, sha: str) -> ResolvedPack:
     )
 
 
-def fetch_pack(source: PackSource) -> ResolvedPack:
+def fetch_pack(source: PackSource) -> tuple[ResolvedPack, str]:
     try:
-        return fetch_commit(source, resolve_commit(source))
+        sha, ref = resolve_commit(source)
+        return fetch_commit(source, sha), ref
     except http.GitHubFetchError as e:
         raise PackError(str(e)) from e
 
@@ -394,10 +403,12 @@ def add_external(source: PackSource) -> ExternalPack:
     ref — ``@latest`` or a bare source (default branch) — stays source-only (``commit=None``)
     and the 24h TTL keeps the resolved commit in the per-machine sidecar instead.
     """
-    fetched = fetch_pack(source)
+    fetched, resolved_ref = fetch_pack(source)
     commit = fetched_commit(fetched)
     if source.ref is None or source.ref == LATEST_REF:
-        PackMeta(commit=commit, checked_at=time.time()).write(meta_path(fetched.manifest.name))
+        PackMeta(commit=commit, checked_at=time.time(), resolved_ref=resolved_ref).write(
+            meta_path(fetched.manifest.name)
+        )
         return ExternalPack(name=fetched.manifest.name, source=source, commit=None)
     return ExternalPack(name=fetched.manifest.name, source=source, commit=commit)
 
@@ -465,12 +476,12 @@ def resolve_moving(entry: ExternalPack) -> ResolvedPack | None:
     if cached_meta and cached_meta.fresh(now) and (hit := load_cached(entry, cached_meta.commit)):
         return hit
     try:
-        sha = resolve_commit(entry.source)
+        sha, ref = resolve_commit(entry.source)
     except http.GitHubFetchError:
         return load_cached(entry, cached_meta.commit) if cached_meta else None
     resolved = load_cached(entry, sha) or auto_fetch(entry, sha)
     if resolved is not None:
-        PackMeta(commit=sha, checked_at=now).write(meta_path(entry.name))
+        PackMeta(commit=sha, checked_at=now, resolved_ref=ref).write(meta_path(entry.name))
     return resolved
 
 
@@ -488,6 +499,11 @@ def cached_commit(entry: ExternalPack, now: float) -> str | None:
 def resolved_commit(entry: ExternalPack) -> str | None:
     """The commit this entry last resolved to for display: its pin, else the sidecar's record (ignoring TTL)."""
     return entry.commit if entry.commit is not None else (m := PackMeta.load(meta_path(entry.name))) and m.commit
+
+
+def resolved_ref_name(entry: ExternalPack) -> str | None:
+    """The moving ref this entry last resolved to for display: None when pinned, else the sidecar's resolved_ref."""
+    return None if entry.commit is not None else (m := PackMeta.load(meta_path(entry.name))) and m.resolved_ref
 
 
 def load_cached_fresh(entry: ExternalPack, now: float) -> ResolvedPack:

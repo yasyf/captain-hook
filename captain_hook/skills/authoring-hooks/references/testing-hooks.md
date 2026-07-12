@@ -1,7 +1,7 @@
 # Testing Hooks
 
 Every primitive accepts `tests=` — a dict mapping `Input` descriptors to expected outcomes.
-`uvx capt-hook test` discovers all hooks, builds a mock event from each `Input`, runs the
+`uvx --isolated capt-hook test` discovers all hooks, builds a mock event from each `Input`, runs the
 hook's conditions and handler, and asserts the outcome. Exit code 1 on any failure.
 
 ## How a test runs
@@ -71,7 +71,7 @@ evidence, `only_if` fails).
 
 ## Output formats
 
-`uvx capt-hook test` prints one line per test and a summary:
+`uvx --isolated capt-hook test` prints one line per test and a summary:
 
 ```
   PASS  workflow:gate_50b992e3:Input(command='git push origin main', ...)
@@ -80,7 +80,7 @@ evidence, `only_if` fails).
 18 tests: 17 passed, 1 failed, 0 errors, 0 skipped
 ```
 
-`uvx capt-hook test --json` emits one record per test for parsing:
+`uvx --isolated capt-hook test --json` emits one record per test for parsing:
 
 ```json
 {"id": "workflow:gate_50b992e3:Input(...)", "status": "pass", "expected": "block", "reason": ""}
