@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 
 MAX_BOUND_VALUE = 200
 
+FILE_FORMAT = "{time:YYYY-MM-DD HH:mm:ss,SSS} {level} {name}: {message}"
+STDERR_FORMAT = "{level}: {message}"
+
 
 def truncate_bound_values(record: Record) -> None:
     """Patcher: cap long string values bound via ``logger.bind(...)``."""
@@ -51,9 +54,9 @@ def setup_logging(session_id: str | None) -> None:
             {
                 "sink": str(log_dir / f"{session_id}.log"),
                 "level": "DEBUG",
-                "format": make_format("{time:YYYY-MM-DD HH:mm:ss,SSS} {level} {name}: {message}"),
+                "format": make_format(FILE_FORMAT),
                 "encoding": "utf-8",
             },
-            {"sink": sys.stderr, "level": "WARNING", "format": make_format("{level}: {message}")},
+            {"sink": sys.stderr, "level": "WARNING", "format": make_format(STDERR_FORMAT)},
         ],
     )
