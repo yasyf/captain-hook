@@ -49,6 +49,16 @@
     "cc-context@cc-context": true
   },
   "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook run Notification"
+          }
+        ]
+      }
+    ],
     "PermissionRequest": [
       {
         "hooks": [
@@ -79,6 +89,16 @@
         ]
       }
     ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook run PreCompact"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "hooks": [
@@ -95,6 +115,15 @@
           {
             "type": "command",
             "command": "uvx capt-hook review run",
+            "async": true
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook run SessionEnd --async",
             "async": true
           }
         ]
