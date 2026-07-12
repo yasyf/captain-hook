@@ -1,17 +1,19 @@
 """Thin, stdlib-only hook client — forwards an event to the resident daemon, or runs cold.
 
 The ``capt-hook-client`` console script sits in the wired hook-command slot. It hand-rolls
-the ``[--hooks D] [--root R] run EVENT [--async]`` / ``ping`` grammar the daemon serves and
-``os.execv``-passes-through anything else (``review run`` …) to ``python -m captain_hook``
-untouched. For a recognized event it reads stdin, connects to (or spawns) this project's
-warm worker over a Unix socket, and writes the worker's response bytes back verbatim.
+the ``[--root R] run EVENT [--async]`` / ``ping`` grammar the daemon serves and
+``os.execv``-passes-through everything else to ``python -m captain_hook`` untouched: non-daemon
+commands (``review run`` …) and every invocation carrying an explicit ``--hooks``. The daemon
+discovers hooks from the root's own dir, so a custom-hooks request cannot be served warm without
+diverging from cold; passing it through keeps it byte-identical by construction. For a recognized
+event it reads stdin, connects to (or spawns) this project's warm worker over a Unix socket, and
+writes the worker's response bytes back verbatim. ``ping`` is connect-only: it reports on an
+existing worker and never spawns one, so inspecting a project cannot boot a daemon.
 
-When no worker is reachable it falls back to the cold ``python -m captain_hook`` path, so
-this client is correct and shippable before the daemon exists: spawning today's
-``captain_hook daemon run`` exits immediately (no such subcommand), the early exit is
-detected, and the client runs cold with no stall. A deadline that expires mid-flight fails
-OPEN (exit 0, no output) — never cold — because the worker may have already dispatched and
-a cold rerun would double-fire side-effecting hooks.
+When no worker is reachable a run falls back to the cold ``python -m captain_hook`` path, and a
+worker that dies at startup is detected via its early exit and the run goes cold with no stall. A
+deadline that expires mid-flight fails OPEN (exit 0, no output) — never cold — because the worker
+may have already dispatched and a cold rerun would double-fire side-effecting hooks.
 
 Never imports :mod:`captain_hook`; ``subprocess`` is imported lazily on the spawn/cold
 paths only.
@@ -55,12 +57,12 @@ def main() -> None:
     """Entry point for the ``capt-hook-client`` console script."""
     args = sys.argv[1:]
     match parse_argv(args):
-        case None:
+        case None | {"hooks": str()}:
             os.execv(sys.executable, [sys.executable, "-m", "captain_hook", *args])
-        case {"verb": "ping", "root": root, "hooks": _}:
+        case {"verb": "ping", "root": root}:
             sys.exit(do_ping(resolve_root(root)))
-        case {"verb": "run", "event": event, "async": async_, "root": root, "hooks": hooks}:
-            sys.exit(do_run(event, resolve_root(root), hooks, args, async_=async_))
+        case {"verb": "run", "event": event, "async": async_, "root": root}:
+            sys.exit(do_run(event, resolve_root(root), args, async_=async_))
 
 
 def parse_argv(argv: list[str]) -> dict[str, object] | None:
@@ -106,7 +108,7 @@ def deadline_seconds(event: str | None) -> float:
     return UPS_DEADLINE if event == "UserPromptSubmit" else DEFAULT_DEADLINE
 
 
-def build_request(event: str, root: str, hooks: str | None, payload_raw: str, *, async_: bool) -> dict[str, object]:
+def build_request(event: str, root: str, payload_raw: str, *, async_: bool) -> dict[str, object]:
     return {
         "v": key.PROTOCOL,
         "client": client_meta(),
@@ -115,7 +117,7 @@ def build_request(event: str, root: str, hooks: str | None, payload_raw: str, *,
         "async": async_,
         "root": root,
         "cwd": os.getcwd(),
-        "hooks": hooks,
+        "hooks": None,
         "env": key.request_env(),
         "payload_raw": payload_raw,
     }
@@ -129,12 +131,12 @@ def client_meta() -> dict[str, object]:
     return {"version": "", "build": key.build_fingerprint(), "pid": os.getpid(), "ppid": os.getppid()}
 
 
-def do_run(event: str, root: str, hooks: str | None, args: list[str], *, async_: bool) -> int:
+def do_run(event: str, root: str, args: list[str], *, async_: bool) -> int:
     payload = sys.stdin.buffer.read()
     if os.environ.get("CAPT_HOOK_NO_DAEMON") == "1":
         return cold(args, payload)
     deadline_at = time.monotonic() + deadline_seconds(event)
-    request = build_request(event, root, hooks, payload.decode("utf-8", "surrogateescape"), async_=async_)
+    request = build_request(event, root, payload.decode("utf-8", "surrogateescape"), async_=async_)
     try:
         response = round_trip(request, root, deadline_at)
     except DeadlineExpired:
@@ -150,12 +152,18 @@ def do_run(event: str, root: str, hooks: str | None, args: list[str], *, async_:
 
 
 def do_ping(root: str) -> int:
+    sock = try_connect(str(key.socket_path(key.worker_key(root, os.environ))))
+    if sock is None:
+        breadcrumb("no reachable daemon; ping does not spawn")
+        return 1
     deadline_at = time.monotonic() + deadline_seconds(None)
     try:
-        response = round_trip(ping_request(), root, deadline_at)
+        response = exchange(sock, ping_request(), deadline_at)
     except (DaemonUnavailable, BadResponse, DeadlineExpired) as exc:
         breadcrumb(str(exc))
         return 1
+    finally:
+        close(sock)
     sys.stdout.write(json.dumps(response) + "\n")
     return 0 if response.get("status") == "ok" else 1
 

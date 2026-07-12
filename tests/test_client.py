@@ -41,6 +41,17 @@ def hooks_dir(tmp_path: Path) -> Path:
     return d
 
 
+@pytest.fixture
+def project_dir(tmp_path: Path) -> Path:
+    # Hooks at the default <root>/.claude/hooks discovery location: the daemon and the cold CLI
+    # both find them with no --hooks, so the same project drives the warm and the cold path.
+    d = tmp_path / ".claude" / "hooks"
+    d.mkdir(parents=True)
+    (d / "__init__.py").write_text("")
+    (d / "conf.py").write_text(BLOCK_HOOK)
+    return tmp_path
+
+
 def client_env(run_dir: Path, **overrides: str) -> dict[str, str]:
     return {**os.environ, "CAPT_HOOK_RUN_DIR": str(run_dir), "CAPT_HOOK_ONCE_TTL": "0", **overrides}
 
@@ -183,13 +194,13 @@ class TestBuildRequest:
     def test_shape(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CAPT_HOOK_CLIENT_BUILD", "b-1")
         monkeypatch.setenv("CAPT_HOOK_MARKER", "seen")
-        request = client.build_request("PreToolUse", "/proj", "/proj/.claude/hooks", PAYLOAD, async_=True)
+        request = client.build_request("PreToolUse", "/proj", PAYLOAD, async_=True)
         assert request["v"] == key.PROTOCOL
         assert request["kind"] == "event"
         assert request["event"] == "PreToolUse"
         assert request["async"] is True
         assert request["root"] == "/proj"
-        assert request["hooks"] == "/proj/.claude/hooks"
+        assert request["hooks"] is None
         assert request["payload_raw"] == PAYLOAD
         assert request["client"] == {"version": "", "build": "b-1", "pid": os.getpid(), "ppid": os.getppid()}
         assert request["env"]["CAPT_HOOK_MARKER"] == "seen"
@@ -197,22 +208,20 @@ class TestBuildRequest:
 
 
 class TestFallbackMatrix:
-    def test_no_daemon_env_is_straight_cold(self, run_dir: Path, hooks_dir: Path) -> None:
+    def test_no_daemon_env_is_straight_cold(self, run_dir: Path, project_dir: Path) -> None:
         env = client_env(run_dir, CAPT_HOOK_NO_DAEMON="1")
-        result = run_client(
-            "--hooks", str(hooks_dir), "--root", str(hooks_dir.parent), "run", "PreToolUse", env=env, stdin=PAYLOAD
-        )
+        result = run_client("--root", str(project_dir), "run", "PreToolUse", env=env, stdin=PAYLOAD)
         assert result.returncode == 0
         assert "permissionDecision" in result.stdout
         # Straight cold means no socket handshake was ever attempted.
         assert not list(run_dir.glob("*.sock")) and not list(run_dir.glob("*.lock"))
 
-    def test_spawn_early_exit_falls_back_cold_fast(self, run_dir: Path, hooks_dir: Path) -> None:
-        env = client_env(run_dir)
+    def test_spawn_early_exit_falls_back_cold_fast(self, run_dir: Path, project_dir: Path) -> None:
+        # Over-long run dir → socket path past the sun_path cap → the spawned worker aborts at
+        # bind; the client must detect the early exit and run cold fast.
+        env = client_env(run_dir, CAPT_HOOK_RUN_DIR=str(run_dir / ("d" * 90)))
         start = time.monotonic()
-        result = run_client(
-            "--hooks", str(hooks_dir), "--root", str(hooks_dir.parent), "run", "PreToolUse", env=env, stdin=PAYLOAD
-        )
+        result = run_client("--root", str(project_dir), "run", "PreToolUse", env=env, stdin=PAYLOAD)
         assert time.monotonic() - start < 10.0
         assert result.returncode == 0
         assert "permissionDecision" in result.stdout
@@ -223,7 +232,7 @@ class TestFallbackMatrix:
         env = client_env(run_dir, CAPT_HOOK_CLIENT_TIMEOUT="0.4", CAPT_HOOK_DAEMON_FALLBACK="closed")
         daemon = preseed_daemon(run_dir, root, env, response=None)
         try:
-            result = run_client("--hooks", str(hooks_dir), "--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+            result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
         finally:
             daemon.close()
         assert result.returncode == 0, result.stderr
@@ -271,18 +280,7 @@ class TestRoundTrip:
         env = self._env(run_dir)
         daemon = preseed_daemon(run_dir, root, env, {"v": 1, "status": "ok", "stdout": "", "exit": 0})
         try:
-            run_client(
-                "--hooks",
-                str(hooks_dir),
-                "--root",
-                root,
-                "run",
-                "PreToolUse",
-                "--async",
-                env=env,
-                stdin=PAYLOAD,
-                cwd=root,
-            )
+            run_client("--root", root, "run", "PreToolUse", "--async", env=env, stdin=PAYLOAD, cwd=root)
         finally:
             daemon.close()
         assert len(daemon.requests) == 1
@@ -292,7 +290,7 @@ class TestRoundTrip:
         assert request["event"] == "PreToolUse"
         assert request["async"] is True
         assert request["root"] == root
-        assert request["hooks"] == str(hooks_dir)
+        assert request["hooks"] is None
         assert request["payload_raw"] == PAYLOAD
         assert os.path.realpath(str(request["cwd"])) == os.path.realpath(root)
 
@@ -329,7 +327,9 @@ class TestPing:
     def test_ping_no_daemon_exits_one(self, run_dir: Path) -> None:
         result = run_client("--root", "/tmp", "ping", env=client_env(run_dir))
         assert result.returncode == 1
-        assert "worker exited early" in result.stderr
+        assert "capt-hook-client:" in result.stderr
+        # Connect-only: a ping with no daemon must never spawn one, so it leaves the run dir bare.
+        assert not any(run_dir.iterdir())
 
     def test_ping_with_daemon_prints_response(self, run_dir: Path, hooks_dir: Path) -> None:
         root = str(hooks_dir.parent)
@@ -345,27 +345,41 @@ class TestPing:
 
 
 class TestColdParity:
-    def test_client_cold_fallback_matches_cold_cli(self, run_dir: Path, hooks_dir: Path) -> None:
-        root = str(hooks_dir.parent)
+    def test_client_cold_fallback_matches_cold_cli(self, run_dir: Path, project_dir: Path) -> None:
+        root = str(project_dir)
         env = client_env(run_dir, CAPT_HOOK_NO_DAEMON="1")
-        via_client = run_client("--hooks", str(hooks_dir), "--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
-        via_cold = run_cold("--hooks", str(hooks_dir), "--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        via_client = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        via_cold = run_cold("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
         assert via_client.stdout == via_cold.stdout
         assert via_client.returncode == via_cold.returncode
         assert via_cold.stdout != ""
 
-    def test_client_spawn_fallback_matches_cold_cli(self, run_dir: Path, hooks_dir: Path) -> None:
-        # The real shipped C1 path: no daemon exists, so `daemon run` spawns and exits
-        # immediately, the client detects the early exit and runs cold. stdout/exit must
-        # match the cold CLI byte-for-byte (the breadcrumb lives on stderr only).
-        root = str(hooks_dir.parent)
-        env = client_env(run_dir)
-        via_client = run_client("--hooks", str(hooks_dir), "--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
-        via_cold = run_cold("--hooks", str(hooks_dir), "--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+    def test_client_spawn_fallback_matches_cold_cli(self, run_dir: Path, project_dir: Path) -> None:
+        # Over-long run dir → socket path past the sun_path cap → the spawned worker aborts at
+        # bind; the client detects the early exit and runs cold, byte-for-byte with the cold CLI.
+        root = str(project_dir)
+        env = client_env(run_dir, CAPT_HOOK_RUN_DIR=str(run_dir / ("d" * 90)))
+        via_client = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        via_cold = run_cold("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
         assert "worker exited early" in via_client.stderr
         assert via_client.stdout == via_cold.stdout
         assert via_client.returncode == via_cold.returncode
         assert via_cold.stdout != ""
+
+    def test_explicit_hooks_bypasses_a_live_daemon(self, run_dir: Path, hooks_dir: Path) -> None:
+        # A custom --hooks request must run cold even with a warm worker listening: the daemon
+        # only serves the root's own hooks, so passthrough is the only way to stay cold-identical.
+        root = str(hooks_dir.parent)
+        env = client_env(run_dir, CAPT_HOOK_DAEMON_FALLBACK="closed")
+        daemon = preseed_daemon(run_dir, root, env, {"v": 1, "status": "ok", "stdout": "FROM-DAEMON", "exit": 0})
+        try:
+            result = run_client("--hooks", str(hooks_dir), "--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        finally:
+            daemon.close()
+        assert daemon.requests == []
+        assert "FROM-DAEMON" not in result.stdout
+        assert "permissionDecision" in result.stdout
+        assert result.returncode == 0
 
 
 class TestImportPurity:

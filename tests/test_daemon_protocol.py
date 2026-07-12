@@ -26,7 +26,7 @@ class FakeSocket:
 
 
 def test_decode_event_request_from_client_build_request() -> None:
-    raw = thin_client.build_request("PreToolUse", "/proj", None, "PAYLOAD-BYTES", async_=False)
+    raw = thin_client.build_request("PreToolUse", "/proj", "PAYLOAD-BYTES", async_=False)
     req = protocol.decode_request(json.dumps(raw).encode())
 
     assert req == protocol.Request(
@@ -43,8 +43,10 @@ def test_decode_event_request_from_client_build_request() -> None:
     )
 
 
-def test_decode_event_request_async_and_hooks() -> None:
-    raw = thin_client.build_request("Stop", "/r", ".claude/hooks", "{}", async_=True)
+def test_decode_preserves_async_and_forward_compat_hooks() -> None:
+    # The client always sends hooks=None; the wire field is kept for forward-compat, so decode
+    # must still carry a hooks value a future client might set.
+    raw = thin_client.build_request("Stop", "/r", "{}", async_=True) | {"hooks": ".claude/hooks"}
     req = protocol.decode_request(json.dumps(raw).encode())
 
     assert req.kind == "event"
@@ -65,7 +67,7 @@ def test_decode_ping_request_from_client() -> None:
 
 
 def test_decode_through_read_line_pipeline() -> None:
-    raw = thin_client.build_request("PostToolUse", "/proj", None, "P", async_=False)
+    raw = thin_client.build_request("PostToolUse", "/proj", "P", async_=False)
     sock = FakeSocket(json.dumps(raw).encode() + b"\nTRAILING-JUNK")
 
     req = protocol.decode_request(protocol.read_line(sock))
