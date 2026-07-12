@@ -36,16 +36,17 @@ turning the plugin on.
 ```
 
 The event wiring lives in the plugin itself. Its `hooks.json` registers all twelve
-lifecycle events: `uvx capt-hook run <Event>` for the synchronous ones, an async
-`uvx capt-hook run SessionStart --async`, and two async commands on `SessionEnd`:
-`uvx capt-hook review run` for the [session reviewer](../guide/session-reviewer.qmd)
-and `uvx capt-hook run SessionEnd --async` for async `SessionEnd` handlers. Every
+lifecycle events: `uvx --isolated capt-hook run <Event>` for the synchronous ones,
+an async `uvx --isolated capt-hook run SessionStart --async`, and two async commands
+on `SessionEnd`: `uvx --isolated capt-hook review run` for the
+[session reviewer](../guide/session-reviewer.qmd) and
+`uvx --isolated capt-hook run SessionEnd --async` for async `SessionEnd` handlers. Every
 event is registered up front, whether or not a hook listens on it yet; dispatch runs the
 hooks that match and stays silent otherwise.
 
 ## How a hook runs
 
-When an event fires, Claude Code runs `uvx capt-hook run <Event>` and talks to it over a pipe:
+When an event fires, Claude Code runs `uvx --isolated capt-hook run <Event>` and talks to it over a pipe:
 
 1. Claude Code writes the event as JSON to the process's **stdin**:
 
@@ -66,7 +67,7 @@ When an event fires, Claude Code runs `uvx capt-hook run <Event>` and talks to i
 
 ## Adding hooks
 
-Editing a hook's body needs nothing. The same `uvx capt-hook run` command picks it up.
+Editing a hook's body needs nothing. The same `uvx --isolated capt-hook run` command picks it up.
 A hook on a brand-new event needs nothing either: the plugin already registers every
 event, so the new file is live from the next session, with zero settings changes.
 `.claude/hooks/` is code, so commit it, and review hook changes in pull requests like

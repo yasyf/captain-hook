@@ -46,7 +46,7 @@ uvx capt-hook review enable
 
 Both paths set up what the reviewer needs:
 
-- the captain-hook plugin registered in `.claude/settings.json` — its `hooks.json` fires the async `uvx capt-hook review run` on `SessionEnd`, and the brain loads its `scanning-sessions` and `authoring-hooks` skills directly;
+- the captain-hook plugin registered in `.claude/settings.json` — its `hooks.json` fires the async `uvx --isolated capt-hook review run` on `SessionEnd`, and the brain loads its `scanning-sessions` and `authoring-hooks` skills directly;
 - a per-machine watching flag for this repo.
 
 `review enable` also writes the same `SessionEnd` entry into the committed

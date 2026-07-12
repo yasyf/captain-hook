@@ -2,15 +2,15 @@
 name: bootstrapping-hooks
 description: Surveys a repository and sets up captain-hook (capt-hook) guardrails for Claude Code — blocking gates, advisory nudges, command blocks, and test-integrity checks mined from the repo's own docs, CI workflows, lint configs, and git history. Scaffolds the framework and enables the session reviewer up front (Step 1), then proposes categorized candidates for user approval before writing anything, then writes .claude/hooks/*.py with inline tests and verifies with capt-hook test — the captain-hook plugin registers every hook event, so nothing else needs wiring. Use when the user asks to "set up captain hook", "set up capt-hook", "set up hooks", "bootstrap capt-hook", "add guardrails", "enforce our conventions with hooks", "protect this repo", or "make Claude follow CONTRIBUTING.md".
 argument-hint: "[repo path] (defaults to current project)"
-allowed-tools: Read, Grep, Glob, AskUserQuestion, Write, Edit, Bash(uvx capt-hook:*, capt-hook:*, git log:*, git diff:*, ls:*, find:*)
+allowed-tools: Read, Grep, Glob, AskUserQuestion, Write, Edit, Bash(uvx capt-hook:*, uvx --isolated capt-hook:*, capt-hook:*, git log:*, git diff:*, ls:*, find:*)
 ---
 
 # Bootstrapping capt-hook Guardrails
 
 capt-hook is a declarative hook framework for Claude Code. Hooks are Python files in
-`.claude/hooks/`, dispatched by the `uvx capt-hook run <Event>` entries the
+`.claude/hooks/`, dispatched by the `uvx --isolated capt-hook run <Event>` entries the
 captain-hook plugin registers for every event. Each hook carries inline tests —
-`tests={Input(...): Block() | Warn() | Allow()}` — run with `uvx capt-hook test`. Hooks are
+`tests={Input(...): Block() | Warn() | Allow()}` — run with `uvx --isolated capt-hook test`. Hooks are
 always Python regardless of the target repo's language: conditions like `Command` and
 `FilePath` are language-agnostic; only AST `lint` rules are Python-specific. The full
 API reference, pattern catalog, and testing guide ship with the `authoring-hooks`
@@ -19,7 +19,7 @@ skill, which owns hook drafting (Step 6 delegates to it).
 ## Hard Rules
 
 - **Never write a hook the user has not approved in Step 4.** Survey and propose first; write only what was selected.
-- **Every deterministic hook ships inline tests** — at least one firing `Input` and one `Allow()` — and `uvx capt-hook test` must be green before the final report (Step 8). LLM hooks (`llm_gate`, `llm_nudge`, `prompt_check`) and signal-scored `nudge`s ship without `tests=` — their inline tests would only exercise a stubbed model — with one exception: an LLM hook gated by a **required `contexts=` provider** should ship `tests=`, because the context extraction runs for real under the stub. The default stub always confirms, so every firing case exercises the real gate and every `Allow()` case must yield no evidence (fail the gate) — or override the verdict per test with `Input(llm={"fire": False})` / `{"block": False}` to wire-test the judge-declines path. Never treat a stubbed verdict as proof the model judges correctly.
+- **Every deterministic hook ships inline tests** — at least one firing `Input` and one `Allow()` — and `uvx --isolated capt-hook test` must be green before the final report (Step 8). LLM hooks (`llm_gate`, `llm_nudge`, `prompt_check`) and signal-scored `nudge`s ship without `tests=` — their inline tests would only exercise a stubbed model — with one exception: an LLM hook gated by a **required `contexts=` provider** should ship `tests=`, because the context extraction runs for real under the stub. The default stub always confirms, so every firing case exercises the real gate and every `Allow()` case must yield no evidence (fail the gate) — or override the verdict per test with `Input(llm={"fire": False})` / `{"block": False}` to wire-test the judge-declines path. Never treat a stubbed verdict as proof the model judges correctly.
 - **Propose `block` only for irreversible or destructive actions** (history rewrites, data deletion, deploys, secret leaks). Default everything else to warn. The user picks final severity in Step 4.
 - **Never write style rules here.** A style guide found during the survey is delegated whole to the `translating-styleguides` skill (category E below).
 
@@ -35,7 +35,7 @@ Bootstrap Progress:
 - [ ] Step 4: Propose via AskUserQuestion — nothing written before approval
 - [ ] Step 5: Clear the demo example.py (scaffolding ran in Step 1)
 - [ ] Step 6: Draft approved hooks via authoring-hooks, one file per category
-- [ ] Step 7: Verify (uvx capt-hook test, fix until green)
+- [ ] Step 7: Verify (uvx --isolated capt-hook test, fix until green)
 - [ ] Step 8: Final report (table + declined list)
 ```
 
@@ -49,10 +49,10 @@ grep -lq 'captain-hook' .claude/settings.json 2>/dev/null && echo COMMITTED || e
 ```
 
 Then scaffold up front, so the framework and the session reviewer are live before you propose
-anything. Run `uvx capt-hook init` in every repo. It scaffolds `.claude/hooks/`, registers the
+anything. Run `uvx --isolated capt-hook init` in every repo. It scaffolds `.claude/hooks/`, registers the
 captain-hook plugin in `.claude/settings.json` (the plugin wires every hook event), installs
 the skills, and **enables the session reviewer** (watching this repo; it mines ended sessions
-and opens hook PRs — `uvx capt-hook review disable` to stop).
+and opens hook PRs — `uvx --isolated capt-hook review disable` to stop).
 
 If capt-hook hooks already exist under `.claude/hooks/`, switch to **additive mode**: never
 overwrite existing hook files; new categories go in new files, and the Step 4 menu only offers
@@ -135,7 +135,7 @@ skill's `SKILL.md` directly and follow it — both skills ship together.
 Run:
 
 ```bash
-uvx capt-hook test
+uvx --isolated capt-hook test
 ```
 
 Add `--json` when parsing results (one JSON record per test). Fix failures until green —
@@ -159,10 +159,10 @@ Output a markdown table plus a declined list:
 Declined: <candidates the user rejected, with their source quotes>
 ```
 
-Close with next steps: `uvx capt-hook logs --tail 50` to inspect live firings, and tune
+Close with next steps: `uvx --isolated capt-hook logs --tail 50` to inspect live firings, and tune
 `max_fires` on any hook that nags. Note that Step 1 also armed the **session reviewer** — it now
 watches this repo, mines your ended sessions for durable corrections, and opens hook PRs
-automatically; `uvx capt-hook review disable` turns it off.
+automatically; `uvx --isolated capt-hook review disable` turns it off.
 
 ## Worked mini-example
 
@@ -194,7 +194,7 @@ gate(
 )
 ```
 
-`uvx capt-hook test` confirms:
+`uvx --isolated capt-hook test` confirms:
 
 ```
   PASS  workflow:gate_50b992e3:Input(command='git push origin main', ...)

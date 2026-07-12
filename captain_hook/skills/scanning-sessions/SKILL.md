@@ -1,6 +1,6 @@
 ---
 name: scanning-sessions
-description: The headless session-reviewer brain — turns a watched repo's PR-eligible candidates into pull requests, both kinds. Invoked as /captain-hook:scanning-sessions --transcript <path> inside the target repo by capt-hook's detached SessionEnd reviewer pipeline. Enumerates judge-accepted, threshold-eligible candidates via uvx capt-hook review (the CLI is the source of truth), re-verifies every cited correction or complaint verbatim against its session transcript, then per candidate drafts a new hook (create candidates) or amends the attributed misfiring hook with a regression test (fix candidates) in a worktree by delegating to the authoring-hooks skill, proves it with uvx capt-hook test, opens exactly one PR with the verbatim evidence, and records the PR on the candidate. Use when a prompt starts with /captain-hook:scanning-sessions, or to review eligible capt-hook candidates and open hook PRs.
+description: The headless session-reviewer brain — turns a watched repo's PR-eligible candidates into pull requests, both kinds. Invoked as /captain-hook:scanning-sessions --transcript <path> inside the target repo by capt-hook's detached SessionEnd reviewer pipeline. Enumerates judge-accepted, threshold-eligible candidates via uvx --isolated capt-hook review (the CLI is the source of truth), re-verifies every cited correction or complaint verbatim against its session transcript, then per candidate drafts a new hook (create candidates) or amends the attributed misfiring hook with a regression test (fix candidates) in a worktree by delegating to the authoring-hooks skill, proves it with uvx --isolated capt-hook test, opens exactly one PR with the verbatim evidence, and records the PR on the candidate. Use when a prompt starts with /captain-hook:scanning-sessions, or to review eligible capt-hook candidates and open hook PRs.
 argument-hint: "--transcript <path to the ended session's transcript>"
 allowed-tools: Read, Grep, Glob, Bash, Skill
 ---
@@ -28,7 +28,7 @@ user feedback next pass.
 
 ## Hard Rules
 
-- **The CLI is the source of truth.** `uvx capt-hook review threshold-check` / `show`
+- **The CLI is the source of truth.** `uvx --isolated capt-hook review threshold-check` / `show`
   decide eligibility — judge acceptance, session/day thresholds, the open-PR cap, the
   watching flag. Never re-derive thresholds yourself; never PR a candidate the CLI
   calls ineligible. Full command surface: [review CLI](references/review-cli.md).
@@ -46,7 +46,7 @@ user feedback next pass.
   `pack=` set — is fixed in a captain-hook clone (`gh repo clone`, temp dir) under
   `captain_hook/packs/<pack>/`, verified with `uv run --project . capt-hook test`,
   and PR'd against captain-hook. An **external-pack** hook is fixed in a clone of the
-  pack's own repo, verified with `uvx capt-hook --hooks <dir> test`, and PR'd there.
+  pack's own repo, verified with `uvx --isolated capt-hook --hooks <dir> test`, and PR'd there.
   A denied push to the target repo is a **logged skip** — never fall back to
   committing the fix in the watched repo; a pack hook patched locally diverges from
   the pack and re-breaks on its next update.
@@ -59,11 +59,11 @@ user feedback next pass.
   never open a PR against a hook that is no longer there.
 - **You do not draft hooks yourself** — this skill carries no Write/Edit. Drafting
   happens inside the `captain-hook:authoring-hooks` skill, invoked via the Skill tool.
-- **`uvx capt-hook test` must be green** in the worktree before `gh pr create`.
+- **`uvx --isolated capt-hook test` must be green** in the worktree before `gh pr create`.
 - **Run to completion — never stop early.** You run headless; a text-only reply ends
   the session immediately. After the authoring-hooks skill returns, keep going in the
   same run: the job is done only when every eligible candidate either has
-  `uvx capt-hook review update <id> pr_open --pr-url <url>` recorded for a created PR
+  `uvx --isolated capt-hook review update <id> pr_open --pr-url <url>` recorded for a created PR
   or has been explicitly skipped with a logged reason. Summaries come last, after
   Step 7 — never between steps.
 - **Stay inside the workflow.** Never edit the user's checkout or any
@@ -87,7 +87,7 @@ Review Progress:
          cross-repo target
   - [ ] Step 4: Draft via the authoring-hooks skill (fix candidates: FIX mode —
          amend the target hook + regression test)
-  - [ ] Step 5: Verify (uvx capt-hook test green in the worktree)
+  - [ ] Step 5: Verify (uvx --isolated capt-hook test green in the worktree)
   - [ ] Step 6: Commit, push, gh pr create (verbatim evidence in the body)
   - [ ] Step 7: review update <ID> pr_open --pr-url <url>
 - [ ] Step 8: Final report
@@ -96,9 +96,9 @@ Review Progress:
 ### 1. Enumerate eligible candidates
 
 ```bash
-uvx capt-hook review threshold-check
-uvx capt-hook review list
-uvx capt-hook review show <ID>      # for each candidate threshold-check marks eligible=True
+uvx --isolated capt-hook review threshold-check
+uvx --isolated capt-hook review list
+uvx --isolated capt-hook review show <ID>      # for each candidate threshold-check marks eligible=True
 ```
 
 `threshold-check` prints one line per candidate with `eligible=`, the judge-accepted
@@ -168,23 +168,23 @@ Follow [references/pr-workflow.md](references/pr-workflow.md) exactly:
 2. **Draft** — invoke the `captain-hook:authoring-hooks` skill via the Skill tool, passing the
    verbatim correction, its context, and the worktree (or clone) path. It picks the
    primitive, writes `.claude/hooks/<slug>.py` with inline tests (one firing on the
-   offending shape, one `Allow()` on a benign neighbor), and runs `uvx capt-hook
+   offending shape, one `Allow()` on a benign neighbor), and runs `uvx --isolated capt-hook
    test`; a generic create instead amends or adds the hook under
    `captain_hook/packs/general/` in the captain-hook clone. For a **fix** candidate,
    invoke its FIX mode instead, passing the target hook file, the misfire class, and
    the verbatim complaint — it amends the hook and adds the mandatory regression test
    (silent on the misfiring input, still firing on the genuine case).
-3. **Verify** — run `uvx capt-hook test` in the worktree yourself (in a clone, the
+3. **Verify** — run `uvx --isolated capt-hook test` in the worktree yourself (in a clone, the
    pack-kind verify command from the Hard Rules); green or the candidate is skipped
    this pass.
 4. **PR** — commit the hook file, push the branch, `gh pr create` with the template
    body: the rule, the hook's behavior, and an Evidence section quoting each verbatim
    correction with its session id and date.
-5. **Record** — `uvx capt-hook review update <ID> pr_open --pr-url <url>`, then remove
+5. **Record** — `uvx --isolated capt-hook review update <ID> pr_open --pr-url <url>`, then remove
    the worktree. If that update fails with `no candidate with id <ID>` or a transition
    error like `rejected -> pr_open`, a concurrent judge pass regrouped the candidate
    (realistic when sessions share one review database) — **do not abort the run**.
-   Re-run `uvx capt-hook review list --repo <key>` and stamp the successor create
+   Re-run `uvx --isolated capt-hook review list --repo <key>` and stamp the successor create
    candidate whose `rule` equals the branch's slug; if none exists (judge-retired),
    close the just-opened PR with the `gh pr close` command in
    [pr-workflow.md](references/pr-workflow.md) — an unstamped PR is invisible to

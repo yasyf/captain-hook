@@ -4,6 +4,46 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.7.0] - 2026-07-12
+
+### Added
+- **Moving packs show what they resolved to.** `@latest` and bare-source pack
+  resolution now persists the resolved GitHub release tag (or branch) in the
+  pack's per-machine sidecar; `pack list` shows that ref for moving GitHub
+  packs instead of the manifest's often-stale `version`, falling back to the
+  manifest when the sidecar predates 9.7.0; and `pack update` echoes
+  `updated <name> -> <ref>@<sha>`.
+
+### Changed
+- **A pack manifest's `version` key is optional** and defaults to `0.0.0`.
+  Keep the key while pre-9.7.0 capt-hook is in the wild, though — older
+  releases crash on a manifest without it.
+
+### Fixed
+- **Hook dispatch no longer runs a stale `uv tool install capt-hook`.** A
+  machine with any prior unpinned tool install had every bare `uvx capt-hook`
+  hook invocation silently short-circuit to that installed environment —
+  uv-documented behavior — freezing hooks at whatever version the install
+  left behind. The canonical prefix is now `uvx --isolated capt-hook` across
+  the plugin's `hooks.json` and every agent-executed skill command: installed
+  tools are ignored without forcing a network refresh, so dispatch works
+  offline and ephemeral-cache revalidation still picks up new releases about
+  same-day, at ~135ms median added per dispatch.
+
+## [9.6.0] - 2026-07-12
+
+### Added
+- **The fable main loop is nudged to delegate sustained browser automation
+  (general pack 0.19.0).** A new `PostToolUse` `llm_nudge` fires when the main
+  loop (never a subagent) drives a run of `agent-browser`/`playwright` calls
+  inline — five or more browser tool calls via Bash or Skill within the
+  current turn — and steers the hands-on browser work to a delegated `opus`/`xhigh`
+  teammate (or an `agent-browser-with-cookies` teammate when the site needs the
+  user's login), just like any other implementation. A single gated, stateful,
+  or authenticated interaction the agent just decided to run (a go/no-go
+  verification, a login+2FA flow) stays inline: an LLM judge declines below
+  that bar, and the nudge fires at most once per session.
+
 ## [9.5.0] - 2026-07-12
 
 ### Added

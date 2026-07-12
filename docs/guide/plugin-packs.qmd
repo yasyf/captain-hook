@@ -34,13 +34,13 @@ wires two kinds of command:
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "uvx capt-hook pack attach ${CLAUDE_PLUGIN_ROOT}/hooks" }] }
+      { "hooks": [{ "type": "command", "command": "uvx --isolated capt-hook pack attach ${CLAUDE_PLUGIN_ROOT}/hooks" }] }
     ],
     "PreToolUse": [
-      { "hooks": [{ "type": "command", "command": "uvx capt-hook run PreToolUse" }] }
+      { "hooks": [{ "type": "command", "command": "uvx --isolated capt-hook run PreToolUse" }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "uvx capt-hook run Stop" }] }
+      { "hooks": [{ "type": "command", "command": "uvx --isolated capt-hook run Stop" }] }
     ]
   }
 }
@@ -54,25 +54,26 @@ directory holding `capt-hook.toml` (here a `hooks/` subtree with `hooks = "."`).
 A missing or invalid manifest exits non-zero with a stderr message, so a broken
 plugin fails loud at author time rather than silently loading nothing.
 
-Every other command is the canonical `uvx capt-hook run <Event>`, wired for each
-event the pack subscribes.
+Every other command is the canonical `uvx --isolated capt-hook run <Event>`,
+wired for each event the pack subscribes.
 
 ## Keep the run command byte-identical
 
 Claude Code deduplicates hook commands by exact string match: two hooks that wire
 the same command string for one event run that command once. A plugin that wired
 `uvx capt-hook --hooks ${CLAUDE_PLUGIN_ROOT}/hooks run PreToolUse` produces a
-different string from the captain-hook plugin's own `uvx capt-hook run PreToolUse`,
-so Claude Code runs both — two `uvx` processes per event, and the project's
-`packs.toml` packs resolved and dispatched twice.
+different string from the captain-hook plugin's own
+`uvx --isolated capt-hook run PreToolUse` — as does the pre-9.7.0 bare
+`uvx capt-hook run PreToolUse` — so Claude Code runs both: two `uvx` processes
+per event, and the project's `packs.toml` packs resolved and dispatched twice.
 
-Wiring your plugin to the identical `uvx capt-hook run PreToolUse` collapses the
-two plugins into one process per event. The session-attached pack still loads
-inside that one process, because `pack attach` already recorded it for the
-session and `run` picks it up during discovery. So keep the run command exactly
-`uvx capt-hook run <Event>` (add `--async` only where captain-hook's own
-`hooks.json` does), and put per-plugin configuration in the attached pack's
-manifest and hooks, never in the run command's flags.
+Wiring your plugin to the identical `uvx --isolated capt-hook run PreToolUse`
+collapses the two plugins into one process per event. The session-attached pack
+still loads inside that one process, because `pack attach` already recorded it
+for the session and `run` picks it up during discovery. So keep the run command
+exactly `uvx --isolated capt-hook run <Event>` (add `--async` only where
+captain-hook's own `hooks.json` does), and put per-plugin configuration in the
+attached pack's manifest and hooks, never in the run command's flags.
 
 Attach records the pack once, keyed by the session id. A subagent's hook events
 carry that same session id, so an attached pack loads for subagents too — the

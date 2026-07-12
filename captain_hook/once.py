@@ -1,6 +1,6 @@
 """Duplicate-dispatch guard for ``capt-hook run <Event>``.
 
-Claude Code runs the byte-identical ``uvx capt-hook run <Event>`` command once per
+Claude Code runs the byte-identical ``uvx --isolated capt-hook run <Event>`` command once per
 registering source (project settings plus each plugin), so one event fans out into
 N sibling processes reading identical stdin within milliseconds of each other. A
 side-effecting hook then fires N times. The guard lets the first sibling win an

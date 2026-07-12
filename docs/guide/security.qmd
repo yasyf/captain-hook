@@ -11,8 +11,8 @@ trust model matters.
 Two distinct bodies of code meet at a hook.
 
 The framework is captain-hook itself, published to PyPI as `capt-hook`. You run
-it with `uvx capt-hook run <Event>`, so you trust the maintainers and PyPI the
-same way you trust any other dependency.
+it with `uvx --isolated capt-hook run <Event>`, so you trust the maintainers and
+PyPI the same way you trust any other dependency.
 
 Your hooks are the Python files under `.claude/hooks/`. You write them, so they
 carry whatever logic you put there. captain-hook loads every file in that
@@ -25,7 +25,7 @@ never sees more of your machine than the hook itself does.
 
 ## `uvx` isolation as a safety guarantee
 
-`uvx capt-hook` runs captain-hook from an ephemeral, isolated environment that
+`uvx --isolated capt-hook` runs captain-hook from an ephemeral environment that
 `uv` builds on demand. The framework and its dependencies install into a cache
 that `uv` manages, separate from your project.
 
@@ -33,11 +33,18 @@ Your project's virtualenv stays untouched. captain-hook never lands in your
 `pyproject.toml`, your lockfile, or your site-packages. You can add a hook to any
 repository without changing a single dependency in that repository.
 
-Version drift stays contained. The hook runs the captain-hook version `uvx`
-resolves, not a copy pinned into your project that silently rots. Upgrades happen
-at the `uvx` layer, where you control them.
+The `--isolated` flag is load-bearing. A bare `uvx capt-hook` prefers an
+installed tool when one exists: run `uv tool install capt-hook` once, and every
+bare invocation on that machine silently resolves to the environment that
+install froze — `uv` documents this shortcut — so hooks keep running a
+months-old framework while looking current. `--isolated` ignores installed
+tools entirely. Dispatch always resolves from `uv`'s ephemeral-environment
+cache instead: a cache hit needs no network, so hooks fire offline, and
+revalidation picks up a new release within about a day of publish. Version
+drift stays contained without a copy pinned into your project that silently
+rots.
 
-Removing the wiring removes captain-hook. Delete the `hooks` block from
+Removing the wiring removes captain-hook. Disable the captain-hook plugin in
 `.claude/settings.json` and nothing in your project still references the
 framework, because nothing in your project ever did.
 

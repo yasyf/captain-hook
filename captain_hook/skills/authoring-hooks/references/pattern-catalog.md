@@ -1,7 +1,7 @@
 # Pattern Catalog
 
 One fully-worked hook file per taxonomy category. Every code block below passes
-`uvx capt-hook test` verbatim — copy it, then adapt patterns, messages, and source citations
+`uvx --isolated capt-hook test` verbatim — copy it, then adapt patterns, messages, and source citations
 to the surveyed repo while keeping the test structure. Test-format details and debugging:
 [testing hooks](testing-hooks.md).
 

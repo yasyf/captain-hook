@@ -61,7 +61,7 @@ Verification runs in the clone and differs by pack kind:
 - **Builtin pack** (`target_repo` is captain-hook): the hook lives under
   `captain_hook/packs/<pack>/`; verify with `uv run --project . capt-hook test`.
 - **External pack**: the hook lives in the directory named by the `hooks` key of the
-  clone's `capt-hook.toml` manifest; verify with `uvx capt-hook --hooks <dir> test`
+  clone's `capt-hook.toml` manifest; verify with `uvx --isolated capt-hook --hooks <dir> test`
   against that directory.
 
 Commit, push, and `gh pr create` run inside the clone with the same templates as
@@ -76,7 +76,7 @@ remove.
 ## Verify, commit, push
 
 ```bash
-cd "$worktree" && uvx capt-hook test     # must be green — skip the candidate otherwise
+cd "$worktree" && uvx --isolated capt-hook test     # must be green — skip the candidate otherwise
 git -C "$worktree" add .claude/hooks/<slug>.py
 git -C "$worktree" commit -m "feat(hooks): add <rule-slug> guard from session feedback"
 git -C "$worktree" push -u origin "capt-hook/review/<rule-slug>"
@@ -102,7 +102,7 @@ Body template:
 ## Hook
 
 `.claude/hooks/<slug>.py` — <primitive> on <event>; fires on <offending shape>, stays
-silent on <benign neighbor>. Inline tests pass (`uvx capt-hook test`).
+silent on <benign neighbor>. Inline tests pass (`uvx --isolated capt-hook test`).
 
 ## Evidence
 
@@ -140,7 +140,7 @@ Stamp the candidate immediately — this is what frees the eligibility math from
 double-proposing and lets `sync-prs` track the PR's fate:
 
 ```bash
-uvx capt-hook review update <ID> pr_open --pr-url <url>
+uvx --isolated capt-hook review update <ID> pr_open --pr-url <url>
 git worktree remove "$worktree" --force
 ```
 
@@ -160,8 +160,8 @@ share one review database. Two shapes: `no candidate with id <ID>` means a summa
 re-judge re-parented the candidate's observations onto a fresh slug candidate and the
 emptied original was swept; a transition error like `rejected -> pr_open` means the
 candidate was judge-retired (every observation re-judged, none accepted). Re-run
-`uvx capt-hook review list --repo <key>` and stamp the successor create candidate whose
-`rule` equals the branch's slug — `uvx capt-hook review update <successor-ID> pr_open
+`uvx --isolated capt-hook review list --repo <key>` and stamp the successor create candidate whose
+`rule` equals the branch's slug — `uvx --isolated capt-hook review update <successor-ID> pr_open
 --pr-url <url>`. If no such candidate exists (the rule was judge-retired), close the PR
 you just opened — `sync-prs` only follows PRs a `pr_open` candidate row points at, so an
 unstamped PR would sit open forever with nothing tracking its fate:

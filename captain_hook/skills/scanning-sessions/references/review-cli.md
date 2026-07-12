@@ -1,6 +1,6 @@
 # The `capt-hook review` CLI
 
-The reviewer's command surface, run as `uvx capt-hook review <command>`. The store
+The reviewer's command surface, run as `uvx --isolated capt-hook review <command>`. The store
 lives outside the repo (under capt-hook's state dir), so every command sees the same
 candidates regardless of cwd; commands taking `--repo` default to the repo containing
 the current directory.
@@ -157,7 +157,7 @@ watching flag and the repo-wide open-PR cap — never re-derive any of this.
 Moves a candidate along the lifecycle. The one you use:
 
 ```bash
-uvx capt-hook review update 12 pr_open --pr-url https://github.com/owner/repo/pull/7
+uvx --isolated capt-hook review update 12 pr_open --pr-url https://github.com/owner/repo/pull/7
 ```
 
 `--pr-url` stamps the URL and `pr_opened_at` onto the candidate. Statuses: `watching`,
