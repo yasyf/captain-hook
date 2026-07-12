@@ -14,10 +14,13 @@ the PRs, recording each run's outcome for the status dashboard's health line.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+import re
 import subprocess
 import sys
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,6 +30,8 @@ from captain_hook.review.repo import resolve_repo_key
 from captain_hook.settings import resolve_state_dir
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from spawnllm import TModel
 
     from captain_hook.review.repo import RepoKey
@@ -257,6 +262,36 @@ async def watching_ids(store: ReviewStore, repo: RepoKey) -> set[int]:
     return {int(str(row["id"])) for row in await store.candidates(repo, status=CandidateStatus.WATCHING)}
 
 
+@contextmanager
+def repo_brain_lock(repo: RepoKey, settings: ReviewSettings) -> Iterator[bool]:
+    """Claims the per-repository brain lock non-blockingly, yielding whether it was acquired.
+
+    A repo may run at most one PR-drafting brain at a time: a SessionStart and a
+    SessionEnd pass on the same repo otherwise race, both reading the same eligible
+    candidate and spawning competing brains before either records ``pr_open``. The
+    lock is an OS ``flock`` under the review state dir — independent of any database
+    connection, so it spans the store's open/close while the brain updates that same
+    database. It is non-blocking: a second concurrent pass yields ``False`` and skips
+    the brain instead of queueing behind the first.
+    """
+    (path := settings.db_path.parent / "locks" / f"{re.sub(r'\W+', '_', repo)}.lock").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings) -> SpawnReport:
     """Runs the detached reviewer pass over one ended session.
 
@@ -276,6 +311,8 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
     Returns:
         The :class:`SpawnReport` for this pass.
     """
+    from loguru import logger
+
     from captain_hook.review.judge import judge_pass
     from captain_hook.review.scan import scan
     from captain_hook.review.store import CandidateStatus, ReviewStore
@@ -291,20 +328,33 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
         triage = await triage_pass(store, settings=settings)
         verdicts = await judge_pass(store, settings=settings, refresh_summary=True)
         sync = await sync_open_prs(store, repo, settings=settings)
-        eligible = tuple(
-            [
-                candidate_id
-                for row in await store.candidates(repo, status=CandidateStatus.WATCHING)
-                if await store.eligible(candidate_id := int(str(row["id"])), settings=settings)
-            ]
-        )
-        opened_before = await pr_open_ids(store, repo)
-    outcome = spawn_brain(transcript, repo_root=Path(cwd), settings=settings) if eligible else None
+    eligible: tuple[int, ...] = ()
+    brain = False
+    brain_exit: int | None = None
+    brain_seconds: float | None = None
     brain_prs = brain_skips = 0
-    if outcome is not None:
-        async with await ReviewStore.open(settings.db_path) as store:
-            brain_prs = len(await pr_open_ids(store, repo) - opened_before)
-            brain_skips = len(set(eligible) & await watching_ids(store, repo))
+    # Lock spans the eligibility read through the brain and the pr_open set-diff, so a
+    # concurrent pass can neither double-spawn nor leak its transitions into this count.
+    with repo_brain_lock(repo, settings) as claimed:
+        if claimed:
+            async with await ReviewStore.open(settings.db_path) as store:
+                eligible = tuple(
+                    [
+                        candidate_id
+                        for row in await store.candidates(repo, status=CandidateStatus.WATCHING)
+                        if await store.eligible(candidate_id := int(str(row["id"])), settings=settings)
+                    ]
+                )
+                opened_before = await pr_open_ids(store, repo)
+            if eligible:
+                brain = True
+                outcome = spawn_brain(transcript, repo_root=Path(cwd), settings=settings)
+                brain_exit, brain_seconds = outcome.exit_code, outcome.seconds
+                async with await ReviewStore.open(settings.db_path) as store:
+                    brain_prs = len(await pr_open_ids(store, repo) - opened_before)
+                    brain_skips = len(set(eligible) & await watching_ids(store, repo))
+        else:
+            logger.bind(repo=repo).info("reviewer brain skipped: another pass holds this repo's lock")
     return SpawnReport(
         repo=repo,
         watching=True,
@@ -316,9 +366,9 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
         judged=verdicts.judged,
         failed=verdicts.failed,
         eligible=eligible,
-        brain=bool(eligible),
-        brain_exit=outcome.exit_code if outcome else None,
-        brain_seconds=outcome.seconds if outcome else None,
+        brain=brain,
+        brain_exit=brain_exit,
+        brain_seconds=brain_seconds,
         brain_prs=brain_prs,
         brain_skips=brain_skips,
         synced_merged=sync.accepted,

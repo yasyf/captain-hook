@@ -987,6 +987,45 @@ class TestReviewSession:
         assert report.eligible == (candidate_id,)
         assert (report.brain, report.brain_exit, report.brain_prs, report.brain_skips) == (True, 0, 0, 1)
 
+    async def test_concurrent_passes_spawn_at_most_one_brain(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A SessionStart and a SessionEnd pass on one repo can run at once; the per-repo lock
+        # lets exactly one spawn the brain while the other sees the lock held and skips it.
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        calls: list[Path] = []
+        brain_entered = threading.Event()
+        release = threading.Event()
+
+        def blocking_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) -> BrainOutcome:
+            calls.append(repo_root)
+            brain_entered.set()
+            assert release.wait(timeout=10)
+            return BrainOutcome(exit_code=0, seconds=1.0, log_path=review_log_path())
+
+        monkeypatch.setattr("captain_hook.review.pipeline.spawn_brain", blocking_brain)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
+            await seed_eligible_fix(store, repo=GIT_REPO_KEY)
+        first = write_transcript(tmp_path / "start.jsonl", [assistant_text("nothing to correct here")])
+        second = write_transcript(tmp_path / "end.jsonl", [assistant_text("nothing to correct here")])
+
+        holder: dict[str, SpawnReport] = {}
+
+        def run_holder() -> None:
+            holder["report"] = asyncio.run(review_session(first, cwd=str(git_repo), settings=settings))
+
+        thread = threading.Thread(target=run_holder)
+        thread.start()
+        assert brain_entered.wait(timeout=10)
+        loser = await review_session(second, cwd=str(git_repo), settings=settings)
+        release.set()
+        thread.join(timeout=10)
+
+        assert len(calls) == 1
+        assert holder["report"].brain is True
+        assert (loser.brain, loser.eligible, loser.brain_prs) == (False, (), 0)
+
     @pytest.mark.parametrize(
         ("category", "expect_brain"),
         [

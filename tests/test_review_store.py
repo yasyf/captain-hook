@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import sqlite3
@@ -366,6 +367,40 @@ class TestTransitions:
         merged_at = datetime(2026, 7, 8, 15, 6, 25, tzinfo=UTC)
         await store.transition(candidate_id, CandidateStatus.ACCEPTED, resolved_at=merged_at)
         assert (await candidate_row(store, candidate_id))["resolved_at"] == "2026-07-08T15:06:25+00:00"
+
+    async def test_stale_write_cannot_overwrite_a_concurrent_acceptance(self, tmp_path: Path) -> None:
+        # Two connections both read PR_OPEN, then one accepts and one tries to stale it. The
+        # compare-and-swap (WHERE id AND status) makes the stale writer lose the race, re-read
+        # ACCEPTED, and reject — never overwriting the acceptance a peer already committed.
+        path = tmp_path / "review.db"
+        async with await ReviewStore.open(path) as setup:
+            candidate_id = await create_candidate(setup)
+            await setup.transition(candidate_id, CandidateStatus.PR_OPEN, pr_opened_at=datetime.now(UTC))
+
+        accepter = await ReviewStore.open(path)
+        staler = await ReviewStore.open(path)
+        try:
+            before_update = asyncio.Event()
+            acceptance_committed = asyncio.Event()
+            underlying = staler.store.conn.execute
+
+            async def gated(sql: str, *args: object, **kwargs: object) -> object:
+                if sql.startswith("UPDATE candidates SET status"):
+                    before_update.set()
+                    await acceptance_committed.wait()
+                return await underlying(sql, *args, **kwargs)
+
+            staler.store.conn.execute = gated  # type: ignore[method-assign]
+            stale_task = asyncio.create_task(staler.transition(candidate_id, CandidateStatus.STALE))
+            await before_update.wait()
+            await accepter.transition(candidate_id, CandidateStatus.ACCEPTED)
+            acceptance_committed.set()
+            with pytest.raises(InvalidTransition, match="accepted -> stale"):
+                await stale_task
+            assert (await candidate_row(accepter, candidate_id))["status"] == "accepted"
+        finally:
+            await accepter.close()
+            await staler.close()
 
 
 class TestCreateEligibility:

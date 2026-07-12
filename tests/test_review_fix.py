@@ -30,7 +30,7 @@ from captain_hook.review.fix import (
 )
 from captain_hook.review.judge import ReviewVerdict, build_prompt
 from captain_hook.review.repo import RepoKey
-from captain_hook.review.routing import CAPTAIN_HOOK_REPO, PackIndex, Target
+from captain_hook.review.routing import CAPTAIN_HOOK_REPO, ExternalRoute, PackIndex, Target
 from captain_hook.review.scan import ScanReport, scan_transcript
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import ReviewStore
@@ -381,9 +381,25 @@ class TestResolveTarget:
         assert resolve_target(make_decision(kind=kind, source_file=source_file), INDEX) == expected
 
     def test_declared_external_pack_routes_to_its_repo(self) -> None:
-        index = PackIndex(builtins=INDEX.builtins, externals={"notify": NOTIFY_REPO})
+        index = PackIndex(builtins=INDEX.builtins, externals={"notify": ExternalRoute("notify", NOTIFY_REPO)})
         target = resolve_target(make_decision(kind=NOTIFY_KIND, source_file=NOTIFY_SOURCE), index)
         assert target == Target("hooks/alerts.py", NOTIFY_KIND, NOTIFY_REPO, "notify")
+
+    def test_hyphenated_external_pack_routes_by_sanitized_prefix(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A pack named `ccx-rel` loads under the module prefix `ccx_rel`, so a firing decision's
+        # kind carries `ccx_rel.<mod>:...`. The index must key by that sanitized runtime prefix — not
+        # the canonical hyphenated name — or resolve_target misses and falls back to `.claude/hooks`.
+        cache_external_pack(tmp_path, monkeypatch, name="ccx-rel")
+        root = write_external_packs_toml(tmp_path / "proj", name="ccx-rel", source="github:acme/ccx-rel@v1")
+        index = PackIndex.load(root)
+        assert index.externals == {"ccx_rel": ExternalRoute("ccx-rel", RepoKey("github.com/acme/ccx-rel"))}
+        source = "/home/u/.cache/captain-hook/packs/ccx-rel@abc1234/hooks/alerts.py"
+        target = resolve_target(make_decision(kind="ccx_rel.alerts:hook_deadbeef", source_file=source), index)
+        assert target == Target(
+            "hooks/alerts.py", "ccx_rel.alerts:hook_deadbeef", RepoKey("github.com/acme/ccx-rel"), "ccx-rel"
+        )
 
     @pytest.mark.parametrize(
         ("source_file", "expected"),
@@ -412,7 +428,7 @@ class TestPackIndex:
         cache_external_pack(tmp_path, monkeypatch)
         root = write_external_packs_toml(tmp_path / "proj")
         index = PackIndex.load(root)
-        assert index.externals == {"notify": NOTIFY_REPO}
+        assert index.externals == {"notify": ExternalRoute("notify", NOTIFY_REPO)}
 
     def test_load_drops_a_declared_external_pack_that_is_not_cached(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

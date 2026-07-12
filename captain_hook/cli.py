@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -197,24 +197,38 @@ def review_command(prefix: str) -> str:
     return f"{prefix} review run"
 
 
-def generate_settings(hooks_dir: str = ".claude/hooks", prefix: str = DEFAULT_PREFIX) -> dict[str, Any]:
+def review_entry(prefix: str) -> dict[str, Any]:
+    return {"type": "command", "command": review_command(prefix), "async": True}
+
+
+def review_group(prefix: str) -> dict[str, Any]:
+    return {"hooks": [review_entry(prefix)]}
+
+
+def subscribed_events_by_async() -> defaultdict[bool, set[str]]:
     events_by_async: defaultdict[bool, set[str]] = defaultdict(set)
     for entry in _state.hooks:
         events_by_async[entry.spec.async_] |= event_names(entry.spec.events)
+    return events_by_async
 
+
+def event_commands(
+    event: str, events_by_async: Mapping[bool, set[str]], flag: str, prefix: str
+) -> list[dict[str, Any]]:
+    return [
+        {"type": "command", "command": run_command(prefix, flag, event, async_=is_async)}
+        | ({"async": True} if is_async else {})
+        for is_async in (False, True)
+        if event in events_by_async.get(is_async, set())
+    ] + ([review_entry(prefix)] if event == "SessionEnd" else [])
+
+
+def generate_settings(hooks_dir: str = ".claude/hooks", prefix: str = DEFAULT_PREFIX) -> dict[str, Any]:
+    events_by_async = subscribed_events_by_async()
     flag = hooks_flag(hooks_dir)
-
-    def commands(event: str) -> list[dict[str, Any]]:
-        return [
-            {"type": "command", "command": run_command(prefix, flag, event, async_=is_async)}
-            | ({"async": True} if is_async else {})
-            for is_async, events in sorted(events_by_async.items())
-            if event in events
-        ] + ([{"type": "command", "command": review_command(prefix), "async": True}] if event == "SessionEnd" else [])
-
     return {
         "hooks": {
-            event: [{"hooks": commands(event)}]
+            event: [{"hooks": event_commands(event, events_by_async, flag, prefix)}]
             for event in sorted(events_by_async[False] | events_by_async[True] | {"SessionEnd"})
         }
     }
@@ -238,16 +252,6 @@ def classify_group(group: dict[str, Any], rendered: frozenset[str]) -> str:
     if set(group) == {"hooks"} and all(h.get("command") in rendered for h in group.get("hooks") or []):
         return "own"
     return "custom"
-
-
-def capt_hook_events(path: Path) -> set[str]:
-    if not path.exists():
-        return set()
-    return {
-        event
-        for event, groups in (json.loads(path.read_text()).get("hooks") or {}).items()
-        if any(is_captain_hook_group(g) for g in groups)
-    }
 
 
 def is_review_group(group: dict[str, Any]) -> bool:
@@ -301,28 +305,59 @@ def sibling_settings(path: Path) -> Path:
     return path.parent / ("settings.json" if path.name == "settings.local.json" else "settings.local.json")
 
 
+def sibling_defers(
+    entry: dict[str, Any], event: str, deferred_modes: set[tuple[str, bool]], sibling_review: set[str]
+) -> bool:
+    """True when a sibling settings file already wires this generated command's exact mode.
+
+    Deferral is per ``(event, is_async)``: a sibling's async ``review run`` never suppresses a
+    freshly generated sync ``run SessionStart`` dispatcher. A ``review run`` command dedups against
+    the sibling by event instead, since it carries no run mode.
+    """
+    if (mode := run_command_mode(entry.get("command") or "")) is not None:
+        return mode in deferred_modes
+    return event in sibling_review
+
+
 def merge_settings(
     hooks_dir: str, settings_path: Path, prefix: str = DEFAULT_PREFIX
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    new_hooks: dict[str, list[dict[str, Any]]] = generate_settings(hooks_dir, prefix=prefix)["hooks"]
+    from captain_hook.review.cli import REVIEW_EVENTS, review_wired
+
+    events_by_async = subscribed_events_by_async()
+    flag = hooks_flag(hooks_dir)
     rendered = rendered_commands(hooks_dir, prefix)
     existing = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     existing_hooks: dict[str, list[dict[str, Any]]] = existing.get("hooks") or {}
-    deferred = capt_hook_events(sibling_settings(settings_path))
+    sibling = sibling_settings(settings_path)
+    deferred_modes = wired_modes(sibling)
+    sibling_hooks: dict[str, Any] = (json.loads(sibling.read_text()).get("hooks") or {}) if sibling.exists() else {}
+    sibling_review = {event for event in REVIEW_EVENTS if review_wired(sibling_hooks, event)}
 
     summary: dict[str, str] = {}
     merged_hooks: dict[str, list[dict[str, Any]]] = {}
-    for event in sorted(existing_hooks.keys() | new_hooks.keys()):
+    for event in sorted(existing_hooks.keys() | events_by_async[False] | events_by_async[True] | {"SessionEnd"}):
         classified = [(g, classify_group(g, rendered)) for g in existing_hooks.get(event, [])]
-        kept = [g for g, kind in classified if kind != "own"]
+        # foreign and genuinely-custom groups survive verbatim; own groups regenerate. A capt-hook
+        # review-only group is always machine-written, so a prefix-mismatched one is re-rendered to
+        # the active prefix rather than kept as custom — and never vetoes the fresh dispatcher.
+        kept = [g for g, kind in classified if kind == "foreign" or (kind == "custom" and not is_review_group(g))]
         own = [g for g, kind in classified if kind == "own"]
-        custom = any(kind == "custom" for _, kind in classified)
-        fresh_own = [] if (custom or event in deferred) else new_hooks.get(event, [])
-        # Preserve a SessionStart `review run` group generate_settings won't re-emit (SessionEnd's is in fresh_own).
-        managed = [g for g in own if is_review_group(g) and not any(is_review_group(f) for f in fresh_own)] + fresh_own
+        custom = any(kind == "custom" and not is_review_group(g) for g, kind in classified)
+        had_review = any(is_review_group(g) for g, _ in classified)
+
+        generatable = event_commands(event, events_by_async, flag, prefix)
+        suppressed = [c for c in generatable if sibling_defers(c, event, deferred_modes, sibling_review)]
+        fresh_cmds = [] if custom else [c for c in generatable if c not in suppressed]
+        review_in_fresh = any("review run" in (c.get("command") or "") for c in fresh_cmds)
+        fresh_own = [{"hooks": fresh_cmds}] if fresh_cmds else []
+        managed = (
+            [review_group(prefix)] if had_review and not review_in_fresh and event not in sibling_review else []
+        ) + fresh_own
+
         if custom:
             summary[event] = "custom"
-        elif event in deferred and (own or new_hooks.get(event)):
+        elif suppressed and not fresh_cmds and not managed:
             summary[event] = "deferred"
         elif own or managed:
             summary[event] = (
@@ -478,7 +513,7 @@ def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None
 
 
 def init_project(root: Path, *, review: bool = True) -> None:
-    from captain_hook.review.cli import watch_repo
+    from captain_hook.review.cli import ensure_review_wiring, watch_repo
     from captain_hook.review.repo import repo_key
 
     hooks_dir = root / ".claude" / "hooks"
@@ -489,6 +524,11 @@ def init_project(root: Path, *, review: bool = True) -> None:
         example.write_text(example_hook_source())
 
     settings_path = root / ".claude" / "settings.json"
+    repo = repo_key(root)
+    # Install the reviewer marker before discovery so discovery registers the announcer and
+    # settings generation emits the synchronous `run SessionStart` dispatcher it fires through.
+    if review and repo is not None:
+        ensure_review_wiring(settings_path, command_prefix(root))
     resolved = CliState(root=root, hooks=str(hooks_dir)).discover()
     merged, summary = merge_settings(".claude/hooks", settings_path, command_prefix(root))
     write_settings(settings_path, merged)
@@ -503,14 +543,14 @@ def init_project(root: Path, *, review: bool = True) -> None:
     click.echo("Claude Code plugin:")
     click.echo(f"  + registered {PLUGIN_ID} in .claude/settings.json (skills install on folder-trust)")
     click.echo()
-    match (review, repo_key(root)):
+    match (review, repo):
         case (False, _):
             click.echo("Session reviewer: skipped (--no-review) — `uvx capt-hook review enable` to turn it on later.")
         case (True, None):
             click.echo(
                 "Session reviewer: needs a git repo with a remote — `uvx capt-hook review enable` once it has one."
             )
-        case (True, repo):
+        case (True, _):
             watch_repo(repo)
             click.echo(
                 f"Session reviewer: watching {repo} — mines your ended sessions and opens hook PRs automatically."

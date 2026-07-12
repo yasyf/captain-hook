@@ -138,10 +138,15 @@ class TestEnableDisable:
         assert f"watching {GIT_REPO_KEY}" in result.output
         assert asyncio.run(repo_watching(GIT_REPO_KEY)) is True
         data = json.loads((git_repo / ".claude" / "settings.json").read_text())
-        review_entry = {"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}", "async": True}
-        for event in ("SessionEnd", "SessionStart"):
-            entries = [entry for group in data["hooks"][event] for entry in group["hooks"]]
-            assert entries == [review_entry]
+
+        def commands(event: str) -> list[str]:
+            return [entry["command"] for group in data["hooks"][event] for entry in group["hooks"]]
+
+        # SessionEnd runs the async reviewer; SessionStart additionally wires the synchronous
+        # `run SessionStart` dispatcher, without which the PR announcer never fires.
+        assert commands("SessionEnd") == [f"uvx {REVIEW_RUN_COMMAND}"]
+        assert f"uvx {REVIEW_RUN_COMMAND}" in commands("SessionStart")
+        assert "uvx capt-hook run SessionStart" in commands("SessionStart")
 
     def test_enable_registers_plugin(self, git_repo: Path) -> None:
         assert invoke("enable", root=git_repo).exit_code == 0
@@ -215,6 +220,16 @@ class TestInitEnablesReviewer:
         assert f"watching {GIT_REPO_KEY}" in result.stdout
         settings = json.loads((git_repo / ".claude" / "settings.json").read_text())
         assert settings["enabledPlugins"] == {"captain-hook@captain-hook": True}
+
+    def test_init_wires_synchronous_session_start_dispatcher(self, git_repo: Path) -> None:
+        # Finding 11 (init path): default init on a git repo must install the reviewer marker before
+        # discovery so settings.json emits the synchronous `run SessionStart` the announcer fires through.
+        result = run_cli("init", root_dir=str(git_repo))
+        assert result.returncode == 0, result.stderr
+        settings = json.loads((git_repo / ".claude" / "settings.json").read_text())
+        commands = [entry["command"] for group in settings["hooks"]["SessionStart"] for entry in group["hooks"]]
+        assert "uvx capt-hook run SessionStart" in commands
+        assert f"uvx {REVIEW_RUN_COMMAND}" in commands
 
     def test_init_no_review_does_not_watch(self, git_repo: Path) -> None:
         result = run_cli("init", "--no-review", root_dir=str(git_repo))

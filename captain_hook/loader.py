@@ -144,7 +144,9 @@ def register_pr_announcements() -> None:
 
 
 def discover_pack(name: str, pack_dir: Path) -> None:
-    pkg = f"{PACK_PACKAGE_PREFIX}.{re.sub(r'\W', '_', name)}"
+    from captain_hook.packs.manager import pack_module_name
+
+    pkg = f"{PACK_PACKAGE_PREFIX}.{pack_module_name(name)}"
     ensure_pack_package(PACK_PACKAGE_PREFIX, [])
     ensure_pack_package(pkg, [str(pack_dir)])
     for path in sorted(pack_dir.glob("*.py")):

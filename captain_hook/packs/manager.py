@@ -47,6 +47,11 @@ REFRESH_TTL_SECONDS = 24 * 60 * 60
 PACK_NAME_RE = re.compile(r"[a-z][a-z0-9-]*")
 
 
+def pack_module_name(name: str) -> str:
+    """The import-safe module component a pack loads under (a pack name's hyphens become underscores)."""
+    return re.sub(r"\W", "_", name)
+
+
 class PackError(Exception):
     """A pack source, manifest, or enabled-packs entry was invalid or unresolvable."""
 

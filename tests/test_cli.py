@@ -399,7 +399,10 @@ class TestMergeSettings:
         assert commands == ["uv run capt-hook run PreToolUse --async"]
         assert summary["PreToolUse"] == "updated"
 
-    def test_cli_036_custom_uvx_review_preserved_under_launcher(self, tmp_path: Path) -> None:
+    def test_cli_036_launcher_heals_stale_uvx_review(self, tmp_path: Path) -> None:
+        # A `uvx capt-hook review run` group is always machine-written, so under a launcher it is a
+        # stale-prefix artifact: it is re-rendered to the launcher prefix and never vetoes the
+        # freshly generated SessionEnd dispatcher (which the old veto silently deleted).
         from captain_hook.cli import command_prefix, merge_settings
 
         register_hook(Event.SessionEnd, message="end")
@@ -409,10 +412,11 @@ class TestMergeSettings:
         self.seed(sp, {"SessionEnd": [review]})
 
         merged, summary = merge_settings(".claude/hooks", sp, command_prefix(tmp_path))
-        assert merged["hooks"]["SessionEnd"] == [review]  # canonical uvx review is non-canonical under a launcher
-        assert summary["SessionEnd"] == "custom"
+        commands = [h["command"] for g in merged["hooks"]["SessionEnd"] for h in g["hooks"]]
+        assert commands == ["uv run capt-hook run SessionEnd", "uv run capt-hook review run"]
+        assert summary["SessionEnd"] == "added"
 
-    def test_cli_037_idempotent_with_launcher_and_custom(self, tmp_path: Path) -> None:
+    def test_cli_037_idempotent_with_launcher_after_healing_stale_review(self, tmp_path: Path) -> None:
         from captain_hook.cli import command_prefix, merge_settings, write_settings
 
         register_hook(Event.PreToolUse, message="pre")
@@ -428,7 +432,7 @@ class TestMergeSettings:
         merged2, summary2 = merge_settings(".claude/hooks", sp, prefix)
         write_settings(sp, merged2)
         assert sp.read_text() == first
-        assert summary2["SessionEnd"] == "custom"
+        assert summary2["SessionEnd"] == "unchanged"
         assert summary2["PreToolUse"] == "unchanged"
 
     def test_cli_038_removes_stale_canonical_keeps_custom(self, tmp_path: Path) -> None:
@@ -464,6 +468,40 @@ class TestMergeSettings:
             h["command"] == "uvx capt-hook run PreToolUse" for g in merged["hooks"]["PreToolUse"] for h in g["hooks"]
         )
         assert summary["PreToolUse"] == "custom"  # old canonical entries are preserved, never rewritten
+
+    def test_cli_041_stale_uvx_review_does_not_veto_launcher_session_start_dispatcher(self, tmp_path: Path) -> None:
+        # Finding 9: register-hooks under a launcher after a `uvx review run` was written must keep the
+        # SessionStart dispatcher AND heal the mismatched review to the launcher prefix.
+        from captain_hook.cli import command_prefix, merge_settings
+
+        register_hook(Event.SessionStart, message="announce", async_=False)
+        self.write_launcher(tmp_path, "uv run capt-hook")
+        sp = tmp_path / "settings.json"
+        dispatcher = {"hooks": [{"type": "command", "command": "uv run capt-hook run SessionStart"}]}
+        review = {"hooks": [{"type": "command", "command": "uvx capt-hook review run", "async": True}]}
+        self.seed(sp, {"SessionStart": [dispatcher, review]})
+
+        merged, _ = merge_settings(".claude/hooks", sp, command_prefix(tmp_path))
+        commands = [h["command"] for g in merged["hooks"]["SessionStart"] for h in g["hooks"]]
+        assert "uv run capt-hook run SessionStart" in commands
+        assert "uv run capt-hook review run" in commands
+        assert "uvx capt-hook review run" not in commands
+
+    def test_cli_042_sibling_async_review_keeps_generated_sync_session_start(self, tmp_path: Path) -> None:
+        # Finding 14: a sibling holding only the async SessionStart review-run must not defer the whole
+        # event — the freshly generated synchronous dispatcher (the announcer) still lands.
+        from captain_hook.cli import merge_settings
+
+        register_hook(Event.SessionStart, message="announce", async_=False)
+        self.seed(
+            tmp_path / "settings.local.json",
+            {"SessionStart": [{"hooks": [{"type": "command", "command": "uvx capt-hook review run", "async": True}]}]},
+        )
+        sp = tmp_path / "settings.json"
+
+        merged, _ = merge_settings(".claude/hooks", sp)
+        commands = [h["command"] for g in merged["hooks"].get("SessionStart", []) for h in g["hooks"]]
+        assert commands == ["uvx capt-hook run SessionStart"]  # sync dispatcher survives; async review stays in sibling
 
 
 class TestReviewRunPreservation:

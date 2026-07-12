@@ -679,6 +679,12 @@ WHERE c.candidate_kind = ? AND c.status = ?
     ) -> None:
         """Moves a candidate along :data:`TRANSITIONS` — the only status-write codepath.
 
+        The move is a compare-and-swap against the status it validated: the ``UPDATE``
+        matches ``id`` *and* the read status, so a concurrent writer that already moved
+        the row cannot be overwritten. On a lost race the current status is re-read and
+        re-validated — a still-legal move (a ``stale -> accepted`` that lost to a peer's
+        own ``stale -> accepted``) converges, an illegal one raises.
+
         Entering :attr:`CandidateStatus.ACCEPTED` stamps ``resolved_at``, the
         watermark a later reopen counts fresh recurrences against — from the
         authoritative merge timestamp when the caller supplies one (a synced MERGED
@@ -698,30 +704,34 @@ WHERE c.candidate_kind = ? AND c.status = ?
             InvalidTransition: If the move is not allowed from the current status.
             LookupError: If no candidate carries ``candidate_id``.
         """
-        cur = await self.store.conn.execute("SELECT status FROM candidates WHERE id = ?", (candidate_id,))
-        if not (rows := [str(row["status"]) async for row in cur]):
-            raise LookupError(f"no candidate with id {candidate_id}")
-        if to not in TRANSITIONS[current := CandidateStatus(rows[0])]:
-            raise InvalidTransition(f"{current} -> {to}")
-        stamp = now()
-        resolution = (
-            (resolved_at.astimezone(UTC).isoformat() if resolved_at is not None else stamp)
-            if to == CandidateStatus.ACCEPTED
-            else None
-        )
-        await self.store.conn.execute(
-            "UPDATE candidates SET status = ?, updated_at = ?, "
-            "pr_url = COALESCE(?, pr_url), pr_opened_at = COALESCE(?, pr_opened_at), "
-            "resolved_at = COALESCE(?, resolved_at) WHERE id = ?",
-            (
-                to,
-                stamp,
-                pr_url,
-                pr_opened_at.astimezone(UTC).isoformat() if pr_opened_at else None,
-                resolution,
-                candidate_id,
-            ),
-        )
+        while True:
+            cur = await self.store.conn.execute("SELECT status FROM candidates WHERE id = ?", (candidate_id,))
+            if not (rows := [str(row["status"]) async for row in cur]):
+                raise LookupError(f"no candidate with id {candidate_id}")
+            if to not in TRANSITIONS[current := CandidateStatus(rows[0])]:
+                raise InvalidTransition(f"{current} -> {to}")
+            stamp = now()
+            resolution = (
+                (resolved_at.astimezone(UTC).isoformat() if resolved_at is not None else stamp)
+                if to == CandidateStatus.ACCEPTED
+                else None
+            )
+            cur = await self.store.conn.execute(
+                "UPDATE candidates SET status = ?, updated_at = ?, "
+                "pr_url = COALESCE(?, pr_url), pr_opened_at = COALESCE(?, pr_opened_at), "
+                "resolved_at = COALESCE(?, resolved_at) WHERE id = ? AND status = ?",
+                (
+                    to,
+                    stamp,
+                    pr_url,
+                    pr_opened_at.astimezone(UTC).isoformat() if pr_opened_at else None,
+                    resolution,
+                    candidate_id,
+                    current,
+                ),
+            )
+            if cur.rowcount == 1:
+                return
 
     async def pr_state_cache(self, url: str) -> CachedPrState | None:
         """Returns the last-fetched GitHub state for ``url``, with its fetch time — or ``None`` if uncached.

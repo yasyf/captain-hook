@@ -298,10 +298,10 @@ def resolve_target(decision: Decision, index: PackIndex) -> Target | None:
     match module.split("."):
         case [pack, mod] if (pack_dir := index.builtins.get(pack)) and (pack_dir / f"{mod}.py").is_file():
             return Target(f"{PACKS_DIR}/{pack}/{mod}.py", decision.kind, CAPTAIN_HOOK_REPO, pack)
-        case [pack, _mod] if (repo := index.externals.get(pack)) and (
+        case [pack, _mod] if (route := index.externals.get(pack)) and (
             path := external_target_path(decision.source_file)
         ):
-            return Target(path, decision.kind, repo, pack)
+            return Target(path, decision.kind, route.repo, route.pack_name)
         case parts if all(part.isidentifier() for part in parts):
             return Target(f".claude/hooks/{parts[-1]}.py", decision.kind, repo=None, pack=None)
         case _:

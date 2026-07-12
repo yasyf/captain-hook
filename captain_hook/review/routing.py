@@ -45,6 +45,19 @@ class Target:
 
 
 @dataclass(frozen=True, slots=True)
+class ExternalRoute:
+    """A cached external pack's canonical name and home repo.
+
+    Attributes:
+        pack_name: The pack's canonical ``packs.toml`` name (hyphens intact).
+        repo: The pack's ``github.com/<owner>/<repo>`` home repo key.
+    """
+
+    pack_name: str
+    repo: RepoKey
+
+
+@dataclass(frozen=True, slots=True)
 class PackIndex:
     """A project's pack-name → home-repo map, resolved once with no network.
 
@@ -56,11 +69,13 @@ class PackIndex:
 
     Attributes:
         builtins: The builtin pack names mapped to their on-disk directories.
-        externals: The cached external pack names mapped to their home repo keys.
+        externals: Cached external packs keyed by the sanitized runtime module prefix a
+            hook loads under (``ccx-rel`` → ``ccx_rel``) — the form a firing decision's
+            ``kind`` carries — mapping to the pack's canonical name and home repo key.
     """
 
     builtins: Mapping[str, Path]
-    externals: Mapping[str, RepoKey]
+    externals: Mapping[str, ExternalRoute]
 
     @classmethod
     def load(cls, root: Path | None) -> PackIndex:
@@ -75,13 +90,16 @@ class PackIndex:
             builtin_packs,
             cached_commit,
             find_cached,
+            pack_module_name,
             packs_toml_path,
             read_entries,
         )
 
         now = time.time()
         externals = {
-            entry.name: RepoKey(f"github.com/{entry.source.owner}/{entry.source.repo}".lower())
+            pack_module_name(entry.name): ExternalRoute(
+                entry.name, RepoKey(f"github.com/{entry.source.owner}/{entry.source.repo}".lower())
+            )
             for entry in (read_entries(packs_toml_path(root)) if root is not None else [])
             if isinstance(entry, ExternalPack)
             and (sha := cached_commit(entry, now)) is not None
