@@ -97,9 +97,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collapses the rejected wall to a count line beyond five entries.
 - **`Clause.completed` is now `Clause.tense`.** The boolean became
   `"any" | "completed" | "prospective"` — "prospective" rejects past
-  predicates, which the boolean could not express. `completed=True` maps to
-  `tense="completed"`; the default is unchanged in behavior. No external
-  callers passed `completed=`.
+  predicates, which the boolean could not express (and excludes
+  counterfactual modal-perfects like "should have left"). `completed=True`
+  maps to `tense="completed"`; the default is unchanged in behavior. No
+  external callers passed `completed=`.
+- **`hook()` identity is the message.** Two `hook()` registrations sharing a
+  message string share one name and one fire ledger — the same semantic
+  `nudge`/`gate` have always had. Distinct rules deserve distinct messages.
+- **An adversarial review hardened the whole wave before release.** A
+  gpt-5.5 finder/refuter pass over the full diff confirmed 29 defects, all
+  fixed: the schema migration now serializes concurrent first opens in one
+  transaction; `transition()` is compare-and-swap so racing syncs cannot
+  overwrite an acceptance; destructive PR-state transitions require a fresh
+  gh response (a gh outage or stale cache can never flip `pr_open`);
+  `resolved_at` records GitHub's merge time, not sync time, so delayed syncs
+  cannot swallow post-merge recurrences; the reopen edge is fix-kind-only
+  with an atomic generation bump; the SessionStart announcer fast-fails on
+  lock contention and marks a row announced only when its line is actually
+  delivered; both activation paths wire the sync SessionStart dispatcher and
+  review wiring renders through the active launcher prefix; a per-repo lock
+  makes concurrent session ends spawn exactly one brain; triage writes are
+  compare-and-set and never override judge-accepted evidence; plan-rejection
+  feedback is gated on its extracted text rather than the empty envelope;
+  and the steering matrix grew six more pinned sentences.
 - **Candidate rows carry lifecycle provenance.** A guarded in-place migration
   adds `generation`, `resolved_at`, `origin_repo_key`, `pack_name`, and
   `announced_status` on first open — historical terminal candidates are
