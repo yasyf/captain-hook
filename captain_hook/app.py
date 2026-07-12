@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import TYPE_CHECKING, get_args
+from typing import TYPE_CHECKING, Any, get_args
 
 from captain_hook.conditions import matches_conditions
 from captain_hook.state import caller_file, hook_name
@@ -116,7 +118,37 @@ class State:
     load_errors: list[LoadError] = field(default_factory=list)
 
 
-_state = State()
+_GLOBAL_STATE = State()
+_STATE_VAR: ContextVar[State] = ContextVar("captain_hook_state")
+
+
+def current_state() -> State:
+    try:
+        return _STATE_VAR.get()
+    except LookupError:
+        return _GLOBAL_STATE
+
+
+@contextmanager
+def use_state(state: State) -> Iterator[State]:
+    token = _STATE_VAR.set(state)
+    try:
+        yield state
+    finally:
+        _STATE_VAR.reset(token)
+
+
+class StateProxy:
+    __slots__ = ()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(current_state(), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(current_state(), name, value)
+
+
+_state = StateProxy()
 
 
 def reset() -> None:

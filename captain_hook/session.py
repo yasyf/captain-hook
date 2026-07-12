@@ -171,7 +171,8 @@ class SessionStore:
     @classmethod
     def track(cls, model: type[BaseModel]) -> None:
         """Register ``model`` so it appears in ``tracked_models()`` and ``tracked_paths()``."""
-        if model not in cls.TRACKED:
+        identity = (model.__module__, model.__qualname__)
+        if identity not in {(m.__module__, m.__qualname__) for m in cls.TRACKED}:
             cls.TRACKED.append(model)
 
     @classmethod
