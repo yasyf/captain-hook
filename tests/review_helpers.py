@@ -195,6 +195,18 @@ def install_judge(
     return calls
 
 
+def install_resolved_model(monkeypatch: pytest.MonkeyPatch, *, model: str = "m1") -> None:
+    """Pins the model-resolution boundary :mod:`captain_hook.review.judge` calls.
+
+    Patches the ``resolved_model`` reference judge.py holds so ``judge_pass`` never
+    reaches :func:`spawnllm.select_backend`, letting a pass record verdicts against a
+    fixed model name without a real authenticated LLM backend on PATH. This is a
+    different boundary from :func:`install_judge` (which stubs the verdict call), so
+    bookkeeping/triage tests that mock LLM behavior stub both explicitly.
+    """
+    monkeypatch.setattr("captain_hook.review.judge.resolved_model", lambda *_, **__: model)
+
+
 def install_triage(
     monkeypatch: pytest.MonkeyPatch,
     *,
