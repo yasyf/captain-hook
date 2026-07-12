@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [9.1.0] - 2026-07-11
 
 ### Fixed
 - **A sync and an async dispatch of one event no longer race for a single once-token.**
@@ -17,10 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SessionEnd` only to `uvx capt-hook review run`, which detaches the session reviewer and
   never reaches `dispatch()`. A second entry, `uvx capt-hook run SessionEnd --async`, now
   runs alongside it, so a pack's `async_=True` `SessionEnd` handler fires fleet-wide.
-
-## [9.1.0] - 2026-07-11
-
-### Fixed
 - **The pre-existing-issue steering nudge stops firing on itself.** The
   predicate double-counted "pre-existing" (a regex signal and an NlpSignal both
   scored the same phrase, reaching the threshold alone), WordNet expansion of
