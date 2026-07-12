@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sys
 import tarfile
-import tomllib
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
@@ -343,58 +342,6 @@ def test_read_entries_rejects_unknown_keys(packs_toml: Path) -> None:
     packs_toml.write_text('[packs.acme]\ncommit = "abc"\n')  # commit without source is not a valid entry
     with pytest.raises(manager.PackError):
         manager.read_entries(packs_toml)
-
-
-# The canonical dogfood launcher embeds double quotes around $CLAUDE_PROJECT_DIR, so its TOML
-# rendering must escape them; LAUNCHER_LINE is the exact expected basic-string form.
-DOGFOOD_LAUNCHER = 'env -u UV_EXCLUDE_NEWER uv run --project "$CLAUDE_PROJECT_DIR" capt-hook'
-LAUNCHER_LINE = 'launcher = "env -u UV_EXCLUDE_NEWER uv run --project \\"$CLAUDE_PROJECT_DIR\\" capt-hook"'
-
-
-def test_read_launcher_absent_and_present(packs_toml: Path) -> None:
-    assert manager.read_launcher(packs_toml) is None  # file absent
-    packs_toml.write_text("[packs.general]\n")
-    assert manager.read_launcher(packs_toml) is None  # key absent
-
-    manager.atomic_write(packs_toml, manager.render_packs_toml([manager.BuiltinPack("general")], DOGFOOD_LAUNCHER))
-    assert packs_toml.read_text().startswith(LAUNCHER_LINE + "\n")  # launcher line rendered before the tables
-    assert manager.read_launcher(packs_toml) == DOGFOOD_LAUNCHER  # exact round-trip, embedded quotes intact
-
-
-def test_upsert_entry_preserves_launcher(packs_toml: Path) -> None:
-    manager.atomic_write(packs_toml, manager.render_packs_toml([], DOGFOOD_LAUNCHER))
-    manager.upsert_entry(packs_toml, manager.BuiltinPack("general"))
-
-    text = packs_toml.read_text()
-    assert text.index("launcher") < text.index("[packs.general]")  # launcher stays ahead of the tables
-    assert manager.read_launcher(packs_toml) == DOGFOOD_LAUNCHER
-    assert manager.read_entries(packs_toml) == [manager.BuiltinPack("general")]
-
-
-def test_delete_entry_preserves_launcher(packs_toml: Path) -> None:
-    manager.atomic_write(
-        packs_toml,
-        manager.render_packs_toml([manager.BuiltinPack("general"), manager.BuiltinPack("python")], DOGFOOD_LAUNCHER),
-    )
-    manager.delete_entry(packs_toml, "python")
-
-    assert manager.read_launcher(packs_toml) == DOGFOOD_LAUNCHER  # survives a wholesale rewrite
-    assert manager.read_entries(packs_toml) == [manager.BuiltinPack("general")]
-
-
-def test_launcher_non_bmp_round_trips(packs_toml: Path) -> None:
-    # Accented char + emoji + embedded quotes: json.dumps would emit surrogate \uXXXX escapes
-    # the TOML spec rejects, breaking the next read. The basic-string escaper keeps them literal.
-    launcher = 'uv run --project "/Users/héllo/😀 dir" capt-hook'
-    manager.atomic_write(packs_toml, manager.render_packs_toml([manager.BuiltinPack("general")], launcher))
-    assert tomllib.loads(packs_toml.read_text())["launcher"] == launcher  # tomllib parses it
-    assert manager.read_launcher(packs_toml) == launcher  # exact round-trip
-
-
-def test_read_launcher_rejects_non_string(packs_toml: Path) -> None:
-    packs_toml.write_text("launcher = 123\n")  # a non-string launcher would flow through as a foreign command
-    with pytest.raises(manager.PackError, match="launcher"):
-        manager.read_launcher(packs_toml)
 
 
 # --- fetch / cache -------------------------------------------------------------------

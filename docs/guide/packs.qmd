@@ -109,9 +109,7 @@ Hook commands are plugin-owned. The captain-hook plugin's `hooks.json` registers
 `uvx capt-hook run <Event>` for every event, and the string is identical on every
 machine, so a fresh clone gets working hooks with nothing installed beyond `uv`.
 Nothing a pack does changes that: `pack add`, `pack remove`, and `pack update`
-edit `.claude/hooks/packs.toml` and never touch the hook commands. A `launcher`
-key left in `packs.toml` from earlier releases is carried along by those commands
-but no longer affects which command runs.
+edit `.claude/hooks/packs.toml` and never touch the hook commands.
 
 ## How packs combine with your own hooks
 
