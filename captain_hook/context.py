@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import subprocess
 from dataclasses import dataclass
 from functools import cached_property
@@ -9,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal, overload
 
 from captain_hook.prompt import Prompt
 from captain_hook.session import SessionStore
+from captain_hook.util import reqenv
 from captain_hook.util.paths import resolve_project_dir
 
 if TYPE_CHECKING:
@@ -121,7 +121,7 @@ class HookContext:
                 args,
                 input=input,
                 timeout=timeout,
-                env=os.environ | (env or {}),
+                env=reqenv.env_map() | (env or {}),
                 cwd=resolve_project_dir(),
             )
         except (OSError, subprocess.SubprocessError):

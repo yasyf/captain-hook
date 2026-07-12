@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast, overload
 
+from captain_hook.util import reqenv
+
 
 def resolve_binary(name: str, *, extra_dirs: Sequence[Path] = ()) -> str | None:
     """Resolve an absolute, executable path for *name*, or None.
@@ -14,7 +16,7 @@ def resolve_binary(name: str, *, extra_dirs: Sequence[Path] = ()) -> str | None:
     Search order: ``$CLAUDE_PLUGIN_ROOT/bin/<name>``, then each *extra_dirs* entry's
     ``<name>``, then ``shutil.which(name)``.
     """
-    roots = [Path(root) / "bin" for root in (os.environ.get("CLAUDE_PLUGIN_ROOT"),) if root]
+    roots = [Path(root) / "bin" for root in (reqenv.getenv("CLAUDE_PLUGIN_ROOT"),) if root]
     return next(
         (
             str(candidate)

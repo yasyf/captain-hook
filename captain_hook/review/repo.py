@@ -8,6 +8,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import NewType
 
+from captain_hook.util import reqenv
+
 RepoKey = NewType("RepoKey", str)
 
 
@@ -35,4 +37,4 @@ def resolve_repo_key(cwd: str) -> RepoKey | None:
 
 def repo_key(start: Path | None = None) -> RepoKey | None:
     """Worktree-safe key for the repo at ``start`` (cwd default); ``None`` without a git repo or ``origin`` remote."""
-    return resolve_repo_key(str((start or Path.cwd()).resolve()))
+    return resolve_repo_key(str((start or reqenv.cwd()).resolve()))

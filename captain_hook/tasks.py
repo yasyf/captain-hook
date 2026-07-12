@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, overload
 
 from loguru import logger
+
+from captain_hook.util import reqenv
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -56,9 +57,9 @@ class Tasks(Sequence[Task]):
     @classmethod
     def resolve_root(cls) -> Path:
         """Resolve the root of Claude Code's native task store (``<config-dir>/tasks``)."""
-        if explicit := os.environ.get("CAPTAIN_HOOK_TASKS_DIR"):
+        if explicit := reqenv.getenv("CAPTAIN_HOOK_TASKS_DIR"):
             return Path(explicit)
-        config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+        config_dir = Path(reqenv.getenv("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
         return config_dir / "tasks"
 
     @classmethod

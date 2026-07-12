@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from functools import cache
 from pathlib import Path
@@ -11,13 +10,15 @@ from typing import TYPE_CHECKING
 from cc_transcript.decisions import Decision, DecisionLog
 from cc_transcript.tools import OtherCall, ToolInputError, parse_tool_call
 
+from captain_hook.util import reqenv
+
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
     from captain_hook.types import HookResult, RegisteredHook
 
 
 def decisions_db_path() -> Path | None:
-    return Path(p) if (p := os.environ.get("CAPT_HOOK_DECISIONS_DB")) else None
+    return Path(p) if (p := reqenv.getenv("CAPT_HOOK_DECISIONS_DB")) else None
 
 
 @cache
@@ -39,7 +40,7 @@ def record_decision(entry: RegisteredHook, evt: BaseHookEvent, result: HookResul
     """Append one ledger row for a fired hook. The single decision-write codepath; never raises into dispatch."""
     from captain_hook.types import Action
 
-    if os.environ.get("CAPT_HOOK_SPAWNED") or not (session_id := evt._raw.get("session_id")):
+    if reqenv.getenv("CAPT_HOOK_SPAWNED") or not (session_id := evt._raw.get("session_id")):
         return
     action, message = (
         ("note", result.note) if result.action is Action.rewrite else (result.action.value, result.message)

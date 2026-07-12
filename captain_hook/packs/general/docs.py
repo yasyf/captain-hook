@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 from captain_hook import (
     Allow,
     BaseHookEvent,
@@ -19,13 +17,14 @@ from captain_hook import (
     nudge,
 )
 from captain_hook.packs.general._lib import EditedSource
+from captain_hook.util import reqenv
 
 
 class Headless(CustomCondition):
     """True in a headless ``claude -p`` / SDK run (``CLAUDE_CODE_ENTRYPOINT`` in the ``sdk-*`` family)."""
 
     def check(self, evt: BaseHookEvent) -> bool:
-        return os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk")
+        return reqenv.getenv("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk")
 
 
 # Advisory reminder to consult the writing-docs skill (and run slop-cop) before

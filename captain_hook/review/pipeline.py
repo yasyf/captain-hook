@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, TypeGuard
 
 from captain_hook.review.repo import resolve_repo_key
 from captain_hook.settings import resolve_state_dir
+from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -146,10 +147,10 @@ def guard_and_spawn(raw: bytes) -> None:
     Args:
         raw: The hook's stdin bytes, holding the SessionEnd JSON payload.
     """
-    if os.environ.get(SPAWNED_ENV):
+    if reqenv.getenv(SPAWNED_ENV):
         return
     # headless `claude -p` / SDK run — not an interactive session
-    if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
+    if reqenv.getenv("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
         return
     if (payload := parse_payload(raw)) is None:
         return
@@ -172,7 +173,7 @@ def guard_and_spawn(raw: bytes) -> None:
                 stdout=log,
                 stderr=log,
                 start_new_session=True,
-                env=os.environ | {SPAWNED_ENV: "1"},
+                env=reqenv.env_map() | {SPAWNED_ENV: "1"},
             )
     except OSError:
         return
@@ -239,7 +240,7 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
             brain_argv(max_turns=settings.brain_max_turns, max_budget_usd=settings.brain_max_budget_usd),
             input=brain_prompt(transcript).encode(),
             cwd=repo_root,
-            env=os.environ | {SPAWNED_ENV: "1"},
+            env=reqenv.env_map() | {SPAWNED_ENV: "1"},
             stdout=log,
             stderr=log,
             check=False,

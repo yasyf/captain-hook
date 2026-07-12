@@ -22,6 +22,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from captain_hook.util import reqenv
+
 DIR_NAME = "capt-hook-once"
 DEFAULT_TTL = 10.0
 TTL_ENV = "CAPT_HOOK_ONCE_TTL"
@@ -50,7 +52,7 @@ def claim_once(event_name: str, payload: bytes, *, async_: bool) -> bool:
 
 
 def _ttl() -> float:
-    return float(os.environ.get(TTL_ENV, DEFAULT_TTL))
+    return float(reqenv.getenv(TTL_ENV, DEFAULT_TTL))
 
 
 def _sentinel_dir() -> Path | None:

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from captain_hook.state import FRAMEWORK_DIR, framework_frame
+from captain_hook.util import reqenv
 
 PLACEHOLDER = re.compile(r"(?<![{$])\{([A-Za-z_]\w*)\}(?!\})")
 
@@ -28,7 +29,7 @@ def caller_dir() -> Path:
     frame = inspect.currentframe()
     while frame and framework_frame(frame.f_code.co_filename):
         frame = frame.f_back
-    return Path(frame.f_code.co_filename).resolve().parent if frame else Path.cwd()
+    return Path(frame.f_code.co_filename).resolve().parent if frame else reqenv.cwd()
 
 
 @dataclass(frozen=True, kw_only=True)

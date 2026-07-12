@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 from cc_transcript.activity import native_user_classifier
+
+from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -19,4 +20,4 @@ def detect(
     transcript_path: str | None = None,
     events: Sequence[TranscriptEvent] | None = None,
 ) -> bool:
-    return "FACTORY_PROJECT_DIR" in os.environ
+    return reqenv.getenv("FACTORY_PROJECT_DIR") is not None

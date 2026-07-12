@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
+
+from captain_hook.util import reqenv
 
 
 def resolve_state_dir() -> Path:
-    return Path(os.environ.get("CAPTAIN_HOOK_STATE_DIR") or Path.home() / ".claude" / "state")
+    return Path(reqenv.getenv("CAPTAIN_HOOK_STATE_DIR") or Path.home() / ".claude" / "state")
 
 
 def resolve_project_dir() -> str | None:
-    return os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR")
+    return reqenv.getenv("CLAUDE_PROJECT_DIR") or reqenv.getenv("FACTORY_PROJECT_DIR")
 
 
 def resolve_cache_home() -> Path:
-    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    return Path(reqenv.getenv("XDG_CACHE_HOME") or Path.home() / ".cache")
 
 
 def resolve_cache_dir() -> Path:
@@ -21,4 +22,4 @@ def resolve_cache_dir() -> Path:
 
 
 def resolve_log_dir() -> Path:
-    return Path(os.environ.get("CAPTAIN_HOOK_LOG_DIR") or resolve_cache_dir() / "logs")
+    return Path(reqenv.getenv("CAPTAIN_HOOK_LOG_DIR") or resolve_cache_dir() / "logs")
