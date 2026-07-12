@@ -16,6 +16,7 @@ ref self-heals. The only loud failure is a pack that is both uncached and unreac
 
 from __future__ import annotations
 
+import contextlib
 import importlib.resources
 import json
 import os
@@ -45,6 +46,9 @@ LATEST_REF = "latest"
 # commit at most once per this window; within it the cached commit is used with no network.
 REFRESH_TTL_SECONDS = 24 * 60 * 60
 PACK_NAME_RE = re.compile(r"[a-z][a-z0-9-]*")
+# Cached commit dirs kept per pack besides the just-resolved one: a recency buffer
+# so a rollback or a still-loading prior session's pin survives one fresh fetch.
+KEEP_COMMITS = 2
 
 
 def pack_module_name(name: str) -> str:
@@ -348,6 +352,34 @@ def find_cached(name: str, sha: str) -> Path | None:
     return d if (d := packs_cache_root() / f"{name}@{sha}").is_dir() and (d / SHA_MARKER).is_file() else None
 
 
+def evict_stale_commits(name: str, keep: str) -> None:
+    """Best-effort GC of a pack's cached commit dirs after a fresh resolution.
+
+    Keeps the just-resolved ``keep`` sha plus the ``KEEP_COMMITS`` most-recent other
+    commit dirs by mtime, removing the rest. Never touches other packs or the dir just
+    resolved; ignores every error, since a missed eviction only costs disk.
+
+    No lock guards a sibling mid-read of an evicted dir. Recency is by mtime, which
+    load_cached bumps on every cache hit, so eviction only reaches a commit that stayed
+    idle past the KEEP_COMMITS buffer across intervening fetches — a >buffer-deep pin
+    left unused. Racing that window is possible but accepted as best-effort.
+    """
+    current = f"{name}@{keep}"
+    dated: list[tuple[float, Path]] = []
+    try:
+        candidates = list(packs_cache_root().glob(f"{name}@*"))
+    except OSError:
+        return
+    for d in candidates:
+        if d.name == current or not d.is_dir():
+            continue
+        with contextlib.suppress(OSError):
+            dated.append((d.stat().st_mtime, d))
+    dated.sort(reverse=True)
+    for _, d in dated[KEEP_COMMITS:]:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def fetch_commit(source: PackSource, sha: str) -> ResolvedPack:
     root = packs_cache_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -377,6 +409,7 @@ def fetch_commit(source: PackSource, sha: str) -> ResolvedPack:
             shutil.rmtree(final)
         os.replace(staging, final)
         (final / SHA_MARKER).write_text(sha)
+    evict_stale_commits(manifest.name, sha)
     return ResolvedPack(
         ExternalPack(name=manifest.name, source=source, commit=sha), manifest.hooks_dir(final), manifest
     )
@@ -427,6 +460,11 @@ def resolve_builtin(name: str) -> ResolvedPack:
 def load_cached(entry: ExternalPack, sha: str) -> ResolvedPack | None:
     if not (cached := find_cached(entry.name, sha)):
         return None
+    # A cache hit never re-fetches, so touch the dir to record continued use; otherwise
+    # its mtime only reflects fetch time and evict_stale_commits could reclaim a commit
+    # that is long-pinned and actively loaded.
+    with contextlib.suppress(OSError):
+        os.utime(cached, None)
     manifest = PackManifest.load(manifest_in(cached))
     return ResolvedPack(entry, manifest.hooks_dir(cached), manifest)
 

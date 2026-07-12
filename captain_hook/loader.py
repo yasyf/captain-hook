@@ -128,9 +128,10 @@ def register_nlp_provisioning() -> None:
 def register_pr_announcements() -> None:
     """Register the shared sync SessionStart hook that surfaces changed PR outcomes to the user.
 
-    Called once per discovery pass when the repo has the reviewer wired, so both event
-    dispatch and settings generation see it. The detached reviewer opens and resolves
-    hook PRs on its own; this hook is how a session start tells the user what happened.
+    Called once per discovery pass, unconditionally: every gate (spawned run, no repo, no
+    database, repo not watched) lives in :func:`~captain_hook.review.announce.collect_announcements`.
+    The detached reviewer opens and resolves hook PRs on its own; this hook is how a session
+    start tells the user what happened.
     """
 
     @on(Event.SessionStart, max_fires=1)

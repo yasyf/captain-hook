@@ -33,7 +33,6 @@ if TYPE_CHECKING:
 
 REVIEW_RUN_COMMAND = "capt-hook review run"
 STATUS_CHOICES = ("watching", "pr_open", "stale", "accepted", "rejected")
-REVIEW_EVENTS = ("SessionEnd", "SessionStart")
 
 
 def current_repo(root: Path) -> RepoKey:
@@ -57,40 +56,34 @@ def group_commands(group: dict[str, Any]) -> list[str]:
     return [str(entry.get("command") or "") for entry in entries]
 
 
-def review_wired(hooks: dict[str, Any], event: str) -> bool:
-    groups: list[dict[str, Any]] = hooks.get(event) or []
+def review_wired(hooks: dict[str, Any]) -> bool:
+    groups: list[dict[str, Any]] = hooks.get("SessionEnd") or []
     return any(REVIEW_RUN_COMMAND in command for group in groups for command in group_commands(group))
 
 
-def ensure_review_wiring(settings_path: Path, prefix: str) -> bool:
-    """Wires ``<prefix> review run`` into every :data:`REVIEW_EVENTS` group, per event, idempotently.
+def ensure_review_wiring(settings_path: Path) -> bool:
+    """Wires ``uvx capt-hook review run`` into the ``SessionEnd`` group, idempotently.
 
-    SessionEnd runs the reviewer when a session ends; SessionStart runs it again
-    on the next session start, so an overnight-still-open session is swept the
-    moment work resumes. The command renders through ``prefix`` — the repo's active
-    launcher — so it stays canonical under a non-``uvx`` launcher instead of being
-    treated as a stale group on the next ``register-hooks``. Each event is wired
-    independently and skipped when either this settings file or its sibling already
-    carries the command, so an already-wired or sibling-deferred event is left alone.
+    The plugin's ``hooks.json`` registers the reviewer for repos that enable the plugin;
+    this keeps writing the settings entry for a non-plugin repo. Skipped when either this
+    settings file or its sibling already carries the command.
 
     Returns:
-        Whether any event was newly wired.
+        Whether the reviewer was newly wired.
     """
-    from captain_hook.cli import review_group, sibling_settings, write_settings
+    from captain_hook.cli import sibling_settings, write_settings
 
     existing: dict[str, Any] = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     sibling = sibling_settings(settings_path)
     sibling_hooks: dict[str, Any] = (json.loads(sibling.read_text()).get("hooks") or {}) if sibling.exists() else {}
     hooks: dict[str, Any] = existing.get("hooks") or {}
-    group = review_group(prefix)
-    additions = {
-        event: [*(hooks.get(event) or []), group]
-        for event in REVIEW_EVENTS
-        if not (review_wired(hooks, event) or review_wired(sibling_hooks, event))
-    }
-    if not additions:
+    if review_wired(hooks) or review_wired(sibling_hooks):
         return False
-    write_settings(settings_path, existing | {"hooks": hooks | additions})
+    group = {"hooks": [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}", "async": True}]}
+    write_settings(
+        settings_path,
+        existing | {"hooks": hooks | {"SessionEnd": [*(hooks.get("SessionEnd") or []), group]}},
+    )
     return True
 
 
@@ -153,15 +146,14 @@ def spawn(transcript: Path, cwd: str | None) -> None:
 @review.command()
 @click.pass_obj
 def enable(state: CliState) -> None:
-    """Watch the current repo, register the captain-hook plugin, and wire the reviewer hooks."""
-    from captain_hook.cli import command_prefix, regenerate_settings, register_marketplace
+    """Watch the current repo, register the captain-hook plugin, and wire the SessionEnd hook."""
+    from captain_hook.cli import register_marketplace
 
     repo = current_repo(state.root)
     watch_repo(repo)
     register_marketplace(state.root)
-    wired = ensure_review_wiring(state.root / ".claude" / "settings.json", command_prefix(state.root))
-    regenerate_settings(state)
-    click.echo(f"watching {repo}" + (" (reviewer hooks wired into .claude/settings.json)" if wired else ""))
+    wired = ensure_review_wiring(state.root / ".claude" / "settings.json")
+    click.echo(f"watching {repo}" + (" (SessionEnd hook wired into .claude/settings.json)" if wired else ""))
 
 
 @review.command()

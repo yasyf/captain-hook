@@ -68,7 +68,7 @@ user feedback next pass.
   Step 7 — never between steps.
 - **Stay inside the workflow.** Never edit the user's checkout or any
   `.claude/settings*.json` (settings edits stall headless runs on a permission
-  prompt you cannot answer), never re-wire hooks, and never chase problems you
+  prompt you cannot answer), never touch hook wiring, and never chase problems you
   notice along the way — a failed check means *log the skip and move on to the
   final report*, not improvise a fix.
 

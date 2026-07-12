@@ -72,10 +72,12 @@ async def pending_announcements(store: ReviewStore, repo: RepoKey) -> list[str]:
 def collect_announcements(root: Path | None) -> str | None:
     """Bridges :func:`pending_announcements` for the sync SessionStart hook: guards, then joins the lines.
 
-    Announces nothing — returning ``None`` — inside a spawned reviewer run
-    (``CAPT_HOOK_SPAWNED``, else the brain would consume the user's announcements),
-    outside a git repo with an ``origin`` remote, or when no review database exists
-    yet, so a session start never opens or creates a store in an unrelated repo.
+    Registered unconditionally at discovery, so every gate lives here. Announces nothing
+    — returning ``None`` — inside a spawned reviewer run (``CAPT_HOOK_SPAWNED``, else the
+    brain would consume the user's announcements), outside a git repo with an ``origin``
+    remote, when no review database exists yet, or when the repo is not being watched — so
+    a session start never opens or creates a store in an unrelated repo and stays silent in
+    a repo the reviewer isn't tracking.
 
     The announcer's ``mark_announced`` write runs with ``busy_timeout = 0``, so a
     detached reviewer holding a write lock fails it immediately (``SQLITE_BUSY``)
@@ -104,6 +106,8 @@ def collect_announcements(root: Path | None) -> str | None:
     async def go() -> list[str]:
         async with await ReviewStore.open(db_path) as store:
             await store.store.conn.execute("PRAGMA busy_timeout = 0")
+            if not await store.watching(repo):
+                return []
             return await pending_announcements(store, repo)
 
     try:

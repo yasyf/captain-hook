@@ -9,7 +9,7 @@ from cc_transcript.judge.similar import KeyOverlap
 from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE
 from click.testing import CliRunner
 
-from captain_hook.cli import cli, generate_settings
+from captain_hook.cli import cli
 from captain_hook.review.cli import REVIEW_RUN_COMMAND, STATUS_CHOICES
 from captain_hook.review.fix import HOOK_COMPLAINT
 from captain_hook.review.repo import RepoKey
@@ -92,21 +92,6 @@ def scanned_repo(tmp_path: Path, git_repo: Path) -> Path:
     return git_repo
 
 
-class TestSettingsTemplate:
-    def test_generate_settings_wires_session_end_to_review_run(self) -> None:
-        assert generate_settings()["hooks"]["SessionEnd"] == [
-            {"hooks": [{"type": "command", "command": "uvx capt-hook review run", "async": True}]}
-        ]
-
-    def test_review_run_command_honors_from_source(self) -> None:
-        [command] = [
-            entry["command"]
-            for group in generate_settings(prefix="uvx --from /local/captain-hook capt-hook")["hooks"]["SessionEnd"]
-            for entry in group["hooks"]
-        ]
-        assert command == "uvx --from /local/captain-hook capt-hook review run"
-
-
 class TestGroupSurface:
     def test_spawn_is_hidden_and_public_commands_listed(self, tmp_path: Path) -> None:
         result = CliRunner().invoke(cli, ["review", "--help"])
@@ -132,7 +117,7 @@ class TestGroupSurface:
 
 
 class TestEnableDisable:
-    def test_enable_watches_and_wires_session_end_and_start(self, git_repo: Path) -> None:
+    def test_enable_watches_and_wires_session_end(self, git_repo: Path) -> None:
         result = invoke("enable", root=git_repo)
         assert result.exit_code == 0, result.output
         assert f"watching {GIT_REPO_KEY}" in result.output
@@ -142,11 +127,10 @@ class TestEnableDisable:
         def commands(event: str) -> list[str]:
             return [entry["command"] for group in data["hooks"][event] for entry in group["hooks"]]
 
-        # SessionEnd runs the async reviewer; SessionStart additionally wires the synchronous
-        # `run SessionStart` dispatcher, without which the PR announcer never fires.
+        # enable writes the plugin's SessionEnd reviewer entry for a non-plugin repo; the
+        # plugin's hooks.json owns SessionStart registration (see test_plugin_hooks.py).
         assert commands("SessionEnd") == [f"uvx {REVIEW_RUN_COMMAND}"]
-        assert f"uvx {REVIEW_RUN_COMMAND}" in commands("SessionStart")
-        assert "uvx capt-hook run SessionStart" in commands("SessionStart")
+        assert "SessionStart" not in data["hooks"]
 
     def test_enable_registers_plugin(self, git_repo: Path) -> None:
         assert invoke("enable", root=git_repo).exit_code == 0
@@ -173,7 +157,7 @@ class TestEnableDisable:
         ]
         assert len(review_groups) == 1
 
-    def test_enable_defers_session_end_to_local_settings_but_wires_session_start(self, git_repo: Path) -> None:
+    def test_enable_defers_session_end_to_local_settings(self, git_repo: Path) -> None:
         claude = git_repo / ".claude"
         claude.mkdir(parents=True)
         (claude / "settings.local.json").write_text(
@@ -192,7 +176,6 @@ class TestEnableDisable:
             )
 
         assert not wired("SessionEnd")
-        assert wired("SessionStart")
 
     def test_disable_unwatches(self, git_repo: Path) -> None:
         assert invoke("enable", root=git_repo).exit_code == 0
@@ -220,16 +203,6 @@ class TestInitEnablesReviewer:
         assert f"watching {GIT_REPO_KEY}" in result.stdout
         settings = json.loads((git_repo / ".claude" / "settings.json").read_text())
         assert settings["enabledPlugins"] == {"captain-hook@captain-hook": True}
-
-    def test_init_wires_synchronous_session_start_dispatcher(self, git_repo: Path) -> None:
-        # Finding 11 (init path): default init on a git repo must install the reviewer marker before
-        # discovery so settings.json emits the synchronous `run SessionStart` the announcer fires through.
-        result = run_cli("init", root_dir=str(git_repo))
-        assert result.returncode == 0, result.stderr
-        settings = json.loads((git_repo / ".claude" / "settings.json").read_text())
-        commands = [entry["command"] for group in settings["hooks"]["SessionStart"] for entry in group["hooks"]]
-        assert "uvx capt-hook run SessionStart" in commands
-        assert f"uvx {REVIEW_RUN_COMMAND}" in commands
 
     def test_init_no_review_does_not_watch(self, git_repo: Path) -> None:
         result = run_cli("init", "--no-review", root_dir=str(git_repo))

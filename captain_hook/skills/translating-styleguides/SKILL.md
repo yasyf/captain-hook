@@ -165,9 +165,8 @@ Run: `uvx capt-hook test` (add `--json` when parsing). Iterate until green.
 and every `Input` runs through the *whole* styleguide. A failing test usually means the
 input trips a sibling rule — shrink it to a single construct that trips exactly one rule.
 
-If `style_llm.py` added hooks on new events (e.g. a `Stop`-targeted `llm_nudge`), run
-`uvx capt-hook register-hooks` (it merges non-destructively into `.claude/settings.json`
-and writes it).
+New events need no wiring: the captain-hook plugin registers every event, so once the
+tests are green the new rules are live from the next session.
 
 ### 8. Enforcement report
 

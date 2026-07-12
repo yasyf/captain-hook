@@ -1,0 +1,90 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "uvx capt-hook run PreToolUse" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "uvx capt-hook run PostToolUse" }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          { "type": "command", "command": "uvx capt-hook run PostToolUseFailure" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "uvx capt-hook run UserPromptSubmit" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "uvx capt-hook run Stop" }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "uvx capt-hook run SubagentStop" }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "uvx capt-hook run SubagentStart" }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          { "type": "command", "command": "uvx capt-hook run PreCompact" }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          { "type": "command", "command": "uvx capt-hook run Notification" }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          { "type": "command", "command": "uvx capt-hook run PermissionRequest" }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "uvx capt-hook run SessionStart" },
+          { "type": "command", "command": "uvx capt-hook run SessionStart --async", "async": true },
+          { "type": "command", "command": "uvx capt-hook review run", "async": true }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "uvx capt-hook review run", "async": true }
+        ]
+      }
+    ]
+  }
+}

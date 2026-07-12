@@ -34,15 +34,15 @@ Add one by name:
 uvx capt-hook pack add general
 ```
 
-This records the pack in `.claude/hooks/packs.toml` and wires the events its hooks
-subscribe to into `.claude/settings.json`:
+This records the pack in `.claude/hooks/packs.toml`:
 
 ```toml
 [packs.general]
 ```
 
-The pack's hooks now fire on the next event. Verify them with the inline tests
-every hook carries:
+That entry is the whole change — `pack add` edits `packs.toml` and nothing else,
+since the captain-hook plugin already registers every event. The pack's hooks fire
+on the next event. Verify them with the inline tests every hook carries:
 
 ```bash
 uvx capt-hook test
@@ -64,8 +64,8 @@ uvx capt-hook pack list
   fixes                    builtin  -                    v0.1.0    1 hooks
 ```
 
-Remove a pack by name. The entry leaves `packs.toml` and the events it added are
-unwired, but its cache stays on disk for other projects:
+Remove a pack by name. The entry leaves `packs.toml`, but its cache stays on disk
+for other projects:
 
 ```bash
 uvx capt-hook pack remove general
@@ -103,74 +103,15 @@ uvx capt-hook pack update acme-guards
 
 Run `pack update` with no name to refresh every external pack.
 
-## The default launcher
+## The hook command
 
-Hook commands default to the `uvx capt-hook` prefix. The string is identical
-on every machine, so the committed `.claude/settings.json` works on a fresh
-clone as-is, with nothing installed beyond `uv`. The tradeoff is `uvx`'s
-per-event environment resolution (~340ms per hook fire). A Python repo that
-declares `capt-hook` as a dependency can skip that tax by pointing the
-launcher at its own venv:
-
-```toml
-launcher = "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook"
-```
-
-That is what this repository dogfoods. The path is project-relative, so it
-stays collaborator-portable — anyone who clones and runs `uv sync` gets
-working hooks — at the cost of requiring that sync before hooks fire.
-
-Whatever launcher you pick, never commit a machine-local absolute path such
-as `~/.local/bin/capt-hook`. Claude Code merges hooks from `settings.json`
-and `settings.local.json` by union and deduplicates only byte-identical
-command strings, so a machine-specific command either breaks every other
-clone (committed) or runs alongside the committed one and fires twice (kept
-local).
-
-## Set a custom launcher
-
-When `uvx capt-hook` is the wrong thing to run — a dev tree hacking on
-capt-hook itself, or a monorepo whose Python project lives in a subdirectory —
-set the top-level `launcher` key in `packs.toml` to the command prefix that
-replaces it. The value you write is exactly what runs:
-
-```toml
-launcher = "env -u UV_EXCLUDE_NEWER uv run --project \"$CLAUDE_PROJECT_DIR\" capt-hook"
-
-[packs.general]
-```
-
-A capt-hook dev tree uses that value: every hook run imports the checkout
-instead of the published wheel. From then on, every command that
-`register-hooks`, `pack add`, `pack remove`, or `pack update` generates starts
-with the prefix; the suffixes — `run <Event>`, `--async`, `review run` — stay
-generator-owned, so the launcher never tracks which events are wired or how.
-In a monorepo, point the prefix at the subproject that declares `capt-hook`
-as a dependency:
-
-```toml
-launcher = "uv run --project \"$CLAUDE_PROJECT_DIR/services/api\" capt-hook"
-```
-
-`register-hooks --from <source>` outranks the launcher: that invocation
-renders `uvx --from <source> capt-hook` regardless of what `packs.toml` says.
-
-Any capt-hook command the generator would not render itself — hand-edited
-flags, a different prefix — is classified *custom* and preserved verbatim on
-every merge. A custom group owns its event: the generator writes no sibling
-group for it, so nothing fires twice, and it survives deferral. This cuts both
-ways when you hand-set a launcher on a repo with existing wiring: the old
-canonical entries no longer match what the generator renders, so the merge
-preserves them as custom instead of rewriting them. Delete the stale entries
-from `.claude/settings.json` by hand once, then re-run `register-hooks`; the
-freed events regenerate with the launcher prefix.
-
-::: {.callout-warning title="A launcher forfeits plugin dedup"}
-Claude Code deduplicates hook commands by exact string match. A launcher
-changes the project's command strings, so they can no longer collapse with a
-plugin's `uvx capt-hook run <Event>` wiring — both run.
-[Ship a pack in a Claude plugin](plugin-packs.qmd) covers the tradeoff.
-:::
+Hook commands are plugin-owned. The captain-hook plugin's `hooks.json` registers
+`uvx capt-hook run <Event>` for every event, and the string is identical on every
+machine, so a fresh clone gets working hooks with nothing installed beyond `uv`.
+Nothing a pack does changes that: `pack add`, `pack remove`, and `pack update`
+edit `.claude/hooks/packs.toml` and never touch the hook commands. A `launcher`
+key left in `packs.toml` from earlier releases is carried along by those commands
+but no longer affects which command runs.
 
 ## How packs combine with your own hooks
 

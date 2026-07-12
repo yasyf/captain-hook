@@ -114,9 +114,6 @@ class State:
     settings: HooksSettings | None = None
     classifier: UserClassifier | None = None
     load_errors: list[LoadError] = field(default_factory=list)
-    # Events subscribed only by session-attached packs — excluded from settings-drift
-    # warnings, since a plugin wires them in its own hooks.json, not the project's settings.
-    attach_only_events: set[str] = field(default_factory=set)
 
 
 _state = State()
@@ -126,7 +123,6 @@ def reset() -> None:
     _state.hooks.clear()
     _state.gitignore_patterns.clear()
     _state.load_errors.clear()
-    _state.attach_only_events.clear()
     _state.settings = None
     _state.classifier = None
 

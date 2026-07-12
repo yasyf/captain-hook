@@ -15,14 +15,15 @@ Every command runs through `uvx`, so nothing else is installed.
 uvx capt-hook init
 ```
 
-`init` creates `.claude/hooks/`, wires Claude Code's settings, installs the
-[helper skills](skills.qmd), and arms the [session reviewer](../guide/session-reviewer.qmd).
-You're already live, with no separate wiring step. To drive setup from Claude instead, install
-the plugin and ask it to "set up captain hook" — see [Agent Skills](skills.qmd).
+`init` creates `.claude/hooks/`, registers the captain-hook plugin — which registers every
+hook event by itself — installs the [helper skills](skills.qmd), and arms the
+[session reviewer](../guide/session-reviewer.qmd). You're already live, with no separate
+wiring step. To drive setup from Claude instead, install the plugin and ask it to "set up
+captain hook" — see [Agent Skills](skills.qmd).
 
 ::: {.callout-tip title="Checkpoint"}
-`init` prints `Scaffolded .claude/hooks/example.py + .claude/settings.json.` and lists the five
-events it wired (`PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`, `SessionEnd`).
+`init` prints the scaffolded paths (`.claude/hooks/example.py`, `.claude/settings.json`),
+the plugin registration line, the session-reviewer line, and a `Next:` list of follow-ups.
 :::
 
 ## 2. Read your first hook
@@ -89,7 +90,7 @@ stubbed verdict, so the whole suite stays deterministic.
 
 ## Next steps
 
-- [Project structure](project-structure.qmd) shows how `.claude/settings.json` wires hooks into Claude Code
+- [Project structure](project-structure.qmd) shows how the captain-hook plugin wires your hooks into Claude Code
 - [Write a hook](../guide/primitives.qmd) walks through the full primitive palette
 - [Filter with conditions](../guide/conditions.qmd) matches tools, files, commands, and history
 - [Test hooks in CI](../guide/testing.qmd) runs `uvx capt-hook test --json` on every PR

@@ -142,9 +142,11 @@ class TestCollectAnnouncements:
         monkeypatch.setenv("HOOKS_REVIEW_DB_PATH", str(db))
         return db
 
-    async def _seed(self, db: Path) -> None:
+    async def _seed(self, db: Path, *, watching: bool = True) -> None:
         async with await ReviewStore.open(db) as store:
             await create_pr_open(store)
+            if watching:
+                await store.enable(REPO)
 
     def test_returns_line_for_the_session_repo(self, review_db: Path, git_repo: Path) -> None:
         import asyncio
@@ -156,6 +158,12 @@ class TestCollectAnnouncements:
 
     def test_silent_when_no_review_db(self, review_db: Path, git_repo: Path) -> None:
         assert not review_db.exists()
+        assert collect_announcements(git_repo) is None
+
+    def test_silent_when_repo_not_watching(self, review_db: Path, git_repo: Path) -> None:
+        import asyncio
+
+        asyncio.run(self._seed(review_db, watching=False))
         assert collect_announcements(git_repo) is None
 
     def test_silent_outside_a_git_repo(self, review_db: Path, tmp_path: Path) -> None:
@@ -213,6 +221,7 @@ class TestSessionStartDispatch:
         async def seed() -> None:
             async with await ReviewStore.open(db) as store:
                 await create_pr_open(store)
+                await store.enable(REPO)
 
         asyncio.run(seed())
 
@@ -237,69 +246,15 @@ class TestSessionStartDispatch:
         assert dispatch(Event.SessionStart, evt, session_dir=tmp_path / "session") is None
 
 
-class TestReviewerWired:
-    @staticmethod
-    def write(root: Path, hooks: dict[str, object]) -> None:
-        import json
-
-        (claude := root / ".claude").mkdir(parents=True, exist_ok=True)
-        (claude / "settings.json").write_text(json.dumps({"hooks": hooks}))
-
-    def test_true_when_review_run_wired_on_session_start(self, tmp_path: Path) -> None:
-        from captain_hook.cli import reviewer_wired
-
-        self.write(
-            tmp_path,
-            {"SessionStart": [{"hooks": [{"type": "command", "command": "uvx capt-hook review run", "async": True}]}]},
-        )
-        assert reviewer_wired(tmp_path) is True
-
-    def test_false_when_review_run_only_on_session_end(self, tmp_path: Path) -> None:
-        from captain_hook.cli import reviewer_wired
-
-        self.write(
-            tmp_path,
-            {"SessionEnd": [{"hooks": [{"type": "command", "command": "uvx capt-hook review run", "async": True}]}]},
-        )
-        assert reviewer_wired(tmp_path) is False
-
-    def test_false_without_settings(self, tmp_path: Path) -> None:
-        from captain_hook.cli import reviewer_wired
-
-        assert reviewer_wired(tmp_path) is False
-
-
 class TestDiscoverRegistration:
-    @staticmethod
-    def make_repo(tmp_path: Path, *, review_wired: bool) -> Path:
-        import json
+    def test_discover_registers_announcer_unconditionally(self, tmp_path: Path) -> None:
+        # A discovery pass over a repo with no settings still registers the announcer;
+        # collect_announcements owns every gate at fire time.
+        from captain_hook.app import _state
+        from captain_hook.cli import CliState
+        from captain_hook.types import Event
 
         (hooks := tmp_path / ".claude" / "hooks").mkdir(parents=True)
         (hooks / "__init__.py").write_text("")
-        if review_wired:
-            (tmp_path / ".claude" / "settings.json").write_text(
-                json.dumps(
-                    {
-                        "hooks": {
-                            "SessionStart": [
-                                {"hooks": [{"type": "command", "command": "uvx capt-hook review run", "async": True}]}
-                            ]
-                        }
-                    }
-                )
-            )
-        return hooks
-
-    def test_discover_registers_sync_session_start_when_reviewer_wired(self, tmp_path: Path) -> None:
-        from captain_hook.cli import CliState, subscribed_modes
-
-        hooks = self.make_repo(tmp_path, review_wired=True)
         CliState(root=tmp_path, hooks=str(hooks)).discover()
-        assert ("SessionStart", False) in subscribed_modes()
-
-    def test_discover_skips_announcer_without_reviewer(self, tmp_path: Path) -> None:
-        from captain_hook.cli import CliState, subscribed_modes
-
-        hooks = self.make_repo(tmp_path, review_wired=False)
-        CliState(root=tmp_path, hooks=str(hooks)).discover()
-        assert ("SessionStart", False) not in subscribed_modes()
+        assert any(h.name == "announce_pr_status" and Event.SessionStart in h.spec.events for h in _state.hooks)

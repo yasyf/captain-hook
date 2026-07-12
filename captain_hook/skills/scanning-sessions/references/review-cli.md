@@ -27,11 +27,11 @@ one strong recurrence re-qualifies it. Illegal moves fail with an error.
 
 ### `review run`
 
-The wired SessionEnd and SessionStart hook entry, registered async (fire-and-forget).
-Reads the hook payload from stdin, guards, and detaches the reviewer child; always exits
-0, and skips non-interactive `claude -p` session ends. Wiring it to SessionStart as well
-means the next session start in a repo sweeps any still-open sibling session left running
-overnight. Claude Code calls this — you never do.
+The SessionEnd and SessionStart hook the captain-hook plugin registers, async
+(fire-and-forget). Reads the hook payload from stdin, guards, and detaches the reviewer
+child; always exits 0, and skips non-interactive `claude -p` session ends. The plugin
+wires it to SessionStart as well, so the next session start in a repo sweeps any
+still-open sibling session left running overnight. Claude Code calls this — you never do.
 
 ### `review spawn --transcript <path> [--cwd <dir>]` (hidden)
 
@@ -41,9 +41,9 @@ defaults to the process cwd. This is what spawned you; do not recurse into it.
 
 ### `review enable` / `review disable`
 
-`enable` marks the current repo watched and wires the reviewer (`capt-hook review run`)
-into both the SessionEnd and SessionStart hooks in `.claude/settings.json` (idempotent,
-per event, deferring to a sibling `settings.local.json` that already carries either).
+`enable` marks the current repo watched and writes the plugin's exact SessionEnd entry
+into the committed `.claude/settings.json` (idempotent; Claude Code dedups the
+byte-identical strings, so the hook runs once).
 `disable` stops watching; candidates stay recorded but never become eligible.
 
 ### `review scan [--transcript <file>]... [--dir <dir>]...`

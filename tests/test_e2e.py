@@ -266,64 +266,6 @@ class TestEventDispatchRoundTrip:
         assert output["reason"] == "incomplete"
 
 
-class TestRegisterHooks:
-    def test_e2e_050_register_hooks_valid_json(self, tmp_path: Path) -> None:
-        result = run_cli(
-            "register-hooks",
-            "--dry-run",
-            hooks_dir=str(FIXTURES_DIR),
-            root_dir=str(tmp_path),
-        )
-        assert result.returncode == 0, f"stderr: {result.stderr}"
-        data = json.loads(result.stdout)
-        assert "hooks" in data
-        assert isinstance(data["hooks"], dict)
-
-    def test_e2e_051_register_hooks_has_expected_events(self, tmp_path: Path) -> None:
-        result = run_cli(
-            "register-hooks",
-            "--dry-run",
-            hooks_dir=str(FIXTURES_DIR),
-            root_dir=str(tmp_path),
-        )
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
-        events = set(data["hooks"].keys())
-        assert "PreToolUse" in events
-        assert "Stop" in events
-
-    def test_e2e_052_register_hooks_commands_have_uvx(self, tmp_path: Path) -> None:
-        result = run_cli(
-            "register-hooks",
-            "--hooks-dir",
-            "custom/hooks",
-            "--dry-run",
-            hooks_dir=str(FIXTURES_DIR),
-            root_dir=str(tmp_path),
-        )
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
-        raw = json.dumps(data)
-        assert "uvx capt-hook" in raw
-        assert "$CLAUDE_PROJECT_DIR/custom/hooks" in raw
-
-    def test_e2e_053_register_hooks_with_from_source(self, tmp_path: Path) -> None:
-        result = run_cli(
-            "register-hooks",
-            "--hooks-dir",
-            "custom/hooks",
-            "--from",
-            "./local/path",
-            "--dry-run",
-            hooks_dir=str(FIXTURES_DIR),
-            root_dir=str(tmp_path),
-        )
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
-        raw = json.dumps(data)
-        assert "uvx --from ./local/path capt-hook" in raw
-
-
 class TestStateModelSerialization:
     def test_e2e_060_hook_state_round_trip(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
