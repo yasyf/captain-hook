@@ -15,6 +15,7 @@ from tests.review_helpers import (
     correction_entries,
     install_fake_embedder,
     install_judge,
+    install_resolved_model,
     install_triage,
     user_text,
     write_transcript,
@@ -45,6 +46,7 @@ class TestTriagePass:
         await scan_correction(store, settings, tmp_path)
         install_triage(monkeypatch, junk_when=lambda prompt: CORRECTION in prompt)
         judge_calls = install_judge(monkeypatch)
+        install_resolved_model(monkeypatch)
 
         report = await triage_pass(store, settings=settings)
         assert report == TriageReport(triaged=1, junk=1, rejected=1)
@@ -62,6 +64,7 @@ class TestTriagePass:
         install_triage(monkeypatch)
         install_fake_embedder(monkeypatch)
         judge_calls = install_judge(monkeypatch, category="durable_style_rule")
+        install_resolved_model(monkeypatch)
 
         report = await triage_pass(store, settings=settings)
         assert report == TriageReport(triaged=1, junk=0, rejected=0)
@@ -102,6 +105,7 @@ class TestTriagePass:
 
         install_fake_embedder(monkeypatch)
         install_judge(monkeypatch, category="durable_style_rule")
+        install_resolved_model(monkeypatch)
         assert (await judge_pass(store, settings=settings)).judged == 1
 
         install_triage(monkeypatch, junk_when=lambda prompt: True)

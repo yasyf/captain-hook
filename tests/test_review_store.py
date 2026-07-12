@@ -29,7 +29,7 @@ from captain_hook.review.store import (
     ReviewStore,
     prompt_version,
 )
-from tests.review_helpers import Verdict
+from tests.review_helpers import Verdict, install_resolved_model
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1605,10 +1605,11 @@ class TestJunkTriage:
         assert (await candidate_row(store, candidate_id))["status"] == CandidateStatus.REJECTED
 
     async def test_judge_pass_revives_a_raced_junk_rejection(
-        self, store: ReviewStore, settings: ReviewSettings
+        self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # The wiring: judge_pass runs the revive before its closing regroup, so a raced junk
         # rejection carrying a persisted acceptance is back to watching by the pass's end.
+        install_resolved_model(monkeypatch)
         candidate_id = await create_candidate(store, rule="canonical-slug")
         await seed(store, candidate_id, "e0", session="s1", occurred="2026-06-01T10:00:00+00:00")
         await store.record_triage(DedupKey("e0"), junk=True)

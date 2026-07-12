@@ -67,6 +67,7 @@ from tests.review_helpers import (
     default_slug_for,
     install_fake_embedder,
     install_judge,
+    install_resolved_model,
     parse,
     requires_llm_backend,
     user_text,
@@ -886,6 +887,7 @@ class TestReviewSession:
     ) -> None:
         settings = ReviewSettings(db_path=tmp_path / "review.db")
         install_brain(monkeypatch)
+        install_resolved_model(monkeypatch)
         url = "https://github.com/yasyf/scratch/pull/1"
         async with await ReviewStore.open(settings.db_path) as store:
             await store.enable(GIT_REPO_KEY)
@@ -911,6 +913,7 @@ class TestReviewSession:
         install_judge(monkeypatch)
         install_fake_embedder(monkeypatch)
         install_brain(monkeypatch)
+        install_resolved_model(monkeypatch)
         proj = tmp_path / "proj"
         ended = write_transcript(proj / "ended.jsonl", correction_entries(session="ended", cwd=str(git_repo)))
         write_transcript(
@@ -932,6 +935,7 @@ class TestReviewSession:
         self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         settings = ReviewSettings(db_path=tmp_path / "review.db")
+        install_resolved_model(monkeypatch)
 
         def fake_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) -> BrainOutcome:
             return BrainOutcome(exit_code=3, seconds=42.5, log_path=review_log_path())
@@ -949,6 +953,7 @@ class TestReviewSession:
         self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         settings = ReviewSettings(db_path=tmp_path / "review.db")
+        install_resolved_model(monkeypatch)
 
         async def move() -> None:
             async with await ReviewStore.open(settings.db_path) as store:
@@ -979,6 +984,7 @@ class TestReviewSession:
     ) -> None:
         settings = ReviewSettings(db_path=tmp_path / "review.db")
         install_brain(monkeypatch)
+        install_resolved_model(monkeypatch)
         async with await ReviewStore.open(settings.db_path) as store:
             await store.enable(GIT_REPO_KEY)
             candidate_id = await seed_eligible_fix(store, repo=GIT_REPO_KEY)
@@ -993,6 +999,7 @@ class TestReviewSession:
         # A SessionStart and a SessionEnd pass on one repo can run at once; the global brain lock
         # lets exactly one spawn the brain while the other sees the lock held and skips it.
         settings = ReviewSettings(db_path=tmp_path / "review.db")
+        install_resolved_model(monkeypatch)
         calls: list[Path] = []
         brain_entered = threading.Event()
         release = threading.Event()
@@ -1040,6 +1047,7 @@ class TestReviewSession:
         second_key = RepoKey("github.com/yasyf/other")
 
         settings = ReviewSettings(db_path=tmp_path / "review.db")
+        install_resolved_model(monkeypatch)
         calls: list[Path] = []
         brain_entered = threading.Event()
         release = threading.Event()
