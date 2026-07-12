@@ -37,10 +37,11 @@ turning the plugin on.
 
 The event wiring lives in the plugin itself. Its `hooks.json` registers all twelve
 lifecycle events: `uvx capt-hook run <Event>` for the synchronous ones, an async
-`uvx capt-hook run SessionStart --async`, and an async `uvx capt-hook review run` on
-`SessionEnd` for the [session reviewer](../guide/session-reviewer.qmd). Every event is
-registered up front, whether or not a hook listens on it yet; dispatch runs the hooks
-that match and stays silent otherwise.
+`uvx capt-hook run SessionStart --async`, and two async commands on `SessionEnd`:
+`uvx capt-hook review run` for the [session reviewer](../guide/session-reviewer.qmd)
+and `uvx capt-hook run SessionEnd --async` for async `SessionEnd` handlers. Every
+event is registered up front, whether or not a hook listens on it yet; dispatch runs the
+hooks that match and stays silent otherwise.
 
 ## How a hook runs
 

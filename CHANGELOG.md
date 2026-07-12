@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [9.1.0] - 2026-07-12
 
 ### Fixed
 - **A sync and an async dispatch of one event no longer race for a single once-token.**
@@ -1505,7 +1505,7 @@ compatibility shims.
 - Claude Code event types, condition types, transcript query API, workflows,
   session/workflow state, inline test harness, and the `captain-hook` CLI.
 
-[Unreleased]: https://github.com/yasyf/captain-hook/compare/v9.0.0...HEAD
+[Unreleased]: https://github.com/yasyf/captain-hook/compare/v9.1.0...HEAD
 [0.9.1]: https://github.com/yasyf/captain-hook/releases/tag/v0.9.1
 [0.9.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.9.0
 [0.8.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.8.0

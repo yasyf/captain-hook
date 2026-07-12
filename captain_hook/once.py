@@ -26,12 +26,15 @@ DEFAULT_TTL = 10.0
 TTL_ENV = "CAPT_HOOK_ONCE_TTL"
 
 
-def claim_once(event_name: str, payload: bytes) -> bool:
-    """Claim the one-time dispatch of ``payload`` under ``event_name``.
+def claim_once(event_name: str, payload: bytes, *, async_: bool) -> bool:
+    """Claim the one-time dispatch of ``payload`` under ``event_name``'s ``async_`` variant.
 
     Returns True when this process won the claim and should dispatch, False when a
-    still-fresh sibling already claimed it (a duplicate that must exit silently).
-    ``CAPT_HOOK_ONCE_TTL=0`` disables the guard, so every call wins.
+    still-fresh sibling already claimed it (a duplicate that must exit silently). The sync
+    and async passes of one event dispatch disjoint hook sets (``dispatch`` filters on
+    ``spec.async_``), so ``async_`` is part of the key: each variant claims its own token and
+    both run even on byte-identical stdin. ``CAPT_HOOK_ONCE_TTL=0`` disables the guard, so
+    every call wins.
     """
     ttl = _ttl()
     if ttl <= 0:
@@ -40,7 +43,8 @@ def claim_once(event_name: str, payload: bytes) -> bool:
     if sentinel_dir is None:
         return True
     _reap(sentinel_dir, ttl)
-    key = hashlib.sha256(event_name.encode() + b"\0" + payload).hexdigest()
+    variant = b"async" if async_ else b"sync"
+    key = hashlib.sha256(event_name.encode() + b"\0" + variant + b"\0" + payload).hexdigest()
     return _try_claim(sentinel_dir / key, ttl)
 
 

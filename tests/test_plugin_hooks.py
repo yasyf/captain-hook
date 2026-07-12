@@ -7,8 +7,9 @@ from typing import Any
 from captain_hook.cli import DEFAULT_PREFIX, review_command, run_command
 from captain_hook.types import Event
 
-# Events the plugin registers under `run --async` rather than a sync `run`, and the one
-# registered under the always-on session reviewer (`review run`, async).
+# Events the plugin registers under `run --async` rather than a sync `run`. REVIEW_EVENT
+# (SessionEnd) carries two async entries: the always-on session reviewer (`review run`) and
+# a `run SessionEnd --async` so async_=True SessionEnd handlers still reach dispatch().
 ASYNC_RUN_EVENTS = {"SessionStart"}
 REVIEW_EVENT = "SessionEnd"
 
@@ -34,15 +35,20 @@ class TestPluginHooksJson:
     def test_every_command_is_canonical(self) -> None:
         for name, groups in load_plugin_hooks()["hooks"].items():
             [group] = groups
-            [entry] = group["hooks"]
-            assert entry["type"] == "command"
+            entries = group["hooks"]
+            assert all(entry["type"] == "command" for entry in entries)
             if name == REVIEW_EVENT:
-                assert entry["command"] == review_command()
-                assert entry["async"] is True
+                assert {entry["command"] for entry in entries} == {
+                    review_command(),
+                    run_command("SessionEnd", async_=True),
+                }
+                assert all(entry["async"] is True for entry in entries)
             elif name in ASYNC_RUN_EVENTS:
+                [entry] = entries
                 assert entry["command"] == run_command(name, async_=True)
                 assert entry["async"] is True
             else:
+                [entry] = entries
                 assert entry["command"] == run_command(name, async_=False)
                 assert "async" not in entry
 

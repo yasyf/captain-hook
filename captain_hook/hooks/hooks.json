@@ -80,7 +80,8 @@
     "SessionEnd": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx capt-hook review run", "async": true }
+          { "type": "command", "command": "uvx capt-hook review run", "async": true },
+          { "type": "command", "command": "uvx capt-hook run SessionEnd --async", "async": true }
         ]
       }
     ]
