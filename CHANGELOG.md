@@ -4,6 +4,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A sync and an async dispatch of one event no longer race for a single once-token.**
+  The duplicate-dispatch guard keyed only on event name and payload, so the synchronous and
+  asynchronous `run <Event>` passes of one event — byte-identical stdin, but disjoint hook
+  sets, since `dispatch` filters on `spec.async_` — claimed the same token and one pass was
+  silently dropped. The claim key now carries the async variant, so each pass guards
+  independently and both run.
+- **`SessionEnd` dispatches async pack handlers.** The plugin's `hooks.json` wired
+  `SessionEnd` only to `uvx capt-hook review run`, which detaches the session reviewer and
+  never reaches `dispatch()`. A second entry, `uvx capt-hook run SessionEnd --async`, now
+  runs alongside it, so a pack's `async_=True` `SessionEnd` handler fires fleet-wide.
+
 ## [9.1.0] - 2026-07-11
 
 ### Fixed

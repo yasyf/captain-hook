@@ -46,34 +46,44 @@ def sentinel_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 class TestClaimOnce:
     def test_first_wins_second_collapses(self, sentinel_dir: Path) -> None:
         payload = b'{"a": 1}'
-        assert once.claim_once("Stop", payload) is True
-        assert once.claim_once("Stop", payload) is False
+        assert once.claim_once("Stop", payload, async_=False) is True
+        assert once.claim_once("Stop", payload, async_=False) is False
 
     def test_distinct_payloads_both_win(self, sentinel_dir: Path) -> None:
-        assert once.claim_once("Stop", b'{"a": 1}') is True
-        assert once.claim_once("Stop", b'{"a": 2}') is True
+        assert once.claim_once("Stop", b'{"a": 1}', async_=False) is True
+        assert once.claim_once("Stop", b'{"a": 2}', async_=False) is True
 
     def test_distinct_events_same_payload_both_win(self, sentinel_dir: Path) -> None:
         payload = b'{"stop_hook_active": false}'
-        assert once.claim_once("Stop", payload) is True
-        assert once.claim_once("SubagentStop", payload) is True
+        assert once.claim_once("Stop", payload, async_=False) is True
+        assert once.claim_once("SubagentStop", payload, async_=False) is True
+
+    def test_sync_and_async_variants_both_win(self, sentinel_dir: Path) -> None:
+        # One event fans out into a sync pass and an async pass that dispatch disjoint hook
+        # sets; byte-identical stdin must not let one variant's token swallow the other. Each
+        # variant claims independently, and a duplicate within a variant still collapses.
+        payload = b'{"source": "startup"}'
+        assert once.claim_once("SessionStart", payload, async_=False) is True
+        assert once.claim_once("SessionStart", payload, async_=True) is True
+        assert once.claim_once("SessionStart", payload, async_=False) is False
+        assert once.claim_once("SessionStart", payload, async_=True) is False
 
     def test_ttl_zero_disables_guard(self, sentinel_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(once.TTL_ENV, "0")
         payload = b'{"a": 1}'
-        assert once.claim_once("Stop", payload) is True
-        assert once.claim_once("Stop", payload) is True
+        assert once.claim_once("Stop", payload, async_=False) is True
+        assert once.claim_once("Stop", payload, async_=False) is True
         assert not sentinel_dir.exists()
 
     def test_stale_sentinel_reclaimed(self, sentinel_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(once.TTL_ENV, "10")
         payload = b'{"a": 1}'
-        assert once.claim_once("Stop", payload) is True
-        assert once.claim_once("Stop", payload) is False
+        assert once.claim_once("Stop", payload, async_=False) is True
+        assert once.claim_once("Stop", payload, async_=False) is False
         (sentinel,) = list(sentinel_dir.iterdir())
         stale = time.time() - 100
         os.utime(sentinel, (stale, stale))
-        assert once.claim_once("Stop", payload) is True
+        assert once.claim_once("Stop", payload, async_=False) is True
 
     def test_reclaim_aborts_when_sentinel_recreated(self, sentinel_dir: Path) -> None:
         # A racing claimant freshly recreated the sentinel between our stale-stat and the
@@ -100,11 +110,11 @@ class TestClaimOnce:
 
     def test_reap_removes_ancient_sentinels(self, sentinel_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(once.TTL_ENV, "10")
-        once.claim_once("Stop", b'{"old": 1}')
+        once.claim_once("Stop", b'{"old": 1}', async_=False)
         (ancient,) = list(sentinel_dir.iterdir())
         stamp = time.time() - 1000
         os.utime(ancient, (stamp, stamp))
-        once.claim_once("Stop", b'{"new": 1}')
+        once.claim_once("Stop", b'{"new": 1}', async_=False)
         remaining = list(sentinel_dir.iterdir())
         assert ancient.name not in {p.name for p in remaining}
         assert len(remaining) == 1
@@ -116,8 +126,8 @@ class TestClaimOnce:
         target.mkdir()
         sentinel_dir.symlink_to(target, target_is_directory=True)
         payload = b'{"a": 1}'
-        assert once.claim_once("Stop", payload) is True
-        assert once.claim_once("Stop", payload) is True
+        assert once.claim_once("Stop", payload, async_=False) is True
+        assert once.claim_once("Stop", payload, async_=False) is True
         assert list(target.iterdir()) == []
 
 

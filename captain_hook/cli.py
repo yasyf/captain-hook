@@ -220,7 +220,7 @@ def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None
     # Collapse the N byte-identical siblings Claude Code spawns per event to one
     # dispatch. Decision-capable events (DECISION_EVENTS) are exempt: swallowing a
     # sibling there could bypass a gate, which outweighs a duplicated side effect.
-    if event not in DECISION_EVENTS and not claim_once(event_name, raw_text.encode()):
+    if event not in DECISION_EVENTS and not claim_once(event_name, raw_text.encode(), async_=async_):
         return
 
     try:

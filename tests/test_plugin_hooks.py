@@ -46,8 +46,15 @@ class TestPluginHooksJson:
                     assert by_command[run_command(name, async_=True)]["async"] is True
                     assert by_command[review_command()]["async"] is True
                 case "SessionEnd":
-                    assert set(by_command) == {review_command()}
+                    # The always-on session reviewer (`review run`) plus a `run SessionEnd
+                    # --async` so a pack's async_=True SessionEnd handler still reaches
+                    # dispatch(); both entries are async.
+                    assert set(by_command) == {
+                        review_command(),
+                        run_command(name, async_=True),
+                    }
                     assert by_command[review_command()]["async"] is True
+                    assert by_command[run_command(name, async_=True)]["async"] is True
                 case _:
                     [entry] = entries
                     assert entry["command"] == run_command(name, async_=False)
