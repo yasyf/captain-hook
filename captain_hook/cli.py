@@ -9,7 +9,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 from cc_transcript.ids import SessionId
@@ -31,6 +31,11 @@ from captain_hook.packs import manager
 from captain_hook.review.cli import review
 from captain_hook.session import SessionStore, ensure_session
 from captain_hook.types import Event
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from cc_transcript.query import Session
 
 DIST_NAME = "capt-hook"
 DEFAULT_PREFIX = f"uvx {DIST_NAME}"
@@ -195,10 +200,36 @@ def provision_nlp(resolved: Sequence[manager.ResolvedPack]) -> None:
         click.echo(f"  deferred (offline?): {e} — the SessionStart hook will retry at session start")
 
 
-def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None:
+def dispatch_event(
+    root: Path,
+    event: Event,
+    raw: dict[str, Any],
+    *,
+    session_dir: Path | None,
+    async_: bool,
+    transcript_loader: Callable[[str | Path | None], Session] | None = None,
+) -> dict[str, Any] | None:
+    """Build the event's context and dispatch it, returning the response envelope or None.
+
+    The one dispatch codepath shared by the cold CLI and the resident daemon: no printing,
+    logging setup, discovery, or once-guard — those are the front door's job. ``transcript_loader``
+    overrides the default parse (the daemon supplies a cache-backed one).
+    """
     from captain_hook.context import HookContext
     from captain_hook.transcripts import lazy_transcript
 
+    resolved_path = raw.get("agent_transcript_path") or raw.get("transcript_path")
+    ctx = HookContext(
+        session=SessionStore(session_dir),
+        transcript=lazy_transcript(resolved_path, loader=transcript_loader),
+        settings=_state.settings,
+        project_root=root,
+    )
+    evt = event.event_class(_raw=raw, ctx=ctx)
+    return dispatch(event, evt, session_dir=session_dir, async_=async_)
+
+
+def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None:
     try:
         event = Event[event_name]
     except KeyError:
@@ -227,21 +258,12 @@ def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None
 
     session_id = raw.get("session_id")
     setup_logging(session_id)
-    resolved_path = raw.get("agent_transcript_path") or raw.get("transcript_path")
 
     # stdin is parsed first so the session dir is known before discovery: CliState.discover
     # loads this session's attached packs (see attached_packs) on top of packs.toml.
     session_dir = ensure_session(SessionId(session_id)) if session_id else None
     state.discover(session_dir=session_dir)
-    ctx = HookContext(
-        session=SessionStore(session_dir),
-        transcript=lazy_transcript(resolved_path),
-        settings=_state.settings,
-        project_root=state.root,
-    )
-    evt = event.event_class(_raw=raw, ctx=ctx)
-
-    if output := dispatch(event, evt, session_dir=session_dir, async_=async_):
+    if output := dispatch_event(state.root, event, raw, session_dir=session_dir, async_=async_):
         print(json.dumps(output))
 
 

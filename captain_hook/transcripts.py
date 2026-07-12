@@ -13,7 +13,7 @@ from lazy_object_proxy import Proxy
 from captain_hook.util.paths import resolve_project_dir
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from cc_transcript.models import TranscriptEvent
     from cc_transcript.query import Session
@@ -92,15 +92,19 @@ class TranscriptLoadError(Exception):
     """
 
 
-def lazy_transcript(path: str | Path | None) -> Session:
+def lazy_transcript(
+    path: str | Path | None, *, loader: Callable[[str | Path | None], Session] | None = None
+) -> Session:
     """A ``Session`` proxy that defers parsing until an attribute is first touched.
 
-    Events whose hooks never read the transcript never pay the parse.
+    Events whose hooks never read the transcript never pay the parse. ``loader`` overrides the
+    default :func:`load_transcript` — the resident daemon plugs in a cache-backed parse.
     """
+    resolve = loader or load_transcript
 
     def load() -> Session:
         try:
-            return load_transcript(path)
+            return resolve(path)
         except Exception as e:
             raise TranscriptLoadError(path) from e
 
