@@ -217,16 +217,6 @@ def read_entries(path: Path) -> list[PackEntry]:
     return [parse_entry(name, table) for name, table in (tomllib.loads(path.read_text()).get("packs") or {}).items()]
 
 
-def read_launcher(path: Path) -> str | None:
-    match tomllib.loads(path.read_text()).get("launcher") if path.exists() else None:
-        case None:
-            return None
-        case str() as launcher:
-            return launcher
-        case other:
-            raise PackError(f"invalid launcher in {path}: expected a string, got {type(other).__name__}")
-
-
 def render_entry(entry: PackEntry) -> str:
     match entry:
         case BuiltinPack(name=name):
@@ -239,34 +229,8 @@ def render_entry(entry: PackEntry) -> str:
             return f'[packs.{name}]\nsource = "{source}"\ncommit = "{commit}"\n\n'
 
 
-def toml_basic_string(value: str) -> str:
-    """Render ``value`` as a quoted TOML basic string, safe for non-BMP characters.
-
-    ``json.dumps`` escapes chars above the BMP (emoji, rare CJK) as surrogate-pair
-    ``\\uXXXX`` sequences, which the TOML spec rejects — ``tomllib`` then raises on the
-    next read. This escapes only backslash, double quote, and the ``U+0000``–``U+001F`` /
-    ``U+007F`` control chars, passing every other char through as literal UTF-8 so the
-    value round-trips. For ASCII values without control chars the output is byte-identical
-    to ``json.dumps``.
-    """
-
-    def escape(c: str) -> str:
-        match c:
-            case "\\":
-                return "\\\\"
-            case '"':
-                return '\\"'
-            case _ if ord(c) <= 0x1F or ord(c) == 0x7F:
-                return f"\\u{ord(c):04x}"
-            case _:
-                return c
-
-    return '"' + "".join(escape(c) for c in value) + '"'
-
-
-def render_packs_toml(entries: Sequence[PackEntry], launcher: str | None = None) -> str:
-    head = "" if launcher is None else f"launcher = {toml_basic_string(launcher)}\n\n"
-    return head + "".join(render_entry(e) for e in sorted(entries, key=lambda e: e.name))
+def render_packs_toml(entries: Sequence[PackEntry]) -> str:
+    return "".join(render_entry(e) for e in sorted(entries, key=lambda e: e.name))
 
 
 def atomic_write(path: Path, text: str) -> None:
@@ -289,7 +253,7 @@ def atomic_write(path: Path, text: str) -> None:
 def upsert_entry(path: Path, entry: PackEntry) -> None:
     atomic_write(
         path,
-        render_packs_toml([*(e for e in read_entries(path) if e.name != entry.name), entry], read_launcher(path)),
+        render_packs_toml([*(e for e in read_entries(path) if e.name != entry.name), entry]),
     )
 
 
@@ -297,7 +261,7 @@ def delete_entry(path: Path, name: str) -> None:
     entries = read_entries(path)
     if name not in {e.name for e in entries}:
         raise PackError(f"pack {name!r} is not enabled in {path}")
-    atomic_write(path, render_packs_toml([e for e in entries if e.name != name], read_launcher(path)))
+    atomic_write(path, render_packs_toml([e for e in entries if e.name != name]))
 
 
 def packs_cache_root() -> Path:

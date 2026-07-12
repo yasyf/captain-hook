@@ -57,13 +57,19 @@ from cc_transcript.mining.confidence import MEDIUM, VERY_HIGH, CandidateSignal
 from cc_transcript.mining.signals import MiningSignal
 from cc_transcript.mining.sourcekind import SourceKind
 from cc_transcript.mining.spec import CONFIDENCE_STEP, bump
-from cc_transcript.models import AssistantEvent, OtherEvent, ToolResultBlock, UserEvent
+from cc_transcript.models import (
+    AssistantEvent,
+    AttachmentEvent,
+    HookAdditionalContext,
+    HookBlockingError,
+    ToolResultBlock,
+    UserEvent,
+)
 
 from captain_hook.review.routing import CAPTAIN_HOOK_REPO, Target
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
-    from typing import Any
 
     from cc_transcript.decisions import Decision, DecisionLog
     from cc_transcript.ids import SessionId, ToolUseId
@@ -162,22 +168,14 @@ def classify_marker(text: str) -> Marker | None:
 
 def fingerprint_of(event: TranscriptEvent) -> Fingerprint | None:
     match event:
-        case OtherEvent(type="attachment", raw=raw):
-            attachment: Mapping[str, Any] = raw["attachment"]
-            match attachment.get("type"):
-                case "hook_additional_context":
-                    return Fingerprint(
-                        message="\n".join(str(part) for part in attachment["content"]),
-                        tool_use_id=attachment.get("toolUseID"),
-                        event=attachment.get("hookEvent"),
-                    )
-                case "hook_blocking_error":
-                    return Fingerprint(
-                        message=str(attachment["blockingError"]["blockingError"]),
-                        event=str(attachment.get("hookEvent") or "Stop"),
-                    )
-                case _:
-                    return None
+        case AttachmentEvent(
+            detail=HookAdditionalContext(content=content, tool_use_id=tool_use_id, hook_event=hook_event)
+        ):
+            return Fingerprint(message="\n".join(content), tool_use_id=tool_use_id, event=hook_event)
+        case AttachmentEvent(
+            detail=HookBlockingError(blocking_error={"blockingError": blocking_error}, hook_event=hook_event)
+        ):
+            return Fingerprint(message=str(blocking_error), event=str(hook_event or "Stop"))
         case UserEvent(meta=meta, text=text) if meta.is_meta and text.startswith(STOP_FEEDBACK_PREFIX):
             return Fingerprint(message=text.removeprefix(STOP_FEEDBACK_PREFIX), event="Stop")
         case UserEvent(blocks=blocks):

@@ -20,12 +20,13 @@ if TYPE_CHECKING:
 REPO = RepoKey("github.com/yasyf/scratch")
 PACK_REPO = RepoKey("github.com/yasyf/captain-hook")
 PR_URL = "https://github.com/yasyf/scratch/pull/9"
+PR_URL_2 = "https://github.com/yasyf/scratch/pull/10"
 PACK_PR_URL = "https://github.com/yasyf/captain-hook/pull/3"
 
 
-async def create_pr_open(store: ReviewStore, *, repo: RepoKey = REPO, url: str = PR_URL) -> int:
+async def create_pr_open(store: ReviewStore, *, repo: RepoKey = REPO, url: str = PR_URL, rule: str = "r") -> int:
     candidate_id = await store.ensure_candidate(
-        repo, kind=CandidateKind.CREATE, rule="r", source_kind=SourceKind("transcript_message")
+        repo, kind=CandidateKind.CREATE, rule=rule, source_kind=SourceKind("transcript_message")
     )
     await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=url)
     return candidate_id
@@ -201,6 +202,37 @@ class TestCollectAnnouncements:
         message = collect_announcements(git_repo)
         assert message is not None
         assert "awaiting your review" in message
+
+    async def _seed_two(self, db: Path) -> None:
+        async with await ReviewStore.open(db) as store:
+            await create_pr_open(store, url=PR_URL, rule="r1")
+            await create_pr_open(store, url=PR_URL_2, rule="r2")
+            await store.enable(REPO)
+
+    def test_contention_marks_no_row_then_all_resurface(self, review_db: Path, git_repo: Path) -> None:
+        # With two pending announcements, a contended write lock must mark neither: the single
+        # BEGIN IMMEDIATE fails before any mark, so nothing is stranded marked-but-undelivered,
+        # and both lines resurface together once the lock releases.
+        import asyncio
+        import sqlite3
+
+        asyncio.run(self._seed_two(review_db))
+        blocker = sqlite3.connect(str(review_db), isolation_level=None)
+        try:
+            blocker.execute("PRAGMA busy_timeout = 0")
+            blocker.execute("BEGIN IMMEDIATE")
+            assert collect_announcements(git_repo) is None
+            (marked,) = blocker.execute(
+                "SELECT COUNT(*) FROM candidates WHERE announced_status IS NOT NULL"
+            ).fetchone()
+            assert marked == 0
+        finally:
+            blocker.execute("ROLLBACK")
+            blocker.close()
+        message = collect_announcements(git_repo)
+        assert message is not None
+        assert message.count(ANNOUNCE_PREFIX) == 2
+        assert collect_announcements(git_repo) is None
 
 
 class TestSessionStartDispatch:

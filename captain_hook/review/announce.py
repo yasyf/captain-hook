@@ -55,17 +55,24 @@ async def pending_announcements(store: ReviewStore, repo: RepoKey) -> list[str]:
     ``rejected`` create candidate with no PR is never announced — then stamps
     ``announced_status`` through :meth:`ReviewStore.mark_announced`.
 
+    The selection and every mark run in one ``BEGIN IMMEDIATE`` transaction, so the pass
+    is all-or-nothing: either every changed candidate is marked and its line returned, or
+    — when the write lock is contended (``SQLITE_BUSY``) — nothing is marked and the whole
+    batch surfaces again at the next session start. A partial mark could otherwise strand a
+    row marked-but-never-delivered.
+
     Args:
         store: The open review store.
         repo: The session's repo; a candidate matches on ``repo_key`` or ``origin_repo_key``.
     """
     lines: list[str] = []
-    for row in await store.candidates(repo):
-        status = CandidateStatus(str(row["status"]))
-        if status not in ANNOUNCE_STATUSES or row["announced_status"] == status or not row["pr_url"]:
-            continue
-        lines.append(announcement_line(row, status))
-        await store.mark_announced(int(str(row["id"])), status)
+    async with store.store.transaction():
+        for row in await store.candidates(repo):
+            status = CandidateStatus(str(row["status"]))
+            if status not in ANNOUNCE_STATUSES or row["announced_status"] == status or not row["pr_url"]:
+                continue
+            lines.append(announcement_line(row, status))
+            await store.mark_announced(int(str(row["id"])), status)
     return lines
 
 
@@ -79,10 +86,12 @@ def collect_announcements(root: Path | None) -> str | None:
     a session start never opens or creates a store in an unrelated repo and stays silent in
     a repo the reviewer isn't tracking.
 
-    The announcer's ``mark_announced`` write runs with ``busy_timeout = 0``, so a
-    detached reviewer holding a write lock fails it immediately (``SQLITE_BUSY``)
-    rather than stalling the synchronous hook for SQLite's default five seconds; the
-    outcome is announced at the next uncontended session start instead.
+    The store opens with ``busy_timeout = 0`` — set before the schema migration and the
+    first-upgrade verdict purge, which would otherwise stall on a detached reviewer's write
+    lock — and the announce pass marks all rows in one transaction, so a contended lock at
+    any point fails immediately (``SQLITE_BUSY``) rather than stalling the synchronous hook
+    for SQLite's default five seconds; the outcome is announced at the next uncontended
+    session start instead, with nothing left half-marked.
 
     Args:
         root: The session's project root; the repo is resolved from it.
@@ -104,8 +113,7 @@ def collect_announcements(root: Path | None) -> str | None:
         return None
 
     async def go() -> list[str]:
-        async with await ReviewStore.open(db_path) as store:
-            await store.store.conn.execute("PRAGMA busy_timeout = 0")
+        async with await ReviewStore.open(db_path, busy_timeout_ms=0) as store:
             if not await store.watching(repo):
                 return []
             return await pending_announcements(store, repo)

@@ -10,7 +10,7 @@ from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE
 from click.testing import CliRunner
 
 from captain_hook.cli import cli
-from captain_hook.review.cli import REVIEW_RUN_COMMAND, STATUS_CHOICES
+from captain_hook.review.cli import STATUS_CHOICES
 from captain_hook.review.fix import HOOK_COMPLAINT
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings
@@ -117,20 +117,11 @@ class TestGroupSurface:
 
 
 class TestEnableDisable:
-    def test_enable_watches_and_wires_session_end(self, git_repo: Path) -> None:
+    def test_enable_watches_the_repo(self, git_repo: Path) -> None:
         result = invoke("enable", root=git_repo)
         assert result.exit_code == 0, result.output
         assert f"watching {GIT_REPO_KEY}" in result.output
         assert asyncio.run(repo_watching(GIT_REPO_KEY)) is True
-        data = json.loads((git_repo / ".claude" / "settings.json").read_text())
-
-        def commands(event: str) -> list[str]:
-            return [entry["command"] for group in data["hooks"][event] for entry in group["hooks"]]
-
-        # enable writes the plugin's SessionEnd reviewer entry for a non-plugin repo; the
-        # plugin's hooks.json owns SessionStart registration (see test_plugin_hooks.py).
-        assert commands("SessionEnd") == [f"uvx {REVIEW_RUN_COMMAND}"]
-        assert "SessionStart" not in data["hooks"]
 
     def test_enable_registers_plugin(self, git_repo: Path) -> None:
         assert invoke("enable", root=git_repo).exit_code == 0
@@ -140,42 +131,6 @@ class TestEnableDisable:
             "source": "github",
             "repo": "yasyf/captain-hook",
         }
-
-    def test_enable_twice_is_idempotent_and_preserves_foreign_settings(self, git_repo: Path) -> None:
-        settings_path = git_repo / ".claude" / "settings.json"
-        settings_path.parent.mkdir(parents=True)
-        foreign = {"hooks": [{"type": "command", "command": "my-tool"}]}
-        settings_path.write_text(json.dumps({"hooks": {"SessionEnd": [foreign]}, "custom": "keep-me"}))
-        assert invoke("enable", root=git_repo).exit_code == 0
-        assert invoke("enable", root=git_repo).exit_code == 0
-        data = json.loads(settings_path.read_text())
-        assert data["custom"] == "keep-me"
-        groups = data["hooks"]["SessionEnd"]
-        assert foreign in groups
-        review_groups = [
-            group for group in groups if any(REVIEW_RUN_COMMAND in entry["command"] for entry in group["hooks"])
-        ]
-        assert len(review_groups) == 1
-
-    def test_enable_defers_session_end_to_local_settings(self, git_repo: Path) -> None:
-        claude = git_repo / ".claude"
-        claude.mkdir(parents=True)
-        (claude / "settings.local.json").write_text(
-            json.dumps(
-                {"hooks": {"SessionEnd": [{"hooks": [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}"}]}]}}
-            )
-        )
-        result = invoke("enable", root=git_repo)
-        assert result.exit_code == 0, result.output
-        committed = claude / "settings.json"
-        hooks = (json.loads(committed.read_text()).get("hooks") or {}) if committed.exists() else {}
-
-        def wired(event: str) -> bool:
-            return any(
-                REVIEW_RUN_COMMAND in entry["command"] for group in (hooks.get(event) or []) for entry in group["hooks"]
-            )
-
-        assert not wired("SessionEnd")
 
     def test_disable_unwatches(self, git_repo: Path) -> None:
         assert invoke("enable", root=git_repo).exit_code == 0

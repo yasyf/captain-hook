@@ -1,5 +1,3 @@
-launcher = "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook"
-
 [packs.general]
 
 [packs.python]

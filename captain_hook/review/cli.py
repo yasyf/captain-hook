@@ -8,7 +8,6 @@ machinery lazily once it actually runs, and async store calls bridge with
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 from datetime import UTC, datetime
@@ -19,7 +18,6 @@ import click
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-    from typing import Any
 
     from cc_transcript.corrections import Correction
     from cc_transcript.judge.similar import KeyOverlap
@@ -31,7 +29,6 @@ if TYPE_CHECKING:
     from captain_hook.review.store import ReviewStore, ThresholdStatus
     from captain_hook.review.sync import SyncReport
 
-REVIEW_RUN_COMMAND = "capt-hook review run"
 STATUS_CHOICES = ("watching", "pr_open", "stale", "accepted", "rejected")
 
 
@@ -49,42 +46,6 @@ def resolve_repo(repo_: str | None, root: Path) -> RepoKey:
     from captain_hook.review.repo import RepoKey
 
     return RepoKey(repo_) if repo_ else current_repo(root)
-
-
-def group_commands(group: dict[str, Any]) -> list[str]:
-    entries: list[dict[str, Any]] = group.get("hooks") or []
-    return [str(entry.get("command") or "") for entry in entries]
-
-
-def review_wired(hooks: dict[str, Any]) -> bool:
-    groups: list[dict[str, Any]] = hooks.get("SessionEnd") or []
-    return any(REVIEW_RUN_COMMAND in command for group in groups for command in group_commands(group))
-
-
-def ensure_review_wiring(settings_path: Path) -> bool:
-    """Wires ``uvx capt-hook review run`` into the ``SessionEnd`` group, idempotently.
-
-    The plugin's ``hooks.json`` registers the reviewer for repos that enable the plugin;
-    this keeps writing the settings entry for a non-plugin repo. Skipped when either this
-    settings file or its sibling already carries the command.
-
-    Returns:
-        Whether the reviewer was newly wired.
-    """
-    from captain_hook.cli import sibling_settings, write_settings
-
-    existing: dict[str, Any] = json.loads(settings_path.read_text()) if settings_path.exists() else {}
-    sibling = sibling_settings(settings_path)
-    sibling_hooks: dict[str, Any] = (json.loads(sibling.read_text()).get("hooks") or {}) if sibling.exists() else {}
-    hooks: dict[str, Any] = existing.get("hooks") or {}
-    if review_wired(hooks) or review_wired(sibling_hooks):
-        return False
-    group = {"hooks": [{"type": "command", "command": f"uvx {REVIEW_RUN_COMMAND}", "async": True}]}
-    write_settings(
-        settings_path,
-        existing | {"hooks": hooks | {"SessionEnd": [*(hooks.get("SessionEnd") or []), group]}},
-    )
-    return True
 
 
 def run_store[T](fn: Callable[[ReviewStore], Awaitable[T]]) -> T:
@@ -146,14 +107,13 @@ def spawn(transcript: Path, cwd: str | None) -> None:
 @review.command()
 @click.pass_obj
 def enable(state: CliState) -> None:
-    """Watch the current repo, register the captain-hook plugin, and wire the SessionEnd hook."""
+    """Watch the current repo and register the captain-hook plugin."""
     from captain_hook.cli import register_marketplace
 
     repo = current_repo(state.root)
     watch_repo(repo)
     register_marketplace(state.root)
-    wired = ensure_review_wiring(state.root / ".claude" / "settings.json")
-    click.echo(f"watching {repo}" + (" (SessionEnd hook wired into .claude/settings.json)" if wired else ""))
+    click.echo(f"watching {repo}")
 
 
 @review.command()

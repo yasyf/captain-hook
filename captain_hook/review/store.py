@@ -279,12 +279,23 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
         self.versions = versions
 
     @classmethod
-    async def open(cls, path: Path, *, versions: PromptVersions = PROMPT_VERSIONS) -> Self:
+    async def open(
+        cls, path: Path, *, versions: PromptVersions = PROMPT_VERSIONS, busy_timeout_ms: int | None = None
+    ) -> Self:
         """Opens the review database at ``path`` under ``versions``, self-healing stale verdicts.
 
         Creates the schema if needed, then sweeps any verdict rows recorded at a
         version their lane no longer runs — the single purge codepath, so
         ``list``/``show``/``status``/``threshold-check`` never count orphans.
+
+        Args:
+            path: The database file path.
+            versions: The per-lane prompt versions gating verdict freshness.
+            busy_timeout_ms: When set, the connection's ``busy_timeout`` is lowered to
+                this before the migration and first-upgrade purge run, so those writes
+                fail fast (``SQLITE_BUSY``) under a concurrent lock instead of stalling on
+                SQLite's default five seconds. The SessionStart announcer passes ``0``;
+                the normal reviewer path leaves the default.
         """
         store = cls(
             await FileStateStore.open(
@@ -354,6 +365,8 @@ CREATE TABLE IF NOT EXISTS pr_states (
             ),
             versions,
         )
+        if busy_timeout_ms is not None:
+            await store.store.conn.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
         await store.migrate_columns("candidates", CANDIDATE_MIGRATIONS)
         await store.migrate_columns("feedback_events", FEEDBACK_MIGRATIONS)
         await store.purge_stale_verdicts_if_changed()
@@ -595,6 +608,57 @@ WHERE c.candidate_kind = ? AND c.status = ?
                 await self.transition(candidate_id, CandidateStatus.REJECTED)
         return len(reject)
 
+    async def revive_junk_rejected(self) -> int:
+        """Reinstates a junk-rejected create candidate the judge has since accepted — judge wins.
+
+        Closes the triage/judge race: a triage pass can mark a create event junk and
+        terminally reject its candidate (:meth:`reject_junk_triaged`) while a concurrent
+        judge pass — whose queue predates the junk mark — is still ruling on that same
+        event. When the judge then persists an accepted verdict, the candidate is stranded
+        ``rejected`` and :meth:`regroup_create` (watching-only) can never surface it. Run
+        at the close of each judge pass before :meth:`regroup_create`, this returns to
+        :attr:`CandidateStatus.WATCHING` every create candidate that is ``rejected``, whose
+        every observation is junk-triaged (the junk-rejection signature), and which now
+        carries a judge acceptance at the create lane's bound version — so the judge
+        outranks the deterministic triage screen and its accepted evidence counts again.
+        The all-junk-plus-acceptance signature is unique to this race: the judge queue
+        skips junk keys, so a non-raced candidate never holds both.
+
+        This is the sole path that moves ``rejected -> watching``, gated to this
+        provenance; :data:`TRANSITIONS` keeps ``rejected`` terminal for every other caller,
+        so the flip writes the status directly rather than through :meth:`transition`.
+
+        Returns:
+            The number of candidates reinstated to watching.
+        """
+        async with self.store.transaction() as conn:
+            revive = [
+                int(row["id"])
+                async for row in await conn.execute(
+                    f"""
+SELECT c.id FROM candidates c
+WHERE c.candidate_kind = 'create' AND c.status = ?
+  AND EXISTS (SELECT 1 FROM candidate_observations o WHERE o.candidate_id = c.id)
+  AND NOT EXISTS (
+    SELECT 1 FROM candidate_observations o JOIN feedback_events e ON e.dedup_key = o.dedup_key
+    WHERE o.candidate_id = c.id AND (e.triage IS NULL OR e.triage != ?)
+  )
+  AND EXISTS (
+    SELECT 1 FROM candidate_observations o
+    JOIN {self.VERDICT_TABLE} v ON v.dedup_key = o.dedup_key
+    WHERE o.candidate_id = c.id AND v.role = 'judge' AND v.prompt_version = ? AND v.{self.ACCEPTED_COLUMN} = 1
+  )
+""",
+                    (CandidateStatus.REJECTED, TRIAGE_JUNK, self.versions.create),
+                )
+            ]
+            for candidate_id in revive:
+                await conn.execute(
+                    "UPDATE candidates SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+                    (CandidateStatus.WATCHING, now(), candidate_id, CandidateStatus.REJECTED),
+                )
+        return len(revive)
+
     async def junk_triaged_keys(self) -> set[str]:
         """Returns the dedup keys of every junk-triaged feedback event — the judge queue's skip set."""
         cur = await self.store.conn.execute("SELECT dedup_key FROM feedback_events WHERE triage = ?", (TRIAGE_JUNK,))
@@ -676,14 +740,26 @@ WHERE c.candidate_kind = ? AND c.status = ?
         pr_url: str | None = None,
         pr_opened_at: datetime | None = None,
         resolved_at: datetime | None = None,
-    ) -> None:
+        expected_pr_url: str | None = None,
+        expected_generation: int | None = None,
+    ) -> bool:
         """Moves a candidate along :data:`TRANSITIONS` — the only status-write codepath.
 
         The move is a compare-and-swap against the status it validated: the ``UPDATE``
         matches ``id`` *and* the read status, so a concurrent writer that already moved
-        the row cannot be overwritten. On a lost race the current status is re-read and
-        re-validated — a still-legal move (a ``stale -> accepted`` that lost to a peer's
-        own ``stale -> accepted``) converges, an illegal one raises.
+        the row cannot be overwritten. On a lost CAS the current status is re-read: when
+        it already equals the requested target — two passes ran the *same* transition and
+        a peer committed first — the move converges as a no-op and returns; otherwise it
+        re-validates and raises on an illegal move. A direct call whose current status
+        already equals ``to`` (no lost race) stays invalid, since a self-loop is never in
+        :data:`TRANSITIONS`.
+
+        ``expected_pr_url``/``expected_generation`` are the sync path's anti-ABA guard:
+        when set, the CAS additionally matches the snapshotted ``pr_url`` and
+        ``generation``, so a delayed PR result cannot resolve a candidate that was
+        meanwhile accepted, reopened (``generation`` bumped), and re-PR'd — the guard
+        finds the row changed and the call no-ops (returns ``False``, the candidate stays
+        untouched) instead of stamping the new generation from the old PR's outcome.
 
         Entering :attr:`CandidateStatus.ACCEPTED` stamps ``resolved_at``, the
         watermark a later reopen counts fresh recurrences against — from the
@@ -699,16 +775,32 @@ WHERE c.candidate_kind = ? AND c.status = ?
             pr_opened_at: When set, stamped in UTC alongside ``pr_url``.
             resolved_at: The authoritative resolution time for an ``accepted`` move
                 (GitHub's merge time); defaults to now when unset. Ignored otherwise.
+            expected_pr_url: The sync path's snapshotted ``pr_url``; the CAS guards on it.
+            expected_generation: The sync path's snapshotted ``generation``; the CAS
+                guards on it. Passing it arms the anti-ABA guard.
+
+        Returns:
+            Whether the move applied — ``True`` when this call (or a converged peer)
+            reached the target, ``False`` when the anti-ABA guard found the row changed.
 
         Raises:
             InvalidTransition: If the move is not allowed from the current status.
             LookupError: If no candidate carries ``candidate_id``.
         """
+        guarded = expected_generation is not None
+        cas_failed = False
         while True:
-            cur = await self.store.conn.execute("SELECT status FROM candidates WHERE id = ?", (candidate_id,))
-            if not (rows := [str(row["status"]) async for row in cur]):
+            cur = await self.store.conn.execute(
+                "SELECT status, pr_url, generation FROM candidates WHERE id = ?", (candidate_id,)
+            )
+            if not (rows := [dict(row) async for row in cur]):
                 raise LookupError(f"no candidate with id {candidate_id}")
-            if to not in TRANSITIONS[current := CandidateStatus(rows[0])]:
+            current = CandidateStatus(str(rows[0]["status"]))
+            if guarded and (rows[0]["pr_url"] != expected_pr_url or int(rows[0]["generation"]) != expected_generation):
+                return False
+            if cas_failed and current == to:
+                return True
+            if to not in TRANSITIONS[current]:
                 raise InvalidTransition(f"{current} -> {to}")
             stamp = now()
             resolution = (
@@ -719,7 +811,8 @@ WHERE c.candidate_kind = ? AND c.status = ?
             cur = await self.store.conn.execute(
                 "UPDATE candidates SET status = ?, updated_at = ?, "
                 "pr_url = COALESCE(?, pr_url), pr_opened_at = COALESCE(?, pr_opened_at), "
-                "resolved_at = COALESCE(?, resolved_at) WHERE id = ? AND status = ?",
+                "resolved_at = COALESCE(?, resolved_at) WHERE id = ? AND status = ?"
+                + (" AND pr_url IS ? AND generation = ?" if guarded else ""),
                 (
                     to,
                     stamp,
@@ -728,10 +821,12 @@ WHERE c.candidate_kind = ? AND c.status = ?
                     resolution,
                     candidate_id,
                     current,
+                    *((expected_pr_url, expected_generation) if guarded else ()),
                 ),
             )
             if cur.rowcount == 1:
-                return
+                return True
+            cas_failed = True
 
     async def pr_state_cache(self, url: str) -> CachedPrState | None:
         """Returns the last-fetched GitHub state for ``url``, with its fetch time — or ``None`` if uncached.

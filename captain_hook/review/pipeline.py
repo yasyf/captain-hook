@@ -17,7 +17,6 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import re
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -263,20 +262,21 @@ async def watching_ids(store: ReviewStore, repo: RepoKey) -> set[int]:
 
 
 @contextmanager
-def repo_brain_lock(repo: RepoKey, settings: ReviewSettings) -> Iterator[bool]:
-    """Claims the per-repository brain lock non-blockingly, yielding whether it was acquired.
+def brain_lock(settings: ReviewSettings) -> Iterator[bool]:
+    """Claims the machine-wide brain lock non-blockingly, yielding whether it was acquired.
 
-    A repo may run at most one PR-drafting brain at a time: a SessionStart and a
-    SessionEnd pass on the same repo otherwise race, both reading the same eligible
-    candidate and spawning competing brains before either records ``pr_open``. The
-    lock is an OS ``flock`` under the review state dir — independent of any database
-    connection, so it spans the store's open/close while the brain updates that same
-    database. It is non-blocking: a second concurrent pass yields ``False`` and skips
-    the brain instead of queueing behind the first.
+    At most one PR-drafting brain runs across the machine at a time. A per-repo lock
+    is bypassable: :meth:`ReviewStore.candidates` aliases one cross-repo candidate into
+    both its target and origin repo, so concurrent passes in each would take *different*
+    per-repo locks yet enumerate the same eligible candidate and spawn competing brains
+    before either records ``pr_open``. A single global lock serializes every pass instead;
+    per-repo eligibility still scopes what each acting brain works on. The lock is an OS
+    ``flock`` under the review state dir — independent of any database connection, so it
+    spans the store's open/close while the brain updates that same database. It is
+    non-blocking: a second concurrent pass yields ``False`` and skips the brain instead of
+    queueing behind the first.
     """
-    (path := settings.db_path.parent / "locks" / f"{re.sub(r'\W+', '_', repo)}.lock").parent.mkdir(
-        parents=True, exist_ok=True
-    )
+    (path := settings.db_path.parent / "locks" / "brain.lock").parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
     try:
         try:
@@ -333,9 +333,10 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
     brain_exit: int | None = None
     brain_seconds: float | None = None
     brain_prs = brain_skips = 0
-    # Lock spans the eligibility read through the brain and the pr_open set-diff, so a
-    # concurrent pass can neither double-spawn nor leak its transitions into this count.
-    with repo_brain_lock(repo, settings) as claimed:
+    # The global lock spans the eligibility read through the brain and the pr_open set-diff,
+    # so a concurrent pass — in this repo or any other sharing the db — can neither
+    # double-spawn nor leak its transitions into this count.
+    with brain_lock(settings) as claimed:
         if claimed:
             async with await ReviewStore.open(settings.db_path) as store:
                 eligible = tuple(

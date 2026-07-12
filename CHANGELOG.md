@@ -4,19 +4,9 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [9.1.0] - 2026-07-11
+## [9.3.0] - 2026-07-12
 
 ### Fixed
-- **A sync and an async dispatch of one event no longer race for a single once-token.**
-  The duplicate-dispatch guard keyed only on event name and payload, so the synchronous and
-  asynchronous `run <Event>` passes of one event — byte-identical stdin, but disjoint hook
-  sets, since `dispatch` filters on `spec.async_` — claimed the same token and one pass was
-  silently dropped. The claim key now carries the async variant, so each pass guards
-  independently and both run.
-- **`SessionEnd` dispatches async pack handlers.** The plugin's `hooks.json` wired
-  `SessionEnd` only to `uvx capt-hook review run`, which detaches the session reviewer and
-  never reaches `dispatch()`. A second entry, `uvx capt-hook run SessionEnd --async`, now
-  runs alongside it, so a pack's `async_=True` `SessionEnd` handler fires fleet-wide.
 - **The pre-existing-issue steering nudge stops firing on itself.** The
   predicate double-counted "pre-existing" (a regex signal and an NlpSignal both
   scored the same phrase, reaching the threshold alone), WordNet expansion of
@@ -40,8 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Sessions that never end get reviewed.** The reviewer was SessionEnd-only,
   so a complaint in a long-lived session sat invisible for days. Ending any
   session now sweeps the repo's still-open sibling transcripts through the
-  mtime-watermark scan, and `review enable` wires the same detached run on
-  SessionStart for the overnight case.
+  mtime-watermark scan, and the plugin's `hooks.json` runs the same detached
+  `review run` on SessionStart for the overnight case.
 - **Complaints that name a hook attribute without a fingerprint.** Attribution
   required a fire fingerprint within three turns; "the task-tracking hook keeps
   firing" with no nearby fire never ingested. A named-hook fallback matches a
@@ -136,7 +126,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `announced_status` on first open — historical terminal candidates are
   baselined as already-announced; open PRs deliberately are not, so existing
   unnoticed PRs announce once.
-- cc-transcript floor is 10.8.
+- cc-transcript floor is 11.
+
+### Removed
+- The `packs.toml` `launcher` key, `read_launcher`, and the `toml_basic_string` helper —
+  inert since 9.0.0 went plugin-canonical (the plugin's `hooks.json` fixes the `uvx
+  capt-hook` command prefix, so nothing builds hook commands from `launcher`). Its sole
+  consumer was pack-manager line preservation across `pack add`/`remove`/`update`.
+  Manifest rewrites (`pack add`/`pack remove`/pinned `pack update`) now drop a stale
+  `launcher` line on their next write instead of preserving it.
+- The internal `sibling_settings` helper in `captain_hook/cli.py` — dead since `review
+  enable` stopped writing settings wiring (9.2.0); nothing read the sibling path anymore.
+
+## [9.2.0] - 2026-07-12
+
+### Changed
+- **`review enable` no longer writes a `SessionEnd` hook into `.claude/settings.json`.**
+  The plugin's static `hooks.json` (9.0.0) already runs `uvx capt-hook review run` on
+  every session end, self-guarded by the watch list, so `enable` now does two things:
+  watch the repo and register the plugin. `ensure_review_wiring` and its helpers are
+  gone with it. One consequence worth knowing: the session reviewer now rides the
+  plugin — a repo where the captain-hook plugin is not enabled gets no reviewer there
+  (and no capt-hook hooks at all).
+
+### Fixed
+- **A sync and an async dispatch of one event no longer race for a single once-token.**
+  The duplicate-dispatch guard keyed only on event name and payload, so the synchronous and
+  asynchronous `run <Event>` passes of one event — byte-identical stdin, but disjoint hook
+  sets, since `dispatch` filters on `spec.async_` — claimed the same token and one pass was
+  silently dropped. The claim key now carries the async variant, so each pass guards
+  independently and both run.
+- **`SessionEnd` dispatches async pack handlers.** The plugin's `hooks.json` wired
+  `SessionEnd` only to `uvx capt-hook review run`, which detaches the session reviewer and
+  never reaches `dispatch()`. A second entry, `uvx capt-hook run SessionEnd --async`, now
+  runs alongside it, so a pack's `async_=True` `SessionEnd` handler fires fleet-wide.
+
+## [9.1.0] - 2026-07-11
+
+### Changed
+- **The model-routing nudges route to gpt-5.6-sol (general pack 0.17.0).** OpenAI's
+  gpt-5.6 family replaces gpt-5.5 in the Models-table lanes: the review-routing,
+  workflow-routing, implementation-spawn, and inline-edit nudges (messages and LLM
+  rubrics) now name gpt-5.6-sol as the codex lane, and their declarative tests assert
+  the `gpt-5.6` family substring so a later variant swap doesn't churn them. The
+  security-noun prefilters are unchanged.
 
 ## [9.0.0] - 2026-07-10
 
@@ -1615,7 +1648,6 @@ compatibility shims.
 - Claude Code event types, condition types, transcript query API, workflows,
   session/workflow state, inline test harness, and the `captain-hook` CLI.
 
-[Unreleased]: https://github.com/yasyf/captain-hook/compare/v8.9.0...HEAD
 [0.9.1]: https://github.com/yasyf/captain-hook/releases/tag/v0.9.1
 [0.9.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.9.0
 [0.8.0]: https://github.com/yasyf/captain-hook/releases/tag/v0.8.0

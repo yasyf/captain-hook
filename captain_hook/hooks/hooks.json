@@ -3,70 +3,80 @@
     "PreToolUse": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx capt-hook run PreToolUse" }
+          { "type": "command", "command": "uvx capt-hook run PreToolUse" },
+          { "type": "command", "command": "uvx capt-hook run PreToolUse --async", "async": true }
         ]
       }
     ],
     "PostToolUse": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx capt-hook run PostToolUse" }
+          { "type": "command", "command": "uvx capt-hook run PostToolUse" },
+          { "type": "command", "command": "uvx capt-hook run PostToolUse --async", "async": true }
         ]
       }
     ],
     "PostToolUseFailure": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx capt-hook run PostToolUseFailure" }
+          { "type": "command", "command": "uvx capt-hook run PostToolUseFailure" },
+          { "type": "command", "command": "uvx capt-hook run PostToolUseFailure --async", "async": true }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx capt-hook run UserPromptSubmit" }
+          { "type": "command", "command": "uvx capt-hook run UserPromptSubmit" },
+          { "type": "command", "command": "uvx capt-hook run UserPromptSubmit --async", "async": true }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx capt-hook run Stop" }
+          { "type": "command", "command": "uvx capt-hook run Stop" },
+          { "type": "command", "command": "uvx capt-hook run Stop --async", "async": true }
         ]
       }
     ],
     "SubagentStop": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx capt-hook run SubagentStop" }
+          { "type": "command", "command": "uvx capt-hook run SubagentStop" },
+          { "type": "command", "command": "uvx capt-hook run SubagentStop --async", "async": true }
         ]
       }
     ],
     "SubagentStart": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx capt-hook run SubagentStart" }
+          { "type": "command", "command": "uvx capt-hook run SubagentStart" },
+          { "type": "command", "command": "uvx capt-hook run SubagentStart --async", "async": true }
         ]
       }
     ],
     "PreCompact": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx capt-hook run PreCompact" }
+          { "type": "command", "command": "uvx capt-hook run PreCompact" },
+          { "type": "command", "command": "uvx capt-hook run PreCompact --async", "async": true }
         ]
       }
     ],
     "Notification": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx capt-hook run Notification" }
+          { "type": "command", "command": "uvx capt-hook run Notification" },
+          { "type": "command", "command": "uvx capt-hook run Notification --async", "async": true }
         ]
       }
     ],
     "PermissionRequest": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx capt-hook run PermissionRequest" }
+          { "type": "command", "command": "uvx capt-hook run PermissionRequest" },
+          { "type": "command", "command": "uvx capt-hook run PermissionRequest --async", "async": true }
         ]
       }
     ],
@@ -82,8 +92,9 @@
     "SessionEnd": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx capt-hook review run", "async": true },
-          { "type": "command", "command": "uvx capt-hook run SessionEnd --async", "async": true }
+          { "type": "command", "command": "uvx capt-hook run SessionEnd" },
+          { "type": "command", "command": "uvx capt-hook run SessionEnd --async", "async": true },
+          { "type": "command", "command": "uvx capt-hook review run", "async": true }
         ]
       }
     ]

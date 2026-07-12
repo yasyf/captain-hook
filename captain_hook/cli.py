@@ -172,10 +172,6 @@ def review_command() -> str:
     return f"{DEFAULT_PREFIX} review run"
 
 
-def sibling_settings(path: Path) -> Path:
-    return path.parent / ("settings.json" if path.name == "settings.local.json" else "settings.local.json")
-
-
 def write_settings(settings_path: Path, data: dict[str, Any]) -> None:
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = settings_path.with_suffix(f"{settings_path.suffix}.tmp")

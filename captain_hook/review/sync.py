@@ -129,30 +129,45 @@ async def sync_open_prs(
     rows = await store.candidates(repo, status=CandidateStatus.PR_OPEN)
     states = await asyncio.gather(*(resolve(str(row["pr_url"])) for row in rows))
     for row, pr in zip(rows, states, strict=True):
-        candidate_id, url = int(str(row["id"])), str(row["pr_url"])
+        # The snapshotted url + generation arm transition()'s anti-ABA guard: a result for a PR
+        # the candidate has since replaced (accepted, reopened, re-PR'd) finds the row changed
+        # and no-ops (returns False, counted kept) rather than resolving the new generation.
+        candidate_id, url, generation = int(str(row["id"])), str(row["pr_url"]), int(str(row["generation"]))
         match pr:
             case PrState(state="MERGED", merged_at=merged_at):
-                await store.transition(
+                if await store.transition(
                     candidate_id,
                     CandidateStatus.ACCEPTED,
                     resolved_at=datetime.fromisoformat(merged_at) if merged_at else None,
-                )
-                logger.bind(
-                    candidate_id=candidate_id, transition="pr_open->accepted", url=url, merged_at=merged_at
-                ).info("PR merged; candidate accepted")
-                counts["accepted"] += 1
+                    expected_pr_url=url,
+                    expected_generation=generation,
+                ):
+                    logger.bind(
+                        candidate_id=candidate_id, transition="pr_open->accepted", url=url, merged_at=merged_at
+                    ).info("PR merged; candidate accepted")
+                    counts["accepted"] += 1
+                else:
+                    counts["kept"] += 1
             case PrState(state="CLOSED"):
-                await store.transition(candidate_id, CandidateStatus.REJECTED)
-                logger.bind(candidate_id=candidate_id, transition="pr_open->rejected", url=url).info(
-                    "PR closed; candidate rejected"
-                )
-                counts["rejected"] += 1
+                if await store.transition(
+                    candidate_id, CandidateStatus.REJECTED, expected_pr_url=url, expected_generation=generation
+                ):
+                    logger.bind(candidate_id=candidate_id, transition="pr_open->rejected", url=url).info(
+                        "PR closed; candidate rejected"
+                    )
+                    counts["rejected"] += 1
+                else:
+                    counts["kept"] += 1
             case PrState(state="OPEN") if is_stale(str(row["pr_opened_at"]), days=settings.stale_after_days):
-                await store.transition(candidate_id, CandidateStatus.STALE)
-                logger.bind(candidate_id=candidate_id, transition="pr_open->stale", url=url).info(
-                    "PR stale; candidate slot freed"
-                )
-                counts["stale"] += 1
+                if await store.transition(
+                    candidate_id, CandidateStatus.STALE, expected_pr_url=url, expected_generation=generation
+                ):
+                    logger.bind(candidate_id=candidate_id, transition="pr_open->stale", url=url).info(
+                        "PR stale; candidate slot freed"
+                    )
+                    counts["stale"] += 1
+                else:
+                    counts["kept"] += 1
             case PrState(state="OPEN"):
                 counts["kept"] += 1
             case None:

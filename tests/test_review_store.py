@@ -402,6 +402,88 @@ class TestTransitions:
             await accepter.close()
             await staler.close()
 
+    async def test_identical_concurrent_transition_converges_instead_of_raising(self, tmp_path: Path) -> None:
+        # Two connections both read PR_OPEN and both request ACCEPTED (concurrent MERGED syncs).
+        # The loser's CAS finds the row already ACCEPTED; because that equals its own target it
+        # converges as a no-op returning True — never raising the false accepted -> accepted.
+        path = tmp_path / "review.db"
+        async with await ReviewStore.open(path) as setup:
+            candidate_id = await create_candidate(setup)
+            await setup.transition(candidate_id, CandidateStatus.PR_OPEN, pr_opened_at=datetime.now(UTC))
+
+        winner = await ReviewStore.open(path)
+        loser = await ReviewStore.open(path)
+        try:
+            before_update = asyncio.Event()
+            winner_committed = asyncio.Event()
+            underlying = loser.store.conn.execute
+
+            async def gated(sql: str, *args: object, **kwargs: object) -> object:
+                if sql.startswith("UPDATE candidates SET status"):
+                    before_update.set()
+                    await winner_committed.wait()
+                return await underlying(sql, *args, **kwargs)
+
+            loser.store.conn.execute = gated  # type: ignore[method-assign]
+            loser_task = asyncio.create_task(loser.transition(candidate_id, CandidateStatus.ACCEPTED))
+            await before_update.wait()
+            assert await winner.transition(candidate_id, CandidateStatus.ACCEPTED) is True
+            winner_committed.set()
+            assert await loser_task is True
+            assert (await candidate_row(winner, candidate_id))["status"] == "accepted"
+        finally:
+            await winner.close()
+            await loser.close()
+
+    async def test_direct_same_state_transition_stays_invalid(self, store: ReviewStore) -> None:
+        # A direct self-loop with no lost CAS still raises: convergence only forgives a status
+        # a *concurrent* peer already reached, never a sequential accepted -> accepted.
+        candidate_id = await create_candidate(store)
+        await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_opened_at=datetime.now(UTC))
+        await store.transition(candidate_id, CandidateStatus.ACCEPTED)
+        with pytest.raises(InvalidTransition, match="accepted -> accepted"):
+            await store.transition(candidate_id, CandidateStatus.ACCEPTED)
+
+    async def test_stale_pr_result_cannot_resolve_a_reopened_candidate(self, store: ReviewStore) -> None:
+        # Anti-ABA: a delayed MERGED result for pull/1 (generation 1) must not resolve a
+        # candidate meanwhile accepted, reopened (generation 2), and re-PR'd against pull/2.
+        # The CAS guard on the snapshotted pr_url + generation finds the row changed and no-ops.
+        candidate_id = await create_candidate(store)
+        await store.transition(
+            candidate_id,
+            CandidateStatus.PR_OPEN,
+            pr_url="https://github.com/x/y/pull/2",
+            pr_opened_at=datetime.now(UTC),
+        )
+        await store.store.conn.execute("UPDATE candidates SET generation = 2 WHERE id = ?", (candidate_id,))
+
+        applied = await store.transition(
+            candidate_id,
+            CandidateStatus.ACCEPTED,
+            resolved_at=datetime(2026, 7, 8, tzinfo=UTC),
+            expected_pr_url="https://github.com/x/y/pull/1",
+            expected_generation=1,
+        )
+        assert applied is False
+        row = await candidate_row(store, candidate_id)
+        assert (row["status"], row["pr_url"], row["generation"], row["resolved_at"]) == (
+            "pr_open",
+            "https://github.com/x/y/pull/2",
+            2,
+            None,
+        )
+
+        assert (
+            await store.transition(
+                candidate_id,
+                CandidateStatus.ACCEPTED,
+                expected_pr_url="https://github.com/x/y/pull/2",
+                expected_generation=2,
+            )
+            is True
+        )
+        assert (await candidate_row(store, candidate_id))["status"] == "accepted"
+
 
 class TestCreateEligibility:
     async def test_unjudged_observations_never_count(self, store: ReviewStore, settings: ReviewSettings) -> None:
@@ -1484,4 +1566,54 @@ class TestJunkTriage:
         await judge(store, "e0")
         assert await store.record_triage(DedupKey("e0"), junk=True) is True
         assert await store.reject_junk_triaged() == 0
+        assert (await candidate_row(store, candidate_id))["status"] == CandidateStatus.WATCHING
+
+    async def test_judge_acceptance_revives_a_junk_rejected_candidate(self, store: ReviewStore) -> None:
+        # The triage/judge race: triage marks the only event junk and terminally rejects the
+        # candidate while a concurrent judge — its queue built before the junk mark — is still
+        # ruling on that same event. When the judge persists an accepted verdict, the close-of-
+        # pass revive reinstates the candidate to watching so the acceptance is not orphaned.
+        candidate_id = await create_candidate(store, rule="canonical-slug")
+        await seed(store, candidate_id, "e0", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        assert await store.record_triage(DedupKey("e0"), junk=True) is True
+        assert await store.reject_junk_triaged() == 1
+        assert (await candidate_row(store, candidate_id))["status"] == CandidateStatus.REJECTED
+
+        await judge(store, "e0", accepted=True)
+        assert await store.revive_junk_rejected() == 1
+        assert (await candidate_row(store, candidate_id))["status"] == CandidateStatus.WATCHING
+
+    async def test_revive_ignores_junk_rejected_without_a_judge_acceptance(self, store: ReviewStore) -> None:
+        # A genuinely junk-rejected candidate the judge never accepted stays rejected — the
+        # revive fires only when a judge acceptance actually exists (the raced case).
+        candidate_id = await create_candidate(store, rule="canonical-slug")
+        await seed(store, candidate_id, "e0", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        await store.record_triage(DedupKey("e0"), junk=True)
+        assert await store.reject_junk_triaged() == 1
+        assert await store.revive_junk_rejected() == 0
+        assert (await candidate_row(store, candidate_id))["status"] == CandidateStatus.REJECTED
+
+    async def test_revive_spares_a_judge_rejected_candidate(self, store: ReviewStore) -> None:
+        # A candidate rejected through non-junk provenance (a kept observation) is never
+        # revived: its evidence is not all-junk, so the signature misses.
+        candidate_id = await create_candidate(store, rule="canonical-slug")
+        await seed(store, candidate_id, "e0", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        await store.record_triage(DedupKey("e0"), junk=False)
+        await judge(store, "e0", accepted=True)
+        await store.transition(candidate_id, CandidateStatus.REJECTED)
+        assert await store.revive_junk_rejected() == 0
+        assert (await candidate_row(store, candidate_id))["status"] == CandidateStatus.REJECTED
+
+    async def test_judge_pass_revives_a_raced_junk_rejection(
+        self, store: ReviewStore, settings: ReviewSettings
+    ) -> None:
+        # The wiring: judge_pass runs the revive before its closing regroup, so a raced junk
+        # rejection carrying a persisted acceptance is back to watching by the pass's end.
+        candidate_id = await create_candidate(store, rule="canonical-slug")
+        await seed(store, candidate_id, "e0", session="s1", occurred="2026-06-01T10:00:00+00:00")
+        await store.record_triage(DedupKey("e0"), junk=True)
+        await store.reject_junk_triaged()
+        await judge(store, "e0", accepted=True)
+
+        await judge_pass(store, settings=settings)
         assert (await candidate_row(store, candidate_id))["status"] == CandidateStatus.WATCHING

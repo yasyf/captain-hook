@@ -330,6 +330,7 @@ async def judge_pass(
         persist_verdict(store, model=model, fidelities=fidelities),
         concurrency=settings.judge_concurrency,
     )
+    await store.revive_junk_rejected()
     merged, retired = await store.regroup_create()
     reopened = await store.reopen_recurrent_fixes()
     return JudgeReport(

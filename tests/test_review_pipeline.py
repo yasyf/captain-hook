@@ -160,7 +160,7 @@ async def seed_corrections(
     )
 
 
-async def seed_eligible_fix(store: ReviewStore, *, repo: RepoKey) -> int:
+async def seed_eligible_fix(store: ReviewStore, *, repo: RepoKey, session: str = "fs1") -> int:
     candidate_id = await store.ensure_candidate(
         repo,
         kind=CandidateKind.FIX,
@@ -170,17 +170,17 @@ async def seed_eligible_fix(store: ReviewStore, *, repo: RepoKey) -> int:
         target_hook_name=FIX_TARGET_HOOK,
         misfire_class="refire",
     )
-    key = dedup_key("hook_complaint", "fs1", FIX_TARGET_HOOK)
+    key = dedup_key("hook_complaint", session, FIX_TARGET_HOOK)
     payload = json.dumps({"signal": to_payload(CandidateSignal(Confidence(VERY_HIGH), ("marker",)))})
     await store.store.conn.execute(
         "INSERT INTO feedback_events (dedup_key, source_kind, session_id, occurred_at, text, payload_json, "
         "context_json, ingested_at) VALUES (?, ?, ?, ?, ?, ?, '{}', '2026-06-01T00:00:00+00:00')",
-        (key, HOOK_COMPLAINT, "fs1", "2026-06-01T10:00:00+00:00", "that reminder misfired again", payload),
+        (key, HOOK_COMPLAINT, session, "2026-06-01T10:00:00+00:00", "that reminder misfired again", payload),
     )
     await store.record_observation(
         candidate_id,
         dedup_key=DedupKey(key),
-        session_id=SessionId("fs1"),
+        session_id=SessionId(session),
         occurred_at=datetime.fromisoformat("2026-06-01T10:00:00+00:00"),
     )
     await store.record_verdict(
@@ -990,7 +990,7 @@ class TestReviewSession:
     async def test_concurrent_passes_spawn_at_most_one_brain(
         self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # A SessionStart and a SessionEnd pass on one repo can run at once; the per-repo lock
+        # A SessionStart and a SessionEnd pass on one repo can run at once; the global brain lock
         # lets exactly one spawn the brain while the other sees the lock held and skips it.
         settings = ReviewSettings(db_path=tmp_path / "review.db")
         calls: list[Path] = []
@@ -1019,6 +1019,55 @@ class TestReviewSession:
         thread.start()
         assert brain_entered.wait(timeout=10)
         loser = await review_session(second, cwd=str(git_repo), settings=settings)
+        release.set()
+        thread.join(timeout=10)
+
+        assert len(calls) == 1
+        assert holder["report"].brain is True
+        assert (loser.brain, loser.eligible, loser.brain_prs) == (False, (), 0)
+
+    async def test_cross_repo_passes_share_the_global_brain_lock(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Two passes in DIFFERENT repos sharing one review db would take different per-repo locks;
+        # the machine-wide lock serializes them so only one brain spawns while the other skips.
+        second_repo = tmp_path / "second"
+        second_repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(second_repo)], check=True)
+        subprocess.run(
+            ["git", "-C", str(second_repo), "remote", "add", "origin", "git@github.com:yasyf/other.git"], check=True
+        )
+        second_key = RepoKey("github.com/yasyf/other")
+
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        calls: list[Path] = []
+        brain_entered = threading.Event()
+        release = threading.Event()
+
+        def blocking_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) -> BrainOutcome:
+            calls.append(repo_root)
+            brain_entered.set()
+            assert release.wait(timeout=10)
+            return BrainOutcome(exit_code=0, seconds=1.0, log_path=review_log_path())
+
+        monkeypatch.setattr("captain_hook.review.pipeline.spawn_brain", blocking_brain)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
+            await store.enable(second_key)
+            await seed_eligible_fix(store, repo=GIT_REPO_KEY, session="fs1")
+            await seed_eligible_fix(store, repo=second_key, session="fs2")
+        first = write_transcript(tmp_path / "start.jsonl", [assistant_text("nothing to correct here")])
+        second = write_transcript(tmp_path / "end.jsonl", [assistant_text("nothing to correct here")])
+
+        holder: dict[str, SpawnReport] = {}
+
+        def run_holder() -> None:
+            holder["report"] = asyncio.run(review_session(first, cwd=str(git_repo), settings=settings))
+
+        thread = threading.Thread(target=run_holder)
+        thread.start()
+        assert brain_entered.wait(timeout=10)
+        loser = await review_session(second, cwd=str(second_repo), settings=settings)
         release.set()
         thread.join(timeout=10)
 

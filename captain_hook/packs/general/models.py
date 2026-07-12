@@ -263,7 +263,7 @@ llm_nudge(
     message=lambda r: (
         f"This delegation would run on fable, but it reads as routine implementation. {r.reasoning} "
         "Implementation defaults to model='opus' + effort='xhigh' (~2x cheaper, nearly as capable); "
-        "a well-scoped edit to existing code can also go to gpt-5.5: spawn the codex:codex-wrapper "
+        "a well-scoped edit to existing code can also go to gpt-5.6-sol: spawn the codex:codex-wrapper "
         "agent with a self-contained prompt. Keep fable if this genuinely is sensitive or error-prone. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
@@ -291,7 +291,7 @@ llm_nudge(
     message=lambda r: (
         f"This inline edit reads as routine implementation on fable. {r.reasoning} "
         "Implementation delegates: spawn a model='opus', effort='xhigh' subagent to own the change, "
-        "or route a well-scoped edit to gpt-5.5 via the codex skill. Keep editing inline only when "
+        "or route a well-scoped edit to gpt-5.6-sol via the codex skill. Keep editing inline only when "
         "the change is small, sensitive, or bound to judgment you just exercised. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
@@ -352,9 +352,9 @@ llm_nudge(
     message=lambda r: (
         f"This review/diagnosis delegation would run on fable. {r.reasoning} "
         "Code/diff review, security review/audit and verification of security-sensitive code, "
-        "and bug diagnosis route to gpt-5.5: spawn the codex:codex-wrapper agent with the "
+        "and bug diagnosis route to gpt-5.6-sol: spawn the codex:codex-wrapper agent with the "
         "self-contained question as its prompt (from the main conversation, run the codex skill "
-        "directly), and escalate to fable only when gpt-5.5's output misses. "
+        "directly), and escalate to fable only when gpt-5.6-sol's output misses. "
         "Design review and findings synthesis stay on fable. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
@@ -378,7 +378,7 @@ llm_nudge(
     agent=False,
     transcript=False,
     tests={
-        Input(prompt="Review the diff for correctness and concurrency issues"): Warn(pattern="gpt-5.5"),
+        Input(prompt="Review the diff for correctness and concurrency issues"): Warn(pattern="gpt-5.6"),
         Input(model="fable", prompt="Adversarially refute this finding: the retry loop is wrong"): Warn(
             pattern="codex"
         ),
@@ -395,7 +395,7 @@ llm_nudge(
             prompt="Synthesize the confirmed review findings and decide which to fix",
             llm={"fire": False},
         ): Allow(),
-        Input(prompt="Audit auth/session.py for security vulnerabilities"): Warn(pattern="gpt-5.5"),
+        Input(prompt="Audit auth/session.py for security vulnerabilities"): Warn(pattern="gpt-5.6"),
         Input(prompt="Verify the input-validation change blocks path traversal"): Warn(pattern="codex"),
         Input(prompt="Verify the pagination change renders the last page correctly"): Allow(),
         Input(
@@ -456,7 +456,7 @@ llm_nudge(
     REVIEW_ROUTING_WORKFLOW_NUDGE,
     message=lambda r: (
         f"This workflow runs review/diagnosis stages on fable. {r.reasoning} "
-        "Route finder, refuter, security-audit, and diagnosis stages to gpt-5.5: give each stage "
+        "Route finder, refuter, security-audit, and diagnosis stages to gpt-5.6-sol: give each stage "
         "agentType: 'codex:codex-wrapper' with the self-contained question as its prompt; "
         "keep the synthesis/accept-reject stage on fable (inherit the session model). "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
@@ -479,7 +479,7 @@ llm_nudge(
             pattern="codex"
         ),
         Input(script="agent(`Adversarially refute: ${f.title}`, {model: 'fable', effort: 'max'})"): Warn(
-            pattern="gpt-5.5"
+            pattern="gpt-5.6"
         ),
         Input(
             script="agent('Write a self-contained codex prompt reviewing this diff, "
@@ -496,7 +496,7 @@ llm_nudge(
             llm={"fire": False},
         ): Allow(),
         Input(script="agent(`Audit the login flow for auth bypass and injection; return findings as JSON`)"): Warn(
-            pattern="gpt-5.5"
+            pattern="gpt-5.6"
         ),
         Input(script="agent('Verify the CLI renders the last page correctly')"): Allow(),
     },

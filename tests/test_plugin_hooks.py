@@ -46,19 +46,24 @@ class TestPluginHooksJson:
                     assert by_command[run_command(name, async_=True)]["async"] is True
                     assert by_command[review_command()]["async"] is True
                 case "SessionEnd":
-                    # The always-on session reviewer (`review run`) plus a `run SessionEnd
-                    # --async` so a pack's async_=True SessionEnd handler still reaches
-                    # dispatch(); both entries are async.
+                    # Sync dispatcher (a default synchronous SessionEnd handler), async
+                    # dispatcher (a pack's async_=True SessionEnd handler), and the
+                    # always-on session reviewer (`review run`); both non-sync entries async.
                     assert set(by_command) == {
-                        review_command(),
+                        run_command(name, async_=False),
                         run_command(name, async_=True),
+                        review_command(),
                     }
-                    assert by_command[review_command()]["async"] is True
+                    assert "async" not in by_command[run_command(name, async_=False)]
                     assert by_command[run_command(name, async_=True)]["async"] is True
+                    assert by_command[review_command()]["async"] is True
                 case _:
-                    [entry] = entries
-                    assert entry["command"] == run_command(name, async_=False)
-                    assert "async" not in entry
+                    # Every other event registers both dispatch variants so a hook declared
+                    # either synchronous or async_=True reaches dispatch() (which filters on
+                    # the exact variant); the once-guard keys on the variant, so both fire.
+                    assert set(by_command) == {run_command(name, async_=False), run_command(name, async_=True)}
+                    assert "async" not in by_command[run_command(name, async_=False)]
+                    assert by_command[run_command(name, async_=True)]["async"] is True
 
     def test_canonical_prefix_is_uvx_capt_hook(self) -> None:
         assert DEFAULT_PREFIX == "uvx capt-hook"

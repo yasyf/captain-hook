@@ -57,10 +57,10 @@ uvx capt-hook pack list
 ```
 
 ```
-  general                  builtin  -                    v0.14.0   10 hooks
+  general                  builtin  -                    v0.17.0   10 hooks
   python                   builtin  -                    v0.1.0    3 hooks
   go                       builtin  -                    v0.1.0    2 hooks
-  steering                 builtin  -                    v0.5.0    1 hooks
+  steering                 builtin  -                    v0.6.0    1 hooks
   fixes                    builtin  -                    v0.1.0    1 hooks
 ```
 
@@ -109,9 +109,9 @@ Hook commands are plugin-owned. The captain-hook plugin's `hooks.json` registers
 `uvx capt-hook run <Event>` for every event, and the string is identical on every
 machine, so a fresh clone gets working hooks with nothing installed beyond `uv`.
 Nothing a pack does changes that: `pack add`, `pack remove`, and `pack update`
-edit `.claude/hooks/packs.toml` and never touch the hook commands. A `launcher`
-key left in `packs.toml` from earlier releases is carried along by those commands
-but no longer affects which command runs.
+edit `.claude/hooks/packs.toml` and never touch the hook commands. A stale
+`launcher` line from an older scaffold is dropped the next time any pack command
+rewrites the manifest.
 
 ## How packs combine with your own hooks
 

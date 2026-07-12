@@ -62,11 +62,11 @@ class TestClaimOnce:
         # One event fans out into a sync pass and an async pass that dispatch disjoint hook
         # sets; byte-identical stdin must not let one variant's token swallow the other. Each
         # variant claims independently, and a duplicate within a variant still collapses.
-        payload = b'{"source": "startup"}'
-        assert once.claim_once("SessionStart", payload, async_=False) is True
-        assert once.claim_once("SessionStart", payload, async_=True) is True
-        assert once.claim_once("SessionStart", payload, async_=False) is False
-        assert once.claim_once("SessionStart", payload, async_=True) is False
+        payload = b'{"reason": "clear"}'
+        assert once.claim_once("SessionEnd", payload, async_=False) is True
+        assert once.claim_once("SessionEnd", payload, async_=True) is True
+        assert once.claim_once("SessionEnd", payload, async_=False) is False
+        assert once.claim_once("SessionEnd", payload, async_=True) is False
 
     def test_ttl_zero_disables_guard(self, sentinel_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(once.TTL_ENV, "0")
