@@ -615,4 +615,20 @@ def pack_update(state: CliState, name: str | None) -> None:
 
 cli.add_command(review)
 
+
+@cli.group(hidden=True)
+def daemon() -> None:
+    """Resident per-project worker (internal — the thin client spawns and drives it)."""
+
+
+@daemon.command(name="run")
+@click.option("--root", "root_", required=True, help="Project root this worker serves")
+@click.option("--foreground", is_flag=True, default=False, help="Log to the terminal instead of the boot log")
+def daemon_run(root_: str, foreground: bool) -> None:
+    """Run the resident worker, serving hook events over its per-project Unix socket."""
+    from captain_hook.daemon.server import Server
+
+    Server(Path(root_).resolve(), foreground=foreground).run()
+
+
 main = cli
