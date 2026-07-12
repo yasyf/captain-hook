@@ -74,14 +74,14 @@ Check for an installed tool first.
 uv tool list
 ```
 
-If `capt-hook` appears there, that install is the cause on plugin versions before 9.6.0. A bare `uvx capt-hook` prefers an installed tool over resolving fresh — `uv` documents this shortcut — so one `uv tool install capt-hook`, however long ago, pins every hook on the machine to that version. Fix it either way:
+If `capt-hook` appears there, that install is the cause on plugin versions before 9.7.0. A bare `uvx capt-hook` prefers an installed tool over resolving fresh — `uv` documents this shortcut — so one `uv tool install capt-hook`, however long ago, pins every hook on the machine to that version. Fix it either way:
 
 ```bash
 uv tool upgrade capt-hook      # keep the PATH binary, current again
 uv tool uninstall capt-hook    # drop it; uvx resolves fresh without it
 ```
 
-Then upgrade the plugin. From 9.6.0 the plugin wires every hook as `uvx --isolated capt-hook run <Event>`, which ignores installed tools entirely, so a stale install can't capture dispatch again. Claude Code checks marketplace plugins for updates at session start only, and auto-update is off by default for third-party marketplaces, so on most machines the upgrade is manual:
+Then upgrade the plugin. From 9.7.0 the plugin wires every hook as `uvx --isolated capt-hook run <Event>`, which ignores installed tools entirely, so a stale install can't capture dispatch again. Claude Code checks marketplace plugins for updates at session start only, and auto-update is off by default for third-party marketplaces, so on most machines the upgrade is manual:
 
 ```
 /plugin marketplace update captain-hook

@@ -144,9 +144,9 @@ description = "Guards for ACME service conventions"
 hooks = "hooks"
 ```
 
-`version` is optional since capt-hook 9.6.0 and defaults to `0.0.0` — a pack
+`version` is optional since capt-hook 9.7.0 and defaults to `0.0.0` — a pack
 consumed `@latest` shows its resolved release tag in `pack list` anyway. Keep
-the key while pre-9.6.0 capt-hook is in the wild, though: older releases crash
+the key while pre-9.7.0 capt-hook is in the wild, though: older releases crash
 on a manifest without it.
 
 The `hooks` path is relative to the repo root regardless of where the manifest

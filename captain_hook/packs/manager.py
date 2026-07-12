@@ -93,8 +93,8 @@ class PackManifest:
             name=data["name"],
             description=data["description"],
             hooks=data["hooks"],
-            # .get is deliberate: `version` is optional since 9.6 (authors keep the key while
-            # pre-9.6 capt-hook is in the wild), and `nlp` is a schema addition manifests predate.
+            # .get is deliberate: `version` is optional since 9.7 (authors keep the key while
+            # pre-9.7 capt-hook is in the wild), and `nlp` is a schema addition manifests predate.
             version=data.get("version", "0.0.0"),
             nlp=data.get("nlp", False),
         )
@@ -165,7 +165,7 @@ class PackMeta:
     Stored as JSON next to the cache so the resolved ``commit``, ``resolved_ref``, and
     ``checked_at`` timestamp never enter the committed ``packs.toml``. ``checked_at`` gates
     the 24h re-resolution TTL; ``resolved_ref`` (the moving ref that resolved — a release tag
-    or a branch) is display-only for ``pack list`` and is absent on pre-9.6 sidecars.
+    or a branch) is display-only for ``pack list`` and is absent on pre-9.7 sidecars.
     """
 
     commit: str
@@ -180,7 +180,7 @@ class PackMeta:
         if not path.is_file():
             return None
         data = json.loads(path.read_text())
-        # .get is deliberate: pre-9.6 sidecars lack resolved_ref (mirrors PackManifest.load).
+        # .get is deliberate: pre-9.7 sidecars lack resolved_ref (mirrors PackManifest.load).
         return cls(commit=data["commit"], checked_at=data["checked_at"], resolved_ref=data.get("resolved_ref"))
 
     def write(self, path: Path) -> None:

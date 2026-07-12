@@ -1015,7 +1015,7 @@ def test_resolve_moving_bare_source_records_branch(tmp_path: Path, monkeypatch: 
     assert meta is not None and meta.resolved_ref == "trunk"  # a bare source records its default branch
 
 
-def test_pack_meta_load_pre_9_6_sidecar_defaults_none(tmp_path: Path) -> None:
+def test_pack_meta_load_pre_9_7_sidecar_defaults_none(tmp_path: Path) -> None:
     path = tmp_path / "acme.meta"
     path.write_text(json.dumps({"commit": "a" * 40, "checked_at": 1.0}))  # a pre-9.5 sidecar has no resolved_ref
     meta = manager.PackMeta.load(path)

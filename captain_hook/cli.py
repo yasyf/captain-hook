@@ -563,7 +563,7 @@ def pack_list(state: CliState) -> None:
                 kind = "github"
                 ref = f"{source.ref or 'HEAD'}@{(manager.resolved_commit(ext) or '???')[:7]}"
                 # A moving pack shows the ref it resolved to (a release tag or a branch carries its
-                # own label); a pin, a pre-9.6 sidecar, or a builtin falls back to the manifest version.
+                # own label); a pin, a pre-9.7 sidecar, or a builtin falls back to the manifest version.
                 version = manager.resolved_ref_name(ext) or f"v{r.manifest.version}"
         count = sum(
             1

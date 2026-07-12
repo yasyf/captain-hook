@@ -63,7 +63,7 @@ Claude Code deduplicates hook commands by exact string match: two hooks that wir
 the same command string for one event run that command once. A plugin that wired
 `uvx capt-hook --hooks ${CLAUDE_PLUGIN_ROOT}/hooks run PreToolUse` produces a
 different string from the captain-hook plugin's own
-`uvx --isolated capt-hook run PreToolUse` — as does the pre-9.6.0 bare
+`uvx --isolated capt-hook run PreToolUse` — as does the pre-9.7.0 bare
 `uvx capt-hook run PreToolUse` — so Claude Code runs both: two `uvx` processes
 per event, and the project's `packs.toml` packs resolved and dispatched twice.
 
