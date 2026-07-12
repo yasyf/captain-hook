@@ -4,6 +4,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.5.0] - 2026-07-12
+
+### Added
+- **The first turn batch-loads the always-used deferred tools (general pack
+  0.18.0).** A new `tools` SessionStart nudge injects additionalContext telling
+  the agent to load the task/plan/monitor/message tool schemas in one
+  `ToolSearch select:` call rather than paying a lookup round-trip per tool as
+  each is first needed; names already resident or absent in the running version
+  simply don't match, and every other deferred tool stays unloaded until a task
+  needs it. It fires once, only on a fresh `startup` or `clear` — `resume` and
+  `compact` keep the schemas already loaded — and never for a subagent. The
+  inline `Input(source=...)` test surface now threads `agent_id` into
+  SessionStart events so the subagent-skip case is simulable.
+
 ## [9.4.0] - 2026-07-12
 
 ### Fixed

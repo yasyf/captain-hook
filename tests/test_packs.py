@@ -12,7 +12,7 @@ from click.testing import CliRunner
 from loguru import logger
 
 import captain_hook
-from captain_hook import app
+from captain_hook import Prompt, app
 from captain_hook.cli import cli
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack, import_pack_module
@@ -35,6 +35,7 @@ GENERAL_HOOKS = {
     "review",
     "tasks",
     "tombstones",
+    "tools",
 }
 PYTHON_HOOKS = {"style", "testing", "toolchain"}
 GO_HOOKS = {"testing", "toolchain"}
@@ -187,6 +188,7 @@ def test_builtin_pack_layout(name: str, hook_stems: set[str]) -> None:
         "models/writing_docs_workflow_nudge.md",
         "models/implementation_spawn_nudge.md",
         "models/inline_edit_nudge.md",
+        "tools/preload_nudge.md",
     ],
 )
 def test_general_pack_prompts_are_packaged(name: str) -> None:
@@ -209,6 +211,31 @@ def test_fixes_pack_scopes_to_native_bash(isolate_modules: None, tmp_path: Path)
     assert allowed["hookSpecificOutput"]["decision"]["behavior"] == "allow"
     assert decision("mcp__srv__Bash", "echo hi") is None
     assert decision("mcp__ops__Bash", "rm -rf /") is None
+
+
+def test_general_pack_preload_tools_nudge(isolate_modules: None, tmp_path: Path) -> None:
+    discover_pack("general", PACKS_DIR / "general")
+    select = (
+        "select:TaskCreate,TaskGet,TaskList,TaskOutput,TaskStop,TaskUpdate,"
+        "Monitor,SendMessage,EnterPlanMode,ExitPlanMode"
+    )
+    rendered = str(Prompt.load("tools/preload_nudge", base=PACKS_DIR / "general" / "prompts"))
+
+    def context(source: str, *, agent_id: str | None = None) -> str | None:
+        evt = input_to_event(Event.SessionStart, Input(source=source, agent_id=agent_id))
+        out = dispatch(Event.SessionStart, evt, session_dir=tmp_path / f"{source}-{agent_id or 'main'}")
+        return out["hookSpecificOutput"]["additionalContext"] if out else None
+
+    injected = context("startup")
+    assert injected is not None and rendered in injected
+    cleared = context("clear")
+    assert cleared is not None and select in cleared
+    assert context("resume") is None
+    assert context("compact") is None
+    assert context("startup", agent_id="sub-1") is None
+    assert context("clear", agent_id="sub-1") is None
+    # max_fires=1: a repeat startup in the same session dir never re-injects
+    assert context("startup") is None
 
 
 # --- PackSource ----------------------------------------------------------------------
@@ -630,7 +657,7 @@ def test_cli_pack_add_list_remove(tmp_path: Path) -> None:
     assert "[packs.general]" in manager.packs_toml_path(tmp_path).read_text()
 
     listed = runner.invoke(cli, ["--root", str(tmp_path), "pack", "list"])
-    assert "general" in listed.output and "10 hooks" in listed.output
+    assert "general" in listed.output and "11 hooks" in listed.output
 
     remove = runner.invoke(cli, ["--root", str(tmp_path), "pack", "remove", "general"])
     assert remove.exit_code == 0

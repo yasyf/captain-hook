@@ -273,13 +273,16 @@ def mock_session_end_event(
 def mock_session_start_event(
     source: str = "startup",
     *,
+    agent_id: str | None = None,
     permission_mode: str | None = None,
     transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> SessionStartEvent:
     return SessionStartEvent(
-        _raw={"source": source} | ({"permission_mode": permission_mode} if permission_mode else {}),
+        _raw={"source": source}
+        | ({"agent_id": agent_id} if agent_id else {})
+        | ({"permission_mode": permission_mode} if permission_mode else {}),
         ctx=build_context(transcript, transcript_path, session_dir),
     )
 
@@ -419,7 +422,7 @@ def input_to_event(
         case Event.Stop:
             evt = mock_stop_event(**ctx_kw)
         case Event.SessionStart:
-            evt = mock_session_start_event(source=inp.source or "startup", **ctx_kw)
+            evt = mock_session_start_event(source=inp.source or "startup", agent_id=inp.agent_id, **ctx_kw)
         case Event.SessionEnd:
             evt = mock_session_end_event(reason=inp.reason or "other", **ctx_kw)
         case _:
