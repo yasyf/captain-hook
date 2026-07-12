@@ -4,6 +4,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.6.0] - 2026-07-12
+
+### Added
+- **The fable main loop is nudged to delegate sustained browser automation
+  (general pack 0.19.0).** A new `PostToolUse` `llm_nudge` fires when the main
+  loop (never a subagent) drives a run of `agent-browser`/`playwright` calls
+  inline — five or more browser tool calls via Bash or Skill within the
+  current turn — and steers the hands-on browser work to a delegated `opus`/`xhigh`
+  teammate (or an `agent-browser-with-cookies` teammate when the site needs the
+  user's login), just like any other implementation. A single gated, stateful,
+  or authenticated interaction the agent just decided to run (a go/no-go
+  verification, a login+2FA flow) stays inline: an LLM judge declines below
+  that bar, and the nudge fires at most once per session.
+
 ## [9.5.0] - 2026-07-12
 
 ### Added

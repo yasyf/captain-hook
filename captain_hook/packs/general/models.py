@@ -14,6 +14,7 @@ from captain_hook import (
     FilePath,
     Input,
     Not,
+    Or,
     Phrase,
     Prompt,
     Rewrite,
@@ -39,6 +40,7 @@ WORKFLOW_HEADER = str(Prompt.load("fragments/workflow_script_header"))
 PROSE_SPAWN_GATE = Prompt.load("models/prose_spawn_gate", deliverable_rubric=DELIVERABLE_GATE_RUBRIC)
 IMPLEMENTATION_SPAWN_NUDGE = Prompt.load("models/implementation_spawn_nudge")
 INLINE_EDIT_NUDGE = Prompt.load("models/inline_edit_nudge")
+BROWSER_DELEGATION_NUDGE = Prompt.load("models/browser_delegation_nudge")
 REVIEW_ROUTING_SPAWN_NUDGE = Prompt.load("models/review_routing_spawn_nudge")
 PROSE_WORKFLOW_NUDGE = Prompt.load(
     "models/prose_workflow_nudge",
@@ -344,6 +346,66 @@ llm_nudge(
             content="def refresh_token(lock: Lock):\n    with lock:\n        rotate()\n" * 12,
             llm={"fire": False},
         ): Allow(),
+    },
+)
+
+
+def browser_calls(n: int, *, tool: str = "Bash", field: str = "command", value: str = "agent-browser click '#next'"):
+    """A same-turn run of ``n`` browser tool_use lines (Bash by default) for the delegation-nudge inline tests."""
+    return [
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": tool, "input": {field: value}, "id": f"tu-{tool}-{i}"}]}}
+        for i in range(n)
+    ]
+
+
+llm_nudge(
+    BROWSER_DELEGATION_NUDGE,
+    message=lambda r: (
+        f"This is sustained browser automation running inline on fable. {r.reasoning} "
+        "Hands-on browser work delegates like any implementation: spawn a model='opus', effort='xhigh' "
+        "subagent to drive agent-browser and return findings, or an agent-browser-with-cookies teammate "
+        "when the site needs your login. Keep driving the browser inline only for a single gated, stateful, "
+        "or authenticated interaction you just decided to run (a go/no-go verification). "
+        "See CLAUDE.md § Plan Execution & Orchestration (Models)."
+    ),
+    events=Event.PostToolUse,
+    only_if=[
+        Tool("Bash|Skill"),
+        Or(
+            ToolInput("command", r"(?i)\b(agent-browser|playwright)\b"),
+            ToolInput("skill", r"(?i)\b(agent-browser|playwright)\b"),
+        ),
+    ],
+    when=lambda evt: not evt.is_subagent
+    and (
+        evt.ctx.t.current_turn.tool_calls.named("Bash")
+        .where_input(command=re.compile(r"(?i)\b(agent-browser|playwright)\b"))
+        .count()
+        + evt.ctx.t.current_turn.tool_calls.named("Skill")
+        .where_input(skill=re.compile(r"(?i)\b(agent-browser|playwright)\b"))
+        .count()
+    )
+    >= 5,
+    max_fires=1,
+    agent=False,
+    transcript=True,
+    tests={
+        Input(command="agent-browser click '#submit'", transcript=browser_calls(5)): Warn(pattern="opus"),
+        Input(command="npx agent-browser click '#next'", transcript=browser_calls(5)): Warn(pattern="opus"),
+        Input(command="playwright-cli click e15", transcript=browser_calls(5)): Warn(pattern="opus"),
+        Input(
+            tool="Skill",
+            tool_input={"skill": "agent-browser-with-cookies"},
+            transcript=browser_calls(5),
+        ): Warn(pattern="opus"),
+        Input(
+            command="agent-browser click '#submit'",
+            transcript=browser_calls(3) + browser_calls(2, tool="Skill", field="skill", value="agent-browser"),
+        ): Warn(pattern="opus"),
+        Input(command="agent-browser click '#submit'", agent_id="tm1", transcript=browser_calls(5)): Allow(),
+        Input(command="agent-browser screenshot out.png"): Allow(),
+        Input(command="agent-browser click '#submit'", transcript=browser_calls(5), llm={"fire": False}): Allow(),
+        Input(command="ls -la", transcript=browser_calls(5)): Allow(),
     },
 )
 
