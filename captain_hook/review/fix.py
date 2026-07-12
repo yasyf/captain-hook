@@ -143,9 +143,13 @@ def classify_marker(text: str) -> Marker | None:
 
 def fingerprint_of(event: TranscriptEvent) -> Fingerprint | None:
     match event:
-        case AttachmentEvent(detail=HookAdditionalContext(content=content, tool_use_id=tool_use_id, hook_event=hook_event)):
+        case AttachmentEvent(
+            detail=HookAdditionalContext(content=content, tool_use_id=tool_use_id, hook_event=hook_event)
+        ):
             return Fingerprint(message="\n".join(content), tool_use_id=tool_use_id, event=hook_event)
-        case AttachmentEvent(detail=HookBlockingError(blocking_error={"blockingError": blocking_error}, hook_event=hook_event)):
+        case AttachmentEvent(
+            detail=HookBlockingError(blocking_error={"blockingError": blocking_error}, hook_event=hook_event)
+        ):
             return Fingerprint(message=str(blocking_error), event=str(hook_event or "Stop"))
         case UserEvent(meta=meta, text=text) if meta.is_meta and text.startswith(STOP_FEEDBACK_PREFIX):
             return Fingerprint(message=text.removeprefix(STOP_FEEDBACK_PREFIX), event="Stop")
