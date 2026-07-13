@@ -107,6 +107,14 @@ def create_private_log(path: Path) -> None:
         os.close(fd)
 
 
+def private_log_opener(path: str, flags: int) -> int:
+    # loguru (re)creates the daemon log via this, so rotated files stay 0600. fchmod forces the mode past
+    # any umask — a hostile umask would otherwise create 0000 logs the next daemon cannot open.
+    fd = os.open(path, flags | os.O_NOFOLLOW, 0o600)
+    os.fchmod(fd, 0o600)
+    return fd
+
+
 def configure_daemon_logging(key: str) -> SessionFileRouter:
     router = SessionFileRouter()
     daemon_log = daemon_log_path(key)
@@ -126,6 +134,7 @@ def configure_daemon_logging(key: str) -> SessionFileRouter:
                 "retention": DAEMON_LOG_RETENTION,
                 "encoding": "utf-8",
                 "enqueue": False,
+                "opener": private_log_opener,
             },
             {"sink": RequestStderrTee(), "level": "WARNING", "format": daemon_format(STDERR_FORMAT), "enqueue": False},
         ],

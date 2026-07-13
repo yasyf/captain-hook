@@ -215,7 +215,10 @@ def worker_process_live(worker: Worker) -> bool:
         return False
     if worker.proc_start is None:
         return True
-    return process_start_time(worker.pid) == worker.proc_start
+    # start-time unknown (ps timed out/transient) is not a mismatch: treat as live, never clean.
+    if (current := process_start_time(worker.pid)) is None:
+        return True
+    return current == worker.proc_start
 
 
 def _await_shutdown(sock_path: str) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import stat
 from pathlib import Path
 
@@ -131,6 +132,46 @@ class TestConfigureDaemonLogging:
         configure_daemon_logging(KEY)
         assert stat.S_IMODE(logs.stat().st_mode) == 0o700
         assert stat.S_IMODE(daemon_log_path(KEY).stat().st_mode) == 0o600
+
+    def test_rotated_and_active_daemon_logs_stay_0600(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # V13: loguru rotation must preserve 0600 on both the rotated file and the freshly-created active
+        # file, not fall back to the umask default (0644), which re-exposes payload-bearing tracebacks.
+        import captain_hook.daemon.logsink as logsink
+
+        logs = tmp_path / "logs"
+        monkeypatch.setattr(logsink, "DAEMON_LOG_ROTATION", "1 KB")
+        configure_daemon_logging(KEY)
+        for _ in range(300):
+            logger.info("x" * 60)  # exceed 1 KB repeatedly to force several rotations
+        logger.complete()
+        active = daemon_log_path(KEY)
+        rotated = [p for p in logs.iterdir() if p.name.startswith(f"daemon-{KEY}") and p != active]
+        assert rotated, "no rotation occurred"
+        assert stat.S_IMODE(active.stat().st_mode) == 0o600
+        for path in rotated:
+            assert stat.S_IMODE(path.stat().st_mode) == 0o600, f"rotated file {path.name} is not 0600"
+
+    def test_rotation_forces_0600_past_a_hostile_umask(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # V13: a umask masking the owner bits (0700) would make os.open(...0o600) create 0000 logs the next
+        # daemon cannot open; the opener's fchmod must force 0600 on the rotated and active files anyway.
+        import captain_hook.daemon.logsink as logsink
+
+        logs = tmp_path / "logs"
+        monkeypatch.setattr(logsink, "DAEMON_LOG_ROTATION", "1 KB")
+        old_umask = os.umask(0o077 | 0o600)  # clear the owner rw bits too
+        try:
+            configure_daemon_logging(KEY)
+            for _ in range(300):
+                logger.info("x" * 60)
+            logger.complete()
+        finally:
+            os.umask(old_umask)
+        active = daemon_log_path(KEY)
+        rotated = [p for p in logs.iterdir() if p.name.startswith(f"daemon-{KEY}") and p != active]
+        assert rotated, "no rotation occurred"
+        assert stat.S_IMODE(active.stat().st_mode) == 0o600
+        for path in rotated:
+            assert stat.S_IMODE(path.stat().st_mode) == 0o600, f"rotated file {path.name} is not 0600 under a bad umask"
 
     def test_create_private_log_refuses_a_symlink(self, tmp_path: Path) -> None:
         # S1/S2: O_NOFOLLOW means a pre-planted symlink at the log path is refused, not followed.

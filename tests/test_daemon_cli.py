@@ -215,6 +215,27 @@ class TestStop:
         finally:
             shutil.rmtree(run, ignore_errors=True)
 
+    def test_leaves_a_live_worker_when_start_time_is_unavailable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # V10: process_start_time returning None (ps timed out/transient) must NOT read as a mismatch that
+        # cleans a LIVE worker's files — unknown != stale; fall back to pid_alive and report unreachable.
+        from captain_hook.daemon import ops
+
+        run = short_run()
+        monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(run))
+        monkeypatch.setattr(ops, "process_start_time", lambda _pid: None)
+        try:
+            write_meta_with_start(
+                run, "aabbccddeeff0033", tmp_path / "proj", pid=os.getpid(), proc_start="recorded-start"
+            )
+            result = CliRunner().invoke(cli, ["daemon", "stop", "--all"])
+            assert result.exit_code == 0, result.output
+            assert "unreachable" in result.output
+            assert list(run.glob("*.json")) != [], "a live worker's files were cleaned on an unknown start-time"
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
     def test_leaves_a_live_matching_worker_unreachable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # FINDER-8: a live pid whose recorded start-time still matches is a genuinely-running daemon
         # (just unresponsive on its socket) — reported "unreachable", its files kept, not cleaned.
@@ -286,6 +307,27 @@ class TestNoSpawn:
             assert list(run.glob("*.json")) == []
         finally:
             shutil.rmtree(run, ignore_errors=True)
+
+
+class TestWorkerProcessLive:
+    def _worker(self, pid: int) -> ops.Worker:
+        return ops.Worker(
+            key="k", pid=pid, root="/r", build="b", version="1", socket="/s.sock", started_at=0.0,
+            proc_start="recorded-start",
+        )
+
+    @pytest.mark.parametrize(
+        ("forced", "expected"),
+        [(None, True), ("recorded-start", True), ("other-start", False)],
+        ids=["unknown-is-live", "match-is-live", "mismatch-is-stale"],
+    )
+    def test_start_time_states(self, monkeypatch: pytest.MonkeyPatch, forced: str | None, expected: bool) -> None:
+        # V10: MATCH → live; MISMATCH (both known, differ) → stale; UNKNOWN (None) → live, never cleaned.
+        monkeypatch.setattr(ops, "process_start_time", lambda _pid: forced)
+        assert ops.worker_process_live(self._worker(os.getpid())) is expected
+
+    def test_dead_pid_is_not_live(self) -> None:
+        assert ops.worker_process_live(self._worker(reaped_pid())) is False
 
 
 class TestOpsHelpers:

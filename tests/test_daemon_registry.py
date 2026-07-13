@@ -217,7 +217,9 @@ def test_build_never_serves_a_torn_discovery(project: CliState, monkeypatch: pyt
     monkeypatch.setattr(CliState, "discover", racing_discover)
     snapshot = reg._build(None)
     assert len(calls) == 2, "the build did not retry after the tree moved during discovery"
-    assert snapshot.state.hooks, "the served snapshot is the torn/empty intermediate, not the settled tree"
+    assert any(h.spec.message == "m" for h in snapshot.state.hooks), (
+        "the served snapshot is the torn/empty intermediate — the project hook (message='m') is missing"
+    )
 
 
 def test_build_is_bounded_when_the_tree_keeps_moving(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -231,6 +233,22 @@ def test_build_is_bounded_when_the_tree_keeps_moving(project: CliState, monkeypa
     result = reg._build(None)
     assert len(calls) == registry.BUILD_RETRIES, "the build was not bounded"
     assert result.state is not None
+    assert result.cacheable is False, "an exhausted-retry (possibly torn) snapshot must not be cacheable"
+
+
+def test_get_does_not_cache_a_non_cacheable_snapshot(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
+    # V9: a non-cacheable (exhausted/torn) snapshot is served but never stored — the next request rebuilds.
+    from dataclasses import replace
+
+    reg = Registry(project)
+    builds: list[int] = []
+    real = reg._discover_once
+    monkeypatch.setattr(reg, "_discover_once", lambda sd: (builds.append(1), replace(real(sd), cacheable=False))[1])
+    first = reg.get(None)
+    reg.get(None)
+    assert first.cacheable is False
+    assert len(builds) == 2, "a non-cacheable snapshot was cached and served on the second request"
+    assert any(h.spec.message == "m" for h in first.state.hooks), "the served snapshot is missing the project hook"
 
 
 def test_concurrent_get_builds_once(project: CliState) -> None:

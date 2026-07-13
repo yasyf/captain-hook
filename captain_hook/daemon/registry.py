@@ -14,7 +14,7 @@ import hashlib
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -137,6 +137,7 @@ class RegistrySnapshot:
     state: app.State
     resolved: list[manager.ResolvedPack]
     discovery_stderr: str = ""
+    cacheable: bool = True
 
 
 class Registry:
@@ -155,7 +156,8 @@ class Registry:
             if (hit := self._lookup(Fingerprint.compute(self._cli_state, session_dir), now)) is not None:
                 return hit
             snapshot = self._build(session_dir)
-            self._cache[snapshot.fingerprint] = snapshot
+            if snapshot.cacheable:
+                self._cache[snapshot.fingerprint] = snapshot
             return snapshot
 
     def drop_all(self) -> None:
@@ -167,12 +169,14 @@ class Registry:
 
     def _build(self, session_dir: Path | None) -> RegistrySnapshot:
         # Retry a discovery whose stable inputs moved under it (a torn mid-rewrite read); serve the latest.
-        for _ in range(BUILD_RETRIES - 1):
+        for _ in range(BUILD_RETRIES):
             before = Fingerprint.stable_digest(self._cli_state, session_dir)
-            snapshot = self._discover_once(session_dir)
+            latest = self._discover_once(session_dir)
             if Fingerprint.stable_digest(self._cli_state, session_dir) == before:
-                return snapshot
-        return self._discover_once(session_dir)
+                return latest
+        # Every retry churned: serve the freshest attempt for THIS request but mark it non-cacheable so a
+        # possibly-torn snapshot cannot poison the next request.
+        return replace(latest, cacheable=False)
 
     def _discover_once(self, session_dir: Path | None) -> RegistrySnapshot:
         from captain_hook.daemon.context import capture_output
