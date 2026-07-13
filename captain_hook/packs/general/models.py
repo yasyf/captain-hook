@@ -265,7 +265,7 @@ llm_nudge(
     message=lambda r: (
         f"This delegation would run on fable, but it reads as routine implementation. {r.reasoning} "
         "Ambiguous, large-refactor, or long-run implementation defaults to model='opus' + effort='xhigh' "
-        "(~2x cheaper, nearly as capable); well-scoped, clearly-bounded, or terminal-heavy implementation "
+        "(~2x cheaper, nearly as capable); well-scoped, clearly-bounded (terminal-heavy included) implementation "
         "routes to gpt-5.6-sol: spawn the codex:codex-wrapper agent with a self-contained prompt. "
         "Keep fable if this genuinely is sensitive or error-prone. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
@@ -280,9 +280,12 @@ llm_nudge(
     agent=False,
     transcript=False,
     tests={
-        Input(prompt="implement the pagination endpoint in api/users.py"): Warn(pattern="opus"),
-        Input(model="fable", prompt="add a --json flag to the export command"): Warn(pattern="opus"),
+        Input(prompt="implement the pagination endpoint in api/users.py"): Warn(pattern="gpt-5.6"),
+        Input(model="fable", prompt="add a --json flag to the export command"): Warn(pattern="gpt-5.6"),
         Input(prompt="add a retry wrapper around the upload call in api/files.py"): Warn(pattern="gpt-5.6"),
+        Input(prompt="Build out the new ingestion subsystem: parser, store, and CLI wiring, shape TBD"): Warn(
+            pattern="opus"
+        ),
         Input(model="opus", prompt="implement the pagination endpoint in api/users.py"): Allow(),
         Input(model="sonnet", prompt="scan the repo for TODO markers"): Allow(),
         Input(agent_type="Explore", prompt="find where the config loader lives"): Allow(),

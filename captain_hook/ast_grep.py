@@ -13,6 +13,7 @@ long names (``"python"``).
 
 from __future__ import annotations
 
+import functools
 import re
 from collections.abc import Iterable, Iterator, Set
 from dataclasses import dataclass
@@ -35,6 +36,31 @@ COMMENT_TYPES: frozenset[str] = frozenset({"comment", "line_comment", "block_com
 The union covers every [`LANG_GLOBS`][captain_hook.types.LANG_GLOBS] grammar; a future grammar
 whose top-level comment kind is named differently would silently miss.
 """
+
+MAX_COMMENT_LINES = 3
+MAX_COMMENT_CHARS = 200
+
+DOC_PREFIXES: dict[str, tuple[str, ...]] = {
+    "rs": ("///", "//!", "/**", "/*!"),
+    "js": ("/**",),
+    "jsx": ("/**",),
+    "ts": ("/**",),
+    "tsx": ("/**",),
+    "java": ("/**",),
+}
+"""Comment prefixes that mark a documentation comment, by language."""
+
+GO_DOC_SIBLINGS: frozenset[str] = frozenset(
+    {
+        "function_declaration",
+        "method_declaration",
+        "type_declaration",
+        "var_declaration",
+        "const_declaration",
+        "package_clause",
+    }
+)
+"""Kinds a top-level Go run must immediately precede to read as godoc."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +159,106 @@ def find_introduced(old: str, new: str, lang: str, pattern: str) -> Iterator[Mat
 def introduced_comments(old: str, new: str, lang: str) -> Iterator[Match]:
     """Comments present in ``new`` whose text was absent from ``old``."""
     return introduced(comments(old, lang), comments(new, lang))
+
+
+@dataclass(frozen=True, slots=True)
+class CommentRun:
+    """A maximal run of comments with no code between them — a block comment, or line comments
+    on adjacent lines — located by 1-based line span and classified doc vs inline."""
+
+    line: int
+    end_line: int
+    texts: tuple[str, ...]
+    doc: bool
+
+    @property
+    def lines(self) -> int:
+        return self.end_line - self.line + 1
+
+    @property
+    def chars(self) -> int:
+        return sum(len(t) for t in self.texts)
+
+    @property
+    def key(self) -> str:
+        """Whitespace-normalized joined text: a run's identity across reflow and reindent."""
+        return " ".join("\n".join(self.texts).split())
+
+    @property
+    def too_long(self) -> bool:
+        return self.lines > MAX_COMMENT_LINES or self.chars > MAX_COMMENT_CHARS
+
+
+def line_span(node: SyntaxNode) -> tuple[int, int]:
+    """1-based line span of a comment's text — trailing newlines excluded, so a grammar that folds
+    the newline into the node (rust ``///``) doesn't inflate the run onto the code line below it."""
+    start = node.raw.range().start.line + 1
+    return start, start + node.text.rstrip("\n").count("\n")
+
+
+def is_doc_run(nodes: list[SyntaxNode], lang: str) -> bool:
+    """Whether a comment run is a documentation comment (godoc / rustdoc / JSDoc).
+
+    A run trips on a language doc prefix (rustdoc ``///``, JSDoc ``/**``), or — for Go, which has
+    no prefix — a top-level run whose next declaration begins on the immediately following line, so
+    a blank line before the declaration breaks the godoc bond.
+    """
+    if (prefixes := DOC_PREFIXES.get(lang)) and nodes[0].text.startswith(prefixes):
+        return True
+    if lang != "go":
+        return False
+    last = nodes[-1].raw
+    if (parent := last.parent()) is None or parent.kind() != "source_file":
+        return False
+    if (nxt := last.next()) is None or nxt.kind() not in GO_DOC_SIBLINGS:
+        return False
+    return nxt.range().start.line == last.range().end.line + 1
+
+
+@functools.lru_cache(maxsize=8)
+def comment_runs(source: str, lang: str) -> list[CommentRun]:
+    """Every comment run in ``source``, grouped by line adjacency and doc-classified.
+
+    Cached per ``(source, lang)`` because several conditions inspect the same image per event.
+    """
+    groups: list[list[SyntaxNode]] = []
+    for node in parse(source, lang).descendants():
+        if node.kind not in COMMENT_TYPES:
+            continue
+        if groups and line_span(node)[0] <= line_span(groups[-1][-1])[1] + 1:
+            groups[-1].append(node)
+        else:
+            groups.append([node])
+    return [
+        CommentRun(
+            line=line_span(group[0])[0],
+            end_line=line_span(group[-1])[1],
+            texts=tuple(n.text for n in group),
+            doc=is_doc_run(group, lang),
+        )
+        for group in groups
+    ]
+
+
+def touched_comment_runs(old: str, new: str, lang: str) -> list[CommentRun]:
+    """Runs of ``new`` whose text is absent from ``old`` — the runs this edit created or grew.
+
+    Identity is the run's whitespace-normalized :attr:`~CommentRun.key`: an untouched run keys
+    identically and drops out, a whitespace-only reflow normalizes away, and a grown or edited run
+    keys differently and reports at its full post-edit size.
+    """
+    before = {run.key for run in comment_runs(old, lang)}
+    return [run for run in comment_runs(new, lang) if run.key not in before]
+
+
+def comment_line_numbers(source: str, lang: str, *, include_doc: bool) -> set[int]:
+    """The 1-based line numbers covered by comments in ``source``; ``include_doc`` keeps doc runs."""
+    return {
+        line
+        for run in comment_runs(source, lang)
+        if include_doc or not run.doc
+        for line in range(run.line, run.end_line + 1)
+    }
 
 
 def rewrite(source: str, lang: str, pattern: str, replace: str) -> str:

@@ -5,8 +5,8 @@ the session model, fable), agent type, and prompt.
 
 The Models rubric: implementation delegates off fable — ambiguous or exploratory work,
 large multi-file refactors, and long agentic runs go to opus-4.8 at xhigh (~2x cheaper
-than fable and nearly as capable); well-scoped, clearly-bounded, or terminal-heavy
-implementation goes to gpt-5.6-sol via the codex:codex-wrapper agent. Fable's lanes are
+than fable and nearly as capable); well-scoped, clearly-bounded
+implementation (terminal-heavy included) goes to gpt-5.6-sol via the codex:codex-wrapper agent. Fable's lanes are
 orchestration, design/architecture review, hard planning, all prose/writing, and
 implementation that is very sensitive or error-prone (auth, migrations, concurrency,
 data loss, crypto, subtle algorithms). Code/diff review, security review/audit, and bug

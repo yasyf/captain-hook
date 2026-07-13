@@ -151,19 +151,25 @@ def dispatch(
 ) -> dict[str, Any] | None:
     """Dispatch an event to all matching hooks and combine their results, deny-wins.
 
-    Follows Claude Code's own ``deny > ask > allow`` precedence: a ``block`` from any
-    matching hook beats an ``allow``/``rewrite``, so one hook's approval can never
-    short-circuit another hook's block. Among approvals the first wins; ``warn`` messages
-    accumulate and surface only when nothing decisive fired.
+    Follows Claude Code's own ``deny > ask > allow`` precedence: a ``block`` from any matching
+    hook beats an ``allow``/``rewrite``, so one hook's approval can never short-circuit another
+    hook's block. Every hook still runs after a block, so ``warn`` messages ride along on the deny
+    rather than being lost to it: when any block fired, the result is one block whose message joins
+    the block messages then the warn messages (encounter order, ``"\n\n"``-separated); approvals are
+    moot once blocked. Absent a block, the first approval wins, else the accumulated warns surface.
     """
     matching = [h for h in get_matching_hooks(evt) if h.spec.async_ == async_]
 
     approval: HookResult | None = None
+    blocked = False
+    blocks: list[str] = []
     warns: list[str] = []
     for entry in matching:
         match execute_hook(entry, evt, session_dir):
-            case HookResult(action=Action.block) as r:
-                return format_output(event, r)
+            case HookResult(action=Action.block, message=msg):
+                blocked = True
+                if msg:
+                    blocks.append(msg)
             case HookResult(action=Action.allow | Action.rewrite) as r if approval is None:
                 approval = r
             case HookResult(action=Action.warn, message=msg) if msg:
@@ -171,6 +177,8 @@ def dispatch(
             case _:
                 pass
 
+    if blocked:
+        return format_output(event, HookResult(action=Action.block, message="\n\n".join([*blocks, *warns]) or None))
     if approval is not None:
         return format_output(event, approval)
     if warns:

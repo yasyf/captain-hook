@@ -227,6 +227,86 @@ class TestToolHookEvent:
         assert make_event(PreToolUseEvent, {"tool_name": "Bash", "tool_input": {"command": "ls"}}).replaced is None
 
 
+class TestPrePostImage:
+    def test_pre_image_edit_reads_full_disk(self, tmp_path: Path) -> None:
+        path = tmp_path / "a.py"
+        path.write_text("on disk\n")
+        raw = {"tool_name": "Edit", "tool_input": {"file_path": str(path), "old_string": "on", "new_string": "OFF"}}
+        assert make_event(PreToolUseEvent, raw).pre_image == "on disk\n"
+
+    def test_pre_image_write_new_file_is_empty(self, tmp_path: Path) -> None:
+        raw = {"tool_name": "Write", "tool_input": {"file_path": str(tmp_path / "new.py"), "content": "x"}}
+        assert make_event(PreToolUseEvent, raw).pre_image == ""
+
+    def test_pre_image_none_off_pre_tool_use(self, tmp_path: Path) -> None:
+        path = tmp_path / "a.py"
+        path.write_text("on disk\n")
+        raw = {"tool_name": "Edit", "tool_input": {"file_path": str(path), "old_string": "on", "new_string": "OFF"}}
+        assert make_event(PostToolUseEvent, raw).pre_image is None
+
+    def test_pre_image_none_for_bash(self) -> None:
+        assert make_event(PreToolUseEvent, {"tool_name": "Bash", "tool_input": {"command": "ls"}}).pre_image is None
+
+    def test_post_image_edit_applies_old_to_new(self, tmp_path: Path) -> None:
+        path = tmp_path / "a.py"
+        path.write_text("hello world\n")
+        raw = {"tool_name": "Edit", "tool_input": {"file_path": str(path), "old_string": "world", "new_string": "there"}}
+        assert make_event(PreToolUseEvent, raw).post_image == "hello there\n"
+
+    def test_post_image_edit_missing_old_is_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "a.py"
+        path.write_text("hello world\n")
+        raw = {"tool_name": "Edit", "tool_input": {"file_path": str(path), "old_string": "absent", "new_string": "x"}}
+        assert make_event(PreToolUseEvent, raw).post_image is None
+
+    def test_post_image_edit_replace_all(self, tmp_path: Path) -> None:
+        path = tmp_path / "a.py"
+        path.write_text("a a a\n")
+        raw = {
+            "tool_name": "Edit",
+            "tool_input": {"file_path": str(path), "old_string": "a", "new_string": "b", "replace_all": True},
+        }
+        assert make_event(PreToolUseEvent, raw).post_image == "b b b\n"
+
+    def test_post_image_edit_replaces_once_by_default(self, tmp_path: Path) -> None:
+        path = tmp_path / "a.py"
+        path.write_text("a a a\n")
+        raw = {"tool_name": "Edit", "tool_input": {"file_path": str(path), "old_string": "a", "new_string": "b"}}
+        assert make_event(PreToolUseEvent, raw).post_image == "b a a\n"
+
+    def test_post_image_multi_edit_folds_spans_in_order(self, tmp_path: Path) -> None:
+        path = tmp_path / "a.py"
+        path.write_text("one two\n")
+        raw = {
+            "tool_name": "MultiEdit",
+            "tool_input": {
+                "file_path": str(path),
+                "edits": [{"old_string": "one", "new_string": "1"}, {"old_string": "two", "new_string": "2"}],
+            },
+        }
+        assert make_event(PreToolUseEvent, raw).post_image == "1 2\n"
+
+    def test_post_image_multi_edit_absent_span_is_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "a.py"
+        path.write_text("one\n")
+        raw = {
+            "tool_name": "MultiEdit",
+            "tool_input": {
+                "file_path": str(path),
+                "edits": [{"old_string": "one", "new_string": "1"}, {"old_string": "absent", "new_string": "9"}],
+            },
+        }
+        assert make_event(PreToolUseEvent, raw).post_image is None
+
+    def test_post_image_write_is_content(self, tmp_path: Path) -> None:
+        raw = {"tool_name": "Write", "tool_input": {"file_path": str(tmp_path / "b.py"), "content": "fresh\n"}}
+        assert make_event(PreToolUseEvent, raw).post_image == "fresh\n"
+
+    def test_post_image_none_off_pre_tool_use(self, tmp_path: Path) -> None:
+        raw = {"tool_name": "Write", "tool_input": {"file_path": str(tmp_path / "b.py"), "content": "fresh\n"}}
+        assert make_event(PostToolUseEvent, raw).post_image is None
+
+
 class TestPreToolUseEvent:
     def test_file_from_edit_input(self) -> None:
         evt = make_event(

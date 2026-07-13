@@ -48,6 +48,13 @@ def disk_pre_image(path: Path) -> str | None:
     return data.decode(errors="replace")
 
 
+def apply_edit(image: str | None, old: str, new: str, replace_all: bool) -> str | None:
+    """Apply one ``old``→``new`` replacement to ``image``, or ``None`` when ``old`` is absent."""
+    if image is None or old not in image:
+        return None
+    return image.replace(old, new) if replace_all else image.replace(old, new, 1)
+
+
 @dataclass(frozen=True, slots=True)
 class BackgroundTask:
     """A background task keeping the session alive, from a ``Stop``/``SubagentStop`` payload.
@@ -252,6 +259,14 @@ class BaseHookEvent:
         return None
 
     @property
+    def pre_image(self) -> str | None:
+        return None
+
+    @property
+    def post_image(self) -> str | None:
+        return None
+
+    @property
     def agent_type(self) -> str | None:
         return None
 
@@ -365,6 +380,46 @@ class ToolHookEvent(BaseHookEvent):
                 return self.old
             case WriteCall(file_path=path) if self.event is Event.PreToolUse:
                 return disk_pre_image(Path(path))
+            case _:
+                return None
+
+    @cached_property
+    def pre_image(self) -> str | None:
+        """The full pre-edit file image for an Edit/MultiEdit/Write, read from disk at PreToolUse.
+
+        ``None`` off ``PreToolUse`` — disk already holds the post-edit text — and for other tools.
+        Unlike :attr:`replaced` (an Edit's ``old`` fragment), this is always the whole file, so a
+        comment run's full extent is visible even when the edit touched only part of it.
+        """
+        if self.event is not Event.PreToolUse:
+            return None
+        match self.input:
+            case EditCall(file_path=path) | MultiEditCall(file_path=path) | WriteCall(file_path=path):
+                return disk_pre_image(Path(path))
+            case _:
+                return None
+
+    @cached_property
+    def post_image(self) -> str | None:
+        """The full post-edit file image an Edit/MultiEdit/Write would produce, at PreToolUse.
+
+        A Write is its ``content``; an Edit applies ``old``→``new`` to :attr:`pre_image` (once, or
+        every occurrence when ``replace_all``); a MultiEdit folds its spans in order. ``None`` when a
+        span's ``old`` is absent from the running image (the tool call would fail), off ``PreToolUse``,
+        or for other tools.
+        """
+        if self.event is not Event.PreToolUse:
+            return None
+        match self.input:
+            case WriteCall(content=content):
+                return content
+            case EditCall(old=old, new=new, replace_all=replace_all):
+                return apply_edit(self.pre_image, old, new, replace_all)
+            case MultiEditCall(edits=edits):
+                image = self.pre_image
+                for span in edits:
+                    image = apply_edit(image, span.old, span.new, span.replace_all)
+                return image
             case _:
                 return None
 

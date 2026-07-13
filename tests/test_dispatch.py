@@ -414,7 +414,8 @@ class TestDispatch:
         assert "additionalContext" not in result["hookSpecificOutput"]
         assert counter == 1
 
-    def test_block_takes_priority_over_warn(self) -> None:
+    def test_warn_then_block_denies_with_both(self) -> None:
+        # A warn that fired before a block rides along on the deny (block text first, then warns).
         register_hook(Event.PreToolUse, message="warning first")
 
         @on(Event.PreToolUse)
@@ -424,7 +425,7 @@ class TestDispatch:
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert result["hookSpecificOutput"]["permissionDecisionReason"] == "blocked"
+        assert result["hookSpecificOutput"]["permissionDecisionReason"] == "blocked\n\nwarning first"
 
     def test_warns_combined_with_newline(self) -> None:
         register_hook(Event.PreToolUse, message="warn1")
@@ -458,7 +459,9 @@ class TestDispatch:
         assert result["hookSpecificOutput"]["permissionDecisionReason"] == "denied"
         assert call_count == 1
 
-    def test_block_short_circuits_no_side_effects(self) -> None:
+    def test_block_then_warn_denies_with_both(self) -> None:
+        # Every hook still runs after a block, so a later warn's handler fires and its message
+        # rides along on the deny — block messages first, then warn messages.
         counter = 0
 
         @on(Event.PreToolUse)
@@ -474,7 +477,8 @@ class TestDispatch:
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert counter == 0
+        assert result["hookSpecificOutput"]["permissionDecisionReason"] == "stop here\n\ncounted"
+        assert counter == 1
 
     def test_handler_crash_returns_none(self) -> None:
 
