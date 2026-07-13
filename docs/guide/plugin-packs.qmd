@@ -68,14 +68,14 @@ so attached packs load for sidechains too.
 ```json
 {
   "dependencies": [
-    { "name": "captain-hook", "marketplace": "captain-hook", "version": ">=9.8.0" }
+    { "name": "captain-hook", "marketplace": "captain-hook", "version": ">=9.9.0" }
   ]
 }
 ```
 
 The object form is required: `name`, `marketplace`, and a version floor. A
 bare `"captain-hook"` string, or an object missing the floor, fails
-`pack lint`. Floor at the oldest release your pack works with; `>=9.8.0` is
+`pack lint`. Floor at the oldest release your pack works with; `>=9.9.0` is
 the first that ships the attach-only contract.
 
 **4. The allowlist in your marketplace's `marketplace.json`.**

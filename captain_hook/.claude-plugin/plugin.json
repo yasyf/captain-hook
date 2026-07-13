@@ -1,6 +1,6 @@
 {
   "name": "captain-hook",
-  "version": "9.8.0",
+  "version": "9.9.0",
   "displayName": "Captain Hook",
   "description": "Skills for the capt-hook declarative hook framework: bootstrap gates and nudges from a repo's conventions, and translate style guides into enforced StyleRules.",
   "author": { "name": "Yasyf Mohamedali", "email": "yasyfm@gmail.com" },
