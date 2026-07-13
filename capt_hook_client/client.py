@@ -10,10 +10,15 @@ event it reads stdin, connects to (or spawns) this project's warm worker over a 
 writes the worker's response bytes back verbatim. ``ping`` is connect-only: it reports on an
 existing worker and never spawns one, so inspecting a project cannot boot a daemon.
 
-When no worker is reachable a run falls back to the cold ``python -m captain_hook`` path, and a
-worker that dies at startup is detected via its early exit and the run goes cold with no stall. A
-deadline that expires mid-flight fails OPEN (exit 0, no output) — never cold — because the worker
-may have already dispatched and a cold rerun would double-fire side-effecting hooks.
+Whether the request reached the socket decides the fallback. A failure BEFORE the bytes are sent —
+no reachable worker, a spawn that dies at startup, a flock contention timeout, a pre-send deadline,
+or any OSError in the connect/spawn machinery — takes the cold ``python -m captain_hook`` fallback
+(``CAPT_HOOK_DAEMON_FALLBACK``; cold by default), so a gate hook's deny envelope is never lost. A
+failure AFTER the bytes are sent — an EOF or reset awaiting the response, a malformed response, or a
+post-send deadline — fails OPEN (exit 0, no output): the worker may already have dispatched, and a
+cold rerun would double-fire side-effecting hooks. A ``status=error`` response (the worker
+dispatched and hit an uncaught error) is relayed verbatim, never rerun cold; only ``status=rejected``
+(a provable non-dispatch on the protocol gate) falls back cold.
 
 Never imports :mod:`captain_hook`; ``subprocess`` is imported lazily on the spawn/cold
 paths only.
@@ -42,15 +47,19 @@ UPS_DEADLINE = 20.0
 
 
 class DaemonUnavailable(Exception):
-    """No worker was reachable and none could be spawned — apply the fallback mode."""
-
-
-class BadResponse(Exception):
-    """The worker replied with a malformed, mismatched, or non-ok response."""
+    """Pre-send: no worker was reachable or spawnable, or the connect/spawn machinery failed. Apply the fallback."""
 
 
 class DeadlineExpired(Exception):
-    """The end-to-end deadline elapsed mid-flight — fail open, never cold."""
+    """Pre-send: the deadline elapsed before the request bytes were sent. Apply the fallback (cold by default)."""
+
+
+class PostSendFailure(Exception):
+    """Post-send: the request was sent and the worker may have dispatched — fail open, never cold."""
+
+
+class BadResponse(PostSendFailure):
+    """Post-send: the worker's response was malformed, truncated, or protocol-mismatched — fail open."""
 
 
 def main() -> None:
@@ -139,16 +148,18 @@ def do_run(event: str, root: str, args: list[str], *, async_: bool) -> int:
     request = build_request(event, root, payload.decode("utf-8", "surrogateescape"), async_=async_)
     try:
         response = round_trip(request, root, deadline_at)
-    except DeadlineExpired:
-        breadcrumb("deadline expired before the worker responded; failing open")
-        return 0
-    except (DaemonUnavailable, BadResponse) as exc:
+    except (DaemonUnavailable, DeadlineExpired) as exc:
         return on_daemon_failure(args, payload, str(exc))
+    except PostSendFailure as exc:
+        breadcrumb(f"{exc}; failing open")
+        return 0
     match response.get("status"):
-        case "ok":
+        case "ok" | "error":
             return emit_response(response)
+        case "rejected":
+            return on_daemon_failure(args, payload, "worker rejected the request protocol version; running cold")
         case status:
-            return on_daemon_failure(args, payload, f"worker returned status {status!r}")
+            return on_daemon_failure(args, payload, f"worker returned unexpected status {status!r}; running cold")
 
 
 def do_ping(root: str) -> int:
@@ -159,7 +170,7 @@ def do_ping(root: str) -> int:
     deadline_at = time.monotonic() + deadline_seconds(None)
     try:
         response = exchange(sock, ping_request(), deadline_at)
-    except (DaemonUnavailable, BadResponse, DeadlineExpired) as exc:
+    except (DaemonUnavailable, DeadlineExpired, PostSendFailure) as exc:
         breadcrumb(str(exc))
         return 1
     finally:
@@ -177,11 +188,14 @@ def round_trip(request: dict[str, object], root: str, deadline_at: float) -> dic
 
 
 def connect_or_spawn(root: str, deadline_at: float) -> socket.socket:
-    worker = key.worker_key(root, os.environ)
-    sock_path = str(key.socket_path(worker))
-    if (sock := try_connect(sock_path)) is not None:
-        return sock
-    return spawn_and_wait(worker, root, sock_path, deadline_at)
+    try:
+        worker = key.worker_key(root, os.environ)
+        sock_path = str(key.socket_path(worker))
+        if (sock := try_connect(sock_path)) is not None:
+            return sock
+        return spawn_and_wait(worker, root, sock_path, deadline_at)
+    except OSError as exc:
+        raise DaemonUnavailable(f"daemon attempt failed before send: {exc}") from exc
 
 
 def try_connect(sock_path: str, attempts: int = CONNECT_ATTEMPTS) -> socket.socket | None:
@@ -207,7 +221,7 @@ def spawn_and_wait(worker: str, root: str, sock_path: str, deadline_at: float) -
             if try_flock(lock_fd):
                 return run_winner(worker, root, sock_path, deadline_at)
             time.sleep(LOSER_POLL)
-        raise DeadlineExpired
+        raise DeadlineExpired("deadline expired before a worker became reachable")
     finally:
         os.close(lock_fd)
 
@@ -233,7 +247,7 @@ def run_winner(worker: str, root: str, sock_path: str, deadline_at: float) -> so
         if (sock := try_connect(sock_path, attempts=1)) is not None:
             return sock
         time.sleep(SPAWN_POLL)
-    raise DeadlineExpired
+    raise DeadlineExpired("deadline expired waiting for the spawned worker")
 
 
 def spawn_daemon(worker: str, root: str):
@@ -262,15 +276,13 @@ def unlink_stale(sock_path: str) -> None:
 
 def exchange(sock: socket.socket, request: dict[str, object], deadline_at: float) -> dict[str, object]:
     if (remaining := deadline_at - time.monotonic()) <= 0:
-        raise DeadlineExpired
+        raise DeadlineExpired("deadline expired before the request was sent")
     sock.settimeout(remaining)
     try:
         sock.sendall((json.dumps(request) + "\n").encode())
         line = read_line(sock, deadline_at)
-    except TimeoutError:
-        raise DeadlineExpired from None
     except OSError as exc:
-        raise DaemonUnavailable(f"socket error: {exc}") from exc
+        raise PostSendFailure(f"socket error after send: {exc}") from exc
     return validate(line)
 
 
@@ -278,10 +290,10 @@ def read_line(sock: socket.socket, deadline_at: float) -> bytes:
     buf = bytearray()
     while b"\n" not in buf:
         if (remaining := deadline_at - time.monotonic()) <= 0:
-            raise DeadlineExpired
+            raise PostSendFailure("deadline expired awaiting the worker's response")
         sock.settimeout(remaining)
         if not (chunk := sock.recv(RECV_CHUNK)):
-            raise DaemonUnavailable("worker closed the connection before responding")
+            raise PostSendFailure("worker closed the connection before responding")
         buf.extend(chunk)
     return bytes(buf)
 

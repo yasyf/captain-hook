@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import shutil
@@ -17,6 +18,21 @@ from capt_hook_client import client, key
 
 BLOCK_HOOK = (
     "from captain_hook import hook, Event\nhook(Event.PreToolUse, message='blocked by test hook', block=True)\n"
+)
+# A PreToolUse hook whose only effect is appending to a sink file named by CAPT_HOOK_MARKER_SINK.
+# The fake daemons never dispatch it, so a written sink means the client ran a COLD fallback — the
+# probe for single-dispatch in the post-send fail-open cases.
+MARKER_HOOK = (
+    "import os\n"
+    "from pathlib import Path\n"
+    "from captain_hook import Event, on\n"
+    "\n"
+    "\n"
+    "@on(Event.PreToolUse)\n"
+    "def mark(evt):\n"
+    "    if sink := os.environ.get('CAPT_HOOK_MARKER_SINK'):\n"
+    "        Path(sink).open('a').write('fired\\n')\n"
+    "    return None\n"
 )
 PAYLOAD = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
 
@@ -52,6 +68,17 @@ def project_dir(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.fixture
+def marker_dir(tmp_path: Path) -> Path:
+    # A project whose sole hook records that a cold run happened; used to prove the client did NOT
+    # rerun cold on the post-send fail-open and status=error paths.
+    d = tmp_path / ".claude" / "hooks"
+    d.mkdir(parents=True)
+    (d / "__init__.py").write_text("")
+    (d / "conf.py").write_text(MARKER_HOOK)
+    return tmp_path
+
+
 def client_env(run_dir: Path, **overrides: str) -> dict[str, str]:
     return {**os.environ, "CAPT_HOOK_RUN_DIR": str(run_dir), "CAPT_HOOK_ONCE_TTL": "0", **overrides}
 
@@ -83,8 +110,11 @@ def run_cold(
 
 
 class FakeDaemon:
-    def __init__(self, sock_path: str, response: dict[str, object] | None) -> None:
+    def __init__(
+        self, sock_path: str, response: dict[str, object] | None, *, close_before_read: bool = False
+    ) -> None:
         self.response = response
+        self.close_before_read = close_before_read
         self.requests: list[dict[str, object]] = []
         self._stop = threading.Event()
         self._srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -103,6 +133,8 @@ class FakeDaemon:
             except OSError:
                 return
             with conn:
+                if self.close_before_read:
+                    continue  # accept, then close without reading — a post-send EOF from the client's view
                 self.requests.append(json.loads(read_line(conn)))
                 if self.response is None:
                     self._stop.wait(10)
@@ -125,11 +157,18 @@ def read_line(conn: socket.socket) -> bytes:
     return bytes(buf)
 
 
-def preseed_daemon(run_dir: Path, root: str, env: dict[str, str], response: dict[str, object] | None) -> FakeDaemon:
+def preseed_daemon(
+    run_dir: Path,
+    root: str,
+    env: dict[str, str],
+    response: dict[str, object] | None,
+    *,
+    close_before_read: bool = False,
+) -> FakeDaemon:
     worker = key.worker_key(root, env)
     sock_path = str(run_dir / f"{worker}.sock")
     assert len(sock_path) < 100
-    return FakeDaemon(sock_path, response)
+    return FakeDaemon(sock_path, response, close_before_read=close_before_read)
 
 
 class TestParseArgv:
@@ -294,7 +333,9 @@ class TestRoundTrip:
         assert request["payload_raw"] == PAYLOAD
         assert os.path.realpath(str(request["cwd"])) == os.path.realpath(root)
 
-    def test_protocol_mismatch_fails_closed(self, run_dir: Path, hooks_dir: Path) -> None:
+    def test_protocol_mismatch_response_fails_open(self, run_dir: Path, hooks_dir: Path) -> None:
+        # A v-mismatched response arrives AFTER the request was sent, so the worker may have
+        # dispatched: the client fails open (exit 0, no output) rather than cold-rerunning.
         root = str(hooks_dir.parent)
         env = self._env(run_dir)
         daemon = preseed_daemon(run_dir, root, env, {"v": 99, "status": "ok", "stdout": "x", "exit": 0})
@@ -302,18 +343,111 @@ class TestRoundTrip:
             result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
         finally:
             daemon.close()
-        assert result.returncode == 1
+        assert result.returncode == 0
         assert result.stdout == ""
 
-    def test_daemon_error_status_fails_closed(self, run_dir: Path, hooks_dir: Path) -> None:
-        root = str(hooks_dir.parent)
-        env = self._env(run_dir)
-        daemon = preseed_daemon(run_dir, root, env, {"v": 1, "status": "error", "stdout": "", "exit": 1})
+
+class TestSendBoundary:
+    """Whether the request was sent decides the fallback: pre-send → cold, post-send → fail open."""
+
+    def _cold_env(self, run_dir: Path, marker_dir: Path, **overrides: str) -> tuple[dict[str, str], Path]:
+        sink = marker_dir / "cold-sink.txt"
+        return client_env(run_dir, CAPT_HOOK_MARKER_SINK=str(sink), **overrides), sink
+
+    def test_post_send_eof_fails_open_no_cold(self, run_dir: Path, marker_dir: Path) -> None:
+        # The daemon accepts then closes without reading; the client's send completes (or breaks) and
+        # the read hits EOF. That is post-send, so it fails open and never reruns cold.
+        root = str(marker_dir)
+        env, sink = self._cold_env(run_dir, marker_dir, CAPT_HOOK_DAEMON_FALLBACK="cold")
+        daemon = preseed_daemon(run_dir, root, env, response=None, close_before_read=True)
+        try:
+            result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        finally:
+            daemon.close()
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == ""
+        assert not sink.exists(), "a cold rerun fired the marker hook — double dispatch"
+
+    def test_post_send_stall_fails_open_no_cold(self, run_dir: Path, marker_dir: Path) -> None:
+        # The daemon reads the request then stalls past the deadline; a post-send deadline fails open.
+        root = str(marker_dir)
+        env, sink = self._cold_env(
+            run_dir, marker_dir, CAPT_HOOK_CLIENT_TIMEOUT="0.4", CAPT_HOOK_DAEMON_FALLBACK="cold"
+        )
+        daemon = preseed_daemon(run_dir, root, env, response=None)
+        try:
+            result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        finally:
+            daemon.close()
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == ""
+        assert len(daemon.requests) == 1
+        assert not sink.exists(), "a cold rerun fired the marker hook — double dispatch"
+
+    def test_error_status_relayed_verbatim_no_cold(self, run_dir: Path, marker_dir: Path) -> None:
+        # status=error means the worker dispatched and hit an uncaught error: relay its stderr and exit
+        # verbatim, never rerun cold (which the consumed once-sentinel would silently swallow).
+        root = str(marker_dir)
+        env, sink = self._cold_env(run_dir, marker_dir, CAPT_HOOK_DAEMON_FALLBACK="cold")
+        response = {"v": 1, "status": "error", "stdout": "", "stderr": "Traceback: boom\n", "exit": 1}
+        daemon = preseed_daemon(run_dir, root, env, response)
         try:
             result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
         finally:
             daemon.close()
         assert result.returncode == 1
+        assert result.stderr == "Traceback: boom\n"
+        assert not sink.exists(), "status=error must not trigger a cold rerun"
+
+    def test_rejected_status_falls_back_cold(self, run_dir: Path, project_dir: Path) -> None:
+        # status=rejected is a provable non-dispatch (protocol gate): cold fallback stays correct.
+        root = str(project_dir)
+        env = client_env(run_dir)  # default fallback: cold
+        daemon = preseed_daemon(run_dir, root, env, {"v": 1, "status": "rejected", "stdout": "", "exit": 0})
+        try:
+            result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        finally:
+            daemon.close()
+        assert result.returncode == 0
+        assert "permissionDecision" in result.stdout  # the cold block hook produced its deny envelope
+
+    def test_presend_deadline_falls_back_cold(self, run_dir: Path, project_dir: Path) -> None:
+        # A held spawn flock with no socket keeps the client from ever reaching a worker; the pre-send
+        # deadline must go cold (default fallback), delivering the gate hook's deny envelope.
+        root = str(project_dir)
+        env = client_env(run_dir, CAPT_HOOK_CLIENT_TIMEOUT="0.4")
+        lock_path = run_dir / f"{key.worker_key(root, env)}.lock"
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+        assert result.returncode == 0, result.stderr
+        assert "permissionDecision" in result.stdout
+        assert not list(run_dir.glob("*.sock")), "no worker should have bound a socket"
+
+    def test_bogus_run_dir_falls_back_cold_matching_cold_cli(self, run_dir: Path, project_dir: Path) -> None:
+        # os.makedirs on a non-directory run dir raises NotADirectoryError inside the spawn machinery;
+        # that OSError is a pre-send failure and goes cold, byte-for-byte with the cold CLI.
+        root = str(project_dir)
+        env = client_env(run_dir, CAPT_HOOK_RUN_DIR="/dev/null/nope")
+        via_client = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        via_cold = run_cold("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        assert via_client.returncode == via_cold.returncode
+        assert via_client.stdout == via_cold.stdout
+        assert "permissionDecision" in via_client.stdout
+
+    def test_log_path_is_a_directory_falls_back_cold(self, run_dir: Path, project_dir: Path) -> None:
+        # The worker log path pre-seeded as a directory makes the spawn's log open raise
+        # IsADirectoryError — a pre-send OSError that goes cold.
+        root = str(project_dir)
+        env = client_env(run_dir)
+        (run_dir / f"{key.worker_key(root, env)}.log").mkdir()
+        result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        assert result.returncode == 0, result.stderr
+        assert "permissionDecision" in result.stdout
 
 
 class TestPassthrough:
