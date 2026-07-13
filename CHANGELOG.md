@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.10.0] - 2026-07-13
+
+### Changed
+- general pack: the verbose-comment rule is now a blocking hook — an Edit/Write/MultiEdit that leaves a comment run (or blank-line-separated comment block) over 3 lines / 200 chars is denied. Size is measured on the post-edit text for runs the edit created or modified; untouched legacy runs stay exempt (multiset-keyed, whitespace-reflow-aware). Doc-generation comments (godoc — including grouped const/var specs, struct fields, imports, interface methods — rustdoc, JSDoc) are exempt from the block and warn instead; a run is doc only when every line carries the doc marker. New comment-density advisory: an edit whose added lines are mostly comments (≥6 added, >50% non-doc) warns. Trailing comments group as singletons; shebang lines don't count.
+- dispatch: a deny no longer discards other hooks' advisories — declarative warns accumulate under "Additional advisories (not the reason for the deny):". Handler-backed (LLM/async) hooks are skipped once a block has fired, so they no longer spend cost or max_fires budget on a denied call.
+
+### Added
+- ast_grep: comment-run machinery (CommentRun, CommentBlock, comment_runs, comment_blocks, touched_comment_blocks, comment_line_numbers) with framework thresholds MAX_COMMENT_LINES=3 / MAX_COMMENT_CHARS=200, importable by external packs.
+- events: pre_image/post_image full-file images for Edit/Write/MultiEdit on PreToolUse.
+
 ## [9.9.0] - 2026-07-13
 
 ### Changed
