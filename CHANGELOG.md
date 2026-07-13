@@ -4,6 +4,31 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.10.0] - 2026-07-13
+
+### Added
+- **Opt-in resident daemon: warm hook dispatch, ~7x faster.** A per-project `hookd`
+  worker keeps the interpreter, imports, and discovered hook registry resident and
+  serves events over a Unix socket; the new stdlib-only `hook` console script sits
+  in the wired hook-command slot, forwards `run <Event>` to the worker (spawning it
+  on first use), and passes every other invocation through to the cold `capt-hook`
+  CLI untouched. Measured dispatch drops from ~490ms cold to ~70ms p50 warm. Warm
+  output is byte-identical to cold — stdout, stderr, and exit code — enforced by a
+  12-case parity suite that runs as the release's acceptance gate. When a worker is
+  unreachable the client falls back to running the hook cold
+  (`CAPT_HOOK_DAEMON_FALLBACK`, with `open`/`closed` modes and a strict send-boundary
+  rule so a hook never double-fires: a pre-send failure reruns cold, a post-send
+  failure fails open); `CAPT_HOOK_NO_DAEMON=1` bypasses the daemon entirely. One
+  worker serves each project root across sessions and pooled accounts, idle-exits
+  after two hours, and restarts itself when the installed build changes; the
+  `hookd status|stop|restart|logs` ops surface inspects and drives workers without
+  ever spawning one. Shipped after a multi-pass adversarial review
+  plus a security pass: 0600 socket in a 0700 run dir, peer-uid verification on both
+  sides, and untrusted run dirs always served cold. Opt-in per project and dogfooded
+  in this repo; plugin consumers keep the cold `uvx --isolated capt-hook run` wiring
+  unchanged. The new Resident daemon guide page covers enabling it, the fallback
+  model, the env knobs, and the accepted limitations.
+
 ## [9.9.0] - 2026-07-13
 
 ### Changed

@@ -46,4 +46,5 @@ inline tests and mock events.
 - [Session reviewer](session-reviewer.qmd) mines your ended sessions for durable corrections and opens hook PRs automatically.
 - [Watch corrections become hooks](corrections-lifecycle.qmd) reads `capt-hook status` to track each correction from watching to a merged PR.
 - [Configuration](configuration.qmd) tunes `HooksSettings`, the env prefix, and the state and log directories.
+- [Resident daemon](daemon.qmd) serves hook dispatch from a warm per-project worker, about 7x faster than cold.
 - [Troubleshooting](troubleshooting.qmd) diagnoses common errors with the right command.
