@@ -49,6 +49,18 @@ class TestSourceDigest:
         os.utime(root / "a.py", ns=(0, 0))
         assert source_digest([root]) != before
 
+    def test_preserved_mtime_content_rewrite_changes_digest(self, tmp_path: Path) -> None:
+        # A same-size, mtime-preserved rewrite (touch -r style) only moves ctime; the editable-checkout
+        # watchdog must still notice it, so ctime is part of the digest tuple.
+        root = make_tree(tmp_path / "pkg", {"a.py": "x = 1\n"})
+        before = source_digest([root])
+        st = (root / "a.py").stat()
+        (root / "a.py").write_text("y = 2\n")  # same byte length, different content
+        os.utime(root / "a.py", ns=(st.st_atime_ns, st.st_mtime_ns))  # restore mtime
+        after = (root / "a.py").stat()
+        assert after.st_size == st.st_size and after.st_mtime_ns == st.st_mtime_ns
+        assert source_digest([root]) != before
+
     def test_add_and_remove_change_digest(self, tmp_path: Path) -> None:
         root = make_tree(tmp_path / "pkg", {"a.py": "x = 1\n"})
         before = source_digest([root])

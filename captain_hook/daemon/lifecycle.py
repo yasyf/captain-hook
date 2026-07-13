@@ -46,7 +46,7 @@ def is_checkout(root: Path) -> bool:
 
 def source_digest(roots: Sequence[Path]) -> str:
     entries = sorted(
-        (root.name, str(path.relative_to(root)), st.st_mtime_ns, st.st_size)
+        (root.name, str(path.relative_to(root)), st.st_mtime_ns, st.st_ctime_ns, st.st_size)
         for root in roots
         for path in root.rglob("*.py")
         if (st := path.stat())

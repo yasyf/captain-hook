@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +14,20 @@ from captain_hook.daemon import registry
 from captain_hook.daemon.registry import Fingerprint, Registry
 
 HOOK = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
+ATTACHED_HOOK = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='att')\n"
+
+
+def make_attached_pack(pack_root: Path, session: Path, *, hook_body: str = ATTACHED_HOOK, name: str = "att") -> Path:
+    (hooks := pack_root / "hooks").mkdir(parents=True, exist_ok=True)
+    (conf := hooks / "conf.py").write_text(hook_body)
+    (pack_root / "capt-hook.toml").write_text(
+        f'name = "{name}"\ndescription = "attached test pack"\nhooks = "hooks"\nversion = "0.1.0"\n'
+    )
+    session.mkdir(parents=True, exist_ok=True)
+    (session / "attached_packs.json").write_text(
+        json.dumps([{"name": name, "dir": str(pack_root), "version": "0.1.0"}])
+    )
+    return conf
 
 
 @pytest.fixture(autouse=True)
@@ -94,6 +109,29 @@ def test_attached_json_change_changes_fingerprint(project: CliState, tmp_path: P
     (session / "attached_packs.json").write_text(json.dumps([{"name": "p", "dir": "/nope", "version": "0.1.0"}]))
     assert fp(project, session) != before
     assert fp(project, session) != fp(project, None)
+
+
+def test_attached_pack_hook_edit_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
+    # The attach set is unchanged, but editing a hook file inside an attached pack must miss the cache —
+    # the fingerprint digests each attached pack's resolved hook tree, not just attached_packs.json.
+    session = tmp_path / "session"
+    conf = make_attached_pack(tmp_path / "attpack", session)
+    before = fp(project, session)
+    conf.write_text(ATTACHED_HOOK.replace("message='att'", "message='att-edited-and-longer'"))
+    assert fp(project, session) != before
+
+
+def test_gitignore_preserved_mtime_rewrite_changes_fingerprint(project: CliState) -> None:
+    # A same-size, mtime-preserved .gitignore rewrite only moves ctime; without ctime in the entry the
+    # warm daemon would keep suppressing a hook cold now fires, so ctime must be part of the fingerprint.
+    gitignore = project.root / ".gitignore"
+    before = fp(project)
+    st = gitignore.stat()
+    gitignore.write_text("*.tmp\n")  # same byte length as the default "*.log\n", different content
+    os.utime(gitignore, ns=(st.st_atime_ns, st.st_mtime_ns))  # restore mtime
+    after = gitignore.stat()
+    assert after.st_size == st.st_size and after.st_mtime_ns == st.st_mtime_ns
+    assert fp(project) != before
 
 
 def test_pycache_and_fastpath_do_not_invalidate(project: CliState) -> None:

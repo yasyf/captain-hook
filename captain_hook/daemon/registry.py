@@ -29,17 +29,18 @@ if TYPE_CHECKING:
 
 MAX_SNAPSHOTS = 8
 
-StatPair = tuple[int, int]
+StatEntry = tuple[int, int, int]
 HookEntry = tuple[str, int, int, int]
-MetaEntry = tuple[str, StatPair | None]
+MetaEntry = tuple[str, StatEntry | None]
+AttachedTree = tuple[str, tuple[HookEntry, ...]]
 
 
-def _stat_pair(path: Path) -> StatPair | None:
+def _stat_entry(path: Path) -> StatEntry | None:
     try:
         st = path.stat()
     except FileNotFoundError:
         return None
-    return (st.st_mtime_ns, st.st_size)
+    return (st.st_mtime_ns, st.st_ctime_ns, st.st_size)
 
 
 def _read_text(path: Path) -> str:
@@ -72,6 +73,15 @@ def _hooks_tree(hooks: str) -> tuple[HookEntry, ...]:
     return tuple(sorted(_iter_tree(root, root))) if (root := Path(hooks)).is_dir() else ()
 
 
+def _attached_trees(session_dir: Path) -> tuple[AttachedTree, ...]:
+    # Resolve the attach set the same way discovery does, then digest each pack's resolved hook tree
+    # so editing an attached pack's hook file (not just re-attaching) misses the cache, like cold.
+    return tuple(
+        (pack.entry.name, _hooks_tree(str(pack.path)))
+        for pack in sorted(manager.resolve_attached(session_dir), key=lambda p: p.entry.name)
+    )
+
+
 def _moving_metas(entries: list[manager.PackEntry]) -> tuple[tuple[MetaEntry, ...], float | None]:
     metas: list[MetaEntry] = []
     horizon: float | None = None
@@ -79,7 +89,7 @@ def _moving_metas(entries: list[manager.PackEntry]) -> tuple[tuple[MetaEntry, ..
         if not (isinstance(entry, manager.ExternalPack) and entry.commit is None):
             continue
         meta_file = manager.meta_path(entry.name)
-        metas.append((entry.name, _stat_pair(meta_file)))
+        metas.append((entry.name, _stat_entry(meta_file)))
         if (loaded := manager.PackMeta.load(meta_file)) is not None:
             expiry = loaded.checked_at + manager.REFRESH_TTL_SECONDS
             horizon = expiry if horizon is None else min(horizon, expiry)
@@ -103,8 +113,9 @@ class Fingerprint:
             _read_text(manager.fastpath_path(root)),
             pack_meta,
             _hooks_tree(cli_state.hooks),
-            _stat_pair(root / ".gitignore"),
+            _stat_entry(root / ".gitignore"),
             _sha256_file(manager.attached_path(session_dir)) if session_dir is not None else "",
+            _attached_trees(session_dir) if session_dir is not None else (),
         )
         return cls(digest=hashlib.sha256(repr(material).encode()).hexdigest(), horizon=horizon)
 
