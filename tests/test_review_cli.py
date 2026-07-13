@@ -127,9 +127,9 @@ class TestEnableDisable:
         assert invoke("enable", root=git_repo).exit_code == 0
         settings = json.loads((git_repo / ".claude" / "settings.json").read_text())
         assert settings["enabledPlugins"] == {"captain-hook@captain-hook": True}
-        assert settings["extraKnownMarketplaces"]["captain-hook"]["source"] == {
-            "source": "github",
-            "repo": "yasyf/captain-hook",
+        assert settings["extraKnownMarketplaces"]["captain-hook"] == {
+            "source": {"source": "github", "repo": "yasyf/captain-hook"},
+            "autoUpdate": True,
         }
 
     def test_disable_unwatches(self, git_repo: Path) -> None:

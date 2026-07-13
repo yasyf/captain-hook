@@ -140,7 +140,7 @@ def register_marketplace(root: Path) -> None:
         existing
         | {
             "extraKnownMarketplaces": existing.get("extraKnownMarketplaces", {})
-            | {"captain-hook": {"source": {"source": "github", "repo": "yasyf/captain-hook"}}},
+            | {"captain-hook": {"source": {"source": "github", "repo": "yasyf/captain-hook"}, "autoUpdate": True}},
             "enabledPlugins": existing.get("enabledPlugins", {}) | {PLUGIN_ID: True},
         },
     )

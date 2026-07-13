@@ -34,13 +34,15 @@
       "source": {
         "source": "github",
         "repo": "yasyf/captain-hook"
-      }
+      },
+      "autoUpdate": true
     },
     "cc-context": {
       "source": {
         "source": "github",
         "repo": "yasyf/cc-context"
-      }
+      },
+      "autoUpdate": true
     }
   },
   "enabledPlugins": {
