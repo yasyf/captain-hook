@@ -49,7 +49,9 @@ def getenv[T](key: str, default: str | T | None = None) -> str | T | None:
 
 
 def env_map() -> Mapping[str, str]:
-    return os.environ if (ov := _OVERRIDES.get()) is None else os.environ | dict(ov.env)
+    if (ov := _OVERRIDES.get()) is None:
+        return os.environ
+    return {k: v for k, v in os.environ.items() if not is_whitelisted(k)} | dict(ov.env)
 
 
 def cwd() -> Path:

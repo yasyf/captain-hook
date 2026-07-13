@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 HOOK_SRC = """
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 
@@ -51,6 +52,21 @@ def side_effect(evt):
     ti = evt._raw.get("tool_input", {})
     if (sink := ti.get("sink")) and (marker := ti.get("marker")):
         Path(sink).open("a").write(marker + "\\n")
+    return None
+
+
+@on(Event.PostToolUse)
+def show_root(evt):
+    if evt._raw.get("tool_input", {}).get("show_root"):
+        print(str(evt.ctx.project_root))
+    return None
+
+
+@on(Event.PostToolUse)
+def exiter(evt):
+    if code := evt._raw.get("tool_input", {}).get("exit_code"):
+        print("BEFORE_EXIT")
+        sys.exit(code)
     return None
 """
 
@@ -251,6 +267,30 @@ class TestEventParity:
         assert json.loads(resp["stdout"])["hookSpecificOutput"]["additionalContext"] == "pre-tool warning"
         assert_matches_cold(resp, "PreToolUse", payload, root, env)
 
+    def test_symlinked_root_flows_verbatim_matching_cold(self, worker: tuple[str, Path, dict], tmp_path: Path) -> None:
+        # The request's literal --root (a symlink) must reach HookContext.project_root verbatim; only
+        # the worker key canonicalizes. A hook echoing project_root proves warm == cold on the literal.
+        sock, root, env = worker
+        link = tmp_path / "root-link"
+        link.symlink_to(root)
+        payload = json.dumps({"session_id": "sl", "tool_name": "Bash", "tool_input": {"show_root": True}})
+        extra = {"CAPT_HOOK_ONCE_TTL": "0"}
+        resp = send(sock, event_req("PostToolUse", payload, link, env, extra_env=extra))
+        assert resp["stdout"] == f"{link}\n"
+        assert_matches_cold(resp, "PostToolUse", payload, link, env, extra_env=extra)
+
+    def test_hook_sys_exit_matches_cold(self, worker: tuple[str, Path, dict]) -> None:
+        # A hook that prints then sys.exit(7): the warm response carries the printed output and exit 7,
+        # byte-parity with cold (where the SystemExit still delivers the output and the code).
+        sock, root, env = worker
+        payload = json.dumps({"session_id": "sx7", "tool_name": "Bash", "tool_input": {"exit_code": 7}})
+        extra = {"CAPT_HOOK_ONCE_TTL": "0"}
+        resp = send(sock, event_req("PostToolUse", payload, root, env, extra_env=extra))
+        assert resp["stdout"] == "BEFORE_EXIT\n"
+        assert resp["exit"] == 7
+        assert resp["status"] == "ok"
+        assert_matches_cold(resp, "PostToolUse", payload, root, env, extra_env=extra)
+
     def test_malformed_payload_matches_cold(self, worker: tuple[str, Path, dict]) -> None:
         sock, root, env = worker
         raw = "{not valid json"
@@ -436,15 +476,66 @@ class TestStandaloneWorkers:
 
 
 class TestClientBuildRestart:
-    def test_client_build_change_arms_a_restart(self, tmp_path: Path) -> None:
+    def test_client_header_change_alone_does_not_arm_restart(self, tmp_path: Path) -> None:
+        from captain_hook.daemon.server import Server
+
+        root = make_project(tmp_path / "proj")
+        server = Server(root, foreground=True)
+        try:
+            assert server._note_client_build("b1") is None  # first seen: record, no restart
+            assert server._note_client_build("b1") is None  # unchanged header
+            # A differing header with an unchanged daemon build_id (e.g. a CAPT_HOOK_CLIENT_BUILD
+            # override) is not proof the install changed, so no restart is armed.
+            assert server._note_client_build("b2") is None
+        finally:
+            server.event_pool.shutdown(wait=False)
+            server.control_pool.shutdown(wait=False)
+
+    def test_real_build_change_arms_a_restart(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from captain_hook.daemon import lifecycle
         from captain_hook.daemon.server import Server
 
         root = make_project(tmp_path / "proj")
         server = Server(root, foreground=True)
         try:
             assert server._note_client_build("b1") is None
-            assert server._note_client_build("b1") is None
+            # Scripted build-id change: the daemon's own recomputation now differs from startup.
+            monkeypatch.setattr(lifecycle, "build_id", lambda: f"{server.build}-moved")
             assert server._note_client_build("b2") is not None  # armed; never invoked (would execv)
         finally:
             server.event_pool.shutdown(wait=False)
             server.control_pool.shutdown(wait=False)
+
+
+class TestDiscoveryDiagnosticsReplay:
+    def test_discovery_warning_replayed_on_every_request(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolate_modules: None
+    ) -> None:
+        # Cold re-prints discovery diagnostics ("packs unavailable ...") on every invocation. Warm
+        # discovers once at build; the captured warning must replay into every request served from that
+        # snapshot, so a cache hit (request 2) carries it byte-for-byte with the build (request 1).
+        from captain_hook.daemon.context import install_context_io
+        from captain_hook.daemon.protocol import decode_request
+        from captain_hook.daemon.server import Server
+        from captain_hook.packs import manager
+
+        monkeypatch.setattr(manager, "resolve_enabled_packs", lambda _root: ([], ["ghost"]))
+        root = make_project(tmp_path / "proj")
+        env = os.environ | {"CAPT_HOOK_ONCE_TTL": "0"}
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {}})
+        req = decode_request(json.dumps(event_req("PostToolUse", payload, root, env)).encode())
+
+        saved = (sys.stdout, sys.stderr)
+        install_context_io()
+        server = Server(root, foreground=True)
+        try:
+            built = server._run_event(req)  # cache miss: builds and captures the discovery warning
+            hit = server._run_event(req)  # cache hit: no fresh discover, replays the snapshot's warning
+        finally:
+            server.event_pool.shutdown(wait=False)
+            server.control_pool.shutdown(wait=False)
+            sys.stdout, sys.stderr = saved
+
+        assert "packs unavailable (offline and not cached): ghost" in built.stderr
+        assert built.stdout == "" and hit.stdout == ""
+        assert hit.stderr == built.stderr  # the cache hit replays the build's diagnostics verbatim

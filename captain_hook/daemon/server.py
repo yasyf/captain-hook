@@ -23,6 +23,7 @@ import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -55,7 +56,6 @@ from captain_hook.types import Event
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
-    from pathlib import Path
 
     from captain_hook.daemon.context import RequestBuffers
     from captain_hook.daemon.protocol import Request
@@ -204,7 +204,13 @@ class Server:
         if self.client_build is None:
             self.client_build = build
             return None
-        return (lambda: self._shutdown(restart=True)) if build != self.client_build else None
+        if build == self.client_build:
+            return None
+        # A client header mismatch alone (e.g. a CAPT_HOOK_CLIENT_BUILD override) is not proof the
+        # install changed; only drain-restart when the daemon's own build_id recomputation moved.
+        if lifecycle.build_id() == self.build:
+            return None
+        return lambda: self._shutdown(restart=True)
 
     def _run_event(self, req: Request) -> Response:
         event_name = req.event or ""
@@ -224,16 +230,25 @@ class Server:
             if parse_error is not None:
                 print(f"Malformed stdin: {parse_error}", file=sys.stderr)
                 return self._from_buffers(buffers)
-            self._dispatch(event, parsed, session_id, req)
+            try:
+                self._dispatch(event, parsed, session_id, req)
+            except SystemExit as exit_:
+                # A hook that calls sys.exit delivers its captured output plus that exit code, mirroring
+                # cold. Any other Exception keeps propagating to the status=error path in _process.
+                return self._from_buffers(buffers, exit_code=_exit_code(exit_.code))
             return self._from_buffers(buffers)
 
     def _dispatch(self, event: Event, raw: dict, session_id: str | None, req: Request) -> None:
         with self._session_lock(session_id):
             session_dir = ensure_session(_session(session_id)) if session_id else None
             snapshot = self.registry.get(session_dir)
+            if snapshot.discovery_stderr:
+                sys.stderr.write(snapshot.discovery_stderr)
             with app.use_state(snapshot.state):
+                # The request's own --root spelling flows into HookContext.project_root verbatim; the
+                # realpath canonicalization lives only in the worker key / daemon identity, not here.
                 output = dispatch_event(
-                    self.cli_state.root,
+                    Path(req.root),
                     event,
                     raw,
                     session_dir=session_dir,
@@ -326,8 +341,10 @@ class Server:
         finally:
             _close(conn)
 
-    def _from_buffers(self, buffers: RequestBuffers) -> Response:
-        return self._response("ok", stdout=buffers.stdout.getvalue(), stderr=buffers.stderr.getvalue())
+    def _from_buffers(self, buffers: RequestBuffers, *, exit_code: int = 0) -> Response:
+        return self._response(
+            "ok", stdout=buffers.stdout.getvalue(), stderr=buffers.stderr.getvalue(), exit_code=exit_code
+        )
 
     def _response(self, status: str, *, stdout: str = "", stderr: str = "", exit_code: int = 0) -> Response:
         return Response(
@@ -345,6 +362,16 @@ def _decode_payload(raw_text: str) -> tuple[dict | None, Exception | None]:
         return json.loads(raw_text), None
     except (json.JSONDecodeError, ValueError) as exc:
         return None, exc
+
+
+def _exit_code(code: object) -> int:
+    match code:
+        case None:
+            return 0
+        case int() as n:
+            return n
+        case _:
+            return 1
 
 
 def _session(session_id: str):

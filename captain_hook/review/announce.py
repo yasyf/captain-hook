@@ -97,15 +97,15 @@ def collect_announcements(root: Path | None) -> str | None:
         root: The session's project root; the repo is resolved from it.
     """
     import asyncio
-    import os
     import sqlite3
 
     from captain_hook.review.pipeline import SPAWNED_ENV
     from captain_hook.review.repo import repo_key
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
+    from captain_hook.util import reqenv
 
-    if os.environ.get(SPAWNED_ENV):
+    if reqenv.getenv(SPAWNED_ENV):
         return None
     if (repo := repo_key(root)) is None:
         return None

@@ -173,6 +173,7 @@ def guard_and_spawn(raw: bytes) -> None:
                 stdout=log,
                 stderr=log,
                 start_new_session=True,
+                cwd=reqenv.cwd(),
                 env=reqenv.env_map() | {SPAWNED_ENV: "1"},
             )
     except OSError:

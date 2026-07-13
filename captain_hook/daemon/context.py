@@ -65,6 +65,22 @@ def request_scope(req: Request, session_id: str | None) -> Iterator[RequestBuffe
             _BOUND.reset(token)
 
 
+@contextmanager
+def capture_output() -> Iterator[RequestBuffers]:
+    """Bind a fresh capture for the duration, isolating stdout/stderr written within it from any outer request's.
+
+    The registry builds a discovered hook set once and replays its diagnostics on every later cache hit;
+    this captures that build's output so it never lands only in the buffer of the request that happened to
+    trigger the build.
+    """
+    buffers = RequestBuffers()
+    token = _BOUND.set(buffers)
+    try:
+        yield buffers
+    finally:
+        _BOUND.reset(token)
+
+
 class ContextIO(io.TextIOBase):
     def __init__(self, stream: str, fallback: TextIO) -> None:
         self._stream = stream

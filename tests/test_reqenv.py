@@ -72,6 +72,17 @@ class TestEnvMap:
             assert env["PATH"] == "/bin"
             assert env["CLAUDE_PROJECT_DIR"] == "/warm"
 
+    def test_bound_strips_whitelisted_key_absent_from_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The B1 probe: a worker started with CLAUDE_CONFIG_DIR=/account-a must not leak it into a
+        # request that omitted it — call_cli children would otherwise inherit account-a's config.
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/account-a")
+        monkeypatch.setenv("PATH", "/bin")
+        with reqenv.use_request(overrides({"CLAUDE_PROJECT_DIR": "/warm"})):
+            env = reqenv.env_map()
+            assert "CLAUDE_CONFIG_DIR" not in env  # whitelisted + absent from request → stripped, not inherited
+            assert env["CLAUDE_PROJECT_DIR"] == "/warm"  # request-provided whitelisted key survives
+            assert env["PATH"] == "/bin"  # non-whitelisted daemon env still inherited verbatim
+
 
 class TestCwd:
     def test_unbound_is_process_cwd(self) -> None:

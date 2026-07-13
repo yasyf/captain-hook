@@ -114,6 +114,7 @@ class RegistrySnapshot:
     fingerprint: Fingerprint
     state: app.State
     resolved: list[manager.ResolvedPack]
+    discovery_stderr: str = ""
 
 
 class Registry:
@@ -143,11 +144,19 @@ class Registry:
         return hit if hit is not None and not fingerprint.expired(now) else None
 
     def _build(self, session_dir: Path | None) -> RegistrySnapshot:
+        from captain_hook.daemon.context import capture_output
+
         state = app.State()
-        with app.use_state(state):
+        # Capture discovery's diagnostics (e.g. "packs unavailable ...") into the snapshot instead of
+        # letting them land only in the buffer of the request that triggered the build; the server
+        # replays them into every request served from this snapshot, mirroring cold's per-invocation print.
+        with capture_output() as captured, app.use_state(state):
             resolved = self._cli_state.discover(session_dir=session_dir)
         # Fingerprint after discover: its resolve wrote the fastpath sidecar, so this captures
         # the post-write inputs the next request will see and stores the snapshot under them.
         return RegistrySnapshot(
-            fingerprint=Fingerprint.compute(self._cli_state, session_dir), state=state, resolved=resolved
+            fingerprint=Fingerprint.compute(self._cli_state, session_dir),
+            state=state,
+            resolved=resolved,
+            discovery_stderr=captured.stderr.getvalue(),
         )
