@@ -10,6 +10,12 @@ rest exit silently.
 Best-effort only: no locking beyond the atomic create, no daemon. A TTL bounds how
 long a claim suppresses siblings (covering uvx's multi-second startup skew) and how
 long a crashed claim keeps blocking before the next process reclaims it.
+
+The sentinel dir lives under the user-stable cache root (:func:`resolve_cache_dir`,
+``$XDG_CACHE_HOME/captain-hook/once``), not ``$TMPDIR``: siblings that spawn with divergent
+temp dirs — a resident daemon vs a cold CLI, an IDE vs a terminal vs launchd — must resolve
+the same sentinel to dedupe the same claim, and ``XDG_CACHE_HOME`` is both reqenv-routed and
+part of the daemon worker key, so every process of one worker agrees by construction.
 """
 
 from __future__ import annotations
@@ -18,13 +24,13 @@ import contextlib
 import hashlib
 import os
 import stat
-import tempfile
 import time
 from pathlib import Path
 
 from captain_hook.util import reqenv
+from captain_hook.util.paths import resolve_cache_dir
 
-DIR_NAME = "capt-hook-once"
+DIR_NAME = "once"
 DEFAULT_TTL = 10.0
 TTL_ENV = "CAPT_HOOK_ONCE_TTL"
 
@@ -56,14 +62,14 @@ def _ttl() -> float:
 
 
 def _sentinel_dir() -> Path | None:
-    """The sentinel dir, or None when it is unsafe to trust on a shared temp dir.
+    """The sentinel dir under the cache root, or None when it is unsafe to trust.
 
     Created 0o700; if the existing entry is a symlink or owned by another uid, the guard
     is skipped (None → the caller dispatches; fail-open) rather than trusting a dir a
-    hostile local user may have planted on shared ``/tmp``.
+    hostile local user may have planted.
     """
-    directory = Path(tempfile.gettempdir()) / DIR_NAME
-    directory.mkdir(mode=0o700, exist_ok=True)
+    directory = resolve_cache_dir() / DIR_NAME
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     info = directory.lstat()
     if stat.S_ISLNK(info.st_mode) or info.st_uid != os.geteuid():
         return None

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -11,9 +10,11 @@ from typing import Any
 import pytest
 
 from captain_hook import once
+from captain_hook.util.paths import resolve_cache_dir
 from tests.helpers import run_cli
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "once_hooks"
+CACHE_NAMESPACE = resolve_cache_dir().name
 
 # Decision-capable events the cli guard exempts, and pure side-effect events it collapses.
 EXEMPT_EVENTS = ["PreToolUse", "Stop", "SubagentStop", "PermissionRequest"]
@@ -35,12 +36,10 @@ def event_stdin(event: str, **extra: Any) -> str:
 
 @pytest.fixture
 def sentinel_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    # once resolves its dir via tempfile.gettempdir(); tempfile caches the tmpdir, so
-    # override it directly rather than via the (already-cached) TMPDIR env in-process.
-    root = tmp_path / "tmp"
-    root.mkdir()
-    monkeypatch.setattr(tempfile, "tempdir", str(root))
-    return root / once.DIR_NAME
+    # once resolves its dir under resolve_cache_dir() ($XDG_CACHE_HOME/captain-hook); pin
+    # XDG_CACHE_HOME to a per-test tmp so no sentinel ever touches the real ~/.cache.
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    return resolve_cache_dir() / once.DIR_NAME
 
 
 class TestClaimOnce:
@@ -124,6 +123,7 @@ class TestClaimOnce:
         # dispatches), never trust it and never claim through it.
         target = tmp_path / "planted"
         target.mkdir()
+        sentinel_dir.parent.mkdir(parents=True, exist_ok=True)
         sentinel_dir.symlink_to(target, target_is_directory=True)
         payload = b'{"a": 1}'
         assert once.claim_once("Stop", payload, async_=False) is True
@@ -135,16 +135,25 @@ def _dispatch_count(counter: Path) -> int:
     return len(counter.read_text().splitlines()) if counter.exists() else 0
 
 
+def _sentinel_root(cache_home: Path) -> Path:
+    return cache_home / CACHE_NAMESPACE / once.DIR_NAME
+
+
 def _run(
     tmp_path: Path,
     event: str,
     stdin: str,
     *,
     ttl: str | None = None,
+    tmpdir: Path | None = None,
 ) -> Any:
-    tmpdir = tmp_path / "tmp"
-    tmpdir.mkdir(exist_ok=True)
-    env = {"TMPDIR": str(tmpdir), "CAPT_HOOK_TEST_COUNTER": str(tmp_path / "count")}
+    (cache_home := tmp_path / "cache").mkdir(exist_ok=True)
+    (td := tmpdir or tmp_path / "tmp").mkdir(parents=True, exist_ok=True)
+    env = {
+        "TMPDIR": str(td),
+        "XDG_CACHE_HOME": str(cache_home),
+        "CAPT_HOOK_TEST_COUNTER": str(tmp_path / "count"),
+    }
     if ttl is not None:
         env[once.TTL_ENV] = ttl
     return run_cli("run", event, hooks_dir=str(FIXTURES_DIR), root_dir=str(tmp_path), stdin_data=stdin, env=env)
@@ -188,12 +197,22 @@ class TestGuardEndToEnd:
         first = _run(tmp_path, "UserPromptSubmit", stdin)
         assert first.returncode == 0, first.stderr
         assert _dispatch_count(tmp_path / "count") == 1
-        (sentinel,) = list((tmp_path / "tmp" / once.DIR_NAME).iterdir())
+        (sentinel,) = list(_sentinel_root(tmp_path / "cache").iterdir())
         stale = time.time() - 100
         os.utime(sentinel, (stale, stale))
         second = _run(tmp_path, "UserPromptSubmit", stdin)
         assert second.returncode == 0, second.stderr
         assert _dispatch_count(tmp_path / "count") == 2
+
+    def test_divergent_tmpdir_same_cache_dedupes(self, tmp_path: Path) -> None:
+        # Siblings with divergent TMPDIR but one XDG_CACHE_HOME share the sentinel and dedupe.
+        stdin = event_stdin("UserPromptSubmit")
+        first = _run(tmp_path, "UserPromptSubmit", stdin, tmpdir=tmp_path / "tmp-a")
+        assert first.returncode == 0, first.stderr
+        assert _dispatch_count(tmp_path / "count") == 1
+        second = _run(tmp_path, "UserPromptSubmit", stdin, tmpdir=tmp_path / "tmp-b")
+        assert second.returncode == 0, second.stderr
+        assert _dispatch_count(tmp_path / "count") == 1
 
     def test_duplicate_exits_silently(self, tmp_path: Path) -> None:
         stdin = event_stdin("UserPromptSubmit")

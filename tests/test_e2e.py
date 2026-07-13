@@ -241,6 +241,7 @@ class TestEventDispatchRoundTrip:
             hooks_dir=str(FIXTURES_DIR),
             root_dir=str(tmp_path),
             stdin_data=stdin,
+            env={"XDG_CACHE_HOME": str(tmp_path / "cache")},
         )
         assert result.returncode == 0, f"stderr: {result.stderr}"
 
