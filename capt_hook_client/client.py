@@ -35,6 +35,7 @@ import json
 import os
 import socket
 import stat
+import struct
 import sys
 import time
 
@@ -54,6 +55,13 @@ RESPONSE_STATUSES = frozenset({"ok", "error", "rejected"})
 
 class DaemonUnavailable(Exception):
     """Pre-send: no worker was reachable or spawnable, or the connect/spawn machinery failed. Apply the fallback."""
+
+
+class UntrustedWorker(DaemonUnavailable):
+    """Pre-send security precondition failure: an untrusted run dir, or a worker socket whose peer euid
+    is not ours (a socket planted by another uid). Force the cold path UNCONDITIONALLY — never fail-open
+    under ``CAPT_HOOK_DAEMON_FALLBACK`` — because a silently-lost gate deny is worse than a redundant cold
+    run; for ``ping`` this exits nonzero without printing the (untrusted) response."""
 
 
 class DeadlineExpired(Exception):
@@ -159,6 +167,11 @@ def do_run(event: str, root: str, args: list[str], *, async_: bool) -> int:
                 return emit_response(response)
             case "rejected":
                 return on_daemon_failure(args, payload, "worker rejected the request protocol version; running cold")
+    except UntrustedWorker as exc:
+        # A security precondition, not a daemon-availability condition: force cold regardless of the
+        # fallback mode so an untrusted run dir or a foreign-uid socket can never silently fail open.
+        breadcrumb(f"{exc}; running cold (security precondition)")
+        return cold(args, payload)
     except (DaemonUnavailable, DeadlineExpired) as exc:
         return on_daemon_failure(args, payload, str(exc))
     except PostSendFailure as exc:
@@ -167,7 +180,11 @@ def do_run(event: str, root: str, args: list[str], *, async_: bool) -> int:
 
 
 def do_ping(root: str) -> int:
-    sock = try_connect(str(key.socket_path(key.worker_key(root, os.environ))))
+    try:
+        sock = try_connect(str(key.socket_path(key.worker_key(root, os.environ))))
+    except UntrustedWorker as exc:
+        breadcrumb(str(exc))
+        return 1
     if sock is None:
         breadcrumb("no reachable daemon; ping does not spawn")
         return 1
@@ -206,17 +223,19 @@ def connect_or_spawn(root: str, deadline_at: float) -> socket.socket:
 def ensure_trusted_run_dir(run_dir: str) -> None:
     """Refuse a pre-existing socket in an untrusted run dir: a non-0700 or non-owned or symlinked run
     dir could hold an attacker-planted socket, so we never connect there and let the caller run cold.
-    An absent run dir is fine — :func:`spawn_and_wait` creates it 0700 before anything binds."""
+    This is defense in depth — the authority is the per-connection peer-uid check in :func:`verify_peer`,
+    which closes the TOCTOU where the dir is created world-writable and a socket planted between this
+    ``lstat`` and the connect. An absent run dir is fine — :func:`spawn_and_wait` creates it 0700 first."""
     try:
         st = os.lstat(run_dir)
     except FileNotFoundError:
         return
     if not stat.S_ISDIR(st.st_mode):
-        raise DaemonUnavailable(f"run dir is not a directory (symlink or file): {run_dir}")
+        raise UntrustedWorker(f"run dir is not a directory (symlink or file): {run_dir}")
     if st.st_uid != os.geteuid():
-        raise DaemonUnavailable(f"run dir is not owned by the current user: {run_dir}")
+        raise UntrustedWorker(f"run dir is not owned by the current user: {run_dir}")
     if stat.S_IMODE(st.st_mode) != 0o700:
-        raise DaemonUnavailable(f"run dir has unsafe mode {stat.S_IMODE(st.st_mode):04o} (want 0700): {run_dir}")
+        raise UntrustedWorker(f"run dir has unsafe mode {stat.S_IMODE(st.st_mode):04o} (want 0700): {run_dir}")
 
 
 def try_connect(sock_path: str, attempts: int = CONNECT_ATTEMPTS) -> socket.socket | None:
@@ -224,12 +243,40 @@ def try_connect(sock_path: str, attempts: int = CONNECT_ATTEMPTS) -> socket.sock
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             sock.connect(sock_path)
-            return sock
         except OSError:
             close(sock)
             if attempt + 1 < attempts:
                 time.sleep(CONNECT_DELAY)
+            continue
+        verify_peer(sock, sock_path)
+        return sock
     return None
+
+
+def verify_peer(sock: socket.socket, sock_path: str) -> None:
+    """Refuse a connected worker socket whose peer euid is not ours. Any uid can win a race to plant a
+    socket in a world-writable run dir; only the kernel-reported peer credential proves the worker is
+    ours, so this — not the run-dir mode check — is the authority that makes a planted socket unusable."""
+    if (uid := peer_uid(sock)) is not None and uid != os.geteuid():
+        close(sock)
+        raise UntrustedWorker(f"worker socket peer uid {uid} is not our euid {os.geteuid()}: {sock_path}")
+
+
+def peer_uid(sock: socket.socket) -> int | None:
+    if (peercred := getattr(socket, "SO_PEERCRED", None)) is not None:
+        return struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, peercred, struct.calcsize("3i")))[1]
+    return getpeereid(sock.fileno())
+
+
+def getpeereid(fd: int) -> int | None:
+    import ctypes
+    import ctypes.util
+
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    uid, gid = ctypes.c_uint(), ctypes.c_uint()
+    if libc.getpeereid(fd, ctypes.byref(uid), ctypes.byref(gid)) != 0:
+        return None
+    return uid.value
 
 
 def spawn_and_wait(worker: str, root: str, sock_path: str, deadline_at: float) -> socket.socket:
@@ -334,19 +381,21 @@ def validate(line: bytes) -> dict[str, object]:
         raise BadResponse(f"protocol mismatch: worker v={response.get('v')!r} client v={key.PROTOCOL!r}")
     if response.get("status") not in RESPONSE_STATUSES:
         raise BadResponse(f"unknown response status: {response.get('status')!r}")
+    # Validate exit for every kind; bool is an int, so exit:true must be rejected here — a malformed
+    # rejected then fails open post-send instead of triggering a double-firing cold rerun.
+    if not isinstance(exit_code := response.get("exit"), int) or isinstance(exit_code, bool):
+        raise BadResponse(f"response exit code is not an integer: {exit_code!r}")
     return response
 
 
 def emit_response(response: dict[str, object]) -> int:
-    if not isinstance(exit_code := response.get("exit"), int):
-        raise BadResponse(f"response exit code is not an integer: {exit_code!r}")
     if stdout := response.get("stdout"):
         sys.stdout.write(str(stdout))
         sys.stdout.flush()
     if stderr := response.get("stderr"):
         sys.stderr.write(str(stderr))
         sys.stderr.flush()
-    return exit_code
+    return response["exit"]  # validated by validate()
 
 
 def on_daemon_failure(args: list[str], payload: bytes, reason: str) -> int:

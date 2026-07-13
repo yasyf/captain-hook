@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import io
 import json
 import os
 import shutil
@@ -110,9 +111,9 @@ def run_cold(
 
 
 class FakeDaemon:
-    def __init__(self, sock_path: str, response: dict[str, object] | None, *, close_before_read: bool = False) -> None:
+    def __init__(self, sock_path: str, response: dict[str, object] | None, *, close_after_read: bool = False) -> None:
         self.response = response
-        self.close_before_read = close_before_read
+        self.close_after_read = close_after_read
         self.requests: list[dict[str, object]] = []
         self._stop = threading.Event()
         self._srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -131,9 +132,11 @@ class FakeDaemon:
             except OSError:
                 return
             with conn:
-                if self.close_before_read:
-                    continue  # accept, then close without reading — a post-send EOF from the client's view
-                self.requests.append(json.loads(read_line(conn)))
+                if not (line := read_line(conn)):
+                    continue  # peer closed before sending (e.g. refused on the client's peer-uid check)
+                self.requests.append(json.loads(line))
+                if self.close_after_read:
+                    continue  # read the request, then drop without responding — a deterministic post-send EOF
                 if self.response is None:
                     self._stop.wait(10)
                 else:
@@ -200,12 +203,12 @@ def preseed_daemon(
     env: dict[str, str],
     response: dict[str, object] | None,
     *,
-    close_before_read: bool = False,
+    close_after_read: bool = False,
 ) -> FakeDaemon:
     worker = key.worker_key(root, env)
     sock_path = str(run_dir / f"{worker}.sock")
     assert len(sock_path) < 100
-    return FakeDaemon(sock_path, response, close_before_read=close_before_read)
+    return FakeDaemon(sock_path, response, close_after_read=close_after_read)
 
 
 class TestParseArgv:
@@ -479,17 +482,18 @@ class TestSendBoundary:
         assert not sink.exists(), "an unknown status must not trigger a cold rerun"
 
     def test_post_send_eof_fails_open_no_cold(self, run_dir: Path, marker_dir: Path) -> None:
-        # The daemon accepts then closes without reading; the client's send completes (or breaks) and
+        # The daemon reads the request (so the client definitively sent) then drops without responding;
         # the read hits EOF. That is post-send, so it fails open and never reruns cold.
         root = str(marker_dir)
         env, sink = self._cold_env(run_dir, marker_dir, CAPT_HOOK_DAEMON_FALLBACK="cold")
-        daemon = preseed_daemon(run_dir, root, env, response=None, close_before_read=True)
+        daemon = preseed_daemon(run_dir, root, env, response=None, close_after_read=True)
         try:
             result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
         finally:
             daemon.close()
         assert result.returncode == 0, result.stderr
         assert result.stdout == ""
+        assert len(daemon.requests) == 1, "the request was not delivered before the EOF (not a post-send case)"
         assert not sink.exists(), "a cold rerun fired the marker hook — double dispatch"
 
     def test_post_send_stall_fails_open_no_cold(self, run_dir: Path, marker_dir: Path) -> None:
@@ -522,6 +526,32 @@ class TestSendBoundary:
         assert result.returncode == 1
         assert result.stderr == "Traceback: boom\n"
         assert not sink.exists(), "status=error must not trigger a cold rerun"
+
+    def test_response_bool_exit_fails_open_no_cold(self, run_dir: Path, marker_dir: Path) -> None:
+        # V12: a bool is an int, so exit:true is malformed → post-send fail open, no stdout relay, no cold.
+        root = str(marker_dir)
+        env, sink = self._cold_env(run_dir, marker_dir, CAPT_HOOK_DAEMON_FALLBACK="cold")
+        daemon = preseed_daemon(run_dir, root, env, {"v": 1, "status": "ok", "stdout": "X", "exit": True})
+        try:
+            result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        finally:
+            daemon.close()
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == ""
+        assert not sink.exists(), "a bool exit must not trigger a cold rerun"
+
+    def test_rejected_with_malformed_exit_fails_open_not_cold(self, run_dir: Path, marker_dir: Path) -> None:
+        # V12: a malformed rejected (exit:true) is not a provable non-dispatch → fail open, never rerun cold.
+        root = str(marker_dir)
+        env, sink = self._cold_env(run_dir, marker_dir, CAPT_HOOK_DAEMON_FALLBACK="cold")
+        daemon = preseed_daemon(run_dir, root, env, {"v": 1, "status": "rejected", "exit": True})
+        try:
+            result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        finally:
+            daemon.close()
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == ""
+        assert not sink.exists(), "a malformed rejected must not trigger a cold rerun"
 
     def test_rejected_status_falls_back_cold(self, run_dir: Path, project_dir: Path) -> None:
         # status=rejected is a provable non-dispatch (protocol gate): cold fallback stays correct.
@@ -610,6 +640,79 @@ class TestRunDirTrust:
         assert "permissionDecision" in result.stdout  # the cold block hook fired instead
         assert result.returncode == 0
 
+    def test_untrusted_run_dir_forces_cold_even_under_fallback_open(self, run_dir: Path, project_dir: Path) -> None:
+        # V2: an untrusted run dir is a security precondition, not an availability condition — it must run
+        # cold regardless of CAPT_HOOK_DAEMON_FALLBACK, so a gate deny is never lost to a fail-open exit 0.
+        os.chmod(run_dir, 0o777)
+        root = str(project_dir)
+        env = client_env(run_dir, CAPT_HOOK_DAEMON_FALLBACK="open")
+        result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        assert result.returncode == 0, result.stderr
+        assert "permissionDecision" in result.stdout, "an untrusted run dir failed open instead of running cold"
+
+
+class TestPeerUidVerification:
+    """V1/V11: the authority closing the run-dir TOCTOU is the per-connection peer-uid check — a socket
+    planted by another uid is refused after connect, before the request is ever sent."""
+
+    def test_same_process_peer_reads_our_euid(self) -> None:
+        left, right = socket.socketpair()
+        try:
+            assert client.peer_uid(left) == os.geteuid()
+            client.verify_peer(left, "/x.sock")  # matching peer → no raise
+        finally:
+            left.close()
+            right.close()
+
+    def test_foreign_peer_uid_is_refused_and_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(client, "peer_uid", lambda _s: os.geteuid() + 1)
+        left, right = socket.socketpair()
+        try:
+            with pytest.raises(client.UntrustedWorker):
+                client.verify_peer(left, "/x.sock")
+            with pytest.raises(OSError):
+                left.sendall(b"x")  # verify_peer closed our side on refusal
+        finally:
+            left.close()
+            right.close()
+
+    def test_event_peer_mismatch_runs_cold_never_sends(
+        self, run_dir: Path, project_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A live stub socket at the worker path, but the peer-uid check is forced to mismatch: the client
+        # refuses it and runs cold (even under FALLBACK=open), never sending the request to the socket.
+        root = str(project_dir)
+        monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(run_dir))
+        monkeypatch.setenv("CAPT_HOOK_ONCE_TTL", "0")
+        monkeypatch.setenv("CAPT_HOOK_DAEMON_FALLBACK", "open")
+        daemon = preseed_daemon(run_dir, root, dict(os.environ), {"v": 1, "status": "ok", "stdout": "SPOOF", "exit": 0})
+        monkeypatch.setattr(client, "peer_uid", lambda _s: os.geteuid() + 1)
+        cold_calls: list[tuple] = []
+        monkeypatch.setattr(client, "cold", lambda args, payload: (cold_calls.append((args, payload)), 0)[1])
+        monkeypatch.setattr(client.sys, "stdin", io.TextIOWrapper(io.BytesIO(PAYLOAD.encode())))
+        try:
+            rc = client.do_run("PreToolUse", root, ["run", "PreToolUse"], async_=False)
+        finally:
+            daemon.close()
+        assert rc == 0
+        assert cold_calls, "a peer-uid mismatch did not force the cold path"
+        assert daemon.requests == [], "the client sent the request to an untrusted socket"
+
+    def test_ping_peer_mismatch_exits_nonzero_without_printing(
+        self, run_dir: Path, hooks_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        root = str(hooks_dir.parent)
+        monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(run_dir))
+        daemon = preseed_daemon(run_dir, root, dict(os.environ), {"v": 1, "status": "ok", "exit": 0})
+        monkeypatch.setattr(client, "peer_uid", lambda _s: os.geteuid() + 1)
+        try:
+            rc = client.do_ping(root)
+        finally:
+            daemon.close()
+        assert rc == 1
+        assert daemon.requests == [], "the client pinged an untrusted socket"
+        assert capsys.readouterr().out == "", "a refused ping printed a spoofed response"
+
 
 class TestPassthrough:
     def test_unknown_subcommand_execs_captain_hook(self, run_dir: Path) -> None:
@@ -629,7 +732,7 @@ class TestPing:
     def test_ping_with_daemon_prints_response(self, run_dir: Path, hooks_dir: Path) -> None:
         root = str(hooks_dir.parent)
         env = client_env(run_dir, CAPT_HOOK_DAEMON_FALLBACK="closed")
-        daemon = preseed_daemon(run_dir, root, env, {"v": 1, "status": "ok", "daemon": {"pid": 123}})
+        daemon = preseed_daemon(run_dir, root, env, {"v": 1, "status": "ok", "exit": 0, "daemon": {"pid": 123}})
         try:
             result = run_client("--root", root, "ping", env=env)
         finally:
@@ -637,6 +740,19 @@ class TestPing:
         assert result.returncode == 0
         assert json.loads(result.stdout)["status"] == "ok"
         assert daemon.requests[0]["kind"] == "ping"
+
+    def test_ping_malformed_exit_exits_nonzero_without_printing(self, run_dir: Path, hooks_dir: Path) -> None:
+        # V12: a ping response with a malformed exit (bool) is untrusted → the client exits nonzero and
+        # prints nothing, never relaying the (untrusted) response to stdout.
+        root = str(hooks_dir.parent)
+        env = client_env(run_dir, CAPT_HOOK_DAEMON_FALLBACK="closed")
+        daemon = preseed_daemon(run_dir, root, env, {"v": 1, "status": "ok", "exit": True})
+        try:
+            result = run_client("--root", root, "ping", env=env)
+        finally:
+            daemon.close()
+        assert result.returncode == 1
+        assert result.stdout == "", "a malformed ping response was printed as if trusted"
 
 
 class TestColdParity:
