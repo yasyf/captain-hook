@@ -701,6 +701,60 @@ class TestSessionScheduler:
             server.control_pool.shutdown(wait=False, cancel_futures=True)
 
 
+class TestPeerCredentialCheck:
+    def test_same_uid_peer_reads_our_euid(self) -> None:
+        from captain_hook.daemon.server import _peer_uid
+
+        left, right = socket.socketpair()
+        try:
+            assert _peer_uid(left) == os.geteuid()
+        finally:
+            left.close()
+            right.close()
+
+    def test_untrusted_peer_uid_is_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # S1/S2: a peer whose uid does not match our euid is dropped at intake, never admitted.
+        from captain_hook.daemon import server as server_mod
+
+        root = make_project(tmp_path / "proj")
+        server = server_mod.Server(root, foreground=True)
+        try:
+            monkeypatch.setattr(server_mod, "_peer_uid", lambda _conn: os.geteuid() + 1)
+            left, right = socket.socketpair()
+            server._intake(left)
+            assert server.active == 0, "an untrusted peer was admitted"
+            with pytest.raises(OSError):
+                left.sendall(b"x")  # intake closed our side
+            right.close()
+        finally:
+            server.intake_pool.shutdown(wait=False)
+            server.event_pool.shutdown(wait=False)
+            server.control_pool.shutdown(wait=False)
+
+
+class TestMetaHardening:
+    def test_write_meta_refuses_a_symlink(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # S1/S2: O_NOFOLLOW means a pre-planted symlink at the meta path is refused, not written through.
+        from captain_hook.daemon.protocol import meta_path
+        from captain_hook.daemon.server import Server
+
+        run = Path(tempfile.mkdtemp(dir="/tmp", prefix="chd-meta-"))
+        monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(run))
+        server = Server(make_project(tmp_path / "proj"), foreground=True)
+        try:
+            target = run / "target.json"
+            target.write_text("ORIGINAL")
+            Path(meta_path(server.key)).symlink_to(target)
+            with pytest.raises(OSError):
+                server._write_meta()
+            assert target.read_text() == "ORIGINAL", "meta write followed a symlink"
+        finally:
+            server.intake_pool.shutdown(wait=False)
+            server.event_pool.shutdown(wait=False)
+            server.control_pool.shutdown(wait=False)
+            shutil.rmtree(run, ignore_errors=True)
+
+
 class TestDiscoveryDiagnosticsReplay:
     def test_discovery_warning_replayed_on_every_request(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolate_modules: None

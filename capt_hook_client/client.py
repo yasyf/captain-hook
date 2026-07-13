@@ -34,6 +34,7 @@ import fcntl
 import json
 import os
 import socket
+import stat
 import sys
 import time
 
@@ -193,12 +194,29 @@ def round_trip(request: dict[str, object], root: str, deadline_at: float) -> dic
 def connect_or_spawn(root: str, deadline_at: float) -> socket.socket:
     try:
         worker = key.worker_key(root, os.environ)
+        ensure_trusted_run_dir(str(key.run_dir()))
         sock_path = str(key.socket_path(worker))
         if (sock := try_connect(sock_path)) is not None:
             return sock
         return spawn_and_wait(worker, root, sock_path, deadline_at)
     except OSError as exc:
         raise DaemonUnavailable(f"daemon attempt failed before send: {exc}") from exc
+
+
+def ensure_trusted_run_dir(run_dir: str) -> None:
+    """Refuse a pre-existing socket in an untrusted run dir: a non-0700 or non-owned or symlinked run
+    dir could hold an attacker-planted socket, so we never connect there and let the caller run cold.
+    An absent run dir is fine — :func:`spawn_and_wait` creates it 0700 before anything binds."""
+    try:
+        st = os.lstat(run_dir)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(st.st_mode):
+        raise DaemonUnavailable(f"run dir is not a directory (symlink or file): {run_dir}")
+    if st.st_uid != os.geteuid():
+        raise DaemonUnavailable(f"run dir is not owned by the current user: {run_dir}")
+    if stat.S_IMODE(st.st_mode) != 0o700:
+        raise DaemonUnavailable(f"run dir has unsafe mode {stat.S_IMODE(st.st_mode):04o} (want 0700): {run_dir}")
 
 
 def try_connect(sock_path: str, attempts: int = CONNECT_ATTEMPTS) -> socket.socket | None:
@@ -215,7 +233,7 @@ def try_connect(sock_path: str, attempts: int = CONNECT_ATTEMPTS) -> socket.sock
 
 
 def spawn_and_wait(worker: str, root: str, sock_path: str, deadline_at: float) -> socket.socket:
-    os.makedirs(str(key.run_dir()), exist_ok=True)
+    os.makedirs(str(key.run_dir()), mode=0o700, exist_ok=True)
     lock_fd = os.open(str(key.lock_path(worker)), os.O_CREAT | os.O_RDWR, 0o600)
     try:
         while time.monotonic() < deadline_at:
@@ -256,7 +274,8 @@ def run_winner(worker: str, root: str, sock_path: str, deadline_at: float) -> so
 def spawn_daemon(worker: str, root: str):
     import subprocess
 
-    log = open(str(key.log_path(worker)), "ab")
+    log_fd = os.open(str(key.log_path(worker)), os.O_CREAT | os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+    log = os.fdopen(log_fd, "ab")
     try:
         return subprocess.Popen(
             [sys.executable, "-m", "captain_hook", "daemon", "run", "--root", root],

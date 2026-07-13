@@ -219,3 +219,12 @@ class TestRequestBoundSkipPermissions:
             assert claude_skip_permissions() is True
         with reqenv.use_request(bound(client_ppid=60, session_id="s2")):
             assert claude_skip_permissions() is False
+
+    def test_bypass_ppid_does_not_poison_a_later_same_session_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # S3: a bypass-signalling ppid must not flip a later same-session request whose ppid does not.
+        table = {50: (1, "claude --dangerously-skip-permissions"), 60: (1, "claude --permission-mode plan")}
+        monkeypatch.setattr(proc, "parent_entry", lambda pid: table.get(pid))
+        with reqenv.use_request(bound(client_ppid=50, session_id="shared")):
+            assert claude_skip_permissions() is True
+        with reqenv.use_request(bound(client_ppid=60, session_id="shared")):
+            assert claude_skip_permissions() is False

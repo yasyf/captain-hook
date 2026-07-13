@@ -12,7 +12,7 @@ SKIP_PERMISSIONS_FLAGS = frozenset({"--dangerously-skip-permissions", "--allow-d
 JS_RUNTIMES = frozenset({"node", "bun", "deno"})
 MAX_WALK = 20
 
-_SKIP_CACHE: LRUDict[str, bool] = LRUDict(512)
+_SKIP_CACHE: LRUDict[tuple[str, int], bool] = LRUDict(512)
 
 
 def parent_entry(pid: int) -> tuple[int, str] | None:
@@ -72,11 +72,12 @@ def claude_skip_permissions() -> bool:
     """Whether the nearest ``claude`` ancestor launched with a skip-permissions flag.
 
     Cold, the walk starts at this process and is process-cached. Under a bound request (the
-    resident daemon) it walks from the client's parent and caches per session id, so one
-    worker never leaks one session's launch flags into another's.
+    resident daemon) it walks from the client's parent and caches per ``(session id, client
+    ppid)``, so one worker never leaks one session's launch flags into another's — and a request
+    carrying a bypass-signalling ppid cannot poison a later same-session request's consent state.
     """
     if (ov := reqenv.current()) is None:
         return _cold_skip_permissions()
-    if ov.session_id not in _SKIP_CACHE:
-        _SKIP_CACHE[ov.session_id] = walk_skip_permissions(ov.client_ppid)
-    return _SKIP_CACHE[ov.session_id]
+    if (cache_key := (ov.session_id, ov.client_ppid)) not in _SKIP_CACHE:
+        _SKIP_CACHE[cache_key] = walk_skip_permissions(ov.client_ppid)
+    return _SKIP_CACHE[cache_key]

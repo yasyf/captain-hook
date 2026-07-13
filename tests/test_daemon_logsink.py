@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 
 import pytest
 from loguru import logger
 
 from captain_hook.daemon.context import request_scope
-from captain_hook.daemon.logsink import SessionFileRouter, configure_daemon_logging, daemon_log_path
+from captain_hook.daemon.logsink import (
+    SessionFileRouter,
+    configure_daemon_logging,
+    create_private_log,
+    daemon_log_path,
+)
 from captain_hook.daemon.protocol import ClientInfo, Request
 
 KEY = "deadbeefcafe0001"
@@ -117,6 +123,24 @@ class TestConfigureDaemonLogging:
         logger.warning("orphan warning")
         logger.complete()
         assert "orphan warning" in daemon_log_path(KEY).read_text()
+
+    def test_daemon_log_dir_is_private_and_file_is_owner_only(self, tmp_path: Path) -> None:
+        # S7: the daemon log persists hook tracebacks that can carry prompt/tool content, so its dir
+        # is 0700 and the file 0600 — no cross-user read on a traversable cache path.
+        logs = tmp_path / "logs"
+        configure_daemon_logging(KEY)
+        assert stat.S_IMODE(logs.stat().st_mode) == 0o700
+        assert stat.S_IMODE(daemon_log_path(KEY).stat().st_mode) == 0o600
+
+    def test_create_private_log_refuses_a_symlink(self, tmp_path: Path) -> None:
+        # S1/S2: O_NOFOLLOW means a pre-planted symlink at the log path is refused, not followed.
+        target = tmp_path / "target.txt"
+        target.write_text("ORIGINAL")
+        link = tmp_path / "daemon.log"
+        link.symlink_to(target)
+        with pytest.raises(OSError):
+            create_private_log(link)
+        assert target.read_text() == "ORIGINAL", "create_private_log followed a symlink"
 
 
 class TestSessionFileRouter:

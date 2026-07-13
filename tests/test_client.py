@@ -574,6 +574,43 @@ class TestSendBoundary:
         assert "permissionDecision" in result.stdout
 
 
+class TestRunDirTrust:
+    """S1/S2: the client refuses a pre-existing socket in a run dir it cannot trust, so an attacker
+    who plants a socket in a world-writable or symlinked run dir cannot intercept the request."""
+
+    def test_absent_run_dir_is_allowed(self, tmp_path: Path) -> None:
+        client.ensure_trusted_run_dir(str(tmp_path / "does-not-exist"))  # spawn creates it 0700
+
+    def test_private_run_dir_is_allowed(self, run_dir: Path) -> None:
+        os.chmod(run_dir, 0o700)
+        client.ensure_trusted_run_dir(str(run_dir))
+
+    def test_world_writable_run_dir_is_refused(self, run_dir: Path) -> None:
+        os.chmod(run_dir, 0o777)
+        with pytest.raises(client.DaemonUnavailable):
+            client.ensure_trusted_run_dir(str(run_dir))
+
+    def test_symlinked_run_dir_is_refused(self, tmp_path: Path, run_dir: Path) -> None:
+        link = tmp_path / "run-link"
+        link.symlink_to(run_dir)
+        with pytest.raises(client.DaemonUnavailable):
+            client.ensure_trusted_run_dir(str(link))
+
+    def test_world_writable_run_dir_runs_cold_not_the_planted_socket(self, run_dir: Path, project_dir: Path) -> None:
+        os.chmod(run_dir, 0o777)
+        root = str(project_dir)
+        env = client_env(run_dir)  # default fallback: cold
+        daemon = preseed_daemon(run_dir, root, env, {"v": 1, "status": "ok", "stdout": "FROM-DAEMON", "exit": 0})
+        try:
+            result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        finally:
+            daemon.close()
+        assert daemon.requests == [], "the client trusted a socket in a world-writable run dir"
+        assert "FROM-DAEMON" not in result.stdout
+        assert "permissionDecision" in result.stdout  # the cold block hook fired instead
+        assert result.returncode == 0
+
+
 class TestPassthrough:
     def test_unknown_subcommand_execs_captain_hook(self, run_dir: Path) -> None:
         result = run_client("definitely-not-a-command", env=client_env(run_dir))

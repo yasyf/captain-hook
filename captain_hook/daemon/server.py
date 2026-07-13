@@ -23,6 +23,7 @@ import json
 import os
 import signal
 import socket
+import struct
 import sys
 import threading
 import time
@@ -186,6 +187,10 @@ class Server:
             lifecycle.reexec(self.argv)
 
     def _intake(self, conn: socket.socket) -> None:
+        if not _peer_allowed(conn):
+            logger.warning("rejecting a connection from an untrusted peer uid")
+            _close(conn)
+            return
         self.last_activity = time.monotonic()
         self._begin_active()
         self.intake_pool.submit(self._read_and_route, conn)
@@ -380,6 +385,9 @@ class Server:
     def _bind(self) -> socket.socket:
         directory = run_dir()
         directory.mkdir(parents=True, exist_ok=True)
+        if directory.is_symlink():
+            logger.error("run dir is a symlink; refusing to chmod through it: {}", directory)
+            raise SystemExit(1)
         os.chmod(directory, 0o700)
         sock_path = validate_sun_path(socket_path(self.key))
         if os.path.exists(sock_path):
@@ -395,7 +403,7 @@ class Server:
         return listener
 
     def _redirect_stdio(self) -> None:
-        fd = os.open(str(log_path(self.key)), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+        fd = os.open(str(log_path(self.key)), os.O_CREAT | os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW, 0o600)
         try:
             os.dup2(fd, 1)
             os.dup2(fd, 2)
@@ -403,19 +411,22 @@ class Server:
             os.close(fd)
 
     def _write_meta(self) -> None:
-        meta_path(self.key).write_text(
-            json.dumps(
-                {
-                    "pid": os.getpid(),
-                    "root": str(self.root),
-                    "build": self.build,
-                    "version": self.version,
-                    "protocol": PROTOCOL,
-                    "socket": str(socket_path(self.key)),
-                    "started_at": self.started_at,
-                }
-            )
-        )
+        payload = json.dumps(
+            {
+                "pid": os.getpid(),
+                "root": str(self.root),
+                "build": self.build,
+                "version": self.version,
+                "protocol": PROTOCOL,
+                "socket": str(socket_path(self.key)),
+                "started_at": self.started_at,
+            }
+        ).encode()
+        fd = os.open(str(meta_path(self.key)), os.O_CREAT | os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
 
     def _status(self) -> dict[str, object]:
         return {
@@ -505,6 +516,28 @@ def _decode_payload(raw_text: str) -> tuple[dict | None, Exception | None]:
 def _session_id_of(req: Request) -> str | None:
     parsed, _ = _decode_payload(req.payload_raw)
     return parsed.get("session_id") if isinstance(parsed, dict) else None
+
+
+def _peer_allowed(conn: socket.socket) -> bool:
+    uid = _peer_uid(conn)
+    return uid is None or uid == os.geteuid()
+
+
+def _peer_uid(conn: socket.socket) -> int | None:
+    if (peercred := getattr(socket, "SO_PEERCRED", None)) is not None:
+        return struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, peercred, struct.calcsize("3i")))[1]
+    return _getpeereid(conn.fileno())
+
+
+def _getpeereid(fd: int) -> int | None:
+    import ctypes
+    import ctypes.util
+
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    uid, gid = ctypes.c_uint(), ctypes.c_uint()
+    if libc.getpeereid(fd, ctypes.byref(uid), ctypes.byref(gid)) != 0:
+        return None
+    return uid.value
 
 
 def _exit_code(code: object) -> int:

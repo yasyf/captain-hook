@@ -12,6 +12,7 @@ the tee reads the emitting thread's request ContextVar.
 
 from __future__ import annotations
 
+import os
 import threading
 from collections import OrderedDict
 from typing import TYPE_CHECKING
@@ -96,10 +97,22 @@ def daemon_log_path(key: str) -> Path:
     return resolve_log_dir() / f"daemon-{key}.log"
 
 
+def create_private_log(path: Path) -> None:
+    # 0600 file, O_NOFOLLOW refuses a pre-planted symlink; the log persists hook tracebacks that can
+    # carry prompt/tool content, so it is same-user-only like cold's per-session logs.
+    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
+
+
 def configure_daemon_logging(key: str) -> SessionFileRouter:
     router = SessionFileRouter()
     daemon_log = daemon_log_path(key)
     daemon_log.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(daemon_log.parent, 0o700)
+    create_private_log(daemon_log)
     logger.configure(
         patcher=truncate_daemon_bound_values,
         handlers=[
