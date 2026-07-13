@@ -49,6 +49,9 @@ class TestRunSubcommand:
         assert result.returncode == 0
 
     def test_cli_002_run_with_async_flag(self, hooks_dir: Path) -> None:
+        # PostToolUse is not a decision event, so both async_=False and async_=True register
+        # cleanly (async_=True on a decision event now raises) and each variant's pass emits its
+        # own hook. TTL=0 disables the once-guard so both passes dispatch deterministically.
         (hooks_dir / "conf.py").write_text("")
         write_hook(
             hooks_dir,
@@ -56,24 +59,21 @@ class TestRunSubcommand:
             from captain_hook.app import hook, on
             from captain_hook.types import Event
 
-            hook(Event.PreToolUse, message="sync hook", async_=False)
-            hook(Event.PreToolUse, message="async hook", async_=True)
+            hook(Event.PostToolUse, message="sync hook", async_=False)
+            hook(Event.PostToolUse, message="async hook", async_=True)
         """,
         )
 
         stdin = stdin_json(tool_name="Bash", tool_input={"command": "echo hi"})
+        env = {"CAPT_HOOK_ONCE_TTL": "0"}
 
-        result_sync = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
+        result_sync = run_cli("run", "PostToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin, env=env)
         assert result_sync.returncode == 0
-        if result_sync.stdout.strip():
-            output_sync = json.loads(result_sync.stdout)
-            assert "sync hook" in json.dumps(output_sync)
+        assert "sync hook" in json.dumps(json.loads(result_sync.stdout))
 
-        result_async = run_cli("run", "PreToolUse", "--async", hooks_dir=str(hooks_dir), stdin_data=stdin)
+        result_async = run_cli("run", "PostToolUse", "--async", hooks_dir=str(hooks_dir), stdin_data=stdin, env=env)
         assert result_async.returncode == 0
-        if result_async.stdout.strip():
-            output_async = json.loads(result_async.stdout)
-            assert "async hook" in json.dumps(output_async)
+        assert "async hook" in json.dumps(json.loads(result_async.stdout))
 
     def test_cli_011_invalid_event_type(self, hooks_dir: Path) -> None:
         result = run_cli("run", "InvalidEvent", hooks_dir=str(hooks_dir), stdin_data="{}")

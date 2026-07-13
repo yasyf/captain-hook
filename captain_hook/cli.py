@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -48,6 +49,15 @@ PLUGIN_ID = "captain-hook@captain-hook"
 # gate. They are never guarded — the duplicate-dispatch guard covers only pure
 # side-effect events, where a missed sibling costs at most one repeated effect.
 DECISION_EVENTS = frozenset({Event.PreToolUse, Event.Stop, Event.SubagentStop, Event.PermissionRequest})
+
+PLUGIN_ROOT_VAR = "${CLAUDE_PLUGIN_ROOT}"
+# The two accepted attach dir args, double-quoted exactly: shlex strips the quotes, so the
+# quoting is verified against the raw command string, not the tokenized argv.
+ATTACH_DIR_ROOT = f'"{PLUGIN_ROOT_VAR}"'
+ATTACH_DIR_HOOKS = f'"{PLUGIN_ROOT_VAR}/hooks"'
+# A version floor is a lower-bound constraint: `>=X.Y.Z` (a bare pin or `<=`/`==` doesn't let a
+# newer captain-hook resolve).
+VERSION_FLOOR_RE = re.compile(r">=\s*\d+\.\d+\.\d+")
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,8 +256,10 @@ def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None
         return
 
     # Collapse the N byte-identical siblings Claude Code spawns per event (a legacy consumer's
-    # mirrored `run` entries) to one dispatch; decision events are exempt. once_guard releases
-    # the claim if dispatch below raises, so a crash never fail-closes a still-starting sibling.
+    # mirrored `run` entries) to one dispatch; decision events are exempt. once_guard is
+    # deliberately dumb: a claim whose dispatch below raises is NOT released — it stays held for
+    # the TTL window (fail-closed), because re-firing could repeat a side effect a sibling's
+    # earlier hooks already landed.
     with once_guard(event, event_name, raw_text.encode(), async_=async_) as dispatch_now:
         if not dispatch_now:
             return
@@ -575,19 +587,6 @@ def _search_upward(start: Path, *rel: str) -> Path | None:
     return None
 
 
-def _hooks_json_for(root: Path, manifest_dir: Path) -> Path | None:
-    """Resolve the plugin's hooks.json the way Claude Code loads it — under ``<plugin>/hooks``.
-
-    ``root`` is the dir the pack's attach line passes (the plugin root, or its ``hooks`` subdir
-    when the manifest is nested there), so hooks.json is a sibling of the manifest or one
-    ``hooks/`` level below the plugin root.
-    """
-    for cand in (root / "hooks" / "hooks.json", manifest_dir / "hooks.json"):
-        if cand.is_file():
-            return cand
-    return None
-
-
 def _command_entries(hooks_json: dict[str, Any]) -> list[tuple[str, str]]:
     """Every ``(event, command)`` command-type hook entry across the file, in declaration order."""
     return [
@@ -597,20 +596,6 @@ def _command_entries(hooks_json: dict[str, Any]) -> list[tuple[str, str]]:
         for entry in group.get("hooks", [])
         if entry.get("type") == "command"
     ]
-
-
-def _capt_hook_entries(hooks_json: dict[str, Any]) -> list[tuple[str, str, list[str]]]:
-    """``(event, command, argv)`` for every command-type entry whose argv invokes ``capt-hook``.
-
-    Each command is tokenized with :func:`shlex.split` so a substring like ``pack attachment`` or
-    a run buried mid-command is matched on real argv boundaries, not text.
-    """
-    entries: list[tuple[str, str, list[str]]] = []
-    for event, cmd in _command_entries(hooks_json):
-        argv = shlex.split(cmd)
-        if DIST_NAME in argv:
-            entries.append((event, cmd, argv))
-    return entries
 
 
 def _is_attach_argv(argv: list[str]) -> bool:
@@ -623,47 +608,131 @@ def _is_attach_argv(argv: list[str]) -> bool:
     )
 
 
-def _is_run_argv(argv: list[str]) -> bool:
-    """True when ``argv`` invokes the ``capt-hook run`` subcommand (the token after the program)."""
-    i = argv.index(DIST_NAME)
-    return i + 1 < len(argv) and argv[i + 1] == "run"
+def _is_canonical_run_argv(argv: list[str]) -> bool:
+    """True when ``argv`` is the canonical ``<prefix> run <...>`` a legacy consumer mirrors."""
+    prefix = shlex.split(DEFAULT_PREFIX)
+    return len(argv) > len(prefix) and argv[: len(prefix)] == prefix and argv[len(prefix)] == "run"
 
 
-def _lint_hooks_json(root: Path, manifest_dir: Path) -> LintResult:
-    if not (path := _hooks_json_for(root, manifest_dir)):
+def _attach_dir_reason(cmd: str, *, nested: bool) -> str | None:
+    """None when ``cmd``'s attach dir is the correctly-quoted plugin-root form for the layout; else why not.
+
+    The dir arg must be the double-quoted ``"${CLAUDE_PLUGIN_ROOT}"`` (manifest at the plugin
+    root) or ``"${CLAUDE_PLUGIN_ROOT}/hooks"`` (manifest one ``hooks/`` level down). shlex strips
+    the quotes, so the raw command is checked: an unquoted var, a literal path, or the wrong
+    suffix for the resolved layout all fail.
+    """
+    expected, other = (ATTACH_DIR_HOOKS, ATTACH_DIR_ROOT) if nested else (ATTACH_DIR_ROOT, ATTACH_DIR_HOOKS)
+    where = "one hooks/ level below the plugin root" if nested else "at the plugin root"
+    if expected in cmd:
+        return None
+    if other in cmd:
+        return f"attach targets {other} but the manifest resolves {where}; use {expected}"
+    return f"attach dir must be the double-quoted {expected} (the manifest resolves {where})"
+
+
+def _lint_hooks_json(root: Path, manifest_dir: Path, *, nested: bool) -> LintResult:
+    # Claude Code loads <plugin>/hooks/hooks.json; a pack may instead keep it beside the manifest.
+    # When both distinct locations exist the load target is ambiguous — fail rather than silently
+    # prefer one (a decoy hooks.json is a real deployment hazard).
+    candidates = list(dict.fromkeys([root / "hooks" / "hooks.json", manifest_dir / "hooks.json"]))
+    present = [p for p in candidates if p.is_file()]
+    if len(present) > 1:
+        return LintResult(
+            "hooks.json",
+            False,
+            f"ambiguous hooks.json: {present[0]} and {present[1]} both exist — Claude Code loads "
+            "<plugin>/hooks/hooks.json; keep exactly one",
+        )
+    if not present:
         return LintResult("hooks.json", False, f"no hooks.json found under {root}/hooks or beside the manifest")
+    path = present[0]
     try:
         data = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError) as e:
         return LintResult("hooks.json", False, f"{path} is unreadable: {e}")
 
-    capt_hook = _capt_hook_entries(data)
-    runs = [f"{event}:{cmd!r}" for event, cmd, argv in capt_hook if _is_run_argv(argv)]
-    if runs:
+    attach_events: list[str] = []
+    canonical_runs: list[str] = []
+    bad_attach: list[str] = []
+    unrecognized: list[str] = []
+    for event, cmd in _command_entries(data):
+        try:
+            argv = shlex.split(cmd)
+        except ValueError:
+            # Unbalanced quotes never crash the lint — a capt-hook entry we can't tokenize is
+            # itself an unrecognized usage; a non-capt-hook one is the plugin's own business.
+            if DIST_NAME in cmd:
+                unrecognized.append(f"{event}:{cmd!r} (unbalanced quotes)")
+            continue
+        if _is_attach_argv(argv):
+            if (reason := _attach_dir_reason(cmd, nested=nested)) is None:
+                attach_events.append(event)
+            else:
+                bad_attach.append(f"{event}:{cmd!r} ({reason})")
+        elif _is_canonical_run_argv(argv):
+            canonical_runs.append(f"{event}:{cmd!r}")
+        elif DIST_NAME in cmd:
+            # Conservative rejection: any raw `capt-hook` mention that is not the canonical attach —
+            # an embedded `bash -c '… capt-hook run …'`, an `echo capt-hook run …`, a bare-uvx attach —
+            # is an unrecognized dispatcher the sole-dispatcher contract forbids.
+            unrecognized.append(f"{event}:{cmd!r}")
+
+    if canonical_runs:
         return LintResult(
             "hooks.json",
             False,
-            f"{len(runs)} capt-hook run entr{'y' if len(runs) == 1 else 'ies'} ({', '.join(runs)}) — the "
-            "captain-hook plugin is the sole dispatcher; a pack ships attach-only",
+            f"{len(canonical_runs)} capt-hook run entr{'y' if len(canonical_runs) == 1 else 'ies'} "
+            f"({', '.join(canonical_runs)}) — the captain-hook plugin is the sole dispatcher; a pack ships attach-only",
         )
-    attach = [event for event, cmd, argv in capt_hook if _is_attach_argv(argv)]
-    if not attach:
+    if unrecognized:
         return LintResult(
-            "hooks.json", False, f"no SessionStart entry tokenizing to {DEFAULT_PREFIX!r} pack attach <dir>"
+            "hooks.json",
+            False,
+            f"unrecognized capt-hook usage: {', '.join(unrecognized)} — a pack ships exactly the canonical "
+            "SessionStart attach and nothing else invoking capt-hook",
         )
-    if len(capt_hook) != 1:
-        others = [f"{event}:{cmd!r}" for event, cmd, argv in capt_hook if not _is_attach_argv(argv)]
-        return LintResult("hooks.json", False, f"expected exactly one capt-hook entry (the attach); also saw {others}")
-    if attach != ["SessionStart"]:
-        return LintResult("hooks.json", False, f"the attach entry must be a SessionStart hook, found under {attach[0]}")
+    if bad_attach:
+        return LintResult("hooks.json", False, f"malformed pack attach: {', '.join(bad_attach)}")
+    if not attach_events:
+        return LintResult(
+            "hooks.json", False, f"no SessionStart entry tokenizing to {DEFAULT_PREFIX!r} pack attach {ATTACH_DIR_ROOT}"
+        )
+    if len(attach_events) != 1:
+        return LintResult(
+            "hooks.json", False, f"expected exactly one canonical attach entry; found under {attach_events}"
+        )
+    if attach_events != ["SessionStart"]:
+        return LintResult(
+            "hooks.json", False, f"the attach entry must be a SessionStart hook, found under {attach_events[0]}"
+        )
     return LintResult("hooks.json", True, f"one canonical SessionStart attach, no run entries ({path})")
+
+
+def _dep_contract_reason(dep: str | dict[str, Any]) -> str | None:
+    """None when ``dep`` is the object-form captain-hook dependency with a version floor; else why not."""
+    if not isinstance(dep, dict):
+        return "must be an object, not a bare string (which carries no marketplace or version floor)"
+    if not (isinstance(name := dep.get("name"), str) and name == "captain-hook"):
+        return 'must set a nonempty "name" of "captain-hook"'
+    if dep.get("marketplace") != "captain-hook":
+        return 'must set "marketplace" to "captain-hook"'
+    version = dep.get("version")
+    if not (isinstance(version, str) and version.strip()):
+        return 'must carry a nonempty string "version" lower bound'
+    if not VERSION_FLOOR_RE.match(version.strip()):
+        return f'"version" {version!r} must be a lower-bound constraint of the form ">=X.Y.Z"'
+    return None
 
 
 def _lint_plugin_json(manifest_dir: Path) -> LintResult:
     if not (path := _search_upward(manifest_dir, ".claude-plugin/plugin.json", "plugin.json")):
         return LintResult("plugin.json", False, f"no plugin.json found searching upward from {manifest_dir}")
-    deps = json.loads(path.read_text()).get("dependencies") or []
-    # A dep names captain-hook as the bare string or as an object keyed by name or marketplace.
+    try:
+        deps = json.loads(path.read_text()).get("dependencies") or []
+    except (json.JSONDecodeError, OSError) as e:
+        return LintResult("plugin.json", False, f"{path} is unreadable: {e}")
+    # A dep references captain-hook as the bare string or as an object keyed by name or marketplace.
     named = [
         d
         for d in deps
@@ -672,14 +741,13 @@ def _lint_plugin_json(manifest_dir: Path) -> LintResult:
     ]
     if not named:
         return LintResult("plugin.json", False, f"{path} declares no captain-hook dependency")
-    dep = named[0]
-    if not (isinstance(dep, dict) and dep.get("marketplace") == "captain-hook" and "version" in dep):
+    if reason := _dep_contract_reason(named[0]):
         return LintResult(
             "plugin.json",
             False,
-            f'the captain-hook dependency in {path} must be an object with marketplace "captain-hook" and a '
-            'version floor, e.g. {"name": "captain-hook", "marketplace": "captain-hook", "version": ">=9.8.0"}; '
-            f"found {dep!r}",
+            f"the captain-hook dependency in {path} {reason}; it must be an object "
+            '{"name": "captain-hook", "marketplace": "captain-hook", "version": ">=X.Y.Z"}, '
+            f"found {named[0]!r}",
         )
     return LintResult("plugin.json", True, f"declares the captain-hook dependency with a version floor ({path})")
 
@@ -687,7 +755,10 @@ def _lint_plugin_json(manifest_dir: Path) -> LintResult:
 def _lint_marketplace_json(manifest_dir: Path) -> LintResult:
     if not (path := _search_upward(manifest_dir, ".claude-plugin/marketplace.json")):
         return LintResult("marketplace.json", True, "no marketplace.json found upward", warning=True)
-    allowed = json.loads(path.read_text()).get("allowCrossMarketplaceDependenciesOn") or []
+    try:
+        allowed = json.loads(path.read_text()).get("allowCrossMarketplaceDependenciesOn") or []
+    except (json.JSONDecodeError, OSError) as e:
+        return LintResult("marketplace.json", False, f"{path} is unreadable: {e}")
     if "captain-hook" in allowed:
         return LintResult("marketplace.json", True, f"allows the captain-hook cross-marketplace dependency ({path})")
     return LintResult(
@@ -703,9 +774,8 @@ def _lint_pack_hooks(manifest: manager.PackManifest, root: Path) -> list[LintRes
     async_errors = [e for e in _state.load_errors if isinstance(e.exc, AsyncDecisionError)]
     other_errors = [e for e in _state.load_errors if not isinstance(e.exc, AsyncDecisionError)]
 
-    # A pack that loads nothing, or whose hooks dir is missing/syntax-broken, ships no working
-    # guard — that must fail, not quietly pass. The async-decision check below owns the
-    # async_=True-on-decision load errors, so this one covers every other load failure.
+    # Zero hooks fails load regardless of cause — even when the async-decision check also reports
+    # the rejected file, a pack that loaded nothing ships no working guard.
     if other_errors:
         load_result = LintResult(
             "load",
@@ -713,9 +783,10 @@ def _lint_pack_hooks(manifest: manager.PackManifest, root: Path) -> list[LintRes
             f"{len(other_errors)} hook file(s) failed to load: "
             + "; ".join(f"{e.source} ({e.exc!r})" for e in other_errors),
         )
-    elif not hooks and not async_errors:
+    elif not hooks:
+        detail = f" ({len(async_errors)} rejected: async_=True on a decision event)" if async_errors else ""
         load_result = LintResult(
-            "load", False, f"no hooks loaded from {manifest.hooks_dir(root)} — a pack ships at least one hook"
+            "load", False, f"no hooks loaded from {manifest.hooks_dir(root)} — a pack ships at least one hook{detail}"
         )
     else:
         load_result = LintResult("load", True, f"{len(hooks)} hook(s) loaded, no load errors")
@@ -746,7 +817,12 @@ def _lint_pack_hooks(manifest: manager.PackManifest, root: Path) -> list[LintRes
 
 def lint_pack(root: Path) -> list[LintResult]:
     """Vet a plugin pack against the attach-only contract; see :func:`pack_lint` for the checks."""
-    manifest_path = manager.manifest_in(root)
+    # The manifest sits at the plugin root, or one `hooks/` level below it; the attach dir suffix
+    # (checked in _lint_hooks_json) must match whichever layout resolves. pack_root is the dir the
+    # attach line targets.
+    nested = not manager.manifest_in(root).is_file() and manager.manifest_in(root / "hooks").is_file()
+    pack_root = root / "hooks" if nested else root
+    manifest_path = manager.manifest_in(pack_root)
     manifest_dir = manifest_path.parent
     try:
         manifest = manager.PackManifest.load(manifest_path)
@@ -757,7 +833,7 @@ def lint_pack(root: Path) -> list[LintResult]:
 
     results = [
         manifest_result,
-        _lint_hooks_json(root, manifest_dir),
+        _lint_hooks_json(root, manifest_dir, nested=nested),
         _lint_plugin_json(manifest_dir),
         _lint_marketplace_json(manifest_dir),
     ]
@@ -768,7 +844,7 @@ def lint_pack(root: Path) -> list[LintResult]:
             LintResult("async-decision", False, "pack not loaded — manifest unresolved"),
         ]
     else:
-        results += _lint_pack_hooks(manifest, root)
+        results += _lint_pack_hooks(manifest, pack_root)
     return results
 
 

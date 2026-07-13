@@ -285,3 +285,166 @@ def test_nested_manifest_layout_resolves_sibling_hooks_json(tmp_path: Path) -> N
     write_marketplace(plugin, ["captain-hook"])
 
     assert failed(by_check(hooks)) == []  # lint receives the hooks/ dir, matching the attach line
+
+
+# --- fix #2: conservative rejection of any non-canonical capt-hook usage ---------------
+
+
+def _with_extra_entry(root: Path, command: str) -> None:
+    data = attach_only()
+    data["hooks"].setdefault("PostToolUse", []).append({"hooks": [{"type": "command", "command": command}]})
+    write_hooks_json(root, data)
+
+
+def test_bash_embedded_capt_hook_run_fails(tmp_path: Path) -> None:
+    # capt-hook buried inside a `bash -c '…'` string is not a top-level argv token, but the raw
+    # command still mentions it — conservatively rejected as an unrecognized dispatcher.
+    root = conforming(tmp_path / "ccx")
+    _with_extra_entry(root, "bash -c 'uvx --isolated capt-hook run PostToolUse'")
+    result = by_check(root)["hooks.json"]
+    assert not result.ok
+    assert "unrecognized capt-hook usage" in result.reason
+
+
+def test_echo_capt_hook_run_fails(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    _with_extra_entry(root, "echo capt-hook run PostToolUse")
+    result = by_check(root)["hooks.json"]
+    assert not result.ok
+    assert "unrecognized capt-hook usage" in result.reason
+
+
+# --- fix #3: attach argument validation (quoted plugin-root form, layout match) --------
+
+
+def attach_cmd(dir_arg: str) -> dict[str, Any]:
+    return attach_only(f"{DEFAULT_PREFIX} pack attach {dir_arg}")
+
+
+def nested_plugin(tmp_path: Path, dir_arg: str) -> Path:
+    """A plugin whose manifest + hooks live one hooks/ level below the plugin root."""
+    plugin = tmp_path / "plugin"
+    hooks = plugin / "hooks"
+    write_manifest(hooks, hooks=".")
+    (hooks / "h.py").write_text(POST_TOOL_HOOK)
+    (hooks / "hooks.json").write_text(json.dumps(attach_cmd(dir_arg)))
+    write_plugin_json(plugin, CAPTAIN_DEP)
+    write_marketplace(plugin, ["captain-hook"])
+    return plugin
+
+
+def test_attach_quoted_root_passes_root_manifest(tmp_path: Path) -> None:
+    assert by_check(conforming(tmp_path / "ccx"))["hooks.json"].ok  # conforming uses the quoted root form
+
+
+def test_attach_quoted_hooks_passes_nested_manifest(tmp_path: Path) -> None:
+    plugin = nested_plugin(tmp_path, '"${CLAUDE_PLUGIN_ROOT}/hooks"')
+    assert failed(by_check(plugin)) == []
+
+
+def test_attach_unquoted_root_fails(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    write_hooks_json(root, attach_cmd("${CLAUDE_PLUGIN_ROOT}"))  # missing the double quotes
+    result = by_check(root)["hooks.json"]
+    assert not result.ok
+    assert "double-quoted" in result.reason
+
+
+def test_attach_wrong_dir_fails(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    write_hooks_json(root, attach_cmd('"/tmp/other"'))
+    assert not by_check(root)["hooks.json"].ok
+
+
+def test_attach_quoted_root_with_nested_manifest_fails(tmp_path: Path) -> None:
+    # The manifest is nested, so the attach must carry the /hooks suffix; the bare root form is a
+    # layout mismatch even though it is correctly quoted.
+    plugin = nested_plugin(tmp_path, '"${CLAUDE_PLUGIN_ROOT}"')
+    result = by_check(plugin)["hooks.json"]
+    assert not result.ok
+    assert "malformed pack attach" in result.reason
+
+
+# --- fix #4: ambiguous hooks.json resolution -------------------------------------------
+
+
+def test_ambiguous_hooks_json_fails(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")  # writes <root>/hooks/hooks.json
+    (root / "hooks.json").write_text(json.dumps(attach_only()))  # decoy beside the manifest
+    result = by_check(root)["hooks.json"]
+    assert not result.ok
+    assert "ambiguous" in result.reason
+
+
+# --- fix #5: dependency version-floor validation ---------------------------------------
+
+
+def test_plugin_json_null_version_fails(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    write_plugin_json(root, [{"name": "captain-hook", "marketplace": "captain-hook", "version": None}])
+    result = by_check(root)["plugin.json"]
+    assert not result.ok
+    assert "version" in result.reason
+
+
+def test_plugin_json_empty_version_fails(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    write_plugin_json(root, [{"name": "captain-hook", "marketplace": "captain-hook", "version": ""}])
+    result = by_check(root)["plugin.json"]
+    assert not result.ok
+    assert "version" in result.reason
+
+
+def test_plugin_json_missing_name_fails(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    write_plugin_json(root, [{"marketplace": "captain-hook", "version": ">=9.8.0"}])
+    result = by_check(root)["plugin.json"]
+    assert not result.ok
+    assert "name" in result.reason
+
+
+def test_plugin_json_pin_without_floor_fails(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    write_plugin_json(root, [{"name": "captain-hook", "marketplace": "captain-hook", "version": "9.8.0"}])
+    result = by_check(root)["plugin.json"]
+    assert not result.ok
+    assert "lower-bound" in result.reason
+
+
+# --- fix #6: malformed inputs become check failures, never tracebacks ------------------
+
+
+def test_unbalanced_quotes_hooks_json_is_a_failure(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    _with_extra_entry(root, "uvx --isolated capt-hook run 'unterminated")
+    result = by_check(root)["hooks.json"]
+    assert not result.ok
+    assert "unbalanced quotes" in result.reason
+
+
+def test_malformed_plugin_json_is_a_failure(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    (root / ".claude-plugin" / "plugin.json").write_text("{ not valid json ")
+    result = by_check(root)["plugin.json"]
+    assert not result.ok
+    assert "unreadable" in result.reason
+
+
+def test_malformed_marketplace_json_is_a_failure(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    (root / ".claude-plugin" / "marketplace.json").write_text("{ not valid json ")
+    result = by_check(root)["marketplace.json"]
+    assert not result.ok
+    assert "unreadable" in result.reason
+
+
+# --- fix #7: zero loaded hooks fails the load check even when async-decision also fires -
+
+
+def test_async_only_hook_fails_load_and_async_checks(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    write_hook(root, 'from captain_hook import Event, hook\n\nhook(Event.Stop, message="bg", async_=True)\n')
+    results = by_check(root)
+    assert not results["load"].ok
+    assert "no hooks loaded" in results["load"].reason
+    assert not results["async-decision"].ok  # both checks report the rejected hook

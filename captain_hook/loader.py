@@ -7,6 +7,7 @@ import importlib.util
 import pkgutil
 import re
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING
@@ -22,6 +23,19 @@ if TYPE_CHECKING:
     from captain_hook.types import HookResult
 
 CONF_MODULE = "conf"
+
+
+def stamp_identity(start: int, *, root: Path, pack: str | None = None) -> None:
+    """Stamp hooks registered since ``start`` with the stable-identity root and pack name.
+
+    ``RegisteredHook.state_key`` keys session state on the pack/location-relative source path
+    rather than the absolute ``source_file`` — which moves when a plugin update relands a pack
+    in a fresh versioned cache dir — so discovery records which root the source is relative to.
+    """
+    hooks = _state.hooks
+    root_str = str(root)
+    for i in range(start, len(hooks)):
+        hooks[i] = replace(hooks[i], state_root=root_str, pack_name=pack)
 
 
 def is_test_module(fqn: str) -> bool:
@@ -77,11 +91,14 @@ def discover_hooks(hooks_dir: str | Path) -> None:
         # Broad catch is deliberate (see discover_pack): a single bad module must
         # not abort discovery. Logged loudly at WARNING and recorded in
         # ``state.load_errors`` so ``capt-hook test`` fails on it, never silently swallowed.
+        before = len(_state.hooks)
         try:
             import_or_reload(fqn, fresh_this_pass)
         except Exception as exc:
             logger.bind(module=fqn).opt(exception=True).warning("skipped unloadable hook module")
             _state.load_errors.append(LoadError(fqn, exc))
+        else:
+            stamp_identity(before, root=hooks_path)
 
 
 def ensure_pack_package(fqn: str, search_paths: list[str]) -> ModuleType:
@@ -158,8 +175,15 @@ def discover_pack(name: str, pack_dir: Path) -> None:
         # Broad catch is deliberate: one unloadable or non-hook .py must not abort
         # the whole pack. Logged loudly at WARNING and recorded in ``load_errors`` so
         # ``capt-hook test`` fails on it, never silently swallowed.
+        before = len(_state.hooks)
         try:
             import_pack_module(f"{pkg}.{path.stem}", path)
         except Exception as exc:
+            # Roll back any hooks the module registered before it raised: a module that
+            # half-loads (e.g. one valid hook then an AsyncDecisionError) must contribute
+            # nothing, so a broken file never leaks a partially-wired guard.
+            del _state.hooks[before:]
             logger.bind(file=str(path)).opt(exception=True).warning("skipped unloadable hook file")
             _state.load_errors.append(LoadError(str(path), exc, pack=name))
+        else:
+            stamp_identity(before, root=pack_dir, pack=name)

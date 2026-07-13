@@ -31,13 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **`capt-hook pack lint <plugin-root>`** vets a pack-shipping plugin against the
   attach-only dependency contract. It checks that the `capt-hook.toml` manifest
-  resolves, that `hooks.json` carries exactly one canonical SessionStart `pack
-  attach` entry and zero `capt-hook run` entries, that `plugin.json` declares the
-  captain-hook dependency and the repo's `marketplace.json` allows the
-  cross-marketplace reference, that the pack subscribes no SessionStart events
-  (attach and the canonical run SessionStart are unordered siblings), and that no
-  hook registers `async_=True` on a decision-capable event. Each check reports
-  pass or fail with a reason; any failure exits non-zero.
+  resolves; that `hooks.json` carries exactly one canonical SessionStart `pack
+  attach` entry — the dir arg double-quoted as `"${CLAUDE_PLUGIN_ROOT}"`, or its
+  `hooks/` subdir, to match the manifest layout — and nothing else that invokes
+  `capt-hook`; that `plugin.json` declares the captain-hook dependency as an object
+  with `marketplace` `"captain-hook"` and a `>=X.Y.Z` version floor; that the repo's
+  `marketplace.json` allows the cross-marketplace reference (WARN, not a failure,
+  when absent); that the pack loads at least one hook with no load errors; that the
+  pack subscribes no SessionStart events (attach and the canonical run SessionStart
+  are unordered siblings); and that no hook registers `async_=True` on a
+  decision-capable event. Each check reports pass, warn, or fail with a reason; any
+  failure exits non-zero.
 
 ### Changed
 - **The Claude plugin manifest now carries a `version`.** Dependency ranges can

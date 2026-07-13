@@ -5,6 +5,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Flag, StrEnum, auto
 from hashlib import sha256
+from pathlib import Path
 from textwrap import dedent
 from typing import (
     TYPE_CHECKING,
@@ -780,15 +781,35 @@ class RegisteredHook:
     handler: Callable[[BaseHookEvent], HookResult | None] | None = None
     name: str = ""
     source_file: str = ""
+    # Stable identity for ``state_key``, stamped by discovery: ``pack_name`` for a pack-loaded
+    # hook, and ``state_root`` the dir ``source_file`` is made relative against (the pack's hooks
+    # dir, or a repo's ``.claude/hooks``). Absent for ad-hoc registrations, which key on the
+    # absolute path.
+    pack_name: str | None = None
+    state_root: str | None = None
 
     @property
     def state_key(self) -> str:
-        """Filesystem-safe per-hook key for session state, namespaced by defining file.
+        """Filesystem-safe per-hook key for session state, namespaced by stable identity.
 
         ``name`` alone collides when two packs each register a plain ``@on`` handler of the
         same function name (``on`` keys on the bare ``fn.__name__``): both would share one
-        ``max_fires`` counter dir. A hook is defined once in one file, so the source-file
-        digest disambiguates packs (a pack's hooks live under its own dir) without touching
-        the human-readable ``name`` used for logging and the decision ledger.
+        ``max_fires`` counter dir. The digest disambiguates them, but must key on *stable*
+        identity — not the absolute ``source_file``. A plugin update relands a pack under a
+        fresh versioned cache dir, so hashing the absolute path there would reset every
+        ``max_fires`` counter for a re-attached pack mid-session. Discovery stamps a pack-loaded
+        hook with its pack name and pack-root, and a repo-local ``.claude/hooks`` module with
+        its hooks dir, so the digest keys on the pack name plus the root-relative source path;
+        the absolute path is only a last-resort fallback for ad-hoc registrations with no root.
         """
-        return f"{self.name}.{sha256(self.source_file.encode()).hexdigest()[:12]}"
+        return f"{self.name}.{sha256(self._state_identity.encode()).hexdigest()[:12]}"
+
+    @property
+    def _state_identity(self) -> str:
+        if self.state_root:
+            try:
+                rel = Path(self.source_file).relative_to(self.state_root).as_posix()
+            except ValueError:
+                return self.source_file
+            return f"{self.pack_name}\0{rel}" if self.pack_name else rel
+        return self.source_file
