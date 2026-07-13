@@ -437,6 +437,27 @@ class TestConcurrency:
         finally:
             slow.close()
 
+    def test_many_slow_peers_do_not_starve_a_normal_client(self, worker: tuple[str, Path, dict]) -> None:
+        # V3: more slow peers than the intake pool has threads, each dribbling without completing a request
+        # line, must not delay a real request — the aggressive intake read deadline drops them fast.
+        sock, root, env = worker
+        self._warm(sock, root, env)
+        slows: list[socket.socket] = []
+        try:
+            for _ in range(16):
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.connect(sock)
+                s.sendall(b'{"partial":')  # no newline; the request line never completes
+                slows.append(s)
+            start = time.perf_counter()
+            resp = send(sock, control_req("ping"))
+            elapsed = time.perf_counter() - start
+            assert resp["status"] == "ok"
+            assert elapsed < 10.0, f"16 slow peers starved a normal ping: {elapsed:.2f}s"
+        finally:
+            for s in slows:
+                s.close()
+
     def test_same_session_flood_does_not_starve_another_session(self, worker: tuple[str, Path, dict]) -> None:
         # A session firing more requests than the event pool has threads must not starve other
         # sessions: same-session requests serialize in a per-session queue (one pool thread at a
@@ -604,6 +625,108 @@ class TestRestartDrain:
         assert finished == [True], "the in-flight dispatch was cut off before it completed"
         assert observed_finished_at_reexec == [True], "execv ran before the in-flight dispatch drained"
 
+    def test_drain_waits_for_scheduler_queued_same_session_work(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # V5: request A running + B queued for the SAME session. The drain must not return when A's future
+        # completes (before A's callback advances B) — that would drop B after the client already sent.
+        from captain_hook.daemon import server as server_mod
+        from captain_hook.daemon.protocol import decode_request
+
+        root = make_project(tmp_path / "proj")
+        server = server_mod.Server(root, foreground=True)
+        try:
+            started: list[object] = []
+            gate_a = threading.Event()
+
+            def fake_process(conn: socket.socket, req: object) -> None:
+                started.append(req)
+                if len(started) == 1:
+                    gate_a.wait(5)  # A blocks so B queues behind it on the same session
+                conn.close()
+
+            monkeypatch.setattr(server, "_process", fake_process)
+            payload = json.dumps({"session_id": "S", "tool_name": "Bash", "tool_input": {}})
+            req = decode_request(json.dumps(event_req("PostToolUse", payload, root, os.environ)).encode())
+            la, ra = socket.socketpair()
+            server._begin_active()
+            server._schedule_event(la, req)  # A: launched, running (blocked)
+            deadline = time.monotonic() + 3
+            while not started and time.monotonic() < deadline:
+                time.sleep(0.01)
+            lb, rb = socket.socketpair()
+            server._begin_active()
+            server._schedule_event(lb, req)  # B: queued behind A on session S
+            assert server.sessions["S"].pending, "B was not queued behind A"
+            threading.Timer(0.2, gate_a.set).start()
+            server._wait_inflight(server_mod.INFLIGHT_DRAIN_S)
+            assert len(started) == 2, "the drain returned before the scheduler-queued B dispatched"
+            assert server.sessions == {}, "the session queue was not fully drained"
+            assert not any(not f.done() for f in server.inflight), "a future was still running after the drain"
+            ra.close()
+            rb.close()
+        finally:
+            server.intake_pool.shutdown(wait=False)
+            server.event_pool.shutdown(wait=False)
+            server.control_pool.shutdown(wait=False)
+
+    def test_teardown_at_drain_cap_does_not_deadlock_on_a_queued_successor(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # At the drain cap, cancel_futures runs a cancelled future's callback under the executor lock;
+        # advancing a queued successor there must not re-enter submit (which would deadlock teardown).
+        from concurrent.futures import ThreadPoolExecutor
+
+        from captain_hook.daemon import server as server_mod
+        from captain_hook.daemon.protocol import decode_request
+
+        root = make_project(tmp_path / "proj")
+        server = server_mod.Server(root, foreground=True)
+        monkeypatch.setattr(server_mod.logger, "remove", lambda *a, **k: None)
+        monkeypatch.setattr(server_mod, "INFLIGHT_DRAIN_S", 0.3)
+        server.event_pool.shutdown(wait=False)
+        server.event_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="test-event")
+        socks = [socket.socketpair() for _ in range(3)]
+        gate = threading.Event()
+        try:
+
+            def blocking_process(conn: socket.socket, _req: object) -> None:
+                gate.wait(30)  # A hangs past the drain cap; A2 stays queued behind it on the single thread
+                conn.close()
+
+            monkeypatch.setattr(server, "_process", blocking_process)
+
+            def sched(session: str, sock: socket.socket) -> None:
+                payload = json.dumps({"session_id": session, "tool_name": "Bash", "tool_input": {}})
+                req = decode_request(json.dumps(event_req("PostToolUse", payload, root, os.environ)).encode())
+                server._begin_active()
+                server._schedule_event(sock, req)
+
+            sched("S", socks[0][0])  # A: runs on the single thread, hangs
+            deadline = time.monotonic() + 3
+            while server.event_load < 1 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            sched("T", socks[1][0])  # A2(T): queued in the executor behind A
+            sched("T", socks[2][0])  # B2(T): scheduler-queued behind A2 on session T
+            assert server.sessions["T"].pending, "B2 was not queued behind A2"
+
+            done = threading.Event()
+            threading.Thread(target=lambda: (server.teardown(), done.set()), daemon=True).start()
+            assert done.wait(15), "teardown deadlocked advancing a queued successor at the drain cap"
+            gate.set()  # release A so it too drains
+            balanced = time.monotonic() + 5
+            while (server.active or server.event_load or server.sessions) and time.monotonic() < balanced:
+                time.sleep(0.02)
+            assert server.active == 0 and server.event_load == 0 and server.sessions == {}
+        finally:
+            gate.set()
+            server.event_pool.shutdown(wait=False, cancel_futures=True)
+            server.intake_pool.shutdown(wait=False)
+            server.control_pool.shutdown(wait=False)
+            for left, right in socks:
+                left.close()
+                right.close()
+
 
 class TestIdleExitRace:
     @contextlib.contextmanager
@@ -626,9 +749,11 @@ class TestIdleExitRace:
             server.control_pool.shutdown(wait=False, cancel_futures=True)
             shutil.rmtree(run, ignore_errors=True)
 
-    def test_idle_exit_drains_backlog_instead_of_dropping(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # A client that connects in the accept-timeout window right at expiry must be served, not
-        # dropped: idle-exit drains the listen backlog before closing the listener.
+    def test_idle_exit_unlinks_first_then_drains_backlog_before_closing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # V8: idle-exit unlinks the socket FIRST (a racing connect now fails pre-send → cold), then
+        # serve_forever drains and serves the backlog before closing — a pre-unlink client is not dropped.
         from captain_hook.daemon import lifecycle
 
         with self._bound_server(monkeypatch) as (server, sock_path):
@@ -639,11 +764,28 @@ class TestIdleExitRace:
             client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             client.connect(sock_path)  # lands in the backlog before idle-exit runs
             try:
-                server._maybe_idle_exit()
-                assert not server.stop_event.is_set(), "idle-exit dropped a freshly-connected client"
-                assert len(drained) == 1, "the backlogged connection was not drained"
+                server._maybe_idle_exit()  # commits to exit: unlinks the socket, sets stop
+                assert server.stop_event.is_set()
+                assert not os.path.exists(sock_path), "the socket was not unlinked before the drain"
+                server._drain_and_close()  # serve_forever's post-loop step: serve the backlog, then close
+                assert len(drained) == 1, "the backlogged connection was dropped instead of drained"
             finally:
                 client.close()
+
+    def test_connect_after_idle_unlink_fails_pre_send(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # V8: once idle-exit unlinks the socket, a racing connect() fails pre-send → the client runs cold.
+        from captain_hook.daemon import lifecycle
+
+        with self._bound_server(monkeypatch) as (server, sock_path):
+            monkeypatch.setattr(lifecycle, "idle_limit", lambda: 0.0)
+            server.last_activity = time.monotonic() - 10_000
+            server._maybe_idle_exit()
+            late = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                with pytest.raises((FileNotFoundError, ConnectionRefusedError)):
+                    late.connect(sock_path)
+            finally:
+                late.close()
 
     def test_idle_exit_deferred_while_a_connection_is_active(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Idle-exit must not fire while any connection is in flight (accepted but not yet completed).
@@ -699,6 +841,92 @@ class TestSessionScheduler:
             server.intake_pool.shutdown(wait=False, cancel_futures=True)
             server.event_pool.shutdown(wait=False, cancel_futures=True)
             server.control_pool.shutdown(wait=False, cancel_futures=True)
+
+
+class TestTeardownRace:
+    def test_intake_that_cannot_schedule_after_shutdown_closes_and_balances(self, tmp_path: Path) -> None:
+        # V4: an intake task that reaches scheduling after the event pool is shut must not leave the
+        # accepted client hanging with a leaked active/event slot — it closes the connection and balances.
+        from captain_hook.daemon.protocol import decode_request
+        from captain_hook.daemon.server import Server
+
+        root = make_project(tmp_path / "proj")
+        server = Server(root, foreground=True)
+        try:
+            server.event_pool.shutdown(wait=False)  # the event pool is already down when scheduling runs
+            left, right = socket.socketpair()
+            server._begin_active()  # mirror _intake's accounting for an accepted connection
+            payload = json.dumps({"session_id": "S", "tool_name": "Bash", "tool_input": {}})
+            req = decode_request(json.dumps(event_req("PostToolUse", payload, root, os.environ)).encode())
+            server._schedule_event(left, req)
+            assert server.active == 0, "active leaked when the intake task could not schedule"
+            assert server.event_load == 0, "event_load leaked"
+            assert server.sessions == {}, "the session queue leaked"
+            with pytest.raises(OSError):
+                left.sendall(b"x")  # the connection was closed
+            right.close()
+        finally:
+            server.intake_pool.shutdown(wait=False)
+            server.control_pool.shutdown(wait=False)
+
+
+class TestNonStrSessionId:
+    def test_session_id_of_treats_non_str_as_absent(self) -> None:
+        from captain_hook.daemon.protocol import decode_request
+        from captain_hook.daemon.server import _session_id_of
+
+        def sid(value: object) -> str | None:
+            payload = json.dumps({"session_id": value, "tool_name": "Bash", "tool_input": {}})
+            raw = json.dumps(event_req("PostToolUse", payload, Path("/x"), {})).encode()
+            return _session_id_of(decode_request(raw))
+
+        assert sid("real") == "real"
+        assert sid(["bad"]) is None
+        assert sid({"k": "v"}) is None
+        assert sid(None) is None
+
+    def test_non_str_session_id_does_not_leak_the_intake_slot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # V7: a non-str (unhashable) session_id must not crash the scheduler (sessions.setdefault raises),
+        # which would leave active/event_load stuck and the client failing open. It schedules session-less.
+        from captain_hook.daemon.protocol import decode_request
+        from captain_hook.daemon.server import Server
+
+        root = make_project(tmp_path / "proj")
+        server = Server(root, foreground=True)
+        try:
+            monkeypatch.setattr(server, "_process", lambda conn, _req: conn.close())
+            left, right = socket.socketpair()
+            server._begin_active()  # mirror _intake's accounting
+            payload = json.dumps({"session_id": ["bad"], "tool_name": "Bash", "tool_input": {}})
+            req = decode_request(json.dumps(event_req("PostToolUse", payload, root, os.environ)).encode())
+            server._schedule_event(left, req)  # must not raise despite the unhashable session_id
+            deadline = time.monotonic() + 5
+            while (server.active or server.event_load or server.sessions) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert server.active == 0, "the intake slot leaked on a non-str session_id"
+            assert server.event_load == 0
+            assert server.sessions == {}, "a non-str session_id must not create a session-queue entry"
+            right.close()
+        finally:
+            server.intake_pool.shutdown(wait=False)
+            server.event_pool.shutdown(wait=False)
+            server.control_pool.shutdown(wait=False)
+
+    def test_non_str_session_id_dispatch_matches_cold(self, worker: tuple[str, Path, dict]) -> None:
+        # V7: with the scheduler no longer crashing, dispatch handles the bad session_id with cold parity
+        # (the ensure_session TypeError, exit 1), and the worker keeps serving afterwards.
+        sock, root, env = worker
+        bad = json.dumps({"session_id": ["bad"], "tool_name": "Bash", "tool_input": {"command": "x"}})
+        resp = send(sock, event_req("PreToolUse", bad, root, env))
+        cold = cold_run("PreToolUse", bad, root, env)
+        assert resp["status"] == "error"
+        assert resp["exit"] == 1 == cold.returncode
+        tail = "TypeError: unsupported operand type(s) for /: 'PosixPath' and 'list'"
+        assert tail in resp["stderr"] and tail in cold.stderr.decode()
+        ok = json.dumps({"session_id": "ok", "tool_name": "Bash", "tool_input": {}})
+        assert send(sock, event_req("PreToolUse", ok, root, env))["status"] == "ok"
 
 
 class TestPeerCredentialCheck:

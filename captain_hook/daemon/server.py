@@ -73,7 +73,8 @@ EVENT_POOL_SIZE = 16
 CONTROL_POOL_SIZE = 2
 INTAKE_POOL_SIZE = 16
 ACCEPT_TIMEOUT = 2.0
-READ_DEADLINE_S = 30.0
+# Aggressive intake read deadline so a dribbling peer is dropped fast and cannot hold an intake slot.
+INTAKE_READ_DEADLINE_S = 3.0
 LISTEN_BACKLOG = 128
 # Generous enough to cover a realistic in-flight LLM-gate dispatch: a restart (or shutdown) drains
 # running dispatches up to this cap before execv, so a slow gate is not hard-killed mid-decision.
@@ -127,6 +128,7 @@ class Server:
         self.active_guard = threading.Lock()
         self.stop_event = threading.Event()
         self.restart = False
+        self.event_pool_closing = False
         self.client_build: str | None = None
         self.last_activity = time.monotonic()
         self.listener: socket.socket | None = None
@@ -169,12 +171,20 @@ class Server:
             except OSError:
                 break
             self._intake(conn)
+        # Shutdown unlinked the socket (no new connect can land); serve everything already accepted into
+        # the backlog before closing, so a client that connected before the unlink is never dropped.
+        self._drain_and_close()
 
     def teardown(self) -> None:
         if self.watchdog is not None:
             self.watchdog.stop()
-        self.intake_pool.shutdown(wait=False, cancel_futures=True)
+        # Quiesce intake BEFORE the event pool: wait for every intake task to finish routing (bounded by
+        # the intake read deadline) so none is left resuming into a shut event pool with no way to reply.
+        self.intake_pool.shutdown(wait=True)
         self._wait_inflight(INFLIGHT_DRAIN_S)
+        # Flag before shutting the event pool: cancel_futures runs a cancelled future's callback under the
+        # executor lock, and advancing a queued successor must not re-enter submit (which would deadlock).
+        self.event_pool_closing = True
         self.event_pool.shutdown(wait=False, cancel_futures=True)
         self.control_pool.shutdown(wait=False, cancel_futures=True)
         if self.writer is not None:
@@ -197,16 +207,14 @@ class Server:
 
     def _read_and_route(self, conn: socket.socket) -> None:
         try:
-            req = decode_request(read_line(conn, deadline=time.monotonic() + READ_DEADLINE_S))
+            req = decode_request(read_line(conn, deadline=time.monotonic() + INTAKE_READ_DEADLINE_S))
         except (ProtocolError, OSError) as exc:
             logger.debug("dropping undecodable request: {}", exc)
             _close(conn)
             self._end_active()
             return
-        if self.stop_event.is_set():
-            _close(conn)
-            self._end_active()
-            return
+        # No stop-check drop here: shutdown unlinks the socket first, so a connection that reaches intake
+        # connected to a live socket and must be served, not dropped after the client already sent.
         self.last_activity = time.monotonic()
         if req.kind in CONTROL_KINDS:
             self._launch(self.control_pool, conn, req, None)
@@ -263,10 +271,24 @@ class Server:
     def _launch(
         self, pool: ThreadPoolExecutor, conn: socket.socket, req: Request, on_done: Callable[[], None] | None
     ) -> None:
-        future = pool.submit(self._process, conn, req)
-        with self.inflight_guard:
-            self.inflight.add(future)
-        future.add_done_callback(lambda done: self._finish(done, on_done))
+        # Skip submit while the event pool is being torn down: shutdown(cancel_futures=True) runs a
+        # cancelled future's callback under the executor lock, so a re-entrant submit here would deadlock.
+        if not (pool is self.event_pool and self.event_pool_closing):
+            try:
+                future = pool.submit(self._process, conn, req)
+            except RuntimeError:
+                pass  # the pool shut down between the accept and here: fall through to close and balance
+            else:
+                with self.inflight_guard:
+                    self.inflight.add(future)
+                future.add_done_callback(lambda done: self._finish(done, on_done))
+                return
+        # The pool is (being) shut down: close the connection and run the done callback so the accepted
+        # client is not left hanging with a leaked active/event slot.
+        _close(conn)
+        self._end_active()
+        if on_done is not None:
+            on_done()
 
     def _finish(self, future: Future[None], on_done: Callable[[], None] | None) -> None:
         with self.inflight_guard:
@@ -449,16 +471,10 @@ class Server:
         with self.active_guard:
             if self.active > 0:
                 return
-        # A client may have connected in the accept-timeout window: drain the backlog before closing
-        # the listener out from under it, so a request arriving right at expiry is served, not dropped.
-        if self._drain_backlog():
-            self.last_activity = time.monotonic()
-            return
         logger.info("idle past the limit; shutting down")
         self._shutdown(restart=False)
 
-    def _drain_backlog(self) -> bool:
-        served = False
+    def _drain_backlog(self) -> None:
         self.listener.settimeout(0.0)
         try:
             while True:
@@ -466,27 +482,41 @@ class Server:
                     conn, _ = self.listener.accept()
                 except OSError:
                     break
-                served = True
                 self._intake(conn)
         finally:
             with contextlib.suppress(OSError):
                 self.listener.settimeout(ACCEPT_TIMEOUT)
-        return served
+
+    def _drain_and_close(self) -> None:
+        self._drain_backlog()
+        if self.listener is not None:
+            with contextlib.suppress(OSError):
+                self.listener.close()
 
     def _shutdown(self, *, restart: bool) -> None:
         if self.stop_event.is_set():
             return
         self.restart = restart
-        self.stop_event.set()
+        # Unlink first (new connect → ECONNREFUSED → client cold, pre-send safe), then set stop and let
+        # serve_forever drain the backlog and close. Minimal so it is safe from the SIGTERM handler.
         _unlink(str(socket_path(self.key)))
-        if self.listener is not None:
-            self.listener.close()
+        self.stop_event.set()
 
     def _wait_inflight(self, timeout: float) -> None:
-        with self.inflight_guard:
-            pending = set(self.inflight)
-        if pending:
-            wait(pending, timeout=timeout)
+        # Drain running AND scheduler-queued work: a session keeps its self.sessions entry until its queued
+        # request completes, so waiting only on running futures would drop the queued one (already sent).
+        deadline = time.monotonic() + timeout
+        while True:
+            with self.inflight_guard:
+                pending = {f for f in self.inflight if not f.done()}
+            with self.sched_guard:
+                queued = bool(self.sessions)
+            if (not pending and not queued) or (remaining := deadline - time.monotonic()) <= 0:
+                return
+            if pending:
+                wait(pending, timeout=remaining)
+            else:
+                time.sleep(0.005)
 
     def _reply(self, conn: socket.socket, response: Response) -> None:
         try:
@@ -520,8 +550,11 @@ def _decode_payload(raw_text: str) -> tuple[dict | None, Exception | None]:
 
 
 def _session_id_of(req: Request) -> str | None:
+    # Only a str session_id partitions the scheduler; a non-str (e.g. a list) is unhashable and would
+    # crash sessions.setdefault, so treat it as absent here — dispatch still handles it with cold parity.
     parsed, _ = _decode_payload(req.payload_raw)
-    return parsed.get("session_id") if isinstance(parsed, dict) else None
+    session_id = parsed.get("session_id") if isinstance(parsed, dict) else None
+    return session_id if isinstance(session_id, str) else None
 
 
 def _peer_allowed(conn: socket.socket) -> bool:
