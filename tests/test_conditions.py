@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from cc_transcript.activity_probe import SessionActivityProbe, probe_events
+from cc_transcript.activity_probe import SessionActivityProbe, session_activity_probe
 
 from captain_hook.app import on
 from captain_hook.conditions import check_condition, is_project_path, matches_conditions, workflow_opt_matches
@@ -1169,7 +1169,7 @@ class TestWaitingCondition:
         def forbidden_probe(*args: Any, **kwargs: Any) -> SessionActivityProbe:
             raise AssertionError("probe consulted despite a populated stop payload")
 
-        monkeypatch.setattr("cc_transcript.activity_probe.probe_events", forbidden_probe)
+        monkeypatch.setattr("cc_transcript.activity_probe.session_activity_probe", forbidden_probe)
         raw = {
             "background_tasks": [
                 {"id": "t1", "type": "shell", "status": "running", "description": "build", "command": "make"}
@@ -1180,11 +1180,11 @@ class TestWaitingCondition:
         probes: list[SessionActivityProbe] = []
 
         def spy_probe(*args: Any, **kwargs: Any) -> SessionActivityProbe:
-            probe = probe_events(*args, **kwargs)
+            probe = session_activity_probe(*args, **kwargs)
             probes.append(probe)
             return probe
 
-        monkeypatch.setattr("cc_transcript.activity_probe.probe_events", spy_probe)
+        monkeypatch.setattr("cc_transcript.activity_probe.session_activity_probe", spy_probe)
         result = check_condition(Waiting(), StopEvent(_raw={}, ctx=ctx))
         assert len(probes) == 1
         assert result is probes[0].is_waiting is False

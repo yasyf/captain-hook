@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import functools
+import json
 import os
 import re
 import shutil
@@ -122,6 +123,20 @@ def fixture_session(messages: list[dict[str, Any]], *, path: Path | None = None)
         ],
         path=path,
     )
+
+
+def disk_fixture_session(messages: list[dict[str, Any]]) -> Session:
+    """Like :func:`fixture_session`, but backed by a real ``.jsonl`` file on disk.
+
+    ``session.path`` points at that file, so a consumer that re-parses the transcript from
+    disk — chiefly the disk-only ``session_activity_probe`` behind ``Waiting()`` — sees the
+    same events an in-memory lift would.
+    """
+    path = fixture_file_dir() / f"fixture-{next(FIXTURE_FILE_COUNTER)}.jsonl"
+    path.write_bytes(
+        b"\n".join(json.dumps(fixture_line(index, message)).encode() for index, message in enumerate(messages))
+    )
+    return load_transcript(path)
 
 
 def build_context(

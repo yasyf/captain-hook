@@ -19,6 +19,9 @@ from captain_hook.testing.helpers import (
     build_context as build_context,
 )
 from captain_hook.testing.helpers import (
+    disk_fixture_session as disk_fixture_session,
+)
+from captain_hook.testing.helpers import (
     fixture_session as fixture_session,
 )
 from captain_hook.testing.helpers import (
@@ -174,7 +177,7 @@ def make_transcript_ctx(
 
 
 def make_messages_ctx(messages: list[dict[str, Any]] | None) -> Any:
-    return MagicMock(transcript=fixture_session(messages or []), settings=None)
+    return MagicMock(transcript=disk_fixture_session(messages or []), settings=None)
 
 
 def run_cli(
@@ -376,7 +379,7 @@ def make_transcript(*messages: dict[str, Any] | list[dict[str, Any]]) -> Session
 
 def waiting_evt(raw_messages: list[dict[str, Any]]) -> PreToolUseEvent:
     """A Bash ``echo`` PreToolUse event over the given raw transcript, ready for ``check_condition``."""
-    ctx = build_ctx(transcript=fixture_session(raw_messages))
+    ctx = build_ctx(transcript=disk_fixture_session(raw_messages))
     return make_pre_tool_event("Bash", {"command": "echo"}, ctx=ctx)
 
 
@@ -385,7 +388,7 @@ def waiting_stop_evt(
     raw_messages: list[dict[str, Any]] | None = None,
 ) -> StopEvent:
     """A ``StopEvent`` carrying ``raw`` (e.g. ``background_tasks``/``session_crons``) over the given transcript."""
-    ctx = build_ctx(transcript=fixture_session(raw_messages or []))
+    ctx = build_ctx(transcript=disk_fixture_session(raw_messages or []))
     return StopEvent(_raw=raw or {}, ctx=ctx)
 
 

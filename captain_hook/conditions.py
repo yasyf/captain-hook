@@ -49,13 +49,13 @@ def waiting_tool_names(evt: BaseHookEvent) -> frozenset[str]:
 
 
 def is_waiting(evt: BaseHookEvent) -> bool:
-    from cc_transcript.activity_probe import probe_events
+    from cc_transcript.activity_probe import session_activity_probe
 
     if evt.background_tasks or evt.session_crons:
         return True
-    if not (t := evt.ctx.transcript):
+    if not (t := evt.ctx.transcript) or t.path is None:
         return False
-    return probe_events(t.events, waiting_tools=waiting_tool_names(evt)).is_waiting
+    return session_activity_probe(t.path, waiting_tools=waiting_tool_names(evt)).is_waiting
 
 
 def workflow_script_source(evt: BaseHookEvent) -> str | None:

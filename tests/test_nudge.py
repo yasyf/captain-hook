@@ -12,11 +12,11 @@ from captain_hook.testing.helpers import mock_subagent_start_event
 from captain_hook.types import Event, RanCommand, Signal, Signals, Tool, Waiting
 from tests.helpers import (
     build_ctx,
+    disk_fixture_session,
     make_ctx,
     make_post_tool_event,
     make_pre_tool_event,
     make_stop_event,
-    make_transcript,
     workflow_launch,
 )
 
@@ -200,7 +200,7 @@ class TestGateWaitAwareDefault:
     def test_stop_gate_skips_while_waiting(self, tmp_path: Path) -> None:
         register_gate("You must stop!")
 
-        ctx = build_ctx(transcript=make_transcript(workflow_launch(id="toolu_wf")), session_dir=tmp_path)
+        ctx = build_ctx(transcript=disk_fixture_session(workflow_launch(id="toolu_wf")), session_dir=tmp_path)
         evt = make_stop_event(ctx=ctx)
         result = dispatch(Event.Stop, evt, session_dir=tmp_path)
 

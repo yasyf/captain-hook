@@ -11,7 +11,8 @@ from cc_transcript import keep
 from cc_transcript.context import ContextWindow
 from cc_transcript.ids import EventRef, EventUuid, SessionId
 from cc_transcript.mining.candidates import DedupKey, FeedbackCandidate, dedup_key
-from cc_transcript.mining.signals import CandidateSignal, MiningSignal
+from cc_transcript.mining.confidence import CandidateSignal
+from cc_transcript.mining.signals import MiningSignal
 
 from captain_hook.review.scan import (
     REVIEWER_MARKER,
