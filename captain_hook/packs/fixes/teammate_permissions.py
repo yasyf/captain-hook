@@ -1,10 +1,12 @@
 # Workaround for https://github.com/anthropics/claude-code/issues/73176: in-process
 # teammates don't inherit the leader's --dangerously-skip-permissions consent, so their
-# Bash calls (heredocs, redirects) pop permission dialogs in the lead UI. Auto-approve
-# native teammate Bash only — MCP tools named mcp__<srv>__Bash suffix-match Tool("Bash")
-# and are vetoed — and only when the process tree shows the user launched with the flag;
-# the denylist is a courtesy speed bump (raw-text, over-prompting by design), not a
-# security boundary — the session is already bypass-consented.
+# Bash calls pop permission dialogs. We answer at PreToolUse *and* PermissionRequest: a
+# teammate whose dialog is forwarded to the lead (ToolUseContext.requestDialog absent, e.g.
+# resumed sessions) runs ZERO PermissionRequest hooks, so a PermissionRequest-only approve
+# never fires there; a PreToolUse allow resolves upstream of that fork on every path (and
+# clears the forced multi-cd "for clarity" ask too). Native teammate Bash only — MCP
+# mcp__<srv>__Bash suffix-matches Tool("Bash") and is vetoed — and only under the launch
+# flag; the denylist is a courtesy speed bump, not a security boundary (already consented).
 from __future__ import annotations
 
 from captain_hook import (
@@ -12,6 +14,7 @@ from captain_hook import (
     Ask,
     BaseHookEvent,
     CustomCondition,
+    Event,
     FromSubagent,
     Input,
     SkipPermissions,
@@ -30,6 +33,7 @@ class McpTool(CustomCondition):
 
 approve(
     "teammate bash under skip-permissions",
+    events=Event.PreToolUse | Event.PermissionRequest,
     only_if=[Tool("Bash"), ToolInput("command", r"[\s\S]"), FromSubagent(), SkipPermissions()],
     skip_if=[
         McpTool(),

@@ -393,7 +393,9 @@ class TestDispatch:
         assert hso["updatedInput"] == {"command": "ccx read x --full"}
         assert hso["additionalContext"] == "n"
 
-    def test_rewrite_short_circuits_no_side_effects(self) -> None:
+    def test_approval_beats_later_warn(self) -> None:
+        # Deny-wins scans every matching hook (no short-circuit on an approval), but an
+        # approval still wins over a warn: the later warn runs yet never surfaces.
         counter = 0
 
         @on(Event.PreToolUse)
@@ -409,7 +411,8 @@ class TestDispatch:
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["updatedInput"] == {"command": "ccx find **"}
-        assert counter == 0
+        assert "additionalContext" not in result["hookSpecificOutput"]
+        assert counter == 1
 
     def test_block_takes_priority_over_warn(self) -> None:
         register_hook(Event.PreToolUse, message="warning first")
@@ -433,7 +436,10 @@ class TestDispatch:
         assert "warn2" in context
         assert "\n\n" in context
 
-    def test_allow_short_circuits(self) -> None:
+    def test_block_wins_over_earlier_allow(self) -> None:
+        # Deny-wins: a block beats an allow that ran before it (CC's deny > allow), so an
+        # earlier approval — e.g. the fixes pack's teammate-bash allow — can never suppress
+        # a later block such as the general pack's `jj undo` guard.
         call_count = 0
 
         @on(Event.PreToolUse)
@@ -444,12 +450,13 @@ class TestDispatch:
         def blocker(evt: Any) -> HookResult:
             nonlocal call_count
             call_count += 1
-            return HookResult(action=Action.block, message="should not reach")
+            return HookResult(action=Action.block, message="denied")
 
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
-        assert call_count == 0
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert result["hookSpecificOutput"]["permissionDecisionReason"] == "denied"
+        assert call_count == 1
 
     def test_block_short_circuits_no_side_effects(self) -> None:
         counter = 0

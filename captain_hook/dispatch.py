@@ -149,19 +149,30 @@ def dispatch(
     *,
     async_: bool = False,
 ) -> dict[str, Any] | None:
-    """Dispatch an event to all matching hooks and return the combined result."""
+    """Dispatch an event to all matching hooks and combine their results, deny-wins.
+
+    Follows Claude Code's own ``deny > ask > allow`` precedence: a ``block`` from any
+    matching hook beats an ``allow``/``rewrite``, so one hook's approval can never
+    short-circuit another hook's block. Among approvals the first wins; ``warn`` messages
+    accumulate and surface only when nothing decisive fired.
+    """
     matching = [h for h in get_matching_hooks(evt) if h.spec.async_ == async_]
 
+    approval: HookResult | None = None
     warns: list[str] = []
     for entry in matching:
         match execute_hook(entry, evt, session_dir):
-            case HookResult(action=Action.block | Action.allow | Action.rewrite) as r:
+            case HookResult(action=Action.block) as r:
                 return format_output(event, r)
+            case HookResult(action=Action.allow | Action.rewrite) as r if approval is None:
+                approval = r
             case HookResult(action=Action.warn, message=msg) if msg:
                 warns.append(msg)
             case _:
                 pass
 
+    if approval is not None:
+        return format_output(event, approval)
     if warns:
         return format_output(event, HookResult(action=Action.warn, message="\n\n".join(warns)))
 

@@ -4,6 +4,28 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.9.0] - 2026-07-13
+
+### Changed
+- **Hook dispatch now follows deny-wins precedence.** `dispatch()` returned on the
+  first decisive result, so an `allow` from an earlier-loaded hook short-circuited a
+  later hook's `block` — e.g. the `fixes` pack's teammate-bash allow suppressing the
+  `general` pack's `git stash` / `jj undo` guards. A `block` from any matching hook now
+  beats an `allow`/`rewrite`, matching Claude Code's own `deny > ask > allow`; among
+  approvals the first still wins and `warn`s still accumulate. Every matching hook now
+  runs (there is no short-circuit on an approval), so a later block is always seen.
+
+### Fixed
+- **Teammate Bash auto-approve now works on the forwarded/resumed permission path.**
+  The `fixes` pack's `approve_teammate_bash_under_skip_permissions` hook answered only
+  `PermissionRequest`, but Claude Code forwards an in-process teammate's permission
+  dialog to the lead when the teammate's `ToolUseContext.requestDialog` is absent
+  (resumed/rehydrated sessions) and runs no `PermissionRequest` hooks on that path — so
+  the auto-approve silently never fired there, and the forced multi-`cd` "for clarity"
+  prompt sat unanswered. The hook now also answers `PreToolUse`, which resolves upstream
+  of the forward fork and auto-approves on every path. `approve()` gained an `events`
+  parameter (default `PermissionRequest`) to opt into this.
+
 ## [9.8.0] - 2026-07-12
 
 ### Added
@@ -27,13 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verdict returned by an async gate on PreToolUse, Stop, SubagentStop, or
   PermissionRequest was silently discarded. The registration path rejects the
   combination with a clear error instead of shipping a gate that never fires.
-- **Two plugins attaching a pack under the same name is now a hard error.** A
-  same-name-but-different-dir `pack attach` used to silently replace the prior
-  entry (last write wins); since the pack name keys gate arbitration and
-  hook-state namespacing, that left dispatch depending on attach order. The
-  attach now fails loudly, naming both dirs, so the conflicting plugin is
-  renamed instead. Attached packs also resolve in stable name order, so gate
-  arbitration across the attached tier no longer depends on attach timing.
+- **Attached packs resolve in stable name order, and a same-name re-attach from a
+  new dir logs a WARNING.** Sorting the attached tier by name means gate
+  arbitration no longer depends on attach timing. A pack re-attaching from a
+  different dir still wins as the newer attach — a plugin update bumps its
+  versioned cache path, so erroring would drop the pack for every post-update
+  session — but the rebind is now logged at WARNING naming both the old and new
+  dir, so a genuine two-plugins-one-name clash is visible.
 
 ### Fixed
 - **Two packs' same-named hooks no longer share a `max_fires` counter.** Per-hook
@@ -41,13 +63,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   function name, so a plain `@on` handler named `check` in one pack and another
   in a second pack collided — one pack's single fire could suppress the other's.
   The state key is now namespaced by the hook's defining file, which is unique
-  per pack.
-- **A crashed once-guard claimer no longer fail-closes its healthy sibling.** The
-  duplicate-dispatch guard let the first of Claude Code's byte-identical sibling
-  processes win a sentinel and the rest exit; if that winner's dispatch then
-  raised, the sentinel kept suppressing every sibling for the full TTL and the
-  event was lost. The claim is now released when dispatch raises, so a slower
-  healthy sibling re-claims and dispatches.
+  per pack. Upgrade note: the on-disk state-key format changed, so an in-flight
+  session's already-fired one-shot (`max_fires`) hooks may fire once more right
+  after the upgrade — a one-time transient as the new keys take over, not a
+  persistent double-fire.
+- **The duplicate-dispatch guard stays fail-closed.** The `once_guard` shim now
+  centralizes the `DECISION_EVENTS` exemption for both the CLI and daemon
+  dispatch paths, but keeps the deliberately dumb contract: the first
+  byte-identical sibling to claim wins, and a claim whose dispatch raises stays
+  held for the TTL window rather than releasing. Releasing would re-run a legacy
+  sibling whose earlier hooks already completed their side effects, or unlink a
+  claim a slower sibling re-took after the TTL — there is no ownership check.
 
 ## [9.7.0] - 2026-07-12
 
