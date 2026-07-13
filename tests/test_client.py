@@ -110,9 +110,7 @@ def run_cold(
 
 
 class FakeDaemon:
-    def __init__(
-        self, sock_path: str, response: dict[str, object] | None, *, close_before_read: bool = False
-    ) -> None:
+    def __init__(self, sock_path: str, response: dict[str, object] | None, *, close_before_read: bool = False) -> None:
         self.response = response
         self.close_before_read = close_before_read
         self.requests: list[dict[str, object]] = []
@@ -155,6 +153,45 @@ def read_line(conn: socket.socket) -> bytes:
             break
         buf.extend(chunk)
     return bytes(buf)
+
+
+class ThrottledServer:
+    """A listener that accepts and never reads, with a tiny receive buffer: a client sending more
+    than the socket buffers hold blocks and — under a short timeout — its ``sendall`` raises before
+    delivering a full request line, the incomplete-send (pre-send) case R1 must classify as cold."""
+
+    def __init__(self, sock_path: str) -> None:
+        self._stop = threading.Event()
+        self._conns: list[socket.socket] = []
+        self._srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
+        self._srv.bind(sock_path)
+        self._srv.listen(8)
+        self._srv.settimeout(0.2)
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self._conns.append(self._srv.accept()[0])  # accept, then never read
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+
+    def close(self) -> None:
+        self._stop.set()
+        self._srv.close()
+        for conn in self._conns:
+            conn.close()
+        self._thread.join(timeout=2)
+
+
+def preseed_throttled(run_dir: Path, root: str, env: dict[str, str]) -> ThrottledServer:
+    sock_path = str(run_dir / f"{key.worker_key(root, env)}.sock")
+    assert len(sock_path) < 100
+    return ThrottledServer(sock_path)
 
 
 def preseed_daemon(
@@ -347,12 +384,99 @@ class TestRoundTrip:
         assert result.stdout == ""
 
 
+class TestExchangeBoundary:
+    """The classification boundary R1 fixes, unit-level and deterministic: a ``sendall`` that raises
+    delivered an incomplete request line (pre-send → cold); a failure while reading the response is
+    post-send (fail open)."""
+
+    class SendFails:
+        def settimeout(self, _: float) -> None: ...
+
+        def sendall(self, _: bytes) -> None:
+            raise BrokenPipeError(32, "Broken pipe")
+
+        def recv(self, _: int) -> bytes:
+            raise AssertionError("must not read the response after an incomplete send")
+
+    class ReadEOF:
+        def settimeout(self, _: float) -> None: ...
+
+        def sendall(self, _: bytes) -> None: ...
+
+        def recv(self, _: int) -> bytes:
+            return b""
+
+    def test_incomplete_send_is_presend_unavailable(self) -> None:
+        with pytest.raises(client.DaemonUnavailable):
+            client.exchange(self.SendFails(), {"kind": "ping"}, time.monotonic() + 5)
+
+    def test_read_failure_after_send_is_postsend(self) -> None:
+        with pytest.raises(client.PostSendFailure):
+            client.exchange(self.ReadEOF(), {"kind": "ping"}, time.monotonic() + 5)
+
+
 class TestSendBoundary:
     """Whether the request was sent decides the fallback: pre-send → cold, post-send → fail open."""
 
     def _cold_env(self, run_dir: Path, marker_dir: Path, **overrides: str) -> tuple[dict[str, str], Path]:
         sink = marker_dir / "cold-sink.txt"
         return client_env(run_dir, CAPT_HOOK_MARKER_SINK=str(sink), **overrides), sink
+
+    def test_incomplete_send_falls_back_cold(self, run_dir: Path, project_dir: Path) -> None:
+        # A worker that accepts but never drains its receive buffer: a large request blocks in
+        # sendall and, under a short deadline, raises before the full line lands. The worker never
+        # dispatched, so this pre-send failure runs cold and delivers the gate hook's deny envelope.
+        root = str(project_dir)
+        env = client_env(run_dir, CAPT_HOOK_CLIENT_TIMEOUT="1.0")  # default fallback: cold
+        big_payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "x" * (512 * 1024)}})
+        server = preseed_throttled(run_dir, root, env)
+        try:
+            result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=big_payload)
+        finally:
+            server.close()
+        assert result.returncode == 0, result.stderr
+        assert "permissionDecision" in result.stdout, "the pre-send failure did not run cold"
+
+    def test_response_missing_exit_fails_open_no_cold(self, run_dir: Path, marker_dir: Path) -> None:
+        # A status=ok response with no exit field is malformed → post-send fail open (exit 0, no
+        # output), never a silent exit 0 relaying the daemon's stdout, and never a cold rerun.
+        root = str(marker_dir)
+        env, sink = self._cold_env(run_dir, marker_dir, CAPT_HOOK_DAEMON_FALLBACK="cold")
+        daemon = preseed_daemon(run_dir, root, env, {"v": 1, "status": "ok", "stdout": "SHOULD_NOT_APPEAR"})
+        try:
+            result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        finally:
+            daemon.close()
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == "", "a malformed response must not relay stdout"
+        assert not sink.exists(), "a malformed response must not trigger a cold rerun"
+
+    def test_response_string_exit_fails_open_no_cold(self, run_dir: Path, marker_dir: Path) -> None:
+        # A non-integer exit ("1") is malformed → post-send fail open, no stdout relay, no cold rerun.
+        root = str(marker_dir)
+        env, sink = self._cold_env(run_dir, marker_dir, CAPT_HOOK_DAEMON_FALLBACK="cold")
+        daemon = preseed_daemon(run_dir, root, env, {"v": 1, "status": "ok", "stdout": "X", "exit": "1"})
+        try:
+            result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        finally:
+            daemon.close()
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == ""
+        assert not sink.exists(), "a malformed response must not trigger a cold rerun"
+
+    def test_response_unknown_status_fails_open_no_cold(self, run_dir: Path, marker_dir: Path) -> None:
+        # An unknown status is not a provable non-dispatch (unlike "rejected"): the worker may have
+        # dispatched, so it is malformed → post-send fail open, never a cold rerun (double-dispatch).
+        root = str(marker_dir)
+        env, sink = self._cold_env(run_dir, marker_dir, CAPT_HOOK_DAEMON_FALLBACK="cold")
+        daemon = preseed_daemon(run_dir, root, env, {"v": 1, "status": "weird", "stdout": "", "exit": 0})
+        try:
+            result = run_client("--root", root, "run", "PreToolUse", env=env, stdin=PAYLOAD)
+        finally:
+            daemon.close()
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == ""
+        assert not sink.exists(), "an unknown status must not trigger a cold rerun"
 
     def test_post_send_eof_fails_open_no_cold(self, run_dir: Path, marker_dir: Path) -> None:
         # The daemon accepts then closes without reading; the client's send completes (or breaks) and

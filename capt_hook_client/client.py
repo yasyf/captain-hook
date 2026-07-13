@@ -10,15 +10,18 @@ event it reads stdin, connects to (or spawns) this project's warm worker over a 
 writes the worker's response bytes back verbatim. ``ping`` is connect-only: it reports on an
 existing worker and never spawns one, so inspecting a project cannot boot a daemon.
 
-Whether the request reached the socket decides the fallback. A failure BEFORE the bytes are sent —
-no reachable worker, a spawn that dies at startup, a flock contention timeout, a pre-send deadline,
-or any OSError in the connect/spawn machinery — takes the cold ``python -m captain_hook`` fallback
-(``CAPT_HOOK_DAEMON_FALLBACK``; cold by default), so a gate hook's deny envelope is never lost. A
-failure AFTER the bytes are sent — an EOF or reset awaiting the response, a malformed response, or a
-post-send deadline — fails OPEN (exit 0, no output): the worker may already have dispatched, and a
-cold rerun would double-fire side-effecting hooks. A ``status=error`` response (the worker
-dispatched and hit an uncaught error) is relayed verbatim, never rerun cold; only ``status=rejected``
-(a provable non-dispatch on the protocol gate) falls back cold.
+Whether the request line was fully sent decides the fallback. A failure BEFORE the line is fully
+delivered — no reachable worker, a spawn that dies at startup, a flock contention timeout, a
+pre-send deadline, any OSError in the connect/spawn machinery, or a ``sendall`` that raises having
+pushed only zero or partial bytes (the worker never saw a complete newline-terminated line, so it
+never dispatched) — takes the cold ``python -m captain_hook`` fallback (``CAPT_HOOK_DAEMON_FALLBACK``;
+cold by default), so a gate hook's deny envelope is never lost. Only once ``sendall`` returns does a
+subsequent failure count as post-send: an EOF or reset awaiting the response, a malformed response
+(bad JSON, a protocol/version mismatch, an unknown status, or a non-integer exit code), or a
+post-send deadline — all fail OPEN (exit 0, no output), because the worker may already have
+dispatched and a cold rerun would double-fire side-effecting hooks. A ``status=error`` response (the
+worker dispatched and hit an uncaught error) is relayed verbatim, never rerun cold; only
+``status=rejected`` (a provable non-dispatch on the protocol gate) falls back cold.
 
 Never imports :mod:`captain_hook`; ``subprocess`` is imported lazily on the spawn/cold
 paths only.
@@ -44,6 +47,8 @@ RECV_CHUNK = 65536
 
 DEFAULT_DEADLINE = 30.0
 UPS_DEADLINE = 20.0
+
+RESPONSE_STATUSES = frozenset({"ok", "error", "rejected"})
 
 
 class DaemonUnavailable(Exception):
@@ -148,18 +153,16 @@ def do_run(event: str, root: str, args: list[str], *, async_: bool) -> int:
     request = build_request(event, root, payload.decode("utf-8", "surrogateescape"), async_=async_)
     try:
         response = round_trip(request, root, deadline_at)
+        match response["status"]:
+            case "ok" | "error":
+                return emit_response(response)
+            case "rejected":
+                return on_daemon_failure(args, payload, "worker rejected the request protocol version; running cold")
     except (DaemonUnavailable, DeadlineExpired) as exc:
         return on_daemon_failure(args, payload, str(exc))
     except PostSendFailure as exc:
         breadcrumb(f"{exc}; failing open")
         return 0
-    match response.get("status"):
-        case "ok" | "error":
-            return emit_response(response)
-        case "rejected":
-            return on_daemon_failure(args, payload, "worker rejected the request protocol version; running cold")
-        case status:
-            return on_daemon_failure(args, payload, f"worker returned unexpected status {status!r}; running cold")
 
 
 def do_ping(root: str) -> int:
@@ -280,6 +283,9 @@ def exchange(sock: socket.socket, request: dict[str, object], deadline_at: float
     sock.settimeout(remaining)
     try:
         sock.sendall((json.dumps(request) + "\n").encode())
+    except OSError as exc:
+        raise DaemonUnavailable(f"send did not complete: {exc}") from exc
+    try:
         line = read_line(sock, deadline_at)
     except OSError as exc:
         raise PostSendFailure(f"socket error after send: {exc}") from exc
@@ -307,18 +313,21 @@ def validate(line: bytes) -> dict[str, object]:
         raise BadResponse("response was not a JSON object")
     if response.get("v") != key.PROTOCOL:
         raise BadResponse(f"protocol mismatch: worker v={response.get('v')!r} client v={key.PROTOCOL!r}")
+    if response.get("status") not in RESPONSE_STATUSES:
+        raise BadResponse(f"unknown response status: {response.get('status')!r}")
     return response
 
 
 def emit_response(response: dict[str, object]) -> int:
+    if not isinstance(exit_code := response.get("exit"), int):
+        raise BadResponse(f"response exit code is not an integer: {exit_code!r}")
     if stdout := response.get("stdout"):
         sys.stdout.write(str(stdout))
         sys.stdout.flush()
     if stderr := response.get("stderr"):
         sys.stderr.write(str(stderr))
         sys.stderr.flush()
-    exit_code = response.get("exit", 0)
-    return exit_code if isinstance(exit_code, int) else 0
+    return exit_code
 
 
 def on_daemon_failure(args: list[str], payload: bytes, reason: str) -> int:
