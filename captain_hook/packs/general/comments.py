@@ -1,65 +1,68 @@
-"""Discourage verbose comments: warn when an edit introduces a long comment or line-comment run.
+"""Enforce terse comments: block an edit that leaves an oversized comment run, warn on the rest.
 
-Comments should be terse and used sparingly — names, types, and organization carry the
-meaning. The one legitimate exception is documentation-generation comments (godoc, rustdoc,
-docstrings), and even a long doc run trips this warn by design: the threshold is deliberately
-strict so verbosity of any kind gets a nudge. Language-agnostic via the tree-sitter comment
-kinds in :data:`~captain_hook.ast_grep.COMMENT_TYPES`; diff-based, so only comments the edit
-*introduces* count — a pre-existing long comment re-saved unchanged never fires.
+Comments should be terse and used sparingly — names, types, and organization carry the meaning.
+This measures the comment runs an edit *creates or grows* (untouched runs stay exempt; a run's
+identity is its whitespace-normalized text, so a reflow never counts) at their full post-edit size,
+and blocks any non-doc run past 3 lines or 200 chars. Documentation-generation comments (godoc,
+rustdoc, JSDoc) are carved out of the block and instead draw an advisory doc warn, and an edit whose
+added lines are mostly comments draws a density warn. Language-agnostic via the tree-sitter comment
+kinds in :data:`~captain_hook.ast_grep.COMMENT_TYPES`.
 """
 
 from __future__ import annotations
 
+import difflib
 from typing import TYPE_CHECKING
 
 from captain_hook import (
     Allow,
     BaseHookEvent,
+    Block,
     CustomCondition,
     Event,
     FileFixture,
     Input,
     Tool,
     Warn,
+    hook,
     nudge,
 )
-from captain_hook.ast_grep import introduced_comments, lang_for_path
+from captain_hook.ast_grep import (
+    comment_line_numbers,
+    lang_for_path,
+    touched_comment_runs,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from captain_hook.ast_grep import CommentRun
 
-    from captain_hook.ast_grep import Match
+COMMENT_DENSITY_MIN_ADDED = 6
+COMMENT_DENSITY_FRACTION = 0.5
 
-MAX_COMMENT_LINES = 4
-MAX_COMMENT_CHARS = 300
-
-# Fixtures for the inline tests — kept as module constants so each physical line stays short.
-GO_NO_COMMENT = "package p\n\nfunc F() {}\n"
-GO_ONE_LINE_DOC = "package p\n\n// F does a thing.\nfunc F() {}\n"
-GO_THREE_LINE_DOC = (
-    "package p\n\n// F does a thing.\n// It handles the empty case.\n// Returns an error otherwise.\nfunc F() {}\n"
-)
-GO_LONG_RUN = (
+# Fixtures for the inline tests — module constants so each physical line stays short.
+GO_INBODY_LONG = (
     "package p\n\nfunc F() {\n"
-    "\t// explanation line one goes here\n"
-    "\t// explanation line two goes here\n"
-    "\t// explanation line three is here\n"
-    "\t// explanation line four is here\n"
-    "\t// explanation line five is here\n"
-    "\t// explanation line six is here ok\n"
+    "\t// explanation line one here\n"
+    "\t// explanation line two here\n"
+    "\t// explanation line three here\n"
+    "\t// explanation line four here\n"
+    "\t// explanation line five here\n"
+    "\t// explanation line six is here\n"
     "\tx := 1\n}\n"
 )
-GO_EXISTING_OLD = "func F() {\n\t// aaa\n\t// bbb\n\t// ccc\n\t// ddd\n\t// eee\n\t// fff\n\tx := 1\n}\n"
-GO_EXISTING_NEW = "func F() {\n\t// aaa\n\t// bbb\n\t// ccc\n\t// ddd\n\t// eee\n\t// fff\n\tx := 2\n}\n"
-GO_WRITE_PLAIN = "package p\n\nvar x = 1\n"
-GO_WRITE_RUN = (
+GO_INBODY_201 = "package p\n\nfunc F() {\n\t// " + "x" * 198 + "\n\tx := 1\n}\n"
+GO_INBODY_200 = "package p\n\nfunc F() {\n\t// " + "x" * 197 + "\n\tx := 1\n}\n"
+GO_DOC_RUN = (
+    "package p\n\n"
+    "// F alpha line here\n// F beta line here\n// F gamma line here\n// F delta line here\n"
+    "func F() {}\n"
+)
+GO_BLANK_SEP_RUN = (
     "package p\n\n"
     "// note one here\n// note two here\n// note three here\n"
     "// note four here\n// note five here\n// note six here\n"
-    "var x = 1\n"
+    "\nvar x = 1\n"
 )
-GO_WRITE_EXISTING_OLD = "package p\n\n// aaa\n// bbb\n// ccc\n// ddd\n// eee\n// fff\nvar x = 1\n"
-GO_WRITE_EXISTING_NEW = "package p\n\n// aaa\n// bbb\n// ccc\n// ddd\n// eee\n// fff\nvar x = 2\n"
 RS_LONG_BLOCK = "/*\n one\n two\n three\n four\n five\n six\n seven\n eight\n*/\nfn f() {}\n"
 RS_LONG_DOC = (
     "/// line one of the rustdoc here\n"
@@ -70,91 +73,149 @@ RS_LONG_DOC = (
     "/// line six of the rustdoc ok\n"
     "pub fn f() {}\n"
 )
-PY_LONG_RUN = (
-    "# note one here\n# note two here\n# note three here\n# note four here\n# note five here\n# note six here\nx = 1\n"
+RS_SHORT_DOC = "/// Builds a widget.\npub fn f() {}\n"
+PY_LONG_RUN = "# note one here\n# note two here\n# note three here\n# note four here\n# note five here\n# note six here\nx = 1\n"
+PY_FOUR_RUN = "# one here\n# two here\n# three here\n# four here\nx = 1\n"
+PY_THREE_RUN = "# one here\n# two here\n# three here\nx = 1\n"
+PY_DOCSTRING = 'def f():\n    """\n    line one\n    line two\n    line three\n    line four\n    line five\n    """\n    return 1\n'
+PY_GROW_OLD_FILE = "# a here\n# b here\n# c here\nx = 1\n"
+PY_GROW_OLD = "# a here\n# b here\n# c here"
+PY_GROW_NEW = "# a here\n# b here\n# c here\n# d here\n# e here\n# f here"
+PY_NEAR_FILE = "# a here\n# b here\n# c here\n# d here\n# e here\n# f here\nx = 1\n"
+PY_REFLOW_FILE = "# alpha here\n# beta here\n# gamma here\n# delta here\nx = 1\n"
+PY_REFLOW_OLD = "# alpha here\n# beta here\n# gamma here\n# delta here"
+PY_REFLOW_NEW = "#  alpha here\n#  beta here\n#  gamma here\n#  delta here"
+PY_MULTIEDIT_NEW = "# a here\n# b here\n# c here\n# d here\n# e here\nx = 1"
+PY_DENSE_FIRES = "# c1 here\na = 1\n# c2 here\nb = 2\n# c3 here\n# c4 here\nc = 3\n# c5 here\n"
+PY_DENSE_ALLOW = "# c1 here\na = 1\nb = 2\nc = 3\nd = 4\ne = 5\nf = 6\n# c2 here\n"
+PY_DENSE_FLOOR = "# c1 here\n# c2 here\n# c3 here\n"
+YAML_HASH = "# a\n# b\n# c\n# d\n# e\n# f\n# g\n# h\n# i\n# j\n"
+
+BLOCK_MESSAGE = (
+    "Verbose comment: this edit leaves a comment run over 3 lines / 200 chars. Comments are terse "
+    "and sparing — names, types, and organization document the code. Shrink it to the one non-obvious "
+    "fact, or delete it and let the code speak; long-form rationale belongs in the doc comment of the "
+    "API it explains or in the commit message. See: STYLEGUIDE.md § Comments."
 )
-PY_LONG_DOCSTRING = (
-    'def f():\n    """\n'
-    "    line one\n    line two\n    line three\n"
-    "    line four\n    line five\n    line six\n"
-    '    """\n    return 1\n'
+DOC_MESSAGE = (
+    "Long documentation comment: doc comments (godoc / rustdoc / JSDoc) are exempt from the "
+    "verbose-comment block, but keep them to a real description of the API — narrative padding and "
+    "signature restatement dilute it. Tighten this one if it can say the same in fewer lines."
+)
+DENSITY_MESSAGE = (
+    "Comment-dense edit: most of the lines this edit adds are comments. A few terse comments beat a "
+    "running commentary — let names and structure carry the story, and keep only the non-obvious "
+    "ones. See: STYLEGUIDE.md § Comments."
 )
 
 
-def runs(matches: Iterable[Match]) -> list[list[Match]]:
-    """Group comments into runs of adjacent lines — a block comment, or consecutive line
-    comments with no code between — each a list of :class:`Match` in document order."""
-    grouped: list[list[Match]] = []
-    for m in sorted(matches, key=lambda c: c.line):
-        if grouped and m.line <= grouped[-1][-1].end_line + 1:
-            grouped[-1].append(m)
-        else:
-            grouped.append([m])
-    return grouped
+def touched(evt: BaseHookEvent) -> list[CommentRun]:
+    """The comment runs this edit created or grew, or ``[]`` when the language is unparsable."""
+    if (
+        not (file := evt.file)
+        or not (lang := lang_for_path(file.path))
+        or (pre := evt.pre_image) is None
+        or (post := evt.post_image) is None
+    ):
+        return []
+    return touched_comment_runs(pre, post, lang)
 
 
-def too_long(run: list[Match]) -> bool:
-    """Whether a comment run exceeds the line or character budget."""
-    lines = run[-1].end_line - run[0].line + 1
-    chars = sum(len(m.text) for m in run)
-    return lines > MAX_COMMENT_LINES or chars > MAX_COMMENT_CHARS
+class VerboseInlineComment(CustomCondition):
+    """True when the edit leaves a too-long non-doc comment run it created or grew."""
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return any(run.too_long and not run.doc for run in touched(evt))
 
 
-class LongCommentIntroduced(CustomCondition):
-    """True when the pending edit introduces a comment (or adjacent line-comment run) past
-    the length budget. Diffs the edit's pre-image against its new text, so a comment already
-    present before the edit never counts; files whose language ast-grep can't parse yield False."""
+class VerboseDocComment(CustomCondition):
+    """True when the edit leaves a too-long documentation comment run it created or grew."""
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return any(run.too_long and run.doc for run in touched(evt))
+
+
+class CommentDenseEdit(CustomCondition):
+    """True when most of the non-blank lines this edit adds are (non-doc) comment lines."""
 
     def check(self, evt: BaseHookEvent) -> bool:
         if (
             not (file := evt.file)
             or not (lang := lang_for_path(file.path))
-            or (old := evt.replaced) is None
-            or (new := evt.content) is None
+            or (pre := evt.pre_image) is None
+            or (post := evt.post_image) is None
         ):
             return False
-        return any(too_long(run) for run in runs(introduced_comments(old, new, lang)))
+        post_lines = post.splitlines()
+        comment_lines = comment_line_numbers(post, lang, include_doc=False)
+        added = comment_added = 0
+        for tag, _i1, _i2, j1, j2 in difflib.SequenceMatcher(a=pre.splitlines(), b=post_lines, autojunk=False).get_opcodes():
+            if tag not in ("insert", "replace"):
+                continue
+            for j in range(j1, j2):
+                if not post_lines[j].strip():
+                    continue
+                added += 1
+                comment_added += j + 1 in comment_lines
+        return added >= COMMENT_DENSITY_MIN_ADDED and comment_added / added > COMMENT_DENSITY_FRACTION
 
+
+hook(
+    Event.PreToolUse,
+    BLOCK_MESSAGE,
+    only_if=[Tool("Edit", "Write", "MultiEdit"), VerboseInlineComment()],
+    block=True,
+    tests={
+        # Too-long non-doc runs an edit creates or grows — blocked.
+        Input(file="svc.go", content=GO_INBODY_LONG): Block(pattern="Verbose comment"),
+        Input(file="svc.go", content=GO_INBODY_201): Block(pattern="Verbose comment"),
+        Input(file="lib.rs", content=RS_LONG_BLOCK): Block(pattern="Verbose comment"),
+        Input(file="m.py", content=PY_LONG_RUN): Block(pattern="Verbose comment"),
+        Input(file="m.py", content=PY_FOUR_RUN): Block(pattern="Verbose comment"),
+        Input(file="var.go", content=GO_BLANK_SEP_RUN): Block(pattern="Verbose comment"),
+        Input(file=FileFixture(name="grow.py", content=PY_GROW_OLD_FILE), old=PY_GROW_OLD, content=PY_GROW_NEW): Block(
+            pattern="Verbose comment"
+        ),
+        Input(
+            tool="MultiEdit", file=FileFixture(name="madd.py", content="x = 1\n"), old="x = 1", content=PY_MULTIEDIT_NEW
+        ): Block(pattern="Verbose comment"),
+        # Boundaries and untouched / exempt runs — allowed.
+        Input(file="m.py", content=PY_THREE_RUN): Allow(),
+        Input(file="ok.go", content=GO_INBODY_200): Allow(),
+        Input(file=FileFixture(name="near.py", content=PY_NEAR_FILE), old="x = 1", content="x = 2"): Allow(),
+        Input(file=FileFixture(name="reflow.py", content=PY_REFLOW_FILE), old=PY_REFLOW_OLD, content=PY_REFLOW_NEW): Allow(),
+        Input(file="m.py", content=PY_DOCSTRING): Allow(),
+        Input(file=FileFixture(name="resave.py", content=PY_LONG_RUN), content=PY_LONG_RUN): Allow(),
+        Input(file="f.yaml", content=YAML_HASH): Allow(),
+        # Doc runs are carved out of the block; a density-shaped edit's short runs stay inline-clean.
+        Input(file="lib.rs", content=RS_LONG_DOC): Allow(),
+        Input(file="doc.go", content=GO_DOC_RUN): Allow(),
+        Input(file="dense.py", content=PY_DENSE_FIRES): Allow(),
+    },
+)
 
 nudge(
-    "Verbose comment introduced. Comments should be terse and used sparingly — let names, "
-    "types, and organization document the code. Keep documentation-generation comments "
-    "(godoc / rustdoc / docstrings) to a real description, and drop long inline commentary "
-    "or anything that restates the code. See: STYLEGUIDE.md § Comments.",
-    only_if=[Tool("Edit", "Write", "MultiEdit"), LongCommentIntroduced()],
+    DOC_MESSAGE,
+    only_if=[Tool("Edit", "Write", "MultiEdit"), VerboseDocComment()],
     events=Event.PreToolUse,
+    max_fires=None,
     tests={
-        # Short / within-budget comments — allowed.
-        Input(file="doc.go", old=GO_NO_COMMENT, content=GO_ONE_LINE_DOC): Allow(),
-        Input(file="doc.go", old=GO_NO_COMMENT, content=GO_THREE_LINE_DOC): Allow(),
-        Input(file="m.py", old="x = 1\n", content="# set x\nx = 1\n"): Allow(),
-        Input(file="lib.rs", old="pub fn f() {}\n", content="/// Builds a widget.\npub fn f() {}\n"): Allow(),
-        # Long introduced comment runs — warned.
-        Input(file="svc.go", old="package p\n\nfunc F() {\n\tx := 1\n}\n", content=GO_LONG_RUN): Warn(
-            pattern="Verbose comment"
-        ),  # 6-line // run > 4 lines
-        Input(file="big.go", old=GO_NO_COMMENT, content="package p\n\n// " + "x" * 320 + "\nfunc F() {}\n"): Warn(
-            pattern="Verbose comment"
-        ),  # single line, > 300 chars
-        Input(file="lib.rs", old="fn f() {}\n", content=RS_LONG_BLOCK): Warn(pattern="Verbose comment"),
-        Input(file="lib.rs", old="pub fn f() {}\n", content=RS_LONG_DOC): Warn(
-            pattern="Verbose comment"
-        ),  # long rustdoc run also warns (strict threshold, by design)
-        Input(file="m.py", old="x = 1\n", content=PY_LONG_RUN): Warn(pattern="Verbose comment"),
-        # Diff-gating: a pre-existing long run re-saved unchanged does not fire.
-        Input(file="svc.go", old=GO_EXISTING_OLD, content=GO_EXISTING_NEW): Allow(),
-        # Python docstrings are string nodes, not comments — never trip this.
-        Input(file="m.py", old="def f():\n    return 1\n", content=PY_LONG_DOCSTRING): Allow(),
-        # Write tool: pre-image comes from disk at PreToolUse.
-        Input(
-            tool="Write",
-            file=FileFixture(name="cmt_new.go", content=GO_WRITE_PLAIN),
-            content=GO_WRITE_RUN,
-        ): Warn(pattern="Verbose comment"),  # long run added to existing file
-        Input(
-            tool="Write",
-            file=FileFixture(name="cmt_pre.go", content=GO_WRITE_EXISTING_OLD),
-            content=GO_WRITE_EXISTING_NEW,
-        ): Allow(),  # run already on disk: not introduced
+        Input(file="lib.rs", content=RS_LONG_DOC): Warn(pattern="documentation comment"),
+        Input(file="doc.go", content=GO_DOC_RUN): Warn(pattern="documentation comment"),
+        # A short doc run and a long non-doc run both leave the doc warn quiet.
+        Input(file="lib.rs", content=RS_SHORT_DOC): Allow(),
+        Input(file="m.py", content=PY_LONG_RUN): Allow(),
+    },
+)
+
+nudge(
+    DENSITY_MESSAGE,
+    only_if=[Tool("Edit", "Write", "MultiEdit"), CommentDenseEdit()],
+    events=Event.PreToolUse,
+    max_fires=None,
+    tests={
+        Input(file="dense.py", content=PY_DENSE_FIRES): Warn(pattern="Comment-dense"),
+        Input(file="sparse.py", content=PY_DENSE_ALLOW): Allow(),
+        Input(file="floor.py", content=PY_DENSE_FLOOR): Allow(),
     },
 )

@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from captain_hook import app, decisions
-from captain_hook.cli import DECISION_EVENTS, EVENT_NAMES, CliState, dispatch_event
+from captain_hook.cli import EVENT_NAMES, CliState, dispatch_event
 from captain_hook.daemon import decision_writer, lifecycle, transcache
 from captain_hook.daemon.context import install_context_io, request_scope
 from captain_hook.daemon.logsink import configure_daemon_logging
@@ -58,7 +58,7 @@ from captain_hook.daemon.protocol import (
     worker_key,
 )
 from captain_hook.daemon.registry import Registry
-from captain_hook.once import claim_once
+from captain_hook.once import once_guard
 from captain_hook.session import ensure_session
 from captain_hook.types import Event
 
@@ -342,8 +342,11 @@ class Server:
             return self._response("ok")
         parsed, parse_error = _decode_payload(raw_text)
         session_id = parsed.get("session_id") if isinstance(parsed, dict) else None
-        with request_scope(req, session_id) as buffers:
-            if event not in DECISION_EVENTS and not claim_once(event_name, raw_text.encode(), async_=req.async_):
+        with (
+            request_scope(req, session_id) as buffers,
+            once_guard(event, event_name, raw_text.encode(), async_=req.async_) as dispatch_now,
+        ):
+            if not dispatch_now:
                 return self._from_buffers(buffers)
             if parse_error is not None:
                 print(f"Malformed stdin: {parse_error}", file=sys.stderr)

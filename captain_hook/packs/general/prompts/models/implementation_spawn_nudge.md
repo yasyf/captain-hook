@@ -1,14 +1,16 @@
-Decide whether this delegated subagent should run on opus-4.8 instead of fable-5.
+Decide whether this delegated subagent's work should route off fable-5 — to opus-4.8, or to gpt-5.6-sol via the codex:codex-wrapper agent.
 
 <delegated_spawn> holds the pending Agent/Task call: its model pin (or that it inherits
 the session model, fable), agent type, and prompt.
 
-The Models rubric: implementation delegates to opus-4.8 at xhigh — opus is ~2x cheaper
-than fable and nearly as capable. Fable's lanes are orchestration, design/architecture
-review, hard planning, all prose/writing, and implementation that is very sensitive or
-error-prone (auth, migrations, concurrency, data loss, crypto, subtle algorithms).
-Code/diff review, security review/audit, and bug diagnosis have their own gpt-5.6-sol
-lanes with separate nudges.
+The Models rubric: implementation delegates off fable — ambiguous or exploratory work,
+large multi-file refactors, and long agentic runs go to opus-4.8 at xhigh (~2x cheaper
+than fable and nearly as capable); well-scoped, clearly-bounded
+implementation (terminal-heavy included) goes to gpt-5.6-sol via the codex:codex-wrapper agent. Fable's lanes are
+orchestration, design/architecture review, hard planning, all prose/writing, and
+implementation that is very sensitive or error-prone (auth, migrations, concurrency,
+data loss, crypto, subtle algorithms). Code/diff review, security review/audit, and bug
+diagnosis have their own gpt-5.6-sol lanes with separate nudges.
 
 Set fire=true only when the prompt is clearly routine implementation — building, fixing,
 wiring, or refactoring code — with no fable-lane signal. A prompt that reviews, plans,
@@ -20,11 +22,15 @@ reasoning under 40 words.
 <examples>
 <example fire="true">
 Implement the pagination endpoint in api/users.py per the spec in the plan.
-Routine implementation with no sensitivity signal — the opus xhigh lane.
+Spec'd, clearly-bounded implementation — the gpt-5.6-sol lane; off fable either way.
 </example>
 <example fire="true">
 Add a --json flag to the export command and thread it through the formatter.
-Well-scoped feature wiring; the default implementation lane.
+Well-scoped feature wiring — the gpt-5.6-sol lane.
+</example>
+<example fire="true">
+Build out the new ingestion subsystem: parser, store, and CLI wiring, shape TBD.
+Exploratory multi-file implementation — the opus xhigh lane.
 </example>
 <example fire="false">
 Review the diff for correctness and concurrency issues.

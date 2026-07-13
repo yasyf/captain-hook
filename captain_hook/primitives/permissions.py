@@ -28,19 +28,30 @@ class SafetyVerdict(BaseModel):
 def approve(
     label: str,
     *,
+    events: Event = Event.PermissionRequest,
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     tests: InlineTests | None = None,
 ) -> None:
-    """Register a hook that answers matching permission dialogs with *allow*.
+    """Register a hook that answers matching tool permissions with *allow*.
 
-    Fires on every matching ``PermissionRequest`` — no fire cap — so a matching dialog is
-    always answered. Warning: an unconditioned ``approve()`` answers **every** dialog,
-    which is equivalent to a permanent ``--dangerously-skip-permissions``; always scope it
-    with ``only_if``/``skip_if``.
+    On ``PermissionRequest`` (the default) it answers a dialog Claude Code is already
+    showing. On ``PreToolUse`` it *pre-authorizes* the tool before Claude Code decides
+    whether to prompt, so the call is allowed on paths where the dialog itself never runs
+    hooks — most importantly an in-process teammate whose dialog is forwarded to the lead
+    and rendered as plain UI. A ``PreToolUse`` allow resolves upstream of the dialog, so it
+    also clears prompts the dialog stage would otherwise force (e.g. the multi-``cd``
+    "for clarity" ask). Register on ``Event.PreToolUse | Event.PermissionRequest`` to
+    pre-authorize while still answering any dialog that slips through.
+
+    Fires on every match — no fire cap. Warning: an unconditioned ``approve()`` answers
+    **every** call, equivalent to a permanent ``--dangerously-skip-permissions`` (and on
+    ``PreToolUse`` it fires on every tool, not just prompting ones); always scope it with
+    ``only_if``/``skip_if``.
 
     Args:
         label: Short name for the hook, used in fire logs and decision records.
+        events: Which event(s) to answer on; defaults to ``PermissionRequest``.
         only_if: Conditions that must all match for the approval to fire.
         skip_if: Conditions that veto the approval (the dialog shows normally).
         tests: Inline tests run by ``capt-hook test``.
@@ -48,6 +59,7 @@ def approve(
     Example:
         >>> approve(
         ...     "teammate bash under skip-permissions",
+        ...     events=Event.PreToolUse | Event.PermissionRequest,
         ...     only_if=[Tool("Bash"), FromSubagent(), SkipPermissions()],
         ...     skip_if=[ToolInput("command", r"\\brm\\b")],
         ... )
@@ -57,7 +69,7 @@ def approve(
         return evt.allow()
 
     handler.__name__ = handler.__qualname__ = hook_name("approve", label, label)
-    on(Event.PermissionRequest, only_if=only_if, skip_if=skip_if, tests=tests)(handler)
+    on(events, only_if=only_if, skip_if=skip_if, tests=tests)(handler)
 
 
 def deny(

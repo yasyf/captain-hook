@@ -32,7 +32,12 @@ def ensure_session(session_id: SessionId) -> Path:
     return sd
 
 
-def cleanup_stale() -> None:
+def cleanup_stale(exclude: SessionId | None = None) -> None:
+    """Reap session dirs untouched for STALE_AGE_SECONDS whose transcript is gone.
+
+    ``exclude`` skips the current session unconditionally — the caller's own dir is live
+    even if a clock skew or a transcript-discovery miss would otherwise mark it stale.
+    """
     from cc_transcript.discovery import find_transcript_sync
 
     sessions = state_root() / "hooks" / "sessions"
@@ -40,6 +45,8 @@ def cleanup_stale() -> None:
         return
     cutoff = time.time() - STALE_AGE_SECONDS
     for sd in sessions.iterdir():
+        if sd.name == exclude:
+            continue
         if sd.is_dir() and sd.stat().st_mtime < cutoff and find_transcript_sync(SessionId(sd.name)) is None:
             shutil.rmtree(sd, ignore_errors=True)
 

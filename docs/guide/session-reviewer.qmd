@@ -49,10 +49,7 @@ Both paths set up what the reviewer needs:
 - the captain-hook plugin registered in `.claude/settings.json` — its `hooks.json` fires the async `uvx --isolated capt-hook review run` on `SessionEnd`, and the brain loads its `scanning-sessions` and `authoring-hooks` skills directly;
 - a per-machine watching flag for this repo.
 
-`review enable` also writes the same `SessionEnd` entry into the committed
-`.claude/settings.json`, byte-identical to the plugin's, so Claude Code deduplicates the two
-and the hook runs once.
-
+The plugin owns the `SessionEnd` wiring; `review enable` writes no hook entries of its own.
 Watching is stored once per machine, so each clone you want reviewed runs `review enable` (or
 `init`) once.
 

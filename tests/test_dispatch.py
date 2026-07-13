@@ -16,6 +16,7 @@ from captain_hook.events import PermissionRequestEvent
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from tests.helpers import (
     make_ctx,
+    make_post_tool_event,
     make_pre_tool_event,
     make_stop_event,
     make_subagent_stop_event,
@@ -267,7 +268,29 @@ class TestExecuteHook:
             name="my_hook",
         )
         execute_hook(entry, make_pre_tool_event(), tmp_path)
-        assert (tmp_path / "my_hook").is_dir()
+        assert (tmp_path / entry.state_key).is_dir()
+
+    def test_same_name_different_source_no_shared_counter(self, tmp_path: Path) -> None:
+        # Two packs each register an @on handler named "check"; only source_file differs. A
+        # bare-name state key would let pack A's single fire suppress pack B's; the source-file
+        # namespacing gives each its own max_fires counter.
+        def make(source_file: str) -> RegisteredHook:
+            def check(evt: Any) -> HookResult:
+                return HookResult(action=Action.warn, message="fired")
+
+            return RegisteredHook(
+                spec=HookSpec(events=Event.PreToolUse, max_fires=1),
+                handler=check,
+                name="check",
+                source_file=source_file,
+            )
+
+        a, b = make("/packs/alpha/check.py"), make("/packs/beta/check.py")
+        assert a.state_key != b.state_key
+
+        assert execute_hook(a, make_pre_tool_event(), tmp_path) is not None  # a fires (1/1)
+        assert execute_hook(a, make_pre_tool_event(), tmp_path) is None  # a exhausted
+        assert execute_hook(b, make_pre_tool_event(), tmp_path) is not None  # b keeps its own slot
 
     def test_fire_count_only_on_non_none(self, tmp_path: Path) -> None:
         call_count = 0
@@ -370,7 +393,9 @@ class TestDispatch:
         assert hso["updatedInput"] == {"command": "ccx read x --full"}
         assert hso["additionalContext"] == "n"
 
-    def test_rewrite_short_circuits_no_side_effects(self) -> None:
+    def test_approval_beats_later_warn(self) -> None:
+        # Deny-wins scans every matching hook (no short-circuit on an approval), but an
+        # approval still wins over a warn: the later warn runs yet never surfaces.
         counter = 0
 
         @on(Event.PreToolUse)
@@ -386,9 +411,11 @@ class TestDispatch:
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["updatedInput"] == {"command": "ccx find **"}
-        assert counter == 0
+        assert "additionalContext" not in result["hookSpecificOutput"]
+        assert counter == 1
 
-    def test_block_takes_priority_over_warn(self) -> None:
+    def test_warn_then_block_denies_with_both(self) -> None:
+        # A warn that fired before a block rides along on the deny (block text first, then warns).
         register_hook(Event.PreToolUse, message="warning first")
 
         @on(Event.PreToolUse)
@@ -398,7 +425,7 @@ class TestDispatch:
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert result["hookSpecificOutput"]["permissionDecisionReason"] == "blocked"
+        assert result["hookSpecificOutput"]["permissionDecisionReason"] == "blocked\n\nwarning first"
 
     def test_warns_combined_with_newline(self) -> None:
         register_hook(Event.PreToolUse, message="warn1")
@@ -410,7 +437,10 @@ class TestDispatch:
         assert "warn2" in context
         assert "\n\n" in context
 
-    def test_allow_short_circuits(self) -> None:
+    def test_block_wins_over_earlier_allow(self) -> None:
+        # Deny-wins: a block beats an allow that ran before it (CC's deny > allow), so an
+        # earlier approval — e.g. the fixes pack's teammate-bash allow — can never suppress
+        # a later block such as the general pack's `jj undo` guard.
         call_count = 0
 
         @on(Event.PreToolUse)
@@ -421,14 +451,17 @@ class TestDispatch:
         def blocker(evt: Any) -> HookResult:
             nonlocal call_count
             call_count += 1
-            return HookResult(action=Action.block, message="should not reach")
+            return HookResult(action=Action.block, message="denied")
 
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
-        assert call_count == 0
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert result["hookSpecificOutput"]["permissionDecisionReason"] == "denied"
+        assert call_count == 1
 
-    def test_block_short_circuits_no_side_effects(self) -> None:
+    def test_block_then_warn_denies_with_both(self) -> None:
+        # Every hook still runs after a block, so a later warn's handler fires and its message
+        # rides along on the deny — block messages first, then warn messages.
         counter = 0
 
         @on(Event.PreToolUse)
@@ -444,7 +477,8 @@ class TestDispatch:
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert counter == 0
+        assert result["hookSpecificOutput"]["permissionDecisionReason"] == "stop here\n\ncounted"
+        assert counter == 1
 
     def test_handler_crash_returns_none(self) -> None:
 
@@ -456,14 +490,16 @@ class TestDispatch:
         assert result is None
 
     def test_async_flag_filters_hooks(self) -> None:
-        register_hook(Event.PreToolUse, message="sync warning", async_=False)
-        register_hook(Event.PreToolUse, message="async warning", async_=True)
+        # PostToolUse (not a decision event) so async_=True is a legal registration; the
+        # async-flag filtering under test is independent of the event.
+        register_hook(Event.PostToolUse, message="sync warning", async_=False)
+        register_hook(Event.PostToolUse, message="async warning", async_=True)
 
-        sync_result = dispatch(Event.PreToolUse, make_pre_tool_event(), async_=False)
+        sync_result = dispatch(Event.PostToolUse, make_post_tool_event(), async_=False)
         assert sync_result is not None
         assert sync_result["hookSpecificOutput"]["additionalContext"] == "sync warning"
 
-        async_result = dispatch(Event.PreToolUse, make_pre_tool_event(), async_=True)
+        async_result = dispatch(Event.PostToolUse, make_post_tool_event(), async_=True)
         assert async_result is not None
         assert async_result["hookSpecificOutput"]["additionalContext"] == "async warning"
 

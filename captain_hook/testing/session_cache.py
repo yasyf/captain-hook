@@ -31,9 +31,6 @@ class SessionCache:
     def path(self, uuid: str) -> Path:
         return self.dir / f"{uuid}.jsonl"
 
-    def has(self, uuid: str) -> bool:
-        return self.path(uuid).exists()
-
     def load(self, uuid: str) -> Path | None:
         if not self.UUID_RE.match(uuid):
             return None

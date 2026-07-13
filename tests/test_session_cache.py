@@ -9,20 +9,10 @@ from captain_hook.testing.session_cache import SessionCache
 UUID = "12345678-1234-1234-1234-123456789abc"
 
 
-class TestPathAndHas:
+class TestPath:
     def test_path_under_hook_fixtures_dir(self, tmp_path: Path) -> None:
         cache = SessionCache(tmp_path, claude_projects=tmp_path / "claude")
         assert cache.path(UUID) == tmp_path / ".claude" / "hook-fixtures" / f"{UUID}.jsonl"
-
-    def test_has_false_when_missing(self, tmp_path: Path) -> None:
-        cache = SessionCache(tmp_path, claude_projects=tmp_path / "claude")
-        assert cache.has(UUID) is False
-
-    def test_has_true_after_save(self, tmp_path: Path) -> None:
-        cache = SessionCache(tmp_path, claude_projects=tmp_path / "claude")
-        cache.dir.mkdir(parents=True, exist_ok=True)
-        cache.path(UUID).write_text("{}")
-        assert cache.has(UUID) is True
 
 
 class TestLoad:

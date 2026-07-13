@@ -50,7 +50,6 @@ def request_scope(req: Request, session_id: str | None) -> Iterator[RequestBuffe
     overrides = reqenv.RequestOverrides(
         env=req.env,
         cwd=req.cwd or os.getcwd(),
-        client_pid=req.client.pid,
         client_ppid=req.client.ppid,
         session_id=sid,
     )

@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from captain_hook import once
+from captain_hook.types import Event
 from captain_hook.util.paths import resolve_cache_dir
 from tests.helpers import run_cli
 
@@ -129,6 +130,33 @@ class TestClaimOnce:
         assert once.claim_once("Stop", payload, async_=False) is True
         assert once.claim_once("Stop", payload, async_=False) is True
         assert list(target.iterdir()) == []
+
+
+class TestOnceGuard:
+    def test_winner_dispatches_duplicate_collapses(self, sentinel_dir: Path) -> None:
+        payload = b'{"a": 1}'
+        with once.once_guard(Event.PostToolUse, "PostToolUse", payload, async_=False) as dispatch_now:
+            assert dispatch_now is True  # first sibling wins the claim and dispatches
+        with once.once_guard(Event.PostToolUse, "PostToolUse", payload, async_=False) as dispatch_now:
+            assert dispatch_now is False  # a still-fresh sibling collapses silently
+
+    def test_decision_event_never_collapses_and_claims_nothing(self, sentinel_dir: Path) -> None:
+        # Decision-capable events are exempt: swallowing a sibling could bypass a gate. They
+        # always dispatch and claim no sentinel, so repeats never collapse.
+        payload = b'{"stop_hook_active": false}'
+        for _ in range(2):
+            with once.once_guard(Event.Stop, "Stop", payload, async_=False) as dispatch_now:
+                assert dispatch_now is True
+        assert not sentinel_dir.exists()  # exempt path never touches the sentinel dir
+
+    def test_dispatch_failure_stays_fail_closed(self, sentinel_dir: Path) -> None:
+        # The shim is deliberately dumb: a claimer whose dispatch raises keeps its claim for the
+        # TTL window. Releasing could re-run a legacy sibling whose earlier hooks already landed
+        # their side effects, so the exception propagates while the sibling stays collapsed.
+        payload = b'{"a": 1}'
+        with pytest.raises(RuntimeError), once.once_guard(Event.PostToolUse, "PostToolUse", payload, async_=False):
+            raise RuntimeError("dispatch blew up")
+        assert once.claim_once("PostToolUse", payload, async_=False) is False  # still claimed for the TTL
 
 
 def _dispatch_count(counter: Path) -> int:

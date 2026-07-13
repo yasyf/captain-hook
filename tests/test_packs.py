@@ -1082,8 +1082,14 @@ def test_attached_round_trip_is_keyed_by_name(tmp_path: Path) -> None:
     manager.upsert_attached(tmp_path, first)
     assert manager.read_attached(tmp_path) == [first]
 
+    rebump = manager.AttachedPack(name="ccx", dir=str(tmp_path / "v1"), version="2.0.0")
+    manager.upsert_attached(tmp_path, rebump)  # same dir replaces in place (e.g. a version bump)
+    assert manager.read_attached(tmp_path) == [rebump]
+
+    # the same name from a *different* dir wins as the newer attach (a plugin update moves its dir),
+    # replacing the prior entry rather than erroring
     moved = manager.AttachedPack(name="ccx", dir=str(tmp_path / "v2"), version="2.0.0")
-    manager.upsert_attached(tmp_path, moved)  # same name replaces, never appends
+    manager.upsert_attached(tmp_path, moved)
     assert manager.read_attached(tmp_path) == [moved]
 
     other = manager.AttachedPack(name="other", dir=str(tmp_path / "o"), version="0.1.0")

@@ -405,7 +405,7 @@ class TestMaxFiresSessionStore:
         assert fire("a1") is None
         assert fire("") is None, "empty agent_id spends the main budget"
 
-        hook_dir = session_dir / _state.hooks[0].name
+        hook_dir = session_dir / _state.hooks[0].state_key
         for agent_slot in ("main", "a1", "a2"):
             state_file = hook_dir / agent_slot / "hook_state.json"
             state = HookState.model_validate_json(state_file.read_text())
@@ -416,7 +416,7 @@ class TestMaxFiresSessionStore:
         register_hook(Event.PreToolUse, message="counted", block=True, max_fires=5)
         dispatch_pre({"command": "echo hi"}, session_dir=session_dir)
 
-        hook_dir = session_dir / _state.hooks[0].name / "main"
+        hook_dir = session_dir / _state.hooks[0].state_key / "main"
         state_file = hook_dir / "hook_state.json"
         assert state_file.exists()
         state = HookState.model_validate_json(state_file.read_text())

@@ -5,9 +5,10 @@ The main loop runs on fable-5; this pending edit is fable implementing directly.
 <edit_target> names the file; <before_edit>/<after_edit> hold the text being replaced
 and written.
 
-The Models rubric: implementation belongs to a delegated opus-4.8 subagent at xhigh —
-~2x cheaper than fable and nearly as capable — or, for a well-scoped edit to existing
-code, to gpt-5.6-sol via the codex skill. Fable edits inline when the change is small or
+The Models rubric: implementation belongs off the main loop — a well-scoped,
+clearly-bounded change goes to gpt-5.6-sol via the codex skill; ambiguous, open-ended,
+or long-running work goes to a delegated opus-4.8 subagent at xhigh (~2x cheaper than
+fable and nearly as capable). Fable edits inline when the change is small or
 judgment-bound: a fix-up finishing work it just reasoned through, a subtle algorithm,
 or a sensitive surface (auth, migrations, concurrency, data loss, crypto).
 
@@ -21,11 +22,11 @@ nudge. Keep reasoning under 40 words.
 <examples>
 <example fire="true">
 after_edit: a new 180-line pagination module written to src/api/pagination.py.
-Substantial net-new feature code — a delegated opus xhigh subagent's lane.
+Substantial net-new code — delegate it: gpt-5.6-sol when the boundaries are crisp, opus xhigh otherwise.
 </example>
 <example fire="true">
 after_edit: rewiring three call sites and adding a formatter class in export.py.
-Routine multi-part refactor a subagent could own end to end.
+Routine bounded refactor — the gpt-5.6-sol lane.
 </example>
 <example fire="false">
 after_edit: a two-line fix to the retry counter the agent just diagnosed.

@@ -147,7 +147,9 @@ class TestPluginManifests:
         manifest = json.loads((SKILLS_DIR.parent / ".claude-plugin" / "plugin.json").read_text())
         assert manifest["name"] == "captain-hook"
         assert SKILL_NAME.fullmatch(manifest["name"])
-        assert "version" not in manifest
+        # Versioned since the plugin-pack dependency contract: consumers pin `>=<release>`, and the
+        # plugin cache is now version-keyed (a content change without a bump serves stale).
+        assert re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"])
         assert not {"skills", "mcpServers", "hooks"} & manifest.keys()
 
     def test_marketplace_manifest(self) -> None:

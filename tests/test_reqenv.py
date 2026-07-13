@@ -9,7 +9,7 @@ from captain_hook.util import reqenv
 
 
 def overrides(env: dict[str, str], *, cwd: str = "/work", session_id: str = "sess") -> reqenv.RequestOverrides:
-    return reqenv.RequestOverrides(env=env, cwd=cwd, client_pid=4242, client_ppid=17, session_id=session_id)
+    return reqenv.RequestOverrides(env=env, cwd=cwd, client_ppid=17, session_id=session_id)
 
 
 class TestWhitelist:

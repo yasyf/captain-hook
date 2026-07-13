@@ -63,6 +63,29 @@ _CONDITION_EVENTS: dict[type, Event] = {
 }
 
 
+class AsyncDecisionError(TypeError):
+    """A hook combined ``async_=True`` with a decision-capable event, whose verdict would be lost."""
+
+
+def reject_async_decision(events: Event, async_: bool) -> None:
+    """Reject an async hook on a decision-capable event: Claude Code never awaits its stdout.
+
+    A background (``async_=True``) hook's output is fire-and-forget, so an allow/deny/block
+    verdict it returns on a ``DECISION_EVENTS`` event is silently discarded — the gate never
+    runs. Only the synchronous registration can decide those events.
+    """
+    if not async_:
+        return
+    from captain_hook.cli import DECISION_EVENTS
+
+    if bad := set(events) & DECISION_EVENTS:
+        names = ", ".join(sorted(e.name for e in bad if e.name))
+        raise AsyncDecisionError(
+            f"async_=True is invalid on decision-capable event(s) {names}: Claude Code never awaits an "
+            f"async hook's stdout, so the gate's verdict is silently discarded. Register it synchronously."
+        )
+
+
 def validate_conditions(conditions: Sequence[TCondition], label: str, events: Event | None = None) -> None:
     for c in conditions:
         if not isinstance(c, (*VALID_CONDITION_TYPES, CustomCondition)):
@@ -190,6 +213,7 @@ def hook(
     async_: bool = False,
     skip_planning_agents: bool = True,
 ) -> None:
+    reject_async_decision(events, async_)
     validate_conditions(only_if, "only_if", events)
     validate_conditions(skip_if, "skip_if", events)
     _state.hooks.append(
@@ -223,6 +247,7 @@ def on(
     async_: bool = False,
     skip_planning_agents: bool = True,
 ) -> Callable[[HookHandler], HookHandler]:
+    reject_async_decision(events, async_)
     validate_conditions(only_if, "only_if", events)
     validate_conditions(skip_if, "skip_if", events)
     spec = HookSpec(

@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 class RequestOverrides:
     env: Mapping[str, str]
     cwd: str
-    client_pid: int
     client_ppid: int
     session_id: str
 

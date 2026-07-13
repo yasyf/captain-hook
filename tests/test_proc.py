@@ -23,9 +23,7 @@ def clear_walk_cache():
 
 
 def bound(client_ppid: int, session_id: str) -> reqenv.RequestOverrides:
-    return reqenv.RequestOverrides(
-        env={}, cwd="/w", client_pid=client_ppid + 1, client_ppid=client_ppid, session_id=session_id
-    )
+    return reqenv.RequestOverrides(env={}, cwd="/w", client_ppid=client_ppid, session_id=session_id)
 
 
 def install_chain(monkeypatch: pytest.MonkeyPatch, commands: list[str]) -> None:

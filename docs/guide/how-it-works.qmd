@@ -86,7 +86,7 @@ One captain-hook process handles every event the same way, in four stages.
 
 1. **Parse the event.** Claude Code writes a JSON payload to stdin. The CLI reads it and builds a typed event object, so a `PreToolUse` payload becomes a `PreToolUseEvent` with accessors like `tool_name` and `command`.
 2. **Match conditions.** Each registered hook is checked against the event. The event must be in the hook's event set, every `only_if` condition must pass, and no `skip_if` condition may pass. Hooks whose conditions all hold are matched. Conditions are covered in [the conditions reference](../reference/conditions.qmd).
-3. **Execute matching hooks.** Each matched hook produces a verdict. A handler hook runs its function; a declarative hook returns its configured message. The first hook to block or allow wins and short-circuits the rest; warnings from every hook accumulate.
+3. **Execute matching hooks.** Each matched hook produces a verdict. A handler hook runs its function; a declarative hook returns its configured message. Every matched hook runs, and a block from any of them beats an allow — deny wins, mirroring Claude Code's own `deny > ask > allow` precedence. Among approvals the first still wins, and warnings from every hook accumulate.
 4. **Format the verdict.** The winning verdict is rendered as the JSON envelope Claude Code expects and written to stdout. A block becomes a deny, a warning becomes injected context, and no verdict means an empty response that leaves the action untouched.
 
 ## Tracing a blocked `git stash`

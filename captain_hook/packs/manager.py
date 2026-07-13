@@ -576,15 +576,21 @@ def upsert_attached(session_dir: Path, pack: AttachedPack) -> None:
     """Record ``pack`` in the session's attach file, replacing any entry of the same name.
 
     The read-modify-write runs under a file lock so two ``pack attach`` processes (parallel
-    SessionStart hooks) serialize rather than clobber each other's entries.
+    SessionStart hooks) serialize rather than clobber each other's entries. When the same pack
+    name re-attaches from a *different* dir the newer attach wins: a plugin update bumps its
+    versioned cache dir, so the pack legitimately re-attaches from a new path on the next
+    SessionStart/resume — erroring there would drop the pack for every post-update session. The
+    rebind is logged at WARNING naming both dirs, since a genuine two-plugins-one-name clash
+    surfaces the same way and wants a look.
     """
     path = attached_path(session_dir)
     lock = path.with_name(path.name + ".lock")
     with FileLock(str(lock)):
         existing = read_attached(session_dir)
         if (prior := next((p for p in existing if p.name == pack.name), None)) and prior.dir != pack.dir:
-            logger.bind(pack=pack.name, previous=prior.dir, incoming=pack.dir).debug(
-                "attached pack name re-bound to a different dir; the newer attach wins"
+            logger.bind(pack=pack.name).warning(
+                f"attached pack {pack.name!r} re-bound to a different dir; the newer attach wins "
+                f"(was {prior.dir}, now {pack.dir})"
             )
         entries = [*(p for p in existing if p.name != pack.name), pack]
         atomic_write(
@@ -601,9 +607,13 @@ def resolve_attached(session_dir: Path) -> list[ResolvedPack]:
     re-attaches every session, so an entry whose dir has vanished or whose manifest is
     missing/malformed is skipped with a debug log rather than killing dispatch for every
     other hook in the event — the same fail-soft shape as ``resolve_enabled_packs``.
+
+    Packs are returned in stable name order (attach keeps one entry per name — a same-name
+    re-attach replaces in place) so gate arbitration across the attached tier does not depend
+    on attach timing.
     """
     resolved: list[ResolvedPack] = []
-    for pack in read_attached(session_dir):
+    for pack in sorted(read_attached(session_dir), key=lambda p: p.name):
         root = Path(pack.dir)
         if not root.is_dir():
             continue
