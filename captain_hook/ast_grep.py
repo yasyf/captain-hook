@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import functools
 import re
+from collections import Counter
 from collections.abc import Iterable, Iterator, Set
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -58,9 +59,15 @@ GO_DOC_SIBLINGS: frozenset[str] = frozenset(
         "var_declaration",
         "const_declaration",
         "package_clause",
+        "const_spec",
+        "var_spec",
+        "field_declaration",
+        "import_declaration",
+        "method_elem",
     }
 )
-"""Kinds a top-level Go run must immediately precede to read as godoc."""
+"""Kinds a Go run must immediately precede to read as godoc — top-level declarations plus grouped
+``const``/``var`` specs, struct fields, imports, and interface methods (which nest below the file)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +106,7 @@ class SyntaxNode:
 
 def lang_for_path(path: Path) -> str | None:
     """Infer an ast-grep language id from a file extension, or ``None`` when unsupported."""
-    return EXT_TO_LANG.get(path.suffix.removeprefix("."))
+    return EXT_TO_LANG.get(path.suffix.removeprefix(".").lower())
 
 
 def has_metavar(text: str) -> bool:
@@ -163,13 +170,15 @@ def introduced_comments(old: str, new: str, lang: str) -> Iterator[Match]:
 
 @dataclass(frozen=True, slots=True)
 class CommentRun:
-    """A maximal run of comments with no code between them — a block comment, or line comments
-    on adjacent lines — located by 1-based line span and classified doc vs inline."""
+    """A maximal run of adjacent line-leading comments (or one block comment), located by 1-based
+    line span and classified doc vs inline. A trailing comment (code before it on the line) is
+    always a singleton run and never groups with its neighbours."""
 
     line: int
     end_line: int
     texts: tuple[str, ...]
     doc: bool
+    leading: bool
 
     @property
     def lines(self) -> int:
@@ -177,12 +186,45 @@ class CommentRun:
 
     @property
     def chars(self) -> int:
-        return sum(len(t) for t in self.texts)
+        return sum(len(t.rstrip("\n")) for t in self.texts)
 
     @property
     def key(self) -> str:
         """Whitespace-normalized joined text: a run's identity across reflow and reindent."""
         return " ".join("\n".join(self.texts).split())
+
+
+@dataclass(frozen=True, slots=True)
+class CommentBlock:
+    """One or more comment runs a size check treats as a unit: adjacent line-leading runs and the
+    paragraphs they form across blank-only gaps. ``lines``/``chars`` sum the constituent runs (the
+    blank gaps don't count), and the block is doc only when every run is."""
+
+    runs: tuple[CommentRun, ...]
+
+    @property
+    def line(self) -> int:
+        return self.runs[0].line
+
+    @property
+    def end_line(self) -> int:
+        return self.runs[-1].end_line
+
+    @property
+    def lines(self) -> int:
+        return sum(run.lines for run in self.runs)
+
+    @property
+    def chars(self) -> int:
+        return sum(run.chars for run in self.runs)
+
+    @property
+    def doc(self) -> bool:
+        return all(run.doc for run in self.runs)
+
+    @property
+    def key(self) -> str:
+        return " ".join("\n".join(t for run in self.runs for t in run.texts).split())
 
     @property
     def too_long(self) -> bool:
@@ -196,20 +238,31 @@ def line_span(node: SyntaxNode) -> tuple[int, int]:
     return start, start + node.text.rstrip("\n").count("\n")
 
 
+def is_shebang(node: SyntaxNode) -> bool:
+    """Whether a comment node is a ``#!`` shebang on the first line — not prose, not run material."""
+    return node.raw.range().start.line == 0 and node.text.startswith("#!")
+
+
+def is_line_leading(node: SyntaxNode, src_lines: list[str]) -> bool:
+    """Whether nothing but whitespace precedes the comment on its line (vs a trailing ``code  # …``)."""
+    r = node.raw.range()
+    line = src_lines[r.start.line] if r.start.line < len(src_lines) else ""
+    return not line[: r.start.column].strip()
+
+
 def is_doc_run(nodes: list[SyntaxNode], lang: str) -> bool:
     """Whether a comment run is a documentation comment (godoc / rustdoc / JSDoc).
 
-    A run trips on a language doc prefix (rustdoc ``///``, JSDoc ``/**``), or — for Go, which has
-    no prefix — a top-level run whose next declaration begins on the immediately following line, so
-    a blank line before the declaration breaks the godoc bond.
+    Prefix languages (rustdoc ``///``, JSDoc ``/**``) require *every* node to carry a doc marker, so
+    a marker line followed by plain narrative doesn't poison the run doc. Go has no prefix: a run is
+    godoc when its next named sibling — a declaration, grouped spec, struct field, import, or
+    interface method — begins on the immediately following line (a blank line breaks the bond).
     """
-    if (prefixes := DOC_PREFIXES.get(lang)) and nodes[0].text.startswith(prefixes):
-        return True
+    if prefixes := DOC_PREFIXES.get(lang):
+        return all(n.text.startswith(prefixes) for n in nodes)
     if lang != "go":
         return False
     last = nodes[-1].raw
-    if (parent := last.parent()) is None or parent.kind() != "source_file":
-        return False
     if (nxt := last.next()) is None or nxt.kind() not in GO_DOC_SIBLINGS:
         return False
     return nxt.range().start.line == last.range().end.line + 1
@@ -219,44 +272,81 @@ def is_doc_run(nodes: list[SyntaxNode], lang: str) -> bool:
 def comment_runs(source: str, lang: str) -> list[CommentRun]:
     """Every comment run in ``source``, grouped by line adjacency and doc-classified.
 
-    Cached per ``(source, lang)`` because several conditions inspect the same image per event.
+    Only line-leading comments group; a trailing comment and a ``#!`` shebang each stand alone (the
+    shebang is dropped entirely). Cached per ``(source, lang)`` — several conditions parse the same
+    image per event.
     """
-    groups: list[list[SyntaxNode]] = []
+    src_lines = source.splitlines()
+    groups: list[tuple[list[SyntaxNode], bool]] = []
     for node in parse(source, lang).descendants():
-        if node.kind not in COMMENT_TYPES:
+        if node.kind not in COMMENT_TYPES or is_shebang(node):
             continue
-        if groups and line_span(node)[0] <= line_span(groups[-1][-1])[1] + 1:
-            groups[-1].append(node)
+        leading = is_line_leading(node, src_lines)
+        if leading and groups and groups[-1][1] and line_span(node)[0] <= line_span(groups[-1][0][-1])[1] + 1:
+            groups[-1][0].append(node)
         else:
-            groups.append([node])
+            groups.append(([node], leading))
     return [
         CommentRun(
-            line=line_span(group[0])[0],
-            end_line=line_span(group[-1])[1],
-            texts=tuple(n.text for n in group),
-            doc=is_doc_run(group, lang),
+            line=line_span(nodes[0])[0],
+            end_line=line_span(nodes[-1])[1],
+            texts=tuple(n.text for n in nodes),
+            doc=is_doc_run(nodes, lang),
+            leading=leading,
         )
-        for group in groups
+        for nodes, leading in groups
     ]
 
 
-def touched_comment_runs(old: str, new: str, lang: str) -> list[CommentRun]:
-    """Runs of ``new`` whose text is absent from ``old`` — the runs this edit created or grew.
+def comment_blocks(source: str, lang: str) -> list[CommentBlock]:
+    """Comment runs merged into blocks for the size check: consecutive line-leading runs separated
+    only by blank lines (no code between) form one block, so blank-line-split paragraphs count as a
+    whole. Trailing runs stay their own block."""
+    src_lines = source.splitlines()
+    blocks: list[list[CommentRun]] = []
+    for run in comment_runs(source, lang):
+        prev = blocks[-1][-1] if blocks else None
+        if (
+            run.leading
+            and prev is not None
+            and prev.leading
+            and all(not src_lines[i - 1].strip() for i in range(prev.end_line + 1, run.line))
+        ):
+            blocks[-1].append(run)
+        else:
+            blocks.append([run])
+    return [CommentBlock(runs=tuple(runs)) for runs in blocks]
 
-    Identity is the run's whitespace-normalized :attr:`~CommentRun.key`: an untouched run keys
-    identically and drops out, a whitespace-only reflow normalizes away, and a grown or edited run
-    keys differently and reports at its full post-edit size.
+
+def touched_comment_blocks(old: str, new: str, lang: str) -> list[CommentBlock]:
+    """Comment blocks of ``new`` this edit created or grew — a multiset diff over :attr:`CommentBlock.key`.
+
+    An old block exempts one identically-keyed new block (a genuine move stays exempt; a duplicated
+    copy past the first counts as touched). A too-long new block is exempt only when an old block
+    with the same key was *also* too long, so a legacy oversized run stays quiet while a reflow that
+    pushes a previously-fine run over the threshold does not.
     """
-    before = {run.key for run in comment_runs(old, lang)}
-    return [run for run in comment_runs(new, lang) if run.key not in before]
+    old_blocks = comment_blocks(old, lang)
+    remaining = Counter(block.key for block in old_blocks)
+    old_too_long = {block.key for block in old_blocks if block.too_long}
+    touched: list[CommentBlock] = []
+    for block in comment_blocks(new, lang):
+        if remaining[block.key] > 0:
+            remaining[block.key] -= 1
+            if block.too_long and block.key not in old_too_long:
+                touched.append(block)
+        else:
+            touched.append(block)
+    return touched
 
 
 def comment_line_numbers(source: str, lang: str, *, include_doc: bool) -> set[int]:
-    """The 1-based line numbers covered by comments in ``source``; ``include_doc`` keeps doc runs."""
+    """The 1-based line numbers occupied by line-leading comments in ``source`` (trailing comments
+    sit on code lines, so they don't count); ``include_doc`` keeps doc runs."""
     return {
         line
         for run in comment_runs(source, lang)
-        if include_doc or not run.doc
+        if run.leading and (include_doc or not run.doc)
         for line in range(run.line, run.end_line + 1)
     }
 

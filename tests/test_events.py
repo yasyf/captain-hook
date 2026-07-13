@@ -270,9 +270,16 @@ class TestPrePostImage:
 
     def test_post_image_edit_replaces_once_by_default(self, tmp_path: Path) -> None:
         path = tmp_path / "a.py"
+        path.write_text("a b a\n")
+        raw = {"tool_name": "Edit", "tool_input": {"file_path": str(path), "old_string": "b", "new_string": "c"}}
+        assert make_event(PreToolUseEvent, raw).post_image == "a c a\n"
+
+    def test_post_image_edit_ambiguous_old_is_none(self, tmp_path: Path) -> None:
+        # The real Edit tool rejects a non-unique old_string; we must not manufacture a first-hit deny.
+        path = tmp_path / "a.py"
         path.write_text("a a a\n")
         raw = {"tool_name": "Edit", "tool_input": {"file_path": str(path), "old_string": "a", "new_string": "b"}}
-        assert make_event(PreToolUseEvent, raw).post_image == "b a a\n"
+        assert make_event(PreToolUseEvent, raw).post_image is None
 
     def test_post_image_multi_edit_folds_spans_in_order(self, tmp_path: Path) -> None:
         path = tmp_path / "a.py"

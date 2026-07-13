@@ -11,7 +11,7 @@ from captain_hook.app import (
 from captain_hook.app import (
     on,
 )
-from captain_hook.dispatch import dispatch, execute_hook, format_output, run_declarative
+from captain_hook.dispatch import ADVISORY_SEPARATOR, dispatch, execute_hook, format_output, run_declarative
 from captain_hook.events import PermissionRequestEvent
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from tests.helpers import (
@@ -415,7 +415,8 @@ class TestDispatch:
         assert counter == 1
 
     def test_warn_then_block_denies_with_both(self) -> None:
-        # A warn that fired before a block rides along on the deny (block text first, then warns).
+        # A (declarative) warn that fired before a block rides along on the deny, behind an advisory
+        # separator — block text first, then the warns.
         register_hook(Event.PreToolUse, message="warning first")
 
         @on(Event.PreToolUse)
@@ -425,7 +426,7 @@ class TestDispatch:
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert result["hookSpecificOutput"]["permissionDecisionReason"] == "blocked\n\nwarning first"
+        assert result["hookSpecificOutput"]["permissionDecisionReason"] == f"blocked\n\n{ADVISORY_SEPARATOR}\n\nwarning first"
 
     def test_warns_combined_with_newline(self) -> None:
         register_hook(Event.PreToolUse, message="warn1")
@@ -459,14 +460,12 @@ class TestDispatch:
         assert result["hookSpecificOutput"]["permissionDecisionReason"] == "denied"
         assert call_count == 1
 
-    def test_block_then_warn_denies_with_both(self) -> None:
-        # Every hook still runs after a block, so a later warn's handler fires and its message
-        # rides along on the deny — block messages first, then warn messages.
+    def test_handler_backed_hook_skipped_after_block(self) -> None:
+        # Once a block fires, a later handler-backed hook (an LLM nudge, an async handler) is not
+        # invoked — it would burn API cost and max_fires on a doomed call.
         counter = 0
 
-        @on(Event.PreToolUse)
-        def blocker(evt: Any) -> HookResult:
-            return HookResult(action=Action.block, message="stop here")
+        register_hook(Event.PreToolUse, message="stop here", block=True)
 
         @on(Event.PreToolUse)
         def counter_handler(evt: Any) -> HookResult:
@@ -477,8 +476,18 @@ class TestDispatch:
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert result["hookSpecificOutput"]["permissionDecisionReason"] == "stop here\n\ncounted"
-        assert counter == 1
+        assert result["hookSpecificOutput"]["permissionDecisionReason"] == "stop here"
+        assert counter == 0
+
+    def test_declarative_warn_after_block_rides_along(self) -> None:
+        # A message-only declarative warn still runs after a block and lands on the deny.
+        register_hook(Event.PreToolUse, message="stop here", block=True)
+        register_hook(Event.PreToolUse, message="advisory note")
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert result["hookSpecificOutput"]["permissionDecisionReason"] == f"stop here\n\n{ADVISORY_SEPARATOR}\n\nadvisory note"
 
     def test_handler_crash_returns_none(self) -> None:
 
