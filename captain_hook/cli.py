@@ -26,7 +26,7 @@ from captain_hook.loader import (
     register_pr_announcements,
 )
 from captain_hook.log import setup_logging
-from captain_hook.once import claim_once
+from captain_hook.once import once_guard
 from captain_hook.packs import manager
 from captain_hook.review.cli import review
 from captain_hook.session import SessionStore, cleanup_stale, ensure_session
@@ -244,27 +244,28 @@ def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None
     if not raw_text.strip():
         return
 
-    # Collapse the N byte-identical siblings Claude Code spawns per event to one
-    # dispatch. Decision-capable events (DECISION_EVENTS) are exempt: swallowing a
-    # sibling there could bypass a gate, which outweighs a duplicated side effect.
-    if event not in DECISION_EVENTS and not claim_once(event_name, raw_text.encode(), async_=async_):
-        return
+    # Collapse the N byte-identical siblings Claude Code spawns per event (a legacy consumer's
+    # mirrored `run` entries) to one dispatch; decision events are exempt. once_guard releases
+    # the claim if dispatch below raises, so a crash never fail-closes a still-starting sibling.
+    with once_guard(event, event_name, raw_text.encode(), async_=async_) as dispatch_now:
+        if not dispatch_now:
+            return
 
-    try:
-        raw = json.loads(raw_text)
-    except (json.JSONDecodeError, ValueError) as e:
-        print(f"Malformed stdin: {e}", file=sys.stderr)
-        return
+        try:
+            raw = json.loads(raw_text)
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"Malformed stdin: {e}", file=sys.stderr)
+            return
 
-    session_id = raw.get("session_id")
-    setup_logging(session_id)
+        session_id = raw.get("session_id")
+        setup_logging(session_id)
 
-    # stdin is parsed first so the session dir is known before discovery: CliState.discover
-    # loads this session's attached packs (see attached_packs) on top of packs.toml.
-    session_dir = ensure_session(SessionId(session_id)) if session_id else None
-    state.discover(session_dir=session_dir)
-    if output := dispatch_event(state.root, event, raw, session_dir=session_dir, async_=async_):
-        print(json.dumps(output))
+        # stdin is parsed first so the session dir is known before discovery: CliState.discover
+        # loads this session's attached packs (see attached_packs) on top of packs.toml.
+        session_dir = ensure_session(SessionId(session_id)) if session_id else None
+        state.discover(session_dir=session_dir)
+        if output := dispatch_event(state.root, event, raw, session_dir=session_dir, async_=async_):
+            print(json.dumps(output))
 
 
 def init_project(root: Path, *, review: bool = True) -> None:
@@ -543,11 +544,11 @@ def pack_attach(directory: str) -> None:
     root = Path(directory).resolve()
     try:
         manifest = manager.PackManifest.load(manager.manifest_in(root))
+        manager.upsert_attached(
+            session_dir, manager.AttachedPack(name=manifest.name, dir=str(root), version=manifest.version)
+        )
     except manager.PackError as e:
         raise click.ClickException(str(e)) from e
-    manager.upsert_attached(
-        session_dir, manager.AttachedPack(name=manifest.name, dir=str(root), version=manifest.version)
-    )
     # Every session runs attach, so it is the natural reaping point for long-dead session dirs.
     # Fail-soft — a cleanup error must never break the attach — and never touch the live session.
     try:

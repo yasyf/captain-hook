@@ -268,7 +268,29 @@ class TestExecuteHook:
             name="my_hook",
         )
         execute_hook(entry, make_pre_tool_event(), tmp_path)
-        assert (tmp_path / "my_hook").is_dir()
+        assert (tmp_path / entry.state_key).is_dir()
+
+    def test_same_name_different_source_no_shared_counter(self, tmp_path: Path) -> None:
+        # Two packs each register an @on handler named "check"; only source_file differs. A
+        # bare-name state key would let pack A's single fire suppress pack B's; the source-file
+        # namespacing gives each its own max_fires counter.
+        def make(source_file: str) -> RegisteredHook:
+            def check(evt: Any) -> HookResult:
+                return HookResult(action=Action.warn, message="fired")
+
+            return RegisteredHook(
+                spec=HookSpec(events=Event.PreToolUse, max_fires=1),
+                handler=check,
+                name="check",
+                source_file=source_file,
+            )
+
+        a, b = make("/packs/alpha/check.py"), make("/packs/beta/check.py")
+        assert a.state_key != b.state_key
+
+        assert execute_hook(a, make_pre_tool_event(), tmp_path) is not None  # a fires (1/1)
+        assert execute_hook(a, make_pre_tool_event(), tmp_path) is None  # a exhausted
+        assert execute_hook(b, make_pre_tool_event(), tmp_path) is not None  # b keeps its own slot
 
     def test_fire_count_only_on_non_none(self, tmp_path: Path) -> None:
         call_count = 0

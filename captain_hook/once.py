@@ -1,21 +1,37 @@
-"""Duplicate-dispatch guard for ``capt-hook run <Event>``.
+"""LEGACY SHIM — duplicate-dispatch guard for ``capt-hook run <Event>``.
 
-Claude Code runs the byte-identical ``uvx --isolated capt-hook run <Event>`` command once per
-registering source (project settings plus each plugin), so one event fans out into
-N sibling processes reading identical stdin within milliseconds of each other. A
-side-effecting hook then fires N times. The guard lets the first sibling win an
-``O_EXCL`` sentinel keyed by the event, its sync/async variant, and its payload; the
-rest exit silently.
+Claude Code dedups hook commands per registering *source*, not globally (anthropics/
+claude-code#76297): a pack-shipping consumer plugin that mirrors the canonical
+``uvx --isolated capt-hook run <Event>`` command already wired by the captain-hook plugin
+registers a second, byte-identical source, so one event fans out into N sibling processes
+reading identical stdin within milliseconds. A side-effecting hook then fires N times. This
+guard lets the first sibling win an ``O_EXCL`` sentinel keyed by the event, its sync/async
+variant, and its payload; the rest exit silently. :func:`once_guard` wraps the claim and
+releases the sentinel if the winner's dispatch raises, so a failed claimer never fail-closes
+a still-starting healthy sibling.
 
-Best-effort only: no locking beyond the atomic create, no daemon. A TTL bounds how
-long a claim suppresses siblings (covering uvx's multi-second startup skew) and how
-long a crashed claim keeps blocking before the next process reclaims it.
+Best-effort only: no locking beyond the atomic create, no daemon. A TTL bounds how long a
+claim suppresses siblings (covering uvx's multi-second startup skew) and how long a crashed
+claim keeps blocking before the next process reclaims it.
 
 The sentinel dir lives under the user-stable cache root (:func:`resolve_cache_dir`,
 ``$XDG_CACHE_HOME/captain-hook/once``), not ``$TMPDIR``: siblings that spawn with divergent
 temp dirs — a resident daemon vs a cold CLI, an IDE vs a terminal vs launchd — must resolve
 the same sentinel to dedupe the same claim, and ``XDG_CACHE_HOME`` is both reqenv-routed and
 part of the daemon worker key, so every process of one worker agrees by construction.
+
+DELETION MANIFEST — the attach-only pack contract makes this shim the ONLY thing collapsing
+the duplicate dispatch a legacy consumer's mirrored ``run`` entries still cause. It exists
+solely until the upstream per-source dedup fix (anthropics/claude-code#76297) ships at the
+fleet-minimum Claude Code version AND legacy consumer plugin caches (which still mirror
+``run`` entries) have decayed. When both hold, delete in one change:
+  - this module (``captain_hook/once.py``) and ``tests/test_once.py``;
+  - both call sites — the ``with once_guard(...)`` blocks in ``cli.run_event`` and
+    ``daemon.server.CaptHookServer._run_event`` (which then dispatch unconditionally);
+  - the ``DECISION_EVENTS`` exemption wiring, which lives here in :func:`once_guard` (the
+    guard is the only reason dispatch knows about decision events; ``DECISION_EVENTS`` the
+    frozenset stays in ``cli`` for the async-decision registration guard);
+  - the ``CAPT_HOOK_ONCE_TTL`` env knob (:data:`TTL_ENV`) and its docs.
 """
 
 from __future__ import annotations
@@ -25,14 +41,45 @@ import hashlib
 import os
 import stat
 import time
+from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from captain_hook.util import reqenv
 from captain_hook.util.paths import resolve_cache_dir
 
+if TYPE_CHECKING:
+    from captain_hook.types import Event
+
 DIR_NAME = "once"
 DEFAULT_TTL = 10.0
 TTL_ENV = "CAPT_HOOK_ONCE_TTL"
+
+
+@contextlib.contextmanager
+def once_guard(event: Event, event_name: str, payload: bytes, *, async_: bool) -> Iterator[bool]:
+    """Yield whether this process should dispatch ``event``, collapsing byte-identical siblings.
+
+    Decision-capable events (``DECISION_EVENTS``) are exempt — swallowing a sibling there could
+    bypass a gate, which outweighs a duplicated side effect — so they always dispatch and claim
+    no sentinel. Every other event runs the once-guard: the first sibling to claim yields True
+    and dispatches, the rest yield False and must exit silently. If a winning claimer's dispatch
+    raises, the sentinel is released (see :func:`release_once`) so a slower healthy sibling can
+    re-claim rather than the event being lost for the whole TTL.
+    """
+    from captain_hook.cli import DECISION_EVENTS
+
+    if event in DECISION_EVENTS:
+        yield True
+        return
+    if not claim_once(event_name, payload, async_=async_):
+        yield False
+        return
+    try:
+        yield True
+    except BaseException:
+        release_once(event_name, payload, async_=async_)
+        raise
 
 
 def claim_once(event_name: str, payload: bytes, *, async_: bool) -> bool:
@@ -52,9 +99,30 @@ def claim_once(event_name: str, payload: bytes, *, async_: bool) -> bool:
     if sentinel_dir is None:
         return True
     _reap(sentinel_dir, ttl)
+    return _try_claim(sentinel_dir / _key(event_name, payload, async_=async_), ttl)
+
+
+def release_once(event_name: str, payload: bytes, *, async_: bool) -> None:
+    """Drop this process's own claim so a slower sibling can re-claim and dispatch.
+
+    Paired with a dispatch that raised after a winning :func:`claim_once`: without it the
+    sentinel would suppress every healthy sibling for the full TTL and the event's side effect
+    would be lost. Best-effort — a missing sentinel (guard disabled, unsafe temp dir, already
+    reaped) is a no-op.
+    """
+    ttl = _ttl()
+    if ttl <= 0:
+        return
+    sentinel_dir = _sentinel_dir()
+    if sentinel_dir is None:
+        return
+    with contextlib.suppress(OSError):
+        (sentinel_dir / _key(event_name, payload, async_=async_)).unlink()
+
+
+def _key(event_name: str, payload: bytes, *, async_: bool) -> str:
     variant = b"async" if async_ else b"sync"
-    key = hashlib.sha256(event_name.encode() + b"\0" + variant + b"\0" + payload).hexdigest()
-    return _try_claim(sentinel_dir / key, ttl)
+    return hashlib.sha256(event_name.encode() + b"\0" + variant + b"\0" + payload).hexdigest()
 
 
 def _ttl() -> float:

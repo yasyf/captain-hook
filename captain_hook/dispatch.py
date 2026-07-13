@@ -59,7 +59,7 @@ def execute_hook(
     (``SystemExit``/``KeyboardInterrupt``), which releases and then re-propagates so the abort is
     not silently swallowed. Uncapped hooks (``max_fires is None``) skip the lock entirely.
     """
-    hook_session_dir = (session_dir / entry.name / (evt.agent_id or "main")) if session_dir else None
+    hook_session_dir = (session_dir / entry.state_key / (evt.agent_id or "main")) if session_dir else None
     if hook_session_dir:
         hook_session_dir.mkdir(parents=True, exist_ok=True)
     store = SessionStore(hook_session_dir)

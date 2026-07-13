@@ -576,15 +576,20 @@ def upsert_attached(session_dir: Path, pack: AttachedPack) -> None:
     """Record ``pack`` in the session's attach file, replacing any entry of the same name.
 
     The read-modify-write runs under a file lock so two ``pack attach`` processes (parallel
-    SessionStart hooks) serialize rather than clobber each other's entries.
+    SessionStart hooks) serialize rather than clobber each other's entries. Re-attaching the
+    same dir is idempotent, but two *different* dirs claiming one pack name is a hard conflict:
+    the name keys gate arbitration and hook-state namespacing, so a silent last-write-wins
+    would leave dispatch depending on attach order. It raises instead — two plugins ship a
+    pack under the same manifest name and one must be renamed.
     """
     path = attached_path(session_dir)
     lock = path.with_name(path.name + ".lock")
     with FileLock(str(lock)):
         existing = read_attached(session_dir)
         if (prior := next((p for p in existing if p.name == pack.name), None)) and prior.dir != pack.dir:
-            logger.bind(pack=pack.name, previous=prior.dir, incoming=pack.dir).debug(
-                "attached pack name re-bound to a different dir; the newer attach wins"
+            raise PackError(
+                f"pack name {pack.name!r} is claimed by two dirs in one session: {prior.dir} and {pack.dir}. "
+                f"Two plugins ship a pack with that manifest name; rename one."
             )
         entries = [*(p for p in existing if p.name != pack.name), pack]
         atomic_write(
@@ -601,9 +606,12 @@ def resolve_attached(session_dir: Path) -> list[ResolvedPack]:
     re-attaches every session, so an entry whose dir has vanished or whose manifest is
     missing/malformed is skipped with a debug log rather than killing dispatch for every
     other hook in the event — the same fail-soft shape as ``resolve_enabled_packs``.
+
+    Packs are returned in stable name order (names are unique — a collision raises at attach)
+    so gate arbitration across the attached tier does not depend on attach timing.
     """
     resolved: list[ResolvedPack] = []
-    for pack in read_attached(session_dir):
+    for pack in sorted(read_attached(session_dir), key=lambda p: p.name):
         root = Path(pack.dir)
         if not root.is_dir():
             continue

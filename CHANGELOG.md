@@ -27,6 +27,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verdict returned by an async gate on PreToolUse, Stop, SubagentStop, or
   PermissionRequest was silently discarded. The registration path rejects the
   combination with a clear error instead of shipping a gate that never fires.
+- **Two plugins attaching a pack under the same name is now a hard error.** A
+  same-name-but-different-dir `pack attach` used to silently replace the prior
+  entry (last write wins); since the pack name keys gate arbitration and
+  hook-state namespacing, that left dispatch depending on attach order. The
+  attach now fails loudly, naming both dirs, so the conflicting plugin is
+  renamed instead. Attached packs also resolve in stable name order, so gate
+  arbitration across the attached tier no longer depends on attach timing.
+
+### Fixed
+- **Two packs' same-named hooks no longer share a `max_fires` counter.** Per-hook
+  session state (the fire-count ledger backing `max_fires`) keyed on the bare
+  function name, so a plain `@on` handler named `check` in one pack and another
+  in a second pack collided — one pack's single fire could suppress the other's.
+  The state key is now namespaced by the hook's defining file, which is unique
+  per pack.
+- **A crashed once-guard claimer no longer fail-closes its healthy sibling.** The
+  duplicate-dispatch guard let the first of Claude Code's byte-identical sibling
+  processes win a sentinel and the rest exit; if that winner's dispatch then
+  raised, the sentinel kept suppressing every sibling for the full TTL and the
+  event was lost. The claim is now released when dispatch raises, so a slower
+  healthy sibling re-claims and dispatches.
 
 ## [9.7.0] - 2026-07-12
 

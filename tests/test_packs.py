@@ -1082,13 +1082,18 @@ def test_attached_round_trip_is_keyed_by_name(tmp_path: Path) -> None:
     manager.upsert_attached(tmp_path, first)
     assert manager.read_attached(tmp_path) == [first]
 
-    moved = manager.AttachedPack(name="ccx", dir=str(tmp_path / "v2"), version="2.0.0")
-    manager.upsert_attached(tmp_path, moved)  # same name replaces, never appends
-    assert manager.read_attached(tmp_path) == [moved]
+    rebump = manager.AttachedPack(name="ccx", dir=str(tmp_path / "v1"), version="2.0.0")
+    manager.upsert_attached(tmp_path, rebump)  # same dir replaces in place (e.g. a version bump)
+    assert manager.read_attached(tmp_path) == [rebump]
+
+    # the same name from a *different* dir is a hard conflict, not a silent last-write-wins
+    with pytest.raises(manager.PackError):
+        manager.upsert_attached(tmp_path, manager.AttachedPack(name="ccx", dir=str(tmp_path / "v2"), version="2.0.0"))
+    assert manager.read_attached(tmp_path) == [rebump]
 
     other = manager.AttachedPack(name="other", dir=str(tmp_path / "o"), version="0.1.0")
     manager.upsert_attached(tmp_path, other)  # a new name appends
-    assert manager.read_attached(tmp_path) == [moved, other]
+    assert manager.read_attached(tmp_path) == [rebump, other]
 
 
 def test_resolve_attached_loads_manifest(tmp_path: Path) -> None:

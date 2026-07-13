@@ -4,6 +4,7 @@ import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Flag, StrEnum, auto
+from hashlib import sha256
 from textwrap import dedent
 from typing import (
     TYPE_CHECKING,
@@ -779,3 +780,15 @@ class RegisteredHook:
     handler: Callable[[BaseHookEvent], HookResult | None] | None = None
     name: str = ""
     source_file: str = ""
+
+    @property
+    def state_key(self) -> str:
+        """Filesystem-safe per-hook key for session state, namespaced by defining file.
+
+        ``name`` alone collides when two packs each register a plain ``@on`` handler of the
+        same function name (``on`` keys on the bare ``fn.__name__``): both would share one
+        ``max_fires`` counter dir. A hook is defined once in one file, so the source-file
+        digest disambiguates packs (a pack's hooks live under its own dir) without touching
+        the human-readable ``name`` used for logging and the decision ledger.
+        """
+        return f"{self.name}.{sha256(self.source_file.encode()).hexdigest()[:12]}"
