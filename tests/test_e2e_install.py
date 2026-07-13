@@ -643,9 +643,9 @@ class TestSkillsInstall:
     def test_init_registers_plugin(self, project_dir: Path) -> None:
         settings = json.loads((project_dir / ".claude" / "settings.json").read_text())
         assert settings["enabledPlugins"] == {"captain-hook@captain-hook": True}
-        assert settings["extraKnownMarketplaces"]["captain-hook"]["source"] == {
-            "source": "github",
-            "repo": "yasyf/captain-hook",
+        assert settings["extraKnownMarketplaces"]["captain-hook"] == {
+            "source": {"source": "github", "repo": "yasyf/captain-hook"},
+            "autoUpdate": True,
         }
         assert not (project_dir / ".claude" / "skills").exists()
 

@@ -117,9 +117,9 @@ class TestRegisterMarketplace:
     def test_creates_settings(self, tmp_path: Path) -> None:
         register_marketplace(tmp_path)
         settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
-        assert settings["extraKnownMarketplaces"]["captain-hook"]["source"] == {
-            "source": "github",
-            "repo": "yasyf/captain-hook",
+        assert settings["extraKnownMarketplaces"]["captain-hook"] == {
+            "source": {"source": "github", "repo": "yasyf/captain-hook"},
+            "autoUpdate": True,
         }
         assert settings["enabledPlugins"] == {"captain-hook@captain-hook": True}
 
