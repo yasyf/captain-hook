@@ -23,61 +23,113 @@ teammates run `pack update` to hydrate it. The full workflow is in
 [Use packs](packs.qmd). Nothing else on this page applies to this tier — the
 plugin does no per-session work.
 
-## Session-attached: plugin `hooks.json`
+## Session-attached: four artifacts
 
 This is the cc-context model. The plugin ships the pack inside itself and
-registers it once per session, so it applies to whatever project the plugin is
-enabled in and leaves no trace in the repo. The plugin's `hooks/hooks.json`
-wires two kinds of command:
+attaches it once per session, so it applies to whatever project the plugin is
+enabled in and leaves no trace in the repo. The captain-hook plugin is the sole
+dispatcher — its own `hooks.json` registers every event — so your plugin never
+wires a `capt-hook run` command. It ships exactly four artifacts.
+
+**1. The pack manifest, `capt-hook.toml`.** Unchanged from any other pack;
+[Author a pack](packs.qmd#author-a-pack) covers it.
+
+**2. One attach hook in the plugin's `hooks/hooks.json`.**
 
 ```json
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "uvx --isolated capt-hook pack attach ${CLAUDE_PLUGIN_ROOT}/hooks" }] }
-    ],
-    "PreToolUse": [
-      { "hooks": [{ "type": "command", "command": "uvx --isolated capt-hook run PreToolUse" }] }
-    ],
-    "Stop": [
-      { "hooks": [{ "type": "command", "command": "uvx --isolated capt-hook run Stop" }] }
+      {
+        "hooks": [
+          { "type": "command", "command": "uvx --isolated capt-hook pack attach \"${CLAUDE_PLUGIN_ROOT}\"" }
+        ]
+      }
     ]
   }
 }
 ```
 
-The `SessionStart` command runs once at session start. `pack attach` reads the
-SessionStart JSON from stdin, records the pack — its manifest directory and
-version — under that session, and writes nothing to stdout, since SessionStart
-stdout is injected into the model context. The argument is the pack root: the
-directory holding `capt-hook.toml` (here a `hooks/` subtree with `hooks = "."`).
-A missing or invalid manifest exits non-zero with a stderr message, so a broken
-plugin fails loud at author time rather than silently loading nothing.
+The argument is the pack root: the directory holding `capt-hook.toml`. Pass
+`"${CLAUDE_PLUGIN_ROOT}/hooks"` when the manifest lives in a `hooks/` subtree.
+This is the plugin's only capt-hook entry; hooks that have nothing to do with
+capt-hook coexist alongside it freely.
 
-Every other command is the canonical `uvx --isolated capt-hook run <Event>`,
-wired for each event the pack subscribes.
+`pack attach` reads the SessionStart JSON from stdin, records the pack — its
+manifest directory and version — under that session, and writes nothing to
+stdout, since SessionStart stdout is injected into the model context. A missing
+or invalid manifest exits non-zero with a stderr message, so a broken plugin
+fails loud at author time rather than silently loading nothing. The attach
+covers the whole session: a subagent's hook events carry the same session id,
+so attached packs load for sidechains too.
 
-## Keep the run command byte-identical
+**3. The dependency in `plugin.json`.**
 
-Claude Code deduplicates hook commands by exact string match: two hooks that wire
-the same command string for one event run that command once. A plugin that wired
-`uvx capt-hook --hooks ${CLAUDE_PLUGIN_ROOT}/hooks run PreToolUse` produces a
-different string from the captain-hook plugin's own
-`uvx --isolated capt-hook run PreToolUse` — as does the pre-9.7.0 bare
-`uvx capt-hook run PreToolUse` — so Claude Code runs both: two `uvx` processes
-per event, and the project's `packs.toml` packs resolved and dispatched twice.
+```json
+{
+  "dependencies": [
+    { "name": "captain-hook", "marketplace": "captain-hook", "version": ">=9.8.0" }
+  ]
+}
+```
 
-Wiring your plugin to the identical `uvx --isolated capt-hook run PreToolUse`
-collapses the two plugins into one process per event. The session-attached pack
-still loads inside that one process, because `pack attach` already recorded it
-for the session and `run` picks it up during discovery. So keep the run command
-exactly `uvx --isolated capt-hook run <Event>` (add `--async` only where
-captain-hook's own `hooks.json` does), and put per-plugin configuration in the
-attached pack's manifest and hooks, never in the run command's flags.
+The object form is required: `name`, `marketplace`, and a version floor. A
+bare `"captain-hook"` string, or an object missing the floor, fails
+`pack lint`. Floor at the oldest release your pack works with; `>=9.8.0` is
+the first that ships the attach-only contract.
 
-Attach records the pack once, keyed by the session id. A subagent's hook events
-carry that same session id, so an attached pack loads for subagents too — the
-attach at SessionStart covers the whole session, sidechains included.
+**4. The allowlist in your marketplace's `marketplace.json`.**
+
+```json
+{
+  "allowCrossMarketplaceDependenciesOn": ["captain-hook"]
+}
+```
+
+::: {.callout-warning title="The allowlist is load-bearing"}
+Without this line, Claude Code skips a `plugin.json`-declared cross-marketplace
+dependency at install — no error, no captain-hook. Verified on Claude Code
+2.1.207. The pack then attaches into a session where no dispatcher runs, and
+every hook stays dark.
+:::
+
+## Tell users how to install
+
+Installing and enabling your plugin auto-installs and enables captain-hook
+through the dependency, but only when the captain-hook marketplace is already
+added — Claude Code does not bootstrap an unknown marketplace. Your install
+instructions are two lines:
+
+```bash
+claude plugin marketplace add yasyf/captain-hook
+claude plugin install your-plugin@your-marketplace
+```
+
+The same two lines are the upgrade path. `claude plugin update` does not
+resolve a dependency a new release adds — it succeeds and silently skips it —
+so users upgrading from a pre-dependency release of your plugin re-run
+`claude plugin install` after adding the marketplace.
+
+## Lint the contract
+
+`pack lint` vets all four artifacts plus the pack itself and exits non-zero on
+any failure, so CI needs one line:
+
+```bash
+uvx capt-hook pack lint .
+```
+
+Pass the plugin root — the same directory your attach line passes. The checks:
+
+| Check | Passes when |
+|---|---|
+| `manifest` | `capt-hook.toml` resolves under the root you passed. |
+| `hooks.json` | Exactly one capt-hook entry: the canonical SessionStart attach, and zero `capt-hook run` entries. Commands are token-parsed, not substring-matched, so a reworded prefix or a `run` buried mid-command still counts. |
+| `plugin.json` | The captain-hook dependency is an object with `marketplace` and a version floor. |
+| `marketplace.json` | `allowCrossMarketplaceDependenciesOn` includes `captain-hook`. A plugin with no `marketplace.json` upward gets a warning, not a failure. |
+| `load` | The pack loads at least one hook with no load errors. Zero hooks fails — a pack that loads nothing ships no working guard. |
+| `session-start` | No hook subscribes `SessionStart`. The attach and the dispatcher's own SessionStart run are parallel sibling hooks with no ordering guarantee, so a pack's own SessionStart hooks are unreliable by construction. |
+| `async-decision` | No hook registers `async_=True` on a decision-capable event — a background hook's verdict is discarded. Registration also raises on this at runtime. |
 
 ## Precedence
 
@@ -94,11 +146,30 @@ disabled = true
 
 The disabled entry pins nothing and resolves to nothing; it only suppresses the
 pack, whether that pack would have come from a builtin, a `packs.toml` source, or
-an attach. An attached pack no project pins loads normally, and its hooks follow
-the same first-decision-wins dispatch as every other pack.
+an attach.
+
+Within the attached tier, packs resolve in stable name order, so gate
+arbitration does not depend on attach timing. A same-name re-attach from a
+different directory replaces the prior entry — the newer attach wins, because a
+plugin update relocates its versioned cache directory and the pack legitimately
+re-attaches from the new path — and the rebind is logged at WARNING naming both
+directories, since a genuine two-plugins-one-name clash surfaces the same way
+and wants a look. An attached pack no project pins loads normally, and its
+hooks join dispatch like every other pack's.
+
+::: {.callout-note title="Legacy consumers with mirrored `run` entries"}
+Plugins built before this contract mirrored the dispatcher's
+`uvx --isolated capt-hook run <Event>` commands. Claude Code dedupes hook
+commands per registering source, not globally, so those entries fan each event
+out into sibling processes. A best-effort once-guard collapses the duplicates —
+the first sibling wins, fail-closed, decision events exempt — until legacy
+plugin caches decay through version bumps. It is a shim with a deletion
+manifest, not a coordination mechanism to build on: ship attach-only.
+[Troubleshooting](troubleshooting.qmd#hooks-run-a-stale-capt-hook) covers the
+symptoms.
+:::
 
 ## See also
 
 - [Use packs](packs.qmd) covers the repo-scoped tier end to end.
-- [How hooks run](how-it-works.qmd) explains discovery, dispatch, and the
-  first-decision-wins ordering.
+- [How hooks run](how-it-works.qmd) explains discovery and dispatch ordering.
