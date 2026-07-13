@@ -96,6 +96,23 @@ def write_meta(run: Path, key: str, root: Path, pid: int) -> None:
     )
 
 
+def write_meta_with_start(run: Path, key: str, root: Path, pid: int, proc_start: str | None) -> None:
+    (run / f"{key}.json").write_text(
+        json.dumps(
+            {
+                "pid": pid,
+                "root": str(root),
+                "build": "stale-build",
+                "version": "0.0.0",
+                "protocol": PROTOCOL,
+                "socket": str(run / f"{key}.sock"),
+                "started_at": time.time() - 5,
+                "proc_start": proc_start,
+            }
+        )
+    )
+
+
 @pytest.fixture
 def live_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Path, Path, str, subprocess.Popen]]:
     run = short_run()
@@ -179,6 +196,40 @@ class TestStop:
             assert result.exit_code == 0, result.output
             assert "cleaned" in result.output
             assert list(run.glob("*.json")) == []
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+    def test_cleans_a_recycled_pid_whose_start_time_mismatches(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # FINDER-8: a meta at a LIVE pid whose recorded start-time no longer matches was recycled to
+        # an unrelated process; its files are stale and cleanable, never reported "unreachable".
+        run = short_run()
+        monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(run))
+        try:
+            write_meta_with_start(run, "aabbccddeeff0011", tmp_path / "proj", pid=os.getpid(), proc_start="stale")
+            result = CliRunner().invoke(cli, ["daemon", "stop", "--all"])
+            assert result.exit_code == 0, result.output
+            assert "cleaned" in result.output
+            assert list(run.glob("*.json")) == []
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+    def test_leaves_a_live_matching_worker_unreachable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # FINDER-8: a live pid whose recorded start-time still matches is a genuinely-running daemon
+        # (just unresponsive on its socket) — reported "unreachable", its files kept, not cleaned.
+        from captain_hook.util.proc import process_start_time
+
+        run = short_run()
+        monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(run))
+        try:
+            write_meta_with_start(
+                run, "aabbccddeeff0022", tmp_path / "proj", pid=os.getpid(), proc_start=process_start_time(os.getpid())
+            )
+            result = CliRunner().invoke(cli, ["daemon", "stop", "--all"])
+            assert result.exit_code == 0, result.output
+            assert "unreachable" in result.output
+            assert list(run.glob("*.json")) != []
         finally:
             shutil.rmtree(run, ignore_errors=True)
 

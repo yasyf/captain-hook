@@ -15,6 +15,26 @@ MAX_WALK = 20
 _SKIP_CACHE: LRUDict[tuple[str, int], bool] = LRUDict(512)
 
 
+def process_start_time(pid: int) -> str | None:
+    """The kernel start-time of ``pid`` (``ps -o lstart``), stable across reads for one process.
+
+    Recorded in the daemon meta at startup and re-derived by the ops surface so a recycled pid — a
+    crashed daemon's pid reassigned to an unrelated live process — is detected as stale, never
+    signalled. Returns ``None`` when the pid is gone or ``ps`` is unavailable.
+    """
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.strip() or None
+
+
 def parent_entry(pid: int) -> tuple[int, str] | None:
     try:
         out = subprocess.run(

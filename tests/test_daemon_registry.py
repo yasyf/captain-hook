@@ -197,6 +197,42 @@ def test_snapshot_past_horizon_is_a_miss(project: CliState) -> None:
 # --- concurrency: one build under contention -------------------------------------------
 
 
+def test_build_never_serves_a_torn_discovery(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
+    # R4: a discovery that reads a hook file mid-rewrite (empty) must be discarded, not cached under
+    # the now-complete file's fingerprint. The build retries and serves the settled discovery.
+    reg = Registry(project)
+    hook_file = Path(project.hooks) / "h.py"
+    original = CliState.discover
+    calls: list[int] = []
+
+    def racing_discover(self: CliState, session_dir: Path | None = None) -> list[registry.manager.ResolvedPack]:
+        calls.append(1)
+        if len(calls) == 1:
+            hook_file.write_text("")  # torn: discovery reads an empty, truncated hook file
+            resolved = original(self, session_dir=session_dir)  # discovers nothing
+            hook_file.write_text(HOOK)  # the rewrite completes right after the torn read
+            return resolved
+        return original(self, session_dir=session_dir)
+
+    monkeypatch.setattr(CliState, "discover", racing_discover)
+    snapshot = reg._build(None)
+    assert len(calls) == 2, "the build did not retry after the tree moved during discovery"
+    assert snapshot.state.hooks, "the served snapshot is the torn/empty intermediate, not the settled tree"
+
+
+def test_build_is_bounded_when_the_tree_keeps_moving(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
+    # R4: an endlessly-churning tree must not spin forever — retries cap at BUILD_RETRIES.
+    digests = iter(str(n) for n in range(1000))
+    monkeypatch.setattr(Fingerprint, "stable_digest", classmethod(lambda cls, cli, sd: next(digests)))
+    reg = Registry(project)
+    calls: list[int] = []
+    real_discover = reg._discover_once
+    monkeypatch.setattr(reg, "_discover_once", lambda sd: (calls.append(1), real_discover(sd))[1])
+    result = reg._build(None)
+    assert len(calls) == registry.BUILD_RETRIES, "the build was not bounded"
+    assert result.state is not None
+
+
 def test_concurrent_get_builds_once(project: CliState) -> None:
     reg = Registry(project)
     builds = 0

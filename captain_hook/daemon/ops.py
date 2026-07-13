@@ -18,6 +18,7 @@ from pathlib import Path
 from capt_hook_client.key import PROTOCOL, log_path, meta_path, run_dir
 from captain_hook.daemon.logsink import daemon_log_path
 from captain_hook.util.paths import resolve_project_dir
+from captain_hook.util.proc import process_start_time
 
 PROBE_TIMEOUT = 2.0
 SHUTDOWN_POLL = 0.02
@@ -33,6 +34,7 @@ class Worker:
     version: str
     socket: str
     started_at: float
+    proc_start: str | None = None
 
     @classmethod
     def from_meta(cls, path: Path) -> Worker | None:
@@ -57,6 +59,7 @@ class Worker:
                     version=version,
                     socket=sock,
                     started_at=float(started),
+                    proc_start=data.get("proc_start"),
                 )
             case _:
                 return None
@@ -199,10 +202,20 @@ def _stop_one(worker: Worker) -> Outcome:
         _await_shutdown(worker.socket)
         _cleanup(worker)
         return Outcome(worker, "stopped")
-    if pid_alive(worker.pid):
+    if worker_process_live(worker):
         return Outcome(worker, "unreachable")
     _cleanup(worker)
     return Outcome(worker, "cleaned")
+
+
+def worker_process_live(worker: Worker) -> bool:
+    # A pid alive but with a start-time that no longer matches the meta was recycled to an unrelated
+    # process; the daemon is gone, so its files are stale and cleanable — never signal a recycled pid.
+    if not pid_alive(worker.pid):
+        return False
+    if worker.proc_start is None:
+        return True
+    return process_start_time(worker.pid) == worker.proc_start
 
 
 def _await_shutdown(sock_path: str) -> None:

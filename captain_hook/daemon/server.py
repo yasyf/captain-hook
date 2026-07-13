@@ -411,6 +411,8 @@ class Server:
             os.close(fd)
 
     def _write_meta(self) -> None:
+        from captain_hook.util.proc import process_start_time
+
         payload = json.dumps(
             {
                 "pid": os.getpid(),
@@ -420,6 +422,7 @@ class Server:
                 "protocol": PROTOCOL,
                 "socket": str(socket_path(self.key)),
                 "started_at": self.started_at,
+                "proc_start": process_start_time(os.getpid()),
             }
         ).encode()
         fd = os.open(str(meta_path(self.key)), os.O_CREAT | os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW, 0o600)

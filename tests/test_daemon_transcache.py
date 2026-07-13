@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -65,6 +66,23 @@ class TestEventsFor:
         target = write(tmp_path / "t.jsonl", a)
         first = transcache._events_for(target)
         write(target, b)
+        second = transcache._events_for(target)
+        assert second == parse_events_from_bytes(b)
+        assert second != first
+
+    def test_mtime_preserved_rewrite_reparses(self, tmp_path: Path) -> None:
+        # FINDER-4: a same-size, mtime-preserved in-place rewrite still moves ctime, so the cache must
+        # reparse rather than return the stale prior events.
+        a = b'{"type":"queue-operation","operation":"enqueue","sessionId":"s","content":"aaa"}\n'
+        b = b'{"type":"queue-operation","operation":"enqueue","sessionId":"s","content":"bbb"}\n'
+        assert len(a) == len(b)
+        target = write(tmp_path / "t.jsonl", a)
+        original = target.stat()
+        first = transcache._events_for(target)
+        write(target, b)
+        os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns))  # restore mtime; ctime still moved
+        after = target.stat()
+        assert after.st_size == original.st_size and after.st_mtime_ns == original.st_mtime_ns
         second = transcache._events_for(target)
         assert second == parse_events_from_bytes(b)
         assert second != first

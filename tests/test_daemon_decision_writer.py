@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -9,7 +10,7 @@ from cc_transcript.decisions import Decision, DecisionLog
 from cc_transcript.ids import SessionId
 
 from captain_hook import decisions
-from captain_hook.daemon.decision_writer import DecisionWriter, install
+from captain_hook.daemon.decision_writer import MAX_DECISION_LOGS, DecisionWriter, install
 from captain_hook.decisions import record_decision
 from captain_hook.events import StopEvent
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
@@ -70,6 +71,18 @@ class TestDecisionWriter:
             writer.submit(make_decision(ts_ms=i, kind=f"k{i}", message=f"m{i}"))
         writer.drain(timeout=5)
         assert len(rows(db_path)) == 20
+
+    def test_log_handles_are_lru_bounded(self, tmp_path: Path) -> None:
+        # S8: many distinct decisions-db paths must not open an unbounded set of handles.
+        writer = DecisionWriter()  # thread not started; drive _log directly
+        opened = [writer._log(tmp_path / f"db-{i}.db") for i in range(MAX_DECISION_LOGS + 8)]
+        try:
+            assert len(writer._logs) == MAX_DECISION_LOGS, "the handle set grew past its bound"
+            with pytest.raises(sqlite3.ProgrammingError):
+                opened[0].conn.execute("SELECT 1")  # the earliest handle was evicted and closed
+        finally:
+            for log in writer._logs.values():
+                log.conn.close()
 
     def test_full_queue_drops_row_with_warning(self, db_path: Path, logcap: Any) -> None:
         writer = DecisionWriter(maxsize=1)  # thread never started, so nothing drains

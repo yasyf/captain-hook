@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import queue
 import threading
+from collections import OrderedDict
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
     from cc_transcript.decisions import Decision, DecisionLog
 
 MAX_QUEUE = 10_000
+MAX_DECISION_LOGS = 64
 
 
 class Stop:
@@ -37,7 +39,7 @@ STOP = Stop()
 class DecisionWriter:
     def __init__(self, *, maxsize: int = MAX_QUEUE) -> None:
         self._queue: queue.Queue[tuple[Path | None, Decision] | Stop] = queue.Queue(maxsize)
-        self._logs: dict[Path | None, DecisionLog] = {}
+        self._logs: OrderedDict[Path | None, DecisionLog] = OrderedDict()
         self._thread = threading.Thread(target=self._run, name="capt-hook-decision-writer", daemon=True)
 
     def start(self) -> None:
@@ -64,11 +66,17 @@ class DecisionWriter:
             log.conn.close()
 
     def _log(self, path: Path | None) -> DecisionLog:
+        # LRU-bound the open handles (like SessionFileRouter) so a peer varying the decisions-db path
+        # cannot exhaust fds; the writer thread owns this dict, so no lock is needed.
         from cc_transcript.decisions import DecisionLog
 
-        if path not in self._logs:
-            self._logs[path] = DecisionLog.open(path)
-        return self._logs[path]
+        if (log := self._logs.get(path)) is not None:
+            self._logs.move_to_end(path)
+            return log
+        self._logs[path] = log = DecisionLog.open(path)
+        while len(self._logs) > MAX_DECISION_LOGS:
+            self._logs.popitem(last=False)[1].conn.close()
+        return log
 
 
 def install() -> DecisionWriter:

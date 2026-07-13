@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from captain_hook.cli import CliState
 
 MAX_SNAPSHOTS = 8
+BUILD_RETRIES = 3
 
 StatEntry = tuple[int, int, int]
 HookEntry = tuple[str, int, int, int]
@@ -105,19 +106,29 @@ class Fingerprint:
         return self.horizon is not None and now >= self.horizon
 
     @classmethod
-    def compute(cls, cli_state: CliState, session_dir: Path | None) -> Fingerprint:
+    def _inputs(cls, cli_state: CliState, session_dir: Path | None) -> tuple[tuple[object, ...], str, float | None]:
+        # ``stable`` excludes the fastpath sidecar (discovery writes it) so it can bracket a discovery.
         root = cli_state.root
         pack_meta, horizon = _moving_metas(manager.read_entries(manager.packs_toml_path(root)))
-        material = (
+        stable = (
             manager.toml_hash(root),
-            _read_text(manager.fastpath_path(root)),
             pack_meta,
             _hooks_tree(cli_state.hooks),
             _stat_entry(root / ".gitignore"),
             _sha256_file(manager.attached_path(session_dir)) if session_dir is not None else "",
             _attached_trees(session_dir) if session_dir is not None else (),
         )
-        return cls(digest=hashlib.sha256(repr(material).encode()).hexdigest(), horizon=horizon)
+        return stable, _read_text(manager.fastpath_path(root)), horizon
+
+    @classmethod
+    def compute(cls, cli_state: CliState, session_dir: Path | None) -> Fingerprint:
+        stable, fastpath, horizon = cls._inputs(cli_state, session_dir)
+        return cls(digest=hashlib.sha256(repr((stable, fastpath)).encode()).hexdigest(), horizon=horizon)
+
+    @classmethod
+    def stable_digest(cls, cli_state: CliState, session_dir: Path | None) -> str:
+        stable, _fastpath, _horizon = cls._inputs(cli_state, session_dir)
+        return hashlib.sha256(repr(stable).encode()).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +166,15 @@ class Registry:
         return hit if hit is not None and not fingerprint.expired(now) else None
 
     def _build(self, session_dir: Path | None) -> RegistrySnapshot:
+        # Retry a discovery whose stable inputs moved under it (a torn mid-rewrite read); serve the latest.
+        for _ in range(BUILD_RETRIES - 1):
+            before = Fingerprint.stable_digest(self._cli_state, session_dir)
+            snapshot = self._discover_once(session_dir)
+            if Fingerprint.stable_digest(self._cli_state, session_dir) == before:
+                return snapshot
+        return self._discover_once(session_dir)
+
+    def _discover_once(self, session_dir: Path | None) -> RegistrySnapshot:
         from captain_hook.daemon.context import capture_output
 
         state = app.State()
