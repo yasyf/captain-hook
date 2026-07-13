@@ -6,9 +6,10 @@ claude-code#76297): a pack-shipping consumer plugin that mirrors the canonical
 registers a second, byte-identical source, so one event fans out into N sibling processes
 reading identical stdin within milliseconds. A side-effecting hook then fires N times. This
 guard lets the first sibling win an ``O_EXCL`` sentinel keyed by the event, its sync/async
-variant, and its payload; the rest exit silently. :func:`once_guard` wraps the claim and
-releases the sentinel if the winner's dispatch raises, so a failed claimer never fail-closes
-a still-starting healthy sibling.
+variant, and its payload; the rest exit silently. :func:`once_guard` wraps the claim and adds
+the ``DECISION_EVENTS`` exemption; it is deliberately dumb — the claim is never released on a
+raised dispatch, so a failure stays fail-closed for the TTL window rather than re-firing hooks
+whose side effects may have already landed.
 
 Best-effort only: no locking beyond the atomic create, no daemon. A TTL bounds how long a
 claim suppresses siblings (covering uvx's multi-second startup skew) and how long a crashed
@@ -63,23 +64,18 @@ def once_guard(event: Event, event_name: str, payload: bytes, *, async_: bool) -
     Decision-capable events (``DECISION_EVENTS``) are exempt — swallowing a sibling there could
     bypass a gate, which outweighs a duplicated side effect — so they always dispatch and claim
     no sentinel. Every other event runs the once-guard: the first sibling to claim yields True
-    and dispatches, the rest yield False and must exit silently. If a winning claimer's dispatch
-    raises, the sentinel is released (see :func:`release_once`) so a slower healthy sibling can
-    re-claim rather than the event being lost for the whole TTL.
+    and dispatches, the rest yield False and must exit silently. The claim is deliberately never
+    released on a raised dispatch — the shim stays dumb: first claimer wins and a failure stays
+    fail-closed for the TTL window, because releasing could re-run a legacy sibling whose earlier
+    hooks already completed their side effects, or unlink a claim a slower sibling re-took after
+    the TTL (there is no ownership check).
     """
     from captain_hook.cli import DECISION_EVENTS
 
     if event in DECISION_EVENTS:
         yield True
         return
-    if not claim_once(event_name, payload, async_=async_):
-        yield False
-        return
-    try:
-        yield True
-    except BaseException:
-        release_once(event_name, payload, async_=async_)
-        raise
+    yield claim_once(event_name, payload, async_=async_)
 
 
 def claim_once(event_name: str, payload: bytes, *, async_: bool) -> bool:
@@ -99,30 +95,9 @@ def claim_once(event_name: str, payload: bytes, *, async_: bool) -> bool:
     if sentinel_dir is None:
         return True
     _reap(sentinel_dir, ttl)
-    return _try_claim(sentinel_dir / _key(event_name, payload, async_=async_), ttl)
-
-
-def release_once(event_name: str, payload: bytes, *, async_: bool) -> None:
-    """Drop this process's own claim so a slower sibling can re-claim and dispatch.
-
-    Paired with a dispatch that raised after a winning :func:`claim_once`: without it the
-    sentinel would suppress every healthy sibling for the full TTL and the event's side effect
-    would be lost. Best-effort — a missing sentinel (guard disabled, unsafe temp dir, already
-    reaped) is a no-op.
-    """
-    ttl = _ttl()
-    if ttl <= 0:
-        return
-    sentinel_dir = _sentinel_dir()
-    if sentinel_dir is None:
-        return
-    with contextlib.suppress(OSError):
-        (sentinel_dir / _key(event_name, payload, async_=async_)).unlink()
-
-
-def _key(event_name: str, payload: bytes, *, async_: bool) -> str:
     variant = b"async" if async_ else b"sync"
-    return hashlib.sha256(event_name.encode() + b"\0" + variant + b"\0" + payload).hexdigest()
+    key = hashlib.sha256(event_name.encode() + b"\0" + variant + b"\0" + payload).hexdigest()
+    return _try_claim(sentinel_dir / key, ttl)
 
 
 def _ttl() -> float:

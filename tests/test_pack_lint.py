@@ -74,8 +74,8 @@ def test_conforming_pack_passes_every_check(tmp_path: Path) -> None:
     results = by_check(conforming(tmp_path / "ccx"))
     assert failed(results) == []
     assert not results["marketplace.json"].warning  # a present-and-correct allowlist is a pass, not a warning
-    assert {"manifest", "hooks.json", "plugin.json", "marketplace.json", "session-start", "async-decision"} == set(
-        results
+    assert {"manifest", "hooks.json", "plugin.json", "marketplace.json", "load", "session-start", "async-decision"} == (
+        set(results)
     )
 
 
@@ -139,8 +139,41 @@ def test_missing_manifest_fails_and_skips_hook_load(tmp_path: Path) -> None:
     root.mkdir()
     results = by_check(root)
     assert not results["manifest"].ok
+    assert not results["load"].ok  # no manifest, no hooks loaded
     assert not results["session-start"].ok  # can't load hooks without a manifest
     assert "not loaded" in results["async-decision"].reason
+
+
+def test_pack_with_no_hooks_fails_load(tmp_path: Path) -> None:
+    # A valid manifest but an empty hooks dir ships no working guard: the load check must fail.
+    root = conforming(tmp_path / "ccx")
+    (root / "h.py").unlink()
+    result = by_check(root)["load"]
+    assert not result.ok
+    assert "no hooks loaded" in result.reason
+    assert run_cli("pack", "lint", str(root)).returncode == 1
+
+
+def test_syntax_broken_hook_file_fails_load(tmp_path: Path) -> None:
+    # A hook file that won't import lands in load_errors — a non-async load error the load check
+    # must surface (before this fix only AsyncDecisionError was inspected).
+    root = conforming(tmp_path / "ccx")
+    (root / "h.py").write_text("def broken(:\n")  # syntax error
+    result = by_check(root)["load"]
+    assert not result.ok
+    assert "failed to load" in result.reason
+    assert run_cli("pack", "lint", str(root)).returncode == 1
+
+
+def test_nonexistent_hooks_dir_fails_load(tmp_path: Path) -> None:
+    # The manifest points hooks at a dir that isn't there: discovery loads nothing, load fails.
+    root = tmp_path / "ccx"
+    write_manifest(root, hooks="nope")
+    write_hooks_json(root, attach_only())
+    write_plugin_json(root, CAPTAIN_DEP)
+    write_marketplace(root, ["captain-hook"])
+    assert not by_check(root)["load"].ok
+    assert run_cli("pack", "lint", str(root)).returncode == 1
 
 
 def test_run_entry_alone_fails_hooks_json(tmp_path: Path) -> None:
@@ -187,6 +220,25 @@ def test_plugin_json_without_dependency_fails(tmp_path: Path) -> None:
     root = conforming(tmp_path / "ccx")
     write_plugin_json(root, [{"name": "something-else"}])
     assert not by_check(root)["plugin.json"].ok
+
+
+def test_plugin_json_name_only_dependency_fails(tmp_path: Path) -> None:
+    # A name-only entry references captain-hook but lacks the marketplace + version floor the
+    # cross-marketplace contract needs; the reason names what to add.
+    root = conforming(tmp_path / "ccx")
+    write_plugin_json(root, [{"name": "captain-hook"}])
+    result = by_check(root)["plugin.json"]
+    assert not result.ok
+    assert "marketplace" in result.reason and "version" in result.reason
+
+
+def test_plugin_json_string_form_dependency_fails(tmp_path: Path) -> None:
+    # A bare-string dependency can't carry a marketplace or version floor, so it fails.
+    root = conforming(tmp_path / "ccx")
+    write_plugin_json(root, ["captain-hook"])
+    result = by_check(root)["plugin.json"]
+    assert not result.ok
+    assert "version" in result.reason
 
 
 def test_missing_marketplace_is_a_warning_not_a_failure(tmp_path: Path) -> None:

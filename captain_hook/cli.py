@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -598,6 +599,36 @@ def _command_entries(hooks_json: dict[str, Any]) -> list[tuple[str, str]]:
     ]
 
 
+def _capt_hook_entries(hooks_json: dict[str, Any]) -> list[tuple[str, str, list[str]]]:
+    """``(event, command, argv)`` for every command-type entry whose argv invokes ``capt-hook``.
+
+    Each command is tokenized with :func:`shlex.split` so a substring like ``pack attachment`` or
+    a run buried mid-command is matched on real argv boundaries, not text.
+    """
+    entries: list[tuple[str, str, list[str]]] = []
+    for event, cmd in _command_entries(hooks_json):
+        argv = shlex.split(cmd)
+        if DIST_NAME in argv:
+            entries.append((event, cmd, argv))
+    return entries
+
+
+def _is_attach_argv(argv: list[str]) -> bool:
+    """True when ``argv`` is exactly the canonical prefix + ``pack attach <one directory arg>``."""
+    prefix = shlex.split(DEFAULT_PREFIX)
+    return (
+        len(argv) == len(prefix) + 3
+        and argv[: len(prefix)] == prefix
+        and argv[len(prefix) : len(prefix) + 2] == ["pack", "attach"]
+    )
+
+
+def _is_run_argv(argv: list[str]) -> bool:
+    """True when ``argv`` invokes the ``capt-hook run`` subcommand (the token after the program)."""
+    i = argv.index(DIST_NAME)
+    return i + 1 < len(argv) and argv[i + 1] == "run"
+
+
 def _lint_hooks_json(root: Path, manifest_dir: Path) -> LintResult:
     if not (path := _hooks_json_for(root, manifest_dir)):
         return LintResult("hooks.json", False, f"no hooks.json found under {root}/hooks or beside the manifest")
@@ -606,9 +637,8 @@ def _lint_hooks_json(root: Path, manifest_dir: Path) -> LintResult:
     except (json.JSONDecodeError, OSError) as e:
         return LintResult("hooks.json", False, f"{path} is unreadable: {e}")
 
-    attach_line = f"{DEFAULT_PREFIX} pack attach"
-    capt_hook = [(event, cmd) for event, cmd in _command_entries(data) if DIST_NAME in cmd.split()]
-    runs = [f"{event}:{cmd!r}" for event, cmd in capt_hook if f"{DIST_NAME} run" in cmd]
+    capt_hook = _capt_hook_entries(data)
+    runs = [f"{event}:{cmd!r}" for event, cmd, argv in capt_hook if _is_run_argv(argv)]
     if runs:
         return LintResult(
             "hooks.json",
@@ -616,11 +646,13 @@ def _lint_hooks_json(root: Path, manifest_dir: Path) -> LintResult:
             f"{len(runs)} capt-hook run entr{'y' if len(runs) == 1 else 'ies'} ({', '.join(runs)}) — the "
             "captain-hook plugin is the sole dispatcher; a pack ships attach-only",
         )
-    attach = [event for event, cmd in capt_hook if cmd.startswith(attach_line)]
+    attach = [event for event, cmd, argv in capt_hook if _is_attach_argv(argv)]
     if not attach:
-        return LintResult("hooks.json", False, f"no SessionStart entry whose command starts with {attach_line!r}")
+        return LintResult(
+            "hooks.json", False, f"no SessionStart entry tokenizing to {DEFAULT_PREFIX!r} pack attach <dir>"
+        )
     if len(capt_hook) != 1:
-        others = [f"{event}:{cmd!r}" for event, cmd in capt_hook if not cmd.startswith(attach_line)]
+        others = [f"{event}:{cmd!r}" for event, cmd, argv in capt_hook if not _is_attach_argv(argv)]
         return LintResult("hooks.json", False, f"expected exactly one capt-hook entry (the attach); also saw {others}")
     if attach != ["SessionStart"]:
         return LintResult("hooks.json", False, f"the attach entry must be a SessionStart hook, found under {attach[0]}")
@@ -631,9 +663,25 @@ def _lint_plugin_json(manifest_dir: Path) -> LintResult:
     if not (path := _search_upward(manifest_dir, ".claude-plugin/plugin.json", "plugin.json")):
         return LintResult("plugin.json", False, f"no plugin.json found searching upward from {manifest_dir}")
     deps = json.loads(path.read_text()).get("dependencies") or []
-    if any(isinstance(d, dict) and d.get("name") == "captain-hook" for d in deps):
-        return LintResult("plugin.json", True, f"declares the captain-hook dependency ({path})")
-    return LintResult("plugin.json", False, f"{path} declares no captain-hook dependency")
+    # A dep names captain-hook as the bare string or as an object keyed by name or marketplace.
+    named = [
+        d
+        for d in deps
+        if d == "captain-hook"
+        or (isinstance(d, dict) and (d.get("name") == "captain-hook" or d.get("marketplace") == "captain-hook"))
+    ]
+    if not named:
+        return LintResult("plugin.json", False, f"{path} declares no captain-hook dependency")
+    dep = named[0]
+    if not (isinstance(dep, dict) and dep.get("marketplace") == "captain-hook" and "version" in dep):
+        return LintResult(
+            "plugin.json",
+            False,
+            f'the captain-hook dependency in {path} must be an object with marketplace "captain-hook" and a '
+            'version floor, e.g. {"name": "captain-hook", "marketplace": "captain-hook", "version": ">=9.8.0"}; '
+            f"found {dep!r}",
+        )
+    return LintResult("plugin.json", True, f"declares the captain-hook dependency with a version floor ({path})")
 
 
 def _lint_marketplace_json(manifest_dir: Path) -> LintResult:
@@ -652,6 +700,25 @@ def _lint_pack_hooks(manifest: manager.PackManifest, root: Path) -> list[LintRes
     reset()
     discover_pack(manifest.name, manifest.hooks_dir(root))
     hooks = list(_state.hooks)
+    async_errors = [e for e in _state.load_errors if isinstance(e.exc, AsyncDecisionError)]
+    other_errors = [e for e in _state.load_errors if not isinstance(e.exc, AsyncDecisionError)]
+
+    # A pack that loads nothing, or whose hooks dir is missing/syntax-broken, ships no working
+    # guard — that must fail, not quietly pass. The async-decision check below owns the
+    # async_=True-on-decision load errors, so this one covers every other load failure.
+    if other_errors:
+        load_result = LintResult(
+            "load",
+            False,
+            f"{len(other_errors)} hook file(s) failed to load: "
+            + "; ".join(f"{e.source} ({e.exc!r})" for e in other_errors),
+        )
+    elif not hooks and not async_errors:
+        load_result = LintResult(
+            "load", False, f"no hooks loaded from {manifest.hooks_dir(root)} — a pack ships at least one hook"
+        )
+    else:
+        load_result = LintResult("load", True, f"{len(hooks)} hook(s) loaded, no load errors")
 
     if session_start := [h.name for h in hooks if Event.SessionStart in h.spec.events]:
         session_result = LintResult(
@@ -664,9 +731,8 @@ def _lint_pack_hooks(manifest: manager.PackManifest, root: Path) -> list[LintRes
         session_result = LintResult("session-start", True, "no hook subscribes SessionStart")
 
     async_decision = [h.name for h in hooks if h.spec.async_ and (set(h.spec.events) & DECISION_EVENTS)]
-    guarded = [e for e in _state.load_errors if isinstance(e.exc, AsyncDecisionError)]
-    if async_decision or guarded:
-        offenders = async_decision or [f"{e.source} ({e.exc})" for e in guarded]
+    if async_decision or async_errors:
+        offenders = async_decision or [f"{e.source} ({e.exc})" for e in async_errors]
         async_result = LintResult(
             "async-decision",
             False,
@@ -675,7 +741,7 @@ def _lint_pack_hooks(manifest: manager.PackManifest, root: Path) -> list[LintRes
     else:
         async_result = LintResult("async-decision", True, "no async_=True hook on a decision event")
 
-    return [session_result, async_result]
+    return [load_result, session_result, async_result]
 
 
 def lint_pack(root: Path) -> list[LintResult]:
@@ -697,6 +763,7 @@ def lint_pack(root: Path) -> list[LintResult]:
     ]
     if manifest is None:
         results += [
+            LintResult("load", False, "pack not loaded — manifest unresolved"),
             LintResult("session-start", False, "pack not loaded — manifest unresolved"),
             LintResult("async-decision", False, "pack not loaded — manifest unresolved"),
         ]
@@ -712,10 +779,12 @@ def pack_lint(plugin_root: str) -> None:
 
     Pass the plugin root (the dir its SessionStart ``pack attach`` line passes). Checks, each
     reported pass/fail: the capt-hook.toml manifest resolves; hooks.json carries exactly one
-    canonical SessionStart attach entry and zero ``capt-hook run`` entries; plugin.json declares
-    the captain-hook dependency; the repo marketplace.json allows the cross-marketplace
-    dependency (a warning when absent); the pack subscribes no SessionStart events; and no hook
-    registers ``async_=True`` on a decision event. Exits non-zero on any failure.
+    canonical SessionStart attach entry (tokenized, not substring-matched) and zero ``capt-hook
+    run`` entries; plugin.json declares the captain-hook dependency as an object with a version
+    floor; the repo marketplace.json allows the cross-marketplace dependency (a warning when
+    absent); the pack loads at least one hook with no load errors; the pack subscribes no
+    SessionStart events; and no hook registers ``async_=True`` on a decision event. Exits
+    non-zero on any failure.
     """
     results = lint_pack(Path(plugin_root).resolve())
     for r in results:

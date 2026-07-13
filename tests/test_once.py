@@ -149,19 +149,14 @@ class TestOnceGuard:
                 assert dispatch_now is True
         assert not sentinel_dir.exists()  # exempt path never touches the sentinel dir
 
-    def test_release_on_dispatch_failure_frees_sibling(self, sentinel_dir: Path) -> None:
-        # The winning claimer's dispatch raises: its sentinel must be released so a slower
-        # healthy sibling can re-claim and dispatch, rather than the event being lost for the
-        # whole TTL. Without release_once, the follow-up claim_once would collapse to False.
+    def test_dispatch_failure_stays_fail_closed(self, sentinel_dir: Path) -> None:
+        # The shim is deliberately dumb: a claimer whose dispatch raises keeps its claim for the
+        # TTL window. Releasing could re-run a legacy sibling whose earlier hooks already landed
+        # their side effects, so the exception propagates while the sibling stays collapsed.
         payload = b'{"a": 1}'
         with pytest.raises(RuntimeError), once.once_guard(Event.PostToolUse, "PostToolUse", payload, async_=False):
             raise RuntimeError("dispatch blew up")
-        assert once.claim_once("PostToolUse", payload, async_=False) is True
-
-    def test_release_once_is_noop_when_unclaimed(self, sentinel_dir: Path) -> None:
-        # A guarded event whose dispatch never claimed (or was already reaped): releasing a
-        # sentinel that isn't there must not raise.
-        once.release_once("PostToolUse", b'{"a": 1}', async_=False)
+        assert once.claim_once("PostToolUse", payload, async_=False) is False  # still claimed for the TTL
 
 
 def _dispatch_count(counter: Path) -> int:

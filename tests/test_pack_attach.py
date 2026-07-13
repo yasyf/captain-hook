@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -81,16 +82,19 @@ def test_concurrent_attach_all_land(tmp_path: Path) -> None:
     assert recorded == {f"p{i}" for i in range(n)}  # no writer clobbered another's entry
 
 
-def test_upsert_attached_same_name_new_dir_raises(tmp_path: Path) -> None:
+def test_upsert_attached_same_name_new_dir_warns_newer_wins(tmp_path: Path, logcap) -> None:  # type: ignore[no-untyped-def]
     session_dir = ensure_session(SessionId("sess-1"))
     first, second = write_pack(tmp_path / "a", "x"), write_pack(tmp_path / "b", "x")
     manager.upsert_attached(session_dir, manager.AttachedPack(name="x", dir=str(first), version="0.1.0"))
-    with pytest.raises(manager.PackError) as exc:
-        manager.upsert_attached(session_dir, manager.AttachedPack(name="x", dir=str(second), version="0.1.0"))
+    manager.upsert_attached(session_dir, manager.AttachedPack(name="x", dir=str(second), version="0.1.0"))
 
-    assert str(first) in str(exc.value) and str(second) in str(exc.value)  # both dirs named
-    # the conflicting write is rejected: the first-attached dir stands, not clobbered
-    assert manager.read_attached(session_dir) == [manager.AttachedPack(name="x", dir=str(first), version="0.1.0")]
+    # A plugin update re-attaches the same pack from its new versioned dir; the newer attach wins
+    # (erroring would drop the pack for every post-update session), and the second dir replaces the first.
+    assert manager.read_attached(session_dir) == [manager.AttachedPack(name="x", dir=str(second), version="0.1.0")]
+    rebind = [r for r in logcap.records if "re-bound" in r.message]
+    assert len(rebind) == 1  # only the differing-dir upsert logs, not the initial attach
+    assert rebind[0].levelno == logging.WARNING  # upgraded from debug to a warning
+    assert str(first) in rebind[0].message and str(second) in rebind[0].message  # both dirs named
 
 
 def test_upsert_attached_same_name_same_dir_is_silent(tmp_path: Path, logcap) -> None:  # type: ignore[no-untyped-def]
@@ -104,16 +108,17 @@ def test_upsert_attached_same_name_same_dir_is_silent(tmp_path: Path, logcap) ->
     assert not [r for r in logcap.records if "re-bound" in r.message]  # same dir: no collision warning
 
 
-def test_cli_attach_name_collision_exits_1(tmp_path: Path) -> None:
+def test_cli_attach_same_name_new_dir_newer_wins(tmp_path: Path) -> None:
     stdin = json.dumps({"session_id": "sess-1"})
     first = write_pack(tmp_path / "a", "x")
-    second = write_pack(tmp_path / "b", "x")  # a second plugin ships a pack under the same name
+    second = write_pack(tmp_path / "b", "x")  # the pack re-attaches from a new versioned cache dir
     assert run_cli("pack", "attach", str(first), stdin_data=stdin).returncode == 0
-    clash = run_cli("pack", "attach", str(second), stdin_data=stdin)
+    rebind = run_cli("pack", "attach", str(second), stdin_data=stdin)
 
-    assert clash.returncode == 1
-    assert str(first.resolve()) in clash.stderr and str(second.resolve()) in clash.stderr  # both dirs named
-    assert clash.stdout == ""
+    assert rebind.returncode == 0  # a same-name re-attach from a new dir is expected, not an error
+    assert rebind.stdout == ""
+    recorded = manager.read_attached(ensure_session(SessionId("sess-1")))
+    assert recorded == [manager.AttachedPack(name="x", dir=str(second.resolve()), version="0.1.0")]  # newer wins
 
 
 def test_resolve_attached_returns_stable_name_order(tmp_path: Path) -> None:
