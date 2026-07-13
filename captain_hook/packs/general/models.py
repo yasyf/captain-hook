@@ -264,9 +264,10 @@ llm_nudge(
     IMPLEMENTATION_SPAWN_NUDGE,
     message=lambda r: (
         f"This delegation would run on fable, but it reads as routine implementation. {r.reasoning} "
-        "Implementation defaults to model='opus' + effort='xhigh' (~2x cheaper, nearly as capable); "
-        "a well-scoped edit to existing code can also go to gpt-5.6-sol: spawn the codex:codex-wrapper "
-        "agent with a self-contained prompt. Keep fable if this genuinely is sensitive or error-prone. "
+        "Ambiguous, large-refactor, or long-run implementation defaults to model='opus' + effort='xhigh' "
+        "(~2x cheaper, nearly as capable); well-scoped, clearly-bounded, or terminal-heavy implementation "
+        "routes to gpt-5.6-sol: spawn the codex:codex-wrapper agent with a self-contained prompt. "
+        "Keep fable if this genuinely is sensitive or error-prone. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
     contexts=[DelegatedSpawn()],
@@ -281,6 +282,7 @@ llm_nudge(
     tests={
         Input(prompt="implement the pagination endpoint in api/users.py"): Warn(pattern="opus"),
         Input(model="fable", prompt="add a --json flag to the export command"): Warn(pattern="opus"),
+        Input(prompt="add a retry wrapper around the upload call in api/files.py"): Warn(pattern="gpt-5.6"),
         Input(model="opus", prompt="implement the pagination endpoint in api/users.py"): Allow(),
         Input(model="sonnet", prompt="scan the repo for TODO markers"): Allow(),
         Input(agent_type="Explore", prompt="find where the config loader lives"): Allow(),
@@ -292,9 +294,9 @@ llm_nudge(
     INLINE_EDIT_NUDGE,
     message=lambda r: (
         f"This inline edit reads as routine implementation on fable. {r.reasoning} "
-        "Implementation delegates: spawn a model='opus', effort='xhigh' subagent to own the change, "
-        "or route a well-scoped edit to gpt-5.6-sol via the codex skill. Keep editing inline only when "
-        "the change is small, sensitive, or bound to judgment you just exercised. "
+        "Implementation delegates: a well-scoped, clearly-bounded change routes to gpt-5.6-sol via the "
+        "codex skill; ambiguous, open-ended, or long-running work goes to a model='opus', effort='xhigh' subagent. Keep "
+        "editing inline only when the change is small, sensitive, or bound to judgment you just exercised. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
     contexts=[InlineEdit()],
@@ -332,6 +334,10 @@ llm_nudge(
             file="src/api/users.py",
             content="def list_users(page: int):\n    return paginate(page)\n" * 12,
         ): Warn(pattern="opus"),
+        Input(
+            file="src/core/cache.py",
+            content="def get(key: str):\n    return store.lookup(key)\n" * 12,
+        ): Warn(pattern="gpt-5.6"),
         Input(
             file="README.md",
             content="Pagination lands in the users API.\n" * 20,
