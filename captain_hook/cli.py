@@ -227,7 +227,11 @@ def dispatch_event(
     overrides the default parse (the daemon supplies a cache-backed one).
     """
     from captain_hook.context import HookContext
+    from captain_hook.heartbeat import record_heartbeat
     from captain_hook.transcripts import lazy_transcript
+
+    if not async_:
+        record_heartbeat(event, raw)
 
     resolved_path = raw.get("agent_transcript_path") or raw.get("transcript_path")
     ctx = HookContext(
@@ -501,6 +505,21 @@ def status(state: CliState, repo_: str | None, sync: bool) -> None:
 
     state.discover()
     status_command(resolve_repo(repo_, state.root), sync=sync, load_errors=list(_state.load_errors))
+
+
+@cli.command()
+@click.option("--session", "session_id", required=True, help="Session id to inspect")
+@click.pass_obj
+def heartbeats(state: CliState, session_id: str) -> None:
+    """Show per-event dispatch heartbeats for a session — an absent event is a wiring gap, not a quiet session."""
+    from captain_hook.decisions import decisions_db_path
+    from captain_hook.heartbeat import open_heartbeat_log
+
+    if not (beats := open_heartbeat_log(decisions_db_path()).for_session(SessionId(session_id))):
+        click.echo(f"no dispatch heartbeats for session {session_id} (never dispatched, or a different decisions.db)")
+        return
+    for b in beats:
+        click.echo(f"  {b.event:<22} ×{b.count}")
 
 
 @cli.group()

@@ -4,6 +4,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.12.0] - 2026-07-13
+
+### Added
+- **Dispatch heartbeats — `capt-hook heartbeats --session <id>`.** Every event now writes
+  an unconditional per-`(session, event)` beat at dispatch entry, before matching, so "the
+  event never dispatched" is distinguishable from "it dispatched and matched nothing" — a
+  gap the decision ledger (which records only hooks that *fired*) can never show, and the
+  one that cost hours when a teammate's `PreToolUse` silently never reached dispatch. The
+  new command lists a session's per-event coverage; a missing event is a wiring gap, not a
+  quiet session. Backed by cc-transcript 13.1.0's `HeartbeatLog` (a `dispatch_heartbeats`
+  table in `decisions.db`), written straight through as one indexed upsert on the sync
+  dispatch path.
+
 ## [9.11.0] - 2026-07-13
 
 ### Added
