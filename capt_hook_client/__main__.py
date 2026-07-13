@@ -1,4 +1,4 @@
-"""``python -m capt_hook_client`` entry point, mirroring the ``capt-hook-client`` script."""
+"""``python -m capt_hook_client`` entry point, mirroring the ``hook`` script."""
 
 from __future__ import annotations
 

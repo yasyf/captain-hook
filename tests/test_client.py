@@ -304,7 +304,7 @@ class TestFallbackMatrix:
         assert time.monotonic() - start < 10.0
         assert result.returncode == 0
         assert "permissionDecision" in result.stdout
-        assert "capt-hook-client: worker exited early" in result.stderr
+        assert "hook: worker exited early" in result.stderr
 
     def test_deadline_expiry_fails_open_never_cold(self, run_dir: Path, hooks_dir: Path) -> None:
         root = str(hooks_dir.parent)
@@ -725,7 +725,7 @@ class TestPing:
     def test_ping_no_daemon_exits_one(self, run_dir: Path) -> None:
         result = run_client("--root", "/tmp", "ping", env=client_env(run_dir))
         assert result.returncode == 1
-        assert "capt-hook-client:" in result.stderr
+        assert "hook:" in result.stderr
         # Connect-only: a ping with no daemon must never spawn one, so it leaves the run dir bare.
         assert not any(run_dir.iterdir())
 

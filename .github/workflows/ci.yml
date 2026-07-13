@@ -67,7 +67,8 @@ jobs:
           uv venv --seed .wheel-smoke
           uv pip install --python .wheel-smoke/bin/python dist/*.whl
           .wheel-smoke/bin/capt-hook --help
-          .wheel-smoke/bin/capt-hook-client --help
+          .wheel-smoke/bin/hook --help
+          .wheel-smoke/bin/hookd --help
           # The thin client must stay stdlib-pure: importing it may pull in neither
           # captain_hook.* nor any third-party module (that import cost is what the daemon deletes).
           .wheel-smoke/bin/python -c 'import sys; b=set(sys.modules); import capt_hook_client.client; new=set(sys.modules)-b; std=set(sys.stdlib_module_names); cap=sorted(m for m in new if m.startswith("captain_hook")); bad=sorted(m for m in new if m.split(".")[0] not in std and not m.startswith("capt_hook_client")); assert not cap, f"client imported captain_hook: {cap}"; assert not bad, f"client imported non-stdlib: {bad}"; print("client purity OK")'

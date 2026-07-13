@@ -1,4 +1,4 @@
-"""The acceptance gate: every event served warm through ``capt-hook-client`` must be
+"""The acceptance gate: every event served warm through ``hook`` must be
 byte-identical to the cold ``python -m captain_hook`` CLI — same stdout, same stderr, same
 exit code. The client runs under ``CAPT_HOOK_DAEMON_FALLBACK=closed`` so a daemon bug surfaces
 as a divergent (or exit-1) response, never silently masked as a cold fallback. ``run_cold`` and

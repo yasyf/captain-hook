@@ -539,7 +539,7 @@ class TestStandaloneWorkers:
                     "tool_input": {"file_path": "a.py", "old_string": "x", "new_string": "y"},
                 }
             )
-            client_bin = str(Path(sys.executable).parent / "capt-hook-client")
+            client_bin = str(Path(sys.executable).parent / "hook")
             proc = subprocess.run(
                 [client_bin, "--root", str(root), "run", "PreToolUse"],
                 input=raw.encode(),

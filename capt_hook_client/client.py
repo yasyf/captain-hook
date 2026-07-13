@@ -1,6 +1,6 @@
 """Thin, stdlib-only hook client — forwards an event to the resident daemon, or runs cold.
 
-The ``capt-hook-client`` console script sits in the wired hook-command slot. It hand-rolls
+The ``hook`` console script sits in the wired hook-command slot. It hand-rolls
 the ``[--root R] run EVENT [--async]`` / ``ping`` grammar the daemon serves and
 ``os.execv``-passes-through everything else to ``python -m captain_hook`` untouched: non-daemon
 commands (``review run`` …) and every invocation carrying an explicit ``--hooks``. The daemon
@@ -77,7 +77,7 @@ class BadResponse(PostSendFailure):
 
 
 def main() -> None:
-    """Entry point for the ``capt-hook-client`` console script."""
+    """Entry point for the ``hook`` console script."""
     args = sys.argv[1:]
     match parse_argv(args):
         case None | {"hooks": str()}:
@@ -423,4 +423,4 @@ def close(sock: socket.socket) -> None:
 
 
 def breadcrumb(message: str) -> None:
-    print(f"capt-hook-client: {message}", file=sys.stderr)
+    print(f"hook: {message}", file=sys.stderr)

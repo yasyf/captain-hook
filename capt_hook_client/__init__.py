@@ -1,7 +1,7 @@
 """Thin, stdlib-only Claude Code hook client and the daemon key/path contract it shares.
 
 ``capt_hook_client`` is the wired-command surface for the Phase 2 resident daemon: the
-``capt-hook-client`` console script (:mod:`capt_hook_client.client`) forwards hook events
+``hook`` console script (:mod:`capt_hook_client.client`) forwards hook events
 to a warm per-project worker over a Unix socket and falls back to the cold
 ``python -m captain_hook`` path when no worker is reachable. :mod:`capt_hook_client.key`
 holds the worker-identity and on-disk-path contract shared verbatim by the client and the

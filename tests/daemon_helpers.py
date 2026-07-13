@@ -1,5 +1,5 @@
 """Shared machinery for the daemon parity and behavior suites: spawn a real worker, drive it
-over its socket or through the installed ``capt-hook-client``, and run the cold CLI with the
+over its socket or through the installed ``hook``, and run the cold CLI with the
 same environment so the two paths can be compared byte-for-byte.
 
 The daemon is a per-project subprocess keyed on a short ``/tmp`` run dir (macOS caps
@@ -28,7 +28,7 @@ from captain_hook.daemon.protocol import PROTOCOL
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-CLIENT_BIN = str(Path(sys.executable).parent / "capt-hook-client")
+CLIENT_BIN = str(Path(sys.executable).parent / "hook")
 RECV_CHUNK = 65536
 
 # Env vars that steer daemon/client behavior; scrubbed from the inherited environment so an

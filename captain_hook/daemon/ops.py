@@ -1,6 +1,6 @@
 """Ops surface for the resident daemon: enumerate, probe, stop, restart, and tail per-project workers.
 
-The ``capt-hook daemon {status,stop,restart,logs}`` subcommands drive these helpers. Workers are
+The ``hookd {status,stop,restart,logs}`` subcommands drive these helpers. Workers are
 matched by the ``root`` recorded in their meta file, never by recomputing a worker key: the ops
 shell's environment differs from the worker's, so a recomputed key would miss a running daemon.
 Every probe is connect-only — inspecting, stopping, or restarting a project never spawns a worker.

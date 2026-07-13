@@ -1,5 +1,5 @@
 """Resident-daemon gates: one worker under a fork storm, warm-vs-cold latency, SIGKILL recovery,
-and stale-socket takeover — all driven through the installed ``capt-hook-client``.
+and stale-socket takeover — all driven through the installed ``hook``.
 
 Every scenario plants the same hook set and fires the same ``PreToolUse`` payload, so the four
 gates measure the daemon, not a moving target. The fork storm proves the flock front door

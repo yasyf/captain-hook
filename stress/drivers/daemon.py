@@ -1,4 +1,4 @@
-"""Daemon driving: spawn and drive the resident worker through the installed ``capt-hook-client``.
+"""Daemon driving: spawn and drive the resident worker through the installed ``hook``.
 
 Each scenario runs inside a :class:`DaemonWorld` — a short ``/tmp`` run dir (macOS caps ``sun_path``
 at 104 bytes, so the sandbox's own long ``/tmp/capt-stress`` root cannot hold the socket), the
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
     from stress.sandbox import Sandbox
 
-CLIENT_BIN = CHECKOUT / ".venv" / "bin" / "capt-hook-client"
+CLIENT_BIN = CHECKOUT / ".venv" / "bin" / "hook"
 COLD_BIN = CHECKOUT / ".venv" / "bin" / "capt-hook"
 DAEMON_RUN_PATTERN = "captain_hook daemon run"
 STOP_TIMEOUT = 10.0
