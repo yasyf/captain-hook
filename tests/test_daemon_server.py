@@ -420,6 +420,53 @@ class TestConcurrency:
             thread.join()
         assert time.perf_counter() - start >= 0.25
 
+    def test_slowloris_does_not_block_a_normal_client(self, worker: tuple[str, Path, dict]) -> None:
+        # A peer that connects and dribbles bytes without ever completing a request line must not
+        # wedge the accept loop: the read runs off the accept thread, so a normal client is served.
+        sock, root, env = worker
+        self._warm(sock, root, env)
+        slow = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        slow.connect(sock)
+        slow.sendall(b'{"partial":')  # no newline; the request line never completes
+        try:
+            payload = json.dumps({"session_id": "normal", "tool_name": "Bash", "tool_input": {}})
+            start = time.perf_counter()
+            resp = send(sock, event_req("PostToolUse", payload, root, env, extra_env={"CAPT_HOOK_ONCE_TTL": "0"}))
+            assert resp["status"] == "ok"
+            assert time.perf_counter() - start < 5.0, "a slowloris peer wedged the accept loop"
+        finally:
+            slow.close()
+
+    def test_same_session_flood_does_not_starve_another_session(self, worker: tuple[str, Path, dict]) -> None:
+        # A session firing more requests than the event pool has threads must not starve other
+        # sessions: same-session requests serialize in a per-session queue (one pool thread at a
+        # time), leaving threads free, rather than each blocking a thread on the session's lock.
+        sock, root, env = worker
+        self._warm(sock, root, env)
+
+        def flood() -> None:
+            payload = json.dumps({"session_id": "floodA", "tool_name": "Bash", "tool_input": {"sleep_ms": 150}})
+            send(
+                sock,
+                event_req("PostToolUse", payload, root, env, extra_env={"CAPT_HOOK_ONCE_TTL": "0"}),
+                timeout=30,
+            )
+
+        threads = [threading.Thread(target=flood) for _ in range(16)]
+        for thread in threads:
+            thread.start()
+        time.sleep(0.1)  # let the flood's reads land and queue behind session floodA's single slot
+        try:
+            payload_b = json.dumps({"session_id": "sessB", "tool_name": "Bash", "tool_input": {}})
+            start = time.perf_counter()
+            resp = send(sock, event_req("PostToolUse", payload_b, root, env, extra_env={"CAPT_HOOK_ONCE_TTL": "0"}))
+            elapsed = time.perf_counter() - start
+            assert resp["status"] == "ok"
+            assert elapsed < 1.0, f"session B was starved by session A's flood: {elapsed:.2f}s"
+        finally:
+            for thread in threads:
+                thread.join()
+
 
 class TestStandaloneWorkers:
     @pytest.mark.parametrize("kind", ["drain", "shutdown"])
@@ -526,6 +573,132 @@ class TestClientBuildRestart:
         finally:
             server.event_pool.shutdown(wait=False)
             server.control_pool.shutdown(wait=False)
+
+
+class TestRestartDrain:
+    def test_restart_drains_inflight_before_reexec(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A watchdog restart must wait for an in-flight dispatch (LLM gates run many seconds) to
+        # finish before execv, not hard-kill it at a short cap and leave the client failing open.
+        from captain_hook.daemon import lifecycle
+        from captain_hook.daemon import server as server_mod
+
+        assert server_mod.INFLIGHT_DRAIN_S >= 30, "the drain cap must cover realistic LLM-gate durations"
+        root = make_project(tmp_path / "proj")
+        server = server_mod.Server(root, foreground=True)
+        monkeypatch.setattr(server_mod.logger, "remove", lambda *a, **k: None)
+        gate = threading.Event()
+        finished: list[bool] = []
+        observed_finished_at_reexec: list[bool] = []
+        monkeypatch.setattr(lifecycle, "reexec", lambda _argv: observed_finished_at_reexec.append(bool(finished)))
+
+        def slow_dispatch() -> None:
+            gate.wait(5)
+            finished.append(True)
+
+        future = server.event_pool.submit(slow_dispatch)
+        with server.inflight_guard:
+            server.inflight.add(future)
+        server.restart = True
+        threading.Timer(0.3, gate.set).start()
+        server.teardown()
+        assert finished == [True], "the in-flight dispatch was cut off before it completed"
+        assert observed_finished_at_reexec == [True], "execv ran before the in-flight dispatch drained"
+
+
+class TestIdleExitRace:
+    @contextlib.contextmanager
+    def _bound_server(self, monkeypatch: pytest.MonkeyPatch):
+        from captain_hook.daemon.protocol import socket_path
+        from captain_hook.daemon.server import Server
+
+        run = Path(tempfile.mkdtemp(dir="/tmp", prefix="chd-idle-"))
+        monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(run))
+        server = Server(Path(tempfile.mkdtemp(prefix="chd-idle-proj-")), foreground=True)
+        server.listener = server._bind()
+        sock_path = str(socket_path(server.key))
+        try:
+            yield server, sock_path
+        finally:
+            with contextlib.suppress(OSError):
+                server.listener.close()
+            server.intake_pool.shutdown(wait=False, cancel_futures=True)
+            server.event_pool.shutdown(wait=False, cancel_futures=True)
+            server.control_pool.shutdown(wait=False, cancel_futures=True)
+            shutil.rmtree(run, ignore_errors=True)
+
+    def test_idle_exit_drains_backlog_instead_of_dropping(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A client that connects in the accept-timeout window right at expiry must be served, not
+        # dropped: idle-exit drains the listen backlog before closing the listener.
+        from captain_hook.daemon import lifecycle
+
+        with self._bound_server(monkeypatch) as (server, sock_path):
+            drained: list[socket.socket] = []
+            monkeypatch.setattr(server, "_intake", lambda conn: (drained.append(conn), conn.close()))
+            monkeypatch.setattr(lifecycle, "idle_limit", lambda: 0.0)
+            server.last_activity = time.monotonic() - 10_000
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.connect(sock_path)  # lands in the backlog before idle-exit runs
+            try:
+                server._maybe_idle_exit()
+                assert not server.stop_event.is_set(), "idle-exit dropped a freshly-connected client"
+                assert len(drained) == 1, "the backlogged connection was not drained"
+            finally:
+                client.close()
+
+    def test_idle_exit_deferred_while_a_connection_is_active(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Idle-exit must not fire while any connection is in flight (accepted but not yet completed).
+        from captain_hook.daemon import lifecycle
+
+        with self._bound_server(monkeypatch) as (server, _sock_path):
+            monkeypatch.setattr(lifecycle, "idle_limit", lambda: 0.0)
+            server.last_activity = time.monotonic() - 10_000
+            server._begin_active()
+            server._maybe_idle_exit()
+            assert not server.stop_event.is_set(), "idle-exit fired while a connection was active"
+            server._end_active()
+            server._maybe_idle_exit()
+            assert server.stop_event.is_set(), "idle-exit failed to fire once fully idle"
+
+
+class TestSessionScheduler:
+    def test_scheduler_evicts_session_and_balances_load_even_on_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The per-session queue and the backlog counter must return to empty after work drains —
+        # including when a dispatch errors — so self.sessions cannot grow unboundedly across sessions.
+        from captain_hook.daemon.protocol import decode_request
+        from captain_hook.daemon.server import Server
+
+        root = make_project(tmp_path / "proj")
+        server = Server(root, foreground=True)
+        try:
+            calls = {"n": 0}
+
+            def fake_process(conn: socket.socket, _req: object) -> None:
+                conn.close()
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    raise RuntimeError("simulated dispatch error")  # the first same-session dispatch errors
+
+            monkeypatch.setattr(server, "_process", fake_process)
+            payload = json.dumps({"session_id": "S", "tool_name": "Bash", "tool_input": {}})
+            req = decode_request(json.dumps(event_req("PostToolUse", payload, root, os.environ)).encode())
+            for _ in range(2):
+                left, right = socket.socketpair()
+                server._begin_active()  # mirror _intake's accounting for an accepted connection
+                server._schedule_event(left, req)
+                right.close()
+            deadline = time.monotonic() + 5
+            while (server.sessions or server.event_load or server.active) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert server.sessions == {}, "the session queue was not evicted after its work drained"
+            assert server.event_load == 0, "the event backlog counter did not balance back to zero"
+            assert server.active == 0, "the active-connection counter did not balance back to zero"
+            assert calls["n"] == 2, "the second same-session request never advanced past the errored first"
+        finally:
+            server.intake_pool.shutdown(wait=False, cancel_futures=True)
+            server.event_pool.shutdown(wait=False, cancel_futures=True)
+            server.control_pool.shutdown(wait=False, cancel_futures=True)
 
 
 class TestDiscoveryDiagnosticsReplay:

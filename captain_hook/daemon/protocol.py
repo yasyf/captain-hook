@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
@@ -174,9 +175,13 @@ def encode_response(response: Response) -> bytes:
     ).encode()
 
 
-def read_line(sock: socket.socket) -> bytes:
+def read_line(sock: socket.socket, *, deadline: float | None = None) -> bytes:
     buf = bytearray()
     while True:
+        if deadline is not None:
+            if (remaining := deadline - time.monotonic()) <= 0:
+                raise ProtocolError("request line did not arrive before the read deadline")
+            sock.settimeout(remaining)
         if not (chunk := sock.recv(RECV_CHUNK)):
             raise ProtocolError("connection closed before a full request line arrived")
         buf.extend(chunk)

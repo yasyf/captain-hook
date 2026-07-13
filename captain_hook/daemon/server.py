@@ -1,9 +1,14 @@
 """The resident worker: a Unix-socket server that dispatches hook events warm.
 
-One request per connection, newline-JSON (:mod:`captain_hook.daemon.protocol`). Events run on a
+One request per connection, newline-JSON (:mod:`captain_hook.daemon.protocol`). The accept thread
+only accepts and hands the raw connection to a read pool, so a slow or hostile peer can never wedge
+the accept loop; the read is bounded by an overall wall-clock deadline. Events then run on a
 16-thread pool, control kinds (ping/status/drain/shutdown) on a separate 2-thread pool so a ping
-never starves behind a slow hook. Each event is served under a per-session lock — same session
-serializes, different sessions interleave — and inside a :func:`request_scope` that binds the
+never starves behind a slow hook. A per-session scheduler admits one dispatch per session at a time
+— same session serializes without each queued request occupying a pool thread, different sessions
+interleave — so one session flooding requests cannot starve another; the total in-flight backlog is
+bounded, and a saturated worker answers ``rejected`` so the client falls back cold rather than
+queueing an unbounded payload backlog. Each event runs inside a :func:`request_scope` that binds the
 request's env, captures its stdout/stderr, and routes its logs to the session file. The event flow
 mirrors cold ``run_event`` byte-for-byte (event validation, empty stdin, the once-guard, malformed
 stdin, then dispatch), so the client's response is indistinguishable from a cold run. Dispatch
@@ -22,8 +27,9 @@ import sys
 import threading
 import time
 import traceback
+from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -64,11 +70,23 @@ if TYPE_CHECKING:
 DIST_NAME = "capt-hook"
 EVENT_POOL_SIZE = 16
 CONTROL_POOL_SIZE = 2
+INTAKE_POOL_SIZE = 16
 ACCEPT_TIMEOUT = 2.0
-READ_TIMEOUT = 30.0
+READ_DEADLINE_S = 30.0
 LISTEN_BACKLOG = 128
-INFLIGHT_DRAIN_S = 10.0
+# Generous enough to cover a realistic in-flight LLM-gate dispatch: a restart (or shutdown) drains
+# running dispatches up to this cap before execv, so a slow gate is not hard-killed mid-decision.
+INFLIGHT_DRAIN_S = 60.0
 WRITER_DRAIN_S = 5.0
+# Ceiling on admitted-but-unfinished event requests (running + queued). Past it the worker answers
+# rejected so the client runs cold, rather than queueing an unbounded (up to 32 MB each) backlog.
+MAX_EVENT_BACKLOG = 256
+
+
+@dataclass(slots=True)
+class SessionQueue:
+    running: bool = False
+    pending: deque[tuple[socket.socket, Request]] = field(default_factory=deque)
 
 
 class DispatchError(Exception):
@@ -98,10 +116,14 @@ class Server:
         self.started_at = time.time()
         self.event_pool = ThreadPoolExecutor(max_workers=EVENT_POOL_SIZE, thread_name_prefix="capt-hook-event")
         self.control_pool = ThreadPoolExecutor(max_workers=CONTROL_POOL_SIZE, thread_name_prefix="capt-hook-control")
-        self.locks: dict[str, threading.Lock] = {}
-        self.locks_guard = threading.Lock()
+        self.intake_pool = ThreadPoolExecutor(max_workers=INTAKE_POOL_SIZE, thread_name_prefix="capt-hook-intake")
+        self.sessions: dict[str, SessionQueue] = {}
+        self.event_load = 0
+        self.sched_guard = threading.Lock()
         self.inflight: set[Future[None]] = set()
         self.inflight_guard = threading.Lock()
+        self.active = 0
+        self.active_guard = threading.Lock()
         self.stop_event = threading.Event()
         self.restart = False
         self.client_build: str | None = None
@@ -145,12 +167,12 @@ class Server:
                 continue
             except OSError:
                 break
-            conn.settimeout(READ_TIMEOUT)
             self._intake(conn)
 
     def teardown(self) -> None:
         if self.watchdog is not None:
             self.watchdog.stop()
+        self.intake_pool.shutdown(wait=False, cancel_futures=True)
         self._wait_inflight(INFLIGHT_DRAIN_S)
         self.event_pool.shutdown(wait=False, cancel_futures=True)
         self.control_pool.shutdown(wait=False, cancel_futures=True)
@@ -164,22 +186,97 @@ class Server:
             lifecycle.reexec(self.argv)
 
     def _intake(self, conn: socket.socket) -> None:
+        self.last_activity = time.monotonic()
+        self._begin_active()
+        self.intake_pool.submit(self._read_and_route, conn)
+
+    def _read_and_route(self, conn: socket.socket) -> None:
         try:
-            req = decode_request(read_line(conn))
+            req = decode_request(read_line(conn, deadline=time.monotonic() + READ_DEADLINE_S))
         except (ProtocolError, OSError) as exc:
             logger.debug("dropping undecodable request: {}", exc)
             _close(conn)
+            self._end_active()
+            return
+        if self.stop_event.is_set():
+            _close(conn)
+            self._end_active()
             return
         self.last_activity = time.monotonic()
-        pool = self.control_pool if req.kind in CONTROL_KINDS else self.event_pool
+        if req.kind in CONTROL_KINDS:
+            self._launch(self.control_pool, conn, req, None)
+        else:
+            self._schedule_event(conn, req)
+
+    def _schedule_event(self, conn: socket.socket, req: Request) -> None:
+        session_id = _session_id_of(req)
+        with self.sched_guard:
+            if self.event_load >= MAX_EVENT_BACKLOG:
+                saturated = True
+            else:
+                saturated = False
+                self.event_load += 1
+                if session_id is not None and self._enqueue_locked(session_id, conn, req):
+                    return
+        if saturated:
+            self._reject_saturated(conn)
+            return
+        self._launch(self.event_pool, conn, req, self._event_done(session_id))
+
+    def _enqueue_locked(self, session_id: str, conn: socket.socket, req: Request) -> bool:
+        queue = self.sessions.setdefault(session_id, SessionQueue())
+        if queue.running:
+            queue.pending.append((conn, req))
+            return True
+        queue.running = True
+        return False
+
+    def _advance_session(self, session_id: str) -> None:
+        with self.sched_guard:
+            if (queue := self.sessions.get(session_id)) is None:
+                return
+            if not queue.pending:
+                del self.sessions[session_id]
+                return
+            conn, req = queue.pending.popleft()
+        self._launch(self.event_pool, conn, req, self._event_done(session_id))
+
+    def _event_done(self, session_id: str | None) -> Callable[[], None]:
+        def done() -> None:
+            with self.sched_guard:
+                self.event_load -= 1
+            if session_id is not None:
+                self._advance_session(session_id)
+
+        return done
+
+    def _reject_saturated(self, conn: socket.socket) -> None:
+        logger.warning("event backlog saturated at {}; rejecting so the client falls back cold", MAX_EVENT_BACKLOG)
+        self._reply(conn, self._response("rejected"))
+        self._end_active()
+
+    def _launch(
+        self, pool: ThreadPoolExecutor, conn: socket.socket, req: Request, on_done: Callable[[], None] | None
+    ) -> None:
         future = pool.submit(self._process, conn, req)
         with self.inflight_guard:
             self.inflight.add(future)
-        future.add_done_callback(self._retire)
+        future.add_done_callback(lambda done: self._finish(done, on_done))
 
-    def _retire(self, future: Future[None]) -> None:
+    def _finish(self, future: Future[None], on_done: Callable[[], None] | None) -> None:
         with self.inflight_guard:
             self.inflight.discard(future)
+        self._end_active()
+        if on_done is not None:
+            on_done()
+
+    def _begin_active(self) -> None:
+        with self.active_guard:
+            self.active += 1
+
+    def _end_active(self) -> None:
+        with self.active_guard:
+            self.active -= 1
 
     def _process(self, conn: socket.socket, req: Request) -> None:
         start = time.perf_counter()
@@ -261,30 +358,24 @@ class Server:
             return self._from_buffers(buffers)
 
     def _dispatch(self, event: Event, raw: dict, session_id: str | None, req: Request) -> None:
-        with self._session_lock(session_id):
-            session_dir = ensure_session(_session(session_id)) if session_id else None
-            snapshot = self.registry.get(session_dir)
-            if snapshot.discovery_stderr:
-                sys.stderr.write(snapshot.discovery_stderr)
-            with app.use_state(snapshot.state):
-                # The request's own --root spelling flows into HookContext.project_root verbatim; the
-                # realpath canonicalization lives only in the worker key / daemon identity, not here.
-                output = dispatch_event(
-                    Path(req.root),
-                    event,
-                    raw,
-                    session_dir=session_dir,
-                    async_=req.async_,
-                    transcript_loader=transcache.load,
-                )
+        # Same-session serialization is enforced upstream by the per-session scheduler, not a lock.
+        session_dir = ensure_session(_session(session_id)) if session_id else None
+        snapshot = self.registry.get(session_dir)
+        if snapshot.discovery_stderr:
+            sys.stderr.write(snapshot.discovery_stderr)
+        with app.use_state(snapshot.state):
+            # The request's own --root spelling flows into HookContext.project_root verbatim; the
+            # realpath canonicalization lives only in the worker key / daemon identity, not here.
+            output = dispatch_event(
+                Path(req.root),
+                event,
+                raw,
+                session_dir=session_dir,
+                async_=req.async_,
+                transcript_loader=transcache.load,
+            )
         if output:
             print(json.dumps(output))
-
-    def _session_lock(self, session_id: str | None) -> contextlib.AbstractContextManager[object]:
-        if session_id is None:
-            return contextlib.nullcontext()
-        with self.locks_guard:
-            return self.locks.setdefault(session_id, threading.Lock())
 
     def _bind(self) -> socket.socket:
         directory = run_dir()
@@ -336,9 +427,34 @@ class Server:
         }
 
     def _maybe_idle_exit(self) -> None:
-        if lifecycle.idle_expired(self.last_activity, time.monotonic(), lifecycle.idle_limit()):
-            logger.info("idle past the limit; shutting down")
-            self._shutdown(restart=False)
+        if not lifecycle.idle_expired(self.last_activity, time.monotonic(), lifecycle.idle_limit()):
+            return
+        with self.active_guard:
+            if self.active > 0:
+                return
+        # A client may have connected in the accept-timeout window: drain the backlog before closing
+        # the listener out from under it, so a request arriving right at expiry is served, not dropped.
+        if self._drain_backlog():
+            self.last_activity = time.monotonic()
+            return
+        logger.info("idle past the limit; shutting down")
+        self._shutdown(restart=False)
+
+    def _drain_backlog(self) -> bool:
+        served = False
+        self.listener.settimeout(0.0)
+        try:
+            while True:
+                try:
+                    conn, _ = self.listener.accept()
+                except OSError:
+                    break
+                served = True
+                self._intake(conn)
+        finally:
+            with contextlib.suppress(OSError):
+                self.listener.settimeout(ACCEPT_TIMEOUT)
+        return served
 
     def _shutdown(self, *, restart: bool) -> None:
         if self.stop_event.is_set():
@@ -384,6 +500,11 @@ def _decode_payload(raw_text: str) -> tuple[dict | None, Exception | None]:
         return json.loads(raw_text), None
     except (json.JSONDecodeError, ValueError) as exc:
         return None, exc
+
+
+def _session_id_of(req: Request) -> str | None:
+    parsed, _ = _decode_payload(req.payload_raw)
+    return parsed.get("session_id") if isinstance(parsed, dict) else None
 
 
 def _exit_code(code: object) -> int:
