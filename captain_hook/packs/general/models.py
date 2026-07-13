@@ -352,10 +352,8 @@ llm_nudge(
 
 def browser_calls(n: int, *, tool: str = "Bash", field: str = "command", value: str = "agent-browser click '#next'"):
     """A same-turn run of ``n`` browser tool_use lines (Bash by default) for the delegation-nudge inline tests."""
-    return [
-        {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": tool, "input": {field: value}, "id": f"tu-{tool}-{i}"}]}}
-        for i in range(n)
-    ]
+    calls = [{"type": "tool_use", "name": tool, "input": {field: value}, "id": f"tu-{tool}-{i}"} for i in range(n)]
+    return [{"type": "assistant", "message": {"content": [call]}} for call in calls]
 
 
 llm_nudge(
@@ -376,16 +374,18 @@ llm_nudge(
             ToolInput("skill", r"(?i)\b(agent-browser|playwright)\b"),
         ),
     ],
-    when=lambda evt: not evt.is_subagent
-    and (
-        evt.ctx.t.current_turn.tool_calls.named("Bash")
-        .where_input(command=re.compile(r"(?i)\b(agent-browser|playwright)\b"))
-        .count()
-        + evt.ctx.t.current_turn.tool_calls.named("Skill")
-        .where_input(skill=re.compile(r"(?i)\b(agent-browser|playwright)\b"))
-        .count()
-    )
-    >= 5,
+    when=lambda evt: (
+        not evt.is_subagent
+        and (
+            evt.ctx.t.current_turn.tool_calls.named("Bash")
+            .where_input(command=re.compile(r"(?i)\b(agent-browser|playwright)\b"))
+            .count()
+            + evt.ctx.t.current_turn.tool_calls.named("Skill")
+            .where_input(skill=re.compile(r"(?i)\b(agent-browser|playwright)\b"))
+            .count()
+        )
+        >= 5
+    ),
     max_fires=1,
     agent=False,
     transcript=True,
