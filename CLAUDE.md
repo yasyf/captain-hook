@@ -9,6 +9,10 @@
 
 Non-trivial work flows `pending` → `in_progress` → `completed`: `TaskCreate` before starting, `TaskUpdate` as you go. The task list is the source of truth — complete or explicitly defer every task before stopping.
 
+## Durable Records (cc-notes)
+
+Durable knowledge routes through `cc-notes`, never loose markdown in the tree: a decision or durable fact → `cc-notes note add`; living guidance with a `--when` read-trigger → `cc-notes doc add`; an append-only chronology with artifacts → `cc-notes log add` / `log append --attach`; friction → `cc-notes papercut`. Decision memos, gate verdicts, handoffs, and status write-ups are notes/docs — not `*-memo.md` files committed alongside results. The tree carries only published docs and source.
+
 ## Plan Execution & Orchestration
 
 Plans you author must specify, and plans you execute must enforce, that substantive work runs as **dynamic workflows** (`Workflow` tool): the script holds the loop, branching, and intermediate results; your context holds only final answers. This section is standing authorization to invoke `Workflow`. Multi-phase work runs as workflows in sequence (understand → implement → verify); read each result before dispatching the next.
