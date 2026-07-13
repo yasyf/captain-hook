@@ -638,4 +638,70 @@ def daemon_run(root_: str, foreground: bool) -> None:
     Server(Path(root_).resolve(), foreground=foreground).run()
 
 
+@daemon.command(name="status")
+@click.option("--root", "root_", default=None, help="Only workers serving this project root (default: this project)")
+@click.option("--all", "all_", is_flag=True, default=False, help="Every worker in the run dir")
+@click.option("--json", "json_output", is_flag=True, default=False, help="Emit machine-readable JSON")
+def daemon_status(root_: str | None, all_: bool, json_output: bool) -> None:
+    """Report resident workers: their root, pid, build, uptime, and whether each is alive (connect-only)."""
+    from captain_hook.daemon import ops
+
+    statuses = ops.status_workers(root_, all_=all_)
+    if json_output:
+        click.echo(json.dumps([ops.status_json(s) for s in statuses]))
+        return
+    if not statuses:
+        click.echo("No daemon workers.")
+        return
+    for line in ops.format_status_table(statuses):
+        click.echo(line)
+
+
+@daemon.command(name="stop")
+@click.option("--root", "root_", default=None, help="Only workers serving this project root (default: this project)")
+@click.option("--all", "all_", is_flag=True, default=False, help="Every worker in the run dir")
+def daemon_stop(root_: str | None, all_: bool) -> None:
+    """Shut down resident workers over their sockets; clean the socket/meta of any dead worker (connect-only)."""
+    from captain_hook.daemon import ops
+
+    outcomes = ops.stop_workers(root_, all_=all_)
+    if not outcomes:
+        click.echo("No daemon workers.")
+        return
+    for outcome in outcomes:
+        click.echo(f"  {outcome.action}: {outcome.worker.root} (pid {outcome.worker.pid})")
+
+
+@daemon.command(name="restart")
+@click.option("--root", "root_", default=None, help="Only workers serving this project root (default: this project)")
+def daemon_restart(root_: str | None) -> None:
+    """Drain resident workers so they exit after in-flight work; the next event respawns a fresh one."""
+    from captain_hook.daemon import ops
+
+    outcomes = ops.restart_workers(root_)
+    if not outcomes:
+        click.echo("No daemon workers.")
+        return
+    for outcome in outcomes:
+        click.echo(f"  {outcome.action}: {outcome.worker.root} (pid {outcome.worker.pid})")
+
+
+@daemon.command(name="logs")
+@click.option("--root", "root_", default=None, help="Only workers serving this project root (default: this project)")
+@click.option("--tail", type=int, default=None, help="Show only the last N lines of each log")
+def daemon_logs(root_: str | None, tail: int | None) -> None:
+    """Tail a worker's boot/stdio log and its rotated daemon log (connect-only — never spawns)."""
+    from captain_hook.daemon import ops
+
+    workers = ops.match_workers(root_, all_=False)
+    if not workers:
+        click.echo("No daemon workers.")
+        return
+    for worker in workers:
+        for label, path in ops.log_sources(worker):
+            click.echo(f"== {label} log: {path} ==")
+            content = ops.read_tail(path, tail)
+            click.echo(content if content is not None else f"(no {label} log at {path})")
+
+
 main = cli

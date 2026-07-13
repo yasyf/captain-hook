@@ -71,6 +71,27 @@ def exiter(evt):
 """
 
 
+# A hook whose only_if condition raises: run_handler swallows a handler body's exception, but a
+# condition raising in matches_conditions propagates uncaught out of dispatch — the daemon's
+# status=error path. PreToolUse is decision-exempt from the once-guard, so warm and cold each
+# dispatch the same payload and both crash on the ValueError.
+RAISING_HOOK_SRC = """
+from __future__ import annotations
+
+from captain_hook import CustomCondition, Event, hook
+
+
+class Boom(CustomCondition):
+    def check(self, evt) -> bool:
+        if evt._raw.get("tool_input", {}).get("boom"):
+            raise ValueError("boom from condition")
+        return False
+
+
+hook(Event.PreToolUse, only_if=[Boom()], message="never", block=True)
+"""
+
+
 def make_project(root: Path) -> Path:
     (hooks := root / ".claude" / "hooks").mkdir(parents=True)
     (hooks / "h.py").write_text(HOOK_SRC)
@@ -539,3 +560,44 @@ class TestDiscoveryDiagnosticsReplay:
         assert "packs unavailable (offline and not cached): ghost" in built.stderr
         assert built.stdout == "" and hit.stdout == ""
         assert hit.stderr == built.stderr  # the cache hit replays the build's diagnostics verbatim
+
+
+def make_raising_project(root: Path) -> Path:
+    (hooks := root / ".claude" / "hooks").mkdir(parents=True)
+    (hooks / "h.py").write_text(RAISING_HOOK_SRC)
+    return root
+
+
+class TestErrorParity:
+    def test_uncaught_dispatch_error_relays_the_traceback_like_cold(
+        self, tmp_path: Path, dirs: dict[str, Path]
+    ) -> None:
+        run = Path(tempfile.mkdtemp(dir="/tmp", prefix="chderr"))
+        try:
+            root = make_raising_project(tmp_path / "boomproj")
+            env = daemon_env_for(root, {**dirs, "run": run})
+            sock_path = sock_for(root, env)
+            proc = spawn_daemon(root, env, run / "boot.log")
+            try:
+                wait_ready(sock_path, proc, run / "boot.log")
+                payload = json.dumps(
+                    {"session_id": "boom", "tool_name": "Bash", "tool_input": {"boom": True, "command": "x"}}
+                )
+                resp = send(sock_path, event_req("PreToolUse", payload, root, env))
+                cold = cold_run("PreToolUse", payload, root, env)
+
+                assert resp["status"] == "error"
+                assert resp["exit"] == 1 == cold.returncode
+                assert "Traceback (most recent call last):" in resp["stderr"]
+                assert "ValueError: boom from condition" in resp["stderr"]
+                # The upper frames legitimately differ (daemon stack vs cold stack), but the tail — the
+                # hook's own frame and the exception line — matches byte-for-byte (same project path, so
+                # no absolute-path divergence between the two runs).
+                warm_tail = resp["stderr"].rstrip().splitlines()[-3:]
+                cold_tail = cold.stderr.decode().rstrip().splitlines()[-3:]
+                assert warm_tail == cold_tail
+                assert "in check" in "\n".join(warm_tail)
+            finally:
+                stop_daemon(sock_path, proc)
+        finally:
+            shutil.rmtree(run, ignore_errors=True)

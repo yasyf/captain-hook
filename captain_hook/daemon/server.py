@@ -21,6 +21,7 @@ import socket
 import sys
 import threading
 import time
+import traceback
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import replace
 from pathlib import Path
@@ -68,6 +69,15 @@ READ_TIMEOUT = 30.0
 LISTEN_BACKLOG = 128
 INFLIGHT_DRAIN_S = 10.0
 WRITER_DRAIN_S = 5.0
+
+
+class DispatchError(Exception):
+    """A hook dispatch raised past ``SystemExit``; carries the cold-parity error response and its traceback text."""
+
+    def __init__(self, response: Response, traceback_text: str) -> None:
+        super().__init__()
+        self.response = response
+        self.traceback_text = traceback_text
 
 
 def default_argv(root: Path, *, foreground: bool) -> list[str]:
@@ -176,6 +186,12 @@ class Server:
         after: Callable[[], None] | None = None
         try:
             response, after = self._route(req)
+        except DispatchError as err:
+            # The dispatch already built the cold-parity error response (traceback in its stderr, exit
+            # 1) inside the request scope; log the traceback here, outside that scope, so it reaches
+            # the daemon log without the request stderr tee mirroring a second copy.
+            logger.error("dispatch raised serving a {} event:\n{}", req.event, err.traceback_text)
+            response = err.response
         except Exception:
             logger.opt(exception=True).error("unhandled error serving a {} request", req.kind)
             response = self._response("error", exit_code=1)
@@ -233,9 +249,15 @@ class Server:
             try:
                 self._dispatch(event, parsed, session_id, req)
             except SystemExit as exit_:
-                # A hook that calls sys.exit delivers its captured output plus that exit code, mirroring
-                # cold. Any other Exception keeps propagating to the status=error path in _process.
+                # A hook that calls sys.exit delivers its captured output plus that exit code, mirroring cold.
                 return self._from_buffers(buffers, exit_code=_exit_code(exit_.code))
+            except Exception:
+                # Cold crashes an uncaught dispatch error to a Python traceback on stderr, exit 1. Mirror
+                # that byte-shape: append the traceback to the captured stderr and carry the error response
+                # out to _process (which logs the traceback to the daemon log outside this scope).
+                trace = traceback.format_exc()
+                buffers.stderr.write(trace)
+                raise DispatchError(self._from_buffers(buffers, status="error", exit_code=1), trace) from None
             return self._from_buffers(buffers)
 
     def _dispatch(self, event: Event, raw: dict, session_id: str | None, req: Request) -> None:
@@ -341,9 +363,9 @@ class Server:
         finally:
             _close(conn)
 
-    def _from_buffers(self, buffers: RequestBuffers, *, exit_code: int = 0) -> Response:
+    def _from_buffers(self, buffers: RequestBuffers, *, status: str = "ok", exit_code: int = 0) -> Response:
         return self._response(
-            "ok", stdout=buffers.stdout.getvalue(), stderr=buffers.stderr.getvalue(), exit_code=exit_code
+            status, stdout=buffers.stdout.getvalue(), stderr=buffers.stderr.getvalue(), exit_code=exit_code
         )
 
     def _response(self, status: str, *, stdout: str = "", stderr: str = "", exit_code: int = 0) -> Response:

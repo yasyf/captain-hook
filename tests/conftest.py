@@ -37,6 +37,10 @@ def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mo
     # its own per-test override (inherited by run_cli subprocesses).
     monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path_factory.mktemp("hook-state")))
     monkeypatch.setenv("CAPT_HOOK_DECISIONS_DB", str(tmp_path_factory.mktemp("decisions") / "decisions.db"))
+    # Isolate the daemon run dir (sockets, locks, worker meta) per test so no test touches the real
+    # ~/.cache/captain-hook/run. Daemon/client tests override this with a short /tmp dir (macOS
+    # sun_path); that test-local monkeypatch tears down first, so composition is safe.
+    monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(tmp_path_factory.mktemp("run")))
     # The SessionEnd reviewer skips headless entrypoints (sdk-*); scrub it so tests don't
     # inherit the ambient CLAUDE_CODE_ENTRYPOINT of a pytest run launched inside claude.
     monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
