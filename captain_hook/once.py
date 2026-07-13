@@ -22,10 +22,19 @@ the same sentinel to dedupe the same claim, and ``XDG_CACHE_HOME`` is both reqen
 part of the daemon worker key, so every process of one worker agrees by construction.
 
 DELETION MANIFEST — the attach-only pack contract makes this shim the ONLY thing collapsing
-the duplicate dispatch a legacy consumer's mirrored ``run`` entries still cause. It exists
-solely until the upstream per-source dedup fix (anthropics/claude-code#76297) ships at the
-fleet-minimum Claude Code version AND legacy consumer plugin caches (which still mirror
-``run`` entries) have decayed. When both hold, delete in one change:
+the duplicate dispatch a legacy consumer's mirrored ``run`` entries still cause. Deletion is
+gated on legacy-cache decay alone; the original second condition — the upstream per-source
+dedup fix (anthropics/claude-code#76297) shipping at the fleet-minimum Claude Code version —
+was dropped as a deliberate decision on 2026-07-13 with the issue still open, because with no
+mirroring source left to duplicate, the upstream fix protects nothing this shim doesn't.
+Decay is proven per machine that runs the fleet, all three checks passing:
+  - every installed plugin at every scope (``installed_plugins.json``) resolves to a
+    ``hooks.json`` with no ``capt-hook run`` string, captain-hook's own plugin excepted;
+  - no ``settings.json`` registers ``capt-hook run`` (the fleet guard test asserts settings
+    stay hooks-free);
+  - stale mirroring cache dirs under ``~/.claude/plugins/cache`` are purged or aged out, so
+    plugin scope-churn cannot resurrect one.
+When decay is proven on every machine, delete in one change:
   - this module (``captain_hook/once.py``) and ``tests/test_once.py``;
   - both call sites — the ``with once_guard(...)`` blocks in ``cli.run_event`` and
     ``daemon.server.CaptHookServer._run_event`` (which then dispatch unconditionally);
