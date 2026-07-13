@@ -4,6 +4,30 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.8.0] - 2026-07-12
+
+### Added
+- **`capt-hook pack lint <plugin-root>`** vets a pack-shipping plugin against the
+  attach-only dependency contract. It checks that the `capt-hook.toml` manifest
+  resolves, that `hooks.json` carries exactly one canonical SessionStart `pack
+  attach` entry and zero `capt-hook run` entries, that `plugin.json` declares the
+  captain-hook dependency and the repo's `marketplace.json` allows the
+  cross-marketplace reference, that the pack subscribes no SessionStart events
+  (attach and the canonical run SessionStart are unordered siblings), and that no
+  hook registers `async_=True` on a decision-capable event. Each check reports
+  pass or fail with a reason; any failure exits non-zero.
+
+### Changed
+- **The Claude plugin manifest now carries a `version`.** Dependency ranges can
+  resolve against it, but this flips the plugin cache from SHA-keyed to
+  version-keyed: every future plugin-content change must bump the version or
+  consumers keep running the cached build.
+- **Registering an `async_=True` hook on a decision-capable event now raises.**
+  Claude Code never awaits a background hook's stdout, so an allow/deny/block
+  verdict returned by an async gate on PreToolUse, Stop, SubagentStop, or
+  PermissionRequest was silently discarded. The registration path rejects the
+  combination with a clear error instead of shipping a gate that never fires.
+
 ## [9.7.0] - 2026-07-12
 
 ### Added

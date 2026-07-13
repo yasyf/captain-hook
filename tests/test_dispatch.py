@@ -16,6 +16,7 @@ from captain_hook.events import PermissionRequestEvent
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from tests.helpers import (
     make_ctx,
+    make_post_tool_event,
     make_pre_tool_event,
     make_stop_event,
     make_subagent_stop_event,
@@ -456,14 +457,16 @@ class TestDispatch:
         assert result is None
 
     def test_async_flag_filters_hooks(self) -> None:
-        register_hook(Event.PreToolUse, message="sync warning", async_=False)
-        register_hook(Event.PreToolUse, message="async warning", async_=True)
+        # PostToolUse (not a decision event) so async_=True is a legal registration; the
+        # async-flag filtering under test is independent of the event.
+        register_hook(Event.PostToolUse, message="sync warning", async_=False)
+        register_hook(Event.PostToolUse, message="async warning", async_=True)
 
-        sync_result = dispatch(Event.PreToolUse, make_pre_tool_event(), async_=False)
+        sync_result = dispatch(Event.PostToolUse, make_post_tool_event(), async_=False)
         assert sync_result is not None
         assert sync_result["hookSpecificOutput"]["additionalContext"] == "sync warning"
 
-        async_result = dispatch(Event.PreToolUse, make_pre_tool_event(), async_=True)
+        async_result = dispatch(Event.PostToolUse, make_post_tool_event(), async_=True)
         assert async_result is not None
         assert async_result["hookSpecificOutput"]["additionalContext"] == "async warning"
 

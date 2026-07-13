@@ -15,7 +15,7 @@ import click
 from cc_transcript.ids import SessionId
 from loguru import logger
 
-from captain_hook.app import _state, load_gitignore, reset
+from captain_hook.app import AsyncDecisionError, _state, load_gitignore, reset
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import (
     CONF_MODULE,
@@ -29,7 +29,7 @@ from captain_hook.log import setup_logging
 from captain_hook.once import claim_once
 from captain_hook.packs import manager
 from captain_hook.review.cli import review
-from captain_hook.session import SessionStore, ensure_session
+from captain_hook.session import SessionStore, cleanup_stale, ensure_session
 from captain_hook.types import Event
 
 if TYPE_CHECKING:
@@ -527,16 +527,19 @@ def pack_add(state: CliState, target: str) -> None:
 @pack.command(name="attach")
 @click.argument("directory")
 def pack_attach(directory: str) -> None:
-    """Register a plugin's pack for the current session (reads the SessionStart JSON on stdin).
+    """Record a plugin's pack for the current session (reads the SessionStart JSON on stdin).
 
-    A Claude plugin wires this to a SessionStart hook so its pack loads under the byte-identical
-    canonical ``uvx --isolated capt-hook run <Event>`` commands, letting Claude Code's exact-command dedup
-    collapse plugin and project wiring into one process per event. Writes nothing to stdout on
-    success (SessionStart stdout is injected into the model context); a missing or invalid
-    manifest exits 1 with a stderr message.
+    A pack-shipping Claude plugin declares the captain-hook plugin as a dependency and wires
+    this one line to its SessionStart hook. The captain-hook plugin is the sole dispatcher: it
+    registers the ``capt-hook run <Event>`` commands once, and this call merely records the
+    pack's manifest dir so those commands discover and run its hooks for this session. The pack
+    ships no ``run`` entries of its own. Writes nothing to stdout on success (SessionStart stdout
+    is injected into the model context); a missing or invalid manifest exits 1 with a stderr
+    message.
     """
     raw = json.loads(sys.stdin.read())
-    session_dir = ensure_session(SessionId(raw["session_id"]))
+    session_id = SessionId(raw["session_id"])
+    session_dir = ensure_session(session_id)
     root = Path(directory).resolve()
     try:
         manifest = manager.PackManifest.load(manager.manifest_in(root))
@@ -545,6 +548,182 @@ def pack_attach(directory: str) -> None:
     manager.upsert_attached(
         session_dir, manager.AttachedPack(name=manifest.name, dir=str(root), version=manifest.version)
     )
+    # Every session runs attach, so it is the natural reaping point for long-dead session dirs.
+    # Fail-soft — a cleanup error must never break the attach — and never touch the live session.
+    try:
+        cleanup_stale(exclude=session_id)
+    except Exception:
+        logger.opt(exception=True).debug("stale-session cleanup during pack attach failed")
+
+
+@dataclass(frozen=True, slots=True)
+class LintResult:
+    check: str
+    ok: bool
+    reason: str
+    warning: bool = False  # reported, but does not fail the lint (a missing marketplace.json)
+
+
+def _search_upward(start: Path, *rel: str) -> Path | None:
+    """The nearest existing ``base/rel`` walking from ``start`` up to the filesystem root."""
+    for base in (start, *start.parents):
+        for r in rel:
+            if (cand := base / r).is_file():
+                return cand
+    return None
+
+
+def _hooks_json_for(root: Path, manifest_dir: Path) -> Path | None:
+    """Resolve the plugin's hooks.json the way Claude Code loads it — under ``<plugin>/hooks``.
+
+    ``root`` is the dir the pack's attach line passes (the plugin root, or its ``hooks`` subdir
+    when the manifest is nested there), so hooks.json is a sibling of the manifest or one
+    ``hooks/`` level below the plugin root.
+    """
+    for cand in (root / "hooks" / "hooks.json", manifest_dir / "hooks.json"):
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _command_entries(hooks_json: dict[str, Any]) -> list[tuple[str, str]]:
+    """Every ``(event, command)`` command-type hook entry across the file, in declaration order."""
+    return [
+        (event, entry["command"])
+        for event, groups in hooks_json.get("hooks", {}).items()
+        for group in groups
+        for entry in group.get("hooks", [])
+        if entry.get("type") == "command"
+    ]
+
+
+def _lint_hooks_json(root: Path, manifest_dir: Path) -> LintResult:
+    if not (path := _hooks_json_for(root, manifest_dir)):
+        return LintResult("hooks.json", False, f"no hooks.json found under {root}/hooks or beside the manifest")
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        return LintResult("hooks.json", False, f"{path} is unreadable: {e}")
+
+    attach_line = f"{DEFAULT_PREFIX} pack attach"
+    capt_hook = [(event, cmd) for event, cmd in _command_entries(data) if DIST_NAME in cmd.split()]
+    runs = [f"{event}:{cmd!r}" for event, cmd in capt_hook if f"{DIST_NAME} run" in cmd]
+    if runs:
+        return LintResult(
+            "hooks.json",
+            False,
+            f"{len(runs)} capt-hook run entr{'y' if len(runs) == 1 else 'ies'} ({', '.join(runs)}) — the "
+            "captain-hook plugin is the sole dispatcher; a pack ships attach-only",
+        )
+    attach = [event for event, cmd in capt_hook if cmd.startswith(attach_line)]
+    if not attach:
+        return LintResult("hooks.json", False, f"no SessionStart entry whose command starts with {attach_line!r}")
+    if len(capt_hook) != 1:
+        others = [f"{event}:{cmd!r}" for event, cmd in capt_hook if not cmd.startswith(attach_line)]
+        return LintResult("hooks.json", False, f"expected exactly one capt-hook entry (the attach); also saw {others}")
+    if attach != ["SessionStart"]:
+        return LintResult("hooks.json", False, f"the attach entry must be a SessionStart hook, found under {attach[0]}")
+    return LintResult("hooks.json", True, f"one canonical SessionStart attach, no run entries ({path})")
+
+
+def _lint_plugin_json(manifest_dir: Path) -> LintResult:
+    if not (path := _search_upward(manifest_dir, ".claude-plugin/plugin.json", "plugin.json")):
+        return LintResult("plugin.json", False, f"no plugin.json found searching upward from {manifest_dir}")
+    deps = json.loads(path.read_text()).get("dependencies") or []
+    if any(isinstance(d, dict) and d.get("name") == "captain-hook" for d in deps):
+        return LintResult("plugin.json", True, f"declares the captain-hook dependency ({path})")
+    return LintResult("plugin.json", False, f"{path} declares no captain-hook dependency")
+
+
+def _lint_marketplace_json(manifest_dir: Path) -> LintResult:
+    if not (path := _search_upward(manifest_dir, ".claude-plugin/marketplace.json")):
+        return LintResult("marketplace.json", True, "no marketplace.json found upward", warning=True)
+    allowed = json.loads(path.read_text()).get("allowCrossMarketplaceDependenciesOn") or []
+    if "captain-hook" in allowed:
+        return LintResult("marketplace.json", True, f"allows the captain-hook cross-marketplace dependency ({path})")
+    return LintResult(
+        "marketplace.json", False, f"{path} omits captain-hook from allowCrossMarketplaceDependenciesOn"
+    )
+
+
+def _lint_pack_hooks(manifest: manager.PackManifest, root: Path) -> list[LintResult]:
+    """Load the pack (same discovery the runtime uses) and vet its subscribed events."""
+    reset()
+    discover_pack(manifest.name, manifest.hooks_dir(root))
+    hooks = list(_state.hooks)
+
+    if session_start := [h.name for h in hooks if Event.SessionStart in h.spec.events]:
+        session_result = LintResult(
+            "session-start",
+            False,
+            f"hook(s) {session_start} subscribe SessionStart — attach races the canonical run "
+            "SessionStart (sibling hooks, no ordering guarantee)",
+        )
+    else:
+        session_result = LintResult("session-start", True, "no hook subscribes SessionStart")
+
+    async_decision = [h.name for h in hooks if h.spec.async_ and (set(h.spec.events) & DECISION_EVENTS)]
+    guarded = [e for e in _state.load_errors if isinstance(e.exc, AsyncDecisionError)]
+    if async_decision or guarded:
+        offenders = async_decision or [f"{e.source} ({e.exc})" for e in guarded]
+        async_result = LintResult(
+            "async-decision",
+            False,
+            f"hook(s) {offenders} register async_=True on a decision event — the verdict is silently discarded",
+        )
+    else:
+        async_result = LintResult("async-decision", True, "no async_=True hook on a decision event")
+
+    return [session_result, async_result]
+
+
+def lint_pack(root: Path) -> list[LintResult]:
+    """Vet a plugin pack against the attach-only contract; see :func:`pack_lint` for the checks."""
+    manifest_path = manager.manifest_in(root)
+    manifest_dir = manifest_path.parent
+    try:
+        manifest = manager.PackManifest.load(manifest_path)
+        manifest_result = LintResult("manifest", True, f"{manager.PACK_MANIFEST} resolved at {manifest_path}")
+    except manager.PackError as e:
+        manifest = None
+        manifest_result = LintResult("manifest", False, str(e))
+
+    results = [
+        manifest_result,
+        _lint_hooks_json(root, manifest_dir),
+        _lint_plugin_json(manifest_dir),
+        _lint_marketplace_json(manifest_dir),
+    ]
+    if manifest is None:
+        results += [
+            LintResult("session-start", False, "pack not loaded — manifest unresolved"),
+            LintResult("async-decision", False, "pack not loaded — manifest unresolved"),
+        ]
+    else:
+        results += _lint_pack_hooks(manifest, root)
+    return results
+
+
+@pack.command(name="lint")
+@click.argument("plugin_root")
+def pack_lint(plugin_root: str) -> None:
+    """Vet a plugin's pack against the attach-only dependency contract.
+
+    Pass the plugin root (the dir its SessionStart ``pack attach`` line passes). Checks, each
+    reported pass/fail: the capt-hook.toml manifest resolves; hooks.json carries exactly one
+    canonical SessionStart attach entry and zero ``capt-hook run`` entries; plugin.json declares
+    the captain-hook dependency; the repo marketplace.json allows the cross-marketplace
+    dependency (a warning when absent); the pack subscribes no SessionStart events; and no hook
+    registers ``async_=True`` on a decision event. Exits non-zero on any failure.
+    """
+    results = lint_pack(Path(plugin_root).resolve())
+    for r in results:
+        tag = "PASS " if r.ok and not r.warning else "WARN " if r.warning else "FAIL "
+        click.echo(f"  {tag} {r.check}: {r.reason}")
+    failures = [r for r in results if not r.ok and not r.warning]
+    click.echo(f"\n{len(results)} checks: {sum(r.ok for r in results)} ok, {len(failures)} failed")
+    if failures:
+        sys.exit(1)
 
 
 @pack.command(name="list")

@@ -8,6 +8,7 @@ import pytest
 from loguru import logger
 
 from captain_hook.app import (
+    AsyncDecisionError,
     _state,
     get_matching_hooks,
     load_gitignore,
@@ -60,10 +61,45 @@ class TestOnDecorator:
         assert on(Event.PreToolUse)(handler) is handler
 
 
+class TestAsyncDecisionGuard:
+    """async_=True on a decision event is rejected: Claude Code never awaits it, so the verdict is lost."""
+
+    @pytest.mark.parametrize("event", [Event.PreToolUse, Event.Stop, Event.SubagentStop, Event.PermissionRequest])
+    def test_hook_rejects_async_on_decision_event(self, event: Event) -> None:
+        with pytest.raises(AsyncDecisionError, match="silently discarded"):
+            register_hook(event, message="m", async_=True)
+        assert _state.hooks == []  # nothing registered
+
+    def test_on_rejects_async_on_decision_event(self) -> None:
+        with pytest.raises(AsyncDecisionError, match="Stop"):
+
+            @on(Event.Stop, async_=True)
+            def handler(evt: Any) -> None:
+                return None
+
+        assert _state.hooks == []
+
+    def test_rejects_async_when_a_combined_flag_includes_a_decision_event(self) -> None:
+        # A hook subscribing several events at once still can't be async if ANY is decision-capable.
+        with pytest.raises(AsyncDecisionError, match="Stop"):
+            register_hook(Event.PostToolUse | Event.Stop, message="m", async_=True)
+
+    def test_allows_async_on_non_decision_event(self) -> None:
+        register_hook(Event.PostToolUse, message="m", async_=True)
+        register_hook(Event.SessionStart, message="m", async_=True)
+        assert len(_state.hooks) == 2  # both non-decision events register cleanly
+
+    def test_allows_sync_hook_on_decision_event(self) -> None:
+        register_hook(Event.Stop, message="m")  # sync is the correct way to gate a decision event
+        assert len(_state.hooks) == 1
+
+
 class TestRegistrationFields:
     def test_stores_all_hookspec_fields(self) -> None:
+        # PostToolUse (not a decision event) so async_=True is valid alongside the tool conditions;
+        # PreToolUse would trip the async-on-decision guard (see TestAsyncDecisionGuard).
         register_hook(
-            Event.PreToolUse,
+            Event.PostToolUse,
             only_if=[Tool("Bash"), Command(r"git")],
             skip_if=[TestFile()],
             message="test",
@@ -73,7 +109,7 @@ class TestRegistrationFields:
             async_=True,
         )
         spec = _state.hooks[0].spec
-        assert spec.events == Event.PreToolUse
+        assert spec.events == Event.PostToolUse
         assert spec.only_if == (Tool("Bash"), Command(r"git"))
         assert spec.skip_if == (TestFile(),)
         assert spec.message == "test"

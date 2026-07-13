@@ -86,6 +86,37 @@ class TestSessionManagement:
         assert sd.is_dir()
         assert seen == [SESSION_ID]
 
+    def test_cleanup_stale_excludes_current_session(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The caller's own session is live even if stale + transcript-less; exclude keeps it.
+        monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
+        monkeypatch.setattr("cc_transcript.discovery.find_transcript_sync", lambda session_id: None)
+
+        current = ensure_session(SessionId(SESSION_ID))
+        other = ensure_session(SessionId("99999999-8888-7777-6666-555555555555"))
+        age_dir(current, seconds=STALE_AGE_SECONDS + 60)
+        age_dir(other, seconds=STALE_AGE_SECONDS + 60)
+
+        cleanup_stale(exclude=SessionId(SESSION_ID))
+        assert current.is_dir()  # excluded session survives
+        assert not other.exists()  # every other stale, transcript-less session is still reaped
+
+    def test_cleanup_stale_has_production_call_site(self) -> None:
+        # cleanup_stale is worthless without a live call site (pack_attach wires it). Guard against
+        # a refactor that drops the wiring and leaves session dirs accumulating forever.
+        import re
+
+        import captain_hook
+
+        pkg = Path(captain_hook.__file__).parent
+        call = re.compile(r"(?<!def )\bcleanup_stale\s*\(")
+        sites = [
+            f"{p.relative_to(pkg)}:{i}"
+            for p in pkg.rglob("*.py")
+            for i, line in enumerate(p.read_text().splitlines(), 1)
+            if call.search(line)
+        ]
+        assert sites, "cleanup_stale must be called from production code, not only tests"
+
     def test_atomic_write_produces_valid_json(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
         slot = store[MyModel]
