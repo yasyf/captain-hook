@@ -72,14 +72,14 @@ When you write a plan — in plan mode, or any "here's what I'll do" before you 
 
 ## Compact Context (ccx)
 
-`cc-context` — the `ccx` CLI and the `cc-context` MCP (its tools mirror the query surface — read, search, symbol, outline, diff, edit — plus `ccx_exec`/`ccx_exec_tools` for multi-call composition and `BashFormat` for JSON re-encoding) — is the DEFAULT for reading code, finding symbols, searching, and reviewing diffs. It returns token-bounded output (signatures + line numbers, explicit overflow, never silent truncation) instead of raw dumps, and the capt-hook `ccx` guard pack rewrites the mappable token-heavy commands (raw `grep`, bare `git diff`/`git show`, page-dump `curl`, oversized `Read`s) to their ccx equivalents in place and BLOCKS the rest — so reach for ccx first.
+`cc-context` — the `ccx` CLI and the `cc-context` MCP (its tools mirror the query surface — read, search, symbol, outline, diff, edit — plus `ccx_exec`/`ccx_exec_tools` for multi-call composition and `BashFormat` for JSON re-encoding) — is the first stop for TARGETED code questions: a file section, a symbol, a search, a diff. It returns token-bounded output (signatures + line numbers, explicit overflow, never silent truncation) instead of raw dumps, and the capt-hook `ccx` guard pack rewrites the mappable token-heavy commands (raw `grep`, bare `git diff`/`git show`, page-dump `curl`, oversized `Read`s) to their ccx equivalents in place and BLOCKS the rest.
 
 1. **Orient a repo** → `ccx repo overview`
 2. **"How does X work / where is Y" (intent)** → `ccx code search "<question>"` (semantic, semble-backed)
-3. **A specific symbol (def + callers + callees)** → `ccx code symbol <name>` (alias `ccx code grok`)
+3. **A specific symbol (where + signature)** → `ccx code symbol <name>` (alias `ccx code grok`; terse by default with a counts trailer — `--callers`/`--callees`/`--body`/`--full` expand)
 4. **Literal or regex text** → `ccx code grep <text> [paths...] [--regex] [--glob G] [--scope dir] [-i] [-w]` (`--regex`/`-i`/`-w` and explicit file operands run on ripgrep; system `grep` fills in when `rg` is missing; a glob or scope anchored at a real path — `.venv/…/pkg/*.py` — is searched even where ignore rules would hide it)
 5. **List files** → `ccx repo find "<glob>"`
-6. **Read a file** → `ccx code outline <file-or-dir>` first (ast-grep structural map for the languages it outlines and any directory, tilth signatures otherwise), then `ccx code read <file> --section A-B` for the part you need (whole file: `ccx code read <file> --full`)
+6. **Read a file** → `ccx code outline <file-or-dir>` first (ast-grep structural map for the languages it outlines and any directory, tilth signatures otherwise; top-level by default — `--deep` expands members, `--section A-B` windows a file), then `ccx code read <file> --section A-B` for the part you need (whole file: `ccx code read <file> --full`)
 7. **Edit a file** → `ccx code edit <file> --at A-B#hash --content <text>` (hash-verified write: refuses on anchor mismatch, re-anchors moved content, returns the new anchor so edits chain; `--content -` reads stdin, `--delete` removes the range)
 8. **Review changes** → `ccx vcs diff [src]` (structural, jj-aware; exact hunks: `git diff -- <file>`)
 9. **Inspect one commit** → `ccx vcs show [ref]` (message + structural per-file diff; default `@-`/HEAD)
@@ -97,7 +97,7 @@ Entries 9–13 are CLI-only (entry 12's `locate` step included) — the MCP mirr
 
 Durable prose — plans, reviews, memory files — cites code as `path:line#hash` (e.g. `internal/render/finalize.go:31#k2fa`); any later session resolves the cite statelessly with ccx, because the hash re-anchors by content even after the file drifts.
 
-Reach for your **LSP** when the answer must be exhaustive/structural (findReferences, rename, goToImplementation). Use **Grep/Glob** or `rg` only for literal content in non-source files (logs, JSON, YAML) — on source, raw `rg` is gated the same as raw `grep`.
+Reach for your **LSP** when the answer must be exhaustive/structural (findReferences, rename, goToImplementation) — and verify any complete-set answer ("every subclass", "every importer") by reading the candidate files: bounded views optimize for precision, not exhaustiveness. Use **Grep/Glob** or `rg` only for literal content in non-source files (logs, JSON, YAML) — on source, raw `rg` is gated the same as raw `grep`.
 
 ## Python Style
 
