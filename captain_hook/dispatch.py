@@ -15,6 +15,8 @@ from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHo
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
 
+ADVISORY_SEPARATOR = "Additional advisories (not the reason for the deny):"
+
 
 def run_declarative(spec: HookSpec, evt: BaseHookEvent) -> HookResult | None:
     return (
@@ -151,12 +153,15 @@ def dispatch(
 ) -> dict[str, Any] | None:
     """Dispatch an event to all matching hooks and combine their results, deny-wins.
 
-    Follows Claude Code's own ``deny > ask > allow`` precedence: a ``block`` from any matching
-    hook beats an ``allow``/``rewrite``, so one hook's approval can never short-circuit another
-    hook's block. Every hook still runs after a block, so ``warn`` messages ride along on the deny
-    rather than being lost to it: when any block fired, the result is one block whose message joins
-    the block messages then the warn messages (encounter order, ``"\n\n"``-separated); approvals are
-    moot once blocked. Absent a block, the first approval wins, else the accumulated warns surface.
+    Follows Claude Code's own ``deny > ask > allow`` precedence: a ``block`` from any matching hook
+    beats an ``allow``/``rewrite``, so one hook's approval can never short-circuit another hook's
+    block. ``warn`` messages ride along on the deny rather than being lost to it — when any block
+    fired the result is one block whose message joins the block messages, an advisory separator, then
+    the surviving warn messages (encounter order, ``"\n\n"``-separated). Once a block has fired,
+    remaining *handler-backed* hooks are skipped (their verdict is doomed and they'd burn API cost
+    and ``max_fires`` budget); message-only declarative hooks still run, so a declarative warn still
+    surfaces on the deny. Approvals are moot once blocked. Absent a block, the first approval wins,
+    else the accumulated warns surface.
     """
     matching = [h for h in get_matching_hooks(evt) if h.spec.async_ == async_]
 
@@ -165,6 +170,8 @@ def dispatch(
     blocks: list[str] = []
     warns: list[str] = []
     for entry in matching:
+        if blocked and entry.handler is not None:
+            continue
         match execute_hook(entry, evt, session_dir):
             case HookResult(action=Action.block, message=msg):
                 blocked = True
@@ -178,7 +185,12 @@ def dispatch(
                 pass
 
     if blocked:
-        return format_output(event, HookResult(action=Action.block, message="\n\n".join([*blocks, *warns]) or None))
+        parts = list(blocks)
+        if warns:
+            if parts:
+                parts.append(ADVISORY_SEPARATOR)
+            parts.extend(warns)
+        return format_output(event, HookResult(action=Action.block, message="\n\n".join(parts) or None))
     if approval is not None:
         return format_output(event, approval)
     if warns:

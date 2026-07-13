@@ -49,8 +49,15 @@ def disk_pre_image(path: Path) -> str | None:
 
 
 def apply_edit(image: str | None, old: str, new: str, replace_all: bool) -> str | None:
-    """Apply one ``old``→``new`` replacement to ``image``, or ``None`` when ``old`` is absent."""
-    if image is None or old not in image:
+    """Apply one ``old``→``new`` replacement to ``image``, mirroring the tool's own preconditions.
+
+    ``None`` when ``old`` is absent, or — without ``replace_all`` — ambiguous (more than one match),
+    since the real Edit tool rejects the call rather than editing the first occurrence.
+    """
+    if image is None:
+        return None
+    count = image.count(old)
+    if count == 0 or (not replace_all and count != 1):
         return None
     return image.replace(old, new) if replace_all else image.replace(old, new, 1)
 
