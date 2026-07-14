@@ -57,7 +57,9 @@ nudge(
             Signal(pattern=r"(?i)(?<!no change )(?<!no changes )(?:outside|beyond) (?:the )?scope", weight=1),
             NlpSignal(
                 clauses=[
-                    Clause(noun=Phrase.expand("change"), verb=Phrase("cause", "introduce"), negated=True),
+                    Clause(
+                        noun=Phrase.expand("change"), verb=Phrase("cause", "introduce"), negated=True, tense="completed"
+                    ),
                     Clause(
                         noun=Phrase("issue", "bug", "problem", "error", "failure", "violation", "warning"),
                         verb=Phrase("leave"),
@@ -429,6 +431,25 @@ nudge(
                                 "text": (
                                     "Landed the parser fix; I left the pre-existing lint warnings alone since they "
                                     "predate this change, and all 42 tests pass."
+                                ),
+                            }
+                        ]
+                    },
+                }
+            ]
+        ): Allow(),
+        # cand6-g2 (session c2b980ad, 2026-07-08): flagged risk, not a dismissal.
+        Input(
+            transcript=[
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "cc-pool might not be compatible with those API changes, or they could "
+                                    "introduce unexpected behavior shifts beyond what my fix addresses."
                                 ),
                             }
                         ]
