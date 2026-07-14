@@ -3,10 +3,12 @@ Decide whether this delegated subagent's work should route off fable-5 — to op
 <delegated_spawn> holds the pending Agent/Task call: its model pin (or that it inherits
 the session model, fable), agent type, and prompt.
 
-The Models rubric: implementation delegates off fable — ambiguous or exploratory work,
-large multi-file refactors, and long agentic runs go to opus-4.8 at xhigh (~2x cheaper
-than fable and nearly as capable); well-scoped, clearly-bounded
-implementation (terminal-heavy included) goes to gpt-5.6-sol via the codex:codex-wrapper agent. Fable's lanes are
+The Models rubric: implementation delegates off fable — the split is decision density.
+Bounded, decision-light work (the plan, work order, or repeated pattern already made the
+decisions; terminal-heavy included) goes to gpt-5.6-sol via the codex:codex-wrapper agent;
+ambiguous, exploratory, long-run, or decision-dense work — mid-flight judgment calls pile
+up even when the scope is bounded — goes to opus-4.8 at xhigh (~2x cheaper
+than fable and nearly as capable). Fable's lanes are
 orchestration, design/architecture review, hard planning, all prose/writing, and
 implementation that is very sensitive or error-prone (auth, migrations, concurrency,
 data loss, crypto, subtle algorithms). Code/diff review, security review/audit, and bug
@@ -22,15 +24,15 @@ reasoning under 40 words.
 <examples>
 <example fire="true">
 Implement the pagination endpoint in api/users.py per the spec in the plan.
-Spec'd, clearly-bounded implementation — the gpt-5.6-sol lane; off fable either way.
+Spec'd, decision-light implementation — the gpt-5.6-sol lane; off fable either way.
 </example>
 <example fire="true">
 Add a --json flag to the export command and thread it through the formatter.
-Well-scoped feature wiring — the gpt-5.6-sol lane.
+Decision-light feature wiring — the gpt-5.6-sol lane.
 </example>
 <example fire="true">
 Build out the new ingestion subsystem: parser, store, and CLI wiring, shape TBD.
-Exploratory multi-file implementation — the opus xhigh lane.
+Exploratory, decision-dense implementation — the opus xhigh lane.
 </example>
 <example fire="false">
 Review the diff for correctness and concurrency issues.
