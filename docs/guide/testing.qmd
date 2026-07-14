@@ -145,6 +145,19 @@ or `name` to control the file name an extension- or path-based condition matches
 string `file="app.py"` stays a virtual path with no bytes behind it, so reach for
 `FileFixture` only when the hook needs the file to exist.
 
+Two more knobs cover command guards that stat their operands. A `{file}` token in
+`Input.command` is replaced with the materialized fixture's absolute path, so the command
+names a real file. `home=True` (requires `name`) materializes the fixture under a private
+temp home and swaps `$HOME` to it for just that test, so a literal `~` in the command
+exercises an `os.path.expanduser`-based guard deterministically:
+
+```python
+tests={
+    Input(command="cat {file}", file=FileFixture(size=2048, name="big.md")): Warn(),
+    Input(command="cat ~/notes.md", file=FileFixture(home=True, name="notes.md", size=128)): Allow(),
+}
+```
+
 When a hook depends on session history, pass a `transcript` fixture so the
 [transcript conditions](../reference/conditions.qmd) have something to read. The
 [Query the transcript](transcript.qmd) guide shows how to build one.

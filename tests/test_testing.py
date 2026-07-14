@@ -648,6 +648,77 @@ class TestRunInlineTests:
         assert len(results) == 2
         assert all(r[2] for r in results), f"Failed: {results}"
 
+    def test_home_fixture_swaps_home_during_hook_execution(self):
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import FileFixture, Input, Warn
+
+        reset()
+        original_home = os.environ.get("HOME")
+        seen_home: list[str | None] = []
+
+        @on(
+            Event.PreToolUse,
+            only_if=[Tool("Bash")],
+            tests={Input(command="cat {file}", file=FileFixture(home=True, name="secret", content="x")): Warn()},
+        )
+        def capture_home(evt):
+            seen_home.append(os.environ.get("HOME"))
+            return evt.warn("captured")
+
+        results = run_inline_tests()
+        assert all(r[2] for r in results), f"Failed: {results}"
+        assert seen_home and seen_home[0] != original_home
+        assert os.environ.get("HOME") == original_home
+
+    def test_home_fixture_restores_home_even_when_test_assertion_fails(self):
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Block, FileFixture, Input
+
+        reset()
+        original_home = os.environ.get("HOME")
+
+        @on(
+            Event.PreToolUse,
+            only_if=[Tool("Bash")],
+            tests={
+                Input(command="cat {file}", file=FileFixture(home=True, name="secret", content="x")): Block(
+                    pattern="nope"
+                )
+            },
+        )
+        def passthrough(evt):
+            return None  # never blocks, so the Block() expectation fails
+
+        results = run_inline_tests()
+        assert len(results) == 1
+        assert results[0][1] == "fail"
+        assert os.environ.get("HOME") == original_home
+
+    def test_home_fixture_restores_home_even_when_hook_raises(self):
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import FileFixture, Input, Warn
+
+        reset()
+        original_home = os.environ.get("HOME")
+
+        @on(
+            Event.PreToolUse,
+            only_if=[Tool("Bash")],
+            tests={Input(command="cat {file}", file=FileFixture(home=True, name="secret", content="x")): Warn()},
+        )
+        def raising_hook(evt):
+            raise RuntimeError("boom")
+
+        results = run_inline_tests()
+        assert len(results) == 1
+        # run_handler swallows the hook's exception and returns None, so the Warn()
+        # expectation fails rather than the run erroring — the swap/restore still ran.
+        assert results[0][1] == "fail"
+        assert os.environ.get("HOME") == original_home
+
 
 class TestStubbedContext:
     def test_input_to_event_ctx_is_stubbed(self):

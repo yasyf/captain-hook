@@ -12,6 +12,7 @@ The [Guide](../guide/index.qmd) how-tos teach which one to reach for.
 | `block_command` | block | `PreToolUse` | ✓ | command |
 | `warn_command` | warn | `PostToolUse` | ✓ | command |
 | `rewrite_command` | rewrite (or block) | `PreToolUse` | ✓ | command |
+| `rewrite_command_occurrences` | rewrite (or block) | `PreToolUse` | ✓ | command |
 | `gate` | block | `Stop \| SubagentStop` | ✓ | completion |
 | `nudge` | warn (or block) | `PreToolUse`/`PostToolUse`/`Stop \| SubagentStop` | ✓ | advice |
 | `lint` | warn (or block) | `PostToolUse` | ✓ | edit (string/AST) |
@@ -47,6 +48,13 @@ rewrite_command(pattern: str | None = None, replace: str | None = None, *,
                 block: str | None = None,
                 note: str | Callable[[PreToolUseEvent], str | None] | None = None,
                 tests: InlineTests | None = None) -> None
+
+rewrite_command_occurrences(*, to: Callable[[PreToolUseEvent, Occurrence], str | None],
+                            only_if: Sequence[TCondition] = (), skip_if: Sequence[TCondition] = (),
+                            block_if: Callable[[PreToolUseEvent, Occurrence], bool] | None = None,
+                            block: str | None = None,
+                            note: str | Callable[[PreToolUseEvent, Sequence[tuple[Occurrence, str]]], str | None] | None = None,
+                            tests: InlineTests | None = None) -> None
 ```
 
 A token list (`["git", "stash"]`) becomes a whitespace-tolerant regex; a string is used as-is.
@@ -61,6 +69,16 @@ raises `TypeError`.
 
 Both forms surface `note` as `additionalContext` and assert with `Rewrite` for a substring
 match or `Block`.
+
+`rewrite_command_occurrences` is the per-occurrence sibling of the conditional form. `to(evt, occ)`
+runs once per parsed command of a `;`/`&&`/`|`-joined line, and every non-`None` return is spliced
+back by byte span, so untouched segments, operators, redirects, and comments survive byte-for-byte.
+`to` is never called for a span-less occurrence (an absorbed-word redirect shape such as
+`echo a >out b`); those pass through untouched. `block_if` — which requires `block` — checks every
+occurrence, span-less ones included, before any rewrite, and one trip blocks the whole line:
+blocking is line-grained, so an unrewritable segment never runs because a sibling was rewritable.
+With no rewrites the line blocks when `block` is set, and passes otherwise. A callable `note`
+receives every `(Occurrence, replacement)` pair and composes the one note for the line.
 
 ## Nudges & gates
 

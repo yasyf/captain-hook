@@ -8,7 +8,7 @@ import re
 import shutil
 import tempfile
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
@@ -98,8 +98,15 @@ def fixture_file_dir() -> Path:
     return root
 
 
+def home_fixture_dir() -> Path:
+    root = Path(tempfile.mkdtemp(prefix="capt-hook-home-"))
+    atexit.register(shutil.rmtree, root, ignore_errors=True)
+    return root
+
+
 def materialize_file(fixture: FileFixture) -> str:
-    path = fixture_file_dir() / (fixture.name or f"fixture-{next(FIXTURE_FILE_COUNTER)}")
+    base = home_fixture_dir() if fixture.home else fixture_file_dir()
+    path = base / (fixture.name or f"fixture-{next(FIXTURE_FILE_COUNTER)}")
     path.write_bytes(fixture.content.encode() if fixture.content is not None else b"x" * (fixture.size or 0))
     return str(path)
 
@@ -460,10 +467,17 @@ def input_to_event(
             evt = mock_session_end_event(reason=inp.reason or "other", **ctx_kw)
         case _:
             file = materialize_file(inp.file) if isinstance(inp.file, FileFixture) else inp.file
+            # {file} is an opt-in substitution: only fires when a FileFixture materialized a real
+            # path AND the command spells the literal token, so no other brace in a command is touched.
+            command = (
+                inp.command.replace("{file}", file)
+                if isinstance(inp.file, FileFixture) and inp.command and "{file}" in inp.command
+                else inp.command
+            )
             evt = mock_tool_event(
                 tool=inp.tool or spec_tool or infer_tool(inp),
                 event=ev,
-                command=inp.command,
+                command=command,
                 file=file,
                 content=inp.content,
                 old=inp.old,
@@ -479,6 +493,10 @@ def input_to_event(
                 tool_input=inp.tool_input,
                 **ctx_kw,
             )
+            if isinstance(inp.file, FileFixture) and inp.file.home:
+                # Scoped here: `file` only binds in this branch, so a home fixture on a
+                # non-tool event stays inert instead of raising.
+                evt.__dict__["_home_dir"] = str(Path(file).parent)
 
     if inp.tasks is not None:
         from captain_hook.tasks import Task, Tasks
@@ -623,6 +641,20 @@ def isolated_state_root() -> Iterator[Path]:
         shutil.rmtree(root, ignore_errors=True)
 
 
+@contextmanager
+def home_env(home: str) -> Iterator[None]:
+    """Swap ``$HOME`` to ``home`` for the duration, restoring the prior value even on failure."""
+    saved = os.environ.get("HOME")
+    os.environ["HOME"] = home
+    try:
+        yield
+    finally:
+        if saved is None:
+            del os.environ["HOME"]
+        else:
+            os.environ["HOME"] = saved
+
+
 def run_inline_tests() -> list[tuple[str, str, bool, str]]:
     from captain_hook.app import _state, is_planning_agent_skip
 
@@ -647,11 +679,12 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
                             if spec_tools
                             else None,
                         )
-                        hook_result = (
-                            execute_hook(entry, evt)
-                            if matches_conditions(entry.spec, evt) and not is_planning_agent_skip(entry.spec, evt)
-                            else None
-                        )
+                        with home_env(home_dir) if (home_dir := evt.__dict__.get("_home_dir")) else nullcontext():
+                            hook_result = (
+                                execute_hook(entry, evt)
+                                if matches_conditions(entry.spec, evt) and not is_planning_agent_skip(entry.spec, evt)
+                                else None
+                            )
                         assert_result(hook_result, expected, entry.name)
                     elif jsonl := SessionCache.for_root().load(key):
                         replays = list(replay_session(entry, jsonl))

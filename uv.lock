@@ -298,7 +298,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "ast-grep-py", specifier = ">=0.39,<1" },
-    { name = "cc-transcript", extras = ["judge"], specifier = ">=13,<14" },
+    { name = "cc-transcript", extras = ["judge"], specifier = ">=13.2,<14" },
     { name = "click", specifier = ">=8" },
     { name = "filelock", specifier = ">=3" },
     { name = "funcy", specifier = ">=2.0" },
@@ -336,7 +336,7 @@ wheels = [
 
 [[package]]
 name = "cc-transcript"
-version = "13.1.0"
+version = "13.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -346,12 +346,12 @@ dependencies = [
     { name = "tree-sitter", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "tree-sitter-bash", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b9/35/b5ae0ca87129396637a78633686410d8b2262534efea72afd26f51e76dfb/cc_transcript-13.1.0.tar.gz", hash = "sha256:28239578b6701968c34e4397fee044ccab4da1be4dda6c686207d4b79b99d7e2", size = 11969012, upload-time = "2026-07-13T23:01:38.126Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2e/cc/5ec914cb230c121f8697c1becd4e1b5b30e06348c389e2705b23c9430d17/cc_transcript-13.2.0.tar.gz", hash = "sha256:0dc35c369355a1652f76d51e7af22f68a057e1e2f406f6884f9e9b5da2505ca1", size = 11970489, upload-time = "2026-07-14T21:54:33.992Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b8/4e/95207bf936f7eeacc593f0457e1f32336060d6de9e86d0602bb388c03bac/cc_transcript-13.1.0-cp313-abi3-macosx_11_0_arm64.whl", hash = "sha256:70d9ba66c6ced4f18733539d8aaa3de3f1bc32eee07aeac3474a4d52f4684376", size = 25385788, upload-time = "2026-07-13T23:01:23.844Z" },
-    { url = "https://files.pythonhosted.org/packages/cb/7d/b8f77d1d78f8edf264db6e92d1e61cb580589b623523fb87a869edd9a416/cc_transcript-13.1.0-cp313-abi3-macosx_11_0_x86_64.whl", hash = "sha256:ad1da3207626db0598ff10d59b5d98fbf8083bf18eb5865f60eed5c09e85d2f2", size = 25384475, upload-time = "2026-07-13T23:01:27.464Z" },
-    { url = "https://files.pythonhosted.org/packages/71/c9/4c309af9d34dd4c29f400bdc147899f64a7dd43fcc557fe31482fcb94124/cc_transcript-13.1.0-cp313-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:30e094ac59fa21f9a481bfe244a4bd825cacf46f35be86b0bb74f19c5b3766e5", size = 25369142, upload-time = "2026-07-13T23:01:31.091Z" },
-    { url = "https://files.pythonhosted.org/packages/0d/22/d86e1c7c36aabab6aaec7eed0833e5ed340662ec1659ad5308dca83f7fed/cc_transcript-13.1.0-cp313-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:adda912055f99ab0c954e4c95d3f31c95c6a00f015902cfa72f1d4bb5929cd8d", size = 25485944, upload-time = "2026-07-13T23:01:34.595Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/ee/b63455aa9d992cd35d752fb238e38598bded91ffc59754b697218a631c24/cc_transcript-13.2.0-cp313-abi3-macosx_11_0_arm64.whl", hash = "sha256:060cc1623d7c42c6c2299a14b7c651627634038ca0c8392385e46f7179f91b61", size = 25386739, upload-time = "2026-07-14T21:54:22.653Z" },
+    { url = "https://files.pythonhosted.org/packages/de/6a/da893e444daa441eb42356a8755b5f978bdee57e8bd36a74a948a070de74/cc_transcript-13.2.0-cp313-abi3-macosx_11_0_x86_64.whl", hash = "sha256:f289074a8a149ad120132a696fb787671f423d0c42e3a44fd2c666104ae648f4", size = 25386198, upload-time = "2026-07-14T21:54:25.645Z" },
+    { url = "https://files.pythonhosted.org/packages/af/08/ea8cabd6686efc233f06eb5d192710ed571896a5fcab156e0f68b139f7d1/cc_transcript-13.2.0-cp313-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:ce74027d377b99bf7aceba379d44325586caef5cd6ee2724b189c7cf87f6aeaa", size = 25370866, upload-time = "2026-07-14T21:54:28.545Z" },
+    { url = "https://files.pythonhosted.org/packages/85/da/1aa08d7e067f285aaa8c846943dfd2b6681b2e1c8d67dd3a172eea9b4aa5/cc_transcript-13.2.0-cp313-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:298bf3930ba260b4a854a28335db42d8c243ccb203f639c00db948ae8efbfabf", size = 25487666, upload-time = "2026-07-14T21:54:31.443Z" },
 ]
 
 [package.optional-dependencies]

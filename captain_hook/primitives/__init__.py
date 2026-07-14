@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from captain_hook.primitives.commands import block_command, rewrite_command, warn_command
+from captain_hook.primitives.commands import (
+    block_command,
+    rewrite_command,
+    rewrite_command_occurrences,
+    warn_command,
+)
 from captain_hook.primitives.lint import diff_lint, lint
 from captain_hook.primitives.llm import (
     GateVerdict,

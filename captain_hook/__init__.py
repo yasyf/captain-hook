@@ -4,7 +4,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from cc_transcript.command import Command, CommandLine, Redirect
+    from cc_transcript.command import Command, CommandLine, Occurrence, Redirect
     from cc_transcript.tools import (
         BashCall,
         EditCall,
@@ -77,6 +77,7 @@ if TYPE_CHECKING:
         prompt_check,
         rewrite_code,
         rewrite_command,
+        rewrite_command_occurrences,
         set_tool_input,
         warn_command,
     )
@@ -182,6 +183,7 @@ _EXPORTS: dict[str, str] = {
     "file": "captain_hook.file",
     "block_command": "captain_hook.primitives.commands",
     "rewrite_command": "captain_hook.primitives.commands",
+    "rewrite_command_occurrences": "captain_hook.primitives.commands",
     "warn_command": "captain_hook.primitives.commands",
     "diff_lint": "captain_hook.primitives.lint",
     "lint": "captain_hook.primitives.lint",
@@ -268,6 +270,7 @@ _EXPORTS: dict[str, str] = {
     "resolve_binary": "captain_hook.util.fs",
     "Command": "cc_transcript.command",
     "CommandLine": "cc_transcript.command",
+    "Occurrence": "cc_transcript.command",
     "Redirect": "cc_transcript.command",
     "BashCall": "cc_transcript.tools",
     "EditCall": "cc_transcript.tools",

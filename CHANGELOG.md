@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [9.15.0] - 2026-07-14
 
 ### Added
+- **`rewrite_command_occurrences` primitive: per-occurrence Bash-line rewrites.** `to(evt, occ)`
+  runs once per parsed command of a `;`/`&&`/`|`-joined line, and every non-`None` return is
+  spliced back by byte span, so untouched segments, operators, redirects, and comments survive
+  byte-for-byte. `block_if` (which requires a non-empty `block`) checks every occurrence before
+  any rewrite and blocks the whole line when one trips; a callable `note` composes one message
+  from all `(Occurrence, replacement)` pairs. `Occurrence` is re-exported at the root. Raises
+  the cc-transcript floor to `>=13.2` for `Command.span` and `CommandLine.splice`.
+- **Inline-test fixtures for path-shaped guards.** A `{file}` token in `Input.command` is
+  replaced with the materialized `FileFixture`'s absolute path, and `FileFixture(home=True)`
+  materializes under a private temp home with `$HOME` swapped for just that test, so stat- and
+  `expanduser`-based command guards test deterministically.
 - **Fixes pack: scratch-dir writes stop prompting under bypass consent.** A new
   `scratch_writes` hook auto-approves native file-tool writes (`Edit`/`Write`/
   `MultiEdit`/`NotebookEdit`) whose target resolves into a system temp root

@@ -11,6 +11,8 @@ from captain_hook.types import Command, Event, HookResponse, InlineTests, Tool
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from cc_transcript.command import Occurrence
+
     from captain_hook.events import PreToolUseEvent
     from captain_hook.types import TCondition
 
@@ -150,3 +152,59 @@ def rewrite_command(
     on(Event.PreToolUse, only_if=[Tool("Bash"), Command(pattern), *only_if], skip_if=skip_if, tests=tests)(
         regex_handler
     )
+
+
+def rewrite_command_occurrences(
+    *,
+    to: Callable[[PreToolUseEvent, Occurrence], str | None],
+    only_if: Sequence[TCondition] = (),
+    skip_if: Sequence[TCondition] = (),
+    block_if: Callable[[PreToolUseEvent, Occurrence], bool] | None = None,
+    block: str | None = None,
+    note: str | Callable[[PreToolUseEvent, Sequence[tuple[Occurrence, str]]], str | None] | None = None,
+    tests: InlineTests | None = None,
+) -> None:
+    r"""Register a ``PreToolUse`` hook that rewrites a Bash line occurrence by occurrence.
+
+    Unlike [`rewrite_command`][captain_hook.rewrite_command]'s ``to=`` form — which maps the
+    whole line to one new command — ``to`` here is called once per parsed
+    [`Occurrence`][cc_transcript.command.Occurrence] of a ``;``/``&&``/``|``-joined line, so a
+    guard can rewrite one segment of a compound command while leaving its siblings untouched.
+    ``to`` is never called for a span-less occurrence (e.g. an absorbed-word redirect shape) —
+    those commands are unspliceable by design and pass through untouched, though ``block_if``
+    still sees them.
+
+    Every occurrence ``to`` rewrites is spliced into the line in one pass, so a multi-occurrence
+    rewrite surfaces as a single ``additionalContext`` note; pass a callable ``note`` to compose
+    one message from every ``(Occurrence, replacement)`` pair.
+
+    ``block_if``, when given, checks every occurrence — including span-less ones — *before* any
+    rewrite is attempted: if any occurrence trips it, the whole line blocks with ``block`` rather
+    than executing a partial rewrite. This is deliberately line-grained — one unrewritable
+    segment must not run just because a sibling was rewritable — so ``block_if`` requires a
+    non-empty ``block`` at registration time (an empty string is rejected too, since both
+    branches below treat ``block`` by truthiness). When nothing rewrites and no ``block_if``
+    trips, the line falls through to ``block`` (if given) or passes through untouched.
+
+    Example:
+        >>> rewrite_command_occurrences(
+        ...     to=lambda evt, occ: "ccx read foo.py --full" if occ.command.matches("^cat foo.py$") else None,
+        ...     note=lambda evt, pairs: f"Rewrote {len(pairs)} cat invocation(s) to ccx read",
+        ... )
+    """
+    if block_if is not None and not block:
+        raise TypeError("rewrite_command_occurrences requires a non-empty block= when block_if is given")
+
+    def handler(evt: PreToolUseEvent) -> HookResponse:
+        if not (cl := evt.command_line):
+            return None
+        if block_if is not None and any(block_if(evt, occ) for occ in cl.occurrences):
+            return evt.block(block) if block else None
+        pairs = [
+            (occ, new) for occ in cl.occurrences if occ.command.span is not None and (new := to(evt, occ)) is not None
+        ]
+        if pairs and (spliced := cl.splice({occ.index: new for occ, new in pairs})) != cl.raw:
+            return evt.rewrite_command(spliced, note=note(evt, pairs) if callable(note) else note)
+        return evt.block(block) if block else None
+
+    on(Event.PreToolUse, only_if=[Tool("Bash"), *only_if], skip_if=skip_if, tests=tests)(handler)

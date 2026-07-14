@@ -1,0 +1,43 @@
+---
+title: "Per-occurrence rewrites"
+---
+
+> Rewrite one segment of a compound command without touching its siblings.
+
+A whole-line rewrite is the wrong tool for a compound command: mapping the entire line to one
+new command either drops the `cd` and `pytest` or rewrites them along for the ride.
+`rewrite_command_occurrences` calls `to` once per parsed command and splices every rewrite back
+by byte span, so untouched segments, operators, redirects, and comments survive byte-for-byte.
+This example steers `pip install` to `uv pip install` wherever it appears in a line.
+
+<!-- gd-embed: per_occurrence_rewrite.py -->
+
+## What it rewrites
+
+```bash
+pip install requests                                  # → uv pip install requests
+cd api && pip install -r requirements.txt && pytest   # → cd api && uv pip install -r requirements.txt && pytest
+pip install 'foo>=2'                                  # quoting survives: → uv pip install 'foo>=2'
+```
+
+## What it leaves alone
+
+```bash
+pip download requests                # not an install
+python -m pip install requests      # not a bare pip executable
+pip install foo | tee install.log    # piped — the guard declines rather than break the pipe
+```
+
+*The rewrite / allow split mirrors the hook's inline `tests`, so it stays true as the hook evolves.*
+
+## Run it yourself
+
+```bash
+uvx capt-hook --hooks docs/examples test
+```
+
+## See also
+
+- [Primitives reference](../reference/primitives.qmd)
+- [Command safety](command-safety.qmd)
+- [Testing guide](../guide/testing.qmd)

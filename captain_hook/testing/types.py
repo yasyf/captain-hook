@@ -47,11 +47,22 @@ class TranscriptFixture:
 
 @dataclass(frozen=True, kw_only=True)
 class FileFixture:
-    """Inline-test file descriptor: materialized to a real temp file so size/stat-based guards run for real."""
+    """Inline-test file descriptor: materialized to a real temp file so size/stat-based guards run for real.
+
+    ``home=True`` materializes the file under a per-test temporary "home" directory instead of
+    the shared fixture directory, and ``run_inline_tests`` swaps ``$HOME`` to that directory for
+    the duration of that one test's hook execution — restored afterward even on failure — so an
+    ``os.path.expanduser``-based hook resolves deterministically. Requires ``name``.
+    """
 
     size: int | None = None
     content: str | None = None
     name: str | None = None
+    home: bool = False
+
+    def __post_init__(self) -> None:
+        if self.home and self.name is None:
+            raise ValueError("FileFixture(home=True) requires name")
 
 
 @dataclass(frozen=True, kw_only=True)
