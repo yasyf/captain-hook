@@ -9,6 +9,7 @@ from typing import Any, ClassVar, overload
 from loguru import logger
 
 from captain_hook.util import reqenv
+from captain_hook.util.paths import resolve_claude_config_dir
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -59,8 +60,7 @@ class Tasks(Sequence[Task]):
         """Resolve the root of Claude Code's native task store (``<config-dir>/tasks``)."""
         if explicit := reqenv.getenv("CAPTAIN_HOOK_TASKS_DIR"):
             return Path(explicit)
-        config_dir = Path(reqenv.getenv("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-        return config_dir / "tasks"
+        return resolve_claude_config_dir() / "tasks"
 
     @classmethod
     def for_session(cls, session_id: str, *, root: Path | None = None) -> Tasks:

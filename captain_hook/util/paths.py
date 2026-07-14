@@ -9,6 +9,10 @@ def resolve_state_dir() -> Path:
     return Path(reqenv.getenv("CAPTAIN_HOOK_STATE_DIR") or Path.home() / ".claude" / "state")
 
 
+def resolve_claude_config_dir() -> Path:
+    return Path(reqenv.getenv("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
 def resolve_project_dir() -> str | None:
     return reqenv.getenv("CLAUDE_PROJECT_DIR") or reqenv.getenv("FACTORY_PROJECT_DIR")
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -28,7 +27,20 @@ from captain_hook.loader import (
     register_pr_announcements,
 )
 from captain_hook.log import setup_logging
-from captain_hook.packs import manager
+from captain_hook.packs import bootstrap, manager
+from captain_hook.packs.contract import (
+    ATTACH_DIR_ROOT,
+    DEFAULT_PREFIX,
+    DIST_NAME,
+    MARKETPLACE_NAME,
+    MARKETPLACE_REPO,
+    PLUGIN_ID,
+    VERSION_FLOOR_RE,
+    attach_dir_reason,
+    command_entries,
+    is_attach_argv,
+    is_canonical_run_argv,
+)
 from captain_hook.review.cli import review
 from captain_hook.session import SessionStore, cleanup_stale, ensure_session
 from captain_hook.types import Event
@@ -38,21 +50,9 @@ if TYPE_CHECKING:
 
     from cc_transcript.query import Session
 
-DIST_NAME = "capt-hook"
-DEFAULT_PREFIX = f"uvx --isolated {DIST_NAME}"
 EVENT_NAMES = ", ".join(n for e in Event if (n := e.name))
-PLUGIN_ID = "captain-hook@captain-hook"
 
 DECISION_EVENTS = frozenset({Event.PreToolUse, Event.Stop, Event.SubagentStop, Event.PermissionRequest})
-
-PLUGIN_ROOT_VAR = "${CLAUDE_PLUGIN_ROOT}"
-# The two accepted attach dir args, double-quoted exactly: shlex strips the quotes, so the
-# quoting is verified against the raw command string, not the tokenized argv.
-ATTACH_DIR_ROOT = f'"{PLUGIN_ROOT_VAR}"'
-ATTACH_DIR_HOOKS = f'"{PLUGIN_ROOT_VAR}/hooks"'
-# A version floor is a lower-bound constraint: `>=X.Y.Z` (a bare pin or `<=`/`==` doesn't let a
-# newer captain-hook resolve).
-VERSION_FLOOR_RE = re.compile(r">=\s*\d+\.\d+\.\d+")
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,7 +146,7 @@ def register_marketplace(root: Path) -> None:
         existing
         | {
             "extraKnownMarketplaces": existing.get("extraKnownMarketplaces", {})
-            | {"captain-hook": {"source": {"source": "github", "repo": "yasyf/captain-hook"}, "autoUpdate": True}},
+            | {MARKETPLACE_NAME: {"source": {"source": "github", "repo": MARKETPLACE_REPO}, "autoUpdate": True}},
             "enabledPlugins": existing.get("enabledPlugins", {}) | {PLUGIN_ID: True},
         },
     )
@@ -552,9 +552,10 @@ def pack_attach(directory: str) -> None:
     this one line to its SessionStart hook. The captain-hook plugin is the sole dispatcher: it
     registers the ``capt-hook run <Event>`` commands once, and this call merely records the
     pack's manifest dir so those commands discover and run its hooks for this session. The pack
-    ships no ``run`` entries of its own. Writes nothing to stdout on success (SessionStart stdout
-    is injected into the model context); a missing or invalid manifest exits 1 with a stderr
-    message.
+    ships no ``run`` entries of its own. Writes nothing to stdout in steady state (SessionStart
+    stdout is injected into the model context); a missing or invalid manifest exits 1 with a stderr
+    message. The one deliberate stdout is a single notice line, emitted only when this call finds
+    the captain-hook plugin marketplace unregistered and detaches a worker to self-bootstrap it.
     """
     raw = json.loads(sys.stdin.read())
     session_id = SessionId(raw["session_id"])
@@ -567,12 +568,25 @@ def pack_attach(directory: str) -> None:
         )
     except manager.PackError as e:
         raise click.ClickException(str(e)) from e
+    # The one deliberate stdout: a self-bootstrap notice, only on the attempt path. Fail-soft —
+    # a bootstrap error must never break the attach.
+    try:
+        if notice := bootstrap.maybe_bootstrap():
+            click.echo(notice)
+    except Exception:
+        logger.opt(exception=True).debug("marketplace bootstrap during pack attach failed")
     # Every session runs attach, so it is the natural reaping point for long-dead session dirs.
     # Fail-soft — a cleanup error must never break the attach — and never touch the live session.
     try:
         cleanup_stale(exclude=session_id)
     except Exception:
         logger.opt(exception=True).debug("stale-session cleanup during pack attach failed")
+
+
+@pack.command(name="bootstrap", hidden=True)
+def pack_bootstrap() -> None:
+    """Detached worker (spawned by ``pack attach``): register the captain-hook marketplace + plugin."""
+    bootstrap.run_bootstrap()
 
 
 @dataclass(frozen=True, slots=True)
@@ -590,50 +604,6 @@ def _search_upward(start: Path, *rel: str) -> Path | None:
             if (cand := base / r).is_file():
                 return cand
     return None
-
-
-def _command_entries(hooks_json: dict[str, Any]) -> list[tuple[str, str]]:
-    """Every ``(event, command)`` command-type hook entry across the file, in declaration order."""
-    return [
-        (event, entry["command"])
-        for event, groups in hooks_json.get("hooks", {}).items()
-        for group in groups
-        for entry in group.get("hooks", [])
-        if entry.get("type") == "command"
-    ]
-
-
-def _is_attach_argv(argv: list[str]) -> bool:
-    """True when ``argv`` is exactly the canonical prefix + ``pack attach <one directory arg>``."""
-    prefix = shlex.split(DEFAULT_PREFIX)
-    return (
-        len(argv) == len(prefix) + 3
-        and argv[: len(prefix)] == prefix
-        and argv[len(prefix) : len(prefix) + 2] == ["pack", "attach"]
-    )
-
-
-def _is_canonical_run_argv(argv: list[str]) -> bool:
-    """True when ``argv`` is the canonical ``<prefix> run <...>`` a legacy consumer mirrors."""
-    prefix = shlex.split(DEFAULT_PREFIX)
-    return len(argv) > len(prefix) and argv[: len(prefix)] == prefix and argv[len(prefix)] == "run"
-
-
-def _attach_dir_reason(cmd: str, *, nested: bool) -> str | None:
-    """None when ``cmd``'s attach dir is the correctly-quoted plugin-root form for the layout; else why not.
-
-    The dir arg must be the double-quoted ``"${CLAUDE_PLUGIN_ROOT}"`` (manifest at the plugin
-    root) or ``"${CLAUDE_PLUGIN_ROOT}/hooks"`` (manifest one ``hooks/`` level down). shlex strips
-    the quotes, so the raw command is checked: an unquoted var, a literal path, or the wrong
-    suffix for the resolved layout all fail.
-    """
-    expected, other = (ATTACH_DIR_HOOKS, ATTACH_DIR_ROOT) if nested else (ATTACH_DIR_ROOT, ATTACH_DIR_HOOKS)
-    where = "one hooks/ level below the plugin root" if nested else "at the plugin root"
-    if expected in cmd:
-        return None
-    if other in cmd:
-        return f"attach targets {other} but the manifest resolves {where}; use {expected}"
-    return f"attach dir must be the double-quoted {expected} (the manifest resolves {where})"
 
 
 def _lint_hooks_json(root: Path, manifest_dir: Path, *, nested: bool) -> LintResult:
@@ -661,7 +631,7 @@ def _lint_hooks_json(root: Path, manifest_dir: Path, *, nested: bool) -> LintRes
     canonical_runs: list[str] = []
     bad_attach: list[str] = []
     unrecognized: list[str] = []
-    for event, cmd in _command_entries(data):
+    for event, cmd in command_entries(data):
         try:
             argv = shlex.split(cmd)
         except ValueError:
@@ -670,12 +640,12 @@ def _lint_hooks_json(root: Path, manifest_dir: Path, *, nested: bool) -> LintRes
             if DIST_NAME in cmd:
                 unrecognized.append(f"{event}:{cmd!r} (unbalanced quotes)")
             continue
-        if _is_attach_argv(argv):
-            if (reason := _attach_dir_reason(cmd, nested=nested)) is None:
+        if is_attach_argv(argv):
+            if (reason := attach_dir_reason(cmd, nested=nested)) is None:
                 attach_events.append(event)
             else:
                 bad_attach.append(f"{event}:{cmd!r} ({reason})")
-        elif _is_canonical_run_argv(argv):
+        elif is_canonical_run_argv(argv):
             canonical_runs.append(f"{event}:{cmd!r}")
         elif DIST_NAME in cmd:
             # Conservative rejection: any raw `capt-hook` mention that is not the canonical attach —
@@ -766,9 +736,7 @@ def _lint_marketplace_json(manifest_dir: Path) -> LintResult:
         return LintResult("marketplace.json", False, f"{path} is unreadable: {e}")
     if "captain-hook" in allowed:
         return LintResult("marketplace.json", True, f"allows the captain-hook cross-marketplace dependency ({path})")
-    return LintResult(
-        "marketplace.json", False, f"{path} omits captain-hook from allowCrossMarketplaceDependenciesOn"
-    )
+    return LintResult("marketplace.json", False, f"{path} omits captain-hook from allowCrossMarketplaceDependenciesOn")
 
 
 def _lint_pack_hooks(manifest: manager.PackManifest, root: Path) -> list[LintResult]:
