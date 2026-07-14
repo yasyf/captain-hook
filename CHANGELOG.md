@@ -21,6 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by where they actually land; MCP `mcp__<srv>__Write` lookalikes are vetoed.
 - **`evt.cwd`.** Every event exposes the payload's working directory as a
   `Path | None`, and inline tests seed it via `Input(cwd=...)`.
+- **`pack attach` self-bootstraps the captain-hook marketplace.** A consumer
+  plugin's first session on a machine without the `yasyf/captain-hook`
+  marketplace registers it and installs the captain-hook plugin in a detached
+  background worker, then prints one notice line — so a pack-shipping plugin no
+  longer tells users to add the marketplace by hand. The bootstrap is
+  idempotent (a registered marketplace short-circuits it with one file read),
+  hourly-damped on failure, and launches its worker isolated (`python -I`) with
+  an absolute `claude` path.
+- **`pack scaffold` generates a pack-shipping plugin's artifacts.** `uvx
+  capt-hook pack scaffold <dir>` writes `capt-hook.toml`, an attach-only
+  `hooks/hooks.json`, the `plugin.json` captain-hook dependency, the
+  `marketplace.json` cross-marketplace allowlist, and a starter hook, then runs
+  `pack lint`. It repairs a partial pack in place — adding only missing contract
+  pieces and migrating legacy mirrored `capt-hook run` entries (canonical or
+  bare-`uvx`) to the single canonical attach — and never rewrites a conforming,
+  unparseable, or unclassifiable file, so it can't clobber content it doesn't
+  understand.
 
 ## [9.14.0] - 2026-07-14
 

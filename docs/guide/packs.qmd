@@ -175,6 +175,11 @@ The `name` in the manifest becomes the `packs.toml` section key, so it must be a
 slug matching `[a-z][a-z0-9-]*`. Tag a release, and consumers add the pack with
 `uvx capt-hook pack add github:acme/guards@v1.2`.
 
+Shipping the pack inside a Claude plugin instead of a `packs.toml` repo takes
+three more artifacts on top of the manifest. `uvx capt-hook pack scaffold .`
+writes them and lints the result — see [Ship a pack in a Claude
+plugin](plugin-packs.qmd).
+
 ## See also
 
 - [Configure settings](configuration.qmd) covers `conf.py`, which sets project

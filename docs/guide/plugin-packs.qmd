@@ -31,6 +31,27 @@ enabled in and leaves no trace in the repo. The captain-hook plugin is the sole
 dispatcher — its own `hooks.json` registers every event — so your plugin never
 wires a `capt-hook run` command. It ships exactly four artifacts.
 
+### Scaffold them
+
+`pack scaffold` writes all four, plus a starter hook, and lints the result:
+
+```bash
+uvx capt-hook pack scaffold .
+```
+
+Pass the plugin root — the directory the attach line targets. In an empty repo
+it creates every artifact; in a partial one it repairs in place, adding only
+the missing contract pieces. It never touches content it can't account for: a
+conforming file stays byte-for-byte identical, an unparseable one is reported
+and left alone, and a hook command it can't classify stops the run before any
+write. A legacy consumer built before the attach-only contract migrates in one
+pass — scaffold strips the mirrored `capt-hook run` entries and leaves the
+single canonical attach. It closes by printing the two-line install snippet for
+your README.
+
+The rest of this section is the contract scaffold writes and `pack lint`
+enforces — read on to hand-author, or to understand what scaffold produced.
+
 **1. The pack manifest, `capt-hook.toml`.** Unchanged from any other pack;
 [Author a pack](packs.qmd#author-a-pack) covers it.
 
@@ -55,13 +76,17 @@ The argument is the pack root: the directory holding `capt-hook.toml`. Pass
 This is the plugin's only capt-hook entry; hooks that have nothing to do with
 capt-hook coexist alongside it freely.
 
-`pack attach` reads the SessionStart JSON from stdin, records the pack — its
-manifest directory and version — under that session, and writes nothing to
-stdout, since SessionStart stdout is injected into the model context. A missing
-or invalid manifest exits non-zero with a stderr message, so a broken plugin
-fails loud at author time rather than silently loading nothing. The attach
-covers the whole session: a subagent's hook events carry the same session id,
-so attached packs load for sidechains too.
+`pack attach` reads the SessionStart JSON from stdin and records the pack — its
+manifest directory and version — under that session. In steady state it writes
+nothing to stdout, since SessionStart stdout is injected into the model
+context; the one exception is the first session on a machine that hasn't
+registered the captain-hook marketplace yet, where attach self-bootstraps it
+and prints a single notice line (see [Tell users how to
+install](#tell-users-how-to-install)). A missing or invalid manifest exits
+non-zero with a stderr message, so a broken plugin fails loud at author time
+rather than silently loading nothing. The attach covers the whole session: a
+subagent's hook events carry the same session id, so attached packs load for
+sidechains too.
 
 **3. The dependency in `plugin.json`.**
 
@@ -95,20 +120,33 @@ every hook stays dark.
 
 ## Tell users how to install
 
-Installing and enabling your plugin auto-installs and enables captain-hook
-through the dependency, but only when the captain-hook marketplace is already
-added — Claude Code does not bootstrap an unknown marketplace. Your install
-instructions are two lines:
+Two lines — your marketplace and your plugin:
 
 ```bash
-claude plugin marketplace add yasyf/captain-hook
+claude plugin marketplace add your-org/your-repo
 claude plugin install your-plugin@your-marketplace
 ```
 
-The same two lines are the upgrade path. `claude plugin update` does not
-resolve a dependency a new release adds — it succeeds and silently skips it —
-so users upgrading from a pre-dependency release of your plugin re-run
-`claude plugin install` after adding the marketplace.
+captain-hook installs itself. Claude Code won't add an unknown marketplace from
+a `plugin.json` dependency alone, so the first session after your plugin is
+enabled runs its attach hook, which registers the `yasyf/captain-hook`
+marketplace and installs the captain-hook plugin in a background worker, then
+prints one line:
+
+> capt-hook: registering the captain-hook plugin marketplace and installing its
+> plugin in the background — this plugin's hooks depend on it. Takes effect via
+> Claude Code's background plugin auto-update, /reload-plugins, or the next
+> session.
+
+Once the marketplace is registered, the `plugin.json` dependency resolves and
+Claude Code enables captain-hook; the hooks go live that session on
+`/reload-plugins`, or the next session automatically. The bootstrap is
+idempotent — a registered marketplace short-circuits it with a single file
+read — and backs off for an hour if `claude` isn't on `PATH` or the
+registration fails. `claude plugin update` alone doesn't resolve a dependency a
+newer release of your plugin adds, but the attach hook self-bootstraps on the
+next session regardless, so there's no manual marketplace step on upgrade
+either.
 
 ## Lint the contract
 

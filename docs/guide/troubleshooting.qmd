@@ -92,6 +92,32 @@ A session that is already running keeps the old hook commands until you run `/re
 
 Last, hunt down legacy `capt-hook run <Event>` entries. Claude Code dedupes hook commands per registering source, not globally, so a `run` entry that survives anywhere besides the captain-hook plugin — a hand-wired line in a project's `.claude/settings.json`, or a pack-shipping consumer plugin built before the attach-only contract — dispatches the event again in a sibling process, and every hook on that event runs twice. The tell is doubled output: two permission prompts for one tool call, the same block message landing twice, or a side-effecting hook applying its effect twice. Delete hand-wired entries from the project settings yourself; a legacy consumer plugin sheds its `run` entries when it releases against the attach-only contract in [Ship a pack in a Claude plugin](plugin-packs.qmd), since the plugin cache re-pulls on a version bump.
 
+## The first session installs captain-hook
+
+A pack-shipping plugin's hooks stay dark until the captain-hook plugin — the
+dispatcher — is installed, and Claude Code won't add an unknown marketplace from
+a `plugin.json` dependency alone. So on the first session where the
+`yasyf/captain-hook` marketplace isn't registered, the plugin's attach hook
+bootstraps it: a detached worker runs `claude plugin marketplace add
+yasyf/captain-hook` then `claude plugin install captain-hook@captain-hook`, and
+attach prints one notice line. Claude Code resolves the dependency from there,
+and the hooks go live via background auto-update, `/reload-plugins`, or the next
+session.
+
+The worker logs to `~/.claude/state/bootstrap/marketplace.log` (or under
+`CAPTAIN_HOOK_STATE_DIR`). If the marketplace never shows up in `claude plugin
+marketplace list`, read that file — a failed `claude` call lands there with its
+exit status. The bootstrap backs off for an hour between attempts, so a
+transient failure doesn't re-run `claude` every session, and a registered
+marketplace short-circuits it with a single file read.
+
+It re-adds the marketplace whenever a pack-shipping plugin is enabled and the
+marketplace is missing — the plugin's hooks are dead without it, so re-adding is
+the point. To stop it, disable or uninstall the plugin whose attach hook runs;
+that stops the pack too. If the plugin itself lands disabled with
+`dependency-unsatisfied` before the next session bootstraps, `claude plugin
+marketplace add yasyf/captain-hook` resolves it on the spot.
+
 ## `NlpSignal` hooks need the spaCy model {#nlpsignal-hooks-need-the-spacy-model}
 
 Hooks that use `NlpSignal` need two downloads: the `en_core_web_sm` spaCy model (~13MB) and the `oewn:2025` WordNet lexicon (~231MB). Packs that declare `nlp = true` in their manifest — `general` and `steering` do — provision both eagerly: `init` and `pack add` download them on the spot, and an async `SessionStart` hook re-checks at every session start, so an install that deferred the download (offline, say) heals itself the next session. Mid-session, the two resources behave differently. A live hook never downloads the spaCy model; that would be a silent network fetch behind the agent's back, so it raises a `RuntimeError` with an install hint instead. The oewn lexicon does self-heal lazily. If it's missing, the first hook that needs it downloads it on the spot, filelock-guarded against concurrent sessions, at the cost of latency on that first NLP hook.
