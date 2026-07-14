@@ -4,6 +4,24 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.15.0] - 2026-07-14
+
+### Added
+- **Fixes pack: scratch-dir writes stop prompting under bypass consent.** A new
+  `scratch_writes` hook auto-approves native file-tool writes (`Edit`/`Write`/
+  `MultiEdit`/`NotebookEdit`) whose target resolves into a system temp root
+  (`/tmp`, `/private/tmp`, `/var/folders`, `/dev/shm`) or a
+  scratch-named directory, in sessions launched with
+  `--dangerously-skip-permissions` — plan mode's permission override and
+  forwarded subagent dialogs otherwise pop dialogs for consent the launch flag
+  already gave. Fires on `PreToolUse` and `PermissionRequest`, like the
+  teammate-Bash hook and for the same forwarded-dialog reason. Relative targets
+  resolve against the payload `cwd`, so `../../tmp/...` spellings approve while
+  `/tmp/../<elsewhere>` spoofs and symlinked scratch-named directories are judged
+  by where they actually land; MCP `mcp__<srv>__Write` lookalikes are vetoed.
+- **`evt.cwd`.** Every event exposes the payload's working directory as a
+  `Path | None`, and inline tests seed it via `Input(cwd=...)`.
+
 ## [9.13.0] - 2026-07-13
 
 ### Removed

@@ -24,10 +24,12 @@ band-aids the symptom instead of fixing the root cause, pushes back when you dis
 a real pre-existing issue, stops the chase after trivial type-checker noise, and
 blocks a turn-end that swaps the requested fix for docs or a follow-up the user
 never asked for),
-and `fixes` (workarounds for upstream Claude Code issues, currently one hook that
+and `fixes` (workarounds for upstream Claude Code issues, one hook that
 auto-approves a teammate's Bash permission dialogs when the process tree shows the
-session was launched with `--dangerously-skip-permissions` available, so bypass-consented
-sessions stop popping dialogs for heredocs and redirects).
+session was launched with `--dangerously-skip-permissions`, and a second that
+auto-approves file-tool writes whose target resolves into a temp or scratch
+directory under the same launch flag, so bypass-consented sessions stop popping
+dialogs for heredocs, redirects, and plan-phase scratch files).
 Add one by name:
 
 ```bash
@@ -61,7 +63,7 @@ uvx capt-hook pack list
   python                   builtin  -                    v0.1.0   3 hooks
   go                       builtin  -                    v0.1.0   2 hooks
   steering                 builtin  -                    v0.7.0   2 hooks
-  fixes                    builtin  -                    v0.1.0   1 hooks
+  fixes                    builtin  -                    v0.2.0   2 hooks
   acme-guards              github   latest@a1b2c3d       v1.4.0   4 hooks
 ```
 

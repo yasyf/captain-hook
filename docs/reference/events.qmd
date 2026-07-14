@@ -44,11 +44,13 @@ keep going. Every other event is advisory — a hook injects context but cannot 
 ## Shared properties
 
 Every event also exposes the base accessors: `event`, `session_id`, `is_subagent`,
-`transcript_path`, `permission_mode`, `skip_permissions`, `parent_agent_type`,
-`stop_hook_active`, `tasks`, and `ctx`. `skip_permissions` walks the process tree and reports
-whether the session's `claude` process was launched with `--dangerously-skip-permissions` or
-`--allow-dangerously-skip-permissions`. `tasks` is the live Claude Code task list; `ctx` is
-the hook context, with the transcript, settings, and the current turn.
+`transcript_path`, `cwd`, `permission_mode`, `skip_permissions`, `parent_agent_type`,
+`stop_hook_active`, `tasks`, and `ctx`. `cwd` is the session's working directory when the
+event fired, for resolving relative tool paths. `skip_permissions` walks the process tree and
+reports whether the session's `claude` process was launched with
+`--dangerously-skip-permissions` or `--allow-dangerously-skip-permissions`. `tasks` is the
+live Claude Code task list; `ctx` is the hook context, with the transcript, settings, and the
+current turn.
 
 ## Typed tool input
 

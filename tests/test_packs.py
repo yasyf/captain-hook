@@ -43,7 +43,7 @@ GO_HOOKS = {"testing", "toolchain"}
 # lib.py carries __capt_hook_skip__ so it is a non-underscore file the loader skips; the
 # layout test counts .py files, so it appears here, but only steering.py registers hooks.
 STEERING_HOOKS = {"steering", "teammates"}
-FIXES_HOOKS = {"teammate_permissions"}
+FIXES_HOOKS = {"teammate_permissions", "scratch_writes"}
 HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 SRC_USES_FILE = (
     "from pathlib import Path\n"
@@ -212,6 +212,27 @@ def test_fixes_pack_scopes_to_native_bash(isolate_modules: None, tmp_path: Path)
     assert allowed["hookSpecificOutput"]["decision"]["behavior"] == "allow"
     assert decision("mcp__srv__Bash", "echo hi") is None
     assert decision("mcp__ops__Bash", "rm -rf /") is None
+
+
+def test_fixes_pack_approves_scratch_writes(isolate_modules: None, tmp_path: Path) -> None:
+    discover_pack("fixes", PACKS_DIR / "fixes")
+
+    def decision(tool: str, tool_input: dict[str, Any], cwd: str | None = None) -> dict[str, Any] | None:
+        evt = input_to_event(
+            Event.PermissionRequest,
+            Input(tool=tool, tool_input=tool_input, cwd=cwd, skip_permissions=True),
+        )
+        return dispatch(Event.PermissionRequest, evt, session_dir=tmp_path)
+
+    allowed = decision("Write", {"file_path": "/tmp/sweep_arc.py", "content": "print(1)"})
+    assert allowed is not None
+    assert allowed["hookSpecificOutput"]["decision"]["behavior"] == "allow"
+    relative = decision("Write", {"file_path": "../../../../tmp/x.py", "content": "x"}, cwd="/a/b/c/d")
+    assert relative is not None
+    assert relative["hookSpecificOutput"]["decision"]["behavior"] == "allow"
+    assert decision("Write", {"file_path": "/Users/u/proj/src/main.py", "content": "x"}) is None
+    assert decision("Write", {"file_path": "/tmp/../Users/u/proj/main.py", "content": "x"}) is None
+    assert decision("mcp__srv__Write", {"file_path": "/tmp/x.py", "content": "x"}) is None
 
 
 def test_general_pack_preload_tools_nudge(isolate_modules: None, tmp_path: Path) -> None:

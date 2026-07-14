@@ -233,6 +233,7 @@ def mock_tool_event(
     error: str | None = None,
     tool_input: dict[str, Any] | None = None,
     permission_mode: str | None = None,
+    cwd: str | None = None,
     transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
@@ -250,6 +251,7 @@ def mock_tool_event(
             | ({"agent_type": agent_type} if agent_type else {})
             | ({"agent_id": agent_id} if agent_id else {})
             | ({"permission_mode": permission_mode} if permission_mode else {})
+            | ({"cwd": cwd} if cwd else {})
             | ({"tool_response": output} if output is not None else {})
             | ({"error": error} if error is not None else {}),
             ctx=build_context(transcript, transcript_path, session_dir, project_root),
@@ -261,12 +263,15 @@ def mock_stop_event(
     *,
     stop_hook_active: bool = False,
     permission_mode: str | None = None,
+    cwd: str | None = None,
     transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> StopEvent:
     return StopEvent(
-        _raw={"stop_hook_active": stop_hook_active} | ({"permission_mode": permission_mode} if permission_mode else {}),
+        _raw={"stop_hook_active": stop_hook_active}
+        | ({"permission_mode": permission_mode} if permission_mode else {})
+        | ({"cwd": cwd} if cwd else {}),
         ctx=build_context(transcript, transcript_path, session_dir),
     )
 
@@ -275,12 +280,15 @@ def mock_session_end_event(
     reason: str = "other",
     *,
     permission_mode: str | None = None,
+    cwd: str | None = None,
     transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> SessionEndEvent:
     return SessionEndEvent(
-        _raw={"reason": reason} | ({"permission_mode": permission_mode} if permission_mode else {}),
+        _raw={"reason": reason}
+        | ({"permission_mode": permission_mode} if permission_mode else {})
+        | ({"cwd": cwd} if cwd else {}),
         ctx=build_context(transcript, transcript_path, session_dir),
     )
 
@@ -290,6 +298,7 @@ def mock_session_start_event(
     *,
     agent_id: str | None = None,
     permission_mode: str | None = None,
+    cwd: str | None = None,
     transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
@@ -297,7 +306,8 @@ def mock_session_start_event(
     return SessionStartEvent(
         _raw={"source": source}
         | ({"agent_id": agent_id} if agent_id else {})
-        | ({"permission_mode": permission_mode} if permission_mode else {}),
+        | ({"permission_mode": permission_mode} if permission_mode else {})
+        | ({"cwd": cwd} if cwd else {}),
         ctx=build_context(transcript, transcript_path, session_dir),
     )
 
@@ -309,6 +319,7 @@ def mock_subagent_stop_event(
     stop_hook_active: bool = False,
     agent_transcript_path: str = "",
     permission_mode: str | None = None,
+    cwd: str | None = None,
     transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
@@ -320,7 +331,8 @@ def mock_subagent_stop_event(
             "agent_id": agent_id,
             "agent_transcript_path": agent_transcript_path,
         }
-        | ({"permission_mode": permission_mode} if permission_mode else {}),
+        | ({"permission_mode": permission_mode} if permission_mode else {})
+        | ({"cwd": cwd} if cwd else {}),
         ctx=build_context(transcript, transcript_path, session_dir),
     )
 
@@ -330,13 +342,15 @@ def mock_subagent_start_event(
     *,
     agent_id: str = "",
     permission_mode: str | None = None,
+    cwd: str | None = None,
     transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> SubagentStartEvent:
     return SubagentStartEvent(
         _raw={"agent_type": agent_type, "agent_id": agent_id}
-        | ({"permission_mode": permission_mode} if permission_mode else {}),
+        | ({"permission_mode": permission_mode} if permission_mode else {})
+        | ({"cwd": cwd} if cwd else {}),
         ctx=build_context(transcript, transcript_path, session_dir),
     )
 
@@ -345,12 +359,15 @@ def mock_user_prompt_event(
     prompt: str = "",
     *,
     permission_mode: str | None = None,
+    cwd: str | None = None,
     transcript: Session | None = None,
     transcript_path: str | Path | None = None,
     session_dir: Path | None = None,
 ) -> UserPromptSubmitEvent:
     return UserPromptSubmitEvent(
-        _raw={"prompt": prompt} | ({"permission_mode": permission_mode} if permission_mode else {}),
+        _raw={"prompt": prompt}
+        | ({"permission_mode": permission_mode} if permission_mode else {})
+        | ({"cwd": cwd} if cwd else {}),
         ctx=build_context(transcript, transcript_path, session_dir),
     )
 
@@ -426,6 +443,7 @@ def input_to_event(
         "transcript": transcript,
         "transcript_path": transcript_path,
         "permission_mode": inp.permission_mode,
+        "cwd": inp.cwd,
     }
     match ev:
         case Event.SubagentStop:

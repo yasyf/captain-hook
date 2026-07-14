@@ -12,8 +12,6 @@ from __future__ import annotations
 from captain_hook import (
     Allow,
     Ask,
-    BaseHookEvent,
-    CustomCondition,
     Event,
     FromSubagent,
     Input,
@@ -22,14 +20,7 @@ from captain_hook import (
     ToolInput,
     approve,
 )
-
-
-class McpTool(CustomCondition):
-    """Matches MCP-server tools (``mcp__<server>__<tool>``), which Tool() suffix-matching also accepts."""
-
-    def check(self, evt: BaseHookEvent) -> bool:
-        return bool(evt.tool_name) and evt.tool_name.startswith("mcp__")
-
+from captain_hook.packs.fixes._lib import McpTool
 
 approve(
     "teammate bash under skip-permissions",

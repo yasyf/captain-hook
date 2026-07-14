@@ -424,6 +424,7 @@ WRONG_TYPED: tuple[tuple[str, dict[str, Any]], ...] = (
     ("tasks_bad_element", {"tasks": ["bad"]}),
     ("tool_input_int_key", {"tool_input": {1: "x"}}),
     ("llm_int_key", {"llm": {1: "x"}}),
+    ("cwd_int", {"cwd": 5}),
 )
 
 VALID_FIELDS: tuple[tuple[str, dict[str, Any]], ...] = (
@@ -435,6 +436,7 @@ VALID_FIELDS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("file_fixture", {"file": FileFixture(size=10)}),
     ("tasks_list", {"tasks": [{"id": "1"}]}),
     ("llm_dict", {"llm": {"fire": False}}),
+    ("cwd", {"cwd": "/x"}),
 )
 
 

@@ -19,6 +19,7 @@ FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "reason": (str,),
     "source": (str,),
     "permission_mode": (str,),
+    "cwd": (str,),
     "offset": (int,),
     "limit": (int,),
     "skip_permissions": (bool,),
@@ -135,6 +136,8 @@ class Input:
         reason: ``SessionEnd`` reason.
         source: ``SessionStart`` source (``startup``/``resume``/``clear``/``compact``).
         permission_mode: Permission mode, e.g. ``"plan"`` for plan-mode gating.
+        cwd: The session working directory surfaced as ``evt.cwd``, for hooks
+            that resolve relative tool paths.
         skip_permissions: Pre-seeds ``evt.skip_permissions`` (normally the
             process-tree walk for ``--dangerously-skip-permissions``); ``None``
             leaves the real walk in place.
@@ -164,6 +167,7 @@ class Input:
     reason: str | None = None
     source: str | None = None
     permission_mode: str | None = None
+    cwd: str | None = None
     skip_permissions: bool | None = None
     offset: int | None = None
     limit: int | None = None
