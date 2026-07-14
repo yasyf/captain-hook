@@ -25,6 +25,7 @@ import click
 from captain_hook.loader import CONF_MODULE, is_skip_marked
 from captain_hook.packs import manager
 from captain_hook.packs.contract import (
+    DEFAULT_PREFIX,
     DIST_NAME,
     MARKETPLACE_NAME,
     VERSION_FLOOR_RE,
@@ -38,6 +39,9 @@ from captain_hook.review.repo import repo_key
 
 # TODO(release-prep): sync to the tag that ships `pack scaffold` (self-bootstrap must be live on PyPI).
 MIN_SCAFFOLD_FLOOR = "9.14.0"
+# Pre-`--isolated` consumers invoked capt-hook as bare `uvx capt-hook`; canonicalizing that prefix
+# lets scaffold migrate their entries with the same predicates lint applies to canonical ones.
+LEGACY_PREFIXES = (("uvx", DIST_NAME),)
 
 type Verb = Literal["created", "updated", "unchanged"]
 
@@ -218,11 +222,19 @@ def plan_starter_hook(hooks_dir: Path) -> list[Plan]:
 # --- merge helpers -------------------------------------------------------------------
 
 
+def canonicalize_prefix(argv: list[str]) -> list[str]:
+    return next(
+        ([*shlex.split(DEFAULT_PREFIX), *argv[len(p) :]] for p in LEGACY_PREFIXES if tuple(argv[: len(p)]) == p),
+        argv,
+    )
+
+
 def classify_command(cmd: str) -> str:
-    """One of ``capt-hook`` (a canonical attach/run entry), ``unrecognized`` (a capt-hook mention we
-    won't touch), or ``foreign`` (no capt-hook mention) — the shared lint tokenization."""
+    """One of ``capt-hook`` (an attach/run entry, canonical or legacy bare-``uvx``), ``unrecognized``
+    (a capt-hook mention we won't touch), or ``foreign`` (no capt-hook mention) — the shared lint
+    tokenization after the legacy prefix is canonicalized."""
     try:
-        argv = shlex.split(cmd)
+        argv = canonicalize_prefix(shlex.split(cmd))
     except ValueError:
         return "unrecognized" if DIST_NAME in cmd else "foreign"
     if is_attach_argv(argv) or is_canonical_run_argv(argv):

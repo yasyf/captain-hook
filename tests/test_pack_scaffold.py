@@ -7,7 +7,7 @@ from pathlib import Path
 import click
 import pytest
 
-from captain_hook.cli import DEFAULT_PREFIX, lint_pack
+from captain_hook.cli import DEFAULT_PREFIX
 from captain_hook.packs import manager, scaffold
 from captain_hook.packs.contract import command_entries
 from tests.helpers import run_cli
@@ -17,6 +17,7 @@ from tests.test_pack_lint import (
     by_check,
     conforming,
     failed,
+    legacy_getaway_hooks_json,
     write_hooks_json,
     write_manifest,
     write_plugin_json,
@@ -133,6 +134,14 @@ def test_strips_legacy_mirrored_run_entries(tmp_path: Path) -> None:
             }
         },
     )
+    assert action_for(scaffold.scaffold_pack(root, name="ccx", description="d"), "hooks.json").verb == "updated"
+    assert command_entries(read_json(root / "hooks" / "hooks.json")) == [("SessionStart", CANONICAL_ATTACH)]
+    assert failed(by_check(root)) == []
+
+
+def test_migrates_bare_uvx_legacy_shape(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    write_hooks_json(root, legacy_getaway_hooks_json())
     assert action_for(scaffold.scaffold_pack(root, name="ccx", description="d"), "hooks.json").verb == "updated"
     assert command_entries(read_json(root / "hooks" / "hooks.json")) == [("SessionStart", CANONICAL_ATTACH)]
     assert failed(by_check(root)) == []
