@@ -1,0 +1,17 @@
+# Authoring guide: https://yasyf.github.io/captain-hook/docs/guide/packs.html
+# Guided walkthrough: run the captain-hook:authoring-hooks skill (/captain-hook:authoring-hooks).
+from __future__ import annotations
+
+from captain_hook import Allow, Block, Input, block_command
+
+# Starter guard — replace it with a rule that fits your project.
+block_command(
+    ["git", "push", "--force"],
+    reason="Force-push rewrites shared history",
+    hint="Push a new commit instead",
+    tests={
+        Input(tool="Bash", command="git push --force"): Block(pattern="history"),
+        Input(tool="Bash", command="git push"): Allow(),
+        Input(tool="Bash", command="git status"): Allow(),
+    },
+)

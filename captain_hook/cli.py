@@ -27,7 +27,7 @@ from captain_hook.loader import (
     register_pr_announcements,
 )
 from captain_hook.log import setup_logging
-from captain_hook.packs import bootstrap, manager
+from captain_hook.packs import bootstrap, manager, scaffold
 from captain_hook.packs.contract import (
     ATTACH_DIR_ROOT,
     DEFAULT_PREFIX,
@@ -40,6 +40,7 @@ from captain_hook.packs.contract import (
     command_entries,
     is_attach_argv,
     is_canonical_run_argv,
+    search_upward,
 )
 from captain_hook.review.cli import review
 from captain_hook.session import SessionStore, cleanup_stale, ensure_session
@@ -597,15 +598,6 @@ class LintResult:
     warning: bool = False  # reported, but does not fail the lint (a missing marketplace.json)
 
 
-def _search_upward(start: Path, *rel: str) -> Path | None:
-    """The nearest existing ``base/rel`` walking from ``start`` up to the filesystem root."""
-    for base in (start, *start.parents):
-        for r in rel:
-            if (cand := base / r).is_file():
-                return cand
-    return None
-
-
 def _lint_hooks_json(root: Path, manifest_dir: Path, *, nested: bool) -> LintResult:
     # Claude Code loads <plugin>/hooks/hooks.json; a pack may instead keep it beside the manifest.
     # When both distinct locations exist the load target is ambiguous — fail rather than silently
@@ -701,7 +693,7 @@ def _dep_contract_reason(dep: str | dict[str, Any]) -> str | None:
 
 
 def _lint_plugin_json(manifest_dir: Path) -> LintResult:
-    if not (path := _search_upward(manifest_dir, ".claude-plugin/plugin.json", "plugin.json")):
+    if not (path := search_upward(manifest_dir, ".claude-plugin/plugin.json", "plugin.json")):
         return LintResult("plugin.json", False, f"no plugin.json found searching upward from {manifest_dir}")
     try:
         deps = json.loads(path.read_text()).get("dependencies") or []
@@ -728,7 +720,7 @@ def _lint_plugin_json(manifest_dir: Path) -> LintResult:
 
 
 def _lint_marketplace_json(manifest_dir: Path) -> LintResult:
-    if not (path := _search_upward(manifest_dir, ".claude-plugin/marketplace.json")):
+    if not (path := search_upward(manifest_dir, ".claude-plugin/marketplace.json")):
         return LintResult("marketplace.json", True, "no marketplace.json found upward", warning=True)
     try:
         allowed = json.loads(path.read_text()).get("allowCrossMarketplaceDependenciesOn") or []
@@ -821,6 +813,16 @@ def lint_pack(root: Path) -> list[LintResult]:
     return results
 
 
+def echo_lint_results(results: list[LintResult]) -> bool:
+    """Print the pass/warn/fail table for ``results``; return whether any hard failure (not a warning) was found."""
+    for r in results:
+        tag = "PASS " if r.ok and not r.warning else "WARN " if r.warning else "FAIL "
+        click.echo(f"  {tag} {r.check}: {r.reason}")
+    failures = [r for r in results if not r.ok and not r.warning]
+    click.echo(f"\n{len(results)} checks: {sum(r.ok for r in results)} ok, {len(failures)} failed")
+    return bool(failures)
+
+
 @pack.command(name="lint")
 @click.argument("plugin_root")
 def pack_lint(plugin_root: str) -> None:
@@ -835,14 +837,44 @@ def pack_lint(plugin_root: str) -> None:
     SessionStart events; and no hook registers ``async_=True`` on a decision event. Exits
     non-zero on any failure.
     """
-    results = lint_pack(Path(plugin_root).resolve())
-    for r in results:
-        tag = "PASS " if r.ok and not r.warning else "WARN " if r.warning else "FAIL "
-        click.echo(f"  {tag} {r.check}: {r.reason}")
-    failures = [r for r in results if not r.ok and not r.warning]
-    click.echo(f"\n{len(results)} checks: {sum(r.ok for r in results)} ok, {len(failures)} failed")
-    if failures:
+    if echo_lint_results(lint_pack(Path(plugin_root).resolve())):
         sys.exit(1)
+
+
+@pack.command(name="scaffold")
+@click.argument("directory", default=".")
+@click.option("--name", default=None, help="Pack slug (default: existing manifest name, else the directory name)")
+@click.option("--description", default=None, help="Pack description (default: the existing manifest's, else generated)")
+def pack_scaffold(directory: str, name: str | None, description: str | None) -> None:
+    """Scaffold or migrate the four artifacts a session-attached pack ships, then lint them.
+
+    Generates any of ``capt-hook.toml``, ``hooks/hooks.json``, ``.claude-plugin/plugin.json``,
+    ``.claude-plugin/marketplace.json``, and a starter ``hooks/guard.py`` that are missing, and
+    surgically repairs an existing one to satisfy the attach-only contract: it adds the captain-hook
+    dependency and marketplace allowlist and migrates legacy mirrored ``capt-hook run`` entries to the
+    single canonical SessionStart attach. A conforming file is left byte-for-byte unchanged; a
+    present-but-unparseable file is reported and never rewritten. After writing, it runs ``pack lint``
+    (exiting non-zero on any failure) and prints the two-line install snippet for your README.
+
+    Pass the plugin root (default: the current directory) — the same directory the attach line targets.
+    """
+    root = Path(directory).resolve()
+    resolved_name = scaffold.resolve_name(root, name)
+    resolved_description = scaffold.resolve_description(root, description, resolved_name)
+    for action in scaffold.scaffold_pack(root, name=resolved_name, description=resolved_description):
+        where = action.path.relative_to(root) if action.path.is_relative_to(root) else action.path
+        click.echo(f"  {action.verb:9} {where}: {action.detail}")
+    click.echo()
+    if echo_lint_results(lint_pack(root)):
+        sys.exit(1)
+    marketplace_line, install_line = scaffold.install_snippet(root, resolved_name)
+    click.echo("\nAdd to your plugin's README so users can install it:")
+    click.echo(f"    {marketplace_line}")
+    click.echo(f"    {install_line}")
+    click.echo("\nNext steps:")
+    click.echo("  1. Replace hooks/guard.py with rules that fit your project.")
+    click.echo("  2. uvx capt-hook --hooks hooks test   # run your hooks' inline tests")
+    click.echo("  3. uvx capt-hook pack lint .           # wire into CI")
 
 
 @pack.command(name="list")

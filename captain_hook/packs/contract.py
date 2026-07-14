@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from pathlib import Path
 from typing import Any
 
 DIST_NAME = "capt-hook"
@@ -28,6 +29,15 @@ VERSION_FLOOR_RE = re.compile(r">=\s*\d+\.\d+\.\d+")
 def attach_command(*, nested: bool) -> str:
     """The canonical SessionStart attach line for a pack whose manifest resolves ``nested`` or not."""
     return f"{DEFAULT_PREFIX} pack attach {ATTACH_DIR_HOOKS if nested else ATTACH_DIR_ROOT}"
+
+
+def search_upward(start: Path, *rel: str) -> Path | None:
+    """The nearest existing ``base/rel`` walking from ``start`` up to the filesystem root."""
+    for base in (start, *start.parents):
+        for r in rel:
+            if (cand := base / r).is_file():
+                return cand
+    return None
 
 
 def command_entries(hooks_json: dict[str, Any]) -> list[tuple[str, str]]:
