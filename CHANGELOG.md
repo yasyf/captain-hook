@@ -22,6 +22,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`evt.cwd`.** Every event exposes the payload's working directory as a
   `Path | None`, and inline tests seed it via `Input(cwd=...)`.
 
+## [9.14.0] - 2026-07-14
+
+### Changed
+- **General pack 0.22.0: implementation routing splits on decision density.**
+  The implementation-spawn and inline-edit nudges (messages and classifier
+  rubrics) now send bounded, decision-light work — the plan, work order, or
+  repeated pattern already made the decisions and what remains is execution —
+  to gpt-5.6-sol via the codex:codex-wrapper agent, and ambiguous,
+  decision-dense, or long-run implementation to opus at xhigh. This replaces
+  the "well-scoped, clearly-bounded" criterion and matches the fleet Models
+  table v5, which also notes sol's two lane gates: judgment degrades as
+  mid-task decisions pile up, and surrounding-code conventions are matched
+  less faithfully (backstopped by finder/refuter review plus capt-hook
+  guards).
+
 ## [9.13.0] - 2026-07-13
 
 ### Removed

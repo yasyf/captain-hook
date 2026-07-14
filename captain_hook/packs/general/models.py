@@ -264,9 +264,10 @@ llm_nudge(
     IMPLEMENTATION_SPAWN_NUDGE,
     message=lambda r: (
         f"This delegation would run on fable, but it reads as routine implementation. {r.reasoning} "
-        "Ambiguous, large-refactor, or long-run implementation defaults to model='opus' + effort='xhigh' "
-        "(~2x cheaper, nearly as capable); well-scoped, clearly-bounded (terminal-heavy included) implementation "
-        "routes to gpt-5.6-sol: spawn the codex:codex-wrapper agent with a self-contained prompt. "
+        "Bounded, decision-light implementation — the decisions are already made and what remains is "
+        "execution (terminal-heavy included) — routes to gpt-5.6-sol: spawn the codex:codex-wrapper agent "
+        "with a self-contained prompt. Ambiguous, decision-dense, or long-run implementation goes to "
+        "model='opus' + effort='xhigh' (~2x cheaper than fable, nearly as capable). "
         "Keep fable if this genuinely is sensitive or error-prone. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
@@ -297,8 +298,8 @@ llm_nudge(
     INLINE_EDIT_NUDGE,
     message=lambda r: (
         f"This inline edit reads as routine implementation on fable. {r.reasoning} "
-        "Implementation delegates: a well-scoped, clearly-bounded change routes to gpt-5.6-sol via the "
-        "codex skill; ambiguous, open-ended, or long-running work goes to a model='opus', effort='xhigh' subagent. Keep "
+        "Implementation delegates: a bounded, decision-light change routes to gpt-5.6-sol via the "
+        "codex skill; ambiguous, decision-dense, or long-running work goes to a model='opus', effort='xhigh' subagent. Keep "
         "editing inline only when the change is small, sensitive, or bound to judgment you just exercised. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
