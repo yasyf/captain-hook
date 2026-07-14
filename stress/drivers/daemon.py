@@ -2,12 +2,11 @@
 
 Each scenario runs inside a :class:`DaemonWorld` — a short ``/tmp`` run dir (macOS caps ``sun_path``
 at 104 bytes, so the sandbox's own long ``/tmp/capt-stress`` root cannot hold the socket), the
-sandbox env extended with the daemon vars plus an isolated ``XDG_CACHE_HOME`` (so the once-guard
-sentinel never touches the user's real cache), and a hook project the scenario plants in the sandbox
-repo. Clients run under ``CAPT_HOOK_DAEMON_FALLBACK=closed`` by default: a client that never reaches
-a worker exits 1, so a silent cold fallback can never mask a missing warm dispatch. Teardown stops
-every worker the scenario spawned (SIGTERM by recorded pid, then SIGKILL any survivor) and the run
-dir is removed, so no daemon outlives its scenario.
+sandbox env extended with the daemon vars plus an isolated ``XDG_CACHE_HOME``, and a hook project the
+scenario plants in the sandbox repo. Clients run under ``CAPT_HOOK_DAEMON_FALLBACK=closed`` by
+default: a client that never reaches a worker exits 1, so a silent cold fallback can never mask a
+missing warm dispatch. Teardown stops every worker the scenario spawned (SIGTERM by recorded pid,
+then SIGKILL any survivor) and the run dir is removed, so no daemon outlives its scenario.
 
 Workers are matched only by the sandbox repo path — every world roots a unique
 ``/tmp/capt-stress/<run>/<name>/repo`` — so ``stop`` and the pid scans never touch a peer scenario's

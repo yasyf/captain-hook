@@ -81,7 +81,7 @@ def marker_dir(tmp_path: Path) -> Path:
 
 
 def client_env(run_dir: Path, **overrides: str) -> dict[str, str]:
-    return {**os.environ, "CAPT_HOOK_RUN_DIR": str(run_dir), "CAPT_HOOK_ONCE_TTL": "0", **overrides}
+    return {**os.environ, "CAPT_HOOK_RUN_DIR": str(run_dir), **overrides}
 
 
 def run_client(
@@ -513,8 +513,6 @@ class TestSendBoundary:
         assert not sink.exists(), "a cold rerun fired the marker hook — double dispatch"
 
     def test_error_status_relayed_verbatim_no_cold(self, run_dir: Path, marker_dir: Path) -> None:
-        # status=error means the worker dispatched and hit an uncaught error: relay its stderr and exit
-        # verbatim, never rerun cold (which the consumed once-sentinel would silently swallow).
         root = str(marker_dir)
         env, sink = self._cold_env(run_dir, marker_dir, CAPT_HOOK_DAEMON_FALLBACK="cold")
         response = {"v": 1, "status": "error", "stdout": "", "stderr": "Traceback: boom\n", "exit": 1}
@@ -683,7 +681,6 @@ class TestPeerUidVerification:
         # refuses it and runs cold (even under FALLBACK=open), never sending the request to the socket.
         root = str(project_dir)
         monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(run_dir))
-        monkeypatch.setenv("CAPT_HOOK_ONCE_TTL", "0")
         monkeypatch.setenv("CAPT_HOOK_DAEMON_FALLBACK", "open")
         daemon = preseed_daemon(run_dir, root, dict(os.environ), {"v": 1, "status": "ok", "stdout": "SPOOF", "exit": 0})
         monkeypatch.setattr(client, "peer_uid", lambda _s: os.geteuid() + 1)

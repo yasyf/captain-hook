@@ -106,8 +106,8 @@ def run_fork_storm(sandbox: Sandbox) -> ScenarioResult:
 def run_latency(sandbox: Sandbox) -> ScenarioResult:
     with daemon_world(sandbox) as world:
         plant_hooks(sandbox, HOOK_SRC)
-        warm_env = world.env(fallback="closed", CAPT_HOOK_ONCE_TTL="0")
-        cold_env = world.env(fallback="cold", CAPT_HOOK_ONCE_TTL="0")
+        warm_env = world.env(fallback="closed")
+        cold_env = world.env(fallback="cold")
         pay = payload("stress-lat")
         discard_ms, discard_rc = world.time_client(EVENT, pay, env=warm_env)  # pays boot + first discovery
         warm = [world.time_client(EVENT, pay, env=warm_env) for _ in range(SAMPLES)]

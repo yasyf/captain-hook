@@ -533,7 +533,7 @@ class TestDispatch:
         hooks_dir = write_hooks(
             tmp_path,
             (
-                "once.py",
+                "max_fires.py",
                 """\
             from captain_hook import hook, Event, Tool
 

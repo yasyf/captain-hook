@@ -28,7 +28,6 @@ from captain_hook.loader import (
     register_pr_announcements,
 )
 from captain_hook.log import setup_logging
-from captain_hook.once import once_guard
 from captain_hook.packs import manager
 from captain_hook.review.cli import review
 from captain_hook.session import SessionStore, cleanup_stale, ensure_session
@@ -44,10 +43,6 @@ DEFAULT_PREFIX = f"uvx --isolated {DIST_NAME}"
 EVENT_NAMES = ", ".join(n for e in Event if (n := e.name))
 PLUGIN_ID = "captain-hook@captain-hook"
 
-# Decision-capable events: their hooks can return an allow/deny/block verdict, so
-# collapsing a byte-identical sibling could swallow a legitimate event and bypass its
-# gate. They are never guarded — the duplicate-dispatch guard covers only pure
-# side-effect events, where a missed sibling costs at most one repeated effect.
 DECISION_EVENTS = frozenset({Event.PreToolUse, Event.Stop, Event.SubagentStop, Event.PermissionRequest})
 
 PLUGIN_ROOT_VAR = "${CLAUDE_PLUGIN_ROOT}"
@@ -223,8 +218,8 @@ def dispatch_event(
     """Build the event's context and dispatch it, returning the response envelope or None.
 
     The one dispatch codepath shared by the cold CLI and the resident daemon: no printing,
-    logging setup, discovery, or once-guard — those are the front door's job. ``transcript_loader``
-    overrides the default parse (the daemon supplies a cache-backed one).
+    logging setup, or discovery — those are the front door's job. ``transcript_loader`` overrides
+    the default parse (the daemon supplies a cache-backed one).
     """
     from captain_hook.context import HookContext
     from captain_hook.heartbeat import record_heartbeat
@@ -259,30 +254,21 @@ def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None
     if not raw_text.strip():
         return
 
-    # Collapse the N byte-identical siblings Claude Code spawns per event (a legacy consumer's
-    # mirrored `run` entries) to one dispatch; decision events are exempt. once_guard is
-    # deliberately dumb: a claim whose dispatch below raises is NOT released — it stays held for
-    # the TTL window (fail-closed), because re-firing could repeat a side effect a sibling's
-    # earlier hooks already landed.
-    with once_guard(event, event_name, raw_text.encode(), async_=async_) as dispatch_now:
-        if not dispatch_now:
-            return
+    try:
+        raw = json.loads(raw_text)
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"Malformed stdin: {e}", file=sys.stderr)
+        return
 
-        try:
-            raw = json.loads(raw_text)
-        except (json.JSONDecodeError, ValueError) as e:
-            print(f"Malformed stdin: {e}", file=sys.stderr)
-            return
+    session_id = raw.get("session_id")
+    setup_logging(session_id)
 
-        session_id = raw.get("session_id")
-        setup_logging(session_id)
-
-        # stdin is parsed first so the session dir is known before discovery: CliState.discover
-        # loads this session's attached packs (see attached_packs) on top of packs.toml.
-        session_dir = ensure_session(SessionId(session_id)) if session_id else None
-        state.discover(session_dir=session_dir)
-        if output := dispatch_event(state.root, event, raw, session_dir=session_dir, async_=async_):
-            print(json.dumps(output))
+    # stdin is parsed first so the session dir is known before discovery: CliState.discover
+    # loads this session's attached packs (see attached_packs) on top of packs.toml.
+    session_dir = ensure_session(SessionId(session_id)) if session_id else None
+    state.discover(session_dir=session_dir)
+    if output := dispatch_event(state.root, event, raw, session_dir=session_dir, async_=async_):
+        print(json.dumps(output))
 
 
 def init_project(root: Path, *, review: bool = True) -> None:

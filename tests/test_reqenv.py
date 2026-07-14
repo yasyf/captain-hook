@@ -56,8 +56,8 @@ class TestGetenv:
             assert reqenv.getenv("PATH") == "/bin:/usr/bin"
 
     def test_default_survives_typed_non_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("CAPT_HOOK_ONCE_TTL", raising=False)
-        assert reqenv.getenv("CAPT_HOOK_ONCE_TTL", 10.0) == 10.0
+        monkeypatch.delenv("CAPT_HOOK_CLIENT_BUILD", raising=False)
+        assert reqenv.getenv("CAPT_HOOK_CLIENT_BUILD", 10.0) == 10.0
 
 
 class TestEnvMap:

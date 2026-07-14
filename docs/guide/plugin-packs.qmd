@@ -157,18 +157,6 @@ directories, since a genuine two-plugins-one-name clash surfaces the same way
 and wants a look. An attached pack no project pins loads normally, and its
 hooks join dispatch like every other pack's.
 
-::: {.callout-note title="Legacy consumers with mirrored `run` entries"}
-Plugins built before this contract mirrored the dispatcher's
-`uvx --isolated capt-hook run <Event>` commands. Claude Code dedupes hook
-commands per registering source, not globally, so those entries fan each event
-out into sibling processes. A best-effort once-guard collapses the duplicates —
-the first sibling wins, fail-closed, decision events exempt — until legacy
-plugin caches decay through version bumps. It is a shim with a deletion
-manifest, not a coordination mechanism to build on: ship attach-only.
-[Troubleshooting](troubleshooting.qmd#hooks-run-a-stale-capt-hook) covers the
-symptoms.
-:::
-
 ## See also
 
 - [Use packs](packs.qmd) covers the repo-scoped tier end to end.

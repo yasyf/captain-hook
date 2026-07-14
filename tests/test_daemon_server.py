@@ -71,10 +71,6 @@ def exiter(evt):
 """
 
 
-# A hook whose only_if condition raises: run_handler swallows a handler body's exception, but a
-# condition raising in matches_conditions propagates uncaught out of dispatch — the daemon's
-# status=error path. PreToolUse is decision-exempt from the once-guard, so warm and cold each
-# dispatch the same payload and both crash on the ValueError.
 RAISING_HOOK_SRC = """
 from __future__ import annotations
 
@@ -295,30 +291,28 @@ class TestEventParity:
         link = tmp_path / "root-link"
         link.symlink_to(root)
         payload = json.dumps({"session_id": "sl", "tool_name": "Bash", "tool_input": {"show_root": True}})
-        extra = {"CAPT_HOOK_ONCE_TTL": "0"}
-        resp = send(sock, event_req("PostToolUse", payload, link, env, extra_env=extra))
+        resp = send(sock, event_req("PostToolUse", payload, link, env))
         assert resp["stdout"] == f"{link}\n"
-        assert_matches_cold(resp, "PostToolUse", payload, link, env, extra_env=extra)
+        assert_matches_cold(resp, "PostToolUse", payload, link, env)
 
     def test_hook_sys_exit_matches_cold(self, worker: tuple[str, Path, dict]) -> None:
         # A hook that prints then sys.exit(7): the warm response carries the printed output and exit 7,
         # byte-parity with cold (where the SystemExit still delivers the output and the code).
         sock, root, env = worker
         payload = json.dumps({"session_id": "sx7", "tool_name": "Bash", "tool_input": {"exit_code": 7}})
-        extra = {"CAPT_HOOK_ONCE_TTL": "0"}
-        resp = send(sock, event_req("PostToolUse", payload, root, env, extra_env=extra))
+        resp = send(sock, event_req("PostToolUse", payload, root, env))
         assert resp["stdout"] == "BEFORE_EXIT\n"
         assert resp["exit"] == 7
         assert resp["status"] == "ok"
-        assert_matches_cold(resp, "PostToolUse", payload, root, env, extra_env=extra)
+        assert_matches_cold(resp, "PostToolUse", payload, root, env)
 
     def test_malformed_payload_matches_cold(self, worker: tuple[str, Path, dict]) -> None:
         sock, root, env = worker
         raw = "{not valid json"
-        resp = send(sock, event_req("PostToolUse", raw, root, env, extra_env={"CAPT_HOOK_ONCE_TTL": "0"}))
+        resp = send(sock, event_req("PostToolUse", raw, root, env))
         assert resp["stderr"].startswith("Malformed stdin:")
         assert resp["exit"] == 0
-        assert_matches_cold(resp, "PostToolUse", raw, root, env, extra_env={"CAPT_HOOK_ONCE_TTL": "0"})
+        assert_matches_cold(resp, "PostToolUse", raw, root, env)
 
     def test_invalid_event_matches_cold(self, worker: tuple[str, Path, dict]) -> None:
         sock, root, env = worker
@@ -340,22 +334,10 @@ class TestDispatchBehaviour:
     ) -> None:
         sock, root, env = worker
         payload = json.dumps({"session_id": "sp", "tool_name": "Bash", "tool_input": {"say": True}})
-        resp = send(sock, event_req("PostToolUse", payload, root, env, extra_env={"CAPT_HOOK_ONCE_TTL": "0"}))
+        resp = send(sock, event_req("PostToolUse", payload, root, env))
         assert "HELLO_FROM_HOOK\n" in resp["stdout"]
         key = worker_key(str(root), env)
         assert "HELLO_FROM_HOOK" not in (dirs["logs"] / f"daemon-{key}.log").read_text()
-
-    def test_claim_once_collapses_duplicate_pair(self, worker: tuple[str, Path, dict], tmp_path: Path) -> None:
-        sock, root, env = worker
-        sink = tmp_path / "sink.txt"
-        marker = f"once-{os.getpid()}-{time.monotonic_ns()}"
-        payload = json.dumps(
-            {"session_id": "sd", "tool_name": "Bash", "tool_input": {"sink": str(sink), "marker": marker}}
-        )
-        req = event_req("PostToolUse", payload, root, env)
-        assert send(sock, req)["status"] == "ok"
-        assert send(sock, req)["status"] == "ok"
-        assert sink.read_text() == marker + "\n"
 
     def test_client_disconnect_still_completes_dispatch(self, worker: tuple[str, Path, dict], tmp_path: Path) -> None:
         sock_path, root, env = worker
@@ -368,9 +350,7 @@ class TestDispatchBehaviour:
                 "tool_input": {"sleep_ms": 200, "sink": str(sink), "marker": marker},
             }
         )
-        conn = send(
-            sock_path, event_req("PostToolUse", payload, root, env, extra_env={"CAPT_HOOK_ONCE_TTL": "0"}), read=False
-        )
+        conn = send(sock_path, event_req("PostToolUse", payload, root, env), read=False)
         conn.close()  # disconnect before reading the response
         deadline = time.monotonic() + 3
         while not sink.exists() and time.monotonic() < deadline:
@@ -381,7 +361,7 @@ class TestDispatchBehaviour:
 class TestConcurrency:
     def _warm(self, sock: str, root: Path, env: dict) -> None:
         payload = json.dumps({"session_id": "warm", "tool_name": "Bash", "tool_input": {}})
-        send(sock, event_req("PostToolUse", payload, root, env, extra_env={"CAPT_HOOK_ONCE_TTL": "0"}))
+        send(sock, event_req("PostToolUse", payload, root, env))
 
     def test_slow_hook_in_one_session_does_not_block_another(self, worker: tuple[str, Path, dict]) -> None:
         sock, root, env = worker
@@ -391,7 +371,7 @@ class TestConcurrency:
         def fire(name: str, session: str, sleep_ms: int) -> None:
             payload = json.dumps({"session_id": session, "tool_name": "Bash", "tool_input": {"sleep_ms": sleep_ms}})
             start = time.perf_counter()
-            send(sock, event_req("PostToolUse", payload, root, env, extra_env={"CAPT_HOOK_ONCE_TTL": "0"}))
+            send(sock, event_req("PostToolUse", payload, root, env))
             elapsed[name] = time.perf_counter() - start
 
         threads = [
@@ -410,7 +390,7 @@ class TestConcurrency:
 
         def fire() -> None:
             payload = json.dumps({"session_id": "same", "tool_name": "Bash", "tool_input": {"sleep_ms": 150}})
-            send(sock, event_req("PostToolUse", payload, root, env, extra_env={"CAPT_HOOK_ONCE_TTL": "0"}))
+            send(sock, event_req("PostToolUse", payload, root, env))
 
         threads = [threading.Thread(target=fire), threading.Thread(target=fire)]
         start = time.perf_counter()
@@ -431,7 +411,7 @@ class TestConcurrency:
         try:
             payload = json.dumps({"session_id": "normal", "tool_name": "Bash", "tool_input": {}})
             start = time.perf_counter()
-            resp = send(sock, event_req("PostToolUse", payload, root, env, extra_env={"CAPT_HOOK_ONCE_TTL": "0"}))
+            resp = send(sock, event_req("PostToolUse", payload, root, env))
             assert resp["status"] == "ok"
             assert time.perf_counter() - start < 5.0, "a slowloris peer wedged the accept loop"
         finally:
@@ -469,7 +449,7 @@ class TestConcurrency:
             payload = json.dumps({"session_id": "floodA", "tool_name": "Bash", "tool_input": {"sleep_ms": 150}})
             send(
                 sock,
-                event_req("PostToolUse", payload, root, env, extra_env={"CAPT_HOOK_ONCE_TTL": "0"}),
+                event_req("PostToolUse", payload, root, env),
                 timeout=30,
             )
 
@@ -480,7 +460,7 @@ class TestConcurrency:
         try:
             payload_b = json.dumps({"session_id": "sessB", "tool_name": "Bash", "tool_input": {}})
             start = time.perf_counter()
-            resp = send(sock, event_req("PostToolUse", payload_b, root, env, extra_env={"CAPT_HOOK_ONCE_TTL": "0"}))
+            resp = send(sock, event_req("PostToolUse", payload_b, root, env))
             elapsed = time.perf_counter() - start
             assert resp["status"] == "ok"
             assert elapsed < 1.0, f"session B was starved by session A's flood: {elapsed:.2f}s"
@@ -997,7 +977,7 @@ class TestDiscoveryDiagnosticsReplay:
 
         monkeypatch.setattr(manager, "resolve_enabled_packs", lambda _root: ([], ["ghost"]))
         root = make_project(tmp_path / "proj")
-        env = os.environ | {"CAPT_HOOK_ONCE_TTL": "0"}
+        env = dict(os.environ)
         payload = json.dumps({"tool_name": "Bash", "tool_input": {}})
         req = decode_request(json.dumps(event_req("PostToolUse", payload, root, env)).encode())
 

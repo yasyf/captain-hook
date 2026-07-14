@@ -40,7 +40,6 @@ DROPPED_ENV = (
     "CAPT_HOOK_CLIENT_BUILD",
     "CAPT_HOOK_DAEMON_DEBUG",
     "HOOKS_DAEMON_IDLE_S",
-    "CAPT_HOOK_ONCE_TTL",
 )
 REAL_RUN_DIR = Path.home() / ".cache" / "captain-hook" / "run"
 GIT_IDENTITY = ("-c", "user.email=stress@capt-hook.test", "-c", "user.name=capt-hook-stress")

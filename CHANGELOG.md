@@ -4,6 +4,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.13.0] - 2026-07-13
+
+### Removed
+- **The duplicate-dispatch once-guard is gone.** The shim existed solely to collapse
+  the sibling processes a legacy consumer plugin's mirrored `run` entries caused
+  (Claude Code dedupes hook commands per registering source, not globally). With
+  every consumer on the attach-only pack contract and legacy plugin caches verified
+  decayed fleet-wide, there is no mirroring source left to collapse — dispatch now
+  runs unconditionally on both the cold CLI and daemon paths. The
+  `CAPT_HOOK_ONCE_TTL` knob is removed with it. A mirrored `run` entry that
+  resurfaces (a hand-wired settings line, a pre-contract plugin cache) now
+  double-fires side-effecting hooks; the fix is deleting the extra registration,
+  per the troubleshooting guide.
+
 ## [9.12.0] - 2026-07-13
 
 ### Added

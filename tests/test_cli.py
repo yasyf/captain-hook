@@ -50,8 +50,7 @@ class TestRunSubcommand:
 
     def test_cli_002_run_with_async_flag(self, hooks_dir: Path) -> None:
         # PostToolUse is not a decision event, so both async_=False and async_=True register
-        # cleanly (async_=True on a decision event now raises) and each variant's pass emits its
-        # own hook. TTL=0 disables the once-guard so both passes dispatch deterministically.
+        # cleanly (async_=True on a decision event now raises) and each variant's pass emits its own hook.
         (hooks_dir / "conf.py").write_text("")
         write_hook(
             hooks_dir,
@@ -65,13 +64,11 @@ class TestRunSubcommand:
         )
 
         stdin = stdin_json(tool_name="Bash", tool_input={"command": "echo hi"})
-        env = {"CAPT_HOOK_ONCE_TTL": "0"}
-
-        result_sync = run_cli("run", "PostToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin, env=env)
+        result_sync = run_cli("run", "PostToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
         assert result_sync.returncode == 0
         assert "sync hook" in json.dumps(json.loads(result_sync.stdout))
 
-        result_async = run_cli("run", "PostToolUse", "--async", hooks_dir=str(hooks_dir), stdin_data=stdin, env=env)
+        result_async = run_cli("run", "PostToolUse", "--async", hooks_dir=str(hooks_dir), stdin_data=stdin)
         assert result_async.returncode == 0
         assert "async hook" in json.dumps(json.loads(result_async.stdout))
 

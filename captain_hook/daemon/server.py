@@ -10,8 +10,8 @@ interleave — so one session flooding requests cannot starve another; the total
 bounded, and a saturated worker answers ``rejected`` so the client falls back cold rather than
 queueing an unbounded payload backlog. Each event runs inside a :func:`request_scope` that binds the
 request's env, captures its stdout/stderr, and routes its logs to the session file. The event flow
-mirrors cold ``run_event`` byte-for-byte (event validation, empty stdin, the once-guard, malformed
-stdin, then dispatch), so the client's response is indistinguishable from a cold run. Dispatch
+mirrors cold ``run_event`` byte-for-byte (event validation, empty stdin, malformed stdin, then
+dispatch), so the client's response is indistinguishable from a cold run. Dispatch
 always runs to completion, even if the client has disconnected, so no side effect is half-applied.
 """
 
@@ -58,7 +58,6 @@ from captain_hook.daemon.protocol import (
     worker_key,
 )
 from captain_hook.daemon.registry import Registry
-from captain_hook.once import once_guard
 from captain_hook.session import ensure_session
 from captain_hook.types import Event
 
@@ -364,12 +363,7 @@ class Server:
             return self._response("ok")
         parsed, parse_error = _decode_payload(raw_text)
         session_id = parsed.get("session_id") if isinstance(parsed, dict) else None
-        with (
-            request_scope(req, session_id) as buffers,
-            once_guard(event, event_name, raw_text.encode(), async_=req.async_) as dispatch_now,
-        ):
-            if not dispatch_now:
-                return self._from_buffers(buffers)
+        with request_scope(req, session_id) as buffers:
             if parse_error is not None:
                 print(f"Malformed stdin: {parse_error}", file=sys.stderr)
                 return self._from_buffers(buffers)

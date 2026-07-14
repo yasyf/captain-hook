@@ -1,9 +1,8 @@
 """End-to-end daemon behaviors that the socket-level suite (``test_daemon_server``) and the
 client-fallback suite (``test_client``) don't cover: a worker picks up an edited hook without a
 restart, recovers from a ``SIGKILL``, exits when idle and respawns on the next event, collapses a
-storm of concurrent clients to exactly one worker, serves version-skewed clients without churning,
-and dedupes byte-identical siblings (daemon-to-daemon and daemon-to-cold) through the shared
-once-sentinel.
+storm of concurrent clients to exactly one worker, and serves version-skewed clients without
+churning.
 
 Two behaviors from the plan's list are already proven elsewhere and are not duplicated here:
 cross-session concurrency (``test_daemon_server.TestConcurrency.test_slow_hook_in_one_session_does_not_block_another``)
@@ -16,7 +15,6 @@ from __future__ import annotations
 import json
 import os
 import signal
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -34,7 +32,6 @@ from tests.daemon_helpers import (
     pid_alive,
     read_meta,
     run_client,
-    run_cold,
     running_daemon,
     send,
     shutdown_worker,
@@ -54,22 +51,6 @@ from captain_hook import Event, on
 
 @on(Event.PostToolUse)
 def noop(evt):
-    return None
-"""
-
-SINK_HOOK = """
-from __future__ import annotations
-
-from pathlib import Path
-
-from captain_hook import Event, on
-
-
-@on(Event.PostToolUse)
-def sink(evt):
-    ti = evt._raw.get("tool_input", {})
-    if (path := ti.get("sink")) and (marker := ti.get("marker")):
-        Path(path).open("a").write(marker + "\\n")
     return None
 """
 
@@ -113,12 +94,11 @@ def test_hot_reload_picks_up_an_edited_hook(project: tuple[Path, dict[str, Path]
     make_project(root, version_hook("VERSION_1"))
     env = daemon_env(root, dirs)
     payload = {"session_id": "hr", "tool_name": "Bash", "tool_input": {}}
-    extra = {"CAPT_HOOK_ONCE_TTL": "0"}
     with running_daemon(root, env) as sock:
-        first = send(sock, event_req("PostToolUse", payload, root, env, extra_env=extra))
+        first = send(sock, event_req("PostToolUse", payload, root, env))
         assert "VERSION_1" in first["stdout"]
         (root / ".claude" / "hooks" / "h.py").write_text(version_hook("VERSION_2_RELOADED"))
-        second = send(sock, event_req("PostToolUse", payload, root, env, extra_env=extra))
+        second = send(sock, event_req("PostToolUse", payload, root, env))
         assert "VERSION_2_RELOADED" in second["stdout"]
         assert "VERSION_1" not in second["stdout"]
 
@@ -220,57 +200,3 @@ def test_client_build_skew_served_without_restart(project: tuple[Path, dict[str,
         # same start time, still serving.
         assert send(sock, control_req("ping"))["status"] == "ok"
         assert read_meta(root, env)["started_at"] == started
-
-
-def test_concurrent_identical_siblings_dispatch_once(project: tuple[Path, dict[str, Path]]) -> None:
-    root, dirs = project
-    make_project(root, SINK_HOOK)
-    env = daemon_env(root, dirs)
-    sink = dirs["run"] / "sink.txt"
-    payload = {"session_id": "once", "tool_name": "Bash", "tool_input": {"sink": str(sink), "marker": "M"}}
-    request = event_req("PostToolUse", payload, root, env, extra_env={"CAPT_HOOK_ONCE_TTL": "30"})
-    responses: dict[int, dict] = {}
-
-    def fire(i: int) -> None:
-        responses[i] = send(sock, request)
-
-    with running_daemon(root, env) as sock:
-        threads = [threading.Thread(target=fire, args=(i,)) for i in range(2)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-    assert all(r["status"] == "ok" for r in responses.values()), responses
-    assert sink.read_text() == "M\n"  # the once-guard collapsed the byte-identical pair to one dispatch
-
-
-def test_daemon_and_cold_sibling_dedupe_via_shared_sentinel(project: tuple[Path, dict[str, Path]]) -> None:
-    root, dirs = project
-    make_project(root, SINK_HOOK)
-    env = daemon_env(root, dirs, CAPT_HOOK_ONCE_TTL="30")
-    sink = dirs["run"] / "sink.txt"
-    raw = json.dumps({"session_id": "cd", "tool_name": "Bash", "tool_input": {"sink": str(sink), "marker": "X"}})
-    daemon_resp: list[dict] = []
-    cold_resp: list[subprocess.CompletedProcess[bytes]] = []
-
-    with running_daemon(root, env) as sock:
-
-        def via_daemon() -> None:
-            daemon_resp.append(send(sock, event_req("PostToolUse", raw, root, env)))
-
-        def via_cold() -> None:
-            cold_resp.append(
-                run_cold("--root", str(root), "run", "PostToolUse", env=env, stdin=raw.encode(), cwd=str(root))
-            )
-
-        threads = [threading.Thread(target=via_daemon), threading.Thread(target=via_cold)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-
-    assert daemon_resp[0]["status"] == "ok"
-    assert cold_resp[0].returncode == 0
-    # A daemon dispatch and a concurrent cold CLI share the XDG_CACHE_HOME-rooted sentinel, so exactly
-    # one of them ran the side-effecting hook.
-    assert sink.read_text() == "X\n"

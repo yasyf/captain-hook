@@ -2,9 +2,7 @@
 byte-identical to the cold ``python -m captain_hook`` CLI — same stdout, same stderr, same
 exit code. The client runs under ``CAPT_HOOK_DAEMON_FALLBACK=closed`` so a daemon bug surfaces
 as a divergent (or exit-1) response, never silently masked as a cold fallback. ``run_cold`` and
-``run_client`` are handed the identical environment (worker key, state, cache, decisions), and
-the once-guard is disabled (``CAPT_HOOK_ONCE_TTL=0``) so replaying the same payload through both
-drivers is not swallowed as a duplicate.
+``run_client`` are handed the identical environment (worker key, state, cache, decisions).
 
 The socket-level suite (``test_daemon_server``) proves the server's response bytes; this suite
 proves the whole client→socket→cold-parity contract end to end across the event surface.
@@ -175,7 +173,7 @@ CASES = [
 def parity() -> Iterator[tuple[Path, dict[str, str]]]:
     dirs = daemon_dirs()
     root = make_project(Path(tempfile.mkdtemp(prefix="chp-proj-")), PARITY_HOOK_SRC)
-    env = daemon_env(root, dirs, CAPT_HOOK_ONCE_TTL="0", CAPT_HOOK_DAEMON_FALLBACK="closed")
+    env = daemon_env(root, dirs, CAPT_HOOK_DAEMON_FALLBACK="closed")
     try:
         with running_daemon(root, env):
             yield root, env
