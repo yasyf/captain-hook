@@ -123,7 +123,9 @@ def test_spawn_uses_exact_detached_argv(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert bootstrap.maybe_bootstrap() == bootstrap.BOOTSTRAP_NOTICE
     assert len(calls) == 1
     call = calls[0]
-    assert call.argv == [sys.executable, "-m", "captain_hook", "pack", "bootstrap"]
+    # -I isolates the detached worker from a cwd/PYTHONPATH captain_hook shadow (venv site-packages
+    # still resolve, so `-I -m captain_hook` runs the installed package).
+    assert call.argv == [sys.executable, "-I", "-m", "captain_hook", "pack", "bootstrap"]
     assert call.kwargs["stdin"] == subprocess.DEVNULL
     assert call.kwargs["start_new_session"] is True
     # all three fds redirected; stdout and stderr share the one log handle so nothing inherits a pipe
@@ -162,13 +164,24 @@ def test_missing_claude_binary_records_attempt_and_skips_spawn(monkeypatch: pyte
 
 def test_run_bootstrap_adds_marketplace_then_installs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     use_config(monkeypatch, config_dir(tmp_path, known=False))
+    claude_present(monkeypatch)  # which("claude") → the absolute path both calls must carry
     calls = capture_run(monkeypatch)
     bootstrap.run_bootstrap()
     assert [c.argv for c in calls] == [
-        ["claude", "plugin", "marketplace", "add", "yasyf/captain-hook"],
-        ["claude", "plugin", "install", "captain-hook@captain-hook"],
+        ["/usr/bin/claude", "plugin", "marketplace", "add", "yasyf/captain-hook"],
+        ["/usr/bin/claude", "plugin", "install", "captain-hook@captain-hook"],
     ]
     assert all(c.kwargs["check"] is True and c.kwargs["timeout"] == 300 for c in calls)
+
+
+def test_run_bootstrap_missing_claude_exits_clean(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # No claude on PATH: the worker resolves an absolute path first, logs, and exits without ever
+    # invoking the literal "claude" (pre-fix it ran subprocess.run(["claude", ...])).
+    use_config(monkeypatch, config_dir(tmp_path, known=False))
+    claude_absent(monkeypatch)
+    calls = capture_run(monkeypatch)
+    bootstrap.run_bootstrap()
+    assert calls == []
 
 
 def test_run_bootstrap_short_circuits_when_sibling_registered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -176,6 +189,25 @@ def test_run_bootstrap_short_circuits_when_sibling_registered(monkeypatch: pytes
     calls = capture_run(monkeypatch)
     bootstrap.run_bootstrap()
     assert calls == []  # a sibling session registered the marketplace under the lock → no claude calls
+
+
+def test_maybe_bootstrap_rechecks_known_under_lock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # A sibling registers the marketplace between the lock-free outer check and lock acquisition;
+    # the under-lock re-check catches it, so no second worker spawns (pre-fix: no re-check → spawn).
+    use_config(monkeypatch, config_dir(tmp_path, known=False))
+    claude_present(monkeypatch)
+    forbid_popen(monkeypatch)
+    seen = iter([False, True])
+    monkeypatch.setattr(bootstrap, "marketplace_known", lambda: next(seen))
+    assert bootstrap.maybe_bootstrap() is None
+
+
+def test_marker_with_non_numeric_attempted_at_is_not_fresh(tmp_path: Path) -> None:
+    # A hand-corrupted marker whose attempted_at isn't a number re-arms the attempt rather than
+    # raising TypeError on the `now - attempted_at` subtraction.
+    marker = tmp_path / "marker.json"
+    marker.write_text(json.dumps({"attempted_at": "not-a-number"}))
+    assert bootstrap.attempt_fresh(marker, time.time()) is False
 
 
 # --- attach wiring -------------------------------------------------------------------

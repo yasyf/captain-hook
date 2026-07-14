@@ -24,6 +24,8 @@ ATTACH_DIR_HOOKS = f'"{PLUGIN_ROOT_VAR}/hooks"'
 # A version floor is a lower-bound constraint: `>=X.Y.Z` (a bare pin or `<=`/`==` doesn't let a
 # newer captain-hook resolve).
 VERSION_FLOOR_RE = re.compile(r">=\s*\d+\.\d+\.\d+")
+# Shell control operators/redirections/substitutions: a canonical grammar token carries none.
+SHELL_METACHARS = frozenset(";&|<>()`\n\r")
 
 
 def attach_command(*, nested: bool) -> str:
@@ -31,40 +33,63 @@ def attach_command(*, nested: bool) -> str:
     return f"{DEFAULT_PREFIX} pack attach {ATTACH_DIR_HOOKS if nested else ATTACH_DIR_ROOT}"
 
 
-def search_upward(start: Path, *rel: str) -> Path | None:
-    """The nearest existing ``base/rel`` walking from ``start`` up to the filesystem root."""
+def search_upward(start: Path, *rel: str, stop: Path | None = None) -> Path | None:
+    """The nearest existing ``base/rel`` walking from ``start`` upward; when ``stop`` is given the
+    walk halts at ``stop`` (inclusive) and never ascends above it."""
+    bound = stop.resolve() if stop is not None else None
     for base in (start, *start.parents):
         for r in rel:
             if (cand := base / r).is_file():
                 return cand
+        if bound is not None and base.resolve() == bound:
+            break
     return None
 
 
 def command_entries(hooks_json: dict[str, Any]) -> list[tuple[str, str]]:
-    """Every ``(event, command)`` command-type hook entry across the file, in declaration order."""
+    """Every ``(event, command)`` command-type hook entry across the file, in declaration order.
+
+    Malformed shapes (a non-dict ``hooks`` map, a non-list group list, a non-dict group or entry,
+    a command entry without a string ``command``) are skipped rather than raised, so ``pack lint``
+    surveys a hand-edited file without tracebacking; ``scaffold`` refuses those shapes up front.
+    """
+    hooks = hooks_json.get("hooks", {})
     return [
         (event, entry["command"])
-        for event, groups in hooks_json.get("hooks", {}).items()
-        for group in groups
-        for entry in group.get("hooks", [])
-        if entry.get("type") == "command"
+        for event, groups in (hooks.items() if isinstance(hooks, dict) else ())
+        for group in (groups if isinstance(groups, list) else ())
+        for entry in (group.get("hooks", []) if isinstance(group, dict) else ())
+        if isinstance(entry, dict) and entry.get("type") == "command" and isinstance(entry.get("command"), str)
     ]
 
 
+def carries_shell_operator(argv: list[str]) -> bool:
+    """True when any token carries a shell control operator, redirection, or substitution char."""
+    return any(SHELL_METACHARS & set(token) for token in argv)
+
+
 def is_attach_argv(argv: list[str]) -> bool:
-    """True when ``argv`` is exactly the canonical prefix + ``pack attach <one directory arg>``."""
+    """True when ``argv`` is exactly the canonical prefix + ``pack attach <one plain directory arg>``."""
     prefix = shlex.split(DEFAULT_PREFIX)
     return (
         len(argv) == len(prefix) + 3
         and argv[: len(prefix)] == prefix
         and argv[len(prefix) : len(prefix) + 2] == ["pack", "attach"]
+        and not carries_shell_operator(argv)
     )
 
 
 def is_canonical_run_argv(argv: list[str]) -> bool:
-    """True when ``argv`` is the canonical ``<prefix> run <...>`` a legacy consumer mirrors."""
+    """True when ``argv`` is exactly ``<prefix> run <Event>`` optionally trailed by ``--async``."""
     prefix = shlex.split(DEFAULT_PREFIX)
-    return len(argv) > len(prefix) and argv[: len(prefix)] == prefix and argv[len(prefix)] == "run"
+    rest = argv[len(prefix) :]
+    return (
+        argv[: len(prefix)] == prefix
+        and rest[:1] == ["run"]
+        and len(rest) in (2, 3)
+        and (len(rest) == 2 or rest[2] == "--async")
+        and not carries_shell_operator(argv)
+    )
 
 
 def attach_dir_reason(cmd: str, *, nested: bool) -> str | None:

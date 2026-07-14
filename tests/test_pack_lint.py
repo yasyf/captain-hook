@@ -314,6 +314,21 @@ def test_echo_capt_hook_run_fails(tmp_path: Path) -> None:
     assert "unrecognized capt-hook usage" in result.reason
 
 
+@pytest.mark.parametrize(
+    "trailing",
+    [" && /opt/audit", "&&/opt/audit", " | tee /opt/log", "; /opt/audit"],
+    ids=["and-spaced", "and-glued", "pipe", "semicolon"],
+)
+def test_compound_run_command_is_unrecognized_not_a_bare_run(tmp_path: Path, trailing: str) -> None:
+    # A capt-hook run entry carrying a shell operator is not the canonical run shape; rejecting it as
+    # unrecognized (rather than a bare "run entry") is what keeps the trailing command from riding along.
+    root = conforming(tmp_path / "ccx")
+    _with_extra_entry(root, f"{DEFAULT_PREFIX} run Stop{trailing}")
+    result = by_check(root)["hooks.json"]
+    assert not result.ok
+    assert "unrecognized capt-hook usage" in result.reason
+
+
 # --- fix #3: attach argument validation (quoted plugin-root form, layout match) --------
 
 

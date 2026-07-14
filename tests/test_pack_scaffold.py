@@ -298,3 +298,160 @@ def test_cli_scaffold_exits_nonzero_when_lint_fails(tmp_path: Path) -> None:
     assert "FAIL" in result.stdout
     assert "session-start" in result.stdout
     assert "/plugin install" not in result.stdout  # the snippet is withheld on a failing lint
+
+
+# --- fix A: non-list dependencies is invalid input, refuse (never spread a string into char-deps) --
+
+
+def test_string_dependencies_refuses_without_writing(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "ccx", "dependencies": "captain-hook"}))
+    before = file_hashes(root)
+    with pytest.raises(click.ClickException) as exc:
+        scaffold.scaffold_pack(root, name="ccx", description="d")
+    assert "plugin.json" in str(exc.value) and "dependencies" in str(exc.value)
+    assert file_hashes(root) == before
+
+
+# --- fix B: the captain-hook dep is identified by name, never by a foreign dep's marketplace field --
+
+
+def test_foreign_dep_claiming_marketplace_is_left_untouched(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    write_plugin_json(root, [{"name": "other-plugin", "marketplace": "captain-hook"}])
+    assert action_for(scaffold.scaffold_pack(root, name="ccx", description="d"), "plugin.json").verb == "updated"
+    deps = read_json(root / ".claude-plugin" / "plugin.json")["dependencies"]
+    assert {"name": "other-plugin", "marketplace": "captain-hook"} in deps  # the foreign dep is preserved
+    captain = next(d for d in deps if d.get("name") == "captain-hook")
+    assert captain == {"name": "captain-hook", "marketplace": "captain-hook", "version": scaffold.dependency_floor()}
+
+
+# --- fix C: non-list allowlist is invalid input, refuse (never coerce to [] then overwrite) ---------
+
+
+def test_string_allowlist_refuses_without_writing(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    (root / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps({"name": "ccx", "allowCrossMarketplaceDependenciesOn": "captain-hook"})
+    )
+    before = file_hashes(root)
+    with pytest.raises(click.ClickException) as exc:
+        scaffold.scaffold_pack(root, name="ccx", description="d")
+    assert "marketplace.json" in str(exc.value)
+    assert file_hashes(root) == before
+
+
+# --- fix D: malformed hooks.json shapes refuse loud instead of tracebacking on AttributeError -------
+
+
+@pytest.mark.parametrize(
+    "bad_hooks",
+    [
+        {"PostToolUse": "not-a-list"},
+        {"PostToolUse": ["not-a-dict"]},
+        {"PostToolUse": [{"hooks": "not-a-list"}]},
+        {"PostToolUse": [{"hooks": ["not-a-dict"]}]},
+        {"PostToolUse": [{"hooks": [{"type": "command"}]}]},
+    ],
+    ids=["non-list-groups", "non-dict-group", "non-list-entries", "non-dict-entry", "command-without-command"],
+)
+def test_malformed_hooks_shape_refuses_without_writing(tmp_path: Path, bad_hooks: dict) -> None:
+    root = conforming(tmp_path / "ccx")
+    (root / "hooks" / "hooks.json").write_text(json.dumps({"hooks": bad_hooks}))
+    before = file_hashes(root)
+    with pytest.raises(click.ClickException) as exc:
+        scaffold.scaffold_pack(root, name="ccx", description="d")
+    assert "hooks.json" in str(exc.value)
+    assert file_hashes(root) == before
+
+
+# --- fix E: an existing guard.py is never clobbered, even skip-marked (has_hook_files excludes it) --
+
+
+def test_existing_skip_marked_guard_is_never_clobbered(tmp_path: Path) -> None:
+    root = tmp_path / "pkg"
+    write_manifest(root, name="pkg", hooks="hooks")
+    (hooks := root / "hooks").mkdir()
+    sentinel = "__capt_hook_skip__ = True\ndisabled_guard = 1\n"
+    (guard := hooks / "guard.py").write_text(sentinel)
+    actions = scaffold.scaffold_pack(root, name="pkg", description="d")
+    assert not any(a.path.name == "guard.py" for a in actions)  # the starter is never planned
+    assert guard.read_text() == sentinel  # the disabled guard survives byte-for-byte
+
+
+# --- fix F: a capt-hook entry carrying a shell operator is unrecognized, so scaffold refuses --------
+
+
+@pytest.mark.parametrize(
+    "trailing",
+    [" && /opt/audit", "&&/opt/audit", " | tee /opt/log", "; /opt/audit", " > /opt/out"],
+    ids=["and-spaced", "and-glued", "pipe", "semicolon", "redirect"],
+)
+def test_compound_run_entry_refuses_never_strips(tmp_path: Path, trailing: str) -> None:
+    root = conforming(tmp_path / "ccx")
+    write_hooks_json(
+        root,
+        {
+            "hooks": {
+                "SessionStart": [{"hooks": [{"type": "command", "command": CANONICAL_ATTACH}]}],
+                "Stop": [{"hooks": [{"type": "command", "command": f"{DEFAULT_PREFIX} run Stop{trailing}"}]}],
+            }
+        },
+    )
+    before = file_hashes(root)
+    with pytest.raises(click.ClickException) as exc:
+        scaffold.scaffold_pack(root, name="ccx", description="d")
+    assert "can't safely rewrite" in str(exc.value)  # refuses rather than deleting the foreign command
+    assert file_hashes(root) == before
+
+
+# --- fix I: scaffolding a child never ascends above its root to rewrite a parent's plugin artifacts -
+
+
+def test_scaffold_child_does_not_rewrite_parent_artifacts(tmp_path: Path) -> None:
+    parent = tmp_path / "parent"
+    (plugin_dir := parent / ".claude-plugin").mkdir(parents=True)
+    plugin_before = {"name": "parent", "dependencies": [{"name": "unrelated"}]}
+    market_before = {"name": "parent", "owner": {"name": "x"}, "allowCrossMarketplaceDependenciesOn": ["other"]}
+    (plugin_dir / "plugin.json").write_text(json.dumps(plugin_before))
+    (plugin_dir / "marketplace.json").write_text(json.dumps(market_before))
+    scaffold.scaffold_pack(parent / "child", name="child", description="d")
+    assert (parent / "child" / ".claude-plugin" / "plugin.json").is_file()  # the child got its own
+    assert read_json(plugin_dir / "plugin.json") == plugin_before  # the parent's is untouched
+    assert read_json(plugin_dir / "marketplace.json") == market_before
+
+
+# --- fix J: a hooks dir escaping the pack root refuses before writing a starter outside the pack ----
+
+
+def test_hooks_dir_escaping_pack_root_refuses(tmp_path: Path) -> None:
+    root = tmp_path / "pkg"
+    root.mkdir()
+    (root / manager.PACK_MANIFEST).write_text(
+        'name = "pkg"\nversion = "0.1.0"\ndescription = "d"\nhooks = "../escape"\n'
+    )
+    before = file_hashes(root)
+    with pytest.raises(click.ClickException) as exc:
+        scaffold.scaffold_pack(root, name="pkg", description="d")
+    assert manager.PACK_MANIFEST in str(exc.value)
+    assert file_hashes(root) == before
+    assert not (tmp_path / "escape").exists()  # nothing landed outside the pack root
+
+
+# --- fix K: a foreign group with no capt-hook entries is preserved verbatim, not pruned as empty ----
+
+
+def test_empty_foreign_group_preserved_verbatim(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    write_hooks_json(
+        root,
+        {
+            "hooks": {
+                "SessionStart": [{"hooks": [{"type": "command", "command": CANONICAL_ATTACH}]}],
+                "PostToolUse": [{"matcher": "Skill", "hooks": []}],
+            }
+        },
+    )
+    scaffold.scaffold_pack(root, name="ccx", description="d")
+    data = read_json(root / "hooks" / "hooks.json")
+    assert data["hooks"].get("PostToolUse") == [{"matcher": "Skill", "hooks": []}]  # kept, not pruned

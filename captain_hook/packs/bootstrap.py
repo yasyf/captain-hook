@@ -69,7 +69,7 @@ def attempt_fresh(marker: Path, now: float) -> bool:
         attempted_at = json.loads(marker.read_text())["attempted_at"]
     except (OSError, ValueError, KeyError):
         return False
-    return now - attempted_at < RETRY_COOLDOWN_SECONDS
+    return isinstance(attempted_at, (int, float)) and now - attempted_at < RETRY_COOLDOWN_SECONDS
 
 
 def record_attempt(marker: Path, now: float) -> None:
@@ -80,7 +80,7 @@ def spawn_worker() -> None:
     (log_path := worker_log_path()).parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("ab") as log:
         subprocess.Popen(
-            [sys.executable, "-m", "captain_hook", "pack", "bootstrap"],
+            [sys.executable, "-I", "-m", "captain_hook", "pack", "bootstrap"],
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=log,
@@ -93,38 +93,45 @@ def spawn_worker() -> None:
 def maybe_bootstrap() -> str | None:
     """Detach the marketplace-registration worker when the captain-hook marketplace is unknown.
 
-    Hot-path ordered to do the least work: a single read proves the marketplace is already
-    registered (the steady state), an hourly marker damps re-spawn churn, and a missing ``claude``
-    binary records the attempt without spawning. Returns the one-line notice only when a worker is
-    launched — that line is the sole deliberate SessionStart stdout, landing in the model context.
+    Hot-path ordered to do the least work: a single lock-free read proves the marketplace is
+    already registered (the steady state). On the miss path a FileLock serializes the re-check,
+    marker damping, and spawn so a burst of concurrent sessions launches one worker, not N; an
+    hourly marker damps re-spawn churn and a missing ``claude`` binary records the attempt without
+    spawning. Returns the one-line notice only when a worker is launched — that line is the sole
+    deliberate SessionStart stdout, landing in the model context.
     """
     if marketplace_known():
         return None
     now = time.time()
     marker = marker_path()
-    if attempt_fresh(marker, now):
-        return None
-    if shutil.which("claude") is None:
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(marker.with_name(marker.name + ".lock"))):
+        if marketplace_known() or attempt_fresh(marker, now):
+            return None
         record_attempt(marker, now)
-        return None
-    record_attempt(marker, now)
-    spawn_worker()
-    return BOOTSTRAP_NOTICE
+        if shutil.which("claude") is None:
+            return None
+        spawn_worker()
+        return BOOTSTRAP_NOTICE
 
 
 def run_bootstrap() -> None:
     """Worker entry: register the captain-hook marketplace and install its plugin, once per config dir.
 
     A sibling session may have registered the marketplace between spawn and lock acquisition, so the
-    known check is repeated under the lock. Both ``claude`` calls run with ``check=True`` — a failure
-    raises and lands loud in the worker log.
+    known check is repeated under the lock. ``claude`` is resolved to an absolute path so a cwd or
+    PATH shadow can't hijack the install; a missing binary logs and exits cleanly. Both calls run
+    with ``check=True`` — a failure raises and lands loud in the worker log.
     """
     marker = marker_path()
     marker.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(str(marker.with_name(marker.name + ".lock"))):
         if marketplace_known():
             return
+        if (claude := shutil.which("claude")) is None:
+            logger.warning("claude binary not found on PATH; skipping marketplace bootstrap")
+            return
         subprocess.run(
-            ["claude", "plugin", "marketplace", "add", MARKETPLACE_REPO], check=True, timeout=WORKER_TIMEOUT_SECONDS
+            [claude, "plugin", "marketplace", "add", MARKETPLACE_REPO], check=True, timeout=WORKER_TIMEOUT_SECONDS
         )
-        subprocess.run(["claude", "plugin", "install", PLUGIN_ID], check=True, timeout=WORKER_TIMEOUT_SECONDS)
+        subprocess.run([claude, "plugin", "install", PLUGIN_ID], check=True, timeout=WORKER_TIMEOUT_SECONDS)

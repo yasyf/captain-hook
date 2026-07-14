@@ -79,9 +79,19 @@ def scaffold_pack(root: Path, *, name: str, description: str) -> list[ScaffoldAc
         plan_hooks_json(root, manifest_dir, nested=nested),
         plan_plugin_json(root, manifest_dir, name=name, description=description),
         plan_marketplace_json(root, manifest_dir, name=name, description=description),
-        *plan_starter_hook(manifest.hooks_dir(pack_root)),
+        *plan_starter_hook(contained_hooks_dir(manifest, pack_root, manifest_path)),
     ]
     return [execute(plan) for plan in plans]
+
+
+def contained_hooks_dir(manifest: manager.PackManifest, pack_root: Path, manifest_path: Path) -> Path:
+    """The manifest's hooks dir, refusing when its ``hooks`` key resolves outside the pack root."""
+    if not (hooks_dir := manifest.hooks_dir(pack_root)).resolve().is_relative_to(pack_root.resolve()):
+        raise click.ClickException(
+            f"{manifest_path} points hooks at {manifest.hooks!r}, which resolves outside the pack root "
+            f"{pack_root}; scaffold refuses to write a starter hook outside the pack"
+        )
+    return hooks_dir
 
 
 def execute(plan: Plan) -> ScaffoldAction:
@@ -175,6 +185,11 @@ def plan_hooks_json(root: Path, manifest_dir: Path, *, nested: bool) -> Plan:
     if not present:
         return Plan(candidates[0], "created", "attach-only hooks.json", render_json(attach_only(canonical)))
     data = parse_json(present[0])
+    if reason := hooks_shape_reason(data):
+        raise click.ClickException(
+            f"{present[0]} has a malformed hooks structure ({reason}); fix hooks.json by hand — "
+            "scaffold refuses to rewrite an entry it can't classify"
+        )
     refuse_unrecognized(present[0], data)
     if (desired := merge_hooks_json(data, canonical)) == data:
         return Plan(present[0], "unchanged", "one canonical SessionStart attach", None)
@@ -182,7 +197,7 @@ def plan_hooks_json(root: Path, manifest_dir: Path, *, nested: bool) -> Plan:
 
 
 def plan_plugin_json(root: Path, manifest_dir: Path, *, name: str, description: str) -> Plan:
-    if (path := search_upward(manifest_dir, ".claude-plugin/plugin.json", "plugin.json")) is None:
+    if (path := search_upward(manifest_dir, ".claude-plugin/plugin.json", "plugin.json", stop=root)) is None:
         path = root / ".claude-plugin" / "plugin.json"
         return Plan(
             path,
@@ -191,19 +206,24 @@ def plan_plugin_json(root: Path, manifest_dir: Path, *, name: str, description: 
             render_json(new_plugin_json(name, description)),
         )
     data = parse_json(path)
-    if (desired := merge_plugin_json(data)) == data:
+    if (desired := merge_plugin_json(path, data)) == data:
         return Plan(path, "unchanged", "captain-hook dependency already conforms", None)
     return Plan(path, "updated", "repaired the captain-hook dependency", render_json(desired))
 
 
 def plan_marketplace_json(root: Path, manifest_dir: Path, *, name: str, description: str) -> Plan:
-    if (path := search_upward(manifest_dir, ".claude-plugin/marketplace.json")) is None:
+    if (path := search_upward(manifest_dir, ".claude-plugin/marketplace.json", stop=root)) is None:
         path = root / ".claude-plugin" / "marketplace.json"
         content = render_json(new_marketplace_json(root, name, description))
         return Plan(path, "created", "marketplace.json allowing the captain-hook dependency", content)
     data = parse_json(path)
     allowed = data.get("allowCrossMarketplaceDependenciesOn")
-    allowlist = allowed if isinstance(allowed, list) else []
+    if allowed is not None and not isinstance(allowed, list):
+        raise click.ClickException(
+            f"{path} has a non-list allowCrossMarketplaceDependenciesOn; fix marketplace.json by hand — "
+            "scaffold refuses to overwrite it"
+        )
+    allowlist = allowed or []
     if MARKETPLACE_NAME in allowlist:
         return Plan(path, "unchanged", "captain-hook already allowlisted", None)
     desired = data | {"allowCrossMarketplaceDependenciesOn": [*allowlist, MARKETPLACE_NAME]}
@@ -211,12 +231,11 @@ def plan_marketplace_json(root: Path, manifest_dir: Path, *, name: str, descript
 
 
 def plan_starter_hook(hooks_dir: Path) -> list[Plan]:
-    # A pack with zero loadable hooks fails lint; seed a starter only when the hooks dir is empty.
-    if has_hook_files(hooks_dir):
+    # Seed a starter only when no loadable hook exists and the target path is free — a skip-marked
+    # or otherwise-present guard.py is never clobbered.
+    if (starter := hooks_dir / "guard.py").exists() or has_hook_files(hooks_dir):
         return []
-    return [
-        Plan(hooks_dir / "guard.py", "created", "starter block_command guard with inline tests", starter_hook_source())
-    ]
+    return [Plan(starter, "created", "starter block_command guard with inline tests", starter_hook_source())]
 
 
 # --- merge helpers -------------------------------------------------------------------
@@ -250,28 +269,57 @@ def refuse_unrecognized(path: Path, data: dict[str, Any]) -> None:
         )
 
 
+def hooks_shape_reason(data: dict[str, Any]) -> str | None:
+    """None when ``data`` has the ``{hooks: {event: [{hooks: [{type, command}...]}...]}}`` shape; else why not."""
+    if not isinstance(hooks := data.get("hooks", {}), dict):
+        return '"hooks" must be an object mapping events to hook groups'
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            return f'"hooks.{event}" must be a list of hook groups'
+        for group in groups:
+            if not isinstance(group, dict):
+                return f'"hooks.{event}" has a non-object group'
+            if not isinstance(entries := group.get("hooks", []), list):
+                return f'"hooks.{event}" has a group whose "hooks" is not a list'
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    return f'"hooks.{event}" has a non-object hook entry'
+                if entry.get("type") == "command" and not isinstance(entry.get("command"), str):
+                    return f'"hooks.{event}" has a command entry without a string "command"'
+    return None
+
+
 def merge_hooks_json(data: dict[str, Any], canonical: str) -> dict[str, Any]:
-    """Strip every canonical capt-hook attach/run entry, prune emptied groups, and append the single
-    canonical SessionStart attach, preserving all non-capt-hook entries verbatim."""
-    events: dict[str, Any] = {}
-    for event, groups in data.get("hooks", {}).items():
-        kept_groups = [
-            {k: v for k, v in group.items() if k != "hooks"} | {"hooks": kept}
-            for group in groups
-            if (kept := [entry for entry in group.get("hooks", []) if not strip_capt_hook(entry)])
-        ]
-        if kept_groups:
-            events[event] = kept_groups
+    """Strip every canonical capt-hook attach/run entry, prune groups it emptied, and append the
+    single canonical SessionStart attach, preserving all non-capt-hook groups verbatim."""
+    events = {
+        event: kept
+        for event, groups in data.get("hooks", {}).items()
+        if (kept := [g for group in groups if (g := prune_group(group)) is not None])
+    }
     events.setdefault("SessionStart", []).append(attach_group(canonical))
     return data | {"hooks": events}
+
+
+def prune_group(group: dict[str, Any]) -> dict[str, Any] | None:
+    """The group with its capt-hook entries removed: verbatim when none matched, ``None`` when
+    removing them emptied a group that had them, else rebuilt around the survivors."""
+    entries = group.get("hooks", [])
+    if (kept := [entry for entry in entries if not strip_capt_hook(entry)]) == entries:
+        return group
+    return {k: v for k, v in group.items() if k != "hooks"} | {"hooks": kept} if kept else None
 
 
 def strip_capt_hook(entry: dict[str, Any]) -> bool:
     return entry.get("type") == "command" and classify_command(entry["command"]) == "capt-hook"
 
 
-def merge_plugin_json(data: dict[str, Any]) -> dict[str, Any]:
-    deps = data.get("dependencies") or []
+def merge_plugin_json(path: Path, data: dict[str, Any]) -> dict[str, Any]:
+    if (deps := data.get("dependencies")) is not None and not isinstance(deps, list):
+        raise click.ClickException(
+            f"{path} has a non-list dependencies; fix plugin.json by hand — scaffold refuses to merge it"
+        )
+    deps = deps or []
     if (idx := next((i for i, d in enumerate(deps) if references_captain_hook(d)), None)) is None:
         return data | {"dependencies": [*deps, captain_dep()]}
     if (merged := merge_captain_dep(deps[idx])) == deps[idx]:
@@ -280,9 +328,7 @@ def merge_plugin_json(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def references_captain_hook(dep: str | dict[str, Any]) -> bool:
-    return dep == MARKETPLACE_NAME or (
-        isinstance(dep, dict) and MARKETPLACE_NAME in (dep.get("name"), dep.get("marketplace"))
-    )
+    return dep == MARKETPLACE_NAME or (isinstance(dep, dict) and dep.get("name") == MARKETPLACE_NAME)
 
 
 def merge_captain_dep(existing: str | dict[str, Any]) -> dict[str, Any]:
@@ -386,7 +432,8 @@ def manifest_description(root: Path) -> str | None:
 
 
 def plugin_name(root: Path) -> str | None:
-    if (path := search_upward(pack_layout(root)[2].parent, ".claude-plugin/plugin.json", "plugin.json")) is None:
+    manifest_dir = pack_layout(root)[2].parent
+    if (path := search_upward(manifest_dir, ".claude-plugin/plugin.json", "plugin.json", stop=root)) is None:
         return None
     try:
         name = json.loads(path.read_text()).get("name")
@@ -396,7 +443,7 @@ def plugin_name(root: Path) -> str | None:
 
 
 def marketplace_name(root: Path) -> str | None:
-    if (path := search_upward(pack_layout(root)[2].parent, ".claude-plugin/marketplace.json")) is None:
+    if (path := search_upward(pack_layout(root)[2].parent, ".claude-plugin/marketplace.json", stop=root)) is None:
         return None
     try:
         name = json.loads(path.read_text()).get("name")
