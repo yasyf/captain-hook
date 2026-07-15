@@ -200,7 +200,9 @@ class TestCommentRuns:
             pytest.param("/// docline\n/// more\npub fn f() {}\n", "rs", True, id="rs_triple_slash_doc"),
             pytest.param("//! inner doc\nmod m {}\n", "rs", True, id="rs_bang_doc"),
             pytest.param("/* plain */\nfn f() {}\n", "rs", False, id="rs_plain_block_inline"),
-            pytest.param("/** m */\n// narrative\nfunction f() {}\n", "js", False, id="js_marker_then_narrative_poisoned"),
+            pytest.param(
+                "/** m */\n// narrative\nfunction f() {}\n", "js", False, id="js_marker_then_narrative_poisoned"
+            ),
             pytest.param("package p\n\n// F does it.\nfunc F() {}\n", "go", True, id="go_adjacent_is_doc"),
             pytest.param("package p\n\nconst (\n\t// doc\n\tX = 1\n)\n", "go", True, id="go_grouped_const_spec_doc"),
             pytest.param("package p\n\ntype T struct {\n\t// doc\n\tF int\n}\n", "go", True, id="go_struct_field_doc"),

@@ -312,7 +312,13 @@ class TestNoSpawn:
 class TestWorkerProcessLive:
     def _worker(self, pid: int) -> ops.Worker:
         return ops.Worker(
-            key="k", pid=pid, root="/r", build="b", version="1", socket="/s.sock", started_at=0.0,
+            key="k",
+            pid=pid,
+            root="/r",
+            build="b",
+            version="1",
+            socket="/s.sock",
+            started_at=0.0,
             proc_start="recorded-start",
         )
 

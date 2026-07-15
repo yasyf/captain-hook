@@ -729,9 +729,7 @@ class TestIdleExitRace:
             server.control_pool.shutdown(wait=False, cancel_futures=True)
             shutil.rmtree(run, ignore_errors=True)
 
-    def test_idle_exit_unlinks_first_then_drains_backlog_before_closing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_idle_exit_unlinks_first_then_drains_backlog_before_closing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # V8: idle-exit unlinks the socket FIRST (a racing connect now fails pre-send → cold), then
         # serve_forever drains and serves the backlog before closing — a pre-unlink client is not dropped.
         from captain_hook.daemon import lifecycle

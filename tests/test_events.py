@@ -250,7 +250,10 @@ class TestPrePostImage:
     def test_post_image_edit_applies_old_to_new(self, tmp_path: Path) -> None:
         path = tmp_path / "a.py"
         path.write_text("hello world\n")
-        raw = {"tool_name": "Edit", "tool_input": {"file_path": str(path), "old_string": "world", "new_string": "there"}}
+        raw = {
+            "tool_name": "Edit",
+            "tool_input": {"file_path": str(path), "old_string": "world", "new_string": "there"},
+        }
         assert make_event(PreToolUseEvent, raw).post_image == "hello there\n"
 
     def test_post_image_edit_missing_old_is_none(self, tmp_path: Path) -> None:

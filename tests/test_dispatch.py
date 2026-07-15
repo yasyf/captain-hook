@@ -426,7 +426,10 @@ class TestDispatch:
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert result["hookSpecificOutput"]["permissionDecisionReason"] == f"blocked\n\n{ADVISORY_SEPARATOR}\n\nwarning first"
+        assert (
+            result["hookSpecificOutput"]["permissionDecisionReason"]
+            == f"blocked\n\n{ADVISORY_SEPARATOR}\n\nwarning first"
+        )
 
     def test_warns_combined_with_newline(self) -> None:
         register_hook(Event.PreToolUse, message="warn1")
@@ -487,7 +490,10 @@ class TestDispatch:
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert result["hookSpecificOutput"]["permissionDecisionReason"] == f"stop here\n\n{ADVISORY_SEPARATOR}\n\nadvisory note"
+        assert (
+            result["hookSpecificOutput"]["permissionDecisionReason"]
+            == f"stop here\n\n{ADVISORY_SEPARATOR}\n\nadvisory note"
+        )
 
     def test_handler_crash_returns_none(self) -> None:
 

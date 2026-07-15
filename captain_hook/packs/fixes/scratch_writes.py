@@ -49,9 +49,9 @@ approve(
         Input(file="/tmp/x.py", content="x", agent_id="tm1", skip_permissions=True): Allow(explicit=True),
         Input(file="/private/tmp/conf.py", old="a", content="b", skip_permissions=True): Allow(explicit=True),
         Input(file="/var/folders/ab/cd/T/scratch.json", content="{}", skip_permissions=True): Allow(explicit=True),
-        Input(
-            file="../../../../tmp/sweep_arc.py", content="print(1)", cwd="/a/b/c/d", skip_permissions=True
-        ): Allow(explicit=True),
+        Input(file="../../../../tmp/sweep_arc.py", content="print(1)", cwd="/a/b/c/d", skip_permissions=True): Allow(
+            explicit=True
+        ),
         Input(file="/Users/u/proj/scratchpads/notes.md", content="x", skip_permissions=True): Allow(explicit=True),
         Input(file="/Users/u/proj/scratch/plan.py", content="x", skip_permissions=True): Allow(explicit=True),
         Input(

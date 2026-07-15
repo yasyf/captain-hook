@@ -350,8 +350,8 @@ nudge(
                                 "text": (
                                     "steering.py fixtures:\n"
                                     "  \"Let's just leave the login issue for now; it's pre-existing and beyond "
-                                    "the scope of my change.\"  -> Warn()\n"
-                                    "  \"That's a pre-existing issue, not caused by my change.\"  -> Warn()"
+                                    'the scope of my change."  -> Warn()\n'
+                                    '  "That\'s a pre-existing issue, not caused by my change."  -> Warn()'
                                 ),
                             }
                         ]
@@ -459,9 +459,7 @@ nudge(
             transcript=[
                 {
                     "type": "assistant",
-                    "message": {
-                        "content": [{"type": "text", "text": "I'll leave the broken test as is."}]
-                    },
+                    "message": {"content": [{"type": "text", "text": "I'll leave the broken test as is."}]},
                 }
             ]
         ): Warn(),
@@ -548,9 +546,7 @@ nudge(
             transcript=[
                 {
                     "type": "assistant",
-                    "message": {
-                        "content": [{"type": "text", "text": "There are no unknown bugs left outside scope."}]
-                    },
+                    "message": {"content": [{"type": "text", "text": "There are no unknown bugs left outside scope."}]},
                 }
             ]
         ): Allow(),

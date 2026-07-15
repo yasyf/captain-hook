@@ -222,9 +222,7 @@ class TestCollectAnnouncements:
             blocker.execute("PRAGMA busy_timeout = 0")
             blocker.execute("BEGIN IMMEDIATE")
             assert collect_announcements(git_repo) is None
-            (marked,) = blocker.execute(
-                "SELECT COUNT(*) FROM candidates WHERE announced_status IS NOT NULL"
-            ).fetchone()
+            (marked,) = blocker.execute("SELECT COUNT(*) FROM candidates WHERE announced_status IS NOT NULL").fetchone()
             assert marked == 0
         finally:
             blocker.execute("ROLLBACK")

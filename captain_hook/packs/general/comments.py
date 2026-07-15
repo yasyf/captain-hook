@@ -73,9 +73,7 @@ GO_TRAILING = (
     "\td := 4 // meters travelled\n}\n"
 )
 GO_DOC_RUN = (
-    "package p\n\n"
-    "// F alpha line here\n// F beta line here\n// F gamma line here\n// F delta line here\n"
-    "func F() {}\n"
+    "package p\n\n// F alpha line here\n// F beta line here\n// F gamma line here\n// F delta line here\nfunc F() {}\n"
 )
 GO_CONST_DOC = (
     "package p\n\nconst (\n"
@@ -111,7 +109,9 @@ JS_POISONED = (
     "// narrative line one\n// narrative line two\n// narrative line three\n// narrative line four\n"
     "function f() {}\n"
 )
-PY_LONG_RUN = "# note one here\n# note two here\n# note three here\n# note four here\n# note five here\n# note six here\nx = 1\n"
+PY_LONG_RUN = (
+    "# note one here\n# note two here\n# note three here\n# note four here\n# note five here\n# note six here\nx = 1\n"
+)
 PY_ALL_COMMENT = (
     "# note one line\n# note two line\n# note three ok\n# note four line\n# note five line\n# note six line ok\n"
 )
@@ -119,7 +119,10 @@ PY_FOUR_RUN = "# one here\n# two here\n# three here\n# four here\nx = 1\n"
 PY_THREE_RUN = "# one here\n# two here\n# three here\nx = 1\n"
 PY_BLANK_SPLIT = "# para one aaa\n# para one bbb\n\n# para two ccc\n# para two ddd\n# para two eee\nx = 1\n"
 PY_SHEBANG_HEADER = "#!/usr/bin/env python3\n# header line one\n# header line two\n# header line three\nx = 1\n"
-PY_DOCSTRING = 'def f():\n    """\n    line one\n    line two\n    line three\n    line four\n    line five\n    """\n    return 1\n'
+PY_DOCSTRING = (
+    'def f():\n    """\n    line one\n    line two\n    line three\n'
+    '    line four\n    line five\n    """\n    return 1\n'
+)
 PY_GROW_OLD_FILE = "# a here\n# b here\n# c here\nx = 1\n"
 PY_GROW_OLD = "# a here\n# b here\n# c here"
 PY_GROW_NEW = "# a here\n# b here\n# c here\n# d here\n# e here\n# f here"
@@ -243,7 +246,9 @@ hook(
         Input(file="trail.go", content=GO_TRAILING): Allow(),
         Input(file="head.py", content=PY_SHEBANG_HEADER): Allow(),
         Input(file=FileFixture(name="near.py", content=PY_NEAR_FILE), old="x = 1", content="x = 2"): Allow(),
-        Input(file=FileFixture(name="reflow.py", content=PY_REFLOW_FILE), old=PY_REFLOW_OLD, content=PY_REFLOW_NEW): Allow(),
+        Input(
+            file=FileFixture(name="reflow.py", content=PY_REFLOW_FILE), old=PY_REFLOW_OLD, content=PY_REFLOW_NEW
+        ): Allow(),
         Input(file="m.py", content=PY_DOCSTRING): Allow(),
         Input(file=FileFixture(name="resave.py", content=PY_LONG_RUN), content=PY_LONG_RUN): Allow(),
         Input(file="f.yaml", content=YAML_HASH): Allow(),

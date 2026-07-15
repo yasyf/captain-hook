@@ -299,7 +299,8 @@ llm_nudge(
     message=lambda r: (
         f"This inline edit reads as routine implementation on fable. {r.reasoning} "
         "Implementation delegates: a bounded, decision-light change routes to gpt-5.6-sol via the "
-        "codex skill; ambiguous, decision-dense, or long-running work goes to a model='opus', effort='xhigh' subagent. Keep "
+        "codex skill; ambiguous, decision-dense, or long-running work goes to a model='opus', "
+        "effort='xhigh' subagent. Keep "
         "editing inline only when the change is small, sensitive, or bound to judgment you just exercised. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
