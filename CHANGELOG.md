@@ -4,6 +4,35 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.16.0] - 2026-07-15
+
+### Added
+- **`review slots [--repo <key>]`.** The open-PR cap check: prints
+  `<repo>: open_prs=<n>/<max> free=<free>`, counting live open PRs by the repo each
+  PR targets, and exits 1 when full. The scanning-sessions brain runs it immediately
+  before `gh pr create`, so a cap that filled mid-pass becomes a logged skip instead
+  of an over-cap PR.
+- **Auto-enrollment.** `review run` enrolls a repo it has never seen as watched, so a
+  plugin-wired repo is reviewed from its first session end with no manual
+  `review enable`; an explicit `review disable` still sticks.
+- **Unwatched-session canary.** `capt-hook status` names repos whose recent sessions
+  ended unwatched with no watching record — a line that self-clears as
+  auto-enrollment picks those repos up.
+
+### Changed
+- **The open-PR cap counts the repo each PR actually targets**, parsed from the
+  candidate's PR URL (distinct URLs; URL-less rows fall back to the candidate's
+  repo), instead of the candidate's origin repo. Cross-repo pack-fix PRs now consume
+  the pack repo's slots rather than the origin repo's, dashboards report the real
+  per-repo open-PR count, and `review update` rejects a malformed `--pr-url` at the
+  boundary. `--repo` filters normalize case.
+
+### Removed
+- **The generic-create route to captain-hook's general pack.** A create candidate's
+  PR always opens against the repo it was observed in; only fixes to existing pack
+  hooks target the pack's own repo. The `seen_in_repos` line on `review show` and
+  `ReviewStore.cross_repo_rules` are gone with it.
+
 ## [9.15.0] - 2026-07-14
 
 ### Added
