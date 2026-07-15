@@ -773,8 +773,14 @@ class TestBrain:
 
 
 class TestSpawnSession:
-    async def test_success_records_ok_row_with_report_json(self, tmp_path: Path, git_repo: Path) -> None:
+    async def test_success_records_ok_row_with_report_json(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         settings = ReviewSettings(db_path=tmp_path / "review.db")
+        install_judge(monkeypatch)
+        install_fake_embedder(monkeypatch)
+        install_brain(monkeypatch)
+        install_resolved_model(monkeypatch)
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
         report = await spawn_session(transcript, cwd=str(git_repo), settings=settings)
         assert report == SpawnReport(repo=GIT_REPO_KEY, watching=True, scanned=1)
