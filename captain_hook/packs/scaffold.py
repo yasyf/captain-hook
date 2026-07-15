@@ -37,8 +37,9 @@ from captain_hook.packs.contract import (
 )
 from captain_hook.review.repo import repo_key
 
-# TODO(release-prep): sync to the tag that ships `pack scaffold` (self-bootstrap must be live on PyPI).
-MIN_SCAFFOLD_FLOOR = "9.14.0"
+# The release that shipped `pack scaffold` and the attach self-bootstrap; a scaffolded floor never
+# drops below it, so the generated two-line install (no manual marketplace add) is always valid.
+MIN_SCAFFOLD_FLOOR = "9.15.0"
 # Pre-`--isolated` consumers invoked capt-hook as bare `uvx capt-hook`; canonicalizing that prefix
 # lets scaffold migrate their entries with the same predicates lint applies to canonical ones.
 LEGACY_PREFIXES = (("uvx", DIST_NAME),)
