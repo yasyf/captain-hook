@@ -777,7 +777,7 @@ class TestSpawnSession:
         settings = ReviewSettings(db_path=tmp_path / "review.db")
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
         report = await spawn_session(transcript, cwd=str(git_repo), settings=settings)
-        assert report == SpawnReport(repo=GIT_REPO_KEY)
+        assert report == SpawnReport(repo=GIT_REPO_KEY, watching=True, scanned=1)
         async with await ReviewStore.open(settings.db_path) as store:
             health = await store.spawn_health()
         assert health.consecutive_failures == 0
@@ -788,8 +788,8 @@ class TestSpawnSession:
         assert health.last["transcript"] == str(transcript)
         assert json.loads(str(health.last["report_json"])) == {
             "repo": str(GIT_REPO_KEY),
-            "watching": False,
-            "scanned": 0,
+            "watching": True,
+            "scanned": 1,
             "inserted": 0,
             "triaged": 0,
             "triage_junk": 0,
@@ -868,12 +868,14 @@ class TestReviewSession:
         assert await review_session(transcript, cwd=str(plain), settings=settings) == SpawnReport(repo=None)
         assert not settings.db_path.exists()
 
-    async def test_unwatched_repo_skips_scan_judge_and_brain(
+    async def test_opted_out_repo_skips_scan_judge_and_brain(
         self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         settings = ReviewSettings(db_path=tmp_path / "review.db")
         calls = install_judge(monkeypatch)
         brains = install_brain(monkeypatch)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.disable(GIT_REPO_KEY)
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
         report = await review_session(transcript, cwd=str(git_repo), settings=settings)
         assert report == SpawnReport(repo=GIT_REPO_KEY)
@@ -881,6 +883,21 @@ class TestReviewSession:
         assert brains == []
         async with await ReviewStore.open(settings.db_path) as store:
             assert await store.file_mtimes() == {}
+
+    async def test_unknown_repo_auto_enrolls_and_runs(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        install_judge(monkeypatch)
+        install_fake_embedder(monkeypatch)
+        install_brain(monkeypatch)
+        install_resolved_model(monkeypatch)
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries(cwd=str(git_repo)))
+        report = await review_session(transcript, cwd=str(git_repo), settings=settings)
+        assert report.watching is True
+        assert report.scanned == 1
+        async with await ReviewStore.open(settings.db_path) as store:
+            assert await store.watching(GIT_REPO_KEY) is True
 
     async def test_merged_pr_sync_counts_flow_into_report_and_stamp_resolved_at(
         self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch

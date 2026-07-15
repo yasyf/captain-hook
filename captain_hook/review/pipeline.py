@@ -324,7 +324,7 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
     if (repo := resolve_repo_key(cwd)) is None:
         return SpawnReport(repo=None)
     async with await ReviewStore.open(settings.db_path) as store:
-        if not await store.watching(repo):
+        if not await store.enroll(repo):
             return SpawnReport(repo=repo)
         scan_report = await scan(store, settings=settings, transcripts=[transcript.parent])
         triage = await triage_pass(store, settings=settings)

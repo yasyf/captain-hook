@@ -122,7 +122,7 @@ def plain(renderable: object, *, width: int = 200) -> str:
 
 def colored(renderable: object, *, width: int = 200) -> str:
     buf = StringIO()
-    Console(file=buf, force_terminal=True, color_system="standard", width=width).print(renderable)
+    Console(file=buf, force_terminal=True, color_system="standard", no_color=False, width=width).print(renderable)
     return buf.getvalue()
 
 
@@ -295,7 +295,15 @@ class TestRenderFrame:
             ),
         ]
         out = plain(
-            render(views, repo=REPO, settings=ReviewSettings(), watching=True, health=ok_health(), judge=NO_JUDGE)
+            render(
+                views,
+                repo=REPO,
+                settings=ReviewSettings(),
+                watching=True,
+                health=ok_health(),
+                judge=NO_JUDGE,
+                open_prs=1,
+            )
         )
         assert "WATCHING" in out and "ELIGIBLE" in out and "PR OPEN" in out
         assert "#1" in out and "#2" in out and "#3" in out
@@ -305,7 +313,15 @@ class TestRenderFrame:
 
     def test_empty_repo_shows_hint(self) -> None:
         out = plain(
-            render([], repo=REPO, settings=ReviewSettings(), watching=False, health=ok_health(), judge=NO_JUDGE)
+            render(
+                [],
+                repo=REPO,
+                settings=ReviewSettings(),
+                watching=False,
+                health=ok_health(),
+                judge=NO_JUDGE,
+                open_prs=0,
+            )
         )
         assert "[not watching]" in out
         assert "No corrections tracked yet" in out
@@ -313,7 +329,15 @@ class TestRenderFrame:
 
 
 def rendered_stages(views: list[CandidateView]) -> str:
-    frame = render(views, repo=REPO, settings=ReviewSettings(), watching=True, health=ok_health(), judge=NO_JUDGE)
+    frame = render(
+        views,
+        repo=REPO,
+        settings=ReviewSettings(),
+        watching=True,
+        health=ok_health(),
+        judge=NO_JUDGE,
+        open_prs=0,
+    )
     return plain(frame)
 
 
@@ -348,6 +372,7 @@ class TestPackErrors:
                 watching=True,
                 health=ok_health(),
                 judge=NO_JUDGE,
+                open_prs=0,
                 load_errors=errors,
             )
         )
@@ -356,7 +381,17 @@ class TestPackErrors:
         assert "RuntimeError: kaboom" in out
 
     def test_zero_errors_renders_no_line(self) -> None:
-        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=ok_health(), judge=NO_JUDGE))
+        out = plain(
+            render(
+                [],
+                repo=REPO,
+                settings=ReviewSettings(),
+                watching=True,
+                health=ok_health(),
+                judge=NO_JUDGE,
+                open_prs=0,
+            )
+        )
         assert "HOOK LOAD FAILED" not in out
 
 
@@ -371,7 +406,17 @@ class TestHealthLine:
             consecutive_failures=34,
             failing_since="2026-06-01T09:00:00+00:00",
         )
-        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=health, judge=NO_JUDGE))
+        out = plain(
+            render(
+                [],
+                repo=REPO,
+                settings=ReviewSettings(),
+                watching=True,
+                health=health,
+                judge=NO_JUDGE,
+                open_prs=0,
+            )
+        )
         assert out.splitlines()[0].startswith("REVIEWER FAILING")
         assert "34 consecutive since 2026-06-01T09:00:00+00:00" in out
         assert "OperationalError: no such column: fidelity" in out
@@ -386,6 +431,7 @@ class TestHealthLine:
                 watching=True,
                 health=ok_health(ago=timedelta(hours=2), judged=7),
                 judge=NO_JUDGE,
+                open_prs=0,
             )
         )
         assert "reviewer ok" in out
@@ -399,12 +445,32 @@ class TestHealthLine:
             last_verdict_at=(datetime.now(UTC) - timedelta(minutes=5)).isoformat(),
             splits=(KeyOverlap("prefer-uv", "use-uv-not-pip", 0.93),),
         )
-        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=ok_health(), judge=judge))
+        out = plain(
+            render(
+                [],
+                repo=REPO,
+                settings=ReviewSettings(),
+                watching=True,
+                health=ok_health(),
+                judge=judge,
+                open_prs=0,
+            )
+        )
         assert "judge: 3 pending · last verdict 5m ago" in out
         assert "1 possible slug splits" in out
 
     def test_judge_segment_hides_verdict_and_splits_when_absent(self) -> None:
-        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=ok_health(), judge=NO_JUDGE))
+        out = plain(
+            render(
+                [],
+                repo=REPO,
+                settings=ReviewSettings(),
+                watching=True,
+                health=ok_health(),
+                judge=NO_JUDGE,
+                open_prs=0,
+            )
+        )
         assert "judge: 0 pending" in out
         assert "last verdict" not in out
         assert "possible slug splits" not in out
@@ -418,13 +484,24 @@ class TestHealthLine:
                 watching=True,
                 health=brain_health(exit_code=0, prs=1),
                 judge=NO_JUDGE,
+                open_prs=0,
             )
         )
         assert "reviewer ok" in out
         assert "brain: exit 0 · 142s · 1 PR" in out
 
     def test_no_brain_segment_when_the_brain_did_not_run(self) -> None:
-        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=ok_health(), judge=NO_JUDGE))
+        out = plain(
+            render(
+                [],
+                repo=REPO,
+                settings=ReviewSettings(),
+                watching=True,
+                health=ok_health(),
+                judge=NO_JUDGE,
+                open_prs=0,
+            )
+        )
         assert "reviewer ok" in out
         assert "brain:" not in out
 
@@ -437,6 +514,7 @@ class TestHealthLine:
                 watching=True,
                 health=brain_health(exit_code=1, prs=0),
                 judge=NO_JUDGE,
+                open_prs=0,
             )
         )
         assert "brain: exit 1 · 142s · 0 PRs" in out
@@ -458,7 +536,17 @@ class TestHealthLine:
         ],
     )
     def test_stale_reviewer_renders_yellow_warning(self, health: SpawnHealth, expected: str) -> None:
-        out = plain(render([], repo=REPO, settings=ReviewSettings(), watching=True, health=health, judge=NO_JUDGE))
+        out = plain(
+            render(
+                [],
+                repo=REPO,
+                settings=ReviewSettings(),
+                watching=True,
+                health=health,
+                judge=NO_JUDGE,
+                open_prs=0,
+            )
+        )
         assert expected in out
         assert "reviewer ok" not in out
 
@@ -628,6 +716,19 @@ class TestOverview:
             fidelity="full",
         )
 
+        cross_target = await store.ensure_candidate(
+            RepoKey("github.com/yasyf/other"),
+            kind=CandidateKind.CREATE,
+            rule="cross-target",
+            source_kind=SourceKind("transcript_message"),
+        )
+        await store.transition(
+            cross_target,
+            CandidateStatus.PR_OPEN,
+            pr_url=f"https://{REPO}/pull/42",
+            pr_opened_at=datetime.now(UTC),
+        )
+
         views = await store.overview(REPO, settings=settings)
         assert len(views) == 4
         for v in views:
@@ -670,6 +771,64 @@ class TestSpawnHealth:
         assert health.last is not None
         assert health.last["ok"] == 1
         assert health.last["error"] is None
+
+
+class TestUnwatchedCanary:
+    async def test_filters_cutoff_known_repos_and_failed_runs(self, store: ReviewStore) -> None:
+        included = RepoKey("github.com/yasyf/included")
+        outside = RepoKey("github.com/yasyf/outside")
+        opted_out = RepoKey("github.com/yasyf/opted-out")
+        enrolled = RepoKey("github.com/yasyf/enrolled")
+        failed = RepoKey("github.com/yasyf/failed")
+        await store.disable(opted_out)
+        await store.enable(enrolled)
+        for repo, started_at, ok in (
+            (included, datetime.now(UTC) - timedelta(days=1), True),
+            (outside, datetime.now(UTC) - timedelta(days=8), True),
+            (opted_out, datetime.now(UTC) - timedelta(days=1), True),
+            (enrolled, datetime.now(UTC) - timedelta(days=1), True),
+            (failed, datetime.now(UTC) - timedelta(days=1), False),
+        ):
+            await store.record_spawn_run(
+                f"/t/{repo}",
+                started_at=started_at,
+                ok=ok,
+                error=None if ok else "Boom: failed",
+                report_json=json.dumps({"repo": str(repo), "watching": False}),
+            )
+        assert await store.unwatched_session_repos() == [str(included)]
+
+    def test_render_shows_warning_after_health(self) -> None:
+        repos = ["github.com/yasyf/one", "github.com/yasyf/two"]
+        out = plain(
+            render(
+                [],
+                repo=REPO,
+                settings=ReviewSettings(),
+                watching=True,
+                health=ok_health(),
+                judge=NO_JUDGE,
+                open_prs=0,
+                unwatched=repos,
+            )
+        )
+        assert out.splitlines()[1].startswith("reviewer ran for unwatched repos:")
+        assert all(repo in out for repo in repos)
+        assert "capt-hook review enable" in out
+
+    def test_render_omits_warning_without_repos(self) -> None:
+        out = plain(
+            render(
+                [],
+                repo=REPO,
+                settings=ReviewSettings(),
+                watching=True,
+                health=ok_health(),
+                judge=NO_JUDGE,
+                open_prs=0,
+            )
+        )
+        assert "unwatched repos" not in out
 
 
 def review_status(*args: str, root: Path) -> Result:

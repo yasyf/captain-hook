@@ -166,10 +166,10 @@ async def eligible_create_candidate(store: ReviewStore) -> int:
     return candidate_id
 
 
-async def open_pr(store: ReviewStore, *, rule: str, opened_at: datetime) -> int:
+async def open_pr(store: ReviewStore, *, rule: str, opened_at: datetime, n: int, repo: RepoKey = REPO) -> int:
     candidate_id = await create_candidate(store, rule=rule)
     await store.transition(
-        candidate_id, CandidateStatus.PR_OPEN, pr_url=f"https://github.com/x/y/pull/{rule}", pr_opened_at=opened_at
+        candidate_id, CandidateStatus.PR_OPEN, pr_url=f"https://{repo}/pull/{n}", pr_opened_at=opened_at
     )
     return candidate_id
 
@@ -256,15 +256,22 @@ class TestSchema:
         )
 
 
-class TestRepos:
-    async def test_watching_roundtrip(self, store: ReviewStore) -> None:
+class TestWatching:
+    async def test_unknown_repo_is_enrolled(self, store: ReviewStore) -> None:
         assert await store.watching(REPO) is False
-        await store.enable(REPO)
-        assert await store.watching(REPO) is True
+        assert await store.enroll(REPO) is True
+        cur = await store.store.conn.execute("SELECT repo_key, watching FROM repos")
+        assert [(row["repo_key"], row["watching"]) async for row in cur] == [(REPO, 1)]
+
+    async def test_disabled_repo_stays_disabled(self, store: ReviewStore) -> None:
         await store.disable(REPO)
-        assert await store.watching(REPO) is False
+        assert await store.enroll(REPO) is False
+        cur = await store.store.conn.execute("SELECT watching FROM repos WHERE repo_key = ?", (REPO,))
+        assert [row["watching"] async for row in cur] == [0]
+
+    async def test_enabled_repo_stays_enabled(self, store: ReviewStore) -> None:
         await store.enable(REPO)
-        assert await store.watching(REPO) is True
+        assert await store.enroll(REPO) is True
 
 
 class TestCandidates:
@@ -636,8 +643,8 @@ class TestPrCap:
     async def test_cap_blocks_when_open_prs_reach_max(self, store: ReviewStore, settings: ReviewSettings) -> None:
         await store.enable(REPO)
         candidate_id = await eligible_create_candidate(store)
-        await open_pr(store, rule="other-a", opened_at=datetime.now(UTC))
-        await open_pr(store, rule="other-b", opened_at=datetime.now(UTC))
+        await open_pr(store, rule="other-a", opened_at=datetime.now(UTC), n=1)
+        await open_pr(store, rule="other-b", opened_at=datetime.now(UTC), n=2)
         status = await store.threshold_status(candidate_id, settings=settings)
         assert status.open_prs == 2
         assert await store.eligible(candidate_id, settings=settings) is False
@@ -645,8 +652,8 @@ class TestPrCap:
     async def test_stale_transition_frees_a_slot(self, store: ReviewStore, settings: ReviewSettings) -> None:
         await store.enable(REPO)
         candidate_id = await eligible_create_candidate(store)
-        stale_one = await open_pr(store, rule="other-a", opened_at=datetime.now(UTC))
-        await open_pr(store, rule="other-b", opened_at=datetime.now(UTC))
+        stale_one = await open_pr(store, rule="other-a", opened_at=datetime.now(UTC), n=1)
+        await open_pr(store, rule="other-b", opened_at=datetime.now(UTC), n=2)
         await store.transition(stale_one, CandidateStatus.STALE)
         status = await store.threshold_status(candidate_id, settings=settings)
         assert status.open_prs == 1
@@ -657,8 +664,8 @@ class TestPrCap:
     ) -> None:
         await store.enable(REPO)
         candidate_id = await eligible_create_candidate(store)
-        await open_pr(store, rule="other-a", opened_at=datetime.now(UTC) - timedelta(days=31))
-        await open_pr(store, rule="other-b", opened_at=datetime.now(UTC))
+        await open_pr(store, rule="other-a", opened_at=datetime.now(UTC) - timedelta(days=31), n=1)
+        await open_pr(store, rule="other-b", opened_at=datetime.now(UTC), n=2)
         status = await store.threshold_status(candidate_id, settings=settings)
         assert status.open_prs == 1
         assert await store.eligible(candidate_id, settings=settings) is True
@@ -677,6 +684,41 @@ class TestPrCap:
         status = await store.threshold_status(candidate_id, settings=settings)
         assert status.open_prs == 0
         assert await store.eligible(candidate_id, settings=settings) is True
+
+    async def test_cross_target_pr_counts_against_target_not_origin(
+        self, store: ReviewStore, settings: ReviewSettings
+    ) -> None:
+        target_candidate = await eligible_create_candidate(store)
+        origin_candidate = await store.ensure_candidate(
+            ORIGIN_REPO,
+            kind=CandidateKind.CREATE,
+            rule="cross-target",
+            source_kind=SourceKind("transcript_message"),
+        )
+        await store.transition(
+            origin_candidate,
+            CandidateStatus.PR_OPEN,
+            pr_url=f"https://{REPO}/pull/42",
+            pr_opened_at=datetime.now(UTC),
+        )
+
+        assert await store.open_pr_targets(settings=settings) == {REPO: 1}
+        assert (await store.threshold_status(target_candidate, settings=settings)).open_prs == 1
+        assert (await store.threshold_status(origin_candidate, settings=settings)).open_prs == 0
+
+    async def test_shared_pr_url_counts_once_against_target(self, store: ReviewStore, settings: ReviewSettings) -> None:
+        await open_pr(store, rule="shared-one", opened_at=datetime.now(UTC), n=7)
+        second = await store.ensure_candidate(
+            ORIGIN_REPO,
+            kind=CandidateKind.CREATE,
+            rule="shared-two",
+            source_kind=SourceKind("transcript_message"),
+        )
+        await store.transition(
+            second, CandidateStatus.PR_OPEN, pr_url=f"https://{REPO}/pull/7", pr_opened_at=datetime.now(UTC)
+        )
+
+        assert await store.open_pr_targets(settings=settings) == {REPO: 1}
 
 
 class TestFixEligibility:
@@ -769,8 +811,8 @@ class TestFixEligibility:
             source_kind="hook_complaint",
         )
         await judge(store, "k0")
-        await open_pr(store, rule="other-a", opened_at=datetime.now(UTC))
-        await open_pr(store, rule="other-b", opened_at=datetime.now(UTC))
+        await open_pr(store, rule="other-a", opened_at=datetime.now(UTC), n=1)
+        await open_pr(store, rule="other-b", opened_at=datetime.now(UTC), n=2)
         assert await store.eligible(candidate_id, settings=settings) is False
 
 
@@ -1385,29 +1427,6 @@ class TestCrossRepoVisibility:
         assert (await candidate_row(store, local_id))["origin_repo_key"] is None
         assert [int(str(row["id"])) for row in await store.candidates(REPO)] == [local_id]
         assert await store.candidates(ORIGIN_REPO) == []
-
-
-class TestCrossRepoRules:
-    async def test_slug_in_two_repos_counts_both(self, store: ReviewStore) -> None:
-        await create_candidate(store)
-        await store.ensure_candidate(
-            ORIGIN_REPO, kind=CandidateKind.CREATE, rule="no-force-push", source_kind=SourceKind("transcript_message")
-        )
-        assert await store.cross_repo_rules() == {"no-force-push": 2}
-
-    async def test_single_repo_slug_is_absent(self, store: ReviewStore) -> None:
-        await create_candidate(store)
-        assert await store.cross_repo_rules() == {}
-
-    async def test_digest_rule_in_two_repos_is_excluded(self, store: ReviewStore) -> None:
-        for repo in (REPO, ORIGIN_REPO):
-            await store.ensure_candidate(
-                repo,
-                kind=CandidateKind.CREATE,
-                rule=digest_rule("same correction"),
-                source_kind=SourceKind("transcript_message"),
-            )
-        assert await store.cross_repo_rules() == {}
 
 
 class TestOriginWatchingGate:

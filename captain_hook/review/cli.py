@@ -45,7 +45,7 @@ def current_repo(root: Path) -> RepoKey:
 def resolve_repo(repo_: str | None, root: Path) -> RepoKey:
     from captain_hook.review.repo import RepoKey
 
-    return RepoKey(repo_) if repo_ else current_repo(root)
+    return RepoKey(repo_.lower()) if repo_ else current_repo(root)
 
 
 def run_store[T](fn: Callable[[ReviewStore], Awaitable[T]]) -> T:
@@ -234,17 +234,16 @@ def show(candidate_id: int) -> None:
 
     async def body(
         store: ReviewStore,
-    ) -> tuple[dict[str, object], ThresholdStatus, bool, tuple[Correction, ...], dict[str, int]]:
+    ) -> tuple[dict[str, object], ThresholdStatus, bool, tuple[Correction, ...]]:
         return (
             await store.candidate(candidate_id),
             await store.threshold_status(candidate_id, settings=settings),
             await store.eligible(candidate_id, settings=settings),
             await store.correction_evidence(candidate_id),
-            await store.cross_repo_rules(),
         )
 
     try:
-        row, status, ok, evidence, cross_repo = run_store(body)
+        row, status, ok, evidence = run_store(body)
     except LookupError as exc:
         raise click.ClickException(str(exc)) from exc
     for key, value in row.items():
@@ -253,8 +252,6 @@ def show(candidate_id: int) -> None:
         f"thresholds: sessions={status.sessions} days={status.days} open_prs={status.open_prs} "
         f"single_observation={status.single_observation} eligible={ok}"
     )
-    if repos := cross_repo.get(str(row["rule"])):
-        click.echo(f"seen_in_repos: {repos}")
     if row["pack_name"]:
         click.echo(
             f"routing: target_repo={row['repo_key']} pack={row['pack_name']} origin_repo={row['origin_repo_key']}"
@@ -300,13 +297,35 @@ def threshold_check(state: CliState, candidate_id: int | None, repo_: str | None
 
 
 @review.command()
+@click.option("--repo", "repo_", default=None, help="Repo key (default: the current repo)")
+@click.pass_obj
+def slots(state: CliState, repo_: str | None) -> None:
+    """Show the available open-PR slots for a repo."""
+    from captain_hook.review.settings import ReviewSettings
+
+    settings = ReviewSettings()
+    repo = resolve_repo(repo_, state.root)
+    open_prs = run_store(lambda store: store.open_pr_targets(settings=settings)).get(repo, 0)
+    free = max(settings.max_open_prs - open_prs, 0)
+    click.echo(f"{repo}: open_prs={open_prs}/{settings.max_open_prs} free={free}")
+    if free == 0:
+        sys.exit(1)
+
+
+@review.command()
 @click.argument("candidate_id", type=int)
 @click.argument("status", type=click.Choice(STATUS_CHOICES))
 @click.option("--pr-url", default=None, help="PR URL stamped with the move (also stamps pr_opened_at)")
 def update(candidate_id: int, status: str, pr_url: str | None) -> None:
     """Move a candidate to a new status."""
+    from captain_hook.review.repo import pr_repo_key
     from captain_hook.review.store import CandidateStatus, InvalidTransition
 
+    if pr_url is not None:
+        try:
+            pr_repo_key(pr_url)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
     try:
         run_store(
             lambda store: store.transition(

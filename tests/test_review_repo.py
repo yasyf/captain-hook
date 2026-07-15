@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from captain_hook.review.repo import normalize_origin, repo_key
+from captain_hook.review.repo import normalize_origin, pr_repo_key, repo_key
 
 
 def git(cwd: Path, *args: str) -> None:
@@ -31,6 +31,21 @@ class TestNormalizeOrigin:
     )
     def test_forms_collapse_to_one_key(self, url: str) -> None:
         assert normalize_origin(url) == "github.com/yasyf/captain-hook"
+
+
+class TestPrRepoKey:
+    def test_parses_repo(self) -> None:
+        assert pr_repo_key("https://github.com/yasyf/captain-hook/pull/42") == "github.com/yasyf/captain-hook"
+
+    def test_lowercases_repo(self) -> None:
+        assert pr_repo_key("https://GitHub.COM/Yasyf/Captain-Hook/pull/42") == "github.com/yasyf/captain-hook"
+
+    def test_accepts_trailing_slash(self) -> None:
+        assert pr_repo_key("http://github.com/yasyf/captain-hook/pull/42/") == "github.com/yasyf/captain-hook"
+
+    def test_rejects_garbage(self) -> None:
+        with pytest.raises(ValueError):
+            pr_repo_key("not a PR")
 
 
 class TestRepoKey:

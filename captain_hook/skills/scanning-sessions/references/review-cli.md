@@ -5,7 +5,9 @@ lives outside the repo (under capt-hook's state dir), so every command sees the 
 candidates regardless of cwd; commands taking `--repo` default to the repo containing
 the current directory.
 
-A misfire of a *pack* hook opens its fix PR against the pack's own repo (a builtin pack
+Cross-repo routing applies to fix candidates only — a create candidate's PR always
+opens against the repo its corrections were observed in. A misfire of a *pack* hook
+opens its fix PR against the pack's own repo (a builtin pack
 routes to captain-hook; a declared external pack routes to `github.com/<owner>/<repo>`),
 so such a candidate's `repo_key` is the pack's repo while its `origin_repo_key` records
 the watched repo the misfire fired in. Every `--repo <key>` filter matches a candidate
@@ -31,7 +33,9 @@ The SessionEnd and SessionStart hook the captain-hook plugin registers, async
 (fire-and-forget). Reads the hook payload from stdin, guards, and detaches the reviewer
 child; always exits 0, and skips non-interactive `claude -p` session ends. The plugin
 wires it to SessionStart as well, so the next session start in a repo sweeps any
-still-open sibling session left running overnight. Claude Code calls this — you never do.
+still-open sibling session left running overnight. A repo with no watching record is
+enrolled as watched on first sight; an explicit `disable` sticks. Claude Code calls
+this — you never do.
 
 ### `review spawn --transcript <path> [--cwd <dir>]` (hidden)
 
@@ -41,10 +45,11 @@ defaults to the process cwd. This is what spawned you; do not recurse into it.
 
 ### `review enable` / `review disable`
 
-`enable` marks the current repo watched and writes the plugin's exact SessionEnd entry
-into the committed `.claude/settings.json` (idempotent; Claude Code dedups the
-byte-identical strings, so the hook runs once).
-`disable` stops watching; candidates stay recorded but never become eligible.
+`enable` marks the current repo watched and registers the captain-hook plugin
+marketplace. Running it by hand is rarely needed: `review run` enrolls any repo it
+first sees, so a plugin-wired repo is watched from its first session end.
+`disable` is the durable opt-out — it sticks across future `review run` passes;
+candidates stay recorded but never become eligible.
 
 ### `review scan [--transcript <file>]... [--dir <dir>]...`
 
@@ -108,13 +113,6 @@ Every column of one candidate's row (`repo_key`, `candidate_kind`, `rule`,
 thresholds: sessions=3 days=2 open_prs=0 single_observation=False eligible=True
 ```
 
-A candidate whose exact rule slug is tracked under more than one repo additionally
-prints `seen_in_repos: N` (the distinct-repo count) after the threshold line. The same
-slug minted independently in several repos is strong evidence the rule is generic
-rather than repo-specific — the signal the brain's CREATE-target classification weighs
-when deciding between `.claude/hooks/` and the general pack. The line is absent for a
-single-repo rule and for digest-keyed (pre-judge) candidates.
-
 `rule` is the candidate's grouping key, and it never upgrades in place. A scan keys every
 new candidate by a content digest. At the close of a judge pass, the regroup re-parents
 each judge-accepted observation onto a slug-keyed candidate (minted on first need) and
@@ -150,7 +148,15 @@ the repo:
 
 Counts are **judge-accepted** observations only (distinct sessions, distinct UTC days);
 unjudged observations count as not-yet. `eligible=True` already accounts for the
-watching flag and the repo-wide open-PR cap — never re-derive any of this.
+watching flag and the repo-wide open-PR cap — never re-derive any of this. `open_prs`
+counts live open PRs by the repo each PR targets, parsed from the PR's URL.
+
+### `review slots [--repo <key>]`
+
+The open-PR cap check. Prints one line — `<repo>: open_prs=<n>/<max> free=<free>` —
+counting live open PRs by the repo each PR targets (parsed from the PR's URL), and
+exits 1 when `free=0`. The brain runs it immediately before `gh pr create`; a full
+target repo is a logged skip, not an error.
 
 ### `review update <ID> <status> [--pr-url <url>]`
 

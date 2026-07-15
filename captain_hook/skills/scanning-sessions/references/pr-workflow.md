@@ -8,9 +8,10 @@ reviewable against the default branch, not their local state.
 
 Each PR encodes exactly one rule: one candidate, one hook file, one revert. A reviewer
 must be able to merge the force-push guard while rejecting the logger nudge. The
-repo-wide open-PR cap is enforced by `threshold-check`'s eligibility call — if three
-candidates are eligible, all three got past the cap; open one PR each, never one PR for
-all three.
+repo-wide open-PR cap is enforced twice — by `threshold-check`'s eligibility call when
+the reviewer spawns, and by the `review slots` check before each `gh pr create`, since
+earlier PRs in the same pass can fill the cap. A candidate the cap squeezes out is a
+logged skip; never batch several candidates into one PR to fit under it.
 
 ## Worktree + branch
 
@@ -37,9 +38,8 @@ Hand `$worktree` to the `authoring-hooks` skill as the directory to write
 ## Cross-repo (pack) fix
 
 When `review show` prints a `routing:` line, the PR opens against `target_repo` — the
-pack's own repo — never the watched repo the misfire fired in. The same procedure
-carries a create candidate classified as generic: its target is captain-hook and its
-hook lands under `captain_hook/packs/general/`.
+pack's own repo — never the watched repo the misfire fired in. Only fix candidates
+route here: a create candidate's hook always lands in the watched repo itself.
 
 The watched repo's checkout has no remote for the pack repo, so clone instead of
 adding a worktree:
@@ -52,9 +52,9 @@ git -C "$clone" switch -c "capt-hook/review/pack-<slug>" "origin/$default"
 ```
 
 Branch naming: `capt-hook/review/pack-<slug>`, where `<slug>` is the target hook
-file's stem (kebab-case) for a fix, or the candidate's `rule` for a general-pack
-create. Run the fix candidate's target-hook re-verification (`git cat-file -e`, the
-registration `rg`) against this clone's `origin/$default` — the file lives here.
+file's stem (kebab-case). Run the fix candidate's target-hook re-verification
+(`git cat-file -e`, the registration `rg`) against this clone's `origin/$default` —
+the file lives here.
 
 Verification runs in the clone and differs by pack kind:
 
@@ -66,7 +66,9 @@ Verification runs in the clone and differs by pack kind:
 
 Commit, push, and `gh pr create` run inside the clone with the same templates as
 below — the fix commit message and PR body shapes carry over unchanged, and the
-post-create stamp (`review update <ID> pr_open --pr-url <url>`) is identical. If the
+post-create stamp (`review update <ID> pr_open --pr-url <url>`) is identical. The
+pre-create slot check targets the pack repo — `review slots --repo <target_repo>` —
+not the watched repo. If the
 push is **denied** (no write access to the pack repo), log the skip with its reason in
 the final report and leave the candidate `watching` — never commit the fix into the
 watched repo instead: a pack hook patched locally diverges from the pack and re-breaks
@@ -77,6 +79,21 @@ remove.
 
 ```bash
 cd "$worktree" && uvx --isolated capt-hook test     # must be green — skip the candidate otherwise
+```
+
+Then confirm the target repo still has a free PR slot before committing anything —
+eligibility was computed when the reviewer spawned, and a concurrent pass may have
+filled the cap since:
+
+```bash
+uvx --isolated capt-hook review slots --repo <target_repo_key>
+```
+
+When it exits 1 (`free=0`), log the skip and leave the candidate `watching` — no
+commit, no push, no branch left behind; the slot frees when an open PR merges,
+closes, or goes stale. Output format and exit semantics: [review CLI](review-cli.md).
+
+```bash
 git -C "$worktree" add .claude/hooks/<slug>.py
 git -C "$worktree" commit -m "feat(hooks): add <rule-slug> guard from session feedback"
 git -C "$worktree" push -u origin "capt-hook/review/<rule-slug>"

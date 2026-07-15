@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
@@ -52,21 +53,13 @@ async def candidate_status(candidate_id: int) -> tuple[str, object]:
         return str(row["status"]), row["pr_opened_at"]
 
 
-async def seed_pr_open(url: str) -> int:
+async def seed_pr_open(url: str, *, rule: str = "r", repo: RepoKey = GIT_REPO_KEY) -> int:
     async with await ReviewStore.open(db_path()) as store:
         candidate_id = await store.ensure_candidate(
-            GIT_REPO_KEY, kind=CandidateKind.CREATE, rule="r", source_kind=TRANSCRIPT_MESSAGE
+            repo, kind=CandidateKind.CREATE, rule=rule, source_kind=TRANSCRIPT_MESSAGE
         )
-        await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=url)
+        await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=url, pr_opened_at=datetime.now(UTC))
         return candidate_id
-
-
-async def seed_cross_repo_rule(rule: str, *repos: RepoKey) -> int:
-    async with await ReviewStore.open(db_path()) as store:
-        return [
-            await store.ensure_candidate(repo, kind=CandidateKind.CREATE, rule=rule, source_kind=TRANSCRIPT_MESSAGE)
-            for repo in repos
-        ][0]
 
 
 async def seed_pack_fix() -> int:
@@ -107,6 +100,7 @@ class TestGroupSurface:
             "list",
             "show",
             "threshold-check",
+            "slots",
             "update",
             "sync-prs",
         ):
@@ -230,14 +224,6 @@ class TestListShowThreshold:
         assert "thresholds: sessions=0 days=0 open_prs=0 single_observation=False eligible=False" in result.output
         assert "seen_in_repos" not in result.output
 
-    def test_show_prints_seen_in_repos_for_a_cross_repo_rule(self, git_repo: Path) -> None:
-        candidate_id = asyncio.run(
-            seed_cross_repo_rule("no-force-push", GIT_REPO_KEY, RepoKey("github.com/yasyf/other"))
-        )
-        result = invoke("show", str(candidate_id), root=git_repo)
-        assert result.exit_code == 0, result.output
-        assert "seen_in_repos: 2" in result.output
-
     def test_show_unknown_candidate_fails(self, git_repo: Path) -> None:
         result = invoke("show", "99", root=git_repo)
         assert result.exit_code != 0
@@ -281,6 +267,14 @@ class TestUpdateAndSyncPrs:
         assert result.exit_code != 0
         assert "watching -> accepted" in result.output
 
+    def test_update_rejects_malformed_pr_url(self, scanned_repo: Path) -> None:
+        url = "https://github.com/yasyf/scratch/pull/1/files"
+        result = invoke("update", "1", "pr_open", "--pr-url", url, root=scanned_repo)
+        assert result.exit_code != 0
+        assert "not a pull-request URL" in result.output
+        status, _ = asyncio.run(candidate_status(1))
+        assert status == "watching"
+
     def test_sync_prs_folds_gh_state(self, git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         url = "https://github.com/yasyf/scratch/pull/7"
         candidate_id = asyncio.run(seed_pr_open(url))
@@ -292,3 +286,25 @@ class TestUpdateAndSyncPrs:
         assert "accepted 1, rejected 0, stale 0, unreachable 0" in result.output
         status, _ = asyncio.run(candidate_status(candidate_id))
         assert status == "accepted"
+
+
+class TestSlots:
+    def test_free_slots_exit_zero_with_exact_line(self, git_repo: Path) -> None:
+        asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/1"))
+        result = invoke("slots", root=git_repo)
+        assert result.exit_code == 0
+        assert result.output == f"{GIT_REPO_KEY}: open_prs=1/2 free=1\n"
+
+    def test_full_slots_exit_one_with_exact_line(self, git_repo: Path) -> None:
+        asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/1", rule="one"))
+        asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/2", rule="two"))
+        result = invoke("slots", "--repo", str(GIT_REPO_KEY), root=git_repo)
+        assert result.exit_code == 1
+        assert result.output == f"{GIT_REPO_KEY}: open_prs=2/2 free=0\n"
+
+    def test_repo_option_normalizes_case(self, git_repo: Path) -> None:
+        asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/1", rule="one"))
+        asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/2", rule="two"))
+        result = invoke("slots", "--repo", str(GIT_REPO_KEY).upper(), root=git_repo)
+        assert result.exit_code == 1
+        assert result.output == f"{GIT_REPO_KEY}: open_prs=2/2 free=0\n"

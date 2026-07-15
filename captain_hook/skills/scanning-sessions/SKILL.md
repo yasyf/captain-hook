@@ -40,13 +40,16 @@ user feedback next pass.
 - **All writes happen in a worktree or temp-dir clone off the target repo's
   `origin/<default>`** — never commit on the user's checkout. Procedure:
   [PR workflow](references/pr-workflow.md).
-- **The PR lands where the hook lives — three-way.** A hook in the watched repo's
-  `.claude/hooks/` (and a repo-specific create) is fixed there, in a worktree, as
-  today. A **builtin-pack** hook — `show`'s `routing:` line targets captain-hook with
-  `pack=` set — is fixed in a captain-hook clone (`gh repo clone`, temp dir) under
-  `captain_hook/packs/<pack>/`, verified with `uv run --project . capt-hook test`,
-  and PR'd against captain-hook. An **external-pack** hook is fixed in a clone of the
-  pack's own repo, verified with `uvx --isolated capt-hook --hooks <dir> test`, and PR'd there.
+- **The PR lands where the hook lives.** A **create** candidate's hook always lands
+  in the watched repo's `.claude/hooks/` — packs ship to every capt-hook user, so a
+  new rule mined from one user's sessions never targets a pack repo. A hook already
+  in the watched repo's `.claude/hooks/` is fixed there, in a worktree, as today.
+  Only a fix to an existing pack hook crosses repos: a **builtin-pack** hook —
+  `show`'s `routing:` line targets captain-hook with `pack=` set — is fixed in a
+  captain-hook clone (`gh repo clone`, temp dir) under `captain_hook/packs/<pack>/`,
+  verified with `uv run --project . capt-hook test`, and PR'd against captain-hook;
+  an **external-pack** hook is fixed in a clone of the pack's own repo, verified with
+  `uvx --isolated capt-hook --hooks <dir> test`, and PR'd there.
   A denied push to the target repo is a **logged skip** — never fall back to
   committing the fix in the watched repo; a pack hook patched locally diverges from
   the pack and re-breaks on its next update.
@@ -82,13 +85,14 @@ Review Progress:
 - [ ] Step 2: Re-verify each candidate's quotes against transcripts
        (fix candidates: also re-verify the target hook at origin/<default> HEAD)
 - [ ] Per eligible, verified candidate:
-  - [ ] Step 3: Pick the target repo (create candidates: classify repo-specific vs
-         generic), then worktree off origin/<default> — or a temp-dir clone for a
-         cross-repo target
+  - [ ] Step 3: Pick the target repo (create: the watched repo; fix: the routing
+         line), then worktree off origin/<default> — or a temp-dir clone for a
+         pack fix
   - [ ] Step 4: Draft via the authoring-hooks skill (fix candidates: FIX mode —
          amend the target hook + regression test)
   - [ ] Step 5: Verify (uvx --isolated capt-hook test green in the worktree)
-  - [ ] Step 6: Commit, push, gh pr create (verbatim evidence in the body)
+  - [ ] Step 6: Slot check (review slots), then commit, push, gh pr create
+         (verbatim evidence in the body)
   - [ ] Step 7: review update <ID> pr_open --pr-url <url>
 - [ ] Step 8: Final report
 ```
@@ -134,52 +138,31 @@ two extra checks gate the draft:
 
 Failing either check → skip (stays `watching`), never PR.
 
-### Where a create candidate's hook lands
-
-Before Step 3, classify each verified **create** candidate — fix candidates are
-already routed (a pack fix's `routing:` line names its target repo):
-
-- **Repo-specific** — the rule names this repo's paths, commands, tools, or
-  vocabulary ("run `uv sync --extra dev` after dependency changes", "docs pages live
-  in `docs/*.qmd`"). It lands as a new `.claude/hooks/<slug>.py` in the watched repo;
-  this is the default.
-- **Generic behavioral** — the rule carries no repo-specific paths, tools, or
-  vocabulary and plausibly applies to any repo. It lands as a PR amending or adding a
-  hook under `captain_hook/packs/general/` in a captain-hook clone. "Wait for plan approval
-  before implementing" is the canonical shape: no path, no command, no project noun —
-  every repo with plan mode has this rule, and it was once wrongly PR'd as a
-  repo-local hook. A `seen_in_repos: N` line on `review show` — the same slug tracked
-  under more than one repo — is strong evidence for generic.
-- **When uncertain, repo-local.** A rule that sounds generic but needs the repo's own
-  command to check it ("run the tests before stopping" — whose test command?) stays
-  repo-local. A wrong general-pack PR ships the rule to every pack user; a wrong
-  repo-local hook inconveniences one repo.
-
 ### 3-7. One PR per candidate
 
 Follow [references/pr-workflow.md](references/pr-workflow.md) exactly:
 
 1. **Target + tree** — a repo-local target gets a worktree: fetch, then
    `git worktree add` a `capt-hook/review/<rule-slug>` branch off `origin/<default>`.
-   A cross-repo target — any fix with a `routing:` line, or a create classified as
-   generic — gets a temp-dir clone of the target repo on branch
-   `capt-hook/review/pack-<slug>` instead, per pr-workflow's
-   "Cross-repo (pack) fix" section.
+   A pack fix — one whose `show` output carries a `routing:` line — gets a temp-dir
+   clone of the target repo on branch `capt-hook/review/pack-<slug>` instead, per
+   pr-workflow's "Cross-repo (pack) fix" section.
 2. **Draft** — invoke the `captain-hook:authoring-hooks` skill via the Skill tool, passing the
    verbatim correction, its context, and the worktree (or clone) path. It picks the
    primitive, writes `.claude/hooks/<slug>.py` with inline tests (one firing on the
    offending shape, one `Allow()` on a benign neighbor), and runs `uvx --isolated capt-hook
-   test`; a generic create instead amends or adds the hook under
-   `captain_hook/packs/general/` in the captain-hook clone. For a **fix** candidate,
+   test`. For a **fix** candidate,
    invoke its FIX mode instead, passing the target hook file, the misfire class, and
    the verbatim complaint — it amends the hook and adds the mandatory regression test
    (silent on the misfiring input, still firing on the genuine case).
 3. **Verify** — run `uvx --isolated capt-hook test` in the worktree yourself (in a clone, the
    pack-kind verify command from the Hard Rules); green or the candidate is skipped
    this pass.
-4. **PR** — commit the hook file, push the branch, `gh pr create` with the template
-   body: the rule, the hook's behavior, and an Evidence section quoting each verbatim
-   correction with its session id and date.
+4. **PR** — slot-check the target repo first (`review slots` — the exact step lives
+   in [pr-workflow.md](references/pr-workflow.md)), then commit the hook file, push
+   the branch, `gh pr create` with the template body: the rule, the hook's behavior,
+   and an Evidence section quoting each verbatim correction with its session id and
+   date.
 5. **Record** — `uvx --isolated capt-hook review update <ID> pr_open --pr-url <url>`, then remove
    the worktree. If that update fails with `no candidate with id <ID>` or a transition
    error like `rejected -> pr_open`, a concurrent judge pass regrouped the candidate

@@ -11,6 +11,7 @@ latest judge verdict accepts them with enough confidence count toward the thresh
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -24,7 +25,7 @@ from cc_transcript.store import FileStateStore
 
 from captain_hook.review.fix import HOOK_COMPLAINT
 from captain_hook.review.prompts import CREATE_TEMPLATE, FIX_TEMPLATE
-from captain_hook.review.repo import RepoKey
+from captain_hook.review.repo import RepoKey, pr_repo_key
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -170,7 +171,7 @@ class ThresholdStatus:
             the misfire fired in for a pack fix, else the candidate's own repo.
         sessions: How many distinct sessions carry a judge-accepted observation.
         days: How many distinct UTC days carry a judge-accepted observation.
-        open_prs: How many of the repo's candidates hold a live, non-stale PR.
+        open_prs: How many live, non-stale PRs target the candidate's repo.
         single_observation: Whether any observation is both judge-accepted and
             heuristically at least ``min_confidence_fix_single`` — the fix-mode
             single-observation path.
@@ -417,6 +418,12 @@ CREATE TABLE IF NOT EXISTS pr_states (
             "INSERT INTO repos (repo_key, watching) VALUES (?, 0) ON CONFLICT(repo_key) DO UPDATE SET watching = 0",
             (repo,),
         )
+
+    async def enroll(self, repo: RepoKey) -> bool:
+        await self.store.conn.execute(
+            "INSERT INTO repos (repo_key, watching) VALUES (?, 1) ON CONFLICT(repo_key) DO NOTHING", (repo,)
+        )
+        return await self.watching(repo)
 
     async def watching(self, repo: RepoKey) -> bool:
         """Returns whether ``repo`` is watched; unknown repos are not."""
@@ -715,23 +722,6 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
         """
         await self.store.conn.execute("UPDATE candidates SET announced_status = ? WHERE id = ?", (status, candidate_id))
 
-    async def cross_repo_rules(self) -> dict[str, int]:
-        """Returns each slug-keyed rule tracked under more than one repo, with its distinct-repo count.
-
-        Exact-slug matches only: a rule counts when the same canonical slug was
-        minted independently under multiple ``repo_key`` values, which is strong
-        evidence the rule is generic rather than repo-specific. Digest-keyed
-        (pre-judge) candidates never match :data:`~cc_transcript.judge.SLUG_PATTERN`
-        and are excluded.
-        """
-        from cc_transcript.judge.verdicts import SLUG_PATTERN
-
-        cur = await self.store.conn.execute(
-            "SELECT rule, COUNT(DISTINCT repo_key) AS repos FROM candidates "
-            "GROUP BY rule HAVING COUNT(DISTINCT repo_key) > 1"
-        )
-        return {rule: int(row["repos"]) async for row in cur if SLUG_PATTERN.fullmatch(rule := str(row["rule"]))}
-
     async def transition(
         self,
         candidate_id: int,
@@ -988,6 +978,23 @@ WHERE c.candidate_kind = 'fix' AND c.status = ? AND c.resolved_at IS NOT NULL
                 await conn.execute("UPDATE candidates SET generation = generation + 1 WHERE id = ?", (candidate_id,))
         return len(reopen)
 
+    async def open_pr_targets(self, *, settings: ReviewSettings) -> dict[RepoKey, int]:
+        cutoff = (datetime.now(UTC) - timedelta(days=settings.stale_after_days)).isoformat()
+        cur = await self.store.conn.execute(
+            "SELECT repo_key, pr_url FROM candidates WHERE status = ? AND pr_opened_at > ?",
+            (CandidateStatus.PR_OPEN, cutoff),
+        )
+        counts: Counter[RepoKey] = Counter()
+        seen: set[str] = set()
+        async for row in cur:
+            match row["pr_url"]:
+                case None:
+                    counts[RepoKey(str(row["repo_key"]))] += 1
+                case url if (u := str(url)) not in seen:
+                    seen.add(u)
+                    counts[pr_repo_key(u)] += 1
+        return dict(counts)
+
     async def threshold_status(self, candidate_id: int, *, settings: ReviewSettings) -> ThresholdStatus:
         """Returns the judge-accepted evidence counts behind one candidate's eligibility.
 
@@ -1035,19 +1042,13 @@ WHERE o.candidate_id = ? AND v.{self.ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
         )
         accepted = [dict(row) async for row in accepted_cur]
 
-        cutoff = (datetime.now(UTC) - timedelta(days=settings.stale_after_days)).isoformat()
-        prs_cur = await conn.execute(
-            "SELECT COUNT(*) AS n FROM candidates WHERE repo_key = ? AND status = ? AND pr_opened_at > ?",
-            (repo, CandidateStatus.PR_OPEN, cutoff),
-        )
-
         return ThresholdStatus(
             kind=kind,
             status=status,
             watching=await self.watching(watching_repo),
             sessions=len({row["session_id"] for row in accepted}),
             days=len({row["day"] for row in accepted}),
-            open_prs=[int(row["n"]) async for row in prs_cur][0],
+            open_prs=(await self.open_pr_targets(settings=settings)).get(repo, 0),
             single_observation=any(
                 signal_confidence(row["payload_json"]) >= settings.min_confidence_fix_single for row in accepted
             ),
@@ -1150,8 +1151,8 @@ ORDER BY o.id
         The set-based sibling of :meth:`threshold_status`, built for :meth:`overview`
         so the dashboard reads N candidates without N per-row round trips: one accepted-
         evidence scan over all candidates (lane version by kind, evidence gated past a
-        reopened candidate's ``resolved_at``), one ``repos`` read, and one open-PR count
-        per repo. It computes the exact same fields as :meth:`threshold_status` — a
+        reopened candidate's ``resolved_at``), one ``repos`` read, and one open-PR target
+        scan. It computes the exact same fields as :meth:`threshold_status` — a
         parity test pins the two together — so :func:`crosses_thresholds` stays the one
         eligibility predicate over either.
         """
@@ -1179,12 +1180,7 @@ WHERE o.candidate_id IN ({placeholders}) AND v.{self.ACCEPTED_COLUMN} = 1 AND v.
         watching_cur = await self.store.conn.execute("SELECT repo_key, watching FROM repos")
         watching = {str(row["repo_key"]): bool(row["watching"]) async for row in watching_cur}
 
-        cutoff = (datetime.now(UTC) - timedelta(days=settings.stale_after_days)).isoformat()
-        prs_cur = await self.store.conn.execute(
-            "SELECT repo_key, COUNT(*) AS n FROM candidates WHERE status = ? AND pr_opened_at > ? GROUP BY repo_key",
-            (CandidateStatus.PR_OPEN, cutoff),
-        )
-        open_prs = {str(row["repo_key"]): int(row["n"]) async for row in prs_cur}
+        open_prs = await self.open_pr_targets(settings=settings)
 
         def status_for(row: Mapping[str, object]) -> ThresholdStatus:
             obs = accepted.get(int(str(row["id"])), [])
@@ -1195,7 +1191,7 @@ WHERE o.candidate_id IN ({placeholders}) AND v.{self.ACCEPTED_COLUMN} = 1 AND v.
                 watching=watching.get(watching_repo, False),
                 sessions=len({o["session_id"] for o in obs}),
                 days=len({o["day"] for o in obs}),
-                open_prs=open_prs.get(str(row["repo_key"]), 0),
+                open_prs=open_prs.get(RepoKey(str(row["repo_key"])), 0),
                 single_observation=any(
                     signal_confidence(o["payload_json"]) >= settings.min_confidence_fix_single for o in obs
                 ),
@@ -1314,6 +1310,20 @@ SELECT
             consecutive_failures=int(streak["consecutive_failures"]),
             failing_since=str(since) if (since := streak["failing_since"]) is not None else None,
         )
+
+    async def unwatched_session_repos(self, *, days: int = 7) -> list[str]:
+        cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        cur = await self.store.conn.execute(
+            """
+SELECT DISTINCT json_extract(report_json, '$.repo') AS repo
+FROM spawn_runs
+WHERE ok = 1 AND started_at > ? AND json_extract(report_json, '$.watching') = 0
+  AND repo IS NOT NULL AND repo NOT IN (SELECT repo_key FROM repos)
+ORDER BY repo
+""",
+            (cutoff,),
+        )
+        return [str(row["repo"]) async for row in cur]
 
     async def judge_queue(
         self, *, refresh_summary: bool = False, probe_hydration: bool = True

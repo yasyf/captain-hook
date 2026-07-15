@@ -233,6 +233,13 @@ def health_line(health: SpawnHealth, judge: JudgeHealth) -> RenderableType:
                     return Text.assemble((f"{line}  ·  ", "dim"), (segment, style))
 
 
+def unwatched_line(repos: Sequence[str]) -> RenderableType:
+    return Text(
+        f"reviewer ran for unwatched repos: {', '.join(repos)} — run `capt-hook review enable` in each repo",
+        style="yellow",
+    )
+
+
 def pack_errors_lines(load_errors: Sequence[LoadError]) -> list[RenderableType]:
     """One red line per degraded hook/pack load, tagged with its pack; empty when nothing failed."""
     return [
@@ -247,8 +254,7 @@ def pack_errors_lines(load_errors: Sequence[LoadError]) -> list[RenderableType]:
     ]
 
 
-def header(repo: RepoKey, views: list[CandidateView], settings: ReviewSettings, *, watching: bool) -> RenderableType:
-    open_n = sum(1 for v in views if stage_of(v) is Stage.PR_OPEN)
+def header(repo: RepoKey, settings: ReviewSettings, *, watching: bool, open_prs: int) -> RenderableType:
     line = Text.assemble(
         ("captain-hook", "bold"),
         ("  ·  ", "dim"),
@@ -256,7 +262,7 @@ def header(repo: RepoKey, views: list[CandidateView], settings: ReviewSettings, 
         "    ",
         (f"[{'watching' if watching else 'not watching'}]", "green" if watching else "yellow"),
         "    ",
-        (f"PR slots {open_n}/{settings.max_open_prs}", "dim"),
+        (f"PR slots {open_prs}/{settings.max_open_prs}", "dim"),
     )
     if watching:
         return line
@@ -291,7 +297,9 @@ def render(
     watching: bool,
     health: SpawnHealth,
     judge: JudgeHealth,
+    open_prs: int,
     load_errors: Sequence[LoadError] = (),
+    unwatched: Sequence[str] = (),
     syncing: bool = False,
 ) -> RenderableType:
     """The whole dashboard frame: reviewer health, degraded loads, header, then a section per lifecycle stage."""
@@ -305,8 +313,9 @@ def render(
     spinner = [Spinner("dots", text=Text("syncing open PRs with GitHub…", style="dim"))] if syncing else []
     return Group(
         health_line(health, judge),
+        *([unwatched_line(unwatched)] if unwatched else []),
         *pack_errors_lines(load_errors),
-        header(repo, views, settings, watching=watching),
+        header(repo, settings, watching=watching, open_prs=open_prs),
         Text(""),
         *sections,
         *empty,
@@ -327,8 +336,10 @@ async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadErr
     async with await ReviewStore.open(settings.db_path) as store:
         health = await store.spawn_health()
         judge = await store.judge_health()
+        unwatched = await store.unwatched_session_repos()
         watching = await store.watching(repo)
         views = await store.overview(repo, settings=settings)
+        open_prs = (await store.open_pr_targets(settings=settings)).get(repo, 0)
         if not (sync and any(stage_of(v) is Stage.PR_OPEN for v in views)):
             console.print(
                 render(
@@ -338,7 +349,9 @@ async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadErr
                     watching=watching,
                     health=health,
                     judge=judge,
+                    open_prs=open_prs,
                     load_errors=load_errors,
+                    unwatched=unwatched,
                 )
             )
             return
@@ -350,13 +363,16 @@ async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadErr
                 watching=watching,
                 health=health,
                 judge=judge,
+                open_prs=open_prs,
                 load_errors=load_errors,
+                unwatched=unwatched,
                 syncing=True,
             ),
             console=console,
         ) as live:
             await sync_open_prs(store, repo, settings=settings)
             fresh = await store.overview(repo, settings=settings)
+            open_prs = (await store.open_pr_targets(settings=settings)).get(repo, 0)
             live.update(
                 render(
                     fresh,
@@ -365,7 +381,9 @@ async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadErr
                     watching=watching,
                     health=health,
                     judge=judge,
+                    open_prs=open_prs,
                     load_errors=load_errors,
+                    unwatched=unwatched,
                 )
             )
 

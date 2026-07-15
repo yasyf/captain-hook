@@ -50,8 +50,10 @@ Both paths set up what the reviewer needs:
 - a per-machine watching flag for this repo.
 
 The plugin owns the `SessionEnd` wiring; `review enable` writes no hook entries of its own.
-Watching is stored once per machine, so each clone you want reviewed runs `review enable` (or
-`init`) once.
+Watching is stored once per machine, and the reviewer enrolls a repo the first time it runs
+in it — a plugin-wired clone is watched from its first session end with no manual step.
+`review enable` arms a repo immediately instead of waiting for that first session;
+`review disable` is the durable opt-out, which auto-enrollment never overrides.
 
 ## Prerequisites
 

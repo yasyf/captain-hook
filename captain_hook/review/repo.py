@@ -11,6 +11,18 @@ from typing import NewType
 from captain_hook.util import reqenv
 
 RepoKey = NewType("RepoKey", str)
+PR_URL = re.compile(r"https?://([^/]+/[^/]+/[^/]+)/pull/\d+/?")
+
+
+def pr_repo_key(url: str) -> RepoKey:
+    """Return the normalized target repo from a pull-request URL.
+
+    Raises:
+        ValueError: If ``url`` is not a pull-request URL.
+    """
+    if (match := PR_URL.fullmatch(url.strip())) is None:
+        raise ValueError(f"not a pull-request URL: {url}")
+    return RepoKey(match.group(1).lower())
 
 
 def git_output(cwd: str, *args: str) -> str | None:
