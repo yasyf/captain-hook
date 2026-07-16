@@ -1,0 +1,16 @@
+name: Documentation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "docs/**"
+      - "captain_hook/**"
+      - "great-docs.yml"
+      - "pyproject.toml"
+      - ".github/workflows/docs.yml"
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true

@@ -1,0 +1,7 @@
+fragments = [
+  "great-docs-local",
+  "cc-skills:great-docs-fleet",
+]
+
+[sources.cc-skills]
+source = "github:yasyf/cc-skills@main"
