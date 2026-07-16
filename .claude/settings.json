@@ -217,11 +217,6 @@
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run Stop --async",
             "async": true
-          },
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook review sweep",
-            "async": true
           }
         ]
       }

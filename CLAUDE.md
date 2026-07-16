@@ -11,7 +11,7 @@ Non-trivial work flows `pending` → `in_progress` → `completed`: `TaskCreate`
 
 ## Durable Records (cc-notes)
 
-Durable knowledge routes through `cc-notes`, never loose markdown in the tree: a decision or durable fact → `cc-notes note add`; living guidance with a `--when` read-trigger → `cc-notes doc add`; an append-only chronology with artifacts → `cc-notes log add` / `log append --attach`; friction → `cc-notes papercut`. Decision memos, gate verdicts, handoffs, and status write-ups are notes/docs — not `*-memo.md` files committed alongside results. The tree carries only published docs and source.
+Durable knowledge routes through cc-notes, never loose markdown in the tree — via the MCP tools first, the `cc-notes` CLI only when no server is live: a decision or durable fact → `note_add`; living guidance with a `when` read-trigger → `doc_add`; an append-only chronology with artifacts → `log_add` / `log_append` (with `attach`); friction → `papercut`; a repeatable procedure → `runbook_add`; orient with `status`. Decision memos, gate verdicts, handoffs, and status write-ups are notes/docs — not `*-memo.md` files committed alongside results. The tree carries only published docs and source.
 
 ## Plan Execution & Orchestration
 
