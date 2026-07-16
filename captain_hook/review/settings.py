@@ -23,7 +23,11 @@ class ReviewSettings(HooksSettings):
     variants apply to hook-misfire fix candidates), the judge knobs bound the
     per-session LLM verdict pass, the ``triage_*`` knobs bound the cheaper junk
     pre-screen that runs before it, and ``brain_max_turns``/``brain_max_budget_usd``
-    cap the headless PR-drafting agent.
+    cap the headless PR-drafting agent and ``brain_deadline_seconds`` kills a
+    brain subprocess that outlives its wall-clock bound. ``spawn_deadline_seconds``
+    bounds one detached child's whole run so a hang records a failed spawn instead
+    of stalling, and ``sweep_interval_minutes`` throttles the Stop-triggered
+    repo-wide sweep.
     """
 
     model_config = SettingsConfigDict(env_prefix="HOOKS_REVIEW_")
@@ -46,4 +50,7 @@ class ReviewSettings(HooksSettings):
     max_triage_calls_per_session: int = 60
     brain_max_turns: int = 80
     brain_max_budget_usd: float = 5.0
+    brain_deadline_seconds: int = 3600
+    spawn_deadline_seconds: int = 7200
+    sweep_interval_minutes: int = 30
     db_path: Path = Field(default_factory=resolve_review_db_path)

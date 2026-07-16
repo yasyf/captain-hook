@@ -36,7 +36,8 @@
       {
         "hooks": [
           { "type": "command", "command": "uvx --isolated capt-hook run Stop" },
-          { "type": "command", "command": "uvx --isolated capt-hook run Stop --async", "async": true }
+          { "type": "command", "command": "uvx --isolated capt-hook run Stop --async", "async": true },
+          { "type": "command", "command": "uvx --isolated capt-hook review sweep", "async": true }
         ]
       }
     ],

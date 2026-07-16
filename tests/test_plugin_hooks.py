@@ -9,6 +9,13 @@ from captain_hook.types import Event
 
 # Both SessionStart and SessionEnd additionally register the always-on session reviewer.
 REVIEW_EVENTS = {"SessionStart", "SessionEnd"}
+# Stop additionally registers the throttled repo-wide reviewer sweep.
+SWEEP_EVENTS = {"Stop"}
+
+
+def review_sweep_command() -> str:
+    """The shipped Stop-sweep command, derived from ``DEFAULT_PREFIX`` like the run/dispatch commands."""
+    return f"{DEFAULT_PREFIX} review sweep"
 
 
 def load_plugin_hooks() -> dict[str, Any]:
@@ -21,10 +28,15 @@ def expected_command_set(name: str) -> set[str]:
     """The commands the shipped hooks.json must register for ``name`` — derived, not hardcoded.
 
     Every event registers both dispatch variants (sync + async); the review-run events add the
-    reviewer sweep. Everything flows from ``DEFAULT_PREFIX``, so a prefix change is a one-line edit.
+    reviewer pass, and Stop adds the throttled sweep. Everything flows from ``DEFAULT_PREFIX``, so a
+    prefix change is a one-line edit.
     """
     commands = {run_command(name, async_=False), run_command(name, async_=True)}
-    return commands | {review_command()} if name in REVIEW_EVENTS else commands
+    if name in REVIEW_EVENTS:
+        commands |= {review_command()}
+    if name in SWEEP_EVENTS:
+        commands |= {review_sweep_command()}
+    return commands
 
 
 class TestPluginHooksJson:
@@ -57,8 +69,21 @@ class TestPluginHooksJson:
             assert by_command[run_command(name, async_=True)]["async"] is True
             if name in REVIEW_EVENTS:
                 assert by_command[review_command()]["async"] is True
+            if name in SWEEP_EVENTS:
+                assert by_command[review_sweep_command()]["async"] is True
+
+    def test_stop_block_ships_the_async_sweep_entry(self) -> None:
+        [group] = load_plugin_hooks()["hooks"]["Stop"]
+        entries = {entry["command"]: entry for entry in group["hooks"]}
+        assert review_sweep_command() in entries
+        assert entries[review_sweep_command()] == {
+            "type": "command",
+            "command": "uvx --isolated capt-hook review sweep",
+            "async": True,
+        }
 
     def test_canonical_prefix_is_uvx_isolated_capt_hook(self) -> None:
         assert DEFAULT_PREFIX == "uvx --isolated capt-hook"
         assert run_command("PreToolUse", async_=False) == "uvx --isolated capt-hook run PreToolUse"
         assert review_command() == "uvx --isolated capt-hook review run"
+        assert review_sweep_command() == "uvx --isolated capt-hook review sweep"

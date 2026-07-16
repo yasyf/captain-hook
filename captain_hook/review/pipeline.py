@@ -14,14 +14,16 @@ the PRs, recording each run's outcome for the status dashboard's health line.
 
 from __future__ import annotations
 
+import asyncio
 import fcntl
+import hashlib
 import json
 import os
 import subprocess
 import sys
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeGuard
 
@@ -67,6 +69,7 @@ class SpawnReport:
         synced_merged: How many open PRs merged, accepting their candidate.
         synced_closed: How many open PRs closed, rejecting their candidate.
         synced_kept: How many open PRs stayed open (fresh or ``gh``-unreachable).
+        sweep: Whether this was a Stop-triggered sweep (no PR sync, no brain).
     """
 
     repo: RepoKey | None
@@ -87,6 +90,7 @@ class SpawnReport:
     synced_merged: int = 0
     synced_closed: int = 0
     synced_kept: int = 0
+    sweep: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +98,8 @@ class BrainOutcome:
     """The headless PR-drafting brain's run outcome for one reviewer pass.
 
     Attributes:
-        exit_code: The brain subprocess's exit status.
+        exit_code: The brain subprocess's exit status; ``-9`` when it overran
+            ``brain_deadline_seconds`` and was killed.
         seconds: The brain's wall-clock runtime in seconds.
         log_path: The spawn log the brain's stdout and stderr appended to.
     """
@@ -108,7 +113,24 @@ def review_log_path() -> Path:
     return resolve_state_dir() / "review" / "spawn.log"
 
 
-def spawn_argv(transcript: str, cwd: str | None) -> list[str]:
+def breadcrumb(reason: str) -> None:
+    try:
+        (path := review_log_path()).parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as log:
+            log.write(f"{datetime.now(UTC).isoformat()} {reason}\n")
+    except OSError:
+        return
+
+
+def sweep_dir() -> Path:
+    return resolve_state_dir() / "review" / "sweeps"
+
+
+def sweep_key(cwd: str) -> str:
+    return hashlib.sha256(cwd.encode()).hexdigest()[:12]
+
+
+def spawn_argv(transcript: str, cwd: str | None, *, sweep: bool = False) -> list[str]:
     return [
         sys.executable,
         "-m",
@@ -118,6 +140,7 @@ def spawn_argv(transcript: str, cwd: str | None) -> list[str]:
         "--transcript",
         transcript,
         *(("--cwd", cwd) if cwd else ()),
+        *(("--sweep",) if sweep else ()),
     ]
 
 
@@ -133,42 +156,31 @@ def parse_payload(raw: bytes) -> dict[str, object] | None:
     return payload if is_payload(payload) else None
 
 
-def guard_and_spawn(raw: bytes) -> None:
-    """Parses the SessionEnd hook payload and detaches the reviewer child.
-
-    Every path returns normally so the wired hook always exits 0: a set
-    ``CAPT_HOOK_SPAWNED`` (the reviewer's own spawned sessions), a headless
-    ``claude -p`` / SDK session (``CLAUDE_CODE_ENTRYPOINT`` in the ``sdk-*``
-    family; an interactive quit is ``cli``), malformed stdin, a missing
-    transcript, and a failed spawn all fall through silently. The child runs
-    with ``CAPT_HOOK_SPAWNED=1`` and its output appended to
-    :func:`review_log_path`.
-
-    Args:
-        raw: The hook's stdin bytes, holding the SessionEnd JSON payload.
-    """
-    if reqenv.getenv(SPAWNED_ENV):
-        return
-    # headless `claude -p` / SDK run — not an interactive session
-    if reqenv.getenv("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
-        return
+def payload_transcript(raw: bytes, *, label: str) -> tuple[str, str | None] | None:
     if (payload := parse_payload(raw)) is None:
-        return
+        breadcrumb(f"{label} skip: unparseable stdin")
+        return None
     transcript = payload.get("transcript_path")
     if not isinstance(transcript, str):
-        return
+        breadcrumb(f"{label} skip: non-string transcript_path")
+        return None
     try:
-        missing = not Path(transcript).is_file()
+        exists = Path(transcript).is_file()
     except ValueError:
-        return
-    if missing:
-        return
+        exists = False
+    if not exists:
+        breadcrumb(f"{label} skip: missing transcript file")
+        return None
     cwd = payload.get("cwd")
+    return transcript, cwd if isinstance(cwd, str) else None
+
+
+def detach(argv: list[str], *, spawned: str) -> None:
     try:
         (log_path := review_log_path()).parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("ab") as log:
             subprocess.Popen(
-                spawn_argv(transcript, cwd if isinstance(cwd, str) else None),
+                argv,
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=log,
@@ -177,7 +189,78 @@ def guard_and_spawn(raw: bytes) -> None:
                 env=reqenv.env_map() | {SPAWNED_ENV: "1"},
             )
     except OSError:
+        breadcrumb(f"detach failed: {spawned}")
         return
+    breadcrumb(spawned)
+
+
+def guard_and_spawn(raw: bytes) -> None:
+    """Parses the SessionEnd hook payload and detaches the reviewer child.
+
+    Every path returns normally so the wired hook always exits 0: a set
+    ``CAPT_HOOK_SPAWNED`` (the reviewer's own spawned sessions), a headless
+    ``claude -p`` / SDK session (``CLAUDE_CODE_ENTRYPOINT`` in the ``sdk-*``
+    family; an interactive quit is ``cli``), malformed stdin, a missing
+    transcript, and a failed spawn all fall through silently, each leaving a
+    breadcrumb line on :func:`review_log_path`. The child runs with
+    ``CAPT_HOOK_SPAWNED=1`` and its output appended to the same log.
+
+    Args:
+        raw: The hook's stdin bytes, holding the SessionEnd JSON payload.
+    """
+    if reqenv.getenv(SPAWNED_ENV):
+        breadcrumb("review-run skip: CAPT_HOOK_SPAWNED set")
+        return
+    # headless `claude -p` / SDK run — not an interactive session
+    if reqenv.getenv("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
+        breadcrumb("review-run skip: sdk entrypoint")
+        return
+    if (parsed := payload_transcript(raw, label="review-run")) is None:
+        return
+    transcript, cwd = parsed
+    detach(spawn_argv(transcript, cwd), spawned=f"spawned {transcript}")
+
+
+def guard_and_sweep(raw: bytes) -> None:
+    """Parses the Stop hook payload and detaches a throttled repo-wide reviewer sweep.
+
+    Mirrors :func:`guard_and_spawn`'s skips (each breadcrumbed) and detach, plus a
+    file-based, database-free throttle: every invocation that passes the skips
+    touches ``<key>.trigger`` under :func:`sweep_dir`, keyed by the payload cwd's
+    sha256, and a sweep spawns only when the matching ``<key>.sweep`` stamp is
+    older than ``sweep_interval_minutes`` (or absent). The stamp is claimed —
+    touched before the detach — so a burst of Stop events yields at most one sweep
+    per interval. The child runs ``review spawn --sweep``: scan, triage, and judge,
+    but never PR sync or the working-copy-editing brain.
+
+    Args:
+        raw: The hook's stdin bytes, holding the Stop JSON payload.
+    """
+    from captain_hook.review.settings import ReviewSettings
+
+    if reqenv.getenv(SPAWNED_ENV):
+        breadcrumb("sweep skip: CAPT_HOOK_SPAWNED set")
+        return
+    if reqenv.getenv("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
+        breadcrumb("sweep skip: sdk entrypoint")
+        return
+    if (parsed := payload_transcript(raw, label="sweep")) is None:
+        return
+    transcript, cwd = parsed
+    interval = timedelta(minutes=ReviewSettings().sweep_interval_minutes)
+    key = sweep_key(cwd or "")
+    try:
+        (stamps := sweep_dir()).mkdir(parents=True, exist_ok=True)
+        (stamps / f"{key}.trigger").touch()
+        stamp = stamps / f"{key}.sweep"
+        if stamp.exists() and datetime.now(UTC) - datetime.fromtimestamp(stamp.stat().st_mtime, tz=UTC) < interval:
+            breadcrumb("sweep skip: throttled")
+            return
+        stamp.touch()
+    except OSError:
+        breadcrumb("sweep skip: stamp OSError")
+        return
+    detach(spawn_argv(transcript, cwd, sweep=True), spawned=f"sweep spawned {transcript}")
 
 
 def brain_prompt(transcript: Path) -> str:
@@ -221,9 +304,12 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
     The argv comes from the spawnllm Claude backend with the permission mode
     forced to ``acceptEdits``, the tool scope narrowed to
     :data:`BRAIN_ALLOWED_TOOLS`, and the turn budget capped by
-    ``settings.brain_max_turns``. The prompt carries the reviewer marker so the
-    brain's own SessionEnd self-skips, and ``CAPT_HOOK_SPAWNED=1`` keeps its
-    SessionEnd hook from re-spawning the reviewer.
+    ``settings.brain_max_turns``. The subprocess is killed at
+    ``settings.brain_deadline_seconds`` — the deadline for the surrounding pass
+    cannot interrupt this blocking call, so the brain carries its own wall-clock
+    bound. The prompt carries the reviewer marker so the brain's own SessionEnd
+    self-skips, and ``CAPT_HOOK_SPAWNED=1`` keeps its SessionEnd hook from
+    re-spawning the reviewer.
 
     Args:
         transcript: The just-ended session's transcript, named in the prompt.
@@ -237,15 +323,21 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
     (log_path := review_log_path()).parent.mkdir(parents=True, exist_ok=True)
     started = datetime.now(UTC)
     with log_path.open("ab") as log:
-        proc = subprocess.run(
-            brain_argv(max_turns=settings.brain_max_turns, max_budget_usd=settings.brain_max_budget_usd),
-            input=brain_prompt(transcript).encode(),
-            cwd=repo_root,
-            env=reqenv.env_map() | {SPAWNED_ENV: "1"},
-            stdout=log,
-            stderr=log,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                brain_argv(max_turns=settings.brain_max_turns, max_budget_usd=settings.brain_max_budget_usd),
+                input=brain_prompt(transcript).encode(),
+                cwd=repo_root,
+                env=reqenv.env_map() | {SPAWNED_ENV: "1"},
+                stdout=log,
+                stderr=log,
+                check=False,
+                timeout=settings.brain_deadline_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            return BrainOutcome(
+                exit_code=-9, seconds=(datetime.now(UTC) - started).total_seconds(), log_path=log_path
+            )
     return BrainOutcome(
         exit_code=proc.returncode, seconds=(datetime.now(UTC) - started).total_seconds(), log_path=log_path
     )
@@ -294,7 +386,7 @@ def brain_lock(settings: ReviewSettings) -> Iterator[bool]:
         os.close(fd)
 
 
-async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings) -> SpawnReport:
+async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings, sweep: bool = False) -> SpawnReport:
     """Runs the detached reviewer pass over one ended session.
 
     Scan, judge, and PR sync run whenever the repo is watched — verdicts
@@ -305,10 +397,15 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
     the corrections of every still-open sibling session in the same repo, while
     the brain still acts only on the current cwd's eligible candidates.
 
+    A ``sweep`` pass runs the same enroll, scan, triage, and judge, but skips PR
+    sync and the entire brain block — a sweep only refreshes the mined evidence
+    and never touches the live working copy.
+
     Args:
         transcript: The ended session's transcript file.
         cwd: The session's working directory, used to resolve the repo.
         settings: The reviewer settings.
+        sweep: Whether this is a throttled Stop-triggered sweep (no sync, no brain).
 
     Returns:
         The :class:`SpawnReport` for this pass.
@@ -322,14 +419,14 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
     from captain_hook.review.triage import triage_pass
 
     if (repo := resolve_repo_key(cwd)) is None:
-        return SpawnReport(repo=None)
+        return SpawnReport(repo=None, sweep=sweep)
     async with await ReviewStore.open(settings.db_path) as store:
         if not await store.enroll(repo):
-            return SpawnReport(repo=repo)
+            return SpawnReport(repo=repo, sweep=sweep)
         scan_report = await scan(store, settings=settings, transcripts=[transcript.parent])
         triage = await triage_pass(store, settings=settings)
         verdicts = await judge_pass(store, settings=settings, refresh_summary=True)
-        sync = await sync_open_prs(store, repo, settings=settings)
+        sync = None if sweep else await sync_open_prs(store, repo, settings=settings)
     eligible: tuple[int, ...] = ()
     brain = False
     brain_exit: int | None = None
@@ -338,26 +435,27 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
     # The global lock spans the eligibility read through the brain and the pr_open set-diff,
     # so a concurrent pass — in this repo or any other sharing the db — can neither
     # double-spawn nor leak its transitions into this count.
-    with brain_lock(settings) as claimed:
-        if claimed:
-            async with await ReviewStore.open(settings.db_path) as store:
-                eligible = tuple(
-                    [
-                        candidate_id
-                        for row in await store.candidates(repo, status=CandidateStatus.WATCHING)
-                        if await store.eligible(candidate_id := int(str(row["id"])), settings=settings)
-                    ]
-                )
-                opened_before = await pr_open_ids(store, repo)
-            if eligible:
-                brain = True
-                outcome = spawn_brain(transcript, repo_root=Path(cwd), settings=settings)
-                brain_exit, brain_seconds = outcome.exit_code, outcome.seconds
+    if not sweep:
+        with brain_lock(settings) as claimed:
+            if claimed:
                 async with await ReviewStore.open(settings.db_path) as store:
-                    brain_prs = len(await pr_open_ids(store, repo) - opened_before)
-                    brain_skips = len(set(eligible) & await watching_ids(store, repo))
-        else:
-            logger.bind(repo=repo).info("reviewer brain skipped: another pass holds this repo's lock")
+                    eligible = tuple(
+                        [
+                            candidate_id
+                            for row in await store.candidates(repo, status=CandidateStatus.WATCHING)
+                            if await store.eligible(candidate_id := int(str(row["id"])), settings=settings)
+                        ]
+                    )
+                    opened_before = await pr_open_ids(store, repo)
+                if eligible:
+                    brain = True
+                    outcome = spawn_brain(transcript, repo_root=Path(cwd), settings=settings)
+                    brain_exit, brain_seconds = outcome.exit_code, outcome.seconds
+                    async with await ReviewStore.open(settings.db_path) as store:
+                        brain_prs = len(await pr_open_ids(store, repo) - opened_before)
+                        brain_skips = len(set(eligible) & await watching_ids(store, repo))
+            else:
+                logger.bind(repo=repo).info("reviewer brain skipped: another pass holds this repo's lock")
     return SpawnReport(
         repo=repo,
         watching=True,
@@ -374,42 +472,57 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
         brain_seconds=brain_seconds,
         brain_prs=brain_prs,
         brain_skips=brain_skips,
-        synced_merged=sync.accepted,
-        synced_closed=sync.rejected,
-        synced_kept=sync.kept + sync.unreachable,
+        synced_merged=sync.accepted if sync else 0,
+        synced_closed=sync.rejected if sync else 0,
+        synced_kept=(sync.kept + sync.unreachable) if sync else 0,
+        sweep=sweep,
     )
 
 
-async def spawn_session(transcript: Path, *, cwd: str, settings: ReviewSettings | None = None) -> SpawnReport:
+async def spawn_session(
+    transcript: Path, *, cwd: str, settings: ReviewSettings | None = None, sweep: bool = False
+) -> SpawnReport:
     """Runs :func:`review_session` and records its outcome — the ``review spawn`` entry.
 
     Wraps the whole reviewer pass — settings construction, repo resolve, and
     store open included (the historical crash sites were inside them) — and
     records exactly one ``spawn_runs`` row per run into a freshly opened store,
-    so ``capt-hook status`` surfaces a silently crashing reviewer. A crash
-    records ``ok=0`` and re-raises, so the traceback still lands in the spawn
-    log; the catch is ``BaseException`` because anyio cancellation shapes are
-    not ``Exception``. When settings construction itself is the crash, the row
-    lands at the default db path.
+    so ``capt-hook status`` surfaces a silently crashing reviewer. The pass runs
+    under ``settings.spawn_deadline_seconds`` so a hang in the async pipeline
+    becomes a recorded ``TimeoutError`` failure rather than a stalled child; the
+    deadline is only evaluated between awaits, so the blocking brain subprocess
+    is bounded separately by ``brain_deadline_seconds`` inside
+    :func:`spawn_brain` (a killed brain records ``brain_exit=-9`` in a healthy
+    run). The failure record opens the store with a low ``busy_timeout`` so a
+    locked database can't hang the record too. A crash records ``ok=0`` and re-raises, so the traceback
+    still lands in the spawn log; the catch is ``BaseException`` because anyio
+    cancellation shapes are not ``Exception``. When settings construction itself
+    is the crash, the row lands at the default db path.
 
     Args:
         transcript: The ended session's transcript file.
         cwd: The session's working directory, used to resolve the repo.
         settings: The reviewer settings; constructed inside the recording
             boundary when omitted, so a settings/env failure still records.
+        sweep: Whether to run the throttled sweep (no PR sync, no brain).
 
     Returns:
         The recorded :class:`SpawnReport` for this pass.
     """
+    from loguru import logger
+
     from captain_hook.review.settings import ReviewSettings, resolve_review_db_path
     from captain_hook.review.store import ReviewStore
 
+    logger.info(f"review spawn child start: transcript={transcript} cwd={cwd} sweep={sweep}")
     started = datetime.now(UTC)
     try:
         settings = settings or ReviewSettings()
-        report = await review_session(transcript, cwd=cwd, settings=settings)
+        async with asyncio.timeout(settings.spawn_deadline_seconds):
+            report = await review_session(transcript, cwd=cwd, settings=settings, sweep=sweep)
     except BaseException as exc:
-        async with await ReviewStore.open(settings.db_path if settings else resolve_review_db_path()) as store:
+        db_path = settings.db_path if settings else resolve_review_db_path()
+        async with await ReviewStore.open(db_path, busy_timeout_ms=2000) as store:
             await store.record_spawn_run(
                 str(transcript), started_at=started, ok=False, error=f"{type(exc).__name__}: {exc}"
             )

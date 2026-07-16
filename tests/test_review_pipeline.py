@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -45,11 +45,13 @@ from captain_hook.review.pipeline import (
     brain_argv,
     brain_prompt,
     guard_and_spawn,
+    guard_and_sweep,
     review_log_path,
     review_session,
     spawn_argv,
     spawn_brain,
     spawn_session,
+    sweep_key,
 )
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.scan import REVIEWER_MARKER, ScanReport, scan_transcript
@@ -206,6 +208,16 @@ async def verdict_fidelities(store: ReviewStore) -> list[str]:
     return [str(row["fidelity"]) async for row in cur]
 
 
+async def count_rows(store: ReviewStore, table: str) -> int:
+    cur = await store.store.conn.execute(f"SELECT COUNT(*) AS n FROM {table}")
+    return [int(row["n"]) async for row in cur][0]
+
+
+def sweep_stamps(cwd: str) -> tuple[Path, Path]:
+    base = state_dir() / "review" / "sweeps"
+    return base / f"{sweep_key(cwd)}.trigger", base / f"{sweep_key(cwd)}.sweep"
+
+
 @pytest.fixture
 def popen_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[str], dict[str, Any]]]:
     calls: list[tuple[list[str], dict[str, Any]]] = []
@@ -241,7 +253,10 @@ class TestExitZeroInvariant:
         proc = run_review(payload, env={SPAWNED_ENV: "1"})
         assert proc.returncode == 0
         assert proc.stdout == b""
-        assert not (state_dir() / "review").exists()
+        # The spawned-env skip breadcrumbs but never detaches a child (no SpawnReport lands).
+        log = (state_dir() / "review" / "spawn.log").read_text()
+        assert "review-run skip: CAPT_HOOK_SPAWNED set" in log
+        assert "SpawnReport" not in log
 
     def test_non_git_cwd_exits_zero_and_detached_child_finishes_clean(self, tmp_path: Path) -> None:
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
@@ -266,7 +281,10 @@ class TestExitZeroInvariant:
         proc = run_review(payload, env={"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}, cwd=tmp_path)
         assert proc.returncode == 0
         assert proc.stdout == b""
-        assert not (state_dir() / "review").exists()
+        # The sdk-entrypoint skip breadcrumbs but never detaches a child (no SpawnReport lands).
+        log = (state_dir() / "review" / "spawn.log").read_text()
+        assert "review-run skip: sdk entrypoint" in log
+        assert "SpawnReport" not in log
 
 
 class TestGuardAndSpawn:
@@ -342,6 +360,107 @@ class TestGuardAndSpawn:
             json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path), "reason": "other"}).encode()
         )
         assert bool(popen_calls) is spawns
+
+
+class TestGuardBreadcrumbs:
+    @pytest.mark.parametrize(
+        ("env", "raw", "reason"),
+        [
+            pytest.param({SPAWNED_ENV: "1"}, b"{}", "review-run skip: CAPT_HOOK_SPAWNED set", id="spawned-env"),
+            pytest.param({"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}, b"{}", "review-run skip: sdk entrypoint", id="sdk"),
+            pytest.param({}, b"not json {{{", "review-run skip: unparseable stdin", id="unparseable"),
+            pytest.param(
+                {},
+                json.dumps({"transcript_path": 42}).encode(),
+                "review-run skip: non-string transcript_path",
+                id="non-string-transcript",
+            ),
+            pytest.param(
+                {},
+                json.dumps({"transcript_path": "/nonexistent/t.jsonl"}).encode(),
+                "review-run skip: missing transcript file",
+                id="missing-transcript",
+            ),
+        ],
+    )
+    def test_guard_breadcrumbs_each_skip_reason(
+        self,
+        popen_calls: list[tuple[list[str], dict[str, Any]]],
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+        raw: bytes,
+        reason: str,
+    ) -> None:
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        guard_and_spawn(raw)
+        assert popen_calls == []
+        assert reason in review_log_path().read_text()
+
+    def test_guard_breadcrumbs_spawn(self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path) -> None:
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        guard_and_spawn(json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path)}).encode())
+        assert len(popen_calls) == 1
+        assert f"spawned {transcript}" in review_log_path().read_text()
+
+
+class TestSweepGuard:
+    def payload(self, tmp_path: Path) -> tuple[Path, bytes]:
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        return transcript, json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path)}).encode()
+
+    def test_sweep_guard_throttles(self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path) -> None:
+        transcript, payload = self.payload(tmp_path)
+        guard_and_sweep(payload)
+        assert len(popen_calls) == 1
+        [(argv, _)] = popen_calls
+        assert argv == spawn_argv(str(transcript), str(tmp_path), sweep=True)
+        trigger, sweep = sweep_stamps(str(tmp_path))
+        assert trigger.exists() and sweep.exists()
+        sweep_mtime = sweep.stat().st_mtime
+        stale = (datetime.now(UTC) - timedelta(days=1)).timestamp()
+        os.utime(trigger, (stale, stale))
+        guard_and_sweep(payload)
+        assert len(popen_calls) == 1  # throttled: no second spawn
+        assert trigger.stat().st_mtime > stale  # trigger re-touched on every invocation
+        assert sweep.stat().st_mtime == sweep_mtime  # sweep stamp claimed once
+
+    def test_sweep_guard_spawns_after_interval(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
+    ) -> None:
+        _, payload = self.payload(tmp_path)
+        guard_and_sweep(payload)
+        assert len(popen_calls) == 1
+        _, sweep = sweep_stamps(str(tmp_path))
+        aged = (datetime.now(UTC) - timedelta(minutes=31)).timestamp()
+        os.utime(sweep, (aged, aged))
+        guard_and_sweep(payload)
+        assert len(popen_calls) == 2
+
+    @pytest.mark.parametrize(
+        "env",
+        [
+            pytest.param({SPAWNED_ENV: "1"}, id="spawned-env"),
+            pytest.param({"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}, id="headless-sdk"),
+        ],
+    )
+    def test_sweep_guard_skips_sdk_and_spawned_env(
+        self,
+        popen_calls: list[tuple[list[str], dict[str, Any]]],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        env: dict[str, str],
+    ) -> None:
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        _, payload = self.payload(tmp_path)
+        guard_and_sweep(payload)
+        assert popen_calls == []
+
+    def test_sweep_guard_missing_transcript(self, popen_calls: list[tuple[list[str], dict[str, Any]]]) -> None:
+        guard_and_sweep(json.dumps({"transcript_path": "/nonexistent/t.jsonl", "cwd": "/x"}).encode())
+        assert popen_calls == []
+        assert "sweep skip: missing transcript file" in review_log_path().read_text()
 
 
 class TestJudgePass:
@@ -771,6 +890,24 @@ class TestBrain:
         assert REVIEWER_MARKER in kwargs["input"].decode()
         assert Path(kwargs["stdout"].name) == state_dir() / "review" / "spawn.log"
 
+    def test_spawn_brain_deadline_kills_and_records_sigkill_exit(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        deadlines: list[float] = []
+
+        def fake_run(argv: list[str], **kw: Any) -> SimpleNamespace:
+            deadlines.append(kw["timeout"])
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=kw["timeout"])
+
+        monkeypatch.setattr("captain_hook.review.pipeline.subprocess.run", fake_run)
+        outcome = spawn_brain(
+            tmp_path / "t.jsonl", repo_root=tmp_path, settings=ReviewSettings(brain_deadline_seconds=7)
+        )
+        assert outcome.exit_code == -9
+        assert outcome.seconds >= 0.0
+        assert outcome.log_path == state_dir() / "review" / "spawn.log"
+        assert deadlines == [7]
+
 
 class TestSpawnSession:
     async def test_success_records_ok_row_with_report_json(
@@ -811,6 +948,7 @@ class TestSpawnSession:
             "synced_merged": 0,
             "synced_closed": 0,
             "synced_kept": 0,
+            "sweep": False,
         }
 
     @pytest.mark.parametrize(
@@ -833,7 +971,7 @@ class TestSpawnSession:
     ) -> None:
         settings = ReviewSettings(db_path=tmp_path / "review.db")
 
-        async def boom(transcript: Path, *, cwd: str, settings: ReviewSettings) -> SpawnReport:
+        async def boom(transcript: Path, *, cwd: str, settings: ReviewSettings, sweep: bool = False) -> SpawnReport:
             raise exc
 
         monkeypatch.setattr("captain_hook.review.pipeline.review_session", boom)
@@ -864,6 +1002,27 @@ class TestSpawnSession:
         assert str(health.last["error"]).startswith("ValidationError:")
         assert "judge_concurrency" in str(health.last["error"])
 
+    async def test_spawn_session_deadline_records_failed_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db", spawn_deadline_seconds=0)
+
+        async def hang(transcript: Path, *, cwd: str, settings: ReviewSettings, sweep: bool = False) -> SpawnReport:
+            await asyncio.sleep(5)
+            return SpawnReport(repo=None)
+
+        monkeypatch.setattr("captain_hook.review.pipeline.review_session", hang)
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        with pytest.raises(TimeoutError):
+            await spawn_session(transcript, cwd=str(tmp_path), settings=settings)
+        async with await ReviewStore.open(settings.db_path) as store:
+            health = await store.spawn_health()
+        assert health.consecutive_failures == 1
+        assert health.last is not None
+        assert health.last["ok"] == 0
+        assert "TimeoutError" in str(health.last["error"])
+        assert health.last["report_json"] is None
+
 
 class TestReviewSession:
     async def test_non_git_cwd_is_a_clean_skip(self, tmp_path: Path) -> None:
@@ -873,6 +1032,33 @@ class TestReviewSession:
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
         assert await review_session(transcript, cwd=str(plain), settings=settings) == SpawnReport(repo=None)
         assert not settings.db_path.exists()
+
+    async def test_sweep_session_skips_brain_and_sync(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        install_resolved_model(monkeypatch)
+
+        def no_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) -> BrainOutcome:
+            raise AssertionError("the brain must not run during a sweep")
+
+        async def no_sync(*args: object, **kwargs: object) -> object:
+            raise AssertionError("PR sync must not run during a sweep")
+
+        monkeypatch.setattr("captain_hook.review.pipeline.spawn_brain", no_brain)
+        monkeypatch.setattr("captain_hook.review.sync.sync_open_prs", no_sync)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
+            candidate_id = await seed_eligible_fix(store, repo=GIT_REPO_KEY)
+        transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
+        report = await review_session(transcript, cwd=str(git_repo), settings=settings, sweep=True)
+        assert report.sweep is True
+        assert (report.brain, report.eligible) == (False, ())
+        assert (report.synced_merged, report.synced_closed, report.synced_kept) == (0, 0, 0)
+        assert (report.watching, report.scanned) == (True, 1)
+        async with await ReviewStore.open(settings.db_path) as store:
+            candidate = await store.candidate(candidate_id)
+        assert CandidateStatus(str(candidate["status"])) == CandidateStatus.WATCHING
 
     async def test_opted_out_repo_skips_scan_judge_and_brain(
         self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
@@ -1368,3 +1554,38 @@ class TestSuggestionPlumbing:
         [prompt] = calls
         assert "- prefer-uv-over-pip (" in prompt
         assert digest_key not in prompt
+
+
+class TestRescanIdempotency:
+    def rounds(self, *questions: str) -> list[dict[str, Any]]:
+        return [
+            entry
+            for i, question in enumerate(questions)
+            for entry in ask_user_question_round(question, notes=ANSWER, session="s1", tool_id=f"q{i}")
+        ]
+
+    async def test_rescan_grown_transcript_is_idempotent(
+        self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path
+    ) -> None:
+        chatter = [
+            assistant_text("continuing the work", sessionId="s1"),
+            assistant_text("all wrapped up", sessionId="s1"),
+        ]
+        path = tmp_path / "s.jsonl"
+        write_transcript(path, self.rounds(QUESTION))
+        assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
+        assert (await count_rows(store, "candidate_observations"), await count_rows(store, "feedback_events")) == (1, 1)
+        watermark = (await store.file_mtimes())[str(path)]
+
+        write_transcript(path, [*self.rounds(QUESTION), *chatter])
+        os.utime(path, (watermark + 10, watermark + 10))
+        assert (await scan_transcript(store, path, settings=settings, repo_key=REPO)).scanned == 1
+        assert (await count_rows(store, "candidate_observations"), await count_rows(store, "feedback_events")) == (1, 1)
+        advanced = (await store.file_mtimes())[str(path)]
+        assert advanced > watermark
+
+        write_transcript(path, [*self.rounds(QUESTION, OTHER_QUESTION), *chatter])
+        os.utime(path, (advanced + 10, advanced + 10))
+        await scan_transcript(store, path, settings=settings, repo_key=REPO)
+        assert await count_rows(store, "candidate_observations") == 2
+        assert await count_rows(store, "feedback_events") == 2

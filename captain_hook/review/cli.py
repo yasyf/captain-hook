@@ -92,16 +92,25 @@ def run_hook() -> None:
     guard_and_spawn(sys.stdin.buffer.read())
 
 
+@review.command(name="sweep")
+def sweep_hook() -> None:
+    """Stop hook entry: guard and detach a throttled repo-wide sweep (always exits 0)."""
+    from captain_hook.review.pipeline import guard_and_sweep
+
+    guard_and_sweep(sys.stdin.buffer.read())
+
+
 @review.command(hidden=True)
 @click.option("--transcript", required=True, type=click.Path(path_type=Path), help="The ended session's transcript")
 @click.option("--cwd", "cwd", default=None, help="The session's working directory (default: the process cwd)")
-def spawn(transcript: Path, cwd: str | None) -> None:
+@click.option("--sweep", is_flag=True, default=False, help="Run the throttled sweep (no PR sync, no brain)")
+def spawn(transcript: Path, cwd: str | None, sweep: bool) -> None:
     """Run the detached reviewer pass over one ended session (spawned by ``review run``)."""
     import asyncio
 
     from captain_hook.review.pipeline import spawn_session
 
-    click.echo(asyncio.run(spawn_session(transcript, cwd=cwd or os.getcwd())))
+    click.echo(asyncio.run(spawn_session(transcript, cwd=cwd or os.getcwd(), sweep=sweep)))
 
 
 @review.command()
