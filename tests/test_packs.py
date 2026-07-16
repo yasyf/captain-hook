@@ -198,21 +198,26 @@ def test_general_pack_prompts_are_packaged(name: str) -> None:
     assert (resources.files(captain_hook) / "packs/general/prompts" / name).is_file()
 
 
-def test_fixes_pack_scopes_to_native_bash(isolate_modules: None, tmp_path: Path) -> None:
+def test_fixes_pack_approves_teammate_tools(isolate_modules: None, tmp_path: Path) -> None:
     discover_pack("fixes", PACKS_DIR / "fixes")
 
-    def decision(tool: str, command: str) -> dict[str, Any] | None:
+    def decision(tool: str, tool_input: dict[str, Any]) -> dict[str, Any] | None:
         evt = input_to_event(
             Event.PermissionRequest,
-            Input(tool=tool, tool_input={"command": command}, agent_id="tm1", skip_permissions=True),
+            Input(tool=tool, tool_input=tool_input, agent_id="tm1", skip_permissions=True),
         )
         return dispatch(Event.PermissionRequest, evt, session_dir=tmp_path)
 
-    allowed = decision("Bash", "echo hi")
-    assert allowed is not None
-    assert allowed["hookSpecificOutput"]["decision"]["behavior"] == "allow"
-    assert decision("mcp__srv__Bash", "echo hi") is None
-    assert decision("mcp__ops__Bash", "rm -rf /") is None
+    def behavior(result: dict[str, Any] | None) -> str | None:
+        return result["hookSpecificOutput"]["decision"]["behavior"] if result else None
+
+    assert behavior(decision("Bash", {"command": "echo hi"})) == "allow"
+    assert behavior(decision("mcp__srv__Bash", {"command": "echo hi"})) == "allow"
+    assert behavior(decision("mcp__plugin_cc-notes_cc-notes__doc_search", {"query": "F1"})) == "allow"
+    assert behavior(decision("WebFetch", {"url": "https://example.com"})) == "allow"
+    assert decision("mcp__ops__Bash", {"command": "rm -rf /"}) is None  # command denylist rides along
+    assert decision("mcp__ops__delete_everything", {}) is None  # destructive verb token
+    assert decision("Bash", {"command": "rm -rf build"}) is None
 
 
 def test_fixes_pack_approves_scratch_writes(isolate_modules: None, tmp_path: Path) -> None:

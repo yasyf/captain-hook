@@ -9,7 +9,6 @@ from captain_hook import (
     Ask,
     BaseHookEvent,
     CustomCondition,
-    Event,
     Input,
     SkipPermissions,
     Tool,
@@ -34,7 +33,6 @@ class ScratchPath(CustomCondition):
 
 approve(
     "scratch-dir writes under skip-permissions",
-    events=Event.PreToolUse | Event.PermissionRequest,
     only_if=[Tool("Edit|Write|MultiEdit|NotebookEdit"), ScratchPath(), SkipPermissions()],
     skip_if=[McpTool()],
     tests={

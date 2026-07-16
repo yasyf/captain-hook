@@ -121,9 +121,15 @@ CASES = [
     Case(
         "pretooluse_no_match",
         "PreToolUse",
-        {"session_id": "p2", "tool_name": "Bash", "tool_input": {"command": "ls"}},
+        {"session_id": "p2", "tool_name": "Glob", "tool_input": {"pattern": "*.py"}},
         empty=True,
         exit_code=0,
+    ),
+    Case(
+        "pretooluse_deny",
+        "PreToolUse",
+        {"session_id": "p2d", "tool_name": "Bash", "tool_input": {"command": "ls"}},
+        nonempty=True,
     ),
     Case(
         "posttooluse",
