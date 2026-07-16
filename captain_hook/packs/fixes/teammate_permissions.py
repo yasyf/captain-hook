@@ -1,5 +1,5 @@
 # CC #73176: forwarded teammate dialogs run zero PermissionRequest hooks; approve()'s
-# PreToolUse default resolves upstream. Denylists are courtesy, not a boundary.
+# PreToolUse default resolves upstream. Denylists decline, never block: courtesy only.
 from __future__ import annotations
 
 from functools import reduce
