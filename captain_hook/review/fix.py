@@ -95,6 +95,7 @@ STRONG_MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("refire", r"\bre-?fired?\b"),
         ("misfire", r"\bmisfir(?:e[ds]?|ing)\b"),
         ("false_positive", r"\bfalse[ -]positives?\b"),
+        ("false_alarm", r"\bfalse alarms?\b"),
         ("ignored_repeat", r"\bignoring (?:it|the repeats?)\b"),
         ("already_addressed", r"\balready (?:fixed|resolved|addressed)\b"),
         ("should_not_have_fired", r"\bshouldn'?t have fired\b"),
@@ -147,12 +148,12 @@ class Fingerprint:
 
 
 def classify_marker(text: str) -> Marker | None:
-    if not re.search(r"\b(?:hook|reminder|nudge|gate|guard)s?\b", text, re.IGNORECASE):
+    if not re.search(r"\b(?:hook|reminder|nudge|gate|guard|warning)s?\b", text, re.IGNORECASE):
         return None
     hedged = re.search(
         r"(?:\bi think\b|\bseems?\b|\bmay\b|\bmight\b|\blooks like\b)"
-        r"[\s\S]{0,80}?(?:false[ -]positive|misfir|re-?fir|shouldn'?t have fired|spurious|unnecessar|wrong(?:ly)?"
-        r"|incorrect(?:ly)?|mistaken(?:ly)?|erroneous(?:ly)?)",
+        r"[\s\S]{0,80}?(?:false[ -]positive|false[ -]alarm|misfir|re-?fir|shouldn'?t have fired"
+        r"|spurious|unnecessar|wrong(?:ly)?|incorrect(?:ly)?|mistaken(?:ly)?|erroneous(?:ly)?)",
         text,
         re.IGNORECASE,
     )

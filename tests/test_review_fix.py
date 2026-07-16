@@ -242,6 +242,22 @@ class TestMarkers:
                 id="hedged-verb-anchored-downgrades",
             ),
             pytest.param("the nudge seems incorrect here", "hedged", "suspected", id="hedged-adjective-only"),
+            pytest.param(
+                "that warning was a false alarm", "strong", "false_alarm", id="warning-vocab-false-alarm"
+            ),
+            pytest.param("the hook was a false alarm", "strong", "false_alarm", id="hook-false-alarm"),
+            pytest.param(
+                "that warning shouldn't have fired",
+                "strong",
+                "should_not_have_fired",
+                id="warning-vocab-should-not-have-fired",
+            ),
+            pytest.param(
+                "I think that warning may be a false alarm",
+                "hedged",
+                "false_alarm",
+                id="hedged-false-alarm",
+            ),
         ],
     )
     def test_marker_classification(self, text: str, strength: str, misfire_class: str) -> None:
@@ -261,6 +277,10 @@ class TestMarkers:
             pytest.param("the hook reminder about the task tracker has fired again", id="fired-again-not-refired"),
             pytest.param("I corrected the incorrect path the hook flagged", id="incorrect-adjective-no-hedge"),
             pytest.param("mistakenly deleted the file, then the hook ran", id="adverb-far-from-fire-verb"),
+            pytest.param("the feature flag was removed", id="feature-flag-no-vocabulary"),
+            pytest.param("CI flagged three new warnings", id="warnings-noun-no-marker"),
+            pytest.param("fixed the compiler warning before committing", id="compiler-warning-no-marker"),
+            pytest.param("I'll silence the warning the hook pointed at", id="warning-compliance"),
         ],
     )
     def test_non_complaints_yield_no_marker(self, text: str) -> None:
