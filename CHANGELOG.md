@@ -4,6 +4,30 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **`approve()` and `deny()` now register on `PreToolUse | PermissionRequest` by
+  default.** A `PermissionRequest`-only hook is silently dead on the
+  forwarded-teammate-dialog path (CC #73176 — zero `PermissionRequest` hooks run
+  there), which made the old default a trap for every pack author. The
+  `PreToolUse` half resolves upstream of that fork, so bare `approve()`/`deny()`
+  hooks — including external packs like cc-notes' approvers — now cover teammate
+  and subagent dialogs with no call-site change. Trade-off: a `PreToolUse` allow
+  bypasses Claude Code's permission evaluation, so an explicit settings
+  `deny`/`ask` rule no longer out-ranks it; pin `events=Event.PermissionRequest`
+  to keep dialog-only timing. `llm_approve()` gains the same `events=` parameter
+  but keeps the `PermissionRequest`-only default — `PreToolUse` fires on every
+  matching call, which would put the judge's LLM round-trip on the hot path.
+- **Fixes pack: subagent auto-approve under skip-permissions now covers every
+  tool, MCP included.** The teammate hook was native-Bash-only by design;
+  a second disjoint hook approves all other tools from subagents/teammates when
+  the session was launched with bypass available
+  (`--dangerously-skip-permissions` or `--allow-dangerously-skip-permissions`).
+  Courtesy guards remain: the Bash command denylist rides along on any
+  command-shaped input, and MCP tools whose name carries a destructive verb
+  token (delete/remove/destroy/drop/purge/wipe/publish/deploy) still prompt.
+
 ## [9.21.0] - 2026-07-16
 
 ### Fixed
