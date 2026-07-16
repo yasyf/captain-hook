@@ -9,7 +9,7 @@ import pytest
 from captain_hook.app import _state
 from captain_hook.context import HookContext
 from captain_hook.dispatch import dispatch
-from captain_hook.events import PermissionRequestEvent
+from captain_hook.events import PermissionRequestEvent, PreToolUseEvent
 from captain_hook.primitives.permissions import SafetyVerdict, approve, deny, llm_approve
 from captain_hook.prompt import Prompt
 from captain_hook.testing.helpers import isolated_state_root
@@ -19,6 +19,7 @@ from captain_hook.util.automode import automode_rubric
 from tests.helpers import make_ctx
 
 ALLOW_ENVELOPE = {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow"}}}
+PRE_TOOL_ALLOW_ENVELOPE = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}
 
 
 def make_permission_event(
@@ -32,14 +33,38 @@ def make_permission_event(
     )
 
 
+def make_pre_tool_event(
+    tool_name: str = "Bash",
+    tool_input: dict[str, Any] | None = None,
+    ctx: HookContext | None = None,
+) -> PreToolUseEvent:
+    return PreToolUseEvent(
+        _raw={"tool_name": tool_name, "tool_input": tool_input or {"command": "echo hi"}, "agent_id": "tm1"},
+        ctx=ctx or make_ctx(),
+    )
+
+
 class TestApprove:
-    def test_registers_on_permission_request_uncapped(self) -> None:
+    def test_registers_on_both_decision_events_uncapped(self) -> None:
         approve("teammate bash", only_if=[Tool("Bash")])
 
         entry = _state.hooks[-1]
-        assert entry.spec.events is Event.PermissionRequest
+        assert entry.spec.events == Event.PreToolUse | Event.PermissionRequest
         assert entry.spec.max_fires is None
         assert entry.name.endswith("approve_teammate_bash")
+
+    def test_pre_tool_use_allows_upstream_of_dialog(self, tmp_path: Path) -> None:
+        approve("teammate bash", only_if=[Tool("Bash")])
+
+        evt = make_pre_tool_event(ctx=make_ctx(tmp_path))
+        assert dispatch(Event.PreToolUse, evt, session_dir=tmp_path) == PRE_TOOL_ALLOW_ENVELOPE
+
+    def test_permission_request_pin_keeps_dialog_only_timing(self, tmp_path: Path) -> None:
+        approve("teammate bash", events=Event.PermissionRequest, only_if=[Tool("Bash")])
+
+        entry = _state.hooks[-1]
+        assert entry.spec.events is Event.PermissionRequest
+        assert dispatch(Event.PreToolUse, make_pre_tool_event(ctx=make_ctx(tmp_path)), session_dir=tmp_path) is None
 
     def test_allows_twice_in_a_row(self, tmp_path: Path) -> None:
         approve("teammate bash", only_if=[Tool("Bash")])
@@ -59,12 +84,34 @@ class TestApprove:
 
 
 class TestDeny:
-    def test_registers_on_permission_request_uncapped(self) -> None:
+    def test_registers_on_both_decision_events_uncapped(self) -> None:
         deny("no subagent bash", only_if=[Tool("Bash")])
 
         entry = _state.hooks[-1]
-        assert entry.spec.events is Event.PermissionRequest
+        assert entry.spec.events == Event.PreToolUse | Event.PermissionRequest
         assert entry.spec.max_fires is None
+
+    def test_pre_tool_use_denies_with_reason(self, tmp_path: Path) -> None:
+        deny("no subagent bash", only_if=[Tool("Bash")])
+
+        evt = make_pre_tool_event(ctx=make_ctx(tmp_path))
+        assert dispatch(Event.PreToolUse, evt, session_dir=tmp_path) == {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "no subagent bash",
+            }
+        }
+
+    def test_deny_beats_approve_at_pre_tool_use(self, tmp_path: Path) -> None:
+        approve("teammate bash", only_if=[Tool("Bash")])
+        deny("no subagent bash", only_if=[Tool("Bash")])
+
+        evt = make_pre_tool_event(ctx=make_ctx(tmp_path))
+        result = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
+
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_denies_with_reason_as_message(self, tmp_path: Path) -> None:
         deny("no subagent bash", only_if=[Tool("Bash")])
@@ -101,12 +148,18 @@ class TestLlmApprove:
     def no_claude_binary(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(automode, "resolve_binary", lambda name: None)
 
-    def test_registers_on_permission_request_uncapped(self) -> None:
+    def test_registers_on_permission_request_only_uncapped(self) -> None:
         llm_approve("safe commands")
 
         entry = _state.hooks[-1]
         assert entry.spec.events is Event.PermissionRequest
         assert entry.spec.max_fires is None
+
+    def test_events_opt_in_registers_on_both(self) -> None:
+        llm_approve("safe commands", events=Event.PreToolUse | Event.PermissionRequest)
+
+        entry = _state.hooks[-1]
+        assert entry.spec.events == Event.PreToolUse | Event.PermissionRequest
 
     def test_safe_verdict_allows(self, tmp_path: Path) -> None:
         llm_approve("safe commands", only_if=[Tool("Bash")])

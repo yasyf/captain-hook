@@ -28,21 +28,23 @@ class SafetyVerdict(BaseModel):
 def approve(
     label: str,
     *,
-    events: Event = Event.PermissionRequest,
+    events: Event = Event.PreToolUse | Event.PermissionRequest,
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     tests: InlineTests | None = None,
 ) -> None:
     """Register a hook that answers matching tool permissions with *allow*.
 
-    On ``PermissionRequest`` (the default) it answers a dialog Claude Code is already
-    showing. On ``PreToolUse`` it *pre-authorizes* the tool before Claude Code decides
-    whether to prompt, so the call is allowed on paths where the dialog itself never runs
-    hooks — most importantly an in-process teammate whose dialog is forwarded to the lead
-    and rendered as plain UI. A ``PreToolUse`` allow resolves upstream of the dialog, so it
-    also clears prompts the dialog stage would otherwise force (e.g. the multi-``cd``
-    "for clarity" ask). Register on ``Event.PreToolUse | Event.PermissionRequest`` to
-    pre-authorize while still answering any dialog that slips through.
+    By default it registers on ``PreToolUse | PermissionRequest``: the ``PreToolUse`` allow
+    *pre-authorizes* the tool before Claude Code decides whether to prompt, covering paths
+    where the dialog itself never runs hooks — most importantly an in-process teammate
+    whose dialog is forwarded to the lead and rendered as plain UI (CC #73176) — and
+    clearing prompts the dialog stage would otherwise force (e.g. the multi-``cd``
+    "for clarity" ask); the ``PermissionRequest`` half still answers any dialog that slips
+    through. Because a ``PreToolUse`` allow bypasses Claude Code's permission evaluation
+    outright, a settings ``deny``/``ask`` rule that would out-rank a ``PermissionRequest``
+    answer is overridden too — pin ``events=Event.PermissionRequest`` to keep dialog-only
+    timing where explicit user rules always win.
 
     Fires on every match — no fire cap. Warning: an unconditioned ``approve()`` answers
     **every** call, equivalent to a permanent ``--dangerously-skip-permissions`` (and on
@@ -51,7 +53,7 @@ def approve(
 
     Args:
         label: Short name for the hook, used in fire logs and decision records.
-        events: Which event(s) to answer on; defaults to ``PermissionRequest``.
+        events: Which event(s) to answer on; defaults to ``PreToolUse | PermissionRequest``.
         only_if: Conditions that must all match for the approval to fire.
         skip_if: Conditions that veto the approval (the dialog shows normally).
         tests: Inline tests run by ``capt-hook test``.
@@ -59,7 +61,6 @@ def approve(
     Example:
         >>> approve(
         ...     "teammate bash under skip-permissions",
-        ...     events=Event.PreToolUse | Event.PermissionRequest,
         ...     only_if=[Tool("Bash"), FromSubagent(), SkipPermissions()],
         ...     skip_if=[ToolInput("command", r"\\brm\\b")],
         ... )
@@ -75,18 +76,27 @@ def approve(
 def deny(
     reason: str,
     *,
+    events: Event = Event.PreToolUse | Event.PermissionRequest,
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     tests: InlineTests | None = None,
 ) -> None:
-    """Register a hook that answers matching permission dialogs with *deny*.
+    """Register a hook that answers matching tool permissions with *deny*.
 
-    Fires on every matching ``PermissionRequest`` — no fire cap — returning a deny whose
-    ``message`` is *reason*. Warning: an unconditioned ``deny()`` rejects **every** dialog,
-    bricking every prompting tool; always scope it with ``only_if``/``skip_if``.
+    By default it registers on ``PreToolUse | PermissionRequest``, so the deny lands even
+    on paths where the dialog runs no hooks (a teammate dialog forwarded to the lead,
+    CC #73176). At ``PreToolUse`` a deny is a real guard, not just a dialog answer: it
+    blocks calls that would otherwise proceed without prompting at all (auto-allowed by
+    settings, or a session in bypass mode). Pin ``events=Event.PermissionRequest`` to only
+    answer dialogs that actually appear.
+
+    Fires on every match — no fire cap — returning a deny whose ``message`` is *reason*.
+    Warning: an unconditioned ``deny()`` rejects **every** call, bricking every matching
+    tool; always scope it with ``only_if``/``skip_if``.
 
     Args:
         reason: The denial message shown to the user, also the hook's label.
+        events: Which event(s) to answer on; defaults to ``PreToolUse | PermissionRequest``.
         only_if: Conditions that must all match for the denial to fire.
         skip_if: Conditions that veto the denial (the dialog shows normally).
         tests: Inline tests run by ``capt-hook test``.
@@ -99,12 +109,13 @@ def deny(
         return evt.block(reason)
 
     handler.__name__ = handler.__qualname__ = hook_name("deny", reason, reason)
-    on(Event.PermissionRequest, only_if=only_if, skip_if=skip_if, tests=tests)(handler)
+    on(events, only_if=only_if, skip_if=skip_if, tests=tests)(handler)
 
 
 def llm_approve(
     label: str,
     *,
+    events: Event = Event.PermissionRequest,
     rubric: str | None = None,
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
@@ -120,6 +131,13 @@ def llm_approve(
     answers the dialog with *allow*; an unsafe verdict or any LLM failure returns ``None``
     so the real dialog shows — it never auto-denies. Adds an LLM round-trip to every
     matching ask, so scope it tightly with ``only_if``/``skip_if``.
+
+    Unlike ``approve()``/``deny()``, the default stays ``PermissionRequest``-only: a
+    dialog is a rare event, but ``PreToolUse`` fires on every matching tool call, which
+    would put the judge's LLM round-trip on the hot path. Pass
+    ``events=Event.PreToolUse | Event.PermissionRequest`` to pre-authorize anyway — that
+    also covers forwarded teammate dialogs, which run no ``PermissionRequest`` hooks
+    (CC #73176) — and mind the cost.
 
     Under ``capt-hook test``, the stubbed LLM always returns ``safe=False``, so inline
     tests deterministically expect ``Ask()``.
@@ -171,4 +189,4 @@ def llm_approve(
         return evt.allow() if verdict.safe else None
 
     handler.__name__ = handler.__qualname__ = name
-    on(Event.PermissionRequest, only_if=only_if, skip_if=skip_if, tests=tests)(handler)
+    on(events, only_if=only_if, skip_if=skip_if, tests=tests)(handler)
