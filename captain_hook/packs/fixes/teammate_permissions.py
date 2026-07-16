@@ -2,6 +2,8 @@
 # PreToolUse default resolves upstream. Denylists are courtesy, not a boundary.
 from __future__ import annotations
 
+from functools import reduce
+
 from captain_hook import (
     Allow,
     Ask,
@@ -20,6 +22,8 @@ DANGEROUS_COMMAND = (
     r"|\bgit\s+(-[Cc]\s+\S+\s+|--?\S+\s+)*push\b[^\n]*(\s--?force(-with-lease)?\b|\s-f\b|\s--delete\b)"
     r"|\b(curl|wget)\b[^|\n]*\|\s*((\S*/)?env\s+)?(\S*/)?(ba|z|da)?sh\b"
 )
+
+DEEP_PAYLOAD: dict[str, object] = reduce(lambda acc, _: {"nest": acc}, range(1000), {"cmd": "rm -rf /"})
 
 approve(
     "teammate bash under skip-permissions",
@@ -90,6 +94,24 @@ approve(
             tool="mcp__runner__call", tool_input={"opts": {"cmd": "rm -rf /"}}, agent_id="tm1", skip_permissions=True
         ): Ask(),  # command keys are found at any nesting depth
         Input(
+            tool="mcp__runner__exec", tool_input={"args": [["rm", "-rf", "/"]]}, agent_id="tm1", skip_permissions=True
+        ): Ask(),  # nested argv lists flatten before the join
+        Input(
+            tool="mcp__runner__exec",
+            tool_input={"args": ["git", {"mode": "status"}, "reset"]},
+            agent_id="tm1",
+            skip_permissions=True,
+        ): Allow(explicit=True),  # mixed leaves scan individually — no cross-item join
+        Input(tool="mcp__x__call", tool_input={"cmd\n": "rm -rf /"}, agent_id="tm1", skip_permissions=True): Allow(
+            explicit=True
+        ),  # carrier keys match exactly — no trailing newline
+        Input(tool="mcp__x__call", tool_input={"ſhell": "rm -rf /"}, agent_id="tm1", skip_permissions=True): Allow(
+            explicit=True
+        ),  # ASCII-only carrier keys — no Unicode casefold
+        Input(tool="mcp__x__deepcall", tool_input=DEEP_PAYLOAD, agent_id="tm1", skip_permissions=True): Allow(
+            explicit=True
+        ),  # beyond MAX_SCAN_DEPTH is not descended, and never errors
+        Input(
             tool="Write",
             tool_input={"file_path": "/Users/u/proj/rm.py", "content": "rm = ResourceManager()"},
             agent_id="tm1",
@@ -114,6 +136,15 @@ approve(
         Input(tool="mcp__srv__drop_table", tool_input={"table": "users"}, agent_id="tm1", skip_permissions=True): Ask(),
         Input(tool="mcp__db__truncate_table", tool_input={"table": "t"}, agent_id="tm1", skip_permissions=True): Ask(),
         Input(tool="mcp__s3__eraseBucket", tool_input={"bucket": "b"}, agent_id="tm1", skip_permissions=True): Ask(),
+        Input(tool="mcp__x__delete2", tool_input={}, agent_id="tm1", skip_permissions=True): Ask(),
+        Input(tool="mcp__x__reset2fa", tool_input={}, agent_id="tm1", skip_permissions=True): Ask(),
+        Input(tool="mcp__x__erase64", tool_input={}, agent_id="tm1", skip_permissions=True): Ask(),
+        Input(tool="mcp__x__drop2Table", tool_input={}, agent_id="tm1", skip_permissions=True): Ask(),
+        Input(tool="mcp__x__deleteV2", tool_input={}, agent_id="tm1", skip_permissions=True): Ask(),
+        Input(tool="mcp__x__base64_decode", tool_input={}, agent_id="tm1", skip_permissions=True): Allow(
+            explicit=True
+        ),  # digits separate tokens: "base"/"decode", no verb
+        Input(tool="mcp__x__utf8_convert", tool_input={}, agent_id="tm1", skip_permissions=True): Allow(explicit=True),
         Input(tool="mcp__auth__revoke_token", tool_input={}, agent_id="tm1", skip_permissions=True): Ask(),
         Input(tool="mcp__db__reset_database", tool_input={}, agent_id="tm1", skip_permissions=True): Ask(),
         Input(command="git status", agent_id="tm1", skip_permissions=True): Ask(),  # native Bash is the hook above's
