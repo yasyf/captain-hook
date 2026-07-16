@@ -242,9 +242,7 @@ class TestMarkers:
                 id="hedged-verb-anchored-downgrades",
             ),
             pytest.param("the nudge seems incorrect here", "hedged", "suspected", id="hedged-adjective-only"),
-            pytest.param(
-                "that warning was a false alarm", "strong", "false_alarm", id="warning-vocab-false-alarm"
-            ),
+            pytest.param("that warning was a false alarm", "strong", "false_alarm", id="warning-vocab-false-alarm"),
             pytest.param("the hook was a false alarm", "strong", "false_alarm", id="hook-false-alarm"),
             pytest.param(
                 "that warning shouldn't have fired",
