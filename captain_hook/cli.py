@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import shlex
@@ -51,6 +52,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from cc_transcript.query import Session
+
+    from captain_hook.types import RegisteredHook
 
 EVENT_NAMES = ", ".join(n for e in Event if (n := e.name))
 
@@ -361,6 +364,15 @@ def expected_kinds_from_state() -> dict[str, str]:
     return out
 
 
+def hook_message_first_line(hook: RegisteredHook) -> str:
+    text = (
+        hook.spec.message
+        if isinstance(hook.spec.message, str)
+        else (inspect.getdoc(hook.handler) or "" if hook.handler is not None else "")
+    )
+    return (text.splitlines() or [""])[0]
+
+
 def run_tests(json_output: bool = False) -> None:
     from captain_hook.app import _state
     from captain_hook.testing.helpers import run_inline_tests
@@ -463,6 +475,38 @@ def test(state: CliState, json_output: bool) -> None:
     """Run inline tests from all registered hooks."""
     state.discover()
     run_tests(json_output=json_output)
+
+
+@cli.command()
+@click.pass_obj
+def hooks(state: CliState) -> None:
+    """List all discovered hooks without running their inline tests.
+
+    Each tab-separated row contains pack, home repository, source basename, hook
+    name, events, and the first line of its message or handler docstring.
+    """
+    from captain_hook.review.routing import CAPTAIN_HOOK_REPO, PackIndex
+
+    state.discover()
+    index = PackIndex.load(state.root)
+    home_repos = {name: CAPTAIN_HOOK_REPO for name in index.builtins} | {
+        route.pack_name: route.repo for route in index.externals.values()
+    }
+    package_root = Path(__file__).resolve().parent
+    rows = [
+        (
+            hook.pack_name or "local",
+            str(home_repos.get(hook.pack_name, "-")) if hook.pack_name else "-",
+            Path(hook.source_file).name,
+            hook.name,
+            "|".join(event.name for event in hook.spec.events if event.name),
+            hook_message_first_line(hook),
+        )
+        for hook in _state.hooks
+        if hook.pack_name is not None or not Path(hook.source_file).resolve().is_relative_to(package_root)
+    ]
+    for row in sorted(rows, key=lambda row: (row[0], row[2], row[3])):
+        print("\t".join(cell.replace("\t", " ") for cell in row))
 
 
 @cli.command()

@@ -77,6 +77,94 @@ class TestRunSubcommand:
         assert result.returncode != 0
 
 
+class TestHooksSubcommand:
+    def test_repo_local_hooks_print_exact_sorted_rows(self, tmp_path: Path, hooks_dir: Path) -> None:
+        write_hook(
+            hooks_dir,
+            '''\
+            from captain_hook.app import on
+            from captain_hook.types import Event
+
+            @on(Event.Stop)
+            def alpha_hook(evt):
+                """Alpha handler summary.
+
+                More detail is omitted.
+                """
+            ''',
+            name="alpha.py",
+        )
+        write_hook(
+            hooks_dir,
+            """\
+            from captain_hook.app import hook
+            from captain_hook.types import Event
+
+            hook(Event.PreToolUse, message="Beta message\\nsecond line")
+            """,
+            name="beta.py",
+        )
+        write_hook(
+            hooks_dir,
+            '''\
+            from captain_hook.app import on
+            from captain_hook.testing import Allow, Input
+            from captain_hook.types import Event
+
+            @on(Event.Stop | Event.SubagentStop, tests={Input(): Allow()})
+            def zeta_hook(evt):
+                """Zeta handler summary."""
+                raise RuntimeError("inline tests must not run")
+            ''',
+            name="zeta.py",
+        )
+
+        result = run_cli("hooks", hooks_dir=str(hooks_dir), root_dir=str(tmp_path))
+
+        assert result.returncode == 0, result.stderr
+        lines = result.stdout.splitlines()
+        assert lines == [
+            "local\t-\talpha.py\talpha_hook\tStop\tAlpha handler summary.",
+            "local\t-\tbeta.py\tbeta:hook_039be508\tPreToolUse\tBeta message",
+            "local\t-\tzeta.py\tzeta_hook\tStop|SubagentStop\tZeta handler summary.",
+        ]
+        assert all(len(line.split("\t")) == 6 for line in lines)
+        assert lines == sorted(lines, key=lambda line: (line.split("\t")[0], line.split("\t")[2:4]))
+
+    def test_message_tabs_sanitized_to_single_column(self, tmp_path: Path, hooks_dir: Path) -> None:
+        write_hook(
+            hooks_dir,
+            """\
+            from captain_hook.app import hook
+            from captain_hook.types import Event
+
+            hook(Event.PreToolUse, message="Gamma\\tmessage\\nsecond line")
+            """,
+            name="gamma.py",
+        )
+
+        result = run_cli("hooks", hooks_dir=str(hooks_dir), root_dir=str(tmp_path))
+
+        assert result.returncode == 0, result.stderr
+        row = next(line.split("\t") for line in result.stdout.splitlines() if line.split("\t")[2] == "gamma.py")
+        assert len(row) == 6
+        assert row[5] == "Gamma message"
+
+    def test_builtin_pack_prints_captain_hook_home_repo(self, tmp_path: Path, hooks_dir: Path) -> None:
+        from captain_hook.packs import manager
+
+        manager.upsert_entry(manager.packs_toml_path(tmp_path), manager.BuiltinPack("fixes"))
+
+        result = run_cli("hooks", hooks_dir=str(hooks_dir), root_dir=str(tmp_path))
+
+        assert result.returncode == 0, result.stderr
+        rows = [line.split("\t") for line in result.stdout.splitlines()]
+        builtin_rows = [row for row in rows if row[0] == "fixes"]
+        assert builtin_rows
+        assert {row[1] for row in builtin_rows} == {"github.com/yasyf/captain-hook"}
+        assert all(len(row) == 6 for row in rows)
+
+
 class TestErrorHandling:
     def test_cli_005_unknown_subcommand(self) -> None:
         result = run_cli("nonexistent")
