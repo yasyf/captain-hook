@@ -7,9 +7,18 @@ from captain_hook import (
     Signal,
     Signals,
     Tool,
+    UserMessages,
     Warn,
     llm_nudge,
 )
+
+FILLER_TURNS = [
+    {
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": f"Edited backends/store_{i}.go per the migration plan."}]},
+    }
+    for i in range(18)
+]
 
 llm_nudge(
     """You are a senior engineer watching another engineer ("the agent") mid-task. You are
@@ -17,19 +26,25 @@ running in agent mode in the project's working directory, with read tools. Your 
 decide whether the agent has veered onto an UNREQUESTED DETOUR — side work nobody asked
 for — without checking in first.
 
-Read first, judge second:
-- The session transcript is rendered above inside `<transcript path="...">`; long content is
-  clipped (you'll see `…(+Nch)` markers). From the full history (prefer `cc-transcript
-  show`/`grep`; else read the file) establish: (1) what was actually ASKED — the user's
-  original request plus any later redirections or standing permissions — and (2) what the
-  agent is doing RIGHT NOW — the just-run tool call and the last few assistant messages.
+Your evidence, in order of authority:
+- `<user_messages>` (rendered above) is the authoritative record of what was ASKED: the
+  user's first prompt plus their most recent messages — the original request, every later
+  redirection, and any standing permissions. Work authorized anywhere in this block is
+  NEVER a detour, even when nothing near the current action mentions the authorization.
+- `<transcript path="...">` shows what the agent is doing RIGHT NOW — the just-run tool
+  call and the last few assistant messages. It is a short recent window, not the full
+  history: in a long session the authorizing message has usually scrolled out of it, so
+  absence of authorization there means nothing.
+- Both blocks clip long content (you'll see `…(+Nch)` markers). Dig into the full history
+  (`cc-transcript show`/`grep`; else read the file) only when a clipping marker hides the
+  part you need to rule on.
 
 Discriminator: the current work is either (a) the requested task, (b) a necessary
 prerequisite of it (the task cannot land or be verified without it), or (c) authorized —
-the user said some form of "also…", "while you're there…", "fix anything you find", or it
-is a small stewardship fix inside code the task already touches. Any of those -> fire=false.
-Otherwise — the agent noticed something adjacent and started acting on it without surfacing
-it — fire=true.
+somewhere in `<user_messages>` the user said some form of "also…", "while you're there…",
+"fix anything you find", or it is a small stewardship fix inside code the task already
+touches. Any of those -> fire=false. Otherwise — the agent noticed something adjacent and
+started acting on it without surfacing it — fire=true.
 
 Detour tells (lean fire=true): "while I'm here" / "might as well" / "let me also" followed
 by edits to files the task doesn't need; fixing or refactoring code the request never
@@ -38,8 +53,8 @@ mystery at length while the requested work sits unfinished.
 
 Do NOT fire when: the side work blocks the task (a broken build or failing test the change
 trips over); it's a small stewardship fix in a file already being edited for the task; the
-user pre-authorized it; the agent is gathering context it needs; or the agent already
-surfaced the discovery and offered options instead of acting.
+user authorized it anywhere in `<user_messages>`; the agent is gathering context it needs;
+or the agent already surfaced the discovery and offered options instead of acting.
 
 <examples>
 <example fire="true">
@@ -63,6 +78,14 @@ file it was already editing.
 Pre-authorized stewardship.
 </example>
 <example fire="false">
+`<user_messages>` shows the first prompt asked for a changelog audit, and a later user
+message added "also migrate the backends to the new interface and clean up anything
+fleet-outdated". The transcript window shows only backend edits with no visible connection
+to any request.
+Authorized mid-turn: the redirection is part of what was asked, however long ago it
+scrolled out of the recent window.
+</example>
+<example fire="false">
 Agent: "I noticed X while working on Y — options: (1) finish Y and file X as a follow-up,
 (2) fix X now, (3) ignore it. Which?"
 Already surfacing options instead of acting.
@@ -71,8 +94,10 @@ Already surfacing options instead of acting.
 
 When uncertain, return fire=false. A missed detour costs one review comment; a false alarm
 on legitimate work teaches the agent to ignore this nudge. Fire only when the current action
-is clearly outside both the request and its prerequisites. Put your reasoning (under 50
-words, naming the detour and the requested task) in `reasoning`.""",
+is clearly outside both the request and its prerequisites as `<user_messages>` records them.
+Put your reasoning (under 50 words, naming the detour and the requested task) in
+`reasoning`.""",
+    label="detours",
     message=lambda r: (
         f"This looks like a detour — side work nobody asked for. {r.reasoning} "
         "Stop and check in before acting: say what you noticed, then propose 2-4 concrete "
@@ -83,6 +108,8 @@ words, naming the detour and the requested task) in `reasoning`.""",
     ),
     only_if=[Tool("Edit|Write|MultiEdit|NotebookEdit|Bash")],
     events=Event.PostToolUse,
+    contexts=[UserMessages()],
+    max_context=4000,
     signals=Signals(
         [
             Signal(pattern=r"(?i)\bwhile (?:I'm|I am|we're|we are) (?:here|at it|in (?:here|there))\b", weight=2),
@@ -104,18 +131,26 @@ words, naming the detour and the requested task) in `reasoning`.""",
             content="retry = 3\n",
             transcript=[
                 {
+                    "type": "user",
+                    "message": {"content": [{"type": "text", "text": "Rename the config flag in settings.py."}]},
+                },
+                {
                     "type": "assistant",
                     "message": {
                         "content": [
                             {"type": "text", "text": "While I'm here, the retry logic looks wrong — fixing it too."}
                         ]
                     },
-                }
+                },
             ],
         ): Warn(pattern="detour"),
         Input(
             command="./scripts/cleanup.sh",
             transcript=[
+                {
+                    "type": "user",
+                    "message": {"content": [{"type": "text", "text": "Add retries to the fetch client."}]},
+                },
                 {
                     "type": "assistant",
                     "message": {
@@ -123,7 +158,7 @@ words, naming the detour and the requested task) in `reasoning`.""",
                             {"type": "text", "text": "I also noticed stale artifacts. One more thing to clean up."}
                         ]
                     },
-                }
+                },
             ],
         ): Warn(pattern="options"),
         Input(
@@ -131,9 +166,13 @@ words, naming the detour and the requested task) in `reasoning`.""",
             content="json_flag = True\n",
             transcript=[
                 {
+                    "type": "user",
+                    "message": {"content": [{"type": "text", "text": "Add a --json flag to the CLI."}]},
+                },
+                {
                     "type": "assistant",
                     "message": {"content": [{"type": "text", "text": "Implementing the requested --json flag now."}]},
-                }
+                },
             ],
         ): Allow(),
         Input(
@@ -141,12 +180,63 @@ words, naming the detour and the requested task) in `reasoning`.""",
             file="client.py",
             transcript=[
                 {
+                    "type": "user",
+                    "message": {"content": [{"type": "text", "text": "Rename the config flag."}]},
+                },
+                {
                     "type": "assistant",
                     "message": {
                         "content": [{"type": "text", "text": "While I'm here, might as well look at the retry logic."}]
                     },
-                }
+                },
             ],
         ): Allow(),
+        Input(
+            file="backends/store.go",
+            content="client = ccnotes.New()\n",
+            llm={"fire": False},
+            transcript=[
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Audit the changelog. Also migrate all our backends to the new ccnotes "
+                                "interface and clean up anything fleet-outdated while you're at it.",
+                            }
+                        ]
+                    },
+                },
+                *FILLER_TURNS,
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": "Let me also migrate the last backend, then a quick cleanup."}
+                        ]
+                    },
+                },
+            ],
+        ): Allow(),
+        Input(
+            file="client.py",
+            content="retry = 3\n",
+            transcript=[
+                {
+                    "type": "user",
+                    "message": {"content": [{"type": "text", "text": "Rename the config flag in settings.py."}]},
+                },
+                *FILLER_TURNS,
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": "Let me also fix the retry logic while I'm at it — quick fix."}
+                        ]
+                    },
+                },
+            ],
+        ): Warn(pattern="detour"),
     },
 )
