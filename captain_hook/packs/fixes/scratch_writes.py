@@ -16,11 +16,7 @@ from captain_hook import (
     approve,
 )
 from captain_hook.packs.fixes._lib import McpTool
-
-SCRATCH_DIR_NAMES = frozenset({"tmp", "temp", "scratch", "scratchpad", "scratchpads"})
-# Roots resolve at import (macOS /var -> /private/var). No $TMPDIR: gettempdir() freezes per
-# daemon worker, so a custom TMPDIR could pin a writable non-scratch dir as auto-approved.
-TEMP_ROOTS = tuple({Path(root).resolve() for root in ("/tmp", "/private/tmp", "/var/folders", "/dev/shm")})
+from captain_hook.util.scratch import is_scratch_path
 
 
 class ScratchPath(CustomCondition):
@@ -33,10 +29,7 @@ class ScratchPath(CustomCondition):
             if evt.cwd is None:
                 return False
             path = evt.cwd / path
-        resolved = path.resolve()
-        return any(resolved.is_relative_to(root) for root in TEMP_ROOTS) or not SCRATCH_DIR_NAMES.isdisjoint(
-            resolved.parts[:-1]
-        )
+        return is_scratch_path(path.resolve())
 
 
 approve(

@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.19.0] - 2026-07-16
+
+### Added
+- **General pack: risky `rm` blocking.** A new `deletions` hook denies Bash `rm` when a target resolves outside any git/jj repository (temp roots and scratch-named dirs exempt via `is_scratch_path`, extracted to `captain_hook/util/scratch.py` as the shared scratch seam), when a glob argument matches more than 10 files (bounded expansion — never a full listing), or when a literal target is itself a repo root. `sudo`/`env` wrappers unwrap; `git rm`, `xargs rm`, and command substitutions pass through. Adversarial-review hardening preserves leaf-symlink semantics, validates glob matches individually, tracks preceding `cd`, and budget-caps recursive `**` scans.
+
 ## [9.16.0] - 2026-07-15
 
 ### Added
