@@ -43,6 +43,7 @@ from captain_hook.packs.contract import (
     search_upward,
 )
 from captain_hook.review.cli import review
+from captain_hook.review.pipeline import DISPATCH_EVENTS, dispatch_review
 from captain_hook.session import SessionStore, cleanup_stale, ensure_session
 from captain_hook.types import Event
 
@@ -180,10 +181,6 @@ def run_command(event: str, *, async_: bool) -> str:
     return f"{DEFAULT_PREFIX} run {event}{' --async' if async_ else ''}"
 
 
-def review_command() -> str:
-    return f"{DEFAULT_PREFIX} review run"
-
-
 def write_settings(settings_path: Path, data: dict[str, Any]) -> None:
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = settings_path.with_suffix(f"{settings_path.suffix}.tmp")
@@ -228,6 +225,11 @@ def dispatch_event(
 
     if not async_:
         record_heartbeat(event, raw)
+    elif event.name in DISPATCH_EVENTS:
+        try:
+            dispatch_review(event.name, raw)
+        except Exception:
+            logger.exception("native review dispatch failed")
 
     resolved_path = raw.get("agent_transcript_path") or raw.get("transcript_path")
     ctx = HookContext(

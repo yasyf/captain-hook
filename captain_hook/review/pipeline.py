@@ -3,8 +3,9 @@
 ``review run`` is wired to the SessionEnd hook event and must exit 0 on every
 path — a non-zero or hanging hook wedges the user's session — so
 :func:`guard_and_spawn` does nothing but parse, guard, and detach
-``capt-hook review spawn`` via ``Popen(start_new_session=True)``; no database
-reads, no scanning, no ``gh``, and no heavy imports happen on that path. The
+``capt-hook review spawn`` via ``Popen(start_new_session=True)``; no scanning,
+no ``gh``, and no heavy imports happen on that path, and the only database
+touch is native dispatch's fail-fast, fail-open enrollment probe. The
 detached child (:func:`spawn_session`, wrapping :func:`review_session`) does
 the real work: resolve the repo, check it is watched, scan the transcript
 incrementally, run the judge pass, sync open PR states, and — when at least
@@ -43,6 +44,10 @@ if TYPE_CHECKING:
 SPAWNED_ENV = "CAPT_HOOK_SPAWNED"
 BRAIN_TIER: TModel = "medium"
 BRAIN_ALLOWED_TOOLS = ("Read", "Grep", "Glob", "Write", "Edit", "Bash", "Skill", "Agent")
+# The events whose native `run <Event>` dispatch fires the reviewer/sweep.
+DISPATCH_EVENTS = frozenset({"SessionStart", "SessionEnd", "Stop"})
+# Window collapsing a stale plugin's raw `review run` racing native dispatch to one reviewer child.
+REVIEW_RUN_DEDUP = timedelta(seconds=60)
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,19 +199,103 @@ def detach(argv: list[str], *, spawned: str) -> None:
     breadcrumb(spawned)
 
 
-def guard_and_spawn(raw: bytes) -> None:
-    """Parses the SessionEnd hook payload and detaches the reviewer child.
+def payload_event(raw: bytes) -> str:
+    """The payload's ``hook_event_name`` (``""`` when absent) — the review-run dedup discriminator."""
+    payload = parse_payload(raw)
+    name = payload.get("hook_event_name") if payload else None
+    return name if isinstance(name, str) else ""
+
+
+def enrolled(cwd: str | None) -> bool:
+    """Whether the repo at *cwd* is watched — the native-dispatch review gate.
+
+    Applies the detached child's own ``store.enroll`` check (auto-watching a brand-new repo, honoring
+    an explicit ``review disable``) so native ``run <Event>`` dispatch skips a non-watched or non-git
+    repo before any reviewer child spawns. A non-git *cwd* short-circuits without opening the store.
+    The store opens with ``busy_timeout = 0`` so a held writer lock cannot stall the hook, and any
+    store failure counts as watched — the detached child re-applies the authoritative gate, so
+    uncertainty costs one short-lived child instead of a dropped review.
+    """
+    if (repo := resolve_repo_key(cwd or str(reqenv.cwd()))) is None:
+        return False
+    from captain_hook.review.settings import ReviewSettings
+    from captain_hook.review.store import ReviewStore
+
+    async def check() -> bool:
+        async with await ReviewStore.open(ReviewSettings().db_path, busy_timeout_ms=0) as store:
+            return await store.enroll(repo)
+
+    try:
+        return asyncio.run(check())
+    except Exception:
+        breadcrumb("review gate uncertain: enroll check failed — deferring to the spawned child")
+        return True
+
+
+def _claim_stamp(stamp: Path, window: timedelta) -> bool:
+    """Atomically claim *stamp*; ``True`` when this caller won and may proceed.
+
+    ``O_CREAT|O_EXCL`` decides the absent-stamp race, a stamp fresher than *window* loses, and a
+    stale stamp is unlinked then re-claimed with ``O_EXCL`` — so concurrent callers (native dispatch
+    racing a stale plugin's raw entry) resolve to exactly one winner.
+    """
+    for _ in range(2):
+        try:
+            os.close(os.open(stamp, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        except FileExistsError:
+            try:
+                age = datetime.now(UTC) - datetime.fromtimestamp(stamp.stat().st_mtime, tz=UTC)
+            except FileNotFoundError:
+                continue
+            if age < window:
+                return False
+            try:
+                stamp.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        return True
+    return False
+
+
+def claim_review_run(cwd: str | None, event_name: str) -> bool:
+    """Claim the short review-run dedup stamp for (*cwd*, *event_name*); ``True`` if the caller may spawn.
+
+    Keyed like :func:`guard_and_sweep`'s throttle but per (cwd, event) and over :data:`REVIEW_RUN_DEDUP`,
+    it collapses the version-skew double-fire and any concurrent same-repo passes (the whole-directory
+    scan already covers those) via the atomic :func:`_claim_stamp`. Fails open on ``OSError`` — a broken
+    state dir loses the reviewer's log either way, so prefer running over silently dropping the review.
+    """
+    key = hashlib.sha256(f"{cwd or ''}\0{event_name}".encode()).hexdigest()[:12]
+    try:
+        (stamps := sweep_dir()).mkdir(parents=True, exist_ok=True)
+        return _claim_stamp(stamps / f"{key}.run", REVIEW_RUN_DEDUP)
+    except OSError:
+        return True
+
+
+def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False) -> None:
+    """Parses the SessionStart/SessionEnd hook payload and detaches the reviewer child.
 
     Every path returns normally so the wired hook always exits 0: a set
     ``CAPT_HOOK_SPAWNED`` (the reviewer's own spawned sessions), a headless
     ``claude -p`` / SDK session (``CLAUDE_CODE_ENTRYPOINT`` in the ``sdk-*``
     family; an interactive quit is ``cli``), malformed stdin, a missing
-    transcript, and a failed spawn all fall through silently, each leaving a
-    breadcrumb line on :func:`review_log_path`. The child runs with
-    ``CAPT_HOOK_SPAWNED=1`` and its output appended to the same log.
+    transcript, a throttled duplicate, and a failed spawn all fall through
+    silently, each leaving a breadcrumb line on :func:`review_log_path`. The
+    child runs with ``CAPT_HOOK_SPAWNED=1`` and its output appended to the same
+    log.
+
+    The :func:`claim_review_run` throttle runs on every caller so native ``run
+    <Event>`` dispatch and a stale plugin's raw ``review run`` entry collapse to
+    one spawn. ``gate_enrollment`` (set only by native dispatch) additionally
+    skips a non-watched repo — checked *before* the claim, so a gated skip never
+    burns the stamp the raw fallback needs; the raw CLI entry leaves it off, so
+    the detached child stays the authoritative enrollment gate for that path.
 
     Args:
-        raw: The hook's stdin bytes, holding the SessionEnd JSON payload.
+        raw: The hook's stdin bytes, holding the SessionStart/SessionEnd JSON payload.
+        gate_enrollment: Skip the spawn for a non-watched repo (native dispatch only).
     """
     if reqenv.getenv(SPAWNED_ENV):
         breadcrumb("review-run skip: CAPT_HOOK_SPAWNED set")
@@ -218,23 +307,38 @@ def guard_and_spawn(raw: bytes) -> None:
     if (parsed := payload_transcript(raw, label="review-run")) is None:
         return
     transcript, cwd = parsed
+    if gate_enrollment and not enrolled(cwd):
+        breadcrumb("review-run skip: not watching")
+        return
+    if not claim_review_run(cwd, payload_event(raw)):
+        breadcrumb("review-run skip: throttled")
+        return
     detach(spawn_argv(transcript, cwd), spawned=f"spawned {transcript}")
 
 
-def guard_and_sweep(raw: bytes) -> None:
+def guard_and_sweep(raw: bytes, *, gate_enrollment: bool = False) -> None:
     """Parses the Stop hook payload and detaches a throttled repo-wide reviewer sweep.
 
     Mirrors :func:`guard_and_spawn`'s skips (each breadcrumbed) and detach, plus a
     file-based, database-free throttle: every invocation that passes the skips
     touches ``<key>.trigger`` under :func:`sweep_dir`, keyed by the payload cwd's
     sha256, and a sweep spawns only when the matching ``<key>.sweep`` stamp is
-    older than ``sweep_interval_minutes`` (or absent). The stamp is claimed —
-    touched before the detach — so a burst of Stop events yields at most one sweep
-    per interval. The child runs ``review spawn --sweep``: scan, triage, and judge,
-    but never PR sync or the working-copy-editing brain.
+    older than ``sweep_interval_minutes`` (or absent). The stamp is claimed
+    atomically (:func:`_claim_stamp`) just before the detach, so a burst of Stop
+    events yields at most one sweep per interval, and native ``run Stop`` dispatch
+    collapses with a stale plugin's raw ``review sweep`` entry. The child runs
+    ``review spawn --sweep``: scan, triage, and judge, but never PR sync or the
+    working-copy-editing brain.
+
+    ``gate_enrollment`` (set only by native dispatch) skips a non-watched repo,
+    checked *after* the read-only throttle peek (keeping the enrollment read off
+    the hot Stop path) but *before* the claim, so a gated skip never burns the
+    stamp the raw fallback needs — the raw CLI entry leaves it off and the child
+    gates that path instead.
 
     Args:
         raw: The hook's stdin bytes, holding the Stop JSON payload.
+        gate_enrollment: Skip the spawn for a non-watched repo (native dispatch only).
     """
     from captain_hook.review.settings import ReviewSettings
 
@@ -256,11 +360,35 @@ def guard_and_sweep(raw: bytes) -> None:
         if stamp.exists() and datetime.now(UTC) - datetime.fromtimestamp(stamp.stat().st_mtime, tz=UTC) < interval:
             breadcrumb("sweep skip: throttled")
             return
-        stamp.touch()
+    except OSError:
+        breadcrumb("sweep skip: stamp OSError")
+        return
+    if gate_enrollment and not enrolled(cwd):
+        breadcrumb("sweep skip: not watching")
+        return
+    try:
+        if not _claim_stamp(stamp, interval):
+            breadcrumb("sweep skip: throttled")
+            return
     except OSError:
         breadcrumb("sweep skip: stamp OSError")
         return
     detach(spawn_argv(transcript, cwd, sweep=True), spawned=f"sweep spawned {transcript}")
+
+
+def dispatch_review(event_name: str, payload: dict[str, object]) -> None:
+    """Native ``run <Event>`` entry: fire the enrollment-gated reviewer or throttled sweep.
+
+    The counterpart to the retired raw ``review run``/``review sweep`` hooks.json entries — called from
+    the async dispatch of a :data:`DISPATCH_EVENTS` event, on both the cold CLI and the daemon. Routes
+    to the same guard-and-detach the CLI entry points use, with the enrollment gate switched on so a
+    non-watched repo never spawns and a stale plugin's raw entry collapses through the shared throttle.
+    """
+    raw = json.dumps(payload).encode()
+    if event_name == "Stop":
+        guard_and_sweep(raw, gate_enrollment=True)
+    else:
+        guard_and_spawn(raw, gate_enrollment=True)
 
 
 def brain_prompt(transcript: Path) -> str:
@@ -335,9 +463,7 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
                 timeout=settings.brain_deadline_seconds,
             )
         except subprocess.TimeoutExpired:
-            return BrainOutcome(
-                exit_code=-9, seconds=(datetime.now(UTC) - started).total_seconds(), log_path=log_path
-            )
+            return BrainOutcome(exit_code=-9, seconds=(datetime.now(UTC) - started).total_seconds(), log_path=log_path)
     return BrainOutcome(
         exit_code=proc.returncode, seconds=(datetime.now(UTC) - started).total_seconds(), log_path=log_path
     )

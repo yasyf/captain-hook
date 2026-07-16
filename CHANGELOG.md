@@ -37,6 +37,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dropped the corrected input and executed the original call. Composition
   precedence is now block > rewrite > allow; among rewrites the first wins.
 
+## [9.22.0] - 2026-07-16
+
+### Added
+- **A pack self-registers its extra dependency marketplaces.** A pack-shipping
+  plugin's `capt-hook.toml` gains a `marketplaces` list of `owner/repo` slugs.
+  On the first session that finds one unregistered, `pack attach` runs `claude
+  plugin marketplace add` for it — alongside captain-hook's own — in the
+  background worker, and Claude Code resolves the matching `plugin.json`
+  dependency. A plugin with several cross-marketplace dependencies now keeps a
+  one-line install: the user adds only the plugin's own marketplace, and the
+  rest register themselves. Introduced in 9.21.0, reliable here.
+
+### Fixed
+- **Generalized marketplace bootstrap holds up across source types and configs.**
+  A marketplace registered by git URL or local path now counts as known, so
+  bootstrap no longer loops hourly re-adding an already-registered marketplace;
+  one failing marketplace no longer aborts the rest of the list; `pack attach`
+  never blocks SessionStart on the worker's lock; per-marketplace attempt
+  markers are keyed per config dir, so two `CLAUDE_CONFIG_DIR`s sharing a state
+  dir stop damping each other; and repo-slug validation is ASCII-anchored.
+
 ## [9.21.0] - 2026-07-16
 
 ### Fixed

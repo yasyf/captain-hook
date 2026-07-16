@@ -80,8 +80,8 @@ capt-hook coexist alongside it freely.
 manifest directory and version — under that session. In steady state it writes
 nothing to stdout, since SessionStart stdout is injected into the model
 context; the one exception is the first session on a machine that hasn't
-registered the captain-hook marketplace yet, where attach self-bootstraps it
-and prints a single notice line (see [Tell users how to
+registered a dependency marketplace yet, where attach self-bootstraps it and
+prints a single notice line (see [Tell users how to
 install](#tell-users-how-to-install)). A missing or invalid manifest exits
 non-zero with a stderr message, so a broken plugin fails loud at author time
 rather than silently loading nothing. The attach covers the whole session: a
@@ -118,6 +118,30 @@ dependency at install — no error, no captain-hook. Verified on Claude Code
 every hook stays dark.
 :::
 
+## Extra dependency marketplaces
+
+captain-hook registers itself. If your plugin depends on *other*
+cross-marketplace plugins too, list their `owner/repo` slugs in your
+`capt-hook.toml`, and attach registers those as well:
+
+```toml
+marketplaces = ["yasyf/cc-present"]
+```
+
+Each slug is a plain `owner/repo` (no `github:` prefix). On the first session
+that finds one unregistered, the same background worker that bootstraps
+captain-hook also runs `claude plugin marketplace add` for it; Claude Code then
+resolves the matching `plugin.json` dependency and installs the plugin. This is
+what keeps a plugin with two or three cross-marketplace dependencies at a
+**one-line** install — the user adds only your marketplace, and the rest
+register themselves.
+
+Declare each extra in all three places: `marketplaces` here so attach registers
+the marketplace, a `dependencies` entry in `plugin.json` so Claude Code installs
+the plugin, and its name in the `marketplace.json` allowlist so the
+cross-marketplace dependency is permitted. A slug that isn't a well-formed
+`owner/repo` fails `pack lint` (it can't load the manifest).
+
 ## Tell users how to install
 
 Two lines — your marketplace and your plugin:
@@ -127,26 +151,26 @@ claude plugin marketplace add your-org/your-repo
 claude plugin install your-plugin@your-marketplace
 ```
 
-captain-hook installs itself. Claude Code won't add an unknown marketplace from
-a `plugin.json` dependency alone, so the first session after your plugin is
-enabled runs its attach hook, which registers the `yasyf/captain-hook`
-marketplace and installs the captain-hook plugin in a background worker, then
-prints one line:
+Your dependency marketplaces install themselves. Claude Code won't add an
+unknown marketplace from a `plugin.json` dependency alone, so the first session
+after your plugin is enabled runs its attach hook, which registers every
+dependency marketplace the pack declares — captain-hook plus anything in
+`marketplaces` — in a background worker, then prints one line:
 
-> capt-hook: registering the captain-hook plugin marketplace and installing its
-> plugin in the background — this plugin's hooks depend on it. Takes effect via
-> Claude Code's background plugin auto-update, /reload-plugins, or the next
-> session.
+> capt-hook: registering the plugin marketplace(s) yasyf/captain-hook,
+> yasyf/cc-present in the background — this plugin's hooks depend on them. Takes
+> effect via Claude Code's background plugin auto-update, /reload-plugins, or the
+> next session.
 
-Once the marketplace is registered, the `plugin.json` dependency resolves and
-Claude Code enables captain-hook; the hooks go live that session on
-`/reload-plugins`, or the next session automatically. The bootstrap is
-idempotent — a registered marketplace short-circuits it with a single file
-read — and backs off for an hour if `claude` isn't on `PATH` or the
-registration fails. `claude plugin update` alone doesn't resolve a dependency a
-newer release of your plugin adds, but the attach hook self-bootstraps on the
-next session regardless, so there's no manual marketplace step on upgrade
-either.
+Once a marketplace is registered, the matching `plugin.json` dependency
+resolves and Claude Code installs and enables the plugin; the hooks go live that
+session on `/reload-plugins`, or the next session automatically. The bootstrap
+is idempotent — already-registered marketplaces short-circuit it with a single
+file read — and backs off for an hour per marketplace if `claude` isn't on
+`PATH` or a registration fails. `claude plugin update` alone doesn't resolve a
+dependency a newer release of your plugin adds, but the attach hook
+self-bootstraps on the next session regardless, so there's no manual marketplace
+step on upgrade either.
 
 ## Lint the contract
 

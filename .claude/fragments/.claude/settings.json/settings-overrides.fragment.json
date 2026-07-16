@@ -104,11 +104,6 @@
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run SessionEnd --async",
             "async": true
-          },
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook review run",
-            "async": true
           }
         ]
       }
@@ -123,11 +118,6 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run SessionStart --async",
-            "async": true
-          },
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/capt-hook review run",
             "async": true
           }
         ]

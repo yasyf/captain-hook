@@ -4,18 +4,8 @@ import importlib.resources
 import json
 from typing import Any
 
-from captain_hook.cli import DEFAULT_PREFIX, review_command, run_command
+from captain_hook.cli import DEFAULT_PREFIX, run_command
 from captain_hook.types import Event
-
-# Both SessionStart and SessionEnd additionally register the always-on session reviewer.
-REVIEW_EVENTS = {"SessionStart", "SessionEnd"}
-# Stop additionally registers the throttled repo-wide reviewer sweep.
-SWEEP_EVENTS = {"Stop"}
-
-
-def review_sweep_command() -> str:
-    """The shipped Stop-sweep command, derived from ``DEFAULT_PREFIX`` like the run/dispatch commands."""
-    return f"{DEFAULT_PREFIX} review sweep"
 
 
 def load_plugin_hooks() -> dict[str, Any]:
@@ -27,16 +17,12 @@ def load_plugin_hooks() -> dict[str, Any]:
 def expected_command_set(name: str) -> set[str]:
     """The commands the shipped hooks.json must register for ``name`` — derived, not hardcoded.
 
-    Every event registers both dispatch variants (sync + async); the review-run events add the
-    reviewer pass, and Stop adds the throttled sweep. Everything flows from ``DEFAULT_PREFIX``, so a
-    prefix change is a one-line edit.
+    Every event registers both dispatch variants (sync + async) and nothing else: the reviewer and
+    the throttled sweep now ride the async ``run <Event>`` dispatch natively, so no ``review run`` or
+    ``review sweep`` entry is wired. Everything flows from ``DEFAULT_PREFIX``, so a prefix change is a
+    one-line edit.
     """
-    commands = {run_command(name, async_=False), run_command(name, async_=True)}
-    if name in REVIEW_EVENTS:
-        commands |= {review_command()}
-    if name in SWEEP_EVENTS:
-        commands |= {review_sweep_command()}
-    return commands
+    return {run_command(name, async_=False), run_command(name, async_=True)}
 
 
 class TestPluginHooksJson:
@@ -60,30 +46,22 @@ class TestPluginHooksJson:
             entries = group["hooks"]
             assert all(entry["type"] == "command" for entry in entries)
             by_command = {entry["command"]: entry for entry in entries}
-            # The command SET is fully derived from DEFAULT_PREFIX (+ the review-run special cases).
+            # The command SET is fully derived from DEFAULT_PREFIX — sync + async, nothing else.
             assert set(by_command) == expected_command_set(name)
-            # The sync dispatcher runs foreground (restores additionalContext SessionStart hooks —
-            # the announcer, context injection — that 9.0.0's async-only registration silenced); the
-            # async dispatcher and the review-run sweep are background.
+            # Sync dispatcher foreground (restores additionalContext hooks); async is background.
             assert "async" not in by_command[run_command(name, async_=False)]
             assert by_command[run_command(name, async_=True)]["async"] is True
-            if name in REVIEW_EVENTS:
-                assert by_command[review_command()]["async"] is True
-            if name in SWEEP_EVENTS:
-                assert by_command[review_sweep_command()]["async"] is True
 
-    def test_stop_block_ships_the_async_sweep_entry(self) -> None:
-        [group] = load_plugin_hooks()["hooks"]["Stop"]
-        entries = {entry["command"]: entry for entry in group["hooks"]}
-        assert review_sweep_command() in entries
-        assert entries[review_sweep_command()] == {
-            "type": "command",
-            "command": "uvx --isolated capt-hook review sweep",
-            "async": True,
-        }
+    def test_ships_no_raw_review_or_sweep_entries(self) -> None:
+        # The reviewer and sweep are native `run <Event>` dispatch now; no raw entry survives.
+        commands = [
+            entry["command"]
+            for group in (grp for groups in load_plugin_hooks()["hooks"].values() for grp in groups)
+            for entry in group["hooks"]
+        ]
+        assert not any("review run" in c or "review sweep" in c for c in commands)
 
     def test_canonical_prefix_is_uvx_isolated_capt_hook(self) -> None:
         assert DEFAULT_PREFIX == "uvx --isolated capt-hook"
         assert run_command("PreToolUse", async_=False) == "uvx --isolated capt-hook run PreToolUse"
-        assert review_command() == "uvx --isolated capt-hook review run"
-        assert review_sweep_command() == "uvx --isolated capt-hook review sweep"
+        assert run_command("Stop", async_=True) == "uvx --isolated capt-hook run Stop --async"

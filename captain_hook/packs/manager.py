@@ -46,9 +46,9 @@ LATEST_REF = "latest"
 # commit at most once per this window; within it the cached commit is used with no network.
 REFRESH_TTL_SECONDS = 24 * 60 * 60
 PACK_NAME_RE = re.compile(r"[a-z][a-z0-9-]*")
-# A consumer-declared dependency marketplace as a bare `owner/repo` GitHub slug: exactly one slash
-# and no leading `-` on either side, so a slug can't pose as a `claude` CLI flag.
-MARKETPLACE_REPO_RE = re.compile(r"^[A-Za-z0-9][\w.-]*/[A-Za-z0-9][\w.-]*$")
+# A dependency marketplace `owner/repo` slug: one slash, no leading `-` either side (can't pose as a
+# `claude` flag), ASCII char classes only (not `\w`) so a homoglyph slug can't slip through.
+MARKETPLACE_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
 # Cached commit dirs kept per pack besides the just-resolved one: a recency buffer
 # so a rollback or a still-loading prior session's pin survives one fresh fetch.
 KEEP_COMMITS = 2
@@ -93,6 +93,8 @@ class PackManifest:
         if not path.is_file():
             raise PackError(f"pack manifest {PACK_MANIFEST} missing at {path.parent}")
         data = tomllib.loads(path.read_text())
+        if not isinstance(raw_marketplaces := data.get("marketplaces", ()), (list, tuple)):
+            raise PackError(f"marketplaces must be a list of owner/repo slugs, got {raw_marketplaces!r}")
         manifest = cls(
             name=data["name"],
             description=data["description"],
@@ -102,12 +104,15 @@ class PackManifest:
             # manifests predate.
             version=data.get("version", "0.0.0"),
             nlp=data.get("nlp", False),
-            marketplaces=tuple(data.get("marketplaces", ())),
+            marketplaces=tuple(raw_marketplaces),
         )
         if not PACK_NAME_RE.fullmatch(manifest.name):
             raise PackError(f"pack name {manifest.name!r} must match {PACK_NAME_RE.pattern}")
-        if bad := [r for r in manifest.marketplaces if not MARKETPLACE_REPO_RE.fullmatch(r)]:
-            raise PackError(f"marketplace repo {bad[0]!r} must match {MARKETPLACE_REPO_RE.pattern}")
+        for m in manifest.marketplaces:
+            if not isinstance(m, str):
+                raise PackError(f"marketplace repo {m!r} must be a string owner/repo slug")
+            if not MARKETPLACE_REPO_RE.fullmatch(m):
+                raise PackError(f"marketplace repo {m!r} must match {MARKETPLACE_REPO_RE.pattern}")
         return manifest
 
     def hooks_dir(self, root: Path) -> Path:

@@ -90,38 +90,79 @@ def worker_repos(call: SimpleNamespace) -> list[str]:
     return call.argv[call.argv.index("bootstrap") + 1 :]
 
 
-# --- known_repos predicate -----------------------------------------------------------
+# --- known-marketplace detection (fix #1: all-source, not github-only) ----------------
 
 
-def test_known_repos_collects_github_source_repos(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    use_config(monkeypatch, seed_config(tmp_path, CAPTAIN, PRESENT))
-    assert bootstrap.known_repos() == {CAPTAIN, PRESENT}
+def write_known(tmp_path: Path, payload: object) -> Path:
+    """A CLAUDE_CONFIG_DIR whose known_marketplaces.json is exactly ``payload``."""
+    config = tmp_path / "config"
+    (config / "plugins").mkdir(parents=True, exist_ok=True)
+    (config / "plugins" / "known_marketplaces.json").write_text(json.dumps(payload))
+    return config
+
+
+def is_known_in(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, payload: object, repo: str) -> bool:
+    use_config(monkeypatch, write_known(tmp_path, payload))
+    return bootstrap.is_known(repo, bootstrap.known_entries())
+
+
+def test_github_source_repo_is_known(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    payload = {CAPTAIN: {"source": {"source": "github", "repo": CAPTAIN}}}
+    assert is_known_in(monkeypatch, tmp_path, payload, CAPTAIN)
+
+
+def test_github_slug_match_is_case_insensitive(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    payload = {"c": {"source": {"source": "github", "repo": "Yasyf/Captain-Hook"}}}
+    assert is_known_in(monkeypatch, tmp_path, payload, CAPTAIN)  # GitHub slugs are case-insensitive
+
+
+def test_git_url_source_counts_as_known(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # captain-hook registered by git URL (not a github source) still counts as known; pre-fix the
+    # github-only check missed it and re-added the marketplace hourly.
+    payload = {"captain-hook": {"source": {"source": "git", "url": "https://github.com/yasyf/captain-hook.git"}}}
+    assert is_known_in(monkeypatch, tmp_path, payload, CAPTAIN)
+
+
+def test_local_source_matches_by_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # a local source has no repo/url; the entry name equalling the repo basename is the only signal,
+    # restoring the old name-membership coverage for un-repo-able sources.
+    payload = {"captain-hook": {"source": {"source": "local", "path": "/x"}}}
+    assert is_known_in(monkeypatch, tmp_path, payload, CAPTAIN)
+
+
+def test_github_entry_does_not_leak_across_owners(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # bob/tools registered by github must NOT make alice/tools known: a github source is matched
+    # precisely by repo and never falls back to the shared basename "tools".
+    payload = {"tools": {"source": {"source": "github", "repo": "bob/tools"}}}
+    assert not is_known_in(monkeypatch, tmp_path, payload, "alice/tools")
+
+
+def test_source_less_entry_is_unknown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # a legacy source-less entry degrades to unknown (safe: spawn), even when its name matches.
+    assert not is_known_in(monkeypatch, tmp_path, {"captain-hook": {}}, CAPTAIN)
 
 
 def test_missing_known_marketplaces_is_empty(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     use_config(monkeypatch, tmp_path / "no-such-config")
-    assert bootstrap.known_repos() == set()
+    assert bootstrap.known_entries() == []
 
 
 def test_malformed_known_marketplaces_is_empty(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config = seed_config(tmp_path)
     (config / "plugins" / "known_marketplaces.json").write_text("{ not json")
     use_config(monkeypatch, config)
-    assert bootstrap.known_repos() == set()
+    assert bootstrap.known_entries() == []
 
 
 def test_non_object_known_marketplaces_is_empty(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    config = seed_config(tmp_path)
-    (config / "plugins" / "known_marketplaces.json").write_text(json.dumps([CAPTAIN]))
-    use_config(monkeypatch, config)
-    assert bootstrap.known_repos() == set()
+    use_config(monkeypatch, write_known(tmp_path, [CAPTAIN]))
+    assert bootstrap.known_entries() == []
 
 
-def test_entry_without_github_source_is_ignored(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    config = seed_config(tmp_path)
-    (config / "plugins" / "known_marketplaces.json").write_text(json.dumps({"captain-hook": {}}))
-    use_config(monkeypatch, config)
-    assert bootstrap.known_repos() == set()  # a legacy source-less entry no longer counts as known
+def test_non_dict_entry_is_dropped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    use_config(monkeypatch, write_known(tmp_path, {"captain-hook": "not-a-dict"}))
+    assert bootstrap.known_entries() == []
+    assert not bootstrap.is_known(CAPTAIN, bootstrap.known_entries())
 
 
 # --- maybe_bootstrap hot path (case a) -----------------------------------------------
@@ -226,8 +267,8 @@ def test_maybe_bootstrap_rechecks_known_under_lock(monkeypatch: pytest.MonkeyPat
     use_config(monkeypatch, seed_config(tmp_path))
     claude_present(monkeypatch)
     forbid_popen(monkeypatch)
-    seen = iter([set(), {CAPTAIN}])
-    monkeypatch.setattr(bootstrap, "known_repos", lambda: next(seen))
+    seen = iter([[], [("captain-hook", {"source": {"source": "github", "repo": CAPTAIN}})]])
+    monkeypatch.setattr(bootstrap, "known_entries", lambda: next(seen))
     assert bootstrap.maybe_bootstrap([]) is None
 
 
@@ -237,6 +278,68 @@ def test_marker_with_non_numeric_attempted_at_is_not_fresh(tmp_path: Path) -> No
     marker = tmp_path / "marker.json"
     marker.write_text(json.dumps({"attempted_at": "not-a-number"}))
     assert bootstrap.attempt_fresh(marker, time.time()) is False
+
+
+def test_marker_with_future_attempted_at_is_not_fresh(tmp_path: Path) -> None:
+    # fix #8: a corrupt marker whose attempted_at is far in the future must re-arm the attempt, not
+    # suppress it forever (pre-fix `now - future < COOLDOWN` was always true).
+    marker = tmp_path / "marker.json"
+    now = time.time()
+    bootstrap.record_attempt(marker, now + bootstrap.RETRY_COOLDOWN_SECONDS * 10)
+    assert bootstrap.attempt_fresh(marker, now) is False
+
+
+def test_marker_path_is_keyed_on_config_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # fix #4: two config dirs sharing a state dir must produce distinct markers for the same repo, or
+    # one profile's marker damps another whose marketplace is genuinely unknown.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg-a"))
+    first = bootstrap.marker_path(CAPTAIN)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg-b"))
+    second = bootstrap.marker_path(CAPTAIN)
+    assert first != second
+
+
+def test_bootstrap_lock_held_returns_none_without_spawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # fix #3: the worker holds the lock across up to K*300s of network calls; a sibling miss-path must
+    # acquire non-blocking and return immediately rather than stall SessionStart to the hook timeout.
+    use_config(monkeypatch, seed_config(tmp_path))  # nothing known → miss path reaches the lock
+    claude_present(monkeypatch)
+    forbid_popen(monkeypatch)
+    bootstrap.bootstrap_dir().mkdir(parents=True, exist_ok=True)
+    held = bootstrap.FileLock(str(bootstrap.bootstrap_lock_path()))
+    held.acquire()
+    try:
+        assert bootstrap.maybe_bootstrap([]) is None  # lock already held → immediate None, no spawn
+    finally:
+        held.release()
+
+
+def test_hot_path_reads_known_marketplaces_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # fix #5: the all-known hot path reads known_marketplaces.json once, not once per required repo.
+    use_config(monkeypatch, seed_config(tmp_path, CAPTAIN, PRESENT, "yasyf/other"))
+    forbid_popen(monkeypatch)
+    reads = 0
+    real = bootstrap.known_entries
+
+    def counting() -> list[tuple[str, dict[str, object]]]:
+        nonlocal reads
+        reads += 1
+        return real()
+
+    monkeypatch.setattr(bootstrap, "known_entries", counting)
+    assert bootstrap.maybe_bootstrap([PRESENT, "yasyf/other"]) is None
+    assert reads == 1  # one read on the hot path, not three
+
+
+def test_duplicate_marketplaces_deduped_in_worker_argv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # fix #6: a manifest repeating an extra (or naming captain-hook explicitly) must not double the
+    # worker argv or the notice.
+    use_config(monkeypatch, seed_config(tmp_path))  # nothing known
+    claude_present(monkeypatch)
+    calls = capture_popen(monkeypatch)
+    notice = bootstrap.maybe_bootstrap([CAPTAIN, PRESENT, PRESENT])
+    assert worker_repos(calls[0]) == [CAPTAIN, PRESENT]  # order-preserving dedupe, one of each
+    assert notice is not None and notice.count(PRESENT) == 1
 
 
 # --- run_bootstrap worker (case e) ---------------------------------------------------
@@ -274,6 +377,34 @@ def test_run_bootstrap_skips_already_known_repo(monkeypatch: pytest.MonkeyPatch,
     assert calls == []  # a sibling session registered the marketplace under the lock → no claude calls
 
 
+def test_run_bootstrap_continues_past_a_failing_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # fix #2: a private/inaccessible first repo must not starve a valid later one — the raise is
+    # logged and stepped over.
+    use_config(monkeypatch, seed_config(tmp_path))  # nothing known
+    claude_present(monkeypatch)
+    attempted: list[str] = []
+
+    def fake(argv: list[str], **kwargs: object) -> object:
+        attempted.append(argv[-1])
+        if argv[-1] == "a/b":
+            raise subprocess.CalledProcessError(1, argv)
+        return MagicMock(returncode=0)
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", fake)
+    bootstrap.run_bootstrap(["a/b", "c/d"])
+    assert attempted == ["a/b", "c/d"]  # the failing first repo did not block the valid second
+
+
+def test_run_bootstrap_skips_unvalidated_argv_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # fix #9: pack bootstrap takes repos straight from argv, bypassing load-time validation; a
+    # flag-shaped slug is revalidated against MARKETPLACE_REPO_RE and never handed to marketplace-add.
+    use_config(monkeypatch, seed_config(tmp_path))
+    claude_present(monkeypatch)
+    calls = capture_run(monkeypatch)
+    bootstrap.run_bootstrap(["--evil/x"])
+    assert calls == []  # no subprocess call issued for the unvalidated slug
+
+
 # --- manifest field (case f) ---------------------------------------------------------
 
 
@@ -296,6 +427,40 @@ def test_manifest_defaults_marketplaces_empty(tmp_path: Path) -> None:
 def test_manifest_rejects_malformed_marketplace(tmp_path: Path, bad: str) -> None:
     with pytest.raises(manager.PackError, match="marketplace repo"):
         load_manifest(tmp_path, [bad])
+
+
+def load_manifest_raw(tmp_path: Path, marketplaces_toml: str) -> manager.PackManifest:
+    """Load a manifest whose ``marketplaces`` value is the given raw TOML (a non-list/non-string test)."""
+    root = tmp_path / "pk"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / manager.PACK_MANIFEST).write_text(
+        f'name = "pk"\nversion = "0.1.0"\ndescription = "d"\nhooks = "."\nmarketplaces = {marketplaces_toml}\n'
+    )
+    return manager.PackManifest.load(root / manager.PACK_MANIFEST)
+
+
+def test_manifest_non_string_marketplace_entry_raises_packerror(tmp_path: Path) -> None:
+    # fix #7: a non-string entry must raise PackError (naming the value), not a bare TypeError out of
+    # MARKETPLACE_REPO_RE.fullmatch — every PackError-shaped attach handler depends on it.
+    with pytest.raises(manager.PackError, match="must be a string"):
+        load_manifest_raw(tmp_path, "[5]")
+
+
+def test_manifest_non_list_marketplaces_raises_packerror(tmp_path: Path) -> None:
+    # fix #7: a scalar marketplaces value must raise PackError, not a TypeError out of tuple(5).
+    with pytest.raises(manager.PackError, match="must be a list"):
+        load_manifest_raw(tmp_path, '"oops"')
+
+
+@pytest.mark.parametrize("slug", ["yasyf/café", "a/ŕ"], ids=["accented", "combining"])
+def test_manifest_rejects_non_ascii_slug(tmp_path: Path, slug: str) -> None:
+    # fix #10: ASCII-only MARKETPLACE_REPO_RE — a homoglyph/combining-mark slug can't pose as ASCII.
+    with pytest.raises(manager.PackError, match="marketplace repo"):
+        load_manifest(tmp_path, [slug])
+
+
+def test_manifest_accepts_plain_ascii_slug(tmp_path: Path) -> None:
+    assert load_manifest(tmp_path, [PRESENT]).marketplaces == (PRESENT,)  # fix #10: ASCII slug still valid
 
 
 # --- attach wiring (case g) ----------------------------------------------------------
