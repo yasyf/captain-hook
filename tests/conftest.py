@@ -49,7 +49,9 @@ def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mo
     # self-bootstrap hits the hard no-op and never spawns a real `claude` worker.
     config_dir = tmp_path_factory.mktemp("claude-config")
     (config_dir / "plugins").mkdir()
-    (config_dir / "plugins" / "known_marketplaces.json").write_text(json.dumps({"captain-hook": {}}))
+    (config_dir / "plugins" / "known_marketplaces.json").write_text(
+        json.dumps({"captain-hook": {"source": {"source": "github", "repo": "yasyf/captain-hook"}}})
+    )
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
     reset()
     yield

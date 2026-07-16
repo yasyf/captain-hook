@@ -46,6 +46,9 @@ LATEST_REF = "latest"
 # commit at most once per this window; within it the cached commit is used with no network.
 REFRESH_TTL_SECONDS = 24 * 60 * 60
 PACK_NAME_RE = re.compile(r"[a-z][a-z0-9-]*")
+# A consumer-declared dependency marketplace as a bare `owner/repo` GitHub slug: exactly one slash
+# and no leading `-` on either side, so a slug can't pose as a `claude` CLI flag.
+MARKETPLACE_REPO_RE = re.compile(r"^[A-Za-z0-9][\w.-]*/[A-Za-z0-9][\w.-]*$")
 # Cached commit dirs kept per pack besides the just-resolved one: a recency buffer
 # so a rollback or a still-loading prior session's pin survives one fresh fetch.
 KEEP_COMMITS = 2
@@ -83,6 +86,7 @@ class PackManifest:
     hooks: str
     version: str = "0.0.0"
     nlp: bool = False
+    marketplaces: tuple[str, ...] = ()
 
     @classmethod
     def load(cls, path: Path) -> PackManifest:
@@ -94,12 +98,16 @@ class PackManifest:
             description=data["description"],
             hooks=data["hooks"],
             # .get is deliberate: `version` is optional since 9.7 (authors keep the key while
-            # pre-9.7 capt-hook is in the wild), and `nlp` is a schema addition manifests predate.
+            # pre-9.7 capt-hook is in the wild), and `nlp`/`marketplaces` are schema additions
+            # manifests predate.
             version=data.get("version", "0.0.0"),
             nlp=data.get("nlp", False),
+            marketplaces=tuple(data.get("marketplaces", ())),
         )
         if not PACK_NAME_RE.fullmatch(manifest.name):
             raise PackError(f"pack name {manifest.name!r} must match {PACK_NAME_RE.pattern}")
+        if bad := [r for r in manifest.marketplaces if not MARKETPLACE_REPO_RE.fullmatch(r)]:
+            raise PackError(f"marketplace repo {bad[0]!r} must match {MARKETPLACE_REPO_RE.pattern}")
         return manifest
 
     def hooks_dir(self, root: Path) -> Path:

@@ -20,9 +20,11 @@ POST_TOOL_HOOK = 'from captain_hook import Event, hook\n\nhook(Event.PostToolUse
 # --- fixture builders ----------------------------------------------------------------
 
 
-def write_manifest(root: Path, *, name: str = "ccx", hooks: str = ".") -> None:
+def write_manifest(root: Path, *, name: str = "ccx", hooks: str = ".", marketplaces: list[str] | None = None) -> None:
     root.mkdir(parents=True, exist_ok=True)
     body = f'name = "{name}"\nversion = "0.1.0"\ndescription = "d"\nhooks = "{hooks}"\n'
+    if marketplaces is not None:
+        body += f"marketplaces = {json.dumps(marketplaces)}\n"
     (root / manager.PACK_MANIFEST).write_text(body)
 
 
@@ -77,6 +79,21 @@ def test_conforming_pack_passes_every_check(tmp_path: Path) -> None:
     assert {"manifest", "hooks.json", "plugin.json", "marketplace.json", "load", "session-start", "async-decision"} == (
         set(results)
     )
+
+
+def test_valid_marketplaces_manifest_passes(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    write_manifest(root, marketplaces=["yasyf/cc-present"])
+    assert by_check(root)["manifest"].ok
+
+
+def test_malformed_marketplace_fails_manifest_check(tmp_path: Path) -> None:
+    root = conforming(tmp_path / "ccx")
+    write_manifest(root, marketplaces=["--evil/x"])  # a flag-injection slug fails PackManifest.load
+    results = by_check(root)
+    assert not results["manifest"].ok
+    assert "marketplace repo" in results["manifest"].reason
+    assert "manifest" in failed(results)  # the existing manifest check reports it — no dedicated lint check
 
 
 def test_conforming_pack_exits_zero(tmp_path: Path) -> None:

@@ -556,7 +556,7 @@ def pack_attach(directory: str) -> None:
     ships no ``run`` entries of its own. Writes nothing to stdout in steady state (SessionStart
     stdout is injected into the model context); a missing or invalid manifest exits 1 with a stderr
     message. The one deliberate stdout is a single notice line, emitted only when this call finds
-    the captain-hook plugin marketplace unregistered and detaches a worker to self-bootstrap it.
+    a required dependency marketplace unregistered and detaches a worker to self-bootstrap it.
     """
     raw = json.loads(sys.stdin.read())
     session_id = SessionId(raw["session_id"])
@@ -572,7 +572,7 @@ def pack_attach(directory: str) -> None:
     # The one deliberate stdout: a self-bootstrap notice, only on the attempt path. Fail-soft —
     # a bootstrap error must never break the attach.
     try:
-        if notice := bootstrap.maybe_bootstrap():
+        if notice := bootstrap.maybe_bootstrap(manifest.marketplaces):
             click.echo(notice)
     except Exception:
         logger.opt(exception=True).debug("marketplace bootstrap during pack attach failed")
@@ -585,9 +585,10 @@ def pack_attach(directory: str) -> None:
 
 
 @pack.command(name="bootstrap", hidden=True)
-def pack_bootstrap() -> None:
-    """Detached worker (spawned by ``pack attach``): register the captain-hook marketplace + plugin."""
-    bootstrap.run_bootstrap()
+@click.argument("repos", nargs=-1)
+def pack_bootstrap(repos: tuple[str, ...]) -> None:
+    """Detached worker (spawned by ``pack attach``): register the given dependency marketplaces."""
+    bootstrap.run_bootstrap(repos)
 
 
 @dataclass(frozen=True, slots=True)
