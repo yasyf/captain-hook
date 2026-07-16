@@ -28,8 +28,9 @@ so two sessions' complaints about one hook collapse to one candidate.
 
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -65,7 +66,7 @@ from cc_transcript.mining.filterspec import at_least, build_candidate_filter, ke
 from cc_transcript.mining.signals import mine
 from cc_transcript.mining.spec import MiningSpec
 from cc_transcript.models import UserEvent
-from cc_transcript.parser import TranscriptParser
+from cc_transcript.parser import TranscriptParser, parse_events_from_bytes
 
 from captain_hook.decisions import decisions_db_path, open_decision_log
 from captain_hook.review.fix import HOOK_COMPLAINT, iter_hook_complaint_signals
@@ -132,17 +133,35 @@ QUOTE_PASTE_RE = re.compile(r">[^\n]*(?:\n(?![^\s>])[^\n]*)*\Z")
 lead line quotes and every later column-0 line is itself a quote (wrapped
 continuation and blank lines allowed), so nothing outside the quote is the user's own."""
 
-STRICT_USER: FilterSpec = build_spec(
+STRICT_USER_ENVELOPE: FilterSpec = build_spec(
     keep_only("user"),
     drop_sidechain(),
     drop_meta_flag("is_meta"),
     drop_compacted(),
+)
+"""The kind-and-metadata half of :data:`STRICT_USER`.
+
+Judges a turn's envelope alone — user kind, and not a sidechain, meta, compacted, or
+transcript-only turn — reading no text. It screens the real carrier of an
+``exit_plan_rejection``, whose own text is empty, while the text half runs against the
+extracted reason (:func:`reason_kept`) rather than the empty envelope.
+"""
+
+STRICT_USER_TEXT: FilterSpec = build_spec(
     drop_empty(only_from=USERS),
     drop_junk("structural", "agent_injection", "stop_hook", "continuation", "command_echo"),
     Clause(TextMatchesAny(JUNK_CREATE_GROUPS), applies_to=USERS),
     drop_phrases(TRIVIAL_ACK_SET | RESUME_PHRASE_SET),
     drop_short(2),
 )
+"""The text half of :data:`STRICT_USER`.
+
+Drops structural noise, agent-injected banners, approve-and-advance directives,
+stop-hook output, command echoes, the :data:`JUNK_CREATE_GROUPS` junk-create leads,
+trivial acknowledgements, very short control messages, and empty turns.
+"""
+
+STRICT_USER: FilterSpec = build_spec(*STRICT_USER_ENVELOPE.clauses, *STRICT_USER_TEXT.clauses)
 """The event-level prefilter for user-authored corrections.
 
 Drops structural noise, agent-injected banners, approve-and-advance directives,
@@ -157,6 +176,14 @@ and the paste-only structural check before it can become a candidate."""
 
 COLLAPSE_DETECTORS = frozenset({"exit_plan_rejection", "plan_reentry", "denial", "interrupt", "review_comment"})
 """CREATE detectors whose surviving signal shadows an equal-text ``transcript_message`` at the same event."""
+
+REASON_ENTRY: dict[str, Any] = {
+    "type": "user",
+    "uuid": "exit-plan-reason",
+    "sessionId": "exit-plan-reason",
+    "timestamp": "1970-01-01T00:00:00+00:00",
+}
+"""The synthetic user-turn envelope the extracted ``exit_plan_rejection`` reason rides."""
 
 
 def is_paste_only(text: str) -> bool:
@@ -191,22 +218,31 @@ class ScanReport:
     inserted: int
 
 
-def gated_event(event: TranscriptEvent, sig: MiningSignal) -> TranscriptEvent:
-    """The event the prefilter judges: the user-authored text under gate, not its envelope.
+def reason_kept(text: str) -> bool:
+    """Whether an extracted ``exit_plan_rejection`` reason clears the text prefilter.
 
     ``exit_plan_rejection`` fires on the tool-result turn that carries the rejection, whose
     own ``text`` is empty — the miner lifts the user's reason into ``sig.text``. Gating the
-    empty envelope would drop every real rejection, so the prefilter runs against a copy of
-    the turn re-texted with the extracted reason; every other gated detector already fires
-    on the user turn whose text it screens.
+    empty envelope would drop every real rejection, so the prefilter runs against the
+    extracted reason instead; every other gated detector already fires on the user turn whose
+    text it screens. Transcript events are frozen native views — not constructible from Python
+    and not :func:`dataclasses.replace`-able — so the reason is re-materialized as the
+    :data:`REASON_ENTRY` user turn through the parser, never a re-texted copy of the carrier.
     """
-    return replace(event, text=sig.text) if sig.detector == "exit_plan_rejection" else event
+    (event,) = parse_events_from_bytes(
+        (json.dumps(REASON_ENTRY | {"message": {"role": "user", "content": text}}) + "\n").encode()
+    )
+    return keep(event, STRICT_USER_TEXT) and not is_paste_only(text)
+
+
+def gated_survives(event: TranscriptEvent, sig: MiningSignal) -> bool:
+    if sig.detector == "exit_plan_rejection":
+        return keep(event, STRICT_USER_ENVELOPE) and reason_kept(sig.text)
+    return keep(event, STRICT_USER) and not is_paste_only(event_text(event))
 
 
 def survives(events: Sequence[TranscriptEvent], sig: MiningSignal) -> bool:
-    if sig.detector in GATED_DETECTORS and (
-        not keep(event := gated_event(events[sig.event_index], sig), STRICT_USER) or is_paste_only(event_text(event))
-    ):
+    if sig.detector in GATED_DETECTORS and not gated_survives(events[sig.event_index], sig):
         return False
     return not (sig.detector == "transcript_message" and sig.trigger_index is None)
 

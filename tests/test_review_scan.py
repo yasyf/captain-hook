@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import sqlite3
+from dataclasses import is_dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +14,7 @@ from cc_transcript.ids import EventRef, EventUuid, SessionId
 from cc_transcript.mining.candidates import DedupKey, FeedbackCandidate, dedup_key
 from cc_transcript.mining.confidence import CandidateSignal
 from cc_transcript.mining.signals import MiningSignal
+from cc_transcript.models import UserEvent
 
 from captain_hook.review.scan import (
     REVIEWER_MARKER,
@@ -87,6 +89,29 @@ async def judge(store: ReviewStore, key: str) -> None:
     await store.record_verdict(
         DedupKey(key), Verdict(), role="judge", prompt_version=store.versions.create, model="m1", fidelity="full"
     )
+
+
+class ViewLikeEvent:
+    """A cc-transcript v14 native-view stand-in wrapping a parsed event.
+
+    ``match`` and ``isinstance`` resolve it to the wrapped event's class, so
+    :func:`~cc_transcript.filterspec.event_kind` still reads ``user``, but its own type is
+    not a dataclass — so :func:`dataclasses.replace` raises exactly as it does on the frozen
+    native views the deployed reviewer parses, reproducing the crash the dataclass repo build
+    masks.
+    """
+
+    __slots__ = ("_event",)
+
+    def __init__(self, event: Any) -> None:
+        object.__setattr__(self, "_event", event)
+
+    @property
+    def __class__(self) -> type:
+        return type(object.__getattribute__(self, "_event"))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_event"), name)
 
 
 class TestDedupDesign:
@@ -318,6 +343,38 @@ class TestJunkCreatePrefilter:
         real_events, real_sig = rejection("the plan skips the data migration step")
         assert real_events[real_sig.event_index].text == ""
         assert survives(real_events, real_sig) is True
+
+        junk_events, junk_sig = rejection("Plan approved, begin")
+        assert survives(junk_events, junk_sig) is False
+
+    def test_exit_plan_rejection_survives_a_native_view_carrier(self) -> None:
+        """Regression: on cc-transcript v14 the carrier is a frozen native view, not a
+        dataclass, so the old ``dataclasses.replace`` re-text raised ``TypeError`` and bricked
+        every scan of the repo. The reason is still gated on ``sig.text``, never the envelope.
+        """
+
+        def rejection(said: str) -> tuple[list[Any], MiningSignal]:
+            denial = (
+                "The user doesn't want to proceed with this tool use. The tool use was rejected.\n"
+                f"To tell you how to proceed, the user said:\n{said}\nNote: The user's next message will follow."
+            )
+            events = parse(
+                [
+                    assistant_tool_use("t1", "ExitPlanMode", {"plan": "## Plan"}, sessionId="s1"),
+                    tool_result("t1", denial, is_error=True, sessionId="s1"),
+                ]
+            )
+            [sig] = [s for s in detect(events) if s.detector == "exit_plan_rejection"]
+            index = sig.event_index
+            return [*events[:index], ViewLikeEvent(events[index]), *events[index + 1 :]], sig
+
+        events, sig = rejection("the plan skips the data migration step")
+        carrier = events[sig.event_index]
+        assert isinstance(carrier, UserEvent)
+        assert not is_dataclass(carrier)
+        with pytest.raises(TypeError, match="dataclass"):
+            replace(carrier, text=sig.text)
+        assert survives(events, sig) is True
 
         junk_events, junk_sig = rejection("Plan approved, begin")
         assert survives(junk_events, junk_sig) is False
