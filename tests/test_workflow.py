@@ -140,7 +140,7 @@ class TestWorkflowFunction:
         hook = _state.hooks[-1]
         assert hook.spec.tests is tests
 
-    def test_registered_hook_skips_planning_agents_by_default(self) -> None:
+    def test_registered_hook_enforces_on_planning_agents_by_default(self) -> None:
         from captain_hook.primitives.workflow import Step, workflow
 
         workflow(
@@ -148,7 +148,7 @@ class TestWorkflowFunction:
             marker="DONE",
             steps=[Step(check=lambda _: True, message="Step 1: Do it.")],
         )
-        assert _state.hooks[-1].spec.skip_planning_agents is True
+        assert _state.hooks[-1].spec.skip_planning_agents is False
 
     def test_passes_only_if_to_hook_spec(self) -> None:
         from captain_hook.primitives.workflow import Step, workflow

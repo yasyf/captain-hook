@@ -121,7 +121,14 @@ def workflow(
 
     guard.__name__ = f"{label.lower().replace('-', '_')}_workflow_guard"
     guard.__qualname__ = guard.__name__
-    on(Event.SubagentStop, only_if=only_if, skip_if=(Waiting(), *skip_if), max_fires=1, tests=tests)(guard)
+    on(
+        Event.SubagentStop,
+        only_if=only_if,
+        skip_if=(Waiting(), *skip_if),
+        max_fires=1,
+        tests=tests,
+        skip_planning_agents=False,
+    )(guard)
 
     if on_start is not None:
 
@@ -130,4 +137,4 @@ def workflow(
 
         setup.__name__ = f"{label.lower().replace('-', '_')}_workflow_setup"
         setup.__qualname__ = setup.__name__
-        on(Event.SubagentStart, only_if=only_if, skip_if=skip_if)(setup)
+        on(Event.SubagentStart, only_if=only_if, skip_if=skip_if, skip_planning_agents=False)(setup)

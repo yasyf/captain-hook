@@ -206,6 +206,7 @@ def llm_primitive[M: BaseModel](
         max_fires=(None if action is Action.block else default_max_fires) if max_fires == DEFAULT_FIRES else max_fires,
         tests=tests,
         async_=async_,
+        skip_planning_agents=action is not Action.block,
     )(handler)
 
 

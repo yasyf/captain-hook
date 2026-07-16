@@ -9,12 +9,13 @@ import pytest
 
 from captain_hook.app import (
     _state,
+    get_matching_hooks,
     reset,
 )
 from captain_hook.dispatch import dispatch
 from captain_hook.packs.general.review import EditedSource
 from captain_hook.packs.general.tombstones import TombstoneComments, is_marker, is_tombstone
-from captain_hook.testing.helpers import fixture_session
+from captain_hook.testing.helpers import fixture_session, mock_subagent_stop_event
 from captain_hook.types import Action, Event, RanCommand, Signal, Signals, Tool, Waiting
 from tests.helpers import (
     build_ctx,
@@ -102,6 +103,16 @@ def register_llm_nudge(
     kw.update(kwargs)
 
     llm_nudge(prompt, **kw)
+
+
+class TestLLMPlanningAgentSkip:
+    def test_llm_gate_default_fires_on_planning_agent_subagent_stop(self) -> None:
+        register_llm_gate("check", events=Event.SubagentStop)
+        assert len(get_matching_hooks(mock_subagent_stop_event(agent_type="general-purpose"))) == 1
+
+    def test_llm_nudge_default_skips_planning_agent_subagent_stop(self) -> None:
+        register_llm_nudge("check", events=Event.SubagentStop)
+        assert get_matching_hooks(mock_subagent_stop_event(agent_type="general-purpose")) == []
 
 
 class TestLlmGateBlocks:

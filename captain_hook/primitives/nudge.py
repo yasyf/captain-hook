@@ -50,7 +50,7 @@ def nudge(
     max_fires: int | None = DEFAULT_FIRES,
     tests: InlineTests | None = None,
     async_: bool = False,
-    skip_planning_agents: bool = True,
+    skip_planning_agents: bool | None = None,
 ) -> None:
     """Register a nudge that warns (or blocks) when conditions or signals match.
 
@@ -59,6 +59,10 @@ def nudge(
     SubagentStop`` for a blocking gate, ``PostToolUse`` for a signal-scored nudge, and
     ``PreToolUse`` otherwise; pass ``events=`` to override. Blocking Stop/SubagentStop gates
     additionally skip while :class:`~captain_hook.types.Waiting`, on top of any ``skip_if``.
+
+    ``skip_planning_agents`` defaults to ``None``, resolving to ``not block``: a blocking gate
+    enforces on every agent type, while a warning nudge skips planning/exploration subagents
+    (only ``SubagentStop``/``SubagentStart`` are affected). Pass ``True``/``False`` to override.
 
     Example:
         >>> nudge("Remember to run tests", only_if=[TouchedFile("**/*.py")])
@@ -112,7 +116,7 @@ def nudge(
         max_fires=(None if block else 3 if sig else 1) if max_fires == DEFAULT_FIRES else max_fires,
         tests=tests,
         async_=async_,
-        skip_planning_agents=skip_planning_agents,
+        skip_planning_agents=(not block) if skip_planning_agents is None else skip_planning_agents,
     )(handler)
 
 
@@ -127,12 +131,14 @@ def gate(
     max_fires: int | None = DEFAULT_FIRES,
     tests: InlineTests | None = None,
     async_: bool = False,
-    skip_planning_agents: bool = True,
+    skip_planning_agents: bool | None = None,
 ) -> None:
     """Register a blocking gate — ``nudge(message, block=True, ...)`` with an explicit signature.
 
     A gate keeps enforcing: it defaults to unlimited fires (once per turn) and skips while the
     session is :class:`~captain_hook.types.Waiting`, additively with any ``skip_if`` given.
+    Because it blocks, ``skip_planning_agents`` resolves (via ``None``) to ``False`` — enforcement
+    runs on every agent type, including delegated ``general-purpose`` subagents at ``SubagentStop``.
 
     Example:
         >>> gate("Run tests before committing", when=lambda evt: not has_tests(evt))

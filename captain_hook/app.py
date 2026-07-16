@@ -211,7 +211,7 @@ def hook(
     max_fires: int | None = None,
     tests: InlineTests | None = None,
     async_: bool = False,
-    skip_planning_agents: bool = True,
+    skip_planning_agents: bool | None = None,
 ) -> None:
     reject_async_decision(events, async_)
     validate_conditions(only_if, "only_if", events)
@@ -228,7 +228,7 @@ def hook(
                 max_fires=max_fires,
                 tests=tests,
                 async_=async_,
-                skip_planning_agents=skip_planning_agents,
+                skip_planning_agents=(not block) if skip_planning_agents is None else skip_planning_agents,
             ),
             name=hook_name("hook", None, message),
             source_file=caller_file(),

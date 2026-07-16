@@ -4,6 +4,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.21.0] - 2026-07-16
+
+### Fixed
+- **Blocking gates enforce on every agent type again.** Since the
+  `skip_planning_agents` default landed (`True`, 8.15.0), any gate firing on
+  `SubagentStop` was silently suppressed for `Explore`/`Plan`/`general-purpose`
+  subagents — and `general-purpose` is the default delegated-implementation
+  subagent, so a gate's only firing path for delegated work went dead. The flag
+  now defaults to `None`, resolving to `not block`: blocking gates (`gate`,
+  `llm_gate`, `hook(block=True)`, and the `workflow()` guard) enforce on every
+  agent type, while warning nudges keep skipping planners. Restores the steering
+  pack's deferral/downgrade `llm_gate` on delegated subagents. Regression tests
+  pin gate/nudge/hook/llm/workflow behavior at `SubagentStop`.
+
 ## [9.20.0] - 2026-07-16
 
 ### Fixed

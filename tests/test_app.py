@@ -286,6 +286,17 @@ class TestPlanningAgentSkip:
         register_hook(Event.SubagentStop, message="default")
         assert _state.hooks[0].spec.skip_planning_agents is True
 
+    def test_blocking_hook_default_fires_on_planning_agent(self) -> None:
+        from captain_hook.testing.helpers import mock_subagent_stop_event
+
+        register_hook(Event.SubagentStop, message="enforce", block=True)
+        evt = mock_subagent_stop_event(agent_type="general-purpose")
+        assert len(get_matching_hooks(evt)) == 1
+
+    def test_blocking_default_spec_has_skip_planning_agents_false(self) -> None:
+        register_hook(Event.SubagentStop, message="enforce", block=True)
+        assert _state.hooks[0].spec.skip_planning_agents is False
+
     def test_pre_tool_use_never_skipped(self) -> None:
         register_hook(Event.PreToolUse, message="tool check")
         evt = make_pre_tool_event(
