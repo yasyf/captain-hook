@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,11 +41,15 @@ from captain_hook.review.judge import (
 )
 from captain_hook.review.pipeline import (
     BRAIN_ALLOWED_TOOLS,
+    REVIEW_RUN_DEDUP,
     SPAWNED_ENV,
     BrainOutcome,
     SpawnReport,
+    _claim_stamp,
     brain_argv,
     brain_prompt,
+    dispatch_review,
+    enrolled,
     guard_and_spawn,
     guard_and_sweep,
     review_log_path,
@@ -51,6 +57,7 @@ from captain_hook.review.pipeline import (
     spawn_argv,
     spawn_brain,
     spawn_session,
+    sweep_dir,
     sweep_key,
 )
 from captain_hook.review.repo import RepoKey
@@ -58,6 +65,7 @@ from captain_hook.review.scan import REVIEWER_MARKER, ScanReport, scan_transcrip
 from captain_hook.review.settings import ReviewSettings, resolve_review_db_path
 from captain_hook.review.store import CandidateKind, CandidateStatus, PromptVersions, ReviewStore
 from captain_hook.review.sync import PrState
+from captain_hook.types import Event
 from tests.review_helpers import (
     CORRECTION,
     REPO,
@@ -461,6 +469,230 @@ class TestSweepGuard:
         guard_and_sweep(json.dumps({"transcript_path": "/nonexistent/t.jsonl", "cwd": "/x"}).encode())
         assert popen_calls == []
         assert "sweep skip: missing transcript file" in review_log_path().read_text()
+
+
+class TestReviewRunThrottle:
+    def payload(self, tmp_path: Path, event: str = "SessionEnd") -> bytes:
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        return json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path), "hook_event_name": event}).encode()
+
+    def run_stamp(self, cwd: str, event: str) -> Path:
+        return sweep_dir() / f"{hashlib.sha256(f'{cwd}\x00{event}'.encode()).hexdigest()[:12]}.run"
+
+    def test_second_run_within_window_throttled(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
+    ) -> None:
+        payload = self.payload(tmp_path)
+        guard_and_spawn(payload)
+        guard_and_spawn(payload)
+        assert len(popen_calls) == 1  # skew double-fire collapses to one reviewer child
+        assert "review-run skip: throttled" in review_log_path().read_text()
+
+    def test_run_spawns_again_after_window(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
+    ) -> None:
+        payload = self.payload(tmp_path)
+        guard_and_spawn(payload)
+        aged = (datetime.now(UTC) - REVIEW_RUN_DEDUP - timedelta(seconds=1)).timestamp()
+        os.utime(self.run_stamp(str(tmp_path), "SessionEnd"), (aged, aged))
+        guard_and_spawn(payload)
+        assert len(popen_calls) == 2
+
+    def test_distinct_events_do_not_share_a_stamp(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
+    ) -> None:
+        guard_and_spawn(self.payload(tmp_path, "SessionStart"))
+        guard_and_spawn(self.payload(tmp_path, "SessionEnd"))
+        assert len(popen_calls) == 2  # SessionStart and SessionEnd key independently
+
+
+class TestEnrollmentGate:
+    def payload(self, tmp_path: Path, *, sweep: bool = False) -> bytes:
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        event = "Stop" if sweep else "SessionEnd"
+        return json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path), "hook_event_name": event}).encode()
+
+    def test_spawn_gate_blocks_unwatched(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("captain_hook.review.pipeline.enrolled", lambda cwd: False)
+        guard_and_spawn(self.payload(tmp_path), gate_enrollment=True)
+        assert popen_calls == []
+        assert "review-run skip: not watching" in review_log_path().read_text()
+
+    def test_spawn_gate_allows_watched(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("captain_hook.review.pipeline.enrolled", lambda cwd: True)
+        guard_and_spawn(self.payload(tmp_path), gate_enrollment=True)
+        assert len(popen_calls) == 1
+
+    def test_spawn_cli_path_ignores_enrollment(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # gate_enrollment defaults off, so the raw `review run` CLI entry spawns regardless.
+        monkeypatch.setattr("captain_hook.review.pipeline.enrolled", lambda cwd: False)
+        guard_and_spawn(self.payload(tmp_path))
+        assert len(popen_calls) == 1
+
+    def test_sweep_gate_blocks_unwatched_after_throttle(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("captain_hook.review.pipeline.enrolled", lambda cwd: False)
+        guard_and_sweep(self.payload(tmp_path, sweep=True), gate_enrollment=True)
+        assert popen_calls == []
+        assert "sweep skip: not watching" in review_log_path().read_text()
+
+    def test_sweep_gate_allows_watched(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("captain_hook.review.pipeline.enrolled", lambda cwd: True)
+        guard_and_sweep(self.payload(tmp_path, sweep=True), gate_enrollment=True)
+        assert len(popen_calls) == 1
+
+
+class TestEnrolled:
+    def test_non_git_cwd_is_not_watched(self, tmp_path: Path) -> None:
+        assert enrolled(str(tmp_path)) is False
+
+    def test_fresh_git_repo_auto_watches(self, git_repo: Path) -> None:
+        assert enrolled(str(git_repo)) is True
+
+    def test_disabled_repo_is_not_watched(self, git_repo: Path) -> None:
+        from captain_hook.review.repo import resolve_repo_key
+
+        repo = resolve_repo_key(str(git_repo))
+        assert repo is not None
+
+        async def disable() -> None:
+            async with await ReviewStore.open(ReviewSettings().db_path) as store:
+                await store.enable(repo)
+                await store.disable(repo)
+
+        asyncio.run(disable())
+        assert enrolled(str(git_repo)) is False
+
+    def test_store_failure_fails_open(self, git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # uncertainty spawns the child (which re-applies the authoritative gate) rather than dropping the review
+        async def boom(*args: object, **kwargs: object) -> object:
+            raise RuntimeError("store down")
+
+        monkeypatch.setattr(ReviewStore, "open", boom)
+        assert enrolled(str(git_repo)) is True
+        assert "review gate uncertain" in review_log_path().read_text()
+
+
+class TestClaimStampAtomicity:
+    WINDOW = timedelta(seconds=60)
+
+    def test_concurrent_claims_resolve_to_one_winner(self, tmp_path: Path) -> None:
+        stamp = tmp_path / "x.run"
+        barrier = threading.Barrier(8)
+
+        def attempt(_: int) -> bool:
+            barrier.wait()
+            return _claim_stamp(stamp, self.WINDOW)
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            wins = list(pool.map(attempt, range(8)))
+        assert wins.count(True) == 1
+
+    def test_fresh_stamp_loses(self, tmp_path: Path) -> None:
+        stamp = tmp_path / "x.run"
+        assert _claim_stamp(stamp, self.WINDOW) is True
+        assert _claim_stamp(stamp, self.WINDOW) is False
+
+    def test_stale_stamp_reclaims(self, tmp_path: Path) -> None:
+        stamp = tmp_path / "x.run"
+        assert _claim_stamp(stamp, self.WINDOW) is True
+        aged = (datetime.now(UTC) - self.WINDOW - timedelta(seconds=1)).timestamp()
+        os.utime(stamp, (aged, aged))
+        assert _claim_stamp(stamp, self.WINDOW) is True
+
+
+class TestGateClaimOrdering:
+    def payload(self, tmp_path: Path, *, sweep: bool = False) -> bytes:
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        event = "Stop" if sweep else "SessionEnd"
+        return json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path), "hook_event_name": event}).encode()
+
+    def test_gated_spawn_skip_does_not_burn_the_stamp(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # native dispatch skips a non-watched repo; the raw CLI fallback within the window must still spawn
+        monkeypatch.setattr("captain_hook.review.pipeline.enrolled", lambda cwd: False)
+        payload = self.payload(tmp_path)
+        guard_and_spawn(payload, gate_enrollment=True)
+        assert popen_calls == []
+        guard_and_spawn(payload)
+        assert len(popen_calls) == 1
+
+    def test_gated_sweep_skip_does_not_burn_the_stamp(
+        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("captain_hook.review.pipeline.enrolled", lambda cwd: False)
+        payload = self.payload(tmp_path, sweep=True)
+        guard_and_sweep(payload, gate_enrollment=True)
+        assert popen_calls == []
+        guard_and_sweep(payload)
+        assert len(popen_calls) == 1
+
+
+class TestDispatchReview:
+    def test_routes_stop_to_sweep(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[tuple[str, bool]] = []
+        monkeypatch.setattr(
+            "captain_hook.review.pipeline.guard_and_sweep",
+            lambda raw, *, gate_enrollment=False: calls.append(("sweep", gate_enrollment)),
+        )
+        monkeypatch.setattr(
+            "captain_hook.review.pipeline.guard_and_spawn",
+            lambda raw, *, gate_enrollment=False: calls.append(("spawn", gate_enrollment)),
+        )
+        dispatch_review("Stop", {"transcript_path": "/t", "cwd": "/c"})
+        assert calls == [("sweep", True)]
+
+    @pytest.mark.parametrize("event", ["SessionStart", "SessionEnd"])
+    def test_routes_session_events_to_reviewer(self, monkeypatch: pytest.MonkeyPatch, event: str) -> None:
+        calls: list[tuple[str, bool]] = []
+        monkeypatch.setattr(
+            "captain_hook.review.pipeline.guard_and_spawn",
+            lambda raw, *, gate_enrollment=False: calls.append(("spawn", gate_enrollment)),
+        )
+        dispatch_review(event, {"transcript_path": "/t", "cwd": "/c"})
+        assert calls == [("spawn", True)]
+
+
+class TestNativeReviewWiring:
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, Any]]]:
+        from captain_hook import cli
+
+        calls: list[tuple[str, dict[str, Any]]] = []
+        monkeypatch.setattr(cli, "dispatch_review", lambda name, raw: calls.append((name, raw)))
+        monkeypatch.setattr("captain_hook.heartbeat.record_heartbeat", lambda event, raw: None)
+        return calls
+
+    def dispatch(self, event: Event, *, async_: bool, tmp_path: Path) -> None:
+        from captain_hook.cli import dispatch_event
+
+        raw = {"transcript_path": "/t", "cwd": str(tmp_path), "hook_event_name": event.name}
+        dispatch_event(tmp_path, event, raw, session_dir=None, async_=async_)
+
+    def test_async_review_event_fires(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        calls = self.install(monkeypatch)
+        self.dispatch(Event.SessionEnd, async_=True, tmp_path=tmp_path)
+        expected = {"transcript_path": "/t", "cwd": str(tmp_path), "hook_event_name": "SessionEnd"}
+        assert calls == [("SessionEnd", expected)]
+
+    def test_sync_review_event_does_not_fire(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        calls = self.install(monkeypatch)
+        self.dispatch(Event.SessionEnd, async_=False, tmp_path=tmp_path)
+        assert calls == []
+
+    def test_async_non_review_event_does_not_fire(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        calls = self.install(monkeypatch)
+        self.dispatch(Event.PreToolUse, async_=True, tmp_path=tmp_path)
+        assert calls == []
 
 
 class TestJudgePass:

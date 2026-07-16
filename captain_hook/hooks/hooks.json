@@ -36,8 +36,7 @@
       {
         "hooks": [
           { "type": "command", "command": "uvx --isolated capt-hook run Stop" },
-          { "type": "command", "command": "uvx --isolated capt-hook run Stop --async", "async": true },
-          { "type": "command", "command": "uvx --isolated capt-hook review sweep", "async": true }
+          { "type": "command", "command": "uvx --isolated capt-hook run Stop --async", "async": true }
         ]
       }
     ],
@@ -85,8 +84,7 @@
       {
         "hooks": [
           { "type": "command", "command": "uvx --isolated capt-hook run SessionStart" },
-          { "type": "command", "command": "uvx --isolated capt-hook run SessionStart --async", "async": true },
-          { "type": "command", "command": "uvx --isolated capt-hook review run", "async": true }
+          { "type": "command", "command": "uvx --isolated capt-hook run SessionStart --async", "async": true }
         ]
       }
     ],
@@ -94,8 +92,7 @@
       {
         "hooks": [
           { "type": "command", "command": "uvx --isolated capt-hook run SessionEnd" },
-          { "type": "command", "command": "uvx --isolated capt-hook run SessionEnd --async", "async": true },
-          { "type": "command", "command": "uvx --isolated capt-hook review run", "async": true }
+          { "type": "command", "command": "uvx --isolated capt-hook run SessionEnd --async", "async": true }
         ]
       }
     ]
