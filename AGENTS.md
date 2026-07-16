@@ -143,4 +143,4 @@ Target Python 3.13+. Run `uv sync --extra dev`, `uv run pytest`, and `uv build`.
 
 **Git.** Commits should be atomic and scoped. One logical change per commit.
 
-**Releases.** Tagging `v*` triggers `.github/workflows/release-pypi.yml`, which builds, publishes to PyPI via trusted publishing, and cuts a GitHub release. The version comes from the tag.
+**Releases.** Tagging `v*` triggers `.github/workflows/release-pypi.yml`, which builds, publishes to PyPI via trusted publishing, and cuts a GitHub release. The version comes from the tag. The workflow also syncs `captain_hook/.claude-plugin/plugin.json`'s `version` to the tag and commits it back to `main` — the bump consumer plugin caches refresh on — so skip the manual plugin.json bump and `git pull` after the run goes green.

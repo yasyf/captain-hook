@@ -71,14 +71,14 @@ uv run --project path/to/captain-hook capt-hook test
 
 ## Releasing
 
-Bump `version` in `pyproject.toml`, add the CHANGELOG entry, and commit them together with `uv.lock`, which pins the package's own version. Then tag the new version and push. `.github/workflows/release-pypi.yml` builds the sdist and wheel, publishes to PyPI via trusted publishing, and cuts a GitHub release:
+Add the CHANGELOG entry and commit it, together with `uv.lock` when a dependency change moved it. Then tag the new version and push. `.github/workflows/release-pypi.yml` builds the sdist and wheel, publishes to PyPI via trusted publishing, cuts a GitHub release, and commits `captain_hook/.claude-plugin/plugin.json` back to `main` with its `version` synced to the tag — that bump is what makes consumer plugin caches pick up the release, so no manual plugin.json edit is needed (a hand-bump before tagging is harmless; the sync no-ops):
 
 ```bash
 git tag v0.9.1
 git push origin v0.9.1
 ```
 
-The release workflow re-derives the wheel version from the tag via `uv version --frozen`, so tag the same version you bumped to.
+The release workflow re-derives the wheel version from the tag via `uv version --frozen` — the committed `pyproject.toml` version is an inert `0.0.0` sentinel, so there is nothing to bump there either. After the run goes green, `git pull`: the plugin.json sync commit landed on `main`, so your local branch is one commit behind.
 
 ## See also
 

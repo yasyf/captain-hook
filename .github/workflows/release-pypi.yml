@@ -56,3 +56,56 @@ jobs:
           --latest
           --repo "${{ github.repository }}"
           dist/*
+
+  # Consumer plugin caches refresh only when plugin.json's version increases, so every
+  # release must advance it on main. The sync runs as its own job: a failure turns the
+  # run red without blocking the already-published artifacts or the GitHub release.
+  sync-plugin-version:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Sync plugin.json version to the released tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          FILE=captain_hook/.claude-plugin/plugin.json
+
+          python3 - "$VERSION" "$FILE" <<'PY'
+          import json, pathlib, re, sys
+          target, path = sys.argv[1], pathlib.Path(sys.argv[2])
+          text = path.read_text()
+          if json.loads(text)["version"] == target:
+              sys.exit(0)
+          new = re.sub(r'(^\s*"version":\s*")[^"]*(")', rf'\g<1>{target}\g<2>', text, count=1, flags=re.M)
+          assert json.loads(new)["version"] == target, "version substitution did not take"
+          path.write_text(new)
+          PY
+
+          if git diff --quiet -- "$FILE"; then
+            echo "plugin.json already at $VERSION; nothing to sync"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$FILE"
+          git commit -m "chore(release): sync plugin.json to $VERSION [skip ci]"
+
+          for attempt in 1 2 3; do
+            git pull --rebase origin main
+            if git push origin HEAD:main; then
+              echo "pushed plugin.json sync on attempt $attempt"
+              exit 0
+            fi
+            echo "push rejected (attempt $attempt)"
+          done
+          echo "::error::failed to push plugin.json sync after 3 attempts"
+          exit 1
