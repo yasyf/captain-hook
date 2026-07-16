@@ -281,6 +281,45 @@ class WorkflowScriptSource:
         return f"{header}\n\n{source}"
 
 
+@dataclass(frozen=True, slots=True)
+class UserMessages:
+    """The session's user prompts as a ``<user_messages>`` request/authorization record.
+
+    Collects every real user prompt from the transcript — turn-opening text under the
+    native classifier, so meta and hook-injected user events are excluded — then renders
+    the first prompt followed by the most recent :attr:`last`, deduped where they
+    overlap. Each prompt is clipped to :attr:`per_message` characters with an explicit
+    ``…(+Nch)`` marker and prefixed ``[first]`` or ``[recent -N]`` (``-1`` most recent)
+    so a judge can order them. The first prompt leads so the original ask survives the
+    tail clip :func:`apply_contexts` applies. Yields ``None`` when the session carries no
+    user prompt; being ``required`` by default, that skips the LLM call rather than
+    judging a hook against an empty authorization record.
+
+    Attributes:
+        last: How many of the most recent prompts to render after the first.
+        per_message: Character budget each rendered prompt is clipped to.
+        tag: The XML block tag; defaults to ``user_messages``.
+        required: Whether empty content skips the LLM call; defaults to ``True``.
+
+    Example:
+        >>> llm_gate("does this edit stay within what the user asked?", contexts=[UserMessages()])
+    """
+
+    last: int = 4
+    per_message: int = 600
+    tag: str = "user_messages"
+    required: bool = True
+
+    def content(self, evt: BaseHookEvent) -> str | None:
+        if not (prompts := [turn.prompt for turn in evt.ctx.transcript.turns if turn.prompt]):
+            return None
+        recent = range(max(len(prompts) - self.last, 0), len(prompts))
+        return "\n\n".join(
+            [f"[first]\n{clip(prompts[0], self.per_message)}"]
+            + [f"[recent -{len(prompts) - i}]\n{clip(prompts[i], self.per_message)}" for i in recent if i]
+        )
+
+
 def with_defaults(contexts: Sequence[PromptContext]) -> tuple[PromptContext, ...]:
     defaults: tuple[PromptContext, ...] = (BeforeEdit(), AfterEdit())
     return (*contexts, *(d for d in defaults if not any(isinstance(c, type(d)) for c in contexts)))

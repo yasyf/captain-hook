@@ -1021,6 +1021,30 @@ class TestPromptObjectAccepted:
         assert _state.hooks[-1].name == str_name
 
 
+class TestLabelStableIdentity:
+    def test_same_label_survives_prompt_change(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import llm_nudge
+
+        llm_nudge("Observe, don't infer", message="WARNING", label="observe")
+        labelled_name = _state.hooks[-1].name
+
+        reset()
+        llm_nudge("A completely different prompt body", message="WARNING", label="observe")
+
+        assert _state.hooks[-1].name == labelled_name
+
+    def test_no_label_name_tracks_prompt_hash(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import llm_nudge
+
+        llm_nudge("Observe, don't infer", message="WARNING")
+        first_name = _state.hooks[-1].name
+
+        reset()
+        llm_nudge("A completely different prompt body", message="WARNING")
+
+        assert _state.hooks[-1].name != first_name
+
+
 class TestLlmContexts:
     def _edit(self, ctx: Any, *, new: str) -> Any:
         return make_pre_tool_event("Edit", {"file_path": "a.py", "old_string": "x = 1\n", "new_string": new}, ctx=ctx)

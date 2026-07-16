@@ -15,6 +15,7 @@ from captain_hook.contexts import (
     BeforeEdit,
     Excerpts,
     Introduced,
+    UserMessages,
     WorkflowScriptSource,
     apply_contexts,
     excerpt_around,
@@ -27,7 +28,7 @@ from captain_hook.packs.general.models import (
 )
 from captain_hook.prompt import Prompt
 from captain_hook.testing import FileFixture, Input
-from captain_hook.testing.helpers import input_to_event, mock_event, mock_tool_event
+from captain_hook.testing.helpers import fixture_session, input_to_event, mock_event, mock_tool_event
 from captain_hook.types import Event
 
 
@@ -232,6 +233,66 @@ class TestWithDefaults:
     def test_user_instance_replaces_default_of_same_type(self) -> None:
         mine = BeforeEdit(required=True)
         assert with_defaults([mine]) == (mine, AfterEdit())
+
+
+def prompts_event(*prompts: str) -> Any:
+    return mock_event(
+        "Stop",
+        transcript=fixture_session(
+            [
+                line
+                for p in prompts
+                for line in (
+                    {"type": "user", "message": {"content": p}},
+                    {"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}},
+                )
+            ]
+        ),
+    )
+
+
+class TestUserMessages:
+    def test_defaults(self) -> None:
+        ctx = UserMessages()
+        assert (ctx.tag, ctx.required, ctx.last, ctx.per_message) == ("user_messages", True, 4, 600)
+
+    def test_includes_first_prompt_beyond_window(self) -> None:
+        evt = prompts_event("AUTHORIZE: refactor the retry logic", *(f"followup {i}" for i in range(1, 10)))
+        assert len(evt.ctx.transcript) >= 20  # 10 prompts + 10 assistant replies
+        content = UserMessages(last=4).content(evt)
+        assert content is not None
+        assert content.startswith("[first]\nAUTHORIZE: refactor the retry logic")
+        assert "followup 1" not in content  # first is kept, but the 2nd-8th fall outside the recent window
+        assert "followup 5" not in content
+
+    def test_last_n_recent_prompts_in_order(self) -> None:
+        evt = prompts_event("first ask", *(f"msg {i}" for i in range(1, 8)))
+        content = UserMessages(last=3).content(evt)
+        assert content is not None
+        assert content == ("[first]\nfirst ask\n\n[recent -3]\nmsg 5\n\n[recent -2]\nmsg 6\n\n[recent -1]\nmsg 7")
+
+    def test_overlap_dedups_first_within_window(self) -> None:
+        evt = prompts_event("one", "two", "three")
+        content = UserMessages(last=4).content(evt)
+        assert content == "[first]\none\n\n[recent -2]\ntwo\n\n[recent -1]\nthree"
+
+    def test_single_prompt_renders_only_first(self) -> None:
+        assert UserMessages().content(prompts_event("just this")) == "[first]\njust this"
+
+    def test_per_message_clip_marker(self) -> None:
+        content = UserMessages(per_message=10).content(prompts_event("A" * 50))
+        assert content == "[first]\n" + "A" * 10 + "…(+40ch)"
+
+    def test_no_user_turns_yields_none(self) -> None:
+        empty = mock_event("Stop", transcript=fixture_session([]))
+        assert UserMessages().content(empty) is None
+        assistant = [{"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}}]
+        assistant_only = mock_event("Stop", transcript=fixture_session(assistant))
+        assert UserMessages().content(assistant_only) is None
+
+    def test_required_empty_skips_llm_call(self) -> None:
+        empty = mock_event("Stop", transcript=fixture_session([]))
+        assert apply_contexts(Prompt().system("s"), empty, [UserMessages()]) is None
 
 
 class TestProseDeliverableSentences:

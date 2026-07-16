@@ -139,7 +139,8 @@ def llm_primitive[M: BaseModel](
     prompt: str | Prompt,
     *,
     action: Action,
-    label: str,
+    prefix: str,
+    label: str | None = None,
     message: str | Callable[[M], str],
     response_model: type[M],
     verdict: Callable[[M], bool],
@@ -163,7 +164,7 @@ def llm_primitive[M: BaseModel](
 ) -> None:
     prompt = str(prompt)
     sig = resolve_signals(signals)
-    name = hook_name(label, None, prompt)
+    name = hook_name(prefix, label, prompt)
 
     def handler(evt: BaseHookEvent) -> HookResult | None:
         if not (
@@ -214,6 +215,7 @@ def llm_gate(
     message: str | Callable[[GateVerdict], str],
     response_model: type[GateVerdict] = GateVerdict,
     verdict: Callable[[GateVerdict], bool] = lambda r: r.block,
+    label: str | None = None,
     signals: Sequence[Signal | NlpSignal] | Signals | None = None,
     when: Callable[[BaseHookEvent], bool] | None = None,
     contexts: Sequence[PromptContext] = (),
@@ -249,6 +251,14 @@ def llm_gate(
     pre-image is only knowable at ``PreToolUse``, so contexts reading it over Writes
     (``Introduced``, ``BeforeEdit(required=True)``) need ``events=Event.PreToolUse``.
 
+    Args:
+        label: Stable identity for this gate. When set, the hook name derives from
+            ``label`` instead of the prompt hash, so review verdicts and fire state
+            survive prompt edits; two registrations sharing a ``label`` within a module
+            resolve to the same hook name. Uniqueness within the module is the author's
+            responsibility. Omit it to derive the name from the prompt (the name then
+            shifts whenever the prompt text changes).
+
     Example:
         >>> llm_gate("Is the agent making excuses?",
         ...          message=lambda r: f"Excuse detected: {r.reasoning}",
@@ -261,7 +271,8 @@ def llm_gate(
     llm_primitive(
         prompt,
         action=Action.block,
-        label="llm_gate",
+        prefix="llm_gate",
+        label=label,
         message=message,
         response_model=response_model,
         verdict=verdict,
@@ -290,6 +301,7 @@ def llm_nudge(
     message: str | Callable[[NudgeVerdict], str],
     response_model: type[NudgeVerdict] = NudgeVerdict,
     verdict: Callable[[NudgeVerdict], bool] = lambda r: r.fire,
+    label: str | None = None,
     signals: Sequence[Signal | NlpSignal] | Signals | None = None,
     when: Callable[[BaseHookEvent], bool] | None = None,
     contexts: Sequence[PromptContext] = (),
@@ -327,6 +339,14 @@ def llm_nudge(
     (``Introduced``, ``BeforeEdit(required=True)``) need ``events=Event.PreToolUse``
     — the nudge default of ``PostToolUse`` leaves them empty on Writes.
 
+    Args:
+        label: Stable identity for this nudge. When set, the hook name derives from
+            ``label`` instead of the prompt hash, so review verdicts and fire state
+            survive prompt edits; two registrations sharing a ``label`` within a module
+            resolve to the same hook name. Uniqueness within the module is the author's
+            responsibility. Omit it to derive the name from the prompt (the name then
+            shifts whenever the prompt text changes).
+
     Example:
         >>> llm_nudge("Is the agent speculating instead of observing?",
         ...           message="Observe, don't infer -- check traces first",
@@ -339,7 +359,8 @@ def llm_nudge(
     llm_primitive(
         prompt,
         action=Action.warn,
-        label="llm_nudge",
+        prefix="llm_nudge",
+        label=label,
         message=message,
         response_model=response_model,
         verdict=verdict,
