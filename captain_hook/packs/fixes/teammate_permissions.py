@@ -86,7 +86,30 @@ approve(
         Input(
             tool="mcp__runner__exec", tool_input={"command": ["rm", "-rf", "/"]}, agent_id="tm1", skip_permissions=True
         ): Ask(),
+        Input(
+            tool="mcp__runner__call", tool_input={"opts": {"cmd": "rm -rf /"}}, agent_id="tm1", skip_permissions=True
+        ): Ask(),  # command keys are found at any nesting depth
+        Input(
+            tool="Write",
+            tool_input={"file_path": "/Users/u/proj/rm.py", "content": "rm = ResourceManager()"},
+            agent_id="tm1",
+            skip_permissions=True,
+        ): Allow(explicit=True),  # content is not a command carrier — never scanned
+        Input(
+            tool="mcp__mail__compose",
+            tool_input={"subject": "git", "mode": "reset"},
+            agent_id="tm1",
+            skip_permissions=True,
+        ): Allow(explicit=True),  # values are scanned individually, never concatenated across keys
         Input(tool="mcp__ops__delete_everything", tool_input={}, agent_id="tm1", skip_permissions=True): Ask(),
+        Input(tool="mcp__ops__DELETE_EVERYTHING", tool_input={}, agent_id="tm1", skip_permissions=True): Ask(),
+        Input(
+            tool="mcp__ui__setDropDown", tool_input={"value": "x"}, agent_id="tm1", skip_permissions=True
+        ): Ask(),  # deliberate fail-closed: the camel compound shatters into "drop"
+        Input(tool="mcp__etl__transform", tool_input={}, agent_id="tm1", skip_permissions=True): Allow(explicit=True),
+        Input(tool="mcp__db__droptable", tool_input={"table": "t"}, agent_id="tm1", skip_permissions=True): Allow(
+            explicit=True
+        ),  # separator-free evasion: accepted tradeoff of token matching
         Input(tool="mcp__ops__delete-everything", tool_input={}, agent_id="tm1", skip_permissions=True): Ask(),
         Input(tool="mcp__srv__drop_table", tool_input={"table": "users"}, agent_id="tm1", skip_permissions=True): Ask(),
         Input(tool="mcp__db__truncate_table", tool_input={"table": "t"}, agent_id="tm1", skip_permissions=True): Ask(),
