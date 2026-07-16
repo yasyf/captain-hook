@@ -45,7 +45,13 @@ from captain_hook import Event, Tool, approve, deny, hook, on
 hook(Event.PreToolUse, only_if=[Tool("Edit")], message="pre-tool warning")
 
 approve("read-allow", only_if=[Tool("Read")])
+approve("write-allow", only_if=[Tool("Write")])
 deny("no bash here", only_if=[Tool("Bash")])
+
+
+@on(Event.PreToolUse, only_if=[Tool("Write")])
+def sanitize_write(evt):
+    return evt.rewrite({"file_path": "/tmp/sanitized.py", "content": "x"})
 
 
 @on(Event.PostToolUse)
@@ -129,6 +135,12 @@ CASES = [
         "pretooluse_deny",
         "PreToolUse",
         {"session_id": "p2d", "tool_name": "Bash", "tool_input": {"command": "ls"}},
+        nonempty=True,
+    ),
+    Case(
+        "pretooluse_rewrite_over_allow",
+        "PreToolUse",
+        {"session_id": "p2r", "tool_name": "Write", "tool_input": {"file_path": "/etc/x.py", "content": "y"}},
         nonempty=True,
     ),
     Case(

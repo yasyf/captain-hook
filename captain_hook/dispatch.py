@@ -160,12 +160,14 @@ def dispatch(
     the surviving warn messages (encounter order, ``"\n\n"``-separated). Once a block has fired,
     remaining *handler-backed* hooks are skipped (their verdict is doomed and they'd burn API cost
     and ``max_fires`` budget); message-only declarative hooks still run, so a declarative warn still
-    surfaces on the deny. Approvals are moot once blocked. Absent a block, the first approval wins,
-    else the accumulated warns surface.
+    surfaces on the deny. Absent a block, a ``rewrite`` beats a plain ``allow`` — a rewrite *is* an
+    allow carrying corrected input, so a broad approval must not drop another hook's rewrite; among
+    rewrites the first wins, else the first allow, else the accumulated warns surface.
     """
     matching = [h for h in get_matching_hooks(evt) if h.spec.async_ == async_]
 
     approval: HookResult | None = None
+    rewrite: HookResult | None = None
     blocked = False
     blocks: list[str] = []
     warns: list[str] = []
@@ -177,7 +179,9 @@ def dispatch(
                 blocked = True
                 if msg:
                     blocks.append(msg)
-            case HookResult(action=Action.allow | Action.rewrite) as r if approval is None:
+            case HookResult(action=Action.rewrite) as r if rewrite is None:
+                rewrite = r
+            case HookResult(action=Action.allow) as r if approval is None:
                 approval = r
             case HookResult(action=Action.warn, message=msg) if msg:
                 warns.append(msg)
@@ -191,8 +195,8 @@ def dispatch(
                 parts.append(ADVISORY_SEPARATOR)
             parts.extend(warns)
         return format_output(event, HookResult(action=Action.block, message="\n\n".join(parts) or None))
-    if approval is not None:
-        return format_output(event, approval)
+    if (winner := rewrite or approval) is not None:
+        return format_output(event, winner)
     if warns:
         return format_output(event, HookResult(action=Action.warn, message="\n\n".join(warns)))
 

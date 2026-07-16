@@ -393,6 +393,53 @@ class TestDispatch:
         assert hso["updatedInput"] == {"command": "ccx read x --full"}
         assert hso["additionalContext"] == "n"
 
+    def test_rewrite_beats_earlier_plain_allow(self) -> None:
+        # A broad approve firing first must not drop a later hook's corrected input:
+        # composition precedence is block > rewrite > allow.
+
+        @on(Event.PreToolUse)
+        def allower(evt: Any) -> HookResult:
+            return HookResult(action=Action.allow)
+
+        @on(Event.PreToolUse)
+        def rewriter(evt: Any) -> HookResult:
+            return HookResult(action=Action.rewrite, updated_input={"command": "echo sanitized"})
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        hso = result["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert hso["updatedInput"] == {"command": "echo sanitized"}
+
+    def test_block_beats_rewrite(self) -> None:
+
+        @on(Event.PreToolUse)
+        def rewriter(evt: Any) -> HookResult:
+            return HookResult(action=Action.rewrite, updated_input={"command": "echo sanitized"})
+
+        @on(Event.PreToolUse)
+        def blocker(evt: Any) -> HookResult:
+            return HookResult(action=Action.block, message="blocked")
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "updatedInput" not in result["hookSpecificOutput"]
+
+    def test_first_rewrite_wins_among_rewrites(self) -> None:
+
+        @on(Event.PreToolUse)
+        def first(evt: Any) -> HookResult:
+            return HookResult(action=Action.rewrite, updated_input={"command": "first"})
+
+        @on(Event.PreToolUse)
+        def second(evt: Any) -> HookResult:
+            return HookResult(action=Action.rewrite, updated_input={"command": "second"})
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        assert result["hookSpecificOutput"]["updatedInput"] == {"command": "first"}
+
     def test_approval_beats_later_warn(self) -> None:
         # Deny-wins scans every matching hook (no short-circuit on an approval), but an
         # approval still wins over a warn: the later warn runs yet never surfaces.
