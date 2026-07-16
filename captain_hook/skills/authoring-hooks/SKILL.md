@@ -1,6 +1,6 @@
 ---
 name: authoring-hooks
-description: Drafts one capt-hook (captain-hook) hook from a durable correction — the user's verbatim feedback plus its context — as a new .claude/hooks/<slug>.py, or (FIX mode) amends an existing misfiring hook with a mandatory regression test reproducing the misfire. Picks the right primitive (nudge for one-shot advice, gate for one-shot stop checks, hook(block=True) for always-on enforcement), writes the narrowest condition that captures the correction, a message that cites the correction, and inline tests (one Input firing on the offending shape, one Allow() on a benign neighbor), then proves the file with uvx --isolated capt-hook test before it goes live. Use when the user says "author a hook", "draft a hook from feedback", "encode this correction as a hook", "fix this misfiring hook", or when the bootstrapping-hooks or scanning-sessions skill delegates a hook to write or amend.
+description: Drafts one capt-hook (captain-hook) hook from a durable correction — the user's verbatim feedback plus its context — as a new .claude/hooks/<slug>.py, or (FIX mode) amends an existing misfiring hook with a mandatory regression test reproducing the misfire, or (EXTEND mode) broadens an existing hook to cover a newly mined rule without weakening its existing tests. Picks the right primitive (nudge for one-shot advice, gate for one-shot stop checks, hook(block=True) for always-on enforcement), writes the narrowest condition that captures the correction, a message that cites the correction, and inline tests (one Input firing on the offending shape, one Allow() on a benign neighbor), then proves the file with uvx --isolated capt-hook test before it goes live. Use when the user says "author a hook", "draft a hook from feedback", "encode this correction as a hook", "fix this misfiring hook", "broaden this hook", or when the bootstrapping-hooks or scanning-sessions skill delegates a hook to write or amend.
 argument-hint: "[the correction to encode — verbatim user text + context]"
 allowed-tools: Read, Grep, Glob, Write, Edit, Bash(uvx capt-hook:*, uvx --isolated capt-hook:*, capt-hook:*, ls:*, git log:*)
 ---
@@ -197,6 +197,28 @@ same complaint from being mined again next session.
 the hook's existing tests to make the amendment pass; if the genuine-case test now
 fails, the amendment is too broad — go back to Step 2. No settings wiring changes:
 the file is already dispatched.
+
+## EXTEND mode — broadening an existing hook
+
+When the mined rule belongs inside a hook that already exists — the scanning-sessions
+skill's overlap check matched an active hook whose stated intent the rule broadens —
+you **amend that hook file**, never write a new one. The invoking skill hands you the
+target hook file (in the watched repo's worktree, or a pack repo's clone for a pack
+hook), the mined rule, and the verbatim correction.
+
+- Extract per Step 1 of a create — rule sentence, offending shape, benign neighbor —
+  except the offending shape is the case the hook currently **misses**.
+- FIX mode's location and identity rules apply unchanged: a pack hook is amended in
+  the pack's own repo, and the message string stays **byte-identical** unless the
+  broadening is the message itself.
+- Tests, inside the hook's `tests = {...}`: one `Input` built from the newly covered
+  shape, asserting the hook now fires (`Block(...)`/`Warn(...)` matching its
+  severity); one `Allow()` on a benign neighbor of the new case. Every pre-existing
+  test stays untouched and green — an existing test failing means the broadening is
+  too broad; narrow the condition, never weaken a test.
+- `uvx --isolated capt-hook test` green is the finish line, existing tests included
+  (in a pack clone, the invoking skill verifies with the pack-kind command from its
+  PR workflow instead).
 
 ## References
 

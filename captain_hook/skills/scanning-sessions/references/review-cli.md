@@ -5,12 +5,16 @@ lives outside the repo (under capt-hook's state dir), so every command sees the 
 candidates regardless of cwd; commands taking `--repo` default to the repo containing
 the current directory.
 
-Cross-repo routing applies to fix candidates only — a create candidate's PR always
-opens against the repo its corrections were observed in. A misfire of a *pack* hook
-opens its fix PR against the pack's own repo (a builtin pack
+Scan-time routing — the `routing:` line and the pack attribution columns — applies to
+fix candidates only. A misfire of a *pack* hook opens its fix PR against the pack's
+own repo (a builtin pack
 routes to captain-hook; a declared external pack routes to `github.com/<owner>/<repo>`),
 so such a candidate's `repo_key` is the pack's repo while its `origin_repo_key` records
-the watched repo the misfire fired in. Every `--repo <key>` filter matches a candidate
+the watched repo the misfire fired in. A create candidate's row always carries
+`repo_key` = the watched repo, no `pack_name`, and no routing line — but its PR may
+still open against a pack's repo when the brain's overlap check (SKILL Step 3)
+upgrades it to an edit of a pack hook; that decision is made at implementation time
+and is never stored on the row. Every `--repo <key>` filter matches a candidate
 whose `repo_key` **or** `origin_repo_key` is `<key>`, so a rerouted pack fix stays visible
 from the repo it fired in, and its eligibility is gated on *that* origin repo's watching
 flag — the pack's repo need not itself be watched.
@@ -101,7 +105,8 @@ One line per candidate, newest first:
 — id, status, `candidate_kind/source_kind`, observation count, and the first 80 chars
 of the earliest observation's verbatim text. A cross-repo pack fix (one whose PR targets a
 different repo than the one it fired in) carries a ` -> <repo_key>` suffix after the count,
-naming the repo its PR opens against.
+naming the repo its PR opens against. The suffix reflects scan-time routing only — a
+create candidate the brain routes at a pack via the overlap check never shows one.
 
 ### `review show <ID>`
 
@@ -137,6 +142,9 @@ origin repo — so you clone the right repo before drafting the fix:
 routing: target_repo=github.com/yasyf/captain-hook pack=general origin_repo=github.com/yasyf/scratch
 ```
 
+A create candidate never prints a `routing:` line — its target is the brain's
+implementation-time decision (SKILL Step 3), not a stored column.
+
 ### `review threshold-check [ID] [--repo <key>]`
 
 The eligibility verdict — the source of truth. Without `ID`, reports every candidate in
@@ -155,8 +163,10 @@ counts live open PRs by the repo each PR targets, parsed from the PR's URL.
 
 The open-PR cap check. Prints one line — `<repo>: open_prs=<n>/<max> free=<free>` —
 counting live open PRs by the repo each PR targets (parsed from the PR's URL), and
-exits 1 when `free=0`. The brain runs it immediately before `gh pr create`; a full
-target repo is a logged skip, not an error.
+exits 1 when `free=0`. The brain runs it immediately before `gh pr create`, passing
+whatever repo the PR targets — for any pack-targeted PR, routed fix or
+create-as-edit alike, that is the pack repo's key. A full target repo is a logged
+skip, not an error.
 
 ### `review update <ID> <status> [--pr-url <url>]`
 
@@ -176,3 +186,39 @@ Folds each open PR's GitHub state back into its candidate via `gh pr view`: merg
 `accepted`, closed → `rejected`, open past the stale window → `stale` (freeing its slot
 under the open-PR cap). Prints the transition counts. The detached child runs this each
 pass; run it manually only when reconciling by hand.
+
+## Companion commands
+
+### `capt-hook hooks`
+
+Not under `review` — the top-level active-hook inventory, run as
+`uvx --isolated capt-hook hooks`. The overlap check's input (SKILL Step 3): one
+tab-separated line per hook discovered in the current repo, six columns, sorted by
+pack, source file, then hook name. Always exits 0; zero hooks prints nothing. No
+tests execute; discovery resolves packs exactly as `capt-hook test` does, so a
+builtin-only repo stays offline (a stale external pack may refresh).
+Framework-internal registrations — the PR announcer, NLP provisioning — are
+omitted; every row is a hook some repo or pack owns.
+
+```
+fixes	github.com/yasyf/captain-hook	permissions.py	fixes.scratch_writes:approve_scratch_dir_writes_under_skip_permissions	PreToolUse|PermissionRequest	
+general	github.com/yasyf/captain-hook	commands.py	general.commands:hook_8aef6be4	PreToolUse	BLOCKED: git stash is not allowed…
+local	-	nudge.py	hooks.style:gate_aa3a1d5b	Stop|SubagentStop	
+```
+
+- **pack** — the pack the hook ships in, or `local` for a repo-local
+  `.claude/hooks/` hook.
+- **home repo** — the repo key a pack edit targets: a builtin pack prints
+  captain-hook's key, a cached external pack its declared repo; `-` for repo-local
+  hooks and for packs the pack index cannot resolve offline.
+- **source file** — the hook file's basename.
+- **hook name** — the registered hook name, as the fire log and `review show`'s
+  `target_hook_name` spell it.
+- **events** — pipe-joined event names.
+- **message first line** — the hook's message when it is a plain string, else the
+  handler docstring's first line, else empty. An LLM hook prints its docstring or
+  nothing — its message lives in the judge closure, never on the spec — so screen
+  LLM hooks by name and source file instead.
+
+Its output is a parsed contract, same as the `review` commands — format changes stay
+additive.

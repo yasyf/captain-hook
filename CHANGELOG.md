@@ -4,6 +4,36 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.25.0] - 2026-07-16
+
+### Added
+- **`capt-hook hooks` — the active-hook inventory.** One tab-separated line per
+  discovered hook: pack (`local` for a repo-local hook), pack home repo key (`-`
+  when unresolvable offline), source file basename, hook name, pipe-joined event
+  names, and the first line of the message or handler docstring. No tests execute,
+  and discovery resolves packs exactly as `capt-hook test` does. The
+  session-reviewer brain's new overlap check reads it; the format is pinned in the
+  scanning-sessions references and changes stay additive.
+- **authoring-hooks EXTEND mode.** The third drafting shape: broaden an existing
+  hook to cover a newly mined rule — one new firing test plus a benign-neighbor
+  `Allow()`, every pre-existing test untouched, message string byte-identical.
+- **Release workflow: plugin.json auto-sync.** A `sync-plugin-version` job commits
+  `captain_hook/.claude-plugin/plugin.json` back to `main` with its `version` set
+  to the released tag — the bump consumer plugin caches refresh on, previously a
+  manual step that was forgotten for six straight releases (and again for 9.24.0).
+  Runs parallel to the GitHub-release job; a failed push turns the release run red
+  without blocking the published artifacts.
+
+### Changed
+- **Session reviewer: PR routing follows the change shape, not the candidate
+  kind.** Every create candidate now takes a mandatory overlap check against the
+  repo's active hooks before drafting: a rule an active hook already covers is a
+  logged skip; a universal broadening of a pack hook becomes an edit PR'd against
+  the pack's own repo (uncertain → repo-local, and repo-specific or
+  preference-shaped rules always stay repo-local); only genuinely new hooks land
+  as new `.claude/hooks/` files. Fix-kind scan-time routing — the `routing:` line
+  and `repo_key`/`origin_repo_key` semantics — is unchanged.
+
 ## [9.24.0] - 2026-07-16
 
 ### Changed
