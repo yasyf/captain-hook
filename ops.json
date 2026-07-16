@@ -1,1 +1,1 @@
-{"v":1,"lamport":2,"ops":[{"kind":"set_criterion_status","id":"389034f35581289e1a74bdd4a442dbaa","status":"met","note":"shipped as 9.24.0 (tag v9.24.0, release run 29495084945 green); includes 4-round codex-reviewed hardening"}]}
+{"v":1,"lamport":3,"ops":[{"kind":"set_criterion_status","id":"ad764c60c857e9ce09855eebdc1f20bb","status":"met","note":"live-verified 2026-07-16: teammate session on yasyf-home, zero prompts for cc-notes doc_search + semble search + Bash echo, ledger-attributed to permissions.py allows"}]}
