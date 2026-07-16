@@ -49,8 +49,6 @@ def payload_leaves(items: list[object], depth: int) -> Iterator[object]:
 
 
 def command_texts(value: object, depth: int = MAX_SCAN_DEPTH) -> Iterator[str]:
-    if depth <= 0:
-        return
     match value:
         case dict() as mapping:
             for key, val in mapping.items():
@@ -58,15 +56,16 @@ def command_texts(value: object, depth: int = MAX_SCAN_DEPTH) -> Iterator[str]:
                     case str() if COMMAND_KEY.fullmatch(key):
                         yield val
                     case list() if COMMAND_KEY.fullmatch(key):
-                        leaves = list(payload_leaves(val, depth - 1))
+                        leaves = list(payload_leaves(val, depth))
                         if leaves and all(isinstance(leaf, str) for leaf in leaves):
                             yield " ".join(leaves)
                         else:
                             yield from (leaf for leaf in leaves if isinstance(leaf, str))
+                        if depth > 0:
+                            yield from command_texts(val, depth - 1)
+                    case dict() | list() if depth > 0:
                         yield from command_texts(val, depth - 1)
-                    case dict() | list():
-                        yield from command_texts(val, depth - 1)
-        case list() as items:
+        case list() as items if depth > 0:
             for item in items:
                 if isinstance(item, dict | list):
                     yield from command_texts(item, depth - 1)
@@ -93,8 +92,9 @@ class NativeTool(CustomCondition):
 class PayloadText(CustomCondition):
     """Matches a regex against command-keyed strings anywhere in the tool input.
 
-    Recurses the input structure to ``MAX_SCAN_DEPTH`` (deeper is simply not descended)
-    but scans only values whose key spells a command carrier exactly, ASCII-only
+    Recurses the input structure through ``MAX_SCAN_DEPTH`` container descents — a value
+    behind exactly that many wrappers is still inspected; anything deeper is simply not
+    descended — and scans only values whose key spells a command carrier exactly, ASCII-only
     (``cmd``/``command``/``script``/``shell``/``exec``/``args``/``argv``/``run``/``code``).
     A carrier string is one candidate; a carrier list flattens to its leaves — all-string
     leaves join into one argv-style line, mixed leaves scan each string individually so
@@ -120,6 +120,9 @@ class DangerousMcpTool(CustomCondition):
     ``set_dropdown`` and ``transform`` don't. Token matching over substring matching is a
     deliberate tradeoff — separator-free names (``droptable``) pass, and camel compounds
     that shatter into a verb (``setDropDown`` → ``drop``) fail closed to a prompt.
+    Digit-inside-verb spellings (``de2lete``, ``rem0ve``) are likewise out of the threat
+    model: an adversarial server can name a destructive tool ``get_info`` — this guards
+    against accidental naming, not adversarial naming.
     """
 
     def check(self, evt: BaseHookEvent) -> bool:

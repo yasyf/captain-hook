@@ -24,6 +24,8 @@ DANGEROUS_COMMAND = (
 )
 
 DEEP_PAYLOAD: dict[str, object] = reduce(lambda acc, _: {"nest": acc}, range(1000), {"cmd": "rm -rf /"})
+NESTED_AT_CAP: dict[str, object] = reduce(lambda acc, _: {"nest": acc}, range(12), {"cmd": "rm -rf /"})
+NESTED_PAST_CAP: dict[str, object] = reduce(lambda acc, _: {"nest": acc}, range(13), {"cmd": "rm -rf /"})
 
 approve(
     "teammate bash under skip-permissions",
@@ -111,6 +113,15 @@ approve(
         Input(tool="mcp__x__deepcall", tool_input=DEEP_PAYLOAD, agent_id="tm1", skip_permissions=True): Allow(
             explicit=True
         ),  # beyond MAX_SCAN_DEPTH is not descended, and never errors
+        Input(
+            tool="mcp__x__deepcall", tool_input=NESTED_AT_CAP, agent_id="tm1", skip_permissions=True
+        ): Ask(),  # exactly MAX_SCAN_DEPTH wrappers: still inspected
+        Input(tool="mcp__x__deepcall", tool_input=NESTED_PAST_CAP, agent_id="tm1", skip_permissions=True): Allow(
+            explicit=True
+        ),  # one past the cap: not descended
+        Input(
+            tool="mcp__x__call", tool_input={"CMD": "rm -rf /"}, agent_id="tm1", skip_permissions=True
+        ): Ask(),  # carrier keys are case-insensitive within ASCII
         Input(
             tool="Write",
             tool_input={"file_path": "/Users/u/proj/rm.py", "content": "rm = ResourceManager()"},
