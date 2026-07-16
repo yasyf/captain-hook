@@ -27,6 +27,7 @@ class TestBlockRiskyRm:
         tmp_path: Path,
     ) -> None:
         monkeypatch.setattr("captain_hook.util.scratch.TEMP_ROOTS", ())
+        monkeypatch.setattr("captain_hook.util.scratch.SCRATCH_DIR_NAMES", frozenset())
         discover_pack("general", PACKS_DIR / "general")
 
         def decision(command: str, cwd: Path | None = None) -> dict[str, Any] | None:
@@ -77,6 +78,7 @@ class TestBlockRiskyRm:
         tmp_path: Path,
     ) -> None:
         monkeypatch.setattr("captain_hook.util.scratch.TEMP_ROOTS", ())
+        monkeypatch.setattr("captain_hook.util.scratch.SCRATCH_DIR_NAMES", frozenset())
         discover_pack("general", PACKS_DIR / "general")
 
         def decision(command: str, cwd: Path) -> dict[str, Any] | None:
@@ -109,6 +111,7 @@ class TestBlockRiskyRm:
         tmp_path: Path,
     ) -> None:
         monkeypatch.setattr("captain_hook.util.scratch.TEMP_ROOTS", ())
+        monkeypatch.setattr("captain_hook.util.scratch.SCRATCH_DIR_NAMES", frozenset())
         discover_pack("general", PACKS_DIR / "general")
 
         def decision(command: str) -> dict[str, Any] | None:
@@ -249,6 +252,7 @@ class TestBlockRiskyRm:
         tmp_path: Path,
     ) -> None:
         monkeypatch.setattr("captain_hook.util.scratch.TEMP_ROOTS", ())
+        monkeypatch.setattr("captain_hook.util.scratch.SCRATCH_DIR_NAMES", frozenset())
         discover_pack("general", PACKS_DIR / "general")
         repo = tmp_path / "repo3"
         (repo / ".git").mkdir(parents=True)
