@@ -19,7 +19,7 @@ captain-hook/
 
 Great Docs generates the API reference with Griffe from the root `captain_hook/__init__.py` re-exports (curated in `great-docs.yml`, not from `__all__`, which just mirrors the re-exports for `import *`) and the CLI reference from the Click app. Example hooks in `docs/examples/*.py` embed into their `.qmd` pages via `<!-- gd-embed: name.py -->` markers that `docs/scripts/embed_examples.py` expands at pre-render, and carry inline `tests = {...}` runnable with `capt-hook --hooks docs/examples test`.
 
-This repo's own hooks run `"$CLAUDE_PROJECT_DIR"/.venv/bin/capt-hook` directly, wired by the committed `.claude/settings.json` hooks block — no per-event `uv run` sync check, so after a dependency change run `uv sync --extra dev` or live hooks execute against the stale `.venv` (the async SessionEnd reviewer is the one exception — it runs `uvx capt-hook review run`). (Consumer repos get their hooks from the plugin's shipped `hooks.json` instead.)
+This repo's own hooks run `"$CLAUDE_PROJECT_DIR"/.venv/bin/capt-hook` directly, wired by the committed `.claude/settings.json` hooks block — no per-event `uv run` sync check, so after a dependency change run `uv sync --extra dev` or live hooks execute against the stale `.venv`. The review machinery needs no wiring of its own: async `run <Event>` dispatch natively fires the enrollment-gated reviewer on SessionStart/SessionEnd and the throttled sweep on Stop. (Consumer repos get their hooks from the plugin's shipped `hooks.json` instead.)
 
 ## Ask Before Assuming
 
