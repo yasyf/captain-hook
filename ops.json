@@ -1,1 +1,1 @@
-{"v":1,"lamport":3,"ops":[{"kind":"set_criterion_status","id":"ad764c60c857e9ce09855eebdc1f20bb","status":"met","note":"live-verified 2026-07-16: teammate session on yasyf-home, zero prompts for cc-notes doc_search + semble search + Bash echo, ledger-attributed to permissions.py allows"}]}
+{"v":1,"lamport":4,"ops":[{"kind":"set_status","status":"done"},{"kind":"link_commit","sha":"b7a24a987ac99006104cdfe0cc248cae6ac4c111"}]}
