@@ -113,13 +113,14 @@ class TestDeny:
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_dialog_only_deny_is_preempted_by_pre_tool_use_allow(self, tmp_path: Path) -> None:
-        # Footgun by design: a deny pinned to PermissionRequest never runs when an approve
-        # fires at PreToolUse — the allow pre-empts the dialog stage, so no dialog exists
-        # for the pinned deny to answer.
+    def test_dialog_only_deny_does_not_match_pre_tool_use_dispatch(self, tmp_path: Path) -> None:
+        # Event filtering behind deny()'s docstring footgun: a PermissionRequest-pinned deny
+        # doesn't match a PreToolUse dispatch, so the approve wins there (CC-side dialog skip
+        # is not unit-testable here).
         approve("teammate bash", only_if=[Tool("Bash")])
         deny("no subagent bash", events=Event.PermissionRequest, only_if=[Tool("Bash")])
 
+        assert _state.hooks[-1].spec.events is Event.PermissionRequest
         evt = make_pre_tool_event(ctx=make_ctx(tmp_path))
         assert dispatch(Event.PreToolUse, evt, session_dir=tmp_path) == PRE_TOOL_ALLOW_ENVELOPE
 

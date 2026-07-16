@@ -440,9 +440,9 @@ class TestDispatch:
         assert result is not None
         assert result["hookSpecificOutput"]["updatedInput"] == {"command": "first"}
 
-    def test_approval_beats_later_warn(self) -> None:
-        # Deny-wins scans every matching hook (no short-circuit on an approval), but an
-        # approval still wins over a warn: the later warn runs yet never surfaces.
+    def test_warn_rides_along_on_winning_rewrite(self) -> None:
+        # Deny-wins scans every matching hook (no short-circuit on an approval), and a
+        # warn is never lost to the winner: it surfaces as the rewrite's advisory context.
         counter = 0
 
         @on(Event.PreToolUse)
@@ -458,8 +458,38 @@ class TestDispatch:
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
         assert result["hookSpecificOutput"]["updatedInput"] == {"command": "ccx find **"}
-        assert "additionalContext" not in result["hookSpecificOutput"]
+        assert result["hookSpecificOutput"]["additionalContext"] == "counted"
         assert counter == 1
+
+    def test_warn_joins_rewrite_note_in_advisory_context(self) -> None:
+
+        @on(Event.PreToolUse)
+        def rewriter(evt: Any) -> HookResult:
+            return HookResult(action=Action.rewrite, updated_input={"command": "ccx find **"}, note="rewrote")
+
+        @on(Event.PreToolUse)
+        def warner(evt: Any) -> HookResult:
+            return HookResult(action=Action.warn, message="counted")
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        assert result["hookSpecificOutput"]["additionalContext"] == "rewrote\n\ncounted"
+
+    def test_warn_rides_along_on_winning_allow(self) -> None:
+
+        @on(Event.PreToolUse)
+        def allower(evt: Any) -> HookResult:
+            return HookResult(action=Action.allow)
+
+        @on(Event.PreToolUse)
+        def warner(evt: Any) -> HookResult:
+            return HookResult(action=Action.warn, message="advisory")
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        hso = result["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert hso["additionalContext"] == "advisory"
 
     def test_warn_then_block_denies_with_both(self) -> None:
         # A (declarative) warn that fired before a block rides along on the deny, behind an advisory

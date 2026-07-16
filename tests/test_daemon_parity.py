@@ -46,7 +46,10 @@ hook(Event.PreToolUse, only_if=[Tool("Edit")], message="pre-tool warning")
 
 approve("read-allow", only_if=[Tool("Read")])
 approve("write-allow", only_if=[Tool("Write")])
+approve("grep-allow", only_if=[Tool("Grep")])
 deny("no bash here", only_if=[Tool("Bash")])
+
+hook(Event.PreToolUse, only_if=[Tool("Grep")], message="grep advisory")
 
 
 @on(Event.PreToolUse, only_if=[Tool("Write")])
@@ -141,6 +144,12 @@ CASES = [
         "pretooluse_rewrite_over_allow",
         "PreToolUse",
         {"session_id": "p2r", "tool_name": "Write", "tool_input": {"file_path": "/etc/x.py", "content": "y"}},
+        nonempty=True,
+    ),
+    Case(
+        "pretooluse_allow_with_warning",
+        "PreToolUse",
+        {"session_id": "p2w", "tool_name": "Grep", "tool_input": {"pattern": "x"}},
         nonempty=True,
     ),
     Case(

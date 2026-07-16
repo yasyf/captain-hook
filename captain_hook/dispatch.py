@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -131,6 +132,7 @@ def format_output(event: Event, result: HookResult) -> dict[str, Any] | None:
                 "hookSpecificOutput": {
                     "hookEventName": event.name,
                     "permissionDecision": "allow",
+                    **({"additionalContext": result.message} if result.message else {}),
                 }
             }
         case Action.rewrite:
@@ -162,7 +164,9 @@ def dispatch(
     and ``max_fires`` budget); message-only declarative hooks still run, so a declarative warn still
     surfaces on the deny. Absent a block, a ``rewrite`` beats a plain ``allow`` — a rewrite *is* an
     allow carrying corrected input, so a broad approval must not drop another hook's rewrite; among
-    rewrites the first wins, else the first allow, else the accumulated warns surface.
+    rewrites the first wins, else the first allow, else the accumulated warns surface alone. Warns
+    are never lost to a winner either: they ride along on the winning allow/rewrite as its advisory
+    context (``additionalContext``), joined after the rewrite's own note.
     """
     matching = [h for h in get_matching_hooks(evt) if h.spec.async_ == async_]
 
@@ -196,6 +200,12 @@ def dispatch(
             parts.extend(warns)
         return format_output(event, HookResult(action=Action.block, message="\n\n".join(parts) or None))
     if (winner := rewrite or approval) is not None:
+        if warns:
+            winner = (
+                replace(winner, note="\n\n".join(([winner.note] if winner.note else []) + warns))
+                if winner.action is Action.rewrite
+                else replace(winner, message="\n\n".join(warns))
+            )
         return format_output(event, winner)
     if warns:
         return format_output(event, HookResult(action=Action.warn, message="\n\n".join(warns)))
