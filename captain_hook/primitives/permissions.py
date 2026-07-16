@@ -41,10 +41,11 @@ def approve(
     whose dialog is forwarded to the lead and rendered as plain UI (CC #73176) — and
     clearing prompts the dialog stage would otherwise force (e.g. the multi-``cd``
     "for clarity" ask); the ``PermissionRequest`` half still answers any dialog that slips
-    through. Because a ``PreToolUse`` allow bypasses Claude Code's permission evaluation
-    outright, a settings ``deny``/``ask`` rule that would out-rank a ``PermissionRequest``
-    answer is overridden too — pin ``events=Event.PermissionRequest`` to keep dialog-only
-    timing where explicit user rules always win.
+    through. A ``PreToolUse`` allow skips the permission prompt but does not bypass
+    permission rules: Claude Code evaluates explicit settings ``deny`` and ``ask`` rules
+    regardless of the hook's answer, so a matching deny rule still blocks and a matching
+    ask rule still prompts. Pin ``events=Event.PermissionRequest`` to answer only dialogs
+    that actually appear.
 
     Fires on every match — no fire cap. Warning: an unconditioned ``approve()`` answers
     **every** call, equivalent to a permanent ``--dangerously-skip-permissions`` (and on
@@ -87,8 +88,10 @@ def deny(
     on paths where the dialog runs no hooks (a teammate dialog forwarded to the lead,
     CC #73176). At ``PreToolUse`` a deny is a real guard, not just a dialog answer: it
     blocks calls that would otherwise proceed without prompting at all (auto-allowed by
-    settings, or a session in bypass mode). Pin ``events=Event.PermissionRequest`` to only
-    answer dialogs that actually appear.
+    settings, or a session in bypass mode). Avoid pinning a deny to
+    ``events=Event.PermissionRequest`` where approves may fire at ``PreToolUse`` — a
+    ``PreToolUse`` allow pre-empts the dialog stage (absent an explicit settings ask
+    rule), so a dialog-only deny never gets a dialog to answer.
 
     Fires on every match — no fire cap — returning a deny whose ``message`` is *reason*.
     Warning: an unconditioned ``deny()`` rejects **every** call, bricking every matching
