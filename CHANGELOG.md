@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [9.19.0] - 2026-07-16
 
+### Fixed
+- **General pack: the review-routing nudges honor the fable escalation lane.** The
+  two LLM-judged review-routing nudges fired on sanctioned escalations — a
+  conditional fable fallback reached only after a codex-wrapper stage returned
+  nothing (4 false fires in one live session), and a review run directly on fable
+  under a declared, documented codex-wrapper failure ("sol lane quota-dead;
+  escalation per models table") the stateless judge cannot verify. Both judge
+  prompts now carve those out, scoped tightly after adversarial review: the
+  declaration covers only the stages doing the declared work, a stage gated on
+  anything but a codex-wrapper miss is not a fallback, and the retired wrapper
+  shape stays fired even inside fallback branches. Regression tests pin both
+  carve-outs and all three counter-shapes, and the nudges now carry stable
+  `label=` identities so future prompt edits keep fire state and complaint
+  attribution. Validated live: 4 sanctioned-escalation shapes silent, 5 misroute
+  shapes still fire.
+
 ### Added
 - **General pack: risky `rm` blocking.** A new `deletions` hook denies Bash `rm` when a target resolves outside any git/jj repository (temp roots and scratch-named dirs exempt via `is_scratch_path`, extracted to `captain_hook/util/scratch.py` as the shared scratch seam), when a glob argument matches more than 10 files (bounded expansion — never a full listing), or when a literal target is itself a repo root. `sudo`/`env` wrappers unwrap; `git rm`, `xargs rm`, and command substitutions pass through. Adversarial-review hardening preserves leaf-symlink semantics, validates glob matches individually, tracks preceding `cd`, and budget-caps recursive `**` scans.
 

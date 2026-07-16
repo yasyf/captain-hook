@@ -18,7 +18,11 @@ which is not review.
 Set fire=true only when the prompt clearly reviews code or diffs for defects, audits
 or verifies security-sensitive code, or diagnoses a bug, and the spawn would run on
 fable. Design review, approach judgment, synthesis over findings, and prose review
-are fable's lanes: fire=false. When uncertain, fire=false — the agent may have
+are fable's lanes: fire=false. A spawn whose prompt states it is the escalation
+after a codex-wrapper attempt that missed or returned nothing is the sanctioned
+escalation: fire=false — unless that prompt runs the codex skill again; the
+retired wrapper shape stays fire=true even when declared as an escalation. When
+uncertain, fire=false — the agent may have
 chosen fable deliberately, and a false alarm teaches it to ignore this nudge. A
 model-pinned spawn whose prompt runs the codex skill itself is the retired wrapper
 shape: fire=true. Keep reasoning under 40 words.
@@ -63,5 +67,9 @@ Verification of security-sensitive code routes to gpt-5.6-sol.
 <example fire="false">
 Implement mitigations for the security-audit findings in auth.py.
 Security-sensitive implementation, not review — the implementation lanes apply.
+</example>
+<example fire="false">
+Escalation: the codex:codex-wrapper review of this diff returned no findings despite the reproduced double-close in pool.go — re-review src/pool.go and report findings as file:line JSON.
+A declared escalation after a documented codex-wrapper miss — fable is the escalation target.
 </example>
 </examples>

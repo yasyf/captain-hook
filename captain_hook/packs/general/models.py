@@ -422,6 +422,7 @@ llm_nudge(
 
 llm_nudge(
     REVIEW_ROUTING_SPAWN_NUDGE,
+    label="review_routing_spawn",
     message=lambda r: (
         f"This review/diagnosis delegation would run on fable. {r.reasoning} "
         "Code/diff review, security review/audit and verification of security-sensitive code, "
@@ -475,6 +476,15 @@ llm_nudge(
             prompt="Implement mitigations for the security audit findings in auth.py",
             llm={"fire": False},
         ): Allow(),
+        Input(
+            prompt="Escalation: the codex:codex-wrapper review of this diff returned no findings "
+            "despite the reproduced double-close — re-review src/pool.go and report findings as JSON",
+            llm={"fire": False},
+        ): Allow(),
+        Input(
+            prompt="Escalation: the codex-wrapper review returned nothing — run the codex skill "
+            "to re-review the diff for correctness"
+        ): Warn(pattern="codex-wrapper"),
     },
 )
 
@@ -527,6 +537,7 @@ llm_nudge(
 
 llm_nudge(
     REVIEW_ROUTING_WORKFLOW_NUDGE,
+    label="review_routing_workflow",
     message=lambda r: (
         f"This workflow runs review/diagnosis stages on fable. {r.reasoning} "
         "Route finder, refuter, security-audit, and diagnosis stages to gpt-5.6-sol: give each stage "
@@ -572,6 +583,37 @@ llm_nudge(
             pattern="gpt-5.6"
         ),
         Input(script="agent('Verify the CLI renders the last page correctly')"): Allow(),
+        Input(
+            script=(
+                "const solOrFable = async (prompt, key) => {\n"
+                "  const r = await agent(prompt, { agentType: 'codex:codex-wrapper', "
+                "label: `${key}:sol`, phase: 'Review', schema: REVIEW })\n"
+                "  if (r) return { ...r, lane_model: 'sol' }\n"
+                "  log(`${key}: sol empty — fable fallback`)\n"
+                "  const f = await agent(prompt, { label: `${key}:fable`, phase: 'Review', schema: REVIEW })\n"
+                "  return f ? { ...f, lane_model: 'fable' } : null\n"
+                "}"
+            ),
+            llm={"fire": False},
+        ): Allow(),
+        Input(
+            script="export const meta = { description: 'refuter pass; sol lane quota-dead this session — "
+            "fable escalation per models table' }\n"
+            "const f = await agent(`Adversarially refute: ${finding.title}`)",
+            llm={"fire": False},
+        ): Allow(),
+        Input(
+            script="const findings = await agent(`Review the diff in src/ for correctness; "
+            "findings as JSON`, {model: 'fable'})"
+        ): Warn(pattern="codex"),
+        Input(
+            script="if (hasRelevantDiff) { const findings = await agent(`Review the diff for "
+            "correctness; findings as JSON`, {model: 'fable'}) }"
+        ): Warn(pattern="codex"),
+        Input(
+            script="const r = await agent(q, { agentType: 'codex:codex-wrapper' })\n"
+            "if (!r) await agent('run the codex skill to review the diff', { model: 'sonnet' })"
+        ): Warn(pattern="codex-wrapper"),
     },
 )
 
