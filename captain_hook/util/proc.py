@@ -6,13 +6,10 @@ from functools import cache
 from pathlib import PurePath
 
 from captain_hook.util import reqenv
-from captain_hook.util.caching import LRUDict
 
 SKIP_PERMISSIONS_FLAGS = frozenset({"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"})
 JS_RUNTIMES = frozenset({"node", "bun", "deno"})
 MAX_WALK = 20
-
-_SKIP_CACHE: LRUDict[tuple[str, int], bool] = LRUDict(512)
 
 
 def process_start_time(pid: int) -> str | None:
@@ -92,12 +89,10 @@ def claude_skip_permissions() -> bool:
     """Whether the nearest ``claude`` ancestor launched with a skip-permissions flag.
 
     Cold, the walk starts at this process and is process-cached. Under a bound request (the
-    resident daemon) it walks from the client's parent and caches per ``(session id, client
-    ppid)``, so one worker never leaks one session's launch flags into another's — and a request
-    carrying a bypass-signalling ppid cannot poison a later same-session request's consent state.
+    resident daemon) it walks fresh from the client's parent on every call — a resumed
+    session may relaunch with different flags, and per-dispatch memoization already lives on
+    ``BaseHookEvent.skip_permissions``.
     """
     if (ov := reqenv.current()) is None:
         return _cold_skip_permissions()
-    if (cache_key := (ov.session_id, ov.client_ppid)) not in _SKIP_CACHE:
-        _SKIP_CACHE[cache_key] = walk_skip_permissions(ov.client_ppid)
-    return _SKIP_CACHE[cache_key]
+    return walk_skip_permissions(ov.client_ppid)

@@ -4,6 +4,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.20.0] - 2026-07-16
+
+### Fixed
+- **Resumed sessions no longer inherit stale skip-permissions consent.** The
+  resident daemon cached the launch-flag walk per session ID, but session IDs
+  survive `claude --resume` — a session relaunched without
+  `--dangerously-skip-permissions` kept serving the old consent verdict (and
+  vice versa). The cache is gone: bound requests walk the client's process
+  tree fresh on every call, while `BaseHookEvent.skip_permissions` still
+  memoizes within a dispatch, so per-event cost is unchanged.
+
 ## [9.19.0] - 2026-07-16
 
 ### Fixed

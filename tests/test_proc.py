@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from captain_hook.util import proc, reqenv
-from captain_hook.util.proc import _SKIP_CACHE, MAX_WALK, _cold_skip_permissions, claude_skip_permissions, parent_entry
+from captain_hook.util.proc import MAX_WALK, _cold_skip_permissions, claude_skip_permissions, parent_entry
 
 HOOK_CMD = "/private/tmp/claude-501/-Users-yasyf-Code-captain-hook/wt/.venv/bin/capt-hook run PermissionRequest"
 SHELL_CMD = "/bin/zsh -c eval capt-hook && pwd -P >| /tmp/claude-d9da-cwd"
@@ -16,10 +16,8 @@ SHELL_CMD = "/bin/zsh -c eval capt-hook && pwd -P >| /tmp/claude-d9da-cwd"
 @pytest.fixture(autouse=True)
 def clear_walk_cache():
     _cold_skip_permissions.cache_clear()
-    _SKIP_CACHE.cache_clear()
     yield
     _cold_skip_permissions.cache_clear()
-    _SKIP_CACHE.cache_clear()
 
 
 def bound(client_ppid: int, session_id: str) -> reqenv.RequestOverrides:
@@ -197,18 +195,23 @@ class TestRequestBoundSkipPermissions:
         with reqenv.use_request(bound(client_ppid=50, session_id="s1")):
             assert claude_skip_permissions() is True
 
-    def test_caches_per_session_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        walked: list[int] = []
-
-        def fake(pid: int) -> tuple[int, str] | None:
-            walked.append(pid)
-            return {50: (1, "claude --dangerously-skip-permissions")}.get(pid)
-
-        monkeypatch.setattr(proc, "parent_entry", fake)
+    def test_same_session_flag_gain_reflected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        table = {50: (1, "claude --permission-mode plan")}
+        monkeypatch.setattr(proc, "parent_entry", lambda pid: table.get(pid))
+        with reqenv.use_request(bound(client_ppid=50, session_id="s1")):
+            assert claude_skip_permissions() is False
+        table[50] = (1, "claude --dangerously-skip-permissions")
         with reqenv.use_request(bound(client_ppid=50, session_id="s1")):
             assert claude_skip_permissions() is True
+
+    def test_same_session_flag_drop_reflected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        table = {50: (1, "claude --dangerously-skip-permissions")}
+        monkeypatch.setattr(proc, "parent_entry", lambda pid: table.get(pid))
+        with reqenv.use_request(bound(client_ppid=50, session_id="s1")):
             assert claude_skip_permissions() is True
-        assert walked == [50]
+        table[50] = (1, "claude --permission-mode plan")
+        with reqenv.use_request(bound(client_ppid=50, session_id="s1")):
+            assert claude_skip_permissions() is False
 
     def test_distinct_sessions_resolve_independently(self, monkeypatch: pytest.MonkeyPatch) -> None:
         table = {50: (1, "claude --dangerously-skip-permissions"), 60: (1, "claude --permission-mode plan")}

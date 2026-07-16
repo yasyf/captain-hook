@@ -142,7 +142,6 @@ class TestDropCaches:
         from captain_hook.daemon import transcache
         from captain_hook.review.repo import resolve_repo_key
         from captain_hook.signals.nlp import parse
-        from captain_hook.util import proc
         from captain_hook.util.http import github_token
 
         seen: list[str] = []
@@ -150,13 +149,12 @@ class TestDropCaches:
         monkeypatch.setattr(transcache, "cache_clear", lambda: seen.append("transcache"))
         monkeypatch.setattr(github_token, "cache_clear", lambda: seen.append("github_token"))
         monkeypatch.setattr(resolve_repo_key, "cache_clear", lambda: seen.append("resolve_repo_key"))
-        monkeypatch.setattr(proc._SKIP_CACHE, "cache_clear", lambda: seen.append("skip"))
         monkeypatch.setattr(parse, "cache_clear", lambda: seen.append("nlp"))
 
         drop_caches(registry)
 
         assert registry.drop_all.called
-        assert set(seen) == {"transcache", "github_token", "resolve_repo_key", "skip", "nlp"}
+        assert set(seen) == {"transcache", "github_token", "resolve_repo_key", "nlp"}
 
 
 class TestStacksAndWatchdog:

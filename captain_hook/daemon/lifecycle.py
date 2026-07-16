@@ -80,13 +80,11 @@ def drop_caches(registry: Registry) -> None:
     from captain_hook.review.repo import resolve_repo_key
     from captain_hook.signals.nlp import parse
     from captain_hook.util.http import github_token
-    from captain_hook.util.proc import _SKIP_CACHE
 
     registry.drop_all()
     transcache.cache_clear()
     github_token.cache_clear()
     resolve_repo_key.cache_clear()
-    _SKIP_CACHE.cache_clear()
     parse.cache_clear()
 
 
