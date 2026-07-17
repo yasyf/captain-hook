@@ -4,6 +4,26 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.27.0] - 2026-07-17
+
+### Fixed
+- **Teammate auto-approval no longer trips on repo names like `cc-sudo`.** The
+  fixes pack's skip-permissions approvers decided whether to auto-approve a
+  subagent's Bash or MCP command with a regex denylist whose `\bsudo\b` branch
+  matched the substring `sudo` inside a hyphenated name, so a benign fleet
+  enumeration that merely listed or grepped over the `cc-sudo` repo raised a
+  permission dialog. Both approvers now parse the command with tree-sitter
+  (`cc_transcript.command`) and flag a destructive program only in command
+  position: a repo or path name is an argument token, never the executable, so
+  that false-positive class is gone. `sudo`, `rm`/`dd`/`shred`/`truncate`/`mkfs*`,
+  dangerous `git` subcommands (`reset`/`clean`/`restore`, a force or delete
+  `push`), a downloader piped into a shell, and a `sh -c` or `eval` payload
+  carrying any of these still fall through to a prompt. The scan stays crash-proof
+  against pathologically nested or non-UTF-8 payloads. It remains a courtesy speed
+  bump, not a security boundary: consent is granted at launch. The rm-guard's
+  `normalize_executable`/`unescape_shell` helpers move to `captain_hook/util/shell.py`
+  so both packs share one primitive.
+
 ## [9.26.0] - 2026-07-17
 
 ### Changed

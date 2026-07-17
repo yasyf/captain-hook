@@ -12,6 +12,7 @@ from typing import NamedTuple
 from captain_hook import Allow, BaseHookEvent, Block, Event, HookResult, Input, Tool, on
 from captain_hook.types import Command as CommandCondition
 from captain_hook.util.scratch import is_scratch_path
+from captain_hook.util.shell import normalize_executable, unescape_shell
 
 GLOB_LIMIT = 10
 
@@ -23,16 +24,6 @@ class GlobExpansion(NamedTuple):
 
 class GlobWalkBudgetExceeded(Exception):
     pass
-
-
-def unescape_shell(raw: str) -> str:
-    return re.sub(r"\\(.)", r"\1", raw)
-
-
-def normalize_executable(raw: str) -> str:
-    return Path(
-        unescape_shell(raw[1:-1] if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"" else raw)
-    ).name.casefold()
 
 
 def in_vcs_repo(directory: Path) -> bool:
