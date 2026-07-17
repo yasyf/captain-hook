@@ -11,7 +11,7 @@ from captain_hook.types import Command, Event, HookResponse, InlineTests, Tool
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from cc_transcript.command import Occurrence
+    from cc_transcript.command import CommandLine, Occurrence
 
     from captain_hook.events import PreToolUseEvent
     from captain_hook.types import TCondition
@@ -160,7 +160,7 @@ def rewrite_command_occurrences(
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     block_if: Callable[[PreToolUseEvent, Occurrence], bool] | None = None,
-    block: str | None = None,
+    block: str | Callable[[PreToolUseEvent, CommandLine], str] | None = None,
     note: str | Callable[[PreToolUseEvent, Sequence[tuple[Occurrence, str]]], str | None] | None = None,
     tests: InlineTests | None = None,
 ) -> None:
@@ -186,6 +186,10 @@ def rewrite_command_occurrences(
     branches below treat ``block`` by truthiness). When nothing rewrites and no ``block_if``
     trips, the line falls through to ``block`` (if given) or passes through untouched.
 
+    ``block`` may be a callable ``(evt, cl) -> str`` computing the message from the event and its
+    parsed [`CommandLine`][cc_transcript.command.CommandLine] — resolved lazily only when the line
+    actually blocks, at either the ``block_if`` hit or the zero-rewrite fallthrough.
+
     Example:
         >>> rewrite_command_occurrences(
         ...     to=lambda evt, occ: "ccx read foo.py --full" if occ.command.matches("^cat foo.py$") else None,
@@ -199,12 +203,12 @@ def rewrite_command_occurrences(
         if not (cl := evt.command_line):
             return None
         if block_if is not None and any(block_if(evt, occ) for occ in cl.occurrences):
-            return evt.block(block) if block else None
+            return evt.block(block(evt, cl) if callable(block) else block) if block else None
         pairs = [
             (occ, new) for occ in cl.occurrences if occ.command.span is not None and (new := to(evt, occ)) is not None
         ]
         if pairs and (spliced := cl.splice({occ.index: new for occ, new in pairs})) != cl.raw:
             return evt.rewrite_command(spliced, note=note(evt, pairs) if callable(note) else note)
-        return evt.block(block) if block else None
+        return evt.block(block(evt, cl) if callable(block) else block) if block else None
 
     on(Event.PreToolUse, only_if=[Tool("Bash"), *only_if], skip_if=skip_if, tests=tests)(handler)

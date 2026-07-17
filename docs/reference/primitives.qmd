@@ -52,7 +52,7 @@ rewrite_command(pattern: str | None = None, replace: str | None = None, *,
 rewrite_command_occurrences(*, to: Callable[[PreToolUseEvent, Occurrence], str | None],
                             only_if: Sequence[TCondition] = (), skip_if: Sequence[TCondition] = (),
                             block_if: Callable[[PreToolUseEvent, Occurrence], bool] | None = None,
-                            block: str | None = None,
+                            block: str | Callable[[PreToolUseEvent, CommandLine], str] | None = None,
                             note: str | Callable[[PreToolUseEvent, Sequence[tuple[Occurrence, str]]], str | None] | None = None,
                             tests: InlineTests | None = None) -> None
 ```
@@ -77,7 +77,10 @@ back by byte span, so untouched segments, operators, redirects, and comments sur
 `echo a >out b`); those pass through untouched. `block_if` — which requires `block` — checks every
 occurrence, span-less ones included, before any rewrite, and one trip blocks the whole line:
 blocking is line-grained, so an unrewritable segment never runs because a sibling was rewritable.
-With no rewrites the line blocks when `block` is set, and passes otherwise. A callable `note`
+With no rewrites the line blocks when `block` is set, and passes otherwise. `block` may itself
+be a callable `(evt, cl) -> str` over the full `CommandLine`, resolved only at the moment the
+line actually blocks — never at registration, never on a successful rewrite — so the message can
+quote the live command. A callable `note`
 receives every `(Occurrence, replacement)` pair and composes the one note for the line.
 
 ## Nudges & gates

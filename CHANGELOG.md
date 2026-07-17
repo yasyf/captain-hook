@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.28.0] - 2026-07-18
+
+### Added
+- **`rewrite_command_occurrences` accepts a callable `block=`.** `block` may now be
+  a callable `(evt, cl) -> str` over the event and its parsed `CommandLine`, resolved
+  lazily only when the line actually blocks — at the `block_if` hit or the
+  zero-rewrite fallthrough, never at registration and never on a successful rewrite —
+  so packs can quote the live command in the block message. String `block=` semantics
+  are unchanged, including the non-empty registration guard alongside `block_if`.
+
 ## [9.27.0] - 2026-07-17
 
 ### Fixed

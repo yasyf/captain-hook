@@ -108,3 +108,52 @@ class TestRewriteCommandOccurrences:
     def test_registration_raises_with_empty_block(self) -> None:
         with pytest.raises(TypeError, match="block="):
             rewrite_command_occurrences(to=lambda evt, occ: None, block_if=lambda evt, occ: True, block="")
+
+    def test_callable_block_on_block_if_hit(self, tmp_path: Path) -> None:
+        rewrite_command_occurrences(
+            to=lambda evt, occ: None,
+            block_if=lambda evt, occ: occ.command.matches(r"^git push"),
+            block=lambda evt, cl: f"Blocked line: {cl.raw}",
+        )
+        result = next(r for r in fire(tmp_path, "git push origin") if r)
+        assert result.action == Action.block
+        assert result.message == "Blocked line: git push origin"
+
+    def test_callable_block_on_zero_rewrite_fallthrough(self, tmp_path: Path) -> None:
+        rewrite_command_occurrences(to=lambda evt, occ: None, block=lambda evt, cl: f"Nothing matched in: {cl.raw}")
+        result = next(r for r in fire(tmp_path, "ls -la") if r)
+        assert result.action == Action.block
+        assert result.message == "Nothing matched in: ls -la"
+
+    def test_callable_block_receives_evt_and_command_line(self, tmp_path: Path) -> None:
+        seen = []
+
+        def block(evt, cl):
+            seen.append((evt, cl))
+            return "blocked"
+
+        rewrite_command_occurrences(to=lambda evt, occ: None, block=block)
+        result = next(r for r in fire(tmp_path, "ls -la") if r)
+        assert result.message == "blocked"
+        assert len(seen) == 1
+        [(evt, cl)] = seen
+        assert cl.raw == "ls -la"
+        assert evt.command == "ls -la"
+
+    def test_str_block_unchanged(self, tmp_path: Path) -> None:
+        rewrite_command_occurrences(to=lambda evt, occ: None, block="static block")
+        result = next(r for r in fire(tmp_path, "ls -la") if r)
+        assert result.action == Action.block
+        assert result.message == "static block"
+
+    def test_callable_block_not_resolved_when_rewriting(self, tmp_path: Path) -> None:
+        def block(evt, cl):
+            raise AssertionError("block must not resolve on a successful rewrite")
+
+        rewrite_command_occurrences(
+            to=lambda evt, occ: "ccx read foo.py --full" if occ.command.matches(r"^cat foo\.py$") else None,
+            block=block,
+        )
+        result = next(r for r in fire(tmp_path, "cat foo.py") if r)
+        assert result.action == Action.rewrite
+        assert result.updated_input == {"command": "ccx read foo.py --full"}
