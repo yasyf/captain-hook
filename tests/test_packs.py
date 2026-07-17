@@ -1028,56 +1028,6 @@ def test_disabled_pack_is_not_resolved(tmp_path: Path) -> None:
     assert [r.entry.name for r in resolved] == ["general"]  # the disabled entry resolves to nothing
 
 
-# --- attached packs (session-scoped plugin attach) -----------------------------------
-
-
-def test_read_attached_absent_is_empty(tmp_path: Path) -> None:
-    assert manager.read_attached(tmp_path) == []
-
-
-def test_attached_round_trip_is_keyed_by_name(tmp_path: Path) -> None:
-    first = manager.AttachedPack(name="ccx", dir=str(tmp_path / "v1"), version="1.0.0")
-    manager.upsert_attached(tmp_path, first)
-    assert manager.read_attached(tmp_path) == [first]
-
-    rebump = manager.AttachedPack(name="ccx", dir=str(tmp_path / "v1"), version="2.0.0")
-    manager.upsert_attached(tmp_path, rebump)  # same dir replaces in place (e.g. a version bump)
-    assert manager.read_attached(tmp_path) == [rebump]
-
-    # the same name from a *different* dir wins as the newer attach (a plugin update moves its dir),
-    # replacing the prior entry rather than erroring
-    moved = manager.AttachedPack(name="ccx", dir=str(tmp_path / "v2"), version="2.0.0")
-    manager.upsert_attached(tmp_path, moved)
-    assert manager.read_attached(tmp_path) == [moved]
-
-    other = manager.AttachedPack(name="other", dir=str(tmp_path / "o"), version="0.1.0")
-    manager.upsert_attached(tmp_path, other)  # a new name appends
-    assert manager.read_attached(tmp_path) == [moved, other]
-
-
-def test_resolve_attached_loads_manifest(tmp_path: Path) -> None:
-    pack = write_pack(tmp_path / "p", "ccx", hooks=".")
-    session = tmp_path / "session"
-    session.mkdir()
-    manager.upsert_attached(session, manager.AttachedPack(name="ccx", dir=str(pack), version="0.1.0"))
-
-    (resolved,) = manager.resolve_attached(session)
-    assert resolved.entry == manager.AttachedPack(name="ccx", dir=str(pack), version="0.1.0")
-    assert resolved.manifest.name == "ccx"
-    assert resolved.path == pack  # hooks="." resolves the manifest dir itself
-
-
-def test_resolve_attached_prunes_stale_dir(tmp_path: Path) -> None:
-    pack = write_pack(tmp_path / "p", "ccx", hooks=".")
-    session = tmp_path / "session"
-    session.mkdir()
-    manager.upsert_attached(session, manager.AttachedPack(name="ccx", dir=str(pack), version="0.1.0"))
-    assert len(manager.resolve_attached(session)) == 1
-
-    pack.rename(tmp_path / "moved")  # a plugin update moved the versioned cache path
-    assert manager.resolve_attached(session) == []  # the dangling entry is silently dropped
-
-
 # --- CLI (pack add / list / remove / update) -----------------------------------------
 
 

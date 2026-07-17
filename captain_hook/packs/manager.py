@@ -38,13 +38,11 @@ from pathlib import Path
 from typing import Any
 
 from filelock import FileLock
-from loguru import logger
 
 from captain_hook.util import http
 from captain_hook.util.paths import resolve_cache_dir
 
 PACK_MANIFEST = "capt-hook.toml"
-ATTACHED_FILE = "attached_packs.json"
 SHA_MARKER = ".sha"
 LATEST_REF = "latest"
 # Moving refs (@latest / a branch / a bare default-branch source) re-resolve to a fresh
@@ -152,25 +150,11 @@ class DisabledPack:
     """A ``[packs.<name>]`` config entry that declines a pack by name.
 
     ``[packs.<name>] disabled = true`` suppresses a pack the repo would otherwise
-    inherit — a builtin, an external source, or a plugin-attached pack — regardless of
+    inherit — a builtin, an external source, or a discovered plugin pack — regardless of
     any other keys on the entry. Disabling always wins.
     """
 
     name: str
-
-
-@dataclass(frozen=True, slots=True)
-class AttachedPack:
-    """A pack a Claude plugin registered for the current session via ``pack attach``.
-
-    Stored per session in ``attached_packs.json`` keyed by ``name``; ``dir`` is the
-    absolute pack root (holding the ``capt-hook.toml`` manifest) and ``version`` is the
-    manifest version recorded at attach time.
-    """
-
-    name: str
-    dir: str
-    version: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,7 +172,7 @@ class PluginPack:
 
 
 type PackEntry = BuiltinPack | ExternalPack | DisabledPack
-type ResolvedEntry = BuiltinPack | ExternalPack | AttachedPack | PluginPack
+type ResolvedEntry = BuiltinPack | ExternalPack | PluginPack
 
 
 @dataclass(frozen=True, slots=True)
@@ -638,70 +622,3 @@ def resolve_enabled_packs(root: Path, entries: Sequence[PackEntry]) -> tuple[lis
     if not (fast or missing):
         atomic_write(fastpath_path(root), toml_hash(root))
     return resolved, missing
-
-
-def attached_path(session_dir: Path) -> Path:
-    return session_dir / ATTACHED_FILE
-
-
-def read_attached(session_dir: Path) -> list[AttachedPack]:
-    path = attached_path(session_dir)
-    if not path.exists():
-        return []
-    return [AttachedPack(name=e["name"], dir=e["dir"], version=e["version"]) for e in json.loads(path.read_text())]
-
-
-def upsert_attached(session_dir: Path, pack: AttachedPack) -> None:
-    """Record ``pack`` in the session's attach file, replacing any entry of the same name.
-
-    The read-modify-write runs under a file lock so two ``pack attach`` processes (parallel
-    SessionStart hooks) serialize rather than clobber each other's entries. When the same pack
-    name re-attaches from a *different* dir the newer attach wins: a plugin update bumps its
-    versioned cache dir, so the pack legitimately re-attaches from a new path on the next
-    SessionStart/resume — erroring there would drop the pack for every post-update session. The
-    rebind is logged at WARNING naming both dirs, since a genuine two-plugins-one-name clash
-    surfaces the same way and wants a look.
-    """
-    path = attached_path(session_dir)
-    lock = path.with_name(path.name + ".lock")
-    with FileLock(str(lock)):
-        existing = read_attached(session_dir)
-        if (prior := next((p for p in existing if p.name == pack.name), None)) and prior.dir != pack.dir:
-            logger.bind(pack=pack.name).warning(
-                f"attached pack {pack.name!r} re-bound to a different dir; the newer attach wins "
-                f"(was {prior.dir}, now {pack.dir})"
-            )
-        entries = [*(p for p in existing if p.name != pack.name), pack]
-        atomic_write(
-            path,
-            json.dumps([{"name": p.name, "dir": p.dir, "version": p.version} for p in entries]),
-        )
-
-
-def resolve_attached(session_dir: Path) -> list[ResolvedPack]:
-    """Resolve this session's attached packs, dropping entries that no longer resolve.
-
-    A plugin update moves or non-atomically rewrites its versioned cache path, so a prior
-    session's attach entry can dangle or point at a half-written manifest. SessionStart
-    re-attaches every session, so an entry whose dir has vanished or whose manifest is
-    missing/malformed is skipped with a debug log rather than killing dispatch for every
-    other hook in the event — the same fail-soft shape as ``resolve_enabled_packs``.
-
-    Packs are returned in stable name order (attach keeps one entry per name — a same-name
-    re-attach replaces in place) so gate arbitration across the attached tier does not depend
-    on attach timing.
-    """
-    resolved: list[ResolvedPack] = []
-    for pack in sorted(read_attached(session_dir), key=lambda p: p.name):
-        root = Path(pack.dir)
-        if not root.is_dir():
-            continue
-        try:
-            manifest = PackManifest.load(manifest_in(root))
-        except (PackError, tomllib.TOMLDecodeError, KeyError, OSError):
-            logger.bind(pack=pack.name, dir=pack.dir).opt(exception=True).debug(
-                "skipped attached pack with a missing or malformed manifest"
-            )
-            continue
-        resolved.append(ResolvedPack(pack, manifest.hooks_dir(root), manifest))
-    return resolved
