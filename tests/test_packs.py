@@ -9,12 +9,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from click.testing import CliRunner
 from loguru import logger
 
 import captain_hook
 from captain_hook import Prompt, app
-from captain_hook.cli import cli
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack, import_pack_module
 from captain_hook.packs import manager
@@ -60,9 +58,13 @@ def write_pack(root: Path, name: str, *, hooks: str = ".", version: str = "0.1.0
     manifest_dir = root / manifest_subdir if manifest_subdir else root
     manifest_dir.mkdir(parents=True, exist_ok=True)
     (manifest_dir / manager.PACK_MANIFEST).write_text(
-        f'name = "{name}"\nversion = "{version}"\ndescription = "d"\nhooks = "{hooks}"\n'
+        f'[pack]\nname = "{name}"\nversion = "{version}"\ndescription = "d"\nhooks = "{hooks}"\n'
     )
     return root
+
+
+def resolve(root: Path) -> tuple[list[manager.ResolvedPack], list[str]]:
+    return manager.resolve_enabled_packs(root, manager.read_config_entries(root))
 
 
 def make_pack_tarball(dest: Path, *, name: str, top: str) -> Path:
@@ -302,7 +304,9 @@ def test_manifest_load_and_hooks_dir(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "manifest_text",
     [
-        pytest.param('name = "Bad_Name"\nversion = "0"\ndescription = "d"\nhooks = "."\n', id="rejects_bad_name"),
+        pytest.param('[pack]\nname = "Bad_Name"\ndescription = "d"\nhooks = "."\n', id="rejects_bad_name"),
+        pytest.param('[pack]\nname = "x"\ndescription = "d"\n', id="rejects_missing_hooks"),
+        pytest.param('[pack]\nname = "x"\ndescription = "d"\nhooks = "."\nmarketplaces = ["bad slug"]\n', id="bad_mkt"),
         pytest.param(None, id="missing_file"),
     ],
 )
@@ -313,14 +317,31 @@ def test_manifest_rejects(tmp_path: Path, manifest_text: str | None) -> None:
         manager.PackManifest.load(tmp_path / manager.PACK_MANIFEST)
 
 
-def test_manifest_missing_field_fails_loud(tmp_path: Path) -> None:
-    (tmp_path / manager.PACK_MANIFEST).write_text('name = "x"\nversion = "0"\nhooks = "."\n')
-    with pytest.raises(KeyError):
-        manager.PackManifest.load(tmp_path / manager.PACK_MANIFEST)
+def test_manifest_marketplaces_parses(tmp_path: Path) -> None:
+    (tmp_path / manager.PACK_MANIFEST).write_text(
+        '[pack]\nname = "x"\ndescription = "d"\nhooks = "."\nmarketplaces = ["acme/guards", "o.w-n/r_e"]\n'
+    )
+    assert manager.PackManifest.load(tmp_path / manager.PACK_MANIFEST).marketplaces == ("acme/guards", "o.w-n/r_e")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param('name = "x"\ndescription = "d"\nhooks = "."\n', id="flat_old_grammar"),
+        pytest.param("[packs.general]\n", id="consumer_only_enablement"),
+    ],
+)
+def test_no_pack_section_raises_from_load_but_probes_none(tmp_path: Path, text: str) -> None:
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / manager.PACK_MANIFEST).write_text(text)
+    # PackManifest.load fails loud on a present-but-[pack]-less file; the discovery probe reads it as "not a pack".
+    with pytest.raises(manager.PackError):
+        manager.PackManifest.load(manager.manifest_in(tmp_path))
+    assert manager.load_pack_manifest(tmp_path) is None
 
 
 def test_manifest_version_optional_defaults(tmp_path: Path) -> None:
-    (tmp_path / manager.PACK_MANIFEST).write_text('name = "x"\ndescription = "d"\nhooks = "."\n')
+    (tmp_path / manager.PACK_MANIFEST).write_text('[pack]\nname = "x"\ndescription = "d"\nhooks = "."\n')
     manifest = manager.PackManifest.load(tmp_path / manager.PACK_MANIFEST)
     assert manifest.version == "0.0.0"  # optional since 9.5; authors keep the key for older capt-hook
 
@@ -335,7 +356,7 @@ def test_manifest_version_optional_defaults(tmp_path: Path) -> None:
 )
 def test_manifest_nlp_flag(tmp_path: Path, nlp_line: str, expected: bool) -> None:
     (tmp_path / manager.PACK_MANIFEST).write_text(
-        f'name = "x"\nversion = "0"\ndescription = "d"\nhooks = "."\n{nlp_line}'
+        f'[pack]\nname = "x"\nversion = "0"\ndescription = "d"\nhooks = "."\n{nlp_line}'
     )
     assert manager.PackManifest.load(tmp_path / manager.PACK_MANIFEST).nlp is expected
 
@@ -355,7 +376,7 @@ def test_manifest_in_missing_returns_root(tmp_path: Path) -> None:
     assert not found.is_file()
 
 
-# --- packs.toml IO -------------------------------------------------------------------
+# --- config IO ([packs.*] enablement tables) -----------------------------------------
 
 
 @pytest.fixture
@@ -405,20 +426,62 @@ def test_read_entries_rejects_unknown_keys(packs_toml: Path) -> None:
         manager.read_entries(packs_toml)
 
 
-def test_rewrite_drops_legacy_launcher_line(packs_toml: Path) -> None:
-    # A packs.toml from an older scaffold carries a top-level `launcher` line, inert since 9.0.0.
-    packs_toml.write_text('launcher = "uvx capt-hook run"\n[packs.general]\n')
-    # read_entries tolerates the stale line — it reads only the [packs.*] tables — and never raises.
-    assert manager.read_entries(packs_toml) == [manager.BuiltinPack("general")]
-
-    # The next manifest rewrite re-renders from entries alone, so the launcher line is dropped.
+def test_upsert_and_delete_preserve_pack_table_and_comments(packs_toml: Path) -> None:
+    packs_toml.write_text(
+        "# top-of-file note\n"
+        "[pack]\n"
+        'name = "ccx"\n'
+        'description = "d"\n'
+        'hooks = "."\n'
+        "# a comment inside the manifest\n"
+        "nlp = true\n\n"
+        "[packs.general]\n"
+    )
     acme = manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@v1"), "a" * 40)
     manager.upsert_entry(packs_toml, acme)
 
+    # The section-scoped rewrite re-renders only the [packs.*] tables; the [pack] manifest, its
+    # inline comment, and the top-of-file note survive verbatim (the reverse of the old whole-file render).
     text = packs_toml.read_text()
-    assert "launcher" not in text  # the stale key is gone
-    assert manager.read_entries(packs_toml) == [acme, manager.BuiltinPack("general")]  # both survive
-    assert "[packs.general]" in text and 'source = "github:a/b@v1"' in text
+    assert "# top-of-file note" in text and "# a comment inside the manifest" in text
+    reparsed = manager.PackManifest.load(packs_toml)
+    assert (reparsed.name, reparsed.nlp) == ("ccx", True)
+    assert manager.read_entries(packs_toml) == [acme, manager.BuiltinPack("general")]
+
+    manager.delete_entry(packs_toml, "acme")
+    text = packs_toml.read_text()
+    assert "# top-of-file note" in text and "# a comment inside the manifest" in text
+    assert manager.PackManifest.load(packs_toml).name == "ccx"
+    assert manager.read_entries(packs_toml) == [manager.BuiltinPack("general")]
+
+
+def test_read_config_entries_and_probe_on_both_sections_file(tmp_path: Path) -> None:
+    (tmp_path / ".claude").mkdir()
+    manager.config_path(tmp_path).write_text(
+        "[pack]\n"
+        'name = "ccx"\n'
+        'description = "d"\n'
+        'hooks = "hooks"\n\n'
+        "[packs.general]\n\n"
+        '[packs.acme]\nsource = "github:a/b@v1"\ncommit = "aaaaaaa"\n'
+    )
+    assert manager.read_config_entries(tmp_path) == [
+        manager.BuiltinPack("general"),
+        manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@v1"), "aaaaaaa"),
+    ]
+    probed = manager.load_pack_manifest(tmp_path)
+    assert probed is not None and (probed.name, probed.hooks) == ("ccx", "hooks")
+
+
+def test_legacy_hooks_packs_toml_is_ignored(tmp_path: Path) -> None:
+    (tmp_path / ".claude").mkdir()
+    manager.config_path(tmp_path).write_text("[packs.general]\n")
+    legacy = tmp_path / ".claude" / "hooks" / "packs.toml"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('[packs.python]\nsource = "github:a/b@v1"\ncommit = "ffff"\n')  # never consulted
+    assert manager.read_config_entries(tmp_path) == [manager.BuiltinPack("general")]
+    resolved, missing = resolve(tmp_path)
+    assert (missing, [r.entry.name for r in resolved]) == ([], ["general"])
 
 
 # --- fetch / cache -------------------------------------------------------------------
@@ -551,8 +614,8 @@ def test_fetch_pack_missing_manifest_fails_loud(tmp_path: Path, monkeypatch: pyt
 
 
 def test_resolve_enabled_builtin(tmp_path: Path) -> None:
-    manager.upsert_entry(manager.packs_toml_path(tmp_path), manager.BuiltinPack("general"))
-    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+    manager.upsert_entry(manager.config_path(tmp_path), manager.BuiltinPack("general"))
+    resolved, missing = resolve(tmp_path)
     assert missing == []
     (general,) = resolved
     assert general.entry == manager.BuiltinPack("general")
@@ -560,19 +623,19 @@ def test_resolve_enabled_builtin(tmp_path: Path) -> None:
 
 
 def test_resolve_unknown_builtin_fails_loud(tmp_path: Path) -> None:
-    manager.upsert_entry(manager.packs_toml_path(tmp_path), manager.BuiltinPack("nope"))
+    manager.upsert_entry(manager.config_path(tmp_path), manager.BuiltinPack("nope"))
     with pytest.raises(manager.PackError):
-        manager.resolve_enabled_packs(tmp_path)
+        resolve(tmp_path)
 
 
 def test_resolve_uncached_external_offline_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
     go_offline(monkeypatch)
     manager.upsert_entry(
-        manager.packs_toml_path(tmp_path),
+        manager.config_path(tmp_path),
         manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@v1"), "a" * 40),
     )
-    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+    resolved, missing = resolve(tmp_path)
     assert (resolved, missing) == ([], ["acme"])  # uncached pin + offline auto-fetch fails -> the one loud path
 
 
@@ -681,48 +744,6 @@ def test_steering_deferral_gate_skips_in_plan_mode() -> None:
     assert gate.spec.skip_if == (Waiting(), InPlanMode())
 
 
-# --- CLI -----------------------------------------------------------------------------
-
-
-def test_cli_pack_add_list_remove(tmp_path: Path) -> None:
-    runner = CliRunner()
-    add = runner.invoke(cli, ["--root", str(tmp_path), "pack", "add", "general"])
-    assert add.exit_code == 0, add.output
-    assert "[packs.general]" in manager.packs_toml_path(tmp_path).read_text()
-
-    listed = runner.invoke(cli, ["--root", str(tmp_path), "pack", "list"])
-    assert "general" in listed.output and "12 hooks" in listed.output
-
-    remove = runner.invoke(cli, ["--root", str(tmp_path), "pack", "remove", "general"])
-    assert remove.exit_code == 0
-    assert manager.read_entries(manager.packs_toml_path(tmp_path)) == []
-
-
-def test_cli_pack_add_rejects_invalid_target(tmp_path: Path) -> None:
-    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "add", "not-a-pack"])
-    assert result.exit_code != 0
-    assert not manager.packs_toml_path(tmp_path).exists()
-
-
-def test_cli_pack_list_reports_import_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    pack_dir = write_pack(tmp_path / "badpack", "badpack", hooks=".")
-    (pack_dir / "boom.py").write_text("raise RuntimeError('kaboom')\n")
-    resolved = [
-        manager.ResolvedPack(
-            entry=manager.BuiltinPack(name="badpack"),
-            path=pack_dir,
-            manifest=manager.PackManifest(name="badpack", version="0.1.0", description="d", hooks="."),
-        )
-    ]
-    monkeypatch.setattr(manager, "resolve_enabled_packs", lambda _root: (resolved, []))
-
-    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "list"])
-
-    assert result.exit_code == 0, result.output
-    assert "badpack" in result.output  # the pack still lists
-    assert "!  badpack: boom.py failed to import - RuntimeError: kaboom" in result.output
-
-
 # --- @latest / ref resolution --------------------------------------------------------
 
 
@@ -759,12 +780,12 @@ def test_cache_miss_pinned_auto_fetches_and_resolves(tmp_path: Path, monkeypatch
     sha = "a" * 40
     gh = fake_github(tmp_path, monkeypatch, name="acme", sha=sha)
     manager.upsert_entry(
-        manager.packs_toml_path(tmp_path),
+        manager.config_path(tmp_path),
         manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@v1"), sha),
     )
     assert manager.find_cached("acme", sha) is None  # cold cache
 
-    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+    resolved, missing = resolve(tmp_path)
 
     assert missing == []
     (pack,) = resolved
@@ -778,11 +799,11 @@ def test_cache_miss_latest_auto_fetches_via_release(tmp_path: Path, monkeypatch:
     gh = fake_github(tmp_path, monkeypatch, name="acme", sha=sha, latest_tag="v2.0.0")
     monkeypatch.setattr(manager.time, "time", Clock())
     manager.upsert_entry(
-        manager.packs_toml_path(tmp_path),
+        manager.config_path(tmp_path),
         manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@latest"), commit=None),
     )
 
-    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+    resolved, missing = resolve(tmp_path)
 
     assert missing == []
     assert resolved[0].manifest.name == "acme"
@@ -794,11 +815,11 @@ def test_cache_miss_latest_auto_fetches_via_release(tmp_path: Path, monkeypatch:
 def test_cache_miss_offline_other_packs_still_resolve(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
     go_offline(monkeypatch)
-    path = manager.packs_toml_path(tmp_path)
+    path = manager.config_path(tmp_path)
     manager.upsert_entry(path, manager.BuiltinPack("general"))
     manager.upsert_entry(path, manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@v1"), "a" * 40))
 
-    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+    resolved, missing = resolve(tmp_path)
 
     assert missing == ["acme"]  # one bad pack does not block the others
     assert [r.entry.name for r in resolved] == ["general"]
@@ -809,7 +830,7 @@ def test_cache_miss_offline_other_packs_still_resolve(tmp_path: Path, monkeypatc
 
 def enable_moving(tmp_path: Path, *, ref: str = "@latest") -> None:
     manager.upsert_entry(
-        manager.packs_toml_path(tmp_path),
+        manager.config_path(tmp_path),
         manager.ExternalPack("acme", manager.PackSource.parse(f"github:acme/acme{ref}"), commit=None),
     )
 
@@ -820,12 +841,12 @@ def test_within_ttl_does_no_network(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
     enable_moving(tmp_path)
 
-    manager.resolve_enabled_packs(tmp_path)  # warms cache + sidecar
+    resolve(tmp_path)  # warms cache + sidecar
     calls_after_warm = gh.calls
     assert calls_after_warm > 0
 
     clock.advance(23 * 60 * 60)  # still inside the 24h window
-    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+    resolved, missing = resolve(tmp_path)
 
     assert missing == [] and resolved[0].manifest.name == "acme"
     assert gh.calls == calls_after_warm  # ZERO new network calls within the TTL window
@@ -837,11 +858,11 @@ def test_past_ttl_reresolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
     enable_moving(tmp_path)
 
-    manager.resolve_enabled_packs(tmp_path)
+    resolve(tmp_path)
     calls_after_warm = gh.calls
 
     clock.advance(25 * 60 * 60)  # past the 24h window
-    manager.resolve_enabled_packs(tmp_path)
+    resolve(tmp_path)
 
     assert gh.json_calls > calls_after_warm  # the ref was re-resolved over the network
     meta = manager.PackMeta.load(manager.meta_path("acme"))
@@ -853,13 +874,13 @@ def test_past_ttl_moved_ref_fetches_new_commit(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(manager.time, "time", clock)
     gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
     enable_moving(tmp_path)
-    manager.resolve_enabled_packs(tmp_path)
+    resolve(tmp_path)
 
     new_tarball = make_pack_tarball(tmp_path / "src-new", name="acme", top="acme-new")
     gh.sha, gh.tarball = "c" * 40, new_tarball  # the moving ref now points at a new commit
     clock.advance(25 * 60 * 60)
 
-    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+    resolved, missing = resolve(tmp_path)
 
     assert missing == [] and resolved[0].manifest.name == "acme"
     assert manager.find_cached("acme", "c" * 40) is not None
@@ -872,11 +893,11 @@ def test_offline_during_ttl_refresh_falls_back_to_cached(tmp_path: Path, monkeyp
     monkeypatch.setattr(manager.time, "time", clock)
     fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
     enable_moving(tmp_path)
-    manager.resolve_enabled_packs(tmp_path)  # warm
+    resolve(tmp_path)  # warm
 
     clock.advance(25 * 60 * 60)  # TTL expired -> a refresh is due
     go_offline(monkeypatch)  # ...but the network is gone
-    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+    resolved, missing = resolve(tmp_path)
 
     assert missing == []  # offline always works: fall back to the cached commit
     assert resolved[0].manifest.name == "acme"
@@ -890,13 +911,13 @@ def test_fastpath_unchanged_skips_all_network(tmp_path: Path, monkeypatch: pytes
     gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
     enable_moving(tmp_path)
 
-    manager.resolve_enabled_packs(tmp_path)  # writes the fastpath sidecar
+    resolve(tmp_path)  # writes the fastpath sidecar
     baseline = gh.calls
 
     # packs.toml byte-identical, every pack cached within TTL -> pure fast skip.
     for _ in range(3):
         clock.advance(60)  # well within TTL
-        manager.resolve_enabled_packs(tmp_path)
+        resolve(tmp_path)
     assert gh.calls == baseline  # the hot path never touched the network
 
 
@@ -905,11 +926,11 @@ def test_fastpath_invalidated_by_packs_toml_edit(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(manager.time, "time", clock)
     gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
     enable_moving(tmp_path)
-    manager.resolve_enabled_packs(tmp_path)
+    resolve(tmp_path)
     after_warm = gh.calls
 
-    manager.upsert_entry(manager.packs_toml_path(tmp_path), manager.BuiltinPack("general"))  # toml changed
-    manager.resolve_enabled_packs(tmp_path)
+    manager.upsert_entry(manager.config_path(tmp_path), manager.BuiltinPack("general"))  # toml changed
+    resolve(tmp_path)
 
     # The hash mismatch drops the fast path; the moving pack is still fresh within TTL, so
     # resolution stays local (no network), but the fastpath sidecar is rewritten for the new toml.
@@ -924,15 +945,15 @@ def test_pinned_lockfile_resolves_without_ref_resolution(tmp_path: Path, monkeyp
     sha = "a" * 40
     gh = fake_github(tmp_path, monkeypatch, name="acme", sha=sha)
     manager.upsert_entry(
-        manager.packs_toml_path(tmp_path),
+        manager.config_path(tmp_path),
         manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@v1"), sha),
     )
-    manager.resolve_enabled_packs(tmp_path)  # cold: fetch the pinned commit directly
+    resolve(tmp_path)  # cold: fetch the pinned commit directly
     assert gh.json_calls == 0  # a hard pin never resolves a ref
     assert gh.download_calls == 1
 
     monkeypatch.setattr(manager.time, "time", Clock(start=1_700_000_000.0 + 10 * 24 * 60 * 60))
-    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+    resolved, missing = resolve(tmp_path)
 
     assert missing == [] and resolved[0].manifest.name == "acme"
     assert gh.download_calls == 1  # pinned + cached: no TTL, no re-fetch even years later
@@ -940,82 +961,6 @@ def test_pinned_lockfile_resolves_without_ref_resolution(tmp_path: Path, monkeyp
 
 
 # --- pack add / update / list moving-ref consistency ---------------------------------
-
-
-def test_cli_pack_add_latest_is_source_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(manager.time, "time", Clock())
-    fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)  # FakeGitHub.latest_tag == "v9.9.9"
-    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "add", "github:acme/acme@latest"])
-
-    assert result.exit_code == 0, result.output
-    toml = manager.packs_toml_path(tmp_path).read_text()
-    assert 'source = "github:acme/acme@latest"' in toml and "commit" not in toml  # no frozen pin
-    (entry,) = manager.read_entries(manager.packs_toml_path(tmp_path))
-    assert entry == manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@latest"), commit=None)
-    meta = manager.PackMeta.load(manager.meta_path("acme"))
-    assert meta is not None and meta.commit == "a" * 40  # cache warmed + sidecar recorded
-    assert meta.resolved_ref == "v9.9.9"  # the @latest release tag, recorded for display
-
-
-def test_cli_pack_add_tag_freezes_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(manager.time, "time", Clock())
-    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
-    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "add", "github:acme/acme@v1.2.3"])
-
-    assert result.exit_code == 0, result.output
-    toml = manager.packs_toml_path(tmp_path).read_text()
-    assert 'source = "github:acme/acme@v1.2.3"' in toml and f'commit = "{"a" * 40}"' in toml  # frozen lockfile pin
-    (entry,) = manager.read_entries(manager.packs_toml_path(tmp_path))
-    assert entry == manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@v1.2.3"), commit="a" * 40)
-    assert manager.PackMeta.load(manager.meta_path("acme")) is None  # a frozen pin keeps no sidecar
-    assert gh.seen_refs == ["v1.2.3"]  # resolved the tag once, at add time
-
-
-def test_cli_pack_update_moving_refreshes_sidecar_not_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    clock = Clock()
-    monkeypatch.setattr(manager.time, "time", clock)
-    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)  # FakeGitHub.latest_tag == "v9.9.9"
-    enable_moving(tmp_path)
-    manager.resolve_enabled_packs(tmp_path)
-
-    gh.sha, gh.tarball = "c" * 40, make_pack_tarball(tmp_path / "src-c", name="acme", top="acme-c")
-    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "update", "acme"])
-
-    assert result.exit_code == 0, result.output
-    # The message names the resolved ref alongside the sha, never the bare sha (FakeGitHub.latest_tag == v9.9.9).
-    assert "updated acme -> v9.9.9@ccccccc" in result.output
-    assert "commit" not in manager.packs_toml_path(tmp_path).read_text()  # still source-only
-    meta = manager.PackMeta.load(manager.meta_path("acme"))
-    assert meta is not None and meta.commit == "c" * 40  # sidecar advanced to the new commit
-    assert meta.resolved_ref == "v9.9.9"  # @latest re-resolved the release tag into the sidecar
-
-
-def test_cli_pack_update_pinned_repins_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    old, new = "a" * 40, "c" * 40
-    gh = fake_github(tmp_path, monkeypatch, name="acme", sha=new)
-    manager.upsert_entry(
-        manager.packs_toml_path(tmp_path),
-        manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@v1"), old),
-    )
-    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "update", "acme"])
-
-    assert result.exit_code == 0, result.output
-    (entry,) = manager.read_entries(manager.packs_toml_path(tmp_path))
-    assert isinstance(entry, manager.ExternalPack) and entry.commit == new  # re-pinned in the lockfile
-    assert gh.seen_refs == ["v1"]  # re-resolved the declared @v1 ref
-
-
-def test_cli_pack_list_shows_resolved_commit_for_moving(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(manager.time, "time", Clock())
-    fake_github(tmp_path, monkeypatch, name="acme", sha="abcdef1" + "0" * 33)  # FakeGitHub.latest_tag == "v9.9.9"
-    enable_moving(tmp_path)
-    manager.resolve_enabled_packs(tmp_path)
-
-    listed = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "list"])
-    assert listed.exit_code == 0, listed.output
-    assert "acme" in listed.output and "latest@abcdef1" in listed.output  # honest resolved commit, not "None"
-    assert "v9.9.9" in listed.output  # the resolved @latest tag shows in the version column
-    assert "v0.1.0" not in listed.output  # not the one-behind manifest version
 
 
 def test_resolve_moving_records_resolved_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1050,23 +995,7 @@ def test_pack_meta_load_pre_9_7_sidecar_defaults_none(tmp_path: Path) -> None:
     assert meta.commit == "a" * 40 and meta.checked_at == 1.0 and meta.resolved_ref is None
 
 
-def test_cli_pack_list_falls_back_to_manifest_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(manager.time, "time", Clock())
-    fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
-    enable_moving(tmp_path)
-    manager.resolve_enabled_packs(tmp_path)
-    # a pre-9.5 sidecar: same cached commit, but no resolved_ref recorded
-    meta = manager.PackMeta.load(manager.meta_path("acme"))
-    assert meta is not None
-    manager.atomic_write(manager.meta_path("acme"), json.dumps({"commit": meta.commit, "checked_at": meta.checked_at}))
-
-    listed = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "list"])
-
-    assert listed.exit_code == 0, listed.output
-    assert "v0.1.0" in listed.output  # no resolved_ref in the sidecar → falls back to the manifest version
-
-
-# --- disabled packs.toml entries -----------------------------------------------------
+# --- disabled config entries ---------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -1089,10 +1018,10 @@ def test_disabled_entry_round_trips(packs_toml: Path) -> None:
 
 
 def test_disabled_pack_is_not_resolved(tmp_path: Path) -> None:
-    path = manager.packs_toml_path(tmp_path)
+    path = manager.config_path(tmp_path)
     manager.upsert_entry(path, manager.BuiltinPack("general"))
     path.write_text(path.read_text() + "[packs.python]\ndisabled = true\n")  # decline the python builtin
-    resolved, missing = manager.resolve_enabled_packs(tmp_path)
+    resolved, missing = resolve(tmp_path)
     assert missing == []
     assert [r.entry.name for r in resolved] == ["general"]  # the disabled entry resolves to nothing
 

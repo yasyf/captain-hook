@@ -3,15 +3,20 @@
 A *pack* is a named, versioned collection of hooks. Builtin packs ship inside the
 ``captain_hook`` wheel under ``captain_hook/packs/<name>/``; external packs live in a
 GitHub repo carrying a ``capt-hook.toml`` manifest and are fetched as a tarball into a
-local cache. A project enables packs by listing them in ``.claude/hooks/packs.toml``.
+local cache. A single ``.claude/capt-hook.toml`` carries both config axes: a ``[pack]``
+table is the manifest (``name``/``description``/``hooks``, plus optional ``version``,
+``nlp``, and dependency ``marketplaces``) that makes a directory a pack, and
+``[packs.<name>]`` tables are a project's enablement list. The two are independent — a
+consumer file holds only ``[packs.*]`` and no ``[pack]``, and a pack that no project has
+enabled ships only ``[pack]``.
 
-packs.toml is the source of truth. An entry may pin a ``commit`` (a hard lock used
-directly) or carry only a ``source`` whose ref moves: ``@latest`` (the latest GitHub
-release), a branch, or the bare default branch. A moving ref re-resolves to a commit at
-most once per 24h, tracked alongside the resolved commit in a per-machine ``PackMeta``
-sidecar; within the window the cached commit is used with no network. A declared pack
-missing from the cache is fetched on demand, so the first event after a clone or a moved
-ref self-heals. The only loud failure is a pack that is both uncached and unreachable.
+An enablement entry may pin a ``commit`` (a hard lock used directly) or carry only a
+``source`` whose ref moves: ``@latest`` (the latest GitHub release), a branch, or the bare
+default branch. A moving ref re-resolves to a commit at most once per 24h, tracked
+alongside the resolved commit in a per-machine ``PackMeta`` sidecar; within the window the
+cached commit is used with no network. A declared pack missing from the cache is fetched on
+demand, so the first event after a clone or a moved ref self-heals. The only loud failure
+is a pack that is both uncached and unreachable.
 """
 
 from __future__ import annotations
@@ -79,6 +84,15 @@ class PackSource:
         return f"github:{self.owner}/{self.repo}" + (f"@{self.ref}" if self.ref else "")
 
 
+def parse_marketplaces(raw: object) -> tuple[str, ...]:
+    if not isinstance(raw, (list, tuple)):
+        raise PackError(f"marketplaces must be a list of owner/repo slugs, got {raw!r}")
+    for slug in raw:
+        if not (isinstance(slug, str) and MARKETPLACE_REPO_RE.fullmatch(slug)):
+            raise PackError(f"marketplace repo {slug!r} must match {MARKETPLACE_REPO_RE.pattern}")
+    return tuple(raw)
+
+
 @dataclass(frozen=True, slots=True)
 class PackManifest:
     name: str
@@ -92,27 +106,24 @@ class PackManifest:
     def load(cls, path: Path) -> PackManifest:
         if not path.is_file():
             raise PackError(f"pack manifest {PACK_MANIFEST} missing at {path.parent}")
-        data = tomllib.loads(path.read_text())
-        if not isinstance(raw_marketplaces := data.get("marketplaces", ()), (list, tuple)):
-            raise PackError(f"marketplaces must be a list of owner/repo slugs, got {raw_marketplaces!r}")
-        manifest = cls(
-            name=data["name"],
-            description=data["description"],
-            hooks=data["hooks"],
-            # .get is deliberate: `version` is optional since 9.7 (authors keep the key while
-            # pre-9.7 capt-hook is in the wild), and `nlp`/`marketplaces` are schema additions
-            # manifests predate.
-            version=data.get("version", "0.0.0"),
-            nlp=data.get("nlp", False),
-            marketplaces=tuple(raw_marketplaces),
-        )
+        # `**rest` ignores unknown [pack] keys — the dual-grammar rollout needs transitional files
+        # to parse under both schemas; every other failure mode raises PackError.
+        match tomllib.loads(path.read_text()).get("pack"):
+            case {"name": str(name), "description": str(description), "hooks": str(hooks), **rest}:
+                manifest = cls(
+                    name=name,
+                    description=description,
+                    hooks=hooks,
+                    version=rest.get("version", "0.0.0"),
+                    nlp=rest.get("nlp", False),
+                    marketplaces=parse_marketplaces(rest.get("marketplaces", ())),
+                )
+            case dict():
+                raise PackError(f"[pack] in {path} is missing required string keys name/description/hooks")
+            case _:
+                raise PackError(f"pack manifest {path} has no [pack] section")
         if not PACK_NAME_RE.fullmatch(manifest.name):
             raise PackError(f"pack name {manifest.name!r} must match {PACK_NAME_RE.pattern}")
-        for m in manifest.marketplaces:
-            if not isinstance(m, str):
-                raise PackError(f"marketplace repo {m!r} must be a string owner/repo slug")
-            if not MARKETPLACE_REPO_RE.fullmatch(m):
-                raise PackError(f"marketplace repo {m!r} must match {MARKETPLACE_REPO_RE.pattern}")
         return manifest
 
     def hooks_dir(self, root: Path) -> Path:
@@ -130,16 +141,16 @@ class ExternalPack:
     source: PackSource
     # A pinned commit is a hard lock used directly; None means the source's ref
     # (@latest, a branch, or the bare default branch) moves, and the resolved
-    # commit lives in a per-machine sidecar (see PackMeta), not in packs.toml.
+    # commit lives in a per-machine sidecar (see PackMeta), not in the committed config.
     commit: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class DisabledPack:
-    """A packs.toml entry that declines a pack by name.
+    """A ``[packs.<name>]`` config entry that declines a pack by name.
 
     ``[packs.<name>] disabled = true`` suppresses a pack the repo would otherwise
-    inherit — a builtin, a packs.toml source, or a plugin-attached pack — regardless of
+    inherit — a builtin, an external source, or a plugin-attached pack — regardless of
     any other keys on the entry. Disabling always wins.
     """
 
@@ -160,8 +171,22 @@ class AttachedPack:
     version: str
 
 
+@dataclass(frozen=True, slots=True)
+class PluginPack:
+    """A pack discovered on an enabled Claude Code plugin whose root ships a ``[pack]`` manifest.
+
+    ``plugin_id`` is the Claude plugin id it was discovered under, ``dir`` the absolute pack
+    root holding the ``capt-hook.toml`` manifest, and ``version`` the manifest version.
+    """
+
+    name: str
+    plugin_id: str
+    dir: str
+    version: str
+
+
 type PackEntry = BuiltinPack | ExternalPack | DisabledPack
-type ResolvedEntry = BuiltinPack | ExternalPack | AttachedPack
+type ResolvedEntry = BuiltinPack | ExternalPack | AttachedPack | PluginPack
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,7 +201,7 @@ class PackMeta:
     """Per-machine resolution sidecar for a moving-ref pack: the last-resolved commit, ref, and when.
 
     Stored as JSON next to the cache so the resolved ``commit``, ``resolved_ref``, and
-    ``checked_at`` timestamp never enter the committed ``packs.toml``. ``checked_at`` gates
+    ``checked_at`` timestamp never enter the committed config. ``checked_at`` gates
     the 24h re-resolution TTL; ``resolved_ref`` (the moving ref that resolved — a release tag
     or a branch) is display-only for ``pack list`` and is absent on pre-9.7 sidecars.
     """
@@ -202,8 +227,8 @@ class PackMeta:
         )
 
 
-def packs_toml_path(root: Path) -> Path:
-    return root / ".claude" / "hooks" / "packs.toml"
+def config_path(root: Path) -> Path:
+    return root / ".claude" / PACK_MANIFEST
 
 
 def manifest_in(root: Path) -> Path:
@@ -214,6 +239,20 @@ def manifest_in(root: Path) -> Path:
     """
     claude = root / ".claude" / PACK_MANIFEST
     return claude if claude.is_file() else root / PACK_MANIFEST
+
+
+def load_pack_manifest(root: Path) -> PackManifest | None:
+    """Load the ``[pack]`` manifest at ``root``, or ``None`` when there is nothing to load.
+
+    The discovery probe: ``None`` when the manifest file is absent or present without a
+    ``[pack]`` section (a consumer-only ``capt-hook.toml`` carrying just ``[packs.*]``
+    enablement). A present-but-malformed ``[pack]`` still raises ``PackError``.
+    """
+    if not (path := manifest_in(root)).is_file():
+        return None
+    if not isinstance(tomllib.loads(path.read_text()).get("pack"), dict):
+        return None
+    return PackManifest.load(path)
 
 
 def parse_entry(name: str, table: dict[str, Any]) -> PackEntry:
@@ -234,6 +273,10 @@ def read_entries(path: Path) -> list[PackEntry]:
     if not path.exists():
         return []
     return [parse_entry(name, table) for name, table in (tomllib.loads(path.read_text()).get("packs") or {}).items()]
+
+
+def read_config_entries(root: Path) -> list[PackEntry]:
+    return read_entries(config_path(root))
 
 
 def render_entry(entry: PackEntry) -> str:
@@ -269,18 +312,40 @@ def atomic_write(path: Path, text: str) -> None:
         raise
 
 
+def strip_packs_tables(text: str) -> str:
+    """Return ``text`` with every ``[packs]`` / ``[packs.*]`` table dropped, all else verbatim.
+
+    A section-scoped rewrite: a ``[pack]`` manifest table, comments, and preamble outside the
+    enablement tables survive byte-for-byte, so an upsert re-renders only the ``[packs.*]`` tables.
+    """
+    kept: list[str] = []
+    dropping = False
+    for line in text.splitlines(keepends=True):
+        if (stripped := line.lstrip()).startswith("[["):
+            dropping = False
+        elif stripped.startswith("["):
+            name = stripped[1:].partition("]")[0].strip()
+            dropping = name == "packs" or name.startswith("packs.")
+        if not dropping:
+            kept.append(line)
+    return "".join(kept)
+
+
+def write_config_entries(path: Path, entries: Sequence[PackEntry]) -> None:
+    preserved = strip_packs_tables(path.read_text()).rstrip("\n") if path.exists() else ""
+    rendered = render_packs_toml(entries)
+    atomic_write(path, f"{preserved}\n\n{rendered}" if preserved else rendered)
+
+
 def upsert_entry(path: Path, entry: PackEntry) -> None:
-    atomic_write(
-        path,
-        render_packs_toml([*(e for e in read_entries(path) if e.name != entry.name), entry]),
-    )
+    write_config_entries(path, [*(e for e in read_entries(path) if e.name != entry.name), entry])
 
 
 def delete_entry(path: Path, name: str) -> None:
     entries = read_entries(path)
     if name not in {e.name for e in entries}:
         raise PackError(f"pack {name!r} is not enabled in {path}")
-    atomic_write(path, render_packs_toml([e for e in entries if e.name != name]))
+    write_config_entries(path, [e for e in entries if e.name != name])
 
 
 def packs_cache_root() -> Path:
@@ -549,12 +614,11 @@ def fastpath_unchanged(root: Path, entries: Sequence[PackEntry], now: float) -> 
 
 
 def toml_hash(root: Path) -> str:
-    path = packs_toml_path(root)
+    path = config_path(root)
     return sha256(path.read_bytes() if path.exists() else b"").hexdigest()
 
 
-def resolve_enabled_packs(root: Path) -> tuple[list[ResolvedPack], list[str]]:
-    entries = read_entries(packs_toml_path(root))
+def resolve_enabled_packs(root: Path, entries: Sequence[PackEntry]) -> tuple[list[ResolvedPack], list[str]]:
     now = time.time()
     fast = fastpath_unchanged(root, entries, now)
     resolved: list[ResolvedPack] = []
