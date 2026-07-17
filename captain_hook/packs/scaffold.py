@@ -11,6 +11,7 @@ shared identity and predicates live in ``packs.contract``, which ``cli`` re-impo
 
 from __future__ import annotations
 
+import importlib.resources
 import json
 import re
 import shlex
@@ -380,8 +381,6 @@ def new_marketplace_json(root: Path, name: str, description: str) -> dict[str, A
 
 
 def starter_hook_source() -> str:
-    import importlib.resources
-
     return (importlib.resources.files("captain_hook") / "templates" / "pack_hook.py.tmpl").read_text()
 
 

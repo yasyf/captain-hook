@@ -14,7 +14,7 @@ from captain_hook import (
     ToolInput,
     approve,
 )
-from captain_hook.packs.fixes._lib import DangerousMcpTool, McpTool, NativeTool, PayloadText
+from captain_hook.packs.fixes._lib import MAX_SCAN_DEPTH, DangerousMcpTool, McpTool, NativeTool, PayloadText
 
 DANGEROUS_COMMAND = (
     r"\b(rm|dd|shred|truncate|sudo|mkfs[.\w]*)\b"
@@ -24,8 +24,10 @@ DANGEROUS_COMMAND = (
 )
 
 DEEP_PAYLOAD: dict[str, object] = reduce(lambda acc, _: {"nest": acc}, range(1000), {"cmd": "rm -rf /"})
-NESTED_AT_CAP: dict[str, object] = reduce(lambda acc, _: {"nest": acc}, range(12), {"cmd": "rm -rf /"})
-NESTED_PAST_CAP: dict[str, object] = reduce(lambda acc, _: {"nest": acc}, range(13), {"cmd": "rm -rf /"})
+NESTED_AT_CAP: dict[str, object] = reduce(lambda acc, _: {"nest": acc}, range(MAX_SCAN_DEPTH), {"cmd": "rm -rf /"})
+NESTED_PAST_CAP: dict[str, object] = reduce(
+    lambda acc, _: {"nest": acc}, range(MAX_SCAN_DEPTH + 1), {"cmd": "rm -rf /"}
+)
 
 approve(
     "teammate bash under skip-permissions",

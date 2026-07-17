@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from captain_hook import Allow, Block, Event, Input, llm_gate
-from captain_hook.packs.general._lib import EditedSource
+from captain_hook.packs.general._lib import SCRATCH_WORKFLOW_WRITE_FIXTURE, EditedSource
 
 llm_gate(
     "You are reviewing a code change before the agent stops. The compact diff of the "
@@ -56,27 +56,6 @@ llm_gate(
                 },
             ]
         ): Allow(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "Write",
-                                "id": "e1",
-                                "input": {
-                                    "file_path": (
-                                        "/tmp/claude-scratch/wf_0be55dd2/r4-judge-continuation-wf_0be55dd2-432.js"
-                                    ),
-                                    "content": "if (input.judgePrompt.length < 1000) throw new Error('tripwire')",
-                                },
-                            }
-                        ]
-                    },
-                },
-            ]
-        ): Allow(),
+        Input(transcript=SCRATCH_WORKFLOW_WRITE_FIXTURE): Allow(),
     },
 )

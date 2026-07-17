@@ -4,6 +4,34 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.26.0] - 2026-07-17
+
+### Changed
+- **Pack-wide STYLEGUIDE pass.** Single-use module constants inline at their call
+  sites across the packs (deletions.py keeps only `GLOB_LIMIT`; glob detection now
+  uses stdlib `glob.has_magic`; the fixes-pack scanner inlines its scan cap and
+  split regexes), deep nesting flattens through extracted helpers (`handle_rm` in
+  the rm guard, `list_leaf_texts` in the fixes-pack payload scanner),
+  `CommentDenseEdit` counts via one comprehension, and models.py restores module
+  order (helpers before classes) while hoisting the review-routing regex shared by
+  two nudges into `REVIEW_ROUTING_PATTERN`. Behavior-preserving except one message:
+  the rm guard's "too broad" deny no longer hardcodes the walk-budget entry count.
+- **`UserSaid` and `AllEditsUnder` moved to `captain_hook.conditions`.** The
+  byte-identical copies in the python and go packs' testing.py collapse into the
+  shared conditions module; the packs import them. The scratch-workflow Write
+  fixture duplicated between the general pack's review.py and docs.py lives once
+  in the pack's `_lib.py`, and teammate_permissions.py derives its nesting-cap
+  fixtures from `MAX_SCAN_DEPTH` instead of restating 12/13.
+
+### Fixed
+- **rm-guard tests pass on Linux.** pytest's `tmp_path` sits under `/tmp` on
+  Linux, so the `SCRATCH_DIR_NAMES` ancestor branch of `is_scratch_path` kept the
+  deny tests scratch-exempt even with `TEMP_ROOTS` patched empty — green on macOS,
+  red on CI. A shared `no_scratch` fixture now neutralizes both branches, and the
+  walk-budget boundary is tested by mocking the `walked_paths` filesystem seam at
+  19,999/20,000 entries (with the anchor pinned) instead of monkeypatching a
+  since-removed constant.
+
 ## [9.25.0] - 2026-07-16
 
 ### Added

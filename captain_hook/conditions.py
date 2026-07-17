@@ -162,6 +162,26 @@ def is_project_file(evt: BaseHookEvent) -> bool:
     return bool((file := evt.file) and is_project_path(file.path, evt.ctx.repo_root))
 
 
+class UserSaid(CustomCondition):
+    """Matches when the user's messages contain any of the given keywords."""
+
+    def __init__(self, *keywords: str) -> None:
+        self.keywords = keywords
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return evt.ctx.t.user_said(*self.keywords)
+
+
+class AllEditsUnder(CustomCondition):
+    """Matches when every edit this session is under one of the given path prefixes."""
+
+    def __init__(self, *prefixes: str) -> None:
+        self.prefixes = prefixes
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return bool(files := evt.ctx.t.edited_files) and all(f.under(*self.prefixes) for f in files)
+
+
 def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
     match c:
         case Tool(names):

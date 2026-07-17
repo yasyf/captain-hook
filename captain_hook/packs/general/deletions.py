@@ -14,11 +14,6 @@ from captain_hook.types import Command as CommandCondition
 from captain_hook.util.scratch import is_scratch_path
 
 GLOB_LIMIT = 10
-WALK_BUDGET = 20_000
-BACKSLASH_ESCAPE = re.compile(r"\\(.)")
-EXECUTABLE_QUOTES = frozenset({"'", '"'})
-GLOB_CHARS = frozenset("*?[")
-VCS_MARKERS = (".git", ".jj")
 
 
 class GlobExpansion(NamedTuple):
@@ -31,21 +26,23 @@ class GlobWalkBudgetExceeded(Exception):
 
 
 def unescape_shell(raw: str) -> str:
-    return BACKSLASH_ESCAPE.sub(r"\1", raw)
+    return re.sub(r"\\(.)", r"\1", raw)
 
 
 def normalize_executable(raw: str) -> str:
     return Path(
-        unescape_shell(raw[1:-1] if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in EXECUTABLE_QUOTES else raw)
+        unescape_shell(raw[1:-1] if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"" else raw)
     ).name.casefold()
 
 
 def in_vcs_repo(directory: Path) -> bool:
-    return any((ancestor / marker).exists() for ancestor in (directory, *directory.parents) for marker in VCS_MARKERS)
+    return any(
+        (ancestor / marker).exists() for ancestor in (directory, *directory.parents) for marker in (".git", ".jj")
+    )
 
 
 def is_repo_root(resolved: Path) -> bool:
-    return any((resolved / marker).exists() for marker in VCS_MARKERS)
+    return any((resolved / marker).exists() for marker in (".git", ".jj"))
 
 
 def rm_targets(args: tuple[str, ...]) -> list[str]:
@@ -72,7 +69,7 @@ def resolve_cd(args: tuple[str, ...], cwd: Path | None) -> Path | None:
 
 
 def static_prefix_dir(token: str, cwd: Path) -> Path:
-    prefix = "/".join(itertools.takewhile(lambda segment: not GLOB_CHARS & set(segment), token.split("/")))
+    prefix = "/".join(itertools.takewhile(lambda segment: not glob.has_magic(segment), token.split("/")))
     return (Path(prefix or "/") if os.path.isabs(token) else cwd / (prefix or ".")).resolve()
 
 
@@ -87,7 +84,7 @@ def recursive_glob_matches(pattern: str, anchor: Path, format_path: Callable[[Pa
     for walked, path in enumerate(walked_paths(anchor), start=1):
         if matcher.match(candidate := format_path(path)):
             yield candidate
-        if walked >= WALK_BUDGET:
+        if walked >= 20_000:
             raise GlobWalkBudgetExceeded
 
 
@@ -145,6 +142,30 @@ def block_rm_target(evt: BaseHookEvent, token: str, cwd: Path | None) -> HookRes
     return None
 
 
+def handle_rm(evt: BaseHookEvent, args: tuple[str, ...], cwd: Path | None) -> HookResult | None:
+    for token in map(unescape_shell, rm_targets(args)):
+        if glob.has_magic(token):
+            expansion = glob_matches(token, cwd, limit=GLOB_LIMIT)
+            if expansion.too_broad:
+                return evt.block(
+                    f"BLOCKED: the glob '{token}' is too broad to verify safely (the scan budget was exhausted "
+                    "before it completed). Narrow the pattern or delete a specific directory with rm -r <dir>."
+                )
+            if len(expansion.matches) > GLOB_LIMIT:
+                return evt.block(
+                    f"BLOCKED: the glob '{token}' matches more than {GLOB_LIMIT} files — an easy way to delete far "
+                    f"more than intended. List the matches first (ls {token}), narrow the pattern, or name a "
+                    "directory explicitly with rm -r <dir>."
+                )
+            for matched in expansion.matches:
+                if (blocked := block_rm_target(evt, matched, cwd)) is not None:
+                    return blocked
+            continue
+        if (blocked := block_rm_target(evt, token, cwd)) is not None:
+            return blocked
+    return None
+
+
 @on(
     Event.PreToolUse,
     only_if=[Tool("Bash"), CommandCondition(r"(?i)\brm\b")],
@@ -173,33 +194,6 @@ def block_risky_rm(evt: BaseHookEvent) -> HookResult | None:
             case "cd":
                 effective_cwd = resolve_cd(unwrapped.args, effective_cwd)
             case "rm":
-                for token in map(unescape_shell, rm_targets(unwrapped.args)):
-                    if GLOB_CHARS & set(token):
-                        expansion = glob_matches(token, effective_cwd, limit=GLOB_LIMIT)
-                        if expansion.too_broad:
-                            return evt.block(
-                                f"BLOCKED: the glob '{token}' is too broad to verify safely (scanning stopped after "
-                                f"{WALK_BUDGET} entries). Narrow the pattern or delete a specific directory with "
-                                "rm -r <dir>."
-                            )
-                        if len(expansion.matches) > GLOB_LIMIT:
-                            return evt.block(
-                                f"BLOCKED: the glob '{token}' matches more than {GLOB_LIMIT} files — an easy way to "
-                                f"delete far more than intended. List the matches first (ls {token}), narrow the "
-                                "pattern, or name a directory explicitly with rm -r <dir>."
-                            )
-                        if (
-                            blocked := next(
-                                (
-                                    result
-                                    for matched in expansion.matches
-                                    if (result := block_rm_target(evt, matched, effective_cwd)) is not None
-                                ),
-                                None,
-                            )
-                        ) is not None:
-                            return blocked
-                        continue
-                    if (blocked := block_rm_target(evt, token, effective_cwd)) is not None:
-                        return blocked
+                if (blocked := handle_rm(evt, unwrapped.args, effective_cwd)) is not None:
+                    return blocked
     return None

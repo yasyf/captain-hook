@@ -54,33 +54,10 @@ REVIEW_ROUTING_WORKFLOW_NUDGE = Prompt.load(
 )
 WRITING_DOCS_SPAWN_NUDGE = Prompt.load("models/writing_docs_spawn_nudge")
 WRITING_DOCS_WORKFLOW_NUDGE = Prompt.load("models/writing_docs_workflow_nudge", workflow_script_header=WORKFLOW_HEADER)
-
-
-@dataclass(frozen=True, slots=True)
-class DelegatedSpawn:
-    """Gating context: the pending Agent/Task call's model pin, agent type, and prompt."""
-
-    tag: str = "delegated_spawn"
-    required: bool = True
-
-    def content(self, evt: BaseHookEvent) -> str | None:
-        if (call := evt.as_input(TaskCall)) is None or not call.prompt:
-            return None
-        model = call.model or "(none — inherits the session model, fable)"
-        return f"model: {model}\nagent_type: {call.agent_type or '(default)'}\nprompt:\n{call.prompt}"
-
-
-@dataclass(frozen=True, slots=True)
-class InlineEdit:
-    """Gating context: the file the main agent is about to edit inline on the main loop."""
-
-    tag: str = "edit_target"
-    required: bool = True
-
-    def content(self, evt: BaseHookEvent) -> str | None:
-        if not evt.file or evt.content is None:
-            return None
-        return f"file: {evt.file.path}\nincoming text: {len(evt.content):,} chars"
+REVIEW_ROUTING_PATTERN = (
+    r"(?i)(\b(review|refut|adversari|audit|correctness|diagnos|root.?caus|secur|vuln|pentest)"
+    r"|\bverif\w*[\s\S]{0,160}?\b(auth|crypt|secret|sanitiz|inject|input.?valid|token|session))"
+)
 
 
 def prose_deliverable_sentences(text: str) -> list[str]:
@@ -139,6 +116,41 @@ def prose_deliverable_sentences(text: str) -> list[str]:
         return []
     negated = set(nlp_scan([Clause(noun=artifact, verb=writing, negated=True)], text))
     return [s for s in matched if s not in negated]
+
+
+def browser_calls(
+    n: int, *, tool: str = "Bash", field: str = "command", value: str = "agent-browser click '#next'"
+) -> list[dict[str, object]]:
+    """A same-turn run of ``n`` browser tool_use lines (Bash by default) for the delegation-nudge inline tests."""
+    calls = [{"type": "tool_use", "name": tool, "input": {field: value}, "id": f"tu-{tool}-{i}"} for i in range(n)]
+    return [{"type": "assistant", "message": {"content": [call]}} for call in calls]
+
+
+@dataclass(frozen=True, slots=True)
+class DelegatedSpawn:
+    """Gating context: the pending Agent/Task call's model pin, agent type, and prompt."""
+
+    tag: str = "delegated_spawn"
+    required: bool = True
+
+    def content(self, evt: BaseHookEvent) -> str | None:
+        if (call := evt.as_input(TaskCall)) is None or not call.prompt:
+            return None
+        model = call.model or "(none — inherits the session model, fable)"
+        return f"model: {model}\nagent_type: {call.agent_type or '(default)'}\nprompt:\n{call.prompt}"
+
+
+@dataclass(frozen=True, slots=True)
+class InlineEdit:
+    """Gating context: the file the main agent is about to edit inline on the main loop."""
+
+    tag: str = "edit_target"
+    required: bool = True
+
+    def content(self, evt: BaseHookEvent) -> str | None:
+        if not evt.file or evt.content is None:
+            return None
+        return f"file: {evt.file.path}\nincoming text: {len(evt.content):,} chars"
 
 
 @dataclass(frozen=True, slots=True)
@@ -361,12 +373,6 @@ llm_nudge(
 )
 
 
-def browser_calls(n: int, *, tool: str = "Bash", field: str = "command", value: str = "agent-browser click '#next'"):
-    """A same-turn run of ``n`` browser tool_use lines (Bash by default) for the delegation-nudge inline tests."""
-    calls = [{"type": "tool_use", "name": tool, "input": {field: value}, "id": f"tu-{tool}-{i}"} for i in range(n)]
-    return [{"type": "assistant", "message": {"content": [call]}} for call in calls]
-
-
 llm_nudge(
     BROWSER_DELEGATION_NUDGE,
     message=lambda r: (
@@ -436,11 +442,7 @@ llm_nudge(
     events=Event.PreToolUse,
     only_if=[
         Tool("Agent|Task"),
-        ToolInput(
-            "prompt",
-            r"(?i)(\b(review|refut|adversari|audit|correctness|diagnos|root.?caus|secur|vuln|pentest)"
-            r"|\bverif\w*[\s\S]{0,160}?\b(auth|crypt|secret|sanitiz|inject|input.?valid|token|session))",
-        ),
+        ToolInput("prompt", REVIEW_ROUTING_PATTERN),
     ],
     skip_if=[
         And(
@@ -549,10 +551,7 @@ llm_nudge(
     events=Event.PreToolUse,
     only_if=[
         Tool("Workflow"),
-        WorkflowScript(
-            pattern=r"(?i)(\b(review|refut|adversari|audit|correctness|diagnos|root.?caus|secur|vuln|pentest)"
-            r"|\bverif\w*[\s\S]{0,160}?\b(auth|crypt|secret|sanitiz|inject|input.?valid|token|session))",
-        ),
+        WorkflowScript(pattern=REVIEW_ROUTING_PATTERN),
     ],
     max_fires=2,
     max_context=16_000,

@@ -30,10 +30,7 @@ DANGEROUS_MCP_VERBS = frozenset(
     }
 )
 
-CAMEL_BOUNDARY = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
-NON_LETTER = re.compile(r"[^A-Za-z]+")
 COMMAND_KEY = re.compile(r"cmd|command|script|shell|exec|args|argv|run|code", re.ASCII | re.IGNORECASE)
-SCAN_CAP = 8192
 MAX_SCAN_DEPTH = 12
 
 
@@ -48,6 +45,14 @@ def payload_leaves(items: list[object], depth: int) -> Iterator[object]:
                 yield item
 
 
+def list_leaf_texts(items: list[object], depth: int) -> Iterator[str]:
+    leaves = list(payload_leaves(items, depth))
+    if leaves and all(isinstance(leaf, str) for leaf in leaves):
+        yield " ".join(leaves)
+    else:
+        yield from (leaf for leaf in leaves if isinstance(leaf, str))
+
+
 def command_texts(value: object, depth: int = MAX_SCAN_DEPTH) -> Iterator[str]:
     match value:
         case dict() as mapping:
@@ -56,11 +61,7 @@ def command_texts(value: object, depth: int = MAX_SCAN_DEPTH) -> Iterator[str]:
                     case str() if COMMAND_KEY.fullmatch(key):
                         yield val
                     case list() if COMMAND_KEY.fullmatch(key):
-                        leaves = list(payload_leaves(val, depth))
-                        if leaves and all(isinstance(leaf, str) for leaf in leaves):
-                            yield " ".join(leaves)
-                        else:
-                            yield from (leaf for leaf in leaves if isinstance(leaf, str))
+                        yield from list_leaf_texts(val, depth)
                         if depth > 0:
                             yield from command_texts(val, depth - 1)
                     case dict() | list() if depth > 0:
@@ -108,7 +109,7 @@ class PayloadText(CustomCondition):
         re.compile(self.pattern)
 
     def check(self, evt: BaseHookEvent) -> bool:
-        return any(re.search(self.pattern, text[:SCAN_CAP]) for text in command_texts(evt.input.raw))
+        return any(re.search(self.pattern, text[:8192]) for text in command_texts(evt.input.raw))
 
 
 class DangerousMcpTool(CustomCondition):
@@ -129,7 +130,10 @@ class DangerousMcpTool(CustomCondition):
         match (evt.tool_name or "").split("__", 2):
             case ["mcp", _, tool]:
                 return not DANGEROUS_MCP_VERBS.isdisjoint(
-                    token.lower() for chunk in NON_LETTER.split(tool) for token in CAMEL_BOUNDARY.split(chunk) if token
+                    token.lower()
+                    for chunk in re.split(r"[^A-Za-z]+", tool)
+                    for token in re.split(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", chunk)
+                    if token
                 )
             case _:
                 return False

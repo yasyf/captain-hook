@@ -1,5 +1,5 @@
 name = "general"
-version = "0.24.0"
+version = "0.25.0"
 description = "Language-agnostic guards: git/jj command safety, doc & prompt nudges, task & plan discipline, model-routing nudges (review, security audit, diagnosis, and bounded decision-light implementation route to gpt-5.6-sol via the codex-wrapper agent; ambiguous/decision-dense/long-run implementation to opus xhigh), a browser-automation delegation nudge for sustained agent-browser/playwright work driven inline on fable, code-review + docs-freshness gates, a detour check-in nudge, blocking verbose-comment enforcement (comment runs over 3 lines / 200 chars denied on the post-edit text, doc-comment carve-out, a comment-density warn), a first-turn nudge to batch-load the always-used deferred tools in one ToolSearch call, and delegated-prose nudges that catch doc writing handed to a subagent or workflow without the writing-docs skill, and blocking rm safety (a delete outside a git/jj repo, of a repo root, or via a glob matching >10 files is denied; temp/scratch paths exempt)."
 hooks = "."
 nlp = true

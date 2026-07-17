@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -19,15 +20,19 @@ from captain_hook.util.scratch import is_scratch_path
 PACKS_DIR = Path(captain_hook.__file__).parent / "packs"
 
 
+@pytest.fixture
+def no_scratch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("captain_hook.util.scratch.TEMP_ROOTS", ())
+    monkeypatch.setattr("captain_hook.util.scratch.SCRATCH_DIR_NAMES", frozenset())
+
+
 class TestBlockRiskyRm:
     def test_repo_boundaries_and_root(
         self,
         isolate_modules: None,
-        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
         tmp_path: Path,
     ) -> None:
-        monkeypatch.setattr("captain_hook.util.scratch.TEMP_ROOTS", ())
-        monkeypatch.setattr("captain_hook.util.scratch.SCRATCH_DIR_NAMES", frozenset())
         discover_pack("general", PACKS_DIR / "general")
 
         def decision(command: str, cwd: Path | None = None) -> dict[str, Any] | None:
@@ -74,11 +79,9 @@ class TestBlockRiskyRm:
     def test_normalizes_executable_and_path_token(
         self,
         isolate_modules: None,
-        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
         tmp_path: Path,
     ) -> None:
-        monkeypatch.setattr("captain_hook.util.scratch.TEMP_ROOTS", ())
-        monkeypatch.setattr("captain_hook.util.scratch.SCRATCH_DIR_NAMES", frozenset())
         discover_pack("general", PACKS_DIR / "general")
 
         def decision(command: str, cwd: Path) -> dict[str, Any] | None:
@@ -107,11 +110,9 @@ class TestBlockRiskyRm:
     def test_leaf_symlink_semantics(
         self,
         isolate_modules: None,
-        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
         tmp_path: Path,
     ) -> None:
-        monkeypatch.setattr("captain_hook.util.scratch.TEMP_ROOTS", ())
-        monkeypatch.setattr("captain_hook.util.scratch.SCRATCH_DIR_NAMES", frozenset())
         discover_pack("general", PACKS_DIR / "general")
 
         def decision(command: str) -> dict[str, Any] | None:
@@ -201,10 +202,9 @@ class TestBlockRiskyRm:
     def test_unknown_user_tilde(
         self,
         isolate_modules: None,
-        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
         tmp_path: Path,
     ) -> None:
-        monkeypatch.setattr("captain_hook.util.scratch.TEMP_ROOTS", ())
         discover_pack("general", PACKS_DIR / "general")
         evt = input_to_event(
             Event.PreToolUse,
@@ -215,25 +215,38 @@ class TestBlockRiskyRm:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "repository" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
+    @pytest.mark.parametrize(
+        ("walked", "expect_deny"),
+        [
+            pytest.param(20_000, True, id="at-budget"),
+            pytest.param(19_999, False, id="under-budget"),
+        ],
+    )
     def test_recursive_glob_budget(
         self,
         isolate_modules: None,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        walked: int,
+        expect_deny: bool,
     ) -> None:
         discover_pack("general", PACKS_DIR / "general")
-        monkeypatch.setattr(sys.modules["captain_hook._packs.general.deletions"], "WALK_BUDGET", 50)
-        broad = tmp_path / "broad"
-        broad.mkdir()
-        for index in range(100):
-            directory = broad / str(index)
-            directory.mkdir()
-            (directory / "file.txt").write_text("")
-        evt = input_to_event(Event.PreToolUse, Input(command="rm **/*.zzz", cwd=str(broad)))
+        anchors: list[Path] = []
+
+        def fake_walked_paths(anchor: Path) -> Iterator[Path]:
+            anchors.append(anchor)
+            return (Path(f"/synthetic/{index}.txt") for index in range(walked))
+
+        monkeypatch.setattr(sys.modules["captain_hook._packs.general.deletions"], "walked_paths", fake_walked_paths)
+        evt = input_to_event(Event.PreToolUse, Input(command="rm **/*.zzz", cwd=str(tmp_path)))
         result = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
-        assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "too broad" in result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert anchors == [tmp_path.resolve()]
+        if expect_deny:
+            assert result is not None
+            assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+            assert "too broad" in result["hookSpecificOutput"]["permissionDecisionReason"]
+        else:
+            assert result is None
 
     def test_recursive_glob_does_not_follow_symlinks(self, isolate_modules: None, tmp_path: Path) -> None:
         discover_pack("general", PACKS_DIR / "general")
@@ -248,11 +261,9 @@ class TestBlockRiskyRm:
     def test_glob_validates_each_match(
         self,
         isolate_modules: None,
-        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
         tmp_path: Path,
     ) -> None:
-        monkeypatch.setattr("captain_hook.util.scratch.TEMP_ROOTS", ())
-        monkeypatch.setattr("captain_hook.util.scratch.SCRATCH_DIR_NAMES", frozenset())
         discover_pack("general", PACKS_DIR / "general")
         repo = tmp_path / "repo3"
         (repo / ".git").mkdir(parents=True)
@@ -272,10 +283,9 @@ class TestBlockRiskyRm:
     def test_tracks_literal_cd(
         self,
         isolate_modules: None,
-        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
         tmp_path: Path,
     ) -> None:
-        monkeypatch.setattr("captain_hook.util.scratch.TEMP_ROOTS", ())
         discover_pack("general", PACKS_DIR / "general")
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)

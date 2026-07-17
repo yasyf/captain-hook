@@ -16,7 +16,7 @@ from captain_hook import (
     llm_gate,
     nudge,
 )
-from captain_hook.packs.general._lib import EditedSource
+from captain_hook.packs.general._lib import SCRATCH_WORKFLOW_WRITE_FIXTURE, EditedSource
 from captain_hook.util import reqenv
 
 
@@ -155,27 +155,6 @@ llm_gate(
                 },
             ]
         ): Allow(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "Write",
-                                "id": "e1",
-                                "input": {
-                                    "file_path": (
-                                        "/tmp/claude-scratch/wf_0be55dd2/r4-judge-continuation-wf_0be55dd2-432.js"
-                                    ),
-                                    "content": "if (input.judgePrompt.length < 1000) throw new Error('tripwire')",
-                                },
-                            }
-                        ]
-                    },
-                },
-            ]
-        ): Allow(),
+        Input(transcript=SCRATCH_WORKFLOW_WRITE_FIXTURE): Allow(),
     },
 )
