@@ -4,6 +4,69 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.0.0] - 2026-07-17
+
+### Changed
+- **BREAKING: one `capt-hook.toml`, two sections.** The pack manifest and the
+  repo enable-list — previously two conflatable files — unify into a single
+  grammar: `[pack]` holds the manifest (`name`, `description`, `hooks`,
+  `version`, `nlp`, `marketplaces`), `[packs.<name>]` tables hold enablement
+  with the 9.x entry grammar unchanged (empty = builtin, `source`/`commit` =
+  GitHub, `disabled = true` = veto). The consumer file moves from
+  `.claude/hooks/packs.toml` to `.claude/capt-hook.toml`; the legacy path is
+  never read — no warning, no fallback — so a repo can pre-stage the new file
+  under 9.x and delete the old one after upgrading. Migration is one `git mv`
+  plus wrapping manifest keys under `[pack]`; unknown top-level keys are
+  ignored, so a pack-source repo can carry both grammars in one file through
+  the transition. A directory is a pack if and only if its manifest has a
+  `[pack]` section, so one file can be both a pack and a consumer. Every
+  manifest failure mode now raises `PackError` (the bare `KeyError` on a
+  missing required key is gone), and `pack add`/`pack remove` preserve a
+  coexisting `[pack]` table and its comments.
+- **BREAKING: plugin packs are discovered, not attached.** Dispatch enumerates
+  enabled Claude Code plugins via `claude plugin list --json` — cached
+  per-project in a snapshot invalidated by stat changes to
+  `installed_plugins.json` and the three settings files, so the ~1s CLI never
+  runs on a warm event — and loads any plugin whose root (or `hooks/` subdir)
+  ships a `[pack]` manifest. A declared `[packs.*]` name always beats a
+  same-name plugin pack, including `disabled = true` and — fixing a 9.x gap —
+  an external that is offline and uncached. Plugin packs now appear in
+  `pack list` (kind `plugin`) and load under `capt-hook test`, which the
+  session-scoped attach model never allowed. The pack-plugin contract shrinks
+  to three artifacts — the `[pack]` manifest, a `plugin.json` dependency on
+  captain-hook with a `>=` floor, and the marketplace
+  `allowCrossMarketplaceDependenciesOn` entry — with **zero** `hooks.json`
+  involvement; `pack lint` enforces exactly that and fails any remaining
+  capt-hook `hooks.json` line as predating the contract. A missing or broken
+  `claude` CLI degrades to an empty plugin roster, never a per-event penalty.
+- **Extra dependency marketplaces ride discovery, every tier.** A
+  `marketplaces = [...]` declaration now triggers the bootstrap worker from
+  the discovery tail, which covers repo-scoped GitHub packs too (declaring it
+  was inert for them before). The worker registers exactly the declared slugs
+  — the implicit `yasyf/captain-hook` prepend is gone, since wherever
+  discovery runs the dispatcher already exists — an empty union costs zero
+  I/O, and the spawn notice moved to stderr (dispatch stdout carries the
+  hook decision).
+- **`pack scaffold` emits the discovery contract.** Generated packs ship no
+  `hooks.json` at all, a `[pack]`-grammar manifest, and a dependency floor of
+  `>=10.0.0`.
+
+### Removed
+- **`pack attach` and the session-attach machinery** (`attached_packs.json`,
+  `AttachedPack`, the four-artifact plugin contract). A plugin still shipping
+  the attach line gets a non-blocking SessionStart hook warning under 10.x
+  until its cleanup release — its pack loads via discovery regardless. An
+  unmigrated repo (no `.claude/capt-hook.toml`) loads zero packs, silently;
+  `capt-hook heartbeats` or `capt-hook pack list` makes that visible.
+- **The captain-hook marketplace self-bootstrap.** A discovery-era pack plugin
+  executes nothing, so the attach-time self-install has no vector; on a
+  machine without captain-hook, Claude Code's dependency error is the visible
+  signal and `claude plugin marketplace add yasyf/captain-hook` is the
+  one-time fix.
+- **The SessionStart-subscription lint check.** Discovery happens inside every
+  event's dispatch, so there is no attach-vs-SessionStart ordering race left
+  to guard; packs may subscribe to `SessionStart`.
+
 ## [9.25.0] - 2026-07-16
 
 ### Added
