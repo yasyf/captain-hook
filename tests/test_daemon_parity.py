@@ -35,8 +35,8 @@ if TYPE_CHECKING:
 
 STOP_TRANSCRIPT = str(Path(__file__).resolve().parent / "fixtures" / "hook_fires" / "fire-stop.jsonl")
 
-# One hooks module covering every parity case. No packs.toml, so discovery loads only these hooks
-# (builtin packs stay off without a manifest) — deterministic output on both the warm and cold paths.
+# One hooks module covering every parity case. No capt-hook.toml and an isolated (plugin-free) config,
+# so discovery loads only these hooks — deterministic output on both the warm and cold paths.
 PARITY_HOOK_SRC = """
 from __future__ import annotations
 

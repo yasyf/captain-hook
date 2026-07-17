@@ -58,10 +58,14 @@ def short_run_dir() -> Path:
 
 def daemon_dirs() -> dict[str, Path]:
     dirs = {"run": short_run_dir()} | {
-        name: Path(tempfile.mkdtemp(prefix="chd-base-")) / name for name in ("state", "cache", "logs", "decisions")
+        name: Path(tempfile.mkdtemp(prefix="chd-base-")) / name
+        for name in ("state", "cache", "logs", "decisions", "config")
     }
     for path in dirs.values():
         path.mkdir(parents=True, exist_ok=True)
+    # Leave installed_plugins.json absent under the isolated config so plugin discovery stays hermetic:
+    # enabled_plugins() returns () without ever spawning a real `claude plugin list` in a subprocess.
+    (dirs["config"] / "plugins").mkdir(parents=True, exist_ok=True)
     return dirs
 
 
@@ -80,6 +84,7 @@ def daemon_env(root: Path, dirs: dict[str, Path], **overrides: str) -> dict[str,
             "XDG_CACHE_HOME": str(dirs["cache"]),
             "CAPTAIN_HOOK_LOG_DIR": str(dirs["logs"]),
             "CAPT_HOOK_DECISIONS_DB": str(dirs["decisions"] / "d.db"),
+            "CLAUDE_CONFIG_DIR": str(dirs["config"]),
             "CLAUDE_PROJECT_DIR": str(root),
         }
         | overrides

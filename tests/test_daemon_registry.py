@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import threading
 import time
@@ -12,20 +11,29 @@ import pytest
 from captain_hook.cli import CliState
 from captain_hook.daemon import registry
 from captain_hook.daemon.registry import Fingerprint, Registry
+from captain_hook.packs import plugins
 
 HOOK = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
-ATTACHED_HOOK = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='att')\n"
+PLUGIN_HOOK = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='pp')\n"
 
 
-def make_attached_pack(pack_root: Path, session: Path, *, hook_body: str = ATTACHED_HOOK, name: str = "att") -> Path:
+def write_snapshot(root: Path, roster: list[tuple[str, str]]) -> Path:
+    # Plant the discovery snapshot directly: the fingerprint reads it as-is (never refreshing via the
+    # CLI), so no fake `claude` is needed — a roster is a list of (plugin_id, plugin_root) pairs.
+    path = plugins.snapshot_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    plugins.PluginSnapshot(
+        stat=plugins.stat_records(root),
+        plugins=tuple(plugins.EnabledPlugin(id=pid, version="1.0.0", root=proot) for pid, proot in roster),
+    ).write(path)
+    return path
+
+
+def make_plugin_pack(pack_root: Path, *, hook_body: str = PLUGIN_HOOK, name: str = "pp") -> Path:
     (hooks := pack_root / "hooks").mkdir(parents=True, exist_ok=True)
     (conf := hooks / "conf.py").write_text(hook_body)
     (pack_root / "capt-hook.toml").write_text(
-        f'name = "{name}"\ndescription = "attached test pack"\nhooks = "hooks"\nversion = "0.1.0"\n'
-    )
-    session.mkdir(parents=True, exist_ok=True)
-    (session / "attached_packs.json").write_text(
-        json.dumps([{"name": name, "dir": str(pack_root), "version": "0.1.0"}])
+        f'[pack]\nname = "{name}"\ndescription = "plugin test pack"\nhooks = "hooks"\nversion = "0.1.0"\n'
     )
     return conf
 
@@ -34,23 +42,19 @@ def make_attached_pack(pack_root: Path, session: Path, *, hook_body: str = ATTAC
 def isolate_cache(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, isolate_modules: None
 ) -> None:
-    # discover() writes the resolve fastpath sidecar under resolve_cache_dir(); keep it off the
-    # real ~/.cache. isolate_modules drops the per-test `hooks.*` imports so a later project's
-    # discover can't reload a prior one's module from its stale spec under random ordering.
+    # discover() writes the resolve fastpath sidecar (and the plugin snapshot) under resolve_cache_dir();
+    # keep it off the real ~/.cache. isolate_modules drops the per-test `hooks.*` imports so a later
+    # project's discover can't reload a prior one's module from its stale spec under random ordering.
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("cache")))
     monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(tmp_path_factory.mktemp("run")))
 
 
-def make_project(
-    root: Path, *, hook_body: str = HOOK, gitignore: str | None = "*.log\n", packs_toml: str | None = None
-) -> CliState:
+def make_project(root: Path, *, hook_body: str = HOOK, gitignore: str | None = "*.log\n") -> CliState:
     hooks = root / ".claude" / "hooks"
     hooks.mkdir(parents=True, exist_ok=True)
     (hooks / "h.py").write_text(hook_body)
     if gitignore is not None:
         (root / ".gitignore").write_text(gitignore)
-    if packs_toml is not None:
-        (hooks / "packs.toml").write_text(packs_toml)
     return CliState(root=root, hooks=str(hooks))
 
 
@@ -59,8 +63,8 @@ def project(tmp_path: Path) -> CliState:
     return make_project(tmp_path / "proj")
 
 
-def fp(cli_state: CliState, session_dir: Path | None = None) -> Fingerprint:
-    return Fingerprint.compute(cli_state, session_dir)
+def fp(cli_state: CliState) -> Fingerprint:
+    return Fingerprint.compute(cli_state)
 
 
 # --- fingerprint invalidation matrix ---------------------------------------------------
@@ -90,9 +94,9 @@ def test_remove_file_changes_fingerprint(project: CliState) -> None:
     assert fp(project) != before
 
 
-def test_packs_toml_change_changes_fingerprint(project: CliState) -> None:
+def test_config_toml_change_changes_fingerprint(project: CliState) -> None:
     before = fp(project)
-    (Path(project.hooks) / "packs.toml").write_text("[packs.general]\n")
+    (project.root / ".claude" / "capt-hook.toml").write_text("[packs.general]\n")
     assert fp(project) != before
 
 
@@ -102,23 +106,37 @@ def test_gitignore_change_changes_fingerprint(project: CliState) -> None:
     assert fp(project) != before
 
 
-def test_attached_json_change_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
-    session = tmp_path / "session"
-    session.mkdir()
-    before = fp(project, session)
-    (session / "attached_packs.json").write_text(json.dumps([{"name": "p", "dir": "/nope", "version": "0.1.0"}]))
-    assert fp(project, session) != before
-    assert fp(project, session) != fp(project, None)
+def test_snapshot_roster_change_changes_fingerprint(project: CliState) -> None:
+    # A plugin enable/disable rewrites the discovery snapshot's roster; the fingerprint reads that
+    # snapshot, so a roster change must miss the cache even when no watched settings file moved.
+    write_snapshot(project.root, [("acme/one", "/nope")])
+    before = fp(project)
+    write_snapshot(project.root, [("acme/one", "/nope"), ("acme/two", "/nowhere")])
+    assert fp(project) != before
 
 
-def test_attached_pack_hook_edit_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
-    # The attach set is unchanged, but editing a hook file inside an attached pack must miss the cache —
-    # the fingerprint digests each attached pack's resolved hook tree, not just attached_packs.json.
-    session = tmp_path / "session"
-    conf = make_attached_pack(tmp_path / "attpack", session)
-    before = fp(project, session)
-    conf.write_text(ATTACHED_HOOK.replace("message='att'", "message='att-edited-and-longer'"))
-    assert fp(project, session) != before
+def test_plugin_pack_hook_edit_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
+    # The roster is unchanged, but editing a hook file inside a discovered plugin pack must miss the
+    # cache — the fingerprint digests each plugin pack's resolved hook tree, not just the snapshot roster.
+    plugin_root = tmp_path / "plug"
+    conf = make_plugin_pack(plugin_root)
+    write_snapshot(project.root, [("acme/pp", str(plugin_root))])
+    before = fp(project)
+    conf.write_text(PLUGIN_HOOK.replace("message='pp'", "message='pp-edited-and-much-longer'"))
+    assert fp(project) != before
+
+
+@pytest.mark.parametrize("idx", range(4))
+def test_watched_file_mtime_bump_changes_fingerprint(project: CliState, idx: int) -> None:
+    # Each of installed_plugins.json + the user/project settings stack invalidates the plugin roster:
+    # an mtime bump on any one moves _claude_stats and must miss the cache.
+    path = plugins.watched_paths(project.root)[idx]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n")
+    before = fp(project)
+    st = path.stat()
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert fp(project) != before
 
 
 def test_gitignore_preserved_mtime_rewrite_changes_fingerprint(project: CliState) -> None:
@@ -134,13 +152,14 @@ def test_gitignore_preserved_mtime_rewrite_changes_fingerprint(project: CliState
     assert fp(project) != before
 
 
-def test_pycache_and_fastpath_do_not_invalidate(project: CliState) -> None:
+def test_pycache_fastpath_and_snapshot_do_not_invalidate(project: CliState) -> None:
     # A build writes __pycache__ into the hooks dir and a resolve sidecar into the cache; the
-    # fingerprint must ignore the former and fold in the latter so the very next call still hits.
+    # fingerprint must ignore the former and fold in the latter (and the plugin snapshot bracket) so
+    # the very next call still hits.
     reg = Registry(project)
-    first = reg.get(None)
+    first = reg.get()
     assert (Path(project.hooks) / "__pycache__").is_dir()
-    assert reg.get(None) is first
+    assert reg.get() is first
 
 
 # --- registry cache behaviour ----------------------------------------------------------
@@ -148,46 +167,31 @@ def test_pycache_and_fastpath_do_not_invalidate(project: CliState) -> None:
 
 def test_cache_hit_returns_same_snapshot_object(project: CliState) -> None:
     reg = Registry(project)
-    snap = reg.get(None)
-    assert reg.get(None) is snap
+    snap = reg.get()
+    assert reg.get() is snap
     assert snap.resolved is not None
     assert snap.state.hooks, "discover populated the snapshot's state"
 
 
 def test_edit_forces_rebuild_new_snapshot(project: CliState) -> None:
     reg = Registry(project)
-    snap = reg.get(None)
+    snap = reg.get()
     (Path(project.hooks) / "h.py").write_text(HOOK.replace("message='m'", "message='changed-and-longer'"))
-    rebuilt = reg.get(None)
+    rebuilt = reg.get()
     assert rebuilt is not snap
     assert rebuilt.fingerprint != snap.fingerprint
 
 
-def test_two_attach_sets_produce_two_snapshots(project: CliState, tmp_path: Path) -> None:
-    sess_a, sess_b = tmp_path / "a", tmp_path / "b"
-    sess_a.mkdir()
-    sess_b.mkdir()
-    (sess_a / "attached_packs.json").write_text(json.dumps([{"name": "pa", "dir": "/x", "version": "0.1.0"}]))
-    (sess_b / "attached_packs.json").write_text(json.dumps([{"name": "pb", "dir": "/y", "version": "0.1.0"}]))
-
-    reg = Registry(project)
-    snap_a, snap_b = reg.get(sess_a), reg.get(sess_b)
-
-    assert snap_a is not snap_b
-    assert snap_a.fingerprint != snap_b.fingerprint
-    assert reg.get(sess_a) is snap_a
-
-
 def test_drop_all_forces_rebuild(project: CliState) -> None:
     reg = Registry(project)
-    snap = reg.get(None)
+    snap = reg.get()
     reg.drop_all()
-    assert reg.get(None) is not snap
+    assert reg.get() is not snap
 
 
 def test_snapshot_past_horizon_is_a_miss(project: CliState) -> None:
     reg = Registry(project)
-    snap = reg.get(None)
+    snap = reg.get()
     stale = Fingerprint(digest=snap.fingerprint.digest, horizon=time.time() - 1)
     reg._cache[stale] = registry.RegistrySnapshot(stale, snap.state, snap.resolved)
     assert stale.expired(time.time())
@@ -205,17 +209,17 @@ def test_build_never_serves_a_torn_discovery(project: CliState, monkeypatch: pyt
     original = CliState.discover
     calls: list[int] = []
 
-    def racing_discover(self: CliState, session_dir: Path | None = None) -> list[registry.manager.ResolvedPack]:
+    def racing_discover(self: CliState) -> list[registry.manager.ResolvedPack]:
         calls.append(1)
         if len(calls) == 1:
             hook_file.write_text("")  # torn: discovery reads an empty, truncated hook file
-            resolved = original(self, session_dir=session_dir)  # discovers nothing
+            resolved = original(self)  # discovers nothing
             hook_file.write_text(HOOK)  # the rewrite completes right after the torn read
             return resolved
-        return original(self, session_dir=session_dir)
+        return original(self)
 
     monkeypatch.setattr(CliState, "discover", racing_discover)
-    snapshot = reg._build(None)
+    snapshot = reg._build()
     assert len(calls) == 2, "the build did not retry after the tree moved during discovery"
     assert any(h.spec.message == "m" for h in snapshot.state.hooks), (
         "the served snapshot is the torn/empty intermediate — the project hook (message='m') is missing"
@@ -225,12 +229,12 @@ def test_build_never_serves_a_torn_discovery(project: CliState, monkeypatch: pyt
 def test_build_is_bounded_when_the_tree_keeps_moving(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
     # R4: an endlessly-churning tree must not spin forever — retries cap at BUILD_RETRIES.
     digests = iter(str(n) for n in range(1000))
-    monkeypatch.setattr(Fingerprint, "stable_digest", classmethod(lambda cls, cli, sd: next(digests)))
+    monkeypatch.setattr(Fingerprint, "stable_digest", classmethod(lambda cls, cli: next(digests)))
     reg = Registry(project)
     calls: list[int] = []
     real_discover = reg._discover_once
-    monkeypatch.setattr(reg, "_discover_once", lambda sd: (calls.append(1), real_discover(sd))[1])
-    result = reg._build(None)
+    monkeypatch.setattr(reg, "_discover_once", lambda: (calls.append(1), real_discover())[1])
+    result = reg._build()
     assert len(calls) == registry.BUILD_RETRIES, "the build was not bounded"
     assert result.state is not None
     assert result.cacheable is False, "an exhausted-retry (possibly torn) snapshot must not be cacheable"
@@ -243,9 +247,9 @@ def test_get_does_not_cache_a_non_cacheable_snapshot(project: CliState, monkeypa
     reg = Registry(project)
     builds: list[int] = []
     real = reg._discover_once
-    monkeypatch.setattr(reg, "_discover_once", lambda sd: (builds.append(1), replace(real(sd), cacheable=False))[1])
-    first = reg.get(None)
-    reg.get(None)
+    monkeypatch.setattr(reg, "_discover_once", lambda: (builds.append(1), replace(real(), cacheable=False))[1])
+    first = reg.get()
+    reg.get()
     assert first.cacheable is False
     assert len(builds) == 2, "a non-cacheable snapshot was cached and served on the second request"
     assert any(h.spec.message == "m" for h in first.state.hooks), "the served snapshot is missing the project hook"
@@ -257,19 +261,19 @@ def test_concurrent_get_builds_once(project: CliState) -> None:
     lock = threading.Lock()
     original = reg._build
 
-    def counting(session_dir: Path | None) -> registry.RegistrySnapshot:
+    def counting() -> registry.RegistrySnapshot:
         nonlocal builds
         with lock:
             builds += 1
         time.sleep(0.05)  # widen the window so peers pile up on the build lock
-        return original(session_dir)
+        return original()
 
     reg._build = counting
     start = threading.Barrier(12)
 
     def worker() -> registry.RegistrySnapshot:
         start.wait()
-        return reg.get(None)
+        return reg.get()
 
     with ThreadPoolExecutor(max_workers=12) as pool:
         snaps = [f.result() for f in [pool.submit(worker) for _ in range(12)]]

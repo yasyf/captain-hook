@@ -973,7 +973,7 @@ class TestDiscoveryDiagnosticsReplay:
         from captain_hook.daemon.server import Server
         from captain_hook.packs import manager
 
-        monkeypatch.setattr(manager, "resolve_enabled_packs", lambda _root: ([], ["ghost"]))
+        monkeypatch.setattr(manager, "resolve_enabled_packs", lambda _root, _entries: ([], ["ghost"]))
         root = make_project(tmp_path / "proj")
         env = dict(os.environ)
         payload = json.dumps({"tool_name": "Bash", "tool_input": {}})
