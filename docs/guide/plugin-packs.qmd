@@ -102,8 +102,16 @@ dispatch hot path, so the roster is cached per project and invalidated by stat
 changes to the files that shape it: Claude Code's `installed_plugins.json`, the
 user, project, and local `settings.json`, and the `managed-settings.json`
 locations (the config dir, `/Library/Application Support/ClaudeCode/`, and
-`/etc/claude-code/`). Installing, enabling, or disabling a plugin re-runs the
-CLI once; every other event reads the snapshot. The manifest probe itself runs
+`/etc/claude-code/`) along with their `managed-settings.d/` drop-in
+directories. Installing, enabling, or disabling a plugin re-runs the
+CLI once; every other event reads the snapshot.
+
+The stat tuple can only watch files. Policy that arrives another way — an MDM
+plist, a `policyHelper` binary, a remote managed policy, or per-session flags
+like `--plugin-dir` and `--settings` — changes what `claude plugin list`
+would report without moving any watched stat, and the roster stays stale
+until one does. When that bites, force a refresh: touch any settings file, or
+delete the project's `.plugins` snapshot under the capt-hook cache. The manifest probe itself runs
 live, so editing a hook file inside a plugin needs no invalidation at all. A
 missing `claude` CLI, a failing invocation, or roster output in a shape
 discovery can't use all degrade to an empty plugin roster — one warning, and
