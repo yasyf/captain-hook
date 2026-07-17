@@ -378,6 +378,26 @@ def test_manifest_in_missing_returns_root(tmp_path: Path) -> None:
     assert not found.is_file()
 
 
+def test_manifest_in_root_pack_beats_consumer_claude(tmp_path: Path) -> None:
+    # scaffold writes the [pack] manifest at the repo root; a later `pack add` writes a consumer-only
+    # .claude/capt-hook.toml. The candidate carrying [pack] wins, so the consumer file never shadows it.
+    (tmp_path / manager.PACK_MANIFEST).write_text('[pack]\nname = "ccx"\ndescription = "d"\nhooks = "."\n')
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / manager.PACK_MANIFEST).write_text("[packs.general]\n")  # consumer-only, no [pack]
+    assert manager.manifest_in(tmp_path) == tmp_path / manager.PACK_MANIFEST
+    probed = manager.load_pack_manifest(tmp_path)
+    assert probed is not None and probed.name == "ccx"
+
+
+def test_manifest_in_both_sections_single_claude_file_still_wins(tmp_path: Path) -> None:
+    # A single .claude/capt-hook.toml carrying both [pack] and [packs.*] keeps winning at .claude (it has [pack]).
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / manager.PACK_MANIFEST).write_text(
+        '[pack]\nname = "ccx"\ndescription = "d"\nhooks = "."\n\n[packs.general]\n'
+    )
+    assert manager.manifest_in(tmp_path) == tmp_path / ".claude" / manager.PACK_MANIFEST
+
+
 # --- config IO ([packs.*] enablement tables) -----------------------------------------
 
 
@@ -455,6 +475,28 @@ def test_upsert_and_delete_preserve_pack_table_and_comments(packs_toml: Path) ->
     assert "# top-of-file note" in text and "# a comment inside the manifest" in text
     assert manager.PackManifest.load(packs_toml).name == "ccx"
     assert manager.read_entries(packs_toml) == [manager.BuiltinPack("general")]
+
+
+def test_upsert_refuses_to_corrupt_a_multiline_pack_string(packs_toml: Path) -> None:
+    # A [pack] description whose multiline string contains a line that looks like a [packs.*] header
+    # would trip the line-based stripper; the rewrite guard re-parses and refuses, leaving the file intact.
+    original = (
+        "[pack]\n"
+        'name = "ccx"\n'
+        'description = """\n'
+        "multi-line\n"
+        "[packs.evil]\n"
+        "still the description\n"
+        '"""\n'
+        'hooks = "."\n\n'
+        "[packs.general]\n"
+    )
+    packs_toml.write_text(original)
+    with pytest.raises(manager.PackError):
+        manager.upsert_entry(
+            packs_toml, manager.ExternalPack("acme", manager.PackSource.parse("github:a/b@v1"), "a" * 40)
+        )
+    assert packs_toml.read_text() == original  # byte-unchanged: the guard fires before atomic_write
 
 
 def test_read_config_entries_and_probe_on_both_sections_file(tmp_path: Path) -> None:
@@ -577,6 +619,25 @@ def test_fetch_pack_prefers_claude_manifest_over_root(tmp_path: Path, monkeypatc
 
     resolved, _ = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
     assert resolved.manifest.name == "claude-pack"
+
+
+def test_fetch_pack_root_pack_beats_consumer_claude_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A repo whose .claude/capt-hook.toml is consumer-only ([packs.*], no [pack]) must fetch the ROOT
+    # [pack] manifest, not the shadowing .claude file — the fetch mirrors manifest_in's resolution.
+    repo = tmp_path / "repo"
+    write_pack(repo, "root-pack", hooks="hooks")  # root [pack] manifest
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / manager.PACK_MANIFEST).write_text("[packs.general]\n")  # consumer-only, no [pack]
+    (repo / "hooks").mkdir()
+    (repo / "hooks" / "h.py").write_text(HOOK_SRC)
+    tarball = tmp_path / "repo.tar.gz"
+    with tarfile.open(tarball, "w:gz") as tf:
+        tf.add(repo, arcname="sha-top")
+
+    install_fetch(monkeypatch, tmp_path, tarball, "b" * 40)
+
+    resolved, _ = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
+    assert resolved.manifest.name == "root-pack"
 
 
 def test_fetch_pack_root_hooks_caches_full_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

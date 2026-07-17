@@ -217,14 +217,36 @@ def config_path(root: Path) -> Path:
     return root / ".claude" / PACK_MANIFEST
 
 
-def manifest_in(root: Path) -> Path:
-    """Return the pack manifest path under root, preferring .claude/capt-hook.toml.
+def text_has_pack_section(text: str) -> bool:
+    """True when ``text`` is valid TOML declaring a ``[pack]`` table (malformed TOML reads as False)."""
+    with contextlib.suppress(tomllib.TOMLDecodeError):
+        return isinstance(tomllib.loads(text).get("pack"), dict)
+    return False
 
-    Falls back to the repo-root location. The returned path may not exist (the
-    canonical missing location), so PackManifest.load still fails loudly.
+
+def has_pack_section(path: Path) -> bool:
+    """True when ``path`` is a readable file whose TOML declares a ``[pack]`` table."""
+    with contextlib.suppress(OSError):
+        return path.is_file() and text_has_pack_section(path.read_text())
+    return False
+
+
+def manifest_in(root: Path) -> Path:
+    """Return the pack manifest path under root: the candidate that actually carries a ``[pack]`` section.
+
+    Probes ``.claude/capt-hook.toml`` then the repo-root ``capt-hook.toml``, returning the first that
+    carries a ``[pack]`` table — so a consumer-only ``.claude`` file (``[packs.*]`` enablement with no
+    ``[pack]``, as ``pack add`` writes) never shadows a valid root ``[pack]`` manifest (as ``scaffold``
+    writes). When neither carries ``[pack]`` (both absent, or both consumer-only) the historical
+    preference stands — ``.claude`` when it exists, else the root — so ``PackManifest.load`` still fails
+    loudly at the canonical missing location.
     """
     claude = root / ".claude" / PACK_MANIFEST
-    return claude if claude.is_file() else root / PACK_MANIFEST
+    rootfile = root / PACK_MANIFEST
+    return next(
+        (candidate for candidate in (claude, rootfile) if has_pack_section(candidate)),
+        claude if claude.is_file() else rootfile,
+    )
 
 
 def load_pack_manifest(root: Path) -> PackManifest | None:
@@ -317,10 +339,37 @@ def strip_packs_tables(text: str) -> str:
     return "".join(kept)
 
 
+def verify_config_rewrite(path: Path, original: str, new_text: str, entries: Sequence[PackEntry]) -> None:
+    """Refuse a ``[packs.*]`` rewrite that would corrupt the file, before any bytes reach disk.
+
+    ``strip_packs_tables`` is line-based, so a ``[pack]`` multiline string whose lines mimic a
+    ``[packs.*]`` header can make it drop real content. This is the guard, not a smarter parser:
+    re-parse the rewritten text and refuse it — raising ``PackError`` — unless (a) it parses, (b) its
+    ``[pack]`` table equals the original's, and (c) its ``[packs]`` table equals exactly the entries
+    asked for. Every refusal names the file and points at a hand edit.
+    """
+    intended = tomllib.loads(render_packs_toml(entries)).get("packs", {})
+    original_pack = tomllib.loads(original).get("pack") if original else None
+    try:
+        result = tomllib.loads(new_text)
+    except tomllib.TOMLDecodeError as e:
+        raise PackError(f"refusing to rewrite {path}: the result would not parse ({e}); hand-edit it instead") from e
+    if result.get("pack") != original_pack:
+        raise PackError(f"refusing to rewrite {path}: the [pack] manifest would change; hand-edit it instead")
+    if result.get("packs", {}) != intended:
+        raise PackError(
+            f"refusing to rewrite {path}: its [packs.*] tables would not match the intended entries; "
+            "hand-edit it instead"
+        )
+
+
 def write_config_entries(path: Path, entries: Sequence[PackEntry]) -> None:
-    preserved = strip_packs_tables(path.read_text()).rstrip("\n") if path.exists() else ""
+    original = path.read_text() if path.exists() else ""
+    preserved = strip_packs_tables(original).rstrip("\n") if original else ""
     rendered = render_packs_toml(entries)
-    atomic_write(path, f"{preserved}\n\n{rendered}" if preserved else rendered)
+    new_text = f"{preserved}\n\n{rendered}" if preserved else rendered
+    verify_config_rewrite(path, original, new_text, entries)
+    atomic_write(path, new_text)
 
 
 def upsert_entry(path: Path, entry: PackEntry) -> None:
@@ -384,6 +433,13 @@ def members_under(members: list[tarfile.TarInfo], hooks: str, manifest_path: str
             yield m
 
 
+def member_has_pack_section(tf: tarfile.TarFile, member: tarfile.TarInfo) -> bool:
+    if (extracted := tf.extractfile(member)) is None:
+        return False
+    with extracted:
+        return text_has_pack_section(extracted.read().decode(errors="replace"))
+
+
 def find_cached(name: str, sha: str) -> Path | None:
     return d if (d := packs_cache_root() / f"{name}@{sha}").is_dir() and (d / SHA_MARKER).is_file() else None
 
@@ -429,11 +485,12 @@ def fetch_commit(source: PackSource, sha: str) -> ResolvedPack:
         with tarfile.open(tarball) as tf:
             members = list(strip_top_level(tf))
             by_path = {m.path: m for m in members}
-            manifest_member = next(
-                (by_path[p] for p in (f".claude/{PACK_MANIFEST}", PACK_MANIFEST) if p in by_path), None
-            )
-            if manifest_member is None:
+            # Prefer the candidate that actually carries a [pack] section (mirrors manifest_in): a
+            # consumer-only .claude/capt-hook.toml in the archive must not shadow the root manifest.
+            candidates = [by_path[p] for p in (f".claude/{PACK_MANIFEST}", PACK_MANIFEST) if p in by_path]
+            if not candidates:
                 raise PackError(f"pack manifest {PACK_MANIFEST} missing in {source}")
+            manifest_member = next((m for m in candidates if member_has_pack_section(tf, m)), candidates[0])
             tf.extract(manifest_member, staging, filter="data")
             manifest = PackManifest.load(staging / manifest_member.path)
             tf.extractall(
