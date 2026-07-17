@@ -120,6 +120,24 @@ def test_hooks_subdir_layout_resolves(tmp_path: Path, monkeypatch: pytest.Monkey
     assert rp.path == plugin / "hooks"
 
 
+def test_split_file_layout_resolves_hooks_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # R8 repro: a consumer-only .claude/capt-hook.toml at the plugin root shadows nothing — the real
+    # [pack] lives one hooks/ level down, and discovery must resolve it there.
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    (install := tmp_path / "install" / "consumer" / "1.0.0").mkdir(parents=True)
+    (install / ".claude").mkdir(parents=True)
+    (install / ".claude" / manager.PACK_MANIFEST).write_text("[packs.general]\n")  # consumer-only
+    (hooks := install / "hooks").mkdir(parents=True)
+    (hooks / manager.PACK_MANIFEST).write_text(pack_manifest("nested", "1.0.0"))
+    (hooks / "h.py").write_text("from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='nested')\n")
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/consumer", install)])
+
+    (rp,) = plugins.resolve_plugin_packs(root, set())
+    assert rp.manifest.name == "nested"
+    assert rp.path == hooks  # the hooks/ manifest won, not the consumer .claude file
+
+
 def test_disabled_plugin_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plant_installed()
     (root := tmp_path / "proj").mkdir()
@@ -295,6 +313,41 @@ def test_cli_failure_caches_empty_roster_and_damps(
     plugins.installed_plugins_path().write_text("x" * 500)  # a watched-file change re-triggers
     plugins.enabled_plugins(root)
     assert calls.read_text() == "xx"
+
+
+def test_dead_shebang_claude_caches_empty_roster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, logcap) -> None:  # type: ignore[no-untyped-def]
+    # R1: a `claude` with a dead shebang passes shutil.which but fails exec with OSError — that must
+    # damp to an empty snapshot, not crash dispatch.
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    (bindir := tmp_path / "bin").mkdir(parents=True)
+    (script := bindir / "claude").write_text("#!/nonexistent/interpreter\nprint('unreachable')\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+
+    assert plugins.enabled_plugins(root) == ()
+    snap = plugins.PluginSnapshot.load(plugins.snapshot_path(root))
+    assert snap is not None and snap.plugins == ()  # empty-roster snapshot written, no exception escaped
+    assert [r for r in logcap.records if r.levelno == logging.WARNING and "claude plugin list failed" in r.message]
+
+
+def test_managed_settings_dropin_changes_invalidate_snapshot(tmp_path: Path) -> None:
+    # R5: a managed-settings.d drop-in under the config dir is watched — add/edit/remove of a *.json
+    # drop-in moves the stat tuple, invalidating a stale roster snapshot.
+    (root := tmp_path / "proj").mkdir()
+    dropin = resolve_claude_config_dir() / "managed-settings.d"
+    absent = plugins.stat_records(root)
+
+    dropin.mkdir(parents=True)
+    (drop := dropin / "10-policy.json").write_text('{"a": 1}')
+    added = plugins.stat_records(root)
+    assert added != absent  # a new drop-in moves the stat tuple
+
+    drop.write_text('{"policy": "changed and now longer"}')  # different byte length
+    assert plugins.stat_records(root) != added  # editing a drop-in moves it
+
+    drop.unlink()
+    assert plugins.stat_records(root) != added  # removing the drop-in moves it back off
 
 
 @pytest.mark.parametrize(

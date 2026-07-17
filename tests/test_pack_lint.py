@@ -297,3 +297,20 @@ def test_nested_manifest_layout_resolves(tmp_path: Path) -> None:
     write_plugin_json(plugin, CAPTAIN_DEP)
     write_marketplace(plugin, ["captain-hook"])
     assert failed(by_check(hooks)) == []  # lint receives the hooks/ dir, matching discovery's probe
+
+
+def test_split_file_layout_lint_resolves_hooks_manifest(tmp_path: Path) -> None:
+    # R8 repro at the PLUGIN ROOT: a consumer-only .claude/capt-hook.toml with the real [pack] one hooks/
+    # level down. Lint must resolve the hooks/ manifest, not blame the shadowing consumer file.
+    root = tmp_path / "plugin"
+    hooks = root / "hooks"
+    write_manifest(hooks, hooks=".")
+    (hooks / "h.py").write_text(POST_TOOL_HOOK)
+    (root / ".claude").mkdir(parents=True, exist_ok=True)
+    (root / ".claude" / manager.PACK_MANIFEST).write_text("[packs.general]\n")  # consumer-only shadow
+    write_plugin_json(root, CAPTAIN_DEP)
+    write_marketplace(root, ["captain-hook"])
+    results = by_check(root)
+    assert results["manifest"].ok
+    assert str(hooks / manager.PACK_MANIFEST) in results["manifest"].reason  # the hooks/ manifest resolved
+    assert failed(results) == []

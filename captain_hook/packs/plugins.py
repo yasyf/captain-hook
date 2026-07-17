@@ -16,6 +16,7 @@ snapshot invalidation.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tomllib
 from collections.abc import Set
@@ -31,14 +32,18 @@ from captain_hook.packs import manager
 from captain_hook.util.paths import resolve_claude_config_dir
 
 CLI_TIMEOUT_SECONDS = 60
-# Enterprise managed settings can enable/disable plugins; Claude Code reads them from a fixed OS
-# location (macOS/Linux) plus the config dir, so a change to any must re-run the roster CLI.
-MANAGED_SETTINGS_PATHS = (
-    Path("/Library/Application Support/ClaudeCode/managed-settings.json"),
-    Path("/etc/claude-code/managed-settings.json"),
+# Enterprise managed settings can enable/disable plugins; Claude Code reads them from fixed OS
+# locations (macOS/Linux) plus the config dir, each with a sibling managed-settings.d drop-in dir.
+MANAGED_SETTINGS_DIRS = (
+    Path("/Library/Application Support/ClaudeCode"),
+    Path("/etc/claude-code"),
 )
 
 type StatRecord = tuple[str, int, int, int] | tuple[str, None]
+
+
+def managed_settings_dirs(config: Path) -> tuple[Path, ...]:
+    return (config, *MANAGED_SETTINGS_DIRS)
 
 
 class PluginListError(Exception):
@@ -54,25 +59,36 @@ def watched_paths(root: Path) -> tuple[Path, ...]:
     return (
         installed_plugins_path(),
         config / "settings.json",
-        config / "managed-settings.json",
-        *MANAGED_SETTINGS_PATHS,
+        *(d / "managed-settings.json" for d in managed_settings_dirs(config)),
         root / ".claude" / "settings.json",
         root / ".claude" / "settings.local.json",
     )
 
 
 def stat_record(path: Path) -> StatRecord:
+    abs_path = os.path.abspath(path)
     try:
         st = path.stat()
     except OSError:
-        return (str(path), None)
+        return (abs_path, None)
     # ctime is folded in alongside mtime+size: a same-size, mtime-restored rewrite moves only ctime,
     # and without it the roster snapshot would stay "fresh" across such an edit.
-    return (str(path), st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+    return (abs_path, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+
+
+def dropin_records(dropin_dir: Path) -> tuple[StatRecord, ...]:
+    """A ``managed-settings.d`` dir's own stat plus one per contained ``*.json`` (sorted); a lone
+    ``(path, None)`` when the dir is absent. The dir stat catches drop-in adds/removes, the per-file
+    records catch edits."""
+    if not dropin_dir.is_dir():
+        return (stat_record(dropin_dir),)
+    return (stat_record(dropin_dir), *(stat_record(p) for p in sorted(dropin_dir.glob("*.json"))))
 
 
 def stat_records(root: Path) -> tuple[StatRecord, ...]:
-    return tuple(stat_record(p) for p in watched_paths(root))
+    config = resolve_claude_config_dir()
+    dropins = tuple(rec for d in managed_settings_dirs(config) for rec in dropin_records(d / "managed-settings.d"))
+    return tuple(stat_record(p) for p in watched_paths(root)) + dropins
 
 
 def snapshot_path(root: Path) -> Path:
@@ -144,18 +160,23 @@ def list_plugins_cli(root: Path) -> tuple[EnabledPlugin, ...]:
     """Run ``claude plugin list --json`` in ``root`` and return its enabled, installed plugins.
 
     The single subprocess boundary of discovery. Keeps only entries Claude Code reports as ``enabled``
-    with a string ``installPath``. Raises :class:`PluginListError` on a nonzero exit and on any roster
-    shape it cannot use — a non-array top level, unparseable JSON, or an entry that trips the parser —
-    so every failure lands on ``enabled_plugins``' warning-and-empty-snapshot path, never crashing
-    dispatch. A subprocess timeout still surfaces as the native ``subprocess.TimeoutExpired``.
+    with a string ``installPath``. Raises :class:`PluginListError` on a nonzero exit, on an ``OSError``
+    that keeps the CLI from executing (a ``claude`` on PATH with a dead shebang passes ``shutil.which``
+    but fails ``exec``), and on any roster shape it cannot use — a non-array top level, unparseable JSON,
+    or an entry that trips the parser — so every failure lands on ``enabled_plugins``'
+    warning-and-empty-snapshot path, never crashing dispatch. A subprocess timeout still surfaces as the
+    native ``subprocess.TimeoutExpired``.
     """
-    result = subprocess.run(
-        ["claude", "plugin", "list", "--json"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        timeout=CLI_TIMEOUT_SECONDS,
-    )
+    try:
+        result = subprocess.run(
+            ["claude", "plugin", "list", "--json"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=CLI_TIMEOUT_SECONDS,
+        )
+    except OSError as e:
+        raise PluginListError(f"claude plugin list could not be executed: {e}") from e
     if result.returncode != 0:
         raise PluginListError(f"claude plugin list exited {result.returncode}: {result.stderr.strip()}")
     try:
@@ -207,10 +228,9 @@ def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
 
 
 def probe_plugin_pack(plugin: EnabledPlugin) -> tuple[Path, manager.PackManifest] | None:
-    for probe in (Path(plugin.root), Path(plugin.root) / "hooks"):
-        if (manifest := manager.load_pack_manifest(probe)) is not None:
-            return probe, manifest
-    return None
+    location = manager.resolve_manifest(Path(plugin.root))
+    manifest = manager.manifest_at(location.manifest)
+    return (location.pack_root, manifest) if manifest is not None else None
 
 
 def resolve_plugin_packs(root: Path, declared: Set[str]) -> list[manager.ResolvedPack]:

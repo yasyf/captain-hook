@@ -89,9 +89,8 @@ def execute(plan: Plan) -> ScaffoldAction:
 
 def pack_layout(root: Path) -> tuple[bool, Path, Path]:
     """Resolve ``root``'s ``(nested, pack_root, manifest_path)`` the same way ``pack lint`` does."""
-    nested = not manager.manifest_in(root).is_file() and manager.manifest_in(root / "hooks").is_file()
-    pack_root = root / "hooks" if nested else root
-    return nested, pack_root, manager.manifest_in(pack_root)
+    location = manager.resolve_manifest(root)
+    return location.pack_root != root, location.pack_root, location.manifest
 
 
 def dependency_floor() -> str:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import tarfile
+import tomllib
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
@@ -499,6 +500,37 @@ def test_upsert_refuses_to_corrupt_a_multiline_pack_string(packs_toml: Path) -> 
     assert packs_toml.read_text() == original  # byte-unchanged: the guard fires before atomic_write
 
 
+def test_upsert_refuses_to_corrupt_a_top_level_string_outside_pack(packs_toml: Path) -> None:
+    # R7: a top-level string mimicking [packs.decoy]/[[resume-copy]] corrupts content outside
+    # [pack]/[packs], where the old guard never looked; the whole-document-minus-packs check catches it.
+    original = (
+        'banner = """\n[packs.decoy]\n[[resume-copy]]\n"""\n\n[pack]\nname = "guards"\ndescription = "d"\nhooks = "."\n'
+    )
+    packs_toml.write_text(original)
+    with pytest.raises(manager.PackError):
+        manager.upsert_entry(packs_toml, manager.BuiltinPack("general"))
+    assert packs_toml.read_text() == original  # byte-unchanged: the guard fires before atomic_write
+
+
+def test_upsert_round_trips_pack_comment_and_extra_top_level_key(packs_toml: Path) -> None:
+    # R7 converse: a normal file ([pack] + comment + an unrelated top-level table) still round-trips.
+    packs_toml.write_text(
+        "# a comment\n"
+        "[pack]\n"
+        'name = "guards"\n'
+        'description = "d"\n'
+        'hooks = "."\n\n'
+        "[tool.other]\n"
+        'key = "value"\n\n'
+        "[packs.general]\n"
+    )
+    manager.upsert_entry(packs_toml, manager.BuiltinPack("ccx"))
+    result = tomllib.loads(packs_toml.read_text())
+    assert set(result["packs"]) == {"general", "ccx"}
+    assert result["pack"]["name"] == "guards" and result["tool"]["other"] == {"key": "value"}
+    assert "# a comment" in packs_toml.read_text()
+
+
 def test_read_config_entries_and_probe_on_both_sections_file(tmp_path: Path) -> None:
     (tmp_path / ".claude").mkdir()
     manager.config_path(tmp_path).write_text(
@@ -638,6 +670,31 @@ def test_fetch_pack_root_pack_beats_consumer_claude_file(tmp_path: Path, monkeyp
 
     resolved, _ = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
     assert resolved.manifest.name == "root-pack"
+
+
+def test_fetch_pack_hooks_manifest_beats_consumer_claude_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # R8 repro: a consumer-only .claude/capt-hook.toml with the real [pack] one hooks/ level down. Fetch
+    # resolves the hooks/ manifest like discovery/lint, and re-resolution keeps hooks_dir under hooks/.
+    repo = tmp_path / "repo"
+    write_pack(repo / "hooks", "nested-pack", hooks=".")  # [pack] at hooks/capt-hook.toml
+    (repo / "hooks" / "h.py").write_text(HOOK_SRC)
+    (repo / ".claude").mkdir(parents=True)
+    (repo / ".claude" / manager.PACK_MANIFEST).write_text("[packs.general]\n")  # consumer-only shadow
+    tarball = tmp_path / "repo.tar.gz"
+    with tarfile.open(tarball, "w:gz") as tf:
+        tf.add(repo, arcname="sha-top")
+
+    sha = "c" * 40
+    install_fetch(monkeypatch, tmp_path, tarball, sha)
+
+    resolved, _ = manager.fetch_pack(manager.PackSource.parse("github:acme/guards@v1"))
+    assert resolved.manifest.name == "nested-pack"
+    assert (resolved.path / "h.py").is_file()
+    cached = tmp_path / "cache" / f"nested-pack@{sha}"
+    assert manager.manifest_in(cached) == cached / "hooks" / manager.PACK_MANIFEST
+    re_resolved = manager.resolve_external(resolved.entry)
+    assert re_resolved is not None and re_resolved.manifest.name == "nested-pack"
+    assert (re_resolved.path / "h.py").is_file()
 
 
 def test_fetch_pack_root_hooks_caches_full_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

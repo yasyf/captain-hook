@@ -700,11 +700,10 @@ def _lint_pack_hooks(manifest: manager.PackManifest, root: Path) -> list[LintRes
 
 def lint_pack(root: Path) -> list[LintResult]:
     """Vet a plugin pack against the discovery contract; see :func:`pack_lint` for the checks."""
-    # The manifest sits at the plugin root, or one `hooks/` level below it (both attach-era layouts);
-    # discovery probes each. pack_root is the dir the manifest resolves under.
-    nested = not manager.manifest_in(root).is_file() and manager.manifest_in(root / "hooks").is_file()
-    pack_root = root / "hooks" if nested else root
-    manifest_path = manager.manifest_in(pack_root)
+    # The shared resolver picks the manifest across the four layouts exactly as discovery does, so lint
+    # never blames a consumer-only .claude file that discovery skips.
+    location = manager.resolve_manifest(root)
+    pack_root, manifest_path = location.pack_root, location.manifest
     manifest_dir = manifest_path.parent
     try:
         manifest = manager.PackManifest.load(manifest_path)
