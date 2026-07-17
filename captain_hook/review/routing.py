@@ -79,11 +79,15 @@ class PackIndex:
         plugins: The sanitized module prefixes of packs shipped on the project's enabled
             plugins that no declared ``[packs.*]`` entry shadows — a misfire whose ``kind``
             prefix is one of these routes to no repo this wave and is dropped.
+        plugin_dirs: The hooks directories of those same non-shadowed plugin packs — the source
+            arm dropping a plugin-pack misfire whose hook fired under a bare ``@on`` function name
+            (no ``<pack>.`` prefix in its ``kind``, so ``plugins`` can't catch it) by its source dir.
     """
 
     builtins: Mapping[str, Path]
     externals: Mapping[str, ExternalRoute]
     plugins: frozenset[str] = frozenset()
+    plugin_dirs: frozenset[str] = frozenset()
 
     @classmethod
     def load(cls, root: Path | None) -> PackIndex:
@@ -128,7 +132,7 @@ class PackIndex:
             and find_cached(entry.name, sha) is not None
         }
         declared = {pack_module_name(entry.name) for entry in entries}
-        discovered: set[str] = set()
+        discovered: dict[str, str] = {}
         snapshot = plugin_discovery.PluginSnapshot.load(plugin_discovery.snapshot_path(root))
         for plugin in snapshot.plugins if snapshot else ():
             try:
@@ -136,5 +140,9 @@ class PackIndex:
             except (PackError, tomllib.TOMLDecodeError, OSError):
                 continue
             if probed is not None:
-                discovered.add(pack_module_name(probed[1].name))
-        return cls(builtins=builtins, externals=externals, plugins=frozenset(discovered) - declared)
+                probe, manifest = probed
+                discovered[pack_module_name(manifest.name)] = str(manifest.hooks_dir(probe))
+        live = {module: hooks for module, hooks in discovered.items() if module not in declared}
+        return cls(
+            builtins=builtins, externals=externals, plugins=frozenset(live), plugin_dirs=frozenset(live.values())
+        )

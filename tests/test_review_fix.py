@@ -454,6 +454,27 @@ class TestResolveTarget:
             source, "guard:warn_deadbeef", None, None
         )
 
+    def test_bare_named_plugin_pack_hook_drops_by_source_dir(self) -> None:
+        # A bare `@on` name carries no `<pack>.` prefix for the name arm, so the source-dir arm drops it.
+        hooks_dir = "/home/u/.claude/plugins/cache/acme/notify/1.0.0/hooks"
+        index = PackIndex(
+            builtins=INDEX.builtins, externals={}, plugins=frozenset(), plugin_dirs=frozenset({hooks_dir})
+        )
+        assert resolve_target(make_decision(kind="my_bare_hook", source_file=f"{hooks_dir}/alerts.py"), index) is None
+
+    def test_repo_hook_outside_plugin_dirs_stays_local(self) -> None:
+        # The source arm matches only by containment: a repo hook outside every plugin dir stays local.
+        index = PackIndex(
+            builtins=INDEX.builtins,
+            externals={},
+            plugins=frozenset(),
+            plugin_dirs=frozenset({"/home/u/.claude/plugins/cache/acme/notify/1.0.0/hooks"}),
+        )
+        source = "/repo/.claude/hooks/guard.py"
+        assert resolve_target(make_decision(kind="guard:warn_deadbeef", source_file=source), index) == Target(
+            source, "guard:warn_deadbeef", None, None
+        )
+
     @pytest.mark.parametrize(
         ("source_file", "expected"),
         [
@@ -496,6 +517,13 @@ class TestPackIndex:
         root = tmp_path / "proj"
         plant_plugin_pack(tmp_path, monkeypatch, root, name="ccx-rel")
         assert PackIndex.load(root).plugins == frozenset({"ccx_rel"})
+
+    def test_load_records_plugin_dirs_for_the_source_arm(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The source arm needs each non-shadowed plugin pack's hooks dir; PackIndex.load records them
+        # (hooks="." here, so the pack root is the hooks dir).
+        root = tmp_path / "proj"
+        plugin_dir = plant_plugin_pack(tmp_path, monkeypatch, root, name="notify")
+        assert PackIndex.load(root).plugin_dirs == frozenset({str(plugin_dir)})
 
     def test_load_reads_the_snapshot_without_a_subprocess(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

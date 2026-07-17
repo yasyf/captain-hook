@@ -39,10 +39,11 @@ records the wheel or cache file — all of these route through the ``kind``: a
 ``<pack>.<module>`` prefix naming a module the installed builtin pack actually ships targets
 the pack source inside captain-hook itself (``captain_hook/packs/<pack>/<module>.py``, repo
 captain-hook), a prefix naming a cached external pack the project declares targets that pack's
-``github.com/<owner>/<repo>`` at the file's in-repo path, a prefix naming a pack discovered on
-an enabled Claude Code plugin is dropped (plugin packs route to no repo this wave), and any
-other module prefix — including a packaged user hook whose package merely shares a builtin
-pack's name — targets the repo-local ``.claude/hooks/<module>.py``.
+``github.com/<owner>/<repo>`` at the file's in-repo path, a hook shipped by a pack discovered on
+an enabled Claude Code plugin is dropped (plugin packs route to no repo this wave) — by its ``kind``
+prefix, or, for a bare ``@on`` name that carries none, by its source dir — and any other module
+prefix — including a packaged user hook whose package merely shares a builtin pack's name — targets
+the repo-local ``.claude/hooks/<module>.py``.
 Unattributable or unresolvable complaints (including legacy kinds whose prefix is
 not a module path, e.g. ``<frozen importlib``) are dropped — precision over recall.
 """
@@ -51,6 +52,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from cc_transcript.filterspec import tool_uses
@@ -290,14 +292,31 @@ def external_target_path(source_file: str) -> str | None:
     return source_file.partition(PACK_CACHE_SEGMENT)[2].partition("/")[2] or None
 
 
+def under_plugin_dir(source_file: str, plugin_dirs: frozenset[str]) -> bool:
+    """True when ``source_file`` lives inside one of the discovered plugin packs' hooks dirs.
+
+    Both sides resolve, so a symlinked temp root (or an unresolved recorded path) still matches. This
+    is the source arm for a plugin-pack hook whose bare ``@on`` name carries no ``<pack>.`` prefix to
+    route on — the name arm can't see it, but its source dir gives it away.
+    """
+    if not source_file or not plugin_dirs:
+        return False
+    source = Path(source_file).resolve()
+    return any(source.is_relative_to(Path(d).resolve()) for d in plugin_dirs)
+
+
+def from_plugin_pack(decision: Decision, module: str, sep: str, index: PackIndex) -> bool:
+    # A plugin pack's hook fires from the plugin install dir (a repo-looking path). Drop it whether its
+    # kind is a `<pack>.<mod>:` prefix (a primitive) or a bare `@on` name matched only by its source dir.
+    prefixed = bool(sep and module and len(segments := module.split(".")) >= 2 and segments[0] in index.plugins)
+    return prefixed or under_plugin_dir(decision.source_file, index.plugin_dirs)
+
+
 def resolve_target(decision: Decision, index: PackIndex) -> Target | None:
     module, sep, _ = decision.kind.partition(":")
-    # A discovered plugin pack's hook fires from the plugin's install dir — a path that reads as
-    # a repo file to ``user_repo_source`` — so drop it here on the ``kind`` prefix, ahead of both
-    # the verbatim early return and the ``.claude/hooks`` fallback, either of which would misfile
-    # its fix as a repo-local PR. Plugin-pack kinds are always ``<pack>.<mod>`` (two segments); a
-    # single-segment repo hook that merely shares a plugin's name keeps its repo-local route.
-    if sep and module and len(segments := module.split(".")) >= 2 and segments[0] in index.plugins:
+    # Drop a plugin-pack misfire ahead of the verbatim early return and the `.claude/hooks` fallback,
+    # either of which would misfile its fix as a repo-local PR (no repo target for plugin packs this wave).
+    if from_plugin_pack(decision, module, sep, index):
         logger.bind(hook=decision.kind).debug("dropped plugin-pack misfire complaint; no repo target this wave")
         return None
     if user_repo_source(decision.source_file):
