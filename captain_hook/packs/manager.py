@@ -88,7 +88,9 @@ def parse_marketplaces(raw: object) -> tuple[str, ...]:
     if not isinstance(raw, (list, tuple)):
         raise PackError(f"marketplaces must be a list of owner/repo slugs, got {raw!r}")
     for slug in raw:
-        if not (isinstance(slug, str) and MARKETPLACE_REPO_RE.fullmatch(slug)):
+        if not isinstance(slug, str):
+            raise PackError(f"marketplace repo {slug!r} must be a string owner/repo slug")
+        if not MARKETPLACE_REPO_RE.fullmatch(slug):
             raise PackError(f"marketplace repo {slug!r} must match {MARKETPLACE_REPO_RE.pattern}")
     return tuple(raw)
 
