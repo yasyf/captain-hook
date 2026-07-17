@@ -35,7 +35,6 @@ from captain_hook.packs.contract import (
     MARKETPLACE_REPO,
     PLUGIN_ID,
     VERSION_FLOOR_RE,
-    command_entries,
     search_upward,
 )
 from captain_hook.review.cli import review
@@ -82,7 +81,7 @@ class CliState:
                 file=sys.stderr,
             )
         # Bootstrap every pack's declared dependency marketplaces (order-preserving union);
-        # maybe_bootstrap is zero-I/O on an empty union and notices on stderr, never stdout.
+        # maybe_bootstrap is zero-I/O on an empty union and prints nothing on any stream.
         bootstrap.maybe_bootstrap(list(dict.fromkeys(m for pack_ in packs for m in pack_.manifest.marketplaces)))
         return packs
 
@@ -581,27 +580,28 @@ class LintResult:
 
 
 def _lint_hooks_json(root: Path, manifest_dir: Path) -> LintResult:
-    # A discovered pack ships zero capt-hook invocations, so a hooks.json (at either attach-era
-    # layout) must not mention capt-hook; an absent one is the expected shape and passes.
+    # Raw-text scan, not a shape walk: the contract is zero capt-hook mention, and a walker's false
+    # negatives (argv-list commands, wrapper nesting) beat a rare false positive. Absent hooks.json passes.
     present = [p for p in dict.fromkeys([root / "hooks" / "hooks.json", manifest_dir / "hooks.json"]) if p.is_file()]
     if not present:
         return LintResult("hooks.json", True, "no hooks.json — a discovered pack ships zero capt-hook invocations")
     offenders: list[str] = []
     for path in present:
         try:
-            data = json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError) as e:
+            text = path.read_text()
+        except OSError as e:
             return LintResult("hooks.json", False, f"{path} is unreadable: {e}")
-        offenders += [f"{path.name}:{event}:{cmd!r}" for event, cmd in command_entries(data) if DIST_NAME in cmd]
+        if DIST_NAME in text:
+            offenders.append(str(path))
     if offenders:
         return LintResult(
             "hooks.json",
             False,
-            f"{len(offenders)} capt-hook command entr{'y' if len(offenders) == 1 else 'ies'} "
-            f"({', '.join(offenders)}) — this pack predates the discovery contract; discovery loads a "
-            f"pack's hooks with no hooks.json entry, so delete its {DIST_NAME!r} line",
+            f"{', '.join(offenders)} mention{'s' if len(offenders) == 1 else ''} {DIST_NAME!r} — this pack "
+            f"predates the discovery contract; discovery loads a pack's hooks with no hooks.json entry, so "
+            f"delete the {DIST_NAME!r} line(s)",
         )
-    return LintResult("hooks.json", True, f"no capt-hook command entries in {', '.join(str(p) for p in present)}")
+    return LintResult("hooks.json", True, f"no {DIST_NAME!r} mention in {', '.join(str(p) for p in present)}")
 
 
 def _dep_contract_reason(dep: str | dict[str, Any]) -> str | None:

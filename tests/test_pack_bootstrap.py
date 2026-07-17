@@ -215,49 +215,40 @@ def test_given_slugs_spawn_exact_argv_and_mark_each(
     assert call.kwargs["stdout"] is call.kwargs["stderr"]
     assert bootstrap.marker_path(CAPTAIN).is_file()  # per-repo markers, both recorded
     assert bootstrap.marker_path(PRESENT).is_file()
-    captured = capsys.readouterr()
-    assert CAPTAIN in captured.err and PRESENT in captured.err  # the notice names both, on stderr
-    assert captured.out == ""  # never stdout
+    assert capsys.readouterr() == ("", "")  # maybe_bootstrap prints nothing on any stream
 
 
-def test_notice_lands_on_stderr_not_stdout(
+def test_maybe_bootstrap_prints_nothing_on_any_stream(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     use_config(monkeypatch, seed_config(tmp_path))  # nothing known
     claude_present(monkeypatch)
-    capture_popen(monkeypatch)
+    calls = capture_popen(monkeypatch)
     bootstrap.maybe_bootstrap([PRESENT])
-    captured = capsys.readouterr()
-    assert bootstrap.bootstrap_notice([PRESENT]) in captured.err  # the notice is a stderr diagnostic
-    assert captured.out == ""  # dispatch stdout carries the hook-decision JSON — never the notice
+    assert worker_repos(calls[0]) == [PRESENT]  # the worker still spawns
+    # A spawn logs one loguru info line, never an event-like stderr notice the warm daemon would replay stale.
+    assert capsys.readouterr() == ("", "")
 
 
 # --- ordering: per-repo damping ------------------------------------------------------
 
 
-def test_narrow_then_broad_spawns_only_for_new_repo(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_narrow_then_broad_spawns_only_for_new_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     use_config(monkeypatch, seed_config(tmp_path))  # nothing known
     claude_present(monkeypatch)
     calls = capture_popen(monkeypatch)
 
     bootstrap.maybe_bootstrap([CAPTAIN])  # records captain-hook's marker, spawns for it
     assert worker_repos(calls[-1]) == [CAPTAIN]
-    assert CAPTAIN in capsys.readouterr().err
 
     bootstrap.maybe_bootstrap([CAPTAIN, PRESENT])  # captain-hook damped by its fresh marker; cc-present fresh-absent
     assert worker_repos(calls[-1]) == [PRESENT]  # only cc-present spawns — the narrow run did not damp it
-    second = capsys.readouterr()
-    assert PRESENT in second.err and CAPTAIN not in second.err
 
 
 # --- per-repo cooldown ---------------------------------------------------------------
 
 
-def test_fresh_cc_present_marker_suppresses_only_it(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_fresh_cc_present_marker_suppresses_only_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     use_config(monkeypatch, seed_config(tmp_path))  # nothing known
     claude_present(monkeypatch)
     bootstrap.record_attempt(bootstrap.marker_path(PRESENT), time.time())
@@ -267,8 +258,6 @@ def test_fresh_cc_present_marker_suppresses_only_it(
 
     assert len(calls) == 1
     assert worker_repos(calls[0]) == [CAPTAIN]  # cc-present damped by its fresh marker; captain-hook still spawns
-    captured = capsys.readouterr()
-    assert CAPTAIN in captured.err and PRESENT not in captured.err
 
 
 def test_fresh_captain_marker_suppresses_respawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -366,16 +355,13 @@ def test_hot_path_reads_known_marketplaces_once(monkeypatch: pytest.MonkeyPatch,
     assert reads == 1  # one read on the hot path, not two
 
 
-def test_duplicate_marketplaces_deduped_in_worker_argv(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # fix #6: a manifest repeating an extra must not double the worker argv or the notice.
+def test_duplicate_marketplaces_deduped_in_worker_argv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # fix #6: a manifest repeating an extra must not double the worker argv.
     use_config(monkeypatch, seed_config(tmp_path))  # nothing known
     claude_present(monkeypatch)
     calls = capture_popen(monkeypatch)
     bootstrap.maybe_bootstrap([CAPTAIN, PRESENT, PRESENT])
     assert worker_repos(calls[0]) == [CAPTAIN, PRESENT]  # order-preserving dedupe, one of each
-    assert capsys.readouterr().err.count(PRESENT) == 1  # the notice names each once
 
 
 # --- run_bootstrap worker ------------------------------------------------------------
@@ -532,7 +518,7 @@ def test_stub_claude_e2e_maybe_bootstrap_registers_marketplace(
 
     # A discovered pack declaring captain-hook as an extra marketplace: detaches a real worker.
     bootstrap.maybe_bootstrap([CAPTAIN])
-    assert bootstrap.bootstrap_notice([CAPTAIN]) in capsys.readouterr().err  # the notice on stderr
+    assert capsys.readouterr() == ("", "")  # the spawn logs a loguru line, prints nothing on any stream
 
     def registered() -> bool:
         return known.exists() and CAPTAIN in known.read_text()

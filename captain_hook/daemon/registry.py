@@ -38,7 +38,7 @@ BUILD_RETRIES = 3
 StatEntry = tuple[int, int, int]
 HookEntry = tuple[str, int, int, int]
 MetaEntry = tuple[str, StatEntry | None]
-PluginTree = tuple[str, tuple[HookEntry, ...]]
+PluginTree = tuple[str, StatEntry | None, tuple[HookEntry, ...]]
 
 
 def _stat_entry(path: Path) -> StatEntry | None:
@@ -80,20 +80,20 @@ def _claude_stats(root: Path) -> tuple[plugins.StatRecord, ...]:
 
 
 def _plugin_trees(root: Path) -> tuple[PluginTree, ...]:
-    # Digest each discovered plugin pack's resolved hook tree so editing a plugin pack's hook file
-    # (or fixing its [pack] manifest) misses the cache, like cold. The roster is read from the
-    # discovery snapshot as-is — never a refresh — so the fingerprint path never spawns the CLI.
+    # Manifest stat + hook tree, both inside the fail-soft try so a dir vanishing mid-walk skips, never crashes.
     if (snapshot := plugins.PluginSnapshot.load(plugins.snapshot_path(root))) is None:
         return ()
     trees: list[PluginTree] = []
     for plugin in sorted(snapshot.plugins, key=lambda p: p.id):
         try:
-            probed = plugins.probe_plugin_pack(plugin)
+            if (probed := plugins.probe_plugin_pack(plugin)) is None:
+                continue
+            probe, manifest = probed
+            trees.append(
+                (plugin.id, _stat_entry(manager.manifest_in(probe)), _hooks_tree(str(manifest.hooks_dir(probe))))
+            )
         except (manager.PackError, tomllib.TOMLDecodeError, OSError):
             continue
-        if probed is not None:
-            probe, manifest = probed
-            trees.append((plugin.id, _hooks_tree(str(manifest.hooks_dir(probe)))))
     return tuple(trees)
 
 

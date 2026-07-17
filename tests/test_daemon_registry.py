@@ -12,6 +12,7 @@ from captain_hook.cli import CliState
 from captain_hook.daemon import registry
 from captain_hook.daemon.registry import Fingerprint, Registry
 from captain_hook.packs import plugins
+from captain_hook.util.paths import resolve_claude_config_dir
 
 HOOK = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 PLUGIN_HOOK = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='pp')\n"
@@ -126,11 +127,47 @@ def test_plugin_pack_hook_edit_changes_fingerprint(project: CliState, tmp_path: 
     assert fp(project) != before
 
 
-@pytest.mark.parametrize("idx", range(4))
+def test_plugin_pack_manifest_edit_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
+    # No hook file and no roster entry moved, but a manifest-only edit (nlp/name/marketplaces) must miss
+    # the cache — the fingerprint digests each plugin pack's manifest file, not just its hook tree.
+    plugin_root = tmp_path / "plug"
+    make_plugin_pack(plugin_root, name="pp")
+    write_snapshot(project.root, [("acme/pp", str(plugin_root))])
+    before = fp(project)
+    (plugin_root / "capt-hook.toml").write_text(
+        '[pack]\nname = "pp"\ndescription = "plugin test pack"\nhooks = "hooks"\nversion = "0.1.0"\nnlp = true\n'
+    )
+    assert fp(project) != before
+
+
+def test_plugin_tree_skips_a_plugin_whose_hooks_dir_vanishes(
+    project: CliState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A dir vanishing mid-walk raises FileNotFoundError from the tree digest; the per-plugin fail-soft
+    # try must skip that one plugin, never crash compute — the healthy sibling still contributes.
+    good_root, bad_root = tmp_path / "good", tmp_path / "bad"
+    make_plugin_pack(good_root, name="good")
+    make_plugin_pack(bad_root, name="bad")
+    write_snapshot(project.root, [("acme/good", str(good_root)), ("acme/bad", str(bad_root))])
+    real = registry._hooks_tree
+
+    def flaky_tree(hooks: str) -> tuple[registry.HookEntry, ...]:
+        if str(bad_root) in hooks:
+            raise FileNotFoundError(hooks)  # the plugin dir vanished between the roster snapshot and the walk
+        return real(hooks)
+
+    monkeypatch.setattr(registry, "_hooks_tree", flaky_tree)
+    assert [pid for pid, *_ in registry._plugin_trees(project.root)] == ["acme/good"]  # raising plugin skipped
+    assert fp(project).digest  # compute did not raise
+
+
+@pytest.mark.parametrize("idx", range(len(plugins.watched_paths(Path("/x")))))
 def test_watched_file_mtime_bump_changes_fingerprint(project: CliState, idx: int) -> None:
-    # Each of installed_plugins.json + the user/project settings stack invalidates the plugin roster:
-    # an mtime bump on any one moves _claude_stats and must miss the cache.
+    # An mtime bump on any watched roster input misses the cache; the absolute managed-settings system
+    # paths (/Library, /etc) aren't sandbox-writable, so skip those slots.
     path = plugins.watched_paths(project.root)[idx]
+    if not (path.is_relative_to(project.root) or path.is_relative_to(resolve_claude_config_dir())):
+        pytest.skip(f"{path} is an absolute managed-settings system path — not sandbox-writable")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{}\n")
     before = fp(project)

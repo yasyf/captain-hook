@@ -131,6 +131,31 @@ def test_unrelated_commands_pass(tmp_path: Path) -> None:
     assert by_check(root)["hooks.json"].ok  # no capt-hook mention → the pack's own hooks are its business
 
 
+def test_argv_list_shaped_capt_hook_command_fails(tmp_path: Path) -> None:
+    # A command given as an argv list (not a string) slips past a shape-walking check, but the raw-text
+    # scan still sees the capt-hook token and fails — crude is correct: the contract is zero involvement.
+    root = conforming(tmp_path / "ccx")
+    (hooks_dir := root / "hooks").mkdir(parents=True, exist_ok=True)
+    argv = ["uvx", "--isolated", "capt-hook", "run", "PostToolUse"]
+    data = {"hooks": {"PostToolUse": [{"hooks": [{"type": "command", "command": argv}]}]}}
+    (hooks_dir / "hooks.json").write_text(json.dumps(data))
+    result = by_check(root)["hooks.json"]
+    assert not result.ok
+    assert "discovery contract" in result.reason
+
+
+def test_split_file_lint_resolves_root_manifest(tmp_path: Path) -> None:
+    # A consumer-only .claude/capt-hook.toml ([packs.*], no [pack]) must not shadow the root [pack]
+    # manifest at lint time — the manifest check resolves the root file, not the consumer one.
+    root = conforming(tmp_path / "ccx")
+    (root / ".claude").mkdir(parents=True, exist_ok=True)
+    (root / ".claude" / manager.PACK_MANIFEST).write_text("[packs.general]\n")  # consumer-only
+    results = by_check(root)
+    assert results["manifest"].ok
+    assert str(root / manager.PACK_MANIFEST) in results["manifest"].reason  # the root manifest resolved
+    assert failed(results) == []
+
+
 def test_legacy_shape_exits_nonzero(tmp_path: Path) -> None:
     root = conforming(tmp_path / "ccx")
     write_hooks_json(root, [LEGACY_ATTACH])

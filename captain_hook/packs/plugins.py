@@ -31,8 +31,14 @@ from captain_hook.packs import manager
 from captain_hook.util.paths import resolve_claude_config_dir
 
 CLI_TIMEOUT_SECONDS = 60
+# Enterprise managed settings can enable/disable plugins; Claude Code reads them from a fixed OS
+# location (macOS/Linux) plus the config dir, so a change to any must re-run the roster CLI.
+MANAGED_SETTINGS_PATHS = (
+    Path("/Library/Application Support/ClaudeCode/managed-settings.json"),
+    Path("/etc/claude-code/managed-settings.json"),
+)
 
-type StatRecord = tuple[str, int, int] | tuple[str, None]
+type StatRecord = tuple[str, int, int, int] | tuple[str, None]
 
 
 class PluginListError(Exception):
@@ -48,6 +54,8 @@ def watched_paths(root: Path) -> tuple[Path, ...]:
     return (
         installed_plugins_path(),
         config / "settings.json",
+        config / "managed-settings.json",
+        *MANAGED_SETTINGS_PATHS,
         root / ".claude" / "settings.json",
         root / ".claude" / "settings.local.json",
     )
@@ -58,7 +66,9 @@ def stat_record(path: Path) -> StatRecord:
         st = path.stat()
     except OSError:
         return (str(path), None)
-    return (str(path), st.st_mtime_ns, st.st_size)
+    # ctime is folded in alongside mtime+size: a same-size, mtime-restored rewrite moves only ctime,
+    # and without it the roster snapshot would stay "fresh" across such an edit.
+    return (str(path), st.st_mtime_ns, st.st_ctime_ns, st.st_size)
 
 
 def stat_records(root: Path) -> tuple[StatRecord, ...]:
@@ -109,12 +119,35 @@ class PluginSnapshot:
         return self.stat == records
 
 
+def parse_plugin_entry(entry: object) -> EnabledPlugin | None:
+    """One roster entry → an :class:`EnabledPlugin`, or ``None`` to skip it (unusable, not enabled).
+
+    A non-object entry, or one whose ``id``/``installPath`` is missing or not a string, is skipped with
+    a debug line so a single malformed sibling never suppresses the valid ones; an entry Claude Code did
+    not report ``enabled`` with an install path is skipped silently (the ordinary not-enabled case).
+    """
+    if not isinstance(entry, dict):
+        logger.debug(f"skipping non-object plugin roster entry {entry!r}")
+        return None
+    if entry.get("enabled") is not True or not entry.get("installPath"):
+        return None
+    if not (isinstance(pid := entry.get("id"), str) and pid and isinstance(path := entry.get("installPath"), str)):
+        logger.bind(id=entry.get("id"), installPath=entry.get("installPath")).debug(
+            "skipping plugin roster entry lacking a string id/installPath"
+        )
+        return None
+    version = entry.get("version", "")
+    return EnabledPlugin(id=pid, version=version if isinstance(version, str) else "", root=path)
+
+
 def list_plugins_cli(root: Path) -> tuple[EnabledPlugin, ...]:
     """Run ``claude plugin list --json`` in ``root`` and return its enabled, installed plugins.
 
-    The single subprocess boundary of discovery. Keeps only entries Claude Code reports as
-    ``enabled`` with an ``installPath``. Raises :class:`PluginListError` on a nonzero exit; a
-    timeout or unparseable output surfaces as the native ``subprocess`` / ``json`` error.
+    The single subprocess boundary of discovery. Keeps only entries Claude Code reports as ``enabled``
+    with a string ``installPath``. Raises :class:`PluginListError` on a nonzero exit and on any roster
+    shape it cannot use — a non-array top level, unparseable JSON, or an entry that trips the parser —
+    so every failure lands on ``enabled_plugins``' warning-and-empty-snapshot path, never crashing
+    dispatch. A subprocess timeout still surfaces as the native ``subprocess.TimeoutExpired``.
     """
     result = subprocess.run(
         ["claude", "plugin", "list", "--json"],
@@ -125,11 +158,16 @@ def list_plugins_cli(root: Path) -> tuple[EnabledPlugin, ...]:
     )
     if result.returncode != 0:
         raise PluginListError(f"claude plugin list exited {result.returncode}: {result.stderr.strip()}")
-    return tuple(
-        EnabledPlugin(id=entry["id"], version=entry.get("version", ""), root=entry["installPath"])
-        for entry in json.loads(result.stdout)
-        if entry.get("enabled") is True and entry.get("installPath")
-    )
+    try:
+        roster = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise PluginListError(f"claude plugin list returned unparseable JSON: {e}") from e
+    if not isinstance(roster, list):
+        raise PluginListError(f"claude plugin list returned {type(roster).__name__}, expected a JSON array")
+    try:
+        return tuple(plugin for entry in roster if (plugin := parse_plugin_entry(entry)) is not None)
+    except (TypeError, AttributeError, KeyError) as e:
+        raise PluginListError(f"claude plugin list returned an unusable roster shape: {e!r}") from e
 
 
 def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:

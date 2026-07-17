@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from captain_hook.packs import bootstrap, manager, plugins
+from captain_hook.util.paths import resolve_claude_config_dir
 from tests.helpers import run_cli
 
 
@@ -228,7 +229,7 @@ def test_two_calls_run_cli_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert calls.read_text() == "x"  # the second event served the snapshot, no re-spawn
 
 
-@pytest.mark.parametrize("idx", [0, 1, 2, 3])
+@pytest.mark.parametrize("idx", range(len(plugins.watched_paths(Path("/x")))))
 def test_refresh_on_each_watched_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, idx: int) -> None:
     plant_installed()
     (root := tmp_path / "proj").mkdir()
@@ -239,10 +240,35 @@ def test_refresh_on_each_watched_change(tmp_path: Path, monkeypatch: pytest.Monk
     plugins.enabled_plugins(root)
     assert calls.read_text() == "x"
     watched = plugins.watched_paths(root)[idx]
+    if not (watched.is_relative_to(root) or watched.is_relative_to(resolve_claude_config_dir())):
+        pytest.skip(f"{watched} is an absolute managed-settings system path — not sandbox-writable")
     watched.parent.mkdir(parents=True, exist_ok=True)
     watched.write_text("x" * 500)  # absent -> present, or a size bump: either moves the stat tuple
     plugins.enabled_plugins(root)
     assert calls.read_text() == "xx"  # the watched-file change re-ran the CLI
+
+
+def test_ctime_only_watched_rewrite_refreshes_roster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A same-size, mtime-restored rewrite of a watched settings file moves only ctime; without ctime in
+    # the stat record the snapshot would stay "fresh" and miss a plugin enable/disable landing that way.
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    calls = tmp_path / "calls"
+    settings = root / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text('{"a": 1}')
+    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")
+    install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/show", plugin)])
+
+    plugins.enabled_plugins(root)
+    assert calls.read_text() == "x"
+    st = settings.stat()
+    settings.write_text('{"b": 2}')  # same byte length, different content
+    os.utime(settings, ns=(st.st_atime_ns, st.st_mtime_ns))  # restore mtime; only ctime moves
+    after = settings.stat()
+    assert after.st_size == st.st_size and after.st_mtime_ns == st.st_mtime_ns
+    plugins.enabled_plugins(root)
+    assert calls.read_text() == "xx"  # ctime move re-ran the CLI
 
 
 @pytest.mark.parametrize(
@@ -269,6 +295,58 @@ def test_cli_failure_caches_empty_roster_and_damps(
     plugins.installed_plugins_path().write_text("x" * 500)  # a watched-file change re-triggers
     plugins.enabled_plugins(root)
     assert calls.read_text() == "xx"
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        pytest.param(
+            {"id": "a/b", "version": "1", "enabled": True, "installPath": "/p"}, ("a/b", "1", "/p"), id="valid"
+        ),
+        pytest.param(123, None, id="numeric-entry"),
+        pytest.param("x", None, id="string-entry"),
+        pytest.param({"enabled": True, "installPath": "/p"}, None, id="missing-id"),
+        pytest.param({"id": "a/b", "enabled": True}, None, id="missing-installpath"),
+        pytest.param({"id": 9, "enabled": True, "installPath": "/p"}, None, id="non-string-id"),
+        pytest.param({"id": "a/b", "enabled": True, "installPath": 7}, None, id="non-string-installpath"),
+        pytest.param({"id": "a/b", "enabled": False, "installPath": "/p"}, None, id="not-enabled"),
+        pytest.param(
+            {"id": "a/b", "version": 9, "enabled": True, "installPath": "/p"},
+            ("a/b", "", "/p"),
+            id="non-string-version",
+        ),
+    ],
+)
+def test_parse_plugin_entry(entry: object, expected: tuple[str, str, str] | None) -> None:
+    result = plugins.parse_plugin_entry(entry)
+    assert (result and (result.id, result.version, result.root)) == expected
+
+
+@pytest.mark.parametrize(
+    "raw_stdout",
+    [pytest.param('{"id": "x", "enabled": true}', id="top-level-dict"), pytest.param("42", id="numeric-top-level")],
+)
+def test_non_list_roster_degrades_to_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_stdout: str) -> None:
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", raw_stdout=raw_stdout)
+    assert plugins.enabled_plugins(root) == ()  # a non-array roster is a PluginListError, damped to empty
+    assert plugins.snapshot_path(root).is_file()  # an empty-roster snapshot was written, so it damps
+
+
+def test_malformed_entry_does_not_suppress_valid_siblings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    good = write_plugin_dir(tmp_path, "show", "1.0.0")
+    roster = [
+        roster_entry("mkt/show", good),  # valid
+        123,  # a bare number, not an object
+        {"enabled": True, "installPath": str(good)},  # missing id
+        {"id": "mkt/other", "enabled": True},  # enabled but no installPath
+    ]
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", raw_stdout=json.dumps(roster))
+    (only,) = plugins.enabled_plugins(root)  # exactly the one valid sibling survives
+    assert only.id == "mkt/show"
 
 
 def test_installed_plugins_absent_runs_no_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -377,7 +455,7 @@ def test_discover_tail_bootstraps_declared_marketplaces(
     discover(root, tmp_path / "no-hooks")
 
     assert spawned == [["yasyf/cc-present"]]  # exactly one worker, for the declared marketplace
-    assert "yasyf/cc-present" in capsys.readouterr().err  # the notice lands on stderr
+    assert capsys.readouterr() == ("", "")  # discovery's bootstrap tail prints nothing on any stream
 
 
 def test_discover_no_marketplaces_is_zero_marketplace_io(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

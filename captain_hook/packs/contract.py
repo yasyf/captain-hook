@@ -1,13 +1,12 @@
 """Shared pack-contract identity: the captain-hook marketplace/plugin slugs, the plugin.json
-dependency version-floor pattern, and the small hooks.json/path readers that ``pack lint`` and
-``pack scaffold`` share. Imported by ``cli``, ``packs.scaffold``, and ``packs.bootstrap`` alike; it
-imports nothing from any of them, so the shared constants live here without a cycle."""
+dependency version-floor pattern, and the upward path reader that ``pack lint`` and ``pack scaffold``
+share. Imported by ``cli``, ``packs.scaffold``, and ``packs.bootstrap`` alike; it imports nothing from
+any of them, so the shared constants live here without a cycle."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
 
 DIST_NAME = "capt-hook"
 DEFAULT_PREFIX = f"uvx --isolated {DIST_NAME}"
@@ -31,20 +30,3 @@ def search_upward(start: Path, *rel: str, stop: Path | None = None) -> Path | No
         if bound is not None and base.resolve() == bound:
             break
     return None
-
-
-def command_entries(hooks_json: dict[str, Any]) -> list[tuple[str, str]]:
-    """Every ``(event, command)`` command-type hook entry across the file, in declaration order.
-
-    Malformed shapes (a non-dict ``hooks`` map, a non-list group list, a non-dict group or entry,
-    a command entry without a string ``command``) are skipped rather than raised, so ``pack lint``
-    surveys a hand-edited file without tracebacking; ``scaffold`` refuses those shapes up front.
-    """
-    hooks = hooks_json.get("hooks", {})
-    return [
-        (event, entry["command"])
-        for event, groups in (hooks.items() if isinstance(hooks, dict) else ())
-        for group in (groups if isinstance(groups, list) else ())
-        for entry in (group.get("hooks", []) if isinstance(group, dict) else ())
-        if isinstance(entry, dict) and entry.get("type") == "command" and isinstance(entry.get("command"), str)
-    ]

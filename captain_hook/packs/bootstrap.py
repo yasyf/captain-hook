@@ -103,14 +103,6 @@ def record_attempt(marker: Path, now: float) -> None:
     manager.atomic_write(marker, json.dumps({"attempted_at": now}))
 
 
-def bootstrap_notice(repos: Sequence[str]) -> str:
-    return (
-        f"capt-hook: registering the plugin marketplace(s) {', '.join(repos)} in the background — this "
-        "plugin's hooks depend on them. Takes effect via Claude Code's background plugin auto-update, "
-        "/reload-plugins, or the next session."
-    )
-
-
 def spawn_worker(repos: Sequence[str]) -> None:
     (log_path := worker_log_path()).parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("ab") as log:
@@ -139,9 +131,9 @@ def maybe_bootstrap(marketplaces: Sequence[str] = ()) -> None:
     concurrent events launches one worker, not N; a sibling already holding the lock returns
     immediately rather than stall dispatch. Damping is per (config dir, repo) (``bootstrap/<sha>.json``,
     an hourly cooldown), so a narrow union never suppresses a later broader one; a missing ``claude``
-    binary records the attempts without spawning. The one-line notice is emitted on stderr only when a
-    worker is launched — dispatch stdout carries the hook-decision JSON, so a stray line there would
-    corrupt it; discovery captures this stderr for the daemon's warm replay.
+    binary records the attempts without spawning. A spawn logs one loguru info line and prints nothing
+    on any stream — dispatch stdout carries the hook-decision JSON, and an event-like stderr notice would
+    replay stale on the daemon's warm cache hits.
     """
     if not (required := list(dict.fromkeys(marketplaces))):
         return
@@ -162,7 +154,7 @@ def maybe_bootstrap(marketplaces: Sequence[str] = ()) -> None:
             if shutil.which("claude") is None:
                 return
             spawn_worker(to_add)
-            print(bootstrap_notice(to_add), file=sys.stderr)
+            logger.bind(marketplaces=to_add).info("registering plugin dependency marketplace(s) in the background")
     except Timeout:
         return
 
