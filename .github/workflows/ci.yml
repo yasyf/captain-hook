@@ -87,4 +87,4 @@ jobs:
           grep -q '"captain-hook@captain-hook": true' "$smoke_proj/.claude/settings.json"
           ! test -e "$smoke_proj/.claude/skills"
           (cd "$smoke_proj" && "$GITHUB_WORKSPACE/.wheel-smoke/bin/capt-hook" pack add general)
-          grep -q '\[packs.general\]' "$smoke_proj/.claude/hooks/packs.toml"
+          grep -q '\[packs.general\]' "$smoke_proj/.claude/capt-hook.toml"

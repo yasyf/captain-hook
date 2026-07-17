@@ -98,7 +98,16 @@ class TestCliDispatch:
     def test_cli_blocks_dangerous_command(self, project_dir: Path) -> None:
         hooks_dir = project_dir / ".claude" / "hooks"
         stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}})
-        result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), root_dir=str(project_dir), stdin_data=stdin)
+        # Anchor cwd to the scaffolded project so the namespace ``hooks`` package resolves against
+        # this project, not a regular ``hooks`` package on the default cwd's import path.
+        result = run_cli(
+            "run",
+            "PreToolUse",
+            hooks_dir=str(hooks_dir),
+            root_dir=str(project_dir),
+            stdin_data=stdin,
+            cwd=str(project_dir),
+        )
         assert result.returncode == 0
         output = json.loads(result.stdout)
         assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -113,7 +122,9 @@ class TestCliDispatch:
 class TestCliTest:
     def test_scaffold_inline_tests_pass(self, project_dir: Path) -> None:
         hooks_dir = project_dir / ".claude" / "hooks"
-        result = run_cli("test", hooks_dir=str(hooks_dir))
+        # Anchor cwd to the scaffolded project so the namespace ``hooks`` package resolves against
+        # this project, not a regular ``hooks`` package on the default cwd's import path.
+        result = run_cli("test", hooks_dir=str(hooks_dir), cwd=str(project_dir))
         assert result.returncode == 0
         assert "PASS" in result.stdout
         assert "0 failed" in result.stdout
