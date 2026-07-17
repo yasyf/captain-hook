@@ -4,7 +4,8 @@ title: "Use packs"
 
 A pack is a named, versioned collection of hooks you enable instead of copying
 hook files into your repo. Builtin packs ship inside `capt-hook`; external packs
-live in a GitHub repo. You list the packs you want in `.claude/hooks/packs.toml`,
+live in a GitHub repo; plugin packs ride in on enabled Claude Code plugins. You
+list the packs you want as `[packs.<name>]` tables in `.claude/capt-hook.toml`,
 and the loader imports them alongside your own `.claude/hooks/` modules.
 
 ## Enable a builtin pack
@@ -36,13 +37,13 @@ Add one by name:
 uvx capt-hook pack add general
 ```
 
-This records the pack in `.claude/hooks/packs.toml`:
+This records the pack in `.claude/capt-hook.toml`:
 
 ```toml
 [packs.general]
 ```
 
-That entry is the whole change — `pack add` edits `packs.toml` and nothing else,
+That entry is the whole change — `pack add` edits `.claude/capt-hook.toml` and nothing else,
 since the captain-hook plugin already registers every event. The pack's hooks fire
 on the next event. Verify them with the inline tests every hook carries:
 
@@ -65,16 +66,20 @@ uvx capt-hook pack list
   steering                 builtin  -                    v0.7.0   2 hooks
   fixes                    builtin  -                    v0.2.0   2 hooks
   acme-guards              github   latest@a1b2c3d       v1.4.0   4 hooks
+  acme-notes               plugin   acme-notes@acme      v0.3.0   3 hooks
 ```
 
 Builtin and pinned packs show their manifest `version`. A moving pack —
 `@latest` or a bare default-branch source — shows the ref it last resolved to
 instead: the release tag here, or the branch name for a bare source. That ref
 lives in the pack's per-machine sidecar, so a machine that has never resolved
-the pack falls back to the manifest version until its first `pack update`.
+the pack falls back to the manifest version until its first `pack update`. A
+`plugin` row is a pack discovered on an enabled Claude Code plugin — its ref is
+the plugin id, and no config entry exists for it; see
+[Ship a pack in a Claude plugin](plugin-packs.qmd).
 
-Remove a pack by name. The entry leaves `packs.toml`, but its cache stays on disk
-for other projects:
+Remove a pack by name. The entry leaves `.claude/capt-hook.toml`, but its cache
+stays on disk for other projects:
 
 ```bash
 uvx capt-hook pack remove general
@@ -91,7 +96,7 @@ uvx capt-hook pack add github:acme/guards@v1.2
 
 `pack add` resolves the ref to a commit, downloads that commit as a tarball into
 `~/.cache/captain-hook/packs/`, validates its manifest, and pins the commit in
-`packs.toml`:
+`.claude/capt-hook.toml`:
 
 ```toml
 [packs.acme-guards]
@@ -100,9 +105,11 @@ commit = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
 ```
 
 The pinned `commit` makes hydration reproducible: a teammate who clones the repo
-runs `uvx capt-hook pack update` to fetch the exact same commit, even if the tag
-later moves. Discovery never reaches the network. An uncached external pack prints
-a one-line notice telling you to run `pack update`.
+gets the exact same commit even if the tag later moves — the first event
+auto-fetches an uncached pack, so hydration needs no manual step. A cached pack
+never touches the network; only a pack that is both uncached and unreachable
+fails, with a one-line stderr notice telling you to run `pack update` when back
+online.
 
 Re-resolve a tracked ref to its latest commit and re-fetch:
 
@@ -119,37 +126,61 @@ Hook commands are plugin-owned. The captain-hook plugin's `hooks.json` registers
 on every machine, so a fresh clone gets working hooks with nothing installed beyond
 `uv`.
 Nothing a pack does changes that: `pack add`, `pack remove`, and a pinned
-`pack update` edit `.claude/hooks/packs.toml`, a moving-ref `pack update` only
-refreshes its per-machine sidecar, and none of them touch the hook commands. A stale
-`launcher` line from an older scaffold is dropped the next time any pack command
-rewrites the manifest.
+`pack update` edit only the `[packs.*]` tables in `.claude/capt-hook.toml`, a
+moving-ref `pack update` only refreshes its per-machine sidecar, and none of
+them touch the hook commands. The rewrite is section-scoped, so a coexisting
+`[pack]` table and its comments survive byte-for-byte.
 
 ## How packs combine with your own hooks
 
 Your `.claude/hooks/` modules import first, so they register ahead of pack hooks.
-Dispatch returns the first `allow` or `block` decision, which means a local hook
-overrides a pack hook on the same event. Packs are the shared baseline; your
-local hooks stay authoritative.
+A block from any hook wins the event outright; among approvals the first
+registered wins, so your local approval outranks a pack's on the same event.
+Packs are the shared baseline; your local hooks stay authoritative.
+
+Across the pack tiers, the more explicit source wins: local hooks, then
+`[packs.*]` entries, then packs discovered on enabled plugins. A `[packs.*]`
+entry always shadows a same-name plugin pack — a pinned external gets its exact
+commit even when an enabled plugin ships the same pack, a `disabled = true`
+entry suppresses it outright, and the shadow holds even while an external is
+offline and uncached. See
+[Ship a pack in a Claude plugin](plugin-packs.qmd#precedence) for the plugin
+tier's own tie-breaks.
 
 ## Author a pack
 
-A pack repo needs a `capt-hook.toml` manifest and a directory of hook `.py`
-files. The manifest may live at `.claude/capt-hook.toml`, beside your other
-Claude Code config, or at the repo root; discovery prefers `.claude/` and falls
-back to the root. The manifest names the pack, versions it, and points at the
-hooks directory:
+A pack repo needs a `capt-hook.toml` manifest with a `[pack]` table and a
+directory of hook `.py` files. The manifest may live at `.claude/capt-hook.toml`,
+beside your other Claude Code config, or at the repo root; of the two locations,
+the file that actually carries a `[pack]` table wins, so a consumer-only
+`.claude` file (just `[packs.*]` enablement, as `pack add` writes) never shadows
+a root manifest. The `[pack]` table names the pack,
+versions it, and points at the hooks directory:
 
 ```toml
+[pack]
 name = "acme-guards"
 version = "1.2.0"
 description = "Guards for ACME service conventions"
 hooks = "hooks"
 ```
 
-`version` is optional since capt-hook 9.7.0 and defaults to `0.0.0` — a pack
-consumed `@latest` shows its resolved release tag in `pack list` anyway. Keep
-the key while pre-9.7.0 capt-hook is in the wild, though: older releases crash
-on a manifest without it.
+`name`, `description`, and `hooks` are required; `version` defaults to `0.0.0`
+(a pack consumed `@latest` shows its resolved release tag in `pack list`
+anyway), `nlp = true` declares the [spaCy
+resources](troubleshooting.qmd#nlpsignal-hooks-need-the-spacy-model), and
+`marketplaces` lists [extra dependency
+marketplaces](plugin-packs.qmd#extra-dependency-marketplaces). A directory is a
+pack if and only if its manifest has a `[pack]` table, and every malformed
+manifest raises `PackError` — a missing required key fails loud, at load time.
+
+The two config axes share one file format on purpose: `[pack]` makes a
+directory a pack, `[packs.*]` tables enable packs for a project, and a single
+`.claude/capt-hook.toml` can carry both — a pack repo that also consumes other
+packs is one file, not two. `pack add` and `pack remove` rewrite only the
+`[packs.*]` tables, so a coexisting `[pack]` table and its comments are safe — a
+rewrite that would alter the `[pack]` table raises `PackError` and leaves the
+file untouched.
 
 The `hooks` path is relative to the repo root regardless of where the manifest
 sits, so moving the manifest into `.claude/` needs no other change. Set
@@ -171,18 +202,41 @@ block_command(
 )
 ```
 
-The `name` in the manifest becomes the `packs.toml` section key, so it must be a
-slug matching `[a-z][a-z0-9-]*`. Tag a release, and consumers add the pack with
-`uvx capt-hook pack add github:acme/guards@v1.2`.
+The `name` in the manifest becomes the consumer's `[packs.<name>]` key, so it
+must be a slug matching `[a-z][a-z0-9-]*`. Tag a release, and consumers add the
+pack with `uvx capt-hook pack add github:acme/guards@v1.2`.
 
-Shipping the pack inside a Claude plugin instead of a `packs.toml` repo takes
-three more artifacts on top of the manifest. `uvx capt-hook pack scaffold .`
-writes them and lints the result — see [Ship a pack in a Claude
-plugin](plugin-packs.qmd).
+Shipping the pack inside a Claude plugin instead takes two more artifacts on
+top of the manifest. `uvx capt-hook pack scaffold .` writes all three and lints
+the result — see [Ship a pack in a Claude plugin](plugin-packs.qmd).
+
+## Migrate from 9.x
+
+The 9.x enable-list lived at `.claude/hooks/packs.toml`; 10.x reads
+`.claude/capt-hook.toml` and never touches the legacy path — no warning, no
+fallback. The entry grammar is unchanged, so a consumer repo migrates with one
+move:
+
+```bash
+git mv .claude/hooks/packs.toml .claude/capt-hook.toml
+```
+
+A pack-source repo additionally wraps its manifest keys under a `[pack]` header.
+Both leniencies that make staging safe are deliberate: 9.x ignores unknown
+top-level tables and never reads the new consumer path, so a repo can carry the
+new file (or a dual-grammar manifest) before upgrading and delete the old one
+after.
+
+::: {.callout-warning title="An unmigrated repo loads zero packs, silently"}
+Under 10.x, a repo whose enable-list still sits at `.claude/hooks/packs.toml`
+dispatches with no packs at all and no error. `uvx capt-hook pack list` shows
+the empty roster, and `uvx capt-hook heartbeats --session <id>` confirms events
+still arrive.
+:::
 
 ## See also
 
 - [Configure settings](configuration.qmd) covers `conf.py`, which sets project
   settings for your own hooks and any enabled pack.
-- [How hooks run](how-it-works.qmd) explains discovery, dispatch, and the
-  first-decision-wins ordering that gives local hooks precedence.
+- [How hooks run](how-it-works.qmd) explains the dispatch pipeline and the
+  verdict precedence behind that ordering.

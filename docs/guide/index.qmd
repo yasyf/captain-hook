@@ -37,7 +37,7 @@ inline tests and mock events.
 - [Query the transcript](transcript.qmd) reads the conversation history inside a handler.
 - [Signals](signals.qmd) scores patterns across the transcript to drive a nudge.
 - [Real-World Patterns](patterns.qmd) collects hooks distilled from a production hooks directory, ready to copy and adapt.
-- [Packs](packs.qmd) enables versioned hook collections, builtin (`general`, `python`) or from GitHub, instead of copying files into your repo.
+- [Packs](packs.qmd) enables versioned hook collections — builtin (`general`, `python`), from GitHub, or discovered on enabled Claude plugins — instead of copying files into your repo.
 
 ### Advanced
 

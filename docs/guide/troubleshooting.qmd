@@ -90,34 +90,59 @@ Then upgrade the plugin. From 9.7.0 the plugin wires every hook as `uvx --isolat
 
 A session that is already running keeps the old hook commands until you run `/reload-plugins` or start a new session. Claude Code refreshes a marketplace plugin's cache only when its `plugin.json` `version` increases; captain-hook's release workflow bumps and commits that version on every tagged release, so `/plugin update` picks up each release as soon as the sync commit lands on `main`.
 
-Last, hunt down legacy `capt-hook run <Event>` entries. Claude Code dedupes hook commands per registering source, not globally, so a `run` entry that survives anywhere besides the captain-hook plugin — a hand-wired line in a project's `.claude/settings.json`, or a pack-shipping consumer plugin built before the attach-only contract — dispatches the event again in a sibling process, and every hook on that event runs twice. The tell is doubled output: two permission prompts for one tool call, the same block message landing twice, or a side-effecting hook applying its effect twice. Delete hand-wired entries from the project settings yourself; a legacy consumer plugin sheds its `run` entries when it releases against the attach-only contract in [Ship a pack in a Claude plugin](plugin-packs.qmd), since the plugin cache re-pulls on a version bump.
+Last, hunt down legacy `capt-hook run <Event>` entries. Claude Code dedupes hook commands per registering source, not globally, so a `run` entry that survives anywhere besides the captain-hook plugin — a hand-wired line in a project's `.claude/settings.json`, or a pack-shipping plugin built before the discovery contract — dispatches the event again in a sibling process, and every hook on that event runs twice. The tell is doubled output: two permission prompts for one tool call, the same block message landing twice, or a side-effecting hook applying its effect twice. Delete hand-wired entries from the project settings yourself; a legacy pack plugin sheds its `run` entries when it releases against the discovery contract in [Ship a pack in a Claude plugin](plugin-packs.qmd), since the plugin cache re-pulls on a version bump — `pack lint` fails any `hooks.json` still mentioning `capt-hook`, so the fix is mechanical.
 
-## The first session installs the dependency plugins
+## Zero packs after upgrading to 10.x
 
-A pack-shipping plugin's hooks stay dark until the captain-hook plugin — the
-dispatcher — is installed, and Claude Code won't add an unknown marketplace from
-a `plugin.json` dependency alone. So on the first session where a dependency
-marketplace isn't registered, the plugin's attach hook bootstraps it: a detached
-worker runs `claude plugin marketplace add <owner/repo>` for each unregistered
-marketplace — captain-hook plus anything the pack declares in its `marketplaces`
-list — and attach prints one notice line. Claude Code resolves the matching
-`plugin.json` dependencies from there and installs the plugins, and the hooks go
-live via background auto-update, `/reload-plugins`, or the next session.
+Every pack went quiet at once: no pack hook fires, no block, no nudge, and nothing errors. The likely cause is an unmigrated enable-list. 10.x reads `.claude/capt-hook.toml` and ignores the legacy `.claude/hooks/packs.toml` entirely, so a repo that skipped the move dispatches every event with zero packs and zero errors.
+
+Confirm it with the roster and the heartbeats:
+
+```bash
+uvx capt-hook pack list                      # empty when the enable-list isn't found
+uvx capt-hook heartbeats --session <id>      # events still arrive; the packs just aren't loaded
+```
+
+The fix is the one-line migration from [Use packs](packs.qmd#migrate-from-9x):
+
+```bash
+git mv .claude/hooks/packs.toml .claude/capt-hook.toml
+```
+
+## A SessionStart warning about `pack attach`
+
+Claude Code shows a non-blocking hook warning at session start naming a failed `capt-hook pack attach` command. An enabled plugin still ships the attach line from the pre-10.0.0 contract; the command no longer exists, so the hook exits non-zero and Claude Code reports it. The warning is cosmetic — the plugin's pack loads via discovery regardless, which `uvx capt-hook pack list` confirms with a `plugin` row. It stops when the plugin ships a cleanup release that deletes the line; if the plugin is yours, [Migrating an attach-era plugin](plugin-packs.qmd#migrating-an-attach-era-plugin) is the one-step fix.
+
+## Discovery installs the dependency plugins
+
+A pack may declare extra dependency marketplaces in its `[pack]` manifest's
+`marketplaces` list, and Claude Code won't add an unknown marketplace from a
+`plugin.json` dependency alone. So when discovery resolves a pack declaring a
+marketplace the machine hasn't registered, it detaches a worker that runs
+`claude plugin marketplace add <owner/repo>` for each unregistered slug. The
+spawn prints nothing on either stream — the worker's log below is its only
+trace. Claude Code resolves the matching `plugin.json` dependencies from
+there and installs the plugins, and the hooks go live via background
+auto-update, `/reload-plugins`, or the next session. This fires for every pack
+tier — a repo-scoped GitHub pack's declaration triggers it the same as a plugin
+pack's.
 
 The worker logs to `~/.claude/state/bootstrap/marketplace.log` (or under
 `CAPTAIN_HOOK_STATE_DIR`). If a marketplace never shows up in `claude plugin
 marketplace list`, read that file — a failed `claude` call lands there with its
-exit status, and one failing marketplace no longer blocks the others in the
-list. The bootstrap backs off for an hour per marketplace between attempts, so a
-transient failure doesn't re-run `claude` every session, and already-registered
-marketplaces short-circuit it with a single file read.
+exit status, and one failing marketplace doesn't block the others in the list.
+The bootstrap backs off for an hour per marketplace between attempts, so a
+transient failure doesn't re-run `claude` on every event, and
+already-registered marketplaces short-circuit it with a single file read.
 
-It re-adds the marketplace whenever a pack-shipping plugin is enabled and the
-marketplace is missing — the plugin's hooks are dead without it, so re-adding is
-the point. To stop it, disable or uninstall the plugin whose attach hook runs;
-that stops the pack too. If the plugin itself lands disabled with
-`dependency-unsatisfied` before the next session bootstraps, `claude plugin
-marketplace add yasyf/captain-hook` resolves it on the spot.
+It re-adds the marketplace whenever a resolved pack declares it and the
+marketplace is missing — the pack's hooks are dead without it, so re-adding is
+the point. To stop it, drop the pack: disable or uninstall the declaring
+plugin, remove the `[packs.*]` entry, or decline the pack by name with
+`disabled = true`. If a pack plugin itself lands disabled with
+`dependency-unsatisfied`, `claude plugin marketplace add yasyf/captain-hook`
+resolves it on the spot — see [Tell users how to
+install](plugin-packs.qmd#tell-users-how-to-install).
 
 ## `NlpSignal` hooks need the spaCy model {#nlpsignal-hooks-need-the-spacy-model}
 
