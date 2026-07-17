@@ -384,7 +384,7 @@ class Server:
     def _dispatch(self, event: Event, raw: dict, session_id: str | None, req: Request) -> None:
         # Same-session serialization is enforced upstream by the per-session scheduler, not a lock.
         session_dir = ensure_session(_session(session_id)) if session_id else None
-        snapshot = self.registry.get(session_dir)
+        snapshot = self.registry.get()
         if snapshot.discovery_stderr:
             sys.stderr.write(snapshot.discovery_stderr)
         with app.use_state(snapshot.state):
