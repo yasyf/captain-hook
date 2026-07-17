@@ -1,19 +1,19 @@
-"""Generate or merge the four artifacts a session-attached pack ships against ``pack lint``.
+"""Generate or merge the three artifacts a discovered pack plugin ships against ``pack lint``.
 
-``scaffold_pack`` is non-destructive by construction and refuses before mutating anything: it plans
-every artifact first — parsing each existing file, refusing an unparseable one or a capt-hook entry
-it can't classify — and only then executes the writes, so a refusal leaves the tree untouched. A
-plan whose desired structure already matches the parsed file writes nothing, keeping a conforming
-file byte-for-byte identical. The one sanctioned destructive edit is stripping the legacy mirrored
-``capt-hook run`` entries the sole-dispatcher contract forbids. It imports nothing from ``cli`` — the
-shared identity and predicates live in ``packs.contract``, which ``cli`` re-imports too.
+A discovery-era pack plugin ships zero capt-hook invocations — no ``hooks.json`` attach entry — so
+its contract shrinks to a ``[pack]`` manifest, the plugin.json captain-hook dependency object, and
+the marketplace.json cross-marketplace allowlist. ``scaffold_pack`` is non-destructive by
+construction and refuses before mutating anything: it plans every artifact first — parsing each
+existing file, refusing an unparseable one — and only then executes the writes, so a refusal leaves
+the tree untouched. A plan whose desired structure already matches the parsed file writes nothing,
+keeping a conforming file byte-for-byte identical. It imports nothing from ``cli`` — the shared
+identity lives in ``packs.contract``, which ``cli`` re-imports too.
 """
 
 from __future__ import annotations
 
 import json
 import re
-import shlex
 import tomllib
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -24,25 +24,12 @@ import click
 
 from captain_hook.loader import CONF_MODULE, is_skip_marked
 from captain_hook.packs import manager
-from captain_hook.packs.contract import (
-    DEFAULT_PREFIX,
-    DIST_NAME,
-    MARKETPLACE_NAME,
-    VERSION_FLOOR_RE,
-    attach_command,
-    command_entries,
-    is_attach_argv,
-    is_canonical_run_argv,
-    search_upward,
-)
+from captain_hook.packs.contract import DIST_NAME, MARKETPLACE_NAME, VERSION_FLOOR_RE, search_upward
 from captain_hook.review.repo import repo_key
 
-# The release that shipped `pack scaffold` and the attach self-bootstrap; a scaffolded floor never
-# drops below it, so the generated two-line install (no manual marketplace add) is always valid.
-MIN_SCAFFOLD_FLOOR = "9.15.0"
-# Pre-`--isolated` consumers invoked capt-hook as bare `uvx capt-hook`; canonicalizing that prefix
-# lets scaffold migrate their entries with the same predicates lint applies to canonical ones.
-LEGACY_PREFIXES = (("uvx", DIST_NAME),)
+# The release that shipped plugin discovery; a scaffolded captain-hook floor never drops below it, so
+# the generated dependency contract reliably pulls the dispatcher onto a pack-plugin-only machine.
+MIN_SCAFFOLD_FLOOR = "10.0.0"
 
 type Verb = Literal["created", "updated", "unchanged"]
 
@@ -67,17 +54,16 @@ class Plan:
 def scaffold_pack(root: Path, *, name: str, description: str) -> list[ScaffoldAction]:
     """Generate or merge every pack artifact under ``root``, returning one action per artifact.
 
-    ``root`` is the plugin root — the directory the SessionStart attach line targets. Raises
-    ``click.ClickException`` (naming the file) when an existing artifact is unparseable or carries a
-    capt-hook entry that can't be safely rewritten; every artifact is planned before any write, so a
-    refusal leaves the tree untouched.
+    ``root`` is the plugin root — the directory discovery loads the ``[pack]`` manifest from. Raises
+    ``click.ClickException`` (naming the file) when an existing artifact is unparseable; every
+    artifact is planned before any write, so a refusal leaves the tree untouched. No ``hooks.json`` is
+    generated: a discovered pack plugin ships zero capt-hook invocations.
     """
-    nested, pack_root, manifest_path = pack_layout(root)
+    _nested, pack_root, manifest_path = pack_layout(root)
     manifest_dir = manifest_path.parent
     manifest_plan, manifest = plan_manifest(manifest_path, name=name, description=description)
     plans = [
         manifest_plan,
-        plan_hooks_json(root, manifest_dir, nested=nested),
         plan_plugin_json(root, manifest_dir, name=name, description=description),
         plan_marketplace_json(root, manifest_dir, name=name, description=description),
         *plan_starter_hook(contained_hooks_dir(manifest, pack_root, manifest_path)),
@@ -175,28 +161,6 @@ def plan_manifest(manifest_path: Path, *, name: str, description: str) -> tuple[
     return Plan(manifest_path, "created", f"pack manifest for {name}", manifest_template(name, description)), manifest
 
 
-def plan_hooks_json(root: Path, manifest_dir: Path, *, nested: bool) -> Plan:
-    candidates = list(dict.fromkeys([root / "hooks" / "hooks.json", manifest_dir / "hooks.json"]))
-    if len(present := [p for p in candidates if p.is_file()]) > 1:
-        raise click.ClickException(
-            f"ambiguous hooks.json: {present[0]} and {present[1]} both exist — Claude Code loads "
-            "<plugin>/hooks/hooks.json; keep exactly one and re-run"
-        )
-    canonical = attach_command(nested=nested)
-    if not present:
-        return Plan(candidates[0], "created", "attach-only hooks.json", render_json(attach_only(canonical)))
-    data = parse_json(present[0])
-    if reason := hooks_shape_reason(data):
-        raise click.ClickException(
-            f"{present[0]} has a malformed hooks structure ({reason}); fix hooks.json by hand — "
-            "scaffold refuses to rewrite an entry it can't classify"
-        )
-    refuse_unrecognized(present[0], data)
-    if (desired := merge_hooks_json(data, canonical)) == data:
-        return Plan(present[0], "unchanged", "one canonical SessionStart attach", None)
-    return Plan(present[0], "updated", "migrated to the canonical SessionStart attach", render_json(desired))
-
-
 def plan_plugin_json(root: Path, manifest_dir: Path, *, name: str, description: str) -> Plan:
     if (path := search_upward(manifest_dir, ".claude-plugin/plugin.json", "plugin.json", stop=root)) is None:
         path = root / ".claude-plugin" / "plugin.json"
@@ -242,79 +206,6 @@ def plan_starter_hook(hooks_dir: Path) -> list[Plan]:
 # --- merge helpers -------------------------------------------------------------------
 
 
-def canonicalize_prefix(argv: list[str]) -> list[str]:
-    return next(
-        ([*shlex.split(DEFAULT_PREFIX), *argv[len(p) :]] for p in LEGACY_PREFIXES if tuple(argv[: len(p)]) == p),
-        argv,
-    )
-
-
-def classify_command(cmd: str) -> str:
-    """One of ``capt-hook`` (an attach/run entry, canonical or legacy bare-``uvx``), ``unrecognized``
-    (a capt-hook mention we won't touch), or ``foreign`` (no capt-hook mention) — the shared lint
-    tokenization after the legacy prefix is canonicalized."""
-    try:
-        argv = canonicalize_prefix(shlex.split(cmd))
-    except ValueError:
-        return "unrecognized" if DIST_NAME in cmd else "foreign"
-    if is_attach_argv(argv) or is_canonical_run_argv(argv):
-        return "capt-hook"
-    return "unrecognized" if DIST_NAME in cmd else "foreign"
-
-
-def refuse_unrecognized(path: Path, data: dict[str, Any]) -> None:
-    if bad := [f"{event}:{cmd!r}" for event, cmd in command_entries(data) if classify_command(cmd) == "unrecognized"]:
-        raise click.ClickException(
-            f"{path} carries capt-hook entries scaffold can't safely rewrite: {', '.join(bad)}. "
-            "Run `capt-hook pack lint` and fix them by hand before scaffolding."
-        )
-
-
-def hooks_shape_reason(data: dict[str, Any]) -> str | None:
-    """None when ``data`` has the ``{hooks: {event: [{hooks: [{type, command}...]}...]}}`` shape; else why not."""
-    if not isinstance(hooks := data.get("hooks", {}), dict):
-        return '"hooks" must be an object mapping events to hook groups'
-    for event, groups in hooks.items():
-        if not isinstance(groups, list):
-            return f'"hooks.{event}" must be a list of hook groups'
-        for group in groups:
-            if not isinstance(group, dict):
-                return f'"hooks.{event}" has a non-object group'
-            if not isinstance(entries := group.get("hooks", []), list):
-                return f'"hooks.{event}" has a group whose "hooks" is not a list'
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    return f'"hooks.{event}" has a non-object hook entry'
-                if entry.get("type") == "command" and not isinstance(entry.get("command"), str):
-                    return f'"hooks.{event}" has a command entry without a string "command"'
-    return None
-
-
-def merge_hooks_json(data: dict[str, Any], canonical: str) -> dict[str, Any]:
-    """Strip every canonical capt-hook attach/run entry, prune groups it emptied, and append the
-    single canonical SessionStart attach, preserving all non-capt-hook groups verbatim."""
-    events = {
-        event: kept
-        for event, groups in data.get("hooks", {}).items()
-        if (kept := [g for group in groups if (g := prune_group(group)) is not None])
-    }
-    events.setdefault("SessionStart", []).append(attach_group(canonical))
-    return data | {"hooks": events}
-
-
-def prune_group(group: dict[str, Any]) -> dict[str, Any] | None:
-    """The group with its capt-hook entries removed: verbatim when none matched, ``None`` when
-    removing them emptied a group that had them, else rebuilt around the survivors."""
-    entries = group.get("hooks", [])
-    if (kept := [entry for entry in entries if not strip_capt_hook(entry)]) == entries:
-        return group
-    return {k: v for k, v in group.items() if k != "hooks"} | {"hooks": kept} if kept else None
-
-
-def strip_capt_hook(entry: dict[str, Any]) -> bool:
-    return entry.get("type") == "command" and classify_command(entry["command"]) == "capt-hook"
-
-
 def merge_plugin_json(path: Path, data: dict[str, Any]) -> dict[str, Any]:
     if (deps := data.get("dependencies")) is not None and not isinstance(deps, list):
         raise click.ClickException(
@@ -349,15 +240,9 @@ def merge_captain_dep(existing: str | dict[str, Any]) -> dict[str, Any]:
 
 
 def manifest_template(name: str, description: str) -> str:
-    return f'name = {toml_str(name)}\nversion = "0.1.0"\ndescription = {toml_str(description)}\nhooks = "hooks"\n'
-
-
-def attach_only(canonical: str) -> dict[str, Any]:
-    return {"hooks": {"SessionStart": [attach_group(canonical)]}}
-
-
-def attach_group(canonical: str) -> dict[str, Any]:
-    return {"hooks": [{"type": "command", "command": canonical}]}
+    return (
+        f'[pack]\nname = {toml_str(name)}\nversion = "0.1.0"\ndescription = {toml_str(description)}\nhooks = "hooks"\n'
+    )
 
 
 def captain_dep() -> dict[str, str]:
