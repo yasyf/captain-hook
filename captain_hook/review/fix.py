@@ -39,9 +39,10 @@ records the wheel or cache file — all of these route through the ``kind``: a
 ``<pack>.<module>`` prefix naming a module the installed builtin pack actually ships targets
 the pack source inside captain-hook itself (``captain_hook/packs/<pack>/<module>.py``, repo
 captain-hook), a prefix naming a cached external pack the project declares targets that pack's
-``github.com/<owner>/<repo>`` at the file's in-repo path, and any other module prefix —
-including a packaged user hook whose package merely shares a builtin pack's name — targets the
-repo-local ``.claude/hooks/<module>.py``.
+``github.com/<owner>/<repo>`` at the file's in-repo path, a prefix naming a pack discovered on
+an enabled Claude Code plugin is dropped (plugin packs route to no repo this wave), and any
+other module prefix — including a packaged user hook whose package merely shares a builtin
+pack's name — targets the repo-local ``.claude/hooks/<module>.py``.
 Unattributable or unresolvable complaints (including legacy kinds whose prefix is
 not a module path, e.g. ``<frozen importlib``) are dropped — precision over recall.
 """
@@ -65,6 +66,7 @@ from cc_transcript.models import (
     ToolResultBlock,
     UserEvent,
 )
+from loguru import logger
 
 from captain_hook.review.routing import CAPTAIN_HOOK_REPO, Target
 
@@ -289,9 +291,17 @@ def external_target_path(source_file: str) -> str | None:
 
 
 def resolve_target(decision: Decision, index: PackIndex) -> Target | None:
+    module, sep, _ = decision.kind.partition(":")
+    # A discovered plugin pack's hook fires from the plugin's install dir — a path that reads as
+    # a repo file to ``user_repo_source`` — so drop it here on the ``kind`` prefix, ahead of both
+    # the verbatim early return and the ``.claude/hooks`` fallback, either of which would misfile
+    # its fix as a repo-local PR. Plugin-pack kinds are always ``<pack>.<mod>`` (two segments); a
+    # single-segment repo hook that merely shares a plugin's name keeps its repo-local route.
+    if sep and module and len(segments := module.split(".")) >= 2 and segments[0] in index.plugins:
+        logger.bind(hook=decision.kind).debug("dropped plugin-pack misfire complaint; no repo target this wave")
+        return None
     if user_repo_source(decision.source_file):
         return Target(decision.source_file, decision.kind, repo=None, pack=None)
-    module, sep, _ = decision.kind.partition(":")
     if not sep or not module:
         return None
     match module.split("."):
