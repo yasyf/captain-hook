@@ -45,8 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was inert for them before). The worker registers exactly the declared slugs
   — the implicit `yasyf/captain-hook` prepend is gone, since wherever
   discovery runs the dispatcher already exists — an empty union costs zero
-  I/O, and the spawn notice moved to stderr (dispatch stdout carries the
-  hook decision).
+  I/O, and the worker spawn is logged rather than printed, keeping dispatch
+  output protocol-clean on both streams.
 - **`pack scaffold` emits the discovery contract.** Generated packs ship no
   `hooks.json` at all, a `[pack]`-grammar manifest, and a dependency floor of
   `>=10.0.0`.
