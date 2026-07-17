@@ -385,6 +385,10 @@ class Server:
         # Same-session serialization is enforced upstream by the per-session scheduler, not a lock.
         session_dir = ensure_session(_session(session_id)) if session_id else None
         snapshot = self.registry.get()
+        # Replay both discovery streams before the dispatch response: cold prints import-time stdout and
+        # its notices during discover(), before the decision JSON, so warm must too — same order per stream.
+        if snapshot.discovery_stdout:
+            sys.stdout.write(snapshot.discovery_stdout)
         if snapshot.discovery_stderr:
             sys.stderr.write(snapshot.discovery_stderr)
         with app.use_state(snapshot.state):

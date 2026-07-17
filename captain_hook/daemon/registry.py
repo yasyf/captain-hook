@@ -153,6 +153,7 @@ class RegistrySnapshot:
     fingerprint: Fingerprint
     state: app.State
     resolved: list[manager.ResolvedPack]
+    discovery_stdout: str = ""
     discovery_stderr: str = ""
     cacheable: bool = True
 
@@ -199,10 +200,8 @@ class Registry:
         from captain_hook.daemon.context import capture_output
 
         state = app.State()
-        # Capture discovery's diagnostics (the missing-packs and bootstrap notices) into the snapshot
-        # instead of letting them land only in the buffer of the request that triggered the build; the
-        # server replays them into every request served from this snapshot, mirroring cold's per-invocation
-        # print. All discovery stderr must originate inside discover() for this warm/cold parity to hold.
+        # Capture discovery's output on BOTH streams (stderr notices, stdout import-time prints); the
+        # server replays it per request so warm mirrors cold's per-invocation print.
         with capture_output() as captured, app.use_state(state):
             resolved = self._cli_state.discover()
         # Fingerprint after discover: it wrote the fastpath sidecar (and may have refreshed the plugin
@@ -212,5 +211,6 @@ class Registry:
             fingerprint=Fingerprint.compute(self._cli_state),
             state=state,
             resolved=resolved,
+            discovery_stdout=captured.stdout.getvalue(),
             discovery_stderr=captured.stderr.getvalue(),
         )

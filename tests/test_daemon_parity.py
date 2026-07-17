@@ -221,3 +221,46 @@ def test_warm_dispatch_is_byte_identical_to_cold(parity: tuple[Path, dict[str, s
         f"  warm: rc={warm.returncode} out={warm.stdout!r} err={warm.stderr!r}"
     )
     case.check(cold)
+
+
+# A hook module that prints to stdout at import time, exercising the discovery-stdout replay path.
+IMPORT_STDOUT_HOOK_SRC = """
+from __future__ import annotations
+
+from captain_hook import Event, on
+
+print("DISCOVERY_STDOUT_LINE")
+
+
+@on(Event.PostToolUse)
+def noop(evt):
+    return None
+"""
+
+
+@pytest.fixture(scope="module")
+def parity_import_stdout() -> Iterator[tuple[Path, dict[str, str]]]:
+    dirs = daemon_dirs()
+    root = make_project(Path(tempfile.mkdtemp(prefix="chp-imp-")), IMPORT_STDOUT_HOOK_SRC)
+    env = daemon_env(root, dirs, CAPT_HOOK_DAEMON_FALLBACK="closed")
+    try:
+        with running_daemon(root, env):
+            yield root, env
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+        cleanup_dirs(dirs)
+
+
+def test_warm_replays_import_time_stdout(parity_import_stdout: tuple[Path, dict[str, str]]) -> None:
+    # R3: an import-time print lands on discovery stdout; warm must replay it byte-identical to cold on
+    # both streams (without the fix the daemon captured but never replayed it, so warm.stdout was empty).
+    root, env = parity_import_stdout
+    case = Case("import_stdout", "PostToolUse", {"session_id": "imp1", "tool_name": "Bash", "tool_input": {}})
+    stdin, args = case.stdin(), case.args(root)
+    cold = run_cold(*args, env=env, stdin=stdin, cwd=str(root))
+    warm = run_client(*args, env=env, stdin=stdin, cwd=str(root))
+    assert cold.stdout == b"DISCOVERY_STDOUT_LINE\n"  # cold prints at import, before the (empty) decision
+    assert (warm.returncode, warm.stdout, warm.stderr) == (cold.returncode, cold.stdout, cold.stderr), (
+        f"warm/cold divergence:\n  cold: out={cold.stdout!r} err={cold.stderr!r}\n"
+        f"  warm: out={warm.stdout!r} err={warm.stderr!r}"
+    )
