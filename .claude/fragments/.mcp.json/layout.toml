@@ -1,0 +1,7 @@
+fragments = [
+  "cc-skills:mcp-base",
+  "mcp-overrides",
+]
+
+[sources.cc-skills]
+source = "github:yasyf/cc-skills@main"
