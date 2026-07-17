@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from click.testing import CliRunner
 from loguru import logger
 
 import captain_hook
 from captain_hook import Prompt, app
+from captain_hook.cli import cli
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack, import_pack_module
 from captain_hook.packs import manager
@@ -1074,3 +1076,137 @@ def test_resolve_attached_prunes_stale_dir(tmp_path: Path) -> None:
 
     pack.rename(tmp_path / "moved")  # a plugin update moved the versioned cache path
     assert manager.resolve_attached(session) == []  # the dangling entry is silently dropped
+
+
+# --- CLI (pack add / list / remove / update) -----------------------------------------
+
+
+def test_cli_pack_add_list_remove(tmp_path: Path) -> None:
+    runner = CliRunner()
+    add = runner.invoke(cli, ["--root", str(tmp_path), "pack", "add", "general"])
+    assert add.exit_code == 0, add.output
+    assert "[packs.general]" in manager.config_path(tmp_path).read_text()
+
+    listed = runner.invoke(cli, ["--root", str(tmp_path), "pack", "list"])
+    assert "general" in listed.output and "12 hooks" in listed.output
+
+    remove = runner.invoke(cli, ["--root", str(tmp_path), "pack", "remove", "general"])
+    assert remove.exit_code == 0
+    assert manager.read_entries(manager.config_path(tmp_path)) == []
+
+
+def test_cli_pack_add_rejects_invalid_target(tmp_path: Path) -> None:
+    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "add", "not-a-pack"])
+    assert result.exit_code != 0
+    assert not manager.config_path(tmp_path).exists()
+
+
+def test_cli_pack_list_reports_import_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pack_dir = write_pack(tmp_path / "badpack", "badpack", hooks=".")
+    (pack_dir / "boom.py").write_text("raise RuntimeError('kaboom')\n")
+    resolved = [
+        manager.ResolvedPack(
+            entry=manager.BuiltinPack(name="badpack"),
+            path=pack_dir,
+            manifest=manager.PackManifest(name="badpack", version="0.1.0", description="d", hooks="."),
+        )
+    ]
+    monkeypatch.setattr(manager, "resolve_enabled_packs", lambda _root, _entries: (resolved, []))
+
+    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "list"])
+
+    assert result.exit_code == 0, result.output
+    assert "badpack" in result.output  # the pack still lists
+    assert "!  badpack: boom.py failed to import - RuntimeError: kaboom" in result.output
+
+
+def test_cli_pack_add_latest_is_source_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager.time, "time", Clock())
+    fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)  # FakeGitHub.latest_tag == "v9.9.9"
+    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "add", "github:acme/acme@latest"])
+
+    assert result.exit_code == 0, result.output
+    toml = manager.config_path(tmp_path).read_text()
+    assert 'source = "github:acme/acme@latest"' in toml and "commit" not in toml  # no frozen pin
+    (entry,) = manager.read_entries(manager.config_path(tmp_path))
+    assert entry == manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@latest"), commit=None)
+    meta = manager.PackMeta.load(manager.meta_path("acme"))
+    assert meta is not None and meta.commit == "a" * 40  # cache warmed + sidecar recorded
+    assert meta.resolved_ref == "v9.9.9"  # the @latest release tag, recorded for display
+
+
+def test_cli_pack_add_tag_freezes_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager.time, "time", Clock())
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
+    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "add", "github:acme/acme@v1.2.3"])
+
+    assert result.exit_code == 0, result.output
+    toml = manager.config_path(tmp_path).read_text()
+    assert 'source = "github:acme/acme@v1.2.3"' in toml and f'commit = "{"a" * 40}"' in toml  # frozen lockfile pin
+    (entry,) = manager.read_entries(manager.config_path(tmp_path))
+    assert entry == manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@v1.2.3"), commit="a" * 40)
+    assert manager.PackMeta.load(manager.meta_path("acme")) is None  # a frozen pin keeps no sidecar
+    assert gh.seen_refs == ["v1.2.3"]  # resolved the tag once, at add time
+
+
+def test_cli_pack_update_moving_refreshes_sidecar_not_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = Clock()
+    monkeypatch.setattr(manager.time, "time", clock)
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)  # FakeGitHub.latest_tag == "v9.9.9"
+    enable_moving(tmp_path)
+    resolve(tmp_path)
+
+    gh.sha, gh.tarball = "c" * 40, make_pack_tarball(tmp_path / "src-c", name="acme", top="acme-c")
+    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "update", "acme"])
+
+    assert result.exit_code == 0, result.output
+    # The message names the resolved ref alongside the sha, never the bare sha (FakeGitHub.latest_tag == v9.9.9).
+    assert "updated acme -> v9.9.9@ccccccc" in result.output
+    assert "commit" not in manager.config_path(tmp_path).read_text()  # still source-only
+    meta = manager.PackMeta.load(manager.meta_path("acme"))
+    assert meta is not None and meta.commit == "c" * 40  # sidecar advanced to the new commit
+    assert meta.resolved_ref == "v9.9.9"  # @latest re-resolved the release tag into the sidecar
+
+
+def test_cli_pack_update_pinned_repins_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    old, new = "a" * 40, "c" * 40
+    gh = fake_github(tmp_path, monkeypatch, name="acme", sha=new)
+    manager.upsert_entry(
+        manager.config_path(tmp_path),
+        manager.ExternalPack("acme", manager.PackSource.parse("github:acme/acme@v1"), old),
+    )
+    result = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "update", "acme"])
+
+    assert result.exit_code == 0, result.output
+    (entry,) = manager.read_entries(manager.config_path(tmp_path))
+    assert isinstance(entry, manager.ExternalPack) and entry.commit == new  # re-pinned in the lockfile
+    assert gh.seen_refs == ["v1"]  # re-resolved the declared @v1 ref
+
+
+def test_cli_pack_list_shows_resolved_commit_for_moving(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager.time, "time", Clock())
+    fake_github(tmp_path, monkeypatch, name="acme", sha="abcdef1" + "0" * 33)  # FakeGitHub.latest_tag == "v9.9.9"
+    enable_moving(tmp_path)
+    resolve(tmp_path)
+
+    listed = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "list"])
+    assert listed.exit_code == 0, listed.output
+    assert "acme" in listed.output and "latest@abcdef1" in listed.output  # honest resolved commit, not "None"
+    assert "v9.9.9" in listed.output  # the resolved @latest tag shows in the version column
+    assert "v0.1.0" not in listed.output  # not the one-behind manifest version
+
+
+def test_cli_pack_list_falls_back_to_manifest_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager.time, "time", Clock())
+    fake_github(tmp_path, monkeypatch, name="acme", sha="a" * 40)
+    enable_moving(tmp_path)
+    resolve(tmp_path)
+    # a pre-9.5 sidecar: same cached commit, but no resolved_ref recorded
+    meta = manager.PackMeta.load(manager.meta_path("acme"))
+    assert meta is not None
+    manager.atomic_write(manager.meta_path("acme"), json.dumps({"commit": meta.commit, "checked_at": meta.checked_at}))
+
+    listed = CliRunner().invoke(cli, ["--root", str(tmp_path), "pack", "list"])
+
+    assert listed.exit_code == 0, listed.output
+    assert "v0.1.0" in listed.output  # no resolved_ref in the sidecar → falls back to the manifest version

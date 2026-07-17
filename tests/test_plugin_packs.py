@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from captain_hook.packs import manager, plugins
+from captain_hook.packs import bootstrap, manager, plugins
+from tests.helpers import run_cli
 
 
 @pytest.fixture(autouse=True)
@@ -311,3 +312,88 @@ def test_newer_plugin_version_rebinds(tmp_path: Path, monkeypatch: pytest.Monkey
     (second,) = plugins.resolve_plugin_packs(root, set())
     assert (second.entry.dir, second.entry.version) == (str(v2), "2.0.0")
     assert second.path == v2
+
+
+# --- end-to-end dispatch (the discovered plugin pack's hook fires) -------------------
+
+
+def run_dispatch(root: Path, event: str, **raw: object) -> str:
+    """Dispatch ``event`` over a subprocess CLI run — the fake claude/env are already on os.environ."""
+    stdin = json.dumps({"session_id": "e2e-sess", **raw})
+    result = run_cli("run", event, root_dir=str(root), stdin_data=stdin)
+    assert result.returncode == 0, result.stdout + result.stderr
+    return result.stdout
+
+
+def test_e2e_discovered_plugin_pack_hook_fires_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")  # ships hook(Event.PreToolUse, message="show")
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
+
+    out = run_dispatch(root, "PreToolUse", tool_name="Bash", tool_input={"command": "echo hi"})
+    assert "show" in out  # the discovered plugin pack's hook fired
+    assert out.count("show") == 1  # exactly once — discovery loaded it a single time
+
+
+def test_e2e_discovered_plugin_pack_fires_for_subagent_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Discovery is per project, not per session, so a subagent-originated event loads the pack too.
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
+
+    out = run_dispatch(root, "PreToolUse", tool_name="Bash", tool_input={"command": "echo hi"}, agent_id="sub-1")
+    assert "show" in out
+
+
+# --- discover-tail bootstrap (a discovered pack's declared marketplaces) --------------
+
+
+def discover(root: Path, hooks: Path) -> None:
+    from captain_hook.cli import CliState
+
+    CliState(root=root, hooks=str(hooks)).discover()
+
+
+def declare_marketplaces(plugin: Path, name: str, version: str, marketplaces: list[str]) -> None:
+    mkt = f"marketplaces = {json.dumps(marketplaces)}\n"
+    (plugin / manager.PACK_MANIFEST).write_text(pack_manifest(name, version) + mkt)
+
+
+def test_discover_tail_bootstraps_declared_marketplaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # spawn_worker is the capture boundary — not subprocess.Popen, which list_plugins_cli shares.
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")
+    declare_marketplaces(plugin, "show", "1.0.0", ["yasyf/cc-present"])
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
+
+    spawned: list[list[str]] = []
+    monkeypatch.setattr(bootstrap, "spawn_worker", lambda repos: spawned.append(list(repos)))
+
+    discover(root, tmp_path / "no-hooks")
+
+    assert spawned == [["yasyf/cc-present"]]  # exactly one worker, for the declared marketplace
+    assert "yasyf/cc-present" in capsys.readouterr().err  # the notice lands on stderr
+
+
+def test_discover_no_marketplaces_is_zero_marketplace_io(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")  # declares no marketplaces
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
+
+    def no_spawn(_: object) -> None:
+        raise AssertionError("no worker should spawn when no pack declares a marketplace")
+
+    def no_read() -> list[tuple[str, dict[str, object]]]:
+        raise AssertionError("known_marketplaces.json must not be read for an empty union")
+
+    monkeypatch.setattr(bootstrap, "spawn_worker", no_spawn)
+    monkeypatch.setattr(bootstrap, "known_entries", no_read)
+
+    discover(root, tmp_path / "no-hooks")
+    assert not bootstrap.bootstrap_dir().exists()  # zero marketplace I/O — no marker dir created

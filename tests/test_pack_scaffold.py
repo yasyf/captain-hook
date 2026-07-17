@@ -274,17 +274,40 @@ def test_hooks_dir_escaping_pack_root_refuses(tmp_path: Path) -> None:
     assert not (tmp_path / "escape").exists()  # nothing landed outside the pack root
 
 
-# --- CLI surface (exit code / install snippet gated on the Phase 4 lint rewire) -------
+# --- CLI surface (exit code / install snippet on the discovery-contract lint) --------
 
 
 def test_cli_scaffold_writes_pack_grammar_manifest(tmp_path: Path) -> None:
-    # The command's exit code and install snippet ride the Phase 4 lint rewrite; the artifacts land
-    # regardless (scaffold writes before linting), so this asserts the wiring, not the exit code.
     root = tmp_path / "my-guards"
     run_cli("pack", "scaffold", str(root))
     manifest = manager.PackManifest.load(manager.manifest_in(root))
     assert manifest.name == "my-guards"  # --name defaults to the directory basename
     assert no_hooks_json(root)
+
+
+def test_cli_scaffold_exits_zero_and_prints_install_snippet(tmp_path: Path) -> None:
+    result = run_cli("pack", "scaffold", str(tmp_path / "pkg"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "created" in result.stdout
+    assert "/plugin marketplace add" in result.stdout
+    assert "/plugin install pkg@" in result.stdout
+    assert "0 failed" in result.stdout
+
+
+def test_cli_name_defaults_to_directory_basename(tmp_path: Path) -> None:
+    root = tmp_path / "my-guards"
+    assert run_cli("pack", "scaffold", str(root)).returncode == 0
+    assert manager.PackManifest.load(manager.manifest_in(root)).name == "my-guards"
+
+
+def test_starter_hook_inline_tests_pass_via_cli(tmp_path: Path) -> None:
+    root = tmp_path / "pkg"
+    scaffold.scaffold_pack(root, name="pkg", description="d")
+    # Run from the pack root so the scaffolded (namespace) hooks/ package isn't shadowed by the
+    # repo's own .claude/hooks package on the default cwd's import path.
+    result = run_cli("test", hooks_dir=str(root / "hooks"), cwd=str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS" in result.stdout and "FAIL" not in result.stdout
 
 
 def test_cli_explicit_name_conflicting_with_manifest_errors(tmp_path: Path) -> None:

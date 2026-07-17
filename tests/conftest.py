@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -45,13 +44,11 @@ def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mo
     # The SessionEnd reviewer skips headless entrypoints (sdk-*); scrub it so tests don't
     # inherit the ambient CLAUDE_CODE_ENTRYPOINT of a pytest run launched inside claude.
     monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
-    # Seed CLAUDE_CONFIG_DIR with a known-marketplaces file listing captain-hook, so pack-attach's
-    # self-bootstrap hits the hard no-op and never spawns a real `claude` worker.
+    # Isolate CLAUDE_CONFIG_DIR to an empty config dir. Leaving plugins/installed_plugins.json absent
+    # is the existence gate that keeps plugin discovery hermetic — enabled_plugins() returns () without
+    # ever spawning a real `claude plugin list`. A test that needs discovery plants the file itself.
     config_dir = tmp_path_factory.mktemp("claude-config")
     (config_dir / "plugins").mkdir()
-    (config_dir / "plugins" / "known_marketplaces.json").write_text(
-        json.dumps({"captain-hook": {"source": {"source": "github", "repo": "yasyf/captain-hook"}}})
-    )
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
     reset()
     yield

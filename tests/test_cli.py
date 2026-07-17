@@ -153,7 +153,7 @@ class TestHooksSubcommand:
     def test_builtin_pack_prints_captain_hook_home_repo(self, tmp_path: Path, hooks_dir: Path) -> None:
         from captain_hook.packs import manager
 
-        manager.upsert_entry(manager.packs_toml_path(tmp_path), manager.BuiltinPack("fixes"))
+        manager.upsert_entry(manager.config_path(tmp_path), manager.BuiltinPack("fixes"))
 
         result = run_cli("hooks", hooks_dir=str(hooks_dir), root_dir=str(tmp_path))
 
@@ -688,7 +688,7 @@ class TestNlpProvisioning:
                 manifest=manager.PackManifest(name="fake", version="0.1.0", description="d", hooks=".", nlp=nlp),
             )
         ]
-        monkeypatch.setattr(manager, "resolve_enabled_packs", lambda _root: (resolved, []))
+        monkeypatch.setattr(manager, "resolve_enabled_packs", lambda _root, _entries: (resolved, []))
         return resolved
 
     @pytest.fixture
