@@ -1,6 +1,6 @@
 """The ``capt-hook helper`` command group — install, ping, and test the desktop helper.
 
-These are the user-facing surface for ``Captain Hook.app``: ``install`` taps the cask and
+These are the user-facing surface for ``Captain Hook.app``: ``install`` installs the cask and
 launches it, ``status`` pings the running helper, and ``notify`` fires a test banner through
 :mod:`captain_hook.helper.client`. Every side effect (brew, ``open``, the socket) runs only
 when the command is invoked, never at import.
@@ -12,8 +12,7 @@ import click
 
 from captain_hook.helper import client
 
-BREW_TAP = "yasyf/tap"
-CASK = "capt-hook-helper"
+CASK = "yasyf/tap/captain-hook"
 APP_PATH = "/Applications/Captain Hook.app"
 
 
@@ -27,7 +26,6 @@ def install() -> None:
     """Install or upgrade the signed helper via Homebrew, then launch it in the background."""
     import subprocess
 
-    subprocess.run(["brew", "tap", BREW_TAP], check=True)
     subprocess.run(["brew", "install", "--cask", "--force", CASK], check=True)
     if subprocess.run(["open", "-g", APP_PATH], capture_output=True).returncode != 0:
         subprocess.run(["open", "-g", "-a", client.APP_NAME], check=False)

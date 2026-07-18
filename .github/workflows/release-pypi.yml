@@ -141,8 +141,8 @@ jobs:
       profile_names: |
         com.yasyf.capt-hook.helper=Captain Hook Helper App
         com.yasyf.capt-hook.helper.widget=Captain Hook Helper Widget
-      cask_token: capt-hook-helper
-      cask_template_path: .github/cask/capt-hook-helper.rb.tmpl
+      cask_token: captain-hook
+      cask_template_path: .github/cask/captain-hook.rb.tmpl
       changed_paths: |
         helper/**
         .github/cask/**

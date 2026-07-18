@@ -27,7 +27,7 @@ def test_helper_group_lists_subcommands() -> None:
         assert command in result.output
 
 
-def test_install_taps_installs_and_launches(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_install_installs_and_launches(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
 
     def fake_run(argv: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
@@ -37,8 +37,7 @@ def test_install_taps_installs_and_launches(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(subprocess, "run", fake_run)
     result = invoke("install")
     assert result.exit_code == 0, result.output
-    assert ["brew", "tap", "yasyf/tap"] in calls
-    assert ["brew", "install", "--cask", "--force", "capt-hook-helper"] in calls
+    assert ["brew", "install", "--cask", "--force", "yasyf/tap/captain-hook"] in calls
     assert ["open", "-g", "/Applications/Captain Hook.app"] in calls
     assert "System Settings" in result.output and "widget" in result.output.lower()
 
