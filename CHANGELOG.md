@@ -4,6 +4,34 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.31.0] - 2026-07-18
+
+### Changed
+- **cc-transcript 14.** The review/judge stack runs on cc-transcript 14's
+  sync, native-core API: the dependency pin is `cc-transcript[judge]>=14,<15`
+  (aiosqlite and tree-sitter leave the dependency graph), stores and the
+  review pipeline are synchronous end to end with only v14's genuinely async
+  surfaces (`run_verdicts`, `record_verdict`, `suggest_canonical_keys`,
+  `extract_correction`) still awaited, and scan/session/transcript plumbing
+  sits on the v14 `stream`/`discovery`/`resolve`/`capture_window` functions.
+- **Protocol markers and tool payloads go through typed surfaces.** The
+  conductor classifier, stop-hook feedback fingerprinting, task-notification
+  detection, MCP tool-name splitting, and TaskCreate/TaskUpdate prose checks
+  now use cc-transcript's filterspec groups, `tools.mcp_parts`, and typed
+  tool calls instead of hand-rolled prefixes and raw dicts. Two visible
+  semantics notes: stop-marker matching adopts the filterspec-owned regex
+  (case-insensitive, no trailing-newline requirement), and structural-noise
+  classification stays anchored to the prompt head — protocol tokens quoted
+  mid-prompt do not reclassify an authored message.
+- **Degraded tool-input parses cover v14's `FallbackCall`.** Inputs outside
+  the JSON contract are detected as degraded alongside `OtherCall`.
+
+### Fixed
+- **Offline stress harness.** Scenario PR URLs now target the sandbox's own
+  repo and the gh stub answers `mergedAt`, so the F08 threshold and F13
+  clock scenarios pass offline (pre-existing harness bugs surfaced by the
+  migration gates).
+
 ## [9.30.0] - 2026-07-18
 
 ### Changed
