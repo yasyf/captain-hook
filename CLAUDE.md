@@ -25,6 +25,8 @@ Exceptions: trivial single-file edits, single file reads, and single targeted `c
 
 **Quality patterns**: pick per task — adversarial verify, judge panel, loop-until-dry, multi-modal sweep. Reviews and audits lean thorough; quick checks lean brief.
 
+**Speculate while you verify.** Verification and the fix it gates are not sequential phases. When verification lanes dispatch — a ground-truth repro loop, adversarial review, a security pass — with a concrete candidate fix already in hand, build that fix concurrently in a background lane routed per the Models table, always worktree-isolated (`isolation: 'worktree'`, or the lane's own worktree — never the shared working copy the in-flight verification is observing). The speculative lane never ships on its own: a confirming verdict applies the already-built fix; a refuting one discards the worktree. A discarded worktree costs tokens; verify-then-fix serialization costs wall-clock every time.
+
 **Models** — route per agent, up-front by task type. Higher = better; cost = cheaper:
 
 | Model | Cost | Int | Taste | Route here |

@@ -15,11 +15,13 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
         # Skill template trees hold moustache sources ({{#SECTION}} markers,
-        # {{TOKEN}} mid-scalar) that are not YAML documents; they are
-        # validated post-render. Inert in repos without such paths.
+        # {{TOKEN}} mid-scalar) that are not YAML/JSON/TOML documents; they
+        # are validated post-render. Inert in repos without such paths.
         exclude: ^plugins/[^/]+/skills/[^/]+/templates/
       - id: check-json
+        exclude: ^plugins/[^/]+/skills/[^/]+/templates/
       - id: check-toml
+        exclude: ^plugins/[^/]+/skills/[^/]+/templates/
       - id: check-merge-conflict
       - id: check-added-large-files
         # 1 MiB, not the 500 KB default: gen-image compresses repo brand images
