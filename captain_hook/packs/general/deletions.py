@@ -4,17 +4,25 @@ import glob
 import itertools
 import os
 import re
+import shlex
+import sys
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
-from captain_hook import Allow, BaseHookEvent, Block, Event, HookResult, Input, Tool, on
+from captain_hook import Allow, Block, Event, HookResult, Input, Rewrite, Tool, on
 from captain_hook.types import Command as CommandCondition
+from captain_hook.util import fs
 from captain_hook.util.scratch import is_scratch_path
 from captain_hook.util.shell import normalize_executable, unescape_shell
 
+if TYPE_CHECKING:
+    from captain_hook.events import PreToolUseEvent
+
 GLOB_LIMIT = 10
+SAFE_WORD = re.compile(r"[^\s'\"\\$`;&|<>(){}#]+")
 
 
 class GlobExpansion(NamedTuple):
@@ -24,6 +32,22 @@ class GlobExpansion(NamedTuple):
 
 class GlobWalkBudgetExceeded(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class Recoverable:
+    block: HookResult
+    note: str
+
+
+@dataclass(frozen=True)
+class Trashed:
+    replacement: str
+    note: str
+
+
+def trash_binary() -> str | None:
+    return fs.resolve_binary("trash") if sys.platform == "darwin" else None
 
 
 def in_vcs_repo(directory: Path) -> bool:
@@ -116,7 +140,26 @@ def glob_matches(token: str, cwd: Path | None, *, limit: int) -> GlobExpansion:
         return GlobExpansion((), True)
 
 
-def block_rm_target(evt: BaseHookEvent, token: str, cwd: Path | None) -> HookResult | None:
+def emit_target(raw: str, *, plain_words: bool) -> str | None:
+    if SAFE_WORD.fullmatch(raw):
+        if (glob.has_magic(raw) or raw.startswith("~")) and not plain_words:
+            return None
+        return f"./{raw}" if raw.startswith("-") else raw
+    if (
+        not any(char in raw for char in "'\"$`{}")
+        and ("\\" not in raw or plain_words)
+        and not glob.has_magic(target := unescape_shell(raw))
+        and not target.startswith("~")
+    ):
+        return shlex.quote(target)
+    return None
+
+
+def check_rm_target(
+    evt: PreToolUseEvent,
+    token: str,
+    cwd: Path | None,
+) -> HookResult | Recoverable | None:
     if (resolved := resolve_target(token, cwd)) is None or is_scratch_path(resolved):
         return None
     if is_repo_root(resolved):
@@ -125,16 +168,31 @@ def block_rm_target(evt: BaseHookEvent, token: str, cwd: Path | None) -> HookRes
             "history. If this is really intended, ask the user to run it themselves."
         )
     if not in_vcs_repo(resolved):
-        return evt.block(
-            f"BLOCKED: rm target '{token}' resolves outside any git/jj repository, so nothing can restore it "
-            "after deletion. Move it to the trash instead, or stop and ask the user to confirm this deletion. "
-            "(Temp and scratch paths are exempt.)"
+        return Recoverable(
+            evt.block(
+                f"BLOCKED: rm target '{token}' resolves outside any git/jj repository, so nothing can restore it "
+                "after deletion. Move it to the trash instead, or stop and ask the user to confirm this deletion. "
+                "(Temp and scratch paths are exempt.)"
+            ),
+            f"Rewrote rm to trash: '{token}' resolves outside any git/jj repository, so rm would be "
+            "unrecoverable. The targets were moved to the macOS Trash instead — restorable via Finder (Put Back). "
+            "If permanent deletion is truly intended, ask the user to run the rm themselves.",
         )
     return None
 
 
-def handle_rm(evt: BaseHookEvent, args: tuple[str, ...], cwd: Path | None) -> HookResult | None:
-    for token in map(unescape_shell, rm_targets(args)):
+def handle_rm(
+    evt: PreToolUseEvent,
+    args: tuple[str, ...],
+    cwd: Path | None,
+    *,
+    trash: str | None,
+    plain_words: bool,
+) -> HookResult | Trashed | None:
+    recovery: Recoverable | None = None
+    targets = rm_targets(args)
+    for raw in targets:
+        token = unescape_shell(raw)
         if glob.has_magic(token):
             expansion = glob_matches(token, cwd, limit=GLOB_LIMIT)
             if expansion.too_broad:
@@ -149,23 +207,41 @@ def handle_rm(evt: BaseHookEvent, args: tuple[str, ...], cwd: Path | None) -> Ho
                     "directory explicitly with rm -r <dir>."
                 )
             for matched in expansion.matches:
-                if (blocked := block_rm_target(evt, matched, cwd)) is not None:
-                    return blocked
+                match check_rm_target(evt, matched, cwd):
+                    case HookResult() as blocked:
+                        return blocked
+                    case Recoverable() as recoverable if recovery is None:
+                        recovery = recoverable
             continue
-        if (blocked := block_rm_target(evt, token, cwd)) is not None:
-            return blocked
-    return None
+        match check_rm_target(evt, token, cwd):
+            case HookResult() as blocked:
+                return blocked
+            case Recoverable() as recoverable if recovery is None:
+                recovery = recoverable
+    if recovery is None:
+        return None
+    if trash is None:
+        return recovery.block
+    emitted: list[str] = []
+    for target in targets:
+        if (value := emit_target(target, plain_words=plain_words)) is None:
+            return recovery.block
+        emitted.append(value)
+    return Trashed(f"{shlex.quote(trash)} {' '.join(emitted)}", recovery.note)
+
+
+RECOVERABLE_RM: Block | Rewrite = Rewrite(pattern="trash") if trash_binary() else Block(pattern="repository")
 
 
 @on(
     Event.PreToolUse,
     only_if=[Tool("Bash"), CommandCondition(r"(?i)\brm\b")],
     tests={
-        Input(command="rm foo.txt", cwd="/"): Block(pattern="repository"),
-        Input(command="rm -- data.txt", cwd="/"): Block(pattern="repository"),
-        Input(command="sudo rm /foo.txt", cwd="/"): Block(pattern="repository"),
-        Input(command=r"\rm /foo.txt", cwd="/"): Block(pattern="repository"),
-        Input(command="'rm' /foo.txt", cwd="/"): Block(pattern="repository"),
+        Input(command="rm foo.txt", cwd="/"): RECOVERABLE_RM,
+        Input(command="rm -- data.txt", cwd="/"): RECOVERABLE_RM,
+        Input(command="sudo rm /foo.txt", cwd="/"): RECOVERABLE_RM,
+        Input(command=r"\rm /foo.txt", cwd="/"): RECOVERABLE_RM,
+        Input(command="'rm' /foo.txt", cwd="/"): RECOVERABLE_RM,
         Input(command="rm /tmp/x.py", cwd="/"): Allow(),
         Input(command="rm -rf /tmp/scratch/build", cwd="/"): Allow(),
         Input(command="rm foo.txt"): Allow(),
@@ -175,16 +251,30 @@ def handle_rm(evt: BaseHookEvent, args: tuple[str, ...], cwd: Path | None) -> Ho
         Input(command="git status"): Allow(),
     },
 )
-def block_risky_rm(evt: BaseHookEvent) -> HookResult | None:
-    if evt.command_line is None:
+def block_risky_rm(evt: PreToolUseEvent) -> HookResult | None:
+    if (cl := evt.command_line) is None:
         return None
     effective_cwd = evt.cwd
-    for command in evt.command_line.commands:
+    trash = trash_binary()
+    replacements: dict[int, str] = {}
+    notes: list[str] = []
+    for occurrence in cl.occurrences:
+        command = occurrence.command
         unwrapped = command.unwrapped
         match normalize_executable(unwrapped.executable):
             case "cd":
                 effective_cwd = resolve_cd(unwrapped.args, effective_cwd)
             case "rm":
-                if (blocked := handle_rm(evt, unwrapped.args, effective_cwd)) is not None:
-                    return blocked
-    return None
+                match handle_rm(
+                    evt,
+                    unwrapped.args,
+                    effective_cwd,
+                    trash=trash if command.span is not None and "\\\n" not in command.raw else None,
+                    plain_words="'" not in command.raw and '"' not in command.raw,
+                ):
+                    case HookResult() as blocked:
+                        return blocked
+                    case Trashed(replacement, note):
+                        replacements[occurrence.index] = replacement
+                        notes.append(note)
+    return evt.rewrite_command(cl.splice(replacements), note="\n".join(dict.fromkeys(notes))) if replacements else None

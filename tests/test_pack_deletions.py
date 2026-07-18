@@ -11,7 +11,7 @@ import pytest
 import captain_hook
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack
-from captain_hook.packs.general.deletions import in_vcs_repo, rm_targets
+from captain_hook.packs.general.deletions import emit_target, in_vcs_repo, rm_targets, trash_binary
 from captain_hook.testing.helpers import input_to_event
 from captain_hook.testing.types import Input
 from captain_hook.types import Event
@@ -26,11 +26,17 @@ def no_scratch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("captain_hook.util.scratch.SCRATCH_DIR_NAMES", frozenset())
 
 
+@pytest.fixture
+def no_trash(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("captain_hook.util.fs.resolve_binary", lambda name, **kw: None)
+
+
 class TestBlockRiskyRm:
     def test_repo_boundaries_and_root(
         self,
         isolate_modules: None,
         no_scratch: None,
+        no_trash: None,
         tmp_path: Path,
     ) -> None:
         discover_pack("general", PACKS_DIR / "general")
@@ -80,6 +86,7 @@ class TestBlockRiskyRm:
         self,
         isolate_modules: None,
         no_scratch: None,
+        no_trash: None,
         tmp_path: Path,
     ) -> None:
         discover_pack("general", PACKS_DIR / "general")
@@ -111,6 +118,7 @@ class TestBlockRiskyRm:
         self,
         isolate_modules: None,
         no_scratch: None,
+        no_trash: None,
         tmp_path: Path,
     ) -> None:
         discover_pack("general", PACKS_DIR / "general")
@@ -136,7 +144,7 @@ class TestBlockRiskyRm:
         (repo / "link").symlink_to(elsewhere / "real.txt")
         assert decision(f"rm {repo / 'link'}") is None
 
-    def test_glob_limit(self, isolate_modules: None, tmp_path: Path) -> None:
+    def test_glob_limit(self, isolate_modules: None, no_trash: None, tmp_path: Path) -> None:
         discover_pack("general", PACKS_DIR / "general")
 
         def decision(command: str, cwd: Path) -> dict[str, Any] | None:
@@ -181,7 +189,12 @@ class TestBlockRiskyRm:
         assert decision("rm *.txt", empty) is None
         assert decision("rm $FOO", empty) is None
 
-    def test_glob_preserves_trailing_slash(self, isolate_modules: None, tmp_path: Path) -> None:
+    def test_glob_preserves_trailing_slash(
+        self,
+        isolate_modules: None,
+        no_trash: None,
+        tmp_path: Path,
+    ) -> None:
         discover_pack("general", PACKS_DIR / "general")
 
         def decision(command: str, cwd: Path) -> dict[str, Any] | None:
@@ -203,6 +216,7 @@ class TestBlockRiskyRm:
         self,
         isolate_modules: None,
         no_scratch: None,
+        no_trash: None,
         tmp_path: Path,
     ) -> None:
         discover_pack("general", PACKS_DIR / "general")
@@ -226,6 +240,7 @@ class TestBlockRiskyRm:
         self,
         isolate_modules: None,
         monkeypatch: pytest.MonkeyPatch,
+        no_trash: None,
         tmp_path: Path,
         walked: int,
         expect_deny: bool,
@@ -262,6 +277,7 @@ class TestBlockRiskyRm:
         self,
         isolate_modules: None,
         no_scratch: None,
+        no_trash: None,
         tmp_path: Path,
     ) -> None:
         discover_pack("general", PACKS_DIR / "general")
@@ -284,6 +300,7 @@ class TestBlockRiskyRm:
         self,
         isolate_modules: None,
         no_scratch: None,
+        no_trash: None,
         tmp_path: Path,
     ) -> None:
         discover_pack("general", PACKS_DIR / "general")
@@ -303,6 +320,451 @@ class TestBlockRiskyRm:
         for command in ("cd /tmp && rm x", "cd $SOMEWHERE && rm x"):
             evt = input_to_event(Event.PreToolUse, Input(command=command, cwd=str(repo)))
             assert dispatch(Event.PreToolUse, evt, session_dir=tmp_path) is None
+
+
+class TestRmTrashRewrite:
+    @staticmethod
+    def load_with_trash(monkeypatch: pytest.MonkeyPatch, *, path: str = "/opt/fake/trash") -> None:
+        discover_pack("general", PACKS_DIR / "general")
+        monkeypatch.setattr(
+            sys.modules["captain_hook._packs.general.deletions"],
+            "trash_binary",
+            lambda: path,
+        )
+
+    @staticmethod
+    def decision(command: str, cwd: Path, session_dir: Path) -> dict[str, Any] | None:
+        evt = input_to_event(Event.PreToolUse, Input(command=command, cwd=str(cwd)))
+        return dispatch(Event.PreToolUse, evt, session_dir=session_dir)
+
+    @staticmethod
+    def assert_rewrite(result: dict[str, Any] | None, command: str) -> dict[str, Any]:
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "allow"
+        assert output["updatedInput"] == {"command": command}
+        assert "Trash" in output["additionalContext"]
+        return output
+
+    def test_outside_vcs_rewrites(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        victim = outside / "victim.txt"
+        victim.write_text("")
+        output = self.assert_rewrite(
+            self.decision(f"rm {victim}", Path("/"), tmp_path),
+            f"/opt/fake/trash {victim}",
+        )
+        assert output["additionalContext"] == (
+            f"Rewrote rm to trash: '{victim}' resolves outside any git/jj repository, so rm would be "
+            "unrecoverable. The targets were moved to the macOS Trash instead — restorable via Finder (Put Back). "
+            "If permanent deletion is truly intended, ask the user to run the rm themselves."
+        )
+
+    def test_flags_dropped(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        victim = tmp_path / "outside" / "victim.txt"
+        victim.parent.mkdir()
+        victim.write_text("")
+        self.assert_rewrite(
+            self.decision(f"rm -rf {victim}", Path("/"), tmp_path),
+            f"/opt/fake/trash {victim}",
+        )
+
+    def test_no_trash_denies(
+        self,
+        isolate_modules: None,
+        no_scratch: None,
+        no_trash: None,
+        tmp_path: Path,
+    ) -> None:
+        discover_pack("general", PACKS_DIR / "general")
+        victim = tmp_path / "outside" / "victim.txt"
+        result = self.decision(f"rm {victim}", Path("/"), tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "repository" in output["permissionDecisionReason"]
+        assert "updatedInput" not in output
+
+    def test_repo_root_still_blocks(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        result = self.decision(f"rm -rf {repo}", Path("/"), tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "history" in output["permissionDecisionReason"]
+        assert "updatedInput" not in output
+
+    def test_glob_limit_denies(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        for index in range(11):
+            (outside / f"{index}.txt").write_text("")
+        result = self.decision("rm *.txt", outside, tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert output["permissionDecisionReason"] == (
+            "BLOCKED: the glob '*.txt' matches more than 10 files — an easy way to delete far more than intended. "
+            "List the matches first (ls *.txt), narrow the pattern, or name a directory explicitly with rm -r <dir>."
+        )
+        assert "updatedInput" not in output
+
+    def test_glob_within_limit_rewrites_raw_token(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        for index in range(3):
+            (outside / f"{index}.txt").write_text("")
+        self.assert_rewrite(
+            self.decision("rm *.txt", outside, tmp_path),
+            "/opt/fake/trash *.txt",
+        )
+
+    def test_quoted_glob_denies(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        for index in range(3):
+            (outside / f"{index}.txt").write_text("")
+        result = self.decision("rm '*.txt'", outside, tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "repository" in output["permissionDecisionReason"]
+        assert "updatedInput" not in output
+
+    def test_glob_within_limit_containing_repo_root_blocks(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside"
+        repo = outside / "repo"
+        (repo / ".git").mkdir(parents=True)
+        for index in range(3):
+            (outside / f"entry-{index}").write_text("")
+        result = self.decision("rm -rf *", outside, tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "history" in output["permissionDecisionReason"]
+        assert "updatedInput" not in output
+
+    def test_glob_over_limit_blocks_before_uncollected_repo_root(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        for index in range(12):
+            (outside / f"entry-{index}").write_text("")
+        repo = outside / "repo"
+        (repo / ".git").mkdir(parents=True)
+        deletions = sys.modules["captain_hook._packs.general.deletions"]
+
+        def ordered_iglob(
+            pattern: str,
+            *,
+            root_dir: str,
+            recursive: bool,
+            include_hidden: bool,
+        ) -> Iterator[str]:
+            assert (pattern, root_dir, recursive, include_hidden) == ("*", str(outside), False, False)
+            return iter([*(f"entry-{index}" for index in range(12)), repo.name])
+
+        monkeypatch.setattr(deletions.glob, "iglob", ordered_iglob)
+        expansion = deletions.glob_matches("*", outside, limit=10)
+        assert len(expansion.matches) == 11
+        assert repo.name not in expansion.matches
+
+        result = self.decision("rm -rf *", outside, tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert output["permissionDecisionReason"] == (
+            "BLOCKED: the glob '*' matches more than 10 files — an easy way to delete far more than intended. "
+            "List the matches first (ls *), narrow the pattern, or name a directory explicitly with rm -r <dir>."
+        )
+        assert "updatedInput" not in output
+
+    def test_too_broad_glob_denies(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+
+        def fake_walked_paths(anchor: Path) -> Iterator[Path]:
+            return (Path(f"/synthetic/{index}.txt") for index in range(20_000))
+
+        monkeypatch.setattr(
+            sys.modules["captain_hook._packs.general.deletions"],
+            "walked_paths",
+            fake_walked_paths,
+        )
+        result = self.decision("rm **/*.zzz", tmp_path, tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert output["permissionDecisionReason"] == (
+            "BLOCKED: the glob '**/*.zzz' is too broad to verify safely (the scan budget was exhausted before it "
+            "completed). Narrow the pattern or delete a specific directory with rm -r <dir>."
+        )
+        assert "updatedInput" not in output
+
+    def test_cd_prefix_preserved(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "victim.txt").write_text("")
+        self.assert_rewrite(
+            self.decision(f"cd {outside} && rm victim.txt", tmp_path, tmp_path),
+            f"cd {outside} && /opt/fake/trash victim.txt",
+        )
+
+    def test_multi_occurrence_splice(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        first = tmp_path / "outside-one" / "x"
+        second = tmp_path / "outside-two" / "y"
+        first.parent.mkdir()
+        second.parent.mkdir()
+        command = f"rm {first} && echo hi && rm {second}"
+        self.assert_rewrite(
+            self.decision(command, Path("/"), tmp_path),
+            f"/opt/fake/trash {first} && echo hi && /opt/fake/trash {second}",
+        )
+
+    def test_block_wins_over_rewrite(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside" / "x"
+        repo = tmp_path / "repo"
+        outside.parent.mkdir()
+        (repo / ".git").mkdir(parents=True)
+        result = self.decision(f"rm {outside} && rm -rf {repo}", Path("/"), tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "history" in output["permissionDecisionReason"]
+        assert "updatedInput" not in output
+
+    def test_dash_target_prefixed(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "-victim.txt").write_text("")
+        self.assert_rewrite(
+            self.decision("rm -- -victim.txt", outside, tmp_path),
+            "/opt/fake/trash ./-victim.txt",
+        )
+
+    def test_dequoted_space_target_requoted(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "my victim.txt").write_text("")
+        self.assert_rewrite(
+            self.decision("rm 'my victim.txt'", outside, tmp_path),
+            "/opt/fake/trash 'my victim.txt'",
+        )
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            pytest.param("rm '~/victim'", id="quoted-tilde"),
+            pytest.param(r"rm 'foo\ bar'", id="quoted-backslash"),
+            pytest.param("rm /outside/{a,b}", id="braces"),
+            pytest.param("rm foo\\\nbar", id="backslash-newline"),
+        ],
+    )
+    def test_unsafe_emission_denies(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+        command: str,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        result = self.decision(command, outside, tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "repository" in output["permissionDecisionReason"]
+        assert "updatedInput" not in output
+
+    def test_trash_binary_path_is_quoted(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch, path="/opt/fake dir/trash")
+        victim = tmp_path / "outside" / "victim.txt"
+        victim.parent.mkdir()
+        output = self.assert_rewrite(
+            self.decision(f"rm {victim}", Path("/"), tmp_path),
+            f"'/opt/fake dir/trash' {victim}",
+        )
+        assert output["updatedInput"]["command"].startswith("'/opt/fake dir/trash' ")
+
+    def test_variable_target_denies(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        result = self.decision("rm $FOO", outside, tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "repository" in output["permissionDecisionReason"]
+        assert "updatedInput" not in output
+
+    def test_allowed_rm_untouched(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        victim = repo / "file.txt"
+        victim.write_text("")
+        assert self.decision(f"rm {victim}", Path("/"), tmp_path) is None
+
+
+class TestEmitTarget:
+    @pytest.mark.parametrize(
+        ("raw", "plain_words", "expected"),
+        [
+            pytest.param("file.txt", True, "file.txt", id="safe-word"),
+            pytest.param("-victim.txt", True, "./-victim.txt", id="dash-leading"),
+            pytest.param("*.txt", True, "*.txt", id="plain-glob"),
+            pytest.param("*.txt", False, None, id="quoted-glob"),
+            pytest.param("~/victim", True, "~/victim", id="plain-tilde"),
+            pytest.param("~/victim", False, None, id="quoted-tilde"),
+            pytest.param("my victim.txt", False, "'my victim.txt'", id="dequoted-space"),
+            pytest.param(r"foo\ bar", True, "'foo bar'", id="plain-backslash"),
+            pytest.param(r"foo\ bar", False, None, id="quoted-backslash"),
+            pytest.param(r"\*.txt", True, None, id="escaped-glob"),
+            pytest.param("victim{1,2}", True, None, id="braces"),
+            pytest.param("$FOO", True, None, id="variable"),
+            pytest.param("`find victim`", True, None, id="backticks"),
+            pytest.param('foo"$BAR"', False, None, id="concatenation"),
+        ],
+    )
+    def test_emission(self, raw: str, plain_words: bool, expected: str | None) -> None:
+        assert emit_target(raw, plain_words=plain_words) == expected
+
+
+@pytest.mark.parametrize(
+    ("platform", "resolved", "expected"),
+    [
+        pytest.param("darwin", "/opt/fake/trash", "/opt/fake/trash", id="darwin-found"),
+        pytest.param("darwin", None, None, id="darwin-missing"),
+        pytest.param("linux", "/opt/fake/trash", None, id="linux-found"),
+        pytest.param("linux", None, None, id="linux-missing"),
+    ],
+)
+def test_trash_binary(
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    resolved: str | None,
+    expected: str | None,
+) -> None:
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr("captain_hook.util.fs.resolve_binary", lambda name: resolved)
+    assert trash_binary() == expected
 
 
 class TestIsScratchPath:

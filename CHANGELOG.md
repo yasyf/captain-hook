@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.29.0] - 2026-07-18
+
+### Changed
+- **Recoverable risky `rm` commands move to the macOS Trash.** The general pack
+  rewrites outside-repository deletes to the resolved `trash` binary on macOS when
+  every literal target, or every match of a glob matching at most 10 files, can be
+  verified and safely re-emitted. Oversized or otherwise unverifiable globs and
+  repository-root deletions remain blocked on every platform; macOS also falls back
+  to the existing deny behavior when `trash` is unavailable.
+
 ## [9.28.0] - 2026-07-18
 
 ### Added
