@@ -41,6 +41,8 @@ def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mo
     # ~/.cache/captain-hook/run. Daemon/client tests override this with a short /tmp dir (macOS
     # sun_path); that test-local monkeypatch tears down first, so composition is safe.
     monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(tmp_path_factory.mktemp("run")))
+    # Isolate the helper dir (helper.sock, status.json) so write_status never touches real ~/.capt-hook.
+    monkeypatch.setenv("CAPT_HOOK_HELPER_DIR", str(tmp_path_factory.mktemp("helper")))
     # The SessionEnd reviewer skips headless entrypoints (sdk-*); scrub it so tests don't
     # inherit the ambient CLAUDE_CODE_ENTRYPOINT of a pytest run launched inside claude.
     monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
@@ -70,6 +72,21 @@ def clear_global_caches():
     yield
     for cached in caches:
         cached.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def stub_helper_notify(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
+    """Stub the desktop-notify seam so the suite never fires a real banner or launches the app.
+
+    ``transition`` and the spawn recorder both dispatch through ``helper.client.notify``; without
+    this, a store move on a dev Mac would launch ``Captain Hook.app``. The helper-client tests
+    exercise the real client, so they opt out and drive the socket in-process instead.
+    """
+    from captain_hook.helper import client
+
+    if request.module.__name__.endswith("test_helper_client"):
+        return
+    monkeypatch.setattr(client, "notify", lambda **_: client.NotifyOutcome(client.Lane.dropped, False, "stubbed"))
 
 
 @pytest.fixture(autouse=True)

@@ -133,6 +133,7 @@ CANDIDATE_MIGRATIONS: tuple[ColumnMigration, ...] = (
         "announced_status TEXT",
         "UPDATE candidates SET announced_status = status WHERE status NOT IN ('watching', 'pr_open')",
     ),
+    ColumnMigration("pr_title", "pr_title TEXT"),
 )
 
 FEEDBACK_MIGRATIONS: tuple[ColumnMigration, ...] = (ColumnMigration("triage", "triage TEXT"),)
@@ -719,6 +720,7 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
         to: CandidateStatus,
         *,
         pr_url: str | None = None,
+        pr_title: str | None = None,
         pr_opened_at: datetime | None = None,
         resolved_at: datetime | None = None,
         expected_pr_url: str | None = None,
@@ -753,6 +755,7 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
             candidate_id: The candidate to move.
             to: The target status.
             pr_url: When set, stamped onto the candidate (the PR-opening move).
+            pr_title: When set, stamped onto the candidate via ``COALESCE`` (kept across later moves).
             pr_opened_at: When set, stamped in UTC alongside ``pr_url``.
             resolved_at: The authoritative resolution time for an ``accepted`` move
                 (GitHub's merge time); defaults to now when unset. Ignored otherwise.
@@ -772,7 +775,8 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
         cas_failed = False
         while True:
             cur = self.store.conn.execute(
-                "SELECT status, pr_url, generation FROM candidates WHERE id = ?", (candidate_id,)
+                "SELECT status, pr_url, generation, repo_key, pr_title, rule FROM candidates WHERE id = ?",
+                (candidate_id,),
             )
             if not (rows := [dict(row) for row in cur]):
                 raise LookupError(f"no candidate with id {candidate_id}")
@@ -791,14 +795,18 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
             )
             cur = self.store.conn.execute(
                 "UPDATE candidates SET status = ?, updated_at = ?, "
-                "pr_url = COALESCE(?, pr_url), pr_opened_at = COALESCE(?, pr_opened_at), "
+                "pr_url = COALESCE(?, pr_url), pr_title = COALESCE(?, pr_title), "
+                "pr_opened_at = COALESCE(?, pr_opened_at), "
                 "resolved_at = COALESCE(?, resolved_at) WHERE id = ? AND status = ?"
                 + (" AND pr_url IS ? AND generation = ?" if guarded else ""),
                 (
                     to,
                     stamp,
                     pr_url,
-                    pr_opened_at.astimezone(UTC).isoformat() if pr_opened_at else None,
+                    pr_title,
+                    pr_opened_at.astimezone(UTC).isoformat()
+                    if pr_opened_at
+                    else (stamp if to is CandidateStatus.PR_OPEN else None),
                     resolution,
                     candidate_id,
                     current,
@@ -806,6 +814,22 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
                 ),
             )
             if cur.rowcount == 1:
+                # Notify only on a real status write: the CAS-converge branch above returns True for a
+                # non-writing peer, so keying the banner anywhere else would double-fire.
+                if to in (CandidateStatus.PR_OPEN, CandidateStatus.ACCEPTED) and (
+                    notify_url := pr_url or rows[0]["pr_url"]
+                ):
+                    from captain_hook.review.notify import notify_transition
+
+                    notify_transition(
+                        {
+                            "repo_key": rows[0]["repo_key"],
+                            "rule": rows[0]["rule"],
+                            "pr_url": notify_url,
+                            "pr_title": pr_title or rows[0]["pr_title"],
+                        },
+                        to,
+                    )
                 return True
             cas_failed = True
 
@@ -819,9 +843,7 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
         """
         from captain_hook.review.sync import CachedPrState, PrState
 
-        cur = self.store.conn.execute(
-            "SELECT state, merged_at, fetched_at FROM pr_states WHERE pr_url = ?", (url,)
-        )
+        cur = self.store.conn.execute("SELECT state, merged_at, fetched_at FROM pr_states WHERE pr_url = ?", (url,))
         if not (rows := [dict(row) for row in cur]):
             return None
         return CachedPrState(
@@ -1316,9 +1338,7 @@ ORDER BY repo
         )
         return [str(row["repo"]) for row in cur]
 
-    def judge_queue(
-        self, *, refresh_summary: bool = False, probe_hydration: bool = True
-    ) -> list[dict[str, object]]:
+    def judge_queue(self, *, refresh_summary: bool = False, probe_hydration: bool = True) -> list[dict[str, object]]:
         """Returns the rows one judge pass judges, each under its taxonomy's bound version.
 
         Each lane is fetched at its own version and post-filtered to its
@@ -1378,9 +1398,7 @@ ORDER BY repo
         FIX verdicts never carry a ``canonical_key``, so the evidence store is
         create-lane-only and this reads the create version.
         """
-        cur = self.store.conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'verdict_evidence'"
-        )
+        cur = self.store.conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'verdict_evidence'")
         if cur.fetchone() is None:
             return False
         cur = self.store.conn.execute(
@@ -1417,15 +1435,31 @@ ORDER BY repo
             The number of verdict rows deleted, or ``0`` when the purge was skipped.
         """
         fingerprint = f"{self.versions.create}:{self.versions.fix}"
-        cur = self.store.conn.execute("SELECT value FROM review_meta WHERE key = ?", (PROMPT_FINGERPRINT_KEY,))
-        if (stored := [str(row["value"]) for row in cur]) and stored[0] == fingerprint:
+        if self.meta(PROMPT_FINGERPRINT_KEY) == fingerprint:
             return 0
         purged = self.purge_stale_verdicts()
+        self.set_meta(PROMPT_FINGERPRINT_KEY, fingerprint)
+        return purged
+
+    def meta(self, key: str) -> str | None:
+        """Returns the ``review_meta`` value for ``key``, or ``None`` when unset — the sole meta read."""
+        cur = self.store.conn.execute("SELECT value FROM review_meta WHERE key = ?", (key,))
+        return str(rows[0]["value"]) if (rows := [row for row in cur]) else None
+
+    def set_meta(self, key: str, value: str | None) -> None:
+        """Upserts ``key`` to ``value`` in ``review_meta``, or clears it when ``value`` is ``None`` — the sole write."""
+        if value is None:
+            self.store.conn.execute("DELETE FROM review_meta WHERE key = ?", (key,))
+            return
         self.store.conn.execute(
             "INSERT INTO review_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (PROMPT_FINGERPRINT_KEY, fingerprint),
+            (key, value),
         )
-        return purged
+
+    def repos(self) -> list[dict[str, object]]:
+        """Returns every enrolled repo (``repo_key``, ``watching``), sorted by key — the snapshot writer's read."""
+        cur = self.store.conn.execute("SELECT repo_key, watching FROM repos ORDER BY repo_key")
+        return [dict(row) for row in cur]
 
     def purge_stale_verdicts(self) -> int:
         """Deletes verdict and evidence rows recorded at a version their lane no longer runs.

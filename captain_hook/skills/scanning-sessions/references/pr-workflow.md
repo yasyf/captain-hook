@@ -178,19 +178,17 @@ gh pr create --title "<title>" --body "<body>" \
 ## After creation
 
 Stamp the candidate immediately — this is what frees the eligibility math from
-double-proposing and lets `sync-prs` track the PR's fate:
+double-proposing and lets `sync-prs` track the PR's fate. Pass `--pr-title` so the
+desktop notification the stamp fires carries the PR's real title, not a bare URL:
 
 ```bash
-uvx --isolated capt-hook review update <ID> pr_open --pr-url <url>
+uvx --isolated capt-hook review update <ID> pr_open --pr-url <url> --pr-title "<title>"
 git worktree remove "$worktree" --force
 ```
 
-Then tell the user — on macOS, fire a desktop notification carrying the PR url. Best-effort:
-a notification failure never fails the run.
-
-```bash
-[ "$(uname)" = Darwin ] && osascript -e 'display notification "<url>" with title "capt-hook review"' || true
-```
+`review update` fires the desktop notification itself, through the signed Captain Hook
+helper — you no longer emit one by hand. An older cached CLI can reject `--pr-title`
+(`no such option`); the flag is additive, so retry the same command without it.
 
 A merged PR later moves the candidate to `accepted`, a closed one to `rejected` — both
 via `review sync-prs`, not by you.

@@ -18,6 +18,7 @@ from loguru import logger
 
 from captain_hook.app import AsyncDecisionError, _state, load_gitignore, reset
 from captain_hook.dispatch import dispatch
+from captain_hook.helper.cli import helper
 from captain_hook.loader import (
     CONF_MODULE,
     discover_hooks,
@@ -875,6 +876,7 @@ def pack_update(state: CliState, name: str | None) -> None:
 
 
 cli.add_command(review)
+cli.add_command(helper)
 
 
 @cli.group(hidden=True)

@@ -643,12 +643,19 @@ async def spawn_session(
         async with asyncio.timeout(settings.spawn_deadline_seconds):
             report = await review_session(transcript, cwd=cwd, settings=settings, sweep=sweep)
     except BaseException as exc:
+        from captain_hook.review.notify import maybe_notify_failures
+        from captain_hook.review.snapshot import write_status
+
         db_path = settings.db_path if settings else resolve_review_db_path()
         with ReviewStore.open(db_path, busy_timeout_ms=2000) as store:
-            store.record_spawn_run(
-                str(transcript), started_at=started, ok=False, error=f"{type(exc).__name__}: {exc}"
-            )
+            store.record_spawn_run(str(transcript), started_at=started, ok=False, error=f"{type(exc).__name__}: {exc}")
+            maybe_notify_failures(store)
+            if settings is not None:
+                write_status(store, settings=settings)
         raise
+    from captain_hook.review.snapshot import write_status
+
     with ReviewStore.open(settings.db_path) as store:
         store.record_spawn_run(str(transcript), started_at=started, ok=True, report_json=json.dumps(asdict(report)))
+        write_status(store, settings=settings)
     return report

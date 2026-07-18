@@ -109,3 +109,47 @@ jobs:
           done
           echo "::error::failed to push plugin.json sync after 3 attempts"
           exit 1
+
+  # Signed Captain Hook.app; release-app.yml's changed_paths gate no-ops a
+  # wheel-only release. After github-release so softprops appends, not recreates.
+  helper-version:
+    runs-on: ubuntu-latest
+    outputs:
+      marketing: ${{ steps.derive.outputs.marketing }}
+    steps:
+      - id: derive
+        shell: bash
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          echo "marketing=${v%%-*}" >> "$GITHUB_OUTPUT"
+
+  helper:
+    needs: [build, helper-version, github-release]
+    permissions:
+      contents: write
+    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@v1
+    with:
+      app_name: Captain Hook
+      project_dir: helper
+      scheme: CaptainHook
+      bundle_id: com.yasyf.capt-hook.helper
+      appexes: Contents/PlugIns/CaptainHookWidget.appex
+      marketing_version: ${{ needs.helper-version.outputs.marketing }}
+      app_groups: |
+        com.yasyf.capt-hook.helper=SXKCTF23Q2.com.yasyf.capt-hook.helper
+        com.yasyf.capt-hook.helper.widget=SXKCTF23Q2.com.yasyf.capt-hook.helper
+      profile_names: |
+        com.yasyf.capt-hook.helper=Captain Hook Helper App
+        com.yasyf.capt-hook.helper.widget=Captain Hook Helper Widget
+      cask_token: capt-hook-helper
+      cask_template_path: .github/cask/capt-hook-helper.rb.tmpl
+      changed_paths: |
+        helper/**
+        .github/cask/**
+    secrets:
+      MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+      MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+      MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+      MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

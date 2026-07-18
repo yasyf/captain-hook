@@ -10,6 +10,7 @@ from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE
 from click.testing import CliRunner
 
 from captain_hook.cli import cli
+from captain_hook.helper.client import status_path
 from captain_hook.review.cli import STATUS_CHOICES
 from captain_hook.review.fix import HOOK_COMPLAINT
 from captain_hook.review.repo import RepoKey
@@ -261,6 +262,25 @@ class TestUpdateAndSyncPrs:
         assert status == "pr_open"
         assert opened_at is not None
 
+    def test_update_stamps_pr_title(self, scanned_repo: Path) -> None:
+        url = "https://github.com/yasyf/scratch/pull/1"
+        result = invoke(
+            "update", "1", "pr_open", "--pr-url", url, "--pr-title", "Block force-pushes", root=scanned_repo
+        )
+        assert result.exit_code == 0, result.output
+        with ReviewStore.open(db_path()) as store:
+            assert store.candidate(1)["pr_title"] == "Block force-pushes"
+
+    def test_update_stdout_is_byte_identical_with_pr_title(self, scanned_repo: Path) -> None:
+        url = "https://github.com/yasyf/scratch/pull/1"
+        without = invoke("update", "1", "pr_open", "--pr-url", url, root=scanned_repo)
+        # The headless reviewer parses this line; --pr-title must not perturb it.
+        assert without.output == "#1 -> pr_open\n"
+        invoke("update", "1", "accepted", "--pr-url", url, root=scanned_repo)  # move off pr_open
+        invoke("update", "1", "watching", root=scanned_repo)
+        with_title = invoke("update", "1", "pr_open", "--pr-url", url, "--pr-title", "x", root=scanned_repo)
+        assert with_title.output == "#1 -> pr_open\n"
+
     def test_update_rejects_invalid_transition(self, scanned_repo: Path) -> None:
         result = invoke("update", "1", "accepted", root=scanned_repo)
         assert result.exit_code != 0
@@ -307,3 +327,19 @@ class TestSlots:
         result = invoke("slots", "--repo", str(GIT_REPO_KEY).upper(), root=git_repo)
         assert result.exit_code == 1
         assert result.output == f"{GIT_REPO_KEY}: open_prs=2/2 free=0\n"
+
+
+class TestSnapshot:
+    def test_snapshot_writes_status_json(self, scanned_repo: Path) -> None:
+        result = invoke("snapshot", root=scanned_repo)
+        assert result.exit_code == 0, result.output
+        assert result.output.strip() == str(status_path())
+        payload = json.loads(status_path().read_text())
+        assert payload["schema_version"] == 1
+
+    def test_snapshot_empty_db_guard_mints_nothing(self, git_repo: Path) -> None:
+        result = invoke("snapshot", root=git_repo)
+        assert result.exit_code == 0, result.output
+        assert "no review database yet" in result.output
+        assert not db_path().exists()  # the app timer never mints a DB
+        assert not status_path().exists()

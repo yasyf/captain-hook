@@ -4,6 +4,25 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Captain Hook.app — a resident desktop helper** (Swift, on
+  [DaemonKit](https://github.com/yasyf/daemonkit)): a Dock-less agent that owns
+  review notifications and a WidgetKit PR widget. It serves the frozen
+  `~/.capt-hook/helper.sock` v1 line protocol with a per-connection peer check,
+  keeps itself registered via login-item reconciliation, and ships as the signed
+  and notarized `capt-hook-helper` cask from the same release workflow that
+  publishes the wheel. Both sides of the wire are pinned byte-for-byte by shared
+  goldens under `tests/fixtures/`.
+- **`capt-hook helper install|status|notify`** and a stdlib socket client with
+  typed outcomes: socket first, then launch-and-poll the app, then a logged
+  drop — never an exception in a hook path, and no osascript fallback.
+- **`review snapshot [--refresh]` and `review update --pr-title`.** The snapshot
+  command writes the atomic, byte-pinned `~/.capt-hook/status.json` (schema 1)
+  the widget reads; candidates carry a PR title, and `pr_open`/`accepted`
+  transitions notify through the helper on the winning update only.
+
 ## [10.2.0] - 2026-07-18
 
 ### Added

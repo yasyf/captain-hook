@@ -1,0 +1,135 @@
+# Captain Hook helper: app + WidgetKit appex + hostless tests, on DaemonKit.
+# Run gen-version-xcconfig.sh before `xcodegen generate`.
+name: CaptainHook
+options:
+  bundleIdPrefix: com.yasyf.capt-hook.helper
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+
+configFiles:
+  Debug: Version.xcconfig
+  Release: Version.xcconfig
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    PRODUCT_NAME: $(TARGET_NAME)
+
+packages:
+  DaemonKit:
+    url: https://github.com/yasyf/daemonkit
+    exactVersion: 0.1.0
+
+targetTemplates:
+  HostApp:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/App
+      - path: Sources/Shared
+    info:
+      properties:
+        CFBundleDisplayName: Captain Hook
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSUIElement: true # agent app: no Dock icon, no menu bar
+        LSApplicationCategoryType: public.app-category.developer-tools
+
+targets:
+  CaptainHook:
+    templates: [HostApp]
+    info:
+      path: Generated/App-Info.plist
+    # PRODUCT_NAME "Captain Hook" (space): opened + pkilled by that exact name.
+    sources:
+      - path: LaunchAgents/com.yasyf.capt-hook.helper.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchAgents
+    # App Group only, non-sandboxed host (xcodegen writes the file from these).
+    entitlements:
+      path: Generated/CaptainHook.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - $(TeamIdentifierPrefix)com.yasyf.capt-hook.helper
+    settings:
+      base:
+        PRODUCT_NAME: Captain Hook
+        PRODUCT_BUNDLE_IDENTIFIER: com.yasyf.capt-hook.helper
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        PROVISIONING_PROFILE_SPECIFIER: "Captain Hook Helper App"
+    dependencies:
+      - target: CaptainHookWidget
+        embed: true
+        codeSign: true
+      - package: DaemonKit
+
+  CaptainHookWidget:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Sources/Widget
+      - path: Sources/Shared
+    info:
+      path: Generated/Widget-Info.plist
+      properties:
+        CFBundleDisplayName: Captain Hook
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    # Sandboxed appex: App Group + home-relative RO exception into ~/.capt-hook/.
+    entitlements:
+      path: Generated/CaptainHookWidget.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups:
+          - $(TeamIdentifierPrefix)com.yasyf.capt-hook.helper
+        com.apple.security.temporary-exception.files.home-relative-path.read-only:
+          - /.capt-hook/
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yasyf.capt-hook.helper.widget
+        SKIP_INSTALL: true
+        PROVISIONING_PROFILE_SPECIFIER: "Captain Hook Helper Widget"
+    dependencies:
+      - package: DaemonKit
+
+  CaptainHookTests:
+    # Host-less PURE-logic bundle. HelperPaths.swift excluded (needs RealHome).
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+      - path: Sources/Shared
+        excludes:
+          - HelperPaths.swift
+      - path: ../tests/fixtures/helper-sock-v1.golden.jsonl
+        buildPhase: resources
+      - path: ../tests/fixtures/status-json-v1.golden.json
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yasyf.capt-hook.helper.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+
+schemes:
+  CaptainHook:
+    build:
+      targets:
+        CaptainHook: all
+        CaptainHookTests: [test]
+    test:
+      config: Debug
+      targets:
+        - CaptainHookTests
+    run:
+      config: Debug
+    archive:
+      config: Release

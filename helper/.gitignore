@@ -1,0 +1,7 @@
+# XcodeGen output + local build artifacts
+*.xcodeproj/
+Generated/
+Version.xcconfig
+build/
+DerivedData/
+.DS_Store

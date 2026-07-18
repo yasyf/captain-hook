@@ -168,17 +168,21 @@ whatever repo the PR targets — for any pack-targeted PR, routed fix or
 create-as-edit alike, that is the pack repo's key. A full target repo is a logged
 skip, not an error.
 
-### `review update <ID> <status> [--pr-url <url>]`
+### `review update <ID> <status> [--pr-url <url>] [--pr-title <title>]`
 
 Moves a candidate along the lifecycle. The one you use:
 
 ```bash
-uvx --isolated capt-hook review update 12 pr_open --pr-url https://github.com/owner/repo/pull/7
+uvx --isolated capt-hook review update 12 pr_open \
+  --pr-url https://github.com/owner/repo/pull/7 --pr-title "[capt-hook] Block force-pushes"
 ```
 
-`--pr-url` stamps the URL and `pr_opened_at` onto the candidate. Statuses: `watching`,
-`pr_open`, `stale`, `accepted`, `rejected` — but only moves allowed by the lifecycle
-succeed, and merge/close outcomes are `sync-prs`'s job, not yours.
+`--pr-url` stamps the URL and `pr_opened_at` onto the candidate; `--pr-title` stamps the
+PR title, which the desktop notification the move fires reads (a `pr_open` or `accepted`
+move sends one). Statuses: `watching`, `pr_open`, `stale`, `accepted`, `rejected` — but
+only moves allowed by the lifecycle succeed, and merge/close outcomes are `sync-prs`'s
+job, not yours. `--pr-title` is additive: an older cached CLI rejects it, so retry without
+it on `no such option`.
 
 ### `review sync-prs [--repo <key>]`
 
@@ -201,9 +205,9 @@ Framework-internal registrations — the PR announcer, NLP provisioning — are
 omitted; every row is a hook some repo or pack owns.
 
 ```
-fixes	github.com/yasyf/captain-hook	permissions.py	fixes.scratch_writes:approve_scratch_dir_writes_under_skip_permissions	PreToolUse|PermissionRequest	
+fixes	github.com/yasyf/captain-hook	permissions.py	fixes.scratch_writes:approve_scratch_dir_writes_under_skip_permissions	PreToolUse|PermissionRequest
 general	github.com/yasyf/captain-hook	commands.py	general.commands:hook_8aef6be4	PreToolUse	BLOCKED: git stash is not allowed…
-local	-	nudge.py	hooks.style:gate_aa3a1d5b	Stop|SubagentStop	
+local	-	nudge.py	hooks.style:gate_aa3a1d5b	Stop|SubagentStop
 ```
 
 - **pack** — the pack the hook ships in, or `local` for a repo-local

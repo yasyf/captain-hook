@@ -10,6 +10,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  helper-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26"
+
+      - name: Test Captain Hook helper
+        run: |
+          brew install xcodegen
+          cd helper
+          ./gen-version-xcconfig.sh 0.0.0
+          xcodegen generate
+          xcodebuild test -project CaptainHook.xcodeproj -scheme CaptainHook \
+            -destination 'platform=macOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -87,11 +106,11 @@ jobs:
           unzip -l dist/*.whl | grep -q 'captain_hook/packs/fixes/capt-hook.toml'
           unzip -l dist/*.whl | grep -q 'captain_hook/packs/performance/capt-hook.toml'
           unzip -l dist/*.whl | grep -qE 'captain_hook/packs/general/[^/]+\.py'
-          ! unzip -l dist/*.whl | grep -q 'stress/'
-          ! tar tzf dist/*.tar.gz | grep -q '/stress/'
+          ! unzip -l dist/*.whl | grep -q 'stress/' || exit 1
+          ! tar tzf dist/*.tar.gz | grep -q '/stress/' || exit 1
           smoke_proj="$(mktemp -d)"
           (cd "$smoke_proj" && "$GITHUB_WORKSPACE/.wheel-smoke/bin/capt-hook" skills install)
           grep -q '"captain-hook@captain-hook": true' "$smoke_proj/.claude/settings.json"
-          ! test -e "$smoke_proj/.claude/skills"
+          test ! -e "$smoke_proj/.claude/skills"
           (cd "$smoke_proj" && "$GITHUB_WORKSPACE/.wheel-smoke/bin/capt-hook" pack add general)
           grep -q '\[packs.general\]' "$smoke_proj/.claude/capt-hook.toml"

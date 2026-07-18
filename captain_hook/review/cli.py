@@ -328,9 +328,12 @@ def slots(state: CliState, repo_: str | None) -> None:
 @click.argument("candidate_id", type=int)
 @click.argument("status", type=click.Choice(STATUS_CHOICES))
 @click.option("--pr-url", default=None, help="PR URL stamped with the move (also stamps pr_opened_at)")
-def update(candidate_id: int, status: str, pr_url: str | None) -> None:
+@click.option("--pr-title", default=None, help="PR title stamped with the move (kept across later moves)")
+def update(candidate_id: int, status: str, pr_url: str | None, pr_title: str | None) -> None:
     """Move a candidate to a new status."""
     from captain_hook.review.repo import pr_repo_key
+    from captain_hook.review.settings import ReviewSettings
+    from captain_hook.review.snapshot import write_status
     from captain_hook.review.store import CandidateStatus, InvalidTransition
 
     if pr_url is not None:
@@ -338,18 +341,56 @@ def update(candidate_id: int, status: str, pr_url: str | None) -> None:
             pr_repo_key(pr_url)
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
-    try:
-        run_store(
-            lambda store: store.transition(
-                candidate_id,
-                CandidateStatus(status),
-                pr_url=pr_url,
-                pr_opened_at=datetime.now(UTC) if pr_url else None,
-            )
+    settings = ReviewSettings()
+
+    def apply(store: ReviewStore) -> None:
+        store.transition(
+            candidate_id,
+            CandidateStatus(status),
+            pr_url=pr_url,
+            pr_title=pr_title,
+            pr_opened_at=datetime.now(UTC) if pr_url else None,
         )
+        try:
+            write_status(store, settings=settings)
+        except OSError as exc:
+            click.echo(f"warning: status.json not written: {exc}", err=True)
+
+    try:
+        run_store(apply)
     except (InvalidTransition, LookupError) as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(f"#{candidate_id} -> {status}")
+
+
+@review.command()
+@click.option("--refresh", is_flag=True, default=False, help="Sync each watched repo's open PRs before writing")
+@click.pass_obj
+def snapshot(state: CliState, refresh: bool) -> None:
+    """Write ~/.capt-hook/status.json for the desktop widget.
+
+    Guards on an existing review database, so the widget's periodic refresh never mints a store
+    on a machine that never enabled review. With ``--refresh``, each repo's open PRs are synced
+    through the TTL-cached GitHub read first, so a merge shows up without a session.
+    """
+    import asyncio
+
+    from captain_hook.review.repo import RepoKey
+    from captain_hook.review.settings import ReviewSettings
+    from captain_hook.review.snapshot import write_status
+    from captain_hook.review.store import ReviewStore
+    from captain_hook.review.sync import sync_open_prs
+
+    settings = ReviewSettings()
+    if not settings.db_path.exists():
+        click.echo("no review database yet — nothing to snapshot")
+        return
+    with ReviewStore.open(settings.db_path) as store:
+        if refresh:
+            for repo in store.repos():
+                asyncio.run(sync_open_prs(store, RepoKey(str(repo["repo_key"])), settings=settings))
+        path = write_status(store, settings=settings)
+    click.echo(str(path))
 
 
 @review.command(name="sync-prs")
