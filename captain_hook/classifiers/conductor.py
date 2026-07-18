@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 def classifier(event: UserEvent) -> bool:
-    return native_user_classifier(event) and STRUCTURAL_NOISE_RE.search(event.text) is None
+    return native_user_classifier(event) and STRUCTURAL_NOISE_RE.match(event.text.strip()) is None
 
 
 def detect(

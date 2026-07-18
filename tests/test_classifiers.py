@@ -91,6 +91,11 @@ class TestConductorClassifier:
         for prefix in prefixes:
             assert not classifier(user_event(f"{prefix}payload")), f"Failed to filter prefix: {prefix}"
 
+    def test_protocol_token_mid_prompt_stays_authored(self):
+        from captain_hook.classifiers.conductor import classifier
+
+        assert classifier(user_event("Why did you emit <task-notification> in the last turn?"))
+
 
 class TestDroidDetect:
     def test_detects_via_env_var(self):
