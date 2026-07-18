@@ -14,6 +14,10 @@ repos:
         args: [--markdown-linebreak-ext=md]
       - id: end-of-file-fixer
       - id: check-yaml
+        # Skill template trees hold moustache sources ({{#SECTION}} markers,
+        # {{TOKEN}} mid-scalar) that are not YAML documents; they are
+        # validated post-render. Inert in repos without such paths.
+        exclude: ^plugins/[^/]+/skills/[^/]+/templates/
       - id: check-json
       - id: check-toml
       - id: check-merge-conflict

@@ -1,0 +1,7 @@
+fragments = [
+  "cc-skills:capt-hook-base",
+  "cc-skills:capt-hook-python",
+]
+
+[sources.cc-skills]
+source = "github:yasyf/cc-skills@main"
