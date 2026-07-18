@@ -67,14 +67,14 @@ async def inject_verdict(
     slug: str | None = None,
 ) -> None:
     rule_slug = slug if slug is not None else (canonical_slug(category) if category in DURABLE_CATEGORIES else None)
-    cur = await store.store.conn.execute("SELECT source_kind FROM feedback_events WHERE dedup_key = ?", (dedup_key,))
+    cur = store.store.conn.execute("SELECT source_kind FROM feedback_events WHERE dedup_key = ?", (dedup_key,))
     await store.record_verdict(
         DedupKey(dedup_key),
         ReviewVerdict(
             category=category, summary="injected", confidence=confidence, rationale="injected", rule_slug=rule_slug
         ),
         role="judge",
-        prompt_version=store.versions.for_row(await cur.fetchone()),
+        prompt_version=store.versions.for_row(cur.fetchone()),
         model=model,
         fidelity=fidelity,  # type: ignore[arg-type]
     )

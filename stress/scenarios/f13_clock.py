@@ -63,7 +63,7 @@ def inject_all(sandbox: Sandbox, *, category: Category, confidence: float = 0.9)
     keys = [str(row["dedup_key"]) for row in query(sandbox.review_db, "SELECT dedup_key FROM feedback_events")]
 
     async def go() -> None:
-        async with await ReviewStore.open(sandbox.review_db) as store:
+        with ReviewStore.open(sandbox.review_db) as store:
             for key in keys:
                 await inject_verdict(store, key, category=category, confidence=confidence)
 
