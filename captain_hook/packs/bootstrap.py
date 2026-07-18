@@ -1,13 +1,13 @@
-"""Marketplace self-bootstrap for consumer plugins.
+"""Register a plugin pack's extra dependency marketplaces with Claude Code.
 
-A pack-shipping Claude plugin declares captain-hook — and, via its ``capt-hook.toml`` manifest, any
-further dependency marketplaces its hooks ride on — as dependencies, but Claude Code never registers
-an unknown marketplace on its own, so a fresh install lands the consumer disabled with
-``dependency-unsatisfied``. The consumer's one shipped hook runs ``pack attach`` from PyPI on every
-SessionStart regardless of whether the captain-hook plugin is installed; that call routes through
-:func:`maybe_bootstrap`, which — for every required marketplace not yet registered — detaches a
-worker that runs ``claude plugin marketplace add``. Claude Code (>=2.1.117) auto-resolves the
-consumer's declared plugin dependencies from there, so no explicit ``plugin install`` is needed.
+A pack-shipping Claude plugin may declare, via its ``capt-hook.toml`` ``[pack]`` manifest, further
+dependency marketplaces its hooks ride on. Claude Code never registers an unknown marketplace on its
+own, so a fresh install lands those dependencies unsatisfied. Discovery — the tail of a working
+capt-hook dispatch — takes the union of every resolved pack's declared marketplaces and routes it
+through :func:`maybe_bootstrap`, which for each not-yet-registered marketplace detaches a worker
+running ``claude plugin marketplace add``. Claude Code (>=2.1.117) auto-resolves the declared plugin
+dependencies from there, so no explicit ``plugin install`` is needed. The captain-hook marketplace
+itself is never bootstrapped here: discovery only ever runs where the dispatcher already exists.
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ from filelock import FileLock, Timeout
 from loguru import logger
 
 from captain_hook.packs import manager
-from captain_hook.packs.contract import MARKETPLACE_REPO
 from captain_hook.util import reqenv
 from captain_hook.util.paths import resolve_claude_config_dir, resolve_state_dir
 
@@ -104,14 +103,6 @@ def record_attempt(marker: Path, now: float) -> None:
     manager.atomic_write(marker, json.dumps({"attempted_at": now}))
 
 
-def bootstrap_notice(repos: Sequence[str]) -> str:
-    return (
-        f"capt-hook: registering the plugin marketplace(s) {', '.join(repos)} in the background — this "
-        "plugin's hooks depend on them. Takes effect via Claude Code's background plugin auto-update, "
-        "/reload-plugins, or the next session."
-    )
-
-
 def spawn_worker(repos: Sequence[str]) -> None:
     (log_path := worker_log_path()).parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("ab") as log:
@@ -126,25 +117,29 @@ def spawn_worker(repos: Sequence[str]) -> None:
         )
 
 
-def maybe_bootstrap(extra_marketplaces: Sequence[str] = ()) -> str | None:
-    """Detach a worker to register every required marketplace not yet known to Claude Code.
+def maybe_bootstrap(marketplaces: Sequence[str] = ()) -> None:
+    """Detach a worker to register every dependency marketplace not yet known to Claude Code.
 
-    captain-hook's own marketplace is always required; ``extra_marketplaces`` are the consumer
-    manifest's declared dependency marketplaces (deduped, order-preserving). Hot-path ordered to do
-    the least work: a single lock-free read of ``known_marketplaces.json`` proves every required
-    repo is registered (the steady state), returning without a marker touch or a spawn. On the miss
+    ``marketplaces`` is the union of the ``[pack]`` manifests' declared dependency marketplaces
+    across a project's resolved packs (deduped, order-preserving); it registers exactly those and
+    nothing more — the captain-hook marketplace is not implied, since discovery only ever runs where
+    the dispatcher already exists. An empty union returns immediately with zero I/O, so the common
+    case (no pack declares extras) costs nothing per event. Otherwise the hot path is ordered to do
+    the least work: a single lock-free read of ``known_marketplaces.json`` proves every repo is
+    already registered (the steady state), returning without a marker touch or a spawn. On the miss
     path a *non-blocking* FileLock serializes the re-check, marker damping, and spawn so a burst of
-    concurrent sessions launches one worker, not N; a sibling already holding the lock (its worker
-    is in flight, markers already damp) makes this call return immediately rather than stall
-    SessionStart. Damping is per (config dir, repo) (``bootstrap/<sha>.json``, an hourly cooldown),
-    so a narrow attach never suppresses a later broader one; a missing ``claude`` binary records the
-    attempts without spawning. Returns the one-line notice only when a worker is launched — that
-    line is the sole deliberate SessionStart stdout, landing in the model context.
+    concurrent events launches one worker, not N; a sibling already holding the lock returns
+    immediately rather than stall dispatch. Damping is per (config dir, repo) (``bootstrap/<sha>.json``,
+    an hourly cooldown), so a narrow union never suppresses a later broader one; a missing ``claude``
+    binary records the attempts without spawning. A spawn logs one loguru info line and prints nothing
+    on any stream — dispatch stdout carries the hook-decision JSON, and an event-like stderr notice would
+    replay stale on the daemon's warm cache hits.
     """
-    required = list(dict.fromkeys([MARKETPLACE_REPO, *extra_marketplaces]))
+    if not (required := list(dict.fromkeys(marketplaces))):
+        return
     known = known_entries()
     if not (missing := [r for r in required if not is_known(r, known)]):
-        return None
+        return
     now = time.time()
     bootstrap_dir().mkdir(parents=True, exist_ok=True)
     try:
@@ -153,15 +148,15 @@ def maybe_bootstrap(extra_marketplaces: Sequence[str] = ()) -> str | None:
             if not (
                 to_add := [r for r in missing if not is_known(r, known) and not attempt_fresh(marker_path(r), now)]
             ):
-                return None
+                return
             for repo in to_add:
                 record_attempt(marker_path(repo), now)
             if shutil.which("claude") is None:
-                return None
+                return
             spawn_worker(to_add)
-            return bootstrap_notice(to_add)
+            logger.bind(marketplaces=to_add).info("registering plugin dependency marketplace(s) in the background")
     except Timeout:
-        return None
+        return
 
 
 def run_bootstrap(repos: Sequence[str]) -> None:

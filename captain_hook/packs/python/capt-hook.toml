@@ -1,3 +1,4 @@
+[pack]
 name = "python"
 version = "0.2.0"
 description = "Python-specific guards: a pytest-before-commit gate, AST style rules, and a uv missing-dependency nudge."

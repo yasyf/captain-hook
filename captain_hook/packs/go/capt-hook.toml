@@ -1,3 +1,4 @@
+[pack]
 name = "go"
 version = "0.2.0"
 description = "Go-specific guards: a go-test-before-commit gate and a go.mod nudge on module-resolution errors."

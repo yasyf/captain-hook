@@ -20,6 +20,10 @@ Hooks are just Python files under `.claude/hooks/`. An optional `conf.py` beside
 `uvx capt-hook test` and `uvx capt-hook run` both default `--hooks` to that directory; pass
 `--hooks <dir>` to point elsewhere.
 
+Enabling a [pack](../guide/packs.qmd) adds one more file, `.claude/capt-hook.toml` — the
+committed list of `[packs.*]` entries the loader imports alongside your own hooks. `pack add`
+creates and maintains it; `init` doesn't.
+
 ## The wiring contract
 
 `init` registers the captain-hook plugin in `.claude/settings.json`: an

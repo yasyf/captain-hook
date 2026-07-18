@@ -69,9 +69,9 @@ Verification runs in the clone and differs by pack kind:
 
 - **Builtin pack** (`target_repo` is captain-hook): the hook lives under
   `captain_hook/packs/<pack>/`; verify with `uv run --project . capt-hook test`.
-- **External pack**: the hook lives in the directory named by the `hooks` key of the
-  clone's `capt-hook.toml` manifest; verify with `uvx --isolated capt-hook --hooks <dir> test`
-  against that directory.
+- **External pack**: the hook lives in the directory named by the `hooks` key in the
+  `[pack]` table of the clone's `capt-hook.toml` manifest; verify with
+  `uvx --isolated capt-hook --hooks <dir> test` against that directory.
 
 Commit, push, and `gh pr create` run inside the clone with the same templates as
 below — the commit-message and PR-body shapes for the candidate's kind carry over

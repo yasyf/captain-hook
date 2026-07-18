@@ -3,15 +3,20 @@
 A *pack* is a named, versioned collection of hooks. Builtin packs ship inside the
 ``captain_hook`` wheel under ``captain_hook/packs/<name>/``; external packs live in a
 GitHub repo carrying a ``capt-hook.toml`` manifest and are fetched as a tarball into a
-local cache. A project enables packs by listing them in ``.claude/hooks/packs.toml``.
+local cache. A single ``.claude/capt-hook.toml`` carries both config axes: a ``[pack]``
+table is the manifest (``name``/``description``/``hooks``, plus optional ``version``,
+``nlp``, and dependency ``marketplaces``) that makes a directory a pack, and
+``[packs.<name>]`` tables are a project's enablement list. The two are independent — a
+consumer file holds only ``[packs.*]`` and no ``[pack]``, and a pack that no project has
+enabled ships only ``[pack]``.
 
-packs.toml is the source of truth. An entry may pin a ``commit`` (a hard lock used
-directly) or carry only a ``source`` whose ref moves: ``@latest`` (the latest GitHub
-release), a branch, or the bare default branch. A moving ref re-resolves to a commit at
-most once per 24h, tracked alongside the resolved commit in a per-machine ``PackMeta``
-sidecar; within the window the cached commit is used with no network. A declared pack
-missing from the cache is fetched on demand, so the first event after a clone or a moved
-ref self-heals. The only loud failure is a pack that is both uncached and unreachable.
+An enablement entry may pin a ``commit`` (a hard lock used directly) or carry only a
+``source`` whose ref moves: ``@latest`` (the latest GitHub release), a branch, or the bare
+default branch. A moving ref re-resolves to a commit at most once per 24h, tracked
+alongside the resolved commit in a per-machine ``PackMeta`` sidecar; within the window the
+cached commit is used with no network. A declared pack missing from the cache is fetched on
+demand, so the first event after a clone or a moved ref self-heals. The only loud failure
+is a pack that is both uncached and unreachable.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ import contextlib
 import importlib.resources
 import json
 import os
+import posixpath
 import re
 import shutil
 import tarfile
@@ -33,13 +39,11 @@ from pathlib import Path
 from typing import Any
 
 from filelock import FileLock
-from loguru import logger
 
 from captain_hook.util import http
 from captain_hook.util.paths import resolve_cache_dir
 
 PACK_MANIFEST = "capt-hook.toml"
-ATTACHED_FILE = "attached_packs.json"
 SHA_MARKER = ".sha"
 LATEST_REF = "latest"
 # Moving refs (@latest / a branch / a bare default-branch source) re-resolve to a fresh
@@ -52,6 +56,14 @@ MARKETPLACE_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-
 # Cached commit dirs kept per pack besides the just-resolved one: a recency buffer
 # so a rollback or a still-loading prior session's pin survives one fresh fetch.
 KEEP_COMMITS = 2
+# Shared manifest-resolution order (see resolve_manifest): (pack_root, manifest) paths relative to
+# the search root — .claude/ then the bare file, at the root then one hooks/ level below.
+MANIFEST_CANDIDATES: tuple[tuple[str, str], ...] = (
+    ("", f".claude/{PACK_MANIFEST}"),
+    ("", PACK_MANIFEST),
+    ("hooks", f"hooks/.claude/{PACK_MANIFEST}"),
+    ("hooks", f"hooks/{PACK_MANIFEST}"),
+)
 
 
 def pack_module_name(name: str) -> str:
@@ -79,6 +91,17 @@ class PackSource:
         return f"github:{self.owner}/{self.repo}" + (f"@{self.ref}" if self.ref else "")
 
 
+def parse_marketplaces(raw: object) -> tuple[str, ...]:
+    if not isinstance(raw, (list, tuple)):
+        raise PackError(f"marketplaces must be a list of owner/repo slugs, got {raw!r}")
+    for slug in raw:
+        if not isinstance(slug, str):
+            raise PackError(f"marketplace repo {slug!r} must be a string owner/repo slug")
+        if not MARKETPLACE_REPO_RE.fullmatch(slug):
+            raise PackError(f"marketplace repo {slug!r} must match {MARKETPLACE_REPO_RE.pattern}")
+    return tuple(raw)
+
+
 @dataclass(frozen=True, slots=True)
 class PackManifest:
     name: str
@@ -92,27 +115,24 @@ class PackManifest:
     def load(cls, path: Path) -> PackManifest:
         if not path.is_file():
             raise PackError(f"pack manifest {PACK_MANIFEST} missing at {path.parent}")
-        data = tomllib.loads(path.read_text())
-        if not isinstance(raw_marketplaces := data.get("marketplaces", ()), (list, tuple)):
-            raise PackError(f"marketplaces must be a list of owner/repo slugs, got {raw_marketplaces!r}")
-        manifest = cls(
-            name=data["name"],
-            description=data["description"],
-            hooks=data["hooks"],
-            # .get is deliberate: `version` is optional since 9.7 (authors keep the key while
-            # pre-9.7 capt-hook is in the wild), and `nlp`/`marketplaces` are schema additions
-            # manifests predate.
-            version=data.get("version", "0.0.0"),
-            nlp=data.get("nlp", False),
-            marketplaces=tuple(raw_marketplaces),
-        )
+        # `**rest` ignores unknown [pack] keys — the dual-grammar rollout needs transitional files
+        # to parse under both schemas; every other failure mode raises PackError.
+        match tomllib.loads(path.read_text()).get("pack"):
+            case {"name": str(name), "description": str(description), "hooks": str(hooks), **rest}:
+                manifest = cls(
+                    name=name,
+                    description=description,
+                    hooks=hooks,
+                    version=rest.get("version", "0.0.0"),
+                    nlp=rest.get("nlp", False),
+                    marketplaces=parse_marketplaces(rest.get("marketplaces", ())),
+                )
+            case dict():
+                raise PackError(f"[pack] in {path} is missing required string keys name/description/hooks")
+            case _:
+                raise PackError(f"pack manifest {path} has no [pack] section")
         if not PACK_NAME_RE.fullmatch(manifest.name):
             raise PackError(f"pack name {manifest.name!r} must match {PACK_NAME_RE.pattern}")
-        for m in manifest.marketplaces:
-            if not isinstance(m, str):
-                raise PackError(f"marketplace repo {m!r} must be a string owner/repo slug")
-            if not MARKETPLACE_REPO_RE.fullmatch(m):
-                raise PackError(f"marketplace repo {m!r} must match {MARKETPLACE_REPO_RE.pattern}")
         return manifest
 
     def hooks_dir(self, root: Path) -> Path:
@@ -130,16 +150,16 @@ class ExternalPack:
     source: PackSource
     # A pinned commit is a hard lock used directly; None means the source's ref
     # (@latest, a branch, or the bare default branch) moves, and the resolved
-    # commit lives in a per-machine sidecar (see PackMeta), not in packs.toml.
+    # commit lives in a per-machine sidecar (see PackMeta), not in the committed config.
     commit: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class DisabledPack:
-    """A packs.toml entry that declines a pack by name.
+    """A ``[packs.<name>]`` config entry that declines a pack by name.
 
     ``[packs.<name>] disabled = true`` suppresses a pack the repo would otherwise
-    inherit — a builtin, a packs.toml source, or a plugin-attached pack — regardless of
+    inherit — a builtin, an external source, or a discovered plugin pack — regardless of
     any other keys on the entry. Disabling always wins.
     """
 
@@ -147,21 +167,21 @@ class DisabledPack:
 
 
 @dataclass(frozen=True, slots=True)
-class AttachedPack:
-    """A pack a Claude plugin registered for the current session via ``pack attach``.
+class PluginPack:
+    """A pack discovered on an enabled Claude Code plugin whose root ships a ``[pack]`` manifest.
 
-    Stored per session in ``attached_packs.json`` keyed by ``name``; ``dir`` is the
-    absolute pack root (holding the ``capt-hook.toml`` manifest) and ``version`` is the
-    manifest version recorded at attach time.
+    ``plugin_id`` is the Claude plugin id it was discovered under, ``dir`` the absolute pack
+    root holding the ``capt-hook.toml`` manifest, and ``version`` the manifest version.
     """
 
     name: str
+    plugin_id: str
     dir: str
     version: str
 
 
 type PackEntry = BuiltinPack | ExternalPack | DisabledPack
-type ResolvedEntry = BuiltinPack | ExternalPack | AttachedPack
+type ResolvedEntry = BuiltinPack | ExternalPack | PluginPack
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,7 +196,7 @@ class PackMeta:
     """Per-machine resolution sidecar for a moving-ref pack: the last-resolved commit, ref, and when.
 
     Stored as JSON next to the cache so the resolved ``commit``, ``resolved_ref``, and
-    ``checked_at`` timestamp never enter the committed ``packs.toml``. ``checked_at`` gates
+    ``checked_at`` timestamp never enter the committed config. ``checked_at`` gates
     the 24h re-resolution TTL; ``resolved_ref`` (the moving ref that resolved — a release tag
     or a branch) is display-only for ``pack list`` and is absent on pre-9.7 sidecars.
     """
@@ -202,18 +222,70 @@ class PackMeta:
         )
 
 
-def packs_toml_path(root: Path) -> Path:
-    return root / ".claude" / "hooks" / "packs.toml"
+def config_path(root: Path) -> Path:
+    return root / ".claude" / PACK_MANIFEST
+
+
+def text_has_pack_section(text: str) -> bool:
+    """True when ``text`` is valid TOML declaring a ``[pack]`` table (malformed TOML reads as False)."""
+    with contextlib.suppress(tomllib.TOMLDecodeError):
+        return isinstance(tomllib.loads(text).get("pack"), dict)
+    return False
+
+
+def has_pack_section(path: Path) -> bool:
+    """True when ``path`` is a readable file whose TOML declares a ``[pack]`` table."""
+    with contextlib.suppress(OSError):
+        return path.is_file() and text_has_pack_section(path.read_text())
+    return False
+
+
+@dataclass(frozen=True, slots=True)
+class ManifestLocation:
+    """A resolved pack manifest: the ``capt-hook.toml`` file and the ``pack_root`` its ``hooks`` resolves against."""
+
+    pack_root: Path
+    manifest: Path
+
+
+def resolve_manifest(root: Path) -> ManifestLocation:
+    """Resolve ``root``'s pack manifest across the four discovery layouts, in :data:`MANIFEST_CANDIDATES` order.
+
+    Probes ``.claude/capt-hook.toml`` then the bare ``capt-hook.toml``, at ``root`` then one ``hooks/``
+    level below. The first candidate whose file carries a ``[pack]`` section wins — so a consumer-only
+    ``.claude`` file (``[packs.*]`` enablement with no ``[pack]``, as ``pack add`` writes) never shadows
+    a real ``[pack]`` at the root or under ``hooks/``. When none carries ``[pack]`` the first candidate
+    whose file merely exists is the error-reporting fallback, else the bare root ``capt-hook.toml`` — so
+    ``PackManifest.load`` still fails loudly at the canonical missing location.
+    """
+    located = [(root / pack_root, root / manifest) for pack_root, manifest in MANIFEST_CANDIDATES]
+    pack_root, manifest = next((pair for pair in located if has_pack_section(pair[1])), None) or next(
+        (pair for pair in located if pair[1].is_file()), (root, root / PACK_MANIFEST)
+    )
+    return ManifestLocation(pack_root=pack_root, manifest=manifest)
 
 
 def manifest_in(root: Path) -> Path:
-    """Return the pack manifest path under root, preferring .claude/capt-hook.toml.
+    """The pack manifest path under ``root`` — the winning candidate from :func:`resolve_manifest`."""
+    return resolve_manifest(root).manifest
 
-    Falls back to the repo-root location. The returned path may not exist (the
-    canonical missing location), so PackManifest.load still fails loudly.
+
+def manifest_at(path: Path) -> PackManifest | None:
+    """Load the ``[pack]`` manifest at an explicit ``capt-hook.toml`` path, or ``None`` when it is absent or
+    carries no ``[pack]`` section (a consumer-only ``[packs.*]`` file). A malformed ``[pack]`` still raises.
     """
-    claude = root / ".claude" / PACK_MANIFEST
-    return claude if claude.is_file() else root / PACK_MANIFEST
+    if not path.is_file() or not isinstance(tomllib.loads(path.read_text()).get("pack"), dict):
+        return None
+    return PackManifest.load(path)
+
+
+def load_pack_manifest(root: Path) -> PackManifest | None:
+    """Load ``root``'s ``[pack]`` manifest across the discovery layouts, or ``None`` when there is none.
+
+    The discovery probe: ``None`` when the resolved manifest is absent or present without a ``[pack]``
+    section (a consumer-only file). A present-but-malformed ``[pack]`` still raises ``PackError``.
+    """
+    return manifest_at(resolve_manifest(root).manifest)
 
 
 def parse_entry(name: str, table: dict[str, Any]) -> PackEntry:
@@ -234,6 +306,10 @@ def read_entries(path: Path) -> list[PackEntry]:
     if not path.exists():
         return []
     return [parse_entry(name, table) for name, table in (tomllib.loads(path.read_text()).get("packs") or {}).items()]
+
+
+def read_config_entries(root: Path) -> list[PackEntry]:
+    return read_entries(config_path(root))
 
 
 def render_entry(entry: PackEntry) -> str:
@@ -269,18 +345,69 @@ def atomic_write(path: Path, text: str) -> None:
         raise
 
 
+def strip_packs_tables(text: str) -> str:
+    """Return ``text`` with every ``[packs]`` / ``[packs.*]`` table dropped, all else verbatim.
+
+    A section-scoped rewrite: a ``[pack]`` manifest table, comments, and preamble outside the
+    enablement tables survive byte-for-byte, so an upsert re-renders only the ``[packs.*]`` tables.
+    """
+    kept: list[str] = []
+    dropping = False
+    for line in text.splitlines(keepends=True):
+        if (stripped := line.lstrip()).startswith("[["):
+            dropping = False
+        elif stripped.startswith("["):
+            name = stripped[1:].partition("]")[0].strip()
+            dropping = name == "packs" or name.startswith("packs.")
+        if not dropping:
+            kept.append(line)
+    return "".join(kept)
+
+
+def verify_config_rewrite(path: Path, original: str, new_text: str, entries: Sequence[PackEntry]) -> None:
+    """Refuse a ``[packs.*]`` rewrite that would corrupt the file, before any bytes reach disk.
+
+    ``strip_packs_tables`` is line-based, so any top-level multiline string whose lines mimic a
+    ``[packs.*]`` header can make it drop real content. This is the guard, not a smarter parser:
+    re-parse the rewritten text and refuse it — raising ``PackError`` — unless (a) it parses, (b) the
+    whole document minus its ``packs`` key is byte-for-byte the parsed original minus ``packs``, and
+    (c) its ``[packs]`` table equals exactly the entries asked for. Every refusal points at a hand edit.
+    """
+    intended = tomllib.loads(render_packs_toml(entries)).get("packs", {})
+    try:
+        result = tomllib.loads(new_text)
+    except tomllib.TOMLDecodeError as e:
+        raise PackError(f"refusing to rewrite {path}: the result would not parse ({e}); hand-edit it instead") from e
+    before = tomllib.loads(original) if original else {}
+    if {k: v for k, v in result.items() if k != "packs"} != {k: v for k, v in before.items() if k != "packs"}:
+        raise PackError(
+            f"refusing to rewrite {path}: content outside the [packs.*] tables would change; hand-edit it instead"
+        )
+    if result.get("packs", {}) != intended:
+        raise PackError(
+            f"refusing to rewrite {path}: its [packs.*] tables would not match the intended entries; "
+            "hand-edit it instead"
+        )
+
+
+def write_config_entries(path: Path, entries: Sequence[PackEntry]) -> None:
+    original = path.read_text() if path.exists() else ""
+    preserved = strip_packs_tables(original).rstrip("\n") if original else ""
+    rendered = render_packs_toml(entries)
+    new_text = f"{preserved}\n\n{rendered}" if preserved else rendered
+    verify_config_rewrite(path, original, new_text, entries)
+    atomic_write(path, new_text)
+
+
 def upsert_entry(path: Path, entry: PackEntry) -> None:
-    atomic_write(
-        path,
-        render_packs_toml([*(e for e in read_entries(path) if e.name != entry.name), entry]),
-    )
+    write_config_entries(path, [*(e for e in read_entries(path) if e.name != entry.name), entry])
 
 
 def delete_entry(path: Path, name: str) -> None:
     entries = read_entries(path)
     if name not in {e.name for e in entries}:
         raise PackError(f"pack {name!r} is not enabled in {path}")
-    atomic_write(path, render_packs_toml([e for e in entries if e.name != name]))
+    write_config_entries(path, [e for e in entries if e.name != name])
 
 
 def packs_cache_root() -> Path:
@@ -318,19 +445,44 @@ def strip_top_level(tf: tarfile.TarFile) -> Iterator[tarfile.TarInfo]:
             yield member
 
 
-def members_under(members: list[tarfile.TarInfo], hooks: str, manifest_path: str) -> Iterator[tarfile.TarInfo]:
+def members_under(
+    members: list[tarfile.TarInfo], pack_root: str, hooks: str, manifest_path: str
+) -> Iterator[tarfile.TarInfo]:
     """Yield the manifest plus members within the pack's hooks dir.
 
-    hooks == "." (hooks beside the manifest) selects the whole tree; a real
-    subdir selects only the manifest and that subtree, so the cache holds just
-    what the loader imports. The manifest is included by its actual archive path
-    so a .claude/ manifest survives without dragging in the rest of .claude/.
+    ``pack_root`` is the archive-relative dir the manifest resolves under ("" at the archive root,
+    "hooks" one level down); ``hooks`` is the manifest's hooks field, relative to it. The combined
+    hooks dir of "." (hooks beside the manifest) selects the whole pack subtree; a real subdir selects
+    only that subtree, so the cache holds just what the loader imports. The manifest is included by its
+    actual archive path so a nested manifest survives without dragging in its siblings.
     """
-    rel = hooks.strip("/")
-    prefix = "" if rel in ("", ".") else rel + "/"
+    rel = "" if (combined := posixpath.normpath(posixpath.join(pack_root, hooks))) == "." else combined
+    prefix = "" if rel == "" else rel + "/"
     for m in members:
         if m.path == manifest_path or not prefix or m.path == rel or m.path.startswith(prefix):
             yield m
+
+
+def resolve_manifest_member(
+    by_path: dict[str, tarfile.TarInfo], tf: tarfile.TarFile
+) -> tuple[str, tarfile.TarInfo] | None:
+    """Pick the ``(pack_root, member)`` manifest from a tarball's members in :data:`MANIFEST_CANDIDATES` order.
+
+    Mirrors :func:`resolve_manifest` over archive member names: the first candidate present and carrying
+    a ``[pack]`` section wins; when none carries ``[pack]`` the first candidate present is the fallback,
+    and ``None`` means no candidate member exists at all.
+    """
+    located = [(pack_root, by_path[manifest]) for pack_root, manifest in MANIFEST_CANDIDATES if manifest in by_path]
+    if not located:
+        return None
+    return next((pair for pair in located if member_has_pack_section(tf, pair[1])), located[0])
+
+
+def member_has_pack_section(tf: tarfile.TarFile, member: tarfile.TarInfo) -> bool:
+    if (extracted := tf.extractfile(member)) is None:
+        return False
+    with extracted:
+        return text_has_pack_section(extracted.read().decode(errors="replace"))
 
 
 def find_cached(name: str, sha: str) -> Path | None:
@@ -377,16 +529,15 @@ def fetch_commit(source: PackSource, sha: str) -> ResolvedPack:
             shutil.rmtree(staging)
         with tarfile.open(tarball) as tf:
             members = list(strip_top_level(tf))
-            by_path = {m.path: m for m in members}
-            manifest_member = next(
-                (by_path[p] for p in (f".claude/{PACK_MANIFEST}", PACK_MANIFEST) if p in by_path), None
-            )
-            if manifest_member is None:
+            if (located := resolve_manifest_member({m.path: m for m in members}, tf)) is None:
                 raise PackError(f"pack manifest {PACK_MANIFEST} missing in {source}")
+            pack_root, manifest_member = located
             tf.extract(manifest_member, staging, filter="data")
             manifest = PackManifest.load(staging / manifest_member.path)
             tf.extractall(
-                staging, members=list(members_under(members, manifest.hooks, manifest_member.path)), filter="data"
+                staging,
+                members=list(members_under(members, pack_root, manifest.hooks, manifest_member.path)),
+                filter="data",
             )
         tarball.unlink()
         final = root / f"{manifest.name}@{sha}"
@@ -396,7 +547,7 @@ def fetch_commit(source: PackSource, sha: str) -> ResolvedPack:
         (final / SHA_MARKER).write_text(sha)
     evict_stale_commits(manifest.name, sha)
     return ResolvedPack(
-        ExternalPack(name=manifest.name, source=source, commit=sha), manifest.hooks_dir(final), manifest
+        ExternalPack(name=manifest.name, source=source, commit=sha), manifest.hooks_dir(final / pack_root), manifest
     )
 
 
@@ -441,8 +592,9 @@ def builtin_packs() -> dict[str, Path]:
 def resolve_builtin(name: str) -> ResolvedPack:
     if not (pack_dir := builtin_packs().get(name)):
         raise PackError(f"unknown builtin pack {name!r}; available: {', '.join(sorted(builtin_packs())) or 'none'}")
-    manifest = PackManifest.load(manifest_in(pack_dir))
-    return ResolvedPack(BuiltinPack(name=name), manifest.hooks_dir(pack_dir), manifest)
+    location = resolve_manifest(pack_dir)
+    manifest = PackManifest.load(location.manifest)
+    return ResolvedPack(BuiltinPack(name=name), manifest.hooks_dir(location.pack_root), manifest)
 
 
 def load_cached(entry: ExternalPack, sha: str) -> ResolvedPack | None:
@@ -453,8 +605,9 @@ def load_cached(entry: ExternalPack, sha: str) -> ResolvedPack | None:
     # that is long-pinned and actively loaded.
     with contextlib.suppress(OSError):
         os.utime(cached, None)
-    manifest = PackManifest.load(manifest_in(cached))
-    return ResolvedPack(entry, manifest.hooks_dir(cached), manifest)
+    location = resolve_manifest(cached)
+    manifest = PackManifest.load(location.manifest)
+    return ResolvedPack(entry, manifest.hooks_dir(location.pack_root), manifest)
 
 
 def resolve_external(entry: ExternalPack) -> ResolvedPack | None:
@@ -549,12 +702,11 @@ def fastpath_unchanged(root: Path, entries: Sequence[PackEntry], now: float) -> 
 
 
 def toml_hash(root: Path) -> str:
-    path = packs_toml_path(root)
+    path = config_path(root)
     return sha256(path.read_bytes() if path.exists() else b"").hexdigest()
 
 
-def resolve_enabled_packs(root: Path) -> tuple[list[ResolvedPack], list[str]]:
-    entries = read_entries(packs_toml_path(root))
+def resolve_enabled_packs(root: Path, entries: Sequence[PackEntry]) -> tuple[list[ResolvedPack], list[str]]:
     now = time.time()
     fast = fastpath_unchanged(root, entries, now)
     resolved: list[ResolvedPack] = []
@@ -572,70 +724,3 @@ def resolve_enabled_packs(root: Path) -> tuple[list[ResolvedPack], list[str]]:
     if not (fast or missing):
         atomic_write(fastpath_path(root), toml_hash(root))
     return resolved, missing
-
-
-def attached_path(session_dir: Path) -> Path:
-    return session_dir / ATTACHED_FILE
-
-
-def read_attached(session_dir: Path) -> list[AttachedPack]:
-    path = attached_path(session_dir)
-    if not path.exists():
-        return []
-    return [AttachedPack(name=e["name"], dir=e["dir"], version=e["version"]) for e in json.loads(path.read_text())]
-
-
-def upsert_attached(session_dir: Path, pack: AttachedPack) -> None:
-    """Record ``pack`` in the session's attach file, replacing any entry of the same name.
-
-    The read-modify-write runs under a file lock so two ``pack attach`` processes (parallel
-    SessionStart hooks) serialize rather than clobber each other's entries. When the same pack
-    name re-attaches from a *different* dir the newer attach wins: a plugin update bumps its
-    versioned cache dir, so the pack legitimately re-attaches from a new path on the next
-    SessionStart/resume — erroring there would drop the pack for every post-update session. The
-    rebind is logged at WARNING naming both dirs, since a genuine two-plugins-one-name clash
-    surfaces the same way and wants a look.
-    """
-    path = attached_path(session_dir)
-    lock = path.with_name(path.name + ".lock")
-    with FileLock(str(lock)):
-        existing = read_attached(session_dir)
-        if (prior := next((p for p in existing if p.name == pack.name), None)) and prior.dir != pack.dir:
-            logger.bind(pack=pack.name).warning(
-                f"attached pack {pack.name!r} re-bound to a different dir; the newer attach wins "
-                f"(was {prior.dir}, now {pack.dir})"
-            )
-        entries = [*(p for p in existing if p.name != pack.name), pack]
-        atomic_write(
-            path,
-            json.dumps([{"name": p.name, "dir": p.dir, "version": p.version} for p in entries]),
-        )
-
-
-def resolve_attached(session_dir: Path) -> list[ResolvedPack]:
-    """Resolve this session's attached packs, dropping entries that no longer resolve.
-
-    A plugin update moves or non-atomically rewrites its versioned cache path, so a prior
-    session's attach entry can dangle or point at a half-written manifest. SessionStart
-    re-attaches every session, so an entry whose dir has vanished or whose manifest is
-    missing/malformed is skipped with a debug log rather than killing dispatch for every
-    other hook in the event — the same fail-soft shape as ``resolve_enabled_packs``.
-
-    Packs are returned in stable name order (attach keeps one entry per name — a same-name
-    re-attach replaces in place) so gate arbitration across the attached tier does not depend
-    on attach timing.
-    """
-    resolved: list[ResolvedPack] = []
-    for pack in sorted(read_attached(session_dir), key=lambda p: p.name):
-        root = Path(pack.dir)
-        if not root.is_dir():
-            continue
-        try:
-            manifest = PackManifest.load(manifest_in(root))
-        except (PackError, tomllib.TOMLDecodeError, KeyError, OSError):
-            logger.bind(pack=pack.name, dir=pack.dir).opt(exception=True).debug(
-                "skipped attached pack with a missing or malformed manifest"
-            )
-            continue
-        resolved.append(ResolvedPack(pack, manifest.hooks_dir(root), manifest))
-    return resolved

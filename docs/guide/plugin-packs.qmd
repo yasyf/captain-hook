@@ -2,108 +2,46 @@
 title: "Ship a pack in a Claude plugin"
 ---
 
-A Claude plugin can carry a capt-hook pack so its hooks load in every project the
-plugin is enabled for, without that project running `capt-hook init` or editing
-`packs.toml`. There are two sanctioned tiers. Pick by whether the pack should
-track the *repo* or track the *session*.
+A Claude plugin can carry a capt-hook pack, and dispatch discovers it: every
+event, the dispatcher enumerates the project's enabled plugins and loads any
+whose root ships a `[pack]` manifest. The pack applies to whatever project the
+plugin is enabled in, with zero repo edits and zero per-session wiring — the
+plugin runs nothing at all. This is the cc-context model.
 
-## Repo-scoped: `packs.toml`
+The alternative is pinning the pack in a repo's committed
+`.claude/capt-hook.toml`, so every clone hydrates the same commit — the
+cc-notes model, right for a pack that encodes one repo's own conventions.
+[Use packs](packs.qmd) covers that tier end to end; the rest of this page is
+the plugin tier.
 
-This is the cc-notes model. The pack is pinned in the project's committed
-`.claude/hooks/packs.toml`, so every clone hydrates the same commit and the
-wiring lives in the repo. Use it when the pack encodes that repo's own
-conventions.
+## The three artifacts
 
-```bash
-uvx capt-hook pack add github:acme/notes@v1.2
-```
+A pack plugin ships exactly three artifacts, and `pack lint` enforces exactly
+these. There is no `hooks.json` involvement: the captain-hook plugin is the
+sole dispatcher, and a plugin `hooks.json` that mentions `capt-hook` at all
+predates this contract and fails lint.
 
-`pack add` resolves the ref, caches the commit, and writes a pinned entry;
-teammates run `pack update` to hydrate it. The full workflow is in
-[Use packs](packs.qmd). Nothing else on this page applies to this tier — the
-plugin does no per-session work.
+**1. The pack manifest, `capt-hook.toml`.** A `[pack]` table at the plugin
+root, or under a `hooks/` subdirectory — discovery probes both. Unchanged from
+any other pack; [Author a pack](packs.qmd#author-a-pack) covers it.
 
-## Session-attached: four artifacts
-
-This is the cc-context model. The plugin ships the pack inside itself and
-attaches it once per session, so it applies to whatever project the plugin is
-enabled in and leaves no trace in the repo. The captain-hook plugin is the sole
-dispatcher — its own `hooks.json` registers every event — so your plugin never
-wires a `capt-hook run` command. It ships exactly four artifacts.
-
-### Scaffold them
-
-`pack scaffold` writes all four, plus a starter hook, and lints the result:
-
-```bash
-uvx capt-hook pack scaffold .
-```
-
-Pass the plugin root — the directory the attach line targets. In an empty repo
-it creates every artifact; in a partial one it repairs in place, adding only
-the missing contract pieces. It never touches content it can't account for: a
-conforming file stays byte-for-byte identical, an unparseable one is reported
-and left alone, and a hook command it can't classify stops the run before any
-write. A legacy consumer built before the attach-only contract migrates in one
-pass — scaffold strips the mirrored `capt-hook run` entries and leaves the
-single canonical attach. It closes by printing the two-line install snippet for
-your README.
-
-The rest of this section is the contract scaffold writes and `pack lint`
-enforces — read on to hand-author, or to understand what scaffold produced.
-
-**1. The pack manifest, `capt-hook.toml`.** Unchanged from any other pack;
-[Author a pack](packs.qmd#author-a-pack) covers it.
-
-**2. One attach hook in the plugin's `hooks/hooks.json`.**
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          { "type": "command", "command": "uvx --isolated capt-hook pack attach \"${CLAUDE_PLUGIN_ROOT}\"" }
-        ]
-      }
-    ]
-  }
-}
-```
-
-The argument is the pack root: the directory holding `capt-hook.toml`. Pass
-`"${CLAUDE_PLUGIN_ROOT}/hooks"` when the manifest lives in a `hooks/` subtree.
-This is the plugin's only capt-hook entry; hooks that have nothing to do with
-capt-hook coexist alongside it freely.
-
-`pack attach` reads the SessionStart JSON from stdin and records the pack — its
-manifest directory and version — under that session. In steady state it writes
-nothing to stdout, since SessionStart stdout is injected into the model
-context; the one exception is the first session on a machine that hasn't
-registered a dependency marketplace yet, where attach self-bootstraps it and
-prints a single notice line (see [Tell users how to
-install](#tell-users-how-to-install)). A missing or invalid manifest exits
-non-zero with a stderr message, so a broken plugin fails loud at author time
-rather than silently loading nothing. The attach covers the whole session: a
-subagent's hook events carry the same session id, so attached packs load for
-sidechains too.
-
-**3. The dependency in `plugin.json`.**
+**2. The dependency in `plugin.json`.**
 
 ```json
 {
   "dependencies": [
-    { "name": "captain-hook", "marketplace": "captain-hook", "version": ">=9.9.0" }
+    { "name": "captain-hook", "marketplace": "captain-hook", "version": ">=10.0.0" }
   ]
 }
 ```
 
-The object form is required: `name`, `marketplace`, and a version floor. A
-bare `"captain-hook"` string, or an object missing the floor, fails
-`pack lint`. Floor at the oldest release your pack works with; `>=9.9.0` is
-the first that ships the attach-only contract.
+The object form is required: `name`, `marketplace`, and a version floor. A bare
+`"captain-hook"` string, or an object missing the floor, fails `pack lint`.
+Floor at `>=10.0.0` — the first release that discovers plugin packs. This
+dependency is what pulls the dispatcher onto a machine that installs only your
+plugin; without it the pack has no runtime at all.
 
-**4. The allowlist in your marketplace's `marketplace.json`.**
+**3. The allowlist in your marketplace's `marketplace.json`.**
 
 ```json
 {
@@ -113,34 +51,26 @@ the first that ships the attach-only contract.
 
 ::: {.callout-warning title="The allowlist is load-bearing"}
 Without this line, Claude Code skips a `plugin.json`-declared cross-marketplace
-dependency at install — no error, no captain-hook. Verified on Claude Code
-2.1.207. The pack then attaches into a session where no dispatcher runs, and
-every hook stays dark.
+dependency at install — no error, no captain-hook, and every hook in the pack
+stays dark. Verified on Claude Code 2.1.207.
 :::
 
-## Extra dependency marketplaces
+## Scaffold them
 
-captain-hook registers itself. If your plugin depends on *other*
-cross-marketplace plugins too, list their `owner/repo` slugs in your
-`capt-hook.toml`, and attach registers those as well:
+`pack scaffold` writes all three, plus a starter hook, and lints the result:
 
-```toml
-marketplaces = ["yasyf/cc-present"]
+```bash
+uvx capt-hook pack scaffold .
 ```
 
-Each slug is a plain `owner/repo` (no `github:` prefix). On the first session
-that finds one unregistered, the same background worker that bootstraps
-captain-hook also runs `claude plugin marketplace add` for it; Claude Code then
-resolves the matching `plugin.json` dependency and installs the plugin. This is
-what keeps a plugin with two or three cross-marketplace dependencies at a
-**one-line** install — the user adds only your marketplace, and the rest
-register themselves.
-
-Declare each extra in all three places: `marketplaces` here so attach registers
-the marketplace, a `dependencies` entry in `plugin.json` so Claude Code installs
-the plugin, and its name in the `marketplace.json` allowlist so the
-cross-marketplace dependency is permitted. A slug that isn't a well-formed
-`owner/repo` fails `pack lint` (it can't load the manifest).
+Pass the plugin root — the directory discovery probes for the manifest. In an
+empty repo it creates every artifact; in a partial one it repairs in place,
+adding only the missing contract pieces. It never touches content it can't
+account for: a conforming file stays byte-for-byte identical, and an
+unparseable one is reported and left alone. A plugin built against the old
+attach contract migrates by deleting its capt-hook `hooks.json` line — scaffold
+generates no `hooks.json` and lint fails any surviving `capt-hook` mention in
+one. It closes by printing the two-line install snippet for your README.
 
 ## Tell users how to install
 
@@ -151,75 +81,148 @@ claude plugin marketplace add your-org/your-repo
 claude plugin install your-plugin@your-marketplace
 ```
 
-Your dependency marketplaces install themselves. Claude Code won't add an
-unknown marketplace from a `plugin.json` dependency alone, so the first session
-after your plugin is enabled runs its attach hook, which registers every
-dependency marketplace the pack declares — captain-hook plus anything in
-`marketplaces` — in a background worker, then prints one line:
+On a machine that has never seen captain-hook, installing just your plugin
+surfaces Claude Code's dependency error: the `plugin.json` dependency points at
+a marketplace the machine doesn't know, so the plugin lands disabled with
+`dependency-unsatisfied`. The one-time fix is registering the marketplace —
+`claude plugin marketplace add yasyf/captain-hook`, or `capt-hook init` in any
+repo, which registers it as a side effect. From then on the dependency resolves
+and Claude Code installs the dispatcher itself.
 
-> capt-hook: registering the plugin marketplace(s) yasyf/captain-hook,
-> yasyf/cc-present in the background — this plugin's hooks depend on them. Takes
-> effect via Claude Code's background plugin auto-update, /reload-plugins, or the
-> next session.
+## How discovery works
 
-Once a marketplace is registered, the matching `plugin.json` dependency
-resolves and Claude Code installs and enables the plugin; the hooks go live that
-session on `/reload-plugins`, or the next session automatically. The bootstrap
-is idempotent — already-registered marketplaces short-circuit it with a single
-file read — and backs off for an hour per marketplace if `claude` isn't on
-`PATH` or a registration fails. `claude plugin update` alone doesn't resolve a
-dependency a newer release of your plugin adds, but the attach hook
-self-bootstraps on the next session regardless, so there's no manual marketplace
-step on upgrade either.
+Dispatch enumerates the project's enabled plugins via
+`claude plugin list --json` and probes each one's install path — the root, then
+`hooks/` — for a `[pack]` manifest. A plugin with no manifest merely consumes
+packs and is skipped; a malformed manifest is skipped with a logged warning, so
+one rotted plugin can't kill discovery.
 
-## Lint the contract
+That CLI spawns Node and takes about a second, far too slow for the ~3ms
+dispatch hot path, so the roster is cached per project and invalidated by stat
+changes to the files that shape it: Claude Code's `installed_plugins.json`, the
+user, project, and local `settings.json`, and the `managed-settings.json`
+locations (the config dir, `/Library/Application Support/ClaudeCode/`, and
+`/etc/claude-code/`) along with their `managed-settings.d/` drop-in
+directories. Installing, enabling, or disabling a plugin re-runs the
+CLI once; every other event reads the snapshot.
 
-`pack lint` vets all four artifacts plus the pack itself and exits non-zero on
-any failure, so CI needs one line:
+The stat tuple can only watch files. Policy that arrives another way — an MDM
+plist, a `policyHelper` binary, a remote managed policy, or per-session flags
+like `--plugin-dir` and `--settings` — changes what `claude plugin list`
+would report without moving any watched stat, and the roster stays stale
+until one does. When that bites, force a refresh: touch any settings file, or
+delete the project's `.plugins` snapshot under the capt-hook cache. The manifest probe itself runs
+live, so editing a hook file inside a plugin needs no invalidation at all. A
+missing `claude` CLI, a failing invocation, or roster output in a shape
+discovery can't use all degrade to an empty plugin roster — one warning, and
+the empty roster is cached against the same stat tuple, so the failure never
+becomes a per-event cost.
 
-```bash
-uvx capt-hook pack lint .
-```
+Two consequences of riding the plugin cache:
 
-Pass the plugin root — the same directory your attach line passes. The checks:
+- Updates land on the next stat change. A plugin update moves its versioned
+  install path and rewrites `installed_plugins.json`, so discovery picks up the
+  new pack version on the next event. The session's *other* hooks are a
+  different story: Claude Code keeps a running session on the old install path
+  until `/reload-plugins` or the next session, so mid-session the pack and the
+  plugin's own commands can briefly disagree on version.
+- Dev plugins are untested. Discovery trusts whatever roster
+  `claude plugin list --json` reports; whether a plugin loaded via
+  `claude --plugin-dir` appears there is unverified. Lint and test the pack
+  directly with `uvx capt-hook pack lint .` and
+  `uvx capt-hook --hooks hooks test` instead of relying on discovery.
 
-| Check | Passes when |
-|---|---|
-| `manifest` | `capt-hook.toml` resolves under the root you passed. |
-| `hooks.json` | Exactly one capt-hook entry: the canonical SessionStart attach, and zero `capt-hook run` entries. Commands are token-parsed, not substring-matched, so a reworded prefix or a `run` buried mid-command still counts. |
-| `plugin.json` | The captain-hook dependency is an object with `marketplace` and a version floor. |
-| `marketplace.json` | `allowCrossMarketplaceDependenciesOn` includes `captain-hook`. A plugin with no `marketplace.json` upward gets a warning, not a failure. |
-| `load` | The pack loads at least one hook with no load errors. Zero hooks fails — a pack that loads nothing ships no working guard. |
-| `session-start` | No hook subscribes `SessionStart`. The attach and the dispatcher's own SessionStart run are parallel sibling hooks with no ordering guarantee, so a pack's own SessionStart hooks are unreliable by construction. |
-| `async-decision` | No hook registers `async_=True` on a decision-capable event — a background hook's verdict is discarded. Registration also raises on this at runtime. |
+Discovered packs are first-class: they show in `uvx capt-hook pack list` as
+kind `plugin`, and `uvx capt-hook test` loads and runs their inline tests
+alongside everything else.
 
 ## Precedence
 
-When a pack name arrives from more than one tier, the more explicit source wins.
-A `packs.toml` entry beats an attached pack of the same name: a repo that pins
-`acme-notes` gets that exact commit even if an enabled plugin also attaches an
-`acme-notes`, and the ambient attach is dropped. A repo that wants none of an
-ambient plugin's pack declines it by name, which beats every source:
+A `[packs.*]` entry in the project's `.claude/capt-hook.toml` always beats a
+same-name plugin pack: a pinned external wins even while it is offline and
+uncached, and a `disabled = true` entry suppresses the plugin pack outright.
+That is the decline switch for a repo that wants none of an ambient plugin's
+pack:
 
 ```toml
 [packs.acme-notes]
 disabled = true
 ```
 
-The disabled entry pins nothing and resolves to nothing; it only suppresses the
-pack, whether that pack would have come from a builtin, a `packs.toml` source, or
-an attach.
+Within the plugin tier, plugins resolve in stable plugin-id order. When two
+plugins ship the same pack name, the lower plugin id wins and the clash is
+logged at WARNING naming both — a genuine two-plugins-one-name conflict wants a
+look, not a silent coin flip.
 
-Within the attached tier, packs resolve in stable name order, so gate
-arbitration does not depend on attach timing. A same-name re-attach from a
-different directory replaces the prior entry — the newer attach wins, because a
-plugin update relocates its versioned cache directory and the pack legitimately
-re-attaches from the new path — and the rebind is logged at WARNING naming both
-directories, since a genuine two-plugins-one-name clash surfaces the same way
-and wants a look. An attached pack no project pins loads normally, and its
-hooks join dispatch like every other pack's.
+## Extra dependency marketplaces
+
+captain-hook's own marketplace needs no declaration — wherever discovery runs,
+the dispatcher already exists. If your pack's hooks depend on *other*
+cross-marketplace plugins, list their `owner/repo` slugs in the `[pack]` table:
+
+```toml
+[pack]
+name = "acme-notes"
+description = "Note-taking guards"
+hooks = "hooks"
+marketplaces = ["yasyf/cc-present"]
+```
+
+Each slug is a plain `owner/repo` (no `github:` prefix); a malformed one fails
+manifest load and therefore `pack lint`. When discovery resolves a pack
+declaring an unregistered marketplace, it detaches a background worker that
+runs `claude plugin marketplace add` for exactly the declared slugs. The spawn
+prints nothing on either stream — dispatch stdout carries the hook decision —
+and leaves only a log line plus the worker's own log as its trace. Claude Code
+resolves the matching `plugin.json` dependencies from there and installs the
+plugins. This works for every pack tier — a repo-scoped GitHub pack's
+`marketplaces` declaration triggers the same worker.
+
+The worker is damped: already-registered marketplaces short-circuit with a
+single file read, a pack with no `marketplaces` costs zero I/O, and a failed
+registration backs off for an hour per marketplace. See
+[the troubleshooting entry](troubleshooting.qmd#discovery-installs-the-dependency-plugins)
+for the worker's log.
+
+Declare each extra in all three places: `marketplaces` here so discovery
+registers the marketplace, a `dependencies` entry in `plugin.json` so Claude
+Code installs the plugin, and its name in the `marketplace.json` allowlist so
+the cross-marketplace dependency is permitted.
+
+## Lint the contract
+
+`pack lint` vets the three artifacts plus the pack itself and exits non-zero on
+any failure, so CI needs one line:
+
+```bash
+uvx capt-hook pack lint .
+```
+
+Pass the plugin root — the same directory discovery probes. The checks:
+
+| Check | Passes when |
+|---|---|
+| `manifest` | A `[pack]` manifest resolves under the root (or its `hooks/` subdirectory), with valid `marketplaces` slugs. |
+| `hooks.json` | Absent, or free of the string `capt-hook` entirely — a raw-text scan, not a command parse. Any surviving attach or `run` line predates the discovery contract and fails; the migration is to delete it. |
+| `plugin.json` | The captain-hook dependency is an object with `marketplace` and a version floor. |
+| `marketplace.json` | `allowCrossMarketplaceDependenciesOn` includes `captain-hook`. A plugin with no `marketplace.json` upward gets a warning, not a failure. |
+| `load` | The pack loads at least one hook with no load errors. Zero hooks fails — a pack that loads nothing ships no working guard. |
+| `async-decision` | No hook registers `async_=True` on a decision-capable event — a background hook's verdict is discarded. Registration also raises on this at runtime. |
+
+Packs may subscribe to `SessionStart`: discovery happens inside every event's
+dispatch, so there is no registration-ordering race to guard against.
+
+## Migrating an attach-era plugin
+
+Releases before 10.0.0 wired plugin packs through a `pack attach` line in the
+plugin's `hooks.json`. That command no longer exists. A plugin still shipping
+the line triggers a non-blocking SessionStart hook warning in Claude Code — the
+failed command is cosmetic, and the pack loads via discovery regardless. Ship a
+cleanup release that deletes the attach line and floors the dependency at
+`>=10.0.0`; `pack lint` confirms the result.
 
 ## See also
 
 - [Use packs](packs.qmd) covers the repo-scoped tier end to end.
-- [How hooks run](how-it-works.qmd) explains discovery and dispatch ordering.
+- [How hooks run](how-it-works.qmd) explains the dispatch pipeline discovered
+  hooks ride.

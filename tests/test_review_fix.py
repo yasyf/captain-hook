@@ -17,7 +17,7 @@ from cc_transcript.mining.candidates import DedupKey, dedup_key
 from cc_transcript.mining.confidence import HIGH, MEDIUM, VERY_HIGH
 
 from captain_hook.decisions import decisions_db_path, open_decision_log
-from captain_hook.packs import manager
+from captain_hook.packs import manager, plugins
 from captain_hook.review.fix import (
     COMPLIANCE_RE,
     HOOK_COMPLAINT,
@@ -84,10 +84,29 @@ def cache_external_pack(
 def write_external_packs_toml(
     root: Path, *, name: str = "notify", source: str = "github:acme/notify-hooks@v1", commit: str = "abc1234"
 ) -> Path:
-    path = manager.packs_toml_path(root)
+    path = manager.config_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f'[packs.{name}]\nsource = "{source}"\ncommit = "{commit}"\n')
     return root
+
+
+def plant_plugin_pack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    root: Path,
+    *,
+    name: str = "notify",
+    plugin_id: str = "acme@notify",
+) -> Path:
+    """Plant a discovered plugin pack for ``root``: a ``[pack]`` dir plus a read-only snapshot naming it."""
+    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
+    plugin_dir = tmp_path / "plugins" / name
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / manager.PACK_MANIFEST).write_text(f'[pack]\nname = "{name}"\ndescription = "d"\nhooks = "."\n')
+    plugins.PluginSnapshot(
+        stat=(), plugins=(plugins.EnabledPlugin(id=plugin_id, version="1.0.0", root=str(plugin_dir)),)
+    ).write(plugins.snapshot_path(root))
+    return plugin_dir
 
 
 @dataclass(frozen=True, slots=True)
@@ -419,6 +438,43 @@ class TestResolveTarget:
             "hooks/alerts.py", "ccx_rel.alerts:hook_deadbeef", RepoKey("github.com/acme/ccx-rel"), "ccx-rel"
         )
 
+    def test_plugin_pack_finding_returns_none(self) -> None:
+        # A discovered plugin pack has no repo target this wave: a misfire attributed to one drops
+        # rather than misfiling its fix against the plugin's absolute install path or `.claude/hooks`.
+        index = PackIndex(builtins=INDEX.builtins, externals={}, plugins=frozenset({"notify"}))
+        source = "/home/u/.claude/plugins/cache/acme/notify/1.0.0/alerts.py"
+        assert resolve_target(make_decision(kind="notify.alerts:hook_deadbeef", source_file=source), index) is None
+
+    def test_repo_hook_sharing_a_plugin_name_stays_local(self) -> None:
+        # A single-segment repo hook (`guard:...`) that merely shares a plugin pack's name is not a
+        # plugin pack (those are always `<pack>.<mod>`), so it keeps its repo-local route.
+        index = PackIndex(builtins=INDEX.builtins, externals={}, plugins=frozenset({"guard"}))
+        source = "/repo/.claude/hooks/guard.py"
+        assert resolve_target(make_decision(kind="guard:warn_deadbeef", source_file=source), index) == Target(
+            source, "guard:warn_deadbeef", None, None
+        )
+
+    def test_bare_named_plugin_pack_hook_drops_by_source_dir(self) -> None:
+        # A bare `@on` name carries no `<pack>.` prefix for the name arm, so the source-dir arm drops it.
+        hooks_dir = "/home/u/.claude/plugins/cache/acme/notify/1.0.0/hooks"
+        index = PackIndex(
+            builtins=INDEX.builtins, externals={}, plugins=frozenset(), plugin_dirs=frozenset({hooks_dir})
+        )
+        assert resolve_target(make_decision(kind="my_bare_hook", source_file=f"{hooks_dir}/alerts.py"), index) is None
+
+    def test_repo_hook_outside_plugin_dirs_stays_local(self) -> None:
+        # The source arm matches only by containment: a repo hook outside every plugin dir stays local.
+        index = PackIndex(
+            builtins=INDEX.builtins,
+            externals={},
+            plugins=frozenset(),
+            plugin_dirs=frozenset({"/home/u/.claude/plugins/cache/acme/notify/1.0.0/hooks"}),
+        )
+        source = "/repo/.claude/hooks/guard.py"
+        assert resolve_target(make_decision(kind="guard:warn_deadbeef", source_file=source), index) == Target(
+            source, "guard:warn_deadbeef", None, None
+        )
+
     @pytest.mark.parametrize(
         ("source_file", "expected"),
         [
@@ -454,6 +510,50 @@ class TestPackIndex:
         monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
         root = write_external_packs_toml(tmp_path / "proj")
         assert PackIndex.load(root).externals == {}
+
+    def test_load_maps_a_discovered_plugin_pack_by_its_module_prefix(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "proj"
+        plant_plugin_pack(tmp_path, monkeypatch, root, name="ccx-rel")
+        assert PackIndex.load(root).plugins == frozenset({"ccx_rel"})
+
+    def test_load_records_plugin_dirs_for_the_source_arm(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The source arm needs each non-shadowed plugin pack's hooks dir; PackIndex.load records them
+        # (hooks="." here, so the pack root is the hooks dir).
+        root = tmp_path / "proj"
+        plugin_dir = plant_plugin_pack(tmp_path, monkeypatch, root, name="notify")
+        assert PackIndex.load(root).plugin_dirs == frozenset({str(plugin_dir)})
+
+    def test_load_reads_the_snapshot_without_a_subprocess(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Discovery must never spawn `claude plugin list` on the scan path; PackIndex.load reads the
+        # snapshot as-is, so stubbing the CLI boundary to explode proves it is never reached.
+        def boom(_root: Path) -> tuple[plugins.EnabledPlugin, ...]:
+            raise AssertionError("PackIndex.load must not run the plugin-list subprocess")
+
+        monkeypatch.setattr(plugins, "list_plugins_cli", boom)
+        root = tmp_path / "proj"
+        plant_plugin_pack(tmp_path, monkeypatch, root)
+        assert PackIndex.load(root).plugins == frozenset({"notify"})
+
+    def test_load_lets_a_declared_entry_shadow_a_discovered_plugin_pack(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "proj"
+        plant_plugin_pack(tmp_path, monkeypatch, root)
+        config = manager.config_path(root)
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("[packs.notify]\ndisabled = true\n")
+        assert PackIndex.load(root).plugins == frozenset()
+
+    def test_load_has_no_plugins_without_a_snapshot(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
+        assert PackIndex.load(tmp_path / "proj").plugins == frozenset()
+
+    def test_load_none_has_no_plugins(self) -> None:
+        assert PackIndex.load(None).plugins == frozenset()
 
 
 class TestNamedHookTarget:

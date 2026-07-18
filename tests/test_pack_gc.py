@@ -21,7 +21,9 @@ def make_loadable_pack(root: Path, name: str, sha: str, mtime: float) -> Path:
     d = root / f"{name}@{sha}"
     d.mkdir(parents=True)
     (d / manager.SHA_MARKER).write_text(sha)
-    (d / manager.PACK_MANIFEST).write_text(f'name = "{name}"\nversion = "0.0.0"\ndescription = "d"\nhooks = "hooks"\n')
+    (d / manager.PACK_MANIFEST).write_text(
+        f'[pack]\nname = "{name}"\nversion = "0.0.0"\ndescription = "d"\nhooks = "hooks"\n'
+    )
     os.utime(d, (mtime, mtime))
     return d
 

@@ -1,3 +1,4 @@
+[pack]
 name = "fixes"
 version = "0.3.0"
 description = "Workarounds for upstream Claude Code issues."

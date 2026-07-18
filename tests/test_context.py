@@ -101,8 +101,8 @@ class TestSessionManagement:
         assert not other.exists()  # every other stale, transcript-less session is still reaped
 
     def test_cleanup_stale_has_production_call_site(self) -> None:
-        # cleanup_stale is worthless without a live call site (pack_attach wires it). Guard against
-        # a refactor that drops the wiring and leaves session dirs accumulating forever.
+        # cleanup_stale is worthless without a live call site (dispatch_event wires it on sync
+        # SessionStart). Guard against a refactor that drops the wiring and leaks session dirs forever.
         import re
 
         import captain_hook
@@ -116,6 +116,53 @@ class TestSessionManagement:
             if call.search(line)
         ]
         assert sites, "cleanup_stale must be called from production code, not only tests"
+
+    def test_dispatch_event_reaps_stale_on_sync_session_start(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A sync SessionStart dispatch is the production reaping point: a stale, transcript-less foreign
+        # session dir is reaped while the current session (passed as session_dir) is excluded.
+        from captain_hook.cli import dispatch_event
+        from captain_hook.types import Event
+
+        monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
+        monkeypatch.setattr("cc_transcript.discovery.resolve", lambda session_id, *, root=None: None)
+
+        current = ensure_session(SessionId(SESSION_ID))
+        foreign = ensure_session(SessionId("99999999-8888-7777-6666-555555555555"))
+        age_dir(current, seconds=STALE_AGE_SECONDS + 60)
+        age_dir(foreign, seconds=STALE_AGE_SECONDS + 60)
+
+        dispatch_event(
+            tmp_path,
+            Event.SessionStart,
+            {"session_id": SESSION_ID, "source": "startup"},
+            session_dir=current,
+            async_=False,
+        )
+        assert current.is_dir()  # the live session is excluded and survives
+        assert not foreign.exists()  # the stale foreign session dir is reaped
+
+    def test_dispatch_event_skips_reaping_on_non_session_start(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from captain_hook.cli import dispatch_event
+        from captain_hook.types import Event
+
+        monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
+        monkeypatch.setattr("cc_transcript.discovery.resolve", lambda session_id, *, root=None: None)
+
+        foreign = ensure_session(SessionId("99999999-8888-7777-6666-555555555555"))
+        age_dir(foreign, seconds=STALE_AGE_SECONDS + 60)
+
+        dispatch_event(
+            tmp_path,
+            Event.PreToolUse,
+            {"session_id": SESSION_ID, "tool_name": "Bash", "tool_input": {"command": "echo hi"}},
+            session_dir=None,
+            async_=False,
+        )
+        assert foreign.is_dir()  # reaping is scoped to sync SessionStart, not every event
 
     def test_atomic_write_produces_valid_json(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)

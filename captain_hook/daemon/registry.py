@@ -2,10 +2,14 @@
 
 Cold dispatch re-runs :meth:`CliState.discover` on every event — the ~50ms the resident daemon
 exists to delete. This module caches the discovered :class:`~captain_hook.app.State` keyed by a
-cheap :class:`Fingerprint` over everything discovery reads: the local hook tree, ``packs.toml``
-and its resolve sidecars, ``.gitignore``, and the session's attached-pack overlay. An unchanged
-tree hits; any edit, add, or removal (or a moving-ref pack past its refresh horizon) misses and
-rebuilds. Snapshots are built under one lock so concurrent requests never race ``sys.modules``.
+cheap :class:`Fingerprint` over everything discovery reads: the local hook tree, ``capt-hook.toml``
+and its resolve sidecars, ``.gitignore``, the stat tuple of the files that shape plugin discovery
+(Claude Code's ``installed_plugins.json`` and the settings stack), and the resolved hook tree of
+every pack discovered on an enabled Claude Code plugin. An unchanged tree hits; any edit, add, or
+removal — a moving-ref pack past its refresh horizon, a plugin enable/disable, or a hook edit inside
+a discovered plugin pack — misses and rebuilds. Snapshots are built under one lock so concurrent
+requests never race ``sys.modules``. The plugin roster is read from the discovery snapshot as-is:
+the fingerprint path never spawns ``claude plugin list`` — only :meth:`CliState.discover` refreshes it.
 """
 
 from __future__ import annotations
@@ -14,12 +18,13 @@ import hashlib
 import os
 import threading
 import time
+import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from captain_hook import app
-from captain_hook.packs import manager
+from captain_hook.packs import manager, plugins
 from captain_hook.util.caching import LRUDict
 
 if TYPE_CHECKING:
@@ -33,7 +38,7 @@ BUILD_RETRIES = 3
 StatEntry = tuple[int, int, int]
 HookEntry = tuple[str, int, int, int]
 MetaEntry = tuple[str, StatEntry | None]
-AttachedTree = tuple[str, tuple[HookEntry, ...]]
+PluginTree = tuple[str, StatEntry | None, tuple[HookEntry, ...]]
 
 
 def _stat_entry(path: Path) -> StatEntry | None:
@@ -47,13 +52,6 @@ def _stat_entry(path: Path) -> StatEntry | None:
 def _read_text(path: Path) -> str:
     try:
         return path.read_text()
-    except FileNotFoundError:
-        return ""
-
-
-def _sha256_file(path: Path) -> str:
-    try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
     except FileNotFoundError:
         return ""
 
@@ -74,13 +72,29 @@ def _hooks_tree(hooks: str) -> tuple[HookEntry, ...]:
     return tuple(sorted(_iter_tree(root, root))) if (root := Path(hooks)).is_dir() else ()
 
 
-def _attached_trees(session_dir: Path) -> tuple[AttachedTree, ...]:
-    # Resolve the attach set the same way discovery does, then digest each pack's resolved hook tree
-    # so editing an attached pack's hook file (not just re-attaching) misses the cache, like cold.
-    return tuple(
-        (pack.entry.name, _hooks_tree(str(pack.path)))
-        for pack in sorted(manager.resolve_attached(session_dir), key=lambda p: p.entry.name)
-    )
+def _claude_stats(root: Path) -> tuple[plugins.StatRecord, ...]:
+    # The stat tuple discovery invalidates its plugin roster on: installed_plugins.json plus the user
+    # and project settings stack. A change here means a plugin was installed, enabled, or disabled,
+    # so discovery re-runs the CLI and rewrites the snapshot — the next fingerprint reads the new roster.
+    return plugins.stat_records(root)
+
+
+def _plugin_trees(root: Path) -> tuple[PluginTree, ...]:
+    # Manifest stat + hook tree, both inside the fail-soft try so a dir vanishing mid-walk skips, never crashes.
+    if (snapshot := plugins.PluginSnapshot.load(plugins.snapshot_path(root))) is None:
+        return ()
+    trees: list[PluginTree] = []
+    for plugin in sorted(snapshot.plugins, key=lambda p: p.id):
+        try:
+            if (probed := plugins.probe_plugin_pack(plugin)) is None:
+                continue
+            probe, manifest = probed
+            trees.append(
+                (plugin.id, _stat_entry(manager.manifest_in(probe)), _hooks_tree(str(manifest.hooks_dir(probe))))
+            )
+        except (manager.PackError, tomllib.TOMLDecodeError, OSError):
+            continue
+    return tuple(trees)
 
 
 def _moving_metas(entries: list[manager.PackEntry]) -> tuple[tuple[MetaEntry, ...], float | None]:
@@ -106,28 +120,31 @@ class Fingerprint:
         return self.horizon is not None and now >= self.horizon
 
     @classmethod
-    def _inputs(cls, cli_state: CliState, session_dir: Path | None) -> tuple[tuple[object, ...], str, float | None]:
-        # ``stable`` excludes the fastpath sidecar (discovery writes it) so it can bracket a discovery.
+    def _inputs(cls, cli_state: CliState) -> tuple[tuple[object, ...], tuple[str, str], float | None]:
+        # ``brackets`` holds the two sidecars discovery itself writes — the resolve fastpath and the
+        # plugin roster snapshot — kept out of ``stable`` so a build can bracket a discovery: folding a
+        # discovery-written file into ``stable`` would make the build's before/after stable digests differ.
         root = cli_state.root
-        pack_meta, horizon = _moving_metas(manager.read_entries(manager.packs_toml_path(root)))
+        pack_meta, horizon = _moving_metas(manager.read_config_entries(root))
         stable = (
             manager.toml_hash(root),
             pack_meta,
             _hooks_tree(cli_state.hooks),
             _stat_entry(root / ".gitignore"),
-            _sha256_file(manager.attached_path(session_dir)) if session_dir is not None else "",
-            _attached_trees(session_dir) if session_dir is not None else (),
+            _claude_stats(root),
+            _plugin_trees(root),
         )
-        return stable, _read_text(manager.fastpath_path(root)), horizon
+        brackets = (_read_text(manager.fastpath_path(root)), _read_text(plugins.snapshot_path(root)))
+        return stable, brackets, horizon
 
     @classmethod
-    def compute(cls, cli_state: CliState, session_dir: Path | None) -> Fingerprint:
-        stable, fastpath, horizon = cls._inputs(cli_state, session_dir)
-        return cls(digest=hashlib.sha256(repr((stable, fastpath)).encode()).hexdigest(), horizon=horizon)
+    def compute(cls, cli_state: CliState) -> Fingerprint:
+        stable, brackets, horizon = cls._inputs(cli_state)
+        return cls(digest=hashlib.sha256(repr((stable, brackets)).encode()).hexdigest(), horizon=horizon)
 
     @classmethod
-    def stable_digest(cls, cli_state: CliState, session_dir: Path | None) -> str:
-        stable, _fastpath, _horizon = cls._inputs(cli_state, session_dir)
+    def stable_digest(cls, cli_state: CliState) -> str:
+        stable, _brackets, _horizon = cls._inputs(cli_state)
         return hashlib.sha256(repr(stable).encode()).hexdigest()
 
 
@@ -136,6 +153,7 @@ class RegistrySnapshot:
     fingerprint: Fingerprint
     state: app.State
     resolved: list[manager.ResolvedPack]
+    discovery_stdout: str = ""
     discovery_stderr: str = ""
     cacheable: bool = True
 
@@ -146,16 +164,16 @@ class Registry:
         self._cache: LRUDict[Fingerprint, RegistrySnapshot] = LRUDict(maxsize)
         self._build_lock = threading.Lock()
 
-    def get(self, session_dir: Path | None) -> RegistrySnapshot:
+    def get(self) -> RegistrySnapshot:
         now = time.time()
-        if (hit := self._lookup(Fingerprint.compute(self._cli_state, session_dir), now)) is not None:
+        if (hit := self._lookup(Fingerprint.compute(self._cli_state), now)) is not None:
             return hit
         with self._build_lock:
             # Re-fingerprint inside the lock: a peer's build may have just written the resolve
             # sidecar, so the pre-lock fingerprint is stale — recomputing lets us hit its work.
-            if (hit := self._lookup(Fingerprint.compute(self._cli_state, session_dir), now)) is not None:
+            if (hit := self._lookup(Fingerprint.compute(self._cli_state), now)) is not None:
                 return hit
-            snapshot = self._build(session_dir)
+            snapshot = self._build()
             if snapshot.cacheable:
                 self._cache[snapshot.fingerprint] = snapshot
             return snapshot
@@ -167,31 +185,32 @@ class Registry:
         hit = self._cache.get(fingerprint)
         return hit if hit is not None and not fingerprint.expired(now) else None
 
-    def _build(self, session_dir: Path | None) -> RegistrySnapshot:
+    def _build(self) -> RegistrySnapshot:
         # Retry a discovery whose stable inputs moved under it (a torn mid-rewrite read); serve the latest.
         for _ in range(BUILD_RETRIES):
-            before = Fingerprint.stable_digest(self._cli_state, session_dir)
-            latest = self._discover_once(session_dir)
-            if Fingerprint.stable_digest(self._cli_state, session_dir) == before:
+            before = Fingerprint.stable_digest(self._cli_state)
+            latest = self._discover_once()
+            if Fingerprint.stable_digest(self._cli_state) == before:
                 return latest
         # Every retry churned: serve the freshest attempt for THIS request but mark it non-cacheable so a
         # possibly-torn snapshot cannot poison the next request.
         return replace(latest, cacheable=False)
 
-    def _discover_once(self, session_dir: Path | None) -> RegistrySnapshot:
+    def _discover_once(self) -> RegistrySnapshot:
         from captain_hook.daemon.context import capture_output
 
         state = app.State()
-        # Capture discovery's diagnostics (e.g. "packs unavailable ...") into the snapshot instead of
-        # letting them land only in the buffer of the request that triggered the build; the server
-        # replays them into every request served from this snapshot, mirroring cold's per-invocation print.
+        # Capture discovery's output on BOTH streams (stderr notices, stdout import-time prints); the
+        # server replays it per request so warm mirrors cold's per-invocation print.
         with capture_output() as captured, app.use_state(state):
-            resolved = self._cli_state.discover(session_dir=session_dir)
-        # Fingerprint after discover: its resolve wrote the fastpath sidecar, so this captures
-        # the post-write inputs the next request will see and stores the snapshot under them.
+            resolved = self._cli_state.discover()
+        # Fingerprint after discover: it wrote the fastpath sidecar (and may have refreshed the plugin
+        # snapshot), so this captures the post-write inputs the next request sees and stores the snapshot
+        # under them.
         return RegistrySnapshot(
-            fingerprint=Fingerprint.compute(self._cli_state, session_dir),
+            fingerprint=Fingerprint.compute(self._cli_state),
             state=state,
             resolved=resolved,
+            discovery_stdout=captured.stdout.getvalue(),
             discovery_stderr=captured.stderr.getvalue(),
         )

@@ -3,15 +3,17 @@
 A hook that lives in the watched repo itself is fixed in place. A hook shipped by a
 pack is fixed in the *pack's* repo, so its PR — and the candidate that produces it —
 routes there instead: a builtin pack maps to captain-hook, and an external GitHub pack
-declared in the project's ``packs.toml`` maps to ``github.com/<owner>/<repo>``. The
-mapping resolves once per scan with no network — an external pack routes only when its
-content is already cached, so a cache miss leaves the misfire repo-local rather than
-guessing a destination.
+declared in the project's ``.claude/capt-hook.toml`` maps to ``github.com/<owner>/<repo>``.
+A pack discovered on an enabled Claude Code plugin has no repo target this wave, so its
+misfires route nowhere and are dropped rather than misfiled. The mapping resolves once per
+scan with no network — an external pack routes only when its content is already cached, so a
+cache miss leaves the misfire repo-local rather than guessing a destination.
 """
 
 from __future__ import annotations
 
 import time
+import tomllib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -49,7 +51,7 @@ class ExternalRoute:
     """A cached external pack's canonical name and home repo.
 
     Attributes:
-        pack_name: The pack's canonical ``packs.toml`` name (hyphens intact).
+        pack_name: The pack's canonical ``capt-hook.toml`` name (hyphens intact).
         repo: The pack's ``github.com/<owner>/<repo>`` home repo key.
     """
 
@@ -62,47 +64,85 @@ class PackIndex:
     """A project's pack-name → home-repo map, resolved once with no network.
 
     Builtin packs map to captain-hook itself (:data:`CAPTAIN_HOOK_REPO`); external
-    packs declared in the project's ``packs.toml`` map to their
+    packs declared in the project's ``.claude/capt-hook.toml`` map to their
     ``github.com/<owner>/<repo>`` key — but only when their content is already cached,
-    so resolution never touches the network. A pack absent from the index routes
-    nowhere, so its misfires stay repo-local.
+    so resolution never touches the network. Packs discovered on the project's enabled
+    Claude Code plugins have no repo target this wave and land in ``plugins``, so a
+    misfire attributed to one is dropped rather than misrouted. A pack absent from the
+    index routes nowhere, so its misfires stay repo-local.
 
     Attributes:
         builtins: The builtin pack names mapped to their on-disk directories.
         externals: Cached external packs keyed by the sanitized runtime module prefix a
             hook loads under (``ccx-rel`` → ``ccx_rel``) — the form a firing decision's
             ``kind`` carries — mapping to the pack's canonical name and home repo key.
+        plugins: The sanitized module prefixes of packs shipped on the project's enabled
+            plugins that no declared ``[packs.*]`` entry shadows — a misfire whose ``kind``
+            prefix is one of these routes to no repo this wave and is dropped.
+        plugin_dirs: The hooks directories of those same non-shadowed plugin packs — the source
+            arm dropping a plugin-pack misfire whose hook fired under a bare ``@on`` function name
+            (no ``<pack>.`` prefix in its ``kind``, so ``plugins`` can't catch it) by its source dir.
     """
 
     builtins: Mapping[str, Path]
     externals: Mapping[str, ExternalRoute]
+    plugins: frozenset[str] = frozenset()
+    plugin_dirs: frozenset[str] = frozenset()
 
     @classmethod
     def load(cls, root: Path | None) -> PackIndex:
         """Builds the index for the project at ``root`` (builtins only when ``root`` is ``None``).
 
-        Reads ``root``'s ``packs.toml`` and resolves every declared external pack to
-        its home repo, dropping any whose content is not cached under a
-        network-free commit — a pinned commit or a within-TTL moving-ref sidecar.
+        Reads ``root``'s ``.claude/capt-hook.toml`` and resolves every declared external pack
+        to its home repo, dropping any whose content is not cached under a network-free commit
+        — a pinned commit or a within-TTL moving-ref sidecar. Discovered plugin packs come from
+        the read-only ``.plugins`` snapshot (no CLI refresh, no subprocess), probed for a
+        ``[pack]`` manifest at each plugin's root then under ``hooks/``, minus any name a
+        declared ``[packs.*]`` entry shadows. A mined repo may be unmigrated or half-installed,
+        so every read here is fail-soft: an unreadable config or plugin dir yields no entries
+        rather than crashing the scan.
         """
+        from captain_hook.packs import plugins as plugin_discovery
         from captain_hook.packs.manager import (
             ExternalPack,
+            PackError,
             builtin_packs,
             cached_commit,
+            config_path,
             find_cached,
             pack_module_name,
-            packs_toml_path,
             read_entries,
         )
 
+        builtins = builtin_packs()
+        if root is None:
+            return cls(builtins=builtins, externals={}, plugins=frozenset())
         now = time.time()
+        try:
+            entries = read_entries(config_path(root))
+        except (PackError, tomllib.TOMLDecodeError, OSError):
+            return cls(builtins=builtins, externals={}, plugins=frozenset())
         externals = {
             pack_module_name(entry.name): ExternalRoute(
                 entry.name, RepoKey(f"github.com/{entry.source.owner}/{entry.source.repo}".lower())
             )
-            for entry in (read_entries(packs_toml_path(root)) if root is not None else [])
+            for entry in entries
             if isinstance(entry, ExternalPack)
             and (sha := cached_commit(entry, now)) is not None
             and find_cached(entry.name, sha) is not None
         }
-        return cls(builtins=builtin_packs(), externals=externals)
+        declared = {pack_module_name(entry.name) for entry in entries}
+        discovered: dict[str, str] = {}
+        snapshot = plugin_discovery.PluginSnapshot.load(plugin_discovery.snapshot_path(root))
+        for plugin in snapshot.plugins if snapshot else ():
+            try:
+                probed = plugin_discovery.probe_plugin_pack(plugin)
+            except (PackError, tomllib.TOMLDecodeError, OSError):
+                continue
+            if probed is not None:
+                probe, manifest = probed
+                discovered[pack_module_name(manifest.name)] = str(manifest.hooks_dir(probe))
+        live = {module: hooks for module, hooks in discovered.items() if module not in declared}
+        return cls(
+            builtins=builtins, externals=externals, plugins=frozenset(live), plugin_dirs=frozenset(live.values())
+        )

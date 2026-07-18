@@ -11,13 +11,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from cc_transcript.ids import SessionId
-from click.testing import CliRunner
 
-from captain_hook.cli import cli
 from captain_hook.packs import bootstrap, manager
-from captain_hook.session import ensure_session
-from tests.helpers import run_cli
 
 CAPTAIN = "yasyf/captain-hook"
 PRESENT = "yasyf/cc-present"
@@ -79,7 +74,7 @@ def make_pack(root: Path, name: str, *, marketplaces: Sequence[str] = ()) -> Pat
     root.mkdir(parents=True, exist_ok=True)
     mkt = f"marketplaces = {json.dumps(list(marketplaces))}\n" if marketplaces else ""
     (root / manager.PACK_MANIFEST).write_text(
-        f'name = "{name}"\nversion = "0.1.0"\ndescription = "d"\nhooks = "."\n{mkt}'
+        f'[pack]\nname = "{name}"\nversion = "0.1.0"\ndescription = "d"\nhooks = "."\n{mkt}'
     )
     (root / "h.py").write_text('from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message="m")\n')
     return root
@@ -165,31 +160,54 @@ def test_non_dict_entry_is_dropped(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert not bootstrap.is_known(CAPTAIN, bootstrap.known_entries())
 
 
-# --- maybe_bootstrap hot path (case a) -----------------------------------------------
+# --- maybe_bootstrap hot path (all required known → hard no-op) -----------------------
 
 
 def test_all_required_known_is_hard_no_op(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    use_config(monkeypatch, seed_config(tmp_path, CAPTAIN, PRESENT))
+    use_config(monkeypatch, seed_config(tmp_path, PRESENT))
     forbid_popen(monkeypatch)
     assert bootstrap.maybe_bootstrap([PRESENT]) is None
-    # zero further I/O — no per-repo attempt marker written
+    assert not bootstrap.marker_path(PRESENT).exists()  # zero further I/O — no attempt marker written
+
+
+def test_empty_union_is_zero_io_no_op(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # No pack declares extras: maybe_bootstrap must not read known_marketplaces.json, touch a marker,
+    # or spawn — the common per-event case costs nothing.
+    use_config(monkeypatch, seed_config(tmp_path))
+    forbid_popen(monkeypatch)
+
+    def boom() -> list[tuple[str, dict[str, object]]]:
+        raise AssertionError("known_marketplaces.json must not be read for an empty union")
+
+    monkeypatch.setattr(bootstrap, "known_entries", boom)
+    assert bootstrap.maybe_bootstrap([]) is None
+    assert not bootstrap.bootstrap_dir().exists()  # no marker dir created
+
+
+# --- maybe_bootstrap miss path -------------------------------------------------------
+
+
+def test_registers_only_given_slugs_no_implicit_captain(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    use_config(monkeypatch, seed_config(tmp_path))  # nothing known
+    claude_present(monkeypatch)
+    calls = capture_popen(monkeypatch)
+    bootstrap.maybe_bootstrap([PRESENT])
+    assert worker_repos(calls[0]) == [PRESENT]  # captain-hook is NOT implied — exactly the given slug
     assert not bootstrap.marker_path(CAPTAIN).exists()
-    assert not bootstrap.marker_path(PRESENT).exists()
 
 
-# --- maybe_bootstrap miss path (case b) ----------------------------------------------
-
-
-def test_two_unknown_repos_spawn_exact_argv_and_mark_each(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_given_slugs_spawn_exact_argv_and_mark_each(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     use_config(monkeypatch, seed_config(tmp_path))  # nothing known
     claude_present(monkeypatch)
     calls = capture_popen(monkeypatch)
 
-    notice = bootstrap.maybe_bootstrap([PRESENT])
+    bootstrap.maybe_bootstrap([CAPTAIN, PRESENT])
 
     assert len(calls) == 1
     call = calls[0]
-    # captain-hook (implicit, first) then the manifest's declared extra, in order, on one worker.
+    # exactly the given slugs, in order, on one worker — no implicit captain-hook prepend
     assert call.argv == [sys.executable, "-I", "-m", "captain_hook", "pack", "bootstrap", CAPTAIN, PRESENT]
     assert call.kwargs["stdin"] == subprocess.DEVNULL
     assert call.kwargs["start_new_session"] is True
@@ -197,30 +215,37 @@ def test_two_unknown_repos_spawn_exact_argv_and_mark_each(monkeypatch: pytest.Mo
     assert call.kwargs["stdout"] is call.kwargs["stderr"]
     assert bootstrap.marker_path(CAPTAIN).is_file()  # per-repo markers, both recorded
     assert bootstrap.marker_path(PRESENT).is_file()
-    assert notice is not None and CAPTAIN in notice and PRESENT in notice  # the notice names both
+    assert capsys.readouterr() == ("", "")  # maybe_bootstrap prints nothing on any stream
 
 
-# --- ordering: per-repo damping (case c) ---------------------------------------------
-
-
-def test_narrow_attach_then_broad_attach_spawns_only_for_new_repo(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_maybe_bootstrap_prints_nothing_on_any_stream(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     use_config(monkeypatch, seed_config(tmp_path))  # nothing known
     claude_present(monkeypatch)
     calls = capture_popen(monkeypatch)
+    bootstrap.maybe_bootstrap([PRESENT])
+    assert worker_repos(calls[0]) == [PRESENT]  # the worker still spawns
+    # A spawn logs one loguru info line, never an event-like stderr notice the warm daemon would replay stale.
+    assert capsys.readouterr() == ("", "")
 
-    first = bootstrap.maybe_bootstrap([])  # only captain-hook required; records its marker, spawns for it
-    assert first is not None
+
+# --- ordering: per-repo damping ------------------------------------------------------
+
+
+def test_narrow_then_broad_spawns_only_for_new_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    use_config(monkeypatch, seed_config(tmp_path))  # nothing known
+    claude_present(monkeypatch)
+    calls = capture_popen(monkeypatch)
+
+    bootstrap.maybe_bootstrap([CAPTAIN])  # records captain-hook's marker, spawns for it
     assert worker_repos(calls[-1]) == [CAPTAIN]
 
-    second = bootstrap.maybe_bootstrap([PRESENT])  # captain-hook damped by its fresh marker; cc-present fresh-absent
-    assert second is not None
-    assert worker_repos(calls[-1]) == [PRESENT]  # only cc-present spawns — the narrow attach did not damp it
-    assert PRESENT in second and CAPTAIN not in second
+    bootstrap.maybe_bootstrap([CAPTAIN, PRESENT])  # captain-hook damped by its fresh marker; cc-present fresh-absent
+    assert worker_repos(calls[-1]) == [PRESENT]  # only cc-present spawns — the narrow run did not damp it
 
 
-# --- per-repo cooldown (case d) ------------------------------------------------------
+# --- per-repo cooldown ---------------------------------------------------------------
 
 
 def test_fresh_cc_present_marker_suppresses_only_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -229,11 +254,10 @@ def test_fresh_cc_present_marker_suppresses_only_it(monkeypatch: pytest.MonkeyPa
     bootstrap.record_attempt(bootstrap.marker_path(PRESENT), time.time())
     calls = capture_popen(monkeypatch)
 
-    notice = bootstrap.maybe_bootstrap([PRESENT])
+    bootstrap.maybe_bootstrap([CAPTAIN, PRESENT])
 
     assert len(calls) == 1
     assert worker_repos(calls[0]) == [CAPTAIN]  # cc-present damped by its fresh marker; captain-hook still spawns
-    assert notice is not None and CAPTAIN in notice and PRESENT not in notice
 
 
 def test_fresh_captain_marker_suppresses_respawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -241,7 +265,7 @@ def test_fresh_captain_marker_suppresses_respawn(monkeypatch: pytest.MonkeyPatch
     claude_present(monkeypatch)
     bootstrap.record_attempt(bootstrap.marker_path(CAPTAIN), time.time())
     forbid_popen(monkeypatch)
-    assert bootstrap.maybe_bootstrap([]) is None  # within the hourly cooldown → no re-spawn
+    assert bootstrap.maybe_bootstrap([CAPTAIN]) is None  # within the hourly cooldown → no re-spawn
 
 
 def test_expired_captain_marker_allows_respawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -249,7 +273,7 @@ def test_expired_captain_marker_allows_respawn(monkeypatch: pytest.MonkeyPatch, 
     claude_present(monkeypatch)
     bootstrap.record_attempt(bootstrap.marker_path(CAPTAIN), time.time() - bootstrap.RETRY_COOLDOWN_SECONDS - 1)
     calls = capture_popen(monkeypatch)
-    assert bootstrap.maybe_bootstrap([]) is not None
+    bootstrap.maybe_bootstrap([CAPTAIN])
     assert len(calls) == 1  # a stale marker re-arms the spawn
 
 
@@ -257,7 +281,7 @@ def test_missing_claude_binary_records_attempt_and_skips_spawn(monkeypatch: pyte
     use_config(monkeypatch, seed_config(tmp_path))
     claude_absent(monkeypatch)
     forbid_popen(monkeypatch)
-    assert bootstrap.maybe_bootstrap([]) is None
+    assert bootstrap.maybe_bootstrap([CAPTAIN]) is None
     assert bootstrap.marker_path(CAPTAIN).is_file()  # attempt recorded so it enters the cooldown, no busy re-check
 
 
@@ -269,7 +293,7 @@ def test_maybe_bootstrap_rechecks_known_under_lock(monkeypatch: pytest.MonkeyPat
     forbid_popen(monkeypatch)
     seen = iter([[], [("captain-hook", {"source": {"source": "github", "repo": CAPTAIN}})]])
     monkeypatch.setattr(bootstrap, "known_entries", lambda: next(seen))
-    assert bootstrap.maybe_bootstrap([]) is None
+    assert bootstrap.maybe_bootstrap([CAPTAIN]) is None
 
 
 def test_marker_with_non_numeric_attempted_at_is_not_fresh(tmp_path: Path) -> None:
@@ -301,7 +325,7 @@ def test_marker_path_is_keyed_on_config_dir(monkeypatch: pytest.MonkeyPatch, tmp
 
 def test_bootstrap_lock_held_returns_none_without_spawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # fix #3: the worker holds the lock across up to K*300s of network calls; a sibling miss-path must
-    # acquire non-blocking and return immediately rather than stall SessionStart to the hook timeout.
+    # acquire non-blocking and return immediately rather than stall dispatch to the hook timeout.
     use_config(monkeypatch, seed_config(tmp_path))  # nothing known → miss path reaches the lock
     claude_present(monkeypatch)
     forbid_popen(monkeypatch)
@@ -309,14 +333,14 @@ def test_bootstrap_lock_held_returns_none_without_spawn(monkeypatch: pytest.Monk
     held = bootstrap.FileLock(str(bootstrap.bootstrap_lock_path()))
     held.acquire()
     try:
-        assert bootstrap.maybe_bootstrap([]) is None  # lock already held → immediate None, no spawn
+        assert bootstrap.maybe_bootstrap([CAPTAIN]) is None  # lock already held → immediate None, no spawn
     finally:
         held.release()
 
 
 def test_hot_path_reads_known_marketplaces_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # fix #5: the all-known hot path reads known_marketplaces.json once, not once per required repo.
-    use_config(monkeypatch, seed_config(tmp_path, CAPTAIN, PRESENT, "yasyf/other"))
+    use_config(monkeypatch, seed_config(tmp_path, PRESENT, "yasyf/other"))
     forbid_popen(monkeypatch)
     reads = 0
     real = bootstrap.known_entries
@@ -328,21 +352,19 @@ def test_hot_path_reads_known_marketplaces_once(monkeypatch: pytest.MonkeyPatch,
 
     monkeypatch.setattr(bootstrap, "known_entries", counting)
     assert bootstrap.maybe_bootstrap([PRESENT, "yasyf/other"]) is None
-    assert reads == 1  # one read on the hot path, not three
+    assert reads == 1  # one read on the hot path, not two
 
 
 def test_duplicate_marketplaces_deduped_in_worker_argv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    # fix #6: a manifest repeating an extra (or naming captain-hook explicitly) must not double the
-    # worker argv or the notice.
+    # fix #6: a manifest repeating an extra must not double the worker argv.
     use_config(monkeypatch, seed_config(tmp_path))  # nothing known
     claude_present(monkeypatch)
     calls = capture_popen(monkeypatch)
-    notice = bootstrap.maybe_bootstrap([CAPTAIN, PRESENT, PRESENT])
+    bootstrap.maybe_bootstrap([CAPTAIN, PRESENT, PRESENT])
     assert worker_repos(calls[0]) == [CAPTAIN, PRESENT]  # order-preserving dedupe, one of each
-    assert notice is not None and notice.count(PRESENT) == 1
 
 
-# --- run_bootstrap worker (case e) ---------------------------------------------------
+# --- run_bootstrap worker ------------------------------------------------------------
 
 
 def test_run_bootstrap_adds_each_repo_no_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -405,7 +427,7 @@ def test_run_bootstrap_skips_unvalidated_argv_repo(monkeypatch: pytest.MonkeyPat
     assert calls == []  # no subprocess call issued for the unvalidated slug
 
 
-# --- manifest field (case f) ---------------------------------------------------------
+# --- manifest field ------------------------------------------------------------------
 
 
 def load_manifest(tmp_path: Path, marketplaces: list[str]) -> manager.PackManifest:
@@ -434,14 +456,14 @@ def load_manifest_raw(tmp_path: Path, marketplaces_toml: str) -> manager.PackMan
     root = tmp_path / "pk"
     root.mkdir(parents=True, exist_ok=True)
     (root / manager.PACK_MANIFEST).write_text(
-        f'name = "pk"\nversion = "0.1.0"\ndescription = "d"\nhooks = "."\nmarketplaces = {marketplaces_toml}\n'
+        f'[pack]\nname = "pk"\nversion = "0.1.0"\ndescription = "d"\nhooks = "."\nmarketplaces = {marketplaces_toml}\n'
     )
     return manager.PackManifest.load(root / manager.PACK_MANIFEST)
 
 
 def test_manifest_non_string_marketplace_entry_raises_packerror(tmp_path: Path) -> None:
     # fix #7: a non-string entry must raise PackError (naming the value), not a bare TypeError out of
-    # MARKETPLACE_REPO_RE.fullmatch — every PackError-shaped attach handler depends on it.
+    # MARKETPLACE_REPO_RE.fullmatch — every PackError-shaped handler depends on it.
     with pytest.raises(manager.PackError, match="must be a string"):
         load_manifest_raw(tmp_path, "[5]")
 
@@ -452,7 +474,7 @@ def test_manifest_non_list_marketplaces_raises_packerror(tmp_path: Path) -> None
         load_manifest_raw(tmp_path, '"oops"')
 
 
-@pytest.mark.parametrize("slug", ["yasyf/café", "a/ŕ"], ids=["accented", "combining"])
+@pytest.mark.parametrize("slug", ["yasyf/café", "a/ŕ"], ids=["accented", "combining"])
 def test_manifest_rejects_non_ascii_slug(tmp_path: Path, slug: str) -> None:
     # fix #10: ASCII-only MARKETPLACE_REPO_RE — a homoglyph/combining-mark slug can't pose as ASCII.
     with pytest.raises(manager.PackError, match="marketplace repo"):
@@ -463,45 +485,12 @@ def test_manifest_accepts_plain_ascii_slug(tmp_path: Path) -> None:
     assert load_manifest(tmp_path, [PRESENT]).marketplaces == (PRESENT,)  # fix #10: ASCII slug still valid
 
 
-# --- attach wiring (case g) ----------------------------------------------------------
-
-
-def test_attach_with_extra_marketplace_spawns_only_for_extra(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    use_config(monkeypatch, seed_config(tmp_path, CAPTAIN))  # captain-hook known; cc-present unknown
-    claude_present(monkeypatch)
-    calls = capture_popen(monkeypatch)
-    pack = make_pack(tmp_path / "ccx", "ccx", marketplaces=[PRESENT])
-
-    result = CliRunner().invoke(cli, ["pack", "attach", str(pack)], input=json.dumps({"session_id": "sess-g"}))
-
-    assert result.exit_code == 0, result.output
-    recorded = manager.read_attached(ensure_session(SessionId("sess-g")))
-    assert [p.name for p in recorded] == ["ccx"]  # the pack still lands
-    assert len(calls) == 1
-    assert worker_repos(calls[0]) == [PRESENT]  # captain-hook is silent (known); the declared extra spawns
-    assert PRESENT in result.output and CAPTAIN not in result.output
-
-
-def test_attach_survives_bootstrap_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    use_config(monkeypatch, seed_config(tmp_path))
-    pack = make_pack(tmp_path / "ccx", "ccx")
-
-    def boom(*args: object, **kwargs: object) -> str | None:
-        raise RuntimeError("bootstrap blew up")
-
-    monkeypatch.setattr(bootstrap, "maybe_bootstrap", boom)
-    result = CliRunner().invoke(cli, ["pack", "attach", str(pack)], input=json.dumps({"session_id": "sess-x"}))
-
-    assert result.exit_code == 0, result.output  # fail-soft: the bootstrap error never breaks the attach
-    assert "capt-hook: registering" not in result.output
-    recorded = manager.read_attached(ensure_session(SessionId("sess-x")))
-    assert [p.name for p in recorded] == ["ccx"]  # the pack still landed
-
-
 # --- end-to-end with a stub claude on PATH -------------------------------------------
 
 
-def test_stub_claude_e2e_records_argv_and_registers_marketplace(tmp_path: Path) -> None:
+def test_stub_claude_e2e_maybe_bootstrap_registers_marketplace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     config = tmp_path / "config"
     (config / "plugins").mkdir(parents=True)
     (config / "plugins" / "known_marketplaces.json").write_text(json.dumps({"other-marketplace": {}}))
@@ -523,16 +512,13 @@ def test_stub_claude_e2e_records_argv_and_registers_marketplace(tmp_path: Path) 
     )
     stub.chmod(0o755)
 
-    pack = make_pack(tmp_path / "ccx", "ccx")
-    env = {
-        "PATH": f"{stub_dir}{os.pathsep}{os.environ['PATH']}",
-        "CLAUDE_CONFIG_DIR": str(config),
-        "ARGV_LOG": str(argv_log),
-    }
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    monkeypatch.setenv("ARGV_LOG", str(argv_log))
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
 
-    first = run_cli("pack", "attach", str(pack), stdin_data=json.dumps({"session_id": "sess-e2e"}), env=env)
-    assert first.returncode == 0, first.stderr
-    assert first.stdout.strip() == bootstrap.bootstrap_notice([CAPTAIN])  # the one deliberate stdout
+    # A discovered pack declaring captain-hook as an extra marketplace: detaches a real worker.
+    bootstrap.maybe_bootstrap([CAPTAIN])
+    assert capsys.readouterr() == ("", "")  # the spawn logs a loguru line, prints nothing on any stream
 
     def registered() -> bool:
         return known.exists() and CAPTAIN in known.read_text()
@@ -546,6 +532,5 @@ def test_stub_claude_e2e_records_argv_and_registers_marketplace(tmp_path: Path) 
     assert "plugin install" not in logged  # the explicit install is dropped
     assert CAPTAIN in known.read_text()  # the worker registered the marketplace
 
-    second = run_cli("pack", "attach", str(pack), stdin_data=json.dumps({"session_id": "sess-e2e-2"}), env=env)
-    assert second.returncode == 0, second.stderr
-    assert second.stdout == ""  # marketplace now known → hard no-op, no notice
+    bootstrap.maybe_bootstrap([CAPTAIN])  # marketplace now known → hard no-op
+    assert capsys.readouterr().err == ""  # no second notice
