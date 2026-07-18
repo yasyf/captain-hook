@@ -8,8 +8,8 @@ raw core transcript events read via :func:`cc_transcript.parser.stream` and
 persists every surviving signal through one ingest codepath into
 :class:`~captain_hook.review.store.ReviewStore`. Each surviving signal captures
 its durable :class:`~cc_transcript.context.ContextWindow` via
-:func:`~cc_transcript.context.capture_window` over the transcript lifted into a
-:class:`~cc_transcript.activity.SessionActivity`. The candidate floors partition
+:func:`~cc_transcript.context.capture_window` over the transcript's raw
+bytes. The candidate floors partition
 by kind: user-correction kinds gate under :data:`STRICT_USER` (event prefilter,
 trigger-absence disqualification, the ``min_confidence`` floor) while
 ``hook_complaint`` gates under the ``STRICT_FIX`` floor (``min_confidence_fix``)

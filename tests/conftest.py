@@ -20,7 +20,7 @@ from captain_hook.util.model_cache import model_sha256, model_version
 from captain_hook.util.proc import _cold_skip_permissions
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import Iterator
 
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
@@ -144,7 +144,7 @@ def isolate_modules():
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> AsyncIterator[ReviewStore]:
+def store(tmp_path: Path) -> Iterator[ReviewStore]:
     from captain_hook.review.store import ReviewStore
 
     with ReviewStore.open(tmp_path / "review.db") as opened:

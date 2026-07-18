@@ -8,8 +8,8 @@ full reparse — always byte-identical to the cold parse,
 which the daemon's transcript parity depends on. ``lift_session`` runs per request (the classifier
 and cwd are request-scoped), so only the parse is shared, never the lifted ``Session``.
 
-cc-transcript exposes a whole-file ``parse_events_from_bytes`` and a per-line ``decode_line`` but no
-resume-from-offset parser, so the tail parse re-parses the appended byte slice. That is equivalent
+cc-transcript exposes a whole-file ``parse_events_from_bytes`` but no resume-from-offset parser, so
+the tail parse re-parses the appended byte slice. That is equivalent
 to the full parse: ``parse_events_from_bytes`` splits on newlines, and the slice is cut on a newline
 boundary, so ``parse(prefix) + parse(suffix) == parse(prefix + suffix)`` exactly.
 """

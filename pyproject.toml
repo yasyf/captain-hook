@@ -72,7 +72,7 @@ Changelog = "https://github.com/yasyf/captain-hook/blob/main/CHANGELOG.md"
 requires = ["hatchling>=1.27", "pygments>=2.19", "ast-grep-py>=0.44,<0.45"]
 build-backend = "hatchling.build"
 
-# cc-transcript v8 (and its tree-sitter deps) ship no Windows wheels, so scope the
+# cc-transcript's native extension ships macOS/Linux abi3 wheels only, so scope the
 # universal lock to the platforms it supports; keeps `uv lock` from resolving an
 # uninstallable win32 split and drops pywinpty/win32-setctime from the lock.
 [tool.uv]
