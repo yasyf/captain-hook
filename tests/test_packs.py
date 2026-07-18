@@ -25,7 +25,7 @@ from captain_hook.types import Event
 from captain_hook.util import http
 
 PACKS_DIR = Path(captain_hook.__file__).parent / "packs"
-EXPECTED_BUILTINS = {"general", "python", "go", "steering", "fixes"}
+EXPECTED_BUILTINS = {"general", "python", "go", "steering", "fixes", "performance"}
 GENERAL_HOOKS = {
     "commands",
     "comments",
@@ -46,6 +46,7 @@ GO_HOOKS = {"testing", "toolchain"}
 # layout test counts .py files, so it appears here, but only steering.py registers hooks.
 STEERING_HOOKS = {"steering", "teammates"}
 FIXES_HOOKS = {"teammate_permissions", "scratch_writes"}
+PERFORMANCE_HOOKS = {"pipelining"}
 HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 SRC_USES_FILE = (
     "from pathlib import Path\n"
@@ -172,8 +173,9 @@ def test_expected_builtin_packs_present() -> None:
         ("go", GO_HOOKS),
         ("steering", STEERING_HOOKS),
         ("fixes", FIXES_HOOKS),
+        ("performance", PERFORMANCE_HOOKS),
     ],
-    ids=["general", "python", "go", "steering", "fixes"],
+    ids=["general", "python", "go", "steering", "fixes", "performance"],
 )
 def test_builtin_pack_layout(name: str, hook_stems: set[str]) -> None:
     pack_dir = manager.builtin_packs()[name]
