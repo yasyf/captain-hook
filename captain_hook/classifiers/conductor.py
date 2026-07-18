@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from cc_transcript.activity import native_user_classifier
+from cc_transcript.filterspec import STRUCTURAL_NOISE_RE
 from cc_transcript.models import UserEvent
 
 if TYPE_CHECKING:
@@ -12,14 +13,7 @@ if TYPE_CHECKING:
 
 
 def classifier(event: UserEvent) -> bool:
-    return native_user_classifier(event) and not event.text.strip().startswith(
-        (
-            "<system_instruction>",
-            "<task-notification>",
-            "<local-command-caveat>",
-            "<command-name>",
-        )
-    )
+    return native_user_classifier(event) and STRUCTURAL_NOISE_RE.search(event.text) is None
 
 
 def detect(

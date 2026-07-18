@@ -52,7 +52,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from cc_transcript.filterspec import tool_uses
+from cc_transcript.filterspec import STOP_HOOK_GROUPS, compile_groups, tool_uses
 from cc_transcript.mining.confidence import MEDIUM, VERY_HIGH, CandidateSignal
 from cc_transcript.mining.signals import MiningSignal
 from cc_transcript.mining.sourcekind import SourceKind
@@ -82,7 +82,7 @@ HOOK_COMPLAINT = SourceKind("hook_complaint")
 
 PROXIMITY_TURNS = 3
 TIGHT_PROXIMITY_TURNS = 1
-STOP_FEEDBACK_PREFIX = "Stop hook feedback:\n"
+STOP_FEEDBACK_RE = compile_groups(STOP_HOOK_GROUPS, True)
 CAPTAIN_HOOK_ROOT = "captain_hook"
 NAMED_HOOK_WINDOW_MS = 1_800_000
 NAMED_HOOK_RE = re.compile(r"\b(?:the\s+)?([a-z][\w-]*(?:[\s-][a-z][\w-]*)?)\s+hooks?\b", re.IGNORECASE)
@@ -175,8 +175,8 @@ def fingerprint_of(event: TranscriptEvent) -> Fingerprint | None:
             detail=HookBlockingError(blocking_error={"blockingError": blocking_error}, hook_event=hook_event)
         ):
             return Fingerprint(message=str(blocking_error), event=str(hook_event or "Stop"))
-        case UserEvent(meta=meta, text=text) if meta.is_meta and text.startswith(STOP_FEEDBACK_PREFIX):
-            return Fingerprint(message=text.removeprefix(STOP_FEEDBACK_PREFIX), event="Stop")
+        case UserEvent(meta=meta, text=text) if meta.is_meta and (marker := STOP_FEEDBACK_RE.match(text)):
+            return Fingerprint(message=text[marker.end() :].removeprefix("\n"), event="Stop")
         case UserEvent(blocks=blocks):
             return next(
                 (
@@ -211,7 +211,7 @@ def attribute_fingerprint(
     fingerprint: Fingerprint,
 ) -> Decision | None:
     if fingerprint.tool_use_id is not None and (block := uses.get(fingerprint.tool_use_id)) is not None:
-        found = decisions.attribute_tool(session_id, tool_digest=block.call.digest, near_ts_ms=near_ts_ms)
+        found = decisions.attribute_tool(session_id, tool_digest=block.digest, near_ts_ms=near_ts_ms)
         return found if found is not None and found.source_file else None
     if fingerprint.event is None:
         return None

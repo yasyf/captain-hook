@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
 from cc_transcript.models import AssistantEvent, ThinkingBlock, ToolUseBlock, UserEvent
+from cc_transcript.tools import TaskCreateCall, TaskUpdateCall, parse_tool_call
 
 from captain_hook.signals.nlp import NlpSignal
 from captain_hook.types import Event, Signal, Signals
@@ -16,8 +17,6 @@ PROSE_TOOLS: dict[str, Callable[[Mapping[str, Any]], list[str]]] = {
     "ReportFindings": lambda inp: [
         " ".join(filter(None, (f.get("summary"), f.get("failure_scenario")))) for f in inp.get("findings", ())
     ],
-    "TaskCreate": lambda inp: [" ".join(filter(None, (inp.get("subject"), inp.get("description"))))],
-    "TaskUpdate": lambda inp: [" ".join(filter(None, (inp.get("subject"), inp.get("description"))))],
     "TodoWrite": lambda inp: [
         " ".join(filter(None, (t.get("content"), t.get("subject")))) for t in inp.get("todos", ())
     ],
@@ -68,8 +67,16 @@ def block_texts(event: UserEvent | AssistantEvent) -> Iterator[str]:
         match block:
             case ThinkingBlock(thinking=thinking):
                 yield thinking
-            case ToolUseBlock(name=name, input=payload) if extract := PROSE_TOOLS.get(name):
-                yield from extract(payload)
+            case ToolUseBlock(name=name, input=payload):
+                match parse_tool_call(name, payload, on_error="other"):
+                    case TaskCreateCall(subject=subject, description=description) | TaskUpdateCall(
+                        subject=subject, description=description
+                    ):
+                        yield " ".join(filter(None, (subject, description)))
+                    case _ if extract := PROSE_TOOLS.get(name):
+                        yield from extract(payload)
+                    case _:
+                        pass
             case _:
                 pass
 

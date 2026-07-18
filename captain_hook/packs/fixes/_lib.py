@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from itertools import dropwhile
 from typing import TYPE_CHECKING
 
-from cc_transcript.command import ASSIGNMENT_RE, WRAPPER_COMMANDS, parse_command_line
+from cc_transcript.command import Command, parse_command_line
+from cc_transcript.tools import mcp_parts
 
 from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition
 from captain_hook.util.shell import normalize_executable
@@ -13,7 +13,7 @@ from captain_hook.util.shell import normalize_executable
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from cc_transcript.command import Command, CommandLine
+    from cc_transcript.command import CommandLine
 
 DANGEROUS_MCP_VERBS = frozenset(
     {
@@ -86,19 +86,17 @@ def command_texts(value: object, depth: int = MAX_SCAN_DEPTH) -> Iterator[str]:
                     yield from command_texts(item, depth - 1)
 
 
-def unwrap_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
-    while argv and normalize_executable(argv[0]) in WRAPPER_COMMANDS:
-        argv = tuple(
-            dropwhile(
-                lambda a: a.startswith("-") or (a.isascii() and a.isdigit()) or ASSIGNMENT_RE.match(a) is not None,
-                argv[1:],
-            )
-        )
-    return argv
+def unwrapped_argv(cmd: Command) -> tuple[str, ...]:
+    """``cmd.unwrapped.argv``, also unwrapping path-qualified or quoted wrapper heads (``/usr/bin/env bash``)."""
+    while True:
+        argv = cmd.unwrapped.argv
+        if not argv or (head := normalize_executable(argv[0])) == argv[0]:
+            return argv
+        cmd = Command(cmd.raw, head, argv[1:])
 
 
 def head_program(cmd: Command) -> str:
-    return normalize_executable(argv[0]) if (argv := unwrap_argv(cmd.argv)) else ""
+    return normalize_executable(argv[0]) if (argv := unwrapped_argv(cmd)) else ""
 
 
 def git_subcommand(args: tuple[str, ...]) -> str | None:
@@ -137,7 +135,7 @@ def nested_command_string(program: str, args: tuple[str, ...]) -> str | None:
 def is_dangerous_command(cmd: Command, depth: int) -> bool:
     if normalize_executable(cmd.executable) == "sudo":
         return True
-    if not (argv := unwrap_argv(cmd.argv)):
+    if not (argv := unwrapped_argv(cmd)):
         return False
     program = normalize_executable(argv[0])
     if program in DESTRUCTIVE_EXECUTABLES or program.startswith("mkfs"):
@@ -188,7 +186,7 @@ class McpTool(CustomCondition):
     """Matches MCP-server tools (``mcp__<server>__<tool>``), which Tool() suffix-matching also accepts."""
 
     def check(self, evt: BaseHookEvent) -> bool:
-        return bool(evt.tool_name) and evt.tool_name.startswith("mcp__")
+        return mcp_parts(evt.tool_name or "") is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,8 +246,8 @@ class DangerousMcpTool(CustomCondition):
     """
 
     def check(self, evt: BaseHookEvent) -> bool:
-        match (evt.tool_name or "").split("__", 2):
-            case ["mcp", _, tool]:
+        match mcp_parts(evt.tool_name or ""):
+            case (_, tool):
                 return not DANGEROUS_MCP_VERBS.isdisjoint(
                     token.lower()
                     for chunk in re.split(r"[^A-Za-z]+", tool)

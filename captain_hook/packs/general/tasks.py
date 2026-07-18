@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from cc_transcript.filterspec import TASK_NOTIFICATION_MARKER
+
 from captain_hook import (
     Allow,
     BaseHookEvent,
@@ -59,7 +61,7 @@ class TaskNotification(CustomCondition):
     """Matches when the prompt is a system-injected background-task report, not free-form user text."""
 
     def check(self, evt: BaseHookEvent) -> bool:
-        return (evt.user_prompt or "").strip().startswith("<task-notification>")
+        return (evt.user_prompt or "").strip().startswith(TASK_NOTIFICATION_MARKER)
 
 
 gate(
