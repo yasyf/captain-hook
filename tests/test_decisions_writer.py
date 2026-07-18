@@ -8,9 +8,10 @@ from unittest.mock import MagicMock
 import pytest
 from cc_transcript.decisions import Decision, DecisionLog
 from cc_transcript.ids import SessionId, tool_digest
+from cc_transcript.tools import FallbackCall
 
 from captain_hook.app import get_matching_hooks
-from captain_hook.decisions import open_decision_log, record_decision
+from captain_hook.decisions import open_decision_log, parse_degraded, record_decision
 from captain_hook.dispatch import execute_hook
 from captain_hook.events import PreToolUseEvent, StopEvent
 from captain_hook.primitives.nudge import nudge
@@ -104,6 +105,11 @@ class TestRecordDecision:
         assert row.detail == detail
         assert row.tool_name == tool
         assert row.tool_digest == tool_digest(tool, tool_input)
+
+    def test_fallback_input_outside_json_contract_is_degraded(self) -> None:
+        evt = pre_tool_evt("Bash", {"command": b"ls"})
+        assert isinstance(evt.input, FallbackCall)
+        assert parse_degraded(evt) is True
 
     def test_spawned_run_does_not_write(self, db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CAPT_HOOK_SPAWNED", "1")

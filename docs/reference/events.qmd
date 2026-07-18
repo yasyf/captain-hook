@@ -59,7 +59,7 @@ classes such as `ReadCall` and `BashCall`. `evt.as_input(call_type)` narrows it:
 
 | Method | Returns |
 |--------|---------|
-| `evt.input` | The parsed `ToolCall`; `OtherCall` for an unrecognized tool |
+| `evt.input` | The parsed `ToolCall`; `OtherCall` for an unrecognized tool, `FallbackCall` for input outside the JSON contract |
 | `evt.as_input(ReadCall)` | `evt.input` typed as `ReadCall`, or `None` when the event is a different tool |
 
 For a non-matching tool `as_input` returns `None` instead of raising, so a hook reads

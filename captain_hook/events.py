@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
     from cc_transcript.command import CommandLine as CommandLineType
     from cc_transcript.ids import ToolDigest
-    from cc_transcript.tools import ToolCall
+    from cc_transcript.tools import FallbackCall, ToolCall
 
     from captain_hook.context import HookContext
     from captain_hook.tasks import Tasks
@@ -234,7 +234,7 @@ class BaseHookEvent:
         return {}
 
     @cached_property
-    def input(self) -> ToolCall:
+    def input(self) -> ToolCall | FallbackCall:
         return parse_tool_call(self.tool_name or "", self._tool_input, on_error="other")
 
     def as_input(self, call_type: type[T]) -> T | None:

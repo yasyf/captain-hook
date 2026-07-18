@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from cc_transcript.decisions import Decision, DecisionLog
-from cc_transcript.tools import OtherCall, ToolInputError, parse_tool_call
+from cc_transcript.tools import FallbackCall, OtherCall, ToolInputError, parse_tool_call
 
 from captain_hook.util import reqenv
 
@@ -31,6 +31,8 @@ def open_decision_log(path: Path | None) -> DecisionLog:
 
 
 def parse_degraded(evt: BaseHookEvent) -> bool:
+    if isinstance(evt.input, FallbackCall):
+        return True
     if not isinstance(evt.input, OtherCall) or not evt.tool_name:
         return False
     try:
