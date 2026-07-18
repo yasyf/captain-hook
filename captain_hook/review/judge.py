@@ -18,11 +18,11 @@ never reach the LLM, and each pass is capped so verdicts amortize per session.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Self, get_args
 
-import anyio.to_thread
 from cc_transcript.context import ContextWindow, HydratedWindow
 from cc_transcript.judge.llm import resolved_model, structured_judge
 from cc_transcript.judge.verdicts import SLUG_PATTERN, JudgeError, canonical_slug, run_verdicts
@@ -131,7 +131,7 @@ def section(window: ContextWindow, label: str, turns: tuple[Turn, ...], budget: 
     return f"=== {label} ===\n" + (HydratedWindow(window=window, turns=turns).render(budget=budget) or "(none)")
 
 
-async def render_context(window: ContextWindow) -> tuple[str, Fidelity]:
+def render_context(window: ContextWindow) -> tuple[str, Fidelity]:
     """Renders a row's window for a prompt, at the best fidelity available.
 
     While the transcript lives, the window hydrates and renders at full fidelity —
@@ -143,7 +143,7 @@ async def render_context(window: ContextWindow) -> tuple[str, Fidelity]:
     Returns:
         The rendered context and the fidelity it was rendered at.
     """
-    if (hydrated := await window.hydrate()) is None:
+    if (hydrated := window.hydrate()) is None:
         return replace(window, fidelity="summary").render_preview(budget=CONTEXT_BUDGET), "summary"
     split = len(window.before)
     end = split + (window.trigger is not None)
@@ -216,7 +216,7 @@ async def build_prompt(row: Mapping[str, object], *, suggestions: Sequence[Sugge
         CREATE otherwise, the latter carrying the suggested slugs) and the
         fidelity its context rendered at.
     """
-    context, fidelity = await render_context(ContextWindow.from_json(str(row["context_json"])))
+    context, fidelity = render_context(ContextWindow.from_json(str(row["context_json"])))
     if str(row["source_kind"]) == HOOK_COMPLAINT:
         return build_fix_prompt(row, context), fidelity
     return build_create_prompt(row, context, suggestions), fidelity
@@ -303,13 +303,13 @@ async def judge_pass(
     from cc_transcript.judge.similar import default_embedder
 
     model = resolved_model(settings.judge_tier)
-    rows = await store.judge_queue(refresh_summary=refresh_summary)
+    rows = store.judge_queue(refresh_summary=refresh_summary)
     worthy = [row for row in rows if judge_worthy(row)]
     dispatch = worthy[: limit if limit is not None else settings.max_judge_calls_per_session]
     fidelities: dict[str, Fidelity] = {}
-    suggesting = await store.has_verdict_evidence()
+    suggesting = store.has_verdict_evidence()
     if suggesting or any(str(row["source_kind"]) != HOOK_COMPLAINT for row in dispatch):
-        await anyio.to_thread.run_sync(default_embedder)
+        await asyncio.to_thread(default_embedder)
     judged, failed = await run_verdicts(
         dispatch,
         prompt_builder(fidelities, store, suggesting=suggesting),
@@ -317,9 +317,9 @@ async def judge_pass(
         persist_verdict(store, model=model, fidelities=fidelities),
         concurrency=settings.judge_concurrency,
     )
-    await store.revive_junk_rejected()
-    merged, retired = await store.regroup_create()
-    reopened = await store.reopen_recurrent_fixes()
+    store.revive_junk_rejected()
+    merged, retired = store.regroup_create()
+    reopened = store.reopen_recurrent_fixes()
     return JudgeReport(
         judged=judged, failed=failed, pending=len(worthy) - judged, merged=merged, retired=retired, reopened=reopened
     )

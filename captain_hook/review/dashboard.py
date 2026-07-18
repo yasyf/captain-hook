@@ -333,13 +333,13 @@ async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadErr
 
     settings = ReviewSettings()
     console = Console()
-    async with await ReviewStore.open(settings.db_path) as store:
-        health = await store.spawn_health()
-        judge = await store.judge_health()
-        unwatched = await store.unwatched_session_repos()
-        watching = await store.watching(repo)
-        views = await store.overview(repo, settings=settings)
-        open_prs = (await store.open_pr_targets(settings=settings)).get(repo, 0)
+    with ReviewStore.open(settings.db_path) as store:
+        health = store.spawn_health()
+        judge = store.judge_health()
+        unwatched = store.unwatched_session_repos()
+        watching = store.watching(repo)
+        views = store.overview(repo, settings=settings)
+        open_prs = store.open_pr_targets(settings=settings).get(repo, 0)
         if not (sync and any(stage_of(v) is Stage.PR_OPEN for v in views)):
             console.print(
                 render(
@@ -371,8 +371,8 @@ async def run_status(repo: RepoKey, *, sync: bool, load_errors: Sequence[LoadErr
             console=console,
         ) as live:
             await sync_open_prs(store, repo, settings=settings)
-            fresh = await store.overview(repo, settings=settings)
-            open_prs = (await store.open_pr_targets(settings=settings)).get(repo, 0)
+            fresh = store.overview(repo, settings=settings)
+            open_prs = store.open_pr_targets(settings=settings).get(repo, 0)
             live.update(
                 render(
                     fresh,

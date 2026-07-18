@@ -222,12 +222,9 @@ def enrolled(cwd: str | None) -> bool:
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
 
-    async def check() -> bool:
-        async with await ReviewStore.open(ReviewSettings().db_path, busy_timeout_ms=0) as store:
-            return await store.enroll(repo)
-
     try:
-        return asyncio.run(check())
+        with ReviewStore.open(ReviewSettings().db_path, busy_timeout_ms=0) as store:
+            return store.enroll(repo)
     except Exception:
         breadcrumb("review gate uncertain: enroll check failed — deferring to the spawned child")
         return True
@@ -470,16 +467,16 @@ def spawn_brain(transcript: Path, *, repo_root: Path, settings: ReviewSettings) 
     )
 
 
-async def pr_open_ids(store: ReviewStore, repo: RepoKey) -> set[int]:
+def pr_open_ids(store: ReviewStore, repo: RepoKey) -> set[int]:
     from captain_hook.review.store import CandidateStatus
 
-    return {int(str(row["id"])) for row in await store.candidates(repo, status=CandidateStatus.PR_OPEN)}
+    return {int(str(row["id"])) for row in store.candidates(repo, status=CandidateStatus.PR_OPEN)}
 
 
-async def watching_ids(store: ReviewStore, repo: RepoKey) -> set[int]:
+def watching_ids(store: ReviewStore, repo: RepoKey) -> set[int]:
     from captain_hook.review.store import CandidateStatus
 
-    return {int(str(row["id"])) for row in await store.candidates(repo, status=CandidateStatus.WATCHING)}
+    return {int(str(row["id"])) for row in store.candidates(repo, status=CandidateStatus.WATCHING)}
 
 
 @contextmanager
@@ -547,8 +544,8 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
 
     if (repo := resolve_repo_key(cwd)) is None:
         return SpawnReport(repo=None, sweep=sweep)
-    async with await ReviewStore.open(settings.db_path) as store:
-        if not await store.enroll(repo):
+    with ReviewStore.open(settings.db_path) as store:
+        if not store.enroll(repo):
             return SpawnReport(repo=repo, sweep=sweep)
         scan_report = await scan(store, settings=settings, transcripts=[transcript.parent])
         triage = await triage_pass(store, settings=settings)
@@ -565,22 +562,20 @@ async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings
     if not sweep:
         with brain_lock(settings) as claimed:
             if claimed:
-                async with await ReviewStore.open(settings.db_path) as store:
+                with ReviewStore.open(settings.db_path) as store:
                     eligible = tuple(
-                        [
-                            candidate_id
-                            for row in await store.candidates(repo, status=CandidateStatus.WATCHING)
-                            if await store.eligible(candidate_id := int(str(row["id"])), settings=settings)
-                        ]
+                        candidate_id
+                        for row in store.candidates(repo, status=CandidateStatus.WATCHING)
+                        if store.eligible(candidate_id := int(str(row["id"])), settings=settings)
                     )
-                    opened_before = await pr_open_ids(store, repo)
+                    opened_before = pr_open_ids(store, repo)
                 if eligible:
                     brain = True
                     outcome = spawn_brain(transcript, repo_root=Path(cwd), settings=settings)
                     brain_exit, brain_seconds = outcome.exit_code, outcome.seconds
-                    async with await ReviewStore.open(settings.db_path) as store:
-                        brain_prs = len(await pr_open_ids(store, repo) - opened_before)
-                        brain_skips = len(set(eligible) & await watching_ids(store, repo))
+                    with ReviewStore.open(settings.db_path) as store:
+                        brain_prs = len(pr_open_ids(store, repo) - opened_before)
+                        brain_skips = len(set(eligible) & watching_ids(store, repo))
             else:
                 logger.bind(repo=repo).info("reviewer brain skipped: another pass holds this repo's lock")
     return SpawnReport(
@@ -622,8 +617,8 @@ async def spawn_session(
     :func:`spawn_brain` (a killed brain records ``brain_exit=-9`` in a healthy
     run). The failure record opens the store with a low ``busy_timeout`` so a
     locked database can't hang the record too. A crash records ``ok=0`` and re-raises, so the traceback
-    still lands in the spawn log; the catch is ``BaseException`` because anyio
-    cancellation shapes are not ``Exception``. When settings construction itself
+    still lands in the spawn log; the catch is ``BaseException`` because
+    ``asyncio.CancelledError`` is not an ``Exception``. When settings construction itself
     is the crash, the row lands at the default db path.
 
     Args:
@@ -649,13 +644,11 @@ async def spawn_session(
             report = await review_session(transcript, cwd=cwd, settings=settings, sweep=sweep)
     except BaseException as exc:
         db_path = settings.db_path if settings else resolve_review_db_path()
-        async with await ReviewStore.open(db_path, busy_timeout_ms=2000) as store:
-            await store.record_spawn_run(
+        with ReviewStore.open(db_path, busy_timeout_ms=2000) as store:
+            store.record_spawn_run(
                 str(transcript), started_at=started, ok=False, error=f"{type(exc).__name__}: {exc}"
             )
         raise
-    async with await ReviewStore.open(settings.db_path) as store:
-        await store.record_spawn_run(
-            str(transcript), started_at=started, ok=True, report_json=json.dumps(asdict(report))
-        )
+    with ReviewStore.open(settings.db_path) as store:
+        store.record_spawn_run(str(transcript), started_at=started, ok=True, report_json=json.dumps(asdict(report)))
     return report

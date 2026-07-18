@@ -117,16 +117,16 @@ async def sync_open_prs(
     cutoff = datetime.now(UTC) - PR_STATE_TTL
 
     async def resolve(url: str) -> PrState | None:
-        cached = await store.pr_state_cache(url)
+        cached = store.pr_state_cache(url)
         if not force_refresh and cached is not None and cached.fetched_at >= cutoff:
             return cached.pr
         if (pr := await asyncio.to_thread(gh_pr_state, url)) is not None:
-            await store.cache_pr_state(url, pr)
+            store.cache_pr_state(url, pr)
             return pr
         return None
 
     counts: Counter[str] = Counter()
-    rows = await store.candidates(repo, status=CandidateStatus.PR_OPEN)
+    rows = store.candidates(repo, status=CandidateStatus.PR_OPEN)
     states = await asyncio.gather(*(resolve(str(row["pr_url"])) for row in rows))
     for row, pr in zip(rows, states, strict=True):
         # The snapshotted url + generation arm transition()'s anti-ABA guard: a result for a PR
@@ -135,7 +135,7 @@ async def sync_open_prs(
         candidate_id, url, generation = int(str(row["id"])), str(row["pr_url"]), int(str(row["generation"]))
         match pr:
             case PrState(state="MERGED", merged_at=merged_at):
-                if await store.transition(
+                if store.transition(
                     candidate_id,
                     CandidateStatus.ACCEPTED,
                     resolved_at=datetime.fromisoformat(merged_at) if merged_at else None,
@@ -149,7 +149,7 @@ async def sync_open_prs(
                 else:
                     counts["kept"] += 1
             case PrState(state="CLOSED"):
-                if await store.transition(
+                if store.transition(
                     candidate_id, CandidateStatus.REJECTED, expected_pr_url=url, expected_generation=generation
                 ):
                     logger.bind(candidate_id=candidate_id, transition="pr_open->rejected", url=url).info(
@@ -159,7 +159,7 @@ async def sync_open_prs(
                 else:
                     counts["kept"] += 1
             case PrState(state="OPEN") if is_stale(str(row["pr_opened_at"]), days=settings.stale_after_days):
-                if await store.transition(
+                if store.transition(
                     candidate_id, CandidateStatus.STALE, expected_pr_url=url, expected_generation=generation
                 ):
                     logger.bind(candidate_id=candidate_id, transition="pr_open->stale", url=url).info(

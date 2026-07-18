@@ -4,7 +4,7 @@ The fact-recognition mechanism lives in :mod:`cc_transcript.mining` (the
 six CREATE-mode user-correction detectors) and
 :mod:`captain_hook.review.fix` (the FIX-mode :func:`~captain_hook.review.fix.iter_hook_complaint_signals`
 detector over assistant turns); this module injects the reviewer's policy over
-raw core transcript events read via :class:`cc_transcript.TranscriptParser` and
+raw core transcript events read via :func:`cc_transcript.parser.stream` and
 persists every surviving signal through one ingest codepath into
 :class:`~captain_hook.review.store.ReviewStore`. Each surviving signal captures
 its durable :class:`~cc_transcript.context.ContextWindow` via
@@ -49,7 +49,7 @@ from cc_transcript.builders import (
     keep_only,
 )
 from cc_transcript.context import capture_window
-from cc_transcript.discovery import TranscriptDiscovery
+from cc_transcript.discovery import find_in
 from cc_transcript.filterspec import (
     RESUME_PHRASE_SET,
     TRIVIAL_ACK_SET,
@@ -67,7 +67,7 @@ from cc_transcript.mining.filterspec import at_least, build_candidate_filter, ke
 from cc_transcript.mining.signals import mine
 from cc_transcript.mining.spec import ALL_DETECTORS, MiningSpec
 from cc_transcript.models import UserEvent
-from cc_transcript.parser import TranscriptParser, parse_events_from_bytes
+from cc_transcript.parser import parse_events_from_bytes, stat_mtime, stream
 
 from captain_hook.decisions import decisions_db_path, open_decision_log
 from captain_hook.review.fix import HOOK_COMPLAINT, iter_hook_complaint_signals
@@ -80,9 +80,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping, Sequence
     from typing import Any
 
-    from cc_transcript.backend import ParsedTranscript
     from cc_transcript.mining.signals import MiningSignal
-    from cc_transcript.models import TranscriptEvent
+    from cc_transcript.models import Transcript, TranscriptEvent
 
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
@@ -115,18 +114,18 @@ JUNK_CREATE_GROUPS: tuple[tuple[str, str], ...] = (
     ("agent_relay", r"\A\s*Another Claude session sent a message:"),
     (
         "agent_stop_notice",
-        r"\A\s*(?:\d+\s+background agents?\s+(?:were|was)\s+stopped by the user|Background agent\s+\")",
+        r'\A\s*(?:\d+\s+background agents?\s+(?:were|was)\s+stopped by the user|Background agent\s+")',
     ),
     (
         "at_path_handoff",
         r"\A\s*@\S*/\S+\.\w+\s+(?:read it\b|read\b|pick(?:ing)? up\b|implement\w*|impl\b|go\s+ah\w*d"
         r"|approv\w*|begin\b|beign\b|bgin\b|continue\b|resume\b|delete\b|do\s+(?:the|it)\b|let'?s\b|proceed\b)"
-        r"[\s.!?]*\Z",
+        r"[\s.!?]*\z",
     ),
     (
         "limits_reset",
         r"\A\s*(?:\w+,?\s+)?(?:session\s+)?limits?\s+"
-        r"(?:have\s+|has\s+|were\s+|been\s+|have\s+been\s+)?reset(?:[,.]?\s+\w+)?\.?\s*\Z",
+        r"(?:have\s+|has\s+|were\s+|been\s+|have\s+been\s+)?reset(?:[,.]?\s+\w+)?\.?\s*\z",
     ),
     (
         "plan_approved_go",
@@ -320,14 +319,14 @@ def payload_of(sig: MiningSignal) -> Mapping[str, Any] | None:
             raise AssertionError(sig.detector)
 
 
-def to_candidate(activity: SessionActivity, sig: MiningSignal) -> FeedbackCandidate:
+def to_candidate(raw: bytes, sig: MiningSignal) -> FeedbackCandidate:
     anchor = EventRef(sig.session_id, sig.event_uuid)
     return FeedbackCandidate(
         dedup_key=dedup_key(*parts(sig)),
         source_kind=sig.kind,
         occurred_at=sig.occurred_at,
         text=sig.text,
-        window=capture_window(activity, anchor),
+        window=capture_window(raw, anchor),
         ref=anchor,
         session_id=sig.session_id,
         cc_version=sig.cc_version,
@@ -350,17 +349,14 @@ def detect(events: Sequence[TranscriptEvent]) -> Iterator[MiningSignal]:
 
 
 def candidates_from(
-    events: Sequence[TranscriptEvent], signals: Iterable[MiningSignal], *, settings: ReviewSettings
+    raw: bytes, events: Sequence[TranscriptEvent], signals: Iterable[MiningSignal], *, settings: ReviewSettings
 ) -> Iterator[tuple[MiningSignal, FeedbackCandidate]]:
     strict_user = build_candidate_filter(at_least(settings.min_confidence))
     strict_fix = build_candidate_filter(at_least(settings.min_confidence_fix))
-    activity: SessionActivity | None = None
     for sig in signals:
         if not survives(events, sig):
             continue
-        if activity is None:
-            activity = SessionActivity.from_events(sig.session_id, events)
-        candidate = to_candidate(activity, sig)
+        candidate = to_candidate(raw, sig)
         if keep_candidate(candidate, strict_fix if sig.kind == HOOK_COMPLAINT else strict_user):
             yield sig, candidate
 
@@ -431,11 +427,11 @@ def collapse_cross_detector(
 
 
 async def ingest(
-    store: ReviewStore, parsed: ParsedTranscript, *, settings: ReviewSettings, repo_key: RepoKey | None
+    store: ReviewStore, parsed: Transcript, *, settings: ReviewSettings, repo_key: RepoKey | None
 ) -> ScanReport:
     repo_key = repo_key or transcript_repo(parsed.events)
     if repo_key is None or is_reviewer_session(parsed.events):
-        await store.record_file_scan(str(parsed.path), parsed.mtime, [])
+        store.record_file_scan(str(parsed.path), parsed.mtime, [])
         return ScanReport(scanned=1, inserted=0)
     signals = chain(
         iter_hook_complaint_signals(
@@ -445,12 +441,13 @@ async def ingest(
         ),
         detect(parsed.events),
     )
-    kept = collapse_cross_detector(list(candidates_from(parsed.events, signals, settings=settings)))
-    inserted = await store.record_file_scan(str(parsed.path), parsed.mtime, [candidate for _, candidate in kept])
+    raw = parsed.path.read_bytes()
+    kept = collapse_cross_detector(list(candidates_from(raw, parsed.events, signals, settings=settings)))
+    inserted = store.record_file_scan(str(parsed.path), parsed.mtime, [candidate for _, candidate in kept])
     for sig, candidate in kept:
-        async with store.store.transaction():
+        with store.store.transaction():
             candidate_id = (
-                await store.ensure_candidate(
+                store.ensure_candidate(
                     RepoKey(target_repo) if (target_repo := sig.evidence["target_repo"]) else repo_key,
                     kind=CandidateKind.FIX,
                     rule=dedup_key(*rule_parts(sig)),
@@ -462,11 +459,11 @@ async def ingest(
                     pack_name=sig.evidence["pack_name"],
                 )
                 if sig.kind == HOOK_COMPLAINT
-                else await store.ensure_candidate(
+                else store.ensure_candidate(
                     repo_key, kind=CandidateKind.CREATE, rule=dedup_key(*rule_parts(sig)), source_kind=sig.kind
                 )
             )
-            await store.record_observation(
+            store.record_observation(
                 candidate_id, dedup_key=candidate.dedup_key, session_id=sig.session_id, occurred_at=sig.occurred_at
             )
     await record_corrections(parsed.events, kept, repo=transcript_cwd(parsed.events))
@@ -496,11 +493,11 @@ async def scan_transcript(
     Returns:
         The :class:`ScanReport` for this pass.
     """
-    known = await store.file_mtimes()
-    mtime = await TranscriptDiscovery.stat_mtime(path)
+    known = store.file_mtimes()
+    mtime = stat_mtime(path)
     if mtime is None or ((prev := known.get(str(path))) is not None and prev >= mtime):
         return ScanReport(scanned=0, inserted=0)
-    async for parsed in TranscriptParser.stream_transcripts([(path, mtime)]):
+    for parsed in stream([path]):
         return await ingest(store, parsed, settings=settings, repo_key=repo_key)
     return ScanReport(scanned=0, inserted=0)
 
@@ -522,18 +519,16 @@ async def scan(store: ReviewStore, *, settings: ReviewSettings, transcripts: Seq
     Returns:
         The combined :class:`ScanReport` for this pass.
     """
-    known = await store.file_mtimes()
-    paths: list[tuple[Path, float]] = []
+    known = store.file_mtimes()
+    paths: list[Path] = []
     for entry in transcripts:
         if entry.is_dir():
-            paths.extend(await TranscriptDiscovery.find_in(entry, known_mtimes=known))
-        elif (mtime := await TranscriptDiscovery.stat_mtime(entry)) is not None and (
-            (prev := known.get(str(entry))) is None or prev < mtime
-        ):
-            paths.append((entry, mtime))
+            paths.extend(path for path, _ in find_in(entry, known_mtimes=known))
+        elif (mtime := stat_mtime(entry)) is not None and ((prev := known.get(str(entry))) is None or prev < mtime):
+            paths.append(entry)
     scanned = 0
     inserted = 0
-    async for parsed in TranscriptParser.stream_transcripts(paths):
+    for parsed in stream(paths):
         report = await ingest(store, parsed, settings=settings, repo_key=None)
         scanned += report.scanned
         inserted += report.inserted

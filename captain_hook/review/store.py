@@ -29,11 +29,11 @@ from captain_hook.review.repo import RepoKey, pr_repo_key
 from captain_hook.review.status import CandidateStatus
 
 if TYPE_CHECKING:
+    import sqlite3
     from collections.abc import Mapping, Sequence
     from pathlib import Path
     from typing import Any
 
-    import aiosqlite
     from cc_transcript.corrections import Correction
     from cc_transcript.ids import SessionId
     from cc_transcript.judge.similar import KeyOverlap
@@ -262,8 +262,8 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
     re-scanning a session is a no-op.
 
     Example:
-        >>> async with await ReviewStore.open(settings.db_path) as store:
-        ...     await store.eligible(candidate_id, settings=settings)
+        >>> with ReviewStore.open(settings.db_path) as store:
+        ...     store.eligible(candidate_id, settings=settings)
     """
 
     def __init__(self, store: FileStateStore, versions: PromptVersions) -> None:
@@ -271,7 +271,7 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
         self.versions = versions
 
     @classmethod
-    async def open(
+    def open(
         cls, path: Path, *, versions: PromptVersions = PROMPT_VERSIONS, busy_timeout_ms: int | None = None
     ) -> Self:
         """Opens the review database at ``path`` under ``versions``, self-healing stale verdicts.
@@ -290,7 +290,7 @@ class ReviewStore(VerdictStoreMixin, FeedbackStore):
                 the normal reviewer path leaves the default.
         """
         store = cls(
-            await FileStateStore.open(
+            FileStateStore.open(
                 path,
                 extra_schema=FEEDBACK_DDL
                 + cls.verdicts_ddl()
@@ -358,13 +358,13 @@ CREATE TABLE IF NOT EXISTS pr_states (
             versions,
         )
         if busy_timeout_ms is not None:
-            await store.store.conn.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
-        await store.migrate_columns("candidates", CANDIDATE_MIGRATIONS)
-        await store.migrate_columns("feedback_events", FEEDBACK_MIGRATIONS)
-        await store.purge_stale_verdicts_if_changed()
+            store.store.conn.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
+        store.migrate_columns("candidates", CANDIDATE_MIGRATIONS)
+        store.migrate_columns("feedback_events", FEEDBACK_MIGRATIONS)
+        store.purge_stale_verdicts_if_changed()
         return store
 
-    async def migrate_columns(self, table: str, migrations: tuple[ColumnMigration, ...]) -> None:
+    def migrate_columns(self, table: str, migrations: tuple[ColumnMigration, ...]) -> None:
         """Adds this version's ``table`` columns to an older database, backfilling each once.
 
         The guarded-ALTER migration, run on :meth:`open` before
@@ -383,45 +383,45 @@ CREATE TABLE IF NOT EXISTS pr_states (
         interrupted migration rolls back its column and backfill together.
         """
 
-        async def pending(conn: aiosqlite.Connection) -> list[ColumnMigration]:
-            cur = await conn.execute(f"PRAGMA table_info({table})")
-            existing = {str(row["name"]) async for row in cur}
+        def pending(conn: sqlite3.Connection) -> list[ColumnMigration]:
+            cur = conn.execute(f"PRAGMA table_info({table})")
+            existing = {str(row["name"]) for row in cur}
             return [migration for migration in migrations if migration.column not in existing]
 
-        if not await pending(self.store.conn):
+        if not pending(self.store.conn):
             return
-        async with self.store.transaction() as conn:
-            for migration in await pending(conn):
-                await conn.execute(f"ALTER TABLE {table} ADD COLUMN {migration.ddl}")
+        with self.store.transaction() as conn:
+            for migration in pending(conn):
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {migration.ddl}")
                 if migration.backfill is not None:
-                    await conn.execute(migration.backfill)
+                    conn.execute(migration.backfill)
 
-    async def enable(self, repo: RepoKey) -> None:
+    def enable(self, repo: RepoKey) -> None:
         """Marks ``repo`` watched, allowing its candidates to become eligible."""
-        await self.store.conn.execute(
+        self.store.conn.execute(
             "INSERT INTO repos (repo_key, watching) VALUES (?, 1) ON CONFLICT(repo_key) DO UPDATE SET watching = 1",
             (repo,),
         )
 
-    async def disable(self, repo: RepoKey) -> None:
+    def disable(self, repo: RepoKey) -> None:
         """Marks ``repo`` unwatched; its candidates stay recorded but never become eligible."""
-        await self.store.conn.execute(
+        self.store.conn.execute(
             "INSERT INTO repos (repo_key, watching) VALUES (?, 0) ON CONFLICT(repo_key) DO UPDATE SET watching = 0",
             (repo,),
         )
 
-    async def enroll(self, repo: RepoKey) -> bool:
-        await self.store.conn.execute(
+    def enroll(self, repo: RepoKey) -> bool:
+        self.store.conn.execute(
             "INSERT INTO repos (repo_key, watching) VALUES (?, 1) ON CONFLICT(repo_key) DO NOTHING", (repo,)
         )
-        return await self.watching(repo)
+        return self.watching(repo)
 
-    async def watching(self, repo: RepoKey) -> bool:
+    def watching(self, repo: RepoKey) -> bool:
         """Returns whether ``repo`` is watched; unknown repos are not."""
-        cur = await self.store.conn.execute("SELECT watching FROM repos WHERE repo_key = ?", (repo,))
-        return bool(rows[0]["watching"]) if (rows := [row async for row in cur]) else False
+        cur = self.store.conn.execute("SELECT watching FROM repos WHERE repo_key = ?", (repo,))
+        return bool(rows[0]["watching"]) if (rows := [row for row in cur]) else False
 
-    async def ensure_candidate(
+    def ensure_candidate(
         self,
         repo: RepoKey,
         *,
@@ -457,7 +457,7 @@ CREATE TABLE IF NOT EXISTS pr_states (
             The candidate's id.
         """
         stamp = now()
-        await self.store.conn.execute(
+        self.store.conn.execute(
             """
 INSERT INTO candidates (
   repo_key, candidate_kind, rule, source_kind, status,
@@ -489,10 +489,10 @@ INSERT INTO candidates (
                     "AND target_hook_name = ? AND target_source_file = ?"
                 )
                 params = (repo, kind, target_hook_name, target_source_file)
-        cur = await self.store.conn.execute(query, params)
-        return int([row["id"] async for row in cur][0])
+        cur = self.store.conn.execute(query, params)
+        return int([row["id"] for row in cur][0])
 
-    async def record_observation(
+    def record_observation(
         self, candidate_id: int, *, dedup_key: DedupKey, session_id: SessionId, occurred_at: datetime
     ) -> None:
         """Links one evidencing feedback event to a candidate, idempotently.
@@ -507,7 +507,7 @@ INSERT INTO candidates (
             session_id: The session the event came from.
             occurred_at: When the feedback was given.
         """
-        await self.store.conn.execute(
+        self.store.conn.execute(
             """
 INSERT INTO candidate_observations (candidate_id, dedup_key, session_id, occurred_at)
 VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
@@ -515,7 +515,7 @@ VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
             (candidate_id, dedup_key, session_id, occurred_at.astimezone(UTC).isoformat()),
         )
 
-    async def untriaged_create_events(self, *, limit: int) -> list[dict[str, object]]:
+    def untriaged_create_events(self, *, limit: int) -> list[dict[str, object]]:
         """Returns un-triaged create feedback events still evidencing a watching create candidate.
 
         The rows one junk-triage pass classifies, oldest first, capped at ``limit``: a
@@ -527,7 +527,7 @@ VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
         is the authority once it has ruled, so a later junk retry must not overturn a
         reparented acceptance.
         """
-        cur = await self.store.conn.execute(
+        cur = self.store.conn.execute(
             f"""
 SELECT e.dedup_key, e.text FROM feedback_events e
 WHERE e.triage IS NULL AND e.source_kind != ?
@@ -543,9 +543,9 @@ ORDER BY e.id LIMIT ?
 """,
             (HOOK_COMPLAINT, CandidateKind.CREATE, CandidateStatus.WATCHING, self.versions.create, limit),
         )
-        return [dict(row) async for row in cur]
+        return [dict(row) for row in cur]
 
-    async def record_triage(self, dedup_key: DedupKey, *, junk: bool) -> bool:
+    def record_triage(self, dedup_key: DedupKey, *, junk: bool) -> bool:
         """Stamps one feedback event's junk-triage verdict, keyed by dedup key.
 
         The single triage-write codepath, a compare-and-set against the still-untriaged
@@ -559,13 +559,13 @@ ORDER BY e.id LIMIT ?
         Returns:
             Whether this call claimed the row; ``False`` when a concurrent pass wrote first.
         """
-        cur = await self.store.conn.execute(
+        cur = self.store.conn.execute(
             "UPDATE feedback_events SET triage = ? WHERE dedup_key = ? AND triage IS NULL",
             (TRIAGE_JUNK if junk else TRIAGE_KEEP, dedup_key),
         )
         return cur.rowcount == 1
 
-    async def reject_junk_triaged(self) -> int:
+    def reject_junk_triaged(self) -> int:
         """Rejects every watching create candidate all of whose evidence junk-triaged.
 
         Run once at the close of a triage pass, mirroring :meth:`regroup_create`'s
@@ -581,10 +581,10 @@ ORDER BY e.id LIMIT ?
         Returns:
             The number of candidates rejected.
         """
-        async with self.store.transaction() as conn:
+        with self.store.transaction() as conn:
             reject = [
                 int(row["id"])
-                async for row in await conn.execute(
+                for row in conn.execute(
                     f"""
 SELECT c.id FROM candidates c
 WHERE c.candidate_kind = ? AND c.status = ?
@@ -603,10 +603,10 @@ WHERE c.candidate_kind = ? AND c.status = ?
                 )
             ]
             for candidate_id in reject:
-                await self.transition(candidate_id, CandidateStatus.REJECTED)
+                self.transition(candidate_id, CandidateStatus.REJECTED)
         return len(reject)
 
-    async def revive_junk_rejected(self) -> int:
+    def revive_junk_rejected(self) -> int:
         """Reinstates a junk-rejected create candidate the judge has since accepted — judge wins.
 
         Closes the triage/judge race: a triage pass can mark a create event junk and
@@ -629,10 +629,10 @@ WHERE c.candidate_kind = ? AND c.status = ?
         Returns:
             The number of candidates reinstated to watching.
         """
-        async with self.store.transaction() as conn:
+        with self.store.transaction() as conn:
             revive = [
                 int(row["id"])
-                async for row in await conn.execute(
+                for row in conn.execute(
                     f"""
 SELECT c.id FROM candidates c
 WHERE c.candidate_kind = 'create' AND c.status = ?
@@ -651,18 +651,18 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
                 )
             ]
             for candidate_id in revive:
-                await conn.execute(
+                conn.execute(
                     "UPDATE candidates SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
                     (CandidateStatus.WATCHING, now(), candidate_id, CandidateStatus.REJECTED),
                 )
         return len(revive)
 
-    async def junk_triaged_keys(self) -> set[str]:
+    def junk_triaged_keys(self) -> set[str]:
         """Returns the dedup keys of every junk-triaged feedback event — the judge queue's skip set."""
-        cur = await self.store.conn.execute("SELECT dedup_key FROM feedback_events WHERE triage = ?", (TRIAGE_JUNK,))
-        return {str(row["dedup_key"]) async for row in cur}
+        cur = self.store.conn.execute("SELECT dedup_key FROM feedback_events WHERE triage = ?", (TRIAGE_JUNK,))
+        return {str(row["dedup_key"]) for row in cur}
 
-    async def candidates(
+    def candidates(
         self, repo: RepoKey | None = None, *, status: CandidateStatus | None = None
     ) -> list[dict[str, object]]:
         """Returns candidate rows, newest first, optionally narrowed by repo and status.
@@ -690,30 +690,30 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
             + (f"WHERE {' AND '.join(clause for clause, _ in filters)}\n" if filters else "")
             + "ORDER BY c.id DESC"
         )
-        cur = await self.store.conn.execute(query, tuple(value for _, values in filters for value in values))
-        return [dict(row) async for row in cur]
+        cur = self.store.conn.execute(query, tuple(value for _, values in filters for value in values))
+        return [dict(row) for row in cur]
 
-    async def candidate(self, candidate_id: int) -> dict[str, object]:
+    def candidate(self, candidate_id: int) -> dict[str, object]:
         """Returns one candidate's row in :meth:`candidates` shape.
 
         Raises:
             LookupError: If no candidate carries ``candidate_id``.
         """
-        cur = await self.store.conn.execute(CANDIDATES_QUERY + "WHERE c.id = ?", (candidate_id,))
-        if not (rows := [dict(row) async for row in cur]):
+        cur = self.store.conn.execute(CANDIDATES_QUERY + "WHERE c.id = ?", (candidate_id,))
+        if not (rows := [dict(row) for row in cur]):
             raise LookupError(f"no candidate with id {candidate_id}")
         return rows[0]
 
-    async def mark_announced(self, candidate_id: int, status: CandidateStatus) -> None:
+    def mark_announced(self, candidate_id: int, status: CandidateStatus) -> None:
         """Stamps a candidate's ``announced_status``, so its PR outcome is surfaced at most once per change.
 
         The single write path for the SessionStart announcer: after a candidate's
         status is announced, its ``announced_status`` catches up to ``status`` and the
         next session start stays silent until the PR outcome changes again.
         """
-        await self.store.conn.execute("UPDATE candidates SET announced_status = ? WHERE id = ?", (status, candidate_id))
+        self.store.conn.execute("UPDATE candidates SET announced_status = ? WHERE id = ?", (status, candidate_id))
 
-    async def transition(
+    def transition(
         self,
         candidate_id: int,
         to: CandidateStatus,
@@ -771,10 +771,10 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
         guarded = expected_generation is not None
         cas_failed = False
         while True:
-            cur = await self.store.conn.execute(
+            cur = self.store.conn.execute(
                 "SELECT status, pr_url, generation FROM candidates WHERE id = ?", (candidate_id,)
             )
-            if not (rows := [dict(row) async for row in cur]):
+            if not (rows := [dict(row) for row in cur]):
                 raise LookupError(f"no candidate with id {candidate_id}")
             current = CandidateStatus(str(rows[0]["status"]))
             if guarded and (rows[0]["pr_url"] != expected_pr_url or int(rows[0]["generation"]) != expected_generation):
@@ -789,7 +789,7 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
                 if to == CandidateStatus.ACCEPTED
                 else None
             )
-            cur = await self.store.conn.execute(
+            cur = self.store.conn.execute(
                 "UPDATE candidates SET status = ?, updated_at = ?, "
                 "pr_url = COALESCE(?, pr_url), pr_opened_at = COALESCE(?, pr_opened_at), "
                 "resolved_at = COALESCE(?, resolved_at) WHERE id = ? AND status = ?"
@@ -809,7 +809,7 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
                 return True
             cas_failed = True
 
-    async def pr_state_cache(self, url: str) -> CachedPrState | None:
+    def pr_state_cache(self, url: str) -> CachedPrState | None:
         """Returns the last-fetched GitHub state for ``url``, with its fetch time — or ``None`` if uncached.
 
         The single read of the ``pr_states`` TTL cache: :func:`sync_open_prs` uses it
@@ -819,10 +819,10 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
         """
         from captain_hook.review.sync import CachedPrState, PrState
 
-        cur = await self.store.conn.execute(
+        cur = self.store.conn.execute(
             "SELECT state, merged_at, fetched_at FROM pr_states WHERE pr_url = ?", (url,)
         )
-        if not (rows := [dict(row) async for row in cur]):
+        if not (rows := [dict(row) for row in cur]):
             return None
         return CachedPrState(
             PrState(
@@ -832,16 +832,16 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
             datetime.fromisoformat(str(rows[0]["fetched_at"])),
         )
 
-    async def cache_pr_state(self, url: str, pr: PrState) -> None:
+    def cache_pr_state(self, url: str, pr: PrState) -> None:
         """Records ``url``'s freshly-fetched GitHub state — the only ``pr_states`` write."""
-        await self.store.conn.execute(
+        self.store.conn.execute(
             "INSERT INTO pr_states (pr_url, state, merged_at, fetched_at) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(pr_url) DO UPDATE SET state = excluded.state, "
             "merged_at = excluded.merged_at, fetched_at = excluded.fetched_at",
             (url, pr.state, pr.merged_at, now()),
         )
 
-    async def regroup_create(self) -> tuple[int, int]:
+    def regroup_create(self) -> tuple[int, int]:
         """Re-parents, retires, and sweeps watching create candidates onto their durable slugs.
 
         The treadmill that turns the scanner's per-session digest candidates into
@@ -870,10 +870,10 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
         from cc_transcript.mining.sourcekind import SourceKind
 
         started = now()
-        async with self.store.transaction() as conn:
+        with self.store.transaction() as conn:
             reparent = [
                 dict(row)
-                async for row in await conn.execute(
+                for row in conn.execute(
                     f"""
 SELECT o.id AS obs_id, o.dedup_key, o.session_id, o.occurred_at, c.repo_key, e.source_kind, v.canonical_key
 FROM candidate_observations o
@@ -888,23 +888,23 @@ ORDER BY o.id
                 )
             ]
             for row in reparent:
-                new_id = await self.ensure_candidate(
+                new_id = self.ensure_candidate(
                     RepoKey(str(row["repo_key"])),
                     kind=CandidateKind.CREATE,
                     rule=str(row["canonical_key"]),
                     source_kind=SourceKind(str(row["source_kind"])),
                 )
-                await self.record_observation(
+                self.record_observation(
                     new_id,
                     dedup_key=DedupKey(str(row["dedup_key"])),
                     session_id=SessionId(str(row["session_id"])),
                     occurred_at=datetime.fromisoformat(str(row["occurred_at"])),
                 )
-                await conn.execute("DELETE FROM candidate_observations WHERE id = ?", (row["obs_id"],))
+                conn.execute("DELETE FROM candidate_observations WHERE id = ?", (row["obs_id"],))
 
             retire = [
                 int(row["id"])
-                async for row in await conn.execute(
+                for row in conn.execute(
                     f"""
 SELECT c.id FROM candidates c
 WHERE c.candidate_kind = 'create' AND c.status = ?
@@ -920,9 +920,9 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
                 )
             ]
             for candidate_id in retire:
-                await self.transition(candidate_id, CandidateStatus.REJECTED)
+                self.transition(candidate_id, CandidateStatus.REJECTED)
 
-            await conn.execute(
+            conn.execute(
                 """
 DELETE FROM candidates
 WHERE candidate_kind = 'create' AND status = ? AND updated_at < ?
@@ -932,7 +932,7 @@ WHERE candidate_kind = 'create' AND status = ? AND updated_at < ?
             )
         return len(reparent), len(retire)
 
-    async def reopen_recurrent_fixes(self) -> int:
+    def reopen_recurrent_fixes(self) -> int:
         """Reopens accepted fix candidates whose merged fix still misfires — the recurrence treadmill.
 
         Run once at the close of each judge pass beside :meth:`regroup_create`. An
@@ -948,10 +948,10 @@ WHERE candidate_kind = 'create' AND status = ? AND updated_at < ?
         Returns:
             The number of fix candidates reopened.
         """
-        async with self.store.transaction() as conn:
+        with self.store.transaction() as conn:
             reopen = [
                 int(row["id"])
-                async for row in await conn.execute(
+                for row in conn.execute(
                     f"""
 SELECT c.id FROM candidates c
 WHERE c.candidate_kind = 'fix' AND c.status = ? AND c.resolved_at IS NOT NULL
@@ -965,19 +965,19 @@ WHERE c.candidate_kind = 'fix' AND c.status = ? AND c.resolved_at IS NOT NULL
                 )
             ]
             for candidate_id in reopen:
-                await self.transition(candidate_id, CandidateStatus.WATCHING)
-                await conn.execute("UPDATE candidates SET generation = generation + 1 WHERE id = ?", (candidate_id,))
+                self.transition(candidate_id, CandidateStatus.WATCHING)
+                conn.execute("UPDATE candidates SET generation = generation + 1 WHERE id = ?", (candidate_id,))
         return len(reopen)
 
-    async def open_pr_targets(self, *, settings: ReviewSettings) -> dict[RepoKey, int]:
+    def open_pr_targets(self, *, settings: ReviewSettings) -> dict[RepoKey, int]:
         cutoff = (datetime.now(UTC) - timedelta(days=settings.stale_after_days)).isoformat()
-        cur = await self.store.conn.execute(
+        cur = self.store.conn.execute(
             "SELECT repo_key, pr_url FROM candidates WHERE status = ? AND pr_opened_at > ?",
             (CandidateStatus.PR_OPEN, cutoff),
         )
         counts: Counter[RepoKey] = Counter()
         seen: set[str] = set()
-        async for row in cur:
+        for row in cur:
             match row["pr_url"]:
                 case None:
                     counts[RepoKey(str(row["repo_key"]))] += 1
@@ -986,7 +986,7 @@ WHERE c.candidate_kind = 'fix' AND c.status = ? AND c.resolved_at IS NOT NULL
                     counts[pr_repo_key(u)] += 1
         return dict(counts)
 
-    async def threshold_status(self, candidate_id: int, *, settings: ReviewSettings) -> ThresholdStatus:
+    def threshold_status(self, candidate_id: int, *, settings: ReviewSettings) -> ThresholdStatus:
         """Returns the judge-accepted evidence counts behind one candidate's eligibility.
 
         An observation counts only when its dedup key's latest judge verdict at
@@ -1008,19 +1008,19 @@ WHERE c.candidate_kind = 'fix' AND c.status = ? AND c.resolved_at IS NOT NULL
             LookupError: If no candidate carries ``candidate_id``.
         """
         conn = self.store.conn
-        cur = await conn.execute(
+        cur = conn.execute(
             "SELECT repo_key, origin_repo_key, candidate_kind, status, generation, resolved_at "
             "FROM candidates WHERE id = ?",
             (candidate_id,),
         )
-        if not (candidates := [dict(row) async for row in cur]):
+        if not (candidates := [dict(row) for row in cur]):
             raise LookupError(f"no candidate with id {candidate_id}")
         repo, kind = RepoKey(str(candidates[0]["repo_key"])), CandidateKind(str(candidates[0]["candidate_kind"]))
         status = CandidateStatus(str(candidates[0]["status"]))
         watching_repo = RepoKey(str(origin)) if (origin := candidates[0]["origin_repo_key"]) else repo
         since = candidates[0]["resolved_at"] if int(candidates[0]["generation"]) > 1 else None
 
-        accepted_cur = await conn.execute(
+        accepted_cur = conn.execute(
             f"""
 SELECT o.session_id, substr(o.occurred_at, 1, 10) AS day, e.payload_json
 FROM candidate_observations o
@@ -1031,21 +1031,21 @@ WHERE o.candidate_id = ? AND v.{self.ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
 """,
             (self.versions.of(kind), candidate_id, settings.min_judge_confidence, since, since),
         )
-        accepted = [dict(row) async for row in accepted_cur]
+        accepted = [dict(row) for row in accepted_cur]
 
         return ThresholdStatus(
             kind=kind,
             status=status,
-            watching=await self.watching(watching_repo),
+            watching=self.watching(watching_repo),
             sessions=len({row["session_id"] for row in accepted}),
             days=len({row["day"] for row in accepted}),
-            open_prs=(await self.open_pr_targets(settings=settings)).get(repo, 0),
+            open_prs=(self.open_pr_targets(settings=settings)).get(repo, 0),
             single_observation=any(
                 signal_confidence(row["payload_json"]) >= settings.min_confidence_fix_single for row in accepted
             ),
         )
 
-    async def eligible(self, candidate_id: int, *, settings: ReviewSettings) -> bool:
+    def eligible(self, candidate_id: int, *, settings: ReviewSettings) -> bool:
         """Returns whether a candidate's judge-accepted evidence crosses its thresholds.
 
         Delegates to :func:`crosses_thresholds` over the candidate's
@@ -1056,9 +1056,9 @@ WHERE o.candidate_id = ? AND v.{self.ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
             candidate_id: The candidate to check.
             settings: The thresholds and judge knobs to check under.
         """
-        return crosses_thresholds(await self.threshold_status(candidate_id, settings=settings), settings=settings)
+        return crosses_thresholds(self.threshold_status(candidate_id, settings=settings), settings=settings)
 
-    async def pr_summary(self, candidate_id: int, *, settings: ReviewSettings) -> str | None:
+    def pr_summary(self, candidate_id: int, *, settings: ReviewSettings) -> str | None:
         """Returns the candidate's most-confident accepted verdict summary — what its PR would do.
 
         Reads the same judge-accepted observations the thresholds count and
@@ -1072,13 +1072,13 @@ WHERE o.candidate_id = ? AND v.{self.ACCEPTED_COLUMN} = 1 AND v.confidence >= ?
         Raises:
             LookupError: If no candidate carries ``candidate_id``.
         """
-        kind_cur = await self.store.conn.execute(
+        kind_cur = self.store.conn.execute(
             "SELECT candidate_kind, generation, resolved_at FROM candidates WHERE id = ?", (candidate_id,)
         )
-        if not (rows := [dict(row) async for row in kind_cur]):
+        if not (rows := [dict(row) for row in kind_cur]):
             raise LookupError(f"no candidate with id {candidate_id}")
         since = rows[0]["resolved_at"] if int(rows[0]["generation"]) > 1 else None
-        cur = await self.store.conn.execute(
+        cur = self.store.conn.execute(
             f"""
 WITH latest AS (
   SELECT v.dedup_key, v.{self.ACCEPTED_COLUMN} AS accepted, v.{self.SUMMARY_COLUMN} AS summary, v.confidence,
@@ -1103,9 +1103,9 @@ LIMIT 1
                 since,
             ),
         )
-        return str(summary_rows[0]["summary"]) if (summary_rows := [dict(row) async for row in cur]) else None
+        return str(summary_rows[0]["summary"]) if (summary_rows := [dict(row) for row in cur]) else None
 
-    async def correction_evidence(self, candidate_id: int) -> tuple[Correction, ...]:
+    def correction_evidence(self, candidate_id: int) -> tuple[Correction, ...]:
         """Returns the shared-ledger code corrections grounding a candidate's observations.
 
         Joins each observation back to its feedback anchor ``(session_id,
@@ -1117,7 +1117,7 @@ LIMIT 1
         from cc_transcript.corrections import CorrectionLog
         from cc_transcript.ids import EventUuid, SessionId
 
-        cur = await self.store.conn.execute(
+        cur = self.store.conn.execute(
             """
 SELECT DISTINCT e.session_id, e.event_uuid
 FROM candidate_observations o
@@ -1130,11 +1130,11 @@ ORDER BY o.id
         log = CorrectionLog.open()
         return tuple(
             correction
-            for row in [dict(row) async for row in cur]
+            for row in [dict(row) for row in cur]
             for correction in log.for_anchor(SessionId(str(row["session_id"])), EventUuid(str(row["event_uuid"])))
         )
 
-    async def threshold_statuses(
+    def threshold_statuses(
         self, rows: Sequence[Mapping[str, object]], *, settings: ReviewSettings
     ) -> dict[int, ThresholdStatus]:
         """Returns the :class:`ThresholdStatus` for every candidate in ``rows`` in a fixed number of queries.
@@ -1151,7 +1151,7 @@ ORDER BY o.id
             return {}
         ids = [int(str(row["id"])) for row in rows]
         placeholders = ",".join("?" * len(ids))
-        accepted_cur = await self.store.conn.execute(
+        accepted_cur = self.store.conn.execute(
             f"""
 SELECT o.candidate_id, o.session_id, substr(o.occurred_at, 1, 10) AS day, e.payload_json
 FROM candidate_observations o
@@ -1165,13 +1165,13 @@ WHERE o.candidate_id IN ({placeholders}) AND v.{self.ACCEPTED_COLUMN} = 1 AND v.
             (CandidateKind.FIX, self.versions.fix, self.versions.create, *ids, settings.min_judge_confidence),
         )
         accepted: dict[int, list[Mapping[str, object]]] = {}
-        async for row in accepted_cur:
+        for row in accepted_cur:
             accepted.setdefault(int(row["candidate_id"]), []).append(dict(row))
 
-        watching_cur = await self.store.conn.execute("SELECT repo_key, watching FROM repos")
-        watching = {str(row["repo_key"]): bool(row["watching"]) async for row in watching_cur}
+        watching_cur = self.store.conn.execute("SELECT repo_key, watching FROM repos")
+        watching = {str(row["repo_key"]): bool(row["watching"]) for row in watching_cur}
 
-        open_prs = await self.open_pr_targets(settings=settings)
+        open_prs = self.open_pr_targets(settings=settings)
 
         def status_for(row: Mapping[str, object]) -> ThresholdStatus:
             obs = accepted.get(int(str(row["id"])), [])
@@ -1190,7 +1190,7 @@ WHERE o.candidate_id IN ({placeholders}) AND v.{self.ACCEPTED_COLUMN} = 1 AND v.
 
         return {int(str(row["id"])): status_for(row) for row in rows}
 
-    async def pr_summaries(self, rows: Sequence[Mapping[str, object]], *, settings: ReviewSettings) -> dict[int, str]:
+    def pr_summaries(self, rows: Sequence[Mapping[str, object]], *, settings: ReviewSettings) -> dict[int, str]:
         """Returns each candidate's highest-confidence accepted verdict summary in one query.
 
         The set-based sibling of :meth:`pr_summary` for :meth:`overview`: candidates
@@ -1201,7 +1201,7 @@ WHERE o.candidate_id IN ({placeholders}) AND v.{self.ACCEPTED_COLUMN} = 1 AND v.
             return {}
         ids = [int(str(row["id"])) for row in rows]
         placeholders = ",".join("?" * len(ids))
-        cur = await self.store.conn.execute(
+        cur = self.store.conn.execute(
             f"""
 WITH latest AS (
   SELECT v.dedup_key, v.prompt_version, v.{self.ACCEPTED_COLUMN} AS accepted,
@@ -1222,9 +1222,9 @@ WHERE o.candidate_id IN ({placeholders}) AND l.accepted = 1 AND l.confidence >= 
 """,
             (CandidateKind.FIX, self.versions.fix, self.versions.create, *ids, settings.min_judge_confidence),
         )
-        return {int(row["candidate_id"]): str(row["summary"]) async for row in cur if int(row["pick"]) == 1}
+        return {int(row["candidate_id"]): str(row["summary"]) for row in cur if int(row["pick"]) == 1}
 
-    async def overview(self, repo: RepoKey | None = None, *, settings: ReviewSettings) -> list[CandidateView]:
+    def overview(self, repo: RepoKey | None = None, *, settings: ReviewSettings) -> list[CandidateView]:
         """Returns a :class:`CandidateView` per candidate — the status dashboard's whole read.
 
         Assembles each view from the batched :meth:`threshold_statuses` and
@@ -1236,9 +1236,9 @@ WHERE o.candidate_id IN ({placeholders}) AND l.accepted = 1 AND l.confidence >= 
             repo: When set, restrict to this repo.
             settings: The thresholds and judge knobs to evaluate under.
         """
-        rows = await self.candidates(repo)
-        statuses = await self.threshold_statuses(rows, settings=settings)
-        summaries = await self.pr_summaries(rows, settings=settings)
+        rows = self.candidates(repo)
+        statuses = self.threshold_statuses(rows, settings=settings)
+        summaries = self.pr_summaries(rows, settings=settings)
         return [
             CandidateView(
                 row=row,
@@ -1249,7 +1249,7 @@ WHERE o.candidate_id IN ({placeholders}) AND l.accepted = 1 AND l.confidence >= 
             for row in rows
         ]
 
-    async def record_spawn_run(
+    def record_spawn_run(
         self,
         transcript: str,
         *,
@@ -1269,7 +1269,7 @@ WHERE o.candidate_id IN ({placeholders}) AND l.accepted = 1 AND l.confidence >= 
             error: The crash's ``TypeName: message`` line (failed runs only).
             report_json: The run's serialized ``SpawnReport`` (clean runs only).
         """
-        await self.store.conn.execute(
+        self.store.conn.execute(
             """
 INSERT INTO spawn_runs (started_at, finished_at, transcript, ok, error, report_json)
 VALUES (?, ?, ?, ?, ?, ?)
@@ -1277,14 +1277,14 @@ VALUES (?, ?, ?, ?, ?, ?)
             (started_at.astimezone(UTC).isoformat(), now(), transcript, int(ok), error, report_json),
         )
 
-    async def spawn_health(self) -> SpawnHealth:
+    def spawn_health(self) -> SpawnHealth:
         """Returns the detached reviewer's run health — the only spawn-health read.
 
         The failing streak is every run after the last clean one, so a single
         success resets both ``consecutive_failures`` and ``failing_since``.
         """
-        last_cur = await self.store.conn.execute("SELECT * FROM spawn_runs ORDER BY id DESC LIMIT 1")
-        streak_cur = await self.store.conn.execute(
+        last_cur = self.store.conn.execute("SELECT * FROM spawn_runs ORDER BY id DESC LIMIT 1")
+        streak_cur = self.store.conn.execute(
             """
 WITH streak AS (
   SELECT id, started_at FROM spawn_runs
@@ -1295,16 +1295,16 @@ SELECT
   (SELECT started_at FROM streak ORDER BY id LIMIT 1) AS failing_since
 """
         )
-        streak = [dict(row) async for row in streak_cur][0]
+        streak = [dict(row) for row in streak_cur][0]
         return SpawnHealth(
-            last=rows[0] if (rows := [dict(row) async for row in last_cur]) else None,
+            last=rows[0] if (rows := [dict(row) for row in last_cur]) else None,
             consecutive_failures=int(streak["consecutive_failures"]),
             failing_since=str(since) if (since := streak["failing_since"]) is not None else None,
         )
 
-    async def unwatched_session_repos(self, *, days: int = 7) -> list[str]:
+    def unwatched_session_repos(self, *, days: int = 7) -> list[str]:
         cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-        cur = await self.store.conn.execute(
+        cur = self.store.conn.execute(
             """
 SELECT DISTINCT json_extract(report_json, '$.repo') AS repo
 FROM spawn_runs
@@ -1314,9 +1314,9 @@ ORDER BY repo
 """,
             (cutoff,),
         )
-        return [str(row["repo"]) async for row in cur]
+        return [str(row["repo"]) for row in cur]
 
-    async def judge_queue(
+    def judge_queue(
         self, *, refresh_summary: bool = False, probe_hydration: bool = True
     ) -> list[dict[str, object]]:
         """Returns the rows one judge pass judges, each under its taxonomy's bound version.
@@ -1334,10 +1334,10 @@ ORDER BY repo
                 it True so a dead-transcript summary row drops, while the display
                 backlog count passes False to skip the per-row transcript rglob.
         """
-        junk = await self.junk_triaged_keys()
+        junk = self.junk_triaged_keys()
         create_lane = [
             row
-            for row in await self.unjudged(
+            for row in self.unjudged(
                 role="judge",
                 prompt_version=self.versions.create,
                 refresh_summary=refresh_summary,
@@ -1347,7 +1347,7 @@ ORDER BY repo
         ]
         fix_lane = [
             row
-            for row in await self.unjudged(
+            for row in self.unjudged(
                 role="judge",
                 prompt_version=self.versions.fix,
                 refresh_summary=refresh_summary,
@@ -1357,7 +1357,7 @@ ORDER BY repo
         ]
         return create_lane + fix_lane
 
-    async def judge_backlog(self) -> int:
+    def judge_backlog(self) -> int:
         """Counts judge-worthy corrections still lacking a verdict at their lane's bound version.
 
         The dashboard's pending count: every :meth:`judge_queue` row (summary-refresh
@@ -1367,9 +1367,9 @@ ORDER BY repo
         rglob a summary-refresh probe would run — the backlog count over-counts a dead
         transcript by at most one row rather than scanning the projects tree per row.
         """
-        return sum(judge_worthy(row) for row in await self.judge_queue(refresh_summary=True, probe_hydration=False))
+        return sum(judge_worthy(row) for row in self.judge_queue(refresh_summary=True, probe_hydration=False))
 
-    async def has_verdict_evidence(self) -> bool:
+    def has_verdict_evidence(self) -> bool:
         """Whether any canonical-key evidence is stored at the create lane's bound version to suggest from.
 
         Gates the judge pass's per-row slug suggestions: with the companion
@@ -1378,17 +1378,17 @@ ORDER BY repo
         FIX verdicts never carry a ``canonical_key``, so the evidence store is
         create-lane-only and this reads the create version.
         """
-        cur = await self.store.conn.execute(
+        cur = self.store.conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'verdict_evidence'"
         )
-        if await cur.fetchone() is None:
+        if cur.fetchone() is None:
             return False
-        cur = await self.store.conn.execute(
+        cur = self.store.conn.execute(
             "SELECT 1 FROM verdict_evidence WHERE prompt_version = ? LIMIT 1", (self.versions.create,)
         )
-        return await cur.fetchone() is not None
+        return cur.fetchone() is not None
 
-    async def slug_splits(self, *, threshold: float = SPLIT_THRESHOLD) -> list[KeyOverlap]:
+    def slug_splits(self, *, threshold: float = SPLIT_THRESHOLD) -> list[KeyOverlap]:
         """Returns canonical-key pairs whose evidence centroids nearly coincide — possible slug splits.
 
         Delegates to :func:`cc_transcript.judge.near_duplicate_keys` over this
@@ -1400,9 +1400,9 @@ ORDER BY repo
         """
         from cc_transcript.judge.similar import near_duplicate_keys
 
-        return await near_duplicate_keys(self, prompt_version=self.versions.create, threshold=threshold)
+        return near_duplicate_keys(self, prompt_version=self.versions.create, threshold=threshold)
 
-    async def purge_stale_verdicts_if_changed(self) -> int:
+    def purge_stale_verdicts_if_changed(self) -> int:
         """Runs :meth:`purge_stale_verdicts` only when the prompt fingerprint moved since the last open.
 
         The gate on the sole purge codepath, run on :meth:`open`: an unchanged
@@ -1417,17 +1417,17 @@ ORDER BY repo
             The number of verdict rows deleted, or ``0`` when the purge was skipped.
         """
         fingerprint = f"{self.versions.create}:{self.versions.fix}"
-        cur = await self.store.conn.execute("SELECT value FROM review_meta WHERE key = ?", (PROMPT_FINGERPRINT_KEY,))
-        if (stored := [str(row["value"]) async for row in cur]) and stored[0] == fingerprint:
+        cur = self.store.conn.execute("SELECT value FROM review_meta WHERE key = ?", (PROMPT_FINGERPRINT_KEY,))
+        if (stored := [str(row["value"]) for row in cur]) and stored[0] == fingerprint:
             return 0
-        purged = await self.purge_stale_verdicts()
-        await self.store.conn.execute(
+        purged = self.purge_stale_verdicts()
+        self.store.conn.execute(
             "INSERT INTO review_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (PROMPT_FINGERPRINT_KEY, fingerprint),
         )
         return purged
 
-    async def purge_stale_verdicts(self) -> int:
+    def purge_stale_verdicts(self) -> int:
         """Deletes verdict and evidence rows recorded at a version their lane no longer runs.
 
         The only verdict-delete codepath, run once on :meth:`open`: an edited
@@ -1449,10 +1449,10 @@ ORDER BY repo
         """
         from cc_transcript.judge.similar import prepare_evidence_removal
 
-        removable = await prepare_evidence_removal(self.store)
-        async with self.store.transaction() as conn:
+        removable = prepare_evidence_removal(self.store)
+        with self.store.transaction() as conn:
             purged = (
-                await conn.execute(
+                conn.execute(
                     f"""
 DELETE FROM {self.VERDICT_TABLE} WHERE id IN (
   SELECT v.id FROM {self.VERDICT_TABLE} v
@@ -1464,15 +1464,15 @@ DELETE FROM {self.VERDICT_TABLE} WHERE id IN (
                 )
             ).rowcount
             if removable:
-                await conn.execute(
+                conn.execute(
                     "DELETE FROM verdict_vectors WHERE vector_id IN "
                     "(SELECT vector_id FROM verdict_evidence WHERE prompt_version != ?)",
                     (self.versions.create,),
                 )
-                await conn.execute("DELETE FROM verdict_evidence WHERE prompt_version != ?", (self.versions.create,))
+                conn.execute("DELETE FROM verdict_evidence WHERE prompt_version != ?", (self.versions.create,))
         return purged
 
-    async def judge_health(self) -> JudgeHealth:
+    def judge_health(self) -> JudgeHealth:
         """Returns the judge lane's dashboard health at each lane's bound version — the only judge-health read.
 
         Bundles the backlog count, the newest live verdict's timestamp across both
@@ -1480,7 +1480,7 @@ DELETE FROM {self.VERDICT_TABLE} WHERE id IN (
         recency — and the slug-split signal so the status dashboard reads them in
         one call.
         """
-        cur = await self.store.conn.execute(
+        cur = self.store.conn.execute(
             f"""
 SELECT MAX(v.judged_at) AS last FROM {self.VERDICT_TABLE} v
 JOIN feedback_events e ON e.dedup_key = v.dedup_key
@@ -1488,9 +1488,9 @@ WHERE v.role = 'judge' AND v.prompt_version = CASE WHEN e.source_kind = ? THEN ?
 """,
             (HOOK_COMPLAINT, self.versions.fix, self.versions.create),
         )
-        last = [row["last"] async for row in cur][0]
+        last = [row["last"] for row in cur][0]
         return JudgeHealth(
-            pending=await self.judge_backlog(),
+            pending=self.judge_backlog(),
             last_verdict_at=str(last) if last is not None else None,
-            splits=tuple(await self.slug_splits()),
+            splits=tuple(self.slug_splits()),
         )

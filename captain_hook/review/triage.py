@@ -98,10 +98,10 @@ async def triage_pass(store: ReviewStore, *, settings: ReviewSettings) -> Triage
     Returns:
         The pass's :class:`TriageReport`.
     """
-    rows = await store.untriaged_create_events(limit=settings.max_triage_calls_per_session)
+    rows = store.untriaged_create_events(limit=settings.max_triage_calls_per_session)
 
     async def persist(row: Mapping[str, object], verdict: TriageVerdict) -> None:
-        await store.record_triage(DedupKey(str(row["dedup_key"])), junk=verdict.junk)
+        store.record_triage(DedupKey(str(row["dedup_key"])), junk=verdict.junk)
 
     triaged, _ = await run_verdicts(
         rows,
@@ -110,5 +110,5 @@ async def triage_pass(store: ReviewStore, *, settings: ReviewSettings) -> Triage
         persist,
         concurrency=settings.judge_concurrency,
     )
-    junk = len({str(row["dedup_key"]) for row in rows} & await store.junk_triaged_keys())
-    return TriageReport(triaged=triaged, junk=junk, rejected=await store.reject_junk_triaged())
+    junk = len({str(row["dedup_key"]) for row in rows} & store.junk_triaged_keys())
+    return TriageReport(triaged=triaged, junk=junk, rejected=store.reject_junk_triaged())

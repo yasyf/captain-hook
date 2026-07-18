@@ -46,7 +46,7 @@ def announcement_line(row: Mapping[str, object], status: CandidateStatus) -> str
             raise ValueError(f"{status} is not an announceable status")
 
 
-async def pending_announcements(store: ReviewStore, repo: RepoKey) -> list[str]:
+def pending_announcements(store: ReviewStore, repo: RepoKey) -> list[str]:
     """Returns one line per candidate whose PR outcome changed since it was last announced, marking each.
 
     Reads the repo's candidates (matched by PR-target or misfire-origin repo), keeps
@@ -66,13 +66,13 @@ async def pending_announcements(store: ReviewStore, repo: RepoKey) -> list[str]:
         repo: The session's repo; a candidate matches on ``repo_key`` or ``origin_repo_key``.
     """
     lines: list[str] = []
-    async with store.store.transaction():
-        for row in await store.candidates(repo):
+    with store.store.transaction():
+        for row in store.candidates(repo):
             status = CandidateStatus(str(row["status"]))
             if status not in ANNOUNCE_STATUSES or row["announced_status"] == status or not row["pr_url"]:
                 continue
             lines.append(announcement_line(row, status))
-            await store.mark_announced(int(str(row["id"])), status)
+            store.mark_announced(int(str(row["id"])), status)
     return lines
 
 
@@ -96,7 +96,6 @@ def collect_announcements(root: Path | None) -> str | None:
     Args:
         root: The session's project root; the repo is resolved from it.
     """
-    import asyncio
     import sqlite3
 
     from captain_hook.review.pipeline import SPAWNED_ENV
@@ -112,14 +111,9 @@ def collect_announcements(root: Path | None) -> str | None:
     if not (db_path := ReviewSettings().db_path).exists():
         return None
 
-    async def go() -> list[str]:
-        async with await ReviewStore.open(db_path, busy_timeout_ms=0) as store:
-            if not await store.watching(repo):
-                return []
-            return await pending_announcements(store, repo)
-
     try:
-        lines = asyncio.run(go())
+        with ReviewStore.open(db_path, busy_timeout_ms=0) as store:
+            lines = pending_announcements(store, repo) if store.watching(repo) else []
     except sqlite3.OperationalError as exc:
         if exc.sqlite_errorcode != sqlite3.SQLITE_BUSY:
             raise

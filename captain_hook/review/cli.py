@@ -2,8 +2,8 @@
 
 ``review run`` is the wired SessionEnd hook and must exit 0 fast on every path,
 so this module imports nothing heavy at load; every command pulls the review
-machinery lazily once it actually runs, and async store calls bridge with
-``asyncio.run`` at the command boundary.
+machinery lazily once it actually runs, and the commands that drive async LLM or
+``gh`` passes bridge with ``asyncio.run`` at the command boundary.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import click
 from captain_hook.review.status import CandidateStatus
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Callable
 
     from cc_transcript.corrections import Correction
     from cc_transcript.judge.similar import KeyOverlap
@@ -50,18 +50,13 @@ def resolve_repo(repo_: str | None, root: Path) -> RepoKey:
     return RepoKey(repo_.lower()) if repo_ else current_repo(root)
 
 
-def run_store[T](fn: Callable[[ReviewStore], Awaitable[T]]) -> T:
-    """Open the review store, run ``fn`` against it, and bridge with ``asyncio.run`` at the command boundary."""
-    import asyncio
-
+def run_store[T](fn: Callable[[ReviewStore], T]) -> T:
+    """Open the review store and run ``fn`` against it — the shared store boundary for every command."""
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
 
-    async def go() -> T:
-        async with await ReviewStore.open(ReviewSettings().db_path) as store:
-            return await fn(store)
-
-    return asyncio.run(go())
+    with ReviewStore.open(ReviewSettings().db_path) as store:
+        return fn(store)
 
 
 def watch_repo(repo: RepoKey) -> None:
@@ -153,13 +148,17 @@ def disable(state: CliState) -> None:
 )
 def scan(transcripts: tuple[Path, ...], dirs: tuple[Path, ...]) -> None:
     """Scan explicit transcripts for corrections, incrementally."""
+    import asyncio
+
     from captain_hook.review.scan import scan as run_scan
     from captain_hook.review.settings import ReviewSettings
 
     if not transcripts and not dirs:
         raise click.UsageError("pass at least one --transcript or --dir")
     settings = ReviewSettings()
-    report: ScanReport = run_store(lambda store: run_scan(store, settings=settings, transcripts=[*transcripts, *dirs]))
+    report: ScanReport = run_store(
+        lambda store: asyncio.run(run_scan(store, settings=settings, transcripts=[*transcripts, *dirs]))
+    )
     click.echo(f"scanned {report.scanned} transcripts, {report.inserted} new corrections")
 
 
@@ -167,6 +166,8 @@ def scan(transcripts: tuple[Path, ...], dirs: tuple[Path, ...]) -> None:
 @click.option("--limit", type=int, default=None, help="Judge at most this many rows (default: the per-session cap)")
 def triage(limit: int | None) -> None:
     """Judge stored corrections lacking a verdict (manual/backfill)."""
+    import asyncio
+
     from captain_hook.review.judge import judge_pass
     from captain_hook.review.settings import ReviewSettings
 
@@ -174,9 +175,9 @@ def triage(limit: int | None) -> None:
 
     async def body(store: ReviewStore) -> tuple[JudgeReport, list[KeyOverlap]]:
         report = await judge_pass(store, settings=settings, limit=limit)
-        return report, await store.slug_splits()
+        return report, store.slug_splits()
 
-    report, splits = run_store(body)
+    report, splits = run_store(lambda store: asyncio.run(body(store)))
     click.echo(
         f"judged {report.judged}, failed {report.failed}, pending {report.pending}, "
         f"merged {report.merged}, retired {report.retired}, reopened {report.reopened}"
@@ -243,14 +244,14 @@ def show(candidate_id: int) -> None:
 
     settings = ReviewSettings()
 
-    async def body(
+    def body(
         store: ReviewStore,
     ) -> tuple[dict[str, object], ThresholdStatus, bool, tuple[Correction, ...]]:
         return (
-            await store.candidate(candidate_id),
-            await store.threshold_status(candidate_id, settings=settings),
-            await store.eligible(candidate_id, settings=settings),
-            await store.correction_evidence(candidate_id),
+            store.candidate(candidate_id),
+            store.threshold_status(candidate_id, settings=settings),
+            store.eligible(candidate_id, settings=settings),
+            store.correction_evidence(candidate_id),
         )
 
     try:
@@ -283,18 +284,18 @@ def threshold_check(state: CliState, candidate_id: int | None, repo_: str | None
 
     settings = ReviewSettings()
 
-    async def body(store: ReviewStore) -> list[str]:
+    def body(store: ReviewStore) -> list[str]:
         ids = (
             [candidate_id]
             if candidate_id is not None
-            else [int(str(row["id"])) for row in await store.candidates(resolve_repo(repo_, state.root))]
+            else [int(str(row["id"])) for row in store.candidates(resolve_repo(repo_, state.root))]
         )
         return [
-            f"#{cid} eligible={await store.eligible(cid, settings=settings)}"
+            f"#{cid} eligible={store.eligible(cid, settings=settings)}"
             f" sessions={status.sessions}/{settings.min_sessions} days={status.days}/{settings.min_days}"
             f" open_prs={status.open_prs}/{settings.max_open_prs} watching={status.watching}"
             for cid in ids
-            if (status := await store.threshold_status(cid, settings=settings))
+            if (status := store.threshold_status(cid, settings=settings))
         ]
 
     try:
@@ -356,12 +357,16 @@ def update(candidate_id: int, status: str, pr_url: str | None) -> None:
 @click.pass_obj
 def sync_prs(state: CliState, repo_: str | None) -> None:
     """Fold open PR states back into candidate statuses."""
+    import asyncio
+
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.sync import sync_open_prs
 
     settings = ReviewSettings()
     repo = resolve_repo(repo_, state.root)
-    report: SyncReport = run_store(lambda store: sync_open_prs(store, repo, settings=settings, force_refresh=True))
+    report: SyncReport = run_store(
+        lambda store: asyncio.run(sync_open_prs(store, repo, settings=settings, force_refresh=True))
+    )
     click.echo(
         f"accepted {report.accepted}, rejected {report.rejected}, "
         f"stale {report.stale}, unreachable {report.unreachable}"
