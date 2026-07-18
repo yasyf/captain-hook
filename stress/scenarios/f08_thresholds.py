@@ -24,7 +24,6 @@ FAMILY = "thresholds"
 TEXT_A = corpus.DURABLE_CORRECTION_LIVE
 TEXT_B = "never push directly to main, open a pull request instead"
 TEXT_C = "always run the linter before committing anything"
-PR_URL = "https://github.com/capt-hook-stress/thresholds/pull/{n}"
 FIX_SESSION = "stress-fix-strong"
 DECISION_TS = "2026-06-01T12:01:00+00:00"
 
@@ -197,7 +196,7 @@ def open_pr_cap(sandbox: Sandbox) -> ScenarioResult:
     inject_all(sandbox, category="tooling_rule")
     cid = candidate_id(sandbox, TEXT_A)
     moved = [
-        review_cli(sandbox, "update", str(candidate_id(sandbox, text)), "pr_open", "--pr-url", PR_URL.format(n=n))
+        review_cli(sandbox, "update", str(candidate_id(sandbox, text)), "pr_open", "--pr-url", sandbox.pr_url(n))
         for n, text in enumerate((TEXT_B, TEXT_C), 1)
     ]
     return ScenarioResult(
@@ -222,10 +221,10 @@ def transitions_enforced(sandbox: Sandbox) -> ScenarioResult:
     scan_transcripts(sandbox, write_session(sandbox, "transitions", session="stress-tr-1", day=1))
     cid = str(candidate_id(sandbox, TEXT_A))
     skip = review_cli(sandbox, "update", cid, "accepted")
-    opened = review_cli(sandbox, "update", cid, "pr_open", "--pr-url", PR_URL.format(n=1))
+    opened = review_cli(sandbox, "update", cid, "pr_open", "--pr-url", sandbox.pr_url(1))
     accepted = review_cli(sandbox, "update", cid, "accepted")
     terminal = review_cli(sandbox, "update", cid, "rejected")
-    unknown = review_cli(sandbox, "update", "9999", "pr_open", "--pr-url", PR_URL.format(n=9))
+    unknown = review_cli(sandbox, "update", "9999", "pr_open", "--pr-url", sandbox.pr_url(9))
     return ScenarioResult(
         (
             check(

@@ -96,7 +96,7 @@ if args[:2] == ["pr", "view"] and "--json" in args:
     if state in (None, "error"):
         print("stub: no such pr", file=sys.stderr)
         sys.exit(1)
-    print(json.dumps({{"state": state}}))
+    print(json.dumps({{"state": state, "mergedAt": None}}))
     sys.exit(0)
 sys.exit(1)
 """

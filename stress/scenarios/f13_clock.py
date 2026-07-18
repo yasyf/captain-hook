@@ -26,7 +26,6 @@ if TYPE_CHECKING:
 FAMILY = "clock"
 TEXT_A = corpus.DURABLE_CORRECTION_LIVE
 TEXT_B = "never push directly to main, open a pull request instead"
-PR_URL = "https://github.com/capt-hook-stress/clock/pull/{n}"
 
 
 def review_cli(sandbox: Sandbox, *args: str, **env_overrides: str) -> CompletedProcess[str]:
@@ -162,7 +161,7 @@ def stale_frees_slot(sandbox: Sandbox) -> ScenarioResult:
         write_correction(sandbox, "slot-watch", session="stress-clk-s2", ts="2026-06-01T13:00:00+00:00", text=TEXT_B),
     )
     cid_pr, cid_watch = candidate_id(sandbox, TEXT_A), candidate_id(sandbox, TEXT_B)
-    review_cli(sandbox, "update", str(cid_pr), "pr_open", "--pr-url", PR_URL.format(n=1))
+    review_cli(sandbox, "update", str(cid_pr), "pr_open", "--pr-url", sandbox.pr_url(1))
     old_stamp = set_pr_opened_at(sandbox, cid_pr, days_ago=31)
     aged = threshold_line(sandbox, cid_watch)
     fresh_stamp = set_pr_opened_at(sandbox, cid_pr, days_ago=29)
@@ -191,7 +190,7 @@ def sync_stale_transition(sandbox: Sandbox) -> ScenarioResult:
         write_correction(sandbox, "sync-new", session="stress-clk-y2", ts="2026-06-01T13:00:00+00:00", text=TEXT_B),
     )
     cid_old, cid_new = candidate_id(sandbox, TEXT_A), candidate_id(sandbox, TEXT_B)
-    urls = {cid_old: PR_URL.format(n=1), cid_new: PR_URL.format(n=2)}
+    urls = {cid_old: sandbox.pr_url(1), cid_new: sandbox.pr_url(2)}
     for cid, url in urls.items():
         review_cli(sandbox, "update", str(cid), "pr_open", "--pr-url", url)
     set_pr_opened_at(sandbox, cid_old, days_ago=31)

@@ -89,6 +89,9 @@ class Sandbox:
     def decisions_db(self) -> Path:
         return self.state_dir / "decisions.db"
 
+    def pr_url(self, n: int) -> str:
+        return f"https://github.com/{ORIGIN_ORG}/{self.root.name}/pull/{n}"
+
     def env(self, **overrides: str) -> dict[str, str]:
         base = {
             key: value for key, value in os.environ.items() if key not in DROPPED_ENV and not key.startswith("HOOKS_")
