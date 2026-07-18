@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -42,29 +41,29 @@ def db_path() -> Path:
     return ReviewSettings().db_path
 
 
-async def repo_watching(repo: RepoKey) -> bool:
-    async with await ReviewStore.open(db_path()) as store:
-        return await store.watching(repo)
+def repo_watching(repo: RepoKey) -> bool:
+    with ReviewStore.open(db_path()) as store:
+        return store.watching(repo)
 
 
-async def candidate_status(candidate_id: int) -> tuple[str, object]:
-    async with await ReviewStore.open(db_path()) as store:
-        row = await store.candidate(candidate_id)
+def candidate_status(candidate_id: int) -> tuple[str, object]:
+    with ReviewStore.open(db_path()) as store:
+        row = store.candidate(candidate_id)
         return str(row["status"]), row["pr_opened_at"]
 
 
-async def seed_pr_open(url: str, *, rule: str = "r", repo: RepoKey = GIT_REPO_KEY) -> int:
-    async with await ReviewStore.open(db_path()) as store:
-        candidate_id = await store.ensure_candidate(
+def seed_pr_open(url: str, *, rule: str = "r", repo: RepoKey = GIT_REPO_KEY) -> int:
+    with ReviewStore.open(db_path()) as store:
+        candidate_id = store.ensure_candidate(
             repo, kind=CandidateKind.CREATE, rule=rule, source_kind=TRANSCRIPT_MESSAGE
         )
-        await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=url, pr_opened_at=datetime.now(UTC))
+        store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=url, pr_opened_at=datetime.now(UTC))
         return candidate_id
 
 
-async def seed_pack_fix() -> int:
-    async with await ReviewStore.open(db_path()) as store:
-        return await store.ensure_candidate(
+def seed_pack_fix() -> int:
+    with ReviewStore.open(db_path()) as store:
+        return store.ensure_candidate(
             RepoKey("github.com/yasyf/captain-hook"),
             kind=CandidateKind.FIX,
             rule="misfire",
@@ -115,7 +114,7 @@ class TestEnableDisable:
         result = invoke("enable", root=git_repo)
         assert result.exit_code == 0, result.output
         assert f"watching {GIT_REPO_KEY}" in result.output
-        assert asyncio.run(repo_watching(GIT_REPO_KEY)) is True
+        assert repo_watching(GIT_REPO_KEY) is True
 
     def test_enable_registers_plugin(self, git_repo: Path) -> None:
         assert invoke("enable", root=git_repo).exit_code == 0
@@ -131,7 +130,7 @@ class TestEnableDisable:
         result = invoke("disable", root=git_repo)
         assert result.exit_code == 0
         assert f"not watching {GIT_REPO_KEY}" in result.output
-        assert asyncio.run(repo_watching(GIT_REPO_KEY)) is False
+        assert repo_watching(GIT_REPO_KEY) is False
 
     def test_enable_outside_a_git_repo_fails(self, tmp_path: Path) -> None:
         result = invoke("enable", root=tmp_path)
@@ -148,7 +147,7 @@ class TestInitEnablesReviewer:
     def test_init_watches_and_installs_for_git_repo(self, git_repo: Path) -> None:
         result = run_cli("init", root_dir=str(git_repo))
         assert result.returncode == 0, result.stderr
-        assert asyncio.run(repo_watching(GIT_REPO_KEY)) is True
+        assert repo_watching(GIT_REPO_KEY) is True
         assert f"watching {GIT_REPO_KEY}" in result.stdout
         settings = json.loads((git_repo / ".claude" / "settings.json").read_text())
         assert settings["enabledPlugins"] == {"captain-hook@captain-hook": True}
@@ -156,7 +155,7 @@ class TestInitEnablesReviewer:
     def test_init_no_review_does_not_watch(self, git_repo: Path) -> None:
         result = run_cli("init", "--no-review", root_dir=str(git_repo))
         assert result.returncode == 0, result.stderr
-        assert asyncio.run(repo_watching(GIT_REPO_KEY)) is False
+        assert repo_watching(GIT_REPO_KEY) is False
         assert "--no-review" in result.stdout
 
     def test_init_outside_git_skips_review(self, tmp_path: Path) -> None:
@@ -195,7 +194,7 @@ class TestScanAndTriage:
 
     @requires_llm_backend
     def test_triage_reports_possible_slug_splits(self, git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        async def fake_splits(store: object, *, prompt_version: int, threshold: float) -> list[KeyOverlap]:
+        def fake_splits(store: object, *, prompt_version: int, threshold: float) -> list[KeyOverlap]:
             return [KeyOverlap("prefer-uv", "use-uv-not-pip", 0.93)]
 
         monkeypatch.setattr("cc_transcript.judge.similar.near_duplicate_keys", fake_splits)
@@ -230,13 +229,13 @@ class TestListShowThreshold:
         assert "no candidate with id 99" in result.output
 
     def test_list_shows_cross_repo_suffix_for_a_pack_fix(self, git_repo: Path) -> None:
-        candidate_id = asyncio.run(seed_pack_fix())
+        candidate_id = seed_pack_fix()
         result = invoke("list", root=git_repo)
         assert result.exit_code == 0, result.output
         assert f"#{candidate_id} [watching] fix/hook_complaint x0 -> github.com/yasyf/captain-hook:" in result.output
 
     def test_show_prints_routing_line_for_a_pack_fix(self, git_repo: Path) -> None:
-        candidate_id = asyncio.run(seed_pack_fix())
+        candidate_id = seed_pack_fix()
         result = invoke("show", str(candidate_id), root=git_repo)
         assert result.exit_code == 0, result.output
         assert "origin_repo_key: github.com/yasyf/scratch" in result.output
@@ -258,7 +257,7 @@ class TestUpdateAndSyncPrs:
         result = invoke("update", "1", "pr_open", "--pr-url", url, root=scanned_repo)
         assert result.exit_code == 0, result.output
         assert "#1 -> pr_open" in result.output
-        status, opened_at = asyncio.run(candidate_status(1))
+        status, opened_at = candidate_status(1)
         assert status == "pr_open"
         assert opened_at is not None
 
@@ -272,39 +271,39 @@ class TestUpdateAndSyncPrs:
         result = invoke("update", "1", "pr_open", "--pr-url", url, root=scanned_repo)
         assert result.exit_code != 0
         assert "not a pull-request URL" in result.output
-        status, _ = asyncio.run(candidate_status(1))
+        status, _ = candidate_status(1)
         assert status == "watching"
 
     def test_sync_prs_folds_gh_state(self, git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         url = "https://github.com/yasyf/scratch/pull/7"
-        candidate_id = asyncio.run(seed_pr_open(url))
+        candidate_id = seed_pr_open(url)
         monkeypatch.setattr(
             "captain_hook.review.sync.gh_pr_state", lambda _url: PrState("MERGED", "2026-07-08T15:06:25Z")
         )
         result = invoke("sync-prs", root=git_repo)
         assert result.exit_code == 0, result.output
         assert "accepted 1, rejected 0, stale 0, unreachable 0" in result.output
-        status, _ = asyncio.run(candidate_status(candidate_id))
+        status, _ = candidate_status(candidate_id)
         assert status == "accepted"
 
 
 class TestSlots:
     def test_free_slots_exit_zero_with_exact_line(self, git_repo: Path) -> None:
-        asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/1"))
+        seed_pr_open(f"https://{GIT_REPO_KEY}/pull/1")
         result = invoke("slots", root=git_repo)
         assert result.exit_code == 0
         assert result.output == f"{GIT_REPO_KEY}: open_prs=1/2 free=1\n"
 
     def test_full_slots_exit_one_with_exact_line(self, git_repo: Path) -> None:
-        asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/1", rule="one"))
-        asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/2", rule="two"))
+        seed_pr_open(f"https://{GIT_REPO_KEY}/pull/1", rule="one")
+        seed_pr_open(f"https://{GIT_REPO_KEY}/pull/2", rule="two")
         result = invoke("slots", "--repo", str(GIT_REPO_KEY), root=git_repo)
         assert result.exit_code == 1
         assert result.output == f"{GIT_REPO_KEY}: open_prs=2/2 free=0\n"
 
     def test_repo_option_normalizes_case(self, git_repo: Path) -> None:
-        asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/1", rule="one"))
-        asyncio.run(seed_pr_open(f"https://{GIT_REPO_KEY}/pull/2", rule="two"))
+        seed_pr_open(f"https://{GIT_REPO_KEY}/pull/1", rule="one")
+        seed_pr_open(f"https://{GIT_REPO_KEY}/pull/2", rule="two")
         result = invoke("slots", "--repo", str(GIT_REPO_KEY).upper(), root=git_repo)
         assert result.exit_code == 1
         assert result.output == f"{GIT_REPO_KEY}: open_prs=2/2 free=0\n"

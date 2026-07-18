@@ -183,9 +183,9 @@ def seed_decision(
     )
 
 
-async def rows(store: ReviewStore, query: str) -> list[dict[str, Any]]:
-    cur = await store.store.conn.execute(query)
-    return [dict(row) async for row in cur]
+def rows(store: ReviewStore, query: str) -> list[dict[str, Any]]:
+    cur = store.store.conn.execute(query)
+    return [dict(row) for row in cur]
 
 
 class TestMarkers:
@@ -696,7 +696,7 @@ class TestStrictFixPartition:
         path = write_transcript(tmp_path / "s.jsonl", self.hedged_entries())
         seed_decision(decisions)
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
-        [event] = await rows(store, "SELECT * FROM feedback_events")
+        [event] = rows(store, "SELECT * FROM feedback_events")
         assert event["source_kind"] == HOOK_COMPLAINT
         assert json.loads(str(event["payload_json"]))["signal"]["confidence"] == MEDIUM
 
@@ -707,8 +707,8 @@ class TestStrictFixPartition:
         path = write_transcript(tmp_path / "s.jsonl", self.hedged_entries())
         seed_decision(decisions)
         assert await scan_transcript(store, path, settings=raised, repo_key=REPO) == ScanReport(scanned=1, inserted=0)
-        assert await rows(store, "SELECT * FROM feedback_events") == []
-        assert await rows(store, "SELECT * FROM candidates") == []
+        assert rows(store, "SELECT * FROM feedback_events") == []
+        assert rows(store, "SELECT * FROM candidates") == []
 
 
 class TestFixGroupingAndStore:
@@ -719,14 +719,14 @@ class TestFixGroupingAndStore:
         seed_fixture_decisions(decisions, MISFIRE_FIXTURE)
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
 
-        [event] = await rows(store, "SELECT * FROM feedback_events")
+        [event] = rows(store, "SELECT * FROM feedback_events")
         assert event["source_kind"] == HOOK_COMPLAINT
         payload = json.loads(str(event["payload_json"]))
         assert payload["target_source_file"] == ".claude/hooks/status_nudge.py"
         assert payload["signal"]["confidence"] == VERY_HIGH
         assert ContextWindow.from_json(str(event["context_json"])).anchor is not None
 
-        [candidate] = await rows(store, "SELECT * FROM candidates")
+        [candidate] = rows(store, "SELECT * FROM candidates")
         assert (candidate["candidate_kind"], candidate["status"]) == ("fix", "watching")
         assert candidate["target_source_file"] == ".claude/hooks/status_nudge.py"
         assert candidate["target_hook_name"] == "status_nudge:nudge_c424798f"
@@ -735,8 +735,8 @@ class TestFixGroupingAndStore:
             "hook_complaint", "status_nudge:nudge_c424798f", ".claude/hooks/status_nudge.py"
         )
 
-        await store.enable(REPO)
-        [observation] = await rows(store, "SELECT * FROM candidate_observations")
+        store.enable(REPO)
+        [observation] = rows(store, "SELECT * FROM candidate_observations")
         await store.record_verdict(
             DedupKey(str(observation["dedup_key"])),
             Verdict(),
@@ -745,9 +745,9 @@ class TestFixGroupingAndStore:
             model="m1",
             fidelity="full",
         )
-        status = await store.threshold_status(int(candidate["id"]), settings=settings)
+        status = store.threshold_status(int(candidate["id"]), settings=settings)
         assert (status.sessions, status.single_observation) == (1, True)
-        assert await store.eligible(int(candidate["id"]), settings=settings)
+        assert store.eligible(int(candidate["id"]), settings=settings)
 
     async def test_two_sessions_complaints_about_one_hook_group_under_one_candidate(
         self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog, tmp_path: Path
@@ -759,13 +759,13 @@ class TestFixGroupingAndStore:
                 scanned=1, inserted=1
             )
 
-        [candidate] = await rows(store, "SELECT * FROM candidates")
+        [candidate] = rows(store, "SELECT * FROM candidates")
         assert candidate["candidate_kind"] == "fix"
-        observations = await rows(store, "SELECT * FROM candidate_observations")
+        observations = rows(store, "SELECT * FROM candidate_observations")
         assert {row["candidate_id"] for row in observations} == {candidate["id"]}
         assert {row["session_id"] for row in observations} == {"s1", "s2"}
 
-        await store.enable(REPO)
+        store.enable(REPO)
         for observation in observations:
             await store.record_verdict(
                 DedupKey(str(observation["dedup_key"])),
@@ -775,9 +775,9 @@ class TestFixGroupingAndStore:
                 model="m1",
                 fidelity="full",
             )
-        status = await store.threshold_status(int(candidate["id"]), settings=settings)
+        status = store.threshold_status(int(candidate["id"]), settings=settings)
         assert status.sessions == 2
-        assert await store.eligible(int(candidate["id"]), settings=settings)
+        assert store.eligible(int(candidate["id"]), settings=settings)
 
 
 class TestPackTargetRouting:
@@ -787,7 +787,7 @@ class TestPackTargetRouting:
         path = write_transcript(tmp_path / "s.jsonl", complaint_entries(STRONG_COMPLAINT))
         seed_decision(decisions, kind="general.docs:nudge_1a2b3c4d")
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
-        [candidate] = await rows(store, "SELECT * FROM candidates")
+        [candidate] = rows(store, "SELECT * FROM candidates")
         assert candidate["repo_key"] == "github.com/yasyf/captain-hook"
         assert candidate["origin_repo_key"] == REPO
         assert candidate["pack_name"] == "general"
@@ -814,7 +814,7 @@ class TestPackTargetRouting:
         path = write_transcript(tmp_path / "s.jsonl", entries)
         seed_decision(decisions, kind=NOTIFY_KIND, source_file=NOTIFY_SOURCE)
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
-        [candidate] = await rows(store, "SELECT * FROM candidates")
+        [candidate] = rows(store, "SELECT * FROM candidates")
         assert candidate["repo_key"] == NOTIFY_REPO
         assert candidate["origin_repo_key"] == REPO
         assert candidate["pack_name"] == "notify"
@@ -827,7 +827,7 @@ class TestPackTargetRouting:
         path = write_transcript(tmp_path / "s.jsonl", complaint_entries(STRONG_COMPLAINT))
         seed_decision(decisions)
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
-        [candidate] = await rows(store, "SELECT * FROM candidates")
+        [candidate] = rows(store, "SELECT * FROM candidates")
         assert candidate["repo_key"] == REPO
         assert candidate["origin_repo_key"] is None
         assert candidate["pack_name"] is None

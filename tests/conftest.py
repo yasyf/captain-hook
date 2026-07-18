@@ -144,10 +144,10 @@ def isolate_modules():
 
 
 @pytest.fixture
-async def store(tmp_path: Path) -> AsyncIterator[ReviewStore]:
+def store(tmp_path: Path) -> AsyncIterator[ReviewStore]:
     from captain_hook.review.store import ReviewStore
 
-    async with await ReviewStore.open(tmp_path / "review.db") as opened:
+    with ReviewStore.open(tmp_path / "review.db") as opened:
         yield opened
 
 

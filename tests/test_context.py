@@ -51,7 +51,7 @@ class TestSessionManagement:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
-        monkeypatch.setattr("cc_transcript.discovery.find_transcript_sync", lambda session_id: None)
+        monkeypatch.setattr("cc_transcript.discovery.resolve", lambda session_id: None)
 
         sd = ensure_session(SessionId(SESSION_ID))
         age_dir(sd, seconds=STALE_AGE_SECONDS + 60)
@@ -60,7 +60,7 @@ class TestSessionManagement:
 
     def test_cleanup_stale_preserves_recent_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
-        monkeypatch.setattr("cc_transcript.discovery.find_transcript_sync", lambda session_id: None)
+        monkeypatch.setattr("cc_transcript.discovery.resolve", lambda session_id: None)
 
         sd = ensure_session(SessionId(SESSION_ID))
         cleanup_stale()
@@ -78,7 +78,7 @@ class TestSessionManagement:
             seen.append(str(session_id))
             return transcript
 
-        monkeypatch.setattr("cc_transcript.discovery.find_transcript_sync", fake_find)
+        monkeypatch.setattr("cc_transcript.discovery.resolve", fake_find)
 
         sd = ensure_session(SessionId(SESSION_ID))
         age_dir(sd, seconds=STALE_AGE_SECONDS + 60)
@@ -89,7 +89,7 @@ class TestSessionManagement:
     def test_cleanup_stale_excludes_current_session(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # The caller's own session is live even if stale + transcript-less; exclude keeps it.
         monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
-        monkeypatch.setattr("cc_transcript.discovery.find_transcript_sync", lambda session_id: None)
+        monkeypatch.setattr("cc_transcript.discovery.resolve", lambda session_id: None)
 
         current = ensure_session(SessionId(SESSION_ID))
         other = ensure_session(SessionId("99999999-8888-7777-6666-555555555555"))

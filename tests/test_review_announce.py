@@ -24,16 +24,16 @@ PR_URL_2 = "https://github.com/yasyf/scratch/pull/10"
 PACK_PR_URL = "https://github.com/yasyf/captain-hook/pull/3"
 
 
-async def create_pr_open(store: ReviewStore, *, repo: RepoKey = REPO, url: str = PR_URL, rule: str = "r") -> int:
-    candidate_id = await store.ensure_candidate(
+def create_pr_open(store: ReviewStore, *, repo: RepoKey = REPO, url: str = PR_URL, rule: str = "r") -> int:
+    candidate_id = store.ensure_candidate(
         repo, kind=CandidateKind.CREATE, rule=rule, source_kind=SourceKind("transcript_message")
     )
-    await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=url)
+    store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=url)
     return candidate_id
 
 
-async def pack_fix_pr_open(store: ReviewStore) -> int:
-    candidate_id = await store.ensure_candidate(
+def pack_fix_pr_open(store: ReviewStore) -> int:
+    candidate_id = store.ensure_candidate(
         PACK_REPO,
         kind=CandidateKind.FIX,
         rule="misfire",
@@ -44,7 +44,7 @@ async def pack_fix_pr_open(store: ReviewStore) -> int:
         origin_repo_key=REPO,
         pack_name="general",
     )
-    await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=PACK_PR_URL)
+    store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=PACK_PR_URL)
     return candidate_id
 
 
@@ -96,43 +96,43 @@ class TestAnnouncementLine:
 
 
 class TestPendingAnnouncements:
-    async def test_same_repo_pr_open_announced_once(self, store: ReviewStore) -> None:
-        await create_pr_open(store)
-        assert await pending_announcements(store, REPO) == [
+    def test_same_repo_pr_open_announced_once(self, store: ReviewStore) -> None:
+        create_pr_open(store)
+        assert pending_announcements(store, REPO) == [
             f"{ANNOUNCE_PREFIX} a hook PR is awaiting your review — {PR_URL}"
         ]
-        assert await pending_announcements(store, REPO) == []
+        assert pending_announcements(store, REPO) == []
 
-    async def test_cross_repo_pack_fix_matched_by_origin(self, store: ReviewStore) -> None:
-        await pack_fix_pr_open(store)
-        [line] = await pending_announcements(store, REPO)
+    def test_cross_repo_pack_fix_matched_by_origin(self, store: ReviewStore) -> None:
+        pack_fix_pr_open(store)
+        [line] = pending_announcements(store, REPO)
         assert line == (
             f"{ANNOUNCE_PREFIX} a fix PR is open against {PACK_REPO} for pack 'general' "
             f"hook general.docs:nudge_1, which misfired here — {PACK_PR_URL}"
         )
-        assert await pending_announcements(store, PACK_REPO) == []
+        assert pending_announcements(store, PACK_REPO) == []
 
-    async def test_status_change_reannounces(self, store: ReviewStore) -> None:
-        candidate_id = await create_pr_open(store)
-        assert len(await pending_announcements(store, REPO)) == 1
-        await store.transition(candidate_id, CandidateStatus.ACCEPTED)
-        assert await pending_announcements(store, REPO) == [f"{ANNOUNCE_PREFIX} the hook fix PR was merged — {PR_URL}"]
+    def test_status_change_reannounces(self, store: ReviewStore) -> None:
+        candidate_id = create_pr_open(store)
+        assert len(pending_announcements(store, REPO)) == 1
+        store.transition(candidate_id, CandidateStatus.ACCEPTED)
+        assert pending_announcements(store, REPO) == [f"{ANNOUNCE_PREFIX} the hook fix PR was merged — {PR_URL}"]
 
     @pytest.mark.parametrize("status", [CandidateStatus.WATCHING, CandidateStatus.REJECTED])
-    async def test_no_pr_url_never_announced(self, store: ReviewStore, status: CandidateStatus) -> None:
-        candidate_id = await store.ensure_candidate(
+    def test_no_pr_url_never_announced(self, store: ReviewStore, status: CandidateStatus) -> None:
+        candidate_id = store.ensure_candidate(
             REPO, kind=CandidateKind.CREATE, rule="r", source_kind=SourceKind("transcript_message")
         )
         if status is CandidateStatus.REJECTED:
-            await store.transition(candidate_id, CandidateStatus.REJECTED)
-        assert await pending_announcements(store, REPO) == []
+            store.transition(candidate_id, CandidateStatus.REJECTED)
+        assert pending_announcements(store, REPO) == []
 
-    async def test_mark_announced_persists_across_reopen(self, store: ReviewStore) -> None:
+    def test_mark_announced_persists_across_reopen(self, store: ReviewStore) -> None:
         # A brand-new store baselines nothing, so a freshly-transitioned candidate is
         # announced; a re-open of the same DB must still see it marked (single write path).
-        await create_pr_open(store)
-        assert len(await pending_announcements(store, REPO)) == 1
-        rows = await store.candidates(REPO)
+        create_pr_open(store)
+        assert len(pending_announcements(store, REPO)) == 1
+        rows = store.candidates(REPO)
         assert rows[0]["announced_status"] == CandidateStatus.PR_OPEN
 
 
@@ -143,16 +143,15 @@ class TestCollectAnnouncements:
         monkeypatch.setenv("HOOKS_REVIEW_DB_PATH", str(db))
         return db
 
-    async def _seed(self, db: Path, *, watching: bool = True) -> None:
-        async with await ReviewStore.open(db) as store:
-            await create_pr_open(store)
+    def _seed(self, db: Path, *, watching: bool = True) -> None:
+        with ReviewStore.open(db) as store:
+            create_pr_open(store)
             if watching:
-                await store.enable(REPO)
+                store.enable(REPO)
 
     def test_returns_line_for_the_session_repo(self, review_db: Path, git_repo: Path) -> None:
-        import asyncio
 
-        asyncio.run(self._seed(review_db))
+        self._seed(review_db)
         message = collect_announcements(git_repo)
         assert message is not None
         assert "awaiting your review" in message
@@ -162,21 +161,18 @@ class TestCollectAnnouncements:
         assert collect_announcements(git_repo) is None
 
     def test_silent_when_repo_not_watching(self, review_db: Path, git_repo: Path) -> None:
-        import asyncio
 
-        asyncio.run(self._seed(review_db, watching=False))
+        self._seed(review_db, watching=False)
         assert collect_announcements(git_repo) is None
 
     def test_silent_outside_a_git_repo(self, review_db: Path, tmp_path: Path) -> None:
-        import asyncio
 
-        asyncio.run(self._seed(review_db))
+        self._seed(review_db)
         assert collect_announcements(tmp_path) is None
 
     def test_silent_when_spawned(self, review_db: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        import asyncio
 
-        asyncio.run(self._seed(review_db))
+        self._seed(review_db)
         monkeypatch.setenv("CAPT_HOOK_SPAWNED", "1")
         assert collect_announcements(git_repo) is None
 
@@ -184,11 +180,10 @@ class TestCollectAnnouncements:
         # A detached reviewer holding a write lock must not stall the synchronous SessionStart hook:
         # collect_announcements fails the mark_announced write fast (busy_timeout=0) and returns None,
         # leaving the announcement pending for the next uncontended session start.
-        import asyncio
         import sqlite3
         import time
 
-        asyncio.run(self._seed(review_db))
+        self._seed(review_db)
         blocker = sqlite3.connect(str(review_db), isolation_level=None)
         try:
             blocker.execute("PRAGMA busy_timeout = 0")
@@ -203,20 +198,19 @@ class TestCollectAnnouncements:
         assert message is not None
         assert "awaiting your review" in message
 
-    async def _seed_two(self, db: Path) -> None:
-        async with await ReviewStore.open(db) as store:
-            await create_pr_open(store, url=PR_URL, rule="r1")
-            await create_pr_open(store, url=PR_URL_2, rule="r2")
-            await store.enable(REPO)
+    def _seed_two(self, db: Path) -> None:
+        with ReviewStore.open(db) as store:
+            create_pr_open(store, url=PR_URL, rule="r1")
+            create_pr_open(store, url=PR_URL_2, rule="r2")
+            store.enable(REPO)
 
     def test_contention_marks_no_row_then_all_resurface(self, review_db: Path, git_repo: Path) -> None:
         # With two pending announcements, a contended write lock must mark neither: the single
         # BEGIN IMMEDIATE fails before any mark, so nothing is stranded marked-but-undelivered,
         # and both lines resurface together once the lock releases.
-        import asyncio
         import sqlite3
 
-        asyncio.run(self._seed_two(review_db))
+        self._seed_two(review_db)
         blocker = sqlite3.connect(str(review_db), isolation_level=None)
         try:
             blocker.execute("PRAGMA busy_timeout = 0")
@@ -237,7 +231,6 @@ class TestSessionStartDispatch:
     def test_announcement_lands_in_additional_context(
         self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import asyncio
 
         from captain_hook.dispatch import dispatch
         from captain_hook.events import SessionStartEvent
@@ -248,12 +241,12 @@ class TestSessionStartDispatch:
         db = tmp_path / "review.db"
         monkeypatch.setenv("HOOKS_REVIEW_DB_PATH", str(db))
 
-        async def seed() -> None:
-            async with await ReviewStore.open(db) as store:
-                await create_pr_open(store)
-                await store.enable(REPO)
+        def seed() -> None:
+            with ReviewStore.open(db) as store:
+                create_pr_open(store)
+                store.enable(REPO)
 
-        asyncio.run(seed())
+        seed()
 
         register_pr_announcements()
         evt = SessionStartEvent(_raw={"source": "startup"}, ctx=build_ctx(project_root=git_repo))
