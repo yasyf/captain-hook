@@ -4,11 +4,17 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from cc_transcript.command import Command, parse_command_line
+from cc_transcript.command import Command
 from cc_transcript.tools import mcp_parts
 
 from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition
-from captain_hook.util.shell import normalize_executable
+from captain_hook.util.shell import (
+    NESTED_COMMAND_DEPTH,
+    SHELLS,
+    nested_command_string,
+    normalize_executable,
+    safe_parse_command_line,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -41,10 +47,8 @@ MAX_SCAN_DEPTH = 12
 
 DESTRUCTIVE_EXECUTABLES = frozenset({"rm", "dd", "shred", "truncate"})
 DOWNLOADERS = frozenset({"curl", "wget"})
-SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "ash", "fish", "csh", "tcsh"})
 GIT_VALUE_FLAGS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"})
 FORCE_PUSH_FLAG = re.compile(r"(--?force(-with-lease)?|-f|--delete)(=.*)?")
-NESTED_COMMAND_DEPTH = 3
 PAYLOAD_SCAN_LIMIT = 8192
 
 
@@ -119,19 +123,6 @@ def is_dangerous_git(args: tuple[str, ...]) -> bool:
             return False
 
 
-def nested_command_string(program: str, args: tuple[str, ...]) -> str | None:
-    """The command string a shell/eval invocation runs, or ``None``.
-
-    ``sh -c '<cmd>'`` / ``bash -euo pipefail -c '<cmd>'`` yields the token after ``-c``;
-    ``eval a b c`` yields the args joined. ``args`` is the unwrapped command's arguments.
-    """
-    if program in SHELLS:
-        return next((args[i + 1] for i, arg in enumerate(args) if arg == "-c" and i + 1 < len(args)), None)
-    if program == "eval":
-        return " ".join(args) or None
-    return None
-
-
 def is_dangerous_command(cmd: Command, depth: int) -> bool:
     if normalize_executable(cmd.executable) == "sudo":
         return True
@@ -156,20 +147,6 @@ def pipes_into_shell(cl: CommandLine) -> bool:
 
 def is_dangerous_command_line(cl: CommandLine, depth: int = NESTED_COMMAND_DEPTH) -> bool:
     return any(is_dangerous_command(cmd, depth) for cmd in cl.commands) or pipes_into_shell(cl)
-
-
-def safe_parse_command_line(text: str) -> CommandLine | None:
-    """Parse ``text``, returning ``None`` when it is too deeply nested to parse.
-
-    Tree-sitter's ``walk_node`` recurses per nesting level, so a pathologically nested string
-    (a thousand ``(``…) overflows the Python stack. Untrusted payloads and re-parsed shell
-    ``-c`` bodies reach this, so a ``RecursionError`` falls open to "not dangerous" — the safe
-    direction for a courtesy approver — rather than crashing dispatch.
-    """
-    try:
-        return parse_command_line(text)
-    except RecursionError:
-        return None
 
 
 def parse_payload_command_line(text: str) -> CommandLine | None:

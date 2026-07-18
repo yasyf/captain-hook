@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -11,11 +12,12 @@ import pytest
 import captain_hook
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack
-from captain_hook.packs.general.deletions import emit_target, in_vcs_repo, rm_targets, trash_binary
+from captain_hook.packs.general.deletions import in_vcs_repo, rm_targets, trash_binary
 from captain_hook.testing.helpers import input_to_event
 from captain_hook.testing.types import Input
 from captain_hook.types import Event
 from captain_hook.util.scratch import is_scratch_path
+from captain_hook.util.shell import emit_token
 
 PACKS_DIR = Path(captain_hook.__file__).parent / "packs"
 
@@ -579,6 +581,56 @@ class TestRmTrashRewrite:
             f"cd {outside} && /opt/fake/trash victim.txt",
         )
 
+    def test_existing_cd_changes_rm_cwd(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        self.assert_rewrite(
+            self.decision(f"cd {outside} && rm -rf .", tmp_path, tmp_path),
+            f"cd {outside} && /opt/fake/trash .",
+        )
+
+    def test_failed_cd_keeps_prior_cwd(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        missing = tmp_path / "nonexistent-xyz"
+        result = self.decision(f"cd {missing} && rm -rf .", repo, tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "repository root" in output["permissionDecisionReason"]
+
+    def test_piped_cd_does_not_change_rm_cwd(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        self.load_with_trash(monkeypatch)
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        command = f"cd {repo} | rm -rf notes"
+        self.assert_rewrite(
+            self.decision(command, outside, tmp_path),
+            f"cd {repo} | /opt/fake/trash notes",
+        )
+
     def test_multi_occurrence_splice(
         self,
         isolate_modules: None,
@@ -723,6 +775,281 @@ class TestRmTrashRewrite:
         assert self.decision(f"rm {victim}", Path("/"), tmp_path) is None
 
 
+class TestBlastRadius:
+    @pytest.mark.parametrize("command", ["rm -rf --no-preserve-root /", "rm -rf /", "rm -rf /.."])
+    def test_filesystem_root(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+        command: str,
+    ) -> None:
+        TestRmTrashRewrite.load_with_trash(monkeypatch)
+        result = TestRmTrashRewrite.decision(command, Path("/"), tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "filesystem root" in output["permissionDecisionReason"]
+
+    def test_home_directories(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        TestRmTrashRewrite.load_with_trash(monkeypatch)
+        fake_home = tmp_path / "fake-home"
+        fake_home.mkdir()
+        nested = fake_home / "sub"
+        nested.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+        for home in (fake_home, nested / "..", Path("/Users"), Path("/Users/somebody")):
+            result = TestRmTrashRewrite.decision(f"rm -rf {home}", Path("/"), tmp_path)
+            assert result is not None
+            output = result["hookSpecificOutput"]
+            assert output["permissionDecision"] == "deny"
+            assert "home directory" in output["permissionDecisionReason"]
+
+    @pytest.mark.parametrize("marker_type", ["directory", "file"])
+    def test_repo_containing_directory(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+        marker_type: str,
+    ) -> None:
+        TestRmTrashRewrite.load_with_trash(monkeypatch)
+        target = tmp_path / f"contains-repo-{marker_type}"
+        marker = target / "proj" / ".git"
+        match marker_type:
+            case "directory":
+                marker.mkdir(parents=True)
+            case "file":
+                marker.parent.mkdir(parents=True)
+                marker.write_text("gitdir: ../actual")
+        result = TestRmTrashRewrite.decision(f"rm -rf {target}", Path("/"), tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "contains git/jj repositories" in output["permissionDecisionReason"]
+
+    def test_clean_directory_rewrites(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        TestRmTrashRewrite.load_with_trash(monkeypatch)
+        target = tmp_path / "clean"
+        target.mkdir()
+        TestRmTrashRewrite.assert_rewrite(
+            TestRmTrashRewrite.decision(f"rm -rf {target}", Path("/"), tmp_path),
+            f"/opt/fake/trash {target}",
+        )
+
+    def test_symlink_leaf_rewrites_without_scan(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        TestRmTrashRewrite.load_with_trash(monkeypatch)
+        target = tmp_path / "target"
+        (target / "proj" / ".git").mkdir(parents=True)
+        link = tmp_path / "link"
+        link.symlink_to(target, target_is_directory=True)
+        monkeypatch.setattr(
+            "captain_hook.util.vcs.scanned_names",
+            lambda _anchor: pytest.fail("scanned a symlink leaf"),
+        )
+        TestRmTrashRewrite.assert_rewrite(
+            TestRmTrashRewrite.decision(f"rm -rf {link}", Path("/"), tmp_path),
+            f"/opt/fake/trash {link}",
+        )
+
+    def test_glob_match_containing_repo_denies(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        TestRmTrashRewrite.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside"
+        (outside / "container" / "proj" / ".git").mkdir(parents=True)
+        result = TestRmTrashRewrite.decision("rm -rf *", outside, tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "contains git/jj repositories" in output["permissionDecisionReason"]
+
+    def test_non_rewritable_does_not_scan(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        discover_pack("general", PACKS_DIR / "general")
+        deletions = sys.modules["captain_hook._packs.general.deletions"]
+        monkeypatch.setattr(deletions, "trash_binary", lambda: None)
+        monkeypatch.setattr(deletions, "contains_repo", lambda _path: pytest.fail("scanned without trash"))
+        target = tmp_path / "contains-repo"
+        (target / "proj" / ".git").mkdir(parents=True)
+        result = TestRmTrashRewrite.decision(f"rm -rf {target}", Path("/"), tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "repository" in output["permissionDecisionReason"]
+
+    def test_file_rewrites_without_scan(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        TestRmTrashRewrite.load_with_trash(monkeypatch)
+        deletions = sys.modules["captain_hook._packs.general.deletions"]
+        monkeypatch.setattr(deletions, "contains_repo", lambda _path: pytest.fail("scanned a plain file"))
+        target = tmp_path / "plain.txt"
+        target.write_text("")
+        TestRmTrashRewrite.assert_rewrite(
+            TestRmTrashRewrite.decision(f"rm {target}", Path("/"), tmp_path),
+            f"/opt/fake/trash {target}",
+        )
+
+
+class TestNestedDescent:
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "bash -c 'rm -rf /'",
+            "bash -lc 'rm -rf /'",
+            "sh -c 'rm {target}'",
+            "eval rm {target}",
+        ],
+    )
+    def test_nested_rm_denies(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+        command: str,
+    ) -> None:
+        TestRmTrashRewrite.load_with_trash(monkeypatch)
+        target = tmp_path / "outside.txt"
+        target.write_text("")
+        result = TestRmTrashRewrite.decision(command.format(target=target), Path("/"), tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "repository" in output["permissionDecisionReason"]
+        assert "updatedInput" not in output
+
+    def test_nested_scratch_rm_allows(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        TestRmTrashRewrite.load_with_trash(monkeypatch)
+        assert TestRmTrashRewrite.decision("bash -c 'rm /tmp/x'", Path("/"), tmp_path) is None
+
+    def test_nested_cd_tracks_cwd(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        TestRmTrashRewrite.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "x").write_text("")
+        result = TestRmTrashRewrite.decision(f'bash -c "cd {outside} && rm x"', Path("/"), tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "repository" in output["permissionDecisionReason"]
+
+    def test_nested_piped_cd_does_not_change_rm_cwd(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        TestRmTrashRewrite.load_with_trash(monkeypatch)
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        payload = shlex.quote(f"cd {repo} | rm -rf notes")
+        result = TestRmTrashRewrite.decision(f"bash -c {payload}", outside, tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "repository" in output["permissionDecisionReason"]
+
+    def test_depth_cap_fails_open(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        TestRmTrashRewrite.load_with_trash(monkeypatch)
+        target = tmp_path / "outside.txt"
+        target.write_text("")
+        command = f"rm {target}"
+        for _ in range(4):
+            command = f"bash -c {shlex.quote(command)}"
+        assert TestRmTrashRewrite.decision(command, Path("/"), tmp_path) is None
+
+    def test_nested_root_denies_without_trash(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        discover_pack("general", PACKS_DIR / "general")
+        monkeypatch.setattr(sys.modules["captain_hook._packs.general.deletions"], "trash_binary", lambda: None)
+        result = TestRmTrashRewrite.decision("bash -c 'rm -rf /'", Path("/"), tmp_path)
+        assert result is not None
+        output = result["hookSpecificOutput"]
+        assert output["permissionDecision"] == "deny"
+        assert "repository" in output["permissionDecisionReason"]
+
+    def test_top_level_rewrite_and_cd_unchanged(
+        self,
+        isolate_modules: None,
+        monkeypatch: pytest.MonkeyPatch,
+        no_scratch: None,
+        tmp_path: Path,
+    ) -> None:
+        TestRmTrashRewrite.load_with_trash(monkeypatch)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        target = outside / "x"
+        target.write_text("")
+        TestRmTrashRewrite.assert_rewrite(
+            TestRmTrashRewrite.decision(f"rm {target}", Path("/"), tmp_path),
+            f"/opt/fake/trash {target}",
+        )
+        TestRmTrashRewrite.assert_rewrite(
+            TestRmTrashRewrite.decision(f"cd {outside} && rm x", tmp_path, tmp_path),
+            f"cd {outside} && /opt/fake/trash x",
+        )
+
+
 class TestEmitTarget:
     @pytest.mark.parametrize(
         ("raw", "plain_words", "expected"),
@@ -744,7 +1071,7 @@ class TestEmitTarget:
         ],
     )
     def test_emission(self, raw: str, plain_words: bool, expected: str | None) -> None:
-        assert emit_target(raw, plain_words=plain_words) == expected
+        assert emit_token(raw, plain_words=plain_words) == expected
 
 
 @pytest.mark.parametrize(

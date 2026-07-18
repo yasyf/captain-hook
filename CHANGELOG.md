@@ -4,6 +4,47 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.2.0] - 2026-07-18
+
+### Added
+- **`rewrite_command_occurrences(visit=...)` — a stateful occurrence walk.**
+  Alongside the existing `to=` form (unchanged, and still behavior-identical for
+  every consumer), `visit` is called once per occurrence in order — span-less
+  ones included — with a `WalkContext` carrying the effective `cwd` (threaded
+  through statically resolvable `cd` occurrences), quote provenance
+  (`plain_words`), and splice eligibility (`spliceable`). Each call returns a
+  `HookResult` to block the whole line (discarding any accumulated rewrites), a
+  `str`/`Rewritten` to replace that occurrence (notes deduplicated into one
+  `additionalContext` message), or `None` to leave it untouched. `WalkContext`
+  and `Rewritten` are exported.
+
+### Changed
+- **The general-pack rm guard is rebuilt on `visit=`** and now hard-denies
+  catastrophic targets on the macOS rewrite path — the filesystem root, home
+  directories, and any directory that contains a git/jj repository (a bounded,
+  fail-closed scan). It also descends into `sh`/`bash -c` payloads and `eval`
+  arguments (depth-capped, check-only: a risky nested `rm` denies rather than
+  rewriting inside a quoted payload), so `bash -c 'rm -rf /'` no longer bypasses
+  the guard. The VCS predicates and provenance-safe token emission move to
+  `captain_hook.util.vcs` and `captain_hook.util.shell`, shared with the fixes
+  pack's danger classifier.
+
+### Fixed
+- **The rewrite path no longer downgrades a hard deny to a recoverable trash
+  rewrite.** `rm -rf --no-preserve-root /` and `rm -rf ~/Code` were rewritten to
+  `trash` invocations (both were hard-denied before the macOS rewrite landed);
+  they hard-deny again.
+- **Combined shell flag clusters (`bash -lc`, `sh -xc`, …) no longer bypass the
+  nested-shell descent** — the payload after any `-…c` cluster is checked, closing
+  the gap in the shared classifier too.
+- **`cd` cwd-threading is faithful to the shell.** A `cd` to a nonexistent
+  directory (the shell stays put) and a `cd` inside a pipeline segment (its cwd
+  change does not persist) are no longer threaded, so a later relative `rm` is
+  resolved against the directory it actually runs in.
+- **Blast-radius tiers normalize `..` before matching**, so `rm -rf /..` and
+  `rm -rf ~/..` deny with the correct tier and message.
+
+
 ## [10.0.0] - 2026-07-18
 
 ### Changed

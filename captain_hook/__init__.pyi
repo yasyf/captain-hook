@@ -61,6 +61,8 @@ from captain_hook.events import UserPromptSubmitEvent as UserPromptSubmitEvent
 from captain_hook.fields import Deque as Deque
 from captain_hook.file import File as File
 from captain_hook.file import categorize_files as categorize_files
+from captain_hook.primitives.commands import Rewritten as Rewritten
+from captain_hook.primitives.commands import WalkContext as WalkContext
 from captain_hook.primitives.commands import block_command as block_command
 from captain_hook.primitives.commands import rewrite_command as rewrite_command
 from captain_hook.primitives.commands import rewrite_command_occurrences as rewrite_command_occurrences

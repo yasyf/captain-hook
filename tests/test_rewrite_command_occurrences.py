@@ -6,7 +6,7 @@ import pytest
 
 from captain_hook.app import get_matching_hooks
 from captain_hook.dispatch import execute_hook
-from captain_hook.primitives.commands import rewrite_command_occurrences
+from captain_hook.primitives.commands import Rewritten, WalkContext, rewrite_command_occurrences
 from captain_hook.types import Action, Command
 from tests.helpers import make_ctx, make_pre_tool_event
 
@@ -157,3 +157,112 @@ class TestRewriteCommandOccurrences:
         result = next(r for r in fire(tmp_path, "cat foo.py") if r)
         assert result.action == Action.rewrite
         assert result.updated_input == {"command": "ccx read foo.py --full"}
+
+
+class TestVisitRewriteCommandOccurrences:
+    def test_str_verdict_rewrites_occurrence(self, tmp_path: Path) -> None:
+        rewrite_command_occurrences(
+            visit=lambda evt, occ, ctx: "ccx read foo.py --full" if occ.command.matches(r"^cat foo\.py$") else None,
+        )
+        result = next(r for r in fire(tmp_path, "cat foo.py; ls -la") if r)
+        assert result.action == Action.rewrite
+        assert result.updated_input == {"command": "ccx read foo.py --full; ls -la"}
+
+    def test_rewritten_note_surfaces_in_rewrite(self, tmp_path: Path) -> None:
+        rewrite_command_occurrences(
+            visit=lambda evt, occ, ctx: Rewritten("trash foo.txt", note="Rewrote rm to trash"),
+        )
+        result = next(r for r in fire(tmp_path, "rm foo.txt") if r)
+        assert result.action == Action.rewrite
+        assert result.updated_input == {"command": "trash foo.txt"}
+        assert result.note == "Rewrote rm to trash"
+
+    def test_duplicate_rewritten_notes_are_deduplicated(self, tmp_path: Path) -> None:
+        rewrite_command_occurrences(
+            visit=lambda evt, occ, ctx: Rewritten("trash file.txt", note="Rewrote rm to trash"),
+        )
+        result = next(r for r in fire(tmp_path, "rm a.txt; rm b.txt") if r)
+        assert result.action == Action.rewrite
+        assert result.updated_input == {"command": "trash file.txt; trash file.txt"}
+        assert result.note == "Rewrote rm to trash"
+
+    def test_hook_result_aborts_and_discards_accumulated_rewrite(self, tmp_path: Path) -> None:
+        def visit(evt, occ, ctx):
+            if occ.command.matches(r"^cat foo\.py$"):
+                return "ccx read foo.py --full"
+            return evt.block("Pushing is disabled") if occ.command.matches(r"^git push$") else None
+
+        rewrite_command_occurrences(visit=visit)
+        result = next(r for r in fire(tmp_path, "cat foo.py; git push") if r)
+        assert result.action == Action.block
+        assert result.message == "Pushing is disabled"
+        assert result.updated_input is None
+
+    def test_visit_sees_every_occurrence_in_order(self, tmp_path: Path) -> None:
+        seen: list[tuple[str, WalkContext]] = []
+
+        def visit(evt, occ, ctx):
+            seen.append((occ.command.raw, ctx))
+            return None
+
+        rewrite_command_occurrences(visit=visit)
+        assert fire(tmp_path, "echo a >out b; git push") == [None]
+        assert [raw for raw, _ctx in seen] == ["echo a", "git push"]
+        assert [ctx.spliceable for _raw, ctx in seen] == [False, True]
+
+    def test_visit_threads_resolved_cd_cwd_after_visiting_cd(self, tmp_path: Path) -> None:
+        seen: list[tuple[str, Path | None]] = []
+
+        def visit(evt, occ, ctx):
+            seen.append((occ.command.raw, ctx.cwd))
+            return None
+
+        rewrite_command_occurrences(visit=visit)
+        evt = make_pre_tool_event("Bash", {"command": "cd /tmp && cmd"}, make_ctx(tmp_path))
+        evt._raw["cwd"] = str(tmp_path)
+        assert [execute_hook(entry, evt, tmp_path) for entry in get_matching_hooks(evt)] == [None]
+        assert seen == [("cd /tmp", tmp_path), ("cmd", Path("/tmp").resolve())]
+
+    def test_visit_does_not_thread_piped_cd_cwd(self, tmp_path: Path) -> None:
+        seen: list[tuple[str, Path | None]] = []
+
+        def visit(evt, occ, ctx):
+            seen.append((occ.command.raw, ctx.cwd))
+            return None
+
+        rewrite_command_occurrences(visit=visit)
+        evt = make_pre_tool_event("Bash", {"command": "cd /tmp | cmd"}, make_ctx(tmp_path))
+        evt._raw["cwd"] = str(tmp_path)
+        assert [execute_hook(entry, evt, tmp_path) for entry in get_matching_hooks(evt)] == [None]
+        assert seen == [("cd /tmp", tmp_path), ("cmd", tmp_path)]
+
+    def test_rewrite_for_backslash_continuation_raises(self, tmp_path: Path) -> None:
+        spliceable: list[bool] = []
+
+        def visit(evt, occ, ctx):
+            spliceable.append(ctx.spliceable)
+            return "printf a b"
+
+        rewrite_command_occurrences(visit=visit)
+        evt = make_pre_tool_event("Bash", {"command": "printf a \\\n b"}, make_ctx(tmp_path))
+        [entry] = get_matching_hooks(evt)
+        assert entry.handler is not None
+        with pytest.raises(ValueError, match="rewrite for a non-spliceable occurrence"):
+            entry.handler(evt)
+        assert spliceable == [False]
+
+    def test_registration_raises_with_visit_and_to(self) -> None:
+        with pytest.raises(TypeError, match="takes either to= or visit=, not both or neither"):
+            rewrite_command_occurrences(to=lambda evt, occ: None, visit=lambda evt, occ, ctx: None)
+
+    def test_registration_raises_with_visit_and_block_if(self) -> None:
+        with pytest.raises(TypeError, match="visit= form takes no block_if/block/note"):
+            rewrite_command_occurrences(visit=lambda evt, occ, ctx: None, block_if=lambda evt, occ: True)
+
+    def test_registration_raises_with_visit_and_note(self) -> None:
+        with pytest.raises(TypeError, match="visit= form takes no block_if/block/note"):
+            rewrite_command_occurrences(visit=lambda evt, occ, ctx: None, note="not allowed")
+
+    def test_registration_raises_with_neither_form(self) -> None:
+        with pytest.raises(TypeError, match="takes either to= or visit=, not both or neither"):
+            rewrite_command_occurrences()

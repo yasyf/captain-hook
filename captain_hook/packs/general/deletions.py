@@ -12,17 +12,35 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
-from captain_hook import Allow, Block, Event, HookResult, Input, Rewrite, Tool, on
+from captain_hook import (
+    Allow,
+    Block,
+    HookResult,
+    Input,
+    Occurrence,
+    Rewrite,
+    Rewritten,
+    WalkContext,
+    rewrite_command_occurrences,
+)
 from captain_hook.types import Command as CommandCondition
 from captain_hook.util import fs
 from captain_hook.util.scratch import is_scratch_path
-from captain_hook.util.shell import normalize_executable, unescape_shell
+from captain_hook.util.shell import (
+    NESTED_COMMAND_DEPTH,
+    emit_token,
+    nested_command_string,
+    normalize_executable,
+    resolve_cd,
+    safe_parse_command_line,
+    unescape_shell,
+)
+from captain_hook.util.vcs import contains_repo, in_vcs_repo, is_repo_root
 
 if TYPE_CHECKING:
     from captain_hook.events import PreToolUseEvent
 
 GLOB_LIMIT = 10
-SAFE_WORD = re.compile(r"[^\s'\"\\$`;&|<>(){}#]+")
 
 
 class GlobExpansion(NamedTuple):
@@ -50,16 +68,6 @@ def trash_binary() -> str | None:
     return fs.resolve_binary("trash") if sys.platform == "darwin" else None
 
 
-def in_vcs_repo(directory: Path) -> bool:
-    return any(
-        (ancestor / marker).exists() for ancestor in (directory, *directory.parents) for marker in (".git", ".jj")
-    )
-
-
-def is_repo_root(resolved: Path) -> bool:
-    return any((resolved / marker).exists() for marker in (".git", ".jj"))
-
-
 def rm_targets(args: tuple[str, ...]) -> list[str]:
     separator = args.index("--") if "--" in args else len(args)
     return [arg for arg in args[:separator] if arg == "-" or not arg.startswith("-")] + list(args[separator + 1 :])
@@ -72,15 +80,6 @@ def resolve_target(token: str, cwd: Path | None) -> Path | None:
             return None
         path = cwd / path
     return path.parent.resolve() / path.name
-
-
-def resolve_cd(args: tuple[str, ...], cwd: Path | None) -> Path | None:
-    match args:
-        case (token,) if "$" not in token and token != "-":
-            path = Path(os.path.expanduser(unescape_shell(token)))
-            return path.resolve() if path.is_absolute() else (cwd / path).resolve() if cwd is not None else None
-        case _:
-            return None
 
 
 def static_prefix_dir(token: str, cwd: Path) -> Path:
@@ -140,25 +139,35 @@ def glob_matches(token: str, cwd: Path | None, *, limit: int) -> GlobExpansion:
         return GlobExpansion((), True)
 
 
-def emit_target(raw: str, *, plain_words: bool) -> str | None:
-    if SAFE_WORD.fullmatch(raw):
-        if (glob.has_magic(raw) or raw.startswith("~")) and not plain_words:
+def blast_radius_block(evt: PreToolUseEvent, token: str, resolved: Path) -> HookResult | None:
+    resolved = Path(os.path.normpath(resolved))
+    match resolved:
+        case root if root == Path("/"):
+            return evt.block(
+                f"BLOCKED: '{token}' is the filesystem root — deleting it destroys the entire "
+                "system. If this is really intended, ask the user to run it themselves."
+            )
+        case home if home == Path.home() or Path("/Users") in (home, home.parent):
+            return evt.block(
+                f"BLOCKED: '{token}' is a home directory — deleting it destroys every file the "
+                "user owns. If this is really intended, ask the user to run it themselves."
+            )
+        case directory if directory.is_dir(follow_symlinks=False) and contains_repo(directory):
+            return evt.block(
+                f"BLOCKED: '{token}' contains git/jj repositories — deleting it would destroy "
+                "them and their entire history. Delete a narrower path instead, or ask the user "
+                "to run it themselves."
+            )
+        case _:
             return None
-        return f"./{raw}" if raw.startswith("-") else raw
-    if (
-        not any(char in raw for char in "'\"$`{}")
-        and ("\\" not in raw or plain_words)
-        and not glob.has_magic(target := unescape_shell(raw))
-        and not target.startswith("~")
-    ):
-        return shlex.quote(target)
-    return None
 
 
 def check_rm_target(
     evt: PreToolUseEvent,
     token: str,
     cwd: Path | None,
+    *,
+    rewritable: bool,
 ) -> HookResult | Recoverable | None:
     if (resolved := resolve_target(token, cwd)) is None or is_scratch_path(resolved):
         return None
@@ -168,6 +177,8 @@ def check_rm_target(
             "history. If this is really intended, ask the user to run it themselves."
         )
     if not in_vcs_repo(resolved):
+        if rewritable and (blocked := blast_radius_block(evt, token, resolved)) is not None:
+            return blocked
         return Recoverable(
             evt.block(
                 f"BLOCKED: rm target '{token}' resolves outside any git/jj repository, so nothing can restore it "
@@ -207,13 +218,13 @@ def handle_rm(
                     "directory explicitly with rm -r <dir>."
                 )
             for matched in expansion.matches:
-                match check_rm_target(evt, matched, cwd):
+                match check_rm_target(evt, matched, cwd, rewritable=trash is not None):
                     case HookResult() as blocked:
                         return blocked
                     case Recoverable() as recoverable if recovery is None:
                         recovery = recoverable
             continue
-        match check_rm_target(evt, token, cwd):
+        match check_rm_target(evt, token, cwd, rewritable=trash is not None):
             case HookResult() as blocked:
                 return blocked
             case Recoverable() as recoverable if recovery is None:
@@ -224,20 +235,69 @@ def handle_rm(
         return recovery.block
     emitted: list[str] = []
     for target in targets:
-        if (value := emit_target(target, plain_words=plain_words)) is None:
+        if (value := emit_token(target, plain_words=plain_words)) is None:
             return recovery.block
         emitted.append(value)
     return Trashed(f"{shlex.quote(trash)} {' '.join(emitted)}", recovery.note)
 
 
 RECOVERABLE_RM: Block | Rewrite = Rewrite(pattern="trash") if trash_binary() else Block(pattern="repository")
+ROOT_RM: Block = Block(pattern="filesystem root") if trash_binary() else Block(pattern="repository")
 
 
-@on(
-    Event.PreToolUse,
-    only_if=[Tool("Bash"), CommandCondition(r"(?i)\brm\b")],
+def descend_rm(evt: PreToolUseEvent, payload: str, cwd: Path | None, depth: int) -> HookResult | None:
+    if depth <= 0 or (cl := safe_parse_command_line(payload)) is None:
+        return None
+    effective_cwd = cwd
+    for occurrence in cl.occurrences:
+        unwrapped = occurrence.command.unwrapped
+        match normalize_executable(unwrapped.executable):
+            case "cd" if not occurrence.piped:
+                effective_cwd = resolve_cd(unwrapped.args, effective_cwd)
+            case "rm":
+                match handle_rm(evt, unwrapped.args, effective_cwd, trash=None, plain_words=False):
+                    case HookResult() as blocked:
+                        return blocked
+            case program:
+                if (nested := nested_command_string(program, unwrapped.args)) is not None and (
+                    blocked := descend_rm(evt, nested, effective_cwd, depth - 1)
+                ) is not None:
+                    return blocked
+    return None
+
+
+def visit_rm(evt: PreToolUseEvent, occurrence: Occurrence, ctx: WalkContext) -> Rewritten | HookResult | None:
+    unwrapped = occurrence.command.unwrapped
+    match normalize_executable(unwrapped.executable):
+        case "rm":
+            match handle_rm(
+                evt,
+                unwrapped.args,
+                ctx.cwd,
+                trash=trash_binary() if ctx.spliceable else None,
+                plain_words=ctx.plain_words,
+            ):
+                case HookResult() as blocked:
+                    return blocked
+                case Trashed(replacement, note):
+                    return Rewritten(replacement, note)
+                case _:
+                    return None
+        case program:
+            if (payload := nested_command_string(program, unwrapped.args)) is not None:
+                return descend_rm(evt, payload, ctx.cwd, NESTED_COMMAND_DEPTH)
+            return None
+
+
+rewrite_command_occurrences(
+    visit=visit_rm,
+    only_if=[CommandCondition(r"(?i)\brm\b")],
     tests={
         Input(command="rm foo.txt", cwd="/"): RECOVERABLE_RM,
+        Input(command="rm -rf /", cwd="/"): ROOT_RM,
+        Input(command="bash -c 'rm -rf /'", cwd="/"): Block(pattern="repository"),
+        Input(command="bash -lc 'rm -rf /'", cwd="/"): Block(pattern="repository"),
+        Input(command="sh -xc 'rm -rf /'", cwd="/"): Block(pattern="repository"),
         Input(command="rm -- data.txt", cwd="/"): RECOVERABLE_RM,
         Input(command="sudo rm /foo.txt", cwd="/"): RECOVERABLE_RM,
         Input(command=r"\rm /foo.txt", cwd="/"): RECOVERABLE_RM,
@@ -251,30 +311,3 @@ RECOVERABLE_RM: Block | Rewrite = Rewrite(pattern="trash") if trash_binary() els
         Input(command="git status"): Allow(),
     },
 )
-def block_risky_rm(evt: PreToolUseEvent) -> HookResult | None:
-    if (cl := evt.command_line) is None:
-        return None
-    effective_cwd = evt.cwd
-    trash = trash_binary()
-    replacements: dict[int, str] = {}
-    notes: list[str] = []
-    for occurrence in cl.occurrences:
-        command = occurrence.command
-        unwrapped = command.unwrapped
-        match normalize_executable(unwrapped.executable):
-            case "cd":
-                effective_cwd = resolve_cd(unwrapped.args, effective_cwd)
-            case "rm":
-                match handle_rm(
-                    evt,
-                    unwrapped.args,
-                    effective_cwd,
-                    trash=trash if command.span is not None and "\\\n" not in command.raw else None,
-                    plain_words="'" not in command.raw and '"' not in command.raw,
-                ):
-                    case HookResult() as blocked:
-                        return blocked
-                    case Trashed(replacement, note):
-                        replacements[occurrence.index] = replacement
-                        notes.append(note)
-    return evt.rewrite_command(cl.splice(replacements), note="\n".join(dict.fromkeys(notes))) if replacements else None

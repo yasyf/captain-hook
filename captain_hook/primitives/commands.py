@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from captain_hook import ast_grep
 from captain_hook.app import hook as register_hook
 from captain_hook.app import on
-from captain_hook.types import Command, Event, HookResponse, InlineTests, Tool
+from captain_hook.types import Command, Event, HookResponse, HookResult, InlineTests, Tool
+from captain_hook.util.shell import normalize_executable, plain_words, resolve_cd
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -15,6 +18,38 @@ if TYPE_CHECKING:
 
     from captain_hook.events import PreToolUseEvent
     from captain_hook.types import TCondition
+
+
+@dataclass(frozen=True, slots=True)
+class WalkContext:
+    """Per-occurrence walk state handed to a ``visit=`` callable.
+
+    Attributes:
+        cwd: The effective working directory at this occurrence — ``evt.cwd`` threaded
+            through any statically resolvable ``cd`` occurrence earlier in the line;
+            ``None`` when unknown.
+        plain_words: Whether the occurrence's raw text is quote-free, so every parsed
+            argument is its verbatim source spelling.
+        spliceable: Whether a rewrite can be spliced back — the occurrence has a byte
+            span and no backslash-newline continuation. Returning a rewrite for a
+            non-spliceable occurrence raises.
+    """
+
+    cwd: Path | None
+    plain_words: bool
+    spliceable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class Rewritten:
+    """A ``visit=`` verdict replacing one occurrence, optionally carrying a note.
+
+    Example:
+        >>> Rewritten("trash file.txt", note="Rewrote rm to trash")
+    """
+
+    text: str
+    note: str | None = None
 
 
 def block_command_pattern(tokens: list[str]) -> str:
@@ -156,7 +191,8 @@ def rewrite_command(
 
 def rewrite_command_occurrences(
     *,
-    to: Callable[[PreToolUseEvent, Occurrence], str | None],
+    to: Callable[[PreToolUseEvent, Occurrence], str | None] | None = None,
+    visit: Callable[[PreToolUseEvent, Occurrence, WalkContext], str | Rewritten | HookResult | None] | None = None,
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     block_if: Callable[[PreToolUseEvent, Occurrence], bool] | None = None,
@@ -164,7 +200,7 @@ def rewrite_command_occurrences(
     note: str | Callable[[PreToolUseEvent, Sequence[tuple[Occurrence, str]]], str | None] | None = None,
     tests: InlineTests | None = None,
 ) -> None:
-    r"""Register a ``PreToolUse`` hook that rewrites a Bash line occurrence by occurrence.
+    r"""Register a ``PreToolUse`` hook using one of two mutually exclusive occurrence forms.
 
     Unlike [`rewrite_command`][captain_hook.rewrite_command]'s ``to=`` form — which maps the
     whole line to one new command — ``to`` here is called once per parsed
@@ -190,12 +226,70 @@ def rewrite_command_occurrences(
     parsed [`CommandLine`][cc_transcript.command.CommandLine] — resolved lazily only when the line
     actually blocks, at either the ``block_if`` hit or the zero-rewrite fallthrough.
 
+    - **visit** — a stateful walk: called for *every* occurrence in order — span-less ones
+      included — with a [`WalkContext`][captain_hook.WalkContext] carrying the effective
+      ``cwd`` (threaded through statically resolvable ``cd`` occurrences), quote provenance
+      (``plain_words``), and splice eligibility (``spliceable``). Each call returns one of
+      four verdicts: a [`HookResult`][captain_hook.HookResult] (typically ``evt.block(...)``)
+      aborts the walk and returns it verbatim — accumulated rewrites are discarded, never
+      partially applied; a ``str`` or [`Rewritten`][captain_hook.Rewritten] replaces the
+      occurrence, with ``Rewritten.note`` lines deduplicated into one ``additionalContext``
+      message; ``None`` leaves the occurrence untouched. The ``visit`` form takes no
+      ``block_if``/``block``/``note`` — blocking and notes ride on the verdicts.
+
     Example:
         >>> rewrite_command_occurrences(
         ...     to=lambda evt, occ: "ccx read foo.py --full" if occ.command.matches("^cat foo.py$") else None,
         ...     note=lambda evt, pairs: f"Rewrote {len(pairs)} cat invocation(s) to ccx read",
         ... )
     """
+    if (visit is None) == (to is None):
+        raise TypeError("rewrite_command_occurrences takes either to= or visit=, not both or neither")
+    if visit is not None:
+        if any(option is not None for option in (block_if, block, note)):
+            raise TypeError(
+                "the visit= form takes no block_if/block/note — return a HookResult to block and carry "
+                "notes on Rewritten"
+            )
+
+        def visit_handler(evt: PreToolUseEvent) -> HookResponse:
+            if not (cl := evt.command_line):
+                return None
+            effective_cwd = evt.cwd
+            replacements: dict[int, str] = {}
+            notes: list[str] = []
+            for occurrence in cl.occurrences:
+                command = occurrence.command
+                ctx = WalkContext(
+                    cwd=effective_cwd,
+                    plain_words=plain_words(command.raw),
+                    spliceable=command.span is not None and "\\\n" not in command.raw,
+                )
+                match visit(evt, occurrence, ctx):
+                    case HookResult() as result:
+                        return result
+                    case str() | Rewritten() as verdict:
+                        if not ctx.spliceable:
+                            raise ValueError("visit returned a rewrite for a non-spliceable occurrence")
+                        match verdict:
+                            case Rewritten(text, rewrite_note):
+                                replacements[occurrence.index] = text
+                                if rewrite_note is not None:
+                                    notes.append(rewrite_note)
+                            case text:
+                                replacements[occurrence.index] = text
+                    case None:
+                        pass
+                unwrapped = command.unwrapped
+                if normalize_executable(unwrapped.executable) == "cd" and not occurrence.piped:
+                    effective_cwd = resolve_cd(unwrapped.args, effective_cwd)
+            if replacements and (spliced := cl.splice(replacements)) != cl.raw:
+                return evt.rewrite_command(spliced, note="\n".join(dict.fromkeys(notes)) or None)
+            return None
+
+        on(Event.PreToolUse, only_if=[Tool("Bash"), *only_if], skip_if=skip_if, tests=tests)(visit_handler)
+        return
+
     if block_if is not None and not block:
         raise TypeError("rewrite_command_occurrences requires a non-empty block= when block_if is given")
 
