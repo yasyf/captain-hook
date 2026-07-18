@@ -12,23 +12,13 @@ from typing import TYPE_CHECKING, Any, get_args
 from captain_hook.conditions import matches_conditions
 from captain_hook.state import caller_file, hook_name
 from captain_hook.types import (
-    Agent,
-    Command,
-    Content,
     CustomCondition,
     Event,
-    FilePath,
     HookSpec,
     InlineTests,
-    Pattern,
     RegisteredHook,
-    Runs,
-    SourceEdits,
     TCondition,
-    TestFile,
-    Tool,
-    ToolInput,
-    WorkflowScript,
+    condition_events,
 )
 
 if TYPE_CHECKING:
@@ -42,25 +32,6 @@ HookHandler = Callable[["BaseHookEvent"], "HookResult | None"]
 
 VALID_CONDITION_TYPES = tuple(t for t in get_args(TCondition) if t is not CustomCondition)
 VALID_CONDITION_NAMES = ", ".join(t.__name__ for t in VALID_CONDITION_TYPES) + ", or a CustomCondition"
-
-_TOOL_EVENTS = Event.PreToolUse | Event.PostToolUse | Event.PostToolUseFailure | Event.PermissionRequest
-
-# Conditions that read the current event's tool input can only match on a tool event; a
-# condition absent from this map (transcript-history conditions, InPlanMode, Waiting,
-# combinators, CustomCondition) reads session state and is valid on every event.
-_CONDITION_EVENTS: dict[type, Event] = {
-    Tool: _TOOL_EVENTS,
-    ToolInput: _TOOL_EVENTS,
-    WorkflowScript: _TOOL_EVENTS,
-    Command: _TOOL_EVENTS,
-    Runs: _TOOL_EVENTS,
-    FilePath: _TOOL_EVENTS,
-    Content: _TOOL_EVENTS,
-    Pattern: _TOOL_EVENTS,
-    TestFile: _TOOL_EVENTS,
-    SourceEdits: _TOOL_EVENTS,
-    Agent: _TOOL_EVENTS | Event.SubagentStart | Event.SubagentStop,
-}
 
 
 class AsyncDecisionError(TypeError):
@@ -93,7 +64,7 @@ def validate_conditions(conditions: Sequence[TCondition], label: str, events: Ev
                 f"Invalid condition in {label}: {c!r} (type {type(c).__name__}). "
                 f"Expected one of: {VALID_CONDITION_NAMES}."
             )
-        if events is not None and (valid := _CONDITION_EVENTS.get(type(c))) is not None and not (events & valid):
+        if events is not None and not (events & (valid := condition_events(c))):
             raise TypeError(
                 f"{c!r} in {label} can never match on {events!r} — it reads the current tool input, "
                 f"which only exists on {valid!r}."

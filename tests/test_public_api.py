@@ -14,15 +14,34 @@ may change or degrade the public surface. This module pins:
 from __future__ import annotations
 
 import importlib
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
 
 import captain_hook
+from captain_hook.exports import EXPORTS
 from captain_hook.testing.types import FileFixture, Input, TranscriptFixture
 from captain_hook.transcripts import lazy_transcript, load_transcript
+from hatch_build import build_exports
+
+ROOT_STUB = Path(captain_hook.__file__).with_suffix(".pyi")
+MODULE_EXPORTS = frozenset({"file", "style", "util"})
+
+SPAWNLLM_HOT_PATH_PROBE = """
+import sys
+
+import captain_hook
+
+captain_hook.gate
+captain_hook.nudge
+loaded = sorted(name for name in sys.modules if name == "spawnllm" or name.startswith("spawnllm."))
+assert not loaded, loaded
+"""
 
 # The root-package export surface pinned to baseline ee9f7ca3 — the sorted set of names
 # bound at module level by that revision's captain_hook/__init__.py import block.
@@ -176,158 +195,6 @@ PINNED_EXPORTS: tuple[str, ...] = (
     "workflow_state",
 )
 
-# Each pinned name mapped to the module baseline imported it from. Resolved independently
-# of HEAD's private ``_EXPORTS`` table, so a drifted _EXPORTS entry (a name repointed at a
-# module holding a different object) fails the ``is``-identity check below.
-DEFINING_MODULE: dict[str, str] = {
-    "Action": "captain_hook.types",
-    "AfterEdit": "captain_hook.contexts",
-    "Agent": "captain_hook.types",
-    "Allow": "captain_hook.testing",
-    "And": "captain_hook.types",
-    "Artifact": "captain_hook.primitives.workflow",
-    "Ask": "captain_hook.testing",
-    "BackgroundTask": "captain_hook.events",
-    "BaseHookEvent": "captain_hook.events",
-    "BashCall": "cc_transcript.tools",
-    "BeforeEdit": "captain_hook.contexts",
-    "Block": "captain_hook.testing",
-    "COMMENT_TYPES": "captain_hook.ast_grep",
-    "Clause": "captain_hook.signals.nlp",
-    "Command": "cc_transcript.command",
-    "CommandLine": "cc_transcript.command",
-    "Content": "captain_hook.types",
-    "CustomCommandLineCondition": "captain_hook.types",
-    "CustomCondition": "captain_hook.types",
-    "CustomInputTypeCondition": "captain_hook.types",
-    "Deque": "captain_hook.fields",
-    "DurableSlot": "captain_hook.durable",
-    "DurableState": "captain_hook.durable",
-    "DurableStore": "captain_hook.durable",
-    "EditCall": "cc_transcript.tools",
-    "Event": "captain_hook.types",
-    "Excerpts": "captain_hook.contexts",
-    "ExitPlanModeCall": "cc_transcript.tools",
-    "File": "captain_hook.file",
-    "FileFixture": "captain_hook.testing",
-    "FilePath": "captain_hook.types",
-    "FromSubagent": "captain_hook.types",
-    "GateVerdict": "captain_hook.primitives",
-    "GlobCall": "cc_transcript.tools",
-    "GrepCall": "cc_transcript.tools",
-    "HookContext": "captain_hook.context",
-    "HookResponse": "captain_hook.types",
-    "HookResult": "captain_hook.types",
-    "HookState": "captain_hook.state",
-    "HooksSettings": "captain_hook.settings",
-    "InPlanMode": "captain_hook.types",
-    "InlineTests": "captain_hook.testing",
-    "Input": "captain_hook.testing",
-    "Introduced": "captain_hook.contexts",
-    "MultiEditCall": "cc_transcript.tools",
-    "NlpSignal": "captain_hook.signals.nlp",
-    "Not": "captain_hook.types",
-    "NotebookEditCall": "cc_transcript.tools",
-    "NotificationEvent": "captain_hook.events",
-    "NudgeVerdict": "captain_hook.primitives",
-    "Occurrence": "cc_transcript.command",
-    "Or": "captain_hook.types",
-    "OtherCall": "cc_transcript.tools",
-    "Pattern": "captain_hook.types",
-    "PermissionRequestEvent": "captain_hook.events",
-    "Phrase": "captain_hook.signals.nlp",
-    "PostToolUseEvent": "captain_hook.events",
-    "PostToolUseFailureEvent": "captain_hook.events",
-    "PreCompactEvent": "captain_hook.events",
-    "PreToolUseEvent": "captain_hook.events",
-    "PrimitiveState": "captain_hook.state",
-    "Prompt": "captain_hook.prompt",
-    "PromptCheckVerdict": "captain_hook.primitives",
-    "PromptContext": "captain_hook.contexts",
-    "RanCommand": "captain_hook.types",
-    "ReadCall": "cc_transcript.tools",
-    "ReadFile": "captain_hook.types",
-    "Redirect": "cc_transcript.command",
-    "Rewrite": "captain_hook.testing",
-    "Runs": "captain_hook.types",
-    "SafetyVerdict": "captain_hook.primitives",
-    "SessionCron": "captain_hook.events",
-    "SessionEndEvent": "captain_hook.events",
-    "SessionSlot": "captain_hook.session",
-    "SessionStartEvent": "captain_hook.events",
-    "SessionStore": "captain_hook.session",
-    "Signal": "captain_hook.types",
-    "Signals": "captain_hook.types",
-    "SkillCall": "cc_transcript.tools",
-    "SkipPermissions": "captain_hook.types",
-    "SourceEdits": "captain_hook.types",
-    "Step": "captain_hook.primitives.workflow",
-    "StopEvent": "captain_hook.events",
-    "SubagentStartEvent": "captain_hook.events",
-    "SubagentStopEvent": "captain_hook.events",
-    "TCondition": "captain_hook.types",
-    "Task": "captain_hook.tasks",
-    "TaskCall": "cc_transcript.tools",
-    "TaskCreateCall": "cc_transcript.tools",
-    "TaskUpdateCall": "cc_transcript.tools",
-    "Tasks": "captain_hook.tasks",
-    "TestFile": "captain_hook.types",
-    "Tool": "captain_hook.types",
-    "ToolCall": "cc_transcript.tools",
-    "ToolCallBase": "cc_transcript.tools",
-    "ToolHookEvent": "captain_hook.events",
-    "ToolInput": "captain_hook.types",
-    "ToolRewriteEvent": "captain_hook.events",
-    "TouchedFile": "captain_hook.types",
-    "TranscriptFixture": "captain_hook.testing",
-    "UsedSkill": "captain_hook.types",
-    "UserMessages": "captain_hook.contexts",
-    "UserPromptSubmitEvent": "captain_hook.events",
-    "Waiting": "captain_hook.types",
-    "Warn": "captain_hook.testing",
-    "Workflow": "captain_hook.primitives.workflow",
-    "WorkflowScript": "captain_hook.types",
-    "WorkflowScriptSource": "captain_hook.contexts",
-    "WorkflowState": "captain_hook.state",
-    "WriteCall": "cc_transcript.tools",
-    "apply_contexts": "captain_hook.contexts",
-    "approve": "captain_hook.primitives",
-    "block_command": "captain_hook.primitives",
-    "build_settings": "captain_hook.settings",
-    "categorize_files": "captain_hook.file",
-    "deny": "captain_hook.primitives",
-    "diff_lint": "captain_hook.primitives.lint",
-    "excerpt_around": "captain_hook.contexts",
-    "file": "captain_hook",
-    "gate": "captain_hook.primitives",
-    "has_nominal_subject": "captain_hook.signals.nlp",
-    "hook": "captain_hook.app",
-    "is_past_predicate": "captain_hook.signals.nlp",
-    "lint": "captain_hook.primitives.lint",
-    "llm_approve": "captain_hook.primitives",
-    "llm_evaluate": "captain_hook.primitives",
-    "llm_gate": "captain_hook.primitives",
-    "llm_nudge": "captain_hook.primitives",
-    "nudge": "captain_hook.primitives.nudge",
-    "on": "captain_hook.app",
-    "prompt_check": "captain_hook.primitives",
-    "read_json": "captain_hook.util",
-    "resolve_binary": "captain_hook.util",
-    "rewrite_code": "captain_hook.primitives",
-    "rewrite_command": "captain_hook.primitives",
-    "rewrite_command_occurrences": "captain_hook.primitives",
-    "session_state": "captain_hook.session",
-    "set_tool_input": "captain_hook.primitives",
-    "style": "captain_hook",
-    "text_matches": "captain_hook.primitives.workflow",
-    "util": "captain_hook",
-    "warn_command": "captain_hook.primitives",
-    "workflow": "captain_hook.primitives.workflow",
-    "workflow_opt_matches": "captain_hook.conditions",
-    "workflow_opt_values": "captain_hook.conditions",
-    "workflow_script_source": "captain_hook.conditions",
-    "workflow_state": "captain_hook.state",
-}
 
 # Submodule import paths exactly as real consumers spell them (repo hooks, cc-skills
 # bootstrap templates, downstream packs). Each entry: (module, names it must expose).
@@ -344,12 +211,12 @@ CONSUMER_IMPORT_PATHS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
-def test_pinned_and_defining_module_stay_in_sync() -> None:
-    assert tuple(sorted(DEFINING_MODULE)) == PINNED_EXPORTS
+def test_export_table_is_fresh() -> None:
+    assert build_exports(ROOT_STUB) == EXPORTS, "generated exports are stale; run `uv run python hatch_build.py`"
 
 
 def test_export_table_matches_pinned_surface() -> None:
-    assert set(captain_hook._EXPORTS) == set(PINNED_EXPORTS)
+    assert tuple(sorted(EXPORTS)) == PINNED_EXPORTS
 
 
 def test_star_import_binds_exactly_the_exports() -> None:
@@ -357,7 +224,13 @@ def test_star_import_binds_exactly_the_exports() -> None:
     # injects only __builtins__ into a fresh namespace.
     ns: dict[str, object] = {}
     exec("from captain_hook import *", ns)  # noqa: S102
-    assert set(ns) - {"__builtins__"} == set(captain_hook._EXPORTS)
+    assert set(ns) - {"__builtins__"} == set(PINNED_EXPORTS)
+
+
+def test_all_is_introspectable() -> None:
+    assert "__all__" in dir(captain_hook)
+    assert captain_hook.__all__ == sorted(PINNED_EXPORTS)
+    assert vars(captain_hook)["__all__"] is captain_hook.__all__
 
 
 def test_dir_lists_the_pinned_surface() -> None:
@@ -375,8 +248,20 @@ def test_pinned_name_imports_and_is_listed(name: str) -> None:
 
 @pytest.mark.parametrize("name", PINNED_EXPORTS, ids=PINNED_EXPORTS)
 def test_pinned_name_is_object_from_defining_module(name: str) -> None:
-    defining = importlib.import_module(DEFINING_MODULE[name])
-    assert getattr(captain_hook, name) is getattr(defining, name)
+    target = EXPORTS[name]
+    defining = importlib.import_module(target)
+    expected = defining if target == f"captain_hook.{name}" else getattr(defining, name)
+    assert getattr(captain_hook, name) is expected
+
+
+def test_only_pinned_facade_exports_resolve_to_modules() -> None:
+    resolved_modules = {name for name in PINNED_EXPORTS if isinstance(getattr(captain_hook, name), ModuleType)}
+    assert resolved_modules == MODULE_EXPORTS
+
+
+def test_gate_and_nudge_do_not_load_spawnllm() -> None:
+    out = subprocess.run([sys.executable, "-c", SPAWNLLM_HOT_PATH_PROBE], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
 
 
 def test_unknown_attribute_raises_attribute_error() -> None:

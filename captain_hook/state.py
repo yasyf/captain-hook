@@ -25,7 +25,6 @@ if TYPE_CHECKING:
 
 FRAMEWORK_DIR = str(Path(__file__).resolve().parent)
 PACKS_DIR = str(Path(FRAMEWORK_DIR) / "packs")
-SPACY_MODEL = "en_core_web_sm"
 PACK_PACKAGE_PREFIX = "captain_hook._packs"
 
 
@@ -37,13 +36,13 @@ class NlpResources:
     def spacy(self) -> spacy.language.Language:
         import spacy
 
-        from captain_hook.util.model_cache import cached_pipeline
+        from captain_hook.util.model_cache import MODEL_NAME, cached_pipeline
 
         with self._lock:
             if "spacy" in self.__dict__:
                 return self.__dict__["spacy"]
-            if spacy.util.is_package(SPACY_MODEL):
-                return spacy.load(SPACY_MODEL)
+            if spacy.util.is_package(MODEL_NAME):
+                return spacy.load(MODEL_NAME)
             # We refuse to auto-download from a live hook: it's a silent fetch behind the
             # agent's back (~13MB for spaCy; the oewn lexicon is the ~231MB heavyweight).
             # If a previous run / explicit install already populated the cache, use that;
@@ -51,9 +50,9 @@ class NlpResources:
             if cached := cached_pipeline():
                 return spacy.load(cached)
             raise RuntimeError(
-                f"spaCy model {SPACY_MODEL!r} is not installed. "
+                f"spaCy model {MODEL_NAME!r} is not installed. "
                 "Run `uvx capt-hook init` to provision NLP resources, or install the model "
-                f"explicitly: `python -m spacy download {SPACY_MODEL}` "
+                f"explicitly: `python -m spacy download {MODEL_NAME}` "
                 f'or `python -c "from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()"`.'
             )
 

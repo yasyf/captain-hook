@@ -38,20 +38,22 @@ the `CommandCondition` alias to keep the two apart.
 
 `Event` is a flag enum; combine with `|` (`Event.Stop | Event.SubagentStop`).
 
+<!-- gen:events -->
 | Event | When it fires | Typical use |
 |---|---|---|
 | `PreToolUse` | Before a tool runs | Block dangerous commands |
-| `PermissionRequest` | A permission dialog would be shown | Auto-answer dialogs (allow/deny/rewrite); no decision means the dialog shows |
 | `PostToolUse` | After a tool succeeds | Lint output, nudge conventions |
 | `PostToolUseFailure` | After a tool fails | Suggest debugging steps |
 | `UserPromptSubmit` | User sends a message | Detect request patterns |
 | `Stop` | Agent is about to stop | Gate on test execution |
 | `SubagentStop` | A subagent finishes | Verify subagent work |
 | `SubagentStart` | A subagent launches | Capture initial state |
-| `Notification` | Informational event | Logging, metrics |
 | `PreCompact` | Before context compaction | Preserve critical context |
+| `Notification` | Informational event | Logging, metrics |
 | `SessionStart` | Session starts, resumes, clears, or compacts (`evt.source`) | Provision resources, prime state |
 | `SessionEnd` | Session ends | Cleanup, audit logging |
+| `PermissionRequest` | A permission dialog would be shown | Auto-answer dialogs (allow/deny/rewrite); no decision means the dialog shows |
+<!-- /gen:events -->
 
 ## Registration
 
@@ -69,23 +71,25 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 
 ## Primitives
 
+<!-- gen:primitives -->
 | Primitive | Signature (keyword-only after `*`) | Defaults |
 |---|---|---|
 | `block_command` | `(pattern, *, reason, hint=None, only_if=(), skip_if=(), tests=None)` | `PreToolUse` + `Tool("Bash")`; message `"BLOCKED: {reason}. {hint}."` |
 | `warn_command` | `(pattern, *, message, only_if=(), skip_if=(), tests=None, events=Event.PostToolUse)` | warns, never blocks |
-| `rewrite_command` | `(pattern, replace, *, only_if=(), skip_if=(), note=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; a pattern with an ast-grep metavar (`cat $$$ARGS`) rewrites structurally via `ast_grep.rewrite`, otherwise `re.sub(pattern, replace, command)`; allows with the rewritten command |
+| `rewrite_command` | `(pattern=None, replace=None, *, only_if=(), skip_if=(), to=None, block=None, note=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; a pattern with an ast-grep metavar (`cat $$$ARGS`) rewrites structurally via `ast_grep.rewrite`, otherwise `re.sub(pattern, replace, command)`; allows with the rewritten command |
 | `set_tool_input` | `(field, value, *, tool, only_if=(), skip_if=(), note=None, tests=None)` | `PreToolUse` + `Tool(tool)`; fills a **missing** top-level input field with `value` and allows, never clobbering a present one |
-| `gate` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), events=None, max_fires=…, tests=None)` | `Stop \| SubagentStop`; blocks, defaults to **unlimited** fires (keeps enforcing); `skip_if` is additive with an automatic `Waiting()` |
-| `nudge` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), block=False, events=None, max_fires=…, tests=None)` | `PostToolUse` (with signals) else `PreToolUse`; default fires 3 / 1; `when` vetoes even with `signals`; warns |
-| `lint` | `(check, *, message, lang="py", trigger=None, sep=", ", block=False, events=None, tests=None, max_shown=5)` | `PostToolUse`, `Tool("Edit\|Write")` + the `lang` globs, skips test files; `trigger` pre-filters string **and** ast checks |
-| `workflow` | `(*, label, marker, steps, artifacts=None, only_if=(), skip_if=(), tests=None)` | guard on `SubagentStop`, `max_fires=1` |
-| `llm_gate` | `(prompt, *, message, response_model=GateVerdict, verdict=…, signals=None, when=None, contexts=(), only_if=(), skip_if=(), events=None, max_fires=…, tests=None, max_context=2000, specialty="review", model="small", agent=True, transcript=True, diff=False)` | `Stop \| SubagentStop`; defaults to **unlimited** fires (keeps enforcing); blocks when `verdict(result)` — default `GateVerdict.block` |
-| `llm_nudge` | same as `llm_gate` (default `response_model=NudgeVerdict`), plus `async_=False` | `PostToolUse`, `max_fires=3`; warns when `verdict(result)` — default `NudgeVerdict.fire` |
-| `prompt_check` | `(evt, template, fmt=None, *, prefix, suffix="", timeout=45)` | call inside an `@on` handler; returns `HookResult \| None` from `PromptCheckVerdict` |
-| `styleguide` | `(*rules, block=False, only_if=(), skip_if=(), events=None)` | AST style rules — owned by the `translating-styleguides` skill |
-| `approve` | `(label, *, only_if=(), skip_if=(), tests=None)` | `PermissionRequest`; answers matching dialogs with allow; **no fire cap**. Unconditioned == a permanent `--dangerously-skip-permissions`; always scope with conditions |
-| `deny` | `(reason, *, only_if=(), skip_if=(), tests=None)` | `PermissionRequest`; answers with deny, `reason` shown to the user; no fire cap. Unconditioned bricks every prompting tool |
-| `llm_approve` | `(label, *, rubric=None, only_if=(), skip_if=(), model="small", tests=None)` | `PermissionRequest`; LLM safety judge seeded from `claude auto-mode defaults` (+ your `rubric`); a safe verdict allows, an unsafe verdict or LLM failure returns `None` so the dialog shows, never an auto-deny. One LLM round-trip per matching ask |
+| `gate` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), events=None, max_fires=-1, tests=None, async_=False, skip_planning_agents=None)` | `Stop \| SubagentStop`; blocks, defaults to **unlimited** fires (keeps enforcing); `skip_if` is additive with an automatic `Waiting()` |
+| `nudge` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), block=False, events=None, max_fires=-1, tests=None, async_=False, skip_planning_agents=None)` | `PostToolUse` (with signals) else `PreToolUse`; default fires 3 / 1; `when` vetoes even with `signals`; warns |
+| `lint` | `(check=None, *, pattern=None, message, lang='py', trigger=None, sep=', ', block=False, events=None, tests=None, max_shown=5)` | `PostToolUse`, `Tool("Edit\|Write")` + the `lang` globs, skips test files; `trigger` pre-filters string **and** ast checks |
+| `workflow` | `(*, label, marker, steps, artifacts=None, post_complete=None, on_start=None, only_if=(), skip_if=(), tests=None)` | guard on `SubagentStop`, `max_fires=1` |
+| `llm_gate` | `(prompt, *, message, response_model=GateVerdict, verdict=…, label=None, signals=None, when=None, contexts=(), only_if=(), skip_if=(), events=None, max_fires=-1, tests=None, max_context=2000, specialty='review', model='small', agent=True, transcript=True, diff=False)` | `Stop \| SubagentStop`; defaults to **unlimited** fires (keeps enforcing); blocks when `verdict(result)` — default `GateVerdict.block` |
+| `llm_nudge` | `(prompt, *, message, response_model=NudgeVerdict, verdict=…, label=None, signals=None, when=None, contexts=(), only_if=(), skip_if=(), events=None, max_fires=-1, tests=None, async_=False, max_context=2000, specialty='review', model='small', agent=True, transcript=True, diff=False)` | `PostToolUse`, `max_fires=3`; warns when `verdict(result)` — default `NudgeVerdict.fire` |
+| `prompt_check` | `(evt, template, fmt=None, *, prefix, suffix='', timeout=45, include_reasoning=True, diff=False, response_model=PromptCheckVerdict)` | call inside an `@on` handler; returns `HookResult \| None` from `PromptCheckVerdict` |
+| `styleguide` | `(*rules, block=False, only_if=(), skip_if=(), events=None, max_shown=5)` | AST style rules — owned by the `translating-styleguides` skill |
+| `approve` | `(label, *, events=Event.PreToolUse \| Event.PermissionRequest, only_if=(), skip_if=(), tests=None)` | `PreToolUse \| PermissionRequest`; pre-authorizes matching tools before the prompt and answers matching dialogs with allow; **no fire cap**. Unconditioned == a permanent `--dangerously-skip-permissions`; always scope with conditions |
+| `deny` | `(reason, *, events=Event.PreToolUse \| Event.PermissionRequest, only_if=(), skip_if=(), tests=None)` | `PreToolUse \| PermissionRequest`; blocks matching tools before the prompt and answers matching dialogs with deny, `reason` shown to the user; no fire cap. Unconditioned bricks every tool |
+| `llm_approve` | `(label, *, events=Event.PermissionRequest, rubric=None, only_if=(), skip_if=(), model='small', tests=None)` | `PermissionRequest`; LLM safety judge seeded from `claude auto-mode defaults` (+ your `rubric`); a safe verdict allows, an unsafe verdict or LLM failure returns `None` so the dialog shows, never an auto-deny. One LLM round-trip per matching ask |
+<!-- /gen:primitives -->
 
 Notes:
 
@@ -146,27 +150,31 @@ rewrite_command(r"^cat\s+(\S+)$", r"ccx read \1 --full", note="ran ccx", tests={
 `only_if` is **AND** (all must match); `skip_if` is **OR** (any skips). `skip_if` is
 evaluated first.
 
+<!-- gen:conditions -->
 | Need | Use |
 |---|---|
 | Filter by tool name | `Tool("Bash")` or `Tool("Edit", "Write")` — exact names (not regex), aliases auto-expand (Bash=Execute, Write=Create, Agent=Task), MCP suffixes match |
 | Filter by file path | `FilePath("*.py", "*.pyi")` |
 | Filter by bash command text | `CommandCondition(r"git\s+push")` (`captain_hook.types.Command`) — regex over the raw line and each parsed command |
-| Bash argv prefix (structural, no false positives) | `Runs("git", "stash")` — matches `git stash [...]`, not `echo git stash` |
 | Filter by file content being written | `Content(r"print\(")` (multiline regex over Edit new / Write content) |
 | Filter by raw tool-input fields | `ToolInput(model=r"(?i)\bhaiku\b")` (kwargs AND across fields; scalar values coerced to text) |
 | Filter by a Workflow script | `WorkflowScript(model="haiku")` — any `agent()` opt as a kwarg (`effort=`, `agentType=`, …), all AND |
+| Match edit content by code shape (ast-grep) | `Pattern("os.system($CMD)")` — structural, ignores matches inside strings/comments; `lang` inferred from the edited file's extension |
 | Filter by subagent type | `Agent("cleanup")` or `Agent("Explore", "claude-code-guide")` |
-| Match only test files | `TestFile()` (`test_*.py`, `conftest.py`, any `.py` under `tests/`) |
-| Python source edits (skips tests by default, in-repo only) | `SourceEdits(lang="py")`; `lang` also `ts`, `go`, `rs`, ...; `project_only=False` to also match out-of-repo files |
-| File was previously read | `ReadFile("TESTING.md")` — fnmatch globs; anchor dirs with `**/` |
-| File was previously edited | `TouchedFile("**/*.py")` |
-| Command was previously run | `RanCommand("uv", "run", "pytest")` — argv-prefix tokens, wrapper-transparent (`sudo`/`env`/`timeout` stripped) but launcher-literal (`uv run pytest` ≠ `pytest`; list each spelling as its own entry) |
-| Skill was invoked | `UsedSkill("codex")` — bare name also matches `plugin:name` |
-| During plan mode | `InPlanMode()` |
 | Event comes from a subagent/teammate | `FromSubagent()` — the payload carries an `agent_id`; matches the ask's *origin*, where `Agent` matches its *type* |
 | Session launched with bypass available | `SkipPermissions()` — walks to the nearest `claude` ancestor process and matches `--dangerously-skip-permissions` **or** `--allow-dangerously-skip-permissions`; availability counts as consent, whatever the active `permission_mode` |
+| Skill was invoked | `UsedSkill("codex")` — bare name also matches `plugin:name` |
+| File was previously read | `ReadFile("TESTING.md")` — fnmatch globs; anchor dirs with `**/` |
+| Match only test files | `TestFile()` (`**/test_*.py`, `**/*_test.py`, `**/conftest.py`, `**/tests/**/*.py`, `**/*_test.go`, `**/*.test.*`, `**/*.spec.*`) |
+| Python source edits (skips tests by default, in-repo only) | `SourceEdits(lang="py")`; `lang` also `ts`, `go`, `rs`, ...; `project_only=False` to also match out-of-repo files |
+| File was previously edited | `TouchedFile("**/*.py")` |
+| Command was previously run | `RanCommand("uv", "run", "pytest")` — argv-prefix tokens, wrapper-transparent (`sudo`/`env`/`timeout` stripped) but launcher-literal (`uv run pytest` ≠ `pytest`; list each spelling as its own entry) |
+| Bash argv prefix (structural, no false positives) | `Runs("git", "stash")` — matches `git stash [...]`, not `echo git stash` |
+| During plan mode | `InPlanMode()` |
+| Session is parked on background work | `Waiting()` — background shells/subagents/workflows in flight, or an undelivered task notification; typically `skip_if=[Waiting()]` on Stop gates |
 | Combine across types | `Or(...)`, `And(...)`, `Not(...)` |
 | Custom logic | implement `CustomCondition` |
+<!-- /gen:conditions -->
 
 `ReadFile`/`TouchedFile`/`RanCommand`/`UsedSkill` inspect the session transcript — they are
 how Stop gates know what already happened. Custom conditions are any object with a

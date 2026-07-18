@@ -41,6 +41,7 @@ from captain_hook.review.judge import (
 )
 from captain_hook.review.pipeline import (
     BRAIN_ALLOWED_TOOLS,
+    DISPATCH_EVENTS,
     REVIEW_RUN_DEDUP,
     SPAWNED_ENV,
     BrainOutcome,
@@ -677,6 +678,9 @@ class TestNativeReviewWiring:
 
         raw = {"transcript_path": "/t", "cwd": str(tmp_path), "hook_event_name": event.name}
         dispatch_event(tmp_path, event, raw, session_dir=None, async_=async_)
+
+    def test_dispatch_events_are_typed(self) -> None:
+        assert DISPATCH_EVENTS == frozenset({Event.SessionStart, Event.SessionEnd, Event.Stop})
 
     def test_async_review_event_fires(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         calls = self.install(monkeypatch)

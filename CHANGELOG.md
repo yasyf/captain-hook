@@ -4,6 +4,57 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.30.0] - 2026-07-18
+
+### Changed
+- **Language coverage is generated, not hand-listed.** The nine-language
+  `LANG_GLOBS` table is gone; a build hook now probes every Pygments lexer
+  against the bundled ast-grep grammars and writes `captain_hook/langs.py`
+  (generated, gitignored) with 29 languages and 83 file globs. Comment,
+  tombstone, `Pattern`, and rewrite hooks now fire on YAML, JSON (via the
+  JSONC-tolerant grammar), Ruby, Kotlin, Swift, C/C++, C#, PHP, Lua, and the
+  rest of the probed set — the class of miss where a verbose YAML comment
+  went undetected because its language wasn't hand-listed is closed. Known
+  tradeoffs, accepted for coverage: an extension claimed by both a supported
+  and an unsupported lexer keeps the supported mapping (`*.sc` parses as
+  Python), and template dialects parse as their host grammar (`*.eex` as
+  Elixir).
+- **Comment scanning got correct and bounded.** `COMMENT_TYPES` is now the
+  generated cross-language union — `multiline_comment`, `html_comment`, and
+  `js_comment` were silently missing — nested comment kinds count once
+  (a Dart block comment no longer doubles its own length), sources past
+  500 KB skip the scan instead of stalling a hook for tens of seconds, and
+  `DOC_PREFIXES` learned the doc dialects of the newly live languages
+  (KDoc, Swift/Dart/C# `///`, phpdoc, scaladoc) so their doc comments warn
+  as docs instead of blocking as verbose.
+- **The public API has one source of truth.** `captain_hook/__init__.pyi`
+  (defining-module re-exports) replaces the ~150-entry `_EXPORTS` dict, the
+  parallel `TYPE_CHECKING` import block, and the test-side `DEFINING_MODULE`
+  map; a build hook parses the stub into generated `captain_hook/exports.py`
+  and a 20-line PEP 562 facade serves attributes lazily. Every export
+  resolves to the same object as before; bare `import captain_hook` stays at
+  its ~3 ms baseline.
+- **Condition/event validity lives on the condition classes.** The
+  hand-maintained `_CONDITION_EVENTS` map is gone: each restricted condition
+  declares `valid_events`, `condition_events()` recurses combinators
+  (`And` intersects, `Or` unions, `Not` stays unrestricted), and
+  registration errors are unchanged.
+- **Skill reference tables are rendered from code.** The events, primitives,
+  conditions, and matcher tables in the bundled skills regenerate from the
+  live objects behind drift tests; regeneration corrected stale rows —
+  `approve`/`deny` still claimed `PermissionRequest`-only defaults from
+  before 9.24.0, five primitive signatures had drifted, and `Pattern` and
+  `Waiting` had no rows at all.
+- **Derived the remaining duplicated tables.** `File.TEST_PATTERNS` covers
+  `*_test.py`, `*_test.go`, `*.test.*`, and `*.spec.*`; the wn lexicon
+  resolves the latest `oewn` release at provisioning (currently `2025+`)
+  and the CI/docs NLP cache keys embed the resolved version; the spaCy
+  model name, review status choices, dispatch events, scan detector names,
+  judge categories, and review fix paths each have exactly one definition.
+  The general pack's inline-edit nudge derives its source globs from the
+  generated table (Markdown excluded — doc edits stay inline by policy;
+  Zig dropped — no ast-grep grammar).
+
 ## [9.29.0] - 2026-07-18
 
 ### Changed

@@ -8,6 +8,8 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any, ClassVar
 
+from captain_hook.langs import LANG_GLOBS
+
 
 @dataclass(frozen=True, kw_only=True)
 class File:
@@ -19,7 +21,15 @@ class File:
 
     path: Path
 
-    TEST_PATTERNS: ClassVar[list[str]] = ["**/test_*.py", "**/conftest.py", "**/tests/**/*.py"]
+    TEST_PATTERNS: ClassVar[list[str]] = [
+        "**/test_*.py",
+        "**/*_test.py",
+        "**/conftest.py",
+        "**/tests/**/*.py",
+        "**/*_test.go",
+        "**/*.test.*",
+        "**/*.spec.*",
+    ]
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.path, name)
@@ -100,8 +110,6 @@ def categorize_files(paths: Iterable[str | Path], *, lang: str = "py") -> tuple[
         A ``(source, test, skipped)`` tuple, each a sorted, de-duplicated list of
         path strings.
     """
-    from captain_hook.types import LANG_GLOBS
-
     matcher = PathMatcher(patterns=list(LANG_GLOBS.get(lang, (f"*.{lang}",))))
     source: set[str] = set()
     test: set[str] = set()

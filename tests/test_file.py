@@ -94,8 +94,12 @@ class TestFileIsTest:
         ("path", "expected"),
         [
             pytest.param("tests/test_query.py", True, id="test_prefix_file"),
+            pytest.param("pkg/query_test.py", True, id="test_suffix_file"),
             pytest.param("tests/conftest.py", True, id="conftest"),
             pytest.param("/project/bioqa/tests/util/test_helpers.py", True, id="nested_test_dir"),
+            pytest.param("pkg/query_test.go", True, id="go_test_file"),
+            pytest.param("web/query.test.ts", True, id="dot_test_file"),
+            pytest.param("web/query.spec.tsx", True, id="dot_spec_file"),
             pytest.param("bioqa/main.py", False, id="non_test_file"),
         ],
     )

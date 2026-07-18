@@ -40,3 +40,5 @@ coverage.xml
 great-docs/
 docs/scripts/.gd-build/
 stress/reports/
+captain_hook/langs.py
+captain_hook/exports.py

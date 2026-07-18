@@ -42,11 +42,18 @@ jobs:
       # poisoned the key: a sync that rebuilt the venv silently dropped the
       # model while the hit still skipped provisioning. The key is shared with
       # the CI workflow — the assets are identical and interpreter-independent —
-      # and tracks only the locked spaCy minor, so unrelated lockfile churn no
-      # longer evicts the cache and re-downloads from GitHub (which rate-limits).
+      # and tracks the locked spaCy minor and resolved Open English WordNet
+      # version, so unrelated lockfile churn no longer evicts the cache and
+      # re-downloads from GitHub (which rate-limits).
       - name: Resolve spaCy minor (cache key)
         id: spacy
         run: echo "minor=$(grep -A1 '^name = "spacy"$' uv.lock | grep '^version' | grep -o '[0-9]*\.[0-9]*' | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve OEWN version (cache key)
+        id: oewn
+        run: |
+          version=$(uv run python -c "import wn; print(wn.config.get_project_info('oewn')['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Cache NLP assets
         id: nlp-cache
@@ -55,7 +62,7 @@ jobs:
           path: |
             ~/.cache/spacy/models
             ~/.wn_data
-          key: nlp-v3-${{ runner.os }}-spacy-${{ steps.spacy.outputs.minor }}
+          key: nlp-v4-${{ runner.os }}-spacy-${{ steps.spacy.outputs.minor }}-oewn-${{ steps.oewn.outputs.version }}
 
       - name: Sync (docs)
         run: uv sync --group docs
@@ -63,8 +70,7 @@ jobs:
       - name: Provision NLP assets
         if: steps.nlp-cache.outputs.cache-hit != 'true'
         run: |
-          uv run python -c "from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()"
-          uv run python -c "import wn; wn.download('oewn:2025')"
+          uv run python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensure_nlp_resources()"
 
       - name: Build documentation
         run: uv run --with "git+https://github.com/yasyf/cc-skills@main#subdirectory=tools/gd-build" gd-build build

@@ -32,6 +32,7 @@ consult the parent map. Build rules by combining matchers, not by writing traver
 
 ## Prebuilt constants
 
+<!-- gen:matcher-constants -->
 | Constant | Matches |
 |---|---|
 | `M.module` | `ast.Module` (the file root) |
@@ -48,9 +49,11 @@ consult the parent map. Build rules by combining matchers, not by writing traver
 | `M.private` | a definition/assignment/parameter named `_x` (single leading underscore) |
 | `M.dunder` | one named `__x__` |
 | `M.constant` | one named `UPPER_SNAKE` (optional leading underscore) |
+<!-- /gen:matcher-constants -->
 
 ## Predicate factories
 
+<!-- gen:matcher-factories -->
 | Factory | Matches |
 |---|---|
 | `M.kind(*types, label=None)` | any of the given `ast` node types — the primitive for a category not shipped, e.g. `M.kind(ast.Lambda)` |
@@ -59,14 +62,17 @@ consult the parent map. Build rules by combining matchers, not by writing traver
 | `M.ref(name)` | a bare name reference, e.g. `M.ref("Any")` |
 | `M.named(pattern)` | a class/function/assignment/parameter whose bound name matches the regex (`re.search`) |
 | `M.annotated(inner=None)` | an annotation owner (annotated variable, parameter, or return; excludes `*args`/`**kwargs`); with `inner`, its annotation expression must also match, e.g. `M.annotated(M.ref("Any"))` |
+<!-- /gen:matcher-factories -->
 
 ## Structure
 
+<!-- gen:matcher-structure -->
 | Factory | Matches |
 |---|---|
 | `M.under(m)` | a node with *any ancestor* matching `m` |
 | `M.child_of(m)` | a node whose *immediate parent* matches `m` |
 | `M.following(m)` | a body statement that comes *after the first sibling* matching `m` |
+<!-- /gen:matcher-structure -->
 
 ## Refinement: `.where()`
 

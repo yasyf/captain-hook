@@ -4,12 +4,16 @@ import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Flag, StrEnum, auto
+from functools import reduce
 from hashlib import sha256
+from operator import and_, or_
 from pathlib import Path
 from textwrap import dedent
+from types import NotImplementedType
 from typing import (
     TYPE_CHECKING,
     Any,
+    ClassVar,
     Generic,
     Literal,
     Protocol,
@@ -19,6 +23,8 @@ from typing import (
     runtime_checkable,
 )
 
+from captain_hook.langs import LANG_GLOBS
+
 if TYPE_CHECKING:
     from cc_transcript.command import CommandLine
     from cc_transcript.tools import ToolCallBase
@@ -27,19 +33,6 @@ if TYPE_CHECKING:
     from captain_hook.signals.nlp import NlpSignal
 
 T = TypeVar("T", bound="ToolCallBase")
-
-
-LANG_GLOBS: dict[str, tuple[str, ...]] = {
-    "py": ("*.py", "*.pyi"),
-    "ts": ("*.ts",),
-    "tsx": ("*.tsx",),
-    "js": ("*.js", "*.mjs", "*.cjs"),
-    "jsx": ("*.jsx",),
-    "go": ("*.go",),
-    "rs": ("*.rs",),
-    "java": ("*.java",),
-    "bash": ("*.sh", "*.bash"),
-}
 
 
 def _split_names(names: Sequence[str]) -> tuple[str, ...]:
@@ -105,6 +98,10 @@ class Event(Flag):
         raise ValueError(f"event_class requires a single-member flag, got {self!r}")
 
 
+TOOL_EVENTS: Event = Event.PreToolUse | Event.PostToolUse | Event.PostToolUseFailure | Event.PermissionRequest
+ALL_EVENTS: Event = reduce(or_, Event)
+
+
 class Action(StrEnum):
     """Hook result action determining how the hook output is handled.
 
@@ -134,6 +131,7 @@ class Tool:
         >>> hook(Event.PreToolUse, only_if=[Tool("Bash", "Execute")], message="...", block=True)
     """
 
+    valid_events: ClassVar[Event] = TOOL_EVENTS
     names: tuple[str, ...]
 
     def __init__(self, *names: str) -> None:
@@ -155,6 +153,7 @@ class FilePath(PatternsCondition):
         >>> hook(Event.PostToolUse, only_if=[FilePath("*.py", "*.pyi")], message="Python file edited")
     """
 
+    valid_events: ClassVar[Event] = TOOL_EVENTS
     project_only: bool
 
     def __init__(self, *patterns: str, project_only: bool = True) -> None:
@@ -175,6 +174,7 @@ class Command:
         >>> hook(Event.PreToolUse, only_if=[Command(r"git\\s+stash")], message="blocked", block=True)
     """
 
+    valid_events: ClassVar[Event] = TOOL_EVENTS
     pattern: str
 
     def __post_init__(self) -> None:
@@ -193,6 +193,7 @@ class Content:
             ``False`` to also match scratch files, attachments, and other paths outside the repo.
     """
 
+    valid_events: ClassVar[Event] = TOOL_EVENTS
     pattern: str
     project_only: bool = True
 
@@ -219,6 +220,7 @@ class ToolInput:
         >>> hook(Event.PreToolUse, only_if=[ToolInput(model=r"(?i)\\bhaiku\\b")], message="...", block=True)
     """
 
+    valid_events: ClassVar[Event] = TOOL_EVENTS
     fields: tuple[tuple[str, str], ...]
 
     def __init__(self, *positional: str, **fields: str) -> None:
@@ -265,6 +267,7 @@ class WorkflowScript:
         ...       events=Event.PreToolUse)
     """
 
+    valid_events: ClassVar[Event] = TOOL_EVENTS
     pattern: str | None
     opts: tuple[tuple[str, str], ...]
 
@@ -290,7 +293,7 @@ class Pattern:
     Args:
         pattern: An ast-grep pattern string with metavariables, e.g. ``"os.system($CMD)"`` or
             ``"print($$$)"``.
-        lang: ast-grep language id (the short keys of [`LANG_GLOBS`][captain_hook.types.LANG_GLOBS],
+        lang: ast-grep language id (the short keys of [`LANG_GLOBS`][captain_hook.langs.LANG_GLOBS],
             e.g. ``"py"``, ``"go"``); inferred from the edited file's extension when omitted.
         project_only: Only fire on files inside the repository root (default ``True``), like
             [`Content`][captain_hook.types.Content].
@@ -299,6 +302,7 @@ class Pattern:
         >>> hook(Event.PreToolUse, only_if=[Pattern("eval($$$)")], message="no eval", block=True)
     """
 
+    valid_events: ClassVar[Event] = TOOL_EVENTS
     pattern: str
     lang: str | None = None
     project_only: bool = True
@@ -346,9 +350,11 @@ class ReadFile(PatternsCondition):
 class TestFile:
     """Condition that matches when the current event targets a test file.
 
-    A test file is ``test_*.py``, ``conftest.py``, or any ``.py`` under a ``tests/`` directory.
+    A test file is ``test_*.py``, ``*_test.py``, ``conftest.py``, any ``.py`` under a
+    ``tests/`` directory, ``*_test.go``, ``*.test.*``, or ``*.spec.*``.
     """
 
+    valid_events: ClassVar[Event] = TOOL_EVENTS
     __test__ = False
 
     project_only: bool = True
@@ -362,7 +368,7 @@ class SourceEdits:
     ``include_tests`` — is not a test file, optionally narrowed to ``paths``.
 
     Args:
-        lang: Language key into [`LANG_GLOBS`][captain_hook.types.LANG_GLOBS] (default ``"py"``);
+        lang: Language key into [`LANG_GLOBS`][captain_hook.langs.LANG_GLOBS] (default ``"py"``);
             unknown keys fall back to ``*.<lang>``.
         include_tests: Include test files too (default ``False`` excludes them).
         paths: One or more ``fnmatch`` globs the file must also match (e.g. ``("src/**", "lib/**")``);
@@ -374,6 +380,7 @@ class SourceEdits:
         >>> hook(Event.PostToolUse, only_if=[SourceEdits(lang="ts", paths=("src/**", "lib/**"))], message="...")
     """
 
+    valid_events: ClassVar[Event] = TOOL_EVENTS
     lang: str
     include_tests: bool
     paths: tuple[str, ...]
@@ -404,6 +411,7 @@ class Agent:
     for back-compat (``Agent("Explore|claude-code-guide")`` is ``Agent("Explore", "claude-code-guide")``).
     """
 
+    valid_events: ClassVar[Event] = TOOL_EVENTS | Event.SubagentStart | Event.SubagentStop
     names: tuple[str, ...]
 
     def __init__(self, *names: str) -> None:
@@ -529,6 +537,7 @@ class Runs:
         >>> hook(Event.PreToolUse, only_if=[Runs("git", "stash")], message="no stashing", block=True)
     """
 
+    valid_events: ClassVar[Event] = TOOL_EVENTS
     argv: tuple[str, ...]
 
     def __init__(self, *argv: str) -> None:
@@ -570,6 +579,8 @@ class CustomCondition(Protocol):
     Implement ``check`` to create arbitrary matching logic beyond the
     built-in condition types.
 
+    Override ``valid_events`` to restrict to the events your condition can read.
+
     Example:
         >>> class LargeFile(CustomCondition):
         ...     def check(self, evt: BaseHookEvent) -> bool:
@@ -577,6 +588,14 @@ class CustomCondition(Protocol):
         ...
         >>> app.hook(Event.PreToolUse, only_if=[LargeFile()], message="Large file", block=True)
     """
+
+    valid_events: ClassVar[Event] = ALL_EVENTS
+
+    @classmethod
+    def __subclasshook__(cls, other: type) -> bool | NotImplementedType:
+        if cls is CustomCondition:
+            return callable(getattr(other, "check", None))
+        return NotImplemented
 
     def check(self, evt: BaseHookEvent) -> bool: ...
 
@@ -652,6 +671,20 @@ TCondition = (
     | Not
     | CustomCondition
 )
+
+
+def condition_events(c: TCondition) -> Event:
+    """Return the lifecycle events on which a condition can possibly match."""
+    match c:
+        case And(conditions=conditions):
+            return reduce(and_, map(condition_events, conditions), ALL_EVENTS)
+        case Or(conditions=conditions):
+            return reduce(or_, map(condition_events, conditions), Event(0))
+        case Not():
+            return ALL_EVENTS
+        case _:
+            # Session-state conditions are event-agnostic unless their class declares otherwise.
+            return getattr(type(c), "valid_events", ALL_EVENTS)
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

@@ -126,6 +126,8 @@ def logcap():
 
 @pytest.fixture
 def isolate_modules():
+    from captain_hook.exports import EXPORTS
+
     snapshot_modules = set(sys.modules.keys())
     snapshot_path = sys.path[:]
     yield
@@ -136,7 +138,7 @@ def isolate_modules():
     # Removing a submodule leaves the root package's PEP 562 __getattr__ cache pinned to the
     # orphaned object; drop cached exports sourced from a removed module so they re-resolve.
     if (root := sys.modules.get("captain_hook")) is not None:
-        for name, target in root._EXPORTS.items():
+        for name, target in EXPORTS.items():
             if target in removed:
                 root.__dict__.pop(name, None)
 

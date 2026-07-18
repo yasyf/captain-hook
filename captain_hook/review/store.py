@@ -26,6 +26,7 @@ from cc_transcript.store import FileStateStore
 from captain_hook.review.fix import HOOK_COMPLAINT
 from captain_hook.review.prompts import CREATE_TEMPLATE, FIX_TEMPLATE
 from captain_hook.review.repo import RepoKey, pr_repo_key
+from captain_hook.review.status import CandidateStatus
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -102,16 +103,6 @@ def prompt_version(template: str) -> int:
 
 
 PROMPT_VERSIONS = PromptVersions(create=prompt_version(CREATE_TEMPLATE), fix=prompt_version(FIX_TEMPLATE))
-
-
-class CandidateStatus(StrEnum):
-    """A candidate's lifecycle state; ``REJECTED`` is terminal and ``ACCEPTED`` reopens only on recurrence."""
-
-    WATCHING = "watching"
-    PR_OPEN = "pr_open"
-    STALE = "stale"
-    ACCEPTED = "accepted"
-    REJECTED = "rejected"
 
 
 TRANSITIONS: Mapping[CandidateStatus, frozenset[CandidateStatus]] = {

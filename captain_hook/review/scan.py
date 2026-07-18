@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -64,7 +65,7 @@ from cc_transcript.ids import EventRef
 from cc_transcript.mining.candidates import FeedbackCandidate, dedup_key
 from cc_transcript.mining.filterspec import at_least, build_candidate_filter, keep_candidate
 from cc_transcript.mining.signals import mine
-from cc_transcript.mining.spec import MiningSpec
+from cc_transcript.mining.spec import ALL_DETECTORS, MiningSpec
 from cc_transcript.models import UserEvent
 from cc_transcript.parser import TranscriptParser, parse_events_from_bytes
 
@@ -88,6 +89,19 @@ if TYPE_CHECKING:
 
 REVIEWER_MARKER = "capt-hook-session-reviewer"
 """The token the reviewer's own headless sessions carry in their first user message."""
+
+
+class Detector(StrEnum):
+    INTERRUPT = "interrupt"
+    ASK_USER_QUESTION = "ask_user_question"
+    PLAN_REENTRY = "plan_reentry"
+    REVIEW_COMMENT = "review_comment"
+    EXIT_PLAN_REJECTION = "exit_plan_rejection"
+    DENIAL = "denial"
+    TRANSCRIPT_MESSAGE = "transcript_message"
+
+
+assert frozenset(Detector) <= frozenset(ALL_DETECTORS)
 
 REVIEWER_MINING_SPEC = MiningSpec(review=review_spec())
 """The reviewer's mining policy: all six core detectors with the reviewer's review formats.
@@ -170,11 +184,21 @@ trivial acknowledgements, very short control messages, and
 sidechain/meta/compacted/empty turns.
 """
 
-GATED_DETECTORS = frozenset({"transcript_message", "plan_reentry", "review_comment", "exit_plan_rejection"})
+GATED_DETECTORS = frozenset(
+    {Detector.TRANSCRIPT_MESSAGE, Detector.PLAN_REENTRY, Detector.REVIEW_COMMENT, Detector.EXIT_PLAN_REJECTION}
+)
 """CREATE detectors whose surviving signal must clear the :data:`STRICT_USER` prefilter
 and the paste-only structural check before it can become a candidate."""
 
-COLLAPSE_DETECTORS = frozenset({"exit_plan_rejection", "plan_reentry", "denial", "interrupt", "review_comment"})
+COLLAPSE_DETECTORS = frozenset(
+    {
+        Detector.EXIT_PLAN_REJECTION,
+        Detector.PLAN_REENTRY,
+        Detector.DENIAL,
+        Detector.INTERRUPT,
+        Detector.REVIEW_COMMENT,
+    }
+)
 """CREATE detectors whose surviving signal shadows an equal-text ``transcript_message`` at the same event."""
 
 REASON_ENTRY: dict[str, Any] = {
@@ -236,7 +260,7 @@ def reason_kept(text: str) -> bool:
 
 
 def gated_survives(event: TranscriptEvent, sig: MiningSignal) -> bool:
-    if sig.detector == "exit_plan_rejection":
+    if sig.detector == Detector.EXIT_PLAN_REJECTION:
         return keep(event, STRICT_USER_ENVELOPE) and reason_kept(sig.text)
     return keep(event, STRICT_USER) and not is_paste_only(event_text(event))
 
@@ -244,30 +268,30 @@ def gated_survives(event: TranscriptEvent, sig: MiningSignal) -> bool:
 def survives(events: Sequence[TranscriptEvent], sig: MiningSignal) -> bool:
     if sig.detector in GATED_DETECTORS and not gated_survives(events[sig.event_index], sig):
         return False
-    return not (sig.detector == "transcript_message" and sig.trigger_index is None)
+    return not (sig.detector == Detector.TRANSCRIPT_MESSAGE and sig.trigger_index is None)
 
 
 def rule_parts(sig: MiningSignal) -> tuple[str, ...]:
     match sig.detector:
-        case "hook_complaint":
-            return ("hook_complaint", str(sig.evidence["target_hook_name"]), str(sig.evidence["target_source_file"]))
-        case "transcript_message":
-            return ("transcript_message", sig.text)
-        case "exit_plan_rejection":
+        case detector if detector == HOOK_COMPLAINT:
+            return (HOOK_COMPLAINT, str(sig.evidence["target_hook_name"]), str(sig.evidence["target_source_file"]))
+        case Detector.TRANSCRIPT_MESSAGE:
+            return (Detector.TRANSCRIPT_MESSAGE, sig.text)
+        case Detector.EXIT_PLAN_REJECTION:
             return ("plan_review", "exit_plan", sig.text)
-        case "plan_reentry":
-            return ("plan_review", "plan_reentry", sig.text)
-        case "denial" | "interrupt":
+        case Detector.PLAN_REENTRY:
+            return ("plan_review", Detector.PLAN_REENTRY, sig.text)
+        case Detector.DENIAL | Detector.INTERRUPT:
             return ("interrupt_rejection", sig.text)
-        case "review_comment":
+        case Detector.REVIEW_COMMENT:
             return (
-                "review_comment",
+                Detector.REVIEW_COMMENT,
                 sig.evidence["file"] or "",
                 str(sig.evidence["line_start"] or ""),
                 str(sig.evidence["line_end"] or ""),
                 sig.text,
             )
-        case "ask_user_question":
+        case Detector.ASK_USER_QUESTION:
             return ("question_answer", str(sig.evidence["question"] or ""), sig.text)
         case _:
             raise AssertionError(sig.detector)
@@ -280,17 +304,17 @@ def parts(sig: MiningSignal) -> tuple[str, ...]:
 
 def payload_of(sig: MiningSignal) -> Mapping[str, Any] | None:
     match sig.detector:
-        case "hook_complaint":
+        case detector if detector == HOOK_COMPLAINT:
             return dict(sig.evidence)
-        case "transcript_message":
+        case Detector.TRANSCRIPT_MESSAGE:
             return None
-        case "exit_plan_rejection" | "plan_reentry" | "interrupt":
+        case Detector.EXIT_PLAN_REJECTION | Detector.PLAN_REENTRY | Detector.INTERRUPT:
             return {"detector": sig.detector}
-        case "denial":
+        case Detector.DENIAL:
             return dict(sig.evidence) or None
-        case "review_comment":
+        case Detector.REVIEW_COMMENT:
             return {key: sig.evidence[key] for key in ("format", "file", "line_start", "line_end")}
-        case "ask_user_question":
+        case Detector.ASK_USER_QUESTION:
             return dict(sig.evidence)
         case _:
             raise AssertionError(sig.detector)
@@ -402,7 +426,7 @@ def collapse_cross_detector(
     return [
         (sig, candidate)
         for sig, candidate in kept
-        if not (sig.detector == "transcript_message" and (sig.session_id, sig.event_uuid, sig.text) in shadowed)
+        if not (sig.detector == Detector.TRANSCRIPT_MESSAGE and (sig.session_id, sig.event_uuid, sig.text) in shadowed)
     ]
 
 

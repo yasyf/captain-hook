@@ -83,9 +83,7 @@ HOOK_COMPLAINT = SourceKind("hook_complaint")
 PROXIMITY_TURNS = 3
 TIGHT_PROXIMITY_TURNS = 1
 STOP_FEEDBACK_PREFIX = "Stop hook feedback:\n"
-PACKS_DIR = "captain_hook/packs"
-WHEEL_PACKAGE = "captain_hook/"
-PACK_CACHE_SEGMENT = "captain-hook/packs/"
+CAPTAIN_HOOK_ROOT = "captain_hook"
 NAMED_HOOK_WINDOW_MS = 1_800_000
 NAMED_HOOK_RE = re.compile(r"\b(?:the\s+)?([a-z][\w-]*(?:[\s-][a-z][\w-]*)?)\s+hooks?\b", re.IGNORECASE)
 
@@ -276,7 +274,10 @@ def user_repo_source(source_file: str) -> bool:
     the ``captain-hook/packs/`` cache segment. Neither is a repo path, so both resolve through
     the decision ``kind``'s module prefix instead of being returned verbatim.
     """
-    return WHEEL_PACKAGE not in source_file and PACK_CACHE_SEGMENT not in source_file
+    return (
+        f"{CAPTAIN_HOOK_ROOT}/" not in source_file
+        and f"{CAPTAIN_HOOK_ROOT.replace('_', '-')}/packs/" not in source_file
+    )
 
 
 def external_target_path(source_file: str) -> str | None:
@@ -285,7 +286,7 @@ def external_target_path(source_file: str) -> str | None:
     A cached external pack lives at ``.../captain-hook/packs/<name>@<sha>/<path>``, so
     the path within the pack's own repo is everything past the ``<name>@<sha>/`` segment.
     """
-    return source_file.partition(PACK_CACHE_SEGMENT)[2].partition("/")[2] or None
+    return source_file.partition(f"{CAPTAIN_HOOK_ROOT.replace('_', '-')}/packs/")[2].partition("/")[2] or None
 
 
 def resolve_target(decision: Decision, index: PackIndex) -> Target | None:
@@ -296,7 +297,7 @@ def resolve_target(decision: Decision, index: PackIndex) -> Target | None:
         return None
     match module.split("."):
         case [pack, mod] if (pack_dir := index.builtins.get(pack)) and (pack_dir / f"{mod}.py").is_file():
-            return Target(f"{PACKS_DIR}/{pack}/{mod}.py", decision.kind, CAPTAIN_HOOK_REPO, pack)
+            return Target(f"{CAPTAIN_HOOK_ROOT}/packs/{pack}/{mod}.py", decision.kind, CAPTAIN_HOOK_REPO, pack)
         case [pack, _mod] if (route := index.externals.get(pack)) and (
             path := external_target_path(decision.source_file)
         ):

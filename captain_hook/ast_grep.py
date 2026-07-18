@@ -7,7 +7,7 @@ lives behind one seam.
 Patterns are plain ast-grep pattern strings with metavariables: ``print($$$)`` matches a print call
 however its arguments are spelled, ``os.system($CMD)`` captures the argument as ``$CMD``. Rewrites
 reuse ast-grep's ``$VAR`` / ``$$$VAR`` fix syntax. Language ids are the same short keys as
-:data:`~captain_hook.types.LANG_GLOBS` (``"py"``, ``"go"``, ``"ts"``, ...); ast-grep also accepts the
+:data:`~captain_hook.langs.LANG_GLOBS` (``"py"``, ``"go"``, ``"ts"``, ...); ast-grep also accepts the
 long names (``"python"``).
 """
 
@@ -20,7 +20,8 @@ from collections.abc import Iterable, Iterator, Set
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from captain_hook.types import LANG_GLOBS
+from captain_hook.langs import COMMENT_TYPES as GENERATED_COMMENT_TYPES
+from captain_hook.langs import LANG_GLOBS
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -31,15 +32,19 @@ EXT_TO_LANG: dict[str, str] = {glob.removeprefix("*."): lang for lang, globs in 
 
 TEMPLATE_VAR = re.compile(r"\$\$\$([A-Z_][A-Z0-9_]*)|\$([A-Z_][A-Z0-9_]*)")
 
-COMMENT_TYPES: frozenset[str] = frozenset({"comment", "line_comment", "block_comment"})
+COMMENT_TYPES: frozenset[str] = GENERATED_COMMENT_TYPES
 """Tree-sitter node kinds that denote a comment, across every supported grammar.
 
-The union covers every [`LANG_GLOBS`][captain_hook.types.LANG_GLOBS] grammar; a future grammar
-whose top-level comment kind is named differently would silently miss.
+The union covers every [`LANG_GLOBS`][captain_hook.langs.LANG_GLOBS] grammar. Markdown (``md``) is
+the verified exception with no comment kinds. A Dart block documentation comment has an outer
+``comment`` with a nested ``documentation_block_comment``; its grammar has no literal
+``documentation_comment`` kind. Generation fails if another supported grammar defines none of the
+known comment container kinds.
 """
 
 MAX_COMMENT_LINES = 3
 MAX_COMMENT_CHARS = 200
+MAX_COMMENT_SCAN_BYTES = 512_000
 
 DOC_PREFIXES: dict[str, tuple[str, ...]] = {
     "rs": ("///", "//!", "/**", "/*!"),
@@ -48,6 +53,12 @@ DOC_PREFIXES: dict[str, tuple[str, ...]] = {
     "ts": ("/**",),
     "tsx": ("/**",),
     "java": ("/**",),
+    "kotlin": ("/**",),
+    "swift": ("///", "/**"),
+    "dart": ("///",),
+    "cs": ("///",),
+    "php": ("/**",),
+    "scala": ("/**",),
 }
 """Comment prefixes that mark a documentation comment, by language."""
 
@@ -276,10 +287,20 @@ def comment_runs(source: str, lang: str) -> list[CommentRun]:
     shebang is dropped entirely). Cached per ``(source, lang)`` — several conditions parse the same
     image per event.
     """
+    # Bound hook latency by skipping comment scans for large sources.
+    if len(source.encode()) > MAX_COMMENT_SCAN_BYTES:
+        return []
     src_lines = source.splitlines()
     groups: list[tuple[list[SyntaxNode], bool]] = []
+    last_comment_end = (-1, -1)
     for node in parse(source, lang).descendants():
-        if node.kind not in COMMENT_TYPES or is_shebang(node):
+        if node.kind not in COMMENT_TYPES:
+            continue
+        node_range = node.raw.range()
+        if (node_range.start.line, node_range.start.column) < last_comment_end:
+            continue
+        last_comment_end = (node_range.end.line, node_range.end.column)
+        if is_shebang(node):
             continue
         leading = is_line_leading(node, src_lines)
         if leading and groups and groups[-1][1] and line_span(node)[0] <= line_span(groups[-1][0][-1])[1] + 1:

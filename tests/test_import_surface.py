@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT_INIT = Path(__file__).resolve().parents[1] / "captain_hook" / "__init__.py"
+ROOT_STUB = Path(__file__).resolve().parents[1] / "captain_hook" / "__init__.pyi"
 
 CONSUMER_SURFACE = {
     "Action",
@@ -44,6 +44,8 @@ LEGACY_SURFACE = ("Transcript", "Turn", "ToolUse", "ToolUseQuery", "EditInput", 
 PROBE = """
 import importlib, json, sys
 module = importlib.import_module("captain_hook")
+assert "pygments" not in sys.modules
+assert "hatchling" not in sys.modules
 print(json.dumps([name for name in json.loads(sys.argv[1]) if not hasattr(module, name)]))
 """
 
@@ -60,16 +62,20 @@ for name, pack_dir in manager.builtin_packs().items():
 print(",".join(name for name in ("wn", "spacy") if name in sys.modules))
 """
 
+CLI_IMPORT_PROBE = """
+import sys
+
+import captain_hook.cli
+
+assert "aiosqlite" not in sys.modules
+assert "captain_hook.review.store" not in sys.modules
+"""
+
 
 def exported_names() -> set[str]:
-    type_checking = next(
-        node
-        for node in ast.parse(ROOT_INIT.read_text()).body
-        if isinstance(node, ast.If) and ast.unparse(node.test) == "TYPE_CHECKING"
-    )
     return {
         alias.asname or alias.name
-        for node in type_checking.body
+        for node in ast.parse(ROOT_STUB.read_text()).body
         if isinstance(node, ast.ImportFrom)
         for alias in node.names
     }
@@ -100,3 +106,8 @@ def test_builtin_pack_discovery_does_not_load_nlp_models() -> None:
     out = subprocess.run([sys.executable, "-c", PACK_IMPORT_PROBE], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == ""
+
+
+def test_cli_import_does_not_load_review_store() -> None:
+    out = subprocess.run([sys.executable, "-c", CLI_IMPORT_PROBE], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr

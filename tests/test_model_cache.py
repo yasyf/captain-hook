@@ -223,12 +223,15 @@ def test_model_sha256_raises_when_checksum_absent(monkeypatch: pytest.MonkeyPatc
 
 class FakeWn:
     def __init__(self, data_dir: Path, *, installed: bool) -> None:
-        self.config = SimpleNamespace(data_directory=str(data_dir))
+        self.config = SimpleNamespace(
+            data_directory=str(data_dir),
+            get_project_info=lambda lexicon: {"version": "2025+"} if lexicon == model_cache.WN_LEXICON else None,
+        )
         self.installed = installed
         self.downloads: list[str] = []
 
     def lexicons(self, lexicon: str) -> list[str]:
-        assert lexicon == model_cache.WN_LEXICON
+        assert lexicon == f"{model_cache.WN_LEXICON}:2025+"
         return ["oewn"] if self.installed else []
 
     def download(self, spec: str, progress_handler: object = None) -> None:
@@ -260,8 +263,8 @@ def test_wn_lexicon_downloads_once_under_filelock(
     model_cache.ensure_wn_lexicon()
     model_cache.ensure_wn_lexicon()
 
-    assert fake_wn.downloads == [model_cache.WN_LEXICON]
-    assert locks == [str(tmp_path / "wn-data" / "oewn-2025.lock")]
+    assert fake_wn.downloads == [f"{model_cache.WN_LEXICON}:2025+"]
+    assert locks == [str(tmp_path / "wn-data" / "oewn-2025+.lock")]
 
 
 def test_ensure_nlp_resources_composes(monkeypatch: pytest.MonkeyPatch) -> None:

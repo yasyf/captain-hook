@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Literal, Self
+from typing import TYPE_CHECKING, Self, get_args
 
 import anyio.to_thread
 from cc_transcript.context import ContextWindow, HydratedWindow
@@ -32,7 +32,7 @@ from cc_transcript.render import Budget
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from captain_hook.review.fix import HOOK_COMPLAINT
-from captain_hook.review.prompts import CREATE_TEMPLATE, FIX_TEMPLATE
+from captain_hook.review.prompts import CREATE_TEMPLATE, FIX_TEMPLATE, Category
 from captain_hook.review.store import judge_worthy
 
 if TYPE_CHECKING:
@@ -50,20 +50,7 @@ TRIGGER_BUDGET = Budget(turn_chars=2000, tool_chars=6000)
 CONTEXT_BUDGET = Budget()
 
 DURABLE_CATEGORIES = frozenset({"durable_style_rule", "workflow_rule", "tooling_rule", "safety_guard"})
-
-Category = Literal[
-    "durable_style_rule",
-    "workflow_rule",
-    "tooling_rule",
-    "safety_guard",
-    "one_off_correction",
-    "task_specific",
-    "preference_unclear",
-    "ambient_noise",
-    "misfire_confirmed",
-    "compliance",
-    "ambient_mention",
-]
+assert DURABLE_CATEGORIES <= frozenset(get_args(Category))
 
 
 class ReviewVerdict(BaseModel):

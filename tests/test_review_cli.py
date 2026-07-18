@@ -107,7 +107,7 @@ class TestGroupSurface:
             assert command in result.output
 
     def test_status_choices_match_candidate_status(self) -> None:
-        assert set(STATUS_CHOICES) == {status.value for status in CandidateStatus}
+        assert STATUS_CHOICES == tuple(status.value for status in CandidateStatus)
 
 
 class TestEnableDisable:

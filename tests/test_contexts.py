@@ -174,8 +174,12 @@ class TestIntroduced:
         assert Introduced(kind=COMMENT_TYPES).content(evt) == "# why"
 
     def test_unsupported_suffix_yields_none(self) -> None:
-        evt = edit_event(old="x\n", content="# note\ny\n", file="notes.md")
+        evt = edit_event(old="x\n", content="# note\ny\n", file="notes.toml")
         assert Introduced(kind=COMMENT_TYPES).content(evt) is None
+
+    def test_commentless_grammar_yields_no_matches(self) -> None:
+        evt = edit_event(old="x\n", content="# note\ny\n", file="notes.md")
+        assert Introduced(kind=COMMENT_TYPES).content(evt) == ""
 
     def test_bash_yields_none(self) -> None:
         assert Introduced(kind="comment").content(mock_event("PreToolUse", tool="Bash", command="ls")) is None

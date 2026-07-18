@@ -16,8 +16,8 @@ Design notes — accepted tradeoffs, by construction, not bugs:
   "created"; move provenance only survives an in-place edit.
 * Any non-whitespace edit to a legacy oversized run re-trips it at full size — the exemption is for
   untouched and whitespace-only-reflowed runs, not for editing an oversized comment's words.
-* ``yaml``/``toml``/``md``/``json`` are out of scope: only :data:`~captain_hook.types.LANG_GLOBS`
-  languages parse, so comment-only formats never trip.
+* ``yaml`` and ``json`` (through a JSONC-tolerant grammar) parse and fire comment hooks; ``toml`` and
+  ``sql`` have no bundled grammar; ``md`` parses but defines no comment nodes.
 * Threshold boundaries are permissive (``> 3`` lines, ``> 200`` chars — the boundary value passes).
 * On a deny that also carries advisories, block messages come first, then the warns.
 """
@@ -252,7 +252,9 @@ hook(
             ),
         ): Allow(),
         Input(file=FileFixture(name="resave.py", content=PY_LONG_RUN), content=PY_LONG_RUN): Allow(),
-        Input(file="f.yaml", content="# a\n# b\n# c\n# d\n# e\n# f\n# g\n# h\n# i\n# j\n"): Allow(),
+        Input(file="f.yaml", content="# a\n# b\n# c\n# d\n# e\n# f\n# g\n# h\n# i\n# j\n"): Block(
+            pattern="Verbose comment"
+        ),
         # Doc runs are carved out of the block; a density-shaped edit's short runs stay inline-clean.
         Input(file="lib.rs", content=RS_LONG_DOC): Allow(),
         Input(file="doc.go", content=GO_DOC_RUN): Allow(),

@@ -228,7 +228,7 @@ def dispatch_event(
 
     if not async_:
         record_heartbeat(event, raw)
-    elif event.name in DISPATCH_EVENTS:
+    elif event in DISPATCH_EVENTS:
         try:
             dispatch_review(event.name, raw)
         except Exception:

@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, TypeGuard
 
 from captain_hook.review.repo import resolve_repo_key
 from captain_hook.settings import resolve_state_dir
+from captain_hook.types import Event
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
@@ -45,7 +46,7 @@ SPAWNED_ENV = "CAPT_HOOK_SPAWNED"
 BRAIN_TIER: TModel = "medium"
 BRAIN_ALLOWED_TOOLS = ("Read", "Grep", "Glob", "Write", "Edit", "Bash", "Skill", "Agent")
 # The events whose native `run <Event>` dispatch fires the reviewer/sweep.
-DISPATCH_EVENTS = frozenset({"SessionStart", "SessionEnd", "Stop"})
+DISPATCH_EVENTS = frozenset({Event.SessionStart, Event.SessionEnd, Event.Stop})
 # Window collapsing a stale plugin's raw `review run` racing native dispatch to one reviewer child.
 REVIEW_RUN_DEDUP = timedelta(seconds=60)
 
@@ -380,7 +381,7 @@ def dispatch_review(event_name: str, payload: dict[str, object]) -> None:
     """Native ``run <Event>`` entry: fire the enrollment-gated reviewer or throttled sweep.
 
     The counterpart to the retired raw ``review run``/``review sweep`` hooks.json entries — called from
-    the async dispatch of a :data:`DISPATCH_EVENTS` event, on both the cold CLI and the daemon. Routes
+    the async dispatch of a :data:`DISPATCH_EVENTS` member, on both the cold CLI and the daemon. Routes
     to the same guard-and-detach the CLI entry points use, with the enrollment gate switched on so a
     non-watched repo never spawns and a stale plugin's raw entry collapses through the shared throttle.
     """

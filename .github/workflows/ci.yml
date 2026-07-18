@@ -31,13 +31,19 @@ jobs:
       # poisoned the key: a sync that rebuilt the venv silently dropped the
       # model while the hit still skipped provisioning. Both assets are
       # interpreter-independent, so the key is shared across the matrix and
-      # with the docs workflow. The key tracks only the locked spaCy minor —
-      # model selection is per spacy minor and the wn lexicon is pinned below —
-      # so unrelated lockfile churn no longer evicts the cache and re-downloads
-      # from GitHub (which rate-limits, 403).
+      # with the docs workflow. The key tracks the locked spaCy minor and the
+      # resolved Open English WordNet version, so unrelated lockfile churn no
+      # longer evicts the cache and re-downloads from GitHub (which rate-limits,
+      # 403).
       - name: Resolve spaCy minor (cache key)
         id: spacy
         run: echo "minor=$(grep -A1 '^name = "spacy"$' uv.lock | grep '^version' | grep -o '[0-9]*\.[0-9]*' | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve OEWN version (cache key)
+        id: oewn
+        run: |
+          version=$(uv run python -c "import wn; print(wn.config.get_project_info('oewn')['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Cache NLP assets
         id: nlp-cache
@@ -46,7 +52,7 @@ jobs:
           path: |
             ~/.cache/spacy/models
             ~/.wn_data
-          key: nlp-v3-${{ runner.os }}-spacy-${{ steps.spacy.outputs.minor }}
+          key: nlp-v4-${{ runner.os }}-spacy-${{ steps.spacy.outputs.minor }}-oewn-${{ steps.oewn.outputs.version }}
 
       - name: Sync (dev)
         run: uv sync --extra dev
@@ -54,8 +60,7 @@ jobs:
       - name: Provision NLP assets
         if: steps.nlp-cache.outputs.cache-hit != 'true'
         run: |
-          uv run python -c "from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()"
-          uv run python -c "import wn; wn.download('oewn:2025')"
+          uv run python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensure_nlp_resources()"
 
       - name: Test (pytest)
         run: uv run pytest
@@ -74,6 +79,7 @@ jobs:
           .wheel-smoke/bin/python -c 'import sys; b=set(sys.modules); import capt_hook_client.client; new=set(sys.modules)-b; std=set(sys.stdlib_module_names); cap=sorted(m for m in new if m.startswith("captain_hook")); bad=sorted(m for m in new if m.split(".")[0] not in std and not m.startswith("capt_hook_client")); assert not cap, f"client imported captain_hook: {cap}"; assert not bad, f"client imported non-stdlib: {bad}"; print("client purity OK")'
           unzip -l dist/*.whl | grep -q 'capt_hook_client/client.py'
           unzip -l dist/*.whl | grep -q 'capt_hook_client/key.py'
+          unzip -l dist/*.whl | grep -q 'captain_hook/langs.py'
           unzip -l dist/*.whl | grep -q 'captain_hook/skills/.*/SKILL.md'
           unzip -l dist/*.whl | grep -q 'captain_hook/.claude-plugin/plugin.json'
           unzip -l dist/*.whl | grep -q 'captain_hook/packs/general/capt-hook.toml'

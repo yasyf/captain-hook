@@ -19,6 +19,7 @@ from captain_hook import (
     Prompt,
     Rewrite,
     TaskCall,
+    TestFile,
     Tool,
     ToolInput,
     Warn,
@@ -31,6 +32,7 @@ from captain_hook import (
     set_tool_input,
 )
 from captain_hook.contexts import WORKFLOW_SCRIPT_CAP
+from captain_hook.langs import LANG_GLOBS
 from captain_hook.signals.nlp import nlp_scan
 
 DELIVERABLE_GATE_RUBRIC = str(Prompt.load("fragments/deliverable_rubric", verdict_attr="block"))
@@ -58,6 +60,26 @@ REVIEW_ROUTING_PATTERN = (
     r"(?i)(\b(review|refut|adversari|audit|correctness|diagnos|root.?caus|secur|vuln|pentest)"
     r"|\bverif\w*[\s\S]{0,160}?\b(auth|crypt|secret|sanitiz|inject|input.?valid|token|session))"
 )
+WRITING_VERBS = (
+    "write",
+    "draft",
+    "redraft",
+    "rewrite",
+    "revise",
+    "reword",
+    "polish",
+    "copyedit",
+    "compose",
+    "author",
+    "update",
+    "edit",
+)
+SOURCE_FILE_GLOBS = tuple(
+    pattern
+    for language, patterns in LANG_GLOBS.items()
+    if language != "md"  # Markdown is exempt from delegation routing under the docs-exception policy.
+    for pattern in patterns
+)
 
 
 def prose_deliverable_sentences(text: str) -> list[str]:
@@ -69,7 +91,7 @@ def prose_deliverable_sentences(text: str) -> list[str]:
     hyphens split, writing verbs lowercased, and imperative writing verbs given a determiner —
     "Update CHANGELOG.md" otherwise parses as a noun compound.
     """
-    verbs = r"write|draft|redraft|rewrite|revise|reword|polish|copyedit|compose|author|update|edit"
+    verbs = "|".join(WRITING_VERBS)
     text = re.sub(r"\S+/\S+", " ", text)
     text = re.sub(r"[(){}\[\]<>]|(?<![A-Za-z])['\"`]|['\"`](?![A-Za-z])", " ", text)
     text = re.sub(r"(?i)\b(readme|changelog)\.(?:md|rst|txt)\b", r"\1", text)
@@ -98,20 +120,7 @@ def prose_deliverable_sentences(text: str) -> list[str]:
         "pr description",
         "commit message",
     )
-    writing = Phrase(
-        "write",
-        "draft",
-        "redraft",
-        "rewrite",
-        "revise",
-        "reword",
-        "polish",
-        "copyedit",
-        "compose",
-        "author",
-        "update",
-        "edit",
-    )
+    writing = Phrase(*WRITING_VERBS)
     if not (matched := nlp_scan([Clause(noun=artifact, verb=writing)], text)):
         return []
     negated = set(nlp_scan([Clause(noun=artifact, verb=writing, negated=True)], text))
@@ -320,28 +329,9 @@ llm_nudge(
     events=Event.PreToolUse,
     only_if=[
         Tool("Edit|Write|MultiEdit"),
-        FilePath(
-            "**/*.py",
-            "**/*.go",
-            "**/*.swift",
-            "**/*.rs",
-            "**/*.ts",
-            "**/*.tsx",
-            "**/*.js",
-            "**/*.jsx",
-            "**/*.rb",
-            "**/*.java",
-            "**/*.kt",
-            "**/*.c",
-            "**/*.cc",
-            "**/*.cpp",
-            "**/*.h",
-            "**/*.zig",
-        ),
+        FilePath(*SOURCE_FILE_GLOBS),
     ],
-    skip_if=[
-        FilePath("**/test_*.py", "**/*_test.py", "**/*_test.go", "**/tests/**", "**/*.test.*", "**/*.spec.*"),
-    ],
+    skip_if=[TestFile()],
     when=lambda evt: not evt.is_subagent and len(evt.content or "") >= 400,
     max_fires=1,
     agent=False,

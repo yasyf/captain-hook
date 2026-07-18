@@ -6,6 +6,7 @@ import pytest
 
 from captain_hook.ast_grep import (
     COMMENT_TYPES,
+    MAX_COMMENT_SCAN_BYTES,
     Match,
     SyntaxNode,
     comment_blocks,
@@ -51,7 +52,9 @@ class TestFindKinds:
 
 class TestComments:
     def test_comment_types_union(self) -> None:
-        assert COMMENT_TYPES == frozenset({"comment", "line_comment", "block_comment"})
+        assert COMMENT_TYPES == frozenset(
+            {"comment", "line_comment", "block_comment", "multiline_comment", "html_comment", "js_comment"}
+        )
 
     @pytest.mark.parametrize(
         ("source", "lang", "expected"),
@@ -194,6 +197,16 @@ class TestCommentRuns:
         [b] = comment_runs("# spaced out\nx = 1\n", "py")
         assert a.key == b.key == "# spaced out"
 
+    def test_nested_dart_comment_counts_once(self) -> None:
+        source = "/* " + "x" * 96 + " */"
+        [run] = comment_runs(source + "\nvoid main() {}\n", "dart")
+        assert run.texts == (source,)
+        assert run.chars == 102
+
+    def test_oversized_json_skips_comment_scan(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("captain_hook.ast_grep.parse", lambda *_: pytest.fail("oversized source was parsed"))
+        assert comment_runs('{"data":"' + "x" * MAX_COMMENT_SCAN_BYTES + '"}', "json") == []
+
     @pytest.mark.parametrize(
         ("source", "lang", "doc"),
         [
@@ -209,6 +222,13 @@ class TestCommentRuns:
             pytest.param("package p\n\n// note\n\nfunc F() {}\n", "go", False, id="go_blank_separated_inline"),
             pytest.param("package p\n\nfunc F() {\n\t// x\n\ty := 1\n}\n", "go", False, id="go_in_body_inline"),
             pytest.param("/**\n * hi\n */\nfunction f() {}\n", "js", True, id="js_jsdoc"),
+            pytest.param("/** KDoc */\nfun f() = Unit\n", "kotlin", True, id="kotlin_kdoc"),
+            pytest.param("/// Swift doc\nfunc f() {}\n", "swift", True, id="swift_triple_slash_doc"),
+            pytest.param("/** Swift doc */\nfunc f() {}\n", "swift", True, id="swift_block_doc"),
+            pytest.param("/// Dart doc\nvoid f() {}\n", "dart", True, id="dart_triple_slash_doc"),
+            pytest.param("/// <summary>Doc</summary>\nclass C {}\n", "cs", True, id="cs_xml_doc"),
+            pytest.param("<?php\n/** PHPDoc */\nfunction f() {}\n", "php", True, id="php_doc"),
+            pytest.param("/** Scaladoc */\ndef f = ()\n", "scala", True, id="scala_doc"),
             pytest.param("# just a comment\nx = 1\n", "py", False, id="py_never_doc"),
         ],
     )

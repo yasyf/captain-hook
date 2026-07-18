@@ -15,7 +15,7 @@ from captain_hook.util import http
 from captain_hook.util.paths import resolve_cache_home
 
 MODEL_NAME = "en_core_web_sm"
-WN_LEXICON = "oewn:2025"
+WN_LEXICON = "oewn"
 WHEEL_CHECKSUM = re.compile(r"Checksum \.whl:\*\*\s*`([0-9a-f]{64})`")
 
 
@@ -93,18 +93,19 @@ def ensure_spacy_model() -> Path:
 def ensure_wn_lexicon() -> None:
     import wn
 
-    if wn.lexicons(lexicon=WN_LEXICON):
+    lexicon = f"{WN_LEXICON}:{wn.config.get_project_info(WN_LEXICON)['version']}"
+    if wn.lexicons(lexicon=lexicon):
         return
     data_dir = Path(wn.config.data_directory)
     data_dir.mkdir(parents=True, exist_ok=True)
-    with FileLock(str(data_dir / f"{WN_LEXICON.replace(':', '-')}.lock")):
-        if wn.lexicons(lexicon=WN_LEXICON):
+    with FileLock(str(data_dir / f"{lexicon.replace(':', '-')}.lock")):
+        if wn.lexicons(lexicon=lexicon):
             return
-        wn.download(WN_LEXICON, progress_handler=None)
+        wn.download(lexicon, progress_handler=None)
 
 
 def ensure_nlp_resources() -> None:
-    """Provision the NLP resources hooks need: the pinned spaCy pipeline (~13MB) and the oewn:2025 wn lexicon (~231MB).
+    """Provision the NLP resources hooks need: the pinned spaCy pipeline and latest oewn lexicon.
 
     Idempotent and cheap once cached; downloads are filelock-guarded so concurrent
     sessions never race a fetch.

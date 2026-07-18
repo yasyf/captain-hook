@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING
 
 import click
 
+from captain_hook.review.status import CandidateStatus
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -29,7 +31,7 @@ if TYPE_CHECKING:
     from captain_hook.review.store import ReviewStore, ThresholdStatus
     from captain_hook.review.sync import SyncReport
 
-STATUS_CHOICES = ("watching", "pr_open", "stale", "accepted", "rejected")
+STATUS_CHOICES = tuple(status.value for status in CandidateStatus)
 
 
 def current_repo(root: Path) -> RepoKey:

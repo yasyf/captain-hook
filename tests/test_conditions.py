@@ -4,7 +4,7 @@ import json
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 from cc_transcript.activity_probe import SessionActivityProbe, session_activity_probe
@@ -22,10 +22,13 @@ from captain_hook.packs.general._lib import EditedSource
 from captain_hook.primitives.commands import block_command_pattern
 from captain_hook.transcripts import load_transcript
 from captain_hook.types import (
+    ALL_EVENTS,
+    TOOL_EVENTS,
     Agent,
     And,
     Command,
     Content,
+    CustomCondition,
     Event,
     FilePath,
     FromSubagent,
@@ -47,6 +50,7 @@ from captain_hook.types import (
     UsedSkill,
     Waiting,
     WorkflowScript,
+    condition_events,
 )
 from tests.helpers import (
     assistant_msg,
@@ -655,6 +659,67 @@ class TestCombinators:
         evt = make_tool_event("Edit", {"file_path": "a.py", "old_string": "", "new_string": ""})
         cond = Or(And(Tool("Edit", "Write"), FilePath("*.py")), Tool("Bash"))
         assert check_condition(cond, evt) is True
+
+
+class TestConditionEvents:
+    def test_restricted_classes_are_pinned(self) -> None:
+        expected = {
+            Tool: TOOL_EVENTS,
+            ToolInput: TOOL_EVENTS,
+            WorkflowScript: TOOL_EVENTS,
+            Command: TOOL_EVENTS,
+            Runs: TOOL_EVENTS,
+            FilePath: TOOL_EVENTS,
+            Content: TOOL_EVENTS,
+            Pattern: TOOL_EVENTS,
+            TestFile: TOOL_EVENTS,
+            SourceEdits: TOOL_EVENTS,
+            Agent: TOOL_EVENTS | Event.SubagentStart | Event.SubagentStop,
+        }
+        restricted = {
+            condition_type: vars(condition_type)["valid_events"]
+            for condition_type in get_args(TCondition)
+            if "valid_events" in vars(condition_type) and vars(condition_type)["valid_events"] != ALL_EVENTS
+        }
+
+        assert restricted == expected
+        assert {
+            condition_type for condition_type in get_args(TCondition) if "valid_events" in vars(condition_type)
+        } == {*expected, CustomCondition}
+        assert vars(CustomCondition)["valid_events"] == ALL_EVENTS
+
+    def test_and_intersects_child_events(self) -> None:
+        assert condition_events(And(Agent("Explore"), Tool("Bash"))) == TOOL_EVENTS
+
+    def test_or_unions_child_events(self) -> None:
+        assert condition_events(Or(Agent("Explore"), Tool("Bash"))) == (
+            TOOL_EVENTS | Event.SubagentStart | Event.SubagentStop
+        )
+
+    def test_not_is_valid_on_all_events(self) -> None:
+        assert condition_events(Not(Tool("Bash"))) == ALL_EVENTS
+
+    def test_nested_combinators_recurse(self) -> None:
+        condition = And(Or(Agent("Explore"), Tool("Bash")), Runs("git", "status"))
+        assert condition_events(condition) == TOOL_EVENTS
+
+    def test_condition_without_restriction_is_valid_on_all_events(self) -> None:
+        assert condition_events(InPlanMode()) == ALL_EVENTS
+
+    def test_disjoint_registration_raises(self) -> None:
+        condition = And(Tool("Bash"), InPlanMode())
+
+        with pytest.raises(TypeError) as exc_info:
+
+            @on(Event.SessionStart, only_if=[condition])
+            def handler(evt: BaseHookEvent) -> None:
+                return None
+
+        assert str(exc_info.value) == (
+            "And(conditions=(Tool(names=('Bash',)), InPlanMode())) in only_if can never match on "
+            "<Event.SessionStart: 512> — it reads the current tool input, which only exists on "
+            "<Event.PreToolUse|PostToolUse|PostToolUseFailure|PermissionRequest: 2055>."
+        )
 
 
 class TestVariadicNames:

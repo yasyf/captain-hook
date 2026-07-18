@@ -1,5 +1,4 @@
       - name: Provision NLP assets
         if: steps.nlp-cache.outputs.cache-hit != 'true'
         run: |
-          uv run python -c "from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()"
-          uv run python -c "import wn; wn.download('oewn:2025')"
+          uv run python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensure_nlp_resources()"
