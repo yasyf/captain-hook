@@ -780,7 +780,7 @@ class TestJudgePass:
         install_judge(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION])
 
-        def boom(*_: object, **__: object) -> list[object]:
+        async def boom(*_: object, **__: object) -> list[object]:
             raise RuntimeError("sqlite-vec extension failed to load")
 
         def has_evidence(self: ReviewStore) -> bool:
@@ -1205,7 +1205,7 @@ class TestSpawnSession:
     ) -> None:
         settings = ReviewSettings(db_path=tmp_path / "review.db")
 
-        def boom(transcript: Path, *, cwd: str, settings: ReviewSettings, sweep: bool = False) -> SpawnReport:
+        async def boom(transcript: Path, *, cwd: str, settings: ReviewSettings, sweep: bool = False) -> SpawnReport:
             raise exc
 
         monkeypatch.setattr("captain_hook.review.pipeline.review_session", boom)
