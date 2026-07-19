@@ -124,9 +124,12 @@ class TestRecordDecision:
             pytest.param("mcp__github__search", {"q": "x"}, False, id="unknown_tool_wellformed"),
             pytest.param("Edit", {"file_path": "a.py", "old_string": "x"}, True, id="known_tool_malformed"),
             pytest.param("Bash", {"command": b"ls"}, True, id="fallback_input"),
+            pytest.param("mcp__github__search", ["not", "a", "mapping"], True, id="unknown_tool_nonmapping_degraded"),
         ],
     )
-    def test_parse_degraded_truth_table(self, tool: str, tool_input: dict[str, Any], expected: bool) -> None:
+    def test_parse_degraded_truth_table(
+        self, tool: str, tool_input: dict[str, Any] | list[str], expected: bool
+    ) -> None:
         assert parse_degraded(pre_tool_evt(tool, tool_input)) is expected
 
     def test_spawned_run_does_not_write(self, db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

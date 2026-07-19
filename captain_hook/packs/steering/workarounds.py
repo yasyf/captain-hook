@@ -35,6 +35,9 @@ WORKAROUND_LEXICON = re.compile(
     r"|\bshim\b"
     r"|band[-\s]?aid"
     r"|until\s+\S+\s+(?:ship|support|land|expose|grow|gain)"
+    r"|\bfor\s+(?:now|the\s+time\s+being)\b"
+    r"|\bin\s+the\s+meantime\b"
+    r"|\btemporar(?:y|ily)\b"
     r"|does(?:n['’]t|\s+not)\s+support"
     r"|compat(?:ibility)?[-\s]layer"
     r"|\bupstream\b",
@@ -196,14 +199,14 @@ tell is clearly present and no do-not-fire condition applies. Put your reasoning
     label="upstream_workaround_turn",
     signals=Signals(
         [
-            Signal(pattern=WORKAROUND_LEXICON.pattern, weight=2, flags=WORKAROUND_LEXICON.flags),
-            Signal(pattern=SIBLING_DEPS.pattern, weight=2, flags=SIBLING_DEPS.flags),
+            Signal(pattern=WORKAROUND_LEXICON.pattern, weight=1, flags=WORKAROUND_LEXICON.flags),
+            Signal(pattern=SIBLING_DEPS.pattern, weight=1, flags=SIBLING_DEPS.flags),
             NlpSignal(
                 clauses=[
                     Clause(verb=Phrase("support", "expose", "provide", "offer", "handle"), negated=True),
                     Clause(verb=Phrase("ship", "release", "publish"), tense="prospective"),
                 ],
-                weight=2,
+                weight=1,
             ),
         ],
         threshold=2,
