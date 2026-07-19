@@ -68,10 +68,10 @@ a new repo-local hook in the watched repo.
 Verification runs in the clone and differs by pack kind:
 
 - **Builtin pack** (`target_repo` is captain-hook): the hook lives under
-  `captain_hook/packs/<pack>/`; verify with `uv run --project . capt-hook test`.
-- **External pack**: the hook lives in the directory named by the `hooks` key in the
-  `[pack]` table of the clone's `capt-hook.toml` manifest; verify with
-  `uvx --isolated capt-hook --hooks <dir> test` against that directory.
+  `captain_hook/builtin_packs/<pack>/hooks/`; verify with
+  `uv run --project . capt-hook --hooks captain_hook/builtin_packs/<pack>/hooks test`.
+- **Plugin pack** (`target_repo` is the plugin's `plugin.json` repository): the hook lives
+  under the plugin's `capt-hook/hooks/`; verify with `uvx --isolated capt-hook pack test <plugin-root>`.
 
 Commit, push, and `gh pr create` run inside the clone with the same templates as
 below — the commit-message and PR-body shapes for the candidate's kind carry over

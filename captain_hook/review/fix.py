@@ -31,19 +31,18 @@ ledger row whose ``kind`` stem uniquely matches the named hook within
 :data:`NAMED_HOOK_WINDOW_MS`, failing closed on zero or ambiguous matches.
 The PR target resolves by source location into a :class:`~captain_hook.review.routing.Target`
 naming the file, the hook, and the repo the fix belongs to: a watched-repo hook file is the
-target verbatim (``repo`` ``None`` — fixed in place), but an installed-wheel or pack-cache
+target verbatim (``repo`` ``None`` — fixed in place), but an installed-wheel or plugin-pack
 ``source_file`` carries no repo path, so the real hook comes from the decision ``kind``'s
 module prefix routed through the scan's :class:`~captain_hook.review.routing.PackIndex`. A
 ``nudge()``/``gate()`` fire records the primitive file, and a ``hook()`` bundled in a pack
-records the wheel or cache file — all of these route through the ``kind``: a
-``<pack>.<module>`` prefix naming a module the installed builtin pack actually ships targets
-the pack source inside captain-hook itself (``captain_hook/packs/<pack>/<module>.py``, repo
-captain-hook), a prefix naming a cached external pack the project declares targets that pack's
-``github.com/<owner>/<repo>`` at the file's in-repo path, a hook shipped by a pack discovered on
-an enabled Claude Code plugin is dropped (plugin packs route to no repo this wave) — by its ``kind``
-prefix, or, for a bare ``@on`` name that carries none, by its source dir — and any other module
-prefix — including a packaged user hook whose package merely shares a builtin pack's name — targets
-the repo-local ``.claude/hooks/<module>.py``.
+records the wheel or plugin file — all of these route through the ``kind``: a
+``<pack>.<module>`` prefix naming a module a builtin pack ships targets the pack source inside
+captain-hook itself (``captain_hook/builtin_packs/<pack>/hooks/<module>.py``, repo captain-hook);
+a prefix naming a pack an enabled Claude Code plugin ships targets that plugin's ``plugin.json``
+repository at the file's path within the plugin — by its ``kind`` prefix, or, for a bare ``@on``
+name that carries none, by its source dir (a plugin declaring no repository is dropped) — and any
+other module prefix — including a packaged user hook whose package merely shares a builtin pack's
+name — targets the repo-local ``.claude/hooks/<module>.py``.
 Unattributable or unresolvable complaints (including legacy kinds whose prefix is
 not a module path, e.g. ``<frozen importlib``) are dropped — precision over recall.
 """
