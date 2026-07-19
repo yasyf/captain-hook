@@ -4,11 +4,27 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [10.5.0] - 2026-07-20
 
 ## [10.5.0] - 2026-07-20
 
 ### Added
+- **Declarative MCP tool specs in pack manifests.** A pack's `capt-hook.toml` may carry a
+  top-level `[tools]` table — one entry per bare MCP tool segment, with a required
+  `behaves_like = "<builtin>"` and an optional `span_edit` key-map naming the payload's
+  `path`/`content`/`delete` keys. Entries parse into `PackManifest.tools` (malformed ones
+  raise `PackError` naming the pack and entry) and register with cc-transcript's runtime
+  tool-spec registry during discovery, on both the daemon and cold dispatch paths. Gates
+  like `Tool("Edit")` now match a declared `mcp__<server>__<tool>`, span-edit payloads
+  lower to `SpanEditCall` — so `evt.file`/`evt.content`/`evt.replaced` populate and
+  diff-gated hooks fire on MCP edits — and the cc-context ccx pack already ships such a
+  table. Registration reconciles by diff (unchanged specs untouched, removed specs
+  unregistered) and daemon snapshot hits re-reconcile, so a manifest edit takes effect
+  without a daemon restart.
+- **Span-edit awareness in the comment hooks.** When no post-image can be simulated,
+  `touched()` compares the whole-file pre-image against the new span text — span edits
+  only, a conservative superset that suppresses re-introduced blocks and never fires on
+  deletions or PostToolUse — so the verbose-comment block now fires on MCP span edits.
 - **`install_binary` — a pack provisions its own binary at session start.** The primitive
   registers an async `SessionStart` hook that runs an installer script via `/bin/sh`,
   resolved relative to the calling pack file, with the outcome in `capt-hook logs` — INFO
@@ -25,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gain it.
 
 ### Changed
+- **cc-transcript pins to `>=14.4,<14.5`.** 14.4 carries the tool-spec registry this
+  release consumes; 14.5 inverted the persistence tier to native-async and is absorbed
+  separately (the pin lifts with that work). Absorbing 14.x also rewrote the review store
+  onto `mining.FeedbackStore` composition with a `StoreSchema` (the 14.2 store inversion)
+  and moved the judge tier to 14.4's sync surfaces — fixing slug-suggestion retrieval,
+  which had been silently failing whenever verdict evidence existed.
 - **Language tables are derived from ast-grep's own data, not Pygments.** The build hook now reads
   ast-grep-py's sdist (its `Cargo.lock`, `lib.rs` alias and extension tables, and `parsers.rs`) plus
   each grammar's `node-types.json` from the pinned crate, fetches everything sha256-verified, and
