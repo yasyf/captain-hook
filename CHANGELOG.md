@@ -6,8 +6,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [10.5.0] - 2026-07-20
 
-## [10.5.0] - 2026-07-20
-
 ### Added
 - **Declarative MCP tool specs in pack manifests.** A pack's `capt-hook.toml` may carry a
   top-level `[tools]` table — one entry per bare MCP tool segment, with a required
