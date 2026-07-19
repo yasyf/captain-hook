@@ -43,6 +43,9 @@ exist. Migration is mechanical but manual — there is no compatibility shim.
 - **Identity derives from the plugin, not the manifest.** Runtime pack ids are `builtin:<name>` and the
   full plugin id (e.g. `plugin:cc-context@cc-context`); version, description, and repository come from
   `plugin.json`. Authored `name`/`version`/`description`/`hooks`/`nlp`/`marketplaces` fields are gone.
+  Claude Code re-lists an enabled plugin once per scope it resolves through, so the roster is deduped to
+  one entry per full plugin id by scope precedence (`local` > `project` > `user`); two install paths at
+  the same scope is a corrupt roster.
 - **`pack.toml` is a tiny descriptor.** It carries only what can't be derived: `resources = [...]` (the
   NLP/tool resources to provision, replacing the `nlp` boolean) and `[tools.<name>]` gate semantics.
   Tool keys are bare tool segments (mount-agnostic); a tool name claimed by two packs is fatal.

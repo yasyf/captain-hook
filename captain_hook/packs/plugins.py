@@ -12,8 +12,9 @@ the CLI once; every other event reads the snapshot. The fixed-path probe itself 
 discovery (cheap stats), so a pack edit inside a plugin dir needs no snapshot invalidation.
 
 Pack load is all-or-nothing: a plugin advertising ``capt-hook/`` with a missing descriptor or hooks
-dir raises rather than silently dropping guards, and a duplicate full plugin id is a corrupt roster
-that crashes.
+dir raises rather than silently dropping guards. Claude Code re-lists an enabled plugin once per scope
+it resolves through, so the roster is deduped to one entry per full plugin id by scope precedence
+(``local`` > ``project`` > ``user``); two install paths at the same scope is a corrupt roster.
 """
 
 from __future__ import annotations
@@ -34,6 +35,9 @@ from captain_hook.util.fs import atomic_write, read_json
 from captain_hook.util.paths import resolve_cache_dir, resolve_claude_config_dir
 
 CLI_TIMEOUT_SECONDS = 60
+# Claude Code layers plugin scopes; when one id resolves at more than one scope the earlier entry here
+# outranks the later, mirroring settings precedence. An unknown scope ranks lowest.
+SCOPE_PRECEDENCE = ("local", "project", "user")
 # Enterprise managed settings can enable/disable plugins; Claude Code reads them from fixed OS
 # locations (macOS/Linux) plus the config dir, each with a sibling managed-settings.d drop-in dir.
 MANAGED_SETTINGS_DIRS = (
@@ -106,6 +110,7 @@ class EnabledPlugin:
     id: str
     version: str
     root: str
+    scope: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,7 +125,10 @@ class PluginSnapshot:
         try:
             return cls(
                 stat=tuple(tuple(rec) for rec in data["stat"]),
-                plugins=tuple(EnabledPlugin(id=p["id"], version=p["version"], root=p["root"]) for p in data["plugins"]),
+                plugins=tuple(
+                    EnabledPlugin(id=p["id"], version=p["version"], root=p["root"], scope=p.get("scope"))
+                    for p in data["plugins"]
+                ),
             )
         except (KeyError, TypeError):
             return None
@@ -131,7 +139,9 @@ class PluginSnapshot:
             json.dumps(
                 {
                     "stat": [list(rec) for rec in self.stat],
-                    "plugins": [{"id": p.id, "version": p.version, "root": p.root} for p in self.plugins],
+                    "plugins": [
+                        {"id": p.id, "version": p.version, "root": p.root, "scope": p.scope} for p in self.plugins
+                    ],
                 }
             ),
         )
@@ -158,7 +168,45 @@ def parse_plugin_entry(entry: object) -> EnabledPlugin | None:
         )
         return None
     version = entry.get("version", "")
-    return EnabledPlugin(id=pid, version=version if isinstance(version, str) else "", root=path)
+    scope = entry.get("scope")
+    return EnabledPlugin(
+        id=pid,
+        version=version if isinstance(version, str) else "",
+        root=path,
+        scope=scope if isinstance(scope, str) else None,
+    )
+
+
+def scope_rank(scope: str | None) -> int:
+    return SCOPE_PRECEDENCE.index(scope) if scope in SCOPE_PRECEDENCE else len(SCOPE_PRECEDENCE)
+
+
+def pick_scoped(pid: str, entries: list[EnabledPlugin]) -> EnabledPlugin:
+    """The single :class:`EnabledPlugin` a plugin id resolves to across its scope-layered roster entries.
+
+    Entries sharing an install path collapse. Across differing install paths the highest-precedence scope
+    wins (``local`` > ``project`` > ``user``), mirroring Claude Code's own settings layering. Two distinct
+    install paths at the *same* scope is a corrupt roster and raises :class:`PluginListError`.
+    """
+    roots_by_scope: dict[str | None, set[str]] = {}
+    for plugin in entries:
+        roots_by_scope.setdefault(plugin.scope, set()).add(plugin.root)
+    for scope, roots in roots_by_scope.items():
+        if len(roots) > 1:
+            raise PluginListError(f"plugin {pid!r} has {len(roots)} install paths at scope {scope!r}: {sorted(roots)}")
+    return min(entries, key=lambda p: scope_rank(p.scope))
+
+
+def dedupe_scoped_roster(parsed: list[EnabledPlugin]) -> tuple[EnabledPlugin, ...]:
+    """Collapse Claude Code's scope-layered roster to one :class:`EnabledPlugin` per plugin id.
+
+    Claude re-lists an enabled plugin once per scope (``project``/``user``) it resolves through; grouping
+    by id and resolving each group with :func:`pick_scoped` yields one deterministic entry per id.
+    """
+    by_id: dict[str, list[EnabledPlugin]] = {}
+    for plugin in parsed:
+        by_id.setdefault(plugin.id, []).append(plugin)
+    return tuple(pick_scoped(pid, entries) for pid, entries in by_id.items())
 
 
 def list_plugins_cli(root: Path) -> tuple[EnabledPlugin, ...]:
@@ -194,9 +242,8 @@ def list_plugins_cli(root: Path) -> tuple[EnabledPlugin, ...]:
         parsed = [plugin for entry in roster if (plugin := parse_plugin_entry(entry)) is not None]
     except (TypeError, AttributeError, KeyError) as e:
         raise PluginListError(f"claude plugin list returned an unusable roster shape: {e!r}") from e
-    # Claude Code re-lists an enabled plugin per marketplace/ref, so one id can appear several times;
-    # dedupe by full plugin id — one id, one pack.
-    return tuple({plugin.id: plugin for plugin in parsed}.values())
+    # Claude Code re-lists an enabled plugin once per scope it resolves through; collapse to one per id.
+    return dedupe_scoped_roster(parsed)
 
 
 def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:

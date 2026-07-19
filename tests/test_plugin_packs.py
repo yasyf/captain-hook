@@ -54,8 +54,10 @@ def write_plugin_pack(
     return root
 
 
-def roster_entry(plugin_id: str, root: Path, *, version: str = "1.0.0", enabled: bool = True) -> dict[str, object]:
-    return {"id": plugin_id, "version": version, "enabled": enabled, "installPath": str(root)}
+def roster_entry(
+    plugin_id: str, root: Path, *, version: str = "1.0.0", enabled: bool = True, scope: str = "user"
+) -> dict[str, object]:
+    return {"id": plugin_id, "version": version, "enabled": enabled, "installPath": str(root), "scope": scope}
 
 
 def fake_claude(
@@ -195,18 +197,57 @@ def test_malformed_pack_is_fatal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         plugins.resolve_plugin_packs(root)
 
 
-def test_duplicate_roster_entries_deduped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_parse_plugin_entry_retains_scope() -> None:
+    entry = plugins.parse_plugin_entry({"id": "a/b", "enabled": True, "installPath": "/p", "scope": "project"})
+    assert entry is not None and entry.scope == "project"
+
+
+def test_identical_scoped_roster_entries_collapse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Claude re-lists one install under both project and user scope; identical (id, path) collapses to one.
     plant_installed()
     (root := tmp_path / "proj").mkdir()
-    a = write_plugin_pack(tmp_path, "a", slot="a")
-    b = write_plugin_pack(tmp_path, "b", slot="b")
-    # Claude Code re-lists an enabled plugin under each marketplace/ref, so the same id can appear
-    # several times; the roster dedupes by id and one plugin id yields exactly one pack.
+    plugin = write_plugin_pack(tmp_path, "show")
     install_claude(
-        tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("dup@mkt", a), roster_entry("dup@mkt", b)]
+        tmp_path,
+        monkeypatch,
+        calls=tmp_path / "calls",
+        roster=[roster_entry("show@mkt", plugin, scope="project"), roster_entry("show@mkt", plugin, scope="user")],
     )
     (rp,) = plugins.resolve_plugin_packs(root)
-    assert rp.pack_id == "plugin:dup@mkt"
+    assert rp.pack_id == "plugin:show@mkt"
+
+
+def test_scope_precedence_project_over_user(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The same id installed at two paths across scopes resolves by precedence: project outranks user.
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    proj = write_plugin_pack(tmp_path, "show", "9.9.9", slot="proj")
+    user = write_plugin_pack(tmp_path, "show", "1.0.0", slot="user")
+    # user listed first — precedence, not roster order, decides.
+    install_claude(
+        tmp_path,
+        monkeypatch,
+        calls=tmp_path / "calls",
+        roster=[roster_entry("show@mkt", user, scope="user"), roster_entry("show@mkt", proj, scope="project")],
+    )
+    (rp,) = plugins.resolve_plugin_packs(root)
+    assert rp.entry.root == str(proj)  # the project-scope install wins
+
+
+def test_same_scope_conflict_degrades_to_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Two different install paths at the SAME scope is a corrupt roster: PluginListError, damped to empty.
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    a = write_plugin_pack(tmp_path, "show", slot="a")
+    b = write_plugin_pack(tmp_path, "show", slot="b")
+    install_claude(
+        tmp_path,
+        monkeypatch,
+        calls=tmp_path / "calls",
+        roster=[roster_entry("show@mkt", a, scope="project"), roster_entry("show@mkt", b, scope="project")],
+    )
+    assert plugins.enabled_plugins(root) == ()  # PluginListError damped to an empty roster
+    assert plugins.resolve_plugin_packs(root) == []
 
 
 # --- snapshot & CLI invocation -------------------------------------------------------
