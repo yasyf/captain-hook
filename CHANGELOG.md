@@ -4,9 +4,39 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [10.6.0] - 2026-07-20
+
+### Added
+- **Anti-workaround steering hooks** (steering pack 0.8.0). Two hooks now watch for
+  consumer-side workarounds of first-party (cc-family) dependencies — the pattern where a
+  session papers over a sibling library's missing primitive with local scar tissue instead
+  of fixing it upstream. An edit-time nudge (`upstream_workaround_edit`, PreToolUse) fires
+  when an edit introduces workaround-flavored comments naming a sibling dependency, and a
+  turn-level gate (`upstream_workaround_turn`, Stop) judges the turn's diff and prose,
+  blocking when a first-party workaround lands without an upstream fix or a stated
+  justification. The gate's prefilter demands two distinct evidence families (workaround
+  lexicon, sibling-dep mention, prospective-support phrasing) before the judge runs, and
+  both hooks bias toward silence under uncertainty; intentional degradation and
+  third-party-dependency accommodations stay unflagged.
 
 ### Changed
+- **Review persistence is async end to end** — the cc-transcript pin lifts to
+  `>=14.6.1,<15`, and `ReviewStore` now composes over `cc_transcript.mining.store.FeedbackStore`'s
+  native-async tier (`async` transactions and store calls throughout scan, judge, announce,
+  dashboard, notify, pipeline, snapshot, sync, triage, and the decision writer), absorbing
+  14.5's persistence-tier inversion and 14.6.1's `run_verdicts` persist serialization.
+- **Degraded-call detection reads the upstream `error` field.** `parse_degraded` no longer
+  re-parses the tool input to decide whether a call degraded; cc-transcript 14.4+ stamps
+  `OtherCall.error`/`FallbackCall.error` at parse time (`None` ⇔ the payload parsed but the
+  tool has no typed model), so the ledger's degraded flag is now a field read. One deliberate
+  divergence: a non-mapping input to an unknown tool — unreachable through the Claude Code
+  hook protocol — now counts as degraded instead of slipping through the old re-parse.
+- **Exit-plan reason filtering mints a real synthetic event.** `reason_kept` builds its
+  gate event with cc-transcript's `synthetic_user_event` constructor instead of
+  hand-rolling a JSON transcript envelope and round-tripping it through the parser — same
+  filtering, no consumer-side envelope to drift out of sync with the transcript schema.
+  The daemon's incremental transcript cache likewise now cites cc-transcript's documented
+  parse-compositionality contract instead of re-deriving it in a comment.
 - **Inline tests run under a throwaway `$HOME`.** `capt-hook test` executes each inline test with
   `HOME` pointed at a per-run scratch directory (per-fixture `FileFixture(home=True)` dirs still take
   precedence), so fixtures conditioned on live machine state — configured preferences, real dotfiles
