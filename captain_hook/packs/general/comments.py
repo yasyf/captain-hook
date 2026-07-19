@@ -22,6 +22,11 @@ Design notes — accepted tradeoffs, by construction, not bugs:
 * Floating JSDoc is plain; Python and Elixir never classify comment runs as docs; Haskell haddock
   falls to the plain budget. Dart ``///`` adjacent to a declaration classifies as documentation,
   like the generic Swift and Kotlin adjacency cases.
+* A Python PEP 723 fence (``# /// script`` … ``# ///``) whose body parses as TOML with top-level
+  keys in the PEP 723 schema is machine metadata, dropped like a shebang; a lookalike with a prose
+  body stays on the plain budget. String *values* inside the fence are not measured — comments are
+  this hook's only surface, and code string literals already carry unbounded prose — and a comment
+  glued to the fence with no blank line makes the whole run plain-budget material.
 * Divider and decoration rows add no lines to either side, but their characters land in the segment
   they sit in, so decoration can't carry unbounded bulk. Character counts include leaders and omit
   interior newlines.
@@ -132,11 +137,7 @@ def touched(evt: BaseHookEvent) -> list[CommentBlock]:
         # Span edit (opaque locator, no simulated post-image): compare the whole-file pre-image
         # against the new span text — a conservative superset that only suppresses, never misfires.
         # Span edits only: a builtin edit's `replaced` is just its old span, not a superset.
-        if (
-            not isinstance(evt.input, SpanEditCall)
-            or (pre := evt.replaced) is None
-            or (post := evt.content) is None
-        ):
+        if not isinstance(evt.input, SpanEditCall) or (pre := evt.replaced) is None or (post := evt.content) is None:
             return []
     elif (pre := evt.pre_image) is None:
         return []
@@ -354,6 +355,33 @@ hook(
             file="head.py",
             content="#!/usr/bin/env python3\n# header line one\n# header line two\n# header line three\nx = 1\n",
         ): Allow(),
+        # A PEP 723 fence is machine-read script metadata, never run material — however long.
+        Input(
+            file="tool.py",
+            content=(
+                "#!/usr/bin/env -S uv run --script\n"
+                "# /// script\n"
+                '# requires-python = ">=3.13"\n'
+                '# dependencies = ["fleetlib"]\n'
+                "#\n"
+                "# [tool.uv.sources]\n"
+                '# fleetlib = { path = "fleetlib", editable = true }\n'
+                "# ///\n"
+                '"""Tool."""\n\nx = 1\n'
+            ),
+        ): Allow(),
+        # A fence lookalike whose body isn't TOML is prose on the plain budget.
+        Input(
+            file="fake.py",
+            content=(
+                "# /// script\n"
+                "# narrative line one here\n"
+                "# narrative line two here\n"
+                "# narrative line three here\n"
+                "# ///\n"
+                "x = 1\n"
+            ),
+        ): Block(pattern="Verbose comment"),
         Input(
             file=FileFixture(
                 name="near.py", content="# a here\n# b here\n# c here\n# d here\n# e here\n# f here\nx = 1\n"
@@ -461,6 +489,20 @@ nudge(
         Input(file="dense.py", content=PY_DENSE_FIRES): Warn(pattern="Comment-dense"),
         # The block already covers an all-comment edit; the density warn stands down.
         Input(file="all.py", content=PY_ALL_COMMENT): Allow(),
+        # A PEP 723 fence's lines are metadata, not comment density.
+        Input(
+            file="fence.py",
+            content=(
+                "# /// script\n"
+                '# requires-python = ">=3.13"\n'
+                '# dependencies = ["a", "b"]\n'
+                "#\n"
+                "# [tool.uv.sources]\n"
+                '# a = { path = "a" }\n'
+                "# ///\n"
+                "x = 1\n"
+            ),
+        ): Allow(),
         Input(
             file=FileFixture(
                 name="doc-dense.rs",

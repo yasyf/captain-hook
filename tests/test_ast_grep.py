@@ -187,6 +187,58 @@ class TestCommentRuns:
         runs = comment_runs("#!/bin/sh\n# real one\n# real two\n", "bash")
         assert [r.texts for r in runs] == [("# real one", "# real two")]
 
+    def test_pep723_fence_excluded(self) -> None:
+        source = (
+            "#!/usr/bin/env -S uv run --script\n"
+            "# /// script\n"
+            '# requires-python = ">=3.13"\n'
+            '# dependencies = ["fleetlib"]\n'
+            "#\n"
+            "# [tool.uv.sources]\n"
+            '# fleetlib = { path = "fleetlib", editable = true }\n'
+            "# ///\n"
+            "\n# real one\nx = 1\n"
+        )
+        runs = comment_runs(source, "py")
+        assert [r.texts for r in runs] == [("# real one",)]
+
+    def test_pep723_fence_with_prose_body_counts(self) -> None:
+        # A fence lookalike whose body isn't TOML is prose on the plain budget, not metadata.
+        source = "# /// script\n# just a narrative line\n# ///\nx = 1\n"
+        [run] = comment_runs(source, "py")
+        assert run.lines == 3
+
+    def test_pep723_fence_unterminated_counts(self) -> None:
+        [run] = comment_runs('# /// script\n# requires-python = ">=3.13"\nx = 1\n', "py")
+        assert run.lines == 2
+
+    def test_pep723_fence_off_schema_key_counts(self) -> None:
+        # Valid TOML outside the PEP 723 schema (a prose-smuggling channel) stays on the budget.
+        [run] = comment_runs('# /// script\n# notes = "a string that could hide prose"\n# ///\nx = 1\n', "py")
+        assert run.lines == 3
+
+    def test_pep723_fence_crlf_excluded(self) -> None:
+        source = '# /// script\r\n# requires-python = ">=3.13"\r\n# dependencies = ["a"]\r\n# ///\r\nx = 1\r\n'
+        assert comment_runs(source, "py") == []
+
+    def test_pep723_fence_parser_bomb_counts(self) -> None:
+        # tomllib raises beyond TOMLDecodeError on pathological bodies (huge int: ValueError,
+        # deep nesting: RecursionError) — either means "not metadata", never a dispatch crash.
+        [run] = comment_runs("# /// script\n# a = " + "9" * 100_000 + "\n# ///\nx = 1\n", "py")
+        assert run.lines == 3
+        [run] = comment_runs("# /// script\n# a = " + "[" * 700 + "]" * 700 + "\n# ///\nx = 1\n", "py")
+        assert run.lines == 3
+
+    def test_pep723_fence_abutting_comment_counts(self) -> None:
+        # A comment glued to the fence (no blank line) joins its run and keeps the plain budget.
+        source = '# /// script\n# requires-python = ">=3.13"\n# ///\n# a trailing note\nx = 1\n'
+        [run] = comment_runs(source, "py")
+        assert run.lines == 4
+
+    def test_pep723_fence_outside_python_counts(self) -> None:
+        [run] = comment_runs("# /// script\n# a = 1\n# ///\nkey: value\n", "yaml")
+        assert run.lines == 3
+
     def test_run_size_measures(self) -> None:
         [run] = comment_runs("// " + "z" * 40 + "\nx();\n", "js")
         assert run.lines == 1

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import functools
 import re
+import tomllib
 from collections import Counter
 from collections.abc import Iterable, Iterator, Set
 from dataclasses import dataclass
@@ -277,6 +278,23 @@ def is_shebang(node: SyntaxNode) -> bool:
     return node.raw.range().start.line == 0 and node.text.startswith("#!")
 
 
+def is_pep723_fence(texts: Iterable[str]) -> bool:
+    """Whether a comment run is a PEP 723 inline-metadata fence (``# /// script`` … ``# ///``) whose
+    body parses as script metadata — machine-read TOML, not prose, not run material. The top-level
+    keys are held to the PEP 723 schema so prose can't ride an exempt fence."""
+    rows = [t.rstrip("\r\n") for t in texts]
+    if len(rows) < 2 or rows[0] != "# /// script" or rows[-1] != "# ///":
+        return False
+    body = rows[1:-1]
+    if any(row != "#" and not row.startswith("# ") for row in body):
+        return False
+    try:
+        metadata = tomllib.loads("\n".join(row.removeprefix("#").removeprefix(" ") for row in body))
+    except (ValueError, RecursionError):  # TOMLDecodeError ⊂ ValueError; parser bombs aren't metadata either
+        return False
+    return set(metadata) <= {"requires-python", "dependencies", "tool"}
+
+
 def is_line_leading(node: SyntaxNode, src_lines: list[str]) -> bool:
     """Whether nothing but whitespace precedes the comment on its line (vs a trailing ``code  # …``)."""
     r = node.raw.range()
@@ -307,8 +325,8 @@ def comment_runs(source: str, lang: str) -> list[CommentRun]:
     """Every comment run in ``source``, grouped by line adjacency and doc-classified.
 
     Only line-leading comments group; a trailing comment and a ``#!`` shebang each stand alone (the
-    shebang is dropped entirely). Cached per ``(source, lang)`` — several conditions parse the same
-    image per event.
+    shebang is dropped entirely, as is a Python PEP 723 ``# /// script`` fence). Cached per
+    ``(source, lang)`` — several conditions parse the same image per event.
     """
     # Bound hook latency by skipping comment scans for large sources.
     if len(source.encode()) > MAX_COMMENT_SCAN_BYTES:
@@ -339,6 +357,7 @@ def comment_runs(source: str, lang: str) -> list[CommentRun]:
             leading=leading,
         )
         for nodes, leading in groups
+        if not (lang == "py" and is_pep723_fence(n.text for n in nodes))
     ]
 
 
