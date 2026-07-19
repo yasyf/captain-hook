@@ -5,4 +5,4 @@ artifacts = [".claude/capt-hook.toml", ".claude/settings.json", ".github/workflo
 
 [sources.cc-skills]
 spec = "github:yasyf/cc-skills@main"
-commit = "36108d02480b63b45e2c6dab0d82ada31892a1bf"
+commit = "770ade4316cb6888ad10e2f19ecb97281ae7446e"

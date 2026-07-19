@@ -20,7 +20,7 @@ concurrency:
 jobs:
   build-docs:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -83,6 +83,27 @@ jobs:
         with:
           path: great-docs/_site
           include-hidden-files: true
+
+      # Warn-only docs quality gates (continue-on-error + per-step timeout = never gate the
+      # deploy; publish-docs is a separate job). proofread omitted: needs harper-cli, absent in CI.
+      - name: "Docs quality: API lint"
+        run: uv run --group docs great-docs lint
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: "Docs quality: link check"
+        run: uv run --group docs great-docs check-links
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: "Docs quality: SEO audit"
+        run: uv run --group docs great-docs seo
+        continue-on-error: true
+        timeout-minutes: 2
 
   publish-docs:
     needs: build-docs

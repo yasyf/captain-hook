@@ -8,8 +8,13 @@ repo: https://github.com/yasyf/captain-hook
 site_url: "https://yasyf.github.io/captain-hook/"
 pypi: true
 
-navbar_color: "#1e293b"
-accent_color: "#3b82f6"
+navbar_color: "#131a2b"
+accent_color:
+  light: "#c03a1e"
+  dark: "#ff8a70"
+
+social_cards:
+  image: docs/assets/social-preview.jpg
 
 hero:
   name: captain-hook
@@ -278,3 +283,8 @@ back_to_top: true
 keyboard_nav: true
 fast_sidebar: true
 freeze: auto
+
+# Fleet SEO: uniform page-title format (schema placeholders {page_title}/{site_name}; default
+# separator is "|"). social_cards stays per-repo — repos set social_cards.image in their fragment.
+seo:
+  title_template: "{page_title} - {site_name}"
