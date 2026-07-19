@@ -35,8 +35,8 @@ async def scan_correction(store: ReviewStore, settings: ReviewSettings, tmp_path
 
 
 def statuses(store: ReviewStore) -> dict[str, str]:
-    cur = store.store.conn.execute("SELECT rule, status FROM candidates")
-    return {str(row["rule"]): str(row["status"]) for row in cur}
+    rows = store.store.sql("SELECT rule, status FROM candidates")
+    return {str(row["rule"]): str(row["status"]) for row in rows}
 
 
 class TestTriagePass:

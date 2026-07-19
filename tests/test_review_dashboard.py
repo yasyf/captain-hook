@@ -616,7 +616,7 @@ def seed_obs(
     text: str = "correction text",
 ) -> None:
     payload = json.dumps({"signal": to_payload(CandidateSignal(Confidence(heuristic), ("marker",)))})
-    store.store.conn.execute(INSERT_EVENT, (key, source, session, occurred, text, payload))
+    store.store.execute(INSERT_EVENT, (key, source, session, occurred, text, payload))
     store.record_observation(
         candidate_id,
         dedup_key=DedupKey(key),
@@ -628,7 +628,7 @@ def seed_obs(
 async def judge_obs(
     store: ReviewStore, key: str, *, accepted: bool = True, summary: str = "encode this rule", model: str = "m1"
 ) -> None:
-    await store.record_verdict(
+    store.record_verdict(
         DedupKey(key),
         FakeVerdict(accepted=accepted, summary=summary),
         role="judge",
@@ -707,7 +707,7 @@ class TestOverview:
             heuristic=0.95,
             source="hook_complaint",
         )
-        await store.record_verdict(
+        store.record_verdict(
             DedupKey("fix0"),
             FakeVerdict(accepted=True, summary="tighten the guard"),
             role="judge",

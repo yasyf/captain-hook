@@ -183,7 +183,7 @@ async def seed_eligible_fix(store: ReviewStore, *, repo: RepoKey, session: str =
     )
     key = dedup_key("hook_complaint", session, FIX_TARGET_HOOK)
     payload = json.dumps({"signal": to_payload(CandidateSignal(Confidence(VERY_HIGH), ("marker",)))})
-    store.store.conn.execute(
+    store.store.execute(
         "INSERT INTO feedback_events (dedup_key, source_kind, session_id, occurred_at, text, payload_json, "
         "context_json, ingested_at) VALUES (?, ?, ?, ?, ?, ?, '{}', '2026-06-01T00:00:00+00:00')",
         (key, HOOK_COMPLAINT, session, "2026-06-01T10:00:00+00:00", "that reminder misfired again", payload),
@@ -194,7 +194,7 @@ async def seed_eligible_fix(store: ReviewStore, *, repo: RepoKey, session: str =
         session_id=SessionId(session),
         occurred_at=datetime.fromisoformat("2026-06-01T10:00:00+00:00"),
     )
-    await store.record_verdict(
+    store.record_verdict(
         DedupKey(key),
         Verdict(summary="stop the nudge misfiring on its own text"),
         role=JUDGE_ROLE,
@@ -212,13 +212,11 @@ def projects_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 
 def verdict_fidelities(store: ReviewStore) -> list[str]:
-    cur = store.store.conn.execute("SELECT fidelity FROM verdicts ORDER BY id")
-    return [str(row["fidelity"]) for row in cur]
+    return [str(row["fidelity"]) for row in store.store.sql("SELECT fidelity FROM verdicts ORDER BY id")]
 
 
 def count_rows(store: ReviewStore, table: str) -> int:
-    cur = store.store.conn.execute(f"SELECT COUNT(*) AS n FROM {table}")
-    return [int(row["n"]) for row in cur][0]
+    return [int(row["n"]) for row in store.store.sql(f"SELECT COUNT(*) AS n FROM {table}")][0]
 
 
 def sweep_stamps(cwd: str) -> tuple[Path, Path]:
@@ -780,7 +778,7 @@ class TestJudgePass:
         install_judge(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION])
 
-        async def boom(*_: object, **__: object) -> list[object]:
+        def boom(*_: object, **__: object) -> list[object]:
             raise RuntimeError("sqlite-vec extension failed to load")
 
         def has_evidence(self: ReviewStore) -> bool:
@@ -860,7 +858,7 @@ class TestJudgePass:
                     "fire_message": "Remember to use the project's task tracker.",
                 }
             )
-            store.store.conn.execute(
+            store.store.execute(
                 "INSERT INTO feedback_events "
                 "(dedup_key, source_kind, session_id, occurred_at, text, payload_json, context_json, ingested_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, '2026-06-01T00:00:00+00:00')",
@@ -875,11 +873,13 @@ class TestJudgePass:
                 ),
             )
             await judge_pass(store, settings=settings)
-            cur = store.store.conn.execute(
-                "SELECT e.source_kind AS source_kind, v.prompt_version AS prompt_version "
-                "FROM verdicts v JOIN feedback_events e ON e.dedup_key = v.dedup_key WHERE v.role = 'judge'"
-            )
-            lanes = {str(row["source_kind"]): int(row["prompt_version"]) for row in cur}
+            lanes = {
+                str(row["source_kind"]): int(row["prompt_version"])
+                for row in store.store.sql(
+                    "SELECT e.source_kind AS source_kind, v.prompt_version AS prompt_version "
+                    "FROM verdicts v JOIN feedback_events e ON e.dedup_key = v.dedup_key WHERE v.role = 'judge'"
+                )
+            }
             assert lanes == {TRANSCRIPT_MESSAGE: store.versions.create, HOOK_COMPLAINT: store.versions.fix}
 
     @pytest.mark.parametrize("category", ALL_CATEGORIES)
@@ -1729,7 +1729,7 @@ class TestSuggestionPlumbing:
     ) -> None:
         install_fake_embedder(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION], session="s1")
-        await store.record_verdict(
+        store.record_verdict(
             dedup_key("transcript_message", "s1", CORRECTION),
             Verdict(canonical_key="prefer-uv-over-pip", summary="always use uv"),
             role=JUDGE_ROLE,
@@ -1738,7 +1738,7 @@ class TestSuggestionPlumbing:
             fidelity="full",
         )
         await seed_corrections(store, settings, tmp_path, [SECOND_CORRECTION], session="s2")
-        await store.record_verdict(
+        store.record_verdict(
             dedup_key("transcript_message", "s2", SECOND_CORRECTION),
             Verdict(canonical_key="prefer-frozen-dataclasses", summary="always freeze config"),
             role=JUDGE_ROLE,
@@ -1762,7 +1762,7 @@ class TestSuggestionPlumbing:
     ) -> None:
         install_fake_embedder(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION], session="s1")
-        await store.record_verdict(
+        store.record_verdict(
             dedup_key("transcript_message", "s1", CORRECTION),
             Verdict(canonical_key="prefer-uv-over-pip"),
             role=JUDGE_ROLE,
@@ -1772,7 +1772,7 @@ class TestSuggestionPlumbing:
         )
         await seed_corrections(store, settings, tmp_path, [SECOND_CORRECTION], session="s2")
         digest_key = "deadbeef" * 8
-        await store.record_verdict(
+        store.record_verdict(
             dedup_key("transcript_message", "s2", SECOND_CORRECTION),
             Verdict(canonical_key=digest_key),
             role=JUDGE_ROLE,
@@ -1780,7 +1780,7 @@ class TestSuggestionPlumbing:
             model="m1",
             fidelity="full",
         )
-        raw = await suggest_canonical_keys(store, THIRD_CORRECTION, prompt_version=store.versions.create, k=5)
+        raw = suggest_canonical_keys(store, THIRD_CORRECTION, prompt_version=store.versions.create, k=5)
         assert {"prefer-uv-over-pip", digest_key} <= {suggestion.canonical_key for suggestion in raw}
         await seed_corrections(store, settings, tmp_path, [THIRD_CORRECTION], session="s3")
         calls = install_judge(monkeypatch, slug="prefer-uv-over-pip")

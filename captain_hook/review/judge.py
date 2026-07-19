@@ -231,7 +231,7 @@ def prompt_builder(
         if not suggesting or str(row["source_kind"]) == HOOK_COMPLAINT:
             return ()
         try:
-            ranked = await suggest_canonical_keys(store, str(row["text"]), prompt_version=store.versions.create, k=5)
+            ranked = suggest_canonical_keys(store, str(row["text"]), prompt_version=store.versions.create, k=5)
         except Exception as exc:
             raise JudgeError(f"slug suggestion retrieval failed: {exc}") from exc
         return [suggestion for suggestion in ranked if SLUG_PATTERN.fullmatch(suggestion.canonical_key)]
@@ -248,7 +248,7 @@ def persist_verdict(
     store: ReviewStore, *, model: str, fidelities: Mapping[str, Fidelity]
 ) -> Callable[[Mapping[str, object], ReviewVerdict], Awaitable[None]]:
     async def persist(row: Mapping[str, object], verdict: ReviewVerdict) -> None:
-        await store.record_verdict(
+        store.record_verdict(
             DedupKey(str(row["dedup_key"])),
             verdict,
             role=JUDGE_ROLE,

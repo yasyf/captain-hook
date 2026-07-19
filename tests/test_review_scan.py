@@ -81,12 +81,11 @@ def signal_pair(
 
 
 def rows(store: ReviewStore, query: str) -> list[dict[str, Any]]:
-    cur = store.store.conn.execute(query)
-    return [dict(row) for row in cur]
+    return [dict(row) for row in store.store.sql(query)]
 
 
 async def judge(store: ReviewStore, key: str) -> None:
-    await store.record_verdict(
+    store.record_verdict(
         DedupKey(key), Verdict(), role="judge", prompt_version=store.versions.create, model="m1", fidelity="full"
     )
 
@@ -155,10 +154,9 @@ class TestSweepIngestRace:
     ) -> None:
         db = tmp_path / "review.db"
         path = write_transcript(tmp_path / "s.jsonl", correction_entries())
-        with ReviewStore.open(db) as ingesting, ReviewStore.open(db) as sweeping:
-            # A short busy_timeout so the fix's held write lock fails the sweep's
-            # BEGIN IMMEDIATE fast instead of stalling on the default 5s timeout.
-            sweeping.store.conn.execute("PRAGMA busy_timeout = 200")
+        # A short busy_timeout so the fix's held write lock fails the sweep's BEGIN IMMEDIATE
+        # fast instead of stalling on the default 5s timeout.
+        with ReviewStore.open(db) as ingesting, ReviewStore.open(db, busy_timeout_ms=200) as sweeping:
             record = ingesting.record_observation
             fired = False
 

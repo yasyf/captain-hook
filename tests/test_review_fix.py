@@ -203,8 +203,7 @@ def seed_decision(
 
 
 def rows(store: ReviewStore, query: str) -> list[dict[str, Any]]:
-    cur = store.store.conn.execute(query)
-    return [dict(row) for row in cur]
+    return [dict(row) for row in store.store.sql(query)]
 
 
 class TestMarkers:
@@ -837,7 +836,7 @@ class TestFixGroupingAndStore:
 
         store.enable(REPO)
         [observation] = rows(store, "SELECT * FROM candidate_observations")
-        await store.record_verdict(
+        store.record_verdict(
             DedupKey(str(observation["dedup_key"])),
             Verdict(),
             role="judge",
@@ -867,7 +866,7 @@ class TestFixGroupingAndStore:
 
         store.enable(REPO)
         for observation in observations:
-            await store.record_verdict(
+            store.record_verdict(
                 DedupKey(str(observation["dedup_key"])),
                 Verdict(),
                 role="judge",

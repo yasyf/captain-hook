@@ -202,7 +202,7 @@ class TestPrStateCache:
         candidate_id = open_pr(store, url, opened_days_ago=settings.stale_after_days + 1)
         store.cache_pr_state(url, PrState("OPEN", None))
         expired = (datetime.now(UTC) - timedelta(minutes=20)).isoformat()
-        store.store.conn.execute("UPDATE pr_states SET fetched_at = ? WHERE pr_url = ?", (expired, url))
+        store.store.execute("UPDATE pr_states SET fetched_at = ? WHERE pr_url = ?", (expired, url))
         calls = install_gh(monkeypatch, {url: None})
         assert await sync_open_prs(store, REPO, settings=settings) == SyncReport(0, 0, 0, 1)
         assert calls == [url]

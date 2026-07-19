@@ -63,7 +63,6 @@ from cc_transcript.filterspec import (
 )
 from cc_transcript.ids import EventRef
 from cc_transcript.mining.candidates import FeedbackCandidate, dedup_key
-from cc_transcript.mining.filterspec import at_least, build_candidate_filter, keep_candidate
 from cc_transcript.mining.signals import mine
 from cc_transcript.mining.spec import ALL_DETECTORS, MiningSpec
 from cc_transcript.models import UserEvent
@@ -351,13 +350,12 @@ def detect(events: Sequence[TranscriptEvent]) -> Iterator[MiningSignal]:
 def candidates_from(
     raw: bytes, events: Sequence[TranscriptEvent], signals: Iterable[MiningSignal], *, settings: ReviewSettings
 ) -> Iterator[tuple[MiningSignal, FeedbackCandidate]]:
-    strict_user = build_candidate_filter(at_least(settings.min_confidence))
-    strict_fix = build_candidate_filter(at_least(settings.min_confidence_fix))
     for sig in signals:
         if not survives(events, sig):
             continue
         candidate = to_candidate(raw, sig)
-        if keep_candidate(candidate, strict_fix if sig.kind == HOOK_COMPLAINT else strict_user):
+        floor = settings.min_confidence_fix if sig.kind == HOOK_COMPLAINT else settings.min_confidence
+        if candidate.signal.confidence >= floor:
             yield sig, candidate
 
 

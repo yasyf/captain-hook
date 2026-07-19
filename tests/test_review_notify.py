@@ -94,32 +94,27 @@ def test_closed_and_stale_never_notify(store: ReviewStore, notes: list[dict[str,
 
 def test_cas_loser_does_not_double_notify(store: ReviewStore, notes: list[dict[str, object]]) -> None:
     cid = store.ensure_candidate(REPO, kind=CandidateKind.CREATE, rule="guard-rm-rf", source_kind="transcript_message")
-    real = store.store.conn
+    real_sql = store.store.sql
+    armed = True
 
-    class Proxy:
-        def __init__(self) -> None:
-            self.armed = True
+    def gated_sql(sql: str, params: object = ()) -> list[dict[str, object]]:
+        nonlocal armed
+        rows = real_sql(sql, params)
+        if armed and sql.startswith("SELECT status, pr_url, generation"):
+            armed = False
+            # A peer commits the same move between this SELECT and the UPDATE, so the caller's
+            # UPDATE matches zero rows and its next pass converges as a no-op — and must not notify.
+            store.store.execute(
+                "UPDATE candidates SET status = 'pr_open', pr_url = ?, pr_opened_at = ? WHERE id = ?",
+                (PR_URL, datetime.now(UTC).isoformat(), cid),
+            )
+        return rows
 
-        def execute(self, sql: str, params: object = ()):  # noqa: ANN201 - forwards a sqlite cursor
-            cur = real.execute(sql, params)
-            if self.armed and sql.startswith("SELECT status, pr_url, generation"):
-                self.armed = False
-                # A peer commits the same move between this SELECT and the UPDATE, so the caller's
-                # UPDATE matches zero rows and its next pass converges as a no-op — and must not notify.
-                real.execute(
-                    "UPDATE candidates SET status = 'pr_open', pr_url = ?, pr_opened_at = ? WHERE id = ?",
-                    (PR_URL, datetime.now(UTC).isoformat(), cid),
-                )
-            return cur
-
-        def __getattr__(self, name: str) -> object:
-            return getattr(real, name)
-
-    store.store.conn = Proxy()  # type: ignore[assignment]
+    store.store.sql = gated_sql  # type: ignore[method-assign]
     try:
         moved = store.transition(cid, CandidateStatus.PR_OPEN, pr_url=PR_URL, pr_title="Block force-pushes")
     finally:
-        store.store.conn = real
+        store.store.sql = real_sql  # type: ignore[method-assign]
     assert moved is True
     assert notes == []  # the converged loser never reaches the rowcount==1 notify branch
 

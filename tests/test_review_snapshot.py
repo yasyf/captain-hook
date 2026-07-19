@@ -41,7 +41,7 @@ def _medium_payload() -> str:
 
 
 def seed(store: ReviewStore, candidate_id: int, key: str, *, session: str, occurred: str) -> None:
-    store.store.conn.execute(
+    store.store.execute(
         INSERT_EVENT, (key, "transcript_message", session, occurred, f"text {key}", _medium_payload())
     )
     store.record_observation(
@@ -53,12 +53,12 @@ def seed(store: ReviewStore, candidate_id: int, key: str, *, session: str, occur
 
 
 async def accept(store: ReviewStore, key: str) -> None:
-    cur = store.store.conn.execute("SELECT source_kind FROM feedback_events WHERE dedup_key = ?", (key,))
-    await store.record_verdict(
+    cur = store.store.sql("SELECT source_kind FROM feedback_events WHERE dedup_key = ?", (key,))
+    store.record_verdict(
         DedupKey(key),
         Verdict(accepted=True, confidence=0.9, canonical_key=None),
         role="judge",
-        prompt_version=store.versions.for_row(cur.fetchone()),
+        prompt_version=store.versions.for_row(cur[0]),
         model="m1",
         fidelity="full",
     )
@@ -76,7 +76,7 @@ def insert_candidate(store: ReviewStore, rule: str, status: str, **extra: object
         **extra,
     }
     placeholders = ",".join("?" for _ in cols)
-    store.store.conn.execute(f"INSERT INTO candidates ({','.join(cols)}) VALUES ({placeholders})", tuple(cols.values()))
+    store.store.execute(f"INSERT INTO candidates ({','.join(cols)}) VALUES ({placeholders})", tuple(cols.values()))
 
 
 async def seed_golden(store: ReviewStore) -> None:
@@ -102,13 +102,13 @@ async def seed_golden(store: ReviewStore) -> None:
         pr_opened_at="2026-07-15T11:30:00+00:00",
         pr_title="[capt-hook] Block force-pushes",
     )
-    store.store.conn.execute(
+    store.store.execute(
         "INSERT INTO spawn_runs (started_at, finished_at, transcript, ok, error, report_json) "
         "VALUES (?, ?, ?, 1, NULL, '{}')",
         ("2026-07-15T11:58:00+00:00", "2026-07-15T11:59:00+00:00", "/t.jsonl"),
     )
     for i in range(3):
-        store.store.conn.execute(
+        store.store.execute(
             INSERT_EVENT,
             (f"jp{i}", "transcript_message", f"js{i}", "2026-06-10T10:00:00+00:00", f"pending {i}", _medium_payload()),
         )
@@ -184,5 +184,5 @@ def test_transition_to_pr_open_stamps_opened_at(store: ReviewStore) -> None:
     store.enable(REPO)
     insert_candidate(store, "w-stamp", "watching", id=77)
     assert store.transition(77, CandidateStatus.PR_OPEN)
-    row = store.store.conn.execute("SELECT pr_opened_at FROM candidates WHERE id = 77").fetchone()
+    row = store.store.sql("SELECT pr_opened_at FROM candidates WHERE id = 77")[0]
     assert row["pr_opened_at"] is not None

@@ -112,7 +112,7 @@ def seed(
     source_kind: str = "transcript_message",
 ) -> None:
     payload = json.dumps({"signal": to_payload(CandidateSignal(Confidence(heuristic), ("marker",)))})
-    store.store.conn.execute(INSERT_EVENT, (key, source_kind, session, occurred, f"text {key}", payload))
+    store.store.execute(INSERT_EVENT, (key, source_kind, session, occurred, f"text {key}", payload))
     store.record_observation(
         candidate_id,
         dedup_key=DedupKey(key),
@@ -131,12 +131,15 @@ async def judge(
     slug: str | None = None,
     fidelity: Fidelity = "full",
 ) -> None:
-    cur = store.store.conn.execute("SELECT source_kind FROM feedback_events WHERE dedup_key = ?", (key,))
-    await store.record_verdict(
+    store.record_verdict(
         DedupKey(key),
         Verdict(accepted=accepted, confidence=confidence, canonical_key=slug),
         role="judge",
-        prompt_version=store.versions.for_row(cur.fetchone()),
+        prompt_version=store.versions.for_row(
+            rows[0]
+            if (rows := store.store.sql("SELECT source_kind FROM feedback_events WHERE dedup_key = ?", (key,)))
+            else None
+        ),
         model=model,
         fidelity=fidelity,
     )
@@ -153,8 +156,7 @@ async def seed_merge_pair(store: ReviewStore, *, slug: str = "shared-slug") -> t
 
 
 def dump_table(store: ReviewStore, table: str) -> list[dict[str, object]]:
-    cur = store.store.conn.execute(f"SELECT * FROM {table} ORDER BY id")
-    return [dict(row) for row in cur]
+    return [dict(row) for row in store.store.sql(f"SELECT * FROM {table} ORDER BY id")]
 
 
 async def eligible_create_candidate(store: ReviewStore) -> int:
@@ -174,8 +176,7 @@ def open_pr(store: ReviewStore, *, rule: str, opened_at: datetime, n: int, repo:
 
 
 def candidate_row(store: ReviewStore, candidate_id: int) -> dict[str, object]:
-    cur = store.store.conn.execute("SELECT * FROM candidates WHERE id = ?", (candidate_id,))
-    return [dict(row) for row in cur][0]
+    return [dict(row) for row in store.store.sql("SELECT * FROM candidates WHERE id = ?", (candidate_id,))][0]
 
 
 PREWAVE_CANDIDATES_DDL = """
@@ -214,8 +215,7 @@ def build_prewave_db(path: Path, rows: list[tuple[str, str, str]]) -> None:
 
 
 def candidate_columns(store: ReviewStore) -> set[str]:
-    cur = store.store.conn.execute("PRAGMA table_info(candidates)")
-    return {str(row["name"]) for row in cur}
+    return {str(row["name"]) for row in store.store.sql("PRAGMA table_info(candidates)")}
 
 
 async def accepted_fix(store: ReviewStore, *, resolved_at: str) -> int:
@@ -237,14 +237,13 @@ async def accepted_fix(store: ReviewStore, *, resolved_at: str) -> int:
         pr_opened_at=datetime(2026, 6, 10, tzinfo=UTC),
     )
     store.transition(candidate_id, CandidateStatus.ACCEPTED)
-    store.store.conn.execute("UPDATE candidates SET resolved_at = ? WHERE id = ?", (resolved_at, candidate_id))
+    store.store.execute("UPDATE candidates SET resolved_at = ? WHERE id = ?", (resolved_at, candidate_id))
     return candidate_id
 
 
 class TestSchema:
     def test_open_layers_feedback_verdicts_and_review_tables(self, store: ReviewStore) -> None:
-        cur = store.store.conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-        names = {str(row["name"]) for row in cur}
+        names = {str(row["name"]) for row in store.store.sql("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert {"files", "feedback_events", "verdicts", "candidates", "candidate_observations", "repos"} <= names
 
     def test_generic_verdict_names(self) -> None:
@@ -259,14 +258,14 @@ class TestWatching:
     def test_unknown_repo_is_enrolled(self, store: ReviewStore) -> None:
         assert store.watching(REPO) is False
         assert store.enroll(REPO) is True
-        cur = store.store.conn.execute("SELECT repo_key, watching FROM repos")
-        assert [(row["repo_key"], row["watching"]) for row in cur] == [(REPO, 1)]
+        rows = store.store.sql("SELECT repo_key, watching FROM repos")
+        assert [(row["repo_key"], row["watching"]) for row in rows] == [(REPO, 1)]
 
     def test_disabled_repo_stays_disabled(self, store: ReviewStore) -> None:
         store.disable(REPO)
         assert store.enroll(REPO) is False
-        cur = store.store.conn.execute("SELECT watching FROM repos WHERE repo_key = ?", (REPO,))
-        assert [row["watching"] for row in cur] == [0]
+        watching_rows = store.store.sql("SELECT watching FROM repos WHERE repo_key = ?", (REPO,))
+        assert [row["watching"] for row in watching_rows] == [0]
 
     def test_enabled_repo_stays_enabled(self, store: ReviewStore) -> None:
         store.enable(REPO)
@@ -385,7 +384,7 @@ class TestTransitions:
         accepter = ReviewStore.open(path)
         staler = ReviewStore.open(path)
         try:
-            underlying = staler.store.conn.execute
+            underlying = staler.store.execute
             accepted = False
 
             def gated(sql: str, *args: object, **kwargs: object) -> object:
@@ -395,7 +394,7 @@ class TestTransitions:
                     accepter.transition(candidate_id, CandidateStatus.ACCEPTED)
                 return underlying(sql, *args, **kwargs)
 
-            staler.store.conn.execute = gated  # type: ignore[method-assign]
+            staler.store.execute = gated  # type: ignore[method-assign]
             with pytest.raises(InvalidTransition, match="accepted -> stale"):
                 staler.transition(candidate_id, CandidateStatus.STALE)
             assert (candidate_row(accepter, candidate_id))["status"] == "accepted"
@@ -414,7 +413,7 @@ class TestTransitions:
         winner = ReviewStore.open(path)
         loser = ReviewStore.open(path)
         try:
-            underlying = loser.store.conn.execute
+            underlying = loser.store.execute
             raced = False
 
             def gated(sql: str, *args: object, **kwargs: object) -> object:
@@ -424,7 +423,7 @@ class TestTransitions:
                     assert winner.transition(candidate_id, CandidateStatus.ACCEPTED) is True
                 return underlying(sql, *args, **kwargs)
 
-            loser.store.conn.execute = gated  # type: ignore[method-assign]
+            loser.store.execute = gated  # type: ignore[method-assign]
             assert loser.transition(candidate_id, CandidateStatus.ACCEPTED) is True
             assert (candidate_row(winner, candidate_id))["status"] == "accepted"
         finally:
@@ -451,7 +450,7 @@ class TestTransitions:
             pr_url="https://github.com/x/y/pull/2",
             pr_opened_at=datetime.now(UTC),
         )
-        store.store.conn.execute("UPDATE candidates SET generation = 2 WHERE id = ?", (candidate_id,))
+        store.store.execute("UPDATE candidates SET generation = 2 WHERE id = ?", (candidate_id,))
 
         applied = store.transition(
             candidate_id,
@@ -622,8 +621,7 @@ class TestCreateEligibility:
             occurred_at=datetime.fromisoformat("2026-06-01T10:00:00+00:00"),
         )
         await judge(store, "k0")
-        cur = store.store.conn.execute("SELECT COUNT(*) AS n FROM candidate_observations")
-        assert [int(row["n"]) for row in cur] == [1]
+        assert [int(row["n"]) for row in store.store.sql("SELECT COUNT(*) AS n FROM candidate_observations")] == [1]
         status = store.threshold_status(candidate_id, settings=settings)
         assert (status.sessions, status.days) == (1, 1)
 
@@ -1042,7 +1040,7 @@ class TestPurgeStaleVerdicts:
         candidate_id = create_candidate(store, rule=digest_rule("ka"))
         seed(store, candidate_id, "ka", session="s0", occurred="2026-06-01T10:00:00+00:00")
         for version in (store.versions.create, store.versions.create - 1):
-            await store.record_verdict(
+            store.record_verdict(
                 DedupKey("ka"),
                 Verdict(accepted=True, confidence=0.9, canonical_key=None),
                 role="judge",
@@ -1058,7 +1056,7 @@ class TestPurgeStaleVerdicts:
     async def test_purge_spares_other_roles(self, store: ReviewStore) -> None:
         candidate_id = create_candidate(store, rule=digest_rule("ka"))
         seed(store, candidate_id, "ka", session="s0", occurred="2026-06-01T10:00:00+00:00")
-        await store.record_verdict(
+        store.record_verdict(
             DedupKey("ka"),
             Verdict(accepted=True, confidence=0.9, canonical_key=None),
             role="judge",
@@ -1066,7 +1064,7 @@ class TestPurgeStaleVerdicts:
             model="m1",
             fidelity="full",
         )
-        await store.record_verdict(
+        store.record_verdict(
             DedupKey("ka"),
             Verdict(accepted=True, confidence=0.9, canonical_key=None),
             role="auditor",
@@ -1092,7 +1090,7 @@ class TestPurgeStaleVerdicts:
             source_kind="hook_complaint",
         )
         for key in ("kc", "kh"):
-            await store.record_verdict(
+            store.record_verdict(
                 DedupKey(key),
                 Verdict(accepted=True, confidence=0.9, canonical_key=None),
                 role="judge",
@@ -1110,7 +1108,7 @@ class TestPurgeGating:
     async def seed_stale_judge_row(self, store: ReviewStore) -> None:
         candidate_id = create_candidate(store, rule=digest_rule("ka"))
         seed(store, candidate_id, "ka", session="s0", occurred="2026-06-01T10:00:00+00:00")
-        await store.record_verdict(
+        store.record_verdict(
             DedupKey("ka"),
             Verdict(accepted=True, confidence=0.9, canonical_key=None),
             role="judge",
@@ -1136,7 +1134,7 @@ class TestPurgeGating:
         bumped = PromptVersions(create=store.versions.create + 5, fix=store.versions.fix)
         with ReviewStore.open(tmp_path / "review.db", versions=bumped) as reopened:
             assert dump_table(reopened, "verdicts") == []
-            await reopened.record_verdict(
+            reopened.record_verdict(
                 DedupKey("ka"),
                 Verdict(accepted=True, confidence=0.9, canonical_key=None),
                 role="judge",
@@ -1189,7 +1187,7 @@ class TestMigration:
         build_prewave_db(path, [("rejected-rule", "rejected", "2026-05-01T00:00:00+00:00")])
         with ReviewStore.open(path) as store:
             columns = candidate_columns(store)
-            store.store.conn.execute("UPDATE candidates SET announced_status = NULL WHERE status = 'rejected'")
+            store.store.execute("UPDATE candidates SET announced_status = NULL WHERE status = 'rejected'")
         with ReviewStore.open(path) as reopened:
             assert candidate_columns(reopened) == columns
             [row] = dump_table(reopened, "candidates")
@@ -1291,7 +1289,7 @@ class TestReopenRecurrentFixes:
         await judge(store, "cpost", slug="durable-rule")
         store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_opened_at=datetime(2026, 6, 10, tzinfo=UTC))
         store.transition(candidate_id, CandidateStatus.ACCEPTED)
-        store.store.conn.execute(
+        store.store.execute(
             "UPDATE candidates SET resolved_at = ? WHERE id = ?", ("2026-06-15T00:00:00+00:00", candidate_id)
         )
         assert store.reopen_recurrent_fixes() == 0
@@ -1449,13 +1447,12 @@ class TestOriginWatchingGate:
 
 
 def feedback_columns(store: ReviewStore) -> set[str]:
-    cur = store.store.conn.execute("PRAGMA table_info(feedback_events)")
-    return {str(row["name"]) for row in cur}
+    return {str(row["name"]) for row in store.store.sql("PRAGMA table_info(feedback_events)")}
 
 
 def triage_of(store: ReviewStore, key: str) -> object:
-    cur = store.store.conn.execute("SELECT triage FROM feedback_events WHERE dedup_key = ?", (key,))
-    return [row["triage"] for row in cur][0]
+    rows = store.store.sql("SELECT triage FROM feedback_events WHERE dedup_key = ?", (key,))
+    return [row["triage"] for row in rows][0]
 
 
 class TestFeedbackMigration:
