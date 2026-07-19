@@ -15,6 +15,7 @@ accent_color:
 
 social_cards:
   image: docs/assets/social-preview.jpg
+  twitter_site: "@yasyf"
 
 hero:
   name: captain-hook
