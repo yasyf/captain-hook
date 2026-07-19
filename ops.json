@@ -1,1 +1,1 @@
-{"v":1,"lamport":5,"session":"b7c41eac-50ae-4128-ac02-0be077bdcbe3","ops":[{"kind":"renew"}]}
+{"v":1,"lamport":6,"session":"b7c41eac-50ae-4128-ac02-0be077bdcbe3","ops":[{"kind":"set_status","status":"done"},{"kind":"link_commit","sha":"31d1cd3e470bd16304d3b617ee8d737913fe77e6"}]}
