@@ -197,7 +197,12 @@ class Call:
 
     @property
     def wrappers(self) -> tuple[str, ...]:
-        """The leading wrapper commands stripped to reach this call, e.g. ``("sudo",)``."""
+        """The leading wrapper commands stripped to reach this call, e.g. ``("sudo",)``.
+
+        Identified by basename against the authoritative ``WRAPPER_COMMANDS`` table. A wrapper
+        value-flag argument that itself names a wrapper (``sudo -u env rm``) can appear here, but
+        a membership check against a real wrapper head is unaffected.
+        """
         stripped = self.source.argv[: len(self.source.argv) - len(self.command.argv)]
         return tuple(name for token in stripped if (name := basename(token)) in WRAPPER_COMMANDS)
 
