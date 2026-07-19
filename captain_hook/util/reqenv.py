@@ -55,3 +55,8 @@ def env_map() -> Mapping[str, str]:
 
 def cwd() -> Path:
     return Path.cwd() if (ov := _OVERRIDES.get()) is None else Path(ov.cwd)
+
+
+def is_headless() -> bool:
+    """True in a headless ``claude -p`` / SDK run (``CLAUDE_CODE_ENTRYPOINT`` in the ``sdk-*`` family)."""
+    return (getenv("CLAUDE_CODE_ENTRYPOINT") or "").startswith("sdk")

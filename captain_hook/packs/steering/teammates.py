@@ -2,32 +2,12 @@ from __future__ import annotations
 
 from captain_hook import (
     Allow,
-    BaseHookEvent,
-    CustomCondition,
     Event,
+    FromTeammate,
     Input,
-    TaskCall,
     Warn,
     nudge,
 )
-
-
-class FromTeammate(CustomCondition):
-    """True when the current turn's in-flight subagent spawn is a named teammate.
-
-    A teammate spawn carries a ``name`` in its Agent/Task input, which cc-transcript
-    surfaces as ``TaskCall.agent_name``; a plain subagent leaves it unset. Scoped to
-    the current turn so a teammate still running from an earlier turn never re-fires
-    against a later unnamed spawn.
-    """
-
-    def check(self, evt: BaseHookEvent) -> bool:
-        return any(
-            isinstance(use.call, TaskCall) and bool(use.call.agent_name)
-            for use in evt.ctx.t.current_turn.tool_calls.named("Task")
-            if use.result is None
-        )
-
 
 nudge(
     """You are a teammate in a shared session: every message you send re-reads and

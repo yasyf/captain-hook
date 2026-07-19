@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from filelock import FileLock
 
 from captain_hook.packs import bootstrap, manager
 
@@ -83,6 +84,20 @@ def make_pack(root: Path, name: str, *, marketplaces: Sequence[str] = ()) -> Pat
 def worker_repos(call: SimpleNamespace) -> list[str]:
     """The dependency-marketplace repos threaded onto a detached worker's argv (after `pack bootstrap`)."""
     return call.argv[call.argv.index("bootstrap") + 1 :]
+
+
+def recorded_attempts() -> dict[str, float]:
+    """The durable BootstrapState's attempt map, read straight from the eventless global slot."""
+    return bootstrap.bootstrap_slot().get(bootstrap.BootstrapState()).attempts
+
+
+def attempt_recorded(repo: str) -> bool:
+    return bootstrap.attempt_key(repo) in recorded_attempts()
+
+
+def seed_attempt(repo: str, ts: float) -> None:
+    with bootstrap.bootstrap_slot().mutate() as state:
+        state.attempts[bootstrap.attempt_key(repo)] = ts
 
 
 # --- known-marketplace detection (fix #1: all-source, not github-only) ----------------
@@ -167,7 +182,7 @@ def test_all_required_known_is_hard_no_op(monkeypatch: pytest.MonkeyPatch, tmp_p
     use_config(monkeypatch, seed_config(tmp_path, PRESENT))
     forbid_popen(monkeypatch)
     assert bootstrap.maybe_bootstrap([PRESENT]) is None
-    assert not bootstrap.marker_path(PRESENT).exists()  # zero further I/O — no attempt marker written
+    assert not attempt_recorded(PRESENT)  # zero further I/O — no attempt recorded
 
 
 def test_empty_union_is_zero_io_no_op(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -193,7 +208,7 @@ def test_registers_only_given_slugs_no_implicit_captain(monkeypatch: pytest.Monk
     calls = capture_popen(monkeypatch)
     bootstrap.maybe_bootstrap([PRESENT])
     assert worker_repos(calls[0]) == [PRESENT]  # captain-hook is NOT implied — exactly the given slug
-    assert not bootstrap.marker_path(CAPTAIN).exists()
+    assert not attempt_recorded(CAPTAIN)
 
 
 def test_given_slugs_spawn_exact_argv_and_mark_each(
@@ -213,8 +228,8 @@ def test_given_slugs_spawn_exact_argv_and_mark_each(
     assert call.kwargs["start_new_session"] is True
     assert call.kwargs["stdout"] is not None
     assert call.kwargs["stdout"] is call.kwargs["stderr"]
-    assert bootstrap.marker_path(CAPTAIN).is_file()  # per-repo markers, both recorded
-    assert bootstrap.marker_path(PRESENT).is_file()
+    assert attempt_recorded(CAPTAIN)  # per-repo attempts, both recorded
+    assert attempt_recorded(PRESENT)
     assert capsys.readouterr() == ("", "")  # maybe_bootstrap prints nothing on any stream
 
 
@@ -251,19 +266,19 @@ def test_narrow_then_broad_spawns_only_for_new_repo(monkeypatch: pytest.MonkeyPa
 def test_fresh_cc_present_marker_suppresses_only_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     use_config(monkeypatch, seed_config(tmp_path))  # nothing known
     claude_present(monkeypatch)
-    bootstrap.record_attempt(bootstrap.marker_path(PRESENT), time.time())
+    seed_attempt(PRESENT, time.time())
     calls = capture_popen(monkeypatch)
 
     bootstrap.maybe_bootstrap([CAPTAIN, PRESENT])
 
     assert len(calls) == 1
-    assert worker_repos(calls[0]) == [CAPTAIN]  # cc-present damped by its fresh marker; captain-hook still spawns
+    assert worker_repos(calls[0]) == [CAPTAIN]  # cc-present damped by its fresh attempt; captain-hook still spawns
 
 
 def test_fresh_captain_marker_suppresses_respawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     use_config(monkeypatch, seed_config(tmp_path))
     claude_present(monkeypatch)
-    bootstrap.record_attempt(bootstrap.marker_path(CAPTAIN), time.time())
+    seed_attempt(CAPTAIN, time.time())
     forbid_popen(monkeypatch)
     assert bootstrap.maybe_bootstrap([CAPTAIN]) is None  # within the hourly cooldown → no re-spawn
 
@@ -271,10 +286,10 @@ def test_fresh_captain_marker_suppresses_respawn(monkeypatch: pytest.MonkeyPatch
 def test_expired_captain_marker_allows_respawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     use_config(monkeypatch, seed_config(tmp_path))
     claude_present(monkeypatch)
-    bootstrap.record_attempt(bootstrap.marker_path(CAPTAIN), time.time() - bootstrap.RETRY_COOLDOWN_SECONDS - 1)
+    seed_attempt(CAPTAIN, time.time() - bootstrap.RETRY_COOLDOWN_SECONDS - 1)
     calls = capture_popen(monkeypatch)
     bootstrap.maybe_bootstrap([CAPTAIN])
-    assert len(calls) == 1  # a stale marker re-arms the spawn
+    assert len(calls) == 1  # a stale attempt re-arms the spawn
 
 
 def test_missing_claude_binary_records_attempt_and_skips_spawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -282,7 +297,24 @@ def test_missing_claude_binary_records_attempt_and_skips_spawn(monkeypatch: pyte
     claude_absent(monkeypatch)
     forbid_popen(monkeypatch)
     assert bootstrap.maybe_bootstrap([CAPTAIN]) is None
-    assert bootstrap.marker_path(CAPTAIN).is_file()  # attempt recorded so it enters the cooldown, no busy re-check
+    assert attempt_recorded(CAPTAIN)  # attempt recorded so it enters the cooldown, no busy re-check
+
+
+def test_spawn_failure_still_persists_attempt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    use_config(monkeypatch, seed_config(tmp_path))  # nothing known → miss path spawns
+    claude_present(monkeypatch)
+
+    def boom(repos: object) -> None:
+        raise RuntimeError("spawn failed")
+
+    monkeypatch.setattr(bootstrap, "spawn_worker", boom)
+    with pytest.raises(RuntimeError):
+        bootstrap.maybe_bootstrap([CAPTAIN])
+    assert attempt_recorded(CAPTAIN)  # persisted by the locked block before the failing spawn
+
+    # Within the cooldown, the recorded attempt suppresses a re-spawn — no busy retry loop.
+    monkeypatch.setattr(bootstrap, "spawn_worker", lambda repos: pytest.fail("must not re-spawn within cooldown"))
+    assert bootstrap.maybe_bootstrap([CAPTAIN]) is None
 
 
 def test_maybe_bootstrap_rechecks_known_under_lock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -296,41 +328,47 @@ def test_maybe_bootstrap_rechecks_known_under_lock(monkeypatch: pytest.MonkeyPat
     assert bootstrap.maybe_bootstrap([CAPTAIN]) is None
 
 
-def test_marker_with_non_numeric_attempted_at_is_not_fresh(tmp_path: Path) -> None:
-    # A hand-corrupted marker whose attempted_at isn't a number re-arms the attempt rather than
-    # raising TypeError on the `now - attempted_at` subtraction.
-    marker = tmp_path / "marker.json"
-    marker.write_text(json.dumps({"attempted_at": "not-a-number"}))
-    assert bootstrap.attempt_fresh(marker, time.time()) is False
+def test_corrupt_state_re_arms_without_crashing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # A hand-corrupted durable state file (a non-float attempt) loads as an empty BootstrapState
+    # rather than propagating a validation error, so the attempt re-arms instead of a stuck cooldown.
+    use_config(monkeypatch, seed_config(tmp_path))
+    claude_present(monkeypatch)
+    calls = capture_popen(monkeypatch)
+    slot = bootstrap.bootstrap_slot()
+    slot.path.parent.mkdir(parents=True, exist_ok=True)
+    slot.path.write_text(json.dumps({"attempts": {bootstrap.attempt_key(CAPTAIN): "not-a-number"}}))
+    bootstrap.maybe_bootstrap([CAPTAIN])
+    assert worker_repos(calls[-1]) == [CAPTAIN]  # corrupt state ignored → attempt re-armed
 
 
-def test_marker_with_future_attempted_at_is_not_fresh(tmp_path: Path) -> None:
-    # fix #8: a corrupt marker whose attempted_at is far in the future must re-arm the attempt, not
-    # suppress it forever (pre-fix `now - future < COOLDOWN` was always true).
-    marker = tmp_path / "marker.json"
+def test_future_attempt_is_not_fresh() -> None:
+    # fix #8: a corrupt/future timestamp must re-arm the attempt, not suppress it forever
+    # (a raw `now - future < COOLDOWN` would always be true); an absent attempt is never fresh.
     now = time.time()
-    bootstrap.record_attempt(marker, now + bootstrap.RETRY_COOLDOWN_SECONDS * 10)
-    assert bootstrap.attempt_fresh(marker, now) is False
+    key = bootstrap.attempt_key(CAPTAIN)
+    assert bootstrap.attempt_fresh({key: now + bootstrap.RETRY_COOLDOWN_SECONDS * 10}, key, now) is False
+    assert bootstrap.attempt_fresh({}, key, now) is False
 
 
-def test_marker_path_is_keyed_on_config_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    # fix #4: two config dirs sharing a state dir must produce distinct markers for the same repo, or
-    # one profile's marker damps another whose marketplace is genuinely unknown.
+def test_attempt_key_is_keyed_on_config_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # fix #4: two config dirs sharing a state dir must produce distinct attempt keys for the same repo,
+    # or one profile's attempt damps another whose marketplace is genuinely unknown.
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg-a"))
-    first = bootstrap.marker_path(CAPTAIN)
+    first = bootstrap.attempt_key(CAPTAIN)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg-b"))
-    second = bootstrap.marker_path(CAPTAIN)
+    second = bootstrap.attempt_key(CAPTAIN)
     assert first != second
 
 
-def test_bootstrap_lock_held_returns_none_without_spawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_lock_held_returns_none_without_spawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # fix #3: the worker holds the lock across up to K*300s of network calls; a sibling miss-path must
-    # acquire non-blocking and return immediately rather than stall dispatch to the hook timeout.
+    # acquire non-blocking (mutate(timeout=0)) and return immediately rather than stall dispatch.
     use_config(monkeypatch, seed_config(tmp_path))  # nothing known → miss path reaches the lock
     claude_present(monkeypatch)
     forbid_popen(monkeypatch)
-    bootstrap.bootstrap_dir().mkdir(parents=True, exist_ok=True)
-    held = bootstrap.FileLock(str(bootstrap.bootstrap_lock_path()))
+    slot = bootstrap.bootstrap_slot()
+    slot.path.parent.mkdir(parents=True, exist_ok=True)
+    held = FileLock(str(slot.path.with_name(slot.path.name + ".lock")))
     held.acquire()
     try:
         assert bootstrap.maybe_bootstrap([CAPTAIN]) is None  # lock already held → immediate None, no spawn

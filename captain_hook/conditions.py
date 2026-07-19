@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from cc_transcript.tools import SkillCall, WorkflowCall, tool_name_matches
+from cc_transcript.tools import SkillCall, TaskCall, WorkflowCall, tool_name_matches
 
 from captain_hook.types import (
     Agent,
     And,
     Command,
     Content,
+    CustomCommandLineCondition,
     CustomCondition,
     FilePath,
     FromSubagent,
@@ -34,12 +36,30 @@ from captain_hook.types import (
     Waiting,
     WorkflowScript,
 )
+from captain_hook.util import reqenv
+from captain_hook.util.scratch import is_scratch_path
 
 if TYPE_CHECKING:
+    from cc_transcript.command import CommandLine
     from cc_transcript.query import Session
 
     from captain_hook.events import BaseHookEvent
     from captain_hook.types import HookSpec
+
+# Prose and config file extensions that shouldn't, on their own, demand a code-review pass.
+NON_SOURCE_SUFFIXES = (
+    ".md",
+    ".mdx",
+    ".rst",
+    ".txt",
+    ".json",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".ini",
+    ".cfg",
+    ".lock",
+)
 
 
 def waiting_tool_names(evt: BaseHookEvent) -> frozenset[str]:
@@ -180,6 +200,149 @@ class AllEditsUnder(CustomCondition):
 
     def check(self, evt: BaseHookEvent) -> bool:
         return bool(files := evt.ctx.t.edited_files) and all(f.under(*self.prefixes) for f in files)
+
+
+class FromTeammate(CustomCondition):
+    """Matches when the current turn's in-flight subagent spawn is a named teammate.
+
+    A teammate spawn carries a ``name`` in its Agent/Task input, which cc-transcript surfaces as
+    ``TaskCall.agent_name``; a plain subagent leaves it unset. Scoped to the current turn so a
+    teammate still running from an earlier turn never re-fires against a later unnamed spawn.
+
+    Example:
+        >>> nudge("Return tight digests", only_if=[FromTeammate()], events=Event.SubagentStart)
+    """
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return any(
+            isinstance(use.call, TaskCall) and bool(use.call.agent_name)
+            for use in evt.ctx.t.current_turn.tool_calls.named("Task")
+            if use.result is None
+        )
+
+
+class FreshSession(CustomCondition):
+    """Matches a ``SessionStart`` from a fresh ``startup`` or ``clear``, not a ``resume`` or ``compact``.
+
+    Example:
+        >>> nudge("Preload your tools", only_if=[FreshSession()], events=Event.SessionStart)
+    """
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        from captain_hook.events import SessionStartEvent
+
+        return isinstance(evt, SessionStartEvent) and evt.source in ("startup", "clear")
+
+
+class Headless(CustomCondition):
+    """Matches a headless ``claude -p`` / SDK run (``CLAUDE_CODE_ENTRYPOINT`` in the ``sdk-*`` family).
+
+    Example:
+        >>> llm_gate("Check docs freshness", skip_if=[Headless()], events=Event.Stop)
+    """
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return reqenv.is_headless()
+
+
+class RewritingExistingPlan(CustomCondition):
+    """Matches a ``Write`` to a plan file (``.md`` under ``plans/`` or ``specs/``) already written this
+    session, with no new plan cycle (``EnterPlanMode``) since the last ``Write`` to it.
+
+    Reads from ``evt.ctx.prior`` (the window before the current turn's last exchange) so the pending
+    ``Write`` being evaluated is never itself counted as the prior edit. A write to the file this
+    session already implies it exists, so no filesystem check is needed.
+
+    Example:
+        >>> hook(Event.PreToolUse, only_if=[Tool("Write"), RewritingExistingPlan()],
+        ...      message="Edit the plan instead of rewriting it", block=True)
+    """
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        fp = evt.file
+        if not fp or fp.suffix != ".md" or not fp.under("plans/", "specs/"):
+            return False
+        if not evt.ctx.prior.has_edit_to(str(fp)):
+            return False
+        return not evt.ctx.prior.after(tool="Write", file=str(fp)).has_tool("EnterPlanMode")
+
+
+class Commits(CustomCommandLineCondition):
+    """Matches a command line whose primary command explicitly names a path ending in ``suffix``.
+
+    Pairs with a ``git commit`` filter to gate a language's test run only when the commit stages a
+    file of that language — ``Commits(".py")``, ``Commits(".go")``.
+
+    Example:
+        >>> gate("Run pytest first", only_if=[Runs("git", "commit"), Commits(".py")])
+    """
+
+    def __init__(self, suffix: str) -> None:
+        self.suffix = suffix
+
+    def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
+        return (cmd := cl.primary) is not None and self.suffix in str(cmd)
+
+
+class ScratchPath(CustomCondition):
+    """Matches a file-tool target resolving into a system temp root or a scratch-named directory.
+
+    Resolves a relative path against ``evt.cwd`` (a relative path with no cwd never matches), then
+    fully resolves it — following a final-component symlink — before the scratch-path heuristic. The
+    full resolve is a security boundary: this gates the skip-permissions auto-approver, so a symlink
+    that sits in a scratch directory but points at a real file must not be treated as scratch.
+
+    Example:
+        >>> approve("scratch writes", only_if=[Tool("Write"), ScratchPath(), SkipPermissions()])
+    """
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        if (file := evt.file) is None:
+            return False
+        if not (path := Path(file.path)).is_absolute():
+            if evt.cwd is None:
+                return False
+            path = evt.cwd / path
+        return is_scratch_path(path.resolve())
+
+
+class EditedSource(CustomCondition):
+    """Matches when the session edited a non-test, in-repo source file (docs and config excluded).
+
+    ``exclude_suffixes`` tailors which extensions count as non-source (prose/config); it defaults to
+    :data:`NON_SOURCE_SUFFIXES`.
+
+    Example:
+        >>> llm_gate("Review the diff before stopping", only_if=[EditedSource()], events=Event.Stop)
+    """
+
+    def __init__(self, *, exclude_suffixes: Sequence[str] = NON_SOURCE_SUFFIXES) -> None:
+        self.exclude_suffixes = tuple(exclude_suffixes)
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        root = evt.ctx.repo_root
+        return any(
+            not f.is_test
+            and f.suffix not in self.exclude_suffixes
+            and not f.under("docs", ".claude", ".github")
+            and is_project_path(f.path, root)
+            for f in evt.ctx.t.tool_calls.named("Edit|Write").files()
+        )
+
+
+class Redirects(CustomCommandLineCondition):
+    """Matches when any command in the line carries a shell redirect (input or output).
+
+    Detects file redirects on the parsed commands — ``>``, ``>>``, ``2>``, ``<``, and fd
+    duplications such as ``2>&1``. A bare pipe (``echo x | cat``) moves data between commands but
+    is not a redirect, so it never matches.
+
+    Example:
+        >>> hook(Event.PreToolUse, only_if=[Tool("Bash"), Redirects()], message="no redirects", block=True)
+    """
+
+    def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
+        return any(cmd.redirects for cmd in cl.commands)
 
 
 def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:

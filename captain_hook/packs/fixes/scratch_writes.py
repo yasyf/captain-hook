@@ -2,34 +2,16 @@
 # subagent dialogs); answered at both events like teammate_permissions.py. Design: cc-notes 94e5fed5.
 from __future__ import annotations
 
-from pathlib import Path
-
 from captain_hook import (
     Allow,
     Ask,
-    BaseHookEvent,
-    CustomCondition,
     Input,
+    ScratchPath,
     SkipPermissions,
     Tool,
     approve,
 )
 from captain_hook.packs.fixes._lib import McpTool
-from captain_hook.util.scratch import is_scratch_path
-
-
-class ScratchPath(CustomCondition):
-    """Matches file-tool targets resolving into a system temp root or a scratch-named directory."""
-
-    def check(self, evt: BaseHookEvent) -> bool:
-        if (file := evt.file) is None:
-            return False
-        if not (path := Path(file.path)).is_absolute():
-            if evt.cwd is None:
-                return False
-            path = evt.cwd / path
-        return is_scratch_path(path.resolve())
-
 
 approve(
     "scratch-dir writes under skip-permissions",

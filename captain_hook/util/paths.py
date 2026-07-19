@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from captain_hook.util import reqenv
+
+
+def resolve_target(token: str, cwd: Path | None) -> Path | None:
+    path = Path(os.path.expanduser(token))
+    if not path.is_absolute():
+        if cwd is None:
+            return None
+        path = cwd / path
+    return path.parent.resolve() / path.name
 
 
 def resolve_state_dir() -> Path:

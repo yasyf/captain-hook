@@ -2,24 +2,14 @@ from __future__ import annotations
 
 from captain_hook import (
     Allow,
-    BaseHookEvent,
-    CustomCondition,
     Event,
+    FreshSession,
     FromSubagent,
     Input,
     Prompt,
     Warn,
     nudge,
 )
-from captain_hook.events import SessionStartEvent
-
-
-class FreshSession(CustomCondition):
-    """True when a SessionStart fires from a fresh ``startup`` or ``clear``, not a ``resume`` or ``compact``."""
-
-    def check(self, evt: BaseHookEvent) -> bool:
-        return isinstance(evt, SessionStartEvent) and evt.source in ("startup", "clear")
-
 
 nudge(
     str(Prompt.load("tools/preload_nudge")),

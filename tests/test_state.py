@@ -531,7 +531,7 @@ class TestSeenKeys:
 
     def test_unseen_marks_all_in_one_persist(self, tmp_path: Path) -> None:
         store = SessionStore(tmp_path)
-        with patch("captain_hook.session.os.replace", wraps=os.replace) as persist:
+        with patch("captain_hook.util.fs.os.replace", wraps=os.replace) as persist:
             store.unseen(["x", "y", "z"])
         assert persist.call_count == 1
         assert store.load(SeenKeys).seen == {"": ["x", "y", "z"]}

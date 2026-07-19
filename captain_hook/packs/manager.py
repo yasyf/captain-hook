@@ -29,7 +29,6 @@ import posixpath
 import re
 import shutil
 import tarfile
-import tempfile
 import time
 import tomllib
 from collections.abc import Iterator, Sequence
@@ -41,6 +40,7 @@ from typing import Any
 from filelock import FileLock
 
 from captain_hook.util import http
+from captain_hook.util.fs import atomic_write
 from captain_hook.util.paths import resolve_cache_dir
 
 PACK_MANIFEST = "capt-hook.toml"
@@ -326,23 +326,6 @@ def render_entry(entry: PackEntry) -> str:
 
 def render_packs_toml(entries: Sequence[PackEntry]) -> str:
     return "".join(render_entry(e) for e in sorted(entries, key=lambda e: e.name))
-
-
-def atomic_write(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` atomically via a unique temp file in the same directory.
-
-    The temp name is per-call (``mkstemp``), so concurrent writers to the same path never
-    consume each other's temp file — one writer's ``os.replace`` can't yank another's out.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=f"{path.suffix}.tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(text)
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
 
 
 def strip_packs_tables(text: str) -> str:

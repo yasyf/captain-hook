@@ -29,6 +29,7 @@ from filelock import FileLock
 from loguru import logger
 
 from captain_hook.packs import manager
+from captain_hook.util.fs import atomic_write, read_json
 from captain_hook.util.paths import resolve_claude_config_dir
 
 CLI_TIMEOUT_SECONDS = 60
@@ -109,19 +110,18 @@ class PluginSnapshot:
 
     @classmethod
     def load(cls, path: Path) -> PluginSnapshot | None:
-        if not path.is_file():
+        if (data := read_json(path)) is None:
             return None
         try:
-            data = json.loads(path.read_text())
             return cls(
                 stat=tuple(tuple(rec) for rec in data["stat"]),
                 plugins=tuple(EnabledPlugin(id=p["id"], version=p["version"], root=p["root"]) for p in data["plugins"]),
             )
-        except (OSError, ValueError, KeyError, TypeError):
+        except (KeyError, TypeError):
             return None
 
     def write(self, path: Path) -> None:
-        manager.atomic_write(
+        atomic_write(
             path,
             json.dumps(
                 {

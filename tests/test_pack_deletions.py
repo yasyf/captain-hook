@@ -254,7 +254,7 @@ class TestBlockRiskyRm:
             anchors.append(anchor)
             return (Path(f"/synthetic/{index}.txt") for index in range(walked))
 
-        monkeypatch.setattr(sys.modules["captain_hook._packs.general.deletions"], "walked_paths", fake_walked_paths)
+        monkeypatch.setattr("captain_hook.util.globbing.walked_paths", fake_walked_paths)
         evt = input_to_event(Event.PreToolUse, Input(command="rm **/*.zzz", cwd=str(tmp_path)))
         result = dispatch(Event.PreToolUse, evt, session_dir=tmp_path)
         assert anchors == [tmp_path.resolve()]
@@ -550,11 +550,7 @@ class TestRmTrashRewrite:
         def fake_walked_paths(anchor: Path) -> Iterator[Path]:
             return (Path(f"/synthetic/{index}.txt") for index in range(20_000))
 
-        monkeypatch.setattr(
-            sys.modules["captain_hook._packs.general.deletions"],
-            "walked_paths",
-            fake_walked_paths,
-        )
+        monkeypatch.setattr("captain_hook.util.globbing.walked_paths", fake_walked_paths)
         result = self.decision("rm **/*.zzz", tmp_path, tmp_path)
         assert result is not None
         output = result["hookSpecificOutput"]

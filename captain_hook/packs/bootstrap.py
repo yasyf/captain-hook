@@ -12,25 +12,37 @@ itself is never bootstrapped here: discovery only ever runs where the dispatcher
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import sys
 import time
 from collections.abc import Sequence
 from hashlib import sha256
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from filelock import FileLock, Timeout
+from filelock import Timeout
 from loguru import logger
+from pydantic import Field
 
+from captain_hook.durable import DurableState, DurableStore, durable_dir
 from captain_hook.packs import manager
 from captain_hook.util import reqenv
+from captain_hook.util.fs import read_json
 from captain_hook.util.paths import resolve_claude_config_dir, resolve_state_dir
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from captain_hook.durable import DurableSlot
 
 RETRY_COOLDOWN_SECONDS = 3600
 WORKER_TIMEOUT_SECONDS = 300
+
+
+class BootstrapState(DurableState, scope="global"):
+    """Cross-session marketplace-bootstrap damping: the last-attempt epoch keyed by (config dir, repo)."""
+
+    attempts: dict[str, float] = Field(default_factory=dict)
 
 
 def known_marketplaces_path() -> Path:
@@ -39,15 +51,8 @@ def known_marketplaces_path() -> Path:
 
 def known_entries() -> list[tuple[str, dict[str, Any]]]:
     # Unreadable/malformed JSON or a non-object top level → [] (every repo unknown → spawn, safe).
-    try:
-        data = json.loads(known_marketplaces_path().read_text())
-    except (OSError, ValueError):
-        logger.bind(path=str(known_marketplaces_path())).debug(
-            "known_marketplaces.json unreadable; no marketplaces known"
-        )
-        return []
     return [
-        (name, entry) for name, entry in (data.items() if isinstance(data, dict) else ()) if isinstance(entry, dict)
+        (name, entry) for name, entry in read_json(known_marketplaces_path(), {}).items() if isinstance(entry, dict)
     ]
 
 
@@ -75,32 +80,24 @@ def bootstrap_dir() -> Path:
     return resolve_state_dir() / "bootstrap"
 
 
-def bootstrap_lock_path() -> Path:
-    return bootstrap_dir() / "bootstrap.lock"
-
-
-def marker_path(repo: str) -> Path:
-    # Keyed on (config dir, repo): known_marketplaces.json is per CLAUDE_CONFIG_DIR, so two config
-    # dirs sharing a state dir must damp independently or one profile's marker suppresses another.
-    key = sha256(f"{resolve_claude_config_dir().resolve()}\n{repo}".encode()).hexdigest()[:16]
-    return bootstrap_dir() / f"{key}.json"
-
-
 def worker_log_path() -> Path:
     return bootstrap_dir() / "marketplace.log"
 
 
-def attempt_fresh(marker: Path, now: float) -> bool:
-    try:
-        attempted_at = json.loads(marker.read_text())["attempted_at"]
-    except (OSError, ValueError, KeyError):
-        return False
-    # Bound both ends: a corrupt future/inf attempted_at would otherwise suppress the retry forever.
-    return isinstance(attempted_at, (int, float)) and 0 <= now - attempted_at < RETRY_COOLDOWN_SECONDS
+def attempt_key(repo: str) -> str:
+    # Keyed on (config dir, repo): known_marketplaces.json is per CLAUDE_CONFIG_DIR, so two config
+    # dirs sharing a state dir must damp independently or one profile's attempt suppresses another.
+    return sha256(f"{resolve_claude_config_dir().resolve()}\n{repo}".encode()).hexdigest()[:16]
 
 
-def record_attempt(marker: Path, now: float) -> None:
-    manager.atomic_write(marker, json.dumps({"attempted_at": now}))
+def attempt_fresh(attempts: dict[str, float], key: str, now: float) -> bool:
+    # Bound both ends: a corrupt future/inf timestamp would otherwise suppress the retry forever.
+    return (ts := attempts.get(key)) is not None and 0 <= now - ts < RETRY_COOLDOWN_SECONDS
+
+
+def bootstrap_slot() -> DurableSlot[BootstrapState]:
+    """The global, filelock-guarded slot holding the cross-session bootstrap damping state."""
+    return DurableStore(durable_dir("global", None))[BootstrapState]
 
 
 def spawn_worker(repos: Sequence[str]) -> None:
@@ -126,14 +123,18 @@ def maybe_bootstrap(marketplaces: Sequence[str] = ()) -> None:
     the dispatcher already exists. An empty union returns immediately with zero I/O, so the common
     case (no pack declares extras) costs nothing per event. Otherwise the hot path is ordered to do
     the least work: a single lock-free read of ``known_marketplaces.json`` proves every repo is
-    already registered (the steady state), returning without a marker touch or a spawn. On the miss
-    path a *non-blocking* FileLock serializes the re-check, marker damping, and spawn so a burst of
-    concurrent events launches one worker, not N; a sibling already holding the lock returns
-    immediately rather than stall dispatch. Damping is per (config dir, repo) (``bootstrap/<sha>.json``,
-    an hourly cooldown), so a narrow union never suppresses a later broader one; a missing ``claude``
-    binary records the attempts without spawning. A spawn logs one loguru info line and prints nothing
-    on any stream — dispatch stdout carries the hook-decision JSON, and an event-like stderr notice would
-    replay stale on the daemon's warm cache hits.
+    already registered (the steady state), returning without touching the damping state or spawning.
+    On the miss path the durable :class:`BootstrapState`'s *non-blocking* lock — a
+    ``mutate(timeout=0)`` acquire — serializes the re-check and damping; the attempt is persisted
+    when the locked block exits, *before* the worker spawns, so a spawn failure can't un-record it.
+    A burst of concurrent events launches one worker, not N — a sibling that acquires the lock after
+    the attempt lands sees it under cooldown and skips, and a sibling that can't acquire returns
+    immediately rather than stall dispatch. Damping is per (config dir, repo) (an ``attempts`` map
+    keyed by ``sha(config dir, repo)``, an hourly cooldown), so a narrow union never suppresses a
+    later broader one; a missing ``claude`` binary records the attempts without spawning. A spawn
+    logs one loguru info line and prints nothing on any stream — dispatch stdout carries the
+    hook-decision JSON, and an event-like stderr notice would replay stale on the daemon's warm
+    cache hits.
     """
     if not (required := list(dict.fromkeys(marketplaces))):
         return
@@ -141,39 +142,44 @@ def maybe_bootstrap(marketplaces: Sequence[str] = ()) -> None:
     if not (missing := [r for r in required if not is_known(r, known)]):
         return
     now = time.time()
-    bootstrap_dir().mkdir(parents=True, exist_ok=True)
     try:
-        with FileLock(str(bootstrap_lock_path()), timeout=0):
+        with bootstrap_slot().mutate(timeout=0) as state:
             known = known_entries()
             if not (
-                to_add := [r for r in missing if not is_known(r, known) and not attempt_fresh(marker_path(r), now)]
+                to_add := [
+                    r
+                    for r in missing
+                    if not is_known(r, known) and not attempt_fresh(state.attempts, attempt_key(r), now)
+                ]
             ):
                 return
             for repo in to_add:
-                record_attempt(marker_path(repo), now)
-            if shutil.which("claude") is None:
-                return
-            spawn_worker(to_add)
-            logger.bind(marketplaces=to_add).info("registering plugin dependency marketplace(s) in the background")
+                state.attempts[attempt_key(repo)] = now
     except Timeout:
         return
+    # Spawn after the locked block persists the attempt, so a spawn failure can't un-record it.
+    if shutil.which("claude") is None:
+        return
+    spawn_worker(to_add)
+    logger.bind(marketplaces=to_add).info("registering plugin dependency marketplace(s) in the background")
 
 
 def run_bootstrap(repos: Sequence[str]) -> None:
     """Worker entry: register each still-unknown required marketplace once, under the lock.
 
     A sibling session may have registered a marketplace between spawn and lock acquisition, so each
-    repo's known check is repeated (a fresh read) under the lock. ``claude`` is resolved to an
-    absolute path so a cwd or PATH shadow can't hijack the call; a missing binary logs and exits
-    cleanly. Each repo is revalidated against ``MARKETPLACE_REPO_RE`` first — the hidden
-    ``pack bootstrap`` command takes repos straight from argv, bypassing load-time validation — and
-    a mismatch is logged and skipped, never handed to ``marketplace add``. A failing ``marketplace
-    add`` (a private or gone repo) is logged and stepped over so one bad repo can't starve the rest.
-    No explicit ``plugin install``: Claude Code (>=2.1.117) auto-resolves the consumer's declared
-    plugin dependencies once the marketplace is registered.
+    repo's known check is repeated (a fresh read) under the durable :class:`BootstrapState` lock —
+    the same lock :func:`maybe_bootstrap` acquires, so a worker in flight makes new dispatches skip.
+    ``claude`` is resolved to an absolute path so a cwd or PATH shadow can't hijack the call; a
+    missing binary logs and exits cleanly. Each repo is revalidated against
+    ``MARKETPLACE_REPO_RE`` first — the hidden ``pack bootstrap`` command takes repos straight from
+    argv, bypassing load-time validation — and a mismatch is logged and skipped, never handed to
+    ``marketplace add``. A failing ``marketplace add`` (a private or gone repo) is logged and
+    stepped over so one bad repo can't starve the rest. No explicit ``plugin install``: Claude Code
+    (>=2.1.117) auto-resolves the consumer's declared plugin dependencies once the marketplace is
+    registered.
     """
-    bootstrap_dir().mkdir(parents=True, exist_ok=True)
-    with FileLock(str(bootstrap_lock_path())):
+    with bootstrap_slot().mutate():
         if (claude := shutil.which("claude")) is None:
             logger.warning("claude binary not found on PATH; skipping marketplace bootstrap")
             return

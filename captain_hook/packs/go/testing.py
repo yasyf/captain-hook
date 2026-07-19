@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from captain_hook import (
     Allow,
-    BaseHookEvent,
     Block,
-    CustomCondition,
+    Commits,
     Event,
     FilePath,
     Input,
@@ -27,16 +26,9 @@ nudge(
 )
 
 
-class CommitsGo(CustomCondition):
-    """Matches when the git command explicitly names a Go path."""
-
-    def check(self, evt: BaseHookEvent) -> bool:
-        return bool(cl := evt.command_line) and (cmd := cl.primary) is not None and ".go" in str(cmd)
-
-
 gate(
     "No `go test` execution found. Run tests before committing Go changes.",
-    only_if=[Tool("Bash"), CommandCondition(r"git\s+commit"), CommitsGo()],
+    only_if=[Tool("Bash"), CommandCondition(r"git\s+commit"), Commits(".go")],
     skip_if=[
         RanCommand("go", "test"),
         UserSaid("commit", "just commit"),
@@ -58,7 +50,7 @@ nudge(
         RanCommand("go", "test"),
         UserSaid("commit", "just commit"),
         AllEditsUnder("docs/", ".claude/", ".github/"),
-        CommitsGo(),
+        Commits(".go"),
     ],
     events=Event.PreToolUse,
     tests={

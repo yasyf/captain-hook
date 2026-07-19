@@ -25,6 +25,14 @@ from captain_hook import util as util
 from captain_hook.app import hook as hook
 from captain_hook.app import on as on
 from captain_hook.ast_grep import COMMENT_TYPES as COMMENT_TYPES
+from captain_hook.conditions import Commits as Commits
+from captain_hook.conditions import EditedSource as EditedSource
+from captain_hook.conditions import FreshSession as FreshSession
+from captain_hook.conditions import FromTeammate as FromTeammate
+from captain_hook.conditions import Headless as Headless
+from captain_hook.conditions import Redirects as Redirects
+from captain_hook.conditions import RewritingExistingPlan as RewritingExistingPlan
+from captain_hook.conditions import ScratchPath as ScratchPath
 from captain_hook.conditions import workflow_opt_matches as workflow_opt_matches
 from captain_hook.conditions import workflow_opt_values as workflow_opt_values
 from captain_hook.conditions import workflow_script_source as workflow_script_source
@@ -146,5 +154,6 @@ from captain_hook.types import TouchedFile as TouchedFile
 from captain_hook.types import UsedSkill as UsedSkill
 from captain_hook.types import Waiting as Waiting
 from captain_hook.types import WorkflowScript as WorkflowScript
+from captain_hook.util.fs import binary_supports as binary_supports
 from captain_hook.util.fs import read_json as read_json
 from captain_hook.util.fs import resolve_binary as resolve_binary

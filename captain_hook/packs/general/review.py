@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from captain_hook import Allow, Block, Event, Input, llm_gate
-from captain_hook.packs.general._lib import SCRATCH_WORKFLOW_WRITE_FIXTURE, EditedSource
+from captain_hook import Allow, Block, EditedSource, Event, Input, llm_gate
+from captain_hook.packs.general._lib import SCRATCH_WORKFLOW_WRITE_FIXTURE
 
 llm_gate(
     "You are reviewing a code change before the agent stops. The compact diff of the "

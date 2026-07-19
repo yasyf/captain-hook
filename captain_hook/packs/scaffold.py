@@ -27,6 +27,7 @@ from captain_hook.loader import CONF_MODULE, is_skip_marked
 from captain_hook.packs import manager
 from captain_hook.packs.contract import DIST_NAME, MARKETPLACE_NAME, VERSION_FLOOR_RE, search_upward
 from captain_hook.review.repo import repo_key
+from captain_hook.util.fs import atomic_write, read_json
 
 # The release that shipped plugin discovery; a scaffolded captain-hook floor never drops below it, so
 # the generated dependency contract reliably pulls the dispatcher onto a pack-plugin-only machine.
@@ -84,7 +85,7 @@ def contained_hooks_dir(manifest: manager.PackManifest, pack_root: Path, manifes
 
 def execute(plan: Plan) -> ScaffoldAction:
     if plan.content is not None:
-        manager.atomic_write(plan.path, plan.content)
+        atomic_write(plan.path, plan.content)
     return ScaffoldAction(plan.path, plan.verb, plan.detail)
 
 
@@ -319,20 +320,14 @@ def plugin_name(root: Path) -> str | None:
     manifest_dir = pack_layout(root)[2].parent
     if (path := search_upward(manifest_dir, ".claude-plugin/plugin.json", "plugin.json", stop=root)) is None:
         return None
-    try:
-        name = json.loads(path.read_text()).get("name")
-    except (json.JSONDecodeError, OSError):
-        return None
+    name = read_json(path, {}).get("name")
     return name if isinstance(name, str) and manager.PACK_NAME_RE.fullmatch(name) else None
 
 
 def marketplace_name(root: Path) -> str | None:
     if (path := search_upward(pack_layout(root)[2].parent, ".claude-plugin/marketplace.json", stop=root)) is None:
         return None
-    try:
-        name = json.loads(path.read_text()).get("name")
-    except (json.JSONDecodeError, OSError):
-        return None
+    name = read_json(path, {}).get("name")
     return name if isinstance(name, str) and name else None
 
 

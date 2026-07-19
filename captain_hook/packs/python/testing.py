@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from captain_hook import (
     Allow,
-    BaseHookEvent,
     Block,
-    CustomCondition,
+    Commits,
     Event,
     Input,
     RanCommand,
@@ -27,16 +26,9 @@ nudge(
 )
 
 
-class CommitsPython(CustomCondition):
-    """Matches when the git command explicitly names a Python path."""
-
-    def check(self, evt: BaseHookEvent) -> bool:
-        return bool(cl := evt.command_line) and (cmd := cl.primary) is not None and ".py" in str(cmd)
-
-
 gate(
     "No `uv run pytest` execution found. Run tests before committing Python changes.",
-    only_if=[Tool("Bash"), CommandCondition(r"git\s+commit"), CommitsPython()],
+    only_if=[Tool("Bash"), CommandCondition(r"git\s+commit"), Commits(".py")],
     skip_if=[
         RanCommand("uv", "run", "pytest"),
         RanCommand("pytest"),
@@ -60,7 +52,7 @@ nudge(
         RanCommand("pytest"),
         UserSaid("commit", "just commit"),
         AllEditsUnder("docs/", ".claude/", ".github/"),
-        CommitsPython(),
+        Commits(".py"),
     ],
     events=Event.PreToolUse,
     tests={

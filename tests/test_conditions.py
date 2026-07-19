@@ -9,6 +9,7 @@ from typing import Any, get_args
 import pytest
 from cc_transcript.activity_probe import SessionActivityProbe, session_activity_probe
 
+from captain_hook import EditedSource
 from captain_hook.app import on
 from captain_hook.conditions import check_condition, is_project_path, matches_conditions, workflow_opt_matches
 from captain_hook.events import (
@@ -18,7 +19,6 @@ from captain_hook.events import (
     StopEvent,
     UserPromptSubmitEvent,
 )
-from captain_hook.packs.general._lib import EditedSource
 from captain_hook.primitives.commands import block_command_pattern
 from captain_hook.transcripts import load_transcript
 from captain_hook.types import (
@@ -871,6 +871,18 @@ class TestEditedSourceScoping:
         root = tmp_path_factory.mktemp("repo")
         tool_input = {"file_path": str(root / "src" / "app.py"), "old_string": "", "new_string": "x"}
         assert self._check("Edit", tool_input, root) is True
+
+    def test_exclude_suffixes_parameter_reclassifies_source(self, tmp_path: Path) -> None:
+        # A .py edit is source by default; excluding .py demotes it to non-source (no review demanded).
+        ctx = build_ctx(
+            transcript=make_transcript(
+                raw_tool_msg("Edit", {"file_path": "src/app.py", "old_string": "", "new_string": "x"})
+            ),
+            project_root=tmp_path,
+        )
+        evt = make_event(StopEvent, ctx=ctx)
+        assert EditedSource().check(evt) is True
+        assert EditedSource(exclude_suffixes=(".py",)).check(evt) is False
 
 
 def skill_evt(skill: str) -> BaseHookEvent:

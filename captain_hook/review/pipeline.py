@@ -299,7 +299,7 @@ def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False) -> None:
         breadcrumb("review-run skip: CAPT_HOOK_SPAWNED set")
         return
     # headless `claude -p` / SDK run — not an interactive session
-    if reqenv.getenv("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
+    if reqenv.is_headless():
         breadcrumb("review-run skip: sdk entrypoint")
         return
     if (parsed := payload_transcript(raw, label="review-run")) is None:
@@ -343,7 +343,7 @@ def guard_and_sweep(raw: bytes, *, gate_enrollment: bool = False) -> None:
     if reqenv.getenv(SPAWNED_ENV):
         breadcrumb("sweep skip: CAPT_HOOK_SPAWNED set")
         return
-    if reqenv.getenv("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
+    if reqenv.is_headless():
         breadcrumb("sweep skip: sdk entrypoint")
         return
     if (parsed := payload_transcript(raw, label="sweep")) is None:

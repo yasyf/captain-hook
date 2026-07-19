@@ -7,8 +7,13 @@ repo: https://github.com/yasyf/captain-hook
 site_url: "https://yasyf.github.io/captain-hook/"
 pypi: true
 
-navbar_color: "#1e293b"
-accent_color: "#3b82f6"
+navbar_color: "#131a2b"
+accent_color:
+  light: "#c03a1e"
+  dark: "#ff8a70"
+
+social_cards:
+  image: docs/assets/social-preview.jpg
 
 hero:
   name: captain-hook
@@ -119,6 +124,14 @@ reference:
       - Waiting
       - FromSubagent
       - SkipPermissions
+      - FromTeammate
+      - FreshSession
+      - Headless
+      - RewritingExistingPlan
+      - ScratchPath
+      - EditedSource
+      - Commits
+      - Redirects
       - Or
       - And
       - Not
@@ -165,6 +178,7 @@ reference:
       - file.categorize_files
       - util.fs.read_json
       - util.fs.resolve_binary
+      - util.fs.binary_supports
       - Command
       - CommandLine
       - Redirect

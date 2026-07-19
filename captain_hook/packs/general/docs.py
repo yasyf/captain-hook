@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from captain_hook import (
     Allow,
-    BaseHookEvent,
     Block,
-    CustomCondition,
+    EditedSource,
     Event,
     FilePath,
+    Headless,
     Input,
     Tool,
     TouchedFile,
@@ -16,16 +16,7 @@ from captain_hook import (
     llm_gate,
     nudge,
 )
-from captain_hook.packs.general._lib import SCRATCH_WORKFLOW_WRITE_FIXTURE, EditedSource
-from captain_hook.util import reqenv
-
-
-class Headless(CustomCondition):
-    """True in a headless ``claude -p`` / SDK run (``CLAUDE_CODE_ENTRYPOINT`` in the ``sdk-*`` family)."""
-
-    def check(self, evt: BaseHookEvent) -> bool:
-        return reqenv.getenv("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk")
-
+from captain_hook.packs.general._lib import SCRATCH_WORKFLOW_WRITE_FIXTURE
 
 # Advisory reminder to consult the writing-docs skill (and run slop-cop) before
 # editing documentation. Fires once per session on the first doc edit and stands

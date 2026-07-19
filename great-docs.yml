@@ -120,6 +120,14 @@ reference:
       - Waiting
       - FromSubagent
       - SkipPermissions
+      - FromTeammate
+      - FreshSession
+      - Headless
+      - RewritingExistingPlan
+      - ScratchPath
+      - EditedSource
+      - Commits
+      - Redirects
       - Or
       - And
       - Not
@@ -166,6 +174,7 @@ reference:
       - file.categorize_files
       - util.fs.read_json
       - util.fs.resolve_binary
+      - util.fs.binary_supports
       - Command
       - CommandLine
       - Redirect

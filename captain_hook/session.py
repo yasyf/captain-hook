@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import os
 import re
 import shutil
-import tempfile
 import time
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
@@ -14,6 +12,8 @@ from cc_transcript.ids import SessionId
 from filelock import FileLock
 from loguru import logger
 from pydantic import BaseModel
+
+from captain_hook.util.fs import atomic_write
 
 M = TypeVar("M", bound=BaseModel)
 
@@ -85,19 +85,7 @@ class SessionSlot(Generic[M]):  # noqa: UP046
         if not self._path:
             return
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_fd, tmp_name = tempfile.mkstemp(
-                dir=self._path.parent,
-                suffix=".tmp",
-            )
-            try:
-                os.write(tmp_fd, obj.model_dump_json().encode())
-                os.close(tmp_fd)
-                os.replace(tmp_name, self._path)
-            except BaseException:
-                os.close(tmp_fd) if not os.get_inheritable(tmp_fd) else None
-                Path(tmp_name).unlink(missing_ok=True)
-                raise
+            atomic_write(self._path, obj.model_dump_json())
         except OSError:
             logger.bind(path=str(self._path)).opt(exception=True).warning("failed to persist session state")
 
@@ -106,20 +94,22 @@ class SessionSlot(Generic[M]):  # noqa: UP046
             self._path.unlink(missing_ok=True)
 
     @contextmanager
-    def mutate(self) -> Iterator[M]:
+    def mutate(self, *, timeout: float = -1) -> Iterator[M]:
         """Yield the loaded model under an exclusive file lock; persist it on clean exit.
 
         The lock is held for the whole ``with`` block, so concurrent writers — separate
         ``capt-hook run`` processes racing one session's state, or threads within a process —
         serialize rather than clobber. The body must be short: no slow work under the lock.
         A null slot (no session directory) yields an in-memory model and persists nothing.
+        ``timeout`` is the lock-acquire budget in seconds (``-1`` waits indefinitely); pass
+        ``timeout=0`` for a non-blocking acquire that raises ``filelock.Timeout`` on contention.
         """
         if self._path is None:
             yield self.get(self._model())
             return
         self._path.parent.mkdir(parents=True, exist_ok=True)
         lock = self._path.with_name(self._path.name + ".lock")
-        with FileLock(str(lock)):
+        with FileLock(str(lock), timeout=timeout):
             obj = self.get(self._model())
             yield obj
             self.set(obj)
