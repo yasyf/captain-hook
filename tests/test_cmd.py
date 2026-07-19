@@ -3,18 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from cc_transcript.command import Command, parse_command_line
+from cc_transcript.command import parse_command_line
 
 from captain_hook.cmd import Cmd, Expansion, Target, Targets
 from captain_hook.types import Action
 from tests.helpers import make_ctx, make_pre_tool_event
-
-# Command.words and Command.split_options both arrive with cc-transcript 15.0; the Target/flags
-# split and sub() raw re-emission depend on them, so those cases run only once 15.0 is installed.
-requires_15 = pytest.mark.skipif(
-    not (hasattr(Command, "words") and hasattr(Command, "split_options")),
-    reason="needs cc-transcript 15.0 (Command.words + Command.split_options)",
-)
 
 
 def evt_for(command: str, cwd: str | None = None):
@@ -38,15 +31,24 @@ class TestWalk:
 
     def test_descends_into_sh_c_payload(self) -> None:
         calls = evt_for("bash -c 'rm -rf /'").cmd.calls()
-        assert [(c.name, c.nested, c.spliceable) for c in calls] == [("bash", False, True), ("rm", True, False)]
+        assert [(c.name, c.nested, c.spliceable) for c in calls] == [("bash", False, True), ("rm", True, True)]
 
     def test_descends_into_eval_payload(self) -> None:
         assert [c.name for c in evt_for("eval 'rm x'").cmd.calls("rm")] == ["rm"]
+
+    def test_surfaces_command_substitution_calls(self) -> None:
+        calls = evt_for("echo $(rm sub)").cmd.calls()
+        assert [(c.name, c.nested) for c in calls] == [("echo", False), ("rm", True)]
 
     def test_matches_command_position_only(self) -> None:
         cmd = evt_for("echo rm foo; git rm bar").cmd
         assert [c.name for c in cmd.calls()] == ["echo", "git"]
         assert cmd.calls("rm") == ()
+
+    def test_quoted_head_does_not_evade_matching(self) -> None:
+        assert evt_for('"rm" -rf /x').cmd.call("rm").name == "rm"
+        assert evt_for("'rm' /x").cmd.call("rm").name == "rm"
+        assert evt_for('/bin/"rm" /x').cmd.call("rm").name == "rm"
 
     def test_empty_and_non_bash_yield_zero_calls(self) -> None:
         assert evt_for("").cmd.calls() == ()
@@ -66,17 +68,23 @@ class TestCallProperties:
         assert call.wrappers == ("sudo",)
         assert call.name == "rm"
 
+    def test_wrapper_value_flags_unwrap_arity_aware(self) -> None:
+        call = evt_for("sudo -u root rm /x").cmd.call("rm")
+        assert call.wrappers == ("sudo",)
+        assert [t.value for t in call.targets] == ["/x"]
+        call = evt_for("env -u HOME rm /x").cmd.call("rm")
+        assert call.wrappers == ("env",)
+        assert [t.value for t in call.targets] == ["/x"]
+
     def test_no_wrapper_yields_empty_wrappers(self) -> None:
         assert evt_for("rm /x").cmd.call("rm").wrappers == ()
 
     def test_top_level_occurrence_is_spliceable(self) -> None:
         assert evt_for("rm foo").cmd.call("rm").spliceable is True
 
-    def test_nested_call_is_not_spliceable(self) -> None:
-        assert evt_for("sh -c 'rm x'").cmd.call("rm").spliceable is False
-
-    def test_backslash_newline_occurrence_is_not_spliceable(self) -> None:
-        assert evt_for("rm \\\n x").cmd.call("rm").spliceable is False
+    def test_spanless_payloads_are_not_spliceable(self) -> None:
+        assert evt_for("echo $(rm sub)").cmd.call("rm").spliceable is False
+        assert evt_for("fish -c 'rm x'").cmd.call("rm").spliceable is False
 
     def test_cwd_threads_through_resolvable_cd(self) -> None:
         assert [(c.name, str(c.cwd)) for c in evt_for("cd /tmp && rm x", cwd="/home/u").cmd.calls()] == [
@@ -90,6 +98,49 @@ class TestCallProperties:
             ("rm", "/home/u"),
         ]
 
+    def test_cd_threads_within_payload_scope(self) -> None:
+        cmd = evt_for('sh -c "cd /tmp && rm x" && rm y', cwd="/home/u").cmd
+        nested, top = cmd.calls("rm")
+        assert str(nested.cwd) == str(Path("/tmp").resolve())
+        assert str(top.cwd) == "/home/u"
+
+
+class TestVerified:
+    @pytest.mark.parametrize("command", ["rm $HOME", 'rm "$V"/x'], ids=["bare-var", "quoted-var"])
+    def test_expansion_tainted_target_is_unverified(self, command: str) -> None:
+        (target,) = evt_for(command).cmd.call("rm").targets
+        assert target.verified is False
+        assert target.value is None
+        assert target.path is None
+
+    @pytest.mark.parametrize("command", ["rm ~/x", "rm *.py"], ids=["tilde", "glob"])
+    def test_expandable_literal_target_stays_verified(self, command: str) -> None:
+        (target,) = evt_for(command).cmd.call("rm").targets
+        assert target.verified is True
+        assert target.value is not None
+
+    def test_in_word_substitution_taints_the_target(self) -> None:
+        (first, second) = evt_for("rm a$(b)c x").cmd.call("rm").targets
+        assert first.verified is False
+        assert second.verified is True
+
+    def test_lifted_substitution_marks_targets_incomplete(self) -> None:
+        targets = evt_for("rm $(ls) b").cmd.call("rm").targets
+        assert [t.value for t in targets] == ["b"]
+        assert targets.complete is False
+        assert targets.verified is False
+        assert targets.expand().exhausted is True
+
+    def test_verified_targets_are_complete(self) -> None:
+        targets = evt_for("rm a b").cmd.call("rm").targets
+        assert targets.complete is True
+        assert targets.verified is True
+
+    def test_unverified_target_expands_exhausted(self) -> None:
+        target = Target(None, "$HOME", None)
+        assert target.expand() == Expansion((), True)
+        assert target.has_glob is False
+
 
 class TestTarget:
     def test_path_resolves_against_cwd_keeping_final_component_literal(self, tmp_path: Path) -> None:
@@ -100,6 +151,11 @@ class TestTarget:
         assert target.path is None
         assert target.is_scratch is target.is_repo_root is target.in_repo is False
         assert target.is_fs_root is target.is_home is target.contains_repo is False
+
+    def test_unverified_target_has_no_path_and_no_predicates(self) -> None:
+        target = Target(None, "$HOME", Path("/tmp"))
+        assert target.path is None
+        assert target.is_scratch is target.is_home is target.is_fs_root is False
 
     def test_has_glob(self) -> None:
         assert Target("*.py", "*.py", None).has_glob is True
@@ -155,6 +211,9 @@ class TestExpansionAndTargets:
         assert list(targets) == []
         assert targets.expand() == Expansion((), False)
 
+    def test_incomplete_targets_expand_exhausted(self) -> None:
+        assert Targets((), complete=False).expand() == Expansion((), True)
+
     def test_targets_expand_concatenates_and_ors_exhausted(self, tmp_path: Path) -> None:
         (tmp_path / "a.txt").touch()
         targets = Targets((Target("literal", "literal", tmp_path), Target("*.txt", "*.txt", tmp_path)))
@@ -183,53 +242,48 @@ class TestDetachedAndSubGuards:
         with pytest.raises(RuntimeError, match="detached Cmd cannot rewrite"):
             call.sub("rm", "trash")
 
-    def test_sub_on_nested_call_returns_none(self) -> None:
-        call = evt_for("sh -c 'rm x'").cmd.call("rm")
-        assert call.sub("rm", "trash") is None
+    def test_sub_on_substituted_call_returns_none(self) -> None:
+        assert evt_for("rm $(ls) b").cmd.call("rm").sub("rm", "trash") is None
+
+    def test_sub_on_spanless_payload_returns_none(self) -> None:
+        assert evt_for("fish -c 'rm x'").cmd.call("rm").sub("rm", "trash") is None
+
+    def test_sub_on_unembeddable_replacement_returns_none(self) -> None:
+        call = evt_for("eval 'rm a; rm b'").cmd.calls("rm")[0]
+        assert call.sub("rm", "trash", args=Targets((Target("a b", "'a b'", None),))) is None
 
 
-@requires_15
 class TestSplitOptions:
     def test_flags_and_targets_partition_args(self) -> None:
         call = evt_for("rm -rf foo bar").cmd.call("rm")
         assert call.flags == ("-rf",)
-        assert [t.text for t in call.targets] == ["foo", "bar"]
+        assert [t.value for t in call.targets] == ["foo", "bar"]
 
     def test_double_dash_ends_options(self) -> None:
         call = evt_for("rm -f -- -weird.txt").cmd.call("rm")
         assert call.flags == ("-f",)
-        assert [t.text for t in call.targets] == ["-weird.txt"]
+        assert [t.value for t in call.targets] == ["-weird.txt"]
 
     def test_lone_dash_is_an_operand(self) -> None:
         call = evt_for("rm -").cmd.call("rm")
-        assert [t.text for t in call.targets] == ["-"]
+        assert [t.value for t in call.targets] == ["-"]
+
+    def test_quoted_operand_dequotes_in_value_keeping_raw(self) -> None:
+        (target,) = evt_for("rm 'a b.txt'").cmd.call("rm").targets
+        assert target.value == "a b.txt"
+        assert target.raw == "'a b.txt'"
 
     def test_git_value_flag_consumes_its_argument(self) -> None:
         call = evt_for("git -C /repo status").cmd.call("git")
         assert call.flags == ("-C", "/repo")
-        assert [t.text for t in call.targets] == ["status"]
+        assert [t.value for t in call.targets] == ["status"]
 
-    @pytest.mark.parametrize(
-        "command",
-        [
-            "rm -rf a b",
-            "rm -- -x",
-            "rm -",
-            "git -C /r -c k=v commit -m msg file",
-            "git --git-dir=/g status",
-        ],
-        ids=["flags-operands", "double-dash", "lone-dash", "git-value-flags", "equals-joined-flag"],
-    )
-    def test_split_matches_upstream_split_options(self, command: str) -> None:
-        call = next(c for c in evt_for(command).cmd.calls() if c.name in {"rm", "git"})
-        from captain_hook.cmd import COMMAND_VALUE_FLAGS
-
-        options, operands = call.command.split_options(tuple(COMMAND_VALUE_FLAGS.get(call.name, ())))
-        assert call.flags == tuple(options)
-        assert tuple(t.text for t in call.targets) == tuple(operands)
+    def test_equals_joined_flag_stays_single_token(self) -> None:
+        call = evt_for("git --git-dir=/g status").cmd.call("git")
+        assert call.flags == ("--git-dir=/g",)
+        assert [t.value for t in call.targets] == ["status"]
 
 
-@requires_15
 class TestSub:
     def test_rewrites_one_occurrence_preserving_siblings(self) -> None:
         evt = evt_for("rm foo.txt; ls -la; rm bar.txt")
@@ -261,6 +315,16 @@ class TestSub:
         call = evt.cmd.call("rm")
         result = call.sub("rm", "trash", args=call.targets)
         assert result.updated_input == {"command": "trash /x"}
+
+    def test_continuation_collapses_on_rewrite(self) -> None:
+        evt = evt_for("rm a \\\n b && rm c")
+        result = evt.cmd.calls("rm")[0].sub("rm", "trash")
+        assert result.updated_input == {"command": "trash a b && rm c"}
+
+    def test_splices_nested_payload_through_quote_layers(self) -> None:
+        evt = evt_for('sh -c "cd /tmp && rm -rf y" && rm z')
+        result = evt.cmd.calls("rm")[0].sub("rm", "trash")
+        assert result.updated_input == {"command": 'sh -c "cd /tmp && trash -rf y" && rm z'}
 
     def test_accumulated_subs_rewrite_every_occurrence(self) -> None:
         evt = evt_for("rm a && rm b")

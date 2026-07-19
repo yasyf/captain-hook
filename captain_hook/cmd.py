@@ -12,25 +12,20 @@ from cc_transcript.literals import LITERALS
 from captain_hook.util.globbing import GLOB_LIMIT, glob_matches
 from captain_hook.util.paths import resolve_target
 from captain_hook.util.scratch import is_scratch_path
-from captain_hook.util.shell import (
-    NESTED_COMMAND_DEPTH,
-    nested_command_string,
-    resolve_cd,
-    safe_parse_command_line,
-)
+from captain_hook.util.shell import resolve_cd, safe_parse_command_line
 from captain_hook.util.vcs import contains_repo, in_vcs_repo, is_repo_root
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from cc_transcript.command import Command, CommandLine, Occurrence, Redirect, Word
+    from cc_transcript.command import Command, CommandLine, Occurrence, Redirect
 
     from captain_hook.events import ToolRewriteEvent
     from captain_hook.types import HookResult
 
 WRAPPER_COMMANDS: frozenset[str] = frozenset(LITERALS["command.WRAPPER_COMMANDS"])
-COMMAND_VALUE_FLAGS: dict[str, frozenset[str]] = {
-    "git": frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}),
+COMMAND_VALUE_FLAGS: dict[str, tuple[str, ...]] = {
+    "git": ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"),
 }
 
 
@@ -48,7 +43,9 @@ class Expansion:
 
     ``matches`` is capped at ``limit + 1`` entries, so ``len(expansion) > limit`` detects an
     over-cap glob without materializing every match; ``exhausted`` is True when a recursive
-    walk blew its 20k-entry budget before completing (the pattern is too broad to verify).
+    walk blew its 20k-entry budget before completing, or when the targets cannot be statically
+    verified at all — an unverified target, or an operand list a command substitution lifted a
+    word out of. Either way the expansion is incomplete and a guard must not treat it as safe.
 
     Example:
         >>> if len(call.targets.expand()) > 10:
@@ -72,37 +69,55 @@ class Expansion:
 class Target:
     """One operand of a command — a literal path or a glob — with resolution and blast-radius predicates.
 
+    ``value`` is the operand with shell quoting removed, or None when an unresolved expansion
+    (``$VAR``, ``$(...)``) taints the word; such a target is not :attr:`verified` and can never
+    be statically classified — every predicate returns False and :meth:`expand` reports itself
+    exhausted, so a guard falls through to its fail-closed branch instead of approving. A glob
+    or tilde operand (``*.py``, ``~/x``) keeps its value and stays verified: bash expands it,
+    but to statically known candidates.
+
     ``path`` resolves the parent directory but keeps the final component **literal**: a symlink
     is classified as itself, never followed through, which is what a deletion or command target
     needs (act on the entity named, not what it points at). This is deliberately unlike the
     ``ScratchPath`` condition, which *fully* resolves — write-approval must see through a symlink
     to where the bytes actually land. Do not unify the two.
 
-    Every predicate returns False when ``path`` is None (a relative target with no known cwd).
+    Every predicate returns False when ``path`` is None (an unverified target, or a relative
+    target with no known cwd).
 
     Example:
         >>> target.is_repo_root or target.contains_repo
     """
 
-    text: str
+    value: str | None
     raw: str
     cwd: Path | None
+
+    @property
+    def verified(self) -> bool:
+        """Whether the operand is statically known — False when an expansion taints it."""
+        return self.value is not None
 
     @cached_property
     def path(self) -> Path | None:
         """The target resolved against ``cwd``, parent-resolved with the final component kept literal."""
-        return resolve_target(self.text, self.cwd)
+        return None if self.value is None else resolve_target(self.value, self.cwd)
 
     @property
     def has_glob(self) -> bool:
-        """Whether the target's text contains shell glob metacharacters."""
-        return glob.has_magic(self.text)
+        """Whether the target's value contains shell glob metacharacters."""
+        return self.value is not None and glob.has_magic(self.value)
 
     def expand(self, *, limit: int = GLOB_LIMIT) -> Expansion:
-        """Expand a glob target to its matches (capped at ``limit + 1``); a literal yields itself."""
+        """Expand a glob target to its matches (capped at ``limit + 1``); a literal yields itself.
+
+        An unverified target expands to nothing, ``exhausted`` — it cannot be verified.
+        """
+        if self.value is None:
+            return Expansion((), True)
         if not self.has_glob:
-            return Expansion((self.text,), False)
-        matches, too_broad = glob_matches(self.text, self.cwd, limit=limit)
+            return Expansion((self.value,), False)
+        matches, too_broad = glob_matches(self.value, self.cwd, limit=limit)
         return Expansion(matches, too_broad)
 
     @property
@@ -144,9 +159,20 @@ class Target:
 
 @dataclass(frozen=True, slots=True)
 class Targets:
-    """The operand targets of a command, in order — iterable, sized, and expandable as a whole."""
+    """The operand targets of a command, in order — iterable, sized, and expandable as a whole.
+
+    ``complete`` is False when a bare command substitution (``$(...)``, backticks) was lifted
+    out of the command's words, so the collection under-counts the real operands; ``verified``
+    is the one-stop safety check — every operand present, statically known, and dequoted.
+    """
 
     targets: tuple[Target, ...] = ()
+    complete: bool = True
+
+    @property
+    def verified(self) -> bool:
+        """Whether the operand list is complete and every target is verified."""
+        return self.complete and all(target.verified for target in self.targets)
 
     def __iter__(self) -> Iterator[Target]:
         return iter(self.targets)
@@ -158,42 +184,54 @@ class Targets:
         return bool(self.targets)
 
     def expand(self, *, limit: int = GLOB_LIMIT) -> Expansion:
-        """Every target's expansion concatenated: literals contribute themselves, globs their matches."""
+        """Every target's expansion concatenated: literals contribute themselves, globs their matches.
+
+        Reports itself ``exhausted`` when any part does or the collection is incomplete.
+        """
         parts = [target.expand(limit=limit) for target in self.targets]
         return Expansion(
             tuple(match for part in parts for match in part.matches),
-            any(part.exhausted for part in parts),
+            not self.complete or any(part.exhausted for part in parts),
         )
 
 
 @dataclass(frozen=True)
 class Call:
-    """One command invocation reached by walking a command line — a top-level occurrence or a
-    nested payload inside a ``sh -c``/``eval`` cluster.
+    """One command invocation reached by walking a command line — a top-level occurrence, a
+    nested ``sh -c``/``eval`` payload, or a command substitution.
 
     ``command`` is the cc-transcript ``Command`` with leading wrappers (``sudo``, ``env``,
-    ``timeout``, …) stripped; ``name`` is its executable basename, casefolded, so matching is
-    command-position-only by construction (``echo rm foo`` and ``git rm`` never match ``"rm"``).
-    A nested call carries ``occurrence=None`` and is never ``spliceable``.
+    ``timeout``, …) stripped arity-aware; ``name`` is the **dequoted** head word's basename,
+    casefolded (``"rm" -rf /`` names the call ``rm``), so matching is command-position-only by
+    construction (``echo rm foo`` and ``git rm`` never match ``"rm"``) and quoting the
+    executable never evades it.
 
     Example:
         >>> for call in evt.cmd.calls("rm"):
         ...     if call.targets.expand().exhausted:
-        ...         return evt.block("glob too broad to verify")
+        ...         return evt.block("targets too broad to verify")
         ...     return call.sub("rm", "trash", args=call.targets) or evt.block("unrecoverable rm")
     """
 
     cmd: Cmd
-    command: Command
-    source: Command
-    occurrence: Occurrence | None
+    occurrence: Occurrence
     cwd: Path | None
-    nested: bool
+
+    @property
+    def source(self) -> Command:
+        """The command as written, wrappers included."""
+        return self.occurrence.command
+
+    @cached_property
+    def command(self) -> Command:
+        """The command with leading wrappers stripped."""
+        return self.source.unwrapped
 
     @property
     def name(self) -> str:
-        """The unwrapped executable's basename, casefolded."""
-        return basename(self.command.executable)
+        """The unwrapped head word's basename, dequoted and casefolded."""
+        words = self.command.words
+        return basename(words[0].value if words and words[0].value is not None else self.command.executable)
 
     @property
     def wrappers(self) -> tuple[str, ...]:
@@ -203,8 +241,12 @@ class Call:
         value-flag argument that itself names a wrapper (``sudo -u env rm``) can appear here, but
         a membership check against a real wrapper head is unaffected.
         """
-        stripped = self.source.argv[: len(self.source.argv) - len(self.command.argv)]
-        return tuple(name for token in stripped if (name := basename(token)) in WRAPPER_COMMANDS)
+        stripped = self.source.words[: len(self.source.words) - len(self.command.words)]
+        return tuple(
+            name
+            for word in stripped
+            if (name := basename(word.value if word.value is not None else word.raw)) in WRAPPER_COMMANDS
+        )
 
     @property
     def args(self) -> tuple[str, ...]:
@@ -217,19 +259,38 @@ class Call:
         return self.command.redirects
 
     @property
-    def spliceable(self) -> bool:
-        """Whether a rewrite can be spliced back — a top-level occurrence with a byte span and no
-        backslash-newline continuation. Nested calls and span-less occurrences are never spliceable."""
-        return (
-            not self.nested
-            and self.occurrence is not None
-            and self.source.span is not None
-            and "\\\n" not in self.source.raw
+    def nested(self) -> bool:
+        """Whether this call sits below top level — a payload or substitution hop away."""
+        return self.occurrence.nesting > 0
+
+    @property
+    def substituted(self) -> bool:
+        """Whether a command substitution (``$(...)``, backticks) feeds this call's words.
+
+        A bare substitution word is lifted out of the command's words entirely, so
+        :attr:`targets` under-counts and :meth:`sub` cannot re-emit the call faithfully —
+        both refuse accordingly.
+        """
+        return any(
+            (host := occurrence.host) is not None
+            and host.index == self.occurrence.index
+            and len(occurrence.quote_contexts) == len(self.occurrence.quote_contexts)
+            for occurrence in self.cmd.line.occurrences
         )
 
     @property
+    def spliceable(self) -> bool:
+        """Whether a rewrite can be spliced back — the source command carries a byte span.
+
+        Substitution payloads, ``fish -c`` payloads, and joined ``eval`` payloads carry none.
+        A nested payload with a span splices through its quote layers when the replacement
+        survives them, which :meth:`sub` checks per rewrite.
+        """
+        return self.source.span is not None
+
+    @property
     def flags(self) -> tuple[str, ...]:
-        """The option tokens, with any registered value-flag's argument (``git -C <dir>``) alongside it."""
+        """The option tokens, dequoted, with any registered value-flag's argument (``git -C <dir>``) alongside it."""
         return self._split[0]
 
     @property
@@ -239,39 +300,28 @@ class Call:
 
     @cached_property
     def _split(self) -> tuple[tuple[str, ...], Targets]:
-        value_flags = COMMAND_VALUE_FLAGS.get(self.name, frozenset())
-        arg_words = self.command.words[1:]
-        flags: list[str] = []
-        operands: list[Word] = []
-        i = 0
-        while i < len(arg_words):
-            match arg_words[i].text:
-                case "--":
-                    operands.extend(arg_words[i + 1 :])
-                    break
-                case "-":
-                    operands.append(arg_words[i])
-                case flag if flag.startswith("-"):
-                    flags.append(flag)
-                    if "=" not in flag and flag in value_flags and i + 1 < len(arg_words):
-                        flags.append(arg_words[i + 1].text)
-                        i += 1
-                case _:
-                    operands.append(arg_words[i])
-            i += 1
-        return tuple(flags), Targets(tuple(Target(word.text, word.raw, self.cwd) for word in operands))
+        options, operands = self.command.split_options(COMMAND_VALUE_FLAGS.get(self.name, ()))
+        return (
+            tuple(word.value if word.value is not None else word.raw for word in options),
+            Targets(
+                tuple(Target(word.value, word.raw, self.cwd) for word in operands),
+                complete=not self.substituted,
+            ),
+        )
 
     def sub(self, old: str, new: str, *, args: Targets | None = None, note: str | None = None) -> HookResult | None:
         """Rewrite this call's ``old`` executable to ``new`` in place, returning the rewrite result.
 
         ``old`` must equal :attr:`name` (else :class:`ValueError` — a programming error, not a runtime
-        condition). Returns None when the call is not :attr:`spliceable`, so a handler composes the
-        fail-closed fallback in policy code: ``call.sub("rm", trash) or evt.block(...)``.
+        condition). Returns None when the call is not :attr:`spliceable`, is :attr:`substituted`
+        (its operands cannot be re-emitted faithfully), or the replacement cannot survive the
+        enclosing quote layers — so a handler composes the fail-closed fallback in policy code:
+        ``call.sub("rm", trash) or evt.block(...)``.
 
         The occurrence's span is replaced with ``new`` followed by the re-emitted arguments — each
-        argument's verbatim source spelling (``Word.raw``), with a ``./`` prefix added to a
-        ``-``-leading raw so ``new`` never misparses it as a flag. ``args`` defaults to the call's
-        own arguments; pass ``args=call.targets`` to drop flags and keep only operands. Leading
+        argument's verbatim source spelling (``Word.raw``). ``args`` defaults to the call's own
+        arguments; pass ``args=call.targets`` to drop flags and keep only operands, in which case
+        a ``-``-leading raw gains a ``./`` prefix so ``new`` never misparses it as a flag. Leading
         wrappers drop (``sudo rm /x`` → ``trash /x``); redirects outside the span survive.
 
         Subs accumulate on the parent :class:`Cmd`: each call returns a fresh rewrite splicing every
@@ -283,10 +333,13 @@ class Call:
             raise ValueError(f"sub(old={old!r}) must match the call name {self.name!r}")
         if (event := self.cmd.event) is None:
             raise RuntimeError("sub() requires an event-bound Cmd; a detached Cmd cannot rewrite")
-        if (occurrence := self.occurrence) is None or not self.spliceable:
+        if not self.spliceable or self.substituted:
             return None
-        raws = [word.raw for word in self.command.words[1:]] if args is None else [target.raw for target in args]
-        self.cmd.replacements[occurrence.index] = " ".join([new, *(emit_raw(raw) for raw in raws)])
+        raws = [word.raw for word in self.command.words[1:]] if args is None else [emit_raw(t.raw) for t in args]
+        replacement = " ".join([new, *raws])
+        if not self.occurrence.embeddable(replacement):
+            return None
+        self.cmd.replacements[self.occurrence.index] = replacement
         if note is not None:
             self.cmd.notes.append(note)
         return event.rewrite_command(
@@ -300,10 +353,12 @@ class Cmd:
     """The parsed command line behind ``evt.cmd`` — a walk over every command invocation it contains.
 
     ``evt.cmd`` is always a ``Cmd`` (an empty line yields zero calls), never None, so a handler
-    never guards before iterating. Construct one detached for scanning untrusted payloads:
-    ``Cmd(command_line)`` over an already-parsed line, or ``Cmd.parse(text)`` (None when the text
-    is too deeply nested to parse). A detached ``Cmd`` has no bound event, so :meth:`Call.sub`
-    raises on it.
+    never guards before iterating. The walk consumes the parser's payload parts: nested
+    ``sh -c``/``eval`` payloads and command substitutions surface as calls of their own (three
+    levels deep), and ``cd`` threads the working directory to the calls after it within the same
+    payload scope. Construct one detached for scanning untrusted payloads: ``Cmd(command_line)``
+    over an already-parsed line, or ``Cmd.parse(text)`` (None when the text is too deeply nested
+    to parse). A detached ``Cmd`` has no bound event, so :meth:`Call.sub` raises on it.
 
     Example:
         >>> if (call := evt.cmd.call("rm")) and len(call.targets.expand()) > 10:
@@ -331,15 +386,14 @@ class Cmd:
 
     @cached_property
     def _calls(self) -> tuple[Call, ...]:
-        return tuple(self._walk(self.line, self.cwd, NESTED_COMMAND_DEPTH, nested=False))
-
-    def _walk(self, line: CommandLine, cwd: Path | None, depth: int, *, nested: bool) -> Iterator[Call]:
-        for occurrence in line.occurrences:
-            source = occurrence.command
-            command = source.unwrapped
-            yield Call(self, command, source, None if nested else occurrence, cwd, nested)
-            if depth > 0 and (payload := nested_command_string(basename(command.executable), command.args)) is not None:
-                if (inner := safe_parse_command_line(payload)) is not None:
-                    yield from self._walk(inner, cwd, depth - 1, nested=True)
-            if basename(command.executable) == "cd" and not occurrence.piped:
-                cwd = resolve_cd(command.args, cwd)
+        calls: list[Call] = []
+        scopes: dict[int | None, Path | None] = {None: self.cwd}
+        effective: dict[int | None, Path | None] = {}
+        for occurrence in self.line.occurrences:
+            host = occurrence.host.index if occurrence.host is not None else None
+            cwd = scopes.setdefault(host, effective.get(host))
+            effective[occurrence.index] = cwd
+            calls.append(call := Call(self, occurrence, cwd))
+            if call.name == "cd" and not occurrence.piped:
+                scopes[host] = resolve_cd(call.command.args, cwd)
+        return tuple(calls)
