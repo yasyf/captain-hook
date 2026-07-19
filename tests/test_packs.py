@@ -42,9 +42,7 @@ GENERAL_HOOKS = {
 }
 PYTHON_HOOKS = {"style", "testing", "toolchain"}
 GO_HOOKS = {"testing", "toolchain"}
-# lib.py carries __capt_hook_skip__ so it is a non-underscore file the loader skips; the
-# layout test counts .py files, so it appears here, but only steering.py registers hooks.
-STEERING_HOOKS = {"steering", "teammates"}
+STEERING_HOOKS = {"steering", "teammates", "workarounds"}
 FIXES_HOOKS = {"teammate_permissions", "scratch_writes"}
 PERFORMANCE_HOOKS = {"pipelining"}
 HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
@@ -849,9 +847,9 @@ def test_import_pack_module_sets_file(tmp_path: Path) -> None:
 def test_enabling_steering_pack_registers_hooks() -> None:
     resolved = manager.resolve_builtin("steering")
     discover_pack("steering", resolved.path)
-    # Five: steering.py registers the two signal nudges, the band-aid-plan llm_nudge, and the
-    # deferral llm_gate; teammates.py registers the teammate-digest SubagentStart nudge.
-    assert len(app._state.hooks) == 5
+    # Seven: steering.py's two signal nudges + band-aid nudge + deferral gate, workarounds.py's
+    # nudge + gate, teammates.py's digest nudge.
+    assert len(app._state.hooks) == 7
     assert "captain_hook._packs.steering.steering" in sys.modules
     assert "captain_hook._packs.steering.teammates" in sys.modules
 
@@ -860,9 +858,13 @@ def test_steering_deferral_gate_skips_in_plan_mode() -> None:
     from captain_hook.types import InPlanMode, Waiting
 
     discover_pack("steering", manager.resolve_builtin("steering").path)
-    # The lone Stop-gate is the deferral gate; plan mode cannot ship code, so it must skip there
-    # (additively with the auto Waiting() guard), leaving plan-content policing to the ExitPlanMode nudge.
-    (gate,) = (h for h in app._state.hooks if h.spec.events & (Event.Stop | Event.SubagentStop))
+    # Of the two Stop-gates (deferral + upstream-workaround), the deferral gate is the one that
+    # skips in plan mode; the workaround gate guards only on Waiting().
+    (gate,) = (
+        h
+        for h in app._state.hooks
+        if h.spec.events & (Event.Stop | Event.SubagentStop) and InPlanMode() in h.spec.skip_if
+    )
     assert gate.spec.skip_if == (Waiting(), InPlanMode())
 
 
