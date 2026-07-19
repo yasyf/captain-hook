@@ -66,6 +66,7 @@ def search_upward(start: Path, *rel: str, stop: Path | None = None) -> Path | No
             break
     return None
 
+
 EVENT_NAMES = ", ".join(n for e in Event if (n := e.name))
 
 DECISION_EVENTS = frozenset({Event.PreToolUse, Event.Stop, Event.SubagentStop, Event.PermissionRequest})
@@ -110,12 +111,20 @@ _registry_lock = threading.Lock()
 
 
 def pack_tool_specs(packs: Sequence[manager.ResolvedPack]) -> dict[str, ToolReg]:
-    """The ``{tool_name: (behaves_like, span_edit_map)}`` map every enabled pack's ``[tools]`` declare."""
-    return {
-        spec.name: (spec.behaves_like, spec.span_edit.as_map() if spec.span_edit else None)
-        for pack_ in packs
-        for spec in pack_.descriptor.tools
-    }
+    """The ``{tool_name: (behaves_like, span_edit_map)}`` map every enabled pack's ``[tools]`` declare.
+
+    A tool name may be owned by exactly one pack; a collision across packs raises
+    :class:`~captain_hook.packs.manager.PackError` naming both packs and the tool.
+    """
+    specs: dict[str, ToolReg] = {}
+    owner: dict[str, str] = {}
+    for pack_ in packs:
+        for spec in pack_.descriptor.tools:
+            if (prior := owner.get(spec.name)) is not None:
+                raise manager.PackError(f"tool {spec.name!r} is claimed by both {prior!r} and {pack_.pack_id!r}")
+            owner[spec.name] = pack_.pack_id
+            specs[spec.name] = (spec.behaves_like, spec.span_edit.as_map() if spec.span_edit else None)
+    return specs
 
 
 def reconcile_pack_tools(desired: Mapping[str, ToolReg]) -> None:

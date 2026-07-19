@@ -180,6 +180,25 @@ def test_reconcile_pack_tools_touches_only_changed(monkeypatch: pytest.MonkeyPat
     assert unregistered == ["tool_a"]
 
 
+def resolved_with_tool(entry: manager.PackEntry, tool: str) -> manager.ResolvedPack:
+    return manager.ResolvedPack(entry, Path("/x"), manager.PackDescriptor(tools=(manager.ToolSpec(tool, "Edit"),)))
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        pytest.param(manager.BuiltinPack("general"), manager.PluginPack("cc@mkt", "/root"), id="builtin-plus-plugin"),
+        pytest.param(manager.PluginPack("a@mkt", "/ra"), manager.PluginPack("b@mkt", "/rb"), id="plugin-plus-plugin"),
+    ],
+)
+def test_pack_tool_specs_rejects_cross_pack_duplicate(first: manager.PackEntry, second: manager.PackEntry) -> None:
+    a, b = resolved_with_tool(first, "dup_tool"), resolved_with_tool(second, "dup_tool")
+    with pytest.raises(manager.PackError) as exc:
+        cli.pack_tool_specs([a, b])
+    msg = str(exc.value)
+    assert "dup_tool" in msg and a.pack_id in msg and b.pack_id in msg
+
+
 def pre_tool_use(target: Path, content: str | None, *, delete: bool = False) -> PreToolUseEvent:
     payload: dict[str, object] = {"path": str(target)}
     if delete:
