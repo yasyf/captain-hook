@@ -18,9 +18,11 @@ import re
 from collections import Counter
 from collections.abc import Iterable, Iterator, Set
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from captain_hook.langs import COMMENT_TYPES as GENERATED_COMMENT_TYPES
+from captain_hook.langs import DOC_COMMENT_KINDS as GENERATED_DOC_COMMENT_KINDS
+from captain_hook.langs import DOC_SIBLINGS as GENERATED_DOC_SIBLINGS
 from captain_hook.langs import LANG_GLOBS
 
 if TYPE_CHECKING:
@@ -46,39 +48,11 @@ MAX_COMMENT_LINES = 3
 MAX_COMMENT_CHARS = 200
 MAX_COMMENT_SCAN_BYTES = 512_000
 
-DOC_PREFIXES: dict[str, tuple[str, ...]] = {
-    "rs": ("///", "//!", "/**", "/*!"),
-    "js": ("/**",),
-    "jsx": ("/**",),
-    "ts": ("/**",),
-    "tsx": ("/**",),
-    "java": ("/**",),
-    "kotlin": ("/**",),
-    "swift": ("///", "/**"),
-    "dart": ("///",),
-    "cs": ("///",),
-    "php": ("/**",),
-    "scala": ("/**",),
-}
-"""Comment prefixes that mark a documentation comment, by language."""
+DOC_COMMENT_KINDS: frozenset[str] = GENERATED_DOC_COMMENT_KINDS
+"""Grammar-defined kinds that natively mark a documentation comment."""
 
-GO_DOC_SIBLINGS: frozenset[str] = frozenset(
-    {
-        "function_declaration",
-        "method_declaration",
-        "type_declaration",
-        "var_declaration",
-        "const_declaration",
-        "package_clause",
-        "const_spec",
-        "var_spec",
-        "field_declaration",
-        "import_declaration",
-        "method_elem",
-    }
-)
-"""Kinds a Go run must immediately precede to read as godoc — top-level declarations plus grouped
-``const``/``var`` specs, struct fields, imports, and interface methods (which nest below the file)."""
+DOC_SIBLINGS: dict[str, frozenset[str]] = GENERATED_DOC_SIBLINGS
+"""Concrete declaration kinds a comment run may document, by language."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +153,16 @@ def introduced_comments(old: str, new: str, lang: str) -> Iterator[Match]:
     return introduced(comments(old, lang), comments(new, lang))
 
 
+class CommentSegment(NamedTuple):
+    """Line and character sizes of one alphanumeric-bearing portion of a comment block."""
+
+    lines: int
+    chars: int
+
+    def over(self, max_lines: int, max_chars: int) -> bool:
+        return self.lines > max_lines or self.chars > max_chars
+
+
 @dataclass(frozen=True, slots=True)
 class CommentRun:
     """A maximal run of adjacent line-leading comments (or one block comment), located by 1-based
@@ -209,7 +193,8 @@ class CommentRun:
 class CommentBlock:
     """One or more comment runs a size check treats as a unit: adjacent line-leading runs and the
     paragraphs they form across blank-only gaps. ``lines``/``chars`` sum the constituent runs (the
-    blank gaps don't count), and the block is doc only when every run is."""
+    blank gaps don't count), the block is doc only when every run is, and doc budgets split its
+    opening paragraph from the combined trailing paragraphs without changing the runs."""
 
     runs: tuple[CommentRun, ...]
 
@@ -238,8 +223,39 @@ class CommentBlock:
         return " ".join("\n".join(t for run in self.runs for t in run.texts).split())
 
     @property
+    def doc_paragraphs(self) -> tuple[CommentSegment, CommentSegment]:
+        """Opening and trailing doc portions, split at the first alphanumeric-free row.
+
+        A bare comment leader, gutter, divider, or source gap between runs is a separator. Decoration
+        and separator rows count toward neither portion.
+        """
+        rows = [row for run in self.runs for text in ("", *run.texts) for row in text.rstrip("\n").split("\n")]
+        head: list[str] = []
+        tail: list[str] = []
+        head_chars = 0
+        tail_chars = 0
+        parted = False
+        for row in rows:
+            content = any(c.isalnum() for c in row)
+            if not content:
+                parted = parted or bool(head)
+            if parted:
+                tail_chars += len(row)
+                if content:
+                    tail.append(row)
+            else:
+                head_chars += len(row)
+                if content:
+                    head.append(row)
+        return CommentSegment(len(head), head_chars), CommentSegment(len(tail), tail_chars)
+
+    @property
     def too_long(self) -> bool:
-        return self.lines > MAX_COMMENT_LINES or self.chars > MAX_COMMENT_CHARS
+        """Whether the block exceeds its plain or documentation-comment budget."""
+        if not self.doc:
+            return self.lines > MAX_COMMENT_LINES or self.chars > MAX_COMMENT_CHARS
+        head, tail = self.doc_paragraphs
+        return head.over(6, 400) or tail.over(MAX_COMMENT_LINES, MAX_COMMENT_CHARS)
 
 
 def line_span(node: SyntaxNode) -> tuple[int, int]:
@@ -262,19 +278,19 @@ def is_line_leading(node: SyntaxNode, src_lines: list[str]) -> bool:
 
 
 def is_doc_run(nodes: list[SyntaxNode], lang: str) -> bool:
-    """Whether a comment run is a documentation comment (godoc / rustdoc / JSDoc).
+    """Whether a comment run is a documentation comment.
 
-    Prefix languages (rustdoc ``///``, JSDoc ``/**``) require *every* node to carry a doc marker, so
-    a marker line followed by plain narrative doesn't poison the run doc. Go has no prefix: a run is
-    godoc when its next named sibling — a declaration, grouped spec, struct field, import, or
-    interface method — begins on the immediately following line (a blank line breaks the bond).
+    Native markers require every node to carry a grammar-defined doc kind, so narrative cannot ride
+    one marked line. Otherwise, a run is documentation when its next sibling is a declaration that
+    begins on the immediately following line; a blank line breaks the bond.
     """
-    if prefixes := DOC_PREFIXES.get(lang):
-        return all(n.text.startswith(prefixes) for n in nodes)
-    if lang != "go":
-        return False
+    if all(
+        node.kind in DOC_COMMENT_KINDS or any(child.kind() in DOC_COMMENT_KINDS for child in node.raw.children())
+        for node in nodes
+    ):
+        return True
     last = nodes[-1].raw
-    if (nxt := last.next()) is None or nxt.kind() not in GO_DOC_SIBLINGS:
+    if (nxt := last.next()) is None or nxt.kind() not in DOC_SIBLINGS[lang]:
         return False
     return nxt.range().start.line == last.range().end.line + 1
 
@@ -343,19 +359,22 @@ def touched_comment_blocks(old: str, new: str, lang: str) -> list[CommentBlock]:
     """Comment blocks of ``new`` this edit created or grew — a multiset diff over :attr:`CommentBlock.key`.
 
     An old block exempts one identically-keyed new block (a genuine move stays exempt; a duplicated
-    copy past the first counts as touched). A too-long new block is exempt only when an old block
-    with the same key was *also* too long, so a legacy oversized run stays quiet while a reflow that
-    pushes a previously-fine run over the threshold does not.
+    copy past the first counts as touched). An over-budget new block is exempt only when an old block
+    with the same key was *also* over budget, so a legacy oversized run stays quiet while a reflow
+    that pushes a previously-fine run over its budget does not.
     """
     old_blocks = comment_blocks(old, lang)
     remaining = Counter(block.key for block in old_blocks)
-    old_too_long = {block.key for block in old_blocks if block.too_long}
+    old_too_long = Counter(block.key for block in old_blocks if block.too_long)
     touched: list[CommentBlock] = []
     for block in comment_blocks(new, lang):
         if remaining[block.key] > 0:
             remaining[block.key] -= 1
-            if block.too_long and block.key not in old_too_long:
-                touched.append(block)
+            if block.too_long:
+                if old_too_long[block.key] > 0:
+                    old_too_long[block.key] -= 1
+                else:
+                    touched.append(block)
         else:
             touched.append(block)
     return touched

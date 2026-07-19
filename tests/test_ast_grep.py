@@ -212,10 +212,8 @@ class TestCommentRuns:
         [
             pytest.param("/// docline\n/// more\npub fn f() {}\n", "rs", True, id="rs_triple_slash_doc"),
             pytest.param("//! inner doc\nmod m {}\n", "rs", True, id="rs_bang_doc"),
-            pytest.param("/* plain */\nfn f() {}\n", "rs", False, id="rs_plain_block_inline"),
-            pytest.param(
-                "/** m */\n// narrative\nfunction f() {}\n", "js", False, id="js_marker_then_narrative_poisoned"
-            ),
+            pytest.param("/* plain */\nfn f() {}\n", "rs", True, id="rs_plain_block_adjacent_doc"),
+            pytest.param("/** m */\n// narrative\nfunction f() {}\n", "js", True, id="js_mixed_run_adjacent_doc"),
             pytest.param("package p\n\n// F does it.\nfunc F() {}\n", "go", True, id="go_adjacent_is_doc"),
             pytest.param("package p\n\nconst (\n\t// doc\n\tX = 1\n)\n", "go", True, id="go_grouped_const_spec_doc"),
             pytest.param("package p\n\ntype T struct {\n\t// doc\n\tF int\n}\n", "go", True, id="go_struct_field_doc"),
@@ -225,11 +223,17 @@ class TestCommentRuns:
             pytest.param("/** KDoc */\nfun f() = Unit\n", "kotlin", True, id="kotlin_kdoc"),
             pytest.param("/// Swift doc\nfunc f() {}\n", "swift", True, id="swift_triple_slash_doc"),
             pytest.param("/** Swift doc */\nfunc f() {}\n", "swift", True, id="swift_block_doc"),
-            pytest.param("/// Dart doc\nvoid f() {}\n", "dart", True, id="dart_triple_slash_doc"),
+            pytest.param("/// Dart doc\nvoid f() {}\n", "dart", True, id="dart_triple_slash_adjacent_doc"),
             pytest.param("/// <summary>Doc</summary>\nclass C {}\n", "cs", True, id="cs_xml_doc"),
             pytest.param("<?php\n/** PHPDoc */\nfunction f() {}\n", "php", True, id="php_doc"),
             pytest.param("/** Scaladoc */\ndef f = ()\n", "scala", True, id="scala_doc"),
             pytest.param("# just a comment\nx = 1\n", "py", False, id="py_never_doc"),
+            pytest.param("# not a doc comment\ndef f(): ...\n", "py", False, id="py_above_def_stays_plain"),
+            pytest.param("a {\n  /* not doc */\n  color: red;\n}\n", "css", False, id="css_declaration_homonym_plain"),
+            pytest.param("# Ruby doc\ndef foo; end\n", "rb", True, id="rb_method_adjacent_doc"),
+            pytest.param("/** TSDoc */\nexport const x = 1;\n", "ts", True, id="ts_export_statement_doc"),
+            pytest.param("/// only\n", "rs", True, id="rs_native_doc_at_eof"),
+            pytest.param("/**\n * hi\n */\n\nx();\n", "js", False, id="js_floating_jsdoc_plain"),
         ],
     )
     def test_doc_classification(self, source: str, lang: str, doc: bool) -> None:
@@ -239,6 +243,60 @@ class TestCommentRuns:
         source = "/// doc line\n/// doc two\npub fn f() {\n    // inline\n    let x = 1;\n}\n"
         assert comment_line_numbers(source, "rs", include_doc=False) == {4}
         assert 1 in comment_line_numbers(source, "rs", include_doc=True)
+
+
+class TestDocParagraphs:
+    def test_go_bare_leader_splits_head_and_tail(self) -> None:
+        [block] = comment_blocks(
+            "package p\n\n// Head one\n// Head two\n//\n// Tail one\n// Tail two\nfunc F() {}\n",
+            "go",
+        )
+        assert block.doc_paragraphs == ((2, 22), (2, 24))
+
+    def test_jsdoc_gutter_splits_head_and_tail(self) -> None:
+        [block] = comment_blocks(
+            "/**\n * Head one\n * Head two\n *\n * Tail one\n * Tail two\n */\nfunction f() {}\n",
+            "js",
+        )
+        assert block.doc_paragraphs == ((2, 25), (2, 27))
+
+    def test_run_boundary_splits_head_and_tail(self) -> None:
+        [block] = comment_blocks(
+            "/// Head one\n/// Head two\n\n/// Tail one\n/// Tail two\nfn f() {}\n",
+            "rs",
+        )
+        assert block.doc_paragraphs == ((2, 24), (2, 24))
+
+    def test_divider_splits_head_and_tail(self) -> None:
+        [block] = comment_blocks("package p\n\n// Head one\n// ----\n// Tail one\nfunc F() {}\n", "go")
+        assert block.doc_paragraphs == ((1, 11), (1, 18))
+
+    def test_no_separator_leaves_empty_tail(self) -> None:
+        [block] = comment_blocks("package p\n\n// Head one\n// Head two\nfunc F() {}\n", "go")
+        assert block.doc_paragraphs == ((2, 22), (0, 0))
+
+    def test_bare_rustdoc_separator_keeps_native_marker(self) -> None:
+        source = "/// Head one\n/// \n/// Tail one\n"
+        bare = next(
+            node
+            for node in parse(source, "rs").descendants()
+            if node.kind == "line_comment" and not node.text[4:].strip()
+        )
+        assert "outer_doc_comment_marker" in {child.kind() for child in bare.raw.children()}
+        [block] = comment_blocks(source, "rs")
+        assert block.doc
+        assert block.doc_paragraphs == ((1, 12), (1, 16))
+
+    def test_separator_chars_count_toward_budget(self) -> None:
+        separator = "// " + "!" * 1000 + "\n"
+        [block] = comment_blocks("package p\n\n" + separator * 9 + "func F() {}\n", "go")
+        assert block.doc_paragraphs == ((0, 9027), (0, 0))
+        assert block.too_long
+
+    def test_unicode_line_separator_stays_in_physical_row(self) -> None:
+        [block] = comment_blocks("/// a\u2028b\u2028c\u2028d\u2028e\u2028f\u2028g\n", "rs")
+        assert block.doc_paragraphs[0].lines == 1
+        assert not block.too_long
 
 
 class TestCommentBlocks:
@@ -252,8 +310,40 @@ class TestCommentBlocks:
         assert [b.lines for b in blocks] == [1, 1]
 
     def test_block_doc_only_when_all_runs_doc(self) -> None:
-        [block] = comment_blocks("/// doc\n\n// plain\npub fn f() {}\n", "rs")
+        [block] = comment_blocks("/* floating */\n\n/// doc\npub fn f() {}\n", "rs")
         assert not block.doc
+
+    @pytest.mark.parametrize(
+        ("source", "lang", "too_long"),
+        [
+            pytest.param("/// one\n/// two\n/// three\n/// four\n/// five\n/// six\n", "rs", False, id="doc_head_6"),
+            pytest.param(
+                "/// one\n/// two\n/// three\n/// four\n/// five\n/// six\n/// seven\n",
+                "rs",
+                True,
+                id="doc_head_7",
+            ),
+            pytest.param(
+                "package p\n\n// Head one\n// Head two\n// Head three\n//\n"
+                "// Tail one\n// Tail two\n// Tail three\nfunc F() {}\n",
+                "go",
+                False,
+                id="doc_tail_3",
+            ),
+            pytest.param(
+                "package p\n\n// Head one\n// Head two\n//\n"
+                "// Tail one\n// Tail two\n// Tail three\n// Tail four\nfunc F() {}\n",
+                "go",
+                True,
+                id="doc_tail_4",
+            ),
+            pytest.param("package p\n\n// " + "x" * 397 + "\nfunc F() {}\n", "go", False, id="doc_chars_400"),
+            pytest.param("package p\n\n// " + "x" * 398 + "\nfunc F() {}\n", "go", True, id="doc_chars_401"),
+        ],
+    )
+    def test_composite_budget(self, source: str, lang: str, too_long: bool) -> None:
+        [block] = comment_blocks(source, lang)
+        assert block.too_long is too_long
 
 
 class TestTouchedCommentBlocks:
@@ -284,10 +374,29 @@ class TestTouchedCommentBlocks:
         new = "/*\n a\n b\n c\n d\n*/\nfn g() {}\n"
         assert touched_comment_blocks(old, new, "rs") == []
 
+    def test_duplicate_key_legacy_exemption_is_per_occurrence(self) -> None:
+        comments = "// one\n// two\n// three\n// four\n"
+        old = "package p\n\n" + comments + "\nvar X = 1\n\n" + comments + "func F() {}\n"
+        new = "package p\n\n" + comments + "\nvar X = 1\n\n" + comments + "\nfunc F() {}\n"
+        [reported] = touched_comment_blocks(old, new, "go")
+        assert reported == comment_blocks(new, "go")[1]
+
     def test_reflow_to_oversize_is_touched(self) -> None:
         # A short block comment reflowed over the line budget keeps its key but is no longer exempt.
         old = "fn f() {\n    /* one two three */\n}\n"
         new = "fn f() {\n    /*\n     one\n     two\n     three\n    */\n}\n"
+        [block] = touched_comment_blocks(old, new, "rs")
+        assert block.too_long
+
+    def test_moved_over_budget_doc_block_stays_exempt(self) -> None:
+        doc = "/* Head here\n\nalpha beta\ngamma delta\nepsilon zeta\neta theta */\nfn f() {}\n"
+        old = doc + "\nfn g() {}\n"
+        new = "fn g() {}\n\n" + doc
+        assert touched_comment_blocks(old, new, "rs") == []
+
+    def test_doc_tail_reflow_to_oversize_is_touched(self) -> None:
+        old = "/* Head here\n\nalpha beta\ngamma delta\nepsilon zeta */\nfn f() {}\n"
+        new = "/* Head here\n\nalpha\nbeta gamma\ndelta epsilon\nzeta */\nfn f() {}\n"
         [block] = touched_comment_blocks(old, new, "rs")
         assert block.too_long
 
