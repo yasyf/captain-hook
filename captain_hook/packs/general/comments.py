@@ -124,12 +124,14 @@ PY_DENSE_FIRES = "# c1 here\na = 1\n# c2 here\nb = 2\n# c3 here\n# c4 here\nc = 
 
 def touched(evt: BaseHookEvent) -> list[CommentBlock]:
     """The comment blocks this edit created or grew, or ``[]`` when the language is unparsable."""
-    if (
-        not (file := evt.file)
-        or not (lang := lang_for_path(file.path))
-        or (pre := evt.pre_image) is None
-        or (post := evt.post_image) is None
-    ):
+    if not (file := evt.file) or not (lang := lang_for_path(file.path)):
+        return []
+    if (post := evt.post_image) is None:
+        # Span edit (opaque locator, no simulated post-image): compare the whole-file pre-image
+        # against the new span text — a conservative superset that only suppresses, never misfires.
+        if (pre := evt.replaced) is None or (post := evt.content) is None:
+            return []
+    elif (pre := evt.pre_image) is None:
         return []
     return touched_comment_blocks(pre, post, lang)
 

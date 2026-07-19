@@ -6,14 +6,16 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import click
 from cc_transcript.ids import SessionId
+from cc_transcript.tools import register_mcp_tool, unregister_mcp_tool
 from loguru import logger
 
 from captain_hook.app import AsyncDecisionError, _state, load_gitignore, reset
@@ -70,6 +72,7 @@ class CliState:
         packs = [*resolved, *plugin_packs]
         for pack_ in packs:
             discover_pack(pack_.entry.name, pack_.path)
+        register_pack_tools(packs)
         # NLP provisioning is one shared SessionStart hook; register it once when any pack asks.
         if any(pack_.manifest.nlp for pack_ in packs):
             register_nlp_provisioning()
@@ -85,6 +88,42 @@ class CliState:
         # maybe_bootstrap is zero-I/O on an empty union and prints nothing on any stream.
         bootstrap.maybe_bootstrap(list(dict.fromkeys(m for pack_ in packs for m in pack_.manifest.marketplaces)))
         return packs
+
+
+ToolReg = tuple[str, dict[str, str] | None]
+
+# cc-transcript's tool registry is a process-global; discover() and every cache hit reconcile
+# against this per-name (behaves_like, span_edit) map under _registry_lock so no live spec drops.
+_registered_tools: dict[str, ToolReg] = {}
+_registry_lock = threading.Lock()
+
+
+def pack_tool_specs(packs: Sequence[manager.ResolvedPack]) -> dict[str, ToolReg]:
+    """The ``{tool_name: (behaves_like, span_edit_map)}`` map every enabled pack's ``[tools]`` declare."""
+    return {
+        spec.name: (spec.behaves_like, spec.span_edit.as_map() if spec.span_edit else None)
+        for pack_ in packs
+        for spec in pack_.manifest.tools
+    }
+
+
+def reconcile_pack_tools(desired: Mapping[str, ToolReg]) -> None:
+    """Reconcile cc-transcript's tool registry to ``desired``, touching only added, removed, or changed
+    tools so an unchanged spec is never re-registered and no window opens for a live tool. A strict
+    no-op when ``desired`` already matches the registered set."""
+    global _registered_tools
+    with _registry_lock:
+        for name in _registered_tools.keys() - desired.keys():
+            unregister_mcp_tool(name)
+        for name, (behaves_like, span_edit) in desired.items():
+            if _registered_tools.get(name) != (behaves_like, span_edit):
+                register_mcp_tool(name, behaves_like, span_edit)  # last write wins — no unregister gap
+        _registered_tools = dict(desired)
+
+
+def register_pack_tools(packs: Sequence[manager.ResolvedPack]) -> None:
+    """Reconcile cc-transcript's tool registry with every enabled pack's ``[tools]`` specs."""
+    reconcile_pack_tools(pack_tool_specs(packs))
 
 
 def example_hook_source() -> str:

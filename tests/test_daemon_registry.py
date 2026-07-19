@@ -3,11 +3,13 @@ from __future__ import annotations
 import os
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
+from captain_hook import cli
 from captain_hook.cli import CliState
 from captain_hook.daemon import registry
 from captain_hook.daemon.registry import Fingerprint, Registry
@@ -42,12 +44,14 @@ def make_plugin_pack(pack_root: Path, *, hook_body: str = PLUGIN_HOOK, name: str
 @pytest.fixture(autouse=True)
 def isolate_cache(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, isolate_modules: None
-) -> None:
+) -> Iterator[None]:
     # discover() writes the resolve fastpath sidecar (and the plugin snapshot) under resolve_cache_dir();
     # keep it off the real ~/.cache. isolate_modules drops the per-test `hooks.*` imports so a later
     # project's discover can't reload a prior one's module from its stale spec under random ordering.
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("cache")))
     monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(tmp_path_factory.mktemp("run")))
+    yield
+    cli.register_pack_tools([])  # drop any tools this test registered into the process-global registry
 
 
 def make_project(root: Path, *, hook_body: str = HOOK, gitignore: str | None = "*.log\n") -> CliState:
@@ -230,9 +234,33 @@ def test_snapshot_past_horizon_is_a_miss(project: CliState) -> None:
     reg = Registry(project)
     snap = reg.get()
     stale = Fingerprint(digest=snap.fingerprint.digest, horizon=time.time() - 1)
-    reg._cache[stale] = registry.RegistrySnapshot(stale, snap.state, snap.resolved)
+    reg._cache[stale] = registry.RegistrySnapshot(stale, snap.state, snap.resolved, snap.tools)
     assert stale.expired(time.time())
     assert reg._lookup(stale, time.time()) is None
+
+
+def test_cache_hit_reconciles_stale_tool_registry(project: CliState) -> None:
+    # A cache hit skips discover(); if a prior config left the process-global tool registry elsewhere,
+    # serving the hit must reconcile it back to this snapshot's specs or the tool mis-lowers.
+    from dataclasses import replace
+
+    from cc_transcript.tools import expand_tool_names
+
+    reg = Registry(project)
+    base = reg.get()
+    snap = replace(base, tools={"tool_a": ("Edit", None)})
+    reg._cache[base.fingerprint] = snap
+    cli.reconcile_pack_tools(snap.tools)
+    assert "tool_a" in expand_tool_names("Edit")
+
+    # A concurrent request for another config leaves the registry serving tool_b and drops tool_a.
+    cli.reconcile_pack_tools({"tool_b": ("Write", None)})
+    assert "tool_a" not in expand_tool_names("Edit")
+
+    # Serving the still-cached snapshot reconciles the registry back to its own specs.
+    assert reg.get() is snap
+    assert "tool_a" in expand_tool_names("Edit")
+    assert "tool_b" not in expand_tool_names("Write")
 
 
 # --- concurrency: one build under contention -------------------------------------------

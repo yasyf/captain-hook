@@ -103,6 +103,65 @@ def parse_marketplaces(raw: object) -> tuple[str, ...]:
 
 
 @dataclass(frozen=True, slots=True)
+class SpanEditSpec:
+    """The payload-key map a span-edit MCP tool's ``SpanEditCall`` lowering reads: the key names
+    carrying the target ``path`` and written ``content``, and optionally the ``delete`` flag."""
+
+    path: str
+    content: str
+    delete: str | None = None
+
+    def as_map(self) -> dict[str, str]:
+        m = {"path": self.path, "content": self.content}
+        if self.delete is not None:
+            m["delete"] = self.delete
+        return m
+
+
+@dataclass(frozen=True, slots=True)
+class ToolSpec:
+    """A declarative MCP tool spec from a pack manifest's top-level ``[tools]`` table: the bare tool
+    segment, the built-in gate it ``behaves_like``, and an optional span-edit lowering."""
+
+    name: str
+    behaves_like: str
+    span_edit: SpanEditSpec | None = None
+
+
+def parse_span_edit(raw: object, pack: str, tool: str) -> SpanEditSpec | None:
+    if raw is None:
+        return None
+    match raw:
+        case {"path": str(path), "content": str(content), **rest}:
+            match rest.get("delete"):
+                case str() | None as delete:
+                    return SpanEditSpec(path=path, content=content, delete=delete)
+                case bad:
+                    raise PackError(f"[tools.{tool}] span_edit.delete in pack {pack!r} must be a string, got {bad!r}")
+        case dict():
+            raise PackError(f"[tools.{tool}] span_edit in pack {pack!r} needs string keys path/content")
+        case _:
+            raise PackError(f"[tools.{tool}] span_edit in pack {pack!r} must be a table, got {raw!r}")
+
+
+def parse_tools(raw: object, pack: str) -> tuple[ToolSpec, ...]:
+    if not isinstance(raw, dict):
+        raise PackError(f"[tools] in pack {pack!r} must be a table of tool entries, got {raw!r}")
+    specs: list[ToolSpec] = []
+    for tool, entry in raw.items():
+        # `**rest` ignores unknown entry keys — the PackManifest.load tolerance idiom.
+        match entry:
+            case {"behaves_like": str(behaves_like), **rest}:
+                span_edit = parse_span_edit(rest.get("span_edit"), pack, tool)
+                specs.append(ToolSpec(name=tool, behaves_like=behaves_like, span_edit=span_edit))
+            case dict():
+                raise PackError(f"[tools.{tool}] in pack {pack!r} is missing required string key behaves_like")
+            case _:
+                raise PackError(f"[tools.{tool}] in pack {pack!r} must be a table, got {entry!r}")
+    return tuple(specs)
+
+
+@dataclass(frozen=True, slots=True)
 class PackManifest:
     name: str
     description: str
@@ -110,14 +169,16 @@ class PackManifest:
     version: str = "0.0.0"
     nlp: bool = False
     marketplaces: tuple[str, ...] = ()
+    tools: tuple[ToolSpec, ...] = ()
 
     @classmethod
     def load(cls, path: Path) -> PackManifest:
         if not path.is_file():
             raise PackError(f"pack manifest {PACK_MANIFEST} missing at {path.parent}")
-        # `**rest` ignores unknown [pack] keys — the dual-grammar rollout needs transitional files
-        # to parse under both schemas; every other failure mode raises PackError.
-        match tomllib.loads(path.read_text()).get("pack"):
+        # `**rest` ignores unknown [pack] keys; every other failure mode raises PackError. [tools]
+        # is a top-level table (a sibling of [pack]) read from the same parsed doc.
+        doc = tomllib.loads(path.read_text())
+        match doc.get("pack"):
             case {"name": str(name), "description": str(description), "hooks": str(hooks), **rest}:
                 manifest = cls(
                     name=name,
@@ -126,6 +187,7 @@ class PackManifest:
                     version=rest.get("version", "0.0.0"),
                     nlp=rest.get("nlp", False),
                     marketplaces=parse_marketplaces(rest.get("marketplaces", ())),
+                    tools=parse_tools(doc.get("tools", {}), name),
                 )
             case dict():
                 raise PackError(f"[pack] in {path} is missing required string keys name/description/hooks")

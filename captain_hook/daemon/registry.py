@@ -30,7 +30,7 @@ from captain_hook.util.caching import LRUDict
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from captain_hook.cli import CliState
+    from captain_hook.cli import CliState, ToolReg
 
 MAX_SNAPSHOTS = 8
 BUILD_RETRIES = 3
@@ -153,6 +153,7 @@ class RegistrySnapshot:
     fingerprint: Fingerprint
     state: app.State
     resolved: list[manager.ResolvedPack]
+    tools: dict[str, ToolReg]
     discovery_stdout: str = ""
     discovery_stderr: str = ""
     cacheable: bool = True
@@ -167,11 +168,13 @@ class Registry:
     def get(self) -> RegistrySnapshot:
         now = time.time()
         if (hit := self._lookup(Fingerprint.compute(self._cli_state), now)) is not None:
+            self._reconcile_tools(hit)
             return hit
         with self._build_lock:
             # Re-fingerprint inside the lock: a peer's build may have just written the resolve
             # sidecar, so the pre-lock fingerprint is stale — recomputing lets us hit its work.
             if (hit := self._lookup(Fingerprint.compute(self._cli_state), now)) is not None:
+                self._reconcile_tools(hit)
                 return hit
             snapshot = self._build()
             if snapshot.cacheable:
@@ -180,6 +183,13 @@ class Registry:
 
     def drop_all(self) -> None:
         self._cache.cache_clear()
+
+    def _reconcile_tools(self, snapshot: RegistrySnapshot) -> None:
+        # A cache hit skips discover(), so align cc-transcript's process-global tool registry to this
+        # snapshot's specs — a no-op unless a prior request left another config's tools registered.
+        from captain_hook.cli import reconcile_pack_tools
+
+        reconcile_pack_tools(snapshot.tools)
 
     def _lookup(self, fingerprint: Fingerprint, now: float) -> RegistrySnapshot | None:
         hit = self._cache.get(fingerprint)
@@ -197,6 +207,7 @@ class Registry:
         return replace(latest, cacheable=False)
 
     def _discover_once(self) -> RegistrySnapshot:
+        from captain_hook.cli import pack_tool_specs
         from captain_hook.daemon.context import capture_output
 
         state = app.State()
@@ -211,6 +222,7 @@ class Registry:
             fingerprint=Fingerprint.compute(self._cli_state),
             state=state,
             resolved=resolved,
+            tools=pack_tool_specs(resolved),
             discovery_stdout=captured.stdout.getvalue(),
             discovery_stderr=captured.stderr.getvalue(),
         )

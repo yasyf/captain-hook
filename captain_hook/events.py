@@ -12,6 +12,7 @@ from cc_transcript.tools import (
     EditCall,
     MultiEditCall,
     NotebookEditCall,
+    SpanEditCall,
     TaskCall,
     ToolCallBase,
     WriteCall,
@@ -372,6 +373,8 @@ class ToolHookEvent(BaseHookEvent):
                 return "\n".join(span.new for span in edits)
             case NotebookEditCall(new_source=new_source):
                 return new_source
+            case SpanEditCall(new=new):
+                return new
             case _:
                 return None
 
@@ -393,20 +396,25 @@ class ToolHookEvent(BaseHookEvent):
         any event. A Write's pre-image is the file's current on-disk content — ``""``
         for a new file, lossily decoded for non-UTF-8 bytes, ``None`` for a directory
         or unreadable path — and only at ``PreToolUse``: once the Write lands, disk
-        already holds the new text, so any other event yields ``None``. ``None`` for
-        other tools.
+        already holds the new text, so any other event yields ``None``. A registered MCP
+        span-edit tool follows the Write arm — its opaque locator carries no ``old``
+        fragment, so the whole on-disk file stands in as a conservative pre-image (a
+        superset only suppresses, never misreports, an introduced construct). ``None``
+        for other tools.
         """
         match self.input:
             case EditCall() | MultiEditCall():
                 return self.old
             case WriteCall(file_path=path) if self.event is Event.PreToolUse:
                 return disk_pre_image(Path(path))
+            case SpanEditCall(file_path=path) if self.event is Event.PreToolUse:
+                return disk_pre_image(Path(path))
             case _:
                 return None
 
     @cached_property
     def pre_image(self) -> str | None:
-        """The full pre-edit file image for an Edit/MultiEdit/Write, read from disk at PreToolUse.
+        """The full pre-edit file image for an Edit/MultiEdit/Write/span-edit, read from disk at PreToolUse.
 
         ``None`` off ``PreToolUse`` — disk already holds the post-edit text — and for other tools.
         Unlike :attr:`replaced` (an Edit's ``old`` fragment), this is always the whole file, so a
@@ -415,7 +423,12 @@ class ToolHookEvent(BaseHookEvent):
         if self.event is not Event.PreToolUse:
             return None
         match self.input:
-            case EditCall(file_path=path) | MultiEditCall(file_path=path) | WriteCall(file_path=path):
+            case (
+                EditCall(file_path=path)
+                | MultiEditCall(file_path=path)
+                | WriteCall(file_path=path)
+                | SpanEditCall(file_path=path)
+            ):
                 return disk_pre_image(Path(path))
             case _:
                 return None
@@ -425,9 +438,10 @@ class ToolHookEvent(BaseHookEvent):
         """The full post-edit file image an Edit/MultiEdit/Write would produce, at PreToolUse.
 
         A Write is its ``content``; an Edit applies ``old``→``new`` to :attr:`pre_image` (once, or
-        every occurrence when ``replace_all``); a MultiEdit folds its spans in order. ``None`` when a
-        span's ``old`` is absent from the running image (the tool call would fail), off ``PreToolUse``,
-        or for other tools.
+        every occurrence when ``replace_all``); a MultiEdit folds its spans in order. A registered MCP
+        span-edit tool yields ``None``: its opaque locator can't be resolved to a position without the
+        tool, so the post-image can't be simulated. ``None`` too when a span's ``old`` is absent from
+        the running image (the tool call would fail), off ``PreToolUse``, or for other tools.
         """
         if self.event is not Event.PreToolUse:
             return None
