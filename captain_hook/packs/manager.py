@@ -26,8 +26,9 @@ import os
 import re
 import tomllib
 from dataclasses import dataclass
-from fnmatch import fnmatch
 from pathlib import Path
+
+from pathspec import GitIgnoreSpec
 
 PACK_DESCRIPTOR = "pack.toml"
 HOOKS_DIRNAME = "hooks"
@@ -221,38 +222,63 @@ def resolve_builtin(name: str) -> ResolvedPack:
     return ResolvedPack(BuiltinPack(name=name), hooks, PackDescriptor.load(pack_root / PACK_DESCRIPTOR))
 
 
-def gitignore_patterns(root: Path) -> tuple[str, ...]:
-    """The repo's ``.gitignore`` patterns (stripped of comments/blanks and trailing slashes)."""
-    if not (gitignore := root / ".gitignore").is_file():
-        return ()
-    return tuple(
-        line.rstrip("/")
-        for raw in gitignore.read_text().splitlines()
-        if (line := raw.strip()) and not line.startswith("#")
-    )
+def gitignore_lines(path: Path) -> list[str]:
+    """The non-comment, non-blank pattern lines of a ``.gitignore``, or ``[]`` when it is absent."""
+    if not path.is_file():
+        return []
+    return [line for raw in path.read_text().splitlines() if (line := raw.strip()) and not line.startswith("#")]
+
+
+def anchor_pattern(line: str, rel_dir: str) -> str:
+    """Rewrite a ``.gitignore`` pattern from a subdirectory so it matches paths relative to the walk root.
+
+    An anchored pattern (a slash before its last character) binds to ``rel_dir``; an unanchored one
+    matches at any depth beneath it, so it becomes ``rel_dir/**/pattern``. A leading ``!`` is preserved.
+    """
+    negate = line.startswith("!")
+    pat = line[1:] if negate else line
+    prefix = "!" if negate else ""
+    tail = pat.lstrip("/")
+    return f"{prefix}{rel_dir}/{tail}" if "/" in pat.rstrip("/") else f"{prefix}{rel_dir}/**/{tail}"
 
 
 def detect_languages(root: Path) -> frozenset[str]:
-    """The languages in :data:`LANGUAGE_MARKERS` whose recursive, non-ignored build manifest exists under ``root``.
+    """The languages in :data:`LANGUAGE_MARKERS` whose recursive, non-``.gitignore``d build manifest is under ``root``.
 
-    Walks the tree once, pruning VCS dirs and directories matching a ``.gitignore`` pattern, and
-    short-circuiting each language on its first marker (stopping the whole walk once all are found). A
-    single-language repo walks its whole non-ignored tree to prove the absent language; gitignore
-    pruning bounds that by excluding vendored trees (``.venv``, ``node_modules``, ``target``).
+    Walks the tree once with real gitignore semantics: patterns accumulate down the tree so a nested
+    ``.gitignore`` governs its own subtree, and anchored/path/negation patterns resolve through
+    :class:`pathspec.GitIgnoreSpec`. VCS-metadata dirs and gitignored dirs are pruned, and each marker
+    file is itself checked against the accumulated spec, so an individually-ignored ``go.mod`` never
+    counts. Each language short-circuits on its first surviving marker; the walk stops once all are found.
     """
-    patterns = gitignore_patterns(root)
     pending = dict(LANGUAGE_MARKERS)
     found: set[str] = set()
+    lines_by_dir: dict[str, list[str]] = {}
     for dirpath, dirnames, filenames in os.walk(root):
-        fileset = set(filenames)
+        rel = os.path.relpath(dirpath, root)
+        rel_dir = "" if rel == "." else rel
+        own = gitignore_lines(Path(dirpath) / ".gitignore")
+        acc = (
+            own
+            if not rel_dir
+            else lines_by_dir.get(os.path.dirname(dirpath), []) + [anchor_pattern(line, rel_dir) for line in own]
+        )
+        lines_by_dir[dirpath] = acc
+        spec = GitIgnoreSpec.from_lines(acc) if acc else None
         for lang, markers in list(pending.items()):
-            if fileset.intersection(markers):
+            if any(
+                m in filenames and (spec is None or not spec.match_file(f"{rel_dir}/{m}" if rel_dir else m))
+                for m in markers
+            ):
                 found.add(lang)
                 del pending[lang]
         if not pending:
             break
         dirnames[:] = [
-            d for d in dirnames if d not in PRUNE_DIRS and not any(fnmatch(d, pat) for pat in patterns)
+            d
+            for d in dirnames
+            if d not in PRUNE_DIRS
+            and not (spec is not None and spec.match_file(f"{rel_dir}/{d}/" if rel_dir else f"{d}/"))
         ]
     return frozenset(found)
 

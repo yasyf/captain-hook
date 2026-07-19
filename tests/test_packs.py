@@ -188,10 +188,10 @@ def test_descriptor_absent_is_empty(tmp_path: Path) -> None:
 def test_descriptor_parses_resources_and_tools(tmp_path: Path) -> None:
     (path := tmp_path / "pack.toml").write_text(
         'resources = ["spacy:en_core_web_sm"]\n\n'
-        '[tools.ccx_code_edit]\n'
+        "[tools.ccx_code_edit]\n"
         'behaves_like = "Edit"\n'
         'span_edit = { path = "path", content = "content", delete = "delete" }\n\n'
-        '[tools.BashFormat]\n'
+        "[tools.BashFormat]\n"
         'behaves_like = "Bash"\n'
     )
     descriptor = manager.PackDescriptor.load(path)
@@ -258,6 +258,28 @@ def test_detect_languages_finds_both(tmp_path: Path) -> None:
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "pyproject.toml").write_text("")
     assert manager.detect_languages(tmp_path) == frozenset({"go", "python"})
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        # An anchored dir pattern ignores the whole vendor subtree.
+        pytest.param({".gitignore": "/vendor/\n", "vendor/go.mod": "x"}, frozenset(), id="anchored-dir-pattern"),
+        # A path pattern (a slash inside it) matches only at the anchored location.
+        pytest.param({".gitignore": "third_party/go\n", "third_party/go/go.mod": "x"}, frozenset(), id="path-pattern"),
+        # A nested .gitignore governs its own subtree, matched relative to itself.
+        pytest.param({"sub/.gitignore": "go.mod\n", "sub/go.mod": "x"}, frozenset(), id="nested-governs-subtree"),
+        # `**` matches the marker at any depth.
+        pytest.param({".gitignore": "**/pyproject.toml\n", "svc/pyproject.toml": "x"}, frozenset(), id="double-star"),
+        # A negation re-includes a marker an earlier pattern excluded, so it counts.
+        pytest.param({".gitignore": "*.mod\n!go.mod\n", "go.mod": "x"}, frozenset({"go"}), id="negation-reincludes"),
+    ],
+)
+def test_detect_languages_gitignore_semantics(tmp_path: Path, files: dict[str, str], expected: frozenset[str]) -> None:
+    for rel, content in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(content)
+    assert manager.detect_languages(tmp_path) == expected
 
 
 def test_resolve_builtin_unknown_fails_loud() -> None:
