@@ -1,0 +1,5 @@
+source: demo.termshow
+
+# Player overlay for demo.termshow; colorful chrome matches demo.png's windowed look.
+settings:
+  window_chrome: colorful
