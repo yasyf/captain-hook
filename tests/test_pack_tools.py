@@ -37,6 +37,7 @@ MISSING_BEHAVES_LIKE = '[tools.syn_gate]\nspan_edit = { path = "path", content =
 ENTRY_NOT_A_TABLE = '[tools]\nsyn_gate = "notatable"\n'
 NON_STR_SPAN_VALUE = '[tools.syn_span_edit]\nbehaves_like = "Edit"\nspan_edit = { path = 1, content = "content" }\n'
 NON_STR_DELETE = '[tools.syn_span_edit]\nbehaves_like = "Edit"\nspan_edit = { path = "p", content = "c", delete = 5 }\n'
+SPAN_EDIT_SCALAR = '[tools.syn_span_edit]\nbehaves_like = "Edit"\nspan_edit = "x"\n'
 
 
 @pytest.fixture(autouse=True)
@@ -85,13 +86,29 @@ class TestManifestTools:
             (ENTRY_NOT_A_TABLE, "must be a table"),
             (NON_STR_SPAN_VALUE, "needs string keys path/content"),
             (NON_STR_DELETE, "span_edit.delete"),
+            (SPAN_EDIT_SCALAR, "span_edit in pack 'synpack' must be a table"),
         ],
-        ids=["missing-behaves_like", "entry-not-a-table", "non-str-span-value", "non-str-delete"],
+        ids=[
+            "missing-behaves_like",
+            "entry-not-a-table",
+            "non-str-span-value",
+            "non-str-delete",
+            "span-edit-scalar",
+        ],
     )
     def test_malformed_raises_packerror_naming_pack(self, tmp_path: Path, body: str, needle: str) -> None:
         with pytest.raises(manager.PackError) as exc:
             manager.PackManifest.load(manifest_file(tmp_path, body))
         assert needle in str(exc.value)
+        assert "synpack" in str(exc.value)
+
+    def test_top_level_tools_not_a_table_raises(self, tmp_path: Path) -> None:
+        # A top-level scalar key must precede the first table header, so build the file directly.
+        mf = tmp_path / manager.PACK_MANIFEST
+        mf.write_text("tools = 5\n" + PACK_HEAD)
+        with pytest.raises(manager.PackError) as exc:
+            manager.PackManifest.load(mf)
+        assert "must be a table of tool entries" in str(exc.value)
         assert "synpack" in str(exc.value)
 
 
@@ -207,3 +224,24 @@ def test_span_edit_fires_verbose_comment_end_to_end(tmp_path: Path) -> None:
     present = tmp_path / "already.py"
     present.write_text(long_run)
     assert VerboseComment().check(pre_tool_use(present, long_run)) is False
+
+
+def test_doomed_builtin_edit_stays_out_of_span_fallback(tmp_path: Path) -> None:
+    enable_plugin_pack(tmp_path, SPAN_EDIT_ONLY).discover()
+
+    target = tmp_path / "edited.py"
+    target.write_text("x = 1\n")
+    long_run = "# c1\n# c2\n# c3\n# c4\n# c5\n# c6\ny = 2\n"
+    evt = PreToolUseEvent(
+        _raw={
+            "tool_name": "Edit",
+            "tool_input": {"file_path": str(target), "old_string": "not in the file", "new_string": long_run},
+        },
+        ctx=MagicMock(),
+    )
+
+    # The failed simulation leaves no post-image, but a builtin edit's `replaced` is just its old
+    # span — not a whole-file superset — so the span fallback must stay out and nothing fires.
+    assert evt.post_image is None
+    assert evt.replaced == "not in the file"
+    assert VerboseComment().check(evt) is False

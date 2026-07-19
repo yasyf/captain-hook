@@ -42,6 +42,8 @@ from __future__ import annotations
 import difflib
 from typing import TYPE_CHECKING
 
+from cc_transcript.tools import SpanEditCall
+
 from captain_hook import (
     Allow,
     BaseHookEvent,
@@ -129,7 +131,12 @@ def touched(evt: BaseHookEvent) -> list[CommentBlock]:
     if (post := evt.post_image) is None:
         # Span edit (opaque locator, no simulated post-image): compare the whole-file pre-image
         # against the new span text — a conservative superset that only suppresses, never misfires.
-        if (pre := evt.replaced) is None or (post := evt.content) is None:
+        # Span edits only: a builtin edit's `replaced` is just its old span, not a superset.
+        if (
+            not isinstance(evt.input, SpanEditCall)
+            or (pre := evt.replaced) is None
+            or (post := evt.content) is None
+        ):
             return []
     elif (pre := evt.pre_image) is None:
         return []
