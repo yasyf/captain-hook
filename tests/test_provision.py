@@ -49,7 +49,7 @@ class TestInstallBinary:
         ("body", "kwargs", "warning"),
         [
             pytest.param("echo boom >&2\nexit 7", {}, "exit 7: boom", id="nonzero_exit"),
-            pytest.param(None, {}, "No such file or directory", id="missing_script"),
+            pytest.param(None, {}, "No such file", id="missing_script"),
             pytest.param("sleep 10", {"timeout": 0.5}, "run failed", id="timeout"),
             pytest.param("printf '\\377' >&2\nexit 7", {}, "exit 7: \ufffd", id="invalid_utf8"),
         ],

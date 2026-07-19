@@ -215,8 +215,6 @@ def dispatch(
             )
         return format_output(event, winner)
     if warns:
-        return format_output(
-            event, HookResult(action=Action.warn, message="\n\n".join(warns), approve=warn_approve)
-        )
+        return format_output(event, HookResult(action=Action.warn, message="\n\n".join(warns), approve=warn_approve))
 
     return None
