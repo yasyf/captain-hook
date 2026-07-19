@@ -73,7 +73,7 @@ from loguru import logger
 from captain_hook.review.routing import CAPTAIN_HOOK_REPO, Target
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping, Sequence
+    from collections.abc import AsyncIterator, Mapping, Sequence
 
     from cc_transcript.decisions import Decision, DecisionLog
     from cc_transcript.ids import SessionId, ToolUseId
@@ -207,7 +207,7 @@ def preceding_fingerprints(events: Sequence[TranscriptEvent], index: int) -> lis
     return fingerprints
 
 
-def attribute_fingerprint(
+async def attribute_fingerprint(
     decisions: DecisionLog,
     uses: Mapping[ToolUseId, ToolUseBlock],
     session_id: SessionId,
@@ -215,28 +215,27 @@ def attribute_fingerprint(
     fingerprint: Fingerprint,
 ) -> Decision | None:
     if fingerprint.tool_use_id is not None and (block := uses.get(fingerprint.tool_use_id)) is not None:
-        found = decisions.attribute_tool(session_id, tool_digest=block.digest, near_ts_ms=near_ts_ms)
+        found = await decisions.attribute_tool(session_id, tool_digest=block.digest, near_ts_ms=near_ts_ms)
         return found if found is not None and found.source_file else None
     if fingerprint.event is None:
         return None
-    found = decisions.attribute_nearest(session_id, event=fingerprint.event, near_ts_ms=near_ts_ms)
+    found = await decisions.attribute_nearest(session_id, event=fingerprint.event, near_ts_ms=near_ts_ms)
     if found is None or not found.source_file or not found.message or found.message not in fingerprint.message:
         return None
     return found
 
 
-def attribute_from_fingerprints(
+async def attribute_from_fingerprints(
     decisions: DecisionLog,
     uses: Mapping[ToolUseId, ToolUseBlock],
     session_id: SessionId,
     near_ts_ms: int,
     fingerprints: Sequence[tuple[int, int, Fingerprint]],
 ) -> tuple[int, int, Decision] | None:
-    attributed = [
-        (index, turns_back, found)
-        for index, turns_back, fingerprint in fingerprints
-        if (found := attribute_fingerprint(decisions, uses, session_id, near_ts_ms, fingerprint)) is not None
-    ]
+    attributed: list[tuple[int, int, Decision]] = []
+    for index, turns_back, fingerprint in fingerprints:
+        if (found := await attribute_fingerprint(decisions, uses, session_id, near_ts_ms, fingerprint)) is not None:
+            attributed.append((index, turns_back, found))
     if not attributed or len({(found.source_file, found.kind) for _, _, found in attributed}) > 1:
         return None
     return attributed[0]
@@ -254,12 +253,14 @@ def name_slug(name: str) -> str:
     return re.sub(r"[-_\s]+", "", name.lower())
 
 
-def named_hook_target(text: str, decisions: DecisionLog, session_id: SessionId, near_ts_ms: int) -> Decision | None:
+async def named_hook_target(
+    text: str, decisions: DecisionLog, session_id: SessionId, near_ts_ms: int
+) -> Decision | None:
     if not (names := {name_slug(match.group(1)) for match in NAMED_HOOK_RE.finditer(text)}):
         return None
     matched = [
         decision
-        for decision in decisions.for_session(session_id)
+        for decision in await decisions.for_session(session_id)
         if decision.source_file
         and abs(decision.ts_ms - near_ts_ms) <= NAMED_HOOK_WINDOW_MS
         and (stem := hook_stem(decision.kind)) is not None
@@ -346,9 +347,9 @@ def complaint_signal(marker: Marker, turns_back: int | None) -> CandidateSignal:
     return bump(base, CONFIDENCE_STEP, "tight_proximity") if tight else base
 
 
-def iter_hook_complaint_signals(
+async def iter_hook_complaint_signals(
     events: Sequence[TranscriptEvent], *, decisions: DecisionLog, index: PackIndex
-) -> Iterator[MiningSignal]:
+) -> AsyncIterator[MiningSignal]:
     """Yields one :class:`~cc_transcript.mining.MiningSignal` per attributed misfire complaint.
 
     Fires are joined by the events' own session UUID — the only session key —
@@ -377,13 +378,13 @@ def iter_hook_complaint_signals(
         near_ts_ms = int(event.meta.timestamp.timestamp() * 1000)
         session_id = event.meta.session_id
         if (
-            primary := attribute_from_fingerprints(
+            primary := await attribute_from_fingerprints(
                 decisions, uses, session_id, near_ts_ms, preceding_fingerprints(events, event_index)
             )
         ) is not None:
             trigger_index, turns_back, fire = primary
             attribution = "fingerprint"
-        elif (fire := named_hook_target(event.text, decisions, session_id, near_ts_ms)) is not None:
+        elif (fire := await named_hook_target(event.text, decisions, session_id, near_ts_ms)) is not None:
             trigger_index, turns_back, attribution = None, None, "hook_name"
         else:
             continue

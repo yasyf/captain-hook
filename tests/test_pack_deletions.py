@@ -1005,7 +1005,9 @@ class TestNestedDescent:
         target = tmp_path / "outside.txt"
         target.write_text("")
         command = f"rm {target}"
-        for _ in range(4):
+        # NESTED_COMMAND_DEPTH=3 descends four bash -c layers (14.6's structured -c payload parts
+        # reach one deeper than pre-14.6); the fifth wrapper is past the cap and fails open.
+        for _ in range(5):
             command = f"bash -c {shlex.quote(command)}"
         assert TestRmTrashRewrite.decision(command, Path("/"), tmp_path) is None
 

@@ -559,10 +559,18 @@ def status(state: CliState, repo_: str | None, sync: bool) -> None:
 @click.pass_obj
 def heartbeats(state: CliState, session_id: str) -> None:
     """Show per-event dispatch heartbeats for a session — an absent event is a wiring gap, not a quiet session."""
+    import asyncio
+
+    from cc_transcript.heartbeats import Heartbeat
+
     from captain_hook.decisions import decisions_db_path
     from captain_hook.heartbeat import open_heartbeat_log
 
-    if not (beats := open_heartbeat_log(decisions_db_path()).for_session(SessionId(session_id))):
+    async def load() -> tuple[Heartbeat, ...]:
+        async with await open_heartbeat_log(decisions_db_path()) as log:
+            return await log.for_session(SessionId(session_id))
+
+    if not (beats := asyncio.run(load())):
         click.echo(f"no dispatch heartbeats for session {session_id} (never dispatched, or a different decisions.db)")
         return
     for b in beats:

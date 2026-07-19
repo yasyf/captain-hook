@@ -80,12 +80,12 @@ def signal_pair(
     )
 
 
-def rows(store: ReviewStore, query: str) -> list[dict[str, Any]]:
-    return [dict(row) for row in store.store.sql(query)]
+async def rows(store: ReviewStore, query: str) -> list[dict[str, Any]]:
+    return await store.db.sql(query)
 
 
 async def judge(store: ReviewStore, key: str) -> None:
-    store.record_verdict(
+    await store.record_verdict(
         DedupKey(key), Verdict(), role="judge", prompt_version=store.versions.create, model="m1", fidelity="full"
     )
 
@@ -112,24 +112,24 @@ class TestDedupDesign:
             report = await scan_transcript(store, path, settings=settings, repo_key=REPO)
             assert report == ScanReport(scanned=1, inserted=1)
 
-        [candidate] = rows(store, "SELECT * FROM candidates")
+        [candidate] = await rows(store, "SELECT * FROM candidates")
         assert (candidate["repo_key"], candidate["candidate_kind"], candidate["status"]) == (REPO, "create", "watching")
         assert candidate["source_kind"] == "transcript_message"
         assert candidate["rule"] == dedup_key("transcript_message", CORRECTION)
 
-        observations = rows(store, "SELECT * FROM candidate_observations")
+        observations = await rows(store, "SELECT * FROM candidate_observations")
         assert {row["candidate_id"] for row in observations} == {candidate["id"]}
         assert {row["dedup_key"] for row in observations} == {
             dedup_key("transcript_message", session, CORRECTION) for session, _ in sessions
         }
-        assert len(rows(store, "SELECT * FROM feedback_events")) == 3
+        assert len(await rows(store, "SELECT * FROM feedback_events")) == 3
 
-        store.enable(REPO)
+        await store.enable(REPO)
         for row in observations:
             await judge(store, str(row["dedup_key"]))
-        status = store.threshold_status(int(candidate["id"]), settings=settings)
+        status = await store.threshold_status(int(candidate["id"]), settings=settings)
         assert (status.sessions, status.days) == (3, 2)
-        assert store.eligible(int(candidate["id"]), settings=settings) is True
+        assert await store.eligible(int(candidate["id"]), settings=settings) is True
 
     async def test_same_correction_twice_in_one_session_is_one_observation(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path
@@ -143,9 +143,9 @@ class TestDedupDesign:
         path = write_transcript(tmp_path / "s.jsonl", entries)
         report = await scan_transcript(store, path, settings=settings, repo_key=REPO)
         assert report == ScanReport(scanned=1, inserted=1)
-        assert len(rows(store, "SELECT * FROM feedback_events")) == 1
-        assert len(rows(store, "SELECT * FROM candidates")) == 1
-        assert len(rows(store, "SELECT * FROM candidate_observations")) == 1
+        assert len(await rows(store, "SELECT * FROM feedback_events")) == 1
+        assert len(await rows(store, "SELECT * FROM candidates")) == 1
+        assert len(await rows(store, "SELECT * FROM candidate_observations")) == 1
 
 
 class TestSweepIngestRace:
@@ -154,13 +154,14 @@ class TestSweepIngestRace:
     ) -> None:
         db = tmp_path / "review.db"
         path = write_transcript(tmp_path / "s.jsonl", correction_entries())
-        # A short busy_timeout so the fix's held write lock fails the sweep's BEGIN IMMEDIATE
-        # fast instead of stalling on the default 5s timeout.
-        with ReviewStore.open(db) as ingesting, ReviewStore.open(db, busy_timeout_ms=200) as sweeping:
+        async with await ReviewStore.open(db) as ingesting, await ReviewStore.open(db) as sweeping:
+            # A short busy_timeout so the fix's held write lock fails the sweep's
+            # BEGIN IMMEDIATE fast instead of stalling on the default 5s timeout.
+            await sweeping.db.execute("PRAGMA busy_timeout = 200")
             record = ingesting.record_observation
             fired = False
 
-            def racing_record(*args: Any, **kwargs: Any) -> None:
+            async def racing_record(*args: Any, **kwargs: Any) -> None:
                 # Fire a concurrent regroup sweep in the exact window between the
                 # ingest loop's ensure_candidate and record_observation — the
                 # cross-process interleaving the per-pair transaction must defeat.
@@ -168,16 +169,16 @@ class TestSweepIngestRace:
                 if not fired:
                     fired = True
                     with contextlib.suppress(sqlite3.OperationalError):
-                        sweeping.regroup_create()
-                record(*args, **kwargs)
+                        await sweeping.regroup_create()
+                await record(*args, **kwargs)
 
             monkeypatch.setattr(ingesting, "record_observation", racing_record)
             report = await scan_transcript(ingesting, path, settings=settings, repo_key=REPO)
 
             assert fired
             assert report == ScanReport(scanned=1, inserted=1)
-            [candidate] = rows(ingesting, "SELECT * FROM candidates")
-            observations = rows(ingesting, "SELECT * FROM candidate_observations")
+            [candidate] = await rows(ingesting, "SELECT * FROM candidates")
+            observations = await rows(ingesting, "SELECT * FROM candidate_observations")
             assert len(observations) == 1
             assert observations[0]["candidate_id"] == candidate["id"]
 
@@ -205,8 +206,8 @@ class TestStrictUser:
         path = write_transcript(tmp_path / "s.jsonl", [assistant_text("done"), user_text(text)])
         report = await scan_transcript(store, path, settings=settings, repo_key=REPO)
         assert report == ScanReport(scanned=1, inserted=0)
-        assert rows(store, "SELECT * FROM feedback_events") == []
-        assert rows(store, "SELECT * FROM candidates") == []
+        assert await rows(store, "SELECT * FROM feedback_events") == []
+        assert await rows(store, "SELECT * FROM candidates") == []
 
     async def test_noise_band_interrupt_correction_dropped_by_confidence_floor(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path
@@ -219,8 +220,8 @@ class TestStrictUser:
         path = write_transcript(tmp_path / "s.jsonl", entries)
         report = await scan_transcript(store, path, settings=settings, repo_key=REPO)
         assert report == ScanReport(scanned=1, inserted=0)
-        assert rows(store, "SELECT * FROM feedback_events") == []
-        assert rows(store, "SELECT * FROM candidate_observations") == []
+        assert await rows(store, "SELECT * FROM feedback_events") == []
+        assert await rows(store, "SELECT * FROM candidate_observations") == []
 
     async def test_triggerless_transcript_message_dropped(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path
@@ -228,7 +229,7 @@ class TestStrictUser:
         path = write_transcript(tmp_path / "s.jsonl", [user_text(CORRECTION)])
         report = await scan_transcript(store, path, settings=settings, repo_key=REPO)
         assert report == ScanReport(scanned=1, inserted=0)
-        assert rows(store, "SELECT * FROM feedback_events") == []
+        assert await rows(store, "SELECT * FROM feedback_events") == []
 
 
 def prefilter_drops(text: str) -> bool:
@@ -371,14 +372,14 @@ class TestJunkCreatePrefilter:
     ) -> None:
         junk = write_transcript(tmp_path / "junk.jsonl", [assistant_text("done"), user_text("Plan approved, begin")])
         assert await scan_transcript(store, junk, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=0)
-        assert rows(store, "SELECT * FROM candidates") == []
+        assert await rows(store, "SELECT * FROM candidates") == []
 
         tail = write_transcript(
             tmp_path / "tail.jsonl",
             [assistant_text("done"), user_text("Approved. But the retry logic is wrong, fix the null check")],
         )
         assert await scan_transcript(store, tail, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
-        [candidate] = rows(store, "SELECT * FROM candidates")
+        [candidate] = await rows(store, "SELECT * FROM candidates")
         assert candidate["candidate_kind"] == "create"
 
 
@@ -419,8 +420,8 @@ class TestTranscriptGates:
         path = write_transcript(tmp_path / "s.jsonl", entries)
         report = await scan_transcript(store, path, settings=settings, repo_key=REPO)
         assert report == ScanReport(scanned=1, inserted=0)
-        assert rows(store, "SELECT * FROM feedback_events") == []
-        assert rows(store, "SELECT * FROM candidates") == []
+        assert await rows(store, "SELECT * FROM feedback_events") == []
+        assert await rows(store, "SELECT * FROM candidates") == []
 
     async def test_non_git_cwd_dropped(self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path) -> None:
         plain = tmp_path / "plain"
@@ -428,8 +429,8 @@ class TestTranscriptGates:
         path = write_transcript(tmp_path / "s.jsonl", correction_entries(cwd=str(plain)))
         report = await scan_transcript(store, path, settings=settings)
         assert report == ScanReport(scanned=1, inserted=0)
-        assert rows(store, "SELECT * FROM feedback_events") == []
-        assert rows(store, "SELECT * FROM candidates") == []
+        assert await rows(store, "SELECT * FROM feedback_events") == []
+        assert await rows(store, "SELECT * FROM candidates") == []
 
     async def test_git_cwd_resolves_repo_key(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, git_repo: Path
@@ -437,7 +438,7 @@ class TestTranscriptGates:
         path = write_transcript(tmp_path / "s.jsonl", correction_entries(cwd=str(git_repo)))
         report = await scan_transcript(store, path, settings=settings)
         assert report == ScanReport(scanned=1, inserted=1)
-        [candidate] = rows(store, "SELECT * FROM candidates")
+        [candidate] = await rows(store, "SELECT * FROM candidates")
         assert candidate["repo_key"] == "github.com/yasyf/scratch"
 
 
@@ -450,8 +451,8 @@ class TestIncrementalScan:
         assert first == ScanReport(scanned=1, inserted=1)
         second = await scan(store, settings=settings, transcripts=[tmp_path / "proj"])
         assert second == ScanReport(scanned=0, inserted=0)
-        assert len(rows(store, "SELECT * FROM feedback_events")) == 1
-        assert len(rows(store, "SELECT * FROM candidate_observations")) == 1
+        assert len(await rows(store, "SELECT * FROM feedback_events")) == 1
+        assert len(await rows(store, "SELECT * FROM candidate_observations")) == 1
 
     async def test_scan_transcript_skips_unchanged_file(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path
@@ -482,7 +483,7 @@ class TestReviewCommentFormats:
         path = write_transcript(tmp_path / "s.jsonl", [assistant_text("rewrote the parser"), user_text(body)])
         await scan_transcript(store, path, settings=settings, repo_key=REPO)
 
-        [event] = rows(store, "SELECT * FROM feedback_events WHERE source_kind = 'review_comment'")
+        [event] = await rows(store, "SELECT * FROM feedback_events WHERE source_kind = 'review_comment'")
         assert event["text"] == "use a frozen dataclass here instead"
         payload = json.loads(str(event["payload_json"]))
         assert (payload["format"], payload["file"], payload["line_start"], payload["line_end"]) == (
@@ -492,11 +493,11 @@ class TestReviewCommentFormats:
             None,
         )
 
-        [candidate] = rows(store, "SELECT * FROM candidates WHERE source_kind = 'review_comment'")
+        [candidate] = await rows(store, "SELECT * FROM candidates WHERE source_kind = 'review_comment'")
         assert candidate["rule"] == dedup_key(
             "review_comment", "src/foo.py", "10", "", "use a frozen dataclass here instead"
         )
-        [observation] = rows(
+        [observation] = await rows(
             store,
             f"SELECT * FROM candidate_observations WHERE candidate_id = {int(candidate['id'])}",
         )
@@ -558,7 +559,7 @@ class TestCrossDetectorCollapseIngest:
         report = await scan_transcript(store, path, settings=settings, repo_key=REPO)
         assert report == ScanReport(scanned=1, inserted=1)
 
-        [candidate] = rows(store, "SELECT * FROM candidates")
+        [candidate] = await rows(store, "SELECT * FROM candidates")
         assert candidate["source_kind"] == "plan_review"
         assert candidate["rule"] == dedup_key("plan_review", "plan_reentry", CORRECTION)
-        assert len(rows(store, "SELECT * FROM feedback_events")) == 1
+        assert len(await rows(store, "SELECT * FROM feedback_events")) == 1

@@ -7,10 +7,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+import pytest_asyncio
 from loguru import logger
 
+from captain_hook import decisions, heartbeat
 from captain_hook.app import reset
-from captain_hook.decisions import open_decision_log
 from captain_hook.durable import DurableStore
 from captain_hook.review.repo import resolve_repo_key
 from captain_hook.session import SessionStore
@@ -19,7 +20,7 @@ from captain_hook.util.model_cache import model_sha256, model_version
 from captain_hook.util.proc import _cold_skip_permissions
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import AsyncIterator
 
     from captain_hook.review.settings import ReviewSettings
     from captain_hook.review.store import ReviewStore
@@ -60,7 +61,6 @@ def clean_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mo
 @pytest.fixture(autouse=True)
 def clear_global_caches():
     caches = (
-        open_decision_log,
         github_token,
         model_version,
         model_sha256,
@@ -69,9 +69,13 @@ def clear_global_caches():
     )
     for cached in caches:
         cached.cache_clear()
+    decisions.reset_cached_log()
+    heartbeat.reset_cached_log()
     yield
     for cached in caches:
         cached.cache_clear()
+    decisions.reset_cached_log()
+    heartbeat.reset_cached_log()
 
 
 @pytest.fixture(autouse=True)
@@ -157,11 +161,11 @@ def isolate_modules():
                 root.__dict__.pop(name, None)
 
 
-@pytest.fixture
-def store(tmp_path: Path) -> Iterator[ReviewStore]:
+@pytest_asyncio.fixture
+async def store(tmp_path: Path) -> AsyncIterator[ReviewStore]:
     from captain_hook.review.store import ReviewStore
 
-    with ReviewStore.open(tmp_path / "review.db") as opened:
+    async with await ReviewStore.open(tmp_path / "review.db") as opened:
         yield opened
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ from cc_transcript.ids import SessionId, tool_digest
 from cc_transcript.tools import FallbackCall
 
 from captain_hook.app import get_matching_hooks
-from captain_hook.decisions import open_decision_log, parse_degraded, record_decision
+from captain_hook.decisions import parse_degraded, record_decision
 from captain_hook.dispatch import execute_hook
 from captain_hook.events import PreToolUseEvent, StopEvent
 from captain_hook.primitives.nudge import nudge
@@ -46,8 +47,13 @@ def db_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
+async def _rows(db_path: Path) -> tuple[Decision, ...]:
+    async with await DecisionLog.open(db_path) as log:
+        return await log.for_session(SESSION_ID)
+
+
 def rows(db_path: Path) -> tuple[Decision, ...]:
-    return DecisionLog.open(db_path).for_session(SESSION_ID)
+    return asyncio.run(_rows(db_path))
 
 
 class TestRecordDecision:
@@ -152,6 +158,20 @@ class TestDispatchIntegration:
         assert any(r is not None and r.message == "kept" for r in results)
 
 
-class TestOpenDecisionLog:
-    def test_cached_per_path(self, db_path: Path) -> None:
-        assert open_decision_log(db_path) is open_decision_log(db_path)
+class TestColdHandleReuse:
+    def test_two_cold_calls_reuse_one_handle(self, db_path: Path) -> None:
+        # Cold record_decision caches one ledger handle for the process; a second call reuses it
+        # rather than spinning a fresh ConnectionActor (the pre-@cache-drop regression this pins).
+        import threading
+
+        import captain_hook.decisions as decisions_mod
+
+        assert decisions_mod._CACHED_LOG is None
+        baseline = threading.active_count()
+        record_decision(entry("first"), stop_evt(), HookResult(action=Action.warn, message="first"))
+        handle = decisions_mod._CACHED_LOG
+        assert handle is not None
+        record_decision(entry("second"), stop_evt(), HookResult(action=Action.warn, message="second"))
+        assert decisions_mod._CACHED_LOG is handle  # same object, not reopened
+        assert threading.active_count() <= baseline + 1  # one actor thread across both calls, not two
+        assert {row.message for row in rows(db_path)} == {"first", "second"}

@@ -231,7 +231,7 @@ def prompt_builder(
         if not suggesting or str(row["source_kind"]) == HOOK_COMPLAINT:
             return ()
         try:
-            ranked = suggest_canonical_keys(store, str(row["text"]), prompt_version=store.versions.create, k=5)
+            ranked = await suggest_canonical_keys(store.db, str(row["text"]), prompt_version=store.versions.create, k=5)
         except Exception as exc:
             raise JudgeError(f"slug suggestion retrieval failed: {exc}") from exc
         return [suggestion for suggestion in ranked if SLUG_PATTERN.fullmatch(suggestion.canonical_key)]
@@ -248,7 +248,7 @@ def persist_verdict(
     store: ReviewStore, *, model: str, fidelities: Mapping[str, Fidelity]
 ) -> Callable[[Mapping[str, object], ReviewVerdict], Awaitable[None]]:
     async def persist(row: Mapping[str, object], verdict: ReviewVerdict) -> None:
-        store.record_verdict(
+        await store.record_verdict(
             DedupKey(str(row["dedup_key"])),
             verdict,
             role=JUDGE_ROLE,
@@ -303,11 +303,11 @@ async def judge_pass(
     from cc_transcript.judge.similar import default_embedder
 
     model = resolved_model(settings.judge_tier)
-    rows = store.judge_queue(refresh_summary=refresh_summary)
+    rows = await store.judge_queue(refresh_summary=refresh_summary)
     worthy = [row for row in rows if judge_worthy(row)]
     dispatch = worthy[: limit if limit is not None else settings.max_judge_calls_per_session]
     fidelities: dict[str, Fidelity] = {}
-    suggesting = store.has_verdict_evidence()
+    suggesting = await store.has_verdict_evidence()
     if suggesting or any(str(row["source_kind"]) != HOOK_COMPLAINT for row in dispatch):
         await asyncio.to_thread(default_embedder)
     judged, failed = await run_verdicts(
@@ -317,9 +317,9 @@ async def judge_pass(
         persist_verdict(store, model=model, fidelities=fidelities),
         concurrency=settings.judge_concurrency,
     )
-    store.revive_junk_rejected()
-    merged, retired = store.regroup_create()
-    reopened = store.reopen_recurrent_fixes()
+    await store.revive_junk_rejected()
+    merged, retired = await store.regroup_create()
+    reopened = await store.reopen_recurrent_fixes()
     return JudgeReport(
         judged=judged, failed=failed, pending=len(worthy) - judged, merged=merged, retired=retired, reopened=reopened
     )

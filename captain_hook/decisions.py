@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
-from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,15 +19,32 @@ if TYPE_CHECKING:
     from captain_hook.types import HookResult, RegisteredHook
 
 _WRITER: Callable[[Decision], None] | None = None
+_CACHED_LOG: DecisionLog | None = None
 
 
 def decisions_db_path() -> Path | None:
     return Path(p) if (p := reqenv.getenv("CAPT_HOOK_DECISIONS_DB")) else None
 
 
-@cache
-def open_decision_log(path: Path | None) -> DecisionLog:
-    return DecisionLog.open(path)
+async def open_decision_log(path: Path | None) -> DecisionLog:
+    return await DecisionLog.open(path)
+
+
+async def _append(decision: Decision) -> None:
+    # One handle per cold process, reused across successive asyncio.run bridges (the actor captures
+    # the running loop per call); never closed per-call, so N firing hooks open one ledger, not N.
+    global _CACHED_LOG
+    if _CACHED_LOG is None:
+        _CACHED_LOG = await open_decision_log(decisions_db_path())
+    await _CACHED_LOG.append(decision)
+
+
+def reset_cached_log() -> None:
+    """Closes and drops the process-cached cold-path handle — tests call this for per-case isolation."""
+    global _CACHED_LOG
+    if _CACHED_LOG is not None:
+        log, _CACHED_LOG = _CACHED_LOG, None
+        asyncio.run(log.close())
 
 
 def parse_degraded(evt: BaseHookEvent) -> bool:
@@ -67,4 +84,4 @@ def record_decision(entry: RegisteredHook, evt: BaseHookEvent, result: HookResul
     if _WRITER is not None:
         _WRITER(decision)
     else:
-        open_decision_log(decisions_db_path()).append(decision)
+        asyncio.run(_append(decision))

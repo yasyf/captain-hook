@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from captain_hook import app, decisions
+from captain_hook import app, decisions, heartbeat
 from captain_hook.cli import EVENT_NAMES, CliState, dispatch_event
 from captain_hook.daemon import decision_writer, lifecycle, transcache
 from captain_hook.daemon.context import install_context_io, request_scope
@@ -188,6 +188,7 @@ class Server:
         self.control_pool.shutdown(wait=False, cancel_futures=True)
         if self.writer is not None:
             decisions._WRITER = None
+            heartbeat._WRITER = None
             self.writer.drain(WRITER_DRAIN_S)
         if self.router is not None:
             self.router.close()

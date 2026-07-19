@@ -402,11 +402,11 @@ async def record_corrections(
         return
     activity = SessionActivity.from_events(corrections[0][0].session_id, events)
     backend = usable_backend()
-    log = CorrectionLog.open()
-    for sig, candidate in corrections:
-        await extract_correction(
-            log, activity, candidate.ref, source="captain-hook", feedback=sig.text, repo=repo, backend=backend
-        )
+    async with await CorrectionLog.open() as log:
+        for sig, candidate in corrections:
+            await extract_correction(
+                log, activity, candidate.ref, source="captain-hook", feedback=sig.text, repo=repo, backend=backend
+            )
 
 
 def collapse_cross_detector(
@@ -429,23 +429,23 @@ async def ingest(
 ) -> ScanReport:
     repo_key = repo_key or transcript_repo(parsed.events)
     if repo_key is None or is_reviewer_session(parsed.events):
-        store.record_file_scan(str(parsed.path), parsed.mtime, [])
+        await store.record_file_scan(str(parsed.path), parsed.mtime, [])
         return ScanReport(scanned=1, inserted=0)
-    signals = chain(
-        iter_hook_complaint_signals(
-            parsed.events,
-            decisions=open_decision_log(decisions_db_path()),
-            index=PackIndex.load(transcript_cwd(parsed.events)),
-        ),
-        detect(parsed.events),
-    )
+    async with await open_decision_log(decisions_db_path()) as decisions:
+        complaints = [
+            sig
+            async for sig in iter_hook_complaint_signals(
+                parsed.events, decisions=decisions, index=PackIndex.load(transcript_cwd(parsed.events))
+            )
+        ]
+    signals = chain(complaints, detect(parsed.events))
     raw = parsed.path.read_bytes()
     kept = collapse_cross_detector(list(candidates_from(raw, parsed.events, signals, settings=settings)))
-    inserted = store.record_file_scan(str(parsed.path), parsed.mtime, [candidate for _, candidate in kept])
+    inserted = await store.record_file_scan(str(parsed.path), parsed.mtime, [candidate for _, candidate in kept])
     for sig, candidate in kept:
-        with store.store.transaction():
+        async with store.db.transaction():
             candidate_id = (
-                store.ensure_candidate(
+                await store.ensure_candidate(
                     RepoKey(target_repo) if (target_repo := sig.evidence["target_repo"]) else repo_key,
                     kind=CandidateKind.FIX,
                     rule=dedup_key(*rule_parts(sig)),
@@ -457,11 +457,11 @@ async def ingest(
                     pack_name=sig.evidence["pack_name"],
                 )
                 if sig.kind == HOOK_COMPLAINT
-                else store.ensure_candidate(
+                else await store.ensure_candidate(
                     repo_key, kind=CandidateKind.CREATE, rule=dedup_key(*rule_parts(sig)), source_kind=sig.kind
                 )
             )
-            store.record_observation(
+            await store.record_observation(
                 candidate_id, dedup_key=candidate.dedup_key, session_id=sig.session_id, occurred_at=sig.occurred_at
             )
     await record_corrections(parsed.events, kept, repo=transcript_cwd(parsed.events))
@@ -491,7 +491,7 @@ async def scan_transcript(
     Returns:
         The :class:`ScanReport` for this pass.
     """
-    known = store.file_mtimes()
+    known = await store.file_mtimes()
     mtime = stat_mtime(path)
     if mtime is None or ((prev := known.get(str(path))) is not None and prev >= mtime):
         return ScanReport(scanned=0, inserted=0)
@@ -517,7 +517,7 @@ async def scan(store: ReviewStore, *, settings: ReviewSettings, transcripts: Seq
     Returns:
         The combined :class:`ScanReport` for this pass.
     """
-    known = store.file_mtimes()
+    known = await store.file_mtimes()
     paths: list[Path] = []
     for entry in transcripts:
         if entry.is_dir():

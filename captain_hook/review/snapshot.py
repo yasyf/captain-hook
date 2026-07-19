@@ -63,9 +63,9 @@ def _open_pr_entry(view: CandidateView) -> dict[str, object]:
     }
 
 
-def _repo_entry(store: ReviewStore, repo: dict[str, object], *, settings: ReviewSettings) -> dict[str, object]:
+async def _repo_entry(store: ReviewStore, repo: dict[str, object], *, settings: ReviewSettings) -> dict[str, object]:
     repo_key = str(repo["repo_key"])
-    views = store.overview(RepoKey(repo_key), settings=settings)
+    views = await store.overview(RepoKey(repo_key), settings=settings)
     counts = Counter(dashboard.stage_of(view) for view in views)
     open_prs = sorted(
         (view for view in views if CandidateStatus(str(view.row["status"])) is CandidateStatus.PR_OPEN),
@@ -93,20 +93,20 @@ def short_name(repo_key: str) -> str:
     return repo_key.rsplit("/", 1)[-1]
 
 
-def build_snapshot(store: ReviewStore, *, settings: ReviewSettings) -> dict[str, object]:
+async def build_snapshot(store: ReviewStore, *, settings: ReviewSettings) -> dict[str, object]:
     """Projects the review store into the frozen ``status.json`` schema — the pure snapshot build.
 
     Args:
         store: The open review store.
         settings: The thresholds the per-repo counts are evaluated under.
     """
-    spawn = store.spawn_health()
-    judge = store.judge_health()
+    spawn = await store.spawn_health()
+    judge = await store.judge_health()
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": _iso_z(_utcnow()),
         "capt_hook_version": capt_hook_version(),
-        "repos": [_repo_entry(store, repo, settings=settings) for repo in store.repos()],
+        "repos": [await _repo_entry(store, repo, settings=settings) for repo in await store.repos()],
         "health": {
             "ok": spawn.consecutive_failures == 0,
             "consecutive_failures": spawn.consecutive_failures,
@@ -117,7 +117,7 @@ def build_snapshot(store: ReviewStore, *, settings: ReviewSettings) -> dict[str,
     }
 
 
-def write_status(store: ReviewStore, *, settings: ReviewSettings) -> Path:
+async def write_status(store: ReviewStore, *, settings: ReviewSettings) -> Path:
     """Atomically writes the snapshot to :func:`status_path` — the single ``status.json`` writer.
 
     Renders the compact canonical JSON, writes it to a tempfile in the target directory, then
@@ -125,7 +125,7 @@ def write_status(store: ReviewStore, *, settings: ReviewSettings) -> Path:
     """
     path = status_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(build_snapshot(store, settings=settings), separators=(",", ":"), ensure_ascii=False) + "\n"
+    payload = json.dumps(await build_snapshot(store, settings=settings), separators=(",", ":"), ensure_ascii=False) + "\n"
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".status-", suffix=".json")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:

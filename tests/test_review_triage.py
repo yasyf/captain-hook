@@ -34,8 +34,8 @@ async def scan_correction(store: ReviewStore, settings: ReviewSettings, tmp_path
     await scan_transcript(store, path, settings=settings, repo_key=REPO)
 
 
-def statuses(store: ReviewStore) -> dict[str, str]:
-    rows = store.store.sql("SELECT rule, status FROM candidates")
+async def statuses(store: ReviewStore) -> dict[str, str]:
+    rows = await store.db.sql("SELECT rule, status FROM candidates")
     return {str(row["rule"]): str(row["status"]) for row in rows}
 
 
@@ -50,7 +50,7 @@ class TestTriagePass:
 
         report = await triage_pass(store, settings=settings)
         assert report == TriageReport(triaged=1, junk=1, rejected=1)
-        assert set((statuses(store)).values()) == {CandidateStatus.REJECTED}
+        assert set((await statuses(store)).values()) == {CandidateStatus.REJECTED}
 
         assert await judge_pass(store, settings=settings) == JudgeReport(
             judged=0, failed=0, pending=0, merged=0, retired=0, reopened=0
@@ -68,7 +68,7 @@ class TestTriagePass:
 
         report = await triage_pass(store, settings=settings)
         assert report == TriageReport(triaged=1, junk=0, rejected=0)
-        assert set((statuses(store)).values()) == {CandidateStatus.WATCHING}
+        assert set((await statuses(store)).values()) == {CandidateStatus.WATCHING}
 
         assert (await judge_pass(store, settings=settings)).judged == 1
         assert len(judge_calls) == 1
@@ -93,8 +93,8 @@ class TestTriagePass:
         install_triage(monkeypatch, fail_on=CORRECTION)
 
         assert await triage_pass(store, settings=settings) == TriageReport(triaged=0, junk=0, rejected=0)
-        assert store.junk_triaged_keys() == set()
-        assert len(store.untriaged_create_events(limit=10)) == 1
+        assert await store.junk_triaged_keys() == set()
+        assert len(await store.untriaged_create_events(limit=10)) == 1
 
     async def test_a_judge_verdict_blocks_a_later_junk_retry(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -110,8 +110,8 @@ class TestTriagePass:
 
         install_triage(monkeypatch, junk_when=lambda prompt: True)
         assert await triage_pass(store, settings=settings) == TriageReport(triaged=0, junk=0, rejected=0)
-        assert store.junk_triaged_keys() == set()
-        assert CandidateStatus.REJECTED not in set((statuses(store)).values())
+        assert await store.junk_triaged_keys() == set()
+        assert CandidateStatus.REJECTED not in set((await statuses(store)).values())
 
     async def test_mixed_evidence_keeps_the_candidate_watching(
         self, store: ReviewStore, settings: ReviewSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -125,7 +125,7 @@ class TestTriagePass:
 
         report = await triage_pass(store, settings=settings)
         assert (report.triaged, report.junk, report.rejected) == (2, 1, 1)
-        statuses_by_rule = statuses(store)
+        statuses_by_rule = await statuses(store)
         assert sorted(statuses_by_rule.values()) == sorted([CandidateStatus.REJECTED, CandidateStatus.WATCHING])
 
     async def test_cap_bounds_calls_and_the_rest_retries_next_pass(
@@ -144,4 +144,4 @@ class TestTriagePass:
         assert (await triage_pass(store, settings=settings)).triaged == 1
         assert len(calls) == 1
         assert (await triage_pass(store, settings=settings)).triaged == 1
-        assert len(store.untriaged_create_events(limit=10)) == 1
+        assert len(await store.untriaged_create_events(limit=10)) == 1

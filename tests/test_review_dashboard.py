@@ -604,7 +604,7 @@ class TestBrainSegment:
         assert brain_segment(report) == expected
 
 
-def seed_obs(
+async def seed_obs(
     store: ReviewStore,
     candidate_id: int,
     key: str,
@@ -616,8 +616,8 @@ def seed_obs(
     text: str = "correction text",
 ) -> None:
     payload = json.dumps({"signal": to_payload(CandidateSignal(Confidence(heuristic), ("marker",)))})
-    store.store.execute(INSERT_EVENT, (key, source, session, occurred, text, payload))
-    store.record_observation(
+    await store.db.execute(INSERT_EVENT, (key, source, session, occurred, text, payload))
+    await store.record_observation(
         candidate_id,
         dedup_key=DedupKey(key),
         session_id=SessionId(session),
@@ -628,7 +628,7 @@ def seed_obs(
 async def judge_obs(
     store: ReviewStore, key: str, *, accepted: bool = True, summary: str = "encode this rule", model: str = "m1"
 ) -> None:
-    store.record_verdict(
+    await store.record_verdict(
         DedupKey(key),
         FakeVerdict(accepted=accepted, summary=summary),
         role="judge",
@@ -639,11 +639,11 @@ async def judge_obs(
 
 
 async def eligible_create(store: ReviewStore, *, rule: str, summary: str) -> int:
-    candidate_id = store.ensure_candidate(
+    candidate_id = await store.ensure_candidate(
         REPO, kind=CandidateKind.CREATE, rule=rule, source_kind=SourceKind("transcript_message")
     )
     for i, (session, day) in enumerate([("s1", "2026-06-01"), ("s2", "2026-06-01"), ("s3", "2026-06-02")]):
-        seed_obs(store, candidate_id, f"{rule}{i}", session=session, occurred=f"{day}T10:00:00+00:00")
+        await seed_obs(store, candidate_id, f"{rule}{i}", session=session, occurred=f"{day}T10:00:00+00:00")
         await judge_obs(store, f"{rule}{i}", summary=summary)
     return candidate_id
 
@@ -651,46 +651,46 @@ async def eligible_create(store: ReviewStore, *, rule: str, summary: str) -> int
 class TestEligibilityParity:
     async def test_crosses_thresholds_agrees_with_eligible(self, store: ReviewStore) -> None:
         settings = ReviewSettings()
-        store.enable(REPO)
+        await store.enable(REPO)
         ready = await eligible_create(store, rule="ready", summary="run tests")
-        watching = store.ensure_candidate(
+        watching = await store.ensure_candidate(
             REPO, kind=CandidateKind.CREATE, rule="early", source_kind=SourceKind("transcript_message")
         )
-        seed_obs(store, watching, "early0", session="x1", occurred="2026-06-01T10:00:00+00:00")
+        await seed_obs(store, watching, "early0", session="x1", occurred="2026-06-01T10:00:00+00:00")
         await judge_obs(store, "early0")
         for candidate_id, expected in ((ready, True), (watching, False)):
-            status = store.threshold_status(candidate_id, settings=settings)
-            direct = store.eligible(candidate_id, settings=settings)
+            status = await store.threshold_status(candidate_id, settings=settings)
+            direct = await store.eligible(candidate_id, settings=settings)
             assert crosses_thresholds(status, settings=settings) == direct == expected
 
 
 class TestOverview:
     async def test_overview_carries_eligibility_and_pr_summary(self, store: ReviewStore) -> None:
         settings = ReviewSettings()
-        store.enable(REPO)
+        await store.enable(REPO)
         await eligible_create(store, rule="ready", summary="run the suite before committing")
-        views = store.overview(REPO, settings=settings)
+        views = await store.overview(REPO, settings=settings)
         assert [v.eligible for v in views] == [True]
         assert views[0].summary == "run the suite before committing"
 
     async def test_batched_overview_matches_per_candidate_computation(self, store: ReviewStore) -> None:
         settings = ReviewSettings()
-        store.enable(REPO)
+        await store.enable(REPO)
         await eligible_create(store, rule="ready", summary="run the suite before committing")
 
-        early = store.ensure_candidate(
+        early = await store.ensure_candidate(
             REPO, kind=CandidateKind.CREATE, rule="early", source_kind=SourceKind("transcript_message")
         )
-        seed_obs(store, early, "early0", session="x1", occurred="2026-06-01T10:00:00+00:00")
+        await seed_obs(store, early, "early0", session="x1", occurred="2026-06-01T10:00:00+00:00")
         await judge_obs(store, "early0")
 
-        rejected = store.ensure_candidate(
+        rejected = await store.ensure_candidate(
             REPO, kind=CandidateKind.CREATE, rule="nope", source_kind=SourceKind("transcript_message")
         )
-        seed_obs(store, rejected, "nope0", session="x2", occurred="2026-06-02T10:00:00+00:00")
+        await seed_obs(store, rejected, "nope0", session="x2", occurred="2026-06-02T10:00:00+00:00")
         await judge_obs(store, "nope0", accepted=False)
 
-        fix = store.ensure_candidate(
+        fix = await store.ensure_candidate(
             REPO,
             kind=CandidateKind.FIX,
             rule="fix-rule",
@@ -698,7 +698,7 @@ class TestOverview:
             target_source_file="hooks/h.py",
             target_hook_name="h",
         )
-        seed_obs(
+        await seed_obs(
             store,
             fix,
             "fix0",
@@ -707,7 +707,7 @@ class TestOverview:
             heuristic=0.95,
             source="hook_complaint",
         )
-        store.record_verdict(
+        await store.record_verdict(
             DedupKey("fix0"),
             FakeVerdict(accepted=True, summary="tighten the guard"),
             role="judge",
@@ -716,31 +716,31 @@ class TestOverview:
             fidelity="full",
         )
 
-        cross_target = store.ensure_candidate(
+        cross_target = await store.ensure_candidate(
             RepoKey("github.com/yasyf/other"),
             kind=CandidateKind.CREATE,
             rule="cross-target",
             source_kind=SourceKind("transcript_message"),
         )
-        store.transition(
+        await store.transition(
             cross_target,
             CandidateStatus.PR_OPEN,
             pr_url=f"https://{REPO}/pull/42",
             pr_opened_at=datetime.now(UTC),
         )
 
-        views = store.overview(REPO, settings=settings)
+        views = await store.overview(REPO, settings=settings)
         assert len(views) == 4
         for v in views:
             cid = int(str(v.row["id"]))
-            assert v.threshold == store.threshold_status(cid, settings=settings)
-            assert v.eligible == store.eligible(cid, settings=settings)
-            assert v.summary == store.pr_summary(cid, settings=settings)
+            assert v.threshold == await store.threshold_status(cid, settings=settings)
+            assert v.eligible == await store.eligible(cid, settings=settings)
+            assert v.summary == await store.pr_summary(cid, settings=settings)
 
 
-def seed_spawn_runs(store: ReviewStore, *oks: bool) -> None:
+async def seed_spawn_runs(store: ReviewStore, *oks: bool) -> None:
     for day, ok in enumerate(oks, start=1):
-        store.record_spawn_run(
+        await store.record_spawn_run(
             f"/t/{day}",
             started_at=datetime(2026, 6, day, tzinfo=UTC),
             ok=ok,
@@ -750,12 +750,12 @@ def seed_spawn_runs(store: ReviewStore, *oks: bool) -> None:
 
 
 class TestSpawnHealth:
-    def test_no_rows_reports_never_run(self, store: ReviewStore) -> None:
-        assert store.spawn_health() == SpawnHealth(last=None, consecutive_failures=0, failing_since=None)
+    async def test_no_rows_reports_never_run(self, store: ReviewStore) -> None:
+        assert await store.spawn_health() == SpawnHealth(last=None, consecutive_failures=0, failing_since=None)
 
-    def test_streak_counts_failures_since_last_success(self, store: ReviewStore) -> None:
-        seed_spawn_runs(store, False, True, False, False)
-        health = store.spawn_health()
+    async def test_streak_counts_failures_since_last_success(self, store: ReviewStore) -> None:
+        await seed_spawn_runs(store, False, True, False, False)
+        health = await store.spawn_health()
         assert health.consecutive_failures == 2
         assert health.failing_since == "2026-06-03T00:00:00+00:00"
         assert health.last is not None
@@ -763,9 +763,9 @@ class TestSpawnHealth:
         assert health.last["error"] == "Boom: 4"
         assert health.last["transcript"] == "/t/4"
 
-    def test_success_resets_the_streak(self, store: ReviewStore) -> None:
-        seed_spawn_runs(store, False, True)
-        health = store.spawn_health()
+    async def test_success_resets_the_streak(self, store: ReviewStore) -> None:
+        await seed_spawn_runs(store, False, True)
+        health = await store.spawn_health()
         assert health.consecutive_failures == 0
         assert health.failing_since is None
         assert health.last is not None
@@ -774,14 +774,14 @@ class TestSpawnHealth:
 
 
 class TestUnwatchedCanary:
-    def test_filters_cutoff_known_repos_and_failed_runs(self, store: ReviewStore) -> None:
+    async def test_filters_cutoff_known_repos_and_failed_runs(self, store: ReviewStore) -> None:
         included = RepoKey("github.com/yasyf/included")
         outside = RepoKey("github.com/yasyf/outside")
         opted_out = RepoKey("github.com/yasyf/opted-out")
         enrolled = RepoKey("github.com/yasyf/enrolled")
         failed = RepoKey("github.com/yasyf/failed")
-        store.disable(opted_out)
-        store.enable(enrolled)
+        await store.disable(opted_out)
+        await store.enable(enrolled)
         for repo, started_at, ok in (
             (included, datetime.now(UTC) - timedelta(days=1), True),
             (outside, datetime.now(UTC) - timedelta(days=8), True),
@@ -789,14 +789,14 @@ class TestUnwatchedCanary:
             (enrolled, datetime.now(UTC) - timedelta(days=1), True),
             (failed, datetime.now(UTC) - timedelta(days=1), False),
         ):
-            store.record_spawn_run(
+            await store.record_spawn_run(
                 f"/t/{repo}",
                 started_at=started_at,
                 ok=ok,
                 error=None if ok else "Boom: failed",
                 report_json=json.dumps({"repo": str(repo), "watching": False}),
             )
-        assert store.unwatched_session_repos() == [str(included)]
+        assert await store.unwatched_session_repos() == [str(included)]
 
     def test_render_shows_warning_after_health(self) -> None:
         repos = ["github.com/yasyf/one", "github.com/yasyf/two"]
@@ -840,24 +840,24 @@ def top_status(*args: str, root: Path) -> Result:
 
 
 async def seed_db(scenario: str) -> int:
-    with ReviewStore.open(ReviewSettings().db_path) as store:
-        store.enable(REPO)
-        watching = store.ensure_candidate(
+    async with await ReviewStore.open(ReviewSettings().db_path) as store:
+        await store.enable(REPO)
+        watching = await store.ensure_candidate(
             REPO, kind=CandidateKind.CREATE, rule="force", source_kind=SourceKind("transcript_message")
         )
-        seed_obs(
+        await seed_obs(
             store, watching, "w0", session="a1", occurred="2026-06-01T10:00:00+00:00", text="never force-push"
         )
         await judge_obs(store, "w0", summary="block force-push to main")
         await eligible_create(store, rule="tests", summary="run the suite before committing")
         match scenario:
             case "pr_open":
-                pr = store.ensure_candidate(
+                pr = await store.ensure_candidate(
                     REPO, kind=CandidateKind.CREATE, rule="uv", source_kind=SourceKind("transcript_message")
                 )
-                seed_obs(store, pr, "p0", session="b1", occurred="2026-06-01T10:00:00+00:00", text="use uv")
+                await seed_obs(store, pr, "p0", session="b1", occurred="2026-06-01T10:00:00+00:00", text="use uv")
                 await judge_obs(store, "p0", summary="use uv instead of pip")
-                store.transition(
+                await store.transition(
                     pr,
                     CandidateStatus.PR_OPEN,
                     pr_url="https://github.com/yasyf/scratch/pull/42",
@@ -903,11 +903,11 @@ class TestStatusCommand:
         result = review_status(root=git_repo)
         assert result.exit_code == 0, result.output
 
-        def status_of() -> str:
-            with ReviewStore.open(ReviewSettings().db_path) as store:
-                return str((store.candidate(candidate_id))["status"])
+        async def status_of() -> str:
+            async with await ReviewStore.open(ReviewSettings().db_path) as store:
+                return str((await store.candidate(candidate_id))["status"])
 
-        assert status_of() == "accepted"
+        assert asyncio.run(status_of()) == "accepted"
         assert "ACCEPTED" in result.output
 
     def test_status_outside_a_git_repo_fails(self, tmp_path: Path) -> None:

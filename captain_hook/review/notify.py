@@ -101,16 +101,16 @@ def notify_transition(row: Mapping[str, object], to: CandidateStatus) -> None:
             _send(pr_merged_content(row))
 
 
-def maybe_notify_failures(store: ReviewStore) -> None:
+async def maybe_notify_failures(store: ReviewStore) -> None:
     """Fires one ``review_failure`` banner per failing streak once it reaches :data:`FAILURE_STREAK_THRESHOLD`.
 
     The streak's ``failing_since`` stamp is recorded in ``review_meta`` so a still-failing streak
     stays silent; a clean run mints a fresh stamp for the next streak, so the marker self-heals.
     """
-    health = store.spawn_health()
+    health = await store.spawn_health()
     if health.consecutive_failures < FAILURE_STREAK_THRESHOLD:
         return
-    if store.meta(NOTIFIED_FAILING_KEY) == health.failing_since:
+    if await store.meta(NOTIFIED_FAILING_KEY) == health.failing_since:
         return
     _send(review_failure_content(health))
-    store.set_meta(NOTIFIED_FAILING_KEY, health.failing_since)
+    await store.set_meta(NOTIFIED_FAILING_KEY, health.failing_since)

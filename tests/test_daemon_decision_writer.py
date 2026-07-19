@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -9,8 +10,8 @@ import pytest
 from cc_transcript.decisions import Decision, DecisionLog
 from cc_transcript.ids import SessionId
 
-from captain_hook import decisions
-from captain_hook.daemon.decision_writer import MAX_DECISION_LOGS, DecisionWriter, install
+from captain_hook import decisions, heartbeat
+from captain_hook.daemon.decision_writer import MAX_LEDGER_LOGS, DecisionWriter, install
 from captain_hook.decisions import record_decision
 from captain_hook.events import StopEvent
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
@@ -50,8 +51,13 @@ def db_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
+async def _rows(db_path: Path) -> tuple[Decision, ...]:
+    async with await DecisionLog.open(db_path) as log:
+        return await log.for_session(SESSION)
+
+
 def rows(db_path: Path) -> tuple[Decision, ...]:
-    return DecisionLog.open(db_path).for_session(SESSION)
+    return asyncio.run(_rows(db_path))
 
 
 class TestDecisionWriter:
@@ -75,14 +81,18 @@ class TestDecisionWriter:
     def test_log_handles_are_lru_bounded(self, tmp_path: Path) -> None:
         # S8: many distinct decisions-db paths must not open an unbounded set of handles.
         writer = DecisionWriter()  # thread not started; drive _log directly
-        opened = [writer._log(tmp_path / f"db-{i}.db") for i in range(MAX_DECISION_LOGS + 8)]
-        try:
-            assert len(writer._logs) == MAX_DECISION_LOGS, "the handle set grew past its bound"
-            with pytest.raises(sqlite3.ProgrammingError):
-                opened[0].conn.execute("SELECT 1")  # the earliest handle was evicted and closed
-        finally:
-            for log in writer._logs.values():
-                log.conn.close()
+
+        async def body() -> None:
+            opened = [await writer._log(tmp_path / f"db-{i}.db") for i in range(MAX_LEDGER_LOGS + 8)]
+            try:
+                assert len(writer._logs) == MAX_LEDGER_LOGS, "the handle set grew past its bound"
+                with pytest.raises(sqlite3.ProgrammingError):
+                    await opened[0].for_session(SESSION)  # the earliest handle was evicted and closed
+            finally:
+                for log in writer._logs.values():
+                    await log.close()
+
+        asyncio.run(body())
 
     def test_full_queue_drops_row_with_warning(self, db_path: Path, logcap: Any) -> None:
         writer = DecisionWriter(maxsize=1)  # thread never started, so nothing drains
@@ -98,9 +108,11 @@ class TestWriterSeam:
         writer = install()
         try:
             assert decisions._WRITER == writer.submit
+            assert heartbeat._WRITER == writer.submit_heartbeat
             record_decision(stop_entry(), stop_evt(), HookResult(action=Action.warn, message="via-install"))
         finally:
             decisions._WRITER = None
+            heartbeat._WRITER = None
             writer.drain(timeout=5)
         assert [row.message for row in rows(db_path)] == ["via-install"]
 

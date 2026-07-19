@@ -172,7 +172,7 @@ async def seed_corrections(
 
 
 async def seed_eligible_fix(store: ReviewStore, *, repo: RepoKey, session: str = "fs1") -> int:
-    candidate_id = store.ensure_candidate(
+    candidate_id = await store.ensure_candidate(
         repo,
         kind=CandidateKind.FIX,
         rule=dedup_key("hook_complaint", FIX_TARGET_HOOK, FIX_TARGET_FILE),
@@ -183,18 +183,18 @@ async def seed_eligible_fix(store: ReviewStore, *, repo: RepoKey, session: str =
     )
     key = dedup_key("hook_complaint", session, FIX_TARGET_HOOK)
     payload = json.dumps({"signal": to_payload(CandidateSignal(Confidence(VERY_HIGH), ("marker",)))})
-    store.store.execute(
+    await store.db.execute(
         "INSERT INTO feedback_events (dedup_key, source_kind, session_id, occurred_at, text, payload_json, "
         "context_json, ingested_at) VALUES (?, ?, ?, ?, ?, ?, '{}', '2026-06-01T00:00:00+00:00')",
         (key, HOOK_COMPLAINT, session, "2026-06-01T10:00:00+00:00", "that reminder misfired again", payload),
     )
-    store.record_observation(
+    await store.record_observation(
         candidate_id,
         dedup_key=DedupKey(key),
         session_id=SessionId(session),
         occurred_at=datetime.fromisoformat("2026-06-01T10:00:00+00:00"),
     )
-    store.record_verdict(
+    await store.record_verdict(
         DedupKey(key),
         Verdict(summary="stop the nudge misfiring on its own text"),
         role=JUDGE_ROLE,
@@ -211,12 +211,14 @@ def projects_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return tmp_path
 
 
-def verdict_fidelities(store: ReviewStore) -> list[str]:
-    return [str(row["fidelity"]) for row in store.store.sql("SELECT fidelity FROM verdicts ORDER BY id")]
+async def verdict_fidelities(store: ReviewStore) -> list[str]:
+    rows = await store.db.sql("SELECT fidelity FROM verdicts ORDER BY id")
+    return [str(row["fidelity"]) for row in rows]
 
 
-def count_rows(store: ReviewStore, table: str) -> int:
-    return [int(row["n"]) for row in store.store.sql(f"SELECT COUNT(*) AS n FROM {table}")][0]
+async def count_rows(store: ReviewStore, table: str) -> int:
+    rows = await store.db.sql(f"SELECT COUNT(*) AS n FROM {table}")
+    return [int(row["n"]) for row in rows][0]
 
 
 def sweep_stamps(cwd: str) -> tuple[Path, Path]:
@@ -562,17 +564,17 @@ class TestEnrolled:
         repo = resolve_repo_key(str(git_repo))
         assert repo is not None
 
-        def disable() -> None:
-            with ReviewStore.open(ReviewSettings().db_path) as store:
-                store.enable(repo)
-                store.disable(repo)
+        async def disable() -> None:
+            async with await ReviewStore.open(ReviewSettings().db_path) as store:
+                await store.enable(repo)
+                await store.disable(repo)
 
-        disable()
+        asyncio.run(disable())
         assert enrolled(str(git_repo)) is False
 
     def test_store_failure_fails_open(self, git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # uncertainty spawns the child (which re-applies the authoritative gate) rather than dropping the review
-        def boom(*args: object, **kwargs: object) -> object:
+        async def boom(*args: object, **kwargs: object) -> object:
             raise RuntimeError("store down")
 
         monkeypatch.setattr(ReviewStore, "open", boom)
@@ -706,7 +708,7 @@ class TestJudgePass:
         report = await judge_pass(store, settings=settings)
         assert report == JudgeReport(judged=2, failed=0, pending=0, merged=2, retired=0, reopened=0)
         assert len(calls) == 2
-        judged = store.judged(role=JUDGE_ROLE, prompt_version=store.versions.create)
+        judged = await store.judged(role=JUDGE_ROLE, prompt_version=store.versions.create)
         assert {bool(row["accepted"]) for row in judged} == {True}
         assert {str(row["model"]) for row in judged} == {resolved_model(settings.judge_tier)}
         assert await judge_pass(store, settings=settings) == JudgeReport(
@@ -746,7 +748,7 @@ class TestJudgePass:
         self, store: ReviewStore, settings: ReviewSettings, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = install_judge(monkeypatch)
-        store.record_file_scan(
+        await store.record_file_scan(
             "synthetic", 1.0, [synthetic("structural junk", noise("bare_marker")), synthetic(CORRECTION, firm())]
         )
         assert await judge_pass(store, settings=settings) == JudgeReport(
@@ -754,7 +756,7 @@ class TestJudgePass:
         )
         assert len(calls) == 1
         assert "structural junk" not in calls[0]
-        unjudged = store.unjudged(role=JUDGE_ROLE, prompt_version=store.versions.create)
+        unjudged = await store.unjudged(role=JUDGE_ROLE, prompt_version=store.versions.create)
         assert [row["text"] for row in unjudged] == ["structural junk"]
 
     @requires_llm_backend
@@ -778,10 +780,10 @@ class TestJudgePass:
         install_judge(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION])
 
-        def boom(*_: object, **__: object) -> list[object]:
+        async def boom(*_: object, **__: object) -> list[object]:
             raise RuntimeError("sqlite-vec extension failed to load")
 
-        def has_evidence(self: ReviewStore) -> bool:
+        async def has_evidence(self: ReviewStore) -> bool:
             return True
 
         monkeypatch.setattr("cc_transcript.judge.similar.suggest_canonical_keys", boom)
@@ -790,7 +792,7 @@ class TestJudgePass:
         assert await judge_pass(store, settings=settings) == JudgeReport(
             judged=0, failed=1, pending=1, merged=0, retired=0, reopened=0
         )
-        assert [row["text"] for row in store.unjudged(role=JUDGE_ROLE, prompt_version=store.versions.create)] == [
+        assert [row["text"] for row in await store.unjudged(role=JUDGE_ROLE, prompt_version=store.versions.create)] == [
             CORRECTION
         ]
 
@@ -815,7 +817,7 @@ class TestJudgePass:
 
         monkeypatch.setattr("cc_transcript.judge.similar.default_embedder", loader)
         await seed_corrections(store, settings, tmp_path, [CORRECTION, SECOND_CORRECTION])
-        assert not store.has_verdict_evidence()
+        assert not await store.has_verdict_evidence()
         assert await judge_pass(store, settings=settings) == JudgeReport(
             judged=2, failed=0, pending=0, merged=2, retired=0, reopened=0
         )
@@ -839,7 +841,7 @@ class TestJudgePass:
             )
 
         monkeypatch.setattr("captain_hook.review.judge.structured_judge", lambda *_, **__: judge)
-        with ReviewStore.open(tmp_path / "lanes.db", versions=PromptVersions(create=4, fix=3)) as store:
+        async with await ReviewStore.open(tmp_path / "lanes.db", versions=PromptVersions(create=4, fix=3)) as store:
             await seed_corrections(store, settings, tmp_path, [CORRECTION])
             window = ContextWindow(
                 anchor=EventRef(SessionId("fix1"), EventUuid("uf1")),
@@ -858,7 +860,7 @@ class TestJudgePass:
                     "fire_message": "Remember to use the project's task tracker.",
                 }
             )
-            store.store.execute(
+            await store.db.execute(
                 "INSERT INTO feedback_events "
                 "(dedup_key, source_kind, session_id, occurred_at, text, payload_json, context_json, ingested_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, '2026-06-01T00:00:00+00:00')",
@@ -873,13 +875,11 @@ class TestJudgePass:
                 ),
             )
             await judge_pass(store, settings=settings)
-            lanes = {
-                str(row["source_kind"]): int(row["prompt_version"])
-                for row in store.store.sql(
-                    "SELECT e.source_kind AS source_kind, v.prompt_version AS prompt_version "
-                    "FROM verdicts v JOIN feedback_events e ON e.dedup_key = v.dedup_key WHERE v.role = 'judge'"
-                )
-            }
+            rows = await store.db.sql(
+                "SELECT e.source_kind AS source_kind, v.prompt_version AS prompt_version "
+                "FROM verdicts v JOIN feedback_events e ON e.dedup_key = v.dedup_key WHERE v.role = 'judge'"
+            )
+            lanes = {str(row["source_kind"]): int(row["prompt_version"]) for row in rows}
             assert lanes == {TRANSCRIPT_MESSAGE: store.versions.create, HOOK_COMPLAINT: store.versions.fix}
 
     @pytest.mark.parametrize("category", ALL_CATEGORIES)
@@ -939,7 +939,7 @@ class TestQuestionAnswer:
         )
         report = await scan_transcript(store, transcript, settings=settings, repo_key=REPO)
         assert report == ScanReport(scanned=1, inserted=1)
-        [row] = store.candidates(REPO)
+        [row] = await store.candidates(REPO)
         assert row["source_kind"] == "question_answer"
         assert row["rule"] == dedup_key("question_answer", QUESTION, ANSWER)
         assert row["observations"] == 1
@@ -957,7 +957,7 @@ class TestQuestionAnswer:
                 settings=settings,
                 repo_key=REPO,
             )
-        [coalesced] = store.candidates(REPO)
+        [coalesced] = await store.candidates(REPO)
         assert coalesced["rule"] == dedup_key("question_answer", QUESTION, ANSWER)
         assert coalesced["observations"] == 2
         await scan_transcript(
@@ -968,7 +968,7 @@ class TestQuestionAnswer:
             settings=settings,
             repo_key=REPO,
         )
-        assert {row["rule"] for row in store.candidates(REPO)} == {
+        assert {row["rule"] for row in await store.candidates(REPO)} == {
             dedup_key("question_answer", QUESTION, ANSWER),
             dedup_key("question_answer", OTHER_QUESTION, ANSWER),
         }
@@ -1029,7 +1029,7 @@ class TestFidelity:
         assert await judge_pass(store, settings=settings) == JudgeReport(
             judged=1, failed=0, pending=0, merged=1, retired=0, reopened=0
         )
-        assert verdict_fidelities(store) == ["full"]
+        assert await verdict_fidelities(store) == ["full"]
         assert SUMMARY_LABEL not in calls[0]
         assert "the turn the feedback arrived in" in calls[0]
 
@@ -1047,7 +1047,7 @@ class TestFidelity:
         assert await judge_pass(store, settings=settings) == JudgeReport(
             judged=1, failed=0, pending=0, merged=1, retired=0, reopened=0
         )
-        assert verdict_fidelities(store) == ["summary"]
+        assert await verdict_fidelities(store) == ["summary"]
         assert SUMMARY_LABEL in calls[0]
 
     async def test_refresh_summary_rejudges_once_the_window_hydrates_again(
@@ -1066,7 +1066,7 @@ class TestFidelity:
         assert await judge_pass(store, settings=settings) == JudgeReport(
             judged=1, failed=0, pending=0, merged=1, retired=0, reopened=0
         )
-        assert verdict_fidelities(store) == ["summary"]
+        assert await verdict_fidelities(store) == ["summary"]
         assert await judge_pass(store, settings=settings) == JudgeReport(
             judged=0, failed=0, pending=0, merged=0, retired=0, reopened=0
         )
@@ -1074,7 +1074,7 @@ class TestFidelity:
         assert await judge_pass(store, settings=settings, refresh_summary=True) == JudgeReport(
             judged=1, failed=0, pending=0, merged=0, retired=0, reopened=0
         )
-        assert verdict_fidelities(store) == ["full"]
+        assert await verdict_fidelities(store) == ["full"]
         assert len(calls) == 2
         assert await judge_pass(store, settings=settings, refresh_summary=True) == JudgeReport(
             judged=0, failed=0, pending=0, merged=0, retired=0, reopened=0
@@ -1155,8 +1155,8 @@ class TestSpawnSession:
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
         report = await spawn_session(transcript, cwd=str(git_repo), settings=settings)
         assert report == SpawnReport(repo=GIT_REPO_KEY, watching=True, scanned=1)
-        with ReviewStore.open(settings.db_path) as store:
-            health = store.spawn_health()
+        async with await ReviewStore.open(settings.db_path) as store:
+            health = await store.spawn_health()
         assert health.consecutive_failures == 0
         assert health.failing_since is None
         assert health.last is not None
@@ -1212,8 +1212,8 @@ class TestSpawnSession:
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
         with pytest.raises(type(exc)):
             await spawn_session(transcript, cwd=str(tmp_path), settings=settings)
-        with ReviewStore.open(settings.db_path) as store:
-            health = store.spawn_health()
+        async with await ReviewStore.open(settings.db_path) as store:
+            health = await store.spawn_health()
         assert health.consecutive_failures == 1
         assert health.last is not None
         assert health.last["ok"] == 0
@@ -1228,8 +1228,8 @@ class TestSpawnSession:
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
         with pytest.raises(ValidationError):
             await spawn_session(transcript, cwd=str(tmp_path))
-        with ReviewStore.open(resolve_review_db_path()) as store:
-            health = store.spawn_health()
+        async with await ReviewStore.open(resolve_review_db_path()) as store:
+            health = await store.spawn_health()
         assert health.consecutive_failures == 1
         assert health.last is not None
         assert health.last["ok"] == 0
@@ -1249,8 +1249,8 @@ class TestSpawnSession:
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
         with pytest.raises(TimeoutError):
             await spawn_session(transcript, cwd=str(tmp_path), settings=settings)
-        with ReviewStore.open(settings.db_path) as store:
-            health = store.spawn_health()
+        async with await ReviewStore.open(settings.db_path) as store:
+            health = await store.spawn_health()
         assert health.consecutive_failures == 1
         assert health.last is not None
         assert health.last["ok"] == 0
@@ -1281,8 +1281,8 @@ class TestReviewSession:
 
         monkeypatch.setattr("captain_hook.review.pipeline.spawn_brain", no_brain)
         monkeypatch.setattr("captain_hook.review.sync.sync_open_prs", no_sync)
-        with ReviewStore.open(settings.db_path) as store:
-            store.enable(GIT_REPO_KEY)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
             candidate_id = await seed_eligible_fix(store, repo=GIT_REPO_KEY)
         transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
         report = await review_session(transcript, cwd=str(git_repo), settings=settings, sweep=True)
@@ -1290,8 +1290,8 @@ class TestReviewSession:
         assert (report.brain, report.eligible) == (False, ())
         assert (report.synced_merged, report.synced_closed, report.synced_kept) == (0, 0, 0)
         assert (report.watching, report.scanned) == (True, 1)
-        with ReviewStore.open(settings.db_path) as store:
-            candidate = store.candidate(candidate_id)
+        async with await ReviewStore.open(settings.db_path) as store:
+            candidate = await store.candidate(candidate_id)
         assert CandidateStatus(str(candidate["status"])) == CandidateStatus.WATCHING
 
     async def test_opted_out_repo_skips_scan_judge_and_brain(
@@ -1300,15 +1300,15 @@ class TestReviewSession:
         settings = ReviewSettings(db_path=tmp_path / "review.db")
         calls = install_judge(monkeypatch)
         brains = install_brain(monkeypatch)
-        with ReviewStore.open(settings.db_path) as store:
-            store.disable(GIT_REPO_KEY)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.disable(GIT_REPO_KEY)
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
         report = await review_session(transcript, cwd=str(git_repo), settings=settings)
         assert report == SpawnReport(repo=GIT_REPO_KEY)
         assert calls == []
         assert brains == []
-        with ReviewStore.open(settings.db_path) as store:
-            assert store.file_mtimes() == {}
+        async with await ReviewStore.open(settings.db_path) as store:
+            assert await store.file_mtimes() == {}
 
     async def test_unknown_repo_auto_enrolls_and_runs(
         self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
@@ -1322,8 +1322,8 @@ class TestReviewSession:
         report = await review_session(transcript, cwd=str(git_repo), settings=settings)
         assert report.watching is True
         assert report.scanned == 1
-        with ReviewStore.open(settings.db_path) as store:
-            assert store.watching(GIT_REPO_KEY) is True
+        async with await ReviewStore.open(settings.db_path) as store:
+            assert await store.watching(GIT_REPO_KEY) is True
 
     async def test_merged_pr_sync_counts_flow_into_report_and_stamp_resolved_at(
         self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
@@ -1332,20 +1332,20 @@ class TestReviewSession:
         install_brain(monkeypatch)
         install_resolved_model(monkeypatch)
         url = "https://github.com/yasyf/scratch/pull/1"
-        with ReviewStore.open(settings.db_path) as store:
-            store.enable(GIT_REPO_KEY)
-            candidate_id = store.ensure_candidate(
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
+            candidate_id = await store.ensure_candidate(
                 GIT_REPO_KEY, kind=CandidateKind.CREATE, rule=url, source_kind=TRANSCRIPT_MESSAGE
             )
-            store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=url, pr_opened_at=datetime.now(UTC))
+            await store.transition(candidate_id, CandidateStatus.PR_OPEN, pr_url=url, pr_opened_at=datetime.now(UTC))
         monkeypatch.setattr(
             "captain_hook.review.sync.gh_pr_state", lambda _url: PrState("MERGED", "2026-07-08T15:06:25Z")
         )
         transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
         report = await review_session(transcript, cwd=str(git_repo), settings=settings)
         assert (report.synced_merged, report.synced_closed, report.synced_kept) == (1, 0, 0)
-        with ReviewStore.open(settings.db_path) as store:
-            candidate = store.candidate(candidate_id)
+        async with await ReviewStore.open(settings.db_path) as store:
+            candidate = await store.candidate(candidate_id)
         assert CandidateStatus(str(candidate["status"])) == CandidateStatus.ACCEPTED
         assert candidate["resolved_at"] is not None
 
@@ -1366,12 +1366,12 @@ class TestReviewSession:
                 user_text(SECOND_CORRECTION, sessionId="sibling", cwd=str(git_repo)),
             ],
         )
-        with ReviewStore.open(settings.db_path) as store:
-            store.enable(GIT_REPO_KEY)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
         report = await review_session(ended, cwd=str(git_repo), settings=settings)
         assert (report.scanned, report.inserted) == (2, 2)
-        with ReviewStore.open(settings.db_path) as store:
-            samples = {str(row["sample_text"]) for row in store.candidates(GIT_REPO_KEY)}
+        async with await ReviewStore.open(settings.db_path) as store:
+            samples = {str(row["sample_text"]) for row in await store.candidates(GIT_REPO_KEY)}
         assert {CORRECTION, SECOND_CORRECTION} <= samples
 
     async def test_brain_outcome_flows_into_report(
@@ -1384,8 +1384,8 @@ class TestReviewSession:
             return BrainOutcome(exit_code=3, seconds=42.5, log_path=review_log_path())
 
         monkeypatch.setattr("captain_hook.review.pipeline.spawn_brain", fake_brain)
-        with ReviewStore.open(settings.db_path) as store:
-            store.enable(GIT_REPO_KEY)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
             candidate_id = await seed_eligible_fix(store, repo=GIT_REPO_KEY)
         transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
         report = await review_session(transcript, cwd=str(git_repo), settings=settings)
@@ -1399,14 +1399,17 @@ class TestReviewSession:
         install_resolved_model(monkeypatch)
 
         def move() -> None:
-            with ReviewStore.open(settings.db_path) as store:
-                for row in store.candidates(GIT_REPO_KEY, status=CandidateStatus.WATCHING):
-                    store.transition(
-                        int(str(row["id"])),
-                        CandidateStatus.PR_OPEN,
-                        pr_url="https://github.com/yasyf/scratch/pull/9",
-                        pr_opened_at=datetime.now(UTC),
-                    )
+            async def do_move() -> None:
+                async with await ReviewStore.open(settings.db_path) as store:
+                    for row in await store.candidates(GIT_REPO_KEY, status=CandidateStatus.WATCHING):
+                        await store.transition(
+                            int(str(row["id"])),
+                            CandidateStatus.PR_OPEN,
+                            pr_url="https://github.com/yasyf/scratch/pull/9",
+                            pr_opened_at=datetime.now(UTC),
+                        )
+
+            asyncio.run(do_move())
 
         def open_pr(transcript: Path, *, repo_root: Path, settings: ReviewSettings) -> BrainOutcome:
             thread = threading.Thread(target=move)
@@ -1415,8 +1418,8 @@ class TestReviewSession:
             return BrainOutcome(exit_code=0, seconds=12.0, log_path=review_log_path())
 
         monkeypatch.setattr("captain_hook.review.pipeline.spawn_brain", open_pr)
-        with ReviewStore.open(settings.db_path) as store:
-            store.enable(GIT_REPO_KEY)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
             await seed_eligible_fix(store, repo=GIT_REPO_KEY)
         transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
         report = await review_session(transcript, cwd=str(git_repo), settings=settings)
@@ -1428,8 +1431,8 @@ class TestReviewSession:
         settings = ReviewSettings(db_path=tmp_path / "review.db")
         install_brain(monkeypatch)
         install_resolved_model(monkeypatch)
-        with ReviewStore.open(settings.db_path) as store:
-            store.enable(GIT_REPO_KEY)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
             candidate_id = await seed_eligible_fix(store, repo=GIT_REPO_KEY)
         transcript = write_transcript(tmp_path / "s.jsonl", [assistant_text("nothing to correct here")])
         report = await review_session(transcript, cwd=str(git_repo), settings=settings)
@@ -1454,8 +1457,8 @@ class TestReviewSession:
             return BrainOutcome(exit_code=0, seconds=1.0, log_path=review_log_path())
 
         monkeypatch.setattr("captain_hook.review.pipeline.spawn_brain", blocking_brain)
-        with ReviewStore.open(settings.db_path) as store:
-            store.enable(GIT_REPO_KEY)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
             await seed_eligible_fix(store, repo=GIT_REPO_KEY)
         first = write_transcript(tmp_path / "start.jsonl", [assistant_text("nothing to correct here")])
         second = write_transcript(tmp_path / "end.jsonl", [assistant_text("nothing to correct here")])
@@ -1502,9 +1505,9 @@ class TestReviewSession:
             return BrainOutcome(exit_code=0, seconds=1.0, log_path=review_log_path())
 
         monkeypatch.setattr("captain_hook.review.pipeline.spawn_brain", blocking_brain)
-        with ReviewStore.open(settings.db_path) as store:
-            store.enable(GIT_REPO_KEY)
-            store.enable(second_key)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
+            await store.enable(second_key)
             await seed_eligible_fix(store, repo=GIT_REPO_KEY, session="fs1")
             await seed_eligible_fix(store, repo=second_key, session="fs2")
         first = write_transcript(tmp_path / "start.jsonl", [assistant_text("nothing to correct here")])
@@ -1546,8 +1549,8 @@ class TestReviewSession:
         settings = ReviewSettings(db_path=tmp_path / "review.db")
         install_judge(monkeypatch, category=category)
         brains = install_brain(monkeypatch)
-        with ReviewStore.open(settings.db_path) as store:
-            store.enable(GIT_REPO_KEY)
+        async with await ReviewStore.open(settings.db_path) as store:
+            await store.enable(GIT_REPO_KEY)
         sessions = [
             ("s1", "2026-06-01T10:00:00+00:00"),
             ("s2", "2026-06-01T15:00:00+00:00"),
@@ -1650,10 +1653,10 @@ class TestParaphraseGrouping:
         for session, text in (("s1", CORRECTION), ("s2", SECOND_CORRECTION)):
             await seed_corrections(store, settings, tmp_path, [text], session=session)
             await judge_pass(store, settings=settings)
-        [candidate] = store.candidates(REPO)
+        [candidate] = await store.candidates(REPO)
         assert (candidate["rule"], candidate["source_kind"]) == ("prefer-uv-over-pip", "transcript_message")
         assert candidate["observations"] == 2
-        status = store.threshold_status(int(str(candidate["id"])), settings=settings)
+        status = await store.threshold_status(int(str(candidate["id"])), settings=settings)
         assert status.sessions == 2
 
     async def test_distinct_slugs_yield_two_candidates(
@@ -1664,7 +1667,7 @@ class TestParaphraseGrouping:
         for session, text in (("s1", CORRECTION), ("s2", SECOND_CORRECTION)):
             await seed_corrections(store, settings, tmp_path, [text], session=session)
             await judge_pass(store, settings=settings)
-        candidates = store.candidates(REPO)
+        candidates = await store.candidates(REPO)
         assert len(candidates) == 2
         assert {str(c["rule"]) for c in candidates} == {
             default_slug_for(CORRECTION),
@@ -1690,10 +1693,10 @@ class TestSlugRegroupE2E:
         report = await judge_pass(store, settings=settings)
         assert len(calls) == 1
         assert report.judged == 1
-        [candidate] = store.candidates(REPO)
+        [candidate] = await store.candidates(REPO)
         assert (candidate["rule"], candidate["source_kind"]) == ("prefer-specific-except", "plan_review")
         assert candidate["observations"] == 1
-        status = store.threshold_status(int(str(candidate["id"])), settings=settings)
+        status = await store.threshold_status(int(str(candidate["id"])), settings=settings)
         assert status.sessions == 1
 
     async def test_answered_question_regroups_under_the_durable_slug(
@@ -1710,15 +1713,15 @@ class TestSlugRegroupE2E:
         assert await scan_transcript(store, transcript, settings=settings, repo_key=REPO) == ScanReport(
             scanned=1, inserted=1
         )
-        [before] = store.candidates(REPO)
+        [before] = await store.candidates(REPO)
         assert before["rule"] == dedup_key("question_answer", QUESTION, ANSWER)
         calls = install_judge(monkeypatch, slug="prefer-selectolax-parser")
         report = await judge_pass(store, settings=settings)
         assert (report.judged, report.merged, len(calls)) == (1, 1, 1)
-        [after] = store.candidates(REPO)
+        [after] = await store.candidates(REPO)
         assert (after["rule"], after["source_kind"]) == ("prefer-selectolax-parser", "question_answer")
         assert after["observations"] == 1
-        status = store.threshold_status(int(str(after["id"])), settings=settings)
+        status = await store.threshold_status(int(str(after["id"])), settings=settings)
         assert status.sessions == 1
 
 
@@ -1729,7 +1732,7 @@ class TestSuggestionPlumbing:
     ) -> None:
         install_fake_embedder(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION], session="s1")
-        store.record_verdict(
+        await store.record_verdict(
             dedup_key("transcript_message", "s1", CORRECTION),
             Verdict(canonical_key="prefer-uv-over-pip", summary="always use uv"),
             role=JUDGE_ROLE,
@@ -1738,7 +1741,7 @@ class TestSuggestionPlumbing:
             fidelity="full",
         )
         await seed_corrections(store, settings, tmp_path, [SECOND_CORRECTION], session="s2")
-        store.record_verdict(
+        await store.record_verdict(
             dedup_key("transcript_message", "s2", SECOND_CORRECTION),
             Verdict(canonical_key="prefer-frozen-dataclasses", summary="always freeze config"),
             role=JUDGE_ROLE,
@@ -1746,7 +1749,7 @@ class TestSuggestionPlumbing:
             model="m1",
             fidelity="full",
         )
-        assert store.has_verdict_evidence()
+        assert await store.has_verdict_evidence()
         query = f"{CORRECTION}\nalways use uv"
         await seed_corrections(store, settings, tmp_path, [query], session="s3")
         calls = install_judge(monkeypatch, slug="prefer-uv-over-pip")
@@ -1762,7 +1765,7 @@ class TestSuggestionPlumbing:
     ) -> None:
         install_fake_embedder(monkeypatch)
         await seed_corrections(store, settings, tmp_path, [CORRECTION], session="s1")
-        store.record_verdict(
+        await store.record_verdict(
             dedup_key("transcript_message", "s1", CORRECTION),
             Verdict(canonical_key="prefer-uv-over-pip"),
             role=JUDGE_ROLE,
@@ -1772,7 +1775,7 @@ class TestSuggestionPlumbing:
         )
         await seed_corrections(store, settings, tmp_path, [SECOND_CORRECTION], session="s2")
         digest_key = "deadbeef" * 8
-        store.record_verdict(
+        await store.record_verdict(
             dedup_key("transcript_message", "s2", SECOND_CORRECTION),
             Verdict(canonical_key=digest_key),
             role=JUDGE_ROLE,
@@ -1780,7 +1783,7 @@ class TestSuggestionPlumbing:
             model="m1",
             fidelity="full",
         )
-        raw = suggest_canonical_keys(store, THIRD_CORRECTION, prompt_version=store.versions.create, k=5)
+        raw = await suggest_canonical_keys(store.db, THIRD_CORRECTION, prompt_version=store.versions.create, k=5)
         assert {"prefer-uv-over-pip", digest_key} <= {suggestion.canonical_key for suggestion in raw}
         await seed_corrections(store, settings, tmp_path, [THIRD_CORRECTION], session="s3")
         calls = install_judge(monkeypatch, slug="prefer-uv-over-pip")
@@ -1808,18 +1811,18 @@ class TestRescanIdempotency:
         path = tmp_path / "s.jsonl"
         write_transcript(path, self.rounds(QUESTION))
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
-        assert (count_rows(store, "candidate_observations"), count_rows(store, "feedback_events")) == (1, 1)
-        watermark = (store.file_mtimes())[str(path)]
+        assert (await count_rows(store, "candidate_observations"), await count_rows(store, "feedback_events")) == (1, 1)
+        watermark = (await store.file_mtimes())[str(path)]
 
         write_transcript(path, [*self.rounds(QUESTION), *chatter])
         os.utime(path, (watermark + 10, watermark + 10))
         assert (await scan_transcript(store, path, settings=settings, repo_key=REPO)).scanned == 1
-        assert (count_rows(store, "candidate_observations"), count_rows(store, "feedback_events")) == (1, 1)
-        advanced = (store.file_mtimes())[str(path)]
+        assert (await count_rows(store, "candidate_observations"), await count_rows(store, "feedback_events")) == (1, 1)
+        advanced = (await store.file_mtimes())[str(path)]
         assert advanced > watermark
 
         write_transcript(path, [*self.rounds(QUESTION, OTHER_QUESTION), *chatter])
         os.utime(path, (advanced + 10, advanced + 10))
         await scan_transcript(store, path, settings=settings, repo_key=REPO)
-        assert count_rows(store, "candidate_observations") == 2
-        assert count_rows(store, "feedback_events") == 2
+        assert await count_rows(store, "candidate_observations") == 2
+        assert await count_rows(store, "feedback_events") == 2

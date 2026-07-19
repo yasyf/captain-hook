@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+import pytest_asyncio
 from cc_transcript import parse_events_from_bytes
 from cc_transcript.context import SUMMARY_LABEL, ContextWindow, TurnRef
 from cc_transcript.decisions import Decision
@@ -44,6 +45,8 @@ from tests.review_helpers import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from cc_transcript.decisions import DecisionLog
     from cc_transcript.models import TranscriptEvent
 
@@ -123,9 +126,9 @@ def fixture_events(name: str) -> list[TranscriptEvent]:
     return parse_events_from_bytes((FIXTURES / name).read_bytes())
 
 
-def seed_fixture_decisions(decisions: DecisionLog, name: str) -> None:
+async def seed_fixture_decisions(decisions: DecisionLog, name: str) -> None:
     for row in MANIFEST["files"][name]["decision_rows"]:
-        decisions.append(
+        await decisions.append(
             Decision(
                 ts_ms=row["ts_ms"],
                 session_id=SessionId(row["session_id"]),
@@ -170,12 +173,13 @@ def complaint_entries(complaint: str, *, session: str = "sess-1") -> list[dict[s
     ]
 
 
-@pytest.fixture
-def decisions() -> DecisionLog:
-    return open_decision_log(decisions_db_path())
+@pytest_asyncio.fixture
+async def decisions() -> AsyncIterator[DecisionLog]:
+    async with await open_decision_log(decisions_db_path()) as log:
+        yield log
 
 
-def seed_decision(
+async def seed_decision(
     decisions: DecisionLog,
     *,
     ts_ms: int = BASE_MS - 10_000,
@@ -187,7 +191,7 @@ def seed_decision(
     message: str | None = NUDGE_MESSAGE,
     tool_digest: ToolDigest | None = GIT_STATUS_DIGEST,
 ) -> None:
-    decisions.append(
+    await decisions.append(
         Decision(
             ts_ms=ts_ms,
             session_id=SessionId(session_id),
@@ -202,8 +206,8 @@ def seed_decision(
     )
 
 
-def rows(store: ReviewStore, query: str) -> list[dict[str, Any]]:
-    return [dict(row) for row in store.store.sql(query)]
+async def rows(store: ReviewStore, query: str) -> list[dict[str, Any]]:
+    return await store.db.sql(query)
 
 
 class TestMarkers:
@@ -556,52 +560,52 @@ class TestPackIndex:
 
 
 class TestNamedHookTarget:
-    def test_unique_kind_match_attributes(self, decisions: DecisionLog) -> None:
-        seed_decision(decisions, kind="task_tracking:nudge_abc12345")
-        fire = named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS)
+    async def test_unique_kind_match_attributes(self, decisions: DecisionLog) -> None:
+        await seed_decision(decisions, kind="task_tracking:nudge_abc12345")
+        fire = await named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS)
         assert fire is not None
         assert fire.kind == "task_tracking:nudge_abc12345"
 
-    def test_same_kind_twice_returns_nearest(self, decisions: DecisionLog) -> None:
-        seed_decision(decisions, kind="task_tracking:nudge_abc12345", ts_ms=BASE_MS - 120_000)
-        seed_decision(decisions, kind="task_tracking:nudge_abc12345", ts_ms=BASE_MS - 4_000)
-        fire = named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS)
+    async def test_same_kind_twice_returns_nearest(self, decisions: DecisionLog) -> None:
+        await seed_decision(decisions, kind="task_tracking:nudge_abc12345", ts_ms=BASE_MS - 120_000)
+        await seed_decision(decisions, kind="task_tracking:nudge_abc12345", ts_ms=BASE_MS - 4_000)
+        fire = await named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS)
         assert fire is not None
         assert fire.ts_ms == BASE_MS - 4_000
 
-    def test_two_kinds_sharing_a_stem_fail_closed(self, decisions: DecisionLog) -> None:
-        seed_decision(decisions, kind="task_tracking:nudge_aaaa1111", ts_ms=BASE_MS - 8_000)
-        seed_decision(decisions, kind="task_tracking:gate_bbbb2222", ts_ms=BASE_MS - 6_000)
-        assert named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS) is None
+    async def test_two_kinds_sharing_a_stem_fail_closed(self, decisions: DecisionLog) -> None:
+        await seed_decision(decisions, kind="task_tracking:nudge_aaaa1111", ts_ms=BASE_MS - 8_000)
+        await seed_decision(decisions, kind="task_tracking:gate_bbbb2222", ts_ms=BASE_MS - 6_000)
+        assert await named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS) is None
 
-    def test_two_named_hooks_both_fired_fail_closed(self, decisions: DecisionLog) -> None:
-        seed_decision(decisions, kind="task_tracking:nudge_abc12345", ts_ms=BASE_MS - 8_000)
-        seed_decision(decisions, kind="lint_guard:nudge_def67890", ts_ms=BASE_MS - 6_000)
+    async def test_two_named_hooks_both_fired_fail_closed(self, decisions: DecisionLog) -> None:
+        await seed_decision(decisions, kind="task_tracking:nudge_abc12345", ts_ms=BASE_MS - 8_000)
+        await seed_decision(decisions, kind="lint_guard:nudge_def67890", ts_ms=BASE_MS - 6_000)
         text = "the task-tracking hook and the lint-guard hook both misfired on me"
-        assert named_hook_target(text, decisions, SessionId("sess-1"), BASE_MS) is None
+        assert await named_hook_target(text, decisions, SessionId("sess-1"), BASE_MS) is None
 
-    def test_no_match_outside_the_window(self, decisions: DecisionLog) -> None:
-        seed_decision(decisions, kind="task_tracking:nudge_abc12345", ts_ms=BASE_MS - 3_600_000)
-        assert named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS) is None
+    async def test_no_match_outside_the_window(self, decisions: DecisionLog) -> None:
+        await seed_decision(decisions, kind="task_tracking:nudge_abc12345", ts_ms=BASE_MS - 3_600_000)
+        assert await named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS) is None
 
-    def test_no_match_when_named_hook_never_fired(self, decisions: DecisionLog) -> None:
-        seed_decision(decisions, kind="lint_guard:nudge_abc12345")
-        assert named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS) is None
+    async def test_no_match_when_named_hook_never_fired(self, decisions: DecisionLog) -> None:
+        await seed_decision(decisions, kind="lint_guard:nudge_abc12345")
+        assert await named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS) is None
 
-    def test_no_match_when_complaint_names_no_hook(self, decisions: DecisionLog) -> None:
-        seed_decision(decisions, kind="task_tracking:nudge_abc12345")
+    async def test_no_match_when_complaint_names_no_hook(self, decisions: DecisionLog) -> None:
+        await seed_decision(decisions, kind="task_tracking:nudge_abc12345")
         text = "the task tracker reminder misfired again on a done task"
-        assert named_hook_target(text, decisions, SessionId("sess-1"), BASE_MS) is None
+        assert await named_hook_target(text, decisions, SessionId("sess-1"), BASE_MS) is None
 
-    def test_fileless_decision_is_excluded(self, decisions: DecisionLog) -> None:
-        seed_decision(decisions, kind="task_tracking:nudge_abc12345", source_file="")
-        assert named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS) is None
+    async def test_fileless_decision_is_excluded(self, decisions: DecisionLog) -> None:
+        await seed_decision(decisions, kind="task_tracking:nudge_abc12345", source_file="")
+        assert await named_hook_target(TASK_TRACKING_COMPLAINT, decisions, SessionId("sess-1"), BASE_MS) is None
 
 
 class TestDetector:
-    def test_real_misfire_complaint_attributes_to_user_hook_not_primitive(self, decisions: DecisionLog) -> None:
-        seed_fixture_decisions(decisions, MISFIRE_FIXTURE)
-        [sig] = iter_hook_complaint_signals(fixture_events(MISFIRE_FIXTURE), decisions=decisions, index=INDEX)
+    async def test_real_misfire_complaint_attributes_to_user_hook_not_primitive(self, decisions: DecisionLog) -> None:
+        await seed_fixture_decisions(decisions, MISFIRE_FIXTURE)
+        [sig] = [s async for s in iter_hook_complaint_signals(fixture_events(MISFIRE_FIXTURE), decisions=decisions, index=INDEX)]
         assert sig.kind == HOOK_COMPLAINT
         assert "re-fired unnecessarily and I am ignoring the repeats" in sig.text
         assert sig.evidence["target_source_file"] == ".claude/hooks/status_nudge.py"
@@ -616,11 +620,11 @@ class TestDetector:
         assert sig.signal.reasons == ("strong_marker", "refire")
 
     @pytest.mark.parametrize("name", ["fire-compliance.jsonl", "fire-block.jsonl", "fire-stop.jsonl"])
-    def test_compliance_and_working_fire_fixtures_yield_nothing(self, decisions: DecisionLog, name: str) -> None:
-        seed_fixture_decisions(decisions, name)
-        assert list(iter_hook_complaint_signals(fixture_events(name), decisions=decisions, index=INDEX)) == []
+    async def test_compliance_and_working_fire_fixtures_yield_nothing(self, decisions: DecisionLog, name: str) -> None:
+        await seed_fixture_decisions(decisions, name)
+        assert [s async for s in iter_hook_complaint_signals(fixture_events(name), decisions=decisions, index=INDEX)] == []
 
-    def test_complaint_with_no_preceding_fingerprint_yields_nothing(
+    async def test_complaint_with_no_preceding_fingerprint_yields_nothing(
         self, decisions: DecisionLog, tmp_path: Path
     ) -> None:
         path = tmp_path / "s.jsonl"
@@ -630,11 +634,11 @@ class TestDetector:
             assistant_text(STRONG_COMPLAINT),
         ]
         write_transcript(path, entries)
-        seed_decision(decisions)
+        await seed_decision(decisions)
         events = parse_events_from_bytes(path.read_bytes())
-        assert list(iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)) == []
+        assert [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)] == []
 
-    def test_named_hook_fallback_attributes_when_no_fingerprint_lands(
+    async def test_named_hook_fallback_attributes_when_no_fingerprint_lands(
         self, decisions: DecisionLog, tmp_path: Path
     ) -> None:
         path = tmp_path / "s.jsonl"
@@ -645,9 +649,9 @@ class TestDetector:
             assistant_text(TASK_TRACKING_COMPLAINT),
         ]
         write_transcript(path, entries)
-        seed_decision(decisions, kind="task_tracking:nudge_abc12345")
+        await seed_decision(decisions, kind="task_tracking:nudge_abc12345")
         events = parse_events_from_bytes(path.read_bytes())
-        [sig] = iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)
+        [sig] = [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)]
         assert sig.evidence["attribution"] == "hook_name"
         assert sig.evidence["target_source_file"] == ".claude/hooks/task_tracking.py"
         assert sig.evidence["target_hook_name"] == "task_tracking:nudge_abc12345"
@@ -657,7 +661,7 @@ class TestDetector:
         assert sig.signal.confidence == VERY_HIGH
         assert sig.signal.reasons == ("strong_marker", "misfire")
 
-    def test_named_hook_fallback_stays_closed_when_no_hook_is_named(
+    async def test_named_hook_fallback_stays_closed_when_no_hook_is_named(
         self, decisions: DecisionLog, tmp_path: Path
     ) -> None:
         path = tmp_path / "s.jsonl"
@@ -667,15 +671,15 @@ class TestDetector:
             assistant_text(STRONG_COMPLAINT),
         ]
         write_transcript(path, entries)
-        seed_decision(decisions, kind="task_tracking:nudge_abc12345")
+        await seed_decision(decisions, kind="task_tracking:nudge_abc12345")
         events = parse_events_from_bytes(path.read_bytes())
-        assert list(iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)) == []
+        assert [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)] == []
 
-    def test_complaint_with_no_decision_row_yields_nothing(self, decisions: DecisionLog) -> None:
+    async def test_complaint_with_no_decision_row_yields_nothing(self, decisions: DecisionLog) -> None:
         events = fixture_events(MISFIRE_FIXTURE)
-        assert list(iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)) == []
+        assert [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)] == []
 
-    def test_fingerprints_attributing_to_two_targets_drop(self, decisions: DecisionLog, tmp_path: Path) -> None:
+    async def test_fingerprints_attributing_to_two_targets_drop(self, decisions: DecisionLog, tmp_path: Path) -> None:
         other_message = "Prefer `eza` over `ls` in this repo."
         path = tmp_path / "s.jsonl"
         entries = [
@@ -687,8 +691,8 @@ class TestDetector:
             assistant_text(STRONG_COMPLAINT),
         ]
         write_transcript(path, entries)
-        seed_decision(decisions)
-        seed_decision(
+        await seed_decision(decisions)
+        await seed_decision(
             decisions,
             kind="other_hook:nudge_deadbeef",
             source_file="/repo/.claude/hooks/other.py",
@@ -696,9 +700,9 @@ class TestDetector:
             tool_digest=tool_digest("Bash", {"command": "ls"}),
         )
         events = parse_events_from_bytes(path.read_bytes())
-        assert list(iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)) == []
+        assert [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)] == []
 
-    def test_anonymous_declarative_fire_drops(self, decisions: DecisionLog, tmp_path: Path) -> None:
+    async def test_anonymous_declarative_fire_drops(self, decisions: DecisionLog, tmp_path: Path) -> None:
         deny = "BLOCKED: recursive force-delete (rm -rf) is forbidden in this repo."
         path = tmp_path / "s.jsonl"
         entries = [
@@ -707,7 +711,7 @@ class TestDetector:
             assistant_text(f"That rm guard misfired - the path is a scratch dir. {deny}"),
         ]
         write_transcript(path, entries)
-        seed_decision(
+        await seed_decision(
             decisions,
             kind="declarative_1",
             source_file="",
@@ -716,9 +720,9 @@ class TestDetector:
             tool_digest=tool_digest("Bash", {"command": "rm -rf scratch"}),
         )
         events = parse_events_from_bytes(path.read_bytes())
-        assert list(iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)) == []
+        assert [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)] == []
 
-    def test_tight_proximity_bumps_hedged_to_high(self, decisions: DecisionLog, tmp_path: Path) -> None:
+    async def test_tight_proximity_bumps_hedged_to_high(self, decisions: DecisionLog, tmp_path: Path) -> None:
         path = tmp_path / "s.jsonl"
         entries = [
             user_text("run a status check"),
@@ -727,14 +731,14 @@ class TestDetector:
             assistant_text(HEDGED_COMPLAINT),
         ]
         write_transcript(path, entries)
-        seed_decision(decisions)
+        await seed_decision(decisions)
         events = parse_events_from_bytes(path.read_bytes())
-        [sig] = iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)
+        [sig] = [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)]
         assert sig.signal is not None
         assert sig.signal.confidence == MEDIUM + 0.25
         assert sig.signal.reasons == ("hedged_marker", "misfire", "tight_proximity")
 
-    def test_digestless_stop_complaint_attributes_via_nearest(self, decisions: DecisionLog, tmp_path: Path) -> None:
+    async def test_digestless_stop_complaint_attributes_via_nearest(self, decisions: DecisionLog, tmp_path: Path) -> None:
         path = tmp_path / "s.jsonl"
         entries = [
             user_text("wrap up the change"),
@@ -743,7 +747,7 @@ class TestDetector:
             assistant_text(STOP_COMPLAINT),
         ]
         write_transcript(path, entries)
-        seed_decision(
+        await seed_decision(
             decisions,
             kind="stop_reminder:gate_e76ccd07",
             event="Stop",
@@ -752,13 +756,13 @@ class TestDetector:
             tool_digest=None,
         )
         events = parse_events_from_bytes(path.read_bytes())
-        [sig] = iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)
+        [sig] = [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)]
         assert sig.evidence["target_source_file"] == ".claude/hooks/stop_reminder.py"
         assert sig.evidence["target_hook_name"] == "stop_reminder:gate_e76ccd07"
         assert (sig.evidence["event"], sig.evidence["action"]) == ("Stop", "block")
         assert sig.evidence["misfire_class"] == "already_addressed"
 
-    def test_digestless_attribution_requires_the_message_tiebreak(self, decisions: DecisionLog, tmp_path: Path) -> None:
+    async def test_digestless_attribution_requires_the_message_tiebreak(self, decisions: DecisionLog, tmp_path: Path) -> None:
         path = tmp_path / "s.jsonl"
         entries = [
             user_text("wrap up the change"),
@@ -767,7 +771,7 @@ class TestDetector:
             assistant_text(STOP_COMPLAINT),
         ]
         write_transcript(path, entries)
-        seed_decision(
+        await seed_decision(
             decisions,
             kind="other_gate:gate_deadbeef",
             event="Stop",
@@ -776,7 +780,7 @@ class TestDetector:
             tool_digest=None,
         )
         events = parse_events_from_bytes(path.read_bytes())
-        assert list(iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)) == []
+        assert [s async for s in iter_hook_complaint_signals(events, decisions=decisions, index=INDEX)] == []
 
 
 class TestStrictFixPartition:
@@ -793,9 +797,9 @@ class TestStrictFixPartition:
         self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog, tmp_path: Path
     ) -> None:
         path = write_transcript(tmp_path / "s.jsonl", self.hedged_entries())
-        seed_decision(decisions)
+        await seed_decision(decisions)
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
-        [event] = rows(store, "SELECT * FROM feedback_events")
+        [event] = await rows(store, "SELECT * FROM feedback_events")
         assert event["source_kind"] == HOOK_COMPLAINT
         assert json.loads(str(event["payload_json"]))["signal"]["confidence"] == MEDIUM
 
@@ -804,10 +808,10 @@ class TestStrictFixPartition:
     ) -> None:
         raised = ReviewSettings(db_path=settings.db_path, min_confidence_fix=HIGH)
         path = write_transcript(tmp_path / "s.jsonl", self.hedged_entries())
-        seed_decision(decisions)
+        await seed_decision(decisions)
         assert await scan_transcript(store, path, settings=raised, repo_key=REPO) == ScanReport(scanned=1, inserted=0)
-        assert rows(store, "SELECT * FROM feedback_events") == []
-        assert rows(store, "SELECT * FROM candidates") == []
+        assert await rows(store, "SELECT * FROM feedback_events") == []
+        assert await rows(store, "SELECT * FROM candidates") == []
 
 
 class TestFixGroupingAndStore:
@@ -815,17 +819,17 @@ class TestFixGroupingAndStore:
         self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog
     ) -> None:
         path = FIXTURES / MISFIRE_FIXTURE
-        seed_fixture_decisions(decisions, MISFIRE_FIXTURE)
+        await seed_fixture_decisions(decisions, MISFIRE_FIXTURE)
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
 
-        [event] = rows(store, "SELECT * FROM feedback_events")
+        [event] = await rows(store, "SELECT * FROM feedback_events")
         assert event["source_kind"] == HOOK_COMPLAINT
         payload = json.loads(str(event["payload_json"]))
         assert payload["target_source_file"] == ".claude/hooks/status_nudge.py"
         assert payload["signal"]["confidence"] == VERY_HIGH
         assert ContextWindow.from_json(str(event["context_json"])).anchor is not None
 
-        [candidate] = rows(store, "SELECT * FROM candidates")
+        [candidate] = await rows(store, "SELECT * FROM candidates")
         assert (candidate["candidate_kind"], candidate["status"]) == ("fix", "watching")
         assert candidate["target_source_file"] == ".claude/hooks/status_nudge.py"
         assert candidate["target_hook_name"] == "status_nudge:nudge_c424798f"
@@ -834,9 +838,9 @@ class TestFixGroupingAndStore:
             "hook_complaint", "status_nudge:nudge_c424798f", ".claude/hooks/status_nudge.py"
         )
 
-        store.enable(REPO)
-        [observation] = rows(store, "SELECT * FROM candidate_observations")
-        store.record_verdict(
+        await store.enable(REPO)
+        [observation] = await rows(store, "SELECT * FROM candidate_observations")
+        await store.record_verdict(
             DedupKey(str(observation["dedup_key"])),
             Verdict(),
             role="judge",
@@ -844,29 +848,29 @@ class TestFixGroupingAndStore:
             model="m1",
             fidelity="full",
         )
-        status = store.threshold_status(int(candidate["id"]), settings=settings)
+        status = await store.threshold_status(int(candidate["id"]), settings=settings)
         assert (status.sessions, status.single_observation) == (1, True)
-        assert store.eligible(int(candidate["id"]), settings=settings)
+        assert await store.eligible(int(candidate["id"]), settings=settings)
 
     async def test_two_sessions_complaints_about_one_hook_group_under_one_candidate(
         self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog, tmp_path: Path
     ) -> None:
         for session in ("s1", "s2"):
             path = write_transcript(tmp_path / f"{session}.jsonl", complaint_entries(STRONG_COMPLAINT, session=session))
-            seed_decision(decisions, session_id=session)
+            await seed_decision(decisions, session_id=session)
             assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(
                 scanned=1, inserted=1
             )
 
-        [candidate] = rows(store, "SELECT * FROM candidates")
+        [candidate] = await rows(store, "SELECT * FROM candidates")
         assert candidate["candidate_kind"] == "fix"
-        observations = rows(store, "SELECT * FROM candidate_observations")
+        observations = await rows(store, "SELECT * FROM candidate_observations")
         assert {row["candidate_id"] for row in observations} == {candidate["id"]}
         assert {row["session_id"] for row in observations} == {"s1", "s2"}
 
-        store.enable(REPO)
+        await store.enable(REPO)
         for observation in observations:
-            store.record_verdict(
+            await store.record_verdict(
                 DedupKey(str(observation["dedup_key"])),
                 Verdict(),
                 role="judge",
@@ -874,9 +878,9 @@ class TestFixGroupingAndStore:
                 model="m1",
                 fidelity="full",
             )
-        status = store.threshold_status(int(candidate["id"]), settings=settings)
+        status = await store.threshold_status(int(candidate["id"]), settings=settings)
         assert status.sessions == 2
-        assert store.eligible(int(candidate["id"]), settings=settings)
+        assert await store.eligible(int(candidate["id"]), settings=settings)
 
 
 class TestPackTargetRouting:
@@ -884,9 +888,9 @@ class TestPackTargetRouting:
         self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog, tmp_path: Path
     ) -> None:
         path = write_transcript(tmp_path / "s.jsonl", complaint_entries(STRONG_COMPLAINT))
-        seed_decision(decisions, kind="general.docs:nudge_1a2b3c4d")
+        await seed_decision(decisions, kind="general.docs:nudge_1a2b3c4d")
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
-        [candidate] = rows(store, "SELECT * FROM candidates")
+        [candidate] = await rows(store, "SELECT * FROM candidates")
         assert candidate["repo_key"] == "github.com/yasyf/captain-hook"
         assert candidate["origin_repo_key"] == REPO
         assert candidate["pack_name"] == "general"
@@ -911,9 +915,9 @@ class TestPackTargetRouting:
             assistant_text(STRONG_COMPLAINT, cwd=str(root)),
         ]
         path = write_transcript(tmp_path / "s.jsonl", entries)
-        seed_decision(decisions, kind=NOTIFY_KIND, source_file=NOTIFY_SOURCE)
+        await seed_decision(decisions, kind=NOTIFY_KIND, source_file=NOTIFY_SOURCE)
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
-        [candidate] = rows(store, "SELECT * FROM candidates")
+        [candidate] = await rows(store, "SELECT * FROM candidates")
         assert candidate["repo_key"] == NOTIFY_REPO
         assert candidate["origin_repo_key"] == REPO
         assert candidate["pack_name"] == "notify"
@@ -924,9 +928,9 @@ class TestPackTargetRouting:
         self, store: ReviewStore, settings: ReviewSettings, decisions: DecisionLog, tmp_path: Path
     ) -> None:
         path = write_transcript(tmp_path / "s.jsonl", complaint_entries(STRONG_COMPLAINT))
-        seed_decision(decisions)
+        await seed_decision(decisions)
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
-        [candidate] = rows(store, "SELECT * FROM candidates")
+        [candidate] = await rows(store, "SELECT * FROM candidates")
         assert candidate["repo_key"] == REPO
         assert candidate["origin_repo_key"] is None
         assert candidate["pack_name"] is None
