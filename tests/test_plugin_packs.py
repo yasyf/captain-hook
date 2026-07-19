@@ -533,3 +533,15 @@ def test_test_subcommand_never_resolves_plugin_packs(
 
     CliState(root=root).discover()  # full-scope control DOES resolve the plugin pack
     assert calls.exists()
+
+
+def test_pack_list_renders_builtin_and_plugin_ids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    plugin = write_plugin_pack(tmp_path, "show")
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("show@mkt", plugin)])
+
+    result = run_cli("pack", "list", root_dir=str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "builtin:general" in result.stdout  # an active wheel builtin renders with its namespaced id
+    assert "plugin:show@mkt" in result.stdout  # the enabled plugin's pack renders with its full plugin id
