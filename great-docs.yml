@@ -259,6 +259,8 @@ reference:
       - excerpt_around
       - COMMENT_TYPES
 
+# Composed by concatenation after each repo's local fragment: top-level keys
+# here must not collide with any repo fragment (last key silently wins).
 parser: google
 github_style: widget
 jupyter: python3
@@ -266,3 +268,4 @@ dark_mode_toggle: true
 back_to_top: true
 keyboard_nav: true
 fast_sidebar: true
+freeze: auto
