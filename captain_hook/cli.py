@@ -11,7 +11,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import click
 from cc_transcript.ids import SessionId
@@ -56,19 +56,29 @@ EVENT_NAMES = ", ".join(n for e in Event if (n := e.name))
 
 DECISION_EVENTS = frozenset({Event.PreToolUse, Event.Stop, Event.SubagentStop, Event.PermissionRequest})
 
+type DiscoveryScope = Literal["all", "declared", "hooks"]
+
 
 @dataclass(frozen=True, slots=True)
 class CliState:
     root: Path
-    hooks: str
+    hooks: str | None = None
 
-    def discover(self) -> list[manager.ResolvedPack]:
+    @property
+    def hooks_dir(self) -> str:
+        return self.hooks or str(self.root / ".claude" / "hooks")
+
+    def discover(self, *, scope: DiscoveryScope = "all") -> list[manager.ResolvedPack]:
         reset()
         load_gitignore(self.root)
-        discover_hooks(self.hooks)
+        discover_hooks(self.hooks_dir)
+        if scope == "hooks":
+            return []
         entries = manager.read_config_entries(self.root)
         resolved, missing = manager.resolve_enabled_packs(self.root, entries)
-        plugin_packs = plugins.resolve_plugin_packs(self.root, declared={e.name for e in entries})
+        plugin_packs = (
+            plugins.resolve_plugin_packs(self.root, declared={e.name for e in entries}) if scope == "all" else []
+        )
         packs = [*resolved, *plugin_packs]
         for pack_ in packs:
             discover_pack(pack_.entry.name, pack_.path)
@@ -468,7 +478,7 @@ def cli(ctx: click.Context, hooks: str | None, root_path: str | None) -> None:
     from captain_hook.util.paths import resolve_project_dir
 
     root = Path(root_path) if root_path else Path(p) if (p := resolve_project_dir()) else Path.cwd()
-    ctx.obj = CliState(root=root, hooks=hooks or str(root / ".claude" / "hooks"))
+    ctx.obj = CliState(root=root, hooks=hooks)
 
 
 @cli.command(
@@ -486,8 +496,14 @@ def run(state: CliState, event: str, async_: bool) -> None:
 @click.option("--json", "json_output", is_flag=True, default=False, help="Emit one JSON record per test (CI mode)")
 @click.pass_obj
 def test(state: CliState, json_output: bool) -> None:
-    """Run inline tests from all registered hooks."""
-    state.discover()
+    """Run inline tests from the project's own hooks.
+
+    Covers the default hooks directory plus the packs declared in .claude/capt-hook.toml;
+    with --hooks, only that directory. Packs shipped by installed Claude Code plugins are
+    excluded; their own repositories test them. Tests run under a throwaway HOME so live
+    machine state never leaks into fixtures.
+    """
+    state.discover(scope="declared" if state.hooks is None else "hooks")
     run_tests(json_output=json_output)
 
 

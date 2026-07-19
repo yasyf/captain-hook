@@ -110,7 +110,7 @@ class Server:
         self.foreground = foreground
         self.argv = list(argv) if argv is not None else default_argv(root, foreground=foreground)
         self.key = worker_key(str(root), os.environ)
-        self.cli_state = CliState(root=root, hooks=str(root / ".claude" / "hooks"))
+        self.cli_state = CliState(root=root)
         self.registry = Registry(self.cli_state)
         self.build = lifecycle.build_id()
         self.version = importlib.metadata.version(DIST_NAME)

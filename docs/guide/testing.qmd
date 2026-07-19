@@ -31,8 +31,12 @@ field per event payload; see [Input fields](#input-fields) for the full list.
 
 ## Run the tests
 
-From your project root, run the test command. With no `--hooks` flag it discovers
-`.claude/hooks`.
+From your project root, run the test command. With no `--hooks` flag it covers your
+project's own surface, the `.claude/hooks` directory plus any packs declared in
+`.claude/capt-hook.toml`. Pass `--hooks DIR` to test only that directory. Packs shipped
+by installed Claude Code plugins are excluded; their own repositories test them. Tests
+execute under a throwaway `$HOME`, so hooks that read machine state behave identically
+on every machine.
 
 ```bash
 uvx capt-hook test

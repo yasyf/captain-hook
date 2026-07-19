@@ -450,6 +450,35 @@ class TestInlineLlmOverrides:
         assert all(r[2] for r in results), f"Failed: {results}"
 
 
+class TestScratchHome:
+    def test_inline_tests_execute_under_scratch_home(self):
+        from captain_hook.app import on
+        from captain_hook.testing.helpers import run_inline_tests
+        from captain_hook.testing.types import Allow, Input
+        from captain_hook.util.paths import resolve_cache_home
+
+        reset()
+        recorded: dict[str, str | None] = {}
+
+        @on(Event.PreToolUse, tests={Input(command="echo hi"): Allow()})
+        def record_home(evt):
+            recorded["home"] = os.environ["HOME"]
+            recorded["xdg"] = os.environ.get("XDG_CACHE_HOME")
+            return None
+
+        real_home = os.environ["HOME"]
+        real_cache = str(resolve_cache_home())
+        saved_xdg = os.environ.get("XDG_CACHE_HOME")
+
+        results = run_inline_tests()
+
+        assert len(results) == 1 and results[0][2], f"Failed: {results}"
+        assert recorded["home"] != real_home, "handler saw the real HOME, not the scratch dir"
+        assert recorded["xdg"] == real_cache, "XDG_CACHE_HOME was not pinned to the real cache home"
+        assert os.environ["HOME"] == real_home, "HOME not restored after the run"
+        assert os.environ.get("XDG_CACHE_HOME") == saved_xdg, "XDG_CACHE_HOME not restored after the run"
+
+
 class TestDispatchTest:
     def test_dispatch_test_returns_result(self):
         from tests.helpers import dispatch_test

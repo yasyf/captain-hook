@@ -8,7 +8,7 @@ import re
 import shutil
 import tempfile
 from collections.abc import Iterator
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
@@ -642,6 +642,28 @@ def isolated_state_root() -> Iterator[Path]:
 
 
 @contextmanager
+def pinned_caches() -> Iterator[None]:
+    """Pin toolchain caches (``XDG_CACHE_HOME``, ``WN_DATA_DIR``) to their real locations so a scratch
+    ``$HOME`` never hides provisioned NLP resources."""
+    from captain_hook.util.paths import resolve_cache_home
+
+    pins = {
+        "XDG_CACHE_HOME": str(resolve_cache_home()),
+        "WN_DATA_DIR": os.environ.get("WN_DATA_DIR") or str(Path.home() / ".wn_data"),
+    }
+    saved = {key: os.environ.get(key) for key in pins}
+    os.environ.update(pins)
+    try:
+        yield
+    finally:
+        for key, prior in saved.items():
+            if prior is None:
+                del os.environ[key]
+            else:
+                os.environ[key] = prior
+
+
+@contextmanager
 def home_env(home: str) -> Iterator[None]:
     """Swap ``$HOME`` to ``home`` for the duration, restoring the prior value even on failure."""
     saved = os.environ.get("HOME")
@@ -660,7 +682,8 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
 
     results: list[tuple[str, str, bool, str]] = []
 
-    with isolated_state_root():
+    with isolated_state_root() as state_root, pinned_caches():
+        (scratch_home := state_root / "home").mkdir()
         for entry in _state.hooks:
             if not entry.spec.tests:
                 continue
@@ -679,7 +702,7 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
                             if spec_tools
                             else None,
                         )
-                        with home_env(home_dir) if (home_dir := evt.__dict__.get("_home_dir")) else nullcontext():
+                        with home_env(evt.__dict__.get("_home_dir") or str(scratch_home)):
                             hook_result = (
                                 execute_hook(entry, evt)
                                 if matches_conditions(entry.spec, evt) and not is_planning_agent_skip(entry.spec, evt)
@@ -687,7 +710,8 @@ def run_inline_tests() -> list[tuple[str, str, bool, str]]:
                             )
                         assert_result(hook_result, expected, entry.name)
                     elif jsonl := SessionCache.for_root().load(key):
-                        replays = list(replay_session(entry, jsonl))
+                        with home_env(str(scratch_home)):
+                            replays = list(replay_session(entry, jsonl))
                         if not any(matches_expected(r, expected) for r in replays):
                             assert_result(replays[-1] if replays else None, expected, entry.name)
                     else:

@@ -4,6 +4,23 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Inline tests run under a throwaway `$HOME`.** `capt-hook test` executes each inline test with
+  `HOME` pointed at a per-run scratch directory (per-fixture `FileFixture(home=True)` dirs still take
+  precedence), so fixtures conditioned on live machine state — configured preferences, real dotfiles
+  — behave identically on every machine. Toolchain caches are pinned through the sandbox
+  (`XDG_CACHE_HOME`, `WN_DATA_DIR`), so provisioned NLP resources keep resolving; session-replay
+  fixtures still look up real local sessions.
+
+### Fixed
+- **`capt-hook test` now tests only the project's own surface.** The bare form covers the hooks
+  directory plus the packs declared in `.claude/capt-hook.toml`; `--hooks DIR` covers only that
+  directory and skips pack resolution entirely. Packs shipped by installed Claude Code plugins are no
+  longer swept in — their own repositories test them. Dispatch (`run`, `hooks`, the daemon) still
+  discovers everything.
+
 ## [10.5.0] - 2026-07-20
 
 ### Added

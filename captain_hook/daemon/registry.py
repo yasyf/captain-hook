@@ -129,7 +129,7 @@ class Fingerprint:
         stable = (
             manager.toml_hash(root),
             pack_meta,
-            _hooks_tree(cli_state.hooks),
+            _hooks_tree(cli_state.hooks_dir),
             _stat_entry(root / ".gitignore"),
             _claude_stats(root),
             _plugin_trees(root),

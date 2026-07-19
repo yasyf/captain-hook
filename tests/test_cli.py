@@ -740,3 +740,117 @@ class TestNlpProvisioning:
         provision_mock.side_effect = make_exc()
         provision_nlp(self.pin_resolved_packs(tmp_path, monkeypatch, nlp=True))
         assert "deferred" in capsys.readouterr().out
+
+
+class TestTestSubcommand:
+    def test_hooks_flag_scopes_to_that_directory_only(self, tmp_path: Path) -> None:
+        # --hooks DIR narrows the run to that dir; the project's own .claude/hooks and declared packs are excluded.
+        project = tmp_path / "project"
+        (root_hooks := project / ".claude" / "hooks").mkdir(parents=True)
+        (root_hooks / "__init__.py").write_text("")
+        write_hook(
+            root_hooks,
+            """\
+            from captain_hook.app import hook
+            from captain_hook.types import Event
+            from captain_hook.testing.types import Allow, Input
+
+            hook(Event.PreToolUse, message="SHOULDNOTRUN", block=True, tests={Input(command="echo hi"): Allow()})
+            """,
+            name="bad.py",
+        )
+        (project / ".claude" / "capt-hook.toml").write_text("[packs.general]\n")
+
+        (scoped := tmp_path / "scoped").mkdir()
+        (scoped / "__init__.py").write_text("")
+        write_hook(
+            scoped,
+            """\
+            from captain_hook.app import hook
+            from captain_hook.types import Event
+            from captain_hook.testing.types import Block, Input
+
+            hook(Event.PreToolUse, message="ok", block=True, tests={Input(command="echo hi"): Block()})
+            """,
+            name="good.py",
+        )
+
+        result = run_cli("test", hooks_dir=str(scoped), root_dir=str(project))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "1 tests: 1 passed" in result.stdout
+        assert "FAIL" not in result.stdout
+        assert "SHOULDNOTRUN" not in result.stdout
+
+    def test_bare_run_covers_declared_packs_but_never_resolves_plugin_packs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolate_modules: None
+    ) -> None:
+        from click.testing import CliRunner
+
+        from captain_hook.cli import cli
+        from captain_hook.packs import manager, plugins
+
+        project = tmp_path / "project"
+        (local_hooks := project / ".claude" / "hooks").mkdir(parents=True)
+        (local_hooks / "__init__.py").write_text("")
+        (project / ".claude" / "capt-hook.toml").write_text("[packs.stub]\n")
+
+        (pack_dir := tmp_path / "stub-pack").mkdir()
+        write_hook(
+            pack_dir,
+            """\
+            from captain_hook.app import hook
+            from captain_hook.types import Event
+            from captain_hook.testing.types import Block, Input
+
+            hook(Event.PreToolUse, message="stub", block=True, tests={Input(command="echo hi"): Block()})
+            """,
+            name="h.py",
+        )
+        resolved = [
+            manager.ResolvedPack(
+                entry=manager.BuiltinPack(name="stub"),
+                path=pack_dir,
+                manifest=manager.PackManifest(name="stub", version="0.1.0", description="d", hooks="."),
+            )
+        ]
+        monkeypatch.setattr(manager, "resolve_enabled_packs", lambda _root, _entries: (resolved, []))
+        plugin_calls: list[object] = []
+        monkeypatch.setattr(plugins, "resolve_plugin_packs", lambda *a, **k: (plugin_calls.append(1), [])[1])
+
+        home_before = os.environ["HOME"]
+        result = CliRunner().invoke(cli, ["--root", str(project), "test"])
+
+        assert result.exit_code == 0, result.output
+        assert "1 tests: 1 passed" in result.output
+        assert plugin_calls == [], "`test` resolved plugin packs; it must not"
+        assert os.environ["HOME"] == home_before
+
+    def test_inline_tests_run_under_a_scratch_home(self, tmp_path: Path) -> None:
+        # Hermeticity probe: warns iff a fake-HOME marker is invisible from Path.home().
+        (marker_dir := tmp_path / "fake_home" / ".getawayish").mkdir(parents=True)
+        (marker_dir / "prefs.json").write_text("{}")
+        fake_home = tmp_path / "fake_home"
+
+        (probe_hooks := tmp_path / "probe_hooks").mkdir()
+        (probe_hooks / "__init__.py").write_text("")
+        write_hook(
+            probe_hooks,
+            """\
+            from pathlib import Path
+
+            from captain_hook.app import on
+            from captain_hook.types import Event
+            from captain_hook.testing.types import Input, Warn
+
+            @on(Event.PreToolUse, tests={Input(command="echo hi"): Warn()})
+            def onboard(evt):
+                if not (Path.home() / ".getawayish" / "prefs.json").exists():
+                    return evt.warn("onboarding incomplete")
+                return None
+            """,
+            name="probe.py",
+        )
+
+        result = run_cli("test", hooks_dir=str(probe_hooks), root_dir=str(tmp_path), env={"HOME": str(fake_home)})
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "1 tests: 1 passed" in result.stdout

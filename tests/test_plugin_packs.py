@@ -528,3 +528,42 @@ def test_discover_no_marketplaces_is_zero_marketplace_io(tmp_path: Path, monkeyp
 
     discover(root, tmp_path / "no-hooks")
     assert not bootstrap.bootstrap_dir().exists()  # zero marketplace I/O — no marker dir created
+
+
+# --- test-subcommand scoping (plugin packs are never swept in) ------------------------
+
+
+def test_test_subcommand_never_resolves_plugin_packs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolate_modules: None
+) -> None:
+    # `capt-hook test` never sweeps in plugin packs nor spawns `claude plugin list`.
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    (local_hooks := root / ".claude" / "hooks").mkdir(parents=True)
+    (local_hooks / "__init__.py").write_text("")
+    (local_hooks / "good.py").write_text(
+        "from captain_hook.app import hook\n"
+        "from captain_hook.types import Event\n"
+        "from captain_hook.testing.types import Block, Input\n\n"
+        'hook(Event.PreToolUse, message="ok", block=True, tests={Input(command="echo hi"): Block()})\n'
+    )
+    plugin = write_plugin_dir(tmp_path, "redpack", "1.0.0")
+    (plugin / "h.py").write_text(
+        "from captain_hook.app import hook\n"
+        "from captain_hook.types import Event\n"
+        "from captain_hook.testing.types import Allow, Input\n\n"
+        'hook(Event.PreToolUse, message="RED", block=True, tests={Input(command="echo hi"): Allow()})\n'
+    )
+    calls = tmp_path / "calls"
+    install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/redpack", plugin)])
+
+    result = run_cli("test", root_dir=str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 tests: 1 passed" in result.stdout
+    assert "RED" not in result.stdout  # the plugin pack was not tested
+    assert not calls.exists()  # claude plugin list was never spawned
+
+    from captain_hook.cli import CliState
+
+    CliState(root=root).discover()  # full-scope control DOES resolve the plugin pack
+    assert calls.exists()
