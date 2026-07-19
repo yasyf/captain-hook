@@ -181,9 +181,15 @@ reference:
       - util.fs.read_json
       - util.fs.resolve_binary
       - util.fs.binary_supports
+      - Cmd
+      - Call
+      - Target
+      - Targets
+      - Expansion
       - Command
       - CommandLine
       - Redirect
+      - Word
 
   - title: Tool Calls
     desc: Typed tool-call inputs reached via evt.input and evt.as_input().

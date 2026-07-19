@@ -2,6 +2,7 @@ from cc_transcript.command import Command as Command
 from cc_transcript.command import CommandLine as CommandLine
 from cc_transcript.command import Occurrence as Occurrence
 from cc_transcript.command import Redirect as Redirect
+from cc_transcript.command import Word as Word
 from cc_transcript.tools import BashCall as BashCall
 from cc_transcript.tools import EditCall as EditCall
 from cc_transcript.tools import ExitPlanModeCall as ExitPlanModeCall
@@ -25,6 +26,11 @@ from captain_hook import util as util
 from captain_hook.app import hook as hook
 from captain_hook.app import on as on
 from captain_hook.ast_grep import COMMENT_TYPES as COMMENT_TYPES
+from captain_hook.cmd import Call as Call
+from captain_hook.cmd import Cmd as Cmd
+from captain_hook.cmd import Expansion as Expansion
+from captain_hook.cmd import Target as Target
+from captain_hook.cmd import Targets as Targets
 from captain_hook.conditions import Commits as Commits
 from captain_hook.conditions import EditedSource as EditedSource
 from captain_hook.conditions import FreshSession as FreshSession

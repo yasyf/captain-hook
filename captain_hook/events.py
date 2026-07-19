@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from cc_transcript.ids import ToolDigest
     from cc_transcript.tools import FallbackCall, ToolCall
 
+    from captain_hook.cmd import Cmd
     from captain_hook.context import HookContext
     from captain_hook.tasks import Tasks
     from captain_hook.types import HookResult
@@ -481,6 +482,22 @@ class ToolRewriteEvent(ToolHookEvent):
     Base for the events where Claude Code accepts an ``updatedInput`` decision
     (``PreToolUse`` and ``PermissionRequest``), adding the ``rewrite*`` helpers.
     """
+
+    @cached_property
+    def cmd(self) -> Cmd:
+        """The event's Bash command as a walkable :class:`~captain_hook.cmd.Cmd`.
+
+        Always a ``Cmd`` — an empty or non-Bash command yields one with zero calls — so a handler
+        iterates ``evt.cmd.calls(...)`` or tests ``evt.cmd.call(...)`` without a preceding guard.
+        Rewrites composed via :meth:`~captain_hook.cmd.Call.sub` splice back through this event.
+        """
+        from cc_transcript.command import parse_command_line
+
+        from captain_hook.cmd import Cmd
+        from captain_hook.util.shell import safe_parse_command_line
+
+        line = safe_parse_command_line(self.command or "")
+        return Cmd(line if line is not None else parse_command_line(""), cwd=self.cwd, event=self)
 
     def rewrite(self, updated_input: dict[str, Any], *, note: str | None = None) -> HookResult:
         """Allow the tool but replace its input with ``updated_input`` (Claude Code's ``updatedInput``).
