@@ -4,20 +4,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [10.6.0] - 2026-07-20
-
-### Added
-- **Anti-workaround steering hooks** (steering pack 0.8.0). Two hooks now watch for
-  consumer-side workarounds of first-party (cc-family) dependencies — the pattern where a
-  session papers over a sibling library's missing primitive with local scar tissue instead
-  of fixing it upstream. An edit-time nudge (`upstream_workaround_edit`, PreToolUse) fires
-  when an edit introduces workaround-flavored comments naming a sibling dependency, and a
-  turn-level gate (`upstream_workaround_turn`, Stop) judges the turn's diff and prose,
-  blocking when a first-party workaround lands without an upstream fix or a stated
-  justification. The gate's prefilter demands two distinct evidence families (workaround
-  lexicon, sibling-dep mention, prospective-support phrasing) before the judge runs, and
-  both hooks bias toward silence under uncertainty; intentional degradation and
-  third-party-dependency accommodations stay unflagged.
+## [Unreleased]
 
 ### Changed (BREAKING) — packs are now two providers, zero consumer config
 
@@ -55,6 +42,21 @@ exist. Migration is mechanical but manual — there is no compatibility shim.
   `capt-hook test` now covers only the repo's own `.claude/hooks`.
 - **Misfire routing.** A plugin pack's hook-misfire fix PR routes to the `repository` in its
   `plugin.json` (previously dropped); a plugin with no repository is dropped rather than misfiled.
+
+## [10.6.0] - 2026-07-20
+
+### Added
+- **Anti-workaround steering hooks** (steering pack 0.8.0). Two hooks now watch for
+  consumer-side workarounds of first-party (cc-family) dependencies — the pattern where a
+  session papers over a sibling library's missing primitive with local scar tissue instead
+  of fixing it upstream. An edit-time nudge (`upstream_workaround_edit`, PreToolUse) fires
+  when an edit introduces workaround-flavored comments naming a sibling dependency, and a
+  turn-level gate (`upstream_workaround_turn`, Stop) judges the turn's diff and prose,
+  blocking when a first-party workaround lands without an upstream fix or a stated
+  justification. The gate's prefilter demands two distinct evidence families (workaround
+  lexicon, sibling-dep mention, prospective-support phrasing) before the judge runs, and
+  both hooks bias toward silence under uncertainty; intentional degradation and
+  third-party-dependency accommodations stay unflagged.
 
 ### Changed
 - **Review persistence is async end to end** — the cc-transcript pin lifts to

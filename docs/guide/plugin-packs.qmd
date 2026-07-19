@@ -112,9 +112,11 @@ drop-in directories. Installing, enabling, or disabling a plugin re-runs the CLI
 reads the snapshot. The fixed-path probe itself runs live, so editing a hook file inside a plugin needs
 no invalidation.
 
-Claude Code re-lists an enabled plugin once per marketplace or cached ref it resolves through, so the
-same plugin id can appear several times in the roster; discovery dedupes by full plugin id, so one id
-maps to one pack.
+Claude Code re-lists an enabled plugin once per settings scope it's enabled in, so the same plugin id
+can appear several times in the roster. Discovery collapses identical entries and, when scopes pin
+different installs, follows Claude Code's own precedence — local over project over user — so the pack
+loads from the same install Claude runs. Two different installs at the same scope mean a corrupt
+roster; discovery refuses it (one warning, zero plugin packs) rather than guessing.
 
 The stat tuple can only watch files. Policy that arrives another way — an MDM plist, a remote managed
 policy, or per-session flags like `--plugin-dir` and `--settings` — changes what `claude plugin list`

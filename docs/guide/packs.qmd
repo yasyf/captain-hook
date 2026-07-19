@@ -11,20 +11,20 @@ The loader imports every active pack alongside your own `.claude/hooks/` modules
 
 `capt-hook` ships six builtin packs. Four are always active in every repo:
 
-- **`general`** — language-agnostic guards: git/jj command safety, doc and prompt nudges, task and
+- `general` — language-agnostic guards: git/jj command safety, doc and prompt nudges, task and
   plan discipline, model-routing nudges, a code-review gate, a docs-freshness gate, a detour
   check-in nudge, verbose-comment enforcement, and `rm` safety.
-- **`fixes`** — workarounds for upstream Claude Code issues: auto-approving a teammate's permission
+- `fixes` — workarounds for upstream Claude Code issues: auto-approving a teammate's permission
   dialogs and scratch-file writes when the session ran with `--dangerously-skip-permissions`.
-- **`steering`** — judgment nudges: prefer first-principles fixes over band-aids, don't dismiss a real
+- `steering` — judgment nudges: prefer first-principles fixes over band-aids, don't dismiss a real
   pre-existing issue, don't chase trivial type noise, don't swap the requested fix for docs.
-- **`performance`** — wall-clock pipelining nudges that speculate a held fix while verification runs.
+- `performance` — wall-clock pipelining nudges that speculate a held fix while verification runs.
 
 Two more activate by language, detected from the repo's build manifests:
 
-- **`go`** — a go-test-before-commit gate and a `go.mod` nudge — active when a recursive, non-ignored
+- `go` — a go-test-before-commit gate and a `go.mod` nudge — active when a recursive, non-ignored
   `go.mod` or `go.work` exists anywhere in the repo.
-- **`python`** — a pytest-before-commit gate, AST style rules, and a `uv` missing-dependency nudge —
+- `python` — a pytest-before-commit gate, AST style rules, and a `uv` missing-dependency nudge —
   active when a recursive, non-ignored `pyproject.toml` exists.
 
 Detection walks the repo once, pruning VCS metadata and `.gitignore`d directories, so a vendored

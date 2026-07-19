@@ -72,7 +72,7 @@ uv run python -c "import captain_hook; print(captain_hook.__name__)"
 
 ## spaCy model
 
-Hooks that use NLP signals need the `en_core_web_sm` spaCy model and the oewn lexicon. Packs that declare `nlp = true` (general, steering) provision both automatically. `init` (and `pack add`) download them on the spot, and an async `SessionStart` hook self-heals installs that were offline. Standalone hook directories outside any pack still install the model once with `python -m spacy download en_core_web_sm`. See [NlpSignal hooks need the spaCy model](../guide/troubleshooting.qmd#nlpsignal-hooks-need-the-spacy-model).
+Hooks that use NLP signals need the `en_core_web_sm` spaCy model and the oewn lexicon. Packs that declare them as `resources` in their descriptor (general, steering) provision both automatically: `init` downloads them on the spot, and an async `SessionStart` hook self-heals installs that were offline. Standalone hook directories outside any pack still install the model once with `python -m spacy download en_core_web_sm`. See [NlpSignal hooks need the spaCy model](../guide/troubleshooting.qmd#nlpsignal-hooks-need-the-spacy-model).
 
 ## CI integration
 
