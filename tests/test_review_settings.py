@@ -63,4 +63,4 @@ def test_unprefixed_env_does_not_override(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_db_path_defaults_under_state_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
-    assert ReviewSettings().db_path == tmp_path / "review" / "review.db"
+    assert ReviewSettings().db_path == tmp_path / "review" / "review-v1.db"

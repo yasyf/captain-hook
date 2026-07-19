@@ -125,7 +125,9 @@ async def write_status(store: ReviewStore, *, settings: ReviewSettings) -> Path:
     """
     path = status_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(await build_snapshot(store, settings=settings), separators=(",", ":"), ensure_ascii=False) + "\n"
+    payload = (
+        json.dumps(await build_snapshot(store, settings=settings), separators=(",", ":"), ensure_ascii=False) + "\n"
+    )
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".status-", suffix=".json")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:

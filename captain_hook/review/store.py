@@ -13,6 +13,7 @@ enough confidence count toward the thresholds.
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -21,7 +22,7 @@ from hashlib import sha256
 from typing import TYPE_CHECKING, Self
 
 from cc_transcript.mining.confidence import NOISE_FLOOR, from_payload
-from cc_transcript.mining.store import ColumnMigration, FeedbackStore, StoreSchema, now
+from cc_transcript.mining.store import FeedbackStore, StoreSchema, now
 
 from captain_hook.review.fix import HOOK_COMPLAINT
 from captain_hook.review.prompts import CREATE_TEMPLATE, FIX_TEMPLATE
@@ -46,6 +47,36 @@ if TYPE_CHECKING:
     from captain_hook.review.sync import CachedPrState, PrState
 
 SPLIT_THRESHOLD = 0.9
+REVIEW_SCHEMA_VERSION = 1
+REVIEW_V1_TABLE_COLUMNS = {
+    "candidates": {
+        "id",
+        "repo_key",
+        "candidate_kind",
+        "rule",
+        "source_kind",
+        "status",
+        "pr_url",
+        "pr_opened_at",
+        "target_source_file",
+        "target_hook_name",
+        "misfire_class",
+        "created_at",
+        "updated_at",
+        "generation",
+        "resolved_at",
+        "origin_repo_key",
+        "pack_name",
+        "announced_status",
+        "pr_title",
+    },
+    "candidate_observations": {"id", "candidate_id", "dedup_key", "session_id", "occurred_at"},
+    "repos": {"repo_key", "watching"},
+    "spawn_runs": {"id", "started_at", "finished_at", "transcript", "ok", "error", "report_json"},
+    "review_meta": {"key", "value"},
+    "pr_states": {"pr_url", "state", "merged_at", "fetched_at"},
+    "review_triage": {"dedup_key", "triage"},
+}
 
 PROMPT_FINGERPRINT_KEY = "prompt_fingerprint"
 
@@ -72,6 +103,12 @@ CREATE TABLE IF NOT EXISTS candidates (
   misfire_class TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  generation INTEGER NOT NULL DEFAULT 1,
+  resolved_at TEXT,
+  origin_repo_key TEXT,
+  pack_name TEXT,
+  announced_status TEXT,
+  pr_title TEXT,
   CHECK (
     (candidate_kind = 'create' AND target_source_file IS NULL AND target_hook_name IS NULL
       AND misfire_class IS NULL)
@@ -96,6 +133,10 @@ CREATE TABLE IF NOT EXISTS repos (
   repo_key TEXT PRIMARY KEY,
   watching INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS review_triage (
+  dedup_key TEXT PRIMARY KEY REFERENCES feedback_events(dedup_key) ON DELETE CASCADE,
+  triage TEXT NOT NULL CHECK (triage IN ('junk', 'keep'))
+);
 CREATE TABLE IF NOT EXISTS spawn_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   started_at TEXT NOT NULL,
@@ -116,6 +157,7 @@ CREATE TABLE IF NOT EXISTS pr_states (
   merged_at TEXT,
   fetched_at TEXT NOT NULL
 );
+PRAGMA user_version = 1;
 """
 
 
@@ -176,34 +218,50 @@ TRANSITIONS: Mapping[CandidateStatus, frozenset[CandidateStatus]] = {
 }
 
 
-CANDIDATE_MIGRATIONS: tuple[ColumnMigration, ...] = (
-    ColumnMigration("candidates", "generation", "generation INTEGER NOT NULL DEFAULT 1"),
-    ColumnMigration(
-        "candidates",
-        "resolved_at",
-        "resolved_at TEXT",
-        "UPDATE candidates SET resolved_at = updated_at WHERE status = 'accepted'",
-    ),
-    ColumnMigration("candidates", "origin_repo_key", "origin_repo_key TEXT"),
-    ColumnMigration("candidates", "pack_name", "pack_name TEXT"),
-    ColumnMigration(
-        "candidates",
-        "announced_status",
-        "announced_status TEXT",
-        "UPDATE candidates SET announced_status = status WHERE status NOT IN ('watching', 'pr_open')",
-    ),
-    ColumnMigration("candidates", "pr_title", "pr_title TEXT"),
-)
-
-FEEDBACK_MIGRATIONS: tuple[ColumnMigration, ...] = (ColumnMigration("feedback_events", "triage", "triage TEXT"),)
-
-REVIEW_SCHEMA = StoreSchema(extra_ddl=(HOOK_REVIEW_DDL,), migrations=CANDIDATE_MIGRATIONS + FEEDBACK_MIGRATIONS)
+REVIEW_SCHEMA = StoreSchema(extra_ddl=(HOOK_REVIEW_DDL,))
 VERDICT_TABLE = REVIEW_SCHEMA.verdict_table
 ACCEPTED_COLUMN = REVIEW_SCHEMA.accepted_column
 SUMMARY_COLUMN = REVIEW_SCHEMA.summary_column
 
 TRIAGE_JUNK = "junk"
 TRIAGE_KEEP = "keep"
+
+
+class ReviewSchemaError(RuntimeError):
+    """The review database is not the exact hard-cut schema epoch."""
+
+
+def _manual_transfer_guidance(path: Path, detail: str) -> ReviewSchemaError:
+    return ReviewSchemaError(
+        f"review database {path} {detail}; captain-hook requires exact schema v{REVIEW_SCHEMA_VERSION} in "
+        "review-v1.db. Automatic migration is intentionally unavailable because triage decisions, candidates, "
+        "and PR lifecycle state are human-owned source-of-truth. Stop captain-hook, move the incompatible "
+        "database aside, create a fresh review-v1.db, then manually transfer only those human-owned rows with a "
+        "one-time SQLite operation. Transcript-derived events and verdicts may be rebuilt by rescanning transcripts."
+    )
+
+
+def _require_review_schema(path: Path) -> None:
+    legacy = path.with_name("review.db")
+    if path.name == "review-v1.db" and not path.exists() and legacy.exists():
+        raise _manual_transfer_guidance(legacy, "uses the retired unversioned namespace")
+    if not path.exists():
+        return
+    try:
+        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            row = connection.execute("PRAGMA user_version").fetchone()
+            version = int(row[0]) if row is not None else 0
+            if version != REVIEW_SCHEMA_VERSION:
+                raise _manual_transfer_guidance(path, f"has schema epoch {version}")
+            for table, expected in REVIEW_V1_TABLE_COLUMNS.items():
+                found = {str(column[1]) for column in connection.execute(f"PRAGMA table_info({table})")}
+                if found != expected:
+                    raise _manual_transfer_guidance(path, f"claims schema epoch 1 but table {table} is not exact")
+        finally:
+            connection.close()
+    except sqlite3.DatabaseError as error:
+        raise _manual_transfer_guidance(path, "is not a readable SQLite v1 database") from error
 
 
 def signal_confidence(payload_json: object) -> Confidence:
@@ -319,7 +377,7 @@ class JudgeHealth:
 class ReviewStore:
     """The session reviewer's persistent store, composing a :class:`FeedbackStore`.
 
-    Holds the native-engine facade as ``db`` under :data:`REVIEW_SCHEMA` (generic
+    Holds the native-engine facade as ``db`` under exact epoch-1 :data:`REVIEW_SCHEMA` (generic
     ``verdicts`` naming with ``accepted``/``summary`` columns) and layers the review
     tables on top of the feedback-event ledger. Candidates group equivalent evidence
     — create candidates by ``(repo_key, rule)``, fix candidates by ``(repo_key,
@@ -339,26 +397,35 @@ class ReviewStore:
     async def open(
         cls, path: Path, *, versions: PromptVersions = PROMPT_VERSIONS, busy_timeout_ms: int | None = None
     ) -> Self:
-        """Opens the review database at ``path`` under ``versions``, self-healing stale verdicts.
+        """Opens the exact-v1 review database at ``path``, self-healing stale verdicts.
 
-        Composes the native engine over :data:`REVIEW_SCHEMA` (the engine creates the
-        base ledger and verdict table, runs the guarded-ALTER migrations, and applies
-        the six review tables), then sweeps any verdict rows recorded at a version their
-        lane no longer runs — the single purge codepath, so ``list``/``show``/``status``/
-        ``threshold-check`` never count orphans.
+        Rejects every existing foreign or unversioned store before the native engine can
+        mutate it. A fresh database receives the complete base ledger, verdict table, and
+        six review tables directly at epoch 1. It then sweeps verdict rows recorded at a
+        prompt version their lane no longer runs — the single purge codepath, so
+        ``list``/``show``/``status``/``threshold-check`` never count orphans.
 
         Args:
             path: The database file path.
             versions: The per-lane prompt versions gating verdict freshness.
             busy_timeout_ms: When set, the connection's ``busy_timeout`` is lowered to
-                this before the migrations and first-upgrade purge run, so those writes
+                this before schema creation and the prompt-fingerprint purge, so those writes
                 fail fast (``SQLITE_BUSY``) under a concurrent lock instead of stalling on
                 SQLite's default five seconds. The SessionStart announcer passes ``0``;
                 the normal reviewer path leaves the default.
         """
-        store = cls(await FeedbackStore.open(path, REVIEW_SCHEMA, busy_timeout_ms=busy_timeout_ms), versions)
-        await store.purge_stale_verdicts_if_changed()
-        return store
+        _require_review_schema(path)
+        db = await FeedbackStore.open(path, REVIEW_SCHEMA, busy_timeout_ms=busy_timeout_ms)
+        try:
+            [epoch] = await db.sql("PRAGMA user_version")
+            if int(epoch["user_version"]) != REVIEW_SCHEMA_VERSION:
+                raise _manual_transfer_guidance(path, f"has schema epoch {epoch['user_version']}")
+            store = cls(db, versions)
+            await store.purge_stale_verdicts_if_changed()
+            return store
+        except BaseException:
+            await db.close()
+            raise
 
     async def close(self) -> None:
         """Closes the composed engine; a second close is a no-op."""
@@ -543,7 +610,8 @@ VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
         return await self.db.sql(
             f"""
 SELECT e.dedup_key, e.text FROM feedback_events e
-WHERE e.triage IS NULL AND e.source_kind != ?
+LEFT JOIN review_triage t ON t.dedup_key = e.dedup_key
+WHERE t.triage IS NULL AND e.source_kind != ?
   AND EXISTS (
     SELECT 1 FROM candidate_observations o JOIN candidates c ON c.id = o.candidate_id
     WHERE o.dedup_key = e.dedup_key AND c.candidate_kind = ? AND c.status = ?
@@ -573,7 +641,11 @@ ORDER BY e.id LIMIT ?
         """
         return (
             await self.db.execute(
-                "UPDATE feedback_events SET triage = ? WHERE dedup_key = ? AND triage IS NULL",
+                """
+INSERT INTO review_triage (dedup_key, triage)
+SELECT dedup_key, ? FROM feedback_events WHERE dedup_key = ?
+ON CONFLICT(dedup_key) DO NOTHING
+""",
                 (TRIAGE_JUNK if junk else TRIAGE_KEEP, dedup_key),
             )
             == 1
@@ -604,8 +676,9 @@ SELECT c.id FROM candidates c
 WHERE c.candidate_kind = ? AND c.status = ?
   AND EXISTS (SELECT 1 FROM candidate_observations o WHERE o.candidate_id = c.id)
   AND NOT EXISTS (
-    SELECT 1 FROM candidate_observations o JOIN feedback_events e ON e.dedup_key = o.dedup_key
-    WHERE o.candidate_id = c.id AND (e.triage IS NULL OR e.triage != ?)
+    SELECT 1 FROM candidate_observations o
+    LEFT JOIN review_triage t ON t.dedup_key = o.dedup_key
+    WHERE o.candidate_id = c.id AND (t.triage IS NULL OR t.triage != ?)
   )
   AND NOT EXISTS (
     SELECT 1 FROM candidate_observations o
@@ -652,8 +725,9 @@ SELECT c.id FROM candidates c
 WHERE c.candidate_kind = 'create' AND c.status = ?
   AND EXISTS (SELECT 1 FROM candidate_observations o WHERE o.candidate_id = c.id)
   AND NOT EXISTS (
-    SELECT 1 FROM candidate_observations o JOIN feedback_events e ON e.dedup_key = o.dedup_key
-    WHERE o.candidate_id = c.id AND (e.triage IS NULL OR e.triage != ?)
+    SELECT 1 FROM candidate_observations o
+    LEFT JOIN review_triage t ON t.dedup_key = o.dedup_key
+    WHERE o.candidate_id = c.id AND (t.triage IS NULL OR t.triage != ?)
   )
   AND EXISTS (
     SELECT 1 FROM candidate_observations o
@@ -673,7 +747,7 @@ WHERE c.candidate_kind = 'create' AND c.status = ?
 
     async def junk_triaged_keys(self) -> set[str]:
         """Returns the dedup keys of every junk-triaged feedback event — the judge queue's skip set."""
-        rows = await self.db.sql("SELECT dedup_key FROM feedback_events WHERE triage = ?", (TRIAGE_JUNK,))
+        rows = await self.db.sql("SELECT dedup_key FROM review_triage WHERE triage = ?", (TRIAGE_JUNK,))
         return {str(row["dedup_key"]) for row in rows}
 
     async def candidates(
@@ -1347,7 +1421,9 @@ ORDER BY repo
         )
         return [str(row["repo"]) for row in rows]
 
-    async def judge_queue(self, *, refresh_summary: bool = False, probe_hydration: bool = True) -> list[dict[str, object]]:
+    async def judge_queue(
+        self, *, refresh_summary: bool = False, probe_hydration: bool = True
+    ) -> list[dict[str, object]]:
         """Returns the rows one judge pass judges, each under its taxonomy's bound version.
 
         Each lane is fetched at its own version and post-filtered to its

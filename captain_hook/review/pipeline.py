@@ -662,6 +662,8 @@ async def spawn_session(
     from captain_hook.review.snapshot import write_status
 
     async with await ReviewStore.open(settings.db_path) as store:
-        await store.record_spawn_run(str(transcript), started_at=started, ok=True, report_json=json.dumps(asdict(report)))
+        await store.record_spawn_run(
+            str(transcript), started_at=started, ok=True, report_json=json.dumps(asdict(report))
+        )
         await write_status(store, settings=settings)
     return report
