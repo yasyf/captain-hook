@@ -48,7 +48,8 @@ def test_distinct_events_beat_separately(hb_db: Path) -> None:
     record_heartbeat(Event.UserPromptSubmit, {"session_id": "s1"})
     record_heartbeat(Event.PreToolUse, {"session_id": "s1"})
     record_heartbeat(Event.Stop, {"session_id": "s1"})
-    assert HeartbeatLog.open(hb_db).events_seen("s1") == frozenset({"UserPromptSubmit", "PreToolUse", "Stop"})
+    seen = frozenset(beat.event for beat in HeartbeatLog.open(hb_db).for_session("s1"))
+    assert seen == frozenset({"UserPromptSubmit", "PreToolUse", "Stop"})
 
 
 def test_dispatch_event_beats_on_sync_not_async(hb_db: Path, tmp_path: Path) -> None:
