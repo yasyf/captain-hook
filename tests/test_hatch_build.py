@@ -8,6 +8,7 @@ from hatch_build import (
     cargo_checksums,
     comment_kinds,
     dep_packages,
+    doc_comment_kinds,
     lang_keys,
     parse_aliases,
     parse_extensions,
@@ -190,6 +191,26 @@ def test_comment_kinds_excludes_marker_children() -> None:
         {"type": "identifier", "named": True},
     ]
     assert comment_kinds(nodes) == {"line_comment", "block_comment"}
+
+
+def test_doc_comment_kinds_requires_marker_or_documentation() -> None:
+    nodes = [
+        {"type": "inner_doc_comment_marker", "named": True},
+        {"type": "outer_doc_comment_marker", "named": True},
+        {"type": "documentation_block_comment", "named": True},
+        {"type": "doc_comment", "named": True},
+        {"type": "heredoc_body", "named": True},
+        {"type": "nowdoc_string", "named": True},
+        {"type": "haddock", "named": True},
+        {"type": "doctype", "named": True},
+        {"type": "document", "named": True},
+        {"type": "doc_marker", "named": False},
+    ]
+    assert doc_comment_kinds(nodes) == {
+        "documentation_block_comment",
+        "inner_doc_comment_marker",
+        "outer_doc_comment_marker",
+    }
 
 
 def test_build_lang_globs_maps_keys_to_sorted_globs() -> None:

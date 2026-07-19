@@ -20,10 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.tfvars`, `.workflow`. JSON drops `.jsonl`, `.ndjson`, `.module`, `.xc`, so comment hooks no
   longer fire on JSON-lines files; Elixir drops `.eex`/`.leex`; several rarely-seen extensions leave
   Bash, C++, Python, Ruby, and others.
-- **`DOC_COMMENT_KINDS` and `DOC_SIBLINGS` are committed literals in `captain_hook.ast_grep`.** Which
-  declaration kinds take documentation comments is an ecosystem convention, not a grammar fact, so
-  the two tables live in code rather than the generated module. Values are unchanged (minus the
-  removed `jsx` row).
+- **`DOC_COMMENT_KINDS` is generated; `DOC_SIBLINGS` gets its own data module.** The kinds that
+  natively mark a doc comment join `LANG_GLOBS` and `COMMENT_TYPES` in the generated
+  `captain_hook.langs`, derived from the grammar node types (named kinds pairing `doc` with `marker`
+  or containing `documentation` — exact across every grammar, with a fail-loud floor on Rust's two
+  markers). Which declaration kinds take documentation comments is ecosystem convention, not a
+  grammar fact, so that table moves to the new hand-maintained `captain_hook.doc_conventions`. Both
+  tables' values are unchanged (minus the removed `jsx` row).
 
 ### Removed
 - **The generated `captain_hook/exports.py` is gone.** The lazy-facade name-to-module mapping is now

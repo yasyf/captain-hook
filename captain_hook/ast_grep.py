@@ -20,7 +20,9 @@ from collections.abc import Iterable, Iterator, Set
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
+from captain_hook.doc_conventions import DOC_SIBLINGS
 from captain_hook.langs import COMMENT_TYPES as GENERATED_COMMENT_TYPES
+from captain_hook.langs import DOC_COMMENT_KINDS as GENERATED_DOC_COMMENT_KINDS
 from captain_hook.langs import LANG_GLOBS
 
 if TYPE_CHECKING:
@@ -44,174 +46,20 @@ kind (Rust's ``doc_comment`` and its markers, Dart's nested block). Generation f
 grammar but Markdown yields no comment kinds.
 """
 
+DOC_COMMENT_KINDS: frozenset[str] = GENERATED_DOC_COMMENT_KINDS
+"""Grammar-defined kinds that natively mark a documentation comment.
+
+Structural doc-ness exists only in Rust's ``inner_doc_comment_marker``/``outer_doc_comment_marker``
+and Dart's nested ``documentation_block_comment``. Derived at build time from the same
+``node-types.json`` corpus as [`COMMENT_TYPES`][captain_hook.COMMENT_TYPES]: the named kinds that
+pair ``doc`` with ``marker`` or contain ``documentation`` — exact across every supported grammar
+(``heredoc``/``nowdoc``/``haddock``/``doctype`` and Rust's referenced ``doc_comment`` all miss).
+Generation fails loud if the derived set drops Rust's two markers.
+"""
+
 MAX_COMMENT_LINES = 3
 MAX_COMMENT_CHARS = 200
 MAX_COMMENT_SCAN_BYTES = 512_000
-
-DOC_COMMENT_KINDS: frozenset[str] = frozenset(
-    {
-        "documentation_block_comment",
-        "inner_doc_comment_marker",
-        "outer_doc_comment_marker",
-    }
-)
-"""Grammar-defined kinds that natively mark a documentation comment.
-
-A committed convention table: structural doc-ness exists only in Rust's markers and Dart's nested
-block, so the three kinds are spelled out here rather than derived.
-"""
-
-DOC_SIBLINGS: dict[str, frozenset[str]] = {
-    "bash": frozenset(),
-    "c": frozenset(("field_declaration", "function_definition", "type_definition")),
-    "cpp": frozenset(("field_declaration", "function_definition", "namespace_definition", "type_definition")),
-    "cs": frozenset(
-        (
-            "class_declaration",
-            "constructor_declaration",
-            "enum_declaration",
-            "field_declaration",
-            "interface_declaration",
-            "method_declaration",
-            "namespace_declaration",
-            "property_declaration",
-            "record_declaration",
-            "struct_declaration",
-            "type_declaration",
-        )
-    ),
-    "css": frozenset(),
-    "dart": frozenset(("class_declaration", "enum_declaration", "function_declaration", "method_declaration")),
-    "ex": frozenset(),
-    "go": frozenset(
-        (
-            "const_declaration",
-            "const_spec",
-            "field_declaration",
-            "function_declaration",
-            "import_declaration",
-            "method_declaration",
-            "method_elem",
-            "package_clause",
-            "type_declaration",
-            "var_declaration",
-            "var_spec",
-        )
-    ),
-    "hcl": frozenset(),
-    "hs": frozenset(),
-    "html": frozenset(),
-    "java": frozenset(
-        (
-            "annotation_type_declaration",
-            "class_declaration",
-            "constructor_declaration",
-            "enum_declaration",
-            "field_declaration",
-            "import_declaration",
-            "interface_declaration",
-            "method_declaration",
-            "record_declaration",
-        )
-    ),
-    "js": frozenset(("class_declaration", "export_statement", "function_declaration", "method_definition")),
-    "json": frozenset(),
-    "kotlin": frozenset(("class_declaration", "function_declaration", "object_declaration", "property_declaration")),
-    "lua": frozenset(("function_declaration",)),
-    "md": frozenset(),
-    "nix": frozenset(),
-    "php": frozenset(
-        (
-            "class_declaration",
-            "const_declaration",
-            "enum_declaration",
-            "function_definition",
-            "interface_declaration",
-            "method_declaration",
-            "namespace_definition",
-            "property_declaration",
-        )
-    ),
-    "py": frozenset(),
-    "rb": frozenset(("class", "method", "module", "singleton_method")),
-    "rs": frozenset(
-        (
-            "const_item",
-            "enum_item",
-            "field_declaration",
-            "function_item",
-            "impl_item",
-            "mod_item",
-            "static_item",
-            "struct_item",
-            "trait_item",
-            "type_item",
-        )
-    ),
-    "scala": frozenset(
-        (
-            "class_definition",
-            "function_declaration",
-            "function_definition",
-            "import_declaration",
-            "object_definition",
-            "package_clause",
-            "trait_definition",
-            "type_definition",
-            "val_definition",
-            "var_declaration",
-        )
-    ),
-    "solidity": frozenset(
-        (
-            "contract_declaration",
-            "enum_declaration",
-            "function_definition",
-            "interface_declaration",
-            "state_variable_declaration",
-            "struct_declaration",
-        )
-    ),
-    "swift": frozenset(
-        (
-            "class_declaration",
-            "function_declaration",
-            "import_declaration",
-            "property_declaration",
-            "protocol_declaration",
-        )
-    ),
-    "ts": frozenset(
-        (
-            "abstract_class_declaration",
-            "class_declaration",
-            "enum_declaration",
-            "export_statement",
-            "function_declaration",
-            "interface_declaration",
-            "method_definition",
-            "type_alias_declaration",
-        )
-    ),
-    "tsx": frozenset(
-        (
-            "abstract_class_declaration",
-            "class_declaration",
-            "enum_declaration",
-            "export_statement",
-            "function_declaration",
-            "interface_declaration",
-            "method_definition",
-            "type_alias_declaration",
-        )
-    ),
-    "yaml": frozenset(),
-}
-"""Concrete declaration kinds a comment run may document, by language.
-
-A committed convention table: which declaration kinds take documentation comments is ecosystem
-convention, not a grammar fact, so the mapping is spelled out here rather than derived.
-"""
 
 
 @dataclass(frozen=True, slots=True)

@@ -6,6 +6,7 @@ import pytest
 
 from captain_hook.ast_grep import (
     COMMENT_TYPES,
+    DOC_COMMENT_KINDS,
     MAX_COMMENT_SCAN_BYTES,
     Match,
     SyntaxNode,
@@ -54,6 +55,11 @@ class TestComments:
     def test_comment_types_union(self) -> None:
         assert COMMENT_TYPES == frozenset(
             {"comment", "line_comment", "block_comment", "multiline_comment", "html_comment", "js_comment"}
+        )
+
+    def test_doc_comment_kinds_union(self) -> None:
+        assert DOC_COMMENT_KINDS == frozenset(
+            {"documentation_block_comment", "inner_doc_comment_marker", "outer_doc_comment_marker"}
         )
 
     @pytest.mark.parametrize(
@@ -234,6 +240,7 @@ class TestCommentRuns:
             pytest.param("/** TSDoc */\nexport const x = 1;\n", "ts", True, id="ts_export_statement_doc"),
             pytest.param("/// only\n", "rs", True, id="rs_native_doc_at_eof"),
             pytest.param("/**\n * hi\n */\n\nx();\n", "js", False, id="js_floating_jsdoc_plain"),
+            pytest.param("/** Dart doc */\n\nvoid f() {}\n", "dart", True, id="dart_floating_block_doc_native"),
         ],
     )
     def test_doc_classification(self, source: str, lang: str, doc: bool) -> None:

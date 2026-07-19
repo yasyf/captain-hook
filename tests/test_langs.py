@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import re
 
-from captain_hook.ast_grep import DOC_SIBLINGS, EXT_TO_LANG
+from captain_hook.ast_grep import EXT_TO_LANG
+from captain_hook.doc_conventions import DOC_SIBLINGS
 from captain_hook.langs import LANG_GLOBS
 
 LEGACY_EXT_TO_LANG = {
