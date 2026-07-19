@@ -1,7 +1,7 @@
 """The ``capt-hook helper`` command group: install/launch argv, ping, and the notify test surface.
 
-Every side effect (brew, ``open``, the socket) is stubbed, so the suite drives the commands
-without touching Homebrew, launching the app, or hitting a real socket.
+Every side effect (brew, ``open``, the bridge) is stubbed, so the suite drives the commands
+without touching Homebrew, launching the app, or invoking the installed executable.
 """
 
 from __future__ import annotations
@@ -42,22 +42,8 @@ def test_install_installs_and_launches(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "System Settings" in result.output and "widget" in result.output.lower()
 
 
-def test_install_falls_back_to_open_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[list[str]] = []
-
-    def fake_run(argv: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
-        calls.append(argv)
-        rc = 1 if argv[:2] == ["open", "-g"] and argv[2].startswith("/Applications") else 0
-        return subprocess.CompletedProcess(argv, rc)
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    result = invoke("install")
-    assert result.exit_code == 0, result.output
-    assert ["open", "-g", "-a", "Captain Hook"] in calls
-
-
 def test_status_pings_and_prints_version(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(client, "send", lambda _: {"v": 1, "ok": True, "version": "1.0.0"})
+    monkeypatch.setattr(client, "send", lambda _: {"ok": True, "version": "1.0.0"})
     result = invoke("status")
     assert result.exit_code == 0, result.output
     assert "helper v1.0.0 ok=True" in result.output
@@ -78,7 +64,7 @@ def test_notify_reports_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def record(**kwargs: object) -> NotifyOutcome:
         captured.update(kwargs)
-        return NotifyOutcome(Lane.socket, ok=True, error=None)
+        return NotifyOutcome(Lane.bridge, ok=True, error=None)
 
     monkeypatch.setattr(client, "notify", record)
     result = invoke("notify", "--kind", "pr_open", "--title", "T", "--url", "https://x/pull/1")
@@ -86,4 +72,4 @@ def test_notify_reports_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
     assert captured["kind"] == "pr_open"
     assert captured["title"] == "T"
     assert captured["url"] == "https://x/pull/1"
-    assert "lane=socket ok=True" in result.output
+    assert "lane=bridge ok=True" in result.output

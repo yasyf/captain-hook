@@ -1,5 +1,0 @@
-{"v":1,"op":"ping"}
-{"v":1,"ok":true,"version":"1.0.0"}
-{"v":1,"op":"notify","kind":"pr_open","title":"Block force-pushes","subtitle":"captain-hook","body":"Rule guard-rm-rf opened","url":"https://github.com/yasyf/captain-hook/pull/12","repo":"github.com/yasyf/captain-hook"}
-{"v":1,"ok":true}
-{"v":1,"ok":false,"error":"unknown op"}

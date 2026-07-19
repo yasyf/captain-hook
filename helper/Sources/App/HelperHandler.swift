@@ -1,3 +1,4 @@
+import DaemonKit
 import Foundation
 
 struct NotifyPayload: Sendable {
@@ -10,7 +11,6 @@ struct NotifyPayload: Sendable {
     let repo: String?
 }
 
-// The SocketServer handler: one helper.sock v1 request line → one reply line.
 final class HelperHandler: @unchecked Sendable {
     private let version: String
     private let onNotify: @Sendable (NotifyPayload) -> Void
@@ -20,35 +20,41 @@ final class HelperHandler: @unchecked Sendable {
         self.onNotify = onNotify
     }
 
-    func handle(_ line: Data) -> Data {
-        process(line).wireData()
+    func handle(_ request: SocketRequest) async -> SocketResponse {
+        do {
+            return .terminal(SocketTerminal(payload: try JSONEncoder().encode(process(request))))
+        } catch {
+            return .terminal(SocketTerminal(error: "encode reply: \(error)"))
+        }
     }
 
-    func process(_ line: Data) -> HelperReply {
-        guard let request = try? JSONDecoder().decode(HelperRequest.self, from: line) else {
-            return .failure("bad request")
-        }
-        guard request.v == helperProtocolVersion else {
-            return .failure("unsupported protocol version")
-        }
-        switch request.op {
+    func process(_ request: SocketRequest) -> HelperReply {
+        switch request.operation {
         case "ping":
+            guard request.payload.isEmpty else { return .failure("ping payload must be empty") }
             return .ping(version: version)
         case "notify":
-            return notify(request)
+            guard let payload = try? JSONDecoder().decode(NotifyRequest.self, from: request.payload) else {
+                return .failure("bad notify request")
+            }
+            return notify(payload)
         default:
-            return .failure("unknown op")
+            return .failure("unknown operation")
         }
     }
 
-    private func notify(_ request: HelperRequest) -> HelperReply {
-        guard let title = request.title, !title.isEmpty else { return .failure("title required") }
+    private func notify(_ request: NotifyRequest) -> HelperReply {
+        guard !request.title.isEmpty else { return .failure("title required") }
         if let url = request.url, !isHTTPURL(url) { return .failure("url must be http or https") }
-        let kind = request.kind ?? "generic"
         let payload = NotifyPayload(
-            identifier: notificationIdentifier(kind: kind, title: title, body: request.body ?? "", url: request.url),
-            kind: kind,
-            title: title,
+            identifier: notificationIdentifier(
+                kind: request.kind,
+                title: request.title,
+                body: request.body ?? "",
+                url: request.url
+            ),
+            kind: request.kind,
+            title: request.title,
             subtitle: request.subtitle,
             body: request.body,
             url: request.url,

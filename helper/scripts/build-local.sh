@@ -21,6 +21,8 @@ xcodebuild -scheme CaptainHook -configuration Release \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="$identity" \
   DEVELOPMENT_TEAM="$team" \
+  ENABLE_HARDENED_RUNTIME=YES \
+  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
   build
 
 app="$derived/Build/Products/Release/$app_name.app"
@@ -28,6 +30,7 @@ app="$derived/Build/Products/Release/$app_name.app"
 # Assert the App Group entitlement and the stamped version survived signing.
 codesign -d --entitlements :- "$app" 2>/dev/null | grep -q 'com.yasyf.capt-hook.helper'
 plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist"
+APP_PATH="$app" bash scripts/assert-signed-bridge.sh
 
 # Install: boot the old login item out, replace the app, relaunch detached.
 pkill -x "$app_name" || true

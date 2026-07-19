@@ -2,7 +2,7 @@
 
 These are the user-facing surface for ``Captain Hook.app``: ``install`` installs the cask and
 launches it, ``status`` pings the running helper, and ``notify`` fires a test banner through
-:mod:`captain_hook.helper.client`. Every side effect (brew, ``open``, the socket) runs only
+:mod:`captain_hook.helper.client`. Every side effect (brew, ``open``, or the signed bridge) runs only
 when the command is invoked, never at import.
 """
 
@@ -13,7 +13,6 @@ import click
 from captain_hook.helper import client
 
 CASK = "yasyf/tap/captain-hook"
-APP_PATH = "/Applications/Captain Hook.app"
 
 
 @click.group()
@@ -27,8 +26,7 @@ def install() -> None:
     import subprocess
 
     subprocess.run(["brew", "install", "--cask", "--force", CASK], check=True)
-    if subprocess.run(["open", "-g", APP_PATH], capture_output=True).returncode != 0:
-        subprocess.run(["open", "-g", "-a", client.APP_NAME], check=False)
+    subprocess.run(["open", "-g", str(client.APP_PATH)], check=True)
     click.echo(
         "Captain Hook installed. Grant notification permission under "
         "System Settings > Notifications > Captain Hook, then add the review widget via "
@@ -40,7 +38,7 @@ def install() -> None:
 def status() -> None:
     """Ping the running helper and print its reported version."""
     try:
-        reply = client.send({"v": client.PROTOCOL, "op": "ping"})
+        reply = client.send("ping")
     except (OSError, ValueError) as exc:
         raise click.ClickException(f"helper not reachable: {exc}") from exc
     click.echo(f"helper v{reply.get('version')} ok={reply.get('ok')}")

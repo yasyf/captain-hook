@@ -32,7 +32,7 @@ def notes(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
 
     def record(**kwargs: object) -> NotifyOutcome:
         calls.append(kwargs)
-        return NotifyOutcome(Lane.socket, ok=True, error=None)
+        return NotifyOutcome(Lane.bridge, ok=True, error=None)
 
     monkeypatch.setattr(client, "notify", record)
     return calls

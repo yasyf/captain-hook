@@ -70,13 +70,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.coalescer.record(trigger: payload.kind)
             self.refresher.debouncedRefresh()
         }
-        let server = SocketServer(
-            path: HelperPaths.socket.path,
-            configuration: .init(maxLineBytes: 64 * 1024, readTimeout: 5),
-            trust: PeerTrust(),
-            handler: { handler.handle($0) }
-        )
         do {
+            let requirement = try PeerTrust.Requirement(
+                teamIdentifier: "SXKCTF23Q2",
+                signingIdentifier: "com.yasyf.capt-hook.helper.bridge"
+            )
+            let server = SocketServer(
+                path: HelperPaths.socket.path,
+                build: appVersion,
+                configuration: .init(
+                    maximumFrameBytes: 64 * 1024,
+                    maximumActiveRequests: 8,
+                    maximumSessions: 8,
+                    streamQueueDepth: 4,
+                    handshakeTimeout: 5,
+                    writeTimeout: 5
+                ),
+                trust: PeerTrust(requirement: requirement),
+                handler: { await handler.handle($0) }
+            )
             try FileManager.default.createDirectory(at: HelperPaths.directory, withIntermediateDirectories: true)
             try server.start()
             self.server = server
@@ -84,6 +96,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             Log.socket.error("socket start failed: \(String(describing: error), privacy: .public)")
         }
+    }
+
+    func applicationWillTerminate(_: Notification) {
+        server?.stop()
     }
 
     private func startWatcher() {
