@@ -145,6 +145,19 @@ def test_plugin_pack_descriptor_edit_changes_fingerprint(project: CliState, tmp_
     assert fp(project) != before
 
 
+def test_malformed_plugin_pack_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
+    # The loader keys on the whole capt-hook/ dir — a pack.toml without a hooks/ dir is FATAL cold. The
+    # fingerprint must digest the whole dir too, or warm silently ignores a pack cold crashes on.
+    plugin_root = tmp_path / "plug"
+    plugin_root.mkdir()  # an enabled plugin with no capt-hook/ yet — ships no pack
+    write_snapshot(project.root, [("acme/pp", str(plugin_root))])
+    before = fp(project)
+    (pack := plugin_root / manager.PLUGIN_PACK_DIRNAME).mkdir()
+    (pack / manager.PACK_DESCRIPTOR).write_text("resources = []\n")  # pack.toml but no hooks/ — malformed
+    assert fp(project) != before  # the fingerprint now sees the malformed capt-hook/ dir
+    assert [pid for pid, *_ in registry._plugin_trees(project.root)] == ["acme/pp"]  # not skipped
+
+
 def test_plugin_tree_skips_a_plugin_whose_hooks_dir_vanishes(
     project: CliState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

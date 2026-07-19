@@ -39,7 +39,7 @@ BUILD_RETRIES = 3
 
 StatEntry = tuple[int, int, int]
 HookEntry = tuple[str, int, int, int]
-PluginTree = tuple[str, StatEntry | None, tuple[HookEntry, ...]]
+PluginTree = tuple[str, tuple[HookEntry, ...]]
 
 
 def _stat_entry(path: Path) -> StatEntry | None:
@@ -85,23 +85,17 @@ def _claude_stats(root: Path) -> tuple[plugins.StatRecord, ...]:
 
 
 def _plugin_trees(root: Path) -> tuple[PluginTree, ...]:
-    # Each enabled plugin's fixed capt-hook/ pack: descriptor stat + hook tree, in plugin-id order.
-    # A plugin with no capt-hook/hooks/ dir ships no pack and is skipped, as is a dir vanishing mid-walk.
+    # Each plugin's capt-hook/ pack digested WHOLE (pack.toml + hooks/), in plugin-id order: the loader
+    # keys on the whole dir, so watching only hooks/ would let warm ignore a fatal hooks-less pack.
     if (snapshot := plugins.PluginSnapshot.load(plugins.snapshot_path(root))) is None:
         return ()
     trees: list[PluginTree] = []
     for plugin in sorted(snapshot.plugins, key=lambda p: p.id):
         pack_root = plugins.plugin_pack_root(plugin)
-        if not (pack_root / manager.HOOKS_DIRNAME).is_dir():
+        if not pack_root.is_dir():  # no capt-hook/ dir = no pack; a dir vanishing mid-walk skips below
             continue
         try:
-            trees.append(
-                (
-                    plugin.id,
-                    _stat_entry(pack_root / manager.PACK_DESCRIPTOR),
-                    _hooks_tree(str(pack_root / manager.HOOKS_DIRNAME)),
-                )
-            )
+            trees.append((plugin.id, _hooks_tree(str(pack_root))))
         except OSError:
             continue
     return tuple(trees)
