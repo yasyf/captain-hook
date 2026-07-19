@@ -4,6 +4,38 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Language tables are derived from ast-grep's own data, not Pygments.** The build hook now reads
+  ast-grep-py's sdist (its `Cargo.lock`, `lib.rs` alias and extension tables, and `parsers.rs`) plus
+  each grammar's `node-types.json` from the pinned crate, fetches everything sha256-verified, and
+  caches it under `${XDG_CACHE_HOME:-~/.cache}/capt-hook-build`. `LANG_GLOBS` comes from ast-grep's
+  extension table and `COMMENT_TYPES` from the grammar node types; both were guessed from Pygments
+  before. `pygments` is gone from the build and dev dependencies.
+- **`LANG_GLOBS` extension coverage now matches ast-grep.** `.sc` parses as Scala (was Python), and
+  `.jsx` as JavaScript — the separate `jsx` key is folded into `js` (same grammar, an upstream alias
+  of JavaScript). Bash gains `.bats`, `.cgi`, `.command`, `.env`, `.fcgi`, `.tmux`, `.tool`; C++
+  gains `.cu`, `.ino`; TypeScript gains `.cts`, `.mts`; CSS gains `.scss`; HCL gains `.nomad`,
+  `.tfvars`, `.workflow`. JSON drops `.jsonl`, `.ndjson`, `.module`, `.xc`, so comment hooks no
+  longer fire on JSON-lines files; Elixir drops `.eex`/`.leex`; several rarely-seen extensions leave
+  Bash, C++, Python, Ruby, and others.
+- **`DOC_COMMENT_KINDS` and `DOC_SIBLINGS` are committed literals in `captain_hook.ast_grep`.** Which
+  declaration kinds take documentation comments is an ecosystem convention, not a grammar fact, so
+  the two tables live in code rather than the generated module. Values are unchanged (minus the
+  removed `jsx` row).
+
+### Removed
+- **The generated `captain_hook/exports.py` is gone.** The lazy-facade name-to-module mapping is now
+  an inline literal in `captain_hook/__init__.py`, checked against `__init__.pyi` by a test.
+
+### Build
+- **Building from source needs network on a cold cache** (`pypi.org`, `files.pythonhosted.org`,
+  `static.crates.io`); a warm cache builds offline. CI caches the derivation directory across runs.
+- **The isolated build environment resolves the newest in-band `ast-grep-py`**, so a published
+  wheel's `LANG_GLOBS` may gain extensions relative to the lockfile; the supported language set is
+  stable within the `>=0.44,<0.45` band.
+
 ## [10.4.0] - 2026-07-19
 
 ### Changed

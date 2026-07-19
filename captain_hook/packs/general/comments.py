@@ -6,7 +6,7 @@ identity is its whitespace-normalized text, so a pure move stays quiet) at their
 and blocks plain blocks past 3 lines or 200 chars. Grammar-classified documentation comments keep
 only their opening paragraph carved out, under a 6-line / 400-char ceiling; trailing paragraphs use
 the plain budget. Mid-band doc heads draw an advisory warn, and an edit whose added lines are mostly
-comments draws a density warn. Language-agnostic via the tree-sitter comment kinds and generated doc
+comments draws a density warn. Language-agnostic via the tree-sitter comment kinds and committed doc
 tables in :mod:`captain_hook.ast_grep`.
 
 Design notes — accepted tradeoffs, by construction, not bugs:

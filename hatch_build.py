@@ -1,193 +1,251 @@
 from __future__ import annotations
 
+import hashlib
+import io
+import json
 import os
 import re
-from collections import defaultdict
-from collections.abc import Iterator
-from contextlib import contextmanager
+import tarfile
+import tempfile
+import urllib.error
+import urllib.request
 from functools import cache
-from importlib.metadata import version
+from importlib.metadata import version as dist_version
 from pathlib import Path
+from typing import NamedTuple
 
-from ast_grep_py import SgRoot
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
-from pygments.lexers import get_all_lexers
 
-GLOB_PATTERN = re.compile(r"^\*\.([A-Za-z0-9_+-]+)$")
-COMMENT_KIND_SEEDS = (
-    "comment",
-    "line_comment",
-    "block_comment",
-    "multiline_comment",
-    "html_comment",
-    "js_comment",
-)
-DOC_KIND_SEEDS = (
-    "outer_doc_comment_marker",
-    "inner_doc_comment_marker",
-    "documentation_block_comment",
-)
-DECL_KIND_SEEDS: dict[str, tuple[str, ...] | None] = {
-    "function_declaration": None,
-    "method_declaration": None,
-    "type_declaration": None,
-    "var_declaration": None,
-    "const_declaration": None,
-    "package_clause": None,
-    "const_spec": None,
-    "var_spec": None,
-    "field_declaration": None,
-    "import_declaration": None,
-    "method_elem": None,
-    "function_item": None,
-    "struct_item": None,
-    "enum_item": None,
-    "trait_item": None,
-    "impl_item": None,
-    "type_item": None,
-    "const_item": None,
-    "static_item": None,
-    "mod_item": None,
-    "class_declaration": None,
-    "method_definition": None,
-    "export_statement": None,
-    "interface_declaration": None,
-    "abstract_class_declaration": None,
-    "type_alias_declaration": None,
-    "enum_declaration": None,
-    "constructor_declaration": None,
-    "record_declaration": None,
-    "annotation_type_declaration": None,
-    "property_declaration": None,
-    "object_declaration": None,
-    "protocol_declaration": None,
-    "struct_declaration": None,
-    "namespace_declaration": None,
-    "function_definition": ("c", "cpp", "php", "scala", "solidity"),
-    "namespace_definition": None,
-    "type_definition": None,
-    "class_definition": ("scala",),
-    "object_definition": None,
-    "trait_definition": None,
-    "val_definition": None,
-    "contract_declaration": None,
-    "state_variable_declaration": None,
-    "method": ("rb",),
-    "singleton_method": ("rb",),
-    "class": ("rb",),
-    "module": ("rb",),
-}
-COMMENTLESS_LANGS = frozenset({"md"})
+PYPI_JSON = "https://pypi.org/pypi/ast-grep-py/{version}/json"
+CRATE_URL = "https://static.crates.io/crates/{name}/{name}-{version}.crate"
+USER_AGENT = "capt-hook-build (github.com/yasyf/captain-hook)"
 REGEN_COMMAND = "uv run python hatch_build.py"
 
+KEY_OVERRIDES = {"Cpp": "cpp", "Kotlin": "kotlin", "Solidity": "solidity", "Yaml": "yaml"}
+EXTRA_PARSER_FNS = {"Html": "language_html"}
+NODE_TYPES_SUBDIRS = {"LANGUAGE_TYPESCRIPT": "typescript/", "LANGUAGE_TSX": "tsx/", "LANGUAGE_PHP_ONLY": "php_only/"}
+COMMENT_KIND_OVERRIDES: dict[str, dict[str, tuple[str, ...]]] = {}
+COMMENTLESS_LANGS = frozenset({"md"})
 
-@contextmanager
-def suppress_stderr() -> Iterator[None]:
-    saved = os.dup(2)
+ALIASES_BLOCK = re.compile(r"impl_aliases!\s*\{(.*?)\n\}", re.DOTALL)
+EXTENSIONS_BLOCK = re.compile(r"fn extensions\(.*?\n\}", re.DOTALL)
+MATCH_ARM = re.compile(r"(\w+)\s*=>\s*&\[(.*?)\]", re.DOTALL)
+QUOTED = re.compile(r'"([^"]*)"')
+PARSER_FN = re.compile(r"impl_lang(?:_expando)?!\(\s*(\w+)\s*,\s*(\w+)")
+PARSER_CONDITIONAL = re.compile(
+    r'pub fn (\w+)\(\)\s*->\s*TSLanguage\s*\{\s*conditional_lang!\(\s*\w+\s*,\s*"([^"]+)"\s*(?:,\s*(\w+)\s*)?\)',
+    re.DOTALL,
+)
+DEP_LINE = re.compile(r"^\s*(tree-sitter-[\w-]+)\s*=\s*\{([^}]*)\}", re.MULTILINE)
+DEP_PACKAGE = re.compile(r'package\s*=\s*"([^"]+)"')
+PACKAGE_BLOCK = re.compile(
+    r'\[\[package\]\]\s*\nname = "([^"]+)"\nversion = "([^"]+)"(?:\nsource = "[^"]+")?\nchecksum = "([0-9a-f]+)"'
+)
+
+
+class Sources(NamedTuple):
+    lock: str
+    cargo_toml: str
+    lib: str
+    parsers: str
+
+
+class Crate(NamedTuple):
+    package: str
+    version: str
+    sha256: str
+    subdir: str
+
+
+def ast_grep_version() -> str:
+    return dist_version("ast-grep-py")
+
+
+def cache_dir() -> Path:
+    root = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    return root / "capt-hook-build" / f"ast-grep-py-{ast_grep_version()}"
+
+
+def fetch(url: str, *, name: str, sha256: str | None = None) -> bytes:
+    path = cache_dir() / name
+    if path.exists() and (
+        (data := path.read_bytes()) and (sha256 is None or hashlib.sha256(data).hexdigest() == sha256)
+    ):
+        return data
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with open(os.devnull, "w") as devnull:
-            os.dup2(devnull.fileno(), 2)
-            yield
-    finally:
-        os.dup2(saved, 2)
-        os.close(saved)
+        with urllib.request.urlopen(request) as response:
+            data = response.read()
+    except urllib.error.URLError as error:
+        raise RuntimeError(
+            f"cannot fetch {url}: {error}; warm the build cache at {cache_dir()} with `uv build` while online"
+        ) from error
+    if sha256 is not None and (actual := hashlib.sha256(data).hexdigest()) != sha256:
+        raise RuntimeError(f"checksum mismatch for {url}: expected {sha256}, got {actual}")
+    cache_dir().mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=cache_dir(), delete=False) as tmp:
+        tmp.write(data)
+    os.replace(tmp.name, path)
+    return data
 
 
 @cache
-def accepts_language(alias: str) -> bool:
-    with suppress_stderr():
-        try:
-            SgRoot("", alias)
-        # ast-grep raises a pyo3 PanicException outside Exception for unknown languages.
-        except (KeyboardInterrupt, SystemExit):
-            raise
-        except BaseException:
-            return False
-    return True
+def sdist_source() -> tuple[str, str]:
+    payload = json.loads(fetch(PYPI_JSON.format(version=ast_grep_version()), name=f"pypi-{ast_grep_version()}.json"))
+    for entry in payload["urls"]:
+        if entry["packagetype"] == "sdist":
+            return entry["url"], entry["digests"]["sha256"]
+    raise RuntimeError(f"no sdist in PyPI metadata for ast-grep-py {ast_grep_version()}")
 
 
 @cache
-def defines_kind(lang: str, kind: str) -> bool:
-    with suppress_stderr():
-        try:
-            SgRoot("", lang).root().find(kind=kind)
-        except RuntimeError:
-            return False
-    return True
+def sdist_sources() -> Sources:
+    url, sha256 = sdist_source()
+    data = fetch(url, name=f"ast_grep_py-{ast_grep_version()}.tar.gz", sha256=sha256)
+    root = f"ast_grep_py-{ast_grep_version()}"
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+
+        def member(name: str) -> str:
+            if (handle := archive.extractfile(f"{root}/{name}")) is None:
+                raise RuntimeError(f"{name} missing from ast-grep-py sdist")
+            return handle.read().decode()
+
+        return Sources(
+            lock=member("Cargo.lock"),
+            cargo_toml=member("crates/language/Cargo.toml"),
+            lib=member("crates/language/src/lib.rs"),
+            parsers=member("crates/language/src/parsers.rs"),
+        )
 
 
-def build_lang_globs() -> dict[str, tuple[str, ...]]:
-    claims: dict[str, set[tuple[str, str]]] = defaultdict(set)
-    for _name, aliases, globs, _mimetypes in get_all_lexers():
-        if not (accepted := tuple(alias for alias in aliases if accepts_language(alias))):
-            continue
-        lang = min(enumerate(accepted), key=lambda item: (len(item[1]), item[0]))[1]
-        for glob in globs:
-            if match := GLOB_PATTERN.fullmatch(glob):
-                claims[match[1].lower()].add((match[1], lang))
+def cargo_checksums(lock: str) -> dict[str, tuple[str, str]]:
+    return {m.group(1): (m.group(2), m.group(3)) for m in PACKAGE_BLOCK.finditer(lock)}
 
-    owners: dict[str, str] = {}
-    for ext, ext_claims in sorted(claims.items()):
-        claimants = {lang for _spelling, lang in ext_claims}
-        if len(claimants) == 1:
-            owners[ext] = claimants.pop()
-            continue
-        lowercase_claimants = {lang for spelling, lang in ext_claims if spelling == ext}
-        if len(lowercase_claimants) != 1:
-            raise ValueError(f"case-fold collision for extension {ext!r}: {sorted(claimants)!r}")
-        owners[ext] = lowercase_claimants.pop()
 
+def parse_aliases(lib: str) -> dict[str, tuple[str, ...]]:
+    if (block := ALIASES_BLOCK.search(lib)) is None:
+        raise RuntimeError(f"no `impl_aliases!` block in ast-grep-py {ast_grep_version()} lib.rs")
+    return {m.group(1): tuple(QUOTED.findall(m.group(2))) for m in MATCH_ARM.finditer(block.group(1))}
+
+
+def parse_extensions(lib: str) -> dict[str, tuple[str, ...]]:
+    if (block := EXTENSIONS_BLOCK.search(lib)) is None:
+        raise RuntimeError(f"no `fn extensions` block in ast-grep-py {ast_grep_version()} lib.rs")
+    return {m.group(1): tuple(QUOTED.findall(m.group(2))) for m in MATCH_ARM.finditer(block.group(0))}
+
+
+def parser_fns(lib: str) -> dict[str, str]:
+    return {m.group(1): m.group(2) for m in PARSER_FN.finditer(lib)} | EXTRA_PARSER_FNS
+
+
+def parser_table(parsers: str) -> dict[str, tuple[str, str | None]]:
+    return {m.group(1): (m.group(2), m.group(3)) for m in PARSER_CONDITIONAL.finditer(parsers)}
+
+
+def dep_packages(cargo_toml: str) -> dict[str, str]:
     return {
-        lang: tuple(f"*.{ext}" for ext, owner in sorted(owners.items()) if owner == lang)
-        for lang in sorted(set(owners.values()))
+        m.group(1): (pkg.group(1) if (pkg := DEP_PACKAGE.search(m.group(2))) else m.group(1))
+        for m in DEP_LINE.finditer(cargo_toml)
+    }
+
+
+def parser_crates(parsers: str, lib: str, cargo_toml: str, checksums: dict[str, tuple[str, str]]) -> dict[str, Crate]:
+    table = parser_table(parsers)
+    packages = dep_packages(cargo_toml)
+    crates = {}
+    for variant, func in parser_fns(lib).items():
+        dep_key, field = table[func]
+        version, sha256 = checksums[packages[dep_key]]
+        crates[variant] = Crate(packages[dep_key], version, sha256, "" if field is None else NODE_TYPES_SUBDIRS[field])
+    return crates
+
+
+def lang_keys(aliases: dict[str, tuple[str, ...]]) -> dict[str, str]:
+    keys = {}
+    for variant, variant_aliases in aliases.items():
+        if (key := KEY_OVERRIDES.get(variant) or min(variant_aliases, key=len)) not in variant_aliases:
+            raise RuntimeError(f"lang key {key!r} for {variant} is not an upstream alias of {variant_aliases}")
+        keys[variant] = key
+    return keys
+
+
+def comment_kinds(nodes: list[dict[str, object]]) -> set[str]:
+    by_type = {node["type"]: node for node in nodes}
+    named = {kind for kind, node in by_type.items() if node.get("named") and "comment" in kind}
+    referenced = {
+        child["type"]
+        for kind in named
+        for group in (*by_type[kind].get("fields", {}).values(), by_type[kind].get("children", {}))
+        for child in group.get("types", [])
+    }
+    return named - referenced
+
+
+@cache
+def variant_keys() -> dict[str, str]:
+    return lang_keys(parse_aliases(sdist_sources().lib))
+
+
+@cache
+def crate_table() -> dict[str, Crate]:
+    sources = sdist_sources()
+    crates = parser_crates(sources.parsers, sources.lib, sources.cargo_toml, cargo_checksums(sources.lock))
+    if missing := sorted(set(parse_aliases(sources.lib)) - set(crates)):
+        raise RuntimeError(f"no parser crate resolved for languages: {missing}")
+    return crates
+
+
+def grammar_node_types(crate: Crate) -> list[dict[str, object]]:
+    data = fetch(
+        CRATE_URL.format(name=crate.package, version=crate.version),
+        name=f"{crate.package}-{crate.version}.crate",
+        sha256=crate.sha256,
+    )
+    member = f"{crate.package}-{crate.version}/{crate.subdir}src/node-types.json"
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+        if (handle := archive.extractfile(member)) is None:
+            raise RuntimeError(f"{member} missing from {crate.package} {crate.version}")
+        return json.load(handle)
+
+
+def build_lang_globs(lib: str) -> dict[str, tuple[str, ...]]:
+    extensions = parse_extensions(lib)
+    keys = lang_keys(parse_aliases(lib))
+    if missing := sorted(set(keys) - set(extensions)):
+        raise RuntimeError(f"no extensions parsed for languages: {missing!r}")
+    owners: dict[str, str] = {}
+    for variant, variant_exts in extensions.items():
+        for ext in variant_exts:
+            if ext in owners:
+                raise RuntimeError(f"extension {ext!r} claimed by both {owners[ext]} and {variant}")
+            owners[ext] = variant
+    return {
+        keys[variant]: tuple(sorted(f"*.{ext}" for ext in variant_exts))
+        for variant, variant_exts in sorted(extensions.items(), key=lambda item: keys[item[0]])
     }
 
 
 def build_comment_types() -> frozenset[str]:
-    by_lang = {
-        lang: frozenset(kind for kind in COMMENT_KIND_SEEDS if defines_kind(lang, kind)) for lang in build_lang_globs()
-    }
-    if missing := sorted(lang for lang, kinds in by_lang.items() if not kinds and lang not in COMMENTLESS_LANGS):
-        raise RuntimeError(f"generated languages define none of {COMMENT_KIND_SEEDS!r}: {missing!r}")
+    keys = variant_keys()
+    by_lang: dict[str, frozenset[str]] = {}
+    for variant, crate in crate_table().items():
+        if (key := keys[variant]) in COMMENTLESS_LANGS:
+            continue
+        override = COMMENT_KIND_OVERRIDES.get(key, {})
+        kinds = comment_kinds(grammar_node_types(crate)) | set(override.get("add", ()))
+        by_lang[key] = frozenset(kinds - set(override.get("remove", ())))
+    if empty := sorted(lang for lang, kinds in by_lang.items() if not kinds):
+        raise RuntimeError(f"languages define no comment kinds: {empty}")
     return frozenset(kind for kinds in by_lang.values() for kind in kinds)
 
 
-def build_doc_comment_kinds() -> frozenset[str]:
-    by_seed = {seed: [lang for lang in build_lang_globs() if defines_kind(lang, seed)] for seed in DOC_KIND_SEEDS}
-    if dead := sorted(seed for seed, langs in by_seed.items() if not langs):
-        raise RuntimeError(f"doc-kind seeds matched no language: {dead!r}")
-    return frozenset(by_seed)
-
-
-def build_doc_siblings() -> dict[str, frozenset[str]]:
-    table = {
-        lang: frozenset(
-            kind
-            for kind, scope in DECL_KIND_SEEDS.items()
-            if (scope is None or lang in scope) and defines_kind(lang, kind)
-        )
-        for lang in build_lang_globs()
-    }
-    if dead := sorted(kind for kind in DECL_KIND_SEEDS if not any(kind in kinds for kinds in table.values())):
-        raise RuntimeError(f"decl-kind seeds matched no language: {dead!r}")
-    return table
-
-
 def render_langs() -> str:
-    lang_globs = build_lang_globs()
-    comment_types = build_comment_types()
-    doc_comment_kinds = build_doc_comment_kinds()
-    doc_siblings = build_doc_siblings()
-    globs_body = "\n".join(f"    {lang!r}: {globs!r}," for lang, globs in lang_globs.items())
-    comments_body = "\n".join(f"        {kind!r}," for kind in sorted(comment_types))
-    doc_comments_body = "\n".join(f"        {kind!r}," for kind in sorted(doc_comment_kinds))
-    doc_siblings_body = "\n".join(
-        f"    {lang!r}: frozenset({tuple(sorted(kinds))!r})," if kinds else f"    {lang!r}: frozenset(),"
-        for lang, kinds in doc_siblings.items()
-    )
+    globs = build_lang_globs(sdist_sources().lib)
+    globs_body = "\n".join(f"    {key!r}: {value!r}," for key, value in globs.items())
+    comments_body = "\n".join(f"        {kind!r}," for kind in sorted(build_comment_types()))
     return (
         f"# GENERATED by `{REGEN_COMMAND}`.\n"
-        f"# Pygments {version('pygments')}; ast-grep-py {version('ast-grep-py')}.\n\n"
+        f"# ast-grep-py {ast_grep_version()}.\n\n"
         "from __future__ import annotations\n\n"
         "LANG_GLOBS: dict[str, tuple[str, ...]] = {\n"
         f"{globs_body}\n"
@@ -196,15 +254,7 @@ def render_langs() -> str:
         "    {\n"
         f"{comments_body}\n"
         "    }\n"
-        ")\n\n"
-        "DOC_COMMENT_KINDS: frozenset[str] = frozenset(\n"
-        "    {\n"
-        f"{doc_comments_body}\n"
-        "    }\n"
-        ")\n\n"
-        "DOC_SIBLINGS: dict[str, frozenset[str]] = {\n"
-        f"{doc_siblings_body}\n"
-        "}\n"
+        ")\n"
     )
 
 
@@ -216,10 +266,8 @@ class CustomBuildHook(BuildHookInterface):
     PLUGIN_NAME = "custom"
 
     def initialize(self, version: str, build_data: dict[str, object]) -> None:
-        package = Path(self.root) / "captain_hook"
-        write_langs(package / "langs.py")
+        write_langs(Path(self.root) / "captain_hook" / "langs.py")
 
 
 if __name__ == "__main__":
-    package = Path(__file__).parent / "captain_hook"
-    write_langs(package / "langs.py")
+    write_langs(Path(__file__).parent / "captain_hook" / "langs.py")

@@ -44,6 +44,15 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache-dependency-glob: uv.lock
 
+      # langs.py is derived from ast-grep's sdist + grammar crates, cached here.
+      # Restored before the first uv run so an editable install builds offline.
+      - name: Cache build derivation
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/capt-hook-build
+          key: capt-hook-build-v1-${{ hashFiles('uv.lock') }}
+          restore-keys: capt-hook-build-v1-
+
       # The spacy pipeline (~/.cache/spacy/models, via ensure_spacy_model) and
       # the wordnet lexicon (~/.wn_data) live outside the venv, so the restored
       # cache survives uv recreating .venv between runs. Caching .venv instead
