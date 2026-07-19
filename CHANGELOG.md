@@ -15,8 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   External packs importing those module-level names from `captain_hook.ast_grep` must move to the
   generated `DOC_COMMENT_KINDS` and per-language `DOC_SIBLINGS` tables.
 
-## [10.3.0] - 2026-07-19
-
 ### Added
 - **Captain Hook.app — a resident desktop helper** (Swift, on
   [DaemonKit](https://github.com/yasyf/daemonkit)): a Dock-less agent that owns
