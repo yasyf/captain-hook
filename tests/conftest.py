@@ -140,7 +140,7 @@ def logcap():
 
 @pytest.fixture
 def isolate_modules():
-    from captain_hook.exports import EXPORTS
+    from captain_hook import EXPORTS
 
     snapshot_modules = set(sys.modules.keys())
     snapshot_path = sys.path[:]

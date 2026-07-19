@@ -99,6 +99,7 @@ jobs:
           unzip -l dist/*.whl | grep -q 'capt_hook_client/client.py'
           unzip -l dist/*.whl | grep -q 'capt_hook_client/key.py'
           unzip -l dist/*.whl | grep -q 'captain_hook/langs.py'
+          ! unzip -l dist/*.whl | grep -q 'captain_hook/exports.py'
           unzip -l dist/*.whl | grep -q 'captain_hook/skills/.*/SKILL.md'
           unzip -l dist/*.whl | grep -q 'captain_hook/.claude-plugin/plugin.json'
           unzip -l dist/*.whl | grep -q 'captain_hook/packs/general/capt-hook.toml'

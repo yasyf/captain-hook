@@ -13,6 +13,7 @@ may change or degrade the public surface. This module pins:
 
 from __future__ import annotations
 
+import ast
 import importlib
 import subprocess
 import sys
@@ -24,10 +25,9 @@ from typing import Any
 import pytest
 
 import captain_hook
-from captain_hook.exports import EXPORTS
+from captain_hook import EXPORTS
 from captain_hook.testing.types import FileFixture, Input, TranscriptFixture
 from captain_hook.transcripts import lazy_transcript, load_transcript
-from hatch_build import build_exports
 
 ROOT_STUB = Path(captain_hook.__file__).with_suffix(".pyi")
 MODULE_EXPORTS = frozenset({"file", "style", "util"})
@@ -213,8 +213,22 @@ CONSUMER_IMPORT_PATHS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
-def test_export_table_is_fresh() -> None:
-    assert build_exports(ROOT_STUB) == EXPORTS, "generated exports are stale; run `uv run python hatch_build.py`"
+def stub_exports(path: Path) -> dict[str, str]:
+    exports: dict[str, str] = {}
+    for node in ast.parse(path.read_text()).body:
+        if not isinstance(node, ast.ImportFrom) or node.module is None or node.level:
+            raise ValueError(f"unexpected export stub statement: {ast.dump(node)}")
+        for alias in node.names:
+            if alias.asname != alias.name:
+                raise ValueError(f"export must use `X as X`: {ast.unparse(node)}")
+            if alias.name in exports:
+                raise ValueError(f"duplicate export: {alias.name}")
+            exports[alias.name] = f"captain_hook.{alias.name}" if node.module == "captain_hook" else node.module
+    return exports
+
+
+def test_stub_matches_exports() -> None:
+    assert stub_exports(ROOT_STUB) == EXPORTS
 
 
 def test_export_table_matches_pinned_surface() -> None:
