@@ -66,6 +66,25 @@ class TestFormatOutput:
         assert hso["permissionDecision"] == "allow"
         assert hso["hookEventName"] == "PreToolUse"
 
+    def test_pre_tool_use_context_omits_permission_decision(self) -> None:
+        # A context result (warn with approve=False) surfaces its message as pure
+        # additionalContext and drops the PreToolUse allow rider a plain warn carries.
+        result = HookResult(action=Action.warn, message="just context", approve=False)
+        output = format_output(Event.PreToolUse, result)
+        assert output is not None
+        hso = output["hookSpecificOutput"]
+        assert hso["additionalContext"] == "just context"
+        assert "permissionDecision" not in hso
+
+    def test_post_tool_use_context_unchanged(self) -> None:
+        # Non-PreToolUse warns never carried the rider; approve=False leaves them identical.
+        result = HookResult(action=Action.warn, message="ctx", approve=False)
+        output = format_output(Event.PostToolUse, result)
+        assert output is not None
+        hso = output["hookSpecificOutput"]
+        assert hso["additionalContext"] == "ctx"
+        assert "permissionDecision" not in hso
+
     def test_pre_tool_use_allow(self) -> None:
         result = HookResult(action=Action.allow)
         output = format_output(Event.PreToolUse, result)
@@ -517,6 +536,65 @@ class TestDispatch:
         assert "warn1" in context
         assert "warn2" in context
         assert "\n\n" in context
+
+    def test_context_only_drops_pretooluse_rider(self) -> None:
+        # A lone evt.context result surfaces as advisory context without pre-approving the tool.
+        @on(Event.PreToolUse)
+        def contexter(evt: Any) -> HookResult:
+            return evt.context("advice one")
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        hso = result["hookSpecificOutput"]
+        assert hso["additionalContext"] == "advice one"
+        assert "permissionDecision" not in hso
+
+    def test_two_context_only_stay_rider_free(self) -> None:
+        # The context-only merge path rebuilds the warn; approve stays False so no rider regains.
+        @on(Event.PreToolUse)
+        def c1(evt: Any) -> HookResult:
+            return evt.context("a")
+
+        @on(Event.PreToolUse)
+        def c2(evt: Any) -> HookResult:
+            return evt.context("b")
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        hso = result["hookSpecificOutput"]
+        assert hso["additionalContext"] == "a\n\nb"
+        assert "permissionDecision" not in hso
+
+    def test_warn_plus_context_keeps_rider(self) -> None:
+        # any(contributing warns' approve): a plain warn in the merge keeps the allow rider.
+        @on(Event.PreToolUse)
+        def warner(evt: Any) -> HookResult:
+            return evt.warn("plain warn")
+
+        @on(Event.PreToolUse)
+        def contexter(evt: Any) -> HookResult:
+            return evt.context("extra context")
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        hso = result["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert "plain warn" in hso["additionalContext"]
+        assert "extra context" in hso["additionalContext"]
+
+    def test_context_injects_text_verbatim_end_to_end(self) -> None:
+        # Agent-inject shape: a context result's text reaches additionalContext verbatim.
+        injected = "You are reviewing PR #42.\nFocus on the auth changes."
+
+        @on(Event.PreToolUse)
+        def inject(evt: Any) -> HookResult:
+            return evt.context(injected)
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        hso = result["hookSpecificOutput"]
+        assert hso["additionalContext"] == injected
+        assert "permissionDecision" not in hso
 
     def test_block_wins_over_earlier_allow(self) -> None:
         # Deny-wins: a block beats an allow that ran before it (CC's deny > allow), so an

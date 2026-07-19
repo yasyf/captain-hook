@@ -90,6 +90,7 @@ from captain_hook.primitives.permissions import SafetyVerdict as SafetyVerdict
 from captain_hook.primitives.permissions import approve as approve
 from captain_hook.primitives.permissions import deny as deny
 from captain_hook.primitives.permissions import llm_approve as llm_approve
+from captain_hook.primitives.provision import install_binary as install_binary
 from captain_hook.primitives.rewrite import rewrite_code as rewrite_code
 from captain_hook.primitives.rewrite import set_tool_input as set_tool_input
 from captain_hook.primitives.workflow import Artifact as Artifact

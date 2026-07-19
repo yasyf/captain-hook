@@ -24,6 +24,7 @@ The [Guide](../guide/index.qmd) how-tos teach which one to reach for.
 | `approve` | allow | `PermissionRequest` | ✓ | permission dialog |
 | `deny` | block (deny) | `PermissionRequest` | ✓ | permission dialog |
 | `llm_approve` | allow | `PermissionRequest` | ✓ | permission judgment |
+| `install_binary` | none — always allows | `SessionStart` | ✓ | provisioning |
 
 Deterministic primitives carry inline `tests={...}`; LLM-backed ones show `SKIP` under
 `uvx capt-hook test` because they need a live model. The exception is `llm_approve`: its
@@ -172,6 +173,24 @@ Among `PermissionRequest` hooks, the first decisive result in registration order
 local hooks load alphabetically before packs, so your own `deny` beats a pack's `approve`,
 but within one hooks directory `a_allow.py` shadows `z_guards.py`. `skip_if` on the
 approving hook is the supported way to carve out exceptions.
+
+## Provisioning
+
+```python
+install_binary(script: str | Path, *, label: str | None = None, timeout: float = 600,
+               only_if: Sequence[TCondition] = (), skip_if: Sequence[TCondition] = (),
+               tests: InlineTests | None = None) -> None
+```
+
+`install_binary` registers an async `SessionStart` hook — no fire cap, so it runs on
+every start, resume, clear, and compact — that executes `script` with `/bin/sh`, `cwd`
+set to the script's directory, output captured and logged: INFO on exit 0, WARNING with
+a stderr tail on anything else, a missing script or a `timeout` overrun included. The
+handler always returns `None`; provisioning never blocks and never raises. `script`
+resolves relative to the calling file, and `label` (default: the script's file name)
+names the hook in logs. There is no presence check — the script owns idempotency. An
+inline test that fires runs the real installer in every consumer repo; keep firing
+coverage in standalone tests.
 
 ## Inline test inputs
 

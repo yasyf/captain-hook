@@ -550,6 +550,28 @@ class TestWarnParts:
     def test_warn_action_is_warn(self) -> None:
         assert make_event(StopEvent, {}).warn("x").action is Action.warn
 
+    def test_warn_approves_by_default(self) -> None:
+        assert make_event(StopEvent, {}).warn("x").approve is True
+
+
+class TestContextParts:
+    @pytest.mark.parametrize(
+        ("parts", "expected"),
+        [
+            pytest.param(("plain message",), "plain message", id="single_str_part_verbatim"),
+            pytest.param((("files", ["a.py", "b.py"]),), 'files: ["a.py", "b.py"]', id="label_value_tuple_json"),
+            pytest.param(("line1", ("n", 3), {"x": 1}), 'line1\nn: 3\n{"x": 1}', id="multiple_parts_join_newline"),
+        ],
+    )
+    def test_context_shares_warn_rendering(self, parts: tuple[object, ...], expected: str) -> None:
+        # context renders identically to warn — same _render_part path — but never pre-approves.
+        assert make_event(StopEvent, {}).context(*parts).message == expected
+
+    def test_context_is_warn_action_without_approve(self) -> None:
+        result = make_event(StopEvent, {}).context("x")
+        assert result.action is Action.warn
+        assert result.approve is False
+
 
 class TestTranscriptPath:
     @pytest.mark.parametrize(

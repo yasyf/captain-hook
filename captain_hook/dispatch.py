@@ -124,7 +124,7 @@ def format_output(event: Event, result: HookResult) -> dict[str, Any] | None:
                 "hookSpecificOutput": {
                     "hookEventName": event.name,
                     "additionalContext": result.message,
-                    **({"permissionDecision": "allow"} if event is Event.PreToolUse else {}),
+                    **({"permissionDecision": "allow"} if event is Event.PreToolUse and result.approve else {}),
                 }
             }
         case Action.allow:
@@ -167,6 +167,11 @@ def dispatch(
     rewrites the first wins, else the first allow, else the accumulated warns surface alone. Warns
     are never lost to a winner either: they ride along on the winning allow/rewrite as its advisory
     context (``additionalContext``), joined after the rewrite's own note.
+
+    A warn's ``approve`` flag survives the warn-only merge: the rebuilt result carries
+    ``any(contributing warns' approve)``, so a context-only merge (every part ``approve=False``,
+    e.g. ``evt.context``) stays rider-free while a warn+context merge keeps the ``PreToolUse``
+    ``permissionDecision: allow`` rider. The block/allow/rewrite winners carry their own decision.
     """
     matching = [h for h in get_matching_hooks(evt) if h.spec.async_ == async_]
 
@@ -175,6 +180,7 @@ def dispatch(
     blocked = False
     blocks: list[str] = []
     warns: list[str] = []
+    warn_approve = False
     for entry in matching:
         if blocked and entry.handler is not None:
             continue
@@ -187,8 +193,9 @@ def dispatch(
                 rewrite = r
             case HookResult(action=Action.allow) as r if approval is None:
                 approval = r
-            case HookResult(action=Action.warn, message=msg) if msg:
+            case HookResult(action=Action.warn, message=msg) as r if msg:
                 warns.append(msg)
+                warn_approve = warn_approve or r.approve
             case _:
                 pass
 
@@ -208,6 +215,8 @@ def dispatch(
             )
         return format_output(event, winner)
     if warns:
-        return format_output(event, HookResult(action=Action.warn, message="\n\n".join(warns)))
+        return format_output(
+            event, HookResult(action=Action.warn, message="\n\n".join(warns), approve=warn_approve)
+        )
 
     return None

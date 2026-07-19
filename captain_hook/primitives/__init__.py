@@ -18,4 +18,5 @@ from captain_hook.primitives.llm import (
 )
 from captain_hook.primitives.nudge import gate, nudge
 from captain_hook.primitives.permissions import SafetyVerdict, approve, deny, llm_approve
+from captain_hook.primitives.provision import install_binary
 from captain_hook.primitives.rewrite import rewrite_code, set_tool_input

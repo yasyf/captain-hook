@@ -72,6 +72,27 @@ attach contract migrates by deleting its capt-hook `hooks.json` line — scaffol
 generates no `hooks.json` and lint fails any surviving `capt-hook` mention in
 one. It closes by printing the two-line install snippet for your README.
 
+## Provision the pack's binary {#provision-the-packs-binary}
+
+A pack whose hooks shell out to a bundled binary provisions it from inside the pack —
+no `hooks.json`, no wrapper script:
+
+```python
+# hooks/session.py
+from captain_hook import install_binary
+
+install_binary("../scripts/install-binary.sh")
+```
+
+[`install_binary`](primitives.qmd#install_binary) registers an async `SessionStart` hook
+that runs the script with `/bin/sh`, resolved relative to the calling file. Failure is a
+logged no-op — a plugin installed on a machine where the download fails keeps every other
+hook working, and `uvx capt-hook logs` holds the installer's output. The script owns
+idempotency: short-circuit when the binary is already current.
+
+This closes the one job that still pulled a wrapper script and a `hooks.json` entry into
+pack plugins: session-start provisioning.
+
 ## Tell users how to install
 
 Two lines — your marketplace and your plugin:

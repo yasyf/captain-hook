@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
@@ -325,6 +325,16 @@ class BaseHookEvent:
         from captain_hook.types import HookResult as HR
 
         return HR.of(Action.warn, "\n".join(self._render_part(p) for p in parts))
+
+    def context(self, *parts: str | tuple[str, object] | object) -> HookResult:
+        r"""Emit advisory context exactly like :meth:`warn`, but without pre-approving the tool.
+
+        Renders and joins *parts* through the same path as :meth:`warn`, then returns a
+        ``warn``-action result with ``approve=False``. On ``PreToolUse`` this drops the
+        ``permissionDecision: allow`` rider a plain warn carries, so the message surfaces as
+        pure ``additionalContext`` and Claude Code's own permission flow still decides the tool.
+        """
+        return replace(self.warn(*parts), approve=False)
 
     def block(self, message: str) -> HookResult:
         from captain_hook.types import Action

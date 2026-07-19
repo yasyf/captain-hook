@@ -47,6 +47,7 @@ PRIMITIVES: dict[str, Callable[..., object]] = {
     "nudge": captain_hook.nudge,
     "lint": captain_hook.lint,
     "workflow": captain_hook.workflow,
+    "install_binary": captain_hook.install_binary,
     "llm_gate": captain_hook.llm_gate,
     "llm_nudge": captain_hook.llm_nudge,
     "prompt_check": captain_hook.prompt_check,
@@ -79,6 +80,9 @@ PRIMITIVE_DESCRIPTIONS = {
         "**and** ast checks"
     ),
     "workflow": "guard on `SubagentStop`, `max_fires=1`",
+    "install_binary": (
+        "`SessionStart`, async; runs `script` via `/bin/sh` from the calling pack file's dir; always allows"
+    ),
     "llm_gate": (
         "`Stop \\| SubagentStop`; defaults to **unlimited** fires (keeps enforcing); blocks when `verdict(result)` "
         "— default `GateVerdict.block`"

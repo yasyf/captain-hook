@@ -16,6 +16,7 @@ Start from what you want to enforce.
 - Require something done before the agent finishes, go to [`gate`](#gate).
 - Check a Python edit against a rule, go to [`lint`](#lint).
 - Flag only what an edit changed, go to [`diff_lint`](#diff_lint).
+- Install the binary a pack's hooks shell out to, go to [`install_binary`](#install_binary).
 
 To answer a permission dialog before the user sees it, go to [`approve`](#approve);
 to refuse one outright, go to [`deny`](#deny).
@@ -313,6 +314,38 @@ deny(
 An unconditioned `deny()` rejects every dialog, which bricks every prompting tool, so
 scope it the same way. For the LLM-judged variant that approves only what a safety rubric
 clears, see [`llm_approve`](llm-hooks.qmd#llm_approve).
+
+## install_binary {#install_binary}
+
+Provision the binary a pack's hooks shell out to. The hook fires on `SessionStart` —
+every start, resume, clear, and compact — and runs your installer script with `/bin/sh`,
+asynchronously, so a slow download never delays the session. The script path resolves
+relative to the file that calls `install_binary`, and the script runs with its own
+directory as the working directory.
+
+```python
+from captain_hook import install_binary
+
+install_binary("../scripts/install-binary.sh")
+```
+
+The handler always allows. A missing script, a non-zero exit, or a timeout is logged and
+swallowed — provisioning failure is diagnosable, never fatal. `uvx capt-hook logs` shows
+each run: INFO on a clean exit, WARNING with a stderr tail otherwise.
+
+There is deliberately no already-installed check. The script owns idempotency: make it
+short-circuit when the binary is current, and a session where nothing changed costs one
+`/bin/sh` exec. A capt-hook-side presence check would pin consumers to stale binaries
+across plugin updates.
+
+::: {.callout-warning title="Don't pass firing tests"}
+`install_binary` accepts `tests={...}` like any primitive, but an inline test that fires
+executes your real installer in every repo that runs `uvx capt-hook test`. Keep firing
+coverage in a standalone test file with a stub script.
+:::
+
+[Ship a pack in a Claude plugin](plugin-packs.qmd#provision-the-packs-binary) shows the
+plugin-tier setup this primitive was built for.
 
 ---
 

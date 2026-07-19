@@ -94,6 +94,7 @@ EXPORTS: dict[str, str] = {
     "approve": "captain_hook.primitives.permissions",
     "deny": "captain_hook.primitives.permissions",
     "llm_approve": "captain_hook.primitives.permissions",
+    "install_binary": "captain_hook.primitives.provision",
     "rewrite_code": "captain_hook.primitives.rewrite",
     "set_tool_input": "captain_hook.primitives.rewrite",
     "Artifact": "captain_hook.primitives.workflow",

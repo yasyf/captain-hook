@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`install_binary` — a pack provisions its own binary at session start.** The primitive
+  registers an async `SessionStart` hook that runs an installer script via `/bin/sh`,
+  resolved relative to the calling pack file, with the outcome in `capt-hook logs` — INFO
+  on a clean exit, WARNING with a stderr tail otherwise. The handler always allows: a
+  missing or failing script is a logged no-op, never a hook failure. Idempotency and
+  staleness belong to the script — there is no built-in presence check, so a script that
+  short-circuits when the binary is current costs one exec per session.
+- **`evt.context(...)` — `additionalContext` without the auto-approve.** On `PreToolUse`,
+  `evt.warn` approves the tool call it fires on (`permissionDecision: "allow"`) so the
+  warning is delivered without a dialog. `evt.context` builds the same warn-action result
+  minus that rider (`HookResult.approve=False`), for hooks that inject context into a call
+  they hold no opinion on — steering directives, ambient state. Merging keeps the
+  strongest semantics: a warn and a context co-firing keep the rider; contexts alone never
+  gain it.
+
 ### Changed
 - **Language tables are derived from ast-grep's own data, not Pygments.** The build hook now reads
   ast-grep-py's sdist (its `Cargo.lock`, `lib.rs` alias and extension tables, and `parsers.rs`) plus

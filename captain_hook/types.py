@@ -771,13 +771,17 @@ class HookResult:
     """The return value from a hook handler, specifying the action and optional message.
 
     ``updated_input`` and ``note`` carry the ``rewrite`` action's replacement tool
-    input and the advisory context surfaced alongside it.
+    input and the advisory context surfaced alongside it. ``approve`` gates the
+    ``PreToolUse`` ``permissionDecision: allow`` rider a ``warn`` normally carries:
+    ``False`` surfaces the message as pure ``additionalContext`` without pre-approving
+    the tool (the ``evt.context`` variant).
     """
 
     action: Action
     message: str | None = None
     updated_input: dict[str, Any] | None = None
     note: str | None = None
+    approve: bool = True
 
     @classmethod
     def of(cls, action: Action, message: str | None = None) -> HookResult:

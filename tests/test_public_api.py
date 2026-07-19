@@ -179,6 +179,7 @@ PINNED_EXPORTS: tuple[str, ...] = (
     "gate",
     "has_nominal_subject",
     "hook",
+    "install_binary",
     "is_past_predicate",
     "lint",
     "llm_approve",

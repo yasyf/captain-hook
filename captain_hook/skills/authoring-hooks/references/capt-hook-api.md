@@ -82,6 +82,7 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 | `nudge` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), block=False, events=None, max_fires=-1, tests=None, async_=False, skip_planning_agents=None)` | `PostToolUse` (with signals) else `PreToolUse`; default fires 3 / 1; `when` vetoes even with `signals`; warns |
 | `lint` | `(check=None, *, pattern=None, message, lang='py', trigger=None, sep=', ', block=False, events=None, tests=None, max_shown=5)` | `PostToolUse`, `Tool("Edit\|Write")` + the `lang` globs, skips test files; `trigger` pre-filters string **and** ast checks |
 | `workflow` | `(*, label, marker, steps, artifacts=None, post_complete=None, on_start=None, only_if=(), skip_if=(), tests=None)` | guard on `SubagentStop`, `max_fires=1` |
+| `install_binary` | `(script, *, label=None, timeout=600, only_if=(), skip_if=(), tests=None)` | `SessionStart`, async; runs `script` via `/bin/sh` from the calling pack file's dir; always allows |
 | `llm_gate` | `(prompt, *, message, response_model=GateVerdict, verdict=…, label=None, signals=None, when=None, contexts=(), only_if=(), skip_if=(), events=None, max_fires=-1, tests=None, max_context=2000, specialty='review', model='small', agent=True, transcript=True, diff=False)` | `Stop \| SubagentStop`; defaults to **unlimited** fires (keeps enforcing); blocks when `verdict(result)` — default `GateVerdict.block` |
 | `llm_nudge` | `(prompt, *, message, response_model=NudgeVerdict, verdict=…, label=None, signals=None, when=None, contexts=(), only_if=(), skip_if=(), events=None, max_fires=-1, tests=None, async_=False, max_context=2000, specialty='review', model='small', agent=True, transcript=True, diff=False)` | `PostToolUse`, `max_fires=3`; warns when `verdict(result)` — default `NudgeVerdict.fire` |
 | `prompt_check` | `(evt, template, fmt=None, *, prefix, suffix='', timeout=45, include_reasoning=True, diff=False, response_model=PromptCheckVerdict)` | call inside an `@on` handler; returns `HookResult \| None` from `PromptCheckVerdict` |
@@ -204,6 +205,7 @@ Glob caveat: patterns match the full relative path. `**/*.py` matches `src/main.
 | `evt.permission_mode` | e.g. `"plan"` |
 | `evt.ctx.t` | the session as a `cc_transcript.query.Session` (turns, tool calls, text) |
 | `evt.block(msg)` / `evt.warn(msg)` / `evt.allow()` | build the `HookResult` to return |
+| `evt.context(msg)` | `evt.warn` minus the `PreToolUse` auto-approve rider — inject `additionalContext` without approving the call |
 | `evt.rewrite_command(new_command, *, note=None)` | **PreToolUse and PermissionRequest** — rewrite a Bash command in place (keeps the rest of the tool input), allowing it; `note` surfaces as `additionalContext` (dropped on `PermissionRequest`) |
 | `evt.rewrite(updated_input, *, note=None)` | **PreToolUse and PermissionRequest** — replace the tool input wholesale with `updated_input` (same tool schema), allowing it |
 
