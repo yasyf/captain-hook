@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.5.0] - 2026-07-20
+
 ### Added
 - **`install_binary` — a pack provisions its own binary at session start.** The primitive
   registers an async `SessionStart` hook that runs an installer script via `/bin/sh`,
