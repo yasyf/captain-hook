@@ -19,6 +19,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both hooks bias toward silence under uncertainty; intentional degradation and
   third-party-dependency accommodations stay unflagged.
 
+### Changed (BREAKING) — packs are now two providers, zero consumer config
+
+The pack system is redesigned to exactly two providers, and the per-repo pack config is gone. This is
+a breaking major: `.claude/capt-hook.toml`, external GitHub packs, and half the `pack` CLI no longer
+exist. Migration is mechanical but manual — there is no compatibility shim.
+
+- **Two providers, nothing else.** A pack comes from the `capt-hook` wheel (a builtin) or from an
+  enabled Claude Code plugin. GitHub-sourced packs, tarball fetch/cache, pins, and moving refs are all
+  removed.
+- **No `.claude/capt-hook.toml`.** The per-repo enable list ceases to exist and is no longer parsed.
+  Delete it. Builtins activate by policy, not by declaration.
+- **Builtins auto-activate.** `fixes`, `general`, `steering`, and `performance` are unconditional in
+  every repo; `go` activates on a recursive, non-ignored `go.mod`/`go.work` and `python` on a
+  recursive, non-ignored `pyproject.toml`. There are no per-builtin opt-outs — disable the
+  captain-hook plugin to turn everything off.
+- **Plugin packs load from a fixed path.** An enabled plugin ships zero or one pack at
+  `capt-hook/{pack.toml, hooks/}` under its root. Probing, manifest candidates, pointers, and shadow
+  resolution are gone. A `capt-hook/` directory that is malformed (missing `pack.toml`/`hooks/`, bad
+  descriptor, duplicate tool name) is now a **fatal** load error at dispatch — all-or-nothing, never a
+  silent skip. Builtin packs moved from `captain_hook/packs/<name>/` to
+  `captain_hook/builtin_packs/<name>/hooks/`.
+- **Identity derives from the plugin, not the manifest.** Runtime pack ids are `builtin:<name>` and the
+  full plugin id (e.g. `plugin:cc-context@cc-context`); version, description, and repository come from
+  `plugin.json`. Authored `name`/`version`/`description`/`hooks`/`nlp`/`marketplaces` fields are gone.
+- **`pack.toml` is a tiny descriptor.** It carries only what can't be derived: `resources = [...]` (the
+  NLP/tool resources to provision, replacing the `nlp` boolean) and `[tools.<name>]` gate semantics.
+  Tool keys are bare tool segments (mount-agnostic); a tool name claimed by two packs is fatal.
+- **CLI.** `pack add`, `pack remove`, `pack update`, `pack bootstrap`, `pack scaffold`, and `pack lint`
+  are removed. New `pack test <plugin-root>` validates and tests a working-tree plugin pack (folding in
+  what `pack lint` did). `pack list` is read-only and lists active builtins plus plugin packs.
+  `capt-hook test` now covers only the repo's own `.claude/hooks`.
+- **Misfire routing.** A plugin pack's hook-misfire fix PR routes to the `repository` in its
+  `plugin.json` (previously dropped); a plugin with no repository is dropped rather than misfiled.
+
 ### Changed
 - **Review persistence is async end to end** — the cc-transcript pin lifts to
   `>=14.6.1,<15`, and `ReviewStore` now composes over `cc_transcript.mining.store.FeedbackStore`'s
