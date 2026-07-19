@@ -32,3 +32,4 @@ jobs:
       group: cc-guides-render
       cancel-in-progress: false
     uses: yasyf/cc-guides/.github/workflows/re-render.yml@action-v1
+    secrets: inherit
