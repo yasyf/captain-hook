@@ -117,6 +117,18 @@ class TestRecordDecision:
         assert isinstance(evt.input, FallbackCall)
         assert parse_degraded(evt) is True
 
+    @pytest.mark.parametrize(
+        ("tool", "tool_input", "expected"),
+        [
+            pytest.param("Edit", EDIT_INPUT, False, id="typed_call"),
+            pytest.param("mcp__github__search", {"q": "x"}, False, id="unknown_tool_wellformed"),
+            pytest.param("Edit", {"file_path": "a.py", "old_string": "x"}, True, id="known_tool_malformed"),
+            pytest.param("Bash", {"command": b"ls"}, True, id="fallback_input"),
+        ],
+    )
+    def test_parse_degraded_truth_table(self, tool: str, tool_input: dict[str, Any], expected: bool) -> None:
+        assert parse_degraded(pre_tool_evt(tool, tool_input)) is expected
+
     def test_spawned_run_does_not_write(self, db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CAPT_HOOK_SPAWNED", "1")
         record_decision(entry(), stop_evt(), HookResult(action=Action.warn, message="x"))

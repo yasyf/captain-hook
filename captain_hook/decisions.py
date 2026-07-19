@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from cc_transcript.decisions import Decision, DecisionLog
-from cc_transcript.tools import FallbackCall, OtherCall, ToolInputError, parse_tool_call
+from cc_transcript.tools import FallbackCall, OtherCall
 
 from captain_hook.util import reqenv
 
@@ -48,15 +48,13 @@ def reset_cached_log() -> None:
 
 
 def parse_degraded(evt: BaseHookEvent) -> bool:
-    if isinstance(evt.input, FallbackCall):
-        return True
-    if not isinstance(evt.input, OtherCall) or not evt.tool_name:
-        return False
-    try:
-        parse_tool_call(evt.tool_name, evt.input.raw)
-    except ToolInputError:
-        return True
-    return False
+    match evt.input:
+        case FallbackCall():
+            return True
+        case OtherCall() as call:
+            return call.error is not None
+        case _:
+            return False
 
 
 def record_decision(entry: RegisteredHook, evt: BaseHookEvent, result: HookResult) -> None:

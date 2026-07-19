@@ -24,6 +24,7 @@ from captain_hook.review.scan import (
     detect,
     is_paste_only,
     parts,
+    reason_kept,
     rule_parts,
     scan,
     scan_transcript,
@@ -322,6 +323,11 @@ class TestJunkCreatePrefilter:
 
         junk_events, junk_sig = rejection("Plan approved, begin")
         assert survives(junk_events, junk_sig) is False
+
+    def test_reason_kept_mints_a_synthetic_user_event_for_the_gate(self) -> None:
+        assert reason_kept("The plan skips the data migration step. Add it back before we ship.") is True
+        assert reason_kept("Plan approved, begin") is False
+        assert reason_kept("```\ncode paste\n```") is False
 
     def test_exit_plan_rejection_survives_a_native_view_carrier(self) -> None:
         """Regression: the carrier is a frozen native view, not a dataclass, so a

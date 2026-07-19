@@ -28,7 +28,6 @@ so two sessions' complaints about one hook collapse to one candidate.
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -66,7 +65,8 @@ from cc_transcript.mining.candidates import FeedbackCandidate, dedup_key
 from cc_transcript.mining.signals import mine
 from cc_transcript.mining.spec import ALL_DETECTORS, MiningSpec
 from cc_transcript.models import UserEvent
-from cc_transcript.parser import parse_events_from_bytes, stat_mtime, stream
+from cc_transcript.parser import stat_mtime, stream
+from cc_transcript.synthetic import synthetic_user_event
 
 from captain_hook.decisions import decisions_db_path, open_decision_log
 from captain_hook.review.fix import HOOK_COMPLAINT, iter_hook_complaint_signals
@@ -199,14 +199,6 @@ COLLAPSE_DETECTORS = frozenset(
 )
 """CREATE detectors whose surviving signal shadows an equal-text ``transcript_message`` at the same event."""
 
-REASON_ENTRY: dict[str, Any] = {
-    "type": "user",
-    "uuid": "exit-plan-reason",
-    "sessionId": "exit-plan-reason",
-    "timestamp": "1970-01-01T00:00:00+00:00",
-}
-"""The synthetic user-turn envelope the extracted ``exit_plan_rejection`` reason rides."""
-
 
 def is_paste_only(text: str) -> bool:
     """Whether ``text`` is a verbatim paste — a fenced block or blockquote — with no feedback tail.
@@ -247,13 +239,10 @@ def reason_kept(text: str) -> bool:
     own ``text`` is empty — the miner lifts the user's reason into ``sig.text``. Gating the
     empty envelope would drop every real rejection, so the prefilter runs against the
     extracted reason instead; every other gated detector already fires on the user turn whose
-    text it screens. Transcript events are frozen native views — not constructible from Python
-    and not :func:`dataclasses.replace`-able — so the reason is re-materialized as the
-    :data:`REASON_ENTRY` user turn through the parser, never a re-texted copy of the carrier.
+    text it screens. The reason is minted into a synthetic user turn via the upstream
+    constructor and run through the same strict filterspec gate.
     """
-    (event,) = parse_events_from_bytes(
-        (json.dumps(REASON_ENTRY | {"message": {"role": "user", "content": text}}) + "\n").encode()
-    )
+    event = synthetic_user_event(text, uuid="exit-plan-reason", session_id="exit-plan-reason")
     return keep(event, STRICT_USER_TEXT) and not is_paste_only(text)
 
 
