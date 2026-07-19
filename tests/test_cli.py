@@ -761,7 +761,6 @@ class TestTestSubcommand:
             """,
             name="bad.py",
         )
-        (project / ".claude" / "capt-hook.toml").write_text("[packs.general]\n")
 
         (scoped := tmp_path / "scoped").mkdir()
         (scoped / "__init__.py").write_text("")
