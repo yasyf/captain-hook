@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [11.0.0] - 2026-07-20
 
 ### Changed (BREAKING) — packs are now two providers, zero consumer config
 
@@ -42,6 +42,15 @@ exist. Migration is mechanical but manual — there is no compatibility shim.
   `capt-hook test` now covers only the repo's own `.claude/hooks`.
 - **Misfire routing.** A plugin pack's hook-misfire fix PR routes to the `repository` in its
   `plugin.json` (previously dropped); a plugin with no repository is dropped rather than misfiled.
+
+## [10.7.0] - 2026-07-20
+
+### Fixed
+- **PEP 723 script fences are exempt from comment-run accounting.** A well-formed `# /// script`
+  fence (TOML body, PEP 723 top-level schema) is machine metadata, dropped like a shebang — the
+  verbose-comment block, doc warn, and density warn no longer fire on uv script headers. Lookalikes
+  (prose body, off-schema keys, unterminated, glued neighbors, non-Python) stay on the plain budget;
+  parser bombs classify as non-fences instead of crashing dispatch.
 
 ## [10.6.0] - 2026-07-20
 
