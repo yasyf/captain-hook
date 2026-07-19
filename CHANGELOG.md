@@ -4,6 +4,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [10.4.0] - 2026-07-19
+
+### Changed
+- **Verbose-comment budgets now cover documentation comments.** `CommentBlock.too_long` keeps only a
+  doc block's opening paragraph carved out, under a 6-line / 400-character ceiling; all trailing
+  paragraphs share the plain 3-line / 200-character budget. The new `CommentSegment` and
+  `CommentBlock.doc_paragraphs` APIs expose that arithmetic split without changing run or block identity.
+- **Doc classification no longer exports the hand-written `DOC_PREFIXES` or `GO_DOC_SIBLINGS` tables.**
+  External packs importing those module-level names from `captain_hook.ast_grep` must move to the
+  generated `DOC_COMMENT_KINDS` and per-language `DOC_SIBLINGS` tables.
+
 ## [10.3.0] - 2026-07-19
 
 ### Added
@@ -22,17 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   command writes the atomic, byte-pinned `~/.capt-hook/status.json` (schema 1)
   the widget reads; candidates carry a PR title, and `pr_open`/`accepted`
   transitions notify through the helper on the winning update only.
-
-## [Unreleased]
-
-### Changed
-- **Verbose-comment budgets now cover documentation comments.** `CommentBlock.too_long` keeps only a
-  doc block's opening paragraph carved out, under a 6-line / 400-character ceiling; all trailing
-  paragraphs share the plain 3-line / 200-character budget. The new `CommentSegment` and
-  `CommentBlock.doc_paragraphs` APIs expose that arithmetic split without changing run or block identity.
-- **Doc classification no longer exports the hand-written `DOC_PREFIXES` or `GO_DOC_SIBLINGS` tables.**
-  External packs importing those module-level names from `captain_hook.ast_grep` must move to the
-  generated `DOC_COMMENT_KINDS` and per-language `DOC_SIBLINGS` tables.
 
 ## [10.2.0] - 2026-07-18
 
