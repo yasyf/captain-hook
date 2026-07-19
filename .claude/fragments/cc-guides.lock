@@ -1,8 +1,8 @@
 # Written by 'cc-guides render' — do not edit.
 schema = 1
-version = "0.1.36"
+version = "0.1.38"
 artifacts = [".claude/capt-hook.toml", ".claude/settings.json", ".github/workflows/docs.yml", ".mcp.json", ".pre-commit-config.yaml", "AGENTS.md", "CLAUDE.md", "great-docs.yml"]
 
 [sources.cc-skills]
 spec = "github:yasyf/cc-skills@main"
-commit = "2fc32523da63a37e24df9cf11ff06ea1ba665514"
+commit = "62a1a374341d51f76f0fc7add72813b8c35e6168"
