@@ -1,0 +1,2 @@
+# Resources the pack's NLP hooks need provisioned; identity/version derive from the wheel.
+resources = ["spacy:en_core_web_sm", "wordnet:oewn:2025"]

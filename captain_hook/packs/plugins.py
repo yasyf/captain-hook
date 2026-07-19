@@ -1,16 +1,19 @@
-"""Discovery of packs shipped on the enabled Claude Code plugins of a project.
+"""Discovery of the pack shipped on each enabled Claude Code plugin of a project.
 
-A pack-shipping Claude plugin carries a ``[pack]`` manifest (``capt-hook.toml``) at its root
-or under ``hooks/``; the dispatcher loads every enabled plugin whose root ships one. Enabled
+A pack-shipping Claude plugin carries its pack at the fixed path ``capt-hook/{pack.toml, hooks/}``
+under the plugin root; the dispatcher loads every enabled plugin whose root ships one. Enabled
 plugins come from ``claude plugin list --json`` — the sanctioned interface, which resolves
 ``enabled`` against the project's settings stack — but that CLI spawns Node (~1s), far too slow
 for the ~3ms dispatch hot path. So the roster is cached per project in a ``<key>.plugins``
-snapshot beside the resolve fastpath, invalidated by the stat tuple of the files that shape it:
-Claude Code's ``installed_plugins.json`` (mtime only — undocumented, never parsed), the user
-settings, and the project's two settings files. A watched-file change (a plugin install, an
-enable or disable) re-runs the CLI once; every other event reads the snapshot. The ``[pack]``
-probe itself runs live per discovery (cheap stats), so a pack edit inside a plugin dir needs no
-snapshot invalidation.
+snapshot, invalidated by the stat tuple of the files that shape it: Claude Code's
+``installed_plugins.json`` (mtime only — undocumented, never parsed), the user settings, and the
+project's two settings files. A watched-file change (a plugin install, an enable or disable) re-runs
+the CLI once; every other event reads the snapshot. The fixed-path probe itself runs live per
+discovery (cheap stats), so a pack edit inside a plugin dir needs no snapshot invalidation.
+
+Pack load is all-or-nothing: a plugin advertising ``capt-hook/`` with a missing descriptor or hooks
+dir raises rather than silently dropping guards, and a duplicate full plugin id is a corrupt roster
+that crashes.
 """
 
 from __future__ import annotations
@@ -18,8 +21,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import tomllib
-from collections.abc import Set
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -30,7 +31,7 @@ from loguru import logger
 
 from captain_hook.packs import manager
 from captain_hook.util.fs import atomic_write, read_json
-from captain_hook.util.paths import resolve_claude_config_dir
+from captain_hook.util.paths import resolve_cache_dir, resolve_claude_config_dir
 
 CLI_TIMEOUT_SECONDS = 60
 # Enterprise managed settings can enable/disable plugins; Claude Code reads them from fixed OS
@@ -92,8 +93,12 @@ def stat_records(root: Path) -> tuple[StatRecord, ...]:
     return tuple(stat_record(p) for p in watched_paths(root)) + dropins
 
 
+def snapshot_cache_root() -> Path:
+    return resolve_cache_dir() / "packs"
+
+
 def snapshot_path(root: Path) -> Path:
-    return manager.packs_cache_root() / f"{sha256(str(root.resolve()).encode()).hexdigest()[:16]}.plugins"
+    return snapshot_cache_root() / f"{sha256(str(root.resolve()).encode()).hexdigest()[:16]}.plugins"
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,9 +191,12 @@ def list_plugins_cli(root: Path) -> tuple[EnabledPlugin, ...]:
     if not isinstance(roster, list):
         raise PluginListError(f"claude plugin list returned {type(roster).__name__}, expected a JSON array")
     try:
-        return tuple(plugin for entry in roster if (plugin := parse_plugin_entry(entry)) is not None)
+        parsed = [plugin for entry in roster if (plugin := parse_plugin_entry(entry)) is not None]
     except (TypeError, AttributeError, KeyError) as e:
         raise PluginListError(f"claude plugin list returned an unusable roster shape: {e!r}") from e
+    # Claude Code re-lists an enabled plugin per marketplace/ref, so one id can appear several times;
+    # dedupe by full plugin id — one id, one pack.
+    return tuple({plugin.id: plugin for plugin in parsed}.values())
 
 
 def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
@@ -227,49 +235,64 @@ def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
         return plugins
 
 
-def probe_plugin_pack(plugin: EnabledPlugin) -> tuple[Path, manager.PackManifest] | None:
-    location = manager.resolve_manifest(Path(plugin.root))
-    manifest = manager.manifest_at(location.manifest)
-    return (location.pack_root, manifest) if manifest is not None else None
+def plugin_pack_root(plugin: EnabledPlugin) -> Path:
+    """The fixed ``capt-hook/`` dir under a plugin's install root — present iff the plugin ships a pack."""
+    return Path(plugin.root) / manager.PLUGIN_PACK_DIRNAME
 
 
-def resolve_plugin_packs(root: Path, declared: Set[str]) -> list[manager.ResolvedPack]:
-    """Resolve packs shipped on ``root``'s enabled plugins, minus any name the project declares.
+def has_plugin_pack(plugin: EnabledPlugin) -> bool:
+    return plugin_pack_root(plugin).is_dir()
 
-    Each enabled plugin is probed — at its root, then under ``hooks/`` (both attach-era layouts) —
-    for a ``[pack]`` manifest, in plugin-id order. A plugin with no manifest merely consumes packs
-    and is skipped silently; a malformed manifest is skipped fail-soft so one rotted plugin cannot
-    kill discovery. ``declared`` is every ``[packs.*]`` entry name — including disabled entries and
-    uncached or missing externals — so a project entry always shadows a same-name plugin pack. When
-    two plugins ship the same pack name the lower plugin id wins, with a warning naming both.
+
+def plugin_repository(plugin: EnabledPlugin) -> str | None:
+    """The ``repository`` url from a plugin's ``.claude-plugin/plugin.json``, or ``None``.
+
+    Routing-only (a hook-misfire fix PR's destination), never a load gate, so an absent or unreadable
+    plugin.json is fail-soft — a missing repository just leaves a misfire repo-local.
     """
-    resolved: list[manager.ResolvedPack] = []
-    winners: dict[str, str] = {}
-    for plugin in sorted(enabled_plugins(root), key=lambda p: p.id):
-        try:
-            probed = probe_plugin_pack(plugin)
-        except (manager.PackError, tomllib.TOMLDecodeError, OSError):
-            logger.bind(plugin=plugin.id).opt(exception=True).debug("skipped plugin with a malformed [pack] manifest")
-            continue
-        if probed is None:
-            continue
-        probe, manifest = probed
-        if manifest.name in declared:
-            logger.bind(plugin=plugin.id, pack=manifest.name).debug(
-                "plugin pack shadowed by a declared [packs.*] entry"
-            )
-            continue
-        if (winner := winners.get(manifest.name)) is not None:
-            logger.bind(pack=manifest.name).warning(
-                f"duplicate plugin pack {manifest.name!r}: plugin {winner!r} wins over {plugin.id!r}"
-            )
-            continue
-        winners[manifest.name] = plugin.id
-        resolved.append(
-            manager.ResolvedPack(
-                manager.PluginPack(name=manifest.name, plugin_id=plugin.id, dir=str(probe), version=manifest.version),
-                manifest.hooks_dir(probe),
-                manifest,
-            )
+    path = Path(plugin.root) / ".claude-plugin" / "plugin.json"
+    if not path.is_file():
+        return None
+    try:
+        repository = json.loads(path.read_text()).get("repository")
+    except (json.JSONDecodeError, OSError):
+        return None
+    return repository if isinstance(repository, str) and repository else None
+
+
+def resolve_plugin_pack(plugin: EnabledPlugin) -> manager.ResolvedPack:
+    """Load the pack at ``<plugin.root>/capt-hook/{pack.toml, hooks/}``.
+
+    All-or-nothing: a ``capt-hook/`` dir missing its ``pack.toml`` or ``hooks/`` raises
+    :class:`~captain_hook.packs.manager.PackError`, never silently dropping the plugin's guards.
+    """
+    pack_root = plugin_pack_root(plugin)
+    descriptor = pack_root / manager.PACK_DESCRIPTOR
+    hooks = pack_root / manager.HOOKS_DIRNAME
+    if not descriptor.is_file():
+        raise manager.PackError(
+            f"plugin {plugin.id!r} ships {manager.PLUGIN_PACK_DIRNAME}/ without a {manager.PACK_DESCRIPTOR}"
         )
-    return resolved
+    if not hooks.is_dir():
+        raise manager.PackError(
+            f"plugin {plugin.id!r} ships {manager.PLUGIN_PACK_DIRNAME}/ without a {manager.HOOKS_DIRNAME}/ dir"
+        )
+    return manager.ResolvedPack(
+        manager.PluginPack(plugin_id=plugin.id, root=plugin.root, repository=plugin_repository(plugin)),
+        hooks,
+        manager.PackDescriptor.load(descriptor),
+    )
+
+
+def resolve_plugin_packs(root: Path) -> list[manager.ResolvedPack]:
+    """Resolve the pack each of ``root``'s enabled plugins ships, in plugin-id order.
+
+    A plugin with no ``capt-hook/`` dir merely consumes packs and is skipped. A plugin advertising a
+    malformed one raises (all-or-nothing). The roster is deduped by full plugin id in
+    :func:`list_plugins_cli`, so one plugin id yields one pack.
+    """
+    return [
+        resolve_plugin_pack(plugin)
+        for plugin in sorted(enabled_plugins(root), key=lambda p: p.id)
+        if has_plugin_pack(plugin)
+    ]

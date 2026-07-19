@@ -962,35 +962,37 @@ class TestMetaHardening:
 
 
 class TestDiscoveryDiagnosticsReplay:
-    def test_discovery_warning_replayed_on_every_request(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolate_modules: None
-    ) -> None:
-        # Cold re-prints discovery diagnostics ("packs unavailable ...") on every invocation. Warm
-        # discovers once at build; the captured warning must replay into every request served from that
-        # snapshot, so a cache hit (request 2) carries it byte-for-byte with the build (request 1).
+    def test_discovery_diagnostic_replayed_on_every_request(self, tmp_path: Path, isolate_modules: None) -> None:
+        # A hook module's import-time stderr print is captured during the build's discover; a cache hit
+        # replays that captured diagnostic byte-for-byte instead of re-discovering.
         from captain_hook.daemon.context import install_context_io
         from captain_hook.daemon.protocol import decode_request
         from captain_hook.daemon.server import Server
-        from captain_hook.packs import manager
 
-        monkeypatch.setattr(manager, "resolve_enabled_packs", lambda _root, _entries: ([], ["ghost"]))
-        root = make_project(tmp_path / "proj")
+        root = tmp_path / "proj"
+        (hooks := root / ".claude" / "hooks").mkdir(parents=True)
+        (hooks / "h.py").write_text(
+            "import sys\n"
+            "print('discovery diagnostic: heads up', file=sys.stderr)\n"
+            "from captain_hook import Event, hook\n\n"
+            "hook(Event.PreToolUse, message='m')\n"
+        )
         env = dict(os.environ)
-        payload = json.dumps({"tool_name": "Bash", "tool_input": {}})
+        payload = json.dumps({"session_id": "diag1", "tool_name": "Bash", "tool_input": {}})
         req = decode_request(json.dumps(event_req("PostToolUse", payload, root, env)).encode())
 
         saved = (sys.stdout, sys.stderr)
         install_context_io()
         server = Server(root, foreground=True)
         try:
-            built = server._run_event(req)  # cache miss: builds and captures the discovery warning
-            hit = server._run_event(req)  # cache hit: no fresh discover, replays the snapshot's warning
+            built = server._run_event(req)  # cache miss: builds and captures the import-time diagnostic
+            hit = server._run_event(req)  # cache hit: replays the snapshot's diagnostic, no re-discover
         finally:
             server.event_pool.shutdown(wait=False)
             server.control_pool.shutdown(wait=False)
             sys.stdout, sys.stderr = saved
 
-        assert "packs unavailable (offline and not cached): ghost" in built.stderr
+        assert "discovery diagnostic: heads up" in built.stderr
         assert built.stdout == "" and hit.stdout == ""
         assert hit.stderr == built.stderr  # the cache hit replays the build's diagnostics verbatim
 

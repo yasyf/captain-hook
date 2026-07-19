@@ -56,8 +56,8 @@ import captain_hook
 from captain_hook.loader import discover_pack
 from captain_hook.packs import manager
 
-for name, pack_dir in manager.builtin_packs().items():
-    discover_pack(name, pack_dir)
+for name in manager.builtin_names():
+    discover_pack(name, manager.resolve_builtin(name).path)
 
 print(",".join(name for name in ("wn", "spacy") if name in sys.modules))
 """

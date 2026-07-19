@@ -1,5 +1,0 @@
-[pack]
-name = "performance"
-version = "0.1.0"
-description = "Wall-clock pipelining guards: speculate-while-you-verify nudges that start an already-held candidate fix in an isolated worktree while verification lanes run."
-hooks = "."

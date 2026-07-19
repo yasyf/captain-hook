@@ -16,7 +16,7 @@ from captain_hook import (
     llm_gate,
     nudge,
 )
-from captain_hook.packs.general._lib import SCRATCH_WORKFLOW_WRITE_FIXTURE
+from captain_hook.builtin_packs.general.hooks._lib import SCRATCH_WORKFLOW_WRITE_FIXTURE
 
 # Advisory reminder to consult the writing-docs skill (and run slop-cop) before
 # editing documentation. Fires once per session on the first doc edit and stands

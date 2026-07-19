@@ -79,7 +79,7 @@ if TYPE_CHECKING:
     from cc_transcript.ids import SessionId, ToolUseId
     from cc_transcript.models import ToolUseBlock, TranscriptEvent
 
-    from captain_hook.review.routing import PackIndex
+    from captain_hook.review.routing import PackIndex, PluginRoute
 
 HOOK_COMPLAINT = SourceKind("hook_complaint")
 """The source kind for an assistant turn dismissing a hook fire as a misfire."""
@@ -272,66 +272,63 @@ async def named_hook_target(
 
 
 def user_repo_source(source_file: str) -> bool:
-    """A hook file living in the watched repo, not the installed wheel or the pack cache.
+    """A hook file living in the watched repo, not the installed wheel.
 
-    Installed-wheel source (a ``nudge()``/``gate()`` primitive fire, or a ``hook()`` bundled
-    in a builtin pack) carries ``captain_hook/`` in its path; a cached external pack carries
-    the ``captain-hook/packs/`` cache segment. Neither is a repo path, so both resolve through
-    the decision ``kind``'s module prefix instead of being returned verbatim.
+    Installed-wheel source (a ``nudge()``/``gate()`` primitive fire, or a ``hook()`` bundled in a
+    builtin pack) carries ``captain_hook/`` in its path, so it resolves through the decision ``kind``'s
+    module prefix instead of being returned verbatim. Plugin-pack source is routed earlier.
     """
-    return (
-        f"{CAPTAIN_HOOK_ROOT}/" not in source_file
-        and f"{CAPTAIN_HOOK_ROOT.replace('_', '-')}/packs/" not in source_file
-    )
+    return f"{CAPTAIN_HOOK_ROOT}/" not in source_file
 
 
-def external_target_path(source_file: str) -> str | None:
-    """The in-repo path for a cached external pack's ``source_file``.
+def plugin_rel_path(source_file: str, install_root: str) -> str | None:
+    """A plugin-pack ``source_file``'s path relative to its plugin install root, or ``None``.
 
-    A cached external pack lives at ``.../captain-hook/packs/<name>@<sha>/<path>``, so
-    the path within the pack's own repo is everything past the ``<name>@<sha>/`` segment.
+    Best effort: a plugin rooted below its repo root (a ``plugin/`` subdir) carries that offset in the
+    result, which the fix PR resolves against the plugin's repo.
     """
-    return source_file.partition(f"{CAPTAIN_HOOK_ROOT.replace('_', '-')}/packs/")[2].partition("/")[2] or None
+    if not source_file:
+        return None
+    source, root = Path(source_file).resolve(), Path(install_root).resolve()
+    return str(source.relative_to(root)) if source.is_relative_to(root) else None
 
 
-def under_plugin_dir(source_file: str, plugin_dirs: frozenset[str]) -> bool:
-    """True when ``source_file`` lives inside one of the discovered plugin packs' hooks dirs.
+def plugin_route_for(decision: Decision, module: str, sep: str, index: PackIndex) -> PluginRoute | None:
+    """The route for a plugin-pack misfire, or ``None`` when the misfire is not a plugin pack's.
 
-    Both sides resolve, so a symlinked temp root (or an unresolved recorded path) still matches. This
-    is the source arm for a plugin-pack hook whose bare ``@on`` name carries no ``<pack>.`` prefix to
-    route on — the name arm can't see it, but its source dir gives it away.
+    A ``<pack>.<mod>:`` kind (a primitive, always two-plus segments) matches by its module prefix; a
+    bare ``@on`` name matches by its source dir. The returned route's ``repo`` is ``None`` when the
+    owning plugin declares no repository.
     """
-    if not source_file or not plugin_dirs:
-        return False
-    source = Path(source_file).resolve()
-    return any(source.is_relative_to(Path(d).resolve()) for d in plugin_dirs)
-
-
-def from_plugin_pack(decision: Decision, module: str, sep: str, index: PackIndex) -> bool:
-    # A plugin pack's hook fires from the plugin install dir (a repo-looking path). Drop it whether its
-    # kind is a `<pack>.<mod>:` prefix (a primitive) or a bare `@on` name matched only by its source dir.
-    prefixed = bool(sep and module and len(segments := module.split(".")) >= 2 and segments[0] in index.plugins)
-    return prefixed or under_plugin_dir(decision.source_file, index.plugin_dirs)
+    if sep and module and len(parts := module.split(".")) >= 2 and (route := index.plugin_prefixes.get(parts[0])):
+        return route
+    if decision.source_file:
+        source = Path(decision.source_file).resolve()
+        for d, route in index.plugin_dirs.items():
+            if source.is_relative_to(Path(d).resolve()):
+                return route
+    return None
 
 
 def resolve_target(decision: Decision, index: PackIndex) -> Target | None:
     module, sep, _ = decision.kind.partition(":")
-    # Drop a plugin-pack misfire ahead of the verbatim early return and the `.claude/hooks` fallback,
-    # either of which would misfile its fix as a repo-local PR (no repo target for plugin packs this wave).
-    if from_plugin_pack(decision, module, sep, index):
-        logger.bind(hook=decision.kind).debug("dropped plugin-pack misfire complaint; no repo target this wave")
-        return None
+    # A plugin-pack misfire routes to the plugin's repo, or drops when it declares none — never falling
+    # through to the `.claude/hooks` fallback, which would misfile it repo-local.
+    if (route := plugin_route_for(decision, module, sep, index)) is not None:
+        if route.repo is None:
+            logger.bind(hook=decision.kind).debug("dropped plugin-pack misfire; plugin declares no repository")
+            return None
+        rel = plugin_rel_path(decision.source_file, route.root)
+        return Target(rel or decision.source_file, decision.kind, route.repo, module.split(".")[0] if sep else None)
     if user_repo_source(decision.source_file):
         return Target(decision.source_file, decision.kind, repo=None, pack=None)
     if not sep or not module:
         return None
     match module.split("."):
         case [pack, mod] if (pack_dir := index.builtins.get(pack)) and (pack_dir / f"{mod}.py").is_file():
-            return Target(f"{CAPTAIN_HOOK_ROOT}/packs/{pack}/{mod}.py", decision.kind, CAPTAIN_HOOK_REPO, pack)
-        case [pack, _mod] if (route := index.externals.get(pack)) and (
-            path := external_target_path(decision.source_file)
-        ):
-            return Target(path, decision.kind, route.repo, route.pack_name)
+            return Target(
+                f"{CAPTAIN_HOOK_ROOT}/builtin_packs/{pack}/hooks/{mod}.py", decision.kind, CAPTAIN_HOOK_REPO, pack
+            )
         case parts if all(part.isidentifier() for part in parts):
             return Target(f".claude/hooks/{parts[-1]}.py", decision.kind, repo=None, pack=None)
         case _:

@@ -11,7 +11,7 @@ from captain_hook import (
     Tool,
     approve,
 )
-from captain_hook.packs.fixes._lib import McpTool
+from captain_hook.builtin_packs.fixes.hooks._lib import McpTool
 
 approve(
     "scratch-dir writes under skip-permissions",

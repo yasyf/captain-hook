@@ -10,16 +10,16 @@ from typing import Any
 import pytest
 
 import captain_hook
+from captain_hook.builtin_packs.general.hooks.deletions import in_vcs_repo, rm_targets, trash_binary
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack
-from captain_hook.packs.general.deletions import in_vcs_repo, rm_targets, trash_binary
 from captain_hook.testing.helpers import input_to_event
 from captain_hook.testing.types import Input
 from captain_hook.types import Event
 from captain_hook.util.scratch import is_scratch_path
 from captain_hook.util.shell import emit_token
 
-PACKS_DIR = Path(captain_hook.__file__).parent / "packs"
+PACKS_DIR = Path(captain_hook.__file__).parent / "builtin_packs"
 
 
 @pytest.fixture
@@ -41,7 +41,7 @@ class TestBlockRiskyRm:
         no_trash: None,
         tmp_path: Path,
     ) -> None:
-        discover_pack("general", PACKS_DIR / "general")
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
 
         def decision(command: str, cwd: Path | None = None) -> dict[str, Any] | None:
             evt = input_to_event(
@@ -91,7 +91,7 @@ class TestBlockRiskyRm:
         no_trash: None,
         tmp_path: Path,
     ) -> None:
-        discover_pack("general", PACKS_DIR / "general")
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
 
         def decision(command: str, cwd: Path) -> dict[str, Any] | None:
             evt = input_to_event(Event.PreToolUse, Input(command=command, cwd=str(cwd)))
@@ -123,7 +123,7 @@ class TestBlockRiskyRm:
         no_trash: None,
         tmp_path: Path,
     ) -> None:
-        discover_pack("general", PACKS_DIR / "general")
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
 
         def decision(command: str) -> dict[str, Any] | None:
             evt = input_to_event(Event.PreToolUse, Input(command=command, cwd="/"))
@@ -147,7 +147,7 @@ class TestBlockRiskyRm:
         assert decision(f"rm {repo / 'link'}") is None
 
     def test_glob_limit(self, isolate_modules: None, no_trash: None, tmp_path: Path) -> None:
-        discover_pack("general", PACKS_DIR / "general")
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
 
         def decision(command: str, cwd: Path) -> dict[str, Any] | None:
             evt = input_to_event(Event.PreToolUse, Input(command=command, cwd=str(cwd)))
@@ -197,7 +197,7 @@ class TestBlockRiskyRm:
         no_trash: None,
         tmp_path: Path,
     ) -> None:
-        discover_pack("general", PACKS_DIR / "general")
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
 
         def decision(command: str, cwd: Path) -> dict[str, Any] | None:
             evt = input_to_event(Event.PreToolUse, Input(command=command, cwd=str(cwd)))
@@ -221,7 +221,7 @@ class TestBlockRiskyRm:
         no_trash: None,
         tmp_path: Path,
     ) -> None:
-        discover_pack("general", PACKS_DIR / "general")
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
         evt = input_to_event(
             Event.PreToolUse,
             Input(command="rm ~capt_hook_no_such_user_xyz/x", cwd="/"),
@@ -247,7 +247,7 @@ class TestBlockRiskyRm:
         walked: int,
         expect_deny: bool,
     ) -> None:
-        discover_pack("general", PACKS_DIR / "general")
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
         anchors: list[Path] = []
 
         def fake_walked_paths(anchor: Path) -> Iterator[Path]:
@@ -266,7 +266,7 @@ class TestBlockRiskyRm:
             assert result is None
 
     def test_recursive_glob_does_not_follow_symlinks(self, isolate_modules: None, tmp_path: Path) -> None:
-        discover_pack("general", PACKS_DIR / "general")
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
         loop = tmp_path / "loop"
         nested = loop / "a"
         nested.mkdir(parents=True)
@@ -282,7 +282,7 @@ class TestBlockRiskyRm:
         no_trash: None,
         tmp_path: Path,
     ) -> None:
-        discover_pack("general", PACKS_DIR / "general")
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
         repo = tmp_path / "repo3"
         (repo / ".git").mkdir(parents=True)
         (repo / "child" / "match").mkdir(parents=True)
@@ -305,7 +305,7 @@ class TestBlockRiskyRm:
         no_trash: None,
         tmp_path: Path,
     ) -> None:
-        discover_pack("general", PACKS_DIR / "general")
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
         for command in ("cd / && rm somefile", "(cd / && rm somefile)"):
@@ -316,7 +316,7 @@ class TestBlockRiskyRm:
             assert "repository" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
     def test_tracks_temp_and_unknown_cd(self, isolate_modules: None, tmp_path: Path) -> None:
-        discover_pack("general", PACKS_DIR / "general")
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
         for command in ("cd /tmp && rm x", "cd $SOMEWHERE && rm x"):
@@ -327,7 +327,7 @@ class TestBlockRiskyRm:
 class TestRmTrashRewrite:
     @staticmethod
     def load_with_trash(monkeypatch: pytest.MonkeyPatch, *, path: str = "/opt/fake/trash") -> None:
-        discover_pack("general", PACKS_DIR / "general")
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
         monkeypatch.setattr(
             sys.modules["captain_hook._packs.general.deletions"],
             "trash_binary",
@@ -393,7 +393,7 @@ class TestRmTrashRewrite:
         no_trash: None,
         tmp_path: Path,
     ) -> None:
-        discover_pack("general", PACKS_DIR / "general")
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
         victim = tmp_path / "outside" / "victim.txt"
         result = self.decision(f"rm {victim}", Path("/"), tmp_path)
         assert result is not None
@@ -891,7 +891,7 @@ class TestBlastRadius:
         no_scratch: None,
         tmp_path: Path,
     ) -> None:
-        discover_pack("general", PACKS_DIR / "general")
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
         deletions = sys.modules["captain_hook._packs.general.deletions"]
         monkeypatch.setattr(deletions, "trash_binary", lambda: None)
         monkeypatch.setattr(deletions, "contains_repo", lambda _path: pytest.fail("scanned without trash"))
@@ -1018,7 +1018,7 @@ class TestNestedDescent:
         no_scratch: None,
         tmp_path: Path,
     ) -> None:
-        discover_pack("general", PACKS_DIR / "general")
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
         monkeypatch.setattr(sys.modules["captain_hook._packs.general.deletions"], "trash_binary", lambda: None)
         result = TestRmTrashRewrite.decision("bash -c 'rm -rf /'", Path("/"), tmp_path)
         assert result is not None

@@ -8,10 +8,10 @@ import pytest
 from cc_transcript.tools import expand_tool_names, unregister_mcp_tool
 
 from captain_hook import cli
+from captain_hook.builtin_packs.general.hooks.comments import VerboseComment
 from captain_hook.cli import CliState
 from captain_hook.events import PostToolUseEvent, PreToolUseEvent
 from captain_hook.packs import manager, plugins
-from captain_hook.packs.general.comments import VerboseComment
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 SYN_SPAN_EDIT = "syn_span_edit"
 SYN_GATE = "syn_gate"
 
-PACK_HEAD = '[pack]\nname = "synpack"\ndescription = "d"\nhooks = "hooks"\nversion = "0.1.0"\n\n'
+DESCRIPTOR_HEAD = "resources = []\n\n"
 SPAN_EDIT_AND_GATE = (
     "[tools.syn_span_edit]\n"
     'behaves_like = "Edit"\n'
@@ -54,30 +54,30 @@ def isolate(
 
 
 def manifest_file(root: Path, tools_body: str) -> Path:
-    (mf := root / manager.PACK_MANIFEST).write_text(PACK_HEAD + tools_body)
+    (mf := root / manager.PACK_DESCRIPTOR).write_text(DESCRIPTOR_HEAD + tools_body)
     return mf
 
 
 class TestManifestTools:
     def test_span_edit_and_gate(self, tmp_path: Path) -> None:
-        m = manager.PackManifest.load(manifest_file(tmp_path, SPAN_EDIT_AND_GATE))
+        m = manager.PackDescriptor.load(manifest_file(tmp_path, SPAN_EDIT_AND_GATE))
         assert m.tools == (
             manager.ToolSpec(SYN_SPAN_EDIT, "Edit", manager.SpanEditSpec("path", "content", "delete")),
             manager.ToolSpec(SYN_GATE, "Write"),
         )
 
     def test_without_span_edit(self, tmp_path: Path) -> None:
-        m = manager.PackManifest.load(manifest_file(tmp_path, '[tools.syn_gate]\nbehaves_like = "Write"\n'))
+        m = manager.PackDescriptor.load(manifest_file(tmp_path, '[tools.syn_gate]\nbehaves_like = "Write"\n'))
         assert m.tools == (manager.ToolSpec(SYN_GATE, "Write", None),)
 
     def test_delete_omitted_from_span_edit(self, tmp_path: Path) -> None:
         body = '[tools.syn_span_edit]\nbehaves_like = "Edit"\nspan_edit = { path = "path", content = "content" }\n'
-        spec = manager.PackManifest.load(manifest_file(tmp_path, body)).tools[0]
+        spec = manager.PackDescriptor.load(manifest_file(tmp_path, body)).tools[0]
         assert spec.span_edit == manager.SpanEditSpec("path", "content", None)
         assert spec.span_edit.as_map() == {"path": "path", "content": "content"}
 
     def test_no_tools_table_yields_empty(self, tmp_path: Path) -> None:
-        assert manager.PackManifest.load(manifest_file(tmp_path, "")).tools == ()
+        assert manager.PackDescriptor.load(manifest_file(tmp_path, "")).tools == ()
 
     @pytest.mark.parametrize(
         ("body", "needle"),
@@ -86,7 +86,7 @@ class TestManifestTools:
             (ENTRY_NOT_A_TABLE, "must be a table"),
             (NON_STR_SPAN_VALUE, "needs string keys path/content"),
             (NON_STR_DELETE, "span_edit.delete"),
-            (SPAN_EDIT_SCALAR, "span_edit in pack 'synpack' must be a table"),
+            (SPAN_EDIT_SCALAR, "span_edit in"),
         ],
         ids=[
             "missing-behaves_like",
@@ -96,20 +96,16 @@ class TestManifestTools:
             "span-edit-scalar",
         ],
     )
-    def test_malformed_raises_packerror_naming_pack(self, tmp_path: Path, body: str, needle: str) -> None:
+    def test_malformed_raises_packerror_naming_descriptor(self, tmp_path: Path, body: str, needle: str) -> None:
         with pytest.raises(manager.PackError) as exc:
-            manager.PackManifest.load(manifest_file(tmp_path, body))
+            manager.PackDescriptor.load(manifest_file(tmp_path, body))
         assert needle in str(exc.value)
-        assert "synpack" in str(exc.value)
+        assert str(tmp_path) in str(exc.value)  # the descriptor path labels the error
 
     def test_top_level_tools_not_a_table_raises(self, tmp_path: Path) -> None:
-        # A top-level scalar key must precede the first table header, so build the file directly.
-        mf = tmp_path / manager.PACK_MANIFEST
-        mf.write_text("tools = 5\n" + PACK_HEAD)
         with pytest.raises(manager.PackError) as exc:
-            manager.PackManifest.load(mf)
+            manager.PackDescriptor.load(manifest_file(tmp_path, "tools = 5\n"))
         assert "must be a table of tool entries" in str(exc.value)
-        assert "synpack" in str(exc.value)
 
 
 def plant_installed() -> None:
@@ -132,9 +128,10 @@ def make_project(root: Path) -> CliState:
 
 
 def write_plugin_pack(pack_root: Path, tools_body: str) -> None:
-    (hooks := pack_root / "hooks").mkdir(parents=True, exist_ok=True)
-    (hooks / "conf.py").write_text("from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='pp')\n")
-    (pack_root / manager.PACK_MANIFEST).write_text(PACK_HEAD + tools_body)
+    pack = pack_root / manager.PLUGIN_PACK_DIRNAME
+    (hooks := pack / manager.HOOKS_DIRNAME).mkdir(parents=True, exist_ok=True)
+    (hooks / "guard.py").write_text("from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='pp')\n")
+    (pack / manager.PACK_DESCRIPTOR).write_text(DESCRIPTOR_HEAD + tools_body)
 
 
 def enable_plugin_pack(tmp_path: Path, tools_body: str) -> CliState:

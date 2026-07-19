@@ -13,7 +13,7 @@ from captain_hook import cli
 from captain_hook.cli import CliState
 from captain_hook.daemon import registry
 from captain_hook.daemon.registry import Fingerprint, Registry
-from captain_hook.packs import plugins
+from captain_hook.packs import manager, plugins
 from captain_hook.util.paths import resolve_claude_config_dir
 
 HOOK = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
@@ -32,13 +32,12 @@ def write_snapshot(root: Path, roster: list[tuple[str, str]]) -> Path:
     return path
 
 
-def make_plugin_pack(pack_root: Path, *, hook_body: str = PLUGIN_HOOK, name: str = "pp") -> Path:
-    (hooks := pack_root / "hooks").mkdir(parents=True, exist_ok=True)
-    (conf := hooks / "conf.py").write_text(hook_body)
-    (pack_root / "capt-hook.toml").write_text(
-        f'[pack]\nname = "{name}"\ndescription = "plugin test pack"\nhooks = "hooks"\nversion = "0.1.0"\n'
-    )
-    return conf
+def make_plugin_pack(pack_root: Path, *, hook_body: str = PLUGIN_HOOK, descriptor: str = "resources = []\n") -> Path:
+    pack = pack_root / manager.PLUGIN_PACK_DIRNAME
+    (hooks := pack / manager.HOOKS_DIRNAME).mkdir(parents=True, exist_ok=True)
+    (guard := hooks / "guard.py").write_text(hook_body)
+    (pack / manager.PACK_DESCRIPTOR).write_text(descriptor)
+    return guard
 
 
 @pytest.fixture(autouse=True)
@@ -99,9 +98,11 @@ def test_remove_file_changes_fingerprint(project: CliState) -> None:
     assert fp(project) != before
 
 
-def test_config_toml_change_changes_fingerprint(project: CliState) -> None:
+def test_language_marker_change_changes_fingerprint(project: CliState) -> None:
+    # A new recursive build manifest flips builtin activation (go/python), so the fingerprint's
+    # language-marker input must miss the cache.
     before = fp(project)
-    (project.root / ".claude" / "capt-hook.toml").write_text("[packs.general]\n")
+    (project.root / "go.mod").write_text("module x\n")
     assert fp(project) != before
 
 
@@ -131,15 +132,15 @@ def test_plugin_pack_hook_edit_changes_fingerprint(project: CliState, tmp_path: 
     assert fp(project) != before
 
 
-def test_plugin_pack_manifest_edit_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
-    # No hook file and no roster entry moved, but a manifest-only edit (nlp/name/marketplaces) must miss
-    # the cache — the fingerprint digests each plugin pack's manifest file, not just its hook tree.
+def test_plugin_pack_descriptor_edit_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
+    # No hook file and no roster entry moved, but a descriptor-only edit (resources/tools) must miss the
+    # cache — the fingerprint digests each plugin pack's pack.toml stat, not just its hook tree.
     plugin_root = tmp_path / "plug"
-    make_plugin_pack(plugin_root, name="pp")
+    make_plugin_pack(plugin_root)
     write_snapshot(project.root, [("acme/pp", str(plugin_root))])
     before = fp(project)
-    (plugin_root / "capt-hook.toml").write_text(
-        '[pack]\nname = "pp"\ndescription = "plugin test pack"\nhooks = "hooks"\nversion = "0.1.0"\nnlp = true\n'
+    (plugin_root / manager.PLUGIN_PACK_DIRNAME / manager.PACK_DESCRIPTOR).write_text(
+        'resources = ["spacy:en_core_web_sm"]\n'
     )
     assert fp(project) != before
 
@@ -150,8 +151,8 @@ def test_plugin_tree_skips_a_plugin_whose_hooks_dir_vanishes(
     # A dir vanishing mid-walk raises FileNotFoundError from the tree digest; the per-plugin fail-soft
     # try must skip that one plugin, never crash compute — the healthy sibling still contributes.
     good_root, bad_root = tmp_path / "good", tmp_path / "bad"
-    make_plugin_pack(good_root, name="good")
-    make_plugin_pack(bad_root, name="bad")
+    make_plugin_pack(good_root)
+    make_plugin_pack(bad_root)
     write_snapshot(project.root, [("acme/good", str(good_root)), ("acme/bad", str(bad_root))])
     real = registry._hooks_tree
 
@@ -228,15 +229,6 @@ def test_drop_all_forces_rebuild(project: CliState) -> None:
     snap = reg.get()
     reg.drop_all()
     assert reg.get() is not snap
-
-
-def test_snapshot_past_horizon_is_a_miss(project: CliState) -> None:
-    reg = Registry(project)
-    snap = reg.get()
-    stale = Fingerprint(digest=snap.fingerprint.digest, horizon=time.time() - 1)
-    reg._cache[stale] = registry.RegistrySnapshot(stale, snap.state, snap.resolved, snap.tools)
-    assert stale.expired(time.time())
-    assert reg._lookup(stale, time.time()) is None
 
 
 def test_cache_hit_reconciles_stale_tool_registry(project: CliState) -> None:

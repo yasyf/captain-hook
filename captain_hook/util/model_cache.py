@@ -5,6 +5,7 @@ import hashlib
 import re
 import shutil
 import zipfile
+from collections.abc import Callable, Iterable
 from importlib.metadata import version as installed_version
 from pathlib import Path
 from typing import Any
@@ -112,3 +113,24 @@ def ensure_nlp_resources() -> None:
     """
     ensure_spacy_model()
     ensure_wn_lexicon()
+
+
+# A pack.toml ``resources`` entry names one of these; the value provisions it. The keys are the
+# resource identifiers a pack declares (see the general/steering builtin descriptors).
+RESOURCE_PROVISIONERS: dict[str, Callable[[], object]] = {
+    "spacy:en_core_web_sm": ensure_spacy_model,
+    "wordnet:oewn:2025": ensure_wn_lexicon,
+}
+
+
+def unknown_resources(resources: Iterable[str]) -> list[str]:
+    """The declared resource names that no provisioner knows — the validation `pack test` reports."""
+    return [name for name in dict.fromkeys(resources) if name not in RESOURCE_PROVISIONERS]
+
+
+def provision_resources(resources: Iterable[str]) -> None:
+    """Provision every declared pack resource, deduped. Crashes on an unknown resource name."""
+    if unknown := unknown_resources(resources):
+        raise ValueError(f"unknown pack resource(s): {', '.join(unknown)}")
+    for name in dict.fromkeys(resources):
+        RESOURCE_PROVISIONERS[name]()

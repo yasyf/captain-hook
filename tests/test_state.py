@@ -24,7 +24,7 @@ from captain_hook.state import (
 )
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 
-PACKS_DIR = Path(captain_hook.__file__).resolve().parent / "packs"
+PACKS_DIR = Path(captain_hook.__file__).resolve().parent / "builtin_packs"
 
 
 class MyModel(BaseModel):
@@ -388,7 +388,7 @@ class TestHookName:
         assert len(name) > 5
 
     def test_pack_module_hook_name_is_pack_qualified(self, isolate_modules: None) -> None:
-        import_pack_module("captain_hook._packs.general.docs", PACKS_DIR / "general" / "docs.py")
+        import_pack_module("captain_hook._packs.general.docs", PACKS_DIR / "general" / "hooks" / "docs.py")
         names = sorted(entry.name for entry in app._state.hooks)
         assert re.fullmatch(r"general\.docs:llm_gate_[0-9a-f]{8}", names[0])
         assert re.fullmatch(r"general\.docs:nudge_[0-9a-f]{8}", names[1])
@@ -404,7 +404,7 @@ class TestHookName:
 
 class TestPackageAwareStem:
     def test_builtin_pack_file_is_pack_qualified(self) -> None:
-        assert package_aware_stem(PACKS_DIR / "general" / "docs.py") == "general.docs"
+        assert package_aware_stem(PACKS_DIR / "general" / "hooks" / "docs.py") == "general.docs"
 
     def test_framework_file_keeps_bare_stem(self) -> None:
         assert package_aware_stem(PACKS_DIR.parent / "primitives" / "nudge.py") == "nudge"

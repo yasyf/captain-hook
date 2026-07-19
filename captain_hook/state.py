@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from captain_hook.types import Signals
 
 FRAMEWORK_DIR = str(Path(__file__).resolve().parent)
-PACKS_DIR = str(Path(FRAMEWORK_DIR) / "packs")
+BUILTIN_PACKS_DIR = str(Path(FRAMEWORK_DIR) / "builtin_packs")
 PACK_PACKAGE_PREFIX = "captain_hook._packs"
 
 
@@ -231,8 +231,9 @@ def text_hash(text: str) -> str:
 
 
 def package_aware_stem(p: Path) -> str:
-    if str(p).startswith(PACKS_DIR):
-        return f"{p.parent.name}.{p.stem}"
+    # A builtin pack file is builtin_packs/<pack>/hooks/<stem>.py, so its pack name is the grandparent.
+    if str(p).startswith(BUILTIN_PACKS_DIR):
+        return f"{p.parent.parent.name}.{p.stem}"
     if (
         p.name != "__init__.py"
         and not str(p).startswith(FRAMEWORK_DIR)
@@ -245,7 +246,7 @@ def package_aware_stem(p: Path) -> str:
 
 def framework_frame(filename: str) -> bool:
     resolved = Path(filename).resolve()
-    return resolved.is_relative_to(FRAMEWORK_DIR) and not resolved.is_relative_to(PACKS_DIR)
+    return resolved.is_relative_to(FRAMEWORK_DIR) and not resolved.is_relative_to(BUILTIN_PACKS_DIR)
 
 
 def caller_frame() -> FrameType | None:

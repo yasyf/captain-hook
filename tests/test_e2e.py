@@ -36,7 +36,9 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures" / "client_hooks"
 
 
 def stdin_json(**raw: Any) -> str:
-    return json.dumps(raw)
+    # Every real Claude Code event carries a session_id; supply one so session-scoped builtin hooks
+    # (e.g. the task-discipline Stop gate) resolve their session state instead of KeyError-ing.
+    return json.dumps({"session_id": "e2e", **raw})
 
 
 class TestEntryPointExecution:

@@ -123,7 +123,9 @@ class TestHooksSubcommand:
 
         assert result.returncode == 0, result.stderr
         lines = result.stdout.splitlines()
-        assert lines == [
+        # Unconditional builtins load too; scope the exact-rows check to the repo's own local hooks.
+        local = [line for line in lines if line.startswith("local\t")]
+        assert local == [
             "local\t-\talpha.py\talpha_hook\tStop\tAlpha handler summary.",
             "local\t-\tbeta.py\tbeta:hook_039be508\tPreToolUse\tBeta message",
             "local\t-\tzeta.py\tzeta_hook\tStop|SubagentStop\tZeta handler summary.",
@@ -151,10 +153,7 @@ class TestHooksSubcommand:
         assert row[5] == "Gamma message"
 
     def test_builtin_pack_prints_captain_hook_home_repo(self, tmp_path: Path, hooks_dir: Path) -> None:
-        from captain_hook.packs import manager
-
-        manager.upsert_entry(manager.config_path(tmp_path), manager.BuiltinPack("fixes"))
-
+        # The fixes builtin is unconditional, so it loads and its rows show captain-hook as the home repo.
         result = run_cli("hooks", hooks_dir=str(hooks_dir), root_dir=str(tmp_path))
 
         assert result.returncode == 0, result.stderr
@@ -676,7 +675,8 @@ class TestNlpProvisioning:
         purge()
 
     @staticmethod
-    def pin_resolved_packs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, nlp: bool) -> list[Any]:
+    def pin_resolved_packs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, resources: tuple[str, ...]) -> list[Any]:
+        from captain_hook.cli import CliState
         from captain_hook.packs import manager
 
         pack_dir = tmp_path / "fake-pack"
@@ -685,10 +685,10 @@ class TestNlpProvisioning:
             manager.ResolvedPack(
                 entry=manager.BuiltinPack(name="fake"),
                 path=pack_dir,
-                manifest=manager.PackManifest(name="fake", version="0.1.0", description="d", hooks=".", nlp=nlp),
+                descriptor=manager.PackDescriptor(resources=resources),
             )
         ]
-        monkeypatch.setattr(manager, "resolve_enabled_packs", lambda _root, _entries: (resolved, []))
+        monkeypatch.setattr(CliState, "discover", lambda self, **_kw: resolved)
         return resolved
 
     @pytest.fixture
@@ -696,22 +696,24 @@ class TestNlpProvisioning:
         from unittest.mock import MagicMock
 
         mock = MagicMock()
-        monkeypatch.setattr("captain_hook.util.model_cache.ensure_nlp_resources", mock)
+        monkeypatch.setattr("captain_hook.util.model_cache.provision_resources", mock)
         return mock
 
-    def test_init_provisions_nlp(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provision_mock: Any) -> None:
-        from captain_hook.cli import init_project
-
-        self.pin_resolved_packs(tmp_path, monkeypatch, nlp=True)
-        init_project(tmp_path, review=False)
-        provision_mock.assert_called_once_with()
-
-    def test_provision_nlp_skips_without_nlp_packs(
+    def test_init_provisions_resources(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provision_mock: Any
     ) -> None:
-        from captain_hook.cli import provision_nlp
+        from captain_hook.cli import init_project
 
-        provision_nlp(self.pin_resolved_packs(tmp_path, monkeypatch, nlp=False))
+        self.pin_resolved_packs(tmp_path, monkeypatch, resources=("spacy:en_core_web_sm",))
+        init_project(tmp_path, review=False)
+        provision_mock.assert_called_once_with(["spacy:en_core_web_sm"])
+
+    def test_provision_skips_without_resources(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provision_mock: Any
+    ) -> None:
+        from captain_hook.cli import provision_pack_resources
+
+        provision_pack_resources(self.pin_resolved_packs(tmp_path, monkeypatch, resources=()))
         provision_mock.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -727,7 +729,7 @@ class TestNlpProvisioning:
             ),
         ],
     )
-    def test_provision_nlp_defers_on_provisioning_error(
+    def test_provision_defers_on_provisioning_error(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -735,10 +737,10 @@ class TestNlpProvisioning:
         capsys: pytest.CaptureFixture[str],
         make_exc: Any,
     ) -> None:
-        from captain_hook.cli import provision_nlp
+        from captain_hook.cli import provision_pack_resources
 
         provision_mock.side_effect = make_exc()
-        provision_nlp(self.pin_resolved_packs(tmp_path, monkeypatch, nlp=True))
+        provision_pack_resources(self.pin_resolved_packs(tmp_path, monkeypatch, resources=("spacy:en_core_web_sm",)))
         assert "deferred" in capsys.readouterr().out
 
 
@@ -781,39 +783,28 @@ class TestTestSubcommand:
         assert "FAIL" not in result.stdout
         assert "SHOULDNOTRUN" not in result.stdout
 
-    def test_bare_run_covers_declared_packs_but_never_resolves_plugin_packs(
+    def test_bare_run_tests_local_hooks_but_never_resolves_plugin_packs(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolate_modules: None
     ) -> None:
         from click.testing import CliRunner
 
         from captain_hook.cli import cli
-        from captain_hook.packs import manager, plugins
+        from captain_hook.packs import plugins
 
         project = tmp_path / "project"
         (local_hooks := project / ".claude" / "hooks").mkdir(parents=True)
         (local_hooks / "__init__.py").write_text("")
-        (project / ".claude" / "capt-hook.toml").write_text("[packs.stub]\n")
-
-        (pack_dir := tmp_path / "stub-pack").mkdir()
         write_hook(
-            pack_dir,
+            local_hooks,
             """\
             from captain_hook.app import hook
             from captain_hook.types import Event
             from captain_hook.testing.types import Block, Input
 
-            hook(Event.PreToolUse, message="stub", block=True, tests={Input(command="echo hi"): Block()})
+            hook(Event.PreToolUse, message="local", block=True, tests={Input(command="echo hi"): Block()})
             """,
-            name="h.py",
+            name="good.py",
         )
-        resolved = [
-            manager.ResolvedPack(
-                entry=manager.BuiltinPack(name="stub"),
-                path=pack_dir,
-                manifest=manager.PackManifest(name="stub", version="0.1.0", description="d", hooks="."),
-            )
-        ]
-        monkeypatch.setattr(manager, "resolve_enabled_packs", lambda _root, _entries: (resolved, []))
         plugin_calls: list[object] = []
         monkeypatch.setattr(plugins, "resolve_plugin_packs", lambda *a, **k: (plugin_calls.append(1), [])[1])
 

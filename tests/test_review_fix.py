@@ -23,7 +23,6 @@ from captain_hook.review.fix import (
     COMPLIANCE_RE,
     HOOK_COMPLAINT,
     classify_marker,
-    external_target_path,
     fingerprint_of,
     iter_hook_complaint_signals,
     named_hook_target,
@@ -31,7 +30,7 @@ from captain_hook.review.fix import (
 )
 from captain_hook.review.judge import ReviewVerdict, build_prompt
 from captain_hook.review.repo import RepoKey
-from captain_hook.review.routing import CAPTAIN_HOOK_REPO, ExternalRoute, PackIndex, Target
+from captain_hook.review.routing import CAPTAIN_HOOK_REPO, PackIndex, PluginRoute, Target
 from captain_hook.review.scan import ScanReport, scan_transcript
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import ReviewStore
@@ -70,27 +69,13 @@ TASK_TRACKING_COMPLAINT = (
 GIT_STATUS_DIGEST = tool_digest("Bash", {"command": "git status"})
 INDEX = PackIndex.load(None)
 NOTIFY_REPO = RepoKey("github.com/acme/notify-hooks")
-NOTIFY_KIND = "notify.alerts:hook_deadbeef"
-NOTIFY_SOURCE = "/home/u/.cache/captain-hook/packs/notify@abc1234/hooks/alerts.py"
-
-
-def cache_external_pack(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, name: str = "notify", sha: str = "abc1234"
-) -> Path:
-    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
-    cached = tmp_path / "cache" / f"{name}@{sha}"
-    cached.mkdir(parents=True)
-    (cached / manager.SHA_MARKER).write_text(sha)
-    return cached
-
-
-def write_external_packs_toml(
-    root: Path, *, name: str = "notify", source: str = "github:acme/notify-hooks@v1", commit: str = "abc1234"
-) -> Path:
-    path = manager.config_path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f'[packs.{name}]\nsource = "{source}"\ncommit = "{commit}"\n')
-    return root
+NOTIFY_PLUGIN_ID = "notify@acme"
+NOTIFY_PREFIX = manager.pack_module_name(NOTIFY_PLUGIN_ID)  # the runtime module prefix a kind carries
+NOTIFY_KIND = f"{NOTIFY_PREFIX}.alerts:hook_deadbeef"
+NOTIFY_ROOT = "/home/u/.claude/plugins/cache/acme/notify/1.0.0"
+NOTIFY_HOOKS = f"{NOTIFY_ROOT}/{manager.PLUGIN_PACK_DIRNAME}/{manager.HOOKS_DIRNAME}"
+NOTIFY_SOURCE = f"{NOTIFY_HOOKS}/alerts.py"
+NOTIFY_ROUTE = PluginRoute(NOTIFY_REPO, NOTIFY_ROOT)
 
 
 def plant_plugin_pack(
@@ -99,13 +84,22 @@ def plant_plugin_pack(
     root: Path,
     *,
     name: str = "notify",
-    plugin_id: str = "acme@notify",
+    plugin_id: str = NOTIFY_PLUGIN_ID,
+    repository: str | None = "https://github.com/acme/notify-hooks",
 ) -> Path:
-    """Plant a discovered plugin pack for ``root``: a ``[pack]`` dir plus a read-only snapshot naming it."""
-    monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
+    """Plant a discovered plugin pack for ``root``: a fixed ``capt-hook/`` pack plus a snapshot naming it.
+
+    Returns the plugin install root; its pack is at ``<root>/capt-hook/{pack.toml, hooks/}``.
+    """
+    monkeypatch.setattr(plugins, "snapshot_cache_root", lambda: tmp_path / "cache")
     plugin_dir = tmp_path / "plugins" / name
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / manager.PACK_MANIFEST).write_text(f'[pack]\nname = "{name}"\ndescription = "d"\nhooks = "."\n')
+    (hooks := plugin_dir / manager.PLUGIN_PACK_DIRNAME / manager.HOOKS_DIRNAME).mkdir(parents=True)
+    (plugin_dir / manager.PLUGIN_PACK_DIRNAME / manager.PACK_DESCRIPTOR).write_text("resources = []\n")
+    (hooks / "alerts.py").write_text('from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message="x")\n')
+    (plugin_dir / ".claude-plugin").mkdir(parents=True)
+    (plugin_dir / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": name} | ({"repository": repository} if repository else {}))
+    )
     plugins.PluginSnapshot(
         stat=(), plugins=(plugins.EnabledPlugin(id=plugin_id, version="1.0.0", root=str(plugin_dir)),)
     ).write(plugins.snapshot_path(root))
@@ -382,23 +376,23 @@ class TestResolveTarget:
                 PRIMITIVE_NUDGE,
                 "general.docs:nudge_1a2b3c4d",
                 Target(
-                    "captain_hook/packs/general/docs.py", "general.docs:nudge_1a2b3c4d", CAPTAIN_HOOK_REPO, "general"
+                    "captain_hook/builtin_packs/general/hooks/docs.py",
+                    "general.docs:nudge_1a2b3c4d",
+                    CAPTAIN_HOOK_REPO,
+                    "general",
                 ),
                 id="builtin-pack-resolves-into-captain-hook",
             ),
             pytest.param(
-                "/x/site-packages/captain_hook/packs/general/docs.py",
+                "/x/site-packages/captain_hook/builtin_packs/general/hooks/docs.py",
                 "general.docs:hook_1a2b3c4d",
                 Target(
-                    "captain_hook/packs/general/docs.py", "general.docs:hook_1a2b3c4d", CAPTAIN_HOOK_REPO, "general"
+                    "captain_hook/builtin_packs/general/hooks/docs.py",
+                    "general.docs:hook_1a2b3c4d",
+                    CAPTAIN_HOOK_REPO,
+                    "general",
                 ),
                 id="wheel-pack-hook-resolves-into-captain-hook",
-            ),
-            pytest.param(
-                NOTIFY_SOURCE,
-                NOTIFY_KIND,
-                Target(".claude/hooks/alerts.py", NOTIFY_KIND, None, None),
-                id="undeclared-external-pack-cache-hook-falls-back-local",
             ),
             pytest.param(
                 PRIMITIVE_NUDGE,
@@ -420,113 +414,71 @@ class TestResolveTarget:
     def test_resolve_target(self, source_file: str, kind: str, expected: Target | None) -> None:
         assert resolve_target(make_decision(kind=kind, source_file=source_file), INDEX) == expected
 
-    def test_declared_external_pack_routes_to_its_repo(self) -> None:
-        index = PackIndex(builtins=INDEX.builtins, externals={"notify": ExternalRoute("notify", NOTIFY_REPO)})
+    def test_plugin_pack_routes_to_its_repository(self) -> None:
+        index = PackIndex(builtins=INDEX.builtins, plugin_prefixes={NOTIFY_PREFIX: NOTIFY_ROUTE})
         target = resolve_target(make_decision(kind=NOTIFY_KIND, source_file=NOTIFY_SOURCE), index)
-        assert target == Target("hooks/alerts.py", NOTIFY_KIND, NOTIFY_REPO, "notify")
+        # source relativizes against the plugin install root -> the path within the plugin
+        assert target == Target("capt-hook/hooks/alerts.py", NOTIFY_KIND, NOTIFY_REPO, NOTIFY_PREFIX)
 
-    def test_hyphenated_external_pack_routes_by_sanitized_prefix(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # A pack named `ccx-rel` loads under the module prefix `ccx_rel`, so a firing decision's
-        # kind carries `ccx_rel.<mod>:...`. The index must key by that sanitized runtime prefix — not
-        # the canonical hyphenated name — or resolve_target misses and falls back to `.claude/hooks`.
-        cache_external_pack(tmp_path, monkeypatch, name="ccx-rel")
-        root = write_external_packs_toml(tmp_path / "proj", name="ccx-rel", source="github:acme/ccx-rel@v1")
-        index = PackIndex.load(root)
-        assert index.externals == {"ccx_rel": ExternalRoute("ccx-rel", RepoKey("github.com/acme/ccx-rel"))}
-        source = "/home/u/.cache/captain-hook/packs/ccx-rel@abc1234/hooks/alerts.py"
-        target = resolve_target(make_decision(kind="ccx_rel.alerts:hook_deadbeef", source_file=source), index)
-        assert target == Target(
-            "hooks/alerts.py", "ccx_rel.alerts:hook_deadbeef", RepoKey("github.com/acme/ccx-rel"), "ccx-rel"
-        )
-
-    def test_plugin_pack_finding_returns_none(self) -> None:
-        # A discovered plugin pack has no repo target this wave: a misfire attributed to one drops
-        # rather than misfiling its fix against the plugin's absolute install path or `.claude/hooks`.
-        index = PackIndex(builtins=INDEX.builtins, externals={}, plugins=frozenset({"notify"}))
-        source = "/home/u/.claude/plugins/cache/acme/notify/1.0.0/alerts.py"
-        assert resolve_target(make_decision(kind="notify.alerts:hook_deadbeef", source_file=source), index) is None
+    def test_plugin_pack_without_repository_drops(self) -> None:
+        # A plugin pack whose plugin declares no repository has no target: its misfire drops rather than
+        # misfiling against the absolute install path or `.claude/hooks`.
+        index = PackIndex(builtins=INDEX.builtins, plugin_prefixes={NOTIFY_PREFIX: PluginRoute(None, NOTIFY_ROOT)})
+        assert resolve_target(make_decision(kind=NOTIFY_KIND, source_file=NOTIFY_SOURCE), index) is None
 
     def test_repo_hook_sharing_a_plugin_name_stays_local(self) -> None:
-        # A single-segment repo hook (`guard:...`) that merely shares a plugin pack's name is not a
-        # plugin pack (those are always `<pack>.<mod>`), so it keeps its repo-local route.
-        index = PackIndex(builtins=INDEX.builtins, externals={}, plugins=frozenset({"guard"}))
+        # A single-segment repo hook (`guard:...`) that merely shares a plugin prefix is not a plugin
+        # pack (those are always `<pack>.<mod>`), so it keeps its repo-local route.
+        index = PackIndex(builtins=INDEX.builtins, plugin_prefixes={"guard": NOTIFY_ROUTE})
         source = "/repo/.claude/hooks/guard.py"
         assert resolve_target(make_decision(kind="guard:warn_deadbeef", source_file=source), index) == Target(
             source, "guard:warn_deadbeef", None, None
         )
 
-    def test_bare_named_plugin_pack_hook_drops_by_source_dir(self) -> None:
-        # A bare `@on` name carries no `<pack>.` prefix for the name arm, so the source-dir arm drops it.
-        hooks_dir = "/home/u/.claude/plugins/cache/acme/notify/1.0.0/hooks"
-        index = PackIndex(
-            builtins=INDEX.builtins, externals={}, plugins=frozenset(), plugin_dirs=frozenset({hooks_dir})
-        )
-        assert resolve_target(make_decision(kind="my_bare_hook", source_file=f"{hooks_dir}/alerts.py"), index) is None
+    def test_bare_named_plugin_pack_hook_routes_by_source_dir(self) -> None:
+        # A bare `@on` name carries no `<pack>.` prefix for the name arm, so the source-dir arm routes it.
+        index = PackIndex(builtins=INDEX.builtins, plugin_dirs={NOTIFY_HOOKS: NOTIFY_ROUTE})
+        target = resolve_target(make_decision(kind="my_bare_hook", source_file=f"{NOTIFY_HOOKS}/alerts.py"), index)
+        assert target == Target("capt-hook/hooks/alerts.py", "my_bare_hook", NOTIFY_REPO, None)
 
     def test_repo_hook_outside_plugin_dirs_stays_local(self) -> None:
         # The source arm matches only by containment: a repo hook outside every plugin dir stays local.
-        index = PackIndex(
-            builtins=INDEX.builtins,
-            externals={},
-            plugins=frozenset(),
-            plugin_dirs=frozenset({"/home/u/.claude/plugins/cache/acme/notify/1.0.0/hooks"}),
-        )
+        index = PackIndex(builtins=INDEX.builtins, plugin_dirs={NOTIFY_HOOKS: NOTIFY_ROUTE})
         source = "/repo/.claude/hooks/guard.py"
         assert resolve_target(make_decision(kind="guard:warn_deadbeef", source_file=source), index) == Target(
             source, "guard:warn_deadbeef", None, None
         )
-
-    @pytest.mark.parametrize(
-        ("source_file", "expected"),
-        [
-            pytest.param(NOTIFY_SOURCE, "hooks/alerts.py", id="nested-hooks-dir"),
-            pytest.param("/c/.cache/captain-hook/packs/notify@sha/alerts.py", "alerts.py", id="hooks-beside-manifest"),
-            pytest.param(PRIMITIVE_NUDGE, None, id="not-a-pack-cache-path"),
-        ],
-    )
-    def test_external_target_path(self, source_file: str, expected: str | None) -> None:
-        assert external_target_path(source_file) == expected
 
 
 class TestPackIndex:
     def test_load_maps_builtin_packs_to_captain_hook(self) -> None:
         index = PackIndex.load(None)
         assert "general" in index.builtins
-        assert index.externals == {}
+        assert index.plugin_prefixes == {}
         target = resolve_target(make_decision(kind="general.docs:hook_1", source_file=PRIMITIVE_NUDGE), index)
         assert target is not None
         assert target.repo == CAPTAIN_HOOK_REPO
 
-    def test_load_maps_a_cached_external_pack_to_its_repo(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        cache_external_pack(tmp_path, monkeypatch)
-        root = write_external_packs_toml(tmp_path / "proj")
-        index = PackIndex.load(root)
-        assert index.externals == {"notify": ExternalRoute("notify", NOTIFY_REPO)}
-
-    def test_load_drops_a_declared_external_pack_that_is_not_cached(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
-        root = write_external_packs_toml(tmp_path / "proj")
-        assert PackIndex.load(root).externals == {}
-
-    def test_load_maps_a_discovered_plugin_pack_by_its_module_prefix(
+    def test_load_maps_a_plugin_pack_by_its_module_prefix(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         root = tmp_path / "proj"
-        plant_plugin_pack(tmp_path, monkeypatch, root, name="ccx-rel")
-        assert PackIndex.load(root).plugins == frozenset({"ccx_rel"})
+        plugin_dir = plant_plugin_pack(tmp_path, monkeypatch, root, plugin_id="ccx@rel")
+        prefix = manager.pack_module_name("ccx@rel")
+        assert PackIndex.load(root).plugin_prefixes == {prefix: PluginRoute(NOTIFY_REPO, str(plugin_dir))}
 
     def test_load_records_plugin_dirs_for_the_source_arm(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        # The source arm needs each non-shadowed plugin pack's hooks dir; PackIndex.load records them
-        # (hooks="." here, so the pack root is the hooks dir).
+        # The source arm needs each plugin pack's hooks dir; PackIndex.load records them mapped to the route.
         root = tmp_path / "proj"
-        plugin_dir = plant_plugin_pack(tmp_path, monkeypatch, root, name="notify")
-        assert PackIndex.load(root).plugin_dirs == frozenset({str(plugin_dir)})
+        plugin_dir = plant_plugin_pack(tmp_path, monkeypatch, root)
+        hooks = str(plugin_dir / manager.PLUGIN_PACK_DIRNAME / manager.HOOKS_DIRNAME)
+        assert PackIndex.load(root).plugin_dirs == {hooks: PluginRoute(NOTIFY_REPO, str(plugin_dir))}
+
+    def test_route_repo_none_without_repository(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        root = tmp_path / "proj"
+        plant_plugin_pack(tmp_path, monkeypatch, root, repository=None)
+        (route,) = PackIndex.load(root).plugin_prefixes.values()
+        assert route.repo is None
 
     def test_load_reads_the_snapshot_without_a_subprocess(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -539,24 +491,14 @@ class TestPackIndex:
         monkeypatch.setattr(plugins, "list_plugins_cli", boom)
         root = tmp_path / "proj"
         plant_plugin_pack(tmp_path, monkeypatch, root)
-        assert PackIndex.load(root).plugins == frozenset({"notify"})
-
-    def test_load_lets_a_declared_entry_shadow_a_discovered_plugin_pack(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        root = tmp_path / "proj"
-        plant_plugin_pack(tmp_path, monkeypatch, root)
-        config = manager.config_path(root)
-        config.parent.mkdir(parents=True, exist_ok=True)
-        config.write_text("[packs.notify]\ndisabled = true\n")
-        assert PackIndex.load(root).plugins == frozenset()
+        assert set(PackIndex.load(root).plugin_prefixes) == {NOTIFY_PREFIX}
 
     def test_load_has_no_plugins_without_a_snapshot(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(manager, "packs_cache_root", lambda: tmp_path / "cache")
-        assert PackIndex.load(tmp_path / "proj").plugins == frozenset()
+        monkeypatch.setattr(plugins, "snapshot_cache_root", lambda: tmp_path / "cache")
+        assert PackIndex.load(tmp_path / "proj").plugin_prefixes == {}
 
     def test_load_none_has_no_plugins(self) -> None:
-        assert PackIndex.load(None).plugins == frozenset()
+        assert PackIndex.load(None).plugin_prefixes == {}
 
 
 class TestNamedHookTarget:
@@ -605,7 +547,12 @@ class TestNamedHookTarget:
 class TestDetector:
     async def test_real_misfire_complaint_attributes_to_user_hook_not_primitive(self, decisions: DecisionLog) -> None:
         await seed_fixture_decisions(decisions, MISFIRE_FIXTURE)
-        [sig] = [s async for s in iter_hook_complaint_signals(fixture_events(MISFIRE_FIXTURE), decisions=decisions, index=INDEX)]
+        [sig] = [
+            s
+            async for s in iter_hook_complaint_signals(
+                fixture_events(MISFIRE_FIXTURE), decisions=decisions, index=INDEX
+            )
+        ]
         assert sig.kind == HOOK_COMPLAINT
         assert "re-fired unnecessarily and I am ignoring the repeats" in sig.text
         assert sig.evidence["target_source_file"] == ".claude/hooks/status_nudge.py"
@@ -622,7 +569,9 @@ class TestDetector:
     @pytest.mark.parametrize("name", ["fire-compliance.jsonl", "fire-block.jsonl", "fire-stop.jsonl"])
     async def test_compliance_and_working_fire_fixtures_yield_nothing(self, decisions: DecisionLog, name: str) -> None:
         await seed_fixture_decisions(decisions, name)
-        assert [s async for s in iter_hook_complaint_signals(fixture_events(name), decisions=decisions, index=INDEX)] == []
+        assert [
+            s async for s in iter_hook_complaint_signals(fixture_events(name), decisions=decisions, index=INDEX)
+        ] == []
 
     async def test_complaint_with_no_preceding_fingerprint_yields_nothing(
         self, decisions: DecisionLog, tmp_path: Path
@@ -738,7 +687,9 @@ class TestDetector:
         assert sig.signal.confidence == MEDIUM + 0.25
         assert sig.signal.reasons == ("hedged_marker", "misfire", "tight_proximity")
 
-    async def test_digestless_stop_complaint_attributes_via_nearest(self, decisions: DecisionLog, tmp_path: Path) -> None:
+    async def test_digestless_stop_complaint_attributes_via_nearest(
+        self, decisions: DecisionLog, tmp_path: Path
+    ) -> None:
         path = tmp_path / "s.jsonl"
         entries = [
             user_text("wrap up the change"),
@@ -762,7 +713,9 @@ class TestDetector:
         assert (sig.evidence["event"], sig.evidence["action"]) == ("Stop", "block")
         assert sig.evidence["misfire_class"] == "already_addressed"
 
-    async def test_digestless_attribution_requires_the_message_tiebreak(self, decisions: DecisionLog, tmp_path: Path) -> None:
+    async def test_digestless_attribution_requires_the_message_tiebreak(
+        self, decisions: DecisionLog, tmp_path: Path
+    ) -> None:
         path = tmp_path / "s.jsonl"
         entries = [
             user_text("wrap up the change"),
@@ -894,10 +847,10 @@ class TestPackTargetRouting:
         assert candidate["repo_key"] == "github.com/yasyf/captain-hook"
         assert candidate["origin_repo_key"] == REPO
         assert candidate["pack_name"] == "general"
-        assert candidate["target_source_file"] == "captain_hook/packs/general/docs.py"
+        assert candidate["target_source_file"] == "captain_hook/builtin_packs/general/hooks/docs.py"
         assert candidate["target_hook_name"] == "general.docs:nudge_1a2b3c4d"
 
-    async def test_cached_external_pack_complaint_routes_to_the_pack_repo(
+    async def test_plugin_pack_complaint_routes_to_the_plugin_repo(
         self,
         store: ReviewStore,
         settings: ReviewSettings,
@@ -905,8 +858,8 @@ class TestPackTargetRouting:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        cache_external_pack(tmp_path, monkeypatch)
-        root = write_external_packs_toml(tmp_path / "proj")
+        root = tmp_path / "proj"
+        plugin_dir = plant_plugin_pack(tmp_path, monkeypatch, root)
         entries = [
             user_text("run a status check, then commit", cwd=str(root)),
             assistant_tool_use("t1", "Bash", {"command": "git status"}, cwd=str(root)),
@@ -915,13 +868,17 @@ class TestPackTargetRouting:
             assistant_text(STRONG_COMPLAINT, cwd=str(root)),
         ]
         path = write_transcript(tmp_path / "s.jsonl", entries)
-        await seed_decision(decisions, kind=NOTIFY_KIND, source_file=NOTIFY_SOURCE)
+        await seed_decision(
+            decisions,
+            kind=NOTIFY_KIND,
+            source_file=str(plugin_dir / manager.PLUGIN_PACK_DIRNAME / manager.HOOKS_DIRNAME / "alerts.py"),
+        )
         assert await scan_transcript(store, path, settings=settings, repo_key=REPO) == ScanReport(scanned=1, inserted=1)
         [candidate] = await rows(store, "SELECT * FROM candidates")
         assert candidate["repo_key"] == NOTIFY_REPO
         assert candidate["origin_repo_key"] == REPO
-        assert candidate["pack_name"] == "notify"
-        assert candidate["target_source_file"] == "hooks/alerts.py"
+        assert candidate["pack_name"] == NOTIFY_PREFIX
+        assert candidate["target_source_file"] == "capt-hook/hooks/alerts.py"
         assert candidate["target_hook_name"] == NOTIFY_KIND
 
     async def test_hooks_targeted_complaint_keeps_the_session_repo(

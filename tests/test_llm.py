@@ -13,8 +13,8 @@ from captain_hook.app import (
     get_matching_hooks,
     reset,
 )
+from captain_hook.builtin_packs.general.hooks.tombstones import TombstoneComments, is_marker, is_tombstone
 from captain_hook.dispatch import dispatch
-from captain_hook.packs.general.tombstones import TombstoneComments, is_marker, is_tombstone
 from captain_hook.testing.helpers import fixture_session, mock_subagent_stop_event
 from captain_hook.types import Action, Event, RanCommand, Signal, Signals, Tool, Waiting
 from tests.helpers import (

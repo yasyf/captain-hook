@@ -63,6 +63,11 @@ def daemon_dirs() -> dict[str, Path]:
     }
     for path in dirs.values():
         path.mkdir(parents=True, exist_ok=True)
+    # The isolated XDG_CACHE_HOME hides the provisioned spaCy model, which the auto-active NLP builtins
+    # (steering, general) need in the daemon subprocess; symlink it in from the real cache.
+    real_spacy = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "spacy"
+    if real_spacy.is_dir():
+        (dirs["cache"] / "spacy").symlink_to(real_spacy)
     # Leave installed_plugins.json absent under the isolated config so plugin discovery stays hermetic:
     # enabled_plugins() returns () without ever spawning a real `claude plugin list` in a subprocess.
     (dirs["config"] / "plugins").mkdir(parents=True, exist_ok=True)

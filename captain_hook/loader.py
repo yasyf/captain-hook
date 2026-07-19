@@ -19,6 +19,8 @@ from captain_hook.state import PACK_PACKAGE_PREFIX
 from captain_hook.types import Event
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from captain_hook.events import BaseHookEvent
     from captain_hook.types import HookResult
 
@@ -128,18 +130,18 @@ def import_pack_module(fqn: str, path: Path) -> ModuleType:
     return module
 
 
-def register_nlp_provisioning() -> None:
-    """Register the shared SessionStart hook that eagerly provisions NLP resources.
+def register_resource_provisioning(resources: Sequence[str]) -> None:
+    """Register the shared SessionStart hook that eagerly provisions a discovery's pack resources.
 
-    Called once per discovery pass when any resolved pack manifest declares ``nlp``,
+    Called once per discovery pass with the union of every resolved pack descriptor's ``resources``,
     so both event dispatch and settings generation see the async hook.
     """
 
     @on(Event.SessionStart, async_=True)
-    def provision_nlp_resources(evt: BaseHookEvent) -> None:
-        from captain_hook.util.model_cache import ensure_nlp_resources
+    def provision_pack_resources(evt: BaseHookEvent) -> None:
+        from captain_hook.util.model_cache import provision_resources
 
-        ensure_nlp_resources()
+        provision_resources(resources)
 
 
 def register_pr_announcements() -> None:

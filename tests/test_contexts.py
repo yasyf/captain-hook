@@ -8,6 +8,11 @@ from typing import Any
 import pytest
 
 from captain_hook.ast_grep import COMMENT_TYPES
+from captain_hook.builtin_packs.general.hooks.models import (
+    ProseSpawn,
+    ProseWorkflowScript,
+    prose_deliverable_sentences,
+)
 from captain_hook.contexts import (
     PIN_EXCERPT_CAP,
     WORKFLOW_SCRIPT_CAP,
@@ -20,11 +25,6 @@ from captain_hook.contexts import (
     apply_contexts,
     excerpt_around,
     with_defaults,
-)
-from captain_hook.packs.general.models import (
-    ProseSpawn,
-    ProseWorkflowScript,
-    prose_deliverable_sentences,
 )
 from captain_hook.prompt import Prompt
 from captain_hook.testing import FileFixture, Input

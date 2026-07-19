@@ -3,14 +3,17 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import sys
 from pathlib import Path
 
 import pytest
 
-from captain_hook.packs import bootstrap, manager, plugins
+from captain_hook.packs import manager, plugins
 from captain_hook.util.paths import resolve_claude_config_dir
 from tests.helpers import run_cli
+
+HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message={message!r})\n"
 
 
 @pytest.fixture(autouse=True)
@@ -24,21 +27,30 @@ def isolate_cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.
 # --- helpers -------------------------------------------------------------------------
 
 
-def pack_manifest(name: str, version: str, *, hooks: str = ".") -> str:
-    return f'[pack]\nname = "{name}"\ndescription = "d"\nhooks = "{hooks}"\nversion = "{version}"\n'
-
-
-def write_plugin_dir(
-    tmp: Path, name: str, version: str, *, slot: str | None = None, manifest_name: str | None = None, hooks: str = "."
+def write_plugin_pack(
+    tmp: Path,
+    name: str,
+    version: str = "1.0.0",
+    *,
+    slot: str | None = None,
+    repository: str | None = None,
+    hook_message: str | None = None,
+    descriptor: str = "resources = []\n",
 ) -> Path:
-    """A versioned cache-shaped plugin root carrying a ``[pack]`` manifest and one hook file."""
+    """A versioned cache-shaped plugin root shipping a pack at the fixed ``capt-hook/`` path."""
     root = tmp / "install" / (slot or name) / version
-    root.mkdir(parents=True, exist_ok=True)
-    (root / manager.PACK_MANIFEST).write_text(pack_manifest(manifest_name or name, version, hooks=hooks))
-    (hooks_dir := (root if hooks == "." else root / hooks)).mkdir(parents=True, exist_ok=True)
-    (hooks_dir / "h.py").write_text(
-        f"from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message={(manifest_name or name)!r})\n"
-    )
+    (root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+    plugin_json: dict[str, object] = {
+        "name": name,
+        "version": version,
+        "dependencies": [{"name": "captain-hook", "marketplace": "captain-hook", "version": ">=11.0.0"}],
+    }
+    if repository is not None:
+        plugin_json["repository"] = repository
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps(plugin_json))
+    (hooks := root / manager.PLUGIN_PACK_DIRNAME / manager.HOOKS_DIRNAME).mkdir(parents=True, exist_ok=True)
+    (root / manager.PLUGIN_PACK_DIRNAME / manager.PACK_DESCRIPTOR).write_text(descriptor)
+    (hooks / "h.py").write_text(HOOK_SRC.format(message=hook_message or name))
     return root
 
 
@@ -88,148 +100,113 @@ def plant_installed() -> None:
     path.write_text("{}")
 
 
-# --- resolution over the roster ------------------------------------------------------
+# --- fixed-path resolution over the roster -------------------------------------------
 
 
 def test_enabled_plugin_with_pack_loads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plant_installed()
     (root := tmp_path / "proj").mkdir()
-    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")
-    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
+    plugin = write_plugin_pack(tmp_path, "show", repository="https://github.com/yasyf/show")
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("show@show", plugin)])
 
-    (rp,) = plugins.resolve_plugin_packs(root, set())
+    (rp,) = plugins.resolve_plugin_packs(root)
     assert isinstance(rp.entry, manager.PluginPack)
-    assert (rp.entry.name, rp.entry.plugin_id, rp.entry.dir, rp.entry.version) == (
-        "show",
-        "mkt/show",
+    assert (rp.entry.plugin_id, rp.entry.root, rp.entry.repository) == (
+        "show@show",
         str(plugin),
-        "1.0.0",
+        "https://github.com/yasyf/show",
     )
-    assert rp.path == plugin  # hooks = "." -> hooks_dir is the pack root
-    assert rp.manifest.name == "show"
+    assert rp.pack_id == "plugin:show@show"
+    assert rp.name == "show@show"
+    assert rp.path == plugin / manager.PLUGIN_PACK_DIRNAME / manager.HOOKS_DIRNAME
 
 
-def test_hooks_subdir_layout_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_namespaced_identity_orders_by_plugin_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plant_installed()
     (root := tmp_path / "proj").mkdir()
-    plugin = write_plugin_dir(tmp_path, "under", "1.0.0", hooks="hooks")
-    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/under", plugin)])
+    a = write_plugin_pack(tmp_path, "a", slot="a")
+    b = write_plugin_pack(tmp_path, "b", slot="b")
+    # Deliberately out of id order in the roster; resolution sorts by full plugin id.
+    install_claude(
+        tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("b@mkt", b), roster_entry("a@mkt", a)]
+    )
+    assert [rp.pack_id for rp in plugins.resolve_plugin_packs(root)] == ["plugin:a@mkt", "plugin:b@mkt"]
 
-    (rp,) = plugins.resolve_plugin_packs(root, set())
-    assert rp.entry.dir == str(plugin)
-    assert rp.path == plugin / "hooks"
 
-
-def test_split_file_layout_resolves_hooks_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # R8 repro: a consumer-only .claude/capt-hook.toml at the plugin root shadows nothing — the real
-    # [pack] lives one hooks/ level down, and discovery must resolve it there.
+def test_plugin_without_repository_routes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plant_installed()
     (root := tmp_path / "proj").mkdir()
-    (install := tmp_path / "install" / "consumer" / "1.0.0").mkdir(parents=True)
-    (install / ".claude").mkdir(parents=True)
-    (install / ".claude" / manager.PACK_MANIFEST).write_text("[packs.general]\n")  # consumer-only
-    (hooks := install / "hooks").mkdir(parents=True)
-    (hooks / manager.PACK_MANIFEST).write_text(pack_manifest("nested", "1.0.0"))
-    (hooks / "h.py").write_text("from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='nested')\n")
-    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/consumer", install)])
-
-    (rp,) = plugins.resolve_plugin_packs(root, set())
-    assert rp.manifest.name == "nested"
-    assert rp.path == hooks  # the hooks/ manifest won, not the consumer .claude file
+    plugin = write_plugin_pack(tmp_path, "show")  # plugin.json declares no repository
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("show@show", plugin)])
+    (rp,) = plugins.resolve_plugin_packs(root)
+    assert rp.entry.repository is None
 
 
 def test_disabled_plugin_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plant_installed()
     (root := tmp_path / "proj").mkdir()
-    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")
+    plugin = write_plugin_pack(tmp_path, "show")
     install_claude(
-        tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin, enabled=False)]
+        tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("show@show", plugin, enabled=False)]
     )
 
     assert plugins.enabled_plugins(root) == ()  # the CLI's enabled filter drops it
-    assert plugins.resolve_plugin_packs(root, set()) == []
+    assert plugins.resolve_plugin_packs(root) == []
 
 
-@pytest.mark.parametrize(
-    "manifest_text",
-    [
-        pytest.param(None, id="no_manifest_file"),
-        pytest.param("[packs.general]\n", id="consumer_only"),
-        pytest.param("", id="empty_file"),
-    ],
-)
-def test_non_pack_plugin_skipped_silently(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, logcap, manifest_text: str | None
-) -> None:  # type: ignore[no-untyped-def]
+def test_plugin_without_pack_dir_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A plugin that ships no capt-hook/ dir merely consumes packs (or none) and is skipped silently.
     plant_installed()
     (root := tmp_path / "proj").mkdir()
     (install := tmp_path / "install" / "consumer" / "1.0.0").mkdir(parents=True)
-    if manifest_text is not None:
-        (install / manager.PACK_MANIFEST).write_text(manifest_text)
-    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/consumer", install)])
-
-    assert plugins.resolve_plugin_packs(root, set()) == []  # a plugin that merely consumes packs is not a pack
-    assert not [r for r in logcap.records if "malformed" in r.message]  # silent, not fail-soft
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("consumer@mkt", install)])
+    assert plugins.resolve_plugin_packs(root) == []
 
 
 @pytest.mark.parametrize(
-    "bad_manifest",
+    "mangle",
     [
-        pytest.param('[pack]\nname = "bad"\n', id="missing_keys_packerror"),
-        pytest.param("name = = broken\n", id="broken_toml"),
-        pytest.param('[pack]\nname = 5\ndescription = "d"\nhooks = "."\n', id="wrong_type_packerror"),
+        pytest.param(lambda pack: (pack / manager.PACK_DESCRIPTOR).unlink(), id="missing_descriptor"),
+        pytest.param(lambda pack: shutil.rmtree(pack / manager.HOOKS_DIRNAME), id="missing_hooks_dir"),
+        pytest.param(lambda pack: (pack / manager.PACK_DESCRIPTOR).write_text("name = = broken\n"), id="broken_toml"),
+        pytest.param(
+            lambda pack: (pack / manager.PACK_DESCRIPTOR).write_text("[tools.x]\n"), id="tool_missing_behaves_like"
+        ),
+        pytest.param(
+            lambda pack: (pack / manager.PACK_DESCRIPTOR).write_text('resources = "not-a-list"\n'), id="bad_resources"
+        ),
     ],
 )
-def test_malformed_pack_fail_soft_sibling_loads(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, logcap, bad_manifest: str
-) -> None:  # type: ignore[no-untyped-def]
+def test_malformed_pack_is_fatal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mangle) -> None:  # type: ignore[no-untyped-def]
+    # All-or-nothing: a plugin advertising capt-hook/ with a malformed pack raises, never silently
+    # dropping guards — and the healthy sibling never papers over it.
     plant_installed()
     (root := tmp_path / "proj").mkdir()
-    good = write_plugin_dir(tmp_path, "good", "1.0.0")
-    (bad := tmp_path / "install" / "bad" / "1.0.0").mkdir(parents=True)
-    (bad / manager.PACK_MANIFEST).write_text(bad_manifest)
+    good = write_plugin_pack(tmp_path, "good", slot="good")
+    bad = write_plugin_pack(tmp_path, "bad", slot="bad")
+    mangle(bad / manager.PLUGIN_PACK_DIRNAME)
     install_claude(
         tmp_path,
         monkeypatch,
         calls=tmp_path / "calls",
-        roster=[roster_entry("mkt/good", good), roster_entry("mkt/bad", bad)],
+        roster=[roster_entry("good@mkt", good), roster_entry("bad@mkt", bad)],
     )
+    with pytest.raises(manager.PackError):
+        plugins.resolve_plugin_packs(root)
 
-    assert [rp.entry.name for rp in plugins.resolve_plugin_packs(root, set())] == ["good"]
-    assert [r.message for r in logcap.records if "malformed" in r.message]  # the rot logged a debug, dispatch survived
 
-
-def test_declared_name_shadows_plugin_pack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, logcap) -> None:  # type: ignore[no-untyped-def]
+def test_duplicate_roster_entries_deduped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plant_installed()
     (root := tmp_path / "proj").mkdir()
-    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")
-    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
-
-    # "show" is a [packs.show] name the project declares — even an uncached/unreachable external that
-    # never resolves. The old attach shadowing bug let the plugin pack leak through; declared names now
-    # shadow regardless of whether the external is cached.
-    assert plugins.resolve_plugin_packs(root, {"show"}) == []
-    assert [r for r in logcap.records if "shadowed" in r.message]
-
-
-def test_duplicate_names_lower_id_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, logcap) -> None:  # type: ignore[no-untyped-def]
-    plant_installed()
-    (root := tmp_path / "proj").mkdir()
-    p1 = write_plugin_dir(tmp_path, "dup", "1.0.0", slot="one")
-    p2 = write_plugin_dir(tmp_path, "dup", "1.0.0", slot="two")
+    a = write_plugin_pack(tmp_path, "a", slot="a")
+    b = write_plugin_pack(tmp_path, "b", slot="b")
+    # Claude Code re-lists an enabled plugin under each marketplace/ref, so the same id can appear
+    # several times; the roster dedupes by id and one plugin id yields exactly one pack.
     install_claude(
-        tmp_path,
-        monkeypatch,
-        calls=tmp_path / "calls",
-        roster=[roster_entry("zeta/p", p2), roster_entry("alpha/p", p1)],  # deliberately out of id order
+        tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("dup@mkt", a), roster_entry("dup@mkt", b)]
     )
-
-    (rp,) = plugins.resolve_plugin_packs(root, set())
-    assert rp.entry.plugin_id == "alpha/p"  # first by plugin id wins
-    assert rp.entry.dir == str(p1)
-    (warn,) = [r for r in logcap.records if "duplicate plugin pack" in r.message]
-    assert warn.levelno == logging.WARNING
-    assert "alpha/p" in warn.message and "zeta/p" in warn.message  # both ids named
+    (rp,) = plugins.resolve_plugin_packs(root)
+    assert rp.pack_id == "plugin:dup@mkt"
 
 
 # --- snapshot & CLI invocation -------------------------------------------------------
@@ -239,7 +216,7 @@ def test_two_calls_run_cli_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     plant_installed()
     (root := tmp_path / "proj").mkdir()
     calls = tmp_path / "calls"
-    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")
+    plugin = write_plugin_pack(tmp_path, "show", "1.0.0")
     install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/show", plugin)])
 
     first, second = plugins.enabled_plugins(root), plugins.enabled_plugins(root)
@@ -252,7 +229,7 @@ def test_refresh_on_each_watched_change(tmp_path: Path, monkeypatch: pytest.Monk
     plant_installed()
     (root := tmp_path / "proj").mkdir()
     calls = tmp_path / "calls"
-    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")
+    plugin = write_plugin_pack(tmp_path, "show", "1.0.0")
     install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/show", plugin)])
 
     plugins.enabled_plugins(root)
@@ -275,7 +252,7 @@ def test_ctime_only_watched_rewrite_refreshes_roster(tmp_path: Path, monkeypatch
     settings = root / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
     settings.write_text('{"a": 1}')
-    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")
+    plugin = write_plugin_pack(tmp_path, "show", "1.0.0")
     install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/show", plugin)])
 
     plugins.enabled_plugins(root)
@@ -390,7 +367,7 @@ def test_non_list_roster_degrades_to_empty(tmp_path: Path, monkeypatch: pytest.M
 def test_malformed_entry_does_not_suppress_valid_siblings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plant_installed()
     (root := tmp_path / "proj").mkdir()
-    good = write_plugin_dir(tmp_path, "show", "1.0.0")
+    good = write_plugin_pack(tmp_path, "show", "1.0.0")
     roster = [
         roster_entry("mkt/show", good),  # valid
         123,  # a bare number, not an object
@@ -405,7 +382,7 @@ def test_malformed_entry_does_not_suppress_valid_siblings(tmp_path: Path, monkey
 def test_installed_plugins_absent_runs_no_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (root := tmp_path / "proj").mkdir()
     calls = tmp_path / "calls"
-    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")
+    plugin = write_plugin_pack(tmp_path, "show", "1.0.0")
     install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/show", plugin)])
 
     # installed_plugins.json is deliberately not planted; the existence gate returns before any spawn.
@@ -428,21 +405,21 @@ def test_newer_plugin_version_rebinds(tmp_path: Path, monkeypatch: pytest.Monkey
     plant_installed()
     (root := tmp_path / "proj").mkdir()
     calls = tmp_path / "calls"
-    v1 = write_plugin_dir(tmp_path, "show", "1.0.0")
+    v1 = write_plugin_pack(tmp_path, "show", "1.0.0")
     install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/show", v1, version="1.0.0")])
 
-    (first,) = plugins.resolve_plugin_packs(root, set())
-    assert (first.entry.dir, first.entry.version) == (str(v1), "1.0.0")
+    (first,) = plugins.resolve_plugin_packs(root)
+    assert first.entry.root == str(v1)
 
     # A plugin update writes a new versioned cache root and bumps the roster; touching a watched file
     # invalidates the snapshot so the next event re-runs the CLI and rebinds to the new root.
-    v2 = write_plugin_dir(tmp_path, "show", "2.0.0")
+    v2 = write_plugin_pack(tmp_path, "show", "2.0.0")
     install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/show", v2, version="2.0.0")])
     plugins.installed_plugins_path().write_text("x" * 500)
 
-    (second,) = plugins.resolve_plugin_packs(root, set())
-    assert (second.entry.dir, second.entry.version) == (str(v2), "2.0.0")
-    assert second.path == v2
+    (second,) = plugins.resolve_plugin_packs(root)
+    assert second.entry.root == str(v2)
+    assert second.path == v2 / manager.PLUGIN_PACK_DIRNAME / manager.HOOKS_DIRNAME
 
 
 # --- end-to-end dispatch (the discovered plugin pack's hook fires) -------------------
@@ -459,7 +436,7 @@ def run_dispatch(root: Path, event: str, **raw: object) -> str:
 def test_e2e_discovered_plugin_pack_hook_fires_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plant_installed()
     (root := tmp_path / "proj").mkdir()
-    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")  # ships hook(Event.PreToolUse, message="show")
+    plugin = write_plugin_pack(tmp_path, "show")  # ships hook(Event.PreToolUse, message="show")
     install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
 
     out = run_dispatch(root, "PreToolUse", tool_name="Bash", tool_input={"command": "echo hi"})
@@ -471,63 +448,11 @@ def test_e2e_discovered_plugin_pack_fires_for_subagent_event(tmp_path: Path, mon
     # Discovery is per project, not per session, so a subagent-originated event loads the pack too.
     plant_installed()
     (root := tmp_path / "proj").mkdir()
-    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")
+    plugin = write_plugin_pack(tmp_path, "show")
     install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
 
     out = run_dispatch(root, "PreToolUse", tool_name="Bash", tool_input={"command": "echo hi"}, agent_id="sub-1")
     assert "show" in out
-
-
-# --- discover-tail bootstrap (a discovered pack's declared marketplaces) --------------
-
-
-def discover(root: Path, hooks: Path) -> None:
-    from captain_hook.cli import CliState
-
-    CliState(root=root, hooks=str(hooks)).discover()
-
-
-def declare_marketplaces(plugin: Path, name: str, version: str, marketplaces: list[str]) -> None:
-    mkt = f"marketplaces = {json.dumps(marketplaces)}\n"
-    (plugin / manager.PACK_MANIFEST).write_text(pack_manifest(name, version) + mkt)
-
-
-def test_discover_tail_bootstraps_declared_marketplaces(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # spawn_worker is the capture boundary — not subprocess.Popen, which list_plugins_cli shares.
-    plant_installed()
-    (root := tmp_path / "proj").mkdir()
-    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")
-    declare_marketplaces(plugin, "show", "1.0.0", ["yasyf/cc-present"])
-    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
-
-    spawned: list[list[str]] = []
-    monkeypatch.setattr(bootstrap, "spawn_worker", lambda repos: spawned.append(list(repos)))
-
-    discover(root, tmp_path / "no-hooks")
-
-    assert spawned == [["yasyf/cc-present"]]  # exactly one worker, for the declared marketplace
-    assert capsys.readouterr() == ("", "")  # discovery's bootstrap tail prints nothing on any stream
-
-
-def test_discover_no_marketplaces_is_zero_marketplace_io(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    plant_installed()
-    (root := tmp_path / "proj").mkdir()
-    plugin = write_plugin_dir(tmp_path, "show", "1.0.0")  # declares no marketplaces
-    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
-
-    def no_spawn(_: object) -> None:
-        raise AssertionError("no worker should spawn when no pack declares a marketplace")
-
-    def no_read() -> list[tuple[str, dict[str, object]]]:
-        raise AssertionError("known_marketplaces.json must not be read for an empty union")
-
-    monkeypatch.setattr(bootstrap, "spawn_worker", no_spawn)
-    monkeypatch.setattr(bootstrap, "known_entries", no_read)
-
-    discover(root, tmp_path / "no-hooks")
-    assert not bootstrap.bootstrap_dir().exists()  # zero marketplace I/O — no marker dir created
 
 
 # --- test-subcommand scoping (plugin packs are never swept in) ------------------------
@@ -547,8 +472,8 @@ def test_test_subcommand_never_resolves_plugin_packs(
         "from captain_hook.testing.types import Block, Input\n\n"
         'hook(Event.PreToolUse, message="ok", block=True, tests={Input(command="echo hi"): Block()})\n'
     )
-    plugin = write_plugin_dir(tmp_path, "redpack", "1.0.0")
-    (plugin / "h.py").write_text(
+    plugin = write_plugin_pack(tmp_path, "redpack")
+    (plugin / manager.PLUGIN_PACK_DIRNAME / manager.HOOKS_DIRNAME / "h.py").write_text(
         "from captain_hook.app import hook\n"
         "from captain_hook.types import Event\n"
         "from captain_hook.testing.types import Allow, Input\n\n"

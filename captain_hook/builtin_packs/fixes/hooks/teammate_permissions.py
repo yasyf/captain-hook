@@ -14,7 +14,7 @@ from captain_hook import (
     ToolInput,
     approve,
 )
-from captain_hook.packs.fixes._lib import (
+from captain_hook.builtin_packs.fixes.hooks._lib import (
     MAX_SCAN_DEPTH,
     DangerousCommandLine,
     DangerousMcpTool,
