@@ -17,7 +17,7 @@ SOURCE = BUILD_DIR.parent / "docs"
 FRAGMENTS_SRC = SOURCE / "_fragments"
 MATRIX = SOURCE / "tutorial" / "_src" / "matrix.json"
 WIDGETS_DIR = BUILD_DIR / "tutorial" / "widgets"
-MARKER = re.compile(r"<!-- gd-embed-widget: (\w+)( mode=canned)? -->")
+MARKER = re.compile(r"<!-- gd-embed-widget: (\w+) -->")
 
 LIVE_NOTE = "This runs a browser model of the demo subset — run `capt-hook test` for the real engine."
 CANNED_NOTE = "Recorded from the real engine, not evaluated in your browser."

@@ -43,6 +43,7 @@ export interface SessionState {
   usedSkills?: string[];
   touchedFiles?: string[];
   ranCommands?: string[][];
+  repoRoot?: string;
 }
 
 export interface EventInput {

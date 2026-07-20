@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+from dataclasses import replace
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -34,23 +35,24 @@ requires_node = pytest.mark.skipif(NODE is None and not os.environ.get("CI"), re
 
 
 def normalize(envelope: dict[str, Any] | None) -> dict[str, Any]:
-    """Decode a Claude Code stdout envelope into the {action, message, rewritten} verdict shape."""
+    """Decode a Claude Code stdout envelope into the {action, message, rewritten} verdict shape.
+
+    The lowered declarative model only ever emits block / warn / rewrite / pass, so a bare
+    ``permissionDecision: allow`` (indistinguishable from a warn's approve rider) maps to warn.
+    """
     if envelope is None:
         return {"action": "pass", "message": None, "rewritten": None}
     if envelope.get("decision") == "block":
         return {"action": "block", "message": envelope.get("reason"), "rewritten": None}
     hso = envelope.get("hookSpecificOutput", {})
-    match hso.get("permissionDecision"):
-        case "deny":
-            return {"action": "block", "message": hso.get("permissionDecisionReason"), "rewritten": None}
-        case "allow" if "updatedInput" in hso:
-            return {
-                "action": "rewrite",
-                "message": hso.get("additionalContext"),
-                "rewritten": hso["updatedInput"].get("command"),
-            }
-        case "allow":
-            return {"action": "allow", "message": hso.get("additionalContext"), "rewritten": None}
+    if hso.get("permissionDecision") == "deny":
+        return {"action": "block", "message": hso.get("permissionDecisionReason"), "rewritten": None}
+    if "updatedInput" in hso:
+        return {
+            "action": "rewrite",
+            "message": hso.get("additionalContext"),
+            "rewritten": hso["updatedInput"].get("command"),
+        }
     if "additionalContext" in hso:
         return {"action": "warn", "message": hso["additionalContext"], "rewritten": None}
     return {"action": "pass", "message": None, "rewritten": None}
@@ -104,10 +106,13 @@ def _python_input(case: dict[str, Any]) -> dict[str, Any]:
     return inp
 
 
-def _js_input(event: str, case: dict[str, Any]) -> dict[str, Any]:
-    inp = {"event": event, **case.get("input", {})}
-    if "session" in case:
-        inp["session"] = case["session"]
+def _js_input(widget: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
+    inp = {"event": widget["event"], **case.get("input", {})}
+    session = dict(case.get("session", {}))
+    if "repoRoot" in widget:
+        session["repoRoot"] = widget["repoRoot"]
+    if session:
+        inp["session"] = session
     return inp
 
 
@@ -115,6 +120,7 @@ def _js_input(event: str, case: dict[str, Any]) -> dict[str, Any]:
 def live_results(widget_id: str) -> dict[str, dict[str, dict[str, Any]]]:
     widget = MATRIX["widgets"][widget_id]
     event = Event[widget["event"]]
+    root = widget.get("repoRoot")
     saved = list(_state.hooks)
     try:
         compiled = compile_fragment(FRAGMENTS / f"{widget['fragment']}.py")
@@ -122,10 +128,13 @@ def live_results(widget_id: str) -> dict[str, dict[str, dict[str, Any]]]:
         with isolated_state_root():
             for case in widget["cases"]:
                 if case["check"] == "parity":
-                    python[case["id"]] = normalize(dispatch(event, input_to_event(event, Input(**_python_input(case)))))
+                    evt = input_to_event(event, Input(**_python_input(case)))
+                    if root:
+                        evt.ctx = replace(evt.ctx, project_root=Path(root))
+                    python[case["id"]] = normalize(dispatch(event, evt))
     finally:
         _state.hooks[:] = saved
-    node_cases = [{"id": c["id"], "input": _js_input(widget["event"], c)} for c in widget["cases"]]
+    node_cases = [{"id": c["id"], "input": _js_input(widget, c)} for c in widget["cases"]]
     return {"python": python, "js": run_node(compiled["hooks"], node_cases)}
 
 

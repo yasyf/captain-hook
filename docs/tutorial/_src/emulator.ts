@@ -74,6 +74,20 @@ function fnmatch(path: string, glob: string): boolean {
   return re.test(path) || re.test(base);
 }
 
+function isProjectPath(path: string, repoRoot: string | undefined): boolean {
+  if (!path.startsWith("/")) return true;
+  if (!repoRoot) return true;
+  return path === repoRoot || path.startsWith(repoRoot.endsWith("/") ? repoRoot : `${repoRoot}/`);
+}
+
+const SHELL_WRAPPERS = new Set(["sh", "bash", "dash", "zsh", "ksh"]);
+
+function hasWrapper(cl: CommandLine): boolean {
+  return cl.commands.some(
+    (c) => c.argv.includes("eval") || (c.argv.some((w) => SHELL_WRAPPERS.has(w)) && c.argv.includes("-c")),
+  );
+}
+
 function prefixEquals(argv: string[], prefix: string[]): boolean {
   return prefix.length <= argv.length && prefix.every((tok, i) => argv[i] === tok);
 }
@@ -91,9 +105,17 @@ function checkCondition(cond: Condition, ev: EventInput, cl: CommandLine | null)
     case "Runs":
       return cl !== null && cond.argv.length > 0 && cl.commands.some((c) => prefixEquals(c.argv, cond.argv));
     case "FilePath":
-      return ev.file != null && cond.patterns.some((p) => fnmatch(ev.file as string, p));
+      return (
+        ev.file != null &&
+        (!cond.project_only || isProjectPath(ev.file, ev.session?.repoRoot)) &&
+        cond.patterns.some((p) => fnmatch(ev.file as string, p))
+      );
     case "Content":
-      return ev.content != null && compileRegex(cond.pattern, "m").test(ev.content);
+      return (
+        ev.content != null &&
+        (!cond.project_only || (ev.file != null && isProjectPath(ev.file, ev.session?.repoRoot))) &&
+        compileRegex(cond.pattern, "m").test(ev.content)
+      );
     case "TouchedFile":
       return (ev.session?.touchedFiles ?? []).some((f) => cond.patterns.some((p) => fnmatch(f, p)));
     case "UsedSkill":
@@ -150,6 +172,9 @@ export function evaluate(hooks: SerializedHook[], input: EventInput): Verdict {
   const ev: EventInput = { ...input, event, tool: input.tool ?? null };
   try {
     const cl = command !== null ? tokenize(command) : null;
+    if (cl !== null && hasWrapper(cl)) {
+      return { action: "subset-exceeded", message: HONESTY_MESSAGE, rewritten: null };
+    }
     const fired: Fired[] = [];
     for (const hook of hooks) {
       if (!hook.events.includes(event)) continue;

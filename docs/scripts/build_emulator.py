@@ -31,6 +31,7 @@ def build(out: Path = BUNDLE) -> Path:
             ENTRY,
             "--bundle",
             "--format=esm",
+            "--target=es2022",
             "--platform=browser",
             "--log-level=warning",
             f"--banner:js={BANNER_PREFIX}{src_hash()}",

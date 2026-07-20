@@ -10,14 +10,14 @@
         { "id": "echo-quoted", "check": "parity", "input": { "tool": "Bash", "command": "echo \"git stash\"" } },
         { "id": "stash-pop", "check": "parity", "input": { "tool": "Bash", "command": "git stash pop" } },
         { "id": "commit-message", "check": "parity", "input": { "tool": "Bash", "command": "git commit -m \"git stash\"" } },
-        { "id": "sh-c", "check": "parity", "input": { "tool": "Bash", "command": "sh -c \"git stash\"" } },
         { "id": "sudo-wrapper", "check": "parity", "input": { "tool": "Bash", "command": "sudo git stash" } },
         { "id": "env-prefix", "check": "parity", "input": { "tool": "Bash", "command": "FOO=1 git stash" } },
         { "id": "redirect", "check": "parity", "input": { "tool": "Bash", "command": "git stash > /tmp/x" } },
         { "id": "pipeline", "check": "parity", "input": { "tool": "Bash", "command": "true | git stash" } },
         { "id": "unrelated", "check": "parity", "input": { "tool": "Bash", "command": "ls -la" } },
         { "id": "wrong-tool", "check": "parity", "input": { "tool": "Edit", "file": "notes.py", "content": "git stash" } },
-        { "id": "command-substitution", "check": "honesty", "input": { "tool": "Bash", "command": "$(git stash)" } }
+        { "id": "command-substitution", "check": "honesty", "input": { "tool": "Bash", "command": "$(git stash)" } },
+        { "id": "comment-line", "check": "honesty", "input": { "tool": "Bash", "command": "# git stash" } }
       ]
     },
     "runs_guard": {
@@ -32,7 +32,13 @@
         { "id": "env-prefix", "check": "parity", "input": { "tool": "Bash", "command": "FOO=1 git stash" } },
         { "id": "pipeline", "check": "parity", "input": { "tool": "Bash", "command": "true | git stash" } },
         { "id": "glued", "check": "parity", "input": { "tool": "Bash", "command": "git stashpop" } },
-        { "id": "backticks", "check": "honesty", "input": { "tool": "Bash", "command": "`git stash`" } }
+        { "id": "backticks", "check": "honesty", "input": { "tool": "Bash", "command": "`git stash`" } },
+        { "id": "sh-wrapper", "check": "honesty", "input": { "tool": "Bash", "command": "sh -c 'git stash'" } },
+        { "id": "bash-wrapper", "check": "honesty", "input": { "tool": "Bash", "command": "bash -c \"git stash\"" } },
+        { "id": "eval", "check": "honesty", "input": { "tool": "Bash", "command": "eval git stash" } },
+        { "id": "subshell", "check": "honesty", "input": { "tool": "Bash", "command": "( git stash )" } },
+        { "id": "brace-group", "check": "honesty", "input": { "tool": "Bash", "command": "{ git stash; }" } },
+        { "id": "comment-line", "check": "honesty", "input": { "tool": "Bash", "command": "# git stash" } }
       ]
     },
     "rewrite_cat": {
@@ -46,6 +52,30 @@
         { "id": "command-substitution", "check": "honesty", "input": { "tool": "Bash", "command": "cat $(secret)" } }
       ]
     },
+    "multi_hook": {
+      "mode": "live",
+      "fragment": "tutorial_multi_hook",
+      "event": "PreToolUse",
+      "cases": [
+        { "id": "force-push", "check": "parity", "input": { "tool": "Bash", "command": "git push --force" } },
+        { "id": "plain-push", "check": "parity", "input": { "tool": "Bash", "command": "git push origin main" } },
+        { "id": "unrelated", "check": "parity", "input": { "tool": "Bash", "command": "ls -la" } }
+      ]
+    },
+    "secret_guard": {
+      "mode": "live",
+      "fragment": "tutorial_secret_guard",
+      "event": "PreToolUse",
+      "repoRoot": "/repo",
+      "cases": [
+        { "id": "env-secret", "check": "parity", "input": { "tool": "Write", "file": "/repo/.env", "content": "TOKEN=sk-live-abc" } },
+        { "id": "env-example-veto", "check": "parity", "input": { "tool": "Write", "file": "/repo/.env.example", "content": "TOKEN=sk-live-abc" } },
+        { "id": "outside-repo", "check": "parity", "input": { "tool": "Write", "file": "/etc/app/.env", "content": "sk-live-abc" } },
+        { "id": "wrong-path", "check": "parity", "input": { "tool": "Write", "file": "/repo/config.py", "content": "sk-live-abc" } },
+        { "id": "no-secret", "check": "parity", "input": { "tool": "Write", "file": "/repo/.env", "content": "PORT=8080" } },
+        { "id": "read-ignored", "check": "parity", "input": { "tool": "Read", "file": "/repo/.env" } }
+      ]
+    },
     "ui_gate": {
       "mode": "live",
       "fragment": "canonical_hook",
@@ -54,21 +84,21 @@
         {
           "id": "unreviewed-ui-edit",
           "check": "parity",
-          "session": { "touchedFiles": ["app/src/components/Button.tsx"], "usedSkills": [] },
-          "edits": ["app/src/components/Button.tsx"]
+          "session": { "touchedFiles": ["/repo/src/components/Button.tsx"], "usedSkills": [] },
+          "edits": ["/repo/src/components/Button.tsx"]
         },
         {
           "id": "reviewed-ui-edit",
           "check": "parity",
-          "session": { "touchedFiles": ["app/src/components/Button.tsx"], "usedSkills": ["agent-browser"] },
-          "edits": ["app/src/components/Button.tsx"],
+          "session": { "touchedFiles": ["/repo/src/components/Button.tsx"], "usedSkills": ["agent-browser"] },
+          "edits": ["/repo/src/components/Button.tsx"],
           "skills": ["agent-browser"]
         },
         {
           "id": "non-ui-edit",
           "check": "parity",
-          "session": { "touchedFiles": ["README.md"], "usedSkills": [] },
-          "edits": ["README.md"]
+          "session": { "touchedFiles": ["/repo/README.md"], "usedSkills": [] },
+          "edits": ["/repo/README.md"]
         }
       ]
     },

@@ -1,4 +1,4 @@
-// capt-hook-widget src-sha256: 3acbacfc29bd6127cf664fc51f3dc876d905f8b2dbf90466f6972e4eabc75e61
+// capt-hook-widget src-sha256: b94482190c235544da8ab7ad61c2800f8cda92df756ef3b36afb4fa7ec701a56
 
 // dom.ts
 function el(tag, className, text) {
@@ -90,21 +90,41 @@ var ADVISORY_SEPARATOR = "Additional advisories (not the reason for the deny):";
 var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 function detectHonesty(raw) {
   let singleQuoted = false;
+  let doubleQuoted = false;
   for (let i = 0; i < raw.length; i++) {
     const c = raw[i];
     const n = raw[i + 1];
+    const p = raw[i - 1];
     if (singleQuoted) {
       if (c === "'") singleQuoted = false;
+      continue;
+    }
+    if (doubleQuoted) {
+      if (c === "\\") {
+        i++;
+        continue;
+      }
+      if (c === "`") return true;
+      if (c === "$" && (n === "(" || n === "{")) return true;
+      if (c === '"') doubleQuoted = false;
       continue;
     }
     if (c === "'") {
       singleQuoted = true;
       continue;
     }
+    if (c === '"') {
+      doubleQuoted = true;
+      continue;
+    }
+    if (c === "\\") return true;
     if (c === "`") return true;
     if (c === "$" && (n === "(" || n === "{")) return true;
     if (c === "<" && (n === "(" || n === "<")) return true;
     if (c === ">" && n === "(") return true;
+    if (c === "(") return true;
+    if (c === "{" && (n === " " || n === "	")) return true;
+    if (c === "#" && (i === 0 || p === " " || p === "	")) return true;
   }
   return false;
 }
@@ -280,6 +300,17 @@ function fnmatch(path, glob) {
   const base = path.split("/").pop() ?? path;
   return re.test(path) || re.test(base);
 }
+function isProjectPath(path, repoRoot) {
+  if (!path.startsWith("/")) return true;
+  if (!repoRoot) return true;
+  return path === repoRoot || path.startsWith(repoRoot.endsWith("/") ? repoRoot : `${repoRoot}/`);
+}
+var SHELL_WRAPPERS = /* @__PURE__ */ new Set(["sh", "bash", "dash", "zsh", "ksh"]);
+function hasWrapper(cl) {
+  return cl.commands.some(
+    (c) => c.argv.includes("eval") || c.argv.some((w) => SHELL_WRAPPERS.has(w)) && c.argv.includes("-c")
+  );
+}
 function prefixEquals(argv, prefix) {
   return prefix.length <= argv.length && prefix.every((tok, i) => argv[i] === tok);
 }
@@ -295,9 +326,9 @@ function checkCondition(cond, ev, cl) {
     case "Runs":
       return cl !== null && cond.argv.length > 0 && cl.commands.some((c) => prefixEquals(c.argv, cond.argv));
     case "FilePath":
-      return ev.file != null && cond.patterns.some((p) => fnmatch(ev.file, p));
+      return ev.file != null && (!cond.project_only || isProjectPath(ev.file, ev.session?.repoRoot)) && cond.patterns.some((p) => fnmatch(ev.file, p));
     case "Content":
-      return ev.content != null && compileRegex(cond.pattern, "m").test(ev.content);
+      return ev.content != null && (!cond.project_only || ev.file != null && isProjectPath(ev.file, ev.session?.repoRoot)) && compileRegex(cond.pattern, "m").test(ev.content);
     case "TouchedFile":
       return (ev.session?.touchedFiles ?? []).some((f) => cond.patterns.some((p) => fnmatch(f, p)));
     case "UsedSkill":
@@ -351,6 +382,9 @@ function evaluate(hooks, input) {
   const ev = { ...input, event, tool: input.tool ?? null };
   try {
     const cl = command !== null ? tokenize(command) : null;
+    if (cl !== null && hasWrapper(cl)) {
+      return { action: "subset-exceeded", message: HONESTY_MESSAGE, rewritten: null };
+    }
     const fired = [];
     for (const hook of hooks) {
       if (!hook.events.includes(event)) continue;

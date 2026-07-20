@@ -15,21 +15,41 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 export function detectHonesty(raw: string): boolean {
   let singleQuoted = false;
+  let doubleQuoted = false;
   for (let i = 0; i < raw.length; i++) {
     const c = raw[i];
     const n = raw[i + 1];
+    const p = raw[i - 1];
     if (singleQuoted) {
       if (c === "'") singleQuoted = false;
+      continue;
+    }
+    if (doubleQuoted) {
+      if (c === "\\") {
+        i++;
+        continue;
+      }
+      if (c === "`") return true;
+      if (c === "$" && (n === "(" || n === "{")) return true;
+      if (c === '"') doubleQuoted = false;
       continue;
     }
     if (c === "'") {
       singleQuoted = true;
       continue;
     }
+    if (c === '"') {
+      doubleQuoted = true;
+      continue;
+    }
+    if (c === "\\") return true;
     if (c === "`") return true;
     if (c === "$" && (n === "(" || n === "{")) return true;
     if (c === "<" && (n === "(" || n === "<")) return true;
     if (c === ">" && n === "(") return true;
+    if (c === "(") return true;
+    if (c === "{" && (n === " " || n === "\t")) return true;
+    if (c === "#" && (i === 0 || p === " " || p === "\t")) return true;
   }
   return false;
 }
