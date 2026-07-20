@@ -118,6 +118,12 @@ def check_target(
 
 
 def check_call(evt: PreToolUseEvent, call: Call, *, rewritable: bool) -> HookResult | Recoverable | None:
+    if not call.targets.complete:
+        return evt.block(
+            f"BLOCKED: a command substitution supplies rm targets in '{call.source.raw}', so they cannot be "
+            "verified against any git/jj repository or scratch exemption. Expand the substitution to explicit "
+            "paths first, or ask the user to run it themselves."
+        )
     recovery: Recoverable | None = None
     for target in call.targets:
         match check_target(evt, target, call.cwd, rewritable=rewritable):
@@ -151,6 +157,9 @@ ROOT_RM: Block = Block(pattern="filesystem root") if trash_binary() else Block(p
         Input(command="rm $FOO", cwd="/"): Block(pattern="repository"),
         Input(command="rm /outside/{a,b}", cwd="/"): Block(pattern="repository"),
         Input(command="rm foo\\\nbar", cwd="/"): Block(pattern="repository"),
+        Input(command="rm $(ls)", cwd="/"): Block(pattern="repository"),
+        Input(command="rm `ls`", cwd="/"): Block(pattern="repository"),
+        Input(command="rm foo.txt $(ls)", cwd="/"): Block(pattern="repository"),
         Input(command="rm -- data.txt", cwd="/"): RECOVERABLE_RM,
         Input(command="sudo rm /foo.txt", cwd="/"): RECOVERABLE_RM,
         Input(command=r"\rm /foo.txt", cwd="/"): RECOVERABLE_RM,
