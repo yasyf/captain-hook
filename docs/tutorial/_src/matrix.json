@@ -1,0 +1,69 @@
+{
+  "widgets": {
+    "first_block": {
+      "mode": "live",
+      "fragment": "tutorial_first_block",
+      "event": "PreToolUse",
+      "cases": [
+        { "id": "git-stash", "check": "parity", "input": { "tool": "Bash", "command": "git stash" } },
+        { "id": "cd-and-stash", "check": "parity", "input": { "tool": "Bash", "command": "cd /tmp && git stash" } },
+        { "id": "echo-quoted", "check": "parity", "input": { "tool": "Bash", "command": "echo \"git stash\"" } },
+        { "id": "stash-pop", "check": "parity", "input": { "tool": "Bash", "command": "git stash pop" } },
+        { "id": "commit-message", "check": "parity", "input": { "tool": "Bash", "command": "git commit -m \"git stash\"" } },
+        { "id": "sh-c", "check": "parity", "input": { "tool": "Bash", "command": "sh -c \"git stash\"" } },
+        { "id": "sudo-wrapper", "check": "parity", "input": { "tool": "Bash", "command": "sudo git stash" } },
+        { "id": "env-prefix", "check": "parity", "input": { "tool": "Bash", "command": "FOO=1 git stash" } },
+        { "id": "redirect", "check": "parity", "input": { "tool": "Bash", "command": "git stash > /tmp/x" } },
+        { "id": "pipeline", "check": "parity", "input": { "tool": "Bash", "command": "true | git stash" } },
+        { "id": "unrelated", "check": "parity", "input": { "tool": "Bash", "command": "ls -la" } },
+        { "id": "wrong-tool", "check": "parity", "input": { "tool": "Edit", "file": "notes.py", "content": "git stash" } },
+        { "id": "command-substitution", "check": "honesty", "input": { "tool": "Bash", "command": "$(git stash)" } }
+      ]
+    },
+    "runs_guard": {
+      "mode": "live",
+      "fragment": "tutorial_runs_guard",
+      "event": "PreToolUse",
+      "cases": [
+        { "id": "git-stash", "check": "parity", "input": { "tool": "Bash", "command": "git stash" } },
+        { "id": "sudo-wrapper", "check": "parity", "input": { "tool": "Bash", "command": "sudo git stash" } },
+        { "id": "echo-decoy", "check": "parity", "input": { "tool": "Bash", "command": "echo git stash" } },
+        { "id": "stash-pop", "check": "parity", "input": { "tool": "Bash", "command": "git stash pop" } },
+        { "id": "env-prefix", "check": "parity", "input": { "tool": "Bash", "command": "FOO=1 git stash" } },
+        { "id": "pipeline", "check": "parity", "input": { "tool": "Bash", "command": "true | git stash" } },
+        { "id": "glued", "check": "parity", "input": { "tool": "Bash", "command": "git stashpop" } },
+        { "id": "backticks", "check": "honesty", "input": { "tool": "Bash", "command": "`git stash`" } }
+      ]
+    },
+    "first_block_recorded": {
+      "mode": "canned",
+      "fragment": "tutorial_first_block",
+      "event": "PreToolUse",
+      "cases": [
+        {
+          "id": "git-stash",
+          "input": { "tool": "Bash", "command": "git stash" },
+          "verdict": {
+            "action": "block",
+            "message": "BLOCKED: git stash hides work the rest of the team can't see. commit to a branch or use jj instead.",
+            "command": null
+          }
+        },
+        {
+          "id": "stash-pop",
+          "input": { "tool": "Bash", "command": "git stash pop" },
+          "verdict": {
+            "action": "block",
+            "message": "BLOCKED: git stash hides work the rest of the team can't see. commit to a branch or use jj instead.",
+            "command": null
+          }
+        },
+        {
+          "id": "unrelated",
+          "input": { "tool": "Bash", "command": "ls -la" },
+          "verdict": { "action": "pass", "message": null, "command": null }
+        }
+      ]
+    }
+  }
+}
