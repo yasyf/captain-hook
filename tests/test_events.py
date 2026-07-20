@@ -590,3 +590,31 @@ class TestTranscriptPath:
         from tests.helpers import make_ctx as make_padded_ctx
 
         assert StopEvent(_raw=raw, ctx=make_padded_ctx()).transcript_path == expected
+
+
+class TestEvtEdit:
+    def _edit_event(self, file_path: str, old: str, new: str) -> PostToolUseEvent:
+        return make_event(  # type: ignore[return-value]
+            PostToolUseEvent,
+            {"tool_name": "Edit", "tool_input": {"file_path": file_path, "old_string": old, "new_string": new}},
+        )
+
+    def test_edit_exposes_structural_view(self) -> None:
+        evt = self._edit_event("app.py", "x = 1\n", "x = 1\nprint(x)\n")
+        assert evt.edit is not None
+        assert evt.edit.matches("print($$$)")
+        added = evt.edit.introduced("print($$$)")
+        assert len(added) == 1
+        assert added[0].line == 2
+        assert added[0].text == "print(x)"
+
+    def test_moved_construct_is_not_introduced(self) -> None:
+        evt = self._edit_event("app.py", "print(1)\n", "x = 2\nprint(1)\n")
+        assert evt.edit is not None
+        assert evt.edit.introduced("print($$$)") == ()
+
+    def test_non_edit_tool_has_no_edit(self) -> None:
+        assert make_event(PostToolUseEvent, {"tool_name": "Bash", "tool_input": {"command": "ls"}}).edit is None
+
+    def test_unsupported_extension_has_no_edit(self) -> None:
+        assert self._edit_event("file.xyz", "a\n", "a\nb\n").edit is None

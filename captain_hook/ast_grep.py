@@ -19,6 +19,7 @@ import tomllib
 from collections import Counter
 from collections.abc import Iterable, Iterator, Set
 from dataclasses import dataclass
+from functools import cached_property
 from typing import TYPE_CHECKING, NamedTuple
 
 from captain_hook.doc_conventions import DOC_SIBLINGS
@@ -95,6 +96,41 @@ class SyntaxNode:
     def to_match(self) -> Match:
         r = self.raw.range()
         return Match(line=r.start.line + 1, end_line=r.end.line + 1, text=self.raw.text())
+
+
+@dataclass(frozen=True)
+class Edit:
+    """The pending edit's before/after source, parsed for structural queries.
+
+    Reached via [`evt.edit`][captain_hook.ToolHookEvent.edit]; ``None`` there when the event
+    carries no edit or the file's language has no grammar. ``old`` and ``new`` are lazily parsed
+    [`SyntaxNode`][captain_hook.SyntaxNode] trees; ``matches`` and ``introduced`` take ast-grep
+    pattern strings (``"print($$$)"``).
+
+    Example:
+        >>> if evt.edit and (added := evt.edit.introduced("print($$$)")):
+        ...     return evt.warn(f"New print() calls: {[m.line for m in added]}")
+    """
+
+    old_text: str
+    new_text: str
+    lang: str
+
+    @cached_property
+    def old(self) -> SyntaxNode:
+        return parse(self.old_text, self.lang)
+
+    @cached_property
+    def new(self) -> SyntaxNode:
+        return parse(self.new_text, self.lang)
+
+    def matches(self, pattern: str) -> bool:
+        """Whether ``pattern`` matches anywhere in the post-edit source."""
+        return matches(self.new_text, self.lang, pattern)
+
+    def introduced(self, pattern: str) -> tuple[Match, ...]:
+        """Matches of ``pattern`` present after the edit but absent before it, by whitespace-normalized text."""
+        return tuple(find_introduced(self.old_text, self.new_text, self.lang, pattern))
 
 
 def lang_for_path(path: Path) -> str | None:

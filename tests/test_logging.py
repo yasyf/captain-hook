@@ -159,15 +159,15 @@ class TestLlmLogging:
         with patch("captain_hook.primitives.llm.fired_this_turn", return_value=False):
             from captain_hook.primitives.llm import GateVerdict, llm_evaluate
 
-            result = llm_evaluate(
-                evt,
-                "test prompt for evaluation",
-                GateVerdict,
-                hook="test",
-                when=lambda _: True,
-            )
+            with pytest.raises(RuntimeError):
+                llm_evaluate(
+                    evt,
+                    "test prompt for evaluation",
+                    GateVerdict,
+                    hook="test",
+                    when=lambda _: True,
+                )
 
-        assert result is None
         assert any(r.levelno >= WARNING_NO for r in logcap.records)
 
     def test_prompt_check_logs_on_exception(self, logcap: Any) -> None:

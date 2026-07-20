@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass, replace
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar, overload
 
 from cc_transcript.tools import (
     BashCall,
@@ -24,15 +24,21 @@ from captain_hook.file import File
 from captain_hook.types import Event
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
     from cc_transcript.ids import ToolDigest
     from cc_transcript.tools import FallbackCall, ToolCall
+    from pydantic import BaseModel
+    from spawnllm import TModel, TSpecialty
 
+    from captain_hook.ast_grep import Edit
     from captain_hook.cmd import Cmd
     from captain_hook.context import HookContext
+    from captain_hook.contexts import PromptContext
+    from captain_hook.prompt import Prompt
+    from captain_hook.signals.nlp import NlpSignal
     from captain_hook.tasks import Tasks
-    from captain_hook.types import HookResult
+    from captain_hook.types import HookResult, Signal, Signals
 
 T = TypeVar("T", bound=ToolCallBase)
 
@@ -296,6 +302,10 @@ class BaseHookEvent:
         return None
 
     @property
+    def edit(self) -> Edit | None:
+        return None
+
+    @property
     def pre_image(self) -> str | None:
         return None
 
@@ -315,6 +325,136 @@ class BaseHookEvent:
 
     def content_matches(self, pattern: str) -> bool:
         return False
+
+    @overload
+    def llm(
+        self,
+        prompt: str | Prompt,
+        model: None = None,
+        *,
+        contexts: Sequence[PromptContext] = (),
+        signals: Sequence[Signal | NlpSignal] | Signals | None = None,
+        when: Callable[[BaseHookEvent], bool] | None = None,
+        hook: str | None = None,
+        retries: int = 2,
+        max_context: int = 2000,
+        specialty: TSpecialty = "review",
+        size: TModel = "small",
+        agent: bool = False,
+        transcript: bool | int | Literal["recent", "full"] = False,
+        diff: bool | str = False,
+    ) -> str | None: ...
+    @overload
+    def llm(
+        self,
+        prompt: str | Prompt,
+        model: type[bool],
+        *,
+        contexts: Sequence[PromptContext] = (),
+        signals: Sequence[Signal | NlpSignal] | Signals | None = None,
+        when: Callable[[BaseHookEvent], bool] | None = None,
+        hook: str | None = None,
+        retries: int = 2,
+        max_context: int = 2000,
+        specialty: TSpecialty = "review",
+        size: TModel = "small",
+        agent: bool = False,
+        transcript: bool | int | Literal["recent", "full"] = False,
+        diff: bool | str = False,
+    ) -> bool | None: ...
+    @overload
+    def llm(
+        self,
+        prompt: str | Prompt,
+        model: type[int],
+        *,
+        contexts: Sequence[PromptContext] = (),
+        signals: Sequence[Signal | NlpSignal] | Signals | None = None,
+        when: Callable[[BaseHookEvent], bool] | None = None,
+        hook: str | None = None,
+        retries: int = 2,
+        max_context: int = 2000,
+        specialty: TSpecialty = "review",
+        size: TModel = "small",
+        agent: bool = False,
+        transcript: bool | int | Literal["recent", "full"] = False,
+        diff: bool | str = False,
+    ) -> int | None: ...
+    @overload
+    def llm[M: BaseModel](
+        self,
+        prompt: str | Prompt,
+        model: type[M],
+        *,
+        contexts: Sequence[PromptContext] = (),
+        signals: Sequence[Signal | NlpSignal] | Signals | None = None,
+        when: Callable[[BaseHookEvent], bool] | None = None,
+        hook: str | None = None,
+        retries: int = 2,
+        max_context: int = 2000,
+        specialty: TSpecialty = "review",
+        size: TModel = "small",
+        agent: bool = False,
+        transcript: bool | int | Literal["recent", "full"] = False,
+        diff: bool | str = False,
+    ) -> M | None: ...
+    def llm(
+        self,
+        prompt: str | Prompt,
+        model: type[BaseModel] | type[bool] | type[int] | None = None,
+        *,
+        contexts: Sequence[PromptContext] = (),
+        signals: Sequence[Signal | NlpSignal] | Signals | None = None,
+        when: Callable[[BaseHookEvent], bool] | None = None,
+        hook: str | None = None,
+        retries: int = 2,
+        max_context: int = 2000,
+        specialty: TSpecialty = "review",
+        size: TModel = "small",
+        agent: bool = False,
+        transcript: bool | int | Literal["recent", "full"] = False,
+        diff: bool | str = False,
+    ) -> BaseModel | str | bool | int | None:
+        """Ask an LLM a question about this event and return a typed answer.
+
+        The public sugar over the LLM stack: delegates to [`llm_evaluate`][captain_hook.llm_evaluate]
+        (contexts, signals, once-per-turn throttling, retries with validation feedback), which calls
+        the backend through ``ctx.call_llm``. ``model`` picks the answer shape: ``None`` returns the
+        raw ``str`` reply, ``bool``/``int`` coerce through a single-field answer schema, and a
+        ``BaseModel`` subclass returns its validated instance. ``size`` picks the model tier
+        (``"small"``/``"medium"``/``"large"``).
+
+        A skipped call — already fired this turn, or a ``required`` context came up empty — returns
+        ``None``; a call that still fails after ``retries`` re-asks raises.
+
+        Example:
+            >>> if evt.llm("Is this print() call debug leftovers?", bool):
+            ...     return evt.warn("Drop the print before finishing.")
+        """
+        from captain_hook.primitives.llm import BoolAnswer, IntAnswer, llm_evaluate
+        from captain_hook.state import hook_name
+
+        result = llm_evaluate(
+            self,
+            prompt,
+            {bool: BoolAnswer, int: IntAnswer}.get(model, model) if model is not None else None,
+            hook=hook or hook_name("llm", None, str(prompt)),
+            signals=signals,
+            when=when,
+            contexts=contexts,
+            max_context=max_context,
+            specialty=specialty,
+            model=size,
+            agent=agent,
+            transcript=transcript,
+            diff=diff,
+            retries=retries,
+        )
+        match result:
+            case BoolAnswer(answer=answer) | IntAnswer(answer=answer):
+                return answer
+            case _:
+                return result
 
     def allow(self) -> HookResult:
         from captain_hook.types import Action
@@ -430,6 +570,25 @@ class ToolHookEvent(BaseHookEvent):
                 return disk_pre_image(Path(path))
             case _:
                 return None
+
+    @property
+    def edit(self) -> Edit | None:
+        """Structured before/after view of the pending edit, or ``None``.
+
+        ``None`` for non-edit tools, files without a supported grammar, and Writes off
+        ``PreToolUse`` (their pre-image is unknowable once the write lands — the same rule as
+        :attr:`replaced`). The pre side is :attr:`replaced`; the post side is :attr:`content`.
+        """
+        from captain_hook.ast_grep import Edit, lang_for_path
+
+        if (
+            not (file := self.file)
+            or not (lang := lang_for_path(file.path))
+            or (old := self.replaced) is None
+            or (new := self.content) is None
+        ):
+            return None
+        return Edit(old_text=old, new_text=new, lang=lang)
 
     @cached_property
     def pre_image(self) -> str | None:

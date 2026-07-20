@@ -4,15 +4,16 @@ import json
 import subprocess
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from itertools import count
 from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from captain_hook.app import on
 from captain_hook.contexts import apply_contexts, with_defaults
 from captain_hook.primitives.nudge import DEFAULT_FIRES
-from captain_hook.prompt import Prompt
+from captain_hook.prompt import Prompt, render_template
 from captain_hook.signals import extract_signal_context, resolve_signals, transcript_texts
 from captain_hook.state import PrimitiveState, fired_this_turn, hook_name, record_fire
 from captain_hook.types import (
@@ -56,10 +57,22 @@ class PromptCheckVerdict(BaseModel):
     reason: str
 
 
+class BoolAnswer(BaseModel):
+    """LLM response model for ``evt.llm(..., bool)``: a single yes/no ``answer``."""
+
+    answer: bool
+
+
+class IntAnswer(BaseModel):
+    """LLM response model for ``evt.llm(..., int)``: a single integer ``answer``."""
+
+    answer: int
+
+
 def llm_evaluate[M: BaseModel](
     evt: BaseHookEvent,
-    prompt: str,
-    response_model: type[M],
+    prompt: str | Prompt,
+    response_model: type[M] | None,
     *,
     hook: str,
     signals: Sequence[Signal | NlpSignal] | Signals | None = None,
@@ -71,7 +84,15 @@ def llm_evaluate[M: BaseModel](
     agent: bool = False,
     transcript: bool | int | Literal["recent", "full"] = False,
     diff: bool | str = False,
-) -> M | None:
+    retries: int = 2,
+) -> M | str | None:
+    """Run one throttled, context-aware LLM evaluation for ``evt`` and return the validated verdict.
+
+    Applies signals/when gating, renders ``contexts`` (a ``required`` context with no content skips
+    the call), attaches the transcript window and optional diff, then calls the backend — retrying up
+    to ``retries`` times, feeding a schema validation failure back to the model on re-ask. Returns
+    ``None`` on a skip; raises when the call still fails after the final retry.
+    """
     from cc_transcript.render import clip
 
     if fired_this_turn(evt):
@@ -98,7 +119,7 @@ def llm_evaluate[M: BaseModel](
         max_context,
     )
 
-    base = Prompt().system(prompt).context("context", context or None)
+    base = (prompt if isinstance(prompt, Prompt) else Prompt().system(prompt)).context("context", context or None)
     if (built := apply_contexts(base, evt, with_defaults(contexts), max_len=max_context)) is None:
         return None
 
@@ -106,18 +127,30 @@ def llm_evaluate[M: BaseModel](
     if diff and not (diff_text or "").strip():
         return None
 
-    try:
-        return evt.ctx.call_llm(
-            built.context("diff", diff_text),
-            specialty=specialty,
-            model=model,
-            agent=agent,
-            transcript=transcript,
-            response_model=response_model,
-        )
-    except Exception:
-        logger.bind(prompt=prompt).opt(exception=True).warning("llm evaluate failed")
-        return None
+    dispatched = built.context("diff", diff_text)
+    asked = dispatched
+    for attempt in count():
+        try:
+            return evt.ctx.call_llm(
+                asked,
+                specialty=specialty,
+                model=model,
+                agent=agent,
+                transcript=transcript,
+                response_model=response_model,
+            )
+        except ValidationError as e:
+            if attempt >= retries:
+                raise
+            asked = dispatched.context(
+                "validation_error",
+                f"{e}\nYour previous reply failed validation; answer again conforming to the schema.",
+            )
+            logger.bind(attempt=attempt).opt(exception=True).warning("llm output failed validation; retrying")
+        except Exception:
+            if attempt >= retries:
+                raise
+            logger.bind(attempt=attempt).opt(exception=True).warning("llm call failed; retrying")
 
 
 def consume_signals(evt: BaseHookEvent, sig: Signals | None, hook: str) -> list[str] | None:
@@ -167,8 +200,8 @@ def llm_primitive[M: BaseModel](
     name = hook_name(prefix, label, prompt)
 
     def handler(evt: BaseHookEvent) -> HookResult | None:
-        if not (
-            result := llm_evaluate(
+        try:
+            result = llm_evaluate(
                 evt,
                 prompt,
                 response_model,
@@ -183,7 +216,10 @@ def llm_primitive[M: BaseModel](
                 transcript=transcript,
                 diff=diff,
             )
-        ):
+        except Exception:
+            logger.bind(hook=name).opt(exception=True).warning("llm primitive failed")
+            return None
+        if not result:
             return None
         if not verdict(result):
             return None
@@ -192,7 +228,7 @@ def llm_primitive[M: BaseModel](
         record_fire(evt)
         return HookResult(
             action=action,
-            message=message(result) if callable(message) else message,
+            message=message(result) if callable(message) else render_template(message, **result.model_dump()),
         )
 
     handler.__name__ = handler.__qualname__ = name
@@ -233,6 +269,10 @@ def llm_gate(
     diff: bool | str = False,
 ) -> None:
     """Register an LLM-powered blocking gate.
+
+    ``message`` may be a literal string, a ``{field}`` template with the verdict model's fields
+    splatted in (same placeholder rules as :meth:`~captain_hook.Prompt.from_template`: only
+    ``{identifier}`` substitutes, every other brace stays literal), or a callable taking the verdict.
 
     Defaults are tuned for the common case: ``agent=True`` and ``transcript=True``
     so the gate has tool access and a recent transcript window (the path lets the agent
@@ -321,6 +361,10 @@ def llm_nudge(
 ) -> None:
     """Register an LLM-powered advisory nudge.
 
+    ``message`` may be a literal string, a ``{field}`` template with the verdict model's fields
+    splatted in (same placeholder rules as :meth:`~captain_hook.Prompt.from_template`: only
+    ``{identifier}`` substitutes, every other brace stays literal), or a callable taking the verdict.
+
     Defaults are tuned for the common case: ``agent=True`` and ``transcript=True``
     so the nudge has tool access and a recent transcript window (the path lets the agent
     read full history). Pass ``diff=True`` to attach a compact working-tree diff as a
@@ -353,7 +397,7 @@ def llm_nudge(
         ...           message="Observe, don't infer -- check traces first",
         ...           signals=Signals([Signal(r"should contain", weight=2)], threshold=3))
         >>> llm_nudge("Does any newly introduced comment narrate the edit itself?",
-        ...           message=lambda r: f"Tombstone comment: {r.reasoning}",
+        ...           message="Tombstone comment: {reasoning}",
         ...           contexts=[Introduced(kind=COMMENT_TYPES)],
         ...           events=Event.PreToolUse, only_if=[Tool("Edit", "Write", "MultiEdit")])
     """

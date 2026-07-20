@@ -26,6 +26,9 @@ from captain_hook import util as util
 from captain_hook.app import hook as hook
 from captain_hook.app import on as on
 from captain_hook.ast_grep import COMMENT_TYPES as COMMENT_TYPES
+from captain_hook.ast_grep import Edit as Edit
+from captain_hook.ast_grep import Match as Match
+from captain_hook.ast_grep import SyntaxNode as SyntaxNode
 from captain_hook.cmd import Call as Call
 from captain_hook.cmd import Cmd as Cmd
 from captain_hook.cmd import Expansion as Expansion

@@ -4,6 +4,26 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.1.0] - 2026-07-20
+
+### Added
+- **`evt.llm()` — typed LLM answers as an event method.** `evt.llm("Is this throwaway code?", bool)`
+  returns a `bool`; `model=None` returns the raw `str`, `int` an integer, and a `BaseModel`
+  subclass its validated instance. Thin sugar over `llm_evaluate`, so contexts, signals, and
+  once-per-turn throttling apply; `size=` picks the model tier.
+- **`evt.edit` — structural before/after view of the pending edit.** `None` off edit events;
+  otherwise an `Edit` whose `.old`/`.new` are lazily parsed syntax trees, with
+  `.matches(pattern)` against the post-edit source and `.introduced(pattern)` returning the
+  structural matches the edit newly adds.
+- **LLM calls retry with validation feedback.** `llm_evaluate` retries a failed backend call up
+  to `retries=2` times, feeding a schema `ValidationError` back to the model on re-ask, and now
+  raises on final failure; the advisory primitives (`llm_nudge`, `llm_gate`, …) keep their
+  fail-silent behavior at the primitive layer.
+- **LLM primitive messages splat the verdict.** `llm_nudge(..., message="Do not use Any as an
+  escape hatch: {reasoning}.")` substitutes the verdict model's fields into a `{field}` template
+  (same placeholder rules as `Prompt.from_template`: only `{identifier}` substitutes, stray braces
+  stay literal), alongside the existing literal and callable forms.
+
 ## [12.0.1] - 2026-07-20
 
 ### Added

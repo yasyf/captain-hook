@@ -32,6 +32,15 @@ def caller_dir() -> Path:
     return Path(frame.f_code.co_filename).resolve().parent if frame else reqenv.cwd()
 
 
+def render_template(text: str, **vars: object) -> str:
+    def repl(match: re.Match[str]) -> str:
+        if (name := match.group(1)) not in vars:
+            raise KeyError(f"template variable {name!r} not supplied")
+        return str(vars[name])
+
+    return PLACEHOLDER.sub(repl, text)
+
+
 @dataclass(frozen=True, kw_only=True)
 class Prompt:
     """Fluent builder for structured LLM prompts with system text, XML context sections, and a question.
@@ -91,12 +100,7 @@ class Prompt:
             KeyError: If an ``{identifier}`` placeholder has no matching entry in ``vars``.
         """
 
-        def repl(match: re.Match[str]) -> str:
-            if (name := match.group(1)) not in vars:
-                raise KeyError(f"template variable {name!r} not supplied")
-            return str(vars[name])
-
-        return cls(system_text=PLACEHOLDER.sub(repl, dedent_text(text)))
+        return cls(system_text=render_template(dedent_text(text), **vars))
 
     @classmethod
     def load(cls, name: str, *, base: str | Path | None = None, **vars: object) -> Prompt:

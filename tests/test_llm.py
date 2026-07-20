@@ -1339,3 +1339,114 @@ class TestMultiContributorConsume:
         final = evt.ctx.s[PrimitiveState].get()
         assert final is not None
         assert final.consumed == {"rt": {text_hash("a list here"), text_hash("some feedback")}}
+
+
+class TestEvtLlm:
+    def _evt(self, tmp_path: Path, fake: Any, monkeypatch: Any) -> Any:
+        evt = make_post_tool_event(ctx=make_ctx(tmp_path))
+        monkeypatch.setattr(evt.ctx, "call_llm", fake)
+        return evt
+
+    def test_bool_true(self, tmp_path: Path, monkeypatch: Any) -> None:
+        from captain_hook.primitives.llm import BoolAnswer
+
+        evt = self._evt(tmp_path, lambda *a, **k: BoolAnswer(answer=True), monkeypatch)
+        assert evt.llm("Is this throwaway?", bool) is True
+
+    def test_bool_false(self, tmp_path: Path, monkeypatch: Any) -> None:
+        from captain_hook.primitives.llm import BoolAnswer
+
+        evt = self._evt(tmp_path, lambda *a, **k: BoolAnswer(answer=False), monkeypatch)
+        assert evt.llm("Is this throwaway?", bool) is False
+
+    def test_int(self, tmp_path: Path, monkeypatch: Any) -> None:
+        from captain_hook.primitives.llm import IntAnswer
+
+        evt = self._evt(tmp_path, lambda *a, **k: IntAnswer(answer=42), monkeypatch)
+        assert evt.llm("How many?", int) == 42
+
+    def test_model_none_returns_str(self, tmp_path: Path, monkeypatch: Any) -> None:
+        evt = self._evt(tmp_path, lambda *a, **k: "raw reply", monkeypatch)
+        assert evt.llm("Summarize.") == "raw reply"
+
+    def test_basemodel_passthrough(self, tmp_path: Path, monkeypatch: Any) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+
+        verdict = GateVerdict(block=True, reasoning="bad")
+        evt = self._evt(tmp_path, lambda *a, **k: verdict, monkeypatch)
+        assert evt.llm("Gate this?", GateVerdict) is verdict
+
+    def test_validation_error_then_success(self, tmp_path: Path, monkeypatch: Any) -> None:
+        from captain_hook.primitives.llm import BoolAnswer
+
+        calls: list[Any] = []
+
+        def fake(prompt: Any, **kwargs: Any) -> BoolAnswer:
+            calls.append(prompt)
+            if len(calls) == 1:
+                BoolAnswer.model_validate({"answer": object()})
+            return BoolAnswer(answer=True)
+
+        evt = self._evt(tmp_path, fake, monkeypatch)
+        assert evt.llm("Is this throwaway?", bool) is True
+        assert len(calls) == 2
+        assert "validation_error" in str(calls[1])
+
+    def test_persistent_failure_raises(self, tmp_path: Path, monkeypatch: Any) -> None:
+        calls: list[Any] = []
+
+        def fake(prompt: Any, **kwargs: Any) -> None:
+            calls.append(prompt)
+            raise RuntimeError("boom")
+
+        evt = self._evt(tmp_path, fake, monkeypatch)
+        with pytest.raises(RuntimeError):
+            evt.llm("Is this throwaway?", bool)
+        assert len(calls) == 3
+
+    def test_retries_zero_raises_immediately(self, tmp_path: Path, monkeypatch: Any) -> None:
+        calls: list[Any] = []
+
+        def fake(prompt: Any, **kwargs: Any) -> None:
+            calls.append(prompt)
+            raise RuntimeError("boom")
+
+        evt = self._evt(tmp_path, fake, monkeypatch)
+        with pytest.raises(RuntimeError):
+            evt.llm("Is this throwaway?", bool, retries=0)
+        assert len(calls) == 1
+
+
+class TestLlmMessageTemplate:
+    def test_template_message_splats_verdict(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+
+        ctx = make_ctx(
+            tmp_path, texts=["some context"], call_llm_return=GateVerdict(block=True, reasoning="use a Protocol")
+        )
+        register_llm_gate("Check this", message="Do not widen: {reasoning}.", when=lambda evt: True)
+        result = dispatch(Event.Stop, make_stop_event(ctx=ctx), session_dir=tmp_path)
+
+        assert result is not None
+        assert result["reason"] == "Do not widen: use a Protocol."
+
+    def test_literal_message_with_stray_braces_passes_through(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=GateVerdict(block=True, reasoning="x"))
+        register_llm_gate("Check this", message="keep {this: literal} and {}", when=lambda evt: True)
+        result = dispatch(Event.Stop, make_stop_event(ctx=ctx), session_dir=tmp_path)
+
+        assert result is not None
+        assert result["reason"] == "keep {this: literal} and {}"
+
+    def test_unknown_placeholder_raises_keyerror(self, tmp_path: Path) -> None:
+        from captain_hook.primitives.llm import GateVerdict
+
+        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=GateVerdict(block=True, reasoning="x"))
+        register_llm_gate("Check this", message="{nonexistent}", when=lambda evt: True)
+        evt = make_stop_event(ctx=ctx)
+        matching = get_matching_hooks(evt)
+        assert matching
+        with pytest.raises(KeyError):
+            matching[0].handler(evt)
