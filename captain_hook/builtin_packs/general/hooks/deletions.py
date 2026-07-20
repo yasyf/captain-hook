@@ -154,6 +154,8 @@ ROOT_RM: Block = Block(pattern="filesystem root") if trash_binary() else Block(p
         Input(command="bash -c 'rm -rf /'", cwd="/"): Block(pattern="repository"),
         Input(command="bash -lc 'rm -rf /'", cwd="/"): Block(pattern="repository"),
         Input(command="sh -xc 'rm -rf /'", cwd="/"): Block(pattern="repository"),
+        Input(command='bash -c "rm $F"', cwd="/"): Block(pattern="repository"),
+        Input(command='eval "rm $F"', cwd="/"): Block(pattern="repository"),
         Input(command="rm $FOO", cwd="/"): Block(pattern="repository"),
         Input(command="rm /outside/{a,b}", cwd="/"): Block(pattern="repository"),
         Input(command="rm foo\\\nbar", cwd="/"): Block(pattern="repository"),

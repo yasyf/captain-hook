@@ -8,13 +8,7 @@ from cc_transcript.command import Command
 from cc_transcript.tools import mcp_parts
 
 from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition
-from captain_hook.util.shell import (
-    NESTED_COMMAND_DEPTH,
-    SHELLS,
-    nested_command_string,
-    normalize_executable,
-    safe_parse_command_line,
-)
+from captain_hook.util.shell import SHELLS, normalize_executable, safe_parse_command_line
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -123,7 +117,7 @@ def is_dangerous_git(args: tuple[str, ...]) -> bool:
             return False
 
 
-def is_dangerous_command(cmd: Command, depth: int) -> bool:
+def is_dangerous_command(cmd: Command) -> bool:
     if normalize_executable(cmd.executable) == "sudo":
         return True
     if not (argv := unwrapped_argv(cmd)):
@@ -133,8 +127,6 @@ def is_dangerous_command(cmd: Command, depth: int) -> bool:
         return True
     if program == "git":
         return is_dangerous_git(argv[1:])
-    if depth > 0 and (nested := nested_command_string(program, argv[1:])) is not None:
-        return (cl := safe_parse_command_line(nested)) is not None and is_dangerous_command_line(cl, depth - 1)
     return False
 
 
@@ -145,8 +137,8 @@ def pipes_into_shell(cl: CommandLine) -> bool:
     )
 
 
-def is_dangerous_command_line(cl: CommandLine, depth: int = NESTED_COMMAND_DEPTH) -> bool:
-    return any(is_dangerous_command(cmd, depth) for cmd in cl.commands) or pipes_into_shell(cl)
+def is_dangerous_command_line(cl: CommandLine) -> bool:
+    return any(is_dangerous_command(cmd) for cmd in cl.commands) or pipes_into_shell(cl)
 
 
 def parse_payload_command_line(text: str) -> CommandLine | None:
@@ -179,12 +171,12 @@ class NativeTool(CustomCondition):
 class DangerousCommandLine(CustomCommandLineCondition):
     """Matches a native Bash line that runs a destructive command in command position.
 
-    Parses the line with tree-sitter (via ``evt.cmd``) and flags a command whose
-    unwrapped executable is destructive (``rm``/``dd``/``shred``/``truncate``/``mkfs*``),
-    is ``sudo``, is a dangerous ``git`` subcommand (``reset``/``clean``/``restore``, or
-    ``push`` with a force/delete flag), or a downloader piped into a shell. A ``sh -c '<cmd>'``
-    or ``eval '<cmd>'`` payload is re-parsed and checked to a bounded depth. A repo or path
-    whose name merely contains ``sudo`` or ``rm`` is an argument token, never in command
+    Parses the line (via ``evt.cmd``) and flags a command whose unwrapped executable is
+    destructive (``rm``/``dd``/``shred``/``truncate``/``mkfs*``), is ``sudo``, is a dangerous
+    ``git`` subcommand (``reset``/``clean``/``restore``, or ``push`` with a force/delete flag),
+    or a downloader piped into a shell. Nested ``sh -c``/``eval`` payloads and command
+    substitutions are covered because the parser enumerates them as their own commands. A repo
+    or path whose name merely contains ``sudo`` or ``rm`` is an argument token, never in command
     position, so it does not match. A courtesy speed bump, not a security boundary.
     """
 
