@@ -34,26 +34,37 @@ requires_node = pytest.mark.skipif(NODE is None and not os.environ.get("CI"), re
 
 
 def normalize(envelope: dict[str, Any] | None) -> dict[str, Any]:
-    """Decode a Claude Code stdout envelope into the {action, message, command} verdict shape."""
+    """Decode a Claude Code stdout envelope into the {action, message, rewritten} verdict shape."""
     if envelope is None:
-        return {"action": "pass", "message": None, "command": None}
+        return {"action": "pass", "message": None, "rewritten": None}
     if envelope.get("decision") == "block":
-        return {"action": "block", "message": envelope.get("reason"), "command": None}
+        return {"action": "block", "message": envelope.get("reason"), "rewritten": None}
     hso = envelope.get("hookSpecificOutput", {})
     match hso.get("permissionDecision"):
         case "deny":
-            return {"action": "block", "message": hso.get("permissionDecisionReason"), "command": None}
+            return {"action": "block", "message": hso.get("permissionDecisionReason"), "rewritten": None}
         case "allow" if "updatedInput" in hso:
             return {
                 "action": "rewrite",
                 "message": hso.get("additionalContext"),
-                "command": hso["updatedInput"].get("command"),
+                "rewritten": hso["updatedInput"].get("command"),
             }
         case "allow":
-            return {"action": "allow", "message": hso.get("additionalContext"), "command": None}
+            return {"action": "allow", "message": hso.get("additionalContext"), "rewritten": None}
     if "additionalContext" in hso:
-        return {"action": "warn", "message": hso["additionalContext"], "command": None}
-    return {"action": "pass", "message": None, "command": None}
+        return {"action": "warn", "message": hso["additionalContext"], "rewritten": None}
+    return {"action": "pass", "message": None, "rewritten": None}
+
+
+def python_verdict(fragment: str, event: Event, case_input: dict[str, Any]) -> dict[str, Any]:
+    """Compile a fragment's hooks and run one input through the real dispatch engine, isolated."""
+    saved = list(_state.hooks)
+    try:
+        compile_fragment(FRAGMENTS / f"{fragment}.py")
+        with isolated_state_root():
+            return normalize(dispatch(event, input_to_event(event, Input(**case_input))))
+    finally:
+        _state.hooks[:] = saved
 
 
 def run_node(hooks: list[dict[str, Any]], cases: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -68,34 +79,30 @@ def run_node(hooks: list[dict[str, Any]], cases: list[dict[str, Any]]) -> dict[s
 
 
 @cache
-def widget_results(widget_id: str) -> dict[str, dict[str, dict[str, Any]]]:
+def live_results(widget_id: str) -> dict[str, dict[str, dict[str, Any]]]:
     widget = MATRIX["widgets"][widget_id]
-    event = Event[widget.get("event", "PreToolUse")]
+    event = Event[widget["event"]]
     saved = list(_state.hooks)
     try:
         compiled = compile_fragment(FRAGMENTS / f"{widget['fragment']}.py")
         python: dict[str, dict[str, Any]] = {}
         with isolated_state_root():
             for case in widget["cases"]:
-                if widget["mode"] == "canned" or case["check"] != "honesty":
-                    evt = input_to_event(event, Input(**case["input"]))
-                    python[case["id"]] = normalize(dispatch(event, evt))
+                if case["check"] == "parity":
+                    python[case["id"]] = normalize(dispatch(event, input_to_event(event, Input(**case["input"]))))
     finally:
         _state.hooks[:] = saved
-    js: dict[str, dict[str, Any]] = {}
-    if widget["mode"] != "canned":
-        node_cases = [{"id": c["id"], "input": {"event": widget["event"], **c["input"]}} for c in widget["cases"]]
-        js = run_node(compiled["hooks"], node_cases)
-    return {"python": python, "js": js}
+    node_cases = [{"id": c["id"], "input": {"event": widget["event"], **c["input"]}} for c in widget["cases"]]
+    return {"python": python, "js": run_node(compiled["hooks"], node_cases)}
 
 
-def _cases() -> list[Any]:
-    params = []
-    for widget_id, widget in MATRIX["widgets"].items():
-        for case in widget["cases"]:
-            check = "canned" if widget["mode"] == "canned" else case["check"]
-            params.append(pytest.param(widget_id, case, check, id=f"{widget_id}:{case['id']}"))
-    return params
+def _widget_cases(mode: str) -> list[Any]:
+    return [
+        pytest.param(widget_id, case, id=f"{widget_id}:{case['id']}")
+        for widget_id, widget in MATRIX["widgets"].items()
+        if widget["mode"] == mode
+        for case in widget["cases"]
+    ]
 
 
 def test_bundle_drift() -> None:
@@ -106,16 +113,86 @@ def test_bundle_drift() -> None:
 
 
 @requires_node
-@pytest.mark.parametrize(("widget_id", "case", "check"), _cases())
-def test_parity(widget_id: str, case: dict[str, Any], check: str) -> None:
-    results = widget_results(widget_id)
-    cid = case["id"]
-    match check:
-        case "parity":
-            assert results["js"][cid] == results["python"][cid]
-        case "honesty":
-            verdict = results["js"][cid]
-            assert verdict["action"] == "subset-exceeded"
-            assert "capt-hook test" in (verdict["message"] or "")
-        case "canned":
-            assert results["python"][cid] == case["verdict"]
+@pytest.mark.parametrize(("widget_id", "case"), _widget_cases("live"))
+def test_parity(widget_id: str, case: dict[str, Any]) -> None:
+    results = live_results(widget_id)
+    verdict = results["js"][case["id"]]
+    if case["check"] == "honesty":
+        assert verdict["action"] == "subset-exceeded"
+        assert "capt-hook test" in (verdict["message"] or "")
+    else:
+        assert verdict == results["python"][case["id"]]
+
+
+@pytest.mark.parametrize(("widget_id", "case"), _widget_cases("canned"))
+def test_canned_verdicts(widget_id: str, case: dict[str, Any]) -> None:
+    if not case.get("verified"):
+        pytest.skip("illustrative recording, not engine-verified")
+    widget = MATRIX["widgets"][widget_id]
+    verdict = python_verdict(widget["fragment"], Event[case.get("event", "PreToolUse")], case["input"])
+    assert verdict == case["verdict"]
+
+
+REFUSALS = {
+    "gate_signals": "from captain_hook import gate\nfrom captain_hook.types import Signal, Signals\n"
+    "gate('x', signals=Signals([Signal(pattern='y')], threshold=1))\n",
+    "nudge_when": "from captain_hook import nudge\nnudge('x', when=lambda e: True)\n",
+    "rewrite_structural": "from captain_hook import rewrite_command\n"
+    "rewrite_command('cat $$$A', 'bat $$$A', note='x')\n",
+    "rewrite_to": "from captain_hook import rewrite_command\n"
+    "rewrite_command(only_if=[], to=lambda e: None, block='no')\n",
+    "in_plan_mode": "from captain_hook import Event, hook\nfrom captain_hook.types import InPlanMode\n"
+    "hook(Event.PreToolUse, 'x', only_if=[InPlanMode()], block=True)\n",
+    "used_skill": "from captain_hook import nudge, UsedSkill\nnudge('x', skip_if=[UsedSkill('codex')])\n",
+    "regex_dialect": "from captain_hook import Event, hook\nfrom captain_hook.types import Command\n"
+    "hook(Event.PreToolUse, 'x', only_if=[Command('(?P<n>git)')], block=True)\n",
+}
+
+
+@pytest.mark.parametrize("source", REFUSALS.values(), ids=list(REFUSALS))
+def test_compiler_refuses(source: str, tmp_path: Path) -> None:
+    frag = tmp_path / "fragment.py"
+    frag.write_text(source)
+    saved = list(_state.hooks)
+    try:
+        with pytest.raises(ValueError):
+            compile_fragment(frag)
+    finally:
+        _state.hooks[:] = saved
+
+
+def _compile_source(source: str, tmp_path: Path) -> list[dict[str, Any]]:
+    frag = tmp_path / "fragment.py"
+    frag.write_text(source)
+    saved = list(_state.hooks)
+    try:
+        return compile_fragment(frag)["hooks"]
+    finally:
+        _state.hooks[:] = saved
+
+
+def test_compiler_lowers_gate(tmp_path: Path) -> None:
+    hooks = _compile_source(
+        "from captain_hook import Event, Runs, gate\n"
+        "gate('run tests', only_if=[Runs('git', 'push')], events=Event.PreToolUse)\n",
+        tmp_path,
+    )
+    assert hooks == [
+        {
+            "events": ["PreToolUse"],
+            "message": "run tests",
+            "block": True,
+            "only_if": [{"kind": "Runs", "argv": ["git", "push"]}],
+            "skip_if": [],
+        }
+    ]
+
+
+def test_compiler_lowers_rewrite(tmp_path: Path) -> None:
+    (hook,) = _compile_source(
+        "from captain_hook import rewrite_command\n"
+        'rewrite_command(r"^cat\\s+(\\S+)$", r"ccx read \\1 --full", note="x")\n',
+        tmp_path,
+    )
+    assert hook["rewrite"] == {"pattern": r"^cat\s+(\S+)$", "replace": r"ccx read \1 --full", "note": "x"}
+    assert {c["kind"] for c in hook["only_if"]} == {"Tool", "Command"}

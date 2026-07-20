@@ -16,11 +16,11 @@ BUILD_DIR = Path(__file__).resolve().parents[1]
 SOURCE = BUILD_DIR.parent / "docs"
 FRAGMENTS_SRC = SOURCE / "_fragments"
 MATRIX = SOURCE / "tutorial" / "_src" / "matrix.json"
-WIDGET_BUNDLE = BUILD_DIR / "tutorial" / "widgets" / "emulator.js"
+WIDGETS_DIR = BUILD_DIR / "tutorial" / "widgets"
 MARKER = re.compile(r"<!-- gd-embed-widget: (\w+)( mode=canned)? -->")
 
 LIVE_NOTE = "This runs a browser model of the demo subset — run `capt-hook test` for the real engine."
-CANNED_NOTE = "Recorded from the real engine, not live."
+CANNED_NOTE = "Recorded from the real engine, not evaluated in your browser."
 
 
 def widget_data(widget: dict) -> dict:
@@ -34,15 +34,14 @@ def widget_data(widget: dict) -> dict:
 
 
 def widget_block(widget_id: str, matrix: dict) -> str:
-    widget = matrix["widgets"][widget_id]
-    data = widget_data(widget)
+    data = widget_data(matrix["widgets"][widget_id])
     note = CANNED_NOTE if data["mode"] == "canned" else LIVE_NOTE
     payload = json.dumps(data).replace("</", "<\\/")
     return (
-        f'<div class="ch-emu" data-widget="{widget_id}" data-mode="{data["mode"]}">\n'
-        f'<script type="application/json" class="ch-emu-data">{payload}</script>\n'
+        f'<div class="ch-widget" data-widget="{widget_id}" data-mode="{data["mode"]}">\n'
+        f'<script type="application/json" class="ch-widget-data">{payload}</script>\n'
         f"</div>\n"
-        f'<p class="ch-emu-note">{note}</p>'
+        f'<p class="ch-widget-note">{note}</p>'
     )
 
 
@@ -51,12 +50,17 @@ def expand(text: str, matrix: dict, qmd: Path) -> str:
 
     def replace(match: re.Match[str]) -> str:
         nonlocal emitted
-        block = widget_block(match.group(1), matrix)
-        if emitted:
-            return block
-        emitted = True
-        src = os.path.relpath(WIDGET_BUNDLE, qmd.parent)
-        return f'{block}\n<script type="module" src="{src}"></script>'
+        parts = []
+        if not emitted:
+            emitted = True
+            css = os.path.relpath(WIDGETS_DIR / "emulator.css", qmd.parent)
+            js = os.path.relpath(WIDGETS_DIR / "emulator.js", qmd.parent)
+            parts.append(f'<link rel="stylesheet" href="{css}">')
+            parts.append(widget_block(match.group(1), matrix))
+            parts.append(f'<script type="module" src="{js}"></script>')
+        else:
+            parts.append(widget_block(match.group(1), matrix))
+        return "```{=html}\n" + "\n".join(parts) + "\n```"
 
     return MARKER.sub(replace, text)
 

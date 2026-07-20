@@ -15,8 +15,9 @@ import { CommandLine, detectHonesty, tokenize } from "./tokenizer";
 class SubsetExceeded extends Error {}
 
 interface Fired {
-  action: "block" | "warn";
-  message: string;
+  action: "block" | "warn" | "rewrite";
+  message: string | null;
+  rewritten: string | null;
 }
 
 function compileRegex(pattern: string, flags = ""): RegExp {
@@ -27,8 +28,15 @@ function compileRegex(pattern: string, flags = ""): RegExp {
   }
 }
 
+function pyReplacementToJs(replace: string): string {
+  return replace
+    .replace(/\$/g, "$$$$")
+    .replace(/\\g<([^>]+)>/g, "$<$1>")
+    .replace(/\\(\d+)/g, "$$$1");
+}
+
 function mcpSuffix(name: string): string {
-  return name.startsWith("mcp__") ? name.split("__").pop() ?? name : name;
+  return name.startsWith("mcp__") ? (name.split("__").pop() ?? name) : name;
 }
 
 function toolMatches(tool: string | null | undefined, names: string[]): boolean {
@@ -66,10 +74,6 @@ function fnmatch(path: string, glob: string): boolean {
   return re.test(path) || re.test(base);
 }
 
-function skillMatches(skill: string, names: string[]): boolean {
-  return names.includes(skill) || names.includes(skill.split(":").pop() ?? skill);
-}
-
 function prefixEquals(argv: string[], prefix: string[]): boolean {
   return prefix.length <= argv.length && prefix.every((tok, i) => argv[i] === tok);
 }
@@ -86,8 +90,8 @@ function checkCondition(cond: Condition, ev: EventInput, cl: CommandLine | null)
       return ev.file != null && cond.patterns.some((p) => fnmatch(ev.file as string, p));
     case "Content":
       return ev.content != null && compileRegex(cond.pattern, "m").test(ev.content);
-    case "UsedSkill":
-      return (ev.session?.usedSkills ?? []).some((s) => skillMatches(s, cond.names));
+    case "Waiting":
+      return ev.session?.waiting ?? false;
     case "Not":
       return !checkCondition(cond.condition, ev, cl);
     case "Or":
@@ -97,26 +101,41 @@ function checkCondition(cond: Condition, ev: EventInput, cl: CommandLine | null)
   }
 }
 
+function fire(hook: SerializedHook, command: string | null): Fired | null {
+  if (hook.rewrite) {
+    if (command === null) return null;
+    const re = compileRegex(hook.rewrite.pattern, "g");
+    return { action: "rewrite", message: hook.rewrite.note, rewritten: command.replace(re, pyReplacementToJs(hook.rewrite.replace)) };
+  }
+  if (hook.message == null) return null;
+  return { action: hook.block ? "block" : "warn", message: hook.message, rewritten: null };
+}
+
 function combine(fired: Fired[]): Verdict {
-  const blocks = fired.filter((f) => f.action === "block").map((f) => f.message);
-  const warns = fired.filter((f) => f.action === "warn").map((f) => f.message);
-  if (blocks.length > 0) {
+  const blocks = fired.filter((f) => f.action === "block").map((f) => f.message).filter((m): m is string => m != null);
+  const warns = fired.filter((f) => f.action === "warn").map((f) => f.message).filter((m): m is string => m != null);
+  if (fired.some((f) => f.action === "block")) {
     const parts = [...blocks];
     if (warns.length > 0) {
       if (parts.length > 0) parts.push(ADVISORY_SEPARATOR);
       parts.push(...warns);
     }
-    return { action: "block", message: parts.join("\n\n") || null, command: null };
+    return { action: "block", message: parts.join("\n\n") || null, rewritten: null };
   }
-  if (warns.length > 0) return { action: "warn", message: warns.join("\n\n"), command: null };
-  return { action: "pass", message: null, command: null };
+  const rewrite = fired.find((f) => f.action === "rewrite");
+  if (rewrite) {
+    const notes = [...(rewrite.message ? [rewrite.message] : []), ...warns];
+    return { action: "rewrite", message: notes.join("\n\n") || null, rewritten: rewrite.rewritten };
+  }
+  if (warns.length > 0) return { action: "warn", message: warns.join("\n\n"), rewritten: null };
+  return { action: "pass", message: null, rewritten: null };
 }
 
 export function evaluate(hooks: SerializedHook[], input: EventInput): Verdict {
   const event = input.event ?? "PreToolUse";
   const command = input.command ?? null;
   if (command !== null && detectHonesty(command)) {
-    return { action: "subset-exceeded", message: HONESTY_MESSAGE, command: null };
+    return { action: "subset-exceeded", message: HONESTY_MESSAGE, rewritten: null };
   }
   const ev: EventInput = { ...input, event, tool: input.tool ?? null };
   try {
@@ -126,12 +145,12 @@ export function evaluate(hooks: SerializedHook[], input: EventInput): Verdict {
       if (!hook.events.includes(event)) continue;
       if (!hook.only_if.every((c) => checkCondition(c, ev, cl))) continue;
       if (hook.skip_if.some((c) => checkCondition(c, ev, cl))) continue;
-      if (hook.message == null) continue;
-      fired.push({ action: hook.block ? "block" : "warn", message: hook.message });
+      const result = fire(hook, command);
+      if (result) fired.push(result);
     }
     return combine(fired);
   } catch (e) {
-    if (e instanceof SubsetExceeded) return { action: "subset-exceeded", message: HONESTY_MESSAGE, command: null };
+    if (e instanceof SubsetExceeded) return { action: "subset-exceeded", message: HONESTY_MESSAGE, rewritten: null };
     throw e;
   }
 }

@@ -35,33 +35,57 @@
         { "id": "backticks", "check": "honesty", "input": { "tool": "Bash", "command": "`git stash`" } }
       ]
     },
+    "rewrite_cat": {
+      "mode": "live",
+      "fragment": "tutorial_rewrite_cat",
+      "event": "PreToolUse",
+      "cases": [
+        { "id": "single-arg", "check": "parity", "input": { "tool": "Bash", "command": "cat foo.py" } },
+        { "id": "two-args", "check": "parity", "input": { "tool": "Bash", "command": "cat foo.py bar.py" } },
+        { "id": "unrelated", "check": "parity", "input": { "tool": "Bash", "command": "ls -la" } },
+        { "id": "command-substitution", "check": "honesty", "input": { "tool": "Bash", "command": "cat $(secret)" } }
+      ]
+    },
     "first_block_recorded": {
       "mode": "canned",
       "fragment": "tutorial_first_block",
-      "event": "PreToolUse",
       "cases": [
         {
           "id": "git-stash",
+          "event": "PreToolUse",
+          "verified": true,
           "input": { "tool": "Bash", "command": "git stash" },
           "verdict": {
             "action": "block",
             "message": "BLOCKED: git stash hides work the rest of the team can't see. commit to a branch or use jj instead.",
-            "command": null
+            "rewritten": null
           }
         },
         {
           "id": "stash-pop",
+          "event": "PreToolUse",
+          "verified": true,
           "input": { "tool": "Bash", "command": "git stash pop" },
           "verdict": {
             "action": "block",
             "message": "BLOCKED: git stash hides work the rest of the team can't see. commit to a branch or use jj instead.",
-            "command": null
+            "rewritten": null
           }
         },
         {
           "id": "unrelated",
+          "event": "PreToolUse",
+          "verified": true,
           "input": { "tool": "Bash", "command": "ls -la" },
-          "verdict": { "action": "pass", "message": null, "command": null }
+          "verdict": { "action": "pass", "message": null, "rewritten": null }
+        },
+        {
+          "id": "rm-walk",
+          "event": "PreToolUse",
+          "verified": false,
+          "note": "placeholder — illustrative recording, real content lands in a later phase",
+          "input": { "tool": "Bash", "command": "rm -rf build/" },
+          "verdict": { "action": "pass", "message": null, "rewritten": null }
         }
       ]
     }

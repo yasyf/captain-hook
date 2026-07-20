@@ -1,4 +1,4 @@
-.ch-emu {
+.ch-widget {
   --ch-surface: #f6f8fa;
   --ch-border: #d0d7de;
   --ch-text: #1f2328;
@@ -14,14 +14,14 @@
   color: var(--ch-text);
 }
 
-.ch-emu-stage {
+.ch-widget-stage {
   border: 1px solid var(--ch-border);
   border-radius: 8px;
   background: var(--ch-surface);
   padding: 1rem;
 }
 
-.ch-emu-input {
+.ch-widget-input {
   width: 100%;
   box-sizing: border-box;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -33,19 +33,19 @@
   color: var(--ch-text);
 }
 
-.ch-emu-input:focus {
+.ch-widget-input:focus {
   outline: 2px solid var(--ch-accent);
   outline-offset: 1px;
 }
 
-.ch-emu-presets {
+.ch-widget-presets {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
   margin: 0.7rem 0;
 }
 
-.ch-emu-preset {
+.ch-widget-preset {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.8rem;
   padding: 0.25rem 0.55rem;
@@ -56,18 +56,18 @@
   cursor: pointer;
 }
 
-.ch-emu-preset:hover {
+.ch-widget-preset:hover {
   border-color: var(--ch-accent);
 }
 
-.ch-emu-verdict {
+.ch-widget-verdict {
   margin-top: 0.7rem;
   padding: 0.7rem;
   border-radius: 6px;
   border: 1px solid var(--ch-border);
 }
 
-.ch-emu-badge {
+.ch-widget-badge {
   display: inline-block;
   font-weight: 600;
   font-size: 0.72rem;
@@ -79,67 +79,52 @@
   background: var(--ch-muted);
 }
 
-.ch-emu-verdict--block .ch-emu-badge,
-.ch-emu-badge--block {
+.ch-widget-verdict--block .ch-widget-badge {
   background: var(--ch-block);
 }
 
-.ch-emu-verdict--warn .ch-emu-badge,
-.ch-emu-badge--warn {
+.ch-widget-verdict--warn .ch-widget-badge {
   background: var(--ch-warn);
 }
 
-.ch-emu-verdict--pass .ch-emu-badge,
-.ch-emu-verdict--allow .ch-emu-badge,
-.ch-emu-badge--pass,
-.ch-emu-badge--allow {
+.ch-widget-verdict--pass .ch-widget-badge,
+.ch-widget-verdict--allow .ch-widget-badge,
+.ch-widget-verdict--rewrite .ch-widget-badge {
   background: var(--ch-pass);
 }
 
-.ch-emu-verdict--subset-exceeded .ch-emu-badge,
-.ch-emu-badge--subset-exceeded {
+.ch-widget-verdict--subset-exceeded .ch-widget-badge {
   background: var(--ch-subset);
 }
 
-.ch-emu-message {
+.ch-widget-badge-recorded {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-style: italic;
+  color: var(--ch-muted);
+}
+
+.ch-widget-message {
   margin: 0.5rem 0 0;
   white-space: pre-wrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.85rem;
 }
 
-.ch-emu-rewrite {
+.ch-widget-rewrite {
   display: block;
   margin-top: 0.4rem;
   color: var(--ch-accent);
 }
 
-.ch-emu-canned {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.ch-emu-canned th,
-.ch-emu-canned td {
-  text-align: left;
-  padding: 0.4rem 0.5rem;
-  border-bottom: 1px solid var(--ch-border);
-  vertical-align: top;
-}
-
-.ch-emu-canned-input {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.85rem;
-}
-
-.ch-emu-note {
+.ch-widget-note {
   margin: 0.5rem 0 0;
   font-size: 0.8rem;
   color: var(--ch-muted);
 }
 
-html.quarto-dark .ch-emu,
-[data-bs-theme="dark"] .ch-emu {
+html.quarto-dark .ch-widget,
+[data-bs-theme="dark"] .ch-widget {
   --ch-surface: #161b22;
   --ch-border: #30363d;
   --ch-text: #e6edf3;
@@ -151,7 +136,7 @@ html.quarto-dark .ch-emu,
   --ch-subset: #a371f7;
 }
 
-html.quarto-dark .ch-emu-input,
-[data-bs-theme="dark"] .ch-emu-input {
+html.quarto-dark .ch-widget-input,
+[data-bs-theme="dark"] .ch-widget-input {
   background: #0d1117;
 }

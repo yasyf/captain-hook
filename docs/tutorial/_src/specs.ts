@@ -6,7 +6,7 @@ export type Action = "block" | "warn" | "allow" | "rewrite" | "pass" | "subset-e
 export interface Verdict {
   action: Action;
   message: string | null;
-  command: string | null;
+  rewritten: string | null;
 }
 
 export type Condition =
@@ -15,21 +15,28 @@ export type Condition =
   | { kind: "Runs"; argv: string[] }
   | { kind: "FilePath"; patterns: string[]; project_only: boolean }
   | { kind: "Content"; pattern: string; project_only: boolean }
-  | { kind: "UsedSkill"; names: string[] }
+  | { kind: "Waiting" }
   | { kind: "Not"; condition: Condition }
   | { kind: "Or"; conditions: Condition[] }
   | { kind: "And"; conditions: Condition[] };
+
+export interface RewriteSpec {
+  pattern: string;
+  replace: string;
+  note: string | null;
+}
 
 export interface SerializedHook {
   events: string[];
   message: string | null;
   block: boolean;
+  rewrite?: RewriteSpec;
   only_if: Condition[];
   skip_if: Condition[];
 }
 
 export interface SessionState {
-  usedSkills?: string[];
+  waiting?: boolean;
 }
 
 export interface EventInput {
