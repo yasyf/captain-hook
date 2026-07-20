@@ -8,15 +8,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from captain_hook import Allow, Block, Event, HookResult, Input, Rewrite, Tool, on
+from captain_hook.cmd import Target
 from captain_hook.types import Command as CommandCondition
 from captain_hook.util import fs
 from captain_hook.util.globbing import GLOB_LIMIT
 from captain_hook.util.paths import resolve_target
 from captain_hook.util.scratch import is_scratch_path
+from captain_hook.util.shell import emit_token, unescape_shell
 from captain_hook.util.vcs import contains_repo, in_vcs_repo, is_repo_root
 
 if TYPE_CHECKING:
-    from captain_hook.cmd import Call, Target
+    from captain_hook.cmd import Call
     from captain_hook.events import PreToolUseEvent
 
 
@@ -86,7 +88,9 @@ def check_target(
     evt: PreToolUseEvent, target: Target, cwd: Path | None, *, rewritable: bool
 ) -> HookResult | Recoverable | None:
     if not target.verified:
-        return unrecoverable(evt, target.raw)
+        # Classify the unverified spelling as a literal path (a `$FOO` file under cwd), so a
+        # scratch or in-repo cwd stays allowed; emittable() keeps the target out of any rewrite.
+        target = Target(unescape_shell(target.raw), target.raw, cwd)
     if not target.has_glob:
         return check_resolved(evt, target.value or target.raw, target.path, rewritable=rewritable)
     expansion = target.expand()
@@ -124,6 +128,13 @@ def check_call(evt: PreToolUseEvent, call: Call, *, rewritable: bool) -> HookRes
     return recovery
 
 
+def emittable(target: Target) -> bool:
+    # Safe to trash-rewrite only when re-emission matches what the classification assumed —
+    # quoted glob/tilde/backslash and unexpanded $/`/{} spellings diverge, so they refuse.
+    token = target.value if target.value is not None else target.raw
+    return emit_token(token, plain_words=target.raw == target.value) is not None
+
+
 RECOVERABLE_RM: Block | Rewrite = Rewrite(pattern="trash") if trash_binary() else Block(pattern="repository")
 ROOT_RM: Block = Block(pattern="filesystem root") if trash_binary() else Block(pattern="repository")
 
@@ -137,6 +148,9 @@ ROOT_RM: Block = Block(pattern="filesystem root") if trash_binary() else Block(p
         Input(command="bash -c 'rm -rf /'", cwd="/"): Block(pattern="repository"),
         Input(command="bash -lc 'rm -rf /'", cwd="/"): Block(pattern="repository"),
         Input(command="sh -xc 'rm -rf /'", cwd="/"): Block(pattern="repository"),
+        Input(command="rm $FOO", cwd="/"): Block(pattern="repository"),
+        Input(command="rm /outside/{a,b}", cwd="/"): Block(pattern="repository"),
+        Input(command="rm foo\\\nbar", cwd="/"): Block(pattern="repository"),
         Input(command="rm -- data.txt", cwd="/"): RECOVERABLE_RM,
         Input(command="sudo rm /foo.txt", cwd="/"): RECOVERABLE_RM,
         Input(command=r"\rm /foo.txt", cwd="/"): RECOVERABLE_RM,
@@ -154,13 +168,16 @@ def guard_rm(evt: PreToolUseEvent) -> HookResult | None:
     trash = trash_binary()
     result: HookResult | None = None
     for call in evt.cmd.calls("rm"):
-        rewritable = trash is not None and call.spliceable and not call.nested
+        # A backslash-newline continuation splits the continued word in the parse, so neither
+        # classification nor re-emission can be trusted with a rewrite.
+        rewritable = trash is not None and call.spliceable and not call.nested and "\\\n" not in call.source.raw
         match check_call(evt, call, rewritable=rewritable):
             case HookResult() as blocked:
                 return blocked
             case Recoverable() as recovery:
                 if (
                     rewritable
+                    and all(emittable(target) for target in call.targets)
                     and (rewritten := call.sub("rm", shlex.quote(trash), args=call.targets, note=recovery.note))
                     is not None
                 ):
