@@ -179,7 +179,7 @@ class NativeTool(CustomCondition):
 class DangerousCommandLine(CustomCommandLineCondition):
     """Matches a native Bash line that runs a destructive command in command position.
 
-    Parses the line with tree-sitter (via ``evt.command_line``) and flags a command whose
+    Parses the line with tree-sitter (via ``evt.cmd``) and flags a command whose
     unwrapped executable is destructive (``rm``/``dd``/``shred``/``truncate``/``mkfs*``),
     is ``sudo``, is a dangerous ``git`` subcommand (``reset``/``clean``/``restore``, or
     ``push`` with a force/delete flag), or a downloader piped into a shell. A ``sh -c '<cmd>'``

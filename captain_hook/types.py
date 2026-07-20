@@ -638,9 +638,9 @@ class CustomCommandLineCondition(CustomCondition):
     """
 
     def check(self, evt: BaseHookEvent) -> bool:
-        if not (cl := evt.command_line):
+        if not (cmd := evt.cmd).raw:
             return False
-        return self.check_command_line(evt, cl)
+        return self.check_command_line(evt, cmd.line)
 
     def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
         raise NotImplementedError

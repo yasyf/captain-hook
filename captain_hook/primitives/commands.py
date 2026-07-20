@@ -173,16 +173,16 @@ def rewrite_command(
     if ast_grep.has_metavar(pattern):
 
         def structural_handler(evt: PreToolUseEvent) -> HookResponse:
-            if not (cl := evt.command_line):
+            if not (raw := evt.cmd.raw):
                 return None
-            new = ast_grep.rewrite(cl.raw, "bash", pattern, replace)
-            return evt.rewrite_command(new, note=note) if new != cl.raw else None
+            new = ast_grep.rewrite(raw, "bash", pattern, replace)
+            return evt.rewrite_command(new, note=note) if new != raw else None
 
         on(Event.PreToolUse, only_if=[Tool("Bash"), *only_if], skip_if=skip_if, tests=tests)(structural_handler)
         return
 
     def regex_handler(evt: PreToolUseEvent) -> HookResponse:
-        return evt.rewrite_command(re.sub(pattern, replace, command), note=note) if (command := evt.command) else None
+        return evt.rewrite_command(re.sub(pattern, replace, raw), note=note) if (raw := evt.cmd.raw) else None
 
     on(Event.PreToolUse, only_if=[Tool("Bash"), Command(pattern), *only_if], skip_if=skip_if, tests=tests)(
         regex_handler
@@ -253,7 +253,7 @@ def rewrite_command_occurrences(
             )
 
         def visit_handler(evt: PreToolUseEvent) -> HookResponse:
-            if not (cl := evt.command_line):
+            if not (cl := evt.cmd.line).raw:
                 return None
             effective_cwd = evt.cwd
             replacements: dict[int, str] = {}
@@ -294,7 +294,7 @@ def rewrite_command_occurrences(
         raise TypeError("rewrite_command_occurrences requires a non-empty block= when block_if is given")
 
     def handler(evt: PreToolUseEvent) -> HookResponse:
-        if not (cl := evt.command_line):
+        if not (cl := evt.cmd.line).raw:
             return None
         if block_if is not None and any(block_if(evt, occ) for occ in cl.occurrences):
             return evt.block(block(evt, cl) if callable(block) else block) if block else None

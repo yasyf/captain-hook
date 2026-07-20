@@ -353,7 +353,7 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
             return bool(evt.file and (not project_only or is_project_file(evt)) and evt.file.matches(*patterns))
         case Command(pattern):
             return bool(
-                (cl := evt.command_line) and any(re.search(pattern, s) for s in (cl.raw, *map(str, cl.commands)))
+                (cmd := evt.cmd).raw and any(re.search(pattern, s) for s in (cmd.raw, *map(str, cmd.line.commands)))
             )
         case Content(pattern, project_only):
             return bool(
@@ -400,7 +400,7 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
         case RanCommand(argv, subagents):
             return evt.ctx.transcript.has_command(*argv, subagents=subagents)
         case Runs(argv):
-            return bool(argv and (cl := evt.command_line) and any(cmd.argv[: len(argv)] == argv for cmd in cl.commands))
+            return bool(argv and (cmd := evt.cmd).raw and any(c.argv[: len(argv)] == argv for c in cmd.line.commands))
         case InPlanMode():
             return evt.permission_mode == "plan" or (
                 (t := evt.ctx.transcript).tool_calls.named("EnterPlanMode").count()
