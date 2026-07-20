@@ -76,10 +76,10 @@
       "repoRoot": "/repo",
       "cases": [
         { "id": "env-secret", "check": "parity", "input": { "tool": "Write", "file": "/repo/.env", "content": "TOKEN=sk-live-abc" } },
-        { "id": "env-example-veto", "check": "parity", "input": { "tool": "Write", "file": "/repo/.env.example", "content": "TOKEN=sk-live-abc" } },
-        { "id": "outside-repo", "check": "parity", "input": { "tool": "Write", "file": "/etc/app/.env", "content": "sk-live-abc" } },
-        { "id": "wrong-path", "check": "parity", "input": { "tool": "Write", "file": "/repo/config.py", "content": "sk-live-abc" } },
-        { "id": "no-secret", "check": "parity", "input": { "tool": "Write", "file": "/repo/.env", "content": "PORT=8080" } },
+        { "id": "env-example-veto", "check": "parity", "input": { "tool": "Write", "file": "/repo/.env.example", "content": "TOKEN=placeholder" } },
+        { "id": "outside-repo", "check": "parity", "input": { "tool": "Write", "file": "/etc/app/.env", "content": "TOKEN=sk-live-abc" } },
+        { "id": "wrong-path", "check": "parity", "input": { "tool": "Write", "file": "/repo/src/config.py", "content": "TOKEN=sk-live-abc" } },
+        { "id": "no-secret", "check": "parity", "input": { "tool": "Write", "file": "/repo/.env", "content": "just some notes here" } },
         { "id": "read-ignored", "check": "parity", "input": { "tool": "Read", "file": "/repo/.env" } }
       ]
     },
@@ -109,46 +109,124 @@
         }
       ]
     },
-    "first_block_recorded": {
+    "rm_walk": {
       "mode": "canned",
-      "fragment": "tutorial_first_block",
+      "pack": "general",
+      "event": "PreToolUse",
+      "cases": [
+        {
+          "id": "recoverable-rewrite",
+          "verified": false,
+          "note": "rewrite target is the local trash binary — recorded on macOS, not engine-hermetic",
+          "input": { "tool": "Bash", "command": "rm foo.txt", "cwd": "/" },
+          "verdict": {
+            "action": "rewrite",
+            "message": "Rewrote rm to trash: 'foo.txt' resolves outside any git/jj repository, so rm would be unrecoverable. The targets were moved to the macOS Trash instead — restorable via Finder (Put Back). If permanent deletion is truly intended, ask the user to run the rm themselves.",
+            "rewritten": "/usr/bin/trash foo.txt"
+          }
+        },
+        {
+          "id": "filesystem-root",
+          "verified": false,
+          "note": "root-block message adapts to trash availability — illustrative",
+          "input": { "tool": "Bash", "command": "rm -rf /", "cwd": "/" },
+          "verdict": {
+            "action": "block",
+            "message": "BLOCKED: '/' is the filesystem root — deleting it destroys the entire system. If this is really intended, ask the user to run it themselves.",
+            "rewritten": null
+          }
+        },
+        {
+          "id": "glob-over-limit",
+          "verified": true,
+          "input": { "tool": "Bash", "command": "rm -rf /etc/*", "cwd": "/" },
+          "verdict": {
+            "action": "block",
+            "message": "BLOCKED: the glob '/etc/*' matches more than 10 files — an easy way to delete far more than intended. List the matches first (ls /etc/*), narrow the pattern, or name a directory explicitly with rm -r <dir>.",
+            "rewritten": null
+          }
+        },
+        {
+          "id": "command-substitution",
+          "verified": true,
+          "input": { "tool": "Bash", "command": "rm $(ls)", "cwd": "/" },
+          "verdict": {
+            "action": "block",
+            "message": "BLOCKED: a command substitution supplies rm targets in 'rm $(ls)', so they cannot be verified against any git/jj repository or scratch exemption. Expand the substitution to explicit paths first, or ask the user to run it themselves.",
+            "rewritten": null
+          }
+        },
+        {
+          "id": "scratch-allowed",
+          "verified": true,
+          "input": { "tool": "Bash", "command": "rm /tmp/x.py", "cwd": "/" },
+          "verdict": { "action": "pass", "message": null, "rewritten": null }
+        }
+      ]
+    },
+    "test_replay": {
+      "mode": "canned",
+      "fragment": "tutorial_first_block_tested",
+      "event": "PreToolUse",
       "cases": [
         {
           "id": "git-stash",
-          "event": "PreToolUse",
           "verified": true,
           "input": { "tool": "Bash", "command": "git stash" },
           "verdict": {
             "action": "block",
-            "message": "BLOCKED: git stash hides work the rest of the team can't see. commit to a branch or use jj instead.",
+            "message": "BLOCKED: Stashing loses uncommitted agent work. Commit to a WIP branch instead.",
             "rewritten": null
           }
         },
         {
-          "id": "stash-pop",
-          "event": "PreToolUse",
+          "id": "cd-and-stash",
           "verified": true,
-          "input": { "tool": "Bash", "command": "git stash pop" },
+          "input": { "tool": "Bash", "command": "cd /tmp && git stash" },
           "verdict": {
             "action": "block",
-            "message": "BLOCKED: git stash hides work the rest of the team can't see. commit to a branch or use jj instead.",
+            "message": "BLOCKED: Stashing loses uncommitted agent work. Commit to a WIP branch instead.",
             "rewritten": null
           }
         },
         {
-          "id": "unrelated",
-          "event": "PreToolUse",
+          "id": "echo-quoted",
           "verified": true,
-          "input": { "tool": "Bash", "command": "ls -la" },
+          "input": { "tool": "Bash", "command": "echo \"git stash\"" },
+          "verdict": {
+            "action": "block",
+            "message": "BLOCKED: Stashing loses uncommitted agent work. Commit to a WIP branch instead.",
+            "rewritten": null
+          }
+        },
+        {
+          "id": "git-status",
+          "verified": true,
+          "input": { "tool": "Bash", "command": "git status" },
           "verdict": { "action": "pass", "message": null, "rewritten": null }
         },
         {
-          "id": "rm-walk",
-          "event": "PreToolUse",
-          "verified": false,
-          "note": "placeholder — illustrative recording, real content lands in a later phase",
-          "input": { "tool": "Bash", "command": "rm -rf build/" },
+          "id": "wip-commit",
+          "verified": true,
+          "input": { "tool": "Bash", "command": "git commit -m \"wip\"" },
           "verdict": { "action": "pass", "message": null, "rewritten": null }
+        }
+      ]
+    },
+    "llm_gate_teaser": {
+      "mode": "canned",
+      "event": "PreToolUse",
+      "cases": [
+        {
+          "id": "destructive-migration",
+          "verified": false,
+          "note": "illustrative — an LLM verdict is non-deterministic, shown non-live",
+          "input": { "tool": "Bash", "command": "psql -f migrations/0007_drop_orders.sql" },
+          "verdict": {
+            "action": "block",
+            "message": "This migration drops the orders table with no backup or guard — irreversible in production. Snapshot the table first, or gate the drop behind an explicit confirmation.",
+            "rewritten": null
+          }
         }
       ]
     }

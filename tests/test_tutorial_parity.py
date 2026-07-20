@@ -22,13 +22,17 @@ MATRIX = json.loads((SRC / "matrix.json").read_text())
 sys.path.insert(0, str(SCRIPTS))
 
 from build_emulator import BANNER_PREFIX, BUNDLE, src_hash  # noqa: E402
-from widget_compiler import compile_fragment  # noqa: E402
+from widget_compiler import compile_fragment, load_hooks  # noqa: E402
 
+import captain_hook  # noqa: E402
 from captain_hook.app import _state  # noqa: E402
 from captain_hook.dispatch import dispatch  # noqa: E402
+from captain_hook.loader import discover_pack  # noqa: E402
 from captain_hook.testing.helpers import input_to_event, isolated_state_root  # noqa: E402
 from captain_hook.testing.types import Input  # noqa: E402
 from captain_hook.types import Event  # noqa: E402
+
+PACKS_DIR = Path(captain_hook.__file__).parent / "builtin_packs"
 
 NODE = shutil.which("node")
 requires_node = pytest.mark.skipif(NODE is None and not os.environ.get("CI"), reason="node absent and CI unset")
@@ -58,13 +62,17 @@ def normalize(envelope: dict[str, Any] | None) -> dict[str, Any]:
     return {"action": "pass", "message": None, "rewritten": None}
 
 
-def python_verdict(fragment: str, event: Event, case_input: dict[str, Any]) -> dict[str, Any]:
-    """Compile a fragment's hooks and run one input through the real dispatch engine, isolated."""
+def canned_verdict(widget: dict[str, Any], event: Event, case: dict[str, Any]) -> dict[str, Any]:
+    """Register a canned widget's hooks (a fragment or a shipped pack) and dispatch one input, isolated."""
     saved = list(_state.hooks)
     try:
-        compile_fragment(FRAGMENTS / f"{fragment}.py")
+        _state.hooks.clear()
+        if "pack" in widget:
+            discover_pack(widget["pack"], PACKS_DIR / widget["pack"] / "hooks")
+        else:
+            load_hooks(FRAGMENTS / f"{widget['fragment']}.py")
         with isolated_state_root():
-            return normalize(dispatch(event, input_to_event(event, Input(**case_input))))
+            return normalize(dispatch(event, input_to_event(event, Input(**case["input"]))))
     finally:
         _state.hooks[:] = saved
 
@@ -171,8 +179,8 @@ def test_canned_verdicts(widget_id: str, case: dict[str, Any]) -> None:
     if not case.get("verified"):
         pytest.skip("illustrative recording, not engine-verified")
     widget = MATRIX["widgets"][widget_id]
-    verdict = python_verdict(widget["fragment"], Event[case.get("event", "PreToolUse")], case["input"])
-    assert verdict == case["verdict"]
+    event = Event[case.get("event", widget.get("event", "PreToolUse"))]
+    assert canned_verdict(widget, event, case) == case["verdict"]
 
 
 REFUSALS = {
@@ -241,3 +249,21 @@ def test_compiler_lowers_rewrite(tmp_path: Path) -> None:
     )
     assert hook["rewrite"] == {"pattern": r"^cat\s+(\S+)$", "replace": r"ccx read \1 --full", "note": "x"}
     assert {c["kind"] for c in hook["only_if"]} == {"Tool", "Command"}
+
+
+INLINE_TEST_FRAGMENTS = ["tutorial_first_block_tested", "tutorial_runs_guard"]
+
+
+@pytest.mark.parametrize("fragment", INLINE_TEST_FRAGMENTS)
+def test_fragment_inline_tests(fragment: str) -> None:
+    """Run a fragment's own ``tests={...}`` through the real engine, loaded via the compiler seam."""
+    from captain_hook.testing.helpers import run_inline_tests
+
+    saved = list(_state.hooks)
+    try:
+        load_hooks(FRAGMENTS / f"{fragment}.py")
+        results = run_inline_tests()
+    finally:
+        _state.hooks[:] = saved
+    assert results, f"{fragment} registered no inline tests"
+    assert [(name, msg) for name, _status, ok, msg in results if not ok] == []
