@@ -16,6 +16,7 @@ from captain_hook.loader import discover_pack
 from captain_hook.testing.helpers import input_to_event
 from captain_hook.testing.types import Input
 from captain_hook.types import Event
+from captain_hook.util import globbing
 from captain_hook.util.scratch import is_scratch_path
 from captain_hook.util.shell import emit_token
 
@@ -511,7 +512,6 @@ class TestRmTrashRewrite:
             (outside / f"entry-{index}").write_text("")
         repo = outside / "repo"
         (repo / ".git").mkdir(parents=True)
-        deletions = sys.modules["captain_hook._packs.general.deletions"]
 
         def ordered_iglob(
             pattern: str,
@@ -523,8 +523,8 @@ class TestRmTrashRewrite:
             assert (pattern, root_dir, recursive, include_hidden) == ("*", str(outside), False, False)
             return iter([*(f"entry-{index}" for index in range(12)), repo.name])
 
-        monkeypatch.setattr(deletions.glob, "iglob", ordered_iglob)
-        expansion = deletions.glob_matches("*", outside, limit=10)
+        monkeypatch.setattr(globbing.glob, "iglob", ordered_iglob)
+        expansion = globbing.glob_matches("*", outside, limit=10)
         assert len(expansion.matches) == 11
         assert repo.name not in expansion.matches
 
