@@ -4,47 +4,114 @@ toc: false
 body-classes: "gd-homepage"
 ---
 
-Go from nothing to a hook firing in Claude Code with one command. It creates `.claude/hooks/`, wires Claude Code's settings, drops an example hook, and installs the skills:
+::: {.grid}
+
+::: {.g-col-12 .g-col-md-6}
+Claude Code hooks are shell commands wired through JSON. I wanted them to be what every other guardrail in a Python repo already is: typed functions with tests. capt-hook gives you `block_command`, `gate`, and friends — one `init`, zero settings surgery.
 
 ```bash
 uvx capt-hook init
 ```
 
-![Terminal running 'uvx capt-hook test' — a hook blocks git push --force and both inline tests pass](docs/assets/demo.png){width=700}
+- ✓ **Declarative Python hooks** — conditions and primitives, not regex-in-JSON
+- ✓ **Tested inline** — every hook carries `tests={...}`; `capt-hook test` runs them
+- ✓ **Zero wiring** — `init` scaffolds `.claude/hooks/` and wires settings itself
 
-::: {.callout-note}
-No install step. Every command runs through [`uvx`](https://docs.astral.sh/uv/). `uvx capt-hook …` fetches captain-hook into a throwaway environment and runs it, so it never enters your `pyproject.toml`.
+[{{< icon arrow-right >}} Quickstart](docs/getting-started/quickstart.qmd){.btn .btn-primary}
+[{{< icon arrow-right >}} Tutorial](docs/tutorial/index.qmd){.btn .btn-outline-primary}
 :::
 
-[{{< icon arrow-right >}} Installation](docs/getting-started/installation.qmd){.btn .btn-primary}
-[{{< icon arrow-right >}} Quickstart](docs/getting-started/quickstart.qmd){.btn .btn-outline-primary}
-
----
-
+::: {.g-col-12 .g-col-md-6}
 <!-- gd-embed-fragment: canonical_hook -->
+:::
 
-A few lines stop your agent from calling a UI change done before it looked at it. Each hook is declarative Python. It has an event, conditions, and an action.
+:::
+
+{{< termshow file="docs/assets/demo" autoplay="true" >}}
+
+## Block force-push before it runs
+
+One bad Bash call rewrites shared history, and by the time you spot it in the transcript it already ran. Declare the block once, tests inline:
+
+```python
+# .claude/hooks/safety.py
+from captain_hook import Allow, Block, Input, block_command
+
+block_command(
+    ["git", "push", "--force"],
+    reason="Force-pushing rewrites shared history",
+    hint="Use `git push --force-with-lease` instead",
+    tests={
+        Input(command="git push --force"): Block(),
+        Input(command="git push origin main"): Allow(),
+    },
+)
+```
+
+The next `git push --force` never executes: the agent sees the reason plus the hint, and reaches for `--force-with-lease` instead. And when a regex isn't enough, walk the parse — the shipped `general` pack guards `rm` exactly like this:
+
+```python
+for call in evt.command.calls("rm"):
+    if call.targets.expand().exhausted:
+        return evt.block("rm targets too broad to verify")
+    return call.sub("rm", "trash", args=call.targets)
+```
+
+`evt.command` is the parsed command line — every `rm` across `&&` and pipes, each target resolved against the working directory, the rewrite quote-safe. [Learn the walk in the tutorial.](docs/tutorial/index.qmd)
+
+## Turn repeated corrections into rules Claude can't forget
+
+You've typed "use uv, not pip" in a dozen sessions, and session thirteen makes the same mistake. The session reviewer reads each transcript as the session ends, keeps the corrections that are standing rules, and — once a pattern proves itself — opens a PR that codifies it as a hook:
+
+```bash
+uvx capt-hook status
+```
+
+The dashboard stages every correction from first sighting to open PR. You review the PR like any other; merged hooks enforce the rule from then on. [See the corrections lifecycle.](docs/guide/session-reviewer.qmd)
+
+## Gate "done" until the tests actually pass
+
+The agent declares victory while the suite is red. A Stop gate holds the line:
+
+```python
+# .claude/hooks/quality.py
+from captain_hook import RanCommand, TouchedFile, gate
+
+gate(
+    "You edited Python files but never ran the tests. Run `uv run pytest` before finishing.",
+    only_if=[TouchedFile("**/*.py")],
+    skip_if=[RanCommand(r"\bpytest\b")],
+)
+```
+
+The agent can't end the turn until a pytest run shows up in the transcript, and the gate stands down on its own once one does. [More Stop-gate patterns.](docs/guide/workflows.qmd)
 
 ---
 
 ::: {.grid}
 
-::: {.g-col-12 .g-col-md-4}
-{{< icon shield-check >}} **Block footguns before they run**
-
-Declare `git push --force` and `rm -rf` off-limits with one `block_command`, tests inline. [Command safety](docs/examples/command-safety.qmd)
+::: {.g-col-6 .g-col-md-3}
+### [Tutorial](docs/tutorial/index.qmd)
+Block your first command in the browser — live widgets, verified against the real engine.
 :::
 
-::: {.g-col-12 .g-col-md-4}
-{{< icon message-square-text >}} **Learn hooks from your corrections**
-
-The session reviewer mines each transcript and opens PRs that codify your standing rules. [Session reviewer](docs/guide/session-reviewer.qmd)
+::: {.g-col-6 .g-col-md-3}
+### [Guide](docs/guide/index.qmd)
+How-to pages for writing, testing, and shipping hooks.
 :::
 
-::: {.g-col-12 .g-col-md-4}
-{{< icon list-checks >}} **Gate "done" on green tests**
-
-Stop gates hold the agent until the suite ran and the artifacts exist. [Workflows](docs/guide/workflows.qmd)
+::: {.g-col-6 .g-col-md-3}
+### [Examples](docs/examples/index.qmd)
+Runnable hooks with inline tests, one per pattern.
 :::
 
+::: {.g-col-6 .g-col-md-3}
+### [Reference](docs/reference/index.qmd)
+Every class, condition, and CLI command, generated from source.
+:::
+
+:::
+
+::: {.callout-note}
+Every command on this site is the full `uvx capt-hook ...` form — copy-paste from a clean machine and it runs.
 :::

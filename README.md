@@ -57,7 +57,16 @@ block_command(
 )
 ```
 
-The next `git push --force` never executes: the agent sees `BLOCKED: Force-pushing rewrites shared history` plus the hint, and reaches for `--force-with-lease` instead. `rm -rf` is one more `block_command` away.
+The next `git push --force` never executes: the agent sees `BLOCKED: Force-pushing rewrites shared history` plus the hint, and reaches for `--force-with-lease` instead. And when a pattern can't decide, walk the parse — this is the heart of the shipped `rm` guard:
+
+```python
+for call in evt.command.calls("rm"):
+    if call.targets.expand().exhausted:
+        return evt.block("rm targets too broad to verify")
+    return call.sub("rm", "trash", args=call.targets)
+```
+
+`evt.command` is the parsed command line: every `rm` across `&&` and pipes, each target resolved against the working directory, the rewrite quote-safe.
 
 ### Turn repeated corrections into rules Claude can't forget
 
@@ -88,6 +97,7 @@ The agent can't end the turn until a pytest run shows up in the transcript, and 
 
 ## More in the docs
 
+- **Interactive tutorial** — block your first command in the browser, verified against the real engine — [start it](https://yasyf.github.io/captain-hook/docs/tutorial/index.html)
 - **Session reviewer** — the full corrections lifecycle, from transcript to merged hook PR — [guide](https://yasyf.github.io/captain-hook/docs/guide/session-reviewer.html)
 - **Conditions** — typed filters over tools, files, commands, and transcript history — [guide](https://yasyf.github.io/captain-hook/docs/guide/conditions.html)
 - **LLM hooks** — gate on a model's verdict when a regex can't decide — [guide](https://yasyf.github.io/captain-hook/docs/guide/llm-hooks.html)
