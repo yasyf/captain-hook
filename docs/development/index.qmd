@@ -2,7 +2,7 @@
 title: "Development"
 ---
 
-Working on captain-hook itself. For using captain-hook in your project, see [Installation](../getting-started/installation.qmd).
+Working on captain-hook itself. For using captain-hook in your project, see [Installation](../getting-started/quickstart.qmd).
 
 ## Setup
 

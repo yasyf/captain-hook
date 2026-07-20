@@ -24,8 +24,7 @@ hero:
 sections:
   - title: Getting Started
     dir: docs/getting-started
-    index: true
-    index_columns: 2
+    index: false
   - title: Tutorial
     dir: docs/tutorial
     navbar_after: Getting Started

@@ -81,4 +81,4 @@ diff belongs in front of a reviewer. The framework you install is audited at the
 PyPI layer. The hooks you author are audited at the pull-request layer, by you.
 
 For how the wiring is generated and what each part does, see
-[Project Structure & Wiring](../getting-started/project-structure.qmd).
+[Project Structure & Wiring](how-it-works.qmd).

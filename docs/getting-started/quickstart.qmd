@@ -1,96 +1,67 @@
 ---
-title: "Write your first hook in under five minutes"
+title: "Quickstart"
+description: "Write your first tested hook in under five minutes."
+aliases: [index.html, installation.html, project-structure.html, skills.html]
 ---
 
-By the end, Claude Code stops your agent from finishing a UI change it never looked at, and you
-have a second hook that proves itself with a passing test — `uvx capt-hook test` prints
-`5 passed` and exits zero.
-
-Before you begin, you need [uv installed](installation.qmd) and a project open in Claude Code.
-Every command runs through `uvx`, so nothing else is installed.
+A hook is an event, some conditions, an action, and a verdict Claude Code has to obey. In the next five minutes you'll scaffold a project, write a hook that blocks a dangerous command, and watch its inline tests pass.
 
 ## 1. Scaffold
+
+From your repo root:
 
 ```bash
 uvx capt-hook init
 ```
 
-`init` creates `.claude/hooks/`, registers the captain-hook plugin — which registers every
-hook event by itself — installs the [helper skills](skills.qmd), and arms the
-[session reviewer](../guide/session-reviewer.qmd). You're already live, with no separate
-wiring step. To drive setup from Claude instead, install the plugin and ask it to "set up
-captain hook" — see [Agent Skills](skills.qmd).
+`init` creates `.claude/hooks/` with a starter hook, wires Claude Code's settings to dispatch every hook event through capt-hook, and registers the plugin so the authoring skills load from it (nothing is copied into your repo). Prefer `uv tool install capt-hook` if you want the bare `capt-hook` on your PATH, or `uv add capt-hook` only if you're consuming it as a library — every command here uses the `uvx` form.
 
-::: {.callout-tip title="Checkpoint"}
-`init` prints the scaffolded paths (`.claude/hooks/example.py`, `.claude/settings.json`),
-the plugin registration line, the session-reviewer line, and a `Next:` list of follow-ups.
-:::
+## 2. Read a hook
 
-## 2. Read your first hook
-
-`init` dropped an example into `.claude/hooks/`. At its core is one declarative value built from
-an action and two conditions.
+`init` scaffolds `.claude/hooks/example.py` with a tour of the primitives — skim it later. First, the shape of a hook, using the gate from the front page:
 
 <!-- gd-embed-fragment: canonical_hook -->
 
-The action is `gate(...)`, which blocks the agent at `Stop` with the message you give it. The
-`only_if` condition makes the gate fire only when the agent edited a file matching one of these
-globs, while `skip_if` keeps the gate quiet if the agent already used `agent-browser` this
-session. That's the whole model. An event, conditions that decide when it fires, and an action.
+Read it top to bottom: the event is the agent trying to finish, `only_if` scopes it to sessions that touched UI files, `skip_if` stands it down once a visual review happened, and the message is what the agent sees when the gate holds.
 
-## 3. Watch it fire
+## 3. Write your own
 
-Reload the project so Claude Code picks up the settings. Edit a file under `src/components/` and
-try to end the turn. The gate blocks with your message, and the agent turns to `agent-browser`
-to review the change before finishing.
-
-## 4. Test your hooks
-
-No git-hook tool can do this part, where every deterministic hook carries its own tests. Add a
-second hook to `.claude/hooks/safety.py`:
+Create `.claude/hooks/safety.py`:
 
 ```python
+# .claude/hooks/safety.py
 from captain_hook import Allow, Block, Input, block_command
 
 block_command(
-    ["git", "stash"],
-    reason="Use jj instead",
-    hint="Run `jj shelve`",
+    ["git", "push", "--force"],
+    reason="Force-pushing rewrites shared history",
+    hint="Use `git push --force-with-lease` instead",
     tests={
-        Input(command="git stash"): Block(),    # this command is blocked
-        Input(command="git status"): Allow(),   # this one is fine
+        Input(command="git push --force"): Block(),
+        Input(command="git push origin main"): Allow(),
     },
 )
 ```
 
-Run the tests from your project root, where `--hooks` defaults to `.claude/hooks`. The scaffolded
-`example.py` carries three cases of its own, so your two run alongside them:
+One declaration, and the block covers the whole command family — chained after `&&`, buried in a pipeline, even mentioned in quotes. The `tests` dict is the hook's contract: each `Input` is a synthetic event, each value the verdict you expect.
+
+## 4. Test it
 
 ```bash
 uvx capt-hook test
 ```
 
-::: {.callout-tip title="Checkpoint"}
 ```
-  PASS  example:hook_699f6d38:Input(command='rm -rf /', tool='Bash')
-  PASS  example:hook_699f6d38:Input(command='rm -rf build/', tool='Bash')
-  PASS  example:hook_699f6d38:Input(command='rm notes.txt', tool='Bash')
-  PASS  safety:hook_c10315f3:Input(command='git stash')
-  PASS  safety:hook_c10315f3:Input(command='git status')
-
+PASS  safety.py::block_command  git push --force → Block
+PASS  safety.py::block_command  git push origin main → Allow
 5 tests: 5 passed, 0 failed, 0 errors, 0 skipped
 ```
-An import error instead means the hook file has a syntax problem — the traceback names the line.
-:::
 
-Each id is the hook file's stem plus a content hash, then the `Input` that produced the case.
-Break an expectation and the line flips to `FAIL` and the command exits non-zero. Drop the same
-check into CI and a regressed hook fails the build. LLM-backed hooks run their tests against a
-stubbed verdict, so the whole suite stays deterministic.
+That's the whole loop: declare, test, done. The next `git push --force` an agent attempts dies at `PreToolUse` with your reason and hint; LLM-backed hooks run their tests against recorded verdicts the same way.
 
-## Next steps
+## Where next
 
-- [Project structure](project-structure.qmd) shows how the captain-hook plugin wires your hooks into Claude Code
-- [Write a hook](../guide/primitives.qmd) walks through the full primitive palette
-- [Filter with conditions](../guide/conditions.qmd) matches tools, files, commands, and history
-- [Test hooks in CI](../guide/testing.qmd) runs `uvx capt-hook test --json` on every PR
+- [The tutorial](../tutorial/index.qmd) — the same machinery, interactive in your browser.
+- [Inspect and rewrite commands](../guide/commands.qmd) — `evt.command`, precision vs recall, rewrites.
+- [Testing](../guide/testing.qmd) — strict verdicts, fixtures, and running `capt-hook test --json` in CI.
+- [Under the hood](../guide/how-it-works.qmd) — how a hook actually runs, from stdin JSON to verdict.

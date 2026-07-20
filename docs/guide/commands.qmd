@@ -1,0 +1,130 @@
+---
+title: "Inspect and rewrite commands"
+description: "Match, question, walk, and rewrite the Bash command an agent is about to run."
+---
+
+Every Bash-carrying event gives you the parsed command line as `evt.command` — a `Cmd` you can match against, query, walk call by call, and rewrite. `evt.cmd` is the same object, shorthand. The raw text, when you want the string itself, is `evt.command.raw` (or `str(evt.command)`).
+
+## Block a command family
+
+`block_command` compiles a deliberately conservative match: it searches the raw line *and* each parsed command's argv join, so the command is caught anywhere in a `&&` chain or pipeline — and a quoted mention like `echo "git stash"` blocks too. For a safety hook that's the right trade: false positives are cheap, false negatives are not.
+
+```python
+from captain_hook import Allow, Block, Input, block_command
+
+block_command(
+    ["git", "stash"],
+    reason="Stashing loses uncommitted agent work",
+    hint="Commit to a WIP branch instead",
+    tests={
+        Input(command="cd /tmp && git stash"): Block(),
+        Input(command="git status"): Allow(),
+    },
+)
+```
+
+Pass a raw string when you need a precise pattern — `r"git\s+push\s+--force(?!-)"` blocks a force-push while allowing `--force-with-lease`. The conservative match also covers text the shell parser can't structure (comments, malformed lines): the raw regex still fires.
+
+## Match the exact program
+
+When false positives break real workflows, match structure instead of text. `Runs` matches the argv prefix of any parsed command in the line — `git commit -m "git stash"` and `echo git stash` don't fire, because there the words are arguments, not a command:
+
+```python
+from captain_hook import Event, Runs, hook
+
+hook(
+    Event.PreToolUse,
+    "BLOCKED: Stashing loses uncommitted agent work.",
+    only_if=[Runs("git", "stash")],
+    block=True,
+)
+```
+
+`Runs` is not wrapper-transparent: `sudo git stash` is `sudo`'s argv, so it doesn't match. That's the precision you asked for — cover wrappers with an extra entry (`Runs("sudo", "git", "stash")`) or fall back to the conservative pattern. [The tutorial walks this tradeoff live.](../tutorial/02-command-vs-runs.qmd)
+
+::: {.callout-warning}
+Two `Command` classes exist: `captain_hook.types.Command` is the regex *condition*; top-level `captain_hook.Command` is the parsed-command *dataclass* re-exported from `cc_transcript`. Import the condition from `captain_hook.types` — passing the other one to `only_if` fails at registration.
+:::
+
+## Ask questions of the parsed line
+
+For one-off predicates, the query surface on `evt.command.q` beats hand-rolled string checks:
+
+```python
+from captain_hook import Event, on
+
+@on(Event.PreToolUse)
+def pin_pytest_runner(evt):
+    if (q := evt.command.q).runs("pytest") and not q.runs("uv"):
+        return evt.block("Run the suite via `uv run pytest` so the project venv is used.")
+    return None
+```
+
+`q.runs`, `q.has_subcommand`, `q.contains_token`, and `q.uses_redirect` cover most questions; `evt.command.line` exposes the full `CommandLine` (`.commands`, `.primary`, `.head`) when you need the structure itself.
+
+## Walk the calls
+
+`evt.command.calls(name)` yields every invocation of a program across `;`, `&&`, `||`, and pipes — each a `Call` with dequoted `args`, `flags`, `wrappers`, and resolved `targets`:
+
+```python
+for call in evt.command.calls("curl"):
+    if "-k" in call.flags:
+        return evt.block("curl -k disables TLS verification — drop the flag or pin a CA.")
+```
+
+`call.nested` tells you the call sits inside a `bash -c`/`eval` payload; `call.wrappers` names the `sudo`/`env`/`timeout` chain in front of it.
+
+## Judge the blast radius
+
+`call.targets` resolves the call's operands against the working directory, globs included. Each `Target` carries the predicates a deletion-or-mutation guard needs — `is_repo_root`, `in_repo`, `contains_repo`, `is_home`, `is_scratch` — and `targets.expand()` materializes globs with an explicit `exhausted` flag when the expansion is too broad to verify. Unverifiable targets should fail closed:
+
+```python
+for call in evt.command.calls("rm"):
+    if call.targets.expand().exhausted:
+        return evt.block("rm targets too broad to verify — narrow the glob")
+    return call.sub("rm", "trash", args=call.targets)
+```
+
+This is the heart of the shipped `general` pack's `rm` guard — [the full example](../examples/command-safety.qmd) adds recoverability checks and repo-root protection.
+
+## Rewrite instead of blocking
+
+A rewrite beats a block when a safe variant exists, because the agent's task keeps moving. Three tiers:
+
+`call.sub(old, new, *, args=None, note=None)` swaps one call's program, re-emitting targets quote-safely — the `rm`-to-`trash` line above.
+
+`rewrite_command(pattern, replace)` applies a regex rewrite to the raw line:
+
+```python
+from captain_hook import rewrite_command
+
+rewrite_command(
+    r"git push --force\b(?!-)",
+    "git push --force-with-lease",
+    note="Rewrote to --force-with-lease: refuses to clobber unseen remote work.",
+)
+```
+
+The conditional form takes `to=` — a callable receiving the event, returning the replacement line or `None` — for rewrites that depend on the parsed structure. For per-occurrence rewrites inside one line (every `cat` in a pipeline, say), use `rewrite_command_occurrences` — [worked example](../examples/per-occurrence-rewrite.qmd).
+
+## React to commands that already ran
+
+Pre-flight isn't the only hook point. `warn_command` fires on `PostToolUse` — after the command ran — and `RanCommand` matches the session's command history in a Stop gate's `skip_if`:
+
+```python
+from captain_hook import RanCommand, TouchedFile, gate
+
+gate(
+    "You edited Python files but never ran the tests. Run `uv run pytest` before finishing.",
+    only_if=[TouchedFile("**/*.py")],
+    skip_if=[RanCommand(r"\bpytest\b")],
+)
+```
+
+`RanCommand` with argv tokens is wrapper-transparent (`sudo`/`env`/`timeout` are stripped) but launcher-literal — `RanCommand("uv", "run", "pytest")` and `RanCommand("pytest")` are separate entries.
+
+## Where to go next
+
+- [Tutorial: your first block](../tutorial/01-first-block.qmd) and [walk the command](../tutorial/04-walk-the-command.qmd) — the same surfaces, interactive.
+- [Command safety example](../examples/command-safety.qmd) — the full guard with inline tests.
+- [Reference: Files & Commands](../reference/index.qmd) — every `Cmd`/`Call`/`Target` member, generated from source.

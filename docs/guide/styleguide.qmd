@@ -207,7 +207,7 @@ what enforcement needs:
 The skill writes `.claude/hooks/style.py` for Tiers 1 and 2 and `.claude/hooks/style_llm.py`
 for Tier 3, synthesizes inline tests from the guide's own good and bad examples, verifies them
 with `uvx capt-hook test`, and reports every statement including the Tier 4 rows it cannot
-enforce. See [Agent Skills](../getting-started/skills.qmd) for how to invoke it.
+enforce. See [Agent Skills](../getting-started/quickstart.qmd) for how to invoke it.
 
 ::: {.callout-note title="Related"}
 For the full matcher catalog, see [AST Matchers](../reference/matchers.qmd). For running inline tests, see [Test hooks inline](testing.qmd). For change-scoped lint without AST rules, see [Deterministic Primitives](primitives.qmd).
