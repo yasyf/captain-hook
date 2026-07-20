@@ -26,7 +26,6 @@ from captain_hook.types import Event
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from cc_transcript.command import CommandLine as CommandLineType
     from cc_transcript.ids import ToolDigest
     from cc_transcript.tools import FallbackCall, ToolCall
 
@@ -247,13 +246,38 @@ class BaseHookEvent:
     def tool_digest(self) -> ToolDigest | None:
         return self.input.digest if self.tool_name else None
 
-    @property
-    def command(self) -> str | None:
-        return self.input.command if isinstance(self.input, BashCall) else None
+    @cached_property
+    def cmd(self) -> Cmd:
+        """The event's Bash command as a walkable :class:`~captain_hook.cmd.Cmd`.
+
+        Always a ``Cmd`` — an empty or non-Bash command yields one with zero calls — so a handler
+        iterates ``evt.cmd.calls(...)`` or tests ``evt.cmd.call(...)`` without a preceding guard.
+        The raw command text is ``evt.cmd.raw`` (or ``str(evt.cmd)``); ``evt.cmd.q`` and
+        ``evt.cmd.line`` expose the parsed structure. On a rewrite-capable event, rewrites composed
+        via :meth:`~captain_hook.cmd.Call.sub` splice back through it.
+        """
+        from cc_transcript.command import parse_command_line
+
+        from captain_hook.cmd import Cmd
+        from captain_hook.util.shell import safe_parse_command_line
+
+        raw = self.input.command if isinstance(self.input, BashCall) else ""
+        line = safe_parse_command_line(raw)
+        return Cmd(
+            line if line is not None else parse_command_line(""),
+            raw=raw,
+            cwd=self.cwd,
+            event=self if isinstance(self, ToolRewriteEvent) else None,
+        )
 
     @property
-    def command_line(self) -> CommandLineType | None:
-        return None
+    def command(self) -> Cmd:
+        """The event's Bash command as a walkable :class:`~captain_hook.cmd.Cmd` — an alias for :attr:`cmd`.
+
+        Always a ``Cmd`` (empty for a non-Bash or absent command). The raw command text is
+        ``evt.command.raw`` or ``str(evt.command)``.
+        """
+        return self.cmd
 
     @property
     def file(self) -> File | None:
@@ -358,12 +382,6 @@ class ToolHookEvent(BaseHookEvent):
         return self._raw.get("tool_input", {})
 
     @property
-    def command_line(self) -> CommandLineType | None:
-        from cc_transcript.command import parse_command_line
-
-        return parse_command_line(cmd) if (cmd := self.command) else None
-
-    @property
     def content(self) -> str | None:
         match self.input:
             case EditCall(new=new):
@@ -464,9 +482,9 @@ class ToolHookEvent(BaseHookEvent):
         return call.agent_type if isinstance(call := self.input, TaskCall) else None
 
     def command_matches(self, *patterns: str) -> bool:
-        if not (cl := self.command_line) or (cmd := cl.primary) is None:
+        if (primary := self.cmd.line.primary) is None:
             return False
-        return any(cmd.matches(p) for p in patterns)
+        return any(primary.matches(p) for p in patterns)
 
     def file_matches(self, *globs: str) -> bool:
         return bool(self.file) and self.file.matches(*globs)
@@ -482,22 +500,6 @@ class ToolRewriteEvent(ToolHookEvent):
     Base for the events where Claude Code accepts an ``updatedInput`` decision
     (``PreToolUse`` and ``PermissionRequest``), adding the ``rewrite*`` helpers.
     """
-
-    @cached_property
-    def cmd(self) -> Cmd:
-        """The event's Bash command as a walkable :class:`~captain_hook.cmd.Cmd`.
-
-        Always a ``Cmd`` — an empty or non-Bash command yields one with zero calls — so a handler
-        iterates ``evt.cmd.calls(...)`` or tests ``evt.cmd.call(...)`` without a preceding guard.
-        Rewrites composed via :meth:`~captain_hook.cmd.Call.sub` splice back through this event.
-        """
-        from cc_transcript.command import parse_command_line
-
-        from captain_hook.cmd import Cmd
-        from captain_hook.util.shell import safe_parse_command_line
-
-        line = safe_parse_command_line(self.command or "")
-        return Cmd(line if line is not None else parse_command_line(""), cwd=self.cwd, event=self)
 
     def rewrite(self, updated_input: dict[str, Any], *, note: str | None = None) -> HookResult:
         """Allow the tool but replace its input with ``updated_input`` (Claude Code's ``updatedInput``).

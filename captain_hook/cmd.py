@@ -18,7 +18,7 @@ from captain_hook.util.vcs import contains_repo, in_vcs_repo, is_repo_root
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from cc_transcript.command import Command, CommandLine, Occurrence, Redirect
+    from cc_transcript.command import Command, CommandLine, CommandLineQuery, Occurrence, Redirect
 
     from captain_hook.events import ToolRewriteEvent
     from captain_hook.types import HookResult
@@ -327,12 +327,14 @@ class Call:
         Subs accumulate on the parent :class:`Cmd`: each call returns a fresh rewrite splicing every
         sub so far, so returning the last applies them all (``rm a && rm b`` rewrites both) and
         returning ``evt.block(...)`` instead discards them all — a line never rewrites partially.
-        A detached ``Cmd`` (no bound event) raises :class:`RuntimeError`.
+        A ``Cmd`` that is detached or bound to a non-rewrite event raises :class:`RuntimeError`.
         """
         if old != self.name:
             raise ValueError(f"sub(old={old!r}) must match the call name {self.name!r}")
         if (event := self.cmd.event) is None:
-            raise RuntimeError("sub() requires an event-bound Cmd; a detached Cmd cannot rewrite")
+            raise RuntimeError(
+                "sub() requires a rewrite-capable event; this Cmd is detached or bound to a non-rewrite event"
+            )
         if not self.spliceable or self.substituted:
             return None
         raws = [word.raw for word in self.command.words[1:]] if args is None else [emit_raw(t.raw) for t in args]
@@ -360,21 +362,35 @@ class Cmd:
     over an already-parsed line, or ``Cmd.parse(text)`` (None when the text is too deeply nested
     to parse). A detached ``Cmd`` has no bound event, so :meth:`Call.sub` raises on it.
 
+    ``raw`` is the true original command text as written; ``str(cmd)`` returns it. It is set from
+    the source string at construction, so it survives a tree-sitter parse that degrades :attr:`line`
+    to empty — a conservative raw-regex still sees the full command. :attr:`q` and :attr:`line` expose
+    the parsed structure.
+
     Example:
         >>> if (call := evt.cmd.call("rm")) and len(call.targets.expand()) > 10:
         ...     return call.sub("rm", "trash")
     """
 
     line: CommandLine
+    raw: str = ""
     cwd: Path | None = None
     event: ToolRewriteEvent | None = None
     replacements: dict[int, str] = field(default_factory=dict, repr=False, compare=False)
     notes: list[str] = field(default_factory=list, repr=False, compare=False)
 
+    def __str__(self) -> str:
+        return self.raw
+
+    @property
+    def q(self) -> CommandLineQuery:
+        """The fluent query over the parsed line — :attr:`CommandLine.q`."""
+        return self.line.q
+
     @classmethod
     def parse(cls, text: str) -> Cmd | None:
         """Parse ``text`` into a detached ``Cmd``, or None when it is too deeply nested to parse."""
-        return None if (line := safe_parse_command_line(text)) is None else cls(line)
+        return None if (line := safe_parse_command_line(text)) is None else cls(line, raw=text)
 
     def calls(self, name: str | None = None) -> tuple[Call, ...]:
         """Every command invocation in the line (nested payloads included), or those named ``name``."""
