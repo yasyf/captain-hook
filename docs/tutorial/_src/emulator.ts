@@ -80,12 +80,20 @@ function isProjectPath(path: string, repoRoot: string | undefined): boolean {
   return path === repoRoot || path.startsWith(repoRoot.endsWith("/") ? repoRoot : `${repoRoot}/`);
 }
 
-const SHELL_WRAPPERS = new Set(["sh", "bash", "dash", "zsh", "ksh"]);
+const LEADING_WRAPPERS = new Set(["sudo", "env", "timeout", "nohup", "command", "time", "xargs"]);
+const SHELLS = new Set(["sh", "bash", "dash", "zsh", "ksh"]);
+
+function commandExecutable(argv: string[]): string {
+  let i = 0;
+  while (i < argv.length && LEADING_WRAPPERS.has(argv[i])) i++;
+  return argv[i] ?? "";
+}
 
 function hasWrapper(cl: CommandLine): boolean {
-  return cl.commands.some(
-    (c) => c.argv.includes("eval") || (c.argv.some((w) => SHELL_WRAPPERS.has(w)) && c.argv.includes("-c")),
-  );
+  return cl.commands.some((c) => {
+    const exe = commandExecutable(c.argv);
+    return exe === "eval" || (SHELLS.has(exe) && c.argv.includes("-c"));
+  });
 }
 
 function prefixEquals(argv: string[], prefix: string[]): boolean {

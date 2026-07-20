@@ -9,10 +9,13 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "tutorial" / "_src"
 ENTRY = "emulator.ts"
 BUNDLE = SRC_DIR.parent / "widgets" / "emulator.js"
 BANNER_PREFIX = "// capt-hook-widget src-sha256: "
+ESBUILD_FLAGS = ("--bundle", "--format=esm", "--target=es2022", "--platform=browser", "--log-level=warning")
 
 
 def src_hash() -> str:
     digest = hashlib.sha256(ESBUILD_VERSION.encode())
+    digest.update("\0".join(ESBUILD_FLAGS).encode())
+    digest.update(b"\0")
     for path in sorted(SRC_DIR.glob("*.ts")):
         digest.update(path.name.encode())
         digest.update(b"\0")
@@ -29,11 +32,7 @@ def build(out: Path = BUNDLE) -> Path:
             "-y",
             f"esbuild@{ESBUILD_VERSION}",
             ENTRY,
-            "--bundle",
-            "--format=esm",
-            "--target=es2022",
-            "--platform=browser",
-            "--log-level=warning",
+            *ESBUILD_FLAGS,
             f"--banner:js={BANNER_PREFIX}{src_hash()}",
             f"--outfile={out.resolve()}",
         ],

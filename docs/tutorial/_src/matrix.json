@@ -16,6 +16,12 @@
         { "id": "pipeline", "check": "parity", "input": { "tool": "Bash", "command": "true | git stash" } },
         { "id": "unrelated", "check": "parity", "input": { "tool": "Bash", "command": "ls -la" } },
         { "id": "wrong-tool", "check": "parity", "input": { "tool": "Edit", "file": "notes.py", "content": "git stash" } },
+        { "id": "eval-arg", "check": "parity", "input": { "tool": "Bash", "command": "git commit -m eval" } },
+        { "id": "grep-eval", "check": "parity", "input": { "tool": "Bash", "command": "git log --grep eval" } },
+        { "id": "echo-eval", "check": "parity", "input": { "tool": "Bash", "command": "echo eval me" } },
+        { "id": "printf-eval", "check": "parity", "input": { "tool": "Bash", "command": "printf eval" } },
+        { "id": "echo-sh-c-arg", "check": "parity", "input": { "tool": "Bash", "command": "echo sh -c foo" } },
+        { "id": "wrapper-mention-blocks", "check": "parity", "input": { "tool": "Bash", "command": "echo bash -c git stash" } },
         { "id": "command-substitution", "check": "honesty", "input": { "tool": "Bash", "command": "$(git stash)" } },
         { "id": "comment-line", "check": "honesty", "input": { "tool": "Bash", "command": "# git stash" } }
       ]
@@ -38,7 +44,8 @@
         { "id": "eval", "check": "honesty", "input": { "tool": "Bash", "command": "eval git stash" } },
         { "id": "subshell", "check": "honesty", "input": { "tool": "Bash", "command": "( git stash )" } },
         { "id": "brace-group", "check": "honesty", "input": { "tool": "Bash", "command": "{ git stash; }" } },
-        { "id": "comment-line", "check": "honesty", "input": { "tool": "Bash", "command": "# git stash" } }
+        { "id": "comment-line", "check": "honesty", "input": { "tool": "Bash", "command": "# git stash" } },
+        { "id": "sudo-wrapper-payload", "check": "honesty", "input": { "tool": "Bash", "command": "sudo sh -c 'git stash'" } }
       ]
     },
     "rewrite_cat": {

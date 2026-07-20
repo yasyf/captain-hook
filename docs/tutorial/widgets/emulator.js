@@ -1,4 +1,4 @@
-// capt-hook-widget src-sha256: b94482190c235544da8ab7ad61c2800f8cda92df756ef3b36afb4fa7ec701a56
+// capt-hook-widget src-sha256: 120927a6a869a4d04ada9479ca9f9aafe5c1f8b97633bfb0a9fe8a1b5e715f9a
 
 // dom.ts
 function el(tag, className, text) {
@@ -305,11 +305,18 @@ function isProjectPath(path, repoRoot) {
   if (!repoRoot) return true;
   return path === repoRoot || path.startsWith(repoRoot.endsWith("/") ? repoRoot : `${repoRoot}/`);
 }
-var SHELL_WRAPPERS = /* @__PURE__ */ new Set(["sh", "bash", "dash", "zsh", "ksh"]);
+var LEADING_WRAPPERS = /* @__PURE__ */ new Set(["sudo", "env", "timeout", "nohup", "command", "time", "xargs"]);
+var SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "dash", "zsh", "ksh"]);
+function commandExecutable(argv) {
+  let i = 0;
+  while (i < argv.length && LEADING_WRAPPERS.has(argv[i])) i++;
+  return argv[i] ?? "";
+}
 function hasWrapper(cl) {
-  return cl.commands.some(
-    (c) => c.argv.includes("eval") || c.argv.some((w) => SHELL_WRAPPERS.has(w)) && c.argv.includes("-c")
-  );
+  return cl.commands.some((c) => {
+    const exe = commandExecutable(c.argv);
+    return exe === "eval" || SHELLS.has(exe) && c.argv.includes("-c");
+  });
 }
 function prefixEquals(argv, prefix) {
   return prefix.length <= argv.length && prefix.every((tok, i) => argv[i] === tok);
