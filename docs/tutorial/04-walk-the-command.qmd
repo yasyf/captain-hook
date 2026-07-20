@@ -1,0 +1,18 @@
+---
+title: "Walk the command"
+description: "When a regex isn't enough, walk the parse."
+---
+
+Blocking `rm` outright is a blunt instrument — agents delete build artifacts all day, legitimately. What you want is a judgment call: how many files does this `rm` actually hit, and are they recoverable? That's not a pattern; that's a walk over the parsed command. `evt.command` gives you one:
+
+<!-- gd-embed-fragment: tutorial_walk_rm -->
+
+This is the heart of the `rm` guard the shipped `general` pack runs. `calls("rm")` finds every `rm` across `&&`, `;`, and pipes; `targets.expand()` resolves the arguments — globs included — against the working directory; `sub` rewrites the call to `trash`, quoting intact, so a mistake is a restore instead of a loss.
+
+These verdicts are recorded from the real engine — a Python walk doesn't fit in a browser widget, so the presets replay what the pack actually decided:
+
+<!-- gd-embed-widget: rm_walk -->
+
+A rewrite is a third verdict you haven't seen yet: not allow, not block — the command runs, but not the command the agent typed. Rewrites beat blocks when a safe variant exists, because the agent's task keeps moving.
+
+[Next: gate the session itself.](stop-gates.qmd)

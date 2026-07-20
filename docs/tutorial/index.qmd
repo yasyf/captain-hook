@@ -1,0 +1,23 @@
+---
+title: "Tutorial: hooks you can poke"
+description: "Block your first command in the browser, then graduate to the real engine."
+---
+
+Write a hook, type a command at it, watch the verdict. Every widget on these pages runs a JavaScript port of capt-hook's dispatch — and every preset button is a row in a parity test, so what the widget answers is what `capt-hook test` answers. When a command uses shell features the port doesn't model (substitution, heredocs), the widget says so instead of guessing.
+
+Try it — this is the hook you'll build on the next page:
+
+<!-- gd-embed-fragment: tutorial_first_block -->
+
+<!-- gd-embed-widget: first_block -->
+
+Six short stops, each one interaction and one idea:
+
+1. [Your first block](first-block.qmd): one line guards a whole command family
+2. [Precision with Runs](command-vs-runs.qmd): recall vs precision, and why you want both ends
+3. [Conditions compose](secret-guard.qmd): AND, veto, and the guard that ignores reads
+4. [Walk the command](walk-the-command.qmd): when a regex can't decide
+5. [Stop gates](stop-gates.qmd): gate the session, not the tool call
+6. [Test it, then ship it](test-then-ship.qmd): the same cases, as inline tests
+
+Fifteen minutes end to end. When you're done, `uvx capt-hook init` gives you the real thing.

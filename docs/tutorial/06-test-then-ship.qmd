@@ -1,0 +1,26 @@
+---
+title: "Test it, then ship it"
+description: "The same cases, as inline tests."
+---
+
+Every preset you clicked in this tutorial is a test case, and hooks carry their tests inline. Here's page one's guard again — this time with its `tests`:
+
+<!-- gd-embed-fragment: tutorial_first_block_tested -->
+
+`uvx capt-hook test` runs every hook's cases through the real dispatch — the same engine the widgets here were verified against:
+
+<!-- gd-embed-widget: test_replay -->
+
+A hook without tests is a regex you're hoping about. A hook with tests fails your CI when someone loosens the pattern — run `uvx capt-hook test --json` in a workflow and a regressed guard breaks the build, not the incident review.
+
+One thing the widgets couldn't show you: hooks can ask a model. When no pattern can decide — "is this SQL migration destructive?" — `llm_gate` hands the verdict to an LLM with your rubric. Here's a recorded run:
+
+<!-- gd-embed-widget: llm_gate_teaser -->
+
+That's the tour. The real thing is one command away:
+
+```bash
+uvx capt-hook init
+```
+
+`init` scaffolds `.claude/hooks/` with a starter hook and wires Claude Code's settings. The [quickstart](../getting-started/quickstart.qmd) takes it from there — same five minutes, your repo this time.

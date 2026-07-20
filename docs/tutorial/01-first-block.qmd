@@ -1,0 +1,22 @@
+---
+title: "Your first block"
+description: "One line guards a whole command family."
+---
+
+`git stash` is where an agent's uncommitted work goes to die: it stashes, forgets, and your changes are three `pop`s deep by the time you notice. Declare it off-limits:
+
+<!-- gd-embed-fragment: tutorial_first_block -->
+
+That's a complete hook file. Drop it in `.claude/hooks/`, and every Bash call the agent makes passes through it before running.
+
+Type at it. Try `git stash`, then get sneaky — hide it behind `cd`, chain it after `&&`, pipe into it:
+
+<!-- gd-embed-widget: first_block -->
+
+Two things worth noticing:
+
+**The family is covered.** `cd /tmp && git stash`, `true | git stash`, `git stash pop` — one declaration catches the command anywhere in the line, not just at position zero.
+
+**The quoted mention blocks too.** `echo "git stash"` is harmless, and it still blocks. That's deliberate: `block_command` compiles to a conservative match that stops an innocent echo rather than miss a real stash smuggled through quoting. For a safety hook, false positives are cheap and false negatives are not.
+
+Cheap for a guardrail — expensive if you need the command to run. [Next: buy back precision with `Runs`.](command-vs-runs.qmd)

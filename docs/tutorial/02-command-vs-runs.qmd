@@ -1,0 +1,28 @@
+---
+title: "Precision with Runs"
+description: "The same guard two ways — recall vs precision."
+---
+
+The conservative match has a cost: `git commit -m "git stash"` blocks too, and that's a command you actually want to run. capt-hook gives you both ends of the tradeoff. Here's the same guard written twice — once with `block_command`'s pattern match, once with `Runs`, which matches the parsed argv of each command in the line:
+
+<!-- gd-embed-fragment: tutorial_runs_guard -->
+
+Same input, two verdicts, side by side:
+
+<!-- gd-embed-widget: runs_guard -->
+
+Work through the presets and watch the verdicts split — the table shows what the real engine answers (the widget declines wrapper payloads honestly; `capt-hook test` runs those for real):
+
+| Command | Pattern | `Runs` |
+|---|---|---|
+| `git stash` | blocks | blocks |
+| `git commit -m "git stash"` | blocks | allows — it's an argument, not a command |
+| `echo "git stash"` | blocks | allows |
+| `sudo git stash` | blocks | **allows** — `Runs` sees `sudo`'s argv, not what it wraps |
+| `sh -c "git stash"` | blocks | **blocks** — the parser descends into the payload |
+
+The last two rows are the lesson, and they cut in opposite directions. `Runs` matches structure, so a wrapper like `sudo` hides the command from it — cover wrappers with their own entry. But a string payload doesn't hide anything: the parser descends into `sh -c` and finds the `git stash` inside. Precision costs you wrappers, not depth.
+
+So pick by stakes: `Runs` when false positives break real workflows, the conservative pattern when the command must never slip through. For `rm -rf`, take the false positives.
+
+[Next: stack conditions into one guard.](secret-guard.qmd)
