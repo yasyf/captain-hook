@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [12.0.0] - 2026-07-20
 
 ### Added — fluent command API (`evt.cmd`)
 
@@ -36,6 +36,20 @@ The three overlapping command accessors collapse to two names, with no compatibi
   otherwise command-less line is regex-searched against its raw text — previously skipped, since the old
   `evt.command_line` was falsy when the parse yielded no commands — so a guard blocks in the fail-closed
   direction: `# rm -rf /tmp/x` now matches `Command(r"rm\s+-rf")`.
+
+### Fixed — the rm guard fails closed again
+
+- **Unsafe `rm` rewrites deny instead of slipping through.** The fluent-API rewrite of the rm guard
+  dropped its emission-safety gate, so targets carrying `$VAR`, quoted globs, `~`, braces, or
+  backslash-newline continuations were rewritten or allowed instead of denied. The gate is
+  reinstated: a target that cannot be re-emitted verbatim forces a deny, a line whose command
+  substitutions cannot be collected blocks outright, and a tainted `rm` nested inside a
+  `sh -c`/`eval` payload blocks as well.
+
+### Changed — dependencies
+
+- `cc-transcript` floor is now `>=14.8`: arity-aware unwrapping, split options, and the payload
+  primitives the fluent walker and the hardened rm guard build on.
 
 ## [11.0.0] - 2026-07-20
 
