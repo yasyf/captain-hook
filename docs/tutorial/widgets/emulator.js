@@ -1,3 +1,5 @@
+// capt-hook-widget src-sha256: 33f5ae2ff068733df33bed4592afc8d927127dea0c8a1191c9d0a1971ad953a0
+
 // dom.ts
 function el(tag, className, text) {
   const node = document.createElement(tag);

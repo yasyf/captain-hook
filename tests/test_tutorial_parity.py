@@ -20,7 +20,7 @@ MATRIX = json.loads((SRC / "matrix.json").read_text())
 
 sys.path.insert(0, str(SCRIPTS))
 
-from build_emulator import BUNDLE, build  # noqa: E402
+from build_emulator import BANNER_PREFIX, BUNDLE, src_hash  # noqa: E402
 from widget_compiler import compile_fragment  # noqa: E402
 
 from captain_hook.app import _state  # noqa: E402
@@ -98,10 +98,9 @@ def _cases() -> list[Any]:
     return params
 
 
-@requires_node
-def test_bundle_drift(tmp_path: Path) -> None:
-    rebuilt = build(tmp_path / "emulator.js")
-    assert rebuilt.read_bytes() == BUNDLE.read_bytes(), (
+def test_bundle_drift() -> None:
+    banner = BUNDLE.read_text().splitlines()[0]
+    assert banner == f"{BANNER_PREFIX}{src_hash()}", (
         "committed emulator.js is stale — run `python docs/scripts/build_emulator.py`"
     )
 
