@@ -61,7 +61,8 @@ function renderLive(root: HTMLElement, data: WidgetData, evaluate: Evaluate): vo
     }
   };
 
-  root.append(input, presetRow(data.cases, onPick), panel);
+  if (data.cases.some((c) => c.command != null)) root.append(input);
+  root.append(presetRow(data.cases, onPick), panel);
   const first = data.cases[0];
   if (first) onPick(first);
 }

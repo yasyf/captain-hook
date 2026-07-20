@@ -46,6 +46,32 @@
         { "id": "command-substitution", "check": "honesty", "input": { "tool": "Bash", "command": "cat $(secret)" } }
       ]
     },
+    "ui_gate": {
+      "mode": "live",
+      "fragment": "canonical_hook",
+      "event": "Stop",
+      "cases": [
+        {
+          "id": "unreviewed-ui-edit",
+          "check": "parity",
+          "session": { "touchedFiles": ["app/src/components/Button.tsx"], "usedSkills": [] },
+          "edits": ["app/src/components/Button.tsx"]
+        },
+        {
+          "id": "reviewed-ui-edit",
+          "check": "parity",
+          "session": { "touchedFiles": ["app/src/components/Button.tsx"], "usedSkills": ["agent-browser"] },
+          "edits": ["app/src/components/Button.tsx"],
+          "skills": ["agent-browser"]
+        },
+        {
+          "id": "non-ui-edit",
+          "check": "parity",
+          "session": { "touchedFiles": ["README.md"], "usedSkills": [] },
+          "edits": ["README.md"]
+        }
+      ]
+    },
     "first_block_recorded": {
       "mode": "canned",
       "fragment": "tutorial_first_block",

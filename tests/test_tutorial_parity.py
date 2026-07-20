@@ -78,6 +78,39 @@ def run_node(hooks: list[dict[str, Any]], cases: list[dict[str, Any]]) -> dict[s
     return {v["id"]: v["verdict"] for v in json.loads(proc.stdout)["verdicts"]}
 
 
+def build_transcript(edits: list[str], skills: list[str]) -> list[dict[str, Any]]:
+    """Raw transcript lines that make TouchedFile / UsedSkill fire on the given edits and skills."""
+
+    def line(uid: str, name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
+        block = {"type": "tool_use", "name": name, "input": tool_input, "id": uid}
+        return {
+            "type": "assistant",
+            "uuid": uid,
+            "sessionId": "s",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"model": "<t>", "content": [block]},
+        }
+
+    return [
+        *(line(f"e{i}", "Edit", {"file_path": p, "old_string": "a", "new_string": "b"}) for i, p in enumerate(edits)),
+        *(line(f"s{i}", "Skill", {"skill": n}) for i, n in enumerate(skills)),
+    ]
+
+
+def _python_input(case: dict[str, Any]) -> dict[str, Any]:
+    inp = dict(case.get("input", {}))
+    if "edits" in case or "skills" in case:
+        inp["transcript"] = build_transcript(case.get("edits", []), case.get("skills", []))
+    return inp
+
+
+def _js_input(event: str, case: dict[str, Any]) -> dict[str, Any]:
+    inp = {"event": event, **case.get("input", {})}
+    if "session" in case:
+        inp["session"] = case["session"]
+    return inp
+
+
 @cache
 def live_results(widget_id: str) -> dict[str, dict[str, dict[str, Any]]]:
     widget = MATRIX["widgets"][widget_id]
@@ -89,10 +122,10 @@ def live_results(widget_id: str) -> dict[str, dict[str, dict[str, Any]]]:
         with isolated_state_root():
             for case in widget["cases"]:
                 if case["check"] == "parity":
-                    python[case["id"]] = normalize(dispatch(event, input_to_event(event, Input(**case["input"]))))
+                    python[case["id"]] = normalize(dispatch(event, input_to_event(event, Input(**_python_input(case)))))
     finally:
         _state.hooks[:] = saved
-    node_cases = [{"id": c["id"], "input": {"event": widget["event"], **c["input"]}} for c in widget["cases"]]
+    node_cases = [{"id": c["id"], "input": _js_input(widget["event"], c)} for c in widget["cases"]]
     return {"python": python, "js": run_node(compiled["hooks"], node_cases)}
 
 
@@ -143,7 +176,10 @@ REFUSALS = {
     "rewrite_command(only_if=[], to=lambda e: None, block='no')\n",
     "in_plan_mode": "from captain_hook import Event, hook\nfrom captain_hook.types import InPlanMode\n"
     "hook(Event.PreToolUse, 'x', only_if=[InPlanMode()], block=True)\n",
-    "used_skill": "from captain_hook import nudge, UsedSkill\nnudge('x', skip_if=[UsedSkill('codex')])\n",
+    "from_subagent": "from captain_hook import Event, hook\nfrom captain_hook.types import FromSubagent\n"
+    "hook(Event.PreToolUse, 'x', only_if=[FromSubagent()], block=True)\n",
+    "ast_grep_pattern": "from captain_hook import Event, hook\nfrom captain_hook.types import Pattern\n"
+    "hook(Event.PreToolUse, 'x', only_if=[Pattern('eval($$$)')], block=True)\n",
     "regex_dialect": "from captain_hook import Event, hook\nfrom captain_hook.types import Command\n"
     "hook(Event.PreToolUse, 'x', only_if=[Command('(?P<n>git)')], block=True)\n",
 }

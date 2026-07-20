@@ -29,7 +29,10 @@ def widget_data(widget: dict) -> dict:
         return {"mode": "canned", "hooks": [], "cases": [], "recordings": recordings}
     compiled = compile_fragment(FRAGMENTS_SRC / f"{widget['fragment']}.py")
     event = widget.get("event", "PreToolUse")
-    cases = [{"event": event, **c["input"]} for c in widget["cases"]]
+    cases = [
+        {"event": event, **c.get("input", {}), **({"session": c["session"]} if "session" in c else {})}
+        for c in widget["cases"]
+    ]
     return {"mode": "live", "hooks": compiled["hooks"], "cases": cases, "recordings": []}
 
 

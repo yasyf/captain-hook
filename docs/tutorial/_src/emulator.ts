@@ -78,6 +78,10 @@ function prefixEquals(argv: string[], prefix: string[]): boolean {
   return prefix.length <= argv.length && prefix.every((tok, i) => argv[i] === tok);
 }
 
+function skillMatches(skill: string, names: string[]): boolean {
+  return names.includes(skill) || names.includes(skill.split(":").pop() ?? skill);
+}
+
 function checkCondition(cond: Condition, ev: EventInput, cl: CommandLine | null): boolean {
   switch (cond.kind) {
     case "Tool":
@@ -90,6 +94,12 @@ function checkCondition(cond: Condition, ev: EventInput, cl: CommandLine | null)
       return ev.file != null && cond.patterns.some((p) => fnmatch(ev.file as string, p));
     case "Content":
       return ev.content != null && compileRegex(cond.pattern, "m").test(ev.content);
+    case "TouchedFile":
+      return (ev.session?.touchedFiles ?? []).some((f) => cond.patterns.some((p) => fnmatch(f, p)));
+    case "UsedSkill":
+      return (ev.session?.usedSkills ?? []).some((s) => skillMatches(s, cond.names));
+    case "RanCommand":
+      return (ev.session?.ranCommands ?? []).some((argv) => prefixEquals(argv, cond.argv));
     case "Waiting":
       return ev.session?.waiting ?? false;
     case "Not":

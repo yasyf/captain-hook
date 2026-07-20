@@ -1,4 +1,4 @@
-// capt-hook-widget src-sha256: bbd826034744ab10320439d6be025c23996f08f36b2a48b04a1bb2372684dca9
+// capt-hook-widget src-sha256: 3acbacfc29bd6127cf664fc51f3dc876d905f8b2dbf90466f6972e4eabc75e61
 
 // dom.ts
 function el(tag, className, text) {
@@ -46,7 +46,8 @@ function renderLive(root, data, evaluate2) {
       renderVerdict(panel, evaluate2(data.hooks, picked));
     }
   };
-  root.append(input, presetRow(data.cases, onPick), panel);
+  if (data.cases.some((c) => c.command != null)) root.append(input);
+  root.append(presetRow(data.cases, onPick), panel);
   const first = data.cases[0];
   if (first) onPick(first);
 }
@@ -282,6 +283,9 @@ function fnmatch(path, glob) {
 function prefixEquals(argv, prefix) {
   return prefix.length <= argv.length && prefix.every((tok, i) => argv[i] === tok);
 }
+function skillMatches(skill, names) {
+  return names.includes(skill) || names.includes(skill.split(":").pop() ?? skill);
+}
 function checkCondition(cond, ev, cl) {
   switch (cond.kind) {
     case "Tool":
@@ -294,6 +298,12 @@ function checkCondition(cond, ev, cl) {
       return ev.file != null && cond.patterns.some((p) => fnmatch(ev.file, p));
     case "Content":
       return ev.content != null && compileRegex(cond.pattern, "m").test(ev.content);
+    case "TouchedFile":
+      return (ev.session?.touchedFiles ?? []).some((f) => cond.patterns.some((p) => fnmatch(f, p)));
+    case "UsedSkill":
+      return (ev.session?.usedSkills ?? []).some((s) => skillMatches(s, cond.names));
+    case "RanCommand":
+      return (ev.session?.ranCommands ?? []).some((argv) => prefixEquals(argv, cond.argv));
     case "Waiting":
       return ev.session?.waiting ?? false;
     case "Not":

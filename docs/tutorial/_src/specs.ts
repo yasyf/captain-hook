@@ -15,6 +15,9 @@ export type Condition =
   | { kind: "Runs"; argv: string[] }
   | { kind: "FilePath"; patterns: string[]; project_only: boolean }
   | { kind: "Content"; pattern: string; project_only: boolean }
+  | { kind: "TouchedFile"; patterns: string[] }
+  | { kind: "UsedSkill"; names: string[] }
+  | { kind: "RanCommand"; argv: string[] }
   | { kind: "Waiting" }
   | { kind: "Not"; condition: Condition }
   | { kind: "Or"; conditions: Condition[] }
@@ -37,6 +40,9 @@ export interface SerializedHook {
 
 export interface SessionState {
   waiting?: boolean;
+  usedSkills?: string[];
+  touchedFiles?: string[];
+  ranCommands?: string[][];
 }
 
 export interface EventInput {

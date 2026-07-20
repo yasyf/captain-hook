@@ -6,7 +6,20 @@ from typing import TYPE_CHECKING, Any
 from cc_transcript.tools import expand_tool_names
 
 from captain_hook.app import _state
-from captain_hook.types import And, Command, Content, FilePath, Not, Or, Runs, Tool, Waiting
+from captain_hook.types import (
+    And,
+    Command,
+    Content,
+    FilePath,
+    Not,
+    Or,
+    RanCommand,
+    Runs,
+    Tool,
+    TouchedFile,
+    UsedSkill,
+    Waiting,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -53,6 +66,12 @@ def serialize_condition(c: TCondition) -> dict[str, Any]:
             return {"kind": "FilePath", "patterns": list(patterns), "project_only": project_only}
         case Content(pattern, project_only):
             return {"kind": "Content", "pattern": check_regex_dialect(pattern), "project_only": project_only}
+        case TouchedFile(patterns, _):
+            return {"kind": "TouchedFile", "patterns": list(patterns)}
+        case UsedSkill(names, _):
+            return {"kind": "UsedSkill", "names": list(names)}
+        case RanCommand(argv, _):
+            return {"kind": "RanCommand", "argv": list(argv)}
         case Waiting():
             return {"kind": "Waiting"}
         case Not(condition):
