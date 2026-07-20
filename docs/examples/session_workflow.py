@@ -49,8 +49,8 @@ def record_edit(evt: BaseHookEvent) -> HookResult | None:
 
 @on(Event.PreToolUse, only_if=[Tool("Bash")], tests={Input(command="pytest -q"): Allow()})
 def mark_tested(evt: BaseHookEvent) -> HookResult | None:
-    cl = evt.command_line
-    if cl and cl.q.runs("pytest"):
+    cmd = evt.command
+    if cmd.raw and cmd.q.runs("pytest"):
         state = ReviewState.load(evt)
         state.ran_tests = True
         state.save(evt)

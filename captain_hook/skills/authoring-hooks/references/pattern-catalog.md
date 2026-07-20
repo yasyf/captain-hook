@@ -76,12 +76,12 @@ warn_command(
     },
 )
 def block_piped_curl_to_shell(evt: BaseHookEvent) -> HookResult | None:
-    cl = evt.command_line
+    cmd = evt.command
     if (
-        cl
-        and cl.q.uses_redirect()
-        and cl.q.any_command(lambda c: c.program == "curl")
-        and cl.q.any_command(lambda c: c.program in {"sh", "bash"})
+        cmd.raw
+        and cmd.q.uses_redirect()
+        and cmd.q.any_command(lambda c: c.program == "curl")
+        and cmd.q.any_command(lambda c: c.program in {"sh", "bash"})
     ):
         return evt.block("BLOCKED: piping curl into a shell executes untrusted remote code.")
     return None
@@ -92,7 +92,7 @@ Adaptation notes:
 - Raw-regex form for negative lookaheads (`--force(?!-)` blocks `--force` but not
   `--force-with-lease`); token-list form for plain sequences (`["terraform", "destroy"]`
   becomes `r"terraform\s+destroy"`, `"*"` becomes `\S+`).
-- For compound lines (pipes, `&&`), match per-command with `evt.command_line.q` inside an
+- For compound lines (pipes, `&&`), match per-command with `evt.command.q` inside an
   `@on` handler. Do not use `.q.runs(...)` for piped lines — it checks the *last* command
   of a pipeline; use `.any_command(...)` as above.
 - `Block(pattern=...)` is regex-searched against the rendered message, which

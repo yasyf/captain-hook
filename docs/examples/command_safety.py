@@ -57,12 +57,12 @@ block_command(
     },
 )
 def block_piped_curl_to_shell(evt: BaseHookEvent) -> HookResult | None:
-    cl = evt.command_line
+    cmd = evt.command
     if (
-        cl
-        and cl.q.uses_redirect()
-        and cl.q.any_command(lambda c: c.program == "curl")
-        and cl.q.any_command(lambda c: c.program in {"sh", "bash"})
+        cmd.raw
+        and cmd.q.uses_redirect()
+        and cmd.q.any_command(lambda c: c.program == "curl")
+        and cmd.q.any_command(lambda c: c.program in {"sh", "bash"})
     ):
         return evt.block("BLOCKED: piping curl into a shell executes untrusted remote code.")
     return None
@@ -77,7 +77,11 @@ def block_piped_curl_to_shell(evt: BaseHookEvent) -> HookResult | None:
     },
 )
 def block_dotenv_secrets_leak(evt: BaseHookEvent) -> HookResult | None:
-    cl = evt.command_line
-    if cl and cl.q.has_subcommand(".env") and cl.q.any_command(lambda c: c.program in {"cat", "echo", "printenv"}):
+    cmd = evt.command
+    if (
+        cmd.raw
+        and cmd.q.has_subcommand(".env")
+        and cmd.q.any_command(lambda c: c.program in {"cat", "echo", "printenv"})
+    ):
         return evt.block("BLOCKED: printing .env files leaks secrets into the transcript.")
     return None

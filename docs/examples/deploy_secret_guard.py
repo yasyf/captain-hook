@@ -42,7 +42,7 @@ block_command(
 @dataclass(frozen=True)
 class SecretsExfil(CustomCondition):
     def check(self, evt: BaseHookEvent) -> bool:
-        cmd = evt.command or ""
+        cmd = evt.command.raw
         return "get-secret-value" in cmd or "AWS_SECRET" in cmd or "PRIVATE_KEY" in cmd
 
 

@@ -29,8 +29,8 @@ from captain_hook import (
 from captain_hook.types import Command as CommandCondition
 ```
 
-Top-level `Command` is the parsed-shell dataclass (`cc_transcript.command.Command`) that
-`evt.command_line` yields — you rarely import it directly. The regex **condition**
+Top-level `Command` is the parsed-shell dataclass (`cc_transcript.command.Command`) behind
+`evt.command.line` — you rarely import it directly. The regex **condition**
 (`CommandCondition(r"git\s+push")`) lives at `captain_hook.types.Command`; import it under
 the `CommandCondition` alias to keep the two apart.
 
@@ -195,8 +195,8 @@ Glob caveat: patterns match the full relative path. `**/*.py` matches `src/main.
 
 | Accessor | What it is |
 |---|---|
-| `evt.command` | Bash command string (`None` for non-Bash) |
-| `evt.command_line` | parsed command line, or `None`; query via `.q` |
+| `evt.command` (= `evt.cmd`) | the parsed, walkable Bash command as a `Cmd` (empty for non-Bash) — walk it with `.calls()` / `.call(name)`, reach operands via `.targets`, rewrite in place with `.sub()`, query with `.q`, and get the `CommandLine` from `.line` |
+| `evt.command.raw` (= `str(evt.command)`) | the raw command text (`""` for non-Bash) |
 | `evt.file` | `File` for Edit/Write/Read events; `evt.file.path` is a `Path` |
 | `evt.content` / `evt.old` | Edit new/old string (Write: full content / `None`) |
 | `evt.tool_name`, `evt.tool_input` | raw tool identity and payload |
@@ -209,7 +209,7 @@ Glob caveat: patterns match the full relative path. `**/*.py` matches `src/main.
 | `evt.rewrite_command(new_command, *, note=None)` | **PreToolUse and PermissionRequest** — rewrite a Bash command in place (keeps the rest of the tool input), allowing it; `note` surfaces as `additionalContext` (dropped on `PermissionRequest`) |
 | `evt.rewrite(updated_input, *, note=None)` | **PreToolUse and PermissionRequest** — replace the tool input wholesale with `updated_input` (same tool schema), allowing it |
 
-`evt.command_line.q` predicates for compound commands:
+`evt.command.q` predicates for compound commands:
 
 - `.runs("git", "push")` — argv prefix of the **primary** command. The primary is the *last*
   command of a pipeline, so for `curl ... | sh` use `.any_command(...)` instead.
@@ -224,9 +224,9 @@ free functions with the raw text and the `"bash"` language:
 ```python
 from captain_hook import ast_grep
 
-ast_grep.matches(cl.raw, "bash", "cat $$$ARGS")                 # bool
-ast_grep.rewrite(cl.raw, "bash", "cat $$$ARGS", "bat $$$ARGS")  # rewritten str (unchanged when no match)
-ast_grep.capture(cl.raw, "bash", "sed -n $R $F")                # {"R": ..., "F": ...} | None
+ast_grep.matches(evt.command.raw, "bash", "cat $$$ARGS")                 # bool
+ast_grep.rewrite(evt.command.raw, "bash", "cat $$$ARGS", "bat $$$ARGS")  # rewritten str (unchanged when no match)
+ast_grep.capture(evt.command.raw, "bash", "sed -n $R $F")                # {"R": ..., "F": ...} | None
 ```
 
 ## CLI

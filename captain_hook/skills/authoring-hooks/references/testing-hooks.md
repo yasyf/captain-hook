@@ -96,7 +96,7 @@ Statuses: `pass`, `fail` (wrong outcome), `error` (exception in hook or test), `
 | `Expected Block, got None` on a Stop gate | The `Input` lacks transcript evidence for `only_if` — add a `TranscriptFixture` whose tool uses satisfy `TouchedFile`/`RanCommand`. Check the fixture shape: `type` + nested `message.content`, not `role`/`content`. |
 | `Expected Block, got None` on a glob condition | `src/**/*.py` does not match `src/main.py` — the `**` wants an intermediate directory. Use `**/*.py` or `src/*.py`. |
 | `Block message doesn't match '<pat>'` | `pattern` is regex-searched against the *rendered* message. `block_command` renders `BLOCKED: {reason}. {hint}.` — pick a word that survives rendering, or loosen the pattern. |
-| `@on` handler on a piped command never fires | `evt.command_line.q.runs(...)` checks the pipeline's *last* command. Use `.any_command(lambda c: c.program == "...")`. |
+| `@on` handler on a piped command never fires | `evt.command.q.runs(...)` checks the pipeline's *last* command. Use `.any_command(lambda c: c.program == "...")`. |
 | Edit/Write hook gets `None` content | The `Input` set `command=` but the hook's first event/tool is Edit — set `file=` and `content=` (and `tool=` if the hook matches several). |
 | `Input(command=...)` ignored | The hook's first event is `Stop` — the runner builds a Stop event without tool input. Encode the command as a Bash `tool_use` in `transcript=` instead. |
 | LLM hook test always blocks | The default stub verdict always fires. Pass `Input(llm={"fire": False})` / `{"block": False}` to exercise the declines path, or remove `tests=` and test the static `only_if` narrowing on a deterministic sibling hook. |

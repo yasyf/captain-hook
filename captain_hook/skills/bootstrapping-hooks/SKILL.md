@@ -83,7 +83,7 @@ Map every signal onto the taxonomy below. Record per candidate: the **source quo
 
 | Category | Repo signals | Primitive |
 |---|---|---|
-| A. Command safety | "never run X", destructive ops (`rm -rf`, db reset, deploy, force-push), tool substitutions ("use uv not pip") in docs; reverts in git log | `block_command` / `warn_command`; `@on` + `evt.command_line.q` for compound commands (curl-pipe-sh) |
+| A. Command safety | "never run X", destructive ops (`rm -rf`, db reset, deploy, force-push), tool substitutions ("use uv not pip") in docs; reverts in git log | `block_command` / `warn_command`; `@on` + `evt.command.q` for compound commands (curl-pipe-sh) |
 | B. Code quality | lint configs, "use logger not print", banned imports/idioms in docs | `hook(only_if=[Content(...)])`, `lint()`, `nudge(signals=...)`, `llm_gate` escalation |
 | C. Test integrity | `tests/` dir + CI test job; "never skip tests", coverage rules | `gate(only_if=[TouchedFile], skip_if=[RanCommand])`; `prompt_check` on test-file edits |
 | D. Workflow rituals | CONTRIBUTING rituals ("run make lint before pushing", "update CHANGELOG"), multi-step done-criteria | `gate` on `PreToolUse` + `Command(r"git\s+push")`; `workflow()` for ordered checklists |
