@@ -1,0 +1,9 @@
+fragments = [
+  "cc-skills:gitignore-base",
+  "cc-skills:gitignore-python",
+  "cc-skills:gitignore-docs",
+  "gitignore-local",
+]
+
+[sources.cc-skills]
+source = "github:yasyf/cc-skills@main"

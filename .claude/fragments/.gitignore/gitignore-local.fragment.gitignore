@@ -1,0 +1,6 @@
+# MkDocs
+site/
+
+# captain-hook repo-local
+stress/reports/
+captain_hook/langs.py
