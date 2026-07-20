@@ -10,7 +10,8 @@ from typing import Any
 import pytest
 
 import captain_hook
-from captain_hook.builtin_packs.general.hooks.deletions import in_vcs_repo, trash_binary
+from captain_hook.builtin_packs.general.hooks.deletions import trash_binary
+from captain_hook.cmd import Cmd
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack
 from captain_hook.testing.helpers import input_to_event
@@ -19,6 +20,7 @@ from captain_hook.types import Event
 from captain_hook.util import globbing
 from captain_hook.util.scratch import is_scratch_path
 from captain_hook.util.shell import emit_token
+from captain_hook.util.vcs import in_vcs_repo
 
 PACKS_DIR = Path(captain_hook.__file__).parent / "builtin_packs"
 
@@ -1131,3 +1133,20 @@ class TestInVcsRepo:
         (jj_dir / ".jj").mkdir(parents=True)
         assert in_vcs_repo(jj_dir) is True
         assert in_vcs_repo(tmp_path / "absent") is False
+
+
+class TestRmTargets:
+    # rm_targets() folded into Call.targets (b65dfe88); flag-drop and bare-dash cases now live in
+    # test_cmd.py::TestSplitOptions.
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [
+            pytest.param("rm -- -weird b", ["-weird", "b"], id="separator"),
+            pytest.param("rm /victim --", ["/victim"], id="trailing-separator"),
+            pytest.param("rm -rf a -- -b", ["a", "-b"], id="operands-around-separator"),
+            pytest.param("rm", [], id="empty"),
+        ],
+    )
+    def test_targets(self, command: str, expected: list[str]) -> None:
+        call = Cmd.parse(command).call("rm")
+        assert [target.value for target in call.targets] == expected
