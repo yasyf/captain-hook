@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.0.1] - 2026-07-20
+
+### Added
+- **`diff_lint` gains an ast-grep `pattern=` mode.** `diff_lint(pattern="print($$$)", ...)`
+  flags only structural matches the edit introduces, wired through `find_introduced`. Match
+  identity is the whitespace-normalized text rather than the line number, so a construct the
+  edit merely moved never fires — the failure mode of the hand-rolled `lineno`-set diff the
+  docs previously showcased. Mirrors `lint(pattern=...)`: violations render as
+  `"{snippet} (line N)"`, and `lang` selects both the grammar and the file guard.
+
 ## [12.0.0] - 2026-07-20
 
 ### Added — fluent command API (`evt.cmd`)

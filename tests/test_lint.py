@@ -748,3 +748,63 @@ class TestPatternModeLint:
             lint(message="m")
         with pytest.raises(TypeError, match="either a check function or pattern"):
             lint(lambda c: [], pattern="print($$$)", message="m")
+
+
+class TestDiffLint:
+    def dispatch_edit(self, session_dir: Path, *, old: str, new: str, file_path: str = "app.py") -> Any:
+        evt = make_post_tool_event(
+            tool_name="Edit",
+            tool_input={"file_path": file_path, "old_string": old, "new_string": new},
+            ctx=make_ctx(session_dir),
+        )
+        return dispatch(Event.PostToolUse, evt, session_dir)
+
+    def test_check_mode_flags_added_construct(self, session_dir: Path) -> None:
+        from captain_hook.primitives.lint import diff_lint
+
+        def added_prints(pre: ast.AST, post: ast.AST) -> list[str]:
+            def prints(tree: ast.AST) -> set[int]:
+                return {
+                    n.lineno
+                    for n in ast.walk(tree)
+                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "print"
+                }
+
+            return [f"line {n}" for n in sorted(prints(post) - prints(pre))]
+
+        diff_lint(added_prints, message="Added print: {violations}")
+        result = self.dispatch_edit(session_dir, old="x = 1\n", new="x = 1\nprint(x)\n")
+        assert result is not None
+        assert "line 2" in result["hookSpecificOutput"]["additionalContext"]
+        assert self.dispatch_edit(session_dir, old="print(1)\n", new="print(1)\nx = 2\n") is None
+
+    def test_pattern_mode_flags_introduced_match(self, session_dir: Path) -> None:
+        from captain_hook.primitives.lint import diff_lint
+
+        diff_lint(pattern="print($$$)", message="Added print: {violations}")
+        result = self.dispatch_edit(session_dir, old="x = 1\n", new="x = 1\nprint(x)\n")
+        assert result is not None
+        assert "print(x) (line 2)" in result["hookSpecificOutput"]["additionalContext"]
+
+    def test_pattern_mode_ignores_moved_match(self, session_dir: Path) -> None:
+        from captain_hook.primitives.lint import diff_lint
+
+        diff_lint(pattern="print($$$)", message="Added print: {violations}")
+        assert self.dispatch_edit(session_dir, old="print(1)\n", new="x = 2\nprint(1)\n") is None
+
+    def test_pattern_mode_lang_drives_file_guard(self, session_dir: Path) -> None:
+        from captain_hook.primitives.lint import diff_lint
+
+        diff_lint(pattern="console.log($$$)", message="Added console.log: {violations}", lang="ts")
+        result = self.dispatch_edit(session_dir, old="x\n", new="x\nconsole.log(x)\n", file_path="app.ts")
+        assert result is not None
+        assert "console.log(x) (line 2)" in result["hookSpecificOutput"]["additionalContext"]
+        assert self.dispatch_edit(session_dir, old="x\n", new="x\nconsole.log(x)\n") is None
+
+    def test_requires_exactly_one_of_check_or_pattern(self) -> None:
+        from captain_hook.primitives.lint import diff_lint
+
+        with pytest.raises(TypeError, match="either a check function or pattern"):
+            diff_lint(message="m")
+        with pytest.raises(TypeError, match="either a check function or pattern"):
+            diff_lint(lambda pre, post: [], pattern="print($$$)", message="m")

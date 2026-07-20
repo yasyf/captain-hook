@@ -169,31 +169,16 @@ source contains it.
 
 ## diff_lint {#diff_lint}
 
-Flag only what an edit changed. The check takes the pre-edit and post-edit AST and
-returns violations for the delta, so a rule fires on a newly added construct without
-nagging about code the edit left alone.
+Flag only what an edit changed, so a rule fires on a newly added construct without
+nagging about code the edit left alone. The pattern form takes an ast-grep pattern
+and warns when the edit introduces a new structural match. Matches are compared by
+their text, not their line numbers, so a construct the edit merely moved never fires.
 
 ```python
-import ast
-
 from captain_hook import Allow, Input, Warn, diff_lint
 
-
-def added_prints(pre: ast.AST, post: ast.AST) -> list[str]:
-    def prints(tree: ast.AST) -> set[int]:
-        return {
-            node.lineno
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "print"
-        }
-
-    return [f"line {n}" for n in sorted(prints(post) - prints(pre))]
-
-
 diff_lint(
-    added_prints,
+    pattern="print($$$)",
     message="This edit added a print() call: {violations}",
     tests={
         Input(tool="Edit", old="x = 1\n", content="x = 1\nprint(x)\n"): Warn(pattern="added a print"),
@@ -202,8 +187,28 @@ diff_lint(
 )
 ```
 
-`diff_lint` fires on `Edit` of `.py` files by default. For declarative AST rules scoped
-to the change, see [Style Rules](styleguide.qmd).
+For delta logic a pattern can't express, pass a check function instead: it receives
+the pre-edit and post-edit AST and returns violations for the delta.
+
+```python
+import ast
+
+from captain_hook import diff_lint
+
+
+def added_asserts_without_message(pre: ast.AST, post: ast.AST) -> list[str]:
+    def bare(tree: ast.AST) -> set[int]:
+        return {n.lineno for n in ast.walk(tree) if isinstance(n, ast.Assert) and n.msg is None}
+
+    return [f"line {n}" for n in sorted(bare(post) - bare(pre))]
+
+
+diff_lint(added_asserts_without_message, message="New assert without a message: {violations}")
+```
+
+`diff_lint` fires on `Edit` of `.py` files by default; in the pattern form, `lang`
+selects both the grammar and the file guard, so `lang="ts"` fires on `*.ts` edits.
+For declarative AST rules scoped to the change, see [Style Rules](styleguide.qmd).
 
 ## rewrite_command {#rewrite_command}
 

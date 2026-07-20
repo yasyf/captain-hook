@@ -167,18 +167,97 @@ def lint(
     )(handler)
 
 
+@overload
 def diff_lint(
     check: DiffCheck,
     *,
     message: str,
+    sep: str = ...,
+    block: bool = ...,
+    events: Event | None = ...,
+    tests: InlineTests | None = ...,
+    max_shown: int = ...,
+    only_if: Sequence[TCondition] = ...,
+    skip_if: Sequence[TCondition] = ...,
+) -> None: ...
+
+
+@overload
+def diff_lint(
+    *,
+    pattern: str,
+    message: str,
+    lang: str = ...,
+    sep: str = ...,
+    block: bool = ...,
+    events: Event | None = ...,
+    tests: InlineTests | None = ...,
+    max_shown: int = ...,
+    only_if: Sequence[TCondition] = ...,
+    skip_if: Sequence[TCondition] = ...,
+) -> None: ...
+
+
+def diff_lint(
+    check: DiffCheck | None = None,
+    *,
+    pattern: str | None = None,
+    message: str,
+    lang: str = "py",
     sep: str = ", ",
     block: bool = False,
     events: Event | None = None,
     tests: InlineTests | None = None,
     max_shown: int = 5,
-    only_if: Sequence[TCondition] = (Tool("Edit"), FilePath("*.py", project_only=False)),
+    only_if: Sequence[TCondition] | None = None,
     skip_if: Sequence[TCondition] = DEFAULT_SKIP_IF,
 ) -> None:
+    """Register a diff lint: flag only constructs the edit introduces.
+
+    Two modes, exactly one of ``check`` or ``pattern``:
+    - **Tree mode**: ``check`` receives the parsed pre- and post-edit trees as ``ast.AST`` and
+      returns violation strings for the delta (Python only).
+    - **ast-grep mode**: ``pattern`` is an ast-grep pattern string; every structural match present
+      in the new text but absent from the old becomes a ``"{snippet} (line N)"`` violation. Match
+      identity is the whitespace-normalized text, so a construct the edit merely moved never fires.
+      ``lang`` (default ``"py"``) selects the language *and* the file guard, like ``lint``.
+
+    Example:
+        >>> diff_lint(pattern="print($$$)", message="This edit added a print() call: {violations}")
+    """
+    if pattern is not None:
+        if check is not None:
+            raise TypeError("diff_lint takes either a check function or pattern=, not both or neither")
+
+        def pattern_handler(evt: BaseHookEvent) -> HookResult | None:
+            from captain_hook.ast_grep import find_introduced
+
+            if (old := evt.old) is None or (new := evt.content) is None:
+                return None
+            try:
+                violations = [
+                    f"{m.text.splitlines()[0]} (line {m.line})"
+                    for m in find_introduced(textwrap.dedent(old), textwrap.dedent(new), lang, pattern)
+                ]
+            except Exception:
+                logger.bind(pattern=pattern).opt(exception=True).warning("diff lint pattern check failed")
+                return None
+            return format_result(violations, message, sep, block, max_shown)
+
+        pattern_handler.__name__ = pattern_handler.__qualname__ = hook_name("diff_lint", None, message)
+        on(
+            events or Event.PostToolUse,
+            only_if=only_if
+            if only_if is not None
+            else (Tool("Edit"), FilePath(*SourceEdits(lang=lang).globs, project_only=False)),
+            skip_if=skip_if,
+            tests=tests,
+        )(pattern_handler)
+        return
+
+    if check is None:
+        raise TypeError("diff_lint takes either a check function or pattern=, not both or neither")
+
     def handler(evt: BaseHookEvent) -> HookResult | None:
         try:
             return run_diff_check(check, evt, message, sep, block, max_shown)
@@ -190,7 +269,7 @@ def diff_lint(
 
     on(
         events or Event.PostToolUse,
-        only_if=only_if,
+        only_if=only_if if only_if is not None else (Tool("Edit"), FilePath("*.py", project_only=False)),
         skip_if=skip_if,
         tests=tests,
     )(handler)
