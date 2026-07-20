@@ -362,10 +362,11 @@ class Cmd:
     over an already-parsed line, or ``Cmd.parse(text)`` (None when the text is too deeply nested
     to parse). A detached ``Cmd`` has no bound event, so :meth:`Call.sub` raises on it.
 
-    ``raw`` is the true original command text as written; ``str(cmd)`` returns it. It is set from
-    the source string at construction, so it survives a tree-sitter parse that degrades :attr:`line`
-    to empty — a conservative raw-regex still sees the full command. :attr:`q` and :attr:`line` expose
-    the parsed structure.
+    ``raw`` is the true original command text as written: ``str(cmd)`` returns it, and it is the
+    operand for raw-text matching — the :class:`~captain_hook.conditions.Command` regex and ``ast_grep``
+    search it, so a line that parses to zero commands (a comment, a shebang) still matches by its text.
+    ``bool(cmd)`` follows :attr:`raw`, staying truthy for such a line even when :attr:`line` is falsy.
+    :attr:`q` and :attr:`line` expose the parsed structure.
 
     Example:
         >>> if (call := evt.cmd.call("rm")) and len(call.targets.expand()) > 10:
@@ -381,6 +382,9 @@ class Cmd:
 
     def __str__(self) -> str:
         return self.raw
+
+    def __bool__(self) -> bool:
+        return bool(self.raw)
 
     @property
     def q(self) -> CommandLineQuery:

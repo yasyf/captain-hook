@@ -28,9 +28,14 @@ The three overlapping command accessors collapse to two names, with no compatibi
   raw-string uses — `in`, `.startswith`, `.split`, `re.*`, `==` — to `.raw`.
 - **`evt.command_line` is removed.** The parsed `CommandLine` lives at `evt.command.line`, and its
   fluent query moves from `evt.command_line.q` to `evt.command.q`.
-- **`Cmd` gains `.raw`, `str()`, and `.q`.** `Cmd.raw` is the true original command text, preserved even
-  when a degraded tree-sitter parse empties `.line`; `str(cmd)` returns it; `.q` delegates to the parsed
-  line's query.
+- **`Cmd` gains `.raw`, `str()`, `bool()`, and `.q`.** `Cmd.raw` is the true original command text —
+  `str(cmd)` returns it, and it is the operand for raw-text matching (the `Command` regex, `ast_grep`).
+  `bool(cmd)` follows `.raw`, so `if evt.command:` and `evt.command or default` keep their empty-command
+  short-circuit while non-empty misuse still fails loud downstream; `.q` delegates to the parsed line's query.
+- **The `Command` condition now matches lines that parse to zero commands.** A comment, shebang, or
+  otherwise command-less line is regex-searched against its raw text — previously skipped, since the old
+  `evt.command_line` was falsy when the parse yielded no commands — so a guard blocks in the fail-closed
+  direction: `# rm -rf /tmp/x` now matches `Command(r"rm\s+-rf")`.
 
 ## [11.0.0] - 2026-07-20
 

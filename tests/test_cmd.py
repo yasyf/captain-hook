@@ -222,6 +222,23 @@ class TestExpansionAndTargets:
         assert expansion.exhausted is False
 
 
+class TestBool:
+    def test_empty_command_is_falsy_and_short_circuits(self) -> None:
+        evt = evt_for("")
+        assert bool(evt.command) is False
+        assert (evt.command or "x") == "x"
+
+    def test_nonempty_command_is_truthy(self) -> None:
+        evt = evt_for("rm foo")
+        assert bool(evt.command) is True
+        assert (evt.command or "x") is evt.command
+
+    def test_comment_line_is_truthy_cmd_with_falsy_line(self) -> None:
+        cmd = Cmd.parse("# rm -rf /tmp/x")
+        assert bool(cmd) is True
+        assert bool(cmd.line) is False
+
+
 class TestDetachedAndSubGuards:
     def test_parse_builds_detached_cmd(self) -> None:
         cmd = Cmd.parse("rm foo; ls")
