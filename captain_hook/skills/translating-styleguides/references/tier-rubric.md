@@ -28,8 +28,8 @@ Use `StyleDiffRule` instead of `StyleRule` when the guide says "don't *add*" / "
 
 Deterministic on the tree, but the logic needs **cross-node aggregation**: counting,
 statement ordering, body-shape analysis, or comparing two constructs. Override
-`check(self, tree)` and yield `Violation(line, label)`; matchers still serve as
-selectors inside (`M.func.over(tree)`, `M.body_of(node)`).
+`check(self, change)` and yield `Violation(line, label)`; matchers still serve as
+selectors inside (`M.func.over(change.tree)`, `M.body_of(node)`).
 
 Special case: rules about **comments, docstrings, blank lines, or formatting** are not
 in the AST at all. Use the string-mode `lint()` primitive instead — pass a

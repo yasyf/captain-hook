@@ -74,7 +74,7 @@ Condensed:
   "a node that IS x AND/UNDER y"?
 - **Tier 2 — custom `check()`.** Deterministic on the tree but needs cross-node
   aggregation, counting, statement ordering, or body-shape analysis. Matchers still
-  serve as selectors inside (`M.func.over(tree)`). Rules about *comments* or
+  serve as selectors inside (`M.func.over(change.tree)`). Rules about *comments* or
   formatting are not in the AST — use string-mode `lint(fn: (content: str) -> list[str])`.
 - **Tier 3 — LLM.** Requires judging intent, scope, naming quality, or "is this
   justified?". `llm_nudge` by default (advisory); `llm_gate` only when the guide says
@@ -205,7 +205,7 @@ import ast
 from collections.abc import Iterator
 
 from captain_hook import Allow, Input, Warn
-from captain_hook.style import StyleRule, Violation, matchers as M, styleguide
+from captain_hook.style import Change, StyleRule, Violation, matchers as M, styleguide
 
 MUTABLE_LITERALS = (ast.List, ast.Dict, ast.Set)
 
@@ -303,8 +303,8 @@ class UseComprehensions(StyleRule):
         Input(file="app.py", content="def f(items):\n    return [i.value for i in items if i.ok]\n"): Allow(),
     }
 
-    def check(self, tree: ast.Module) -> Iterator[Violation]:
-        for node in ast.walk(tree):
+    def check(self, change: Change) -> Iterator[Violation]:
+        for node in ast.walk(change.tree):
             if (body := M.body_of(node)) is None:
                 continue
             for prev, loop in zip(body, body[1:]):
