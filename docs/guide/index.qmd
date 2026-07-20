@@ -34,17 +34,17 @@ inline tests and mock events.
 
 - [Style Rules](primitives.qmd#style-rules) authors AST-based style checks as data and registers them.
 - [LLM Hooks](llm-hooks.qmd) gates or nudges with an LLM evaluating the event.
-- [Query the transcript](transcript.qmd) reads the conversation history inside a handler.
-- [Signals](signals.qmd) scores patterns across the transcript to drive a nudge.
+- [Query the transcript](llm-hooks.qmd#query-the-transcript) reads the conversation history inside a handler.
+- [Signals](llm-hooks.qmd#score-patterns-with-signals) scores patterns across the transcript to drive a nudge.
 - [Real-World Patterns](primitives.qmd#worked-patterns) collects hooks distilled from a production hooks directory, ready to copy and adapt.
 - [Packs](packs.qmd) enables versioned hook collections — builtin (`general`, `python`), from GitHub, or discovered on enabled Claude plugins — instead of copying files into your repo.
 
 ### Advanced
 
 - [State & Sessions](state.qmd) persists data across hook invocations.
-- [Workflows](workflows.qmd) enforces a multi-step checklist before the agent can stop.
+- [Workflows](state.qmd#enforce-a-multi-step-workflow) enforces a multi-step checklist before the agent can stop.
 - [Session reviewer](session-reviewer.qmd) mines your ended sessions for durable corrections and opens hook PRs automatically.
-- [Watch corrections become hooks](corrections-lifecycle.qmd) reads `capt-hook status` to track each correction from watching to a merged PR.
-- [Configuration](configuration.qmd) tunes `HooksSettings`, the env prefix, and the state and log directories.
+- [Watch corrections become hooks](session-reviewer.qmd) reads `capt-hook status` to track each correction from watching to a merged PR.
+- [Configuration](packs.qmd#configure-hook-settings) tunes `HooksSettings`, the env prefix, and the state and log directories.
 - [Resident daemon](daemon.qmd) serves hook dispatch from a warm per-project worker, about 7x faster than cold.
 - [Troubleshooting](troubleshooting.qmd) diagnoses common errors with the right command.

@@ -1,8 +1,9 @@
 ---
-title: "Persist state across events"
+title: "State & workflows"
+aliases: [workflows.html]
 ---
 
-Hooks run stateless by default. Each invocation starts fresh and forgets the last. Session state gives a hook memory that survives across invocations within one Claude Code session, so you can count events, deduplicate warnings, and accumulate data over a whole session.
+Hooks run stateless by default. Each invocation starts fresh and forgets the last. Session state gives a hook memory that survives across invocations within one Claude Code session — count events, deduplicate warnings, accumulate data. Workflows build on the same machinery to hold a subagent to an ordered checklist before it stops.
 
 ## When to reach for state
 
@@ -14,7 +15,7 @@ A hook decision draws on three sources. Pick the smallest one that answers your 
 | Conditions | The transcript, recomputed every event | The answer lives in tool uses and messages already on record |
 | State | Custom Pydantic models written to disk | The answer is a computed value the transcript cannot reconstruct |
 
-Conditions read what already happened. A `RanCommand` condition tells you whether the agent ran tests, because the test command sits in the transcript. State holds values you compute and write yourself, like a running count, a cached score, or a set of paths you accumulated across edits. If the transcript already carries the answer, use a condition and skip state. See [conditions](../reference/conditions.qmd) for the full set. Reserve state for values you cannot derive from the transcript alone.
+Conditions read what already happened. A `RanCommand` condition tells you whether the agent ran tests, because the test command sits in the transcript. State holds values you compute and write yourself, like a running count, a cached score, or a set of paths you accumulated across edits. If the transcript already carries the answer, use a condition and skip state. Reserve state for values you cannot derive from the transcript alone.
 
 ## Read and write a slot
 
@@ -89,6 +90,17 @@ def require_tests(evt):
 
 Three handlers, one model, one stored file. Prefer `@workflow_state` over a loose bag of models whenever the data is conceptually one workflow.
 
+### Serialize racing writers with `mutate()`
+
+`load`, modify, `save` is last-writer-wins. Within one session that bites when several hooks race the same record — a batch of parallel tool calls can all read the same pre-increment value and clobber each other's writes. `WorkflowState.mutate(evt)` is a context manager that loads, yields, and saves under an exclusive file lock, so racing writers serialize instead:
+
+```python
+with ReviewState.mutate(evt) as state:
+    state.edits.append(str(evt.file.path))
+```
+
+Keep the block short — the lock is held until it exits — and never nest `mutate()` on the same slot within one process: the inner acquisition deadlocks on the outer lock.
+
 ## Register models with `@session_state`
 
 `@session_state` registers a plain model for collective introspection without adding the workflow methods. Use it when you want several models to surface together, for example to list their on-disk paths in a subagent's setup context.
@@ -134,7 +146,7 @@ def remember(evt):
 
 `scope` decides where the file lives. The default `"project"` gives each repo its own file, keyed by the repo root, so a learned fact stays scoped to the codebase it came from. `"global"` shares one file across every project on the machine. Choose it when the fact is repo-independent, like which shell commands emit JSON.
 
-A `DurableState` subclass carries the same `load(evt)`, `save(evt)`, and `reset(evt)` as `WorkflowState`. It adds one method the session store doesn't need. `mutate(evt)` is a context manager that holds a file lock for the whole block, and you reach for it on any write that accumulates into a collection. A durable file has concurrent writers across sessions, since two Claude Code sessions can fire the same hook at once. A plain `load`, modify, then `save` is last-writer-wins, so one session's addition silently overwrites the other's. `mutate` loads, yields, and saves under an exclusive lock, so writers serialize instead of clobbering. Keep the block short, since the lock is held until it exits.
+A `DurableState` subclass carries the same `load(evt)`, `save(evt)`, `reset(evt)`, and `mutate(evt)` as `WorkflowState`. Here `mutate` matters even more: a durable file has concurrent writers *across sessions*, since two Claude Code sessions can fire the same hook at once, and a plain load-modify-save silently loses one session's write. Reach for `mutate` on any write that accumulates into a collection; the same short-block and no-nesting rules apply.
 
 ::: {.callout-note title="Bounded collections"}
 A growing durable collection needs a cap, or it grows without bound. `Deque[256]` is a `deque[str]` capped at 256 that auto-evicts its oldest item on append and keeps its bound across reloads. Use `Deque[item, n]` to set the element type.
@@ -142,8 +154,190 @@ A growing durable collection needs a cap, or it grows without bound. `Deque[256]
 
 ## Where state lives
 
-Each session gets a directory keyed by a hash of its transcript path. A slot serializes its model to JSON at `~/.claude/state/hooks/sessions/<hash>/<hook>/<model_key>.json`, where the model key is the snake-case class name, so `ReviewState` becomes `review_state.json`. When a session's transcript is deleted, its state directory is cleaned up on the next run.
+Each session gets a directory keyed by its Claude Code session id. A slot serializes its model to JSON at `~/.claude/state/hooks/sessions/<session_id>/<state_key>/<agent_id>/<model_key>.json` — the agent segment is `main` for the top-level session and the agent id for a subagent, which is how per-agent budgets like `max_fires` stay separate. The model key is the snake-case class name, so `ReviewState` becomes `review_state.json`. When a session's transcript is deleted, its state directory is cleaned up on the next run.
 
 Durable state lives outside any session directory, so it outlives them. A `"global"` model writes to `~/.claude/state/hooks/durable/global/<model_key>.json`, and a `"project"` model writes to `~/.claude/state/hooks/durable/projects/<project-key>/<model_key>.json`, where the project key is the repo basename plus a hash of its path. A project-scoped model needs a resolvable repo root; running outside any project directory or git repo, it keeps its data in memory for that call and persists nothing.
 
-Set `CAPTAIN_HOOK_STATE_DIR` to relocate the root, which helps in CI sandboxes that forbid writes outside the workspace. The default is `~/.claude/state`. For every tunable setting, see [configuration](configuration.qmd).
+Set `CAPTAIN_HOOK_STATE_DIR` to relocate the root, which helps in CI sandboxes that forbid writes outside the workspace. The default is `~/.claude/state`. For every tunable setting, see [configuration](packs.qmd#configure-hook-settings).
+
+## Enforce a multi-step workflow
+
+Use a workflow when a subagent must finish an ordered checklist before it stops, such as running the linter, running the tests, then writing the report. A workflow blocks the stop and tells the agent which step to do next until every check passes. For a single yes-or-no gate, reach for `gate` instead — workflows earn their weight only when you have several ordered steps or on-disk artifacts to verify.
+
+### How the pieces fit together
+
+A workflow has three interlinked parts.
+
+The **marker** is a distinctive string the agent prints when it believes the whole checklist is done, such as `"QA COMPLETE"`. The workflow searches the transcript for it. While the marker is absent, the workflow walks the steps. Once the marker appears, the workflow stops checking steps and moves on to artifacts.
+
+::: {.callout-warning title="The marker is matched exactly"}
+The workflow searches the transcript for the marker as a literal substring, including case. `"QA COMPLETE"` and `"qa complete"` are different strings — a near-miss never satisfies the workflow, and the stop stays blocked. Choose a distinctive uppercase marker and print it verbatim.
+:::
+
+A **Step** is one checkpoint. It pairs a `check` predicate with a `message` that says what is missing and what to run next. The first step whose `check` returns `False` blocks the stop. An optional `name` labels the step at the call site.
+
+An **Artifact** is a file on disk that must exist and parse against a Pydantic model. Artifacts run only after the marker is found, so they verify the output of a finished checklist, not its progress.
+
+Here is the order in which a stop attempt flows through those parts:
+
+```
+SubagentStop
+     |
+     v
+  marker in transcript?
+     |
+     +-- no --> first Step whose check() is False
+     |              |
+     |              v
+     |          BLOCK: "<LABEL> INCOMPLETE: <message>"
+     |
+     +-- yes --> each Artifact in order
+                    |
+                    +-- missing / bad JSON / validate() returns a string
+                    |        |
+                    |        v
+                    |   BLOCK: "<LABEL> INCOMPLETE: <error>"
+                    |
+                    +-- all valid --> post_complete callback
+                                          |
+                                          +-- returns HookResult --> BLOCK or WARN
+                                          +-- returns None        --> ALLOW stop
+```
+
+A workflow registers a blocking hook on `SubagentStop` with `max_fires=1`, so once it allows the stop it never fires again that session.
+
+### Register a workflow
+
+Pass a `label`, a `marker`, and the ordered `steps` to `workflow()`. The `label` prefixes every block message, so uppercase names like `"QA-GATE"` stand out in the transcript.
+
+```python
+from captain_hook import workflow, Step, text_matches
+
+workflow(
+    label="QA-GATE",
+    marker="QA COMPLETE",
+    steps=[
+        Step(
+            name="run linter",
+            check=text_matches(r"ruff check"),
+            message="Linter has not been run. Run: ruff check src/",
+        ),
+        Step(
+            name="run tests",
+            check=text_matches(r"pytest.*passed"),
+            message="Tests have not been run. Run: pytest tests/ -x",
+        ),
+    ],
+)
+```
+
+When the agent tries to stop before running the linter, it sees the first step's messages joined under the label:
+
+```
+QA-GATE INCOMPLETE: Linter has not been run. Run: ruff check src/
+```
+
+For the full `workflow()` signature, including the `artifacts`, `post_complete`, `on_start`, `only_if`, and `skip_if` parameters, see the [primitives reference](../reference/primitives.qmd).
+
+### Write a step check
+
+A step's `check` receives the session transcript and returns a `bool`. You have two ways to write one.
+
+`text_matches(pattern)` runs a regex over the transcript's *prose* — assistant and user message text, never tool commands or their output. `text_matches(r"ruff check")` fires when the agent narrates "running `ruff check` now", not when it silently runs the command. That makes it right for checks on what the agent *said* (a self-review, a stated conclusion) and wrong for "did the agent run X":
+
+::: {.callout-warning title="`text_matches` scans prose, not commands"}
+Tool invocations and their output never enter the scan. For "did the agent actually run it," write a custom check over the tool history — `t.has_command("ruff", "check")` — or gate with the `RanCommand` condition instead of a workflow step.
+:::
+
+Write a plain function when the check needs the tool history. The function receives the transcript and queries it — the same API as [`evt.ctx.t`](llm-hooks.qmd#query-the-transcript):
+
+```python
+from cc_transcript.query import Session
+
+from captain_hook import Step
+
+
+def wrote_three_tests(t: Session) -> bool:
+    return t.tool_calls.named("Edit").touching("test_*.py").count() >= 3
+
+
+Step(
+    name="write tests",
+    check=wrote_three_tests,
+    message="Fewer than three test files were written. Write at least three test files before stopping.",
+)
+```
+
+### Verify on-disk artifacts
+
+When a step produces a file, add an `Artifact` to confirm the file exists and holds valid data. Artifacts run after the marker is found, so they check the finished output, not the steps. Each artifact names a `path`, a Pydantic `model` to parse the JSON against, and an optional `validate` callback that returns an error string to block or `None` to pass.
+
+```python
+from pydantic import BaseModel
+from captain_hook import workflow, Step, Artifact, text_matches
+
+class LintReport(BaseModel):
+    errors: int
+    warnings: int
+
+workflow(
+    label="QUALITY",
+    marker="QUALITY CHECK DONE",
+    steps=[
+        Step(
+            name="run linter",
+            check=text_matches(r"ruff check"),
+            message="Run the linter. Run: ruff check src/ --output-format json > reports/lint.json",
+        ),
+    ],
+    artifacts=[
+        Artifact(
+            path="reports/lint.json",
+            model=LintReport,
+            validate=lambda r: "Too many errors" if r.errors > 0 else None,
+        ),
+    ],
+)
+```
+
+A missing file, JSON that fails to parse against the model, or a non-empty `validate` return each blocks the stop with a labeled message:
+
+```
+QUALITY INCOMPLETE: reports/lint.json not found.
+```
+
+### Run a callback after everything passes
+
+Pass `post_complete` to run one final check once the marker, steps, and artifacts all pass. The callback receives the event and returns a `HookResult` to block or warn, or `None` to allow the stop.
+
+```python
+from captain_hook import workflow, Step, text_matches, HookResult, Action
+
+def warn_on_large_changeset(evt):
+    edits = evt.ctx.t.tool_calls.named("Edit").count()
+    if edits > 20:
+        return HookResult(
+            action=Action.warn,
+            message=f"Large changeset ({edits} edits). Consider splitting the PR.",
+        )
+    return None
+
+workflow(
+    label="REVIEW",
+    marker="REVIEW COMPLETE",
+    steps=[
+        Step(
+            name="self-review",
+            check=text_matches(r"self.review|code review"),
+            message="Perform a self-review. Review your changes against the style guide.",
+        ),
+    ],
+    post_complete=warn_on_large_changeset,
+)
+```
+
+A workflow is stateless across sessions. When a step needs to count events or remember earlier edits, read and write a Pydantic model through the session store above, then have the step's `check` consult it.
+
+### Debug a workflow that blocks too much
+
+When a workflow blocks where you expected it to pass, start with the marker. Its text must match the transcript exactly, including case, so `"QA COMPLETE"` and `"qa complete"` are different strings. Next, confirm the step's `check` matches the real transcript text — remembering that `text_matches` sees prose only — and loosen the regex to absorb formatting, preferring `text_matches(r"pytest.*passed")` over `text_matches(r"pytest passed")`. Finally, confirm the artifact file sits at the exact `path` and parses against its `model`.

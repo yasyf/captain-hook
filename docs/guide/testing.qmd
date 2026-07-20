@@ -163,7 +163,7 @@ tests={
 
 When a hook depends on session history, pass a `transcript` fixture so the
 [transcript conditions](../reference/conditions.qmd) have something to read. The
-[Query the transcript](transcript.qmd) guide shows how to build one.
+[Query the transcript](llm-hooks.qmd#query-the-transcript) guide shows how to build one.
 
 ## Run the same tests in CI
 
@@ -216,5 +216,5 @@ tests exercise wiring, not judgment — [LLM hooks](llm-hooks.qmd) owns that spl
 
 [Primitives & Verdicts](../reference/primitives.qmd) lists the full `Input` field set and
 the result-type contract. [Write an LLM hook](llm-hooks.qmd) covers splitting deterministic
-narrowing from model judgment, and [Query the transcript](transcript.qmd) shows how to
+narrowing from model judgment, and [Query the transcript](llm-hooks.qmd#query-the-transcript) shows how to
 build transcript fixtures for `Stop` gates.

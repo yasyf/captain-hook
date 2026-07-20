@@ -84,7 +84,7 @@ gate(
 )
 ```
 
-The agent can't end the turn until a pytest run shows up in the transcript, and the gate stands down on its own once one does. [More Stop-gate patterns.](docs/guide/workflows.qmd)
+The agent can't end the turn until a pytest run shows up in the transcript, and the gate stands down on its own once one does. [More Stop-gate patterns.](docs/guide/state.qmd#enforce-a-multi-step-workflow)
 
 ---
 

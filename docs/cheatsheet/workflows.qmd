@@ -3,8 +3,8 @@ title: "Workflows & state"
 ---
 
 Multi-step gates, session state, and signal scoring. The how-tos are
-[Enforce a multi-step workflow](../guide/workflows.qmd), [Persist state](../guide/state.qmd),
-and [Score patterns with signals](../guide/signals.qmd).
+[Enforce a multi-step workflow](../guide/state.qmd#enforce-a-multi-step-workflow), [Persist state](../guide/state.qmd),
+and [Score patterns with signals](../guide/llm-hooks.qmd#score-patterns-with-signals).
 
 ## 🪜 Multi-step gate
 
@@ -61,5 +61,5 @@ Signals([Signal(pattern=r"retry", weight=2), Signal(pattern=r"again")], threshol
 
 ## See also
 
-- [Enforce a multi-step workflow](../guide/workflows.qmd) · [Persist state](../guide/state.qmd) · [Score patterns with signals](../guide/signals.qmd)
+- [Enforce a multi-step workflow](../guide/state.qmd#enforce-a-multi-step-workflow) · [Persist state](../guide/state.qmd) · [Score patterns with signals](../guide/llm-hooks.qmd#score-patterns-with-signals)
 - Reference: [Primitives & verdicts](../reference/primitives.qmd) · [Conditions](../reference/conditions.qmd)

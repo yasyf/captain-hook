@@ -35,5 +35,5 @@ uvx capt-hook --hooks docs/examples test
 ## See also
 
 - [Write an LLM hook](../guide/llm-hooks.qmd)
-- [Query the transcript](../guide/transcript.qmd)
+- [Query the transcript](../guide/llm-hooks.qmd#query-the-transcript)
 - [LLM cost control](llm-cost-control.qmd)

@@ -37,6 +37,6 @@ uvx capt-hook --hooks docs/examples test
 
 ## See also
 
-- [Configuration](../guide/configuration.qmd)
+- [Configuration](../guide/packs.qmd#configure-hook-settings)
 - [Conditions reference](../reference/conditions.qmd)
 - [Primitives guide](../guide/primitives.qmd)

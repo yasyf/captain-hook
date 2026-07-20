@@ -86,7 +86,7 @@ far back it may sit. Under `scope="window"` the score pools distinct signals acr
 instead, counting each once. `origin` filters candidates upstream of either scope: the default
 `"assistant"` scores only the agent's own prose, while `origin="any"` also scores user messages and
 the just-submitted `UserPromptSubmit` prompt. See
-[Score patterns with signals](../guide/signals.qmd).
+[Score patterns with signals](../guide/llm-hooks.qmd#score-patterns-with-signals).
 
 | Type | Purpose | Example |
 |------|---------|---------|

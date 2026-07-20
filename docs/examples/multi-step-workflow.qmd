@@ -34,6 +34,6 @@ uvx capt-hook --hooks docs/examples test
 
 ## See also
 
-- [Workflows](../guide/workflows.qmd)
+- [Workflows](../guide/state.qmd#enforce-a-multi-step-workflow)
 - [Primitives reference](../reference/primitives.qmd)
-- [Transcript](../guide/transcript.qmd)
+- [Transcript](../guide/llm-hooks.qmd#query-the-transcript)
