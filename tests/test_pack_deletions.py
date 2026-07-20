@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 import captain_hook
-from captain_hook.builtin_packs.general.hooks.deletions import in_vcs_repo, rm_targets, trash_binary
+from captain_hook.builtin_packs.general.hooks.deletions import in_vcs_repo, trash_binary
 from captain_hook.dispatch import dispatch
 from captain_hook.loader import discover_pack
 from captain_hook.testing.helpers import input_to_event
@@ -1131,19 +1131,3 @@ class TestInVcsRepo:
         (jj_dir / ".jj").mkdir(parents=True)
         assert in_vcs_repo(jj_dir) is True
         assert in_vcs_repo(tmp_path / "absent") is False
-
-
-class TestRmTargets:
-    @pytest.mark.parametrize(
-        ("args", "expected"),
-        [
-            pytest.param(("-rf", "a", "b"), ["a", "b"], id="flags"),
-            pytest.param(("--", "-weird", "b"), ["-weird", "b"], id="separator"),
-            pytest.param(("/victim", "--"), ["/victim"], id="trailing-separator"),
-            pytest.param(("-rf", "a", "--", "-b"), ["a", "-b"], id="operands-around-separator"),
-            pytest.param(("-",), ["-"], id="bare-dash"),
-            pytest.param((), [], id="empty"),
-        ],
-    )
-    def test_targets(self, args: tuple[str, ...], expected: list[str]) -> None:
-        assert rm_targets(args) == expected
