@@ -4,6 +4,34 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — fluent command API (`evt.cmd`)
+
+`Cmd`, `Call`, `Target`, `Targets`, and `Expansion` are now public, exported types. `evt.cmd` walks
+every invocation in a Bash line — nested `sh -c`/`eval` payloads and command substitutions included —
+via `evt.cmd.calls(name)` / `evt.cmd.call(name)`. Each `Call` exposes its operands as `Target`s through
+`call.targets`, expands globs under a blast-radius cap with `call.targets.expand()`, and rewrites an
+executable in place with `call.sub(old, new)` — subs accumulate on the line and splice back through the
+event, so a compound command rewrites atomically or not at all. The rm-guard is built on this surface.
+
+### Changed (BREAKING) — one command surface: `evt.command` is the parsed `Cmd`
+
+The three overlapping command accessors collapse to two names, with no compatibility shim.
+
+- **`evt.cmd` is on every event.** The fluent walker, previously only on `PreToolUse` and
+  `PermissionRequest`, is a `cached_property` on every hook event — always a `Cmd`, empty for a non-Bash
+  or absent command, so a handler never guards before walking it. `Call.sub` still requires a
+  rewrite-capable event and raises on any other.
+- **`evt.command` now returns the parsed `Cmd`.** It is an alias for `evt.cmd`, no longer a raw string.
+  Read the raw command text with `evt.command.raw` or `str(evt.command)` (`""` for non-Bash). Migrate
+  raw-string uses — `in`, `.startswith`, `.split`, `re.*`, `==` — to `.raw`.
+- **`evt.command_line` is removed.** The parsed `CommandLine` lives at `evt.command.line`, and its
+  fluent query moves from `evt.command_line.q` to `evt.command.q`.
+- **`Cmd` gains `.raw`, `str()`, and `.q`.** `Cmd.raw` is the true original command text, preserved even
+  when a degraded tree-sitter parse empties `.line`; `str(cmd)` returns it; `.q` delegates to the parsed
+  line's query.
+
 ## [11.0.0] - 2026-07-20
 
 ### Changed (BREAKING) — packs are now two providers, zero consumer config
