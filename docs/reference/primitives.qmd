@@ -3,7 +3,7 @@ title: "Primitives & verdicts"
 ---
 
 Every built-in primitive, its signature, and the verdict types the LLM primitives use.
-The [Guide](../guide/index.qmd) how-tos teach which one to reach for.
+The [Guide](../guide/how-it-works.qmd) how-tos teach which one to reach for.
 
 ## At a glance
 

@@ -4,7 +4,7 @@ title: "Reference"
 
 The facts tier: accurate, complete, and neutral. Every tutorial and how-to links here rather
 than restating signatures. For tasks ("how do I gate a command?"), start in the
-[Guide](../guide/index.qmd); for a one-line snippet to copy, scan the
+[Guide](../guide/how-it-works.qmd); for a one-line snippet to copy, scan the
 [Cheatsheet](../cheatsheet/index.qmd); this section is for looking up the exact signature.
 
 ## Curated tables
