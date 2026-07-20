@@ -3,7 +3,7 @@ title: "Conditions"
 ---
 
 Every condition type, in one place. Use conditions in `only_if` (all must match) or `skip_if`
-(any match skips the hook). [Filter hooks with conditions](../guide/conditions.qmd) shows how to
+(any match skips the hook). [Filter hooks with conditions](../guide/primitives.qmd#filter-with-conditions) shows how to
 pick and combine them.
 
 ## Current event
@@ -60,7 +60,7 @@ condition types, wrap them: `Or(*conds)` (any), `And(*conds)` (all — useful ne
 
 `CustomCondition` is a `runtime_checkable` protocol. Any frozen dataclass with a
 `check(self, evt: BaseHookEvent) -> bool` method satisfies it and slots into `only_if`/`skip_if`.
-See [Write a custom condition](../guide/conditions.qmd#write-a-custom-condition) for a worked example.
+See [Write a custom condition](../guide/primitives.qmd#write-a-custom-condition) for a worked example.
 
 Two typed base classes narrow `check` to one shape of input. Subclass and implement the
 inner method; the base handles narrowing and skips events that don't apply.
@@ -74,8 +74,8 @@ inner method; the base handles narrowing and skips events that don't apply.
 `call` arrives typed for direct field access like `call.limit` and `call.file_path`.
 `CustomCommandLineCondition` receives the parsed `CommandLine`; query it via `cl.q`, whose
 methods are `runs`, `has_subcommand`, `contains_token`, and `uses_redirect`. See
-[Match a typed tool call](../guide/conditions.qmd#match-a-typed-tool-call) and
-[Match a structured command line](../guide/conditions.qmd#match-a-structured-command-line).
+[Match a typed tool call](../guide/primitives.qmd#match-a-typed-tool-call) and
+[Match a structured command line](../guide/primitives.qmd#match-a-structured-command-line).
 
 ## Signals (scoring)
 

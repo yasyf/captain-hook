@@ -137,5 +137,5 @@ def my_check(evt): ...
 
 ## See also
 
-- How-tos: [Deterministic primitives](../guide/primitives.qmd) · [LLM hooks](../guide/llm-hooks.qmd) · [Filter with conditions](../guide/conditions.qmd)
+- How-tos: [Deterministic primitives](../guide/primitives.qmd) · [LLM hooks](../guide/llm-hooks.qmd) · [Filter with conditions](../guide/primitives.qmd#filter-with-conditions)
 - Reference: [Primitives & verdicts](../reference/primitives.qmd) · [Conditions](../reference/conditions.qmd) · [Events](../reference/events.qmd)

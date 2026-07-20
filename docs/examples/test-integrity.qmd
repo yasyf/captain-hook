@@ -42,5 +42,5 @@ uvx capt-hook --hooks docs/examples test
 ## See also
 
 - [LLM hooks](../guide/llm-hooks.qmd)
-- [conditions](../guide/conditions.qmd)
+- [conditions](../guide/primitives.qmd#filter-with-conditions)
 - [matchers](../reference/matchers.qmd)

@@ -1,82 +1,32 @@
 ---
-title: "Deterministic primitives"
+title: "Writing hooks"
+aliases: [conditions.html, styleguide.html, patterns.html]
 ---
 
-Primitives are one-call helpers that register a hook for a common pattern. They
-target the right events, count fires, and suppress echo for you, so a fired message the agent repeats back doesn't re-trigger the hook. The deterministic primitives decide the outcome with a regex, an AST walk, or a predicate, no model call. For the LLM-backed primitives, see [LLM Hooks](llm-hooks.qmd).
+A hook is a primitive plus conditions. The primitive says what happens — block, warn, rewrite, gate — and the conditions say when. Most hooks are one call: pick the primitive, scope it with `only_if`/`skip_if`, attach `tests={...}`, done. This page covers the deterministic primitives, the condition system, and AST style rules; new to the framework, start with the [quickstart](../getting-started/quickstart.qmd) and come back for the production patterns.
 
 ## Pick a primitive
 
 Start from what you want to enforce.
 
-- For a Bash command, [`block_command`](#block_command) denies it,
-  [`warn_command`](#warn_command) flags it without stopping it, and
-  [`rewrite_command`](#rewrite_command) swaps it for a better one before it runs.
+- For a Bash command, [`block_command`](commands.qmd) denies it, [`warn_command`](commands.qmd) flags it after it ran, and [`rewrite_command`](commands.qmd) swaps it for a better one before it runs — all three live on [Inspect and rewrite commands](commands.qmd).
 - Advise the agent when conditions or accumulating signals fire, go to [`nudge`](#nudge).
 - Require something done before the agent finishes, go to [`gate`](#gate).
 - Check a Python edit against a rule, go to [`lint`](#lint).
 - Flag only what an edit changed, go to [`diff_lint`](#diff_lint).
+- Enforce a whole style guide as AST rules, go to [Style rules](#style-rules).
 - Install the binary a pack's hooks shell out to, go to [`install_binary`](#install_binary).
+- Answer a permission dialog before the user sees it, go to [`approve`](#approve); refuse one outright, go to [`deny`](#deny).
 
-To answer a permission dialog before the user sees it, go to [`approve`](#approve);
-to refuse one outright, go to [`deny`](#deny).
-
-Each primitive accepts `tests={...}` mapping an `Input` to a `Block`, `Warn`, or
-`Allow` expectation. Run them with `uvx capt-hook test`. The
-[primitives reference](../reference/primitives.qmd) holds every full signature.
+Each primitive accepts `tests={...}` mapping an `Input` to a `Block`, `Warn`, or `Allow` expectation — run them with `uvx capt-hook test` ([Test hooks inline](testing.qmd)). The [primitives reference](../reference/primitives.qmd) holds every full signature. For the model-backed `llm_gate`, `llm_nudge`, and `llm_approve`, see [LLM hooks](llm-hooks.qmd).
 
 ::: {.callout-tip title="Prefer declarative"}
-A custom predicate belongs in a [`CustomCondition.check()`](conditions.qmd#write-a-custom-condition)
-and fires through a declarative `nudge`, `gate`, or `hook`. Reach for an `@on` handler only when you
-need threaded session state, a per-event message computed at runtime, an LLM evaluation, or
-command-line AST queries.
+A custom predicate belongs in a [`CustomCondition.check()`](#write-a-custom-condition) — including parsed-command checks, via [`CustomCommandLineCondition`](#match-a-structured-command-line) — and fires through a declarative `nudge`, `gate`, or `hook`. Reach for an `@on` handler when the hook *acts* rather than matches: threaded session state, a message computed per event, or a [fluent `evt.command` walk that rewrites the call](commands.qmd).
 :::
-
-## block_command {#block_command}
-
-Block a Bash command before it runs. Pass a token list and captain-hook builds a
-whitespace-tolerant regex, so `["git", "stash"]` matches `git stash` and `git stash pop`.
-
-```python
-from captain_hook import Allow, Block, Input, block_command
-
-block_command(
-    ["git", "stash"],
-    reason="Use the team's VCS workflow for shelving changes",
-    hint="Commit a WIP change instead",
-    tests={
-        Input(command="git stash"): Block(),
-        Input(command="git stash pop"): Block(),
-        Input(command="git status"): Allow(),
-    },
-)
-```
-
-Pass a raw string when you need a precise pattern, such as
-`r"git\s+push\s+--force(?!-)"` to block a force-push while allowing `--force-with-lease`.
-
-## warn_command {#warn_command}
-
-Warn on a command without blocking it. The agent sees the message and keeps going.
-
-```python
-from captain_hook import Allow, Input, Warn, warn_command
-
-warn_command(
-    ["python", "-c"],
-    message="Prefer `uv run mtest` over raw `python -c`",
-    tests={
-        Input(command="python -c 'print(1)'"): Warn(),
-        Input(command="uv run mtest"): Allow(),
-    },
-)
-```
 
 ## nudge {#nudge}
 
-Advise the agent when a condition holds or when signals accumulate. A plain nudge with
-`only_if` fires once on the next matching tool use. Add `signals` to fire only after the
-transcript crosses a weighted threshold, which catches a pattern like repeated retries.
+Advise the agent when a condition holds or when signals accumulate. A plain nudge with `only_if` fires once on the next matching tool use. Add `signals` to fire only after the transcript crosses a weighted threshold, which catches a pattern like repeated retries.
 
 ```python
 from captain_hook import Allow, Input, Signal, Signals, Warn, nudge
@@ -90,55 +40,50 @@ nudge(
         ],
         threshold=3,
         window=10,
+        scope="window",
     ),
     tests={
         Input(transcript=[
-            {"role": "assistant", "content": "let me try again"},
-            {"role": "assistant", "content": "retry the suite"},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "let me try again"}]}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "retry the suite"}]}},
         ]): Warn(pattern="failing test"),
-        Input(transcript=[{"role": "assistant", "content": "all green"}]): Allow(),
-    },
-)
-```
-
-A nudge with `signals` defaults to `PostToolUse`; without them it defaults to
-`PreToolUse`. See [Signals](signals.qmd) for the scoring model.
-
-## gate {#gate}
-
-Require something done before the agent stops. A gate is a blocking nudge on the
-`Stop | SubagentStop` events, so it holds the turn open until the work is complete.
-
-```python
-from captain_hook import Allow, Block, Input, RanCommand, Waiting, gate
-
-gate(
-    "Run the tests before stopping.",
-    skip_if=[Waiting(), RanCommand("uv", "run", "mtest")],
-    tests={
         Input(transcript=[
-            {"role": "assistant", "content": "edited the parser"},
-        ]): Block(pattern="Run the tests"),
-        Input(transcript=[
-            {"role": "assistant", "content": "ran `uv run mtest`, all green"},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "all green"}]}},
         ]): Allow(),
     },
 )
 ```
 
-A gate is the same as `nudge(message, block=True, ...)`.
+`scope="window"` scores signals across the whole window; the default `scope="text"` requires one message to reach the threshold on its own. Transcript fixtures use the raw JSONL shape — `{"type": ..., "message": {"content": [...]}}` — exactly as Claude Code writes it; [Query the transcript](transcript.qmd) shows how to capture one. A nudge with `signals` defaults to `PostToolUse`; without them it defaults to `PreToolUse`. See [Signals](signals.qmd) for the scoring model.
 
-Stop gates are wait-aware by default. They skip while the agent waits on background work
-such as a running `Workflow`, an async sub-agent, or a `ScheduleWakeup` loop, then re-fire
-once that work resumes. A `skip_if` you pass composes additively with that automatic
-[`Waiting()`](../reference/conditions.qmd) guard instead of replacing it, so the gate
-stays wait-aware alongside whatever else you skip on.
+## gate {#gate}
+
+Require something done before the agent stops. A gate is a blocking nudge on the `Stop | SubagentStop` events — the same as `nudge(message, block=True, ...)` — so it holds the turn open until the work is complete.
+
+```python
+from captain_hook import Allow, Block, Input, RanCommand, gate
+
+gate(
+    "Run the tests before stopping.",
+    skip_if=[RanCommand("uv", "run", "mtest")],
+    tests={
+        Input(transcript=[
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "edited the parser"}]}},
+        ]): Block(pattern="Run the tests"),
+        Input(transcript=[
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "uv run mtest"}},
+            ]}},
+        ]): Allow(),
+    },
+)
+```
+
+Stop gates are wait-aware by default. They skip while the agent waits on background work such as a running `Workflow`, an async sub-agent, or a `ScheduleWakeup` loop, then re-fire once that work resumes. A `skip_if` you pass composes additively with that automatic [`Waiting()`](../reference/conditions.qmd) guard instead of replacing it — don't add `Waiting()` yourself.
 
 ## lint {#lint}
 
-Check a Python edit against a rule. captain-hook infers the mode from the check's first
-parameter. A `str` parameter receives the file content; an `ast.AST` parameter receives
-each walked node. The check returns violation strings spliced into `{violations}`.
+Check a Python edit against a rule. captain-hook infers the mode from the check's first parameter. A `str` parameter receives the file content; an `ast.AST` parameter receives each walked node. The check returns violation strings spliced into `{violations}`.
 
 ```python
 import ast
@@ -163,16 +108,11 @@ lint(
 )
 ```
 
-Lints fire on `PostToolUse` for `Edit` and `Write` of `.py` files, and skip test files.
-The `trigger` substring is a cheap pre-filter, so captain-hook parses only when the
-source contains it.
+Lints fire on `PostToolUse` for `Edit` and `Write` of `.py` files, and skip test files. The `trigger` substring is a cheap pre-filter, so captain-hook parses only when the source contains it.
 
 ## diff_lint {#diff_lint}
 
-Flag only what an edit changed, so a rule fires on a newly added construct without
-nagging about code the edit left alone. The pattern form takes an ast-grep pattern
-and warns when the edit introduces a new structural match. Matches are compared by
-their text, not their line numbers, so a construct the edit merely moved never fires.
+Flag only what an edit changed, so a rule fires on a newly added construct without nagging about code the edit left alone. The pattern form takes an ast-grep pattern and warns when the edit introduces a new structural match. Matches are compared by their text, not their line numbers, so a construct the edit merely moved never fires.
 
 ```python
 from captain_hook import Allow, Input, Warn, diff_lint
@@ -181,14 +121,13 @@ diff_lint(
     pattern="print($$$)",
     message="This edit added a print() call: {violations}",
     tests={
-        Input(tool="Edit", old="x = 1\n", content="x = 1\nprint(x)\n"): Warn(pattern="added a print"),
-        Input(tool="Edit", old="print(1)\n", content="print(1)\nx = 2\n"): Allow(),
+        Input(tool="Edit", file="app.py", old="x = 1\n", content="x = 1\nprint(x)\n"): Warn(pattern="added a print"),
+        Input(tool="Edit", file="app.py", old="print(1)\n", content="print(1)\nx = 2\n"): Allow(),
     },
 )
 ```
 
-For delta logic a pattern can't express, pass a check function instead: it receives
-the pre-edit and post-edit AST and returns violations for the delta.
+For delta logic a pattern can't express, pass a check function instead: it receives the pre-edit and post-edit AST and returns violations for the delta.
 
 ```python
 import ast
@@ -206,78 +145,11 @@ def added_asserts_without_message(pre: ast.AST, post: ast.AST) -> list[str]:
 diff_lint(added_asserts_without_message, message="New assert without a message: {violations}")
 ```
 
-`diff_lint` fires on `Edit` of `.py` files by default; in the pattern form, `lang`
-selects both the grammar and the file guard, so `lang="ts"` fires on `*.ts` edits.
-For declarative AST rules scoped to the change, see [Style Rules](styleguide.qmd).
-
-## rewrite_command {#rewrite_command}
-
-Swap a Bash command for a better one before it runs, instead of blocking and making the
-agent retry. The hook fires on `PreToolUse` for Bash and replaces the command, surfacing
-`note` as context so the model sees the substitution. It has two forms.
-
-The **regex form** takes a `pattern` and a `replace` template and rewrites matching
-commands with `re.sub`. Use it for a fixed textual swap.
-
-```python
-from captain_hook import Allow, Input, Rewrite, rewrite_command
-
-rewrite_command(
-    r"^cat\s+(\S+)$",
-    r"ccx read \1 --full",
-    note="Rewrote cat to ccx read",
-    tests={
-        Input(command="cat README.md"): Rewrite(pattern="ccx read README.md"),
-        Input(command="grep foo bar.py"): Allow(),
-    },
-)
-```
-
-`Rewrite(pattern=...)` matches a substring of the rewritten command, so it survives any
-absolute-path prefix the rewrite adds.
-
-The **conditional form** takes `to=`, a callable that maps the event to its new command.
-The hook fires on every Bash command, gated by `[Tool("Bash"), *only_if]`. Your `to`
-callable receives the event, reads `evt.command` for the raw string or `evt.command_line`
-for the parsed form, and returns the rewritten command, or `None` to block with `block`.
-Reach for it when the decision depends on parsed structure, not a fixed textual swap.
-
-```python
-from captain_hook import Block, Input, Rewrite, rewrite_command
-
-
-def to_safe_push(evt):
-    cl = evt.command_line
-    if not cl.q.runs("git", "push") or not cl.q.contains_token("--force"):
-        return evt.command  # not a bare force-push; leave it untouched
-    if cl.q.contains_token("--force-with-lease"):
-        return None  # already lease-guarded but flagged here; block to be explicit
-    return evt.command.replace("--force", "--force-with-lease", 1)
-
-
-rewrite_command(
-    to=to_safe_push,
-    block="Use --force-with-lease, not a bare force-push.",
-    note="Rewrote --force to the lease form.",
-    tests={
-        Input(command="git push --force origin main"): Rewrite(pattern="--force-with-lease"),
-        Input(command="git push --force --force-with-lease"): Block(pattern="lease"),
-    },
-)
-```
-
-A `to` callable that returns `None` blocks with `block`; otherwise it returns the command
-string, rewritten or unchanged to leave it alone. `note` may itself be a callable computed
-from the event when the conditional form needs a per-command message. Passing both
-`(pattern, replace)` and `to=`, or neither, raises `TypeError`.
+`diff_lint` fires on `Edit` of `.py` files by default; in the pattern form, `lang` selects both the grammar and the file guard, so `lang="ts"` fires on `*.ts` edits. For declarative AST rules scoped to the change, see [Style rules](#style-rules).
 
 ## approve {#approve}
 
-Answer a permission dialog with *allow* before the user sees it. The hook fires on
-`PermissionRequest`, the event Claude Code raises when a dialog would appear, and carries
-no fire cap, so every matching dialog is answered. In the tests, `Allow(explicit=True)`
-asserts the hook actually answered the dialog, and `Ask()` asserts it stayed out of the
-way so the dialog shows.
+Answer a permission dialog with *allow* before the user sees it. The hook defaults to `PreToolUse | PermissionRequest`: the `PermissionRequest` half answers the dialog Claude Code raises, and the `PreToolUse` half pre-authorizes one stage earlier — which is what covers dialogs forwarded from teammates, where the dialog stage runs no hooks at all. It carries no fire cap, so every matching dialog is answered. In the tests, `Allow(explicit=True)` asserts the hook actually answered, and `Ask()` asserts it stayed out of the way so the dialog shows.
 
 ```python
 from captain_hook import Allow, Ask, FromSubagent, Input, SkipPermissions, Tool, approve
@@ -299,12 +171,11 @@ approve(
 
 ## deny {#deny}
 
-Answer a permission dialog with *deny*. The first argument is both the hook's label and
-the message the user sees. Like `approve`, it fires on every matching `PermissionRequest`
-with no cap.
+Answer a permission dialog with *deny*. The first argument is both the hook's label and the message the user sees. Same event default and no fire cap as `approve`.
 
 ```python
-from captain_hook import Ask, Block, Command, FromSubagent, Input, deny
+from captain_hook import Ask, Block, FromSubagent, Input, deny
+from captain_hook.types import Command
 
 deny(
     "No force pushes from subagents",
@@ -316,17 +187,11 @@ deny(
 )
 ```
 
-An unconditioned `deny()` rejects every dialog, which bricks every prompting tool, so
-scope it the same way. For the LLM-judged variant that approves only what a safety rubric
-clears, see [`llm_approve`](llm-hooks.qmd#llm_approve).
+Note the import: the `Command` *condition* lives in `captain_hook.types` — top-level `captain_hook.Command` is the parsed-command dataclass, a different class that fails loudly if you pass it to `only_if` ([details](commands.qmd)). An unconditioned `deny()` rejects every dialog, which bricks every prompting tool, so scope it the same way. For the LLM-judged variant that approves only what a safety rubric clears, see [`llm_approve`](llm-hooks.qmd#llm_approve).
 
 ## install_binary {#install_binary}
 
-Provision the binary a pack's hooks shell out to. The hook fires on `SessionStart` —
-every start, resume, clear, and compact — and runs your installer script with `/bin/sh`,
-asynchronously, so a slow download never delays the session. The script path resolves
-relative to the file that calls `install_binary`, and the script runs with its own
-directory as the working directory.
+Provision the binary a pack's hooks shell out to. The hook fires on `SessionStart` — every start, resume, clear, and compact — and runs your installer script with `/bin/sh`, asynchronously, so a slow download never delays the session. The script path resolves relative to the file that calls `install_binary`, and the script runs with its own directory as the working directory.
 
 ```python
 from captain_hook import install_binary
@@ -334,14 +199,9 @@ from captain_hook import install_binary
 install_binary("../scripts/install-binary.sh")
 ```
 
-The handler always allows. A missing script, a non-zero exit, or a timeout is logged and
-swallowed — provisioning failure is diagnosable, never fatal. `uvx capt-hook logs` shows
-each run: INFO on a clean exit, WARNING with a stderr tail otherwise.
+The handler always allows. A missing script, a non-zero exit, or a timeout is logged and swallowed — provisioning failure is diagnosable, never fatal. `uvx capt-hook logs` shows each run: INFO on a clean exit, WARNING with a stderr tail otherwise.
 
-There is deliberately no already-installed check. The script owns idempotency: make it
-short-circuit when the binary is current, and a session where nothing changed costs one
-`/bin/sh` exec. A capt-hook-side presence check would pin consumers to stale binaries
-across plugin updates.
+There is deliberately no already-installed check. The script owns idempotency: make it short-circuit when the binary is current, and a session where nothing changed costs one `/bin/sh` exec. A capt-hook-side presence check would pin consumers to stale binaries across plugin updates.
 
 ::: {.callout-warning title="Don't pass firing tests"}
 `install_binary` accepts `tests={...}` like any primitive, but an inline test that fires
@@ -349,12 +209,287 @@ executes your real installer in every repo that runs `uvx capt-hook test`. Keep 
 coverage in a standalone test file with a stub script.
 :::
 
-[Ship a pack in a Claude plugin](plugin-packs.qmd#provision-the-packs-binary) shows the
-plugin-tier setup this primitive was built for.
+[Ship a pack in a Claude plugin](plugin-packs.qmd) shows the plugin-tier setup this primitive was built for.
 
----
+## Filter with conditions
+
+Conditions decide when a hook fires. Every registration takes two lists: a hook fires when **every** `only_if` condition matches and **no** `skip_if` condition does.
+
+```python
+from captain_hook import hook, Event, Tool, RanCommand
+from captain_hook.types import Command
+
+hook(
+    Event.PreToolUse,
+    message="git stash is not allowed; use jj",
+    block=True,
+    only_if=[Tool("Bash"), Command(r"git\s+stash")],
+    skip_if=[RanCommand("jj", "shelve")],
+)
+```
+
+For an "or" inside one condition, use pipe-alternation instead of separate entries. `Tool("Edit|Write")` matches either tool. `Tool("Edit"), Tool("Write")` requires both, which no event satisfies.
+
+### Pick a condition
+
+| You want to match | Use |
+|---|---|
+| A file path | `FilePath("*.py", "*.pyi")` |
+| A bash command | `Command(r"git\s+push")` — or the structural [`Runs`](commands.qmd) |
+| An edit to a source file in a language | `SourceEdits(lang="ts")` |
+| The current tool | `Tool("Bash")` |
+| A file edited earlier this session | `TouchedFile("**/*.py")` |
+| A command run earlier this session | `RanCommand("uv", "run", "mtest")` |
+| A typed tool call's fields | `CustomInputTypeCondition[ReadCall]` |
+| A parsed Bash command line | `CustomCommandLineCondition` |
+
+The first four inspect the current event; `TouchedFile` and `RanCommand` inspect the session transcript, so they tell you whether something already happened. The last two are typed custom-condition bases, covered below. For every condition with its pattern type and defaults, see the [conditions reference](../reference/conditions.qmd).
+
+`FilePath`, `Content`, `TestFile`, and `SourceEdits` match project files only by default — pass `project_only=False` to target scratch files, attachments, or logs. `SourceEdits` skips test files unless you pass `include_tests=True`. `ToolInput` reads one top-level field of any tool's raw input; `WorkflowScript` reads a `Workflow` script whether it arrives inline or as a `script_path` on disk.
+
+::: {.callout-tip title="Regex patterns"}
+`Tool`, `Command`, and `Content` match with regex — escape special characters and use
+raw strings (`r"..."`) to avoid backslash issues. `RanCommand` takes argv tokens instead:
+matching is wrapper-transparent (`sudo`/`env`/`timeout` are stripped) but launcher-literal,
+so list `RanCommand("uv", "run", "pytest")` and `RanCommand("pytest")` as separate entries.
+:::
+
+### Write a custom condition {#write-a-custom-condition}
+
+When no built-in fits, implement `CustomCondition`. It is a `runtime_checkable` Protocol, so any frozen dataclass with a `check(self, evt) -> bool` method satisfies it. Carry configuration as fields.
+
+```python
+from dataclasses import dataclass
+from captain_hook import CustomCondition, BaseHookEvent, hook, Event
+
+@dataclass(frozen=True)
+class MinEdits(CustomCondition):
+    threshold: int = 5
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return evt.ctx.t.tool_calls.named("Edit").count() >= self.threshold
+
+hook(Event.Stop, message="Many edits, run a review", only_if=[MinEdits(threshold=10)])
+```
+
+Use a custom condition like any built-in in either list. The predicate goes in `check()`; the firing goes through a primitive, never an `@on` body.
+
+### Match a typed tool call {#match-a-typed-tool-call}
+
+When your predicate only makes sense for one tool, subclass `CustomInputTypeCondition[T]` instead of reading raw payload fields. Parameterize it with the tool-call type and implement `check_input(self, evt, call)`. The base narrows `evt.input` to that type and skips every other tool, so `call` arrives typed.
+
+```python
+from captain_hook import CustomInputTypeCondition, BaseHookEvent, ReadCall, nudge, Event
+
+class BigRead(CustomInputTypeCondition[ReadCall]):
+    def check_input(self, evt: BaseHookEvent, call: ReadCall) -> bool:
+        return call.limit is not None and call.limit > 1000
+
+nudge(
+    "Reading more than 1000 lines; narrow with offset/limit or grep first.",
+    only_if=[BigRead()],
+    events=Event.PreToolUse,
+)
+```
+
+`ReadCall` exposes `.file_path`, `.offset`, and `.limit`; the other `*Call` types carry their own typed fields. The same narrowing is available imperatively via [`evt.as_input(ReadCall)`](../reference/events.qmd).
+
+### Match a structured command line {#match-a-structured-command-line}
+
+`Command` matches the command text with a regex. When you need the parsed structure — which executable runs, whether a flag or subcommand appears — subclass `CustomCommandLineCondition` and implement `check_command_line(self, evt, cl)`. The base skips every event without a Bash command, so `cl` arrives as a parsed `CommandLine` ready to query. These conditions fire on tool events, so set `events=` explicitly when registering through a Stop-defaulting primitive like `gate`:
+
+```python
+from captain_hook import CustomCommandLineCondition, BaseHookEvent, CommandLine, Event, hook
+
+class PushesWithoutLease(CustomCommandLineCondition):
+    def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
+        return cl.q.runs("git", "push") and not cl.q.contains_token("--force-with-lease")
+
+hook(
+    Event.PreToolUse,
+    message="Force-push without --force-with-lease. Use the lease form.",
+    block=True,
+    only_if=[PushesWithoutLease()],
+)
+```
+
+`cl` is the same object as `evt.command.line`, and `cl.q` carries the query predicates (`runs`, `has_subcommand`, `contains_token`, `uses_redirect`). For the full parsed surface — walking calls, judging blast radius, rewriting — see [Inspect and rewrite commands](commands.qmd).
+
+### Worked patterns
+
+Require tests after editing source files, and skip the gate once they pass.
+
+```python
+from captain_hook import hook, Event, TouchedFile, RanCommand
+
+hook(
+    Event.Stop,
+    message="Source files changed; run tests before stopping",
+    block=True,
+    only_if=[TouchedFile("src/**/*.py")],
+    skip_if=[RanCommand("uv", "run", "mtest")],
+)
+```
+
+Block history-rewriting commands, except during plan mode.
+
+```python
+from captain_hook import hook, Event, Tool, InPlanMode
+from captain_hook.types import Command
+
+hook(
+    Event.PreToolUse,
+    message="This command modifies git history",
+    block=True,
+    only_if=[Tool("Bash"), Command(r"git\s+(rebase|reset|push\s+--force)")],
+    skip_if=[InPlanMode()],
+)
+```
+
+## Style rules {#style-rules}
+
+`styleguide()` turns AST-based style checks into a hook. It ships no rules of its own: you author each rule as a `StyleRule` subclass, and the framework owns parsing, change-scoping, message formatting, and test wiring. A rule is usually just data — a docstring and a matcher.
+
+### Start with matchers
+
+A matcher is a CSS selector for your syntax tree. Where `button.primary > span` picks DOM nodes by tag, class, and parent, `M.call & M.child_of(M.func)` picks AST nodes by kind and position — you compose, negate, and scope selectors the same way, and the framework does the walking.
+
+```python
+from captain_hook.style import matchers as M
+
+M.calls("zip")              # a call to the bare-name function zip()
+M.child_of(M.control_flow)  # a node whose immediate parent is an if/for/while/with/try
+M.private                   # a single-leading-underscore name (not dunder)
+```
+
+Read a matcher against a line of code by asking "does this node match?". Here `M.calls("zip") & ~M.kwarg("strict")` — a call to bare `zip` with no `strict=` keyword — matches the first input and rejects the rest:
+
+| Code | `M.calls("zip") & ~M.kwarg("strict")` |
+|------|:--:|
+| `zip(a, b)` | ✅ matches |
+| `zip(a, b, strict=True)` | ❌ the `~M.kwarg` excludes it |
+| `itertools.zip_longest(a, b)` | ❌ not a bare-name `zip` call |
+| `x = zip` | ❌ a reference, not a call |
+
+::: {.callout-warning title="`M.calls` matches the bare name only"}
+`M.calls("zip")` matches `zip(...)` but not `builtins.zip(...)` or an aliased
+`from itertools import zip_longest as zip`. It keys on the call's bare name, not on what the
+name resolves to — captain-hook has no scope or type information. Reach for `M.call.where(...)`
+when you need to inspect an attribute-access call.
+:::
+
+Matchers compose with boolean algebra (`&`, `|`, `~`) and refine with `.where(...)`:
+
+```python
+# lazy import nested in control flow
+M.imports & M.child_of(M.control_flow) & ~M.under(M.type_checking)
+# a private-named class
+M.cls & M.private
+# a bespoke one-off predicate
+M.call.where(lambda n: len(n.args) > 5)
+```
+
+The full catalog lives in [AST Matchers](../reference/matchers.qmd).
+
+### Write your first rule
+
+A rule is a `StyleRule` subclass: the message is the class docstring, `match` is a matcher, and you hand the class to `styleguide()`.
+
+```python
+from captain_hook import Allow, Input, Warn
+from captain_hook.style import StyleRule, matchers as M, styleguide
+
+class ZipStrict(StyleRule):
+    """
+    zip() without strict=True can silently drop items:
+      - {violations}
+
+    Pass strict=True so length mismatches raise.
+    """
+
+    tests = {
+        Input(file="app.py", content="zip(a, b)\n"): Warn(),
+        Input(file="app.py", content="zip(a, b, strict=True)\n"): Allow(),
+    }
+    match = M.calls("zip") & ~M.kwarg("strict")
+    label = "zip()"
+
+styleguide(ZipStrict)
+```
+
+The class name is the identity — `ZipStrict` becomes `zip-strict` in kebab-case. The runner substitutes `{violations}` with the findings joined by `sep`, a bulleted list by default. `match` selects the offending nodes; each becomes a violation rendered as `label (line N)`, where `label` is a fixed string, a `node -> str` callable, or omitted for the default naming.
+
+::: {.callout-warning title="Open the docstring with a newline"}
+Put a newline right after the opening `"""` so `inspect.cleandoc` can normalize the
+indentation. A message that starts on the same line as the quotes keeps its leading
+whitespace and renders ragged.
+:::
+
+### Compare before and after with a diff rule
+
+To catch a construct that this edit introduced, subclass `StyleDiffRule`. It flags nodes matching `match` in the new tree that were absent from the old tree, comparing by unparsed source:
+
+```python
+from captain_hook.style import StyleDiffRule, matchers as M
+
+class NoNewWildcardImport(StyleDiffRule):
+    """
+    Wildcard import added by this edit:
+      - {violations}
+    """
+
+    match = M.imports.where(lambda n: any(a.name == "*" for a in n.names))
+```
+
+The pre-edit tree is reconstructed from the edit, so the rule fires only on a newly added wildcard, not one already there.
+
+### Drop to `check()` for logic a matcher can't express
+
+When a rule needs cross-node aggregation, body normalization, or anything stateful, override `check()` instead of setting `match`. It receives a `Change` — `.tree` is the post-edit `ast.Module`, `.pre_tree` the pre-edit one for a `StyleDiffRule`, alongside `.source`/`.pre`/`.path` — and yields `Violation`s. A matcher still works as a selector via `.over(...)`:
+
+```python
+class NoStructuralOnlyTests(StyleRule):
+    """Tests that only assert with builtins exercise nothing: {violations}"""
+
+    def check(self, change):
+        for fn in M.func.over(change.tree):
+            if fn.name.startswith("test_") and only_builtin_calls(fn):
+                yield Violation(fn.lineno, fn.name)
+```
+
+### Scope a hook per call
+
+Each `styleguide(...)` call registers exactly one hook, scoped by that call. Every axis, including block versus warn, is per call, so split concerns into separate calls:
+
+```python
+# warn, all *.py
+styleguide(NoPrint, NoBareExcept)
+# block, api only
+styleguide(NoSqlInjection, block=True, only_if=[FilePath("api/**/*.py")])
+```
+
+The built-in `Tool("Edit|Write")` and `FilePath("*.py")` guards always apply, and test files are skipped. Under `block=True`, the single hook returns one block listing every violation at once.
+
+| Parameter | Description |
+|-----------|-------------|
+| `*rules` | `StyleRule` / `StyleDiffRule` subclasses to apply |
+| `block` | Block the tool call instead of warning |
+| `only_if` / `skip_if` | Extra conditions, ANDed/ORed onto the built-in guards |
+| `events` | Override the default `PostToolUse` targeting |
+| `max_shown` | Maximum violations shown per rule (default 5) |
+
+A rule sees the whole post-edit file, so a check always parses complete source, and it reports only violations on the lines your edit changed. Attach inline `tests` to each rule and run them with `uvx capt-hook test` — [each `Input` runs through the whole styleguide](testing.qmd), so keep inputs minimal.
+
+::: {.callout-warning title="A `Write` reports every match"}
+Change-scoping keys off the edited lines. An `Edit` reports only the lines it touched, but a
+`Write` replaces the whole file, so every line counts as changed and every matching violation
+is reported — not just the ones you added.
+:::
+
+### Translate a whole prose guide
+
+To turn an existing STYLEGUIDE.md — or the style sections of CONTRIBUTING, AGENTS, or CLAUDE.md — into rules, run the `translating-styleguides` skill instead of hand-writing every class. It atomizes the prose into candidate rules and sorts each into one of four tiers: a declarative matcher, a custom `check()`, an LLM hook for judgment calls, or unenforceable-with-a-reason. It writes the hook files, synthesizes inline tests from the guide's own examples, verifies them with `uvx capt-hook test`, and reports every statement including the rows it cannot enforce. See [Agent Skills](../reference/skills.qmd).
 
 ::: {.callout-note title="Related"}
-For the model-backed primitives `llm_gate`, `llm_nudge`, and `prompt_check`, see
-[LLM Hooks](llm-hooks.qmd). For multi-step enforcement, see [Workflows](workflows.qmd).
+[Inspect and rewrite commands](commands.qmd) owns the command primitives and the fluent walk. [LLM hooks](llm-hooks.qmd) covers the model-backed primitives, [Workflows](workflows.qmd) multi-step enforcement, and the [reference](../reference/primitives.qmd) every full signature.
 :::

@@ -34,6 +34,6 @@ uvx capt-hook --hooks docs/examples test
 
 ## See also
 
-- [Conditions guide](../guide/conditions.qmd)
+- [Conditions guide](../guide/primitives.qmd#filter-with-conditions)
 - [Style rules guide](styleguide.qmd)
 - [Conditions reference](../reference/conditions.qmd)

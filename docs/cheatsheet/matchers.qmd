@@ -2,7 +2,7 @@
 title: "Matchers"
 ---
 
-The AST matcher vocabulary for [style rules](../guide/styleguide.qmd). Compose with `&`, `|`,
+The AST matcher vocabulary for [style rules](../guide/primitives.qmd#style-rules). Compose with `&`, `|`,
 `~`, refine with `.where(...)`, and run with `.over(tree)` or `.violations(tree)`. Import as
 `from captain_hook.style import matchers as M`. Every entry is in the
 [matchers reference](../reference/matchers.qmd).
@@ -66,5 +66,5 @@ class NoNestedImports(StyleRule):
 
 ## See also
 
-- [Enforce a style guide](../guide/styleguide.qmd) — the how-to that uses these
+- [Enforce a style guide](../guide/primitives.qmd#style-rules) — the how-to that uses these
 - [AST matchers reference](../reference/matchers.qmd) — every matcher, with signatures

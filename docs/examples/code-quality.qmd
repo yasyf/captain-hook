@@ -47,4 +47,4 @@ uvx capt-hook --hooks docs/examples test
 
 - [Primitives](../guide/primitives.qmd)
 - [LLM hooks](../guide/llm-hooks.qmd)
-- [Style guide checks](../guide/styleguide.qmd)
+- [Style guide checks](../guide/primitives.qmd#style-rules)
