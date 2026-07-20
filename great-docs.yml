@@ -146,7 +146,6 @@ reference:
       - Signal
       - Signals
       - CustomCondition
-      - LambdaCondition
       - CustomCommandLineCondition
       - CustomInputTypeCondition
       - workflow_script_source
@@ -286,9 +285,6 @@ reference:
       - Excerpts
       - excerpt_around
       - COMMENT_TYPES
-      - Edit
-      - SyntaxNode
-      - Match
 
 # Composed by concatenation after each repo's local fragment: top-level keys
 # here must not collide with any repo fragment (last key silently wins).
