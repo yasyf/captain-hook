@@ -56,6 +56,6 @@ needs a clock or a queue lives outside the hook.
 
 ## See also
 
-- [Security model](security.qmd) — the trust boundary and where credentials come from
+- [Security model](how-it-works.qmd#security--trust) — the trust boundary and where credentials come from
 - [Decide: LLM or static](llm-hooks.qmd) — when a model's cost is worth it
 - [Enforce a style guide](primitives.qmd#style-rules) — what AST matchers can and cannot express
