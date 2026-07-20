@@ -9,7 +9,7 @@ Blocking `rm` outright is a blunt instrument — agents delete build artifacts a
 
 This is the heart of the `rm` guard the shipped `general` pack runs. `calls("rm")` finds every `rm` across `&&`, `;`, and pipes; `targets.expand()` resolves the arguments — globs included — against the working directory; `sub` rewrites the call to `trash`, quoting intact, so a mistake is a restore instead of a loss.
 
-These verdicts are recorded from the real engine — a Python walk doesn't fit in a browser widget, so the presets replay what the pack actually decided:
+These verdicts are recorded from the real engine — a Python walk doesn't fit in a browser widget, so the presets replay what the pack actually decided. The rewrite rows were recorded on macOS, where a system Trash exists to rewrite into; without one the guard blocks instead:
 
 <!-- gd-embed-widget: rm_walk -->
 
