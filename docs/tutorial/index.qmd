@@ -13,11 +13,11 @@ Try it — this is the hook you'll build on the next page:
 
 Six short stops, each one interaction and one idea:
 
-1. [Your first block](first-block.qmd): one line guards a whole command family
-2. [Precision with Runs](command-vs-runs.qmd): recall vs precision, and why you want both ends
-3. [Conditions compose](secret-guard.qmd): AND, veto, and the guard that ignores reads
-4. [Walk the command](walk-the-command.qmd): when a regex can't decide
-5. [Stop gates](stop-gates.qmd): gate the session, not the tool call
-6. [Test it, then ship it](test-then-ship.qmd): the same cases, as inline tests
+1. [Your first block](01-first-block.qmd): one line guards a whole command family
+2. [Precision with Runs](02-command-vs-runs.qmd): recall vs precision, and why you want both ends
+3. [Conditions compose](03-secret-guard.qmd): AND, veto, and the guard that ignores reads
+4. [Walk the command](04-walk-the-command.qmd): when a regex can't decide
+5. [Stop gates](05-stop-gates.qmd): gate the session, not the tool call
+6. [Test it, then ship it](06-test-then-ship.qmd): the same cases, as inline tests
 
 Fifteen minutes end to end. When you're done, `uvx capt-hook init` gives you the real thing.

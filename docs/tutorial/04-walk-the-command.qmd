@@ -15,4 +15,4 @@ These verdicts are recorded from the real engine — a Python walk doesn't fit i
 
 A rewrite is a third verdict you haven't seen yet: not allow, not block — the command runs, but not the command the agent typed. Rewrites beat blocks when a safe variant exists, because the agent's task keeps moving.
 
-[Next: gate the session itself.](stop-gates.qmd)
+[Next: gate the session itself.](05-stop-gates.qmd)

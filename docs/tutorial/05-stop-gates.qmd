@@ -15,4 +15,4 @@ Walk the combinations. Edit `/repo/src/components/Button.tsx` without a review a
 
 `TouchedFile` and `UsedSkill` read the session's history, not the current tool call — that's what makes gating "done" possible at all. The same machinery drives test gates (`RanCommand(r"\bpytest\b")`) and artifact checks.
 
-[Last stop: turn the widget's cases into tests.](test-then-ship.qmd)
+[Last stop: turn the widget's cases into tests.](06-test-then-ship.qmd)

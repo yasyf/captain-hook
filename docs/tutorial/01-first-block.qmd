@@ -19,4 +19,4 @@ Two things worth noticing:
 
 **The quoted mention blocks too.** `echo "git stash"` is harmless, and it still blocks. That's deliberate: `block_command` compiles to a conservative match that stops an innocent echo rather than miss a real stash smuggled through quoting. For a safety hook, false positives are cheap and false negatives are not.
 
-Cheap for a guardrail — expensive if you need the command to run. [Next: buy back precision with `Runs`.](command-vs-runs.qmd)
+Cheap for a guardrail — expensive if you need the command to run. [Next: buy back precision with `Runs`.](02-command-vs-runs.qmd)

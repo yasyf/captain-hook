@@ -25,4 +25,4 @@ The last two rows are the lesson, and they cut in opposite directions. `Runs` ma
 
 So pick by stakes: `Runs` when false positives break real workflows, the conservative pattern when the command must never slip through. For `rm -rf`, take the false positives.
 
-[Next: stack conditions into one guard.](secret-guard.qmd)
+[Next: stack conditions into one guard.](03-secret-guard.qmd)

@@ -2,8 +2,7 @@
 title: "Agent Skills"
 ---
 
-The verbatim `SKILL.md` source of the two bundled skills. For what they do and how to invoke them, see
-[Agent Skills](../getting-started/quickstart.qmd) in Getting Started.
+The verbatim `SKILL.md` source of the two bundled skills.
 
 ## bootstrapping-hooks
 
