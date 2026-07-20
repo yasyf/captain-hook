@@ -73,9 +73,9 @@ def test_two_home_fixtures_materialize_to_different_directories() -> None:
 
 def test_file_token_substituted_when_fixture_present() -> None:
     evt = input_to_event(Event.PreToolUse, Input(tool="Bash", command="cat {file}", file=FileFixture(content="hi")))
-    assert "{file}" not in evt.command
-    assert evt.command.startswith("cat ")
-    materialized = evt.command.removeprefix("cat ")
+    assert "{file}" not in evt.command.raw
+    assert evt.command.raw.startswith("cat ")
+    materialized = evt.command.raw.removeprefix("cat ")
     assert os.path.exists(materialized)
     with open(materialized) as f:
         assert f.read() == "hi"
@@ -83,9 +83,9 @@ def test_file_token_substituted_when_fixture_present() -> None:
 
 def test_file_token_left_alone_without_fixture() -> None:
     evt = input_to_event(Event.PreToolUse, Input(tool="Bash", command="cat {file}", file="plain/path.txt"))
-    assert evt.command == "cat {file}"
+    assert evt.command.raw == "cat {file}"
 
 
 def test_file_token_left_alone_without_the_token() -> None:
     evt = input_to_event(Event.PreToolUse, Input(tool="Bash", command="cat foo.py", file=FileFixture(content="hi")))
-    assert evt.command == "cat foo.py"
+    assert evt.command.raw == "cat foo.py"

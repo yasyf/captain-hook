@@ -70,7 +70,7 @@ class TestCustomInputTypeCondition:
 class TestCustomCommandLineCondition:
     def test_returns_false_when_command_line_absent(self) -> None:
         evt = mock_tool_event(tool="Read", file="x.py")
-        assert evt.command_line is None
+        assert evt.cmd.raw == ""
         assert HasGit().check(evt) is False
 
     @pytest.mark.parametrize(

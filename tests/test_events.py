@@ -92,8 +92,6 @@ class TestBaseHookEvent:
         "attr,expected",
         [
             ("tool_name", None),
-            ("command", None),
-            ("command_line", None),
             ("file", None),
             ("content", None),
             ("old", None),
@@ -104,6 +102,13 @@ class TestBaseHookEvent:
     def test_base_event_property_defaults(self, attr: str, expected: object) -> None:
         evt = make_event(StopEvent, {})
         assert getattr(evt, attr) == expected
+
+    def test_base_event_command_defaults_to_empty_cmd(self) -> None:
+        evt = make_event(StopEvent, {})
+        assert evt.command is evt.cmd
+        assert evt.cmd.raw == ""
+        assert str(evt.cmd) == ""
+        assert evt.cmd.calls() == ()
 
     @pytest.mark.parametrize(
         "method,arg",

@@ -138,7 +138,7 @@ class TestRewriteCommandOccurrences:
         assert len(seen) == 1
         [(evt, cl)] = seen
         assert cl.raw == "ls -la"
-        assert evt.command == "ls -la"
+        assert evt.command.raw == "ls -la"
 
     def test_str_block_unchanged(self, tmp_path: Path) -> None:
         rewrite_command_occurrences(to=lambda evt, occ: None, block="static block")

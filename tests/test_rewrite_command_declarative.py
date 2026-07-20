@@ -21,7 +21,7 @@ class TestConditionalRewrite:
     def test_rewrites_when_to_returns_command(self, tmp_path: Path) -> None:
         rewrite_command(
             only_if=[Command(r"^cat\s")],
-            to=lambda evt: f"ccx read {evt.command.split()[1]} --full",
+            to=lambda evt: f"ccx read {evt.command.raw.split()[1]} --full",
             note="Rewrote cat to ccx read",
         )
         result = next(r for r in fire(tmp_path, "cat foo.py") if r)

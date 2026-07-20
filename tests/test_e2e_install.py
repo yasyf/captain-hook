@@ -237,7 +237,7 @@ SUDO_GUARD_HOOK = """\
 
     @on(Event.PreToolUse)
     def custom_guard(evt):
-        if evt.tool_name == "Bash" and evt.command and "sudo" in evt.command:
+        if evt.tool_name == "Bash" and "sudo" in evt.command.raw:
             return HookResult(action=Action.block, message="No sudo allowed")
 """
 
@@ -634,7 +634,7 @@ class TestComplexInlineTests:
                     },
                 )
                 def prefer_uv(evt):
-                    if evt.command and evt.command.startswith("pip "):
+                    if evt.command.raw.startswith("pip "):
                         return HookResult(action=Action.block, message="Use uv instead of pip")
                 """,
                 "2 tests",

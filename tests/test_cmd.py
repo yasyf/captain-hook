@@ -7,7 +7,7 @@ from cc_transcript.command import parse_command_line
 
 from captain_hook.cmd import Cmd, Expansion, Target, Targets
 from captain_hook.types import Action
-from tests.helpers import make_ctx, make_pre_tool_event
+from tests.helpers import make_ctx, make_post_tool_event, make_pre_tool_event
 
 
 def evt_for(command: str, cwd: str | None = None):
@@ -239,7 +239,12 @@ class TestDetachedAndSubGuards:
 
     def test_sub_on_detached_cmd_raises_runtime_error(self) -> None:
         call = Cmd.parse("rm foo").call("rm")
-        with pytest.raises(RuntimeError, match="detached Cmd cannot rewrite"):
+        with pytest.raises(RuntimeError, match="rewrite-capable event"):
+            call.sub("rm", "trash")
+
+    def test_sub_on_non_rewrite_event_raises_runtime_error(self) -> None:
+        call = make_post_tool_event("Bash", {"command": "rm foo"}).cmd.call("rm")
+        with pytest.raises(RuntimeError, match="rewrite-capable event"):
             call.sub("rm", "trash")
 
     def test_sub_on_substituted_call_returns_none(self) -> None:
