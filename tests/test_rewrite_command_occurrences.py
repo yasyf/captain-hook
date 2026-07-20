@@ -92,7 +92,7 @@ class TestRewriteCommandOccurrences:
             return False
 
         rewrite_command_occurrences(to=to, block_if=block_if, block="unreachable")
-        # "echo a >out b" absorbs the trailing word into the redirect, leaving it no
+        # "echo a >out b" positions a word after a redirect, so the command has no
         # contiguous byte span — the span-less occurrence `to` must never see.
         result = next(r for r in fire(tmp_path, "echo a >out b; git push") if r)
         assert result.action == Action.rewrite
@@ -207,7 +207,7 @@ class TestVisitRewriteCommandOccurrences:
 
         rewrite_command_occurrences(visit=visit)
         assert fire(tmp_path, "echo a >out b; git push") == [None]
-        assert [raw for raw, _ctx in seen] == ["echo a", "git push"]
+        assert [raw for raw, _ctx in seen] == ["echo a >out b", "git push"]
         assert [ctx.spliceable for _raw, ctx in seen] == [False, True]
 
     def test_visit_threads_resolved_cd_cwd_after_visiting_cd(self, tmp_path: Path) -> None:
