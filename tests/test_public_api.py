@@ -99,6 +99,7 @@ PINNED_EXPORTS: tuple[str, ...] = (
     "InlineTests",
     "Input",
     "Introduced",
+    "LambdaCondition",
     "Match",
     "MultiEditCall",
     "NlpSignal",

@@ -146,6 +146,7 @@ from captain_hook.types import FromSubagent as FromSubagent
 from captain_hook.types import HookResponse as HookResponse
 from captain_hook.types import HookResult as HookResult
 from captain_hook.types import InPlanMode as InPlanMode
+from captain_hook.types import LambdaCondition as LambdaCondition
 from captain_hook.types import Not as Not
 from captain_hook.types import Or as Or
 from captain_hook.types import Pattern as Pattern

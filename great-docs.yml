@@ -146,6 +146,7 @@ reference:
       - Signal
       - Signals
       - CustomCondition
+      - LambdaCondition
       - CustomCommandLineCondition
       - CustomInputTypeCondition
       - workflow_script_source

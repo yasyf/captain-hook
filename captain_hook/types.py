@@ -600,6 +600,26 @@ class CustomCondition(Protocol):
     def check(self, evt: BaseHookEvent) -> bool: ...
 
 
+@dataclass(frozen=True, slots=True)
+class LambdaCondition:
+    """Condition from a bare callable — the inline form of [`CustomCondition`][captain_hook.CustomCondition].
+
+    Wraps ``fn`` as the condition's ``check``, so one-off matching logic drops into
+    ``only_if``/``skip_if`` without declaring a class.
+
+    Example:
+        >>> hook(Event.PreToolUse, only_if=[LambdaCondition(lambda evt: evt.file is not None)],
+        ...      message="File edits need review here", block=True)
+    """
+
+    fn: Callable[[BaseHookEvent], bool]
+
+    valid_events: ClassVar[Event] = ALL_EVENTS
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return self.fn(evt)
+
+
 class CustomInputTypeCondition(CustomCondition, Generic[T]):  # noqa: UP046
     """CustomCondition that fires only for a specific typed tool call.
 

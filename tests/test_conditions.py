@@ -644,6 +644,26 @@ class TestRunsCondition:
         assert check_condition(Runs("git", "stash"), make_event(StopEvent)) is False
 
 
+class TestLambdaCondition:
+    def test_wraps_callable_as_check(self) -> None:
+        from captain_hook import LambdaCondition
+
+        cond = LambdaCondition(lambda evt: evt.tool_name == "Bash")
+        assert check_condition(cond, make_tool_event("Bash", {"command": "ls"})) is True
+        assert (
+            check_condition(cond, make_tool_event("Edit", {"file_path": "a.py", "old_string": "", "new_string": ""}))
+            is False
+        )
+
+    def test_is_custom_condition_valid_on_all_events(self) -> None:
+        from captain_hook import CustomCondition, LambdaCondition
+        from captain_hook.types import ALL_EVENTS, condition_events
+
+        cond = LambdaCondition(lambda evt: True)
+        assert isinstance(cond, CustomCondition)
+        assert condition_events(cond) == ALL_EVENTS
+
+
 class TestCombinators:
     def test_and_all_match(self) -> None:
         evt = make_tool_event("Bash", {"command": "git stash"})

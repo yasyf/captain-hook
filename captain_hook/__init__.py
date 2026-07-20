@@ -150,6 +150,7 @@ EXPORTS: dict[str, str] = {
     "HookResponse": "captain_hook.types",
     "HookResult": "captain_hook.types",
     "InPlanMode": "captain_hook.types",
+    "LambdaCondition": "captain_hook.types",
     "Not": "captain_hook.types",
     "Or": "captain_hook.types",
     "Pattern": "captain_hook.types",

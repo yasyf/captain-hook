@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   escape hatch: {reasoning}.")` substitutes the verdict model's fields into a `{field}` template
   (same placeholder rules as `Prompt.from_template`: only `{identifier}` substitutes, stray braces
   stay literal), alongside the existing literal and callable forms.
+- **`LambdaCondition`** — inline conditions from a bare callable:
+  `only_if=[LambdaCondition(lambda evt: evt.file is not None)]` wraps the lambda as a
+  `CustomCondition`'s `check`, skipping the class declaration for one-off logic.
 
 ## [12.0.1] - 2026-07-20
 
