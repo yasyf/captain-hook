@@ -26,9 +26,14 @@ sections:
     dir: docs/getting-started
     index: true
     index_columns: 2
+  - title: Tutorial
+    dir: docs/tutorial
+    navbar_after: Getting Started
+    index: true
+    index_columns: 2
   - title: Guide
     dir: docs/guide
-    navbar_after: Getting Started
+    navbar_after: Tutorial
     index: true
     index_columns: 2
   - title: Cheatsheet
@@ -50,6 +55,7 @@ pre_render:
   - docs/scripts/embed_examples.py
   - docs/scripts/embed_skills.py
   - docs/scripts/embed_fragments.py
+  - docs/scripts/embed_widgets.py
   - docs/scripts/.gd-build/native_reference_titles.py
 
 cli:
