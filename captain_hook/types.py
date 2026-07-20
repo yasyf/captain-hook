@@ -601,7 +601,7 @@ class CustomCondition(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class LambdaCondition:
+class LambdaCondition(CustomCondition):
     """Condition from a bare callable — the inline form of [`CustomCondition`][captain_hook.CustomCondition].
 
     Wraps ``fn`` as the condition's ``check``, so one-off matching logic drops into
@@ -613,8 +613,6 @@ class LambdaCondition:
     """
 
     fn: Callable[[BaseHookEvent], bool]
-
-    valid_events: ClassVar[Event] = ALL_EVENTS
 
     def check(self, evt: BaseHookEvent) -> bool:
         return self.fn(evt)
