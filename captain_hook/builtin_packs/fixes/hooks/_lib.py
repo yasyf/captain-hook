@@ -2,18 +2,21 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import TYPE_CHECKING
 
-from cc_transcript.command import Command
 from cc_transcript.tools import mcp_parts
 
 from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition
-from captain_hook.util.shell import SHELLS, normalize_executable, safe_parse_command_line
+from captain_hook.cmd import Cmd
+from captain_hook.util.shell import SHELLS
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from cc_transcript.command import CommandLine
+
+    from captain_hook.cmd import Call
 
 DANGEROUS_MCP_VERBS = frozenset(
     {
@@ -41,7 +44,6 @@ MAX_SCAN_DEPTH = 12
 
 DESTRUCTIVE_EXECUTABLES = frozenset({"rm", "dd", "shred", "truncate"})
 DOWNLOADERS = frozenset({"curl", "wget"})
-GIT_VALUE_FLAGS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"})
 FORCE_PUSH_FLAG = re.compile(r"(--?force(-with-lease)?|-f|--delete)(=.*)?")
 PAYLOAD_SCAN_LIMIT = 8192
 
@@ -84,71 +86,29 @@ def command_texts(value: object, depth: int = MAX_SCAN_DEPTH) -> Iterator[str]:
                     yield from command_texts(item, depth - 1)
 
 
-def unwrapped_argv(cmd: Command) -> tuple[str, ...]:
-    """``cmd.unwrapped.argv``, also unwrapping path-qualified or quoted wrapper heads (``/usr/bin/env bash``)."""
-    while True:
-        argv = cmd.unwrapped.argv
-        if not argv or (head := normalize_executable(argv[0])) == argv[0]:
-            return argv
-        cmd = Command(cmd.raw, head, argv[1:])
-
-
-def head_program(cmd: Command) -> str:
-    return normalize_executable(argv[0]) if (argv := unwrapped_argv(cmd)) else ""
-
-
-def git_subcommand(args: tuple[str, ...]) -> str | None:
-    tokens = iter(args)
-    for token in tokens:
-        if token in GIT_VALUE_FLAGS:
-            next(tokens, None)
-        elif not token.startswith("-"):
-            return token
-    return None
-
-
-def is_dangerous_git(args: tuple[str, ...]) -> bool:
-    match git_subcommand(args):
-        case "reset" | "clean" | "restore":
-            return True
-        case "push":
-            return any(FORCE_PUSH_FLAG.fullmatch(arg) for arg in args)
-        case _:
-            return False
-
-
-def is_dangerous_command(cmd: Command) -> bool:
-    if normalize_executable(cmd.executable) == "sudo":
+def is_dangerous_call(call: Call) -> bool:
+    if "sudo" in call.wrappers or call.name == "sudo":
         return True
-    if not (argv := unwrapped_argv(cmd)):
-        return False
-    program = normalize_executable(argv[0])
-    if program in DESTRUCTIVE_EXECUTABLES or program.startswith("mkfs"):
+    if call.name in DESTRUCTIVE_EXECUTABLES or call.name.startswith("mkfs"):
         return True
-    if program == "git":
-        return is_dangerous_git(argv[1:])
+    if call.name == "git":
+        match call.targets.targets[0].value if call.targets else None:
+            case "reset" | "clean" | "restore":
+                return True
+            case "push":
+                return any(FORCE_PUSH_FLAG.fullmatch(flag) for flag in call.flags)
     return False
 
 
-def pipes_into_shell(cl: CommandLine) -> bool:
+def pipes_into_shell(cmd: Cmd) -> bool:
     return any(
-        occ.next_op == "|" and head_program(occ.command) in DOWNLOADERS and head_program(nxt.command) in SHELLS
-        for occ, nxt in zip(cl.occurrences, cl.occurrences[1:])
+        call.occurrence.next_op == "|" and call.name in DOWNLOADERS and nxt.name in SHELLS
+        for call, nxt in pairwise(cmd.calls())
     )
 
 
-def is_dangerous_command_line(cl: CommandLine) -> bool:
-    return any(is_dangerous_command(cmd) for cmd in cl.commands) or pipes_into_shell(cl)
-
-
-def parse_payload_command_line(text: str) -> CommandLine | None:
-    """Parse an untrusted payload string, capped and stripped of un-encodable code points.
-
-    A lone surrogate (a valid JSON string, but not UTF-8-encodable) would crash the parser's
-    ``str.encode``; replacing it keeps the scan crash-proof and never manufactures a new
-    executable token — a surrogate can never be real command text.
-    """
-    return safe_parse_command_line(text[:PAYLOAD_SCAN_LIMIT].encode(errors="replace").decode())
+def is_dangerous_cmd(cmd: Cmd) -> bool:
+    return any(is_dangerous_call(call) for call in cmd.calls()) or pipes_into_shell(cmd)
 
 
 class McpTool(CustomCondition):
@@ -181,7 +141,7 @@ class DangerousCommandLine(CustomCommandLineCondition):
     """
 
     def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
-        return is_dangerous_command_line(cl)
+        return is_dangerous_cmd(evt.cmd)
 
 
 class DangerousPayloadCommand(CustomCondition):
@@ -194,8 +154,11 @@ class DangerousPayloadCommand(CustomCondition):
     """
 
     def check(self, evt: BaseHookEvent) -> bool:
+        # Replace lone surrogates (unencodable, would crash the parser) and cap before Cmd.parse,
+        # which itself falls open (None) on pathological nesting.
         return any(
-            (cl := parse_payload_command_line(text)) is not None and is_dangerous_command_line(cl)
+            (cmd := Cmd.parse(text[:PAYLOAD_SCAN_LIMIT].encode(errors="replace").decode())) is not None
+            and is_dangerous_cmd(cmd)
             for text in command_texts(evt.input.raw)
         )
 

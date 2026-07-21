@@ -12,10 +12,8 @@ from captain_hook.cmd import Target
 from captain_hook.types import Command as CommandCondition
 from captain_hook.util import fs
 from captain_hook.util.globbing import GLOB_LIMIT
-from captain_hook.util.paths import resolve_target
-from captain_hook.util.scratch import is_scratch_path
 from captain_hook.util.shell import emit_token, unescape_shell
-from captain_hook.util.vcs import contains_repo, in_vcs_repo, is_repo_root
+from captain_hook.util.vcs import contains_repo
 
 if TYPE_CHECKING:
     from captain_hook.cmd import Call
@@ -32,28 +30,6 @@ def trash_binary() -> str | None:
     return fs.resolve_binary("trash") if sys.platform == "darwin" else None
 
 
-def blast_radius_block(evt: PreToolUseEvent, token: str, resolved: Path) -> HookResult | None:
-    match Path(os.path.normpath(resolved)):
-        case root if root == Path("/"):
-            return evt.block(
-                f"BLOCKED: '{token}' is the filesystem root — deleting it destroys the entire "
-                "system. If this is really intended, ask the user to run it themselves."
-            )
-        case home if home == Path.home() or Path("/Users") in (home, home.parent):
-            return evt.block(
-                f"BLOCKED: '{token}' is a home directory — deleting it destroys every file the "
-                "user owns. If this is really intended, ask the user to run it themselves."
-            )
-        case directory if directory.is_dir(follow_symlinks=False) and contains_repo(directory):
-            return evt.block(
-                f"BLOCKED: '{token}' contains git/jj repositories — deleting it would destroy "
-                "them and their entire history. Delete a narrower path instead, or ask the user "
-                "to run it themselves."
-            )
-        case _:
-            return None
-
-
 def unrecoverable(evt: PreToolUseEvent, token: str) -> Recoverable:
     return Recoverable(
         evt.block(
@@ -67,20 +43,36 @@ def unrecoverable(evt: PreToolUseEvent, token: str) -> Recoverable:
     )
 
 
-def check_resolved(
-    evt: PreToolUseEvent, token: str, resolved: Path | None, *, rewritable: bool
-) -> HookResult | Recoverable | None:
-    if resolved is None or is_scratch_path(resolved):
+def check_resolved(evt: PreToolUseEvent, target: Target, *, rewritable: bool) -> HookResult | Recoverable | None:
+    if (path := target.path) is None or target.is_scratch:
         return None
-    if is_repo_root(resolved):
+    token = target.value or target.raw
+    if target.is_repo_root:
         return evt.block(
             f"BLOCKED: '{token}' is a git/jj repository root — deleting it destroys the repo and its entire "
             "history. If this is really intended, ask the user to run it themselves."
         )
-    if in_vcs_repo(resolved):
+    if target.in_repo:
         return None
-    if rewritable and (blocked := blast_radius_block(evt, token, resolved)) is not None:
-        return blocked
+    if rewritable:
+        if target.is_fs_root:
+            return evt.block(
+                f"BLOCKED: '{token}' is the filesystem root — deleting it destroys the entire "
+                "system. If this is really intended, ask the user to run it themselves."
+            )
+        if target.is_home:
+            return evt.block(
+                f"BLOCKED: '{token}' is a home directory — deleting it destroys every file the "
+                "user owns. If this is really intended, ask the user to run it themselves."
+            )
+        # A module-level contains_repo call, not target.contains_repo, so the no-scan guard tests
+        # can monkeypatch this exact seam and assert the directory walk stays unentered.
+        if (scan := Path(os.path.normpath(path))).is_dir(follow_symlinks=False) and contains_repo(scan):
+            return evt.block(
+                f"BLOCKED: '{token}' contains git/jj repositories — deleting it would destroy "
+                "them and their entire history. Delete a narrower path instead, or ask the user "
+                "to run it themselves."
+            )
     return unrecoverable(evt, token)
 
 
@@ -92,7 +84,7 @@ def check_target(
         # scratch or in-repo cwd stays allowed; emittable() keeps the target out of any rewrite.
         target = Target(unescape_shell(target.raw), target.raw, cwd)
     if not target.has_glob:
-        return check_resolved(evt, target.value or target.raw, target.path, rewritable=rewritable)
+        return check_resolved(evt, target, rewritable=rewritable)
     expansion = target.expand()
     token = target.value or target.raw
     if expansion.exhausted:
@@ -108,7 +100,7 @@ def check_target(
         )
     recovery: Recoverable | None = None
     for match in expansion:
-        result = check_resolved(evt, match, resolve_target(match, cwd), rewritable=rewritable)
+        result = check_resolved(evt, Target(match, match, cwd), rewritable=rewritable)
         match result:
             case HookResult() as blocked:
                 return blocked
@@ -151,6 +143,7 @@ ROOT_RM: Block = Block(pattern="filesystem root") if trash_binary() else Block(p
     tests={
         Input(command="rm foo.txt", cwd="/"): RECOVERABLE_RM,
         Input(command="rm -rf /", cwd="/"): ROOT_RM,
+        Input(command="''rm -rf /", cwd="/"): ROOT_RM,  # empty-quote concat still names rm in command position
         Input(command="bash -c 'rm -rf /'", cwd="/"): Block(pattern="repository"),
         Input(command="bash -lc 'rm -rf /'", cwd="/"): Block(pattern="repository"),
         Input(command="sh -xc 'rm -rf /'", cwd="/"): Block(pattern="repository"),
