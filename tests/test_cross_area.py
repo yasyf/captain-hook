@@ -10,6 +10,7 @@ import pytest
 from cc_transcript.activity import SessionActivity
 from cc_transcript.command import CommandLine
 
+from captain_hook import T
 from captain_hook.app import (
     _state,
     on,
@@ -54,12 +55,6 @@ from tests.helpers import (
 )
 from tests.helpers import (
     raw_text as msg,
-)
-from tests.helpers import (
-    raw_tool_msg as toolmsg,
-)
-from tests.helpers import (
-    raw_tool_result as tool_resultmsg,
 )
 
 
@@ -162,12 +157,9 @@ class TestInPlanModeCondition:
     def test_fires_when_enter_gt_exit(self) -> None:
         transcript = make_transcript(
             [
-                toolmsg("ExitPlanMode", {}, "ep1"),
-                tool_resultmsg("ep1"),
-                toolmsg("EnterPlanMode", {}, "en1"),
-                tool_resultmsg("en1"),
-                toolmsg("EnterPlanMode", {}, "en2"),
-                tool_resultmsg("en2"),
+                *T.tool_turn("ExitPlanMode"),
+                *T.tool_turn("EnterPlanMode"),
+                *T.tool_turn("EnterPlanMode"),
             ]
         )
         register_hook(Event.PreToolUse, message="in plan mode", block=True, only_if=[InPlanMode()])
@@ -183,10 +175,8 @@ class TestInPlanModeCondition:
     def test_does_not_fire_when_equal(self) -> None:
         transcript = make_transcript(
             [
-                toolmsg("EnterPlanMode", {}, "en1"),
-                tool_resultmsg("en1"),
-                toolmsg("ExitPlanMode", {}, "ep1"),
-                tool_resultmsg("ep1"),
+                *T.tool_turn("EnterPlanMode"),
+                *T.tool_turn("ExitPlanMode"),
             ]
         )
         register_hook(Event.PreToolUse, message="in plan mode", block=True, only_if=[InPlanMode()])
@@ -206,8 +196,7 @@ class TestReadFileCondition:
     def test_skip_if_skips_when_read(self) -> None:
         transcript = make_transcript(
             [
-                toolmsg("Read", {"file_path": "/repo/STYLEGUIDE.md"}, "r1"),
-                tool_resultmsg("r1"),
+                *T.tool_turn("Read", file_path="/repo/STYLEGUIDE.md"),
             ]
         )
         register_hook(Event.PreToolUse, message="read first", block=True, skip_if=[ReadFile("STYLEGUIDE.md")])
@@ -221,7 +210,7 @@ class TestReadFileCondition:
         )
 
     def test_fires_when_not_read(self) -> None:
-        transcript = make_transcript([msg("user", "hello")])
+        transcript = make_transcript([T.user("hello")])
         register_hook(Event.PreToolUse, message="read first", block=True, skip_if=[ReadFile("STYLEGUIDE.md")])
         assert (
             dispatch_pre(
@@ -239,8 +228,7 @@ class TestTouchedFileCondition:
     def test_matches_glob(self) -> None:
         transcript = make_transcript(
             [
-                toolmsg("Edit", {"file_path": "www/src/page.tsx", "old_string": "", "new_string": "x"}, "e1"),
-                tool_resultmsg("e1"),
+                *T.tool_turn("Edit", file_path="www/src/page.tsx", old_string="", new_string="x"),
             ]
         )
         register_hook(Event.PreToolUse, message="www touched", block=True, only_if=[TouchedFile("www/src/*")])
@@ -249,8 +237,7 @@ class TestTouchedFileCondition:
     def test_does_not_match_other_files(self) -> None:
         transcript = make_transcript(
             [
-                toolmsg("Edit", {"file_path": "bioqa/core.py", "old_string": "", "new_string": "x"}, "e1"),
-                tool_resultmsg("e1"),
+                *T.tool_turn("Edit", file_path="bioqa/core.py", old_string="", new_string="x"),
             ]
         )
         register_hook(Event.PreToolUse, message="www touched", block=True, only_if=[TouchedFile("www/src/*")])
@@ -263,8 +250,7 @@ class TestRanCommandCondition:
     def test_skip_if_skips_when_matching(self) -> None:
         transcript = make_transcript(
             [
-                toolmsg("Bash", {"command": "uv run mtest run tests/"}, "b1"),
-                tool_resultmsg("b1"),
+                *T.tool_turn("Bash", command="uv run mtest run tests/"),
             ]
         )
         register_hook(
@@ -275,8 +261,7 @@ class TestRanCommandCondition:
     def test_fires_when_not_matching(self) -> None:
         transcript = make_transcript(
             [
-                toolmsg("Bash", {"command": "ls -la"}, "b1"),
-                tool_resultmsg("b1"),
+                *T.tool_turn("Bash", command="ls -la"),
             ]
         )
         register_hook(
@@ -291,9 +276,9 @@ class TestNudgeSignalScoring:
     def test_nudge_signal_fires_and_cites(self, tmp_path: Path) -> None:
         transcript = make_transcript(
             [
-                msg("assistant", "let me retry this"),
-                msg("assistant", "let me retry again"),
-                msg("assistant", "I will retry the approach"),
+                T.assistant("let me retry this"),
+                T.assistant("let me retry again"),
+                T.assistant("I will retry the approach"),
             ]
         )
         session_dir = tmp_path
@@ -324,8 +309,8 @@ class TestEchoSuppression:
     def test_suppresses_second_dispatch_same_content(self, tmp_path: Path) -> None:
         transcript = make_transcript(
             [
-                msg("assistant", "let me retry this approach"),
-                msg("assistant", "let me retry again with a different method"),
+                T.assistant("let me retry this approach"),
+                T.assistant("let me retry again with a different method"),
             ]
         )
         session_dir = tmp_path
@@ -359,9 +344,9 @@ class TestEchoSuppression:
 
         transcript_new = make_transcript(
             [
-                msg("assistant", "let me retry this approach"),
-                msg("assistant", "let me retry again with a different method"),
-                msg("assistant", "I will retry once more now"),
+                T.assistant("let me retry this approach"),
+                T.assistant("let me retry again with a different method"),
+                T.assistant("I will retry once more now"),
             ]
         )
         evt3 = mock_tool_event(
@@ -500,7 +485,7 @@ class TestWorkflowTranscript:
     """VAL-CROSS-012"""
 
     def test_blocks_when_step_incomplete(self) -> None:
-        transcript = make_transcript([msg("assistant", "I am starting")])
+        transcript = make_transcript([T.assistant("I am starting")])
         workflow(
             label="TEST",
             marker="DONE",
@@ -516,7 +501,7 @@ class TestWorkflowTranscript:
         assert "Run mtest" in reason
 
     def test_allows_when_marker_present(self) -> None:
-        transcript = make_transcript([msg("assistant", "ran mtest and DONE")])
+        transcript = make_transcript([T.assistant("ran mtest and DONE")])
         workflow(
             label="TEST",
             marker="DONE",
@@ -526,7 +511,7 @@ class TestWorkflowTranscript:
         assert result is None
 
     def test_step_evaluation_order(self) -> None:
-        transcript = make_transcript([msg("assistant", "I ran mtest but no review")])
+        transcript = make_transcript([T.assistant("I ran mtest but no review")])
         workflow(
             label="TEST",
             marker="DONE",
@@ -587,7 +572,7 @@ class TestNlpSignalNudge:
         score = score_signals([nlp_sig], "I will run the test suite now.")
         assert score >= 3
 
-        transcript = make_transcript([msg("assistant", "I will run the test suite now.")])
+        transcript = make_transcript([T.assistant("I will run the test suite now.")])
         session_dir = tmp_path
         from captain_hook.primitives.nudge import nudge
 
@@ -609,15 +594,14 @@ class TestUsedSkillCondition:
     def test_skip_if_skips_when_skill_used(self) -> None:
         transcript = make_transcript(
             [
-                toolmsg("Skill", {"skill": "codex"}, "s1"),
-                tool_resultmsg("s1"),
+                *T.tool_turn("Skill", skill="codex"),
             ]
         )
         register_hook(Event.PreToolUse, message="use codex", block=True, skip_if=[UsedSkill("codex|test-runner")])
         assert dispatch_pre({"command": "echo hi"}, transcript=transcript) is None
 
     def test_fires_when_skill_not_used(self) -> None:
-        transcript = make_transcript([msg("user", "hello")])
+        transcript = make_transcript([T.user("hello")])
         register_hook(Event.PreToolUse, message="use codex", block=True, skip_if=[UsedSkill("codex|test-runner")])
         assert dispatch_pre({"command": "echo hi"}, transcript=transcript) is not None
 
@@ -692,7 +676,7 @@ class TestCallLlm:
     """VAL-CROSS-018"""
 
     def test_transcript_interpolation_in_template(self) -> None:
-        transcript = make_transcript([msg("assistant", "context data")])
+        transcript = make_transcript([T.assistant("context data")])
         ctx = build_ctx(transcript=transcript)
         template = "Review: {transcript}\n\nDone"
         rendered = template.format(transcript=ctx.transcript)
@@ -851,7 +835,7 @@ class TestCallLlmIntegration:
     def test_call_llm_forwards_review_specialty(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
         captured = self.capture_call(monkeypatch, "all good")
-        ctx = build_ctx(transcript=make_transcript([msg("assistant", "some context")]), session_dir=tmp_path)
+        ctx = build_ctx(transcript=make_transcript([T.assistant("some context")]), session_dir=tmp_path)
 
         result = ctx.call_llm("Review this code", specialty="review", model="small", timeout=99)
         assert result == "all good"
@@ -863,7 +847,7 @@ class TestCallLlmIntegration:
 
     def test_call_llm_forwards_general_specialty(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         captured = self.capture_call(monkeypatch, "claude response")
-        ctx = build_ctx(transcript=make_transcript([msg("assistant", "context")]), session_dir=tmp_path)
+        ctx = build_ctx(transcript=make_transcript([T.assistant("context")]), session_dir=tmp_path)
 
         result = ctx.call_llm("hello", specialty="general", model="small")
         assert result == "claude response"
@@ -878,7 +862,7 @@ class TestCallLlmIntegration:
 
         verdict = Verdict(block=True, reasoning="detected issue")
         captured = self.capture_call(monkeypatch, verdict)
-        ctx = build_ctx(transcript=make_transcript([msg("assistant", "context")]), session_dir=tmp_path)
+        ctx = build_ctx(transcript=make_transcript([T.assistant("context")]), session_dir=tmp_path)
 
         result = ctx.call_llm("check", specialty="review", model="small", response_model=Verdict)
         assert result is verdict
@@ -886,7 +870,7 @@ class TestCallLlmIntegration:
 
     def test_call_llm_with_transcript_interpolation(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         captured = self.capture_call(monkeypatch, "ok")
-        ctx = build_ctx(transcript=make_transcript([msg("assistant", "important context")]), session_dir=tmp_path)
+        ctx = build_ctx(transcript=make_transcript([T.assistant("important context")]), session_dir=tmp_path)
 
         ctx.call_llm("Review: {transcript}", specialty="review", model="small", transcript=True)
         assert "important context" in captured["prompt"]

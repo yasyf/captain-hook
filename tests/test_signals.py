@@ -6,12 +6,12 @@ from typing import Any, Literal
 
 import pytest
 
+from captain_hook import T
 from captain_hook.context import HookContext
 from captain_hook.session import SessionStore
 from captain_hook.state import PrimitiveState, text_hash
 from captain_hook.testing.helpers import fixture_session
 from captain_hook.types import Signal, Signals
-from tests.helpers import raw_msg, raw_text, raw_text_block, raw_tool_msg, raw_tool_result
 
 
 def make_ctx(
@@ -21,9 +21,7 @@ def make_ctx(
 ) -> HookContext:
     return HookContext(
         session=SessionStore(tmp_path),
-        transcript=fixture_session(
-            messages if messages is not None else [raw_text("assistant", t) for t in (texts or [])]
-        ),
+        transcript=fixture_session(messages if messages is not None else [T.assistant(t) for t in (texts or [])]),
         settings=None,
     )
 
@@ -316,7 +314,7 @@ class TestMatchSignalsAggregation:
         from captain_hook.events import UserPromptSubmitEvent
         from captain_hook.signals import transcript_texts
 
-        ctx = make_ctx(messages=[raw_text("assistant", "here is some feedback")])
+        ctx = make_ctx(messages=[T.assistant("here is some feedback")])
         evt = UserPromptSubmitEvent(_raw={"prompt": "a list of items"}, ctx=ctx)
         entries = transcript_texts(evt, self.SIG.window)
         assert entries == ["a list of items", "here is some feedback"]
@@ -423,14 +421,14 @@ class TestTranscriptTextsUserPrompt:
         from captain_hook.signals import transcript_texts
         from tests.test_wall_of_text_f08 import F08_WRITEUP
 
-        evt = self.ups_event([raw_msg("assistant", F08_WRITEUP)], "hmm")
+        evt = self.ups_event([T.assistant(F08_WRITEUP)], "hmm")
         assert transcript_texts(evt, 6) == ["hmm", F08_WRITEUP]
 
     def test_assistant_entry_passes_wall_gate(self) -> None:
         from captain_hook.signals import transcript_texts
         from tests.test_wall_of_text_f08 import F08_WRITEUP, WALL_OF_TEXT
 
-        evt = self.ups_event([raw_msg("assistant", F08_WRITEUP)], "hmm")
+        evt = self.ups_event([T.assistant(F08_WRITEUP)], "hmm")
         entries = transcript_texts(evt, WALL_OF_TEXT.window)
         triggering = PrimitiveState().match_signals(WALL_OF_TEXT, entries, "h")
         assert triggering == [F08_WRITEUP]
@@ -439,7 +437,7 @@ class TestTranscriptTextsUserPrompt:
         from captain_hook.signals import transcript_texts
         from tests.test_wall_of_text_f08 import F08_WRITEUP
 
-        evt = self.ups_event([raw_msg("assistant", F08_WRITEUP)], "hmm")
+        evt = self.ups_event([T.assistant(F08_WRITEUP)], "hmm")
         assert transcript_texts(evt, 0) == ["hmm"]
 
 
@@ -457,23 +455,23 @@ class TestTranscriptTextsOrigin:
         return transcript_texts(evt, window, origin)
 
     def test_default_keeps_user_and_assistant(self) -> None:
-        msgs = [raw_msg("user", "the user says leave it"), raw_msg("assistant", "the assistant plan")]
+        msgs = [T.user("the user says leave it"), T.assistant("the assistant plan")]
         assert self.texts_for(msgs) == ["the user says leave it", "the assistant plan"]
 
     def test_assistant_origin_drops_user(self) -> None:
-        msgs = [raw_msg("user", "the user says leave it"), raw_msg("assistant", "the assistant plan")]
+        msgs = [T.user("the user says leave it"), T.assistant("the assistant plan")]
         assert self.texts_for(msgs, origin="assistant") == ["the assistant plan"]
 
     def test_any_origin_keeps_user(self) -> None:
-        msgs = [raw_msg("user", "the user says leave it"), raw_msg("assistant", "the assistant plan")]
+        msgs = [T.user("the user says leave it"), T.assistant("the assistant plan")]
         assert self.texts_for(msgs, origin="any") == ["the user says leave it", "the assistant plan"]
 
     def test_agent_injected_dropped_under_both_origins(self) -> None:
         # An agent-injected user banner is dropped under "assistant" (it is a UserEvent) and under
         # "any" (the is_agent_injected conjunct) — the second layer covers origin="any" hooks.
         msgs = [
-            raw_msg("user", '<teammate-message from="A">the relayed plan</teammate-message>'),
-            raw_msg("assistant", "the assistant plan"),
+            T.user('<teammate-message from="A">the relayed plan</teammate-message>'),
+            T.assistant("the assistant plan"),
         ]
         assert self.texts_for(msgs, origin="any") == ["the assistant plan"]
         assert self.texts_for(msgs, origin="assistant") == ["the assistant plan"]
@@ -491,13 +489,13 @@ class TestTranscriptTextsOriginUserPrompt:
     def test_prompt_prepended_under_any(self) -> None:
         from captain_hook.signals import transcript_texts
 
-        evt = self.ups_event([raw_msg("assistant", "prior plan")], "the new prompt")
+        evt = self.ups_event([T.assistant("prior plan")], "the new prompt")
         assert transcript_texts(evt, 6, "any") == ["the new prompt", "prior plan"]
 
     def test_prompt_excluded_under_assistant(self) -> None:
         from captain_hook.signals import transcript_texts
 
-        evt = self.ups_event([raw_msg("assistant", "prior plan")], "the new prompt")
+        evt = self.ups_event([T.assistant("prior plan")], "the new prompt")
         assert transcript_texts(evt, 6, "assistant") == ["prior plan"]
 
     def test_window_zero_assistant_is_inert(self) -> None:
@@ -505,7 +503,7 @@ class TestTranscriptTextsOriginUserPrompt:
         # prompt prepend) — why the distinct-requests nudge must opt into origin="any".
         from captain_hook.signals import transcript_texts
 
-        evt = self.ups_event([raw_msg("assistant", "prior plan")], "1. add foo\n2. fix bar")
+        evt = self.ups_event([T.assistant("prior plan")], "1. add foo\n2. fix bar")
         assert transcript_texts(evt, 0, "assistant") == []
         assert transcript_texts(evt, 0, "any") == ["1. add foo\n2. fix bar"]
 
@@ -520,9 +518,9 @@ class TestTranscriptTextsProse:
 
     def test_meta_injected_events_excluded(self) -> None:
         same = "these pre-existing lines are outside the scope"
-        assert self.texts_for([raw_msg("user", same, isMeta=True)]) == []
-        assert self.texts_for([raw_msg("user", same, isCompactSummary=True)]) == []
-        assert self.texts_for([raw_msg("user", same)]) == [same]
+        assert self.texts_for([T.user(same, isMeta=True)]) == []
+        assert self.texts_for([T.user(same, isCompactSummary=True)]) == []
+        assert self.texts_for([T.user(same)]) == [same]
 
     def test_agent_injected_user_events_excluded(self) -> None:
         # A teammate-message relay banner is a UserEvent with is_agent_injected=True: it echoes
@@ -530,11 +528,11 @@ class TestTranscriptTextsProse:
         # (which otherwise keeps user prose). Genuine human prose with the same tells stays.
         tells = "these pre-existing lines are outside the scope"
         banner = f'<teammate-message from="A">{tells}</teammate-message>'
-        assert self.texts_for([raw_msg("user", banner)]) == []
-        assert self.texts_for([raw_msg("user", tells)]) == [tells]
+        assert self.texts_for([T.user(banner)]) == []
+        assert self.texts_for([T.user(tells)]) == [tells]
 
     def test_thinking_block_is_own_entry(self) -> None:
-        messages = [raw_msg("assistant", [raw_text_block("visible"), {"type": "thinking", "thinking": "hidden plan"}])]
+        messages = [T.assistant("visible", T.thinking("hidden plan"))]
         assert self.texts_for(messages) == ["visible", "hidden plan"]
 
     @pytest.mark.parametrize(
@@ -578,23 +576,21 @@ class TestTranscriptTextsProse:
         ],
     )
     def test_tool_payload_prose(self, name: str, payload: dict[str, Any], expected: list[str]) -> None:
-        assert self.texts_for([raw_tool_msg(name, payload)]) == expected
+        assert self.texts_for([T.assistant(T.tool(name, **payload))]) == expected
 
     def test_turn_window_scopes_to_current_turn(self) -> None:
         messages = [
-            raw_text("user", "first question"),
-            raw_text("assistant", "old answer"),
-            raw_text("user", "second question"),
-            raw_text("assistant", "new answer"),
+            T.user("first question"),
+            T.assistant("old answer"),
+            T.user("second question"),
+            T.assistant("new answer"),
         ]
         assert self.texts_for(messages, "turn") == ["second question", "new answer"]
         assert self.texts_for(messages, 10) == ["first question", "old answer", "second question", "new answer"]
 
     def test_turn_window_out_reaches_int_window(self) -> None:
-        messages = [raw_text("assistant", "early deferral")] + [
-            line
-            for i in range(6)
-            for line in (raw_tool_msg("Read", {"file_path": f"/tmp/f{i}.py"}, id=f"tu_{i}"), raw_tool_result(f"tu_{i}"))
+        messages = [T.assistant("early deferral")] + [
+            line for i in range(6) for line in T.tool_turn("Read", file_path=f"/tmp/f{i}.py")
         ]
         assert "early deferral" not in self.texts_for(messages, 10)
         assert self.texts_for(messages, "turn") == ["early deferral"]

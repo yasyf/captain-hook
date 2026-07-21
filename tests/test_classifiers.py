@@ -10,6 +10,7 @@ from cc_transcript.ids import SessionId
 from cc_transcript.parser import parse_event
 from cc_transcript.query import Session
 
+from captain_hook import T
 from captain_hook.testing.helpers import fixture_session
 from tests.helpers import raw_text
 
@@ -223,8 +224,8 @@ class TestClassifierSegmentsSession:
         monkeypatch.delenv("FACTORY_PROJECT_DIR", raising=False)
         session = fixture_session(
             [
-                raw_text("user", "<system_instruction>setup"),
-                raw_text("user", "Real user message"),
+                T.user("<system_instruction>setup"),
+                T.user("Real user message"),
             ]
         )
         assert session.first_prompt == "Real user message"
@@ -234,8 +235,8 @@ class TestClassifierSegmentsSession:
         monkeypatch.delenv("FACTORY_PROJECT_DIR", raising=False)
         session = fixture_session(
             [
-                raw_text("user", "normal message"),
-                raw_text("user", "another message"),
+                T.user("normal message"),
+                T.user("another message"),
             ]
         )
         assert session.first_prompt == "normal message"

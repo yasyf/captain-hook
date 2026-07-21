@@ -12,6 +12,7 @@ import pytest
 from cc_transcript.ids import SessionId
 from pydantic import BaseModel
 
+from captain_hook import T
 from captain_hook.context import HookContext
 from captain_hook.session import (
     STALE_AGE_SECONDS,
@@ -21,6 +22,7 @@ from captain_hook.session import (
     state_root,
 )
 from captain_hook.turn import Turn
+from tests.helpers import tool_payload
 
 
 class MyModel(BaseModel):
@@ -159,7 +161,7 @@ class TestSessionManagement:
         dispatch_event(
             tmp_path,
             Event.PreToolUse,
-            {"session_id": SESSION_ID, "tool_name": "Bash", "tool_input": {"command": "echo hi"}},
+            tool_payload("Bash", session_id=SESSION_ID, command="echo hi"),
             session_dir=None,
             async_=False,
         )
@@ -205,9 +207,9 @@ class TestContextCaching:
 
 class TestTurnMatches:
     def test_regex_against_opening_prompt(self) -> None:
-        from tests.helpers import make_transcript, raw_text
+        from tests.helpers import make_transcript
 
-        transcript = make_transcript(raw_text("user", "Re-enter plan mode, don't do any more work."))
+        transcript = make_transcript(T.user("Re-enter plan mode, don't do any more work."))
         ctx = HookContext(session=SessionStore(None), transcript=transcript, settings=None)
         assert ctx.turn.matches(r"plan mode") is True
         assert ctx.turn.matches(r"\bdeploy\b") is False
@@ -351,9 +353,8 @@ class TestCallLlm:
 
     def test_with_transcript(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from captain_hook.testing.helpers import fixture_session
-        from tests.helpers import raw_text
 
-        transcript = fixture_session([raw_text("user", "transcript content here")])
+        transcript = fixture_session([T.user("transcript content here")])
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=transcript, settings=None)
 
@@ -368,11 +369,10 @@ class TestCallLlm:
         from pathlib import Path
 
         from captain_hook.testing.helpers import fixture_session
-        from tests.helpers import raw_text
 
         with_path = HookContext(
             session=SessionStore(None),
-            transcript=fixture_session([raw_text("user", "hi")], path=Path("/p/sess.jsonl")),
+            transcript=fixture_session([T.user("hi")], path=Path("/p/sess.jsonl")),
             settings=None,
         )
         block = with_path.transcript_block()
@@ -381,7 +381,7 @@ class TestCallLlm:
 
         no_path = HookContext(
             session=SessionStore(None),
-            transcript=fixture_session([raw_text("user", "hi")]),
+            transcript=fixture_session([T.user("hi")]),
             settings=None,
         )
         assert no_path.transcript_block().startswith("<transcript>\n")
@@ -457,9 +457,8 @@ class TestCallLlm:
 
     def test_transcript_default_is_bounded_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from captain_hook.testing.helpers import fixture_session
-        from tests.helpers import raw_text
 
-        events = [raw_text("user" if i % 2 == 0 else "assistant", f"evt-{i:02d}") for i in range(30)]
+        events = [(T.user(f"evt-{i:02d}") if i % 2 == 0 else T.assistant(f"evt-{i:02d}")) for i in range(30)]
         ctx = HookContext(session=SessionStore(None), transcript=fixture_session(events), settings=None)
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         with patch("spawnllm.call_sync", return_value="ok") as mock_call:
@@ -470,9 +469,8 @@ class TestCallLlm:
 
     def test_transcript_full_includes_oldest(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from captain_hook.testing.helpers import fixture_session
-        from tests.helpers import raw_text
 
-        events = [raw_text("user" if i % 2 == 0 else "assistant", f"evt-{i:02d}") for i in range(30)]
+        events = [(T.user(f"evt-{i:02d}") if i % 2 == 0 else T.assistant(f"evt-{i:02d}")) for i in range(30)]
         ctx = HookContext(session=SessionStore(None), transcript=fixture_session(events), settings=None)
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         with patch("spawnllm.call_sync", return_value="ok") as mock_call:

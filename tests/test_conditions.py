@@ -9,7 +9,7 @@ from typing import Any, get_args
 import pytest
 from cc_transcript.activity_probe import SessionActivityProbe, session_activity_probe
 
-from captain_hook import EditedSource
+from captain_hook import EditedSource, T
 from captain_hook.app import on
 from captain_hook.conditions import UserSaid, check_condition, is_project_path, matches_conditions, workflow_opt_matches
 from captain_hook.events import (
@@ -54,7 +54,6 @@ from captain_hook.types import (
     condition_events,
 )
 from tests.helpers import (
-    assistant_msg,
     async_agent_launch,
     build_ctx,
     make_event,
@@ -68,10 +67,8 @@ from tests.helpers import (
     raw_notification_enqueued,
     raw_queue_op,
     raw_text,
-    raw_tool_msg,
     raw_tool_result,
     raw_tool_use,
-    text_msg,
     waiting_evt,
     waiting_stop_evt,
     workflow_launch,
@@ -878,7 +875,7 @@ class TestSourceEditsCondition:
 
 class TestEditedSourceScoping:
     def _check(self, tool: str, tool_input: dict[str, Any], root: Path) -> bool:
-        ctx = build_ctx(transcript=make_transcript(raw_tool_msg(tool, tool_input)), project_root=root)
+        ctx = build_ctx(transcript=make_transcript(T.assistant(T.tool(tool, **tool_input))), project_root=root)
         return EditedSource().check(make_event(StopEvent, ctx=ctx))
 
     def test_scratchpad_write_excluded(self, tmp_path: Path) -> None:
@@ -902,7 +899,7 @@ class TestEditedSourceScoping:
         # A .py edit is source by default; excluding .py demotes it to non-source (no review demanded).
         ctx = build_ctx(
             transcript=make_transcript(
-                raw_tool_msg("Edit", {"file_path": "src/app.py", "old_string": "", "new_string": "x"})
+                T.assistant(T.tool("Edit", file_path="src/app.py", old_string="", new_string="x"))
             ),
             project_root=tmp_path,
         )
@@ -912,12 +909,12 @@ class TestEditedSourceScoping:
 
 
 def skill_evt(skill: str) -> BaseHookEvent:
-    ctx = build_ctx(transcript=make_transcript(raw_text("user", "go"), raw_tool_msg("Skill", {"skill": skill})))
+    ctx = build_ctx(transcript=make_transcript(T.user("go"), T.assistant(T.tool("Skill", skill=skill))))
     return make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
 
 
 def read_evt(path: str) -> BaseHookEvent:
-    ctx = make_messages_ctx([raw_tool_msg("Read", {"file_path": path})])
+    ctx = make_messages_ctx([T.assistant(T.tool("Read", file_path=path))])
     return make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
 
 
@@ -940,10 +937,10 @@ class TestUsedSkillCondition:
     def test_session_scope_spans_turns(self) -> None:
         ctx = build_ctx(
             transcript=make_transcript(
-                raw_text("user", "run codex on this"),
-                raw_tool_msg("Skill", {"skill": "codex"}),
-                raw_text("user", "now continue"),
-                raw_text("assistant", "ok"),
+                T.user("run codex on this"),
+                T.assistant(T.tool("Skill", skill="codex")),
+                T.user("now continue"),
+                T.assistant("ok"),
             )
         )
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
@@ -953,8 +950,8 @@ class TestUsedSkillCondition:
     def test_default_scope_sees_current_turn(self) -> None:
         ctx = build_ctx(
             transcript=make_transcript(
-                raw_text("user", "run codex on this"),
-                raw_tool_msg("Skill", {"skill": "codex"}),
+                T.user("run codex on this"),
+                T.assistant(T.tool("Skill", skill="codex")),
             )
         )
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
@@ -965,10 +962,10 @@ class TestUsedToolCondition:
     def test_session_scope_spans_turns(self) -> None:
         ctx = build_ctx(
             transcript=make_transcript(
-                raw_text("user", "plan this out"),
-                raw_tool_msg("EnterPlanMode", {}),
-                raw_text("user", "now continue"),
-                raw_text("assistant", "ok"),
+                T.user("plan this out"),
+                T.assistant(T.tool("EnterPlanMode")),
+                T.user("now continue"),
+                T.assistant("ok"),
             )
         )
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
@@ -978,17 +975,15 @@ class TestUsedToolCondition:
     def test_default_scope_sees_current_turn(self) -> None:
         ctx = build_ctx(
             transcript=make_transcript(
-                raw_text("user", "stop and replan"),
-                raw_tool_msg("EnterPlanMode", {}),
+                T.user("stop and replan"),
+                T.assistant(T.tool("EnterPlanMode")),
             )
         )
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(UsedTool("EnterPlanMode"), evt) is True
 
     def test_pipe_and_variadic_names(self) -> None:
-        ctx = build_ctx(
-            transcript=make_transcript(raw_text("user", "go"), raw_tool_msg("Write", {"file_path": "x.py"}))
-        )
+        ctx = build_ctx(transcript=make_transcript(T.user("go"), T.assistant(T.tool("Write", file_path="x.py"))))
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(UsedTool("Edit", "Write"), evt) is True
         assert check_condition(UsedTool("Edit|Write"), evt) is True
@@ -997,9 +992,7 @@ class TestUsedToolCondition:
 
 class TestUserSaidCondition:
     def test_regex_over_prompts(self) -> None:
-        ctx = build_ctx(
-            transcript=make_transcript(raw_text("user", "please just COMMIT it"), raw_text("assistant", "ok"))
-        )
+        ctx = build_ctx(transcript=make_transcript(T.user("please just COMMIT it"), T.assistant("ok")))
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(UserSaid("just commit"), evt) is True
         assert check_condition(UserSaid(r"\bdeploy\b"), evt) is False
@@ -1007,10 +1000,10 @@ class TestUserSaidCondition:
     def test_default_scope_sees_only_current_prompt(self) -> None:
         ctx = build_ctx(
             transcript=make_transcript(
-                raw_text("user", "re-enter plan mode"),
-                raw_text("assistant", "ok"),
-                raw_text("user", "now fix the typo"),
-                raw_text("assistant", "ok"),
+                T.user("re-enter plan mode"),
+                T.assistant("ok"),
+                T.user("now fix the typo"),
+                T.assistant("ok"),
             )
         )
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
@@ -1115,7 +1108,7 @@ class TestWaitingCondition:
     )
     def test_single_tool_matches(self, tool: str, tool_input: dict[str, Any], expected: bool) -> None:
 
-        ctx = make_messages_ctx([assistant_msg((tool, tool_input))])
+        ctx = make_messages_ctx([T.assistant(T.tool(tool, **tool_input))])
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(Waiting(), evt) is expected
 
@@ -1123,10 +1116,10 @@ class TestWaitingCondition:
 
         ctx = make_messages_ctx(
             [
-                assistant_msg(
-                    ("Edit", {"file_path": "a.py", "old_string": "", "new_string": ""}),
-                    ("Read", {"file_path": "a.py"}),
-                    ("Grep", {"pattern": "foo"}),
+                T.assistant(
+                    T.tool("Edit", file_path="a.py", old_string="", new_string=""),
+                    T.tool("Read", file_path="a.py"),
+                    T.tool("Grep", pattern="foo"),
                 )
             ]
         )
@@ -1137,8 +1130,8 @@ class TestWaitingCondition:
 
         ctx = make_messages_ctx(
             [
-                assistant_msg(("Agent", {"prompt": "x", "run_in_background": True})),
-                text_msg("Spawned 4 background agents, waiting for them to report back."),
+                T.assistant(T.tool("Agent", prompt="x", run_in_background=True)),
+                T.assistant("Spawned 4 background agents, waiting for them to report back."),
             ]
         )
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
@@ -1194,21 +1187,21 @@ class TestWaitingCondition:
 
     def test_workflow_orphaned_across_user_message_still_waiting(self) -> None:
 
-        raw = [*workflow_launch(id="toolu_wf"), raw_text("user", "actually, also update the changelog")]
+        raw = [*workflow_launch(id="toolu_wf"), T.user("actually, also update the changelog")]
         assert check_condition(Waiting(), waiting_evt(raw)) is True
 
     def test_workflow_orphaned_then_notified_in_later_turn_is_not_waiting(self) -> None:
 
         raw = [
             *workflow_launch(id="toolu_wf"),
-            raw_text("user", "actually, also update the changelog"),
+            T.user("actually, also update the changelog"),
             *raw_notification("toolu_wf", task_id="waux9o41y"),
         ]
         assert check_condition(Waiting(), waiting_evt(raw)) is False
 
     def test_async_agent_orphaned_across_user_message_still_waiting(self) -> None:
 
-        raw = [*async_agent_launch(id="tu_x"), raw_text("user", "while that runs, what's the plan?")]
+        raw = [*async_agent_launch(id="tu_x"), T.user("while that runs, what's the plan?")]
         assert check_condition(Waiting(), waiting_evt(raw)) is True
 
     def test_empty_transcript_rejects(self) -> None:
@@ -1271,7 +1264,7 @@ class TestWaitingCondition:
                 id="resumed_orphan_no_launch_enqueued_notification",
             ),
             pytest.param(
-                [*async_agent_launch(id="tu_x"), raw_text("user", notification_text("tu_x"))],
+                [*async_agent_launch(id="tu_x"), T.user(notification_text("tu_x"))],
                 False,
                 id="subagent_plain_user_delivery_no_queue_ops",
             ),
@@ -1282,10 +1275,8 @@ class TestWaitingCondition:
             ),
             pytest.param(
                 [
-                    raw_assistant(
-                        raw_tool_use("Workflow", {"script": "return 1"}, "toolu_wf", caller={"type": "direct"})
-                    ),
-                    raw_tool_result("toolu_wf", content="boom", is_error=True, tool_use_result={"status": "failed"}),
+                    T.assistant(T.tool("Workflow", id="toolu_wf", script="return 1") | {"caller": {"type": "direct"}}),
+                    T.user(T.result("boom", of="toolu_wf", is_error=True), toolUseResult={"status": "failed"}),
                 ],
                 False,
                 id="workflow_errored_launch_not_waiting",

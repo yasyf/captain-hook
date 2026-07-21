@@ -4,6 +4,7 @@ import hashlib
 import itertools
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -11,6 +12,8 @@ from cc_transcript import parse_events_from_bytes
 from cc_transcript.filterspec import ANSWERED_PREFIX, ANSWERED_TRAILER
 from cc_transcript.judge import JudgeError, canonical_slug
 from cc_transcript.mining.signals import NO_OPTION_SELECTED
+from cc_transcript.synthetic import assistant_line, meta_fields, tool_use, user_line
+from cc_transcript.synthetic import tool_result as tool_result_block
 
 from captain_hook.review.judge import DURABLE_CATEGORIES, ReviewVerdict
 from captain_hook.review.repo import RepoKey
@@ -44,55 +47,47 @@ def next_uuid() -> str:
     return f"uuid-{next(REVIEW_UUIDS)}"
 
 
-def envelope(entry_type: str, **overrides: Any) -> dict[str, Any]:
+def synthetic_meta(overrides: dict[str, Any]) -> dict[str, Any]:
     return {
-        "type": entry_type,
-        "uuid": overrides.pop("uuid", next_uuid()),
-        "parentUuid": None,
-        "sessionId": overrides.pop("sessionId", "sess-1"),
-        "timestamp": overrides.pop("timestamp", BASE_TS),
-        "cwd": overrides.pop("cwd", "/repo"),
-        "gitBranch": "main",
-        "version": "1.2.3",
-        "isSidechain": False,
-        "isMeta": False,
-        "entrypoint": "cli",
-        **overrides,
-    }
+        "session_id": overrides.pop("sessionId", "sess-1"),
+        "timestamp": datetime.fromisoformat(overrides.pop("timestamp", BASE_TS)),
+    } | overrides
 
 
-def user_text(text: str, **overrides: Any) -> dict[str, Any]:
-    return envelope("user", message={"role": "user", "content": text}, **overrides)
-
-
-def assistant_text(text: str, **overrides: Any) -> dict[str, Any]:
-    return envelope(
-        "assistant",
-        message={"role": "assistant", "model": "claude", "content": [{"type": "text", "text": text}]},
-        **overrides,
+def envelope(entry_type: str, **overrides: Any) -> dict[str, Any]:
+    return (
+        {"type": entry_type}
+        | meta_fields(
+            overrides.pop("uuid", next_uuid()),
+            session_id=overrides.pop("sessionId", "sess-1"),
+            timestamp=datetime.fromisoformat(overrides.pop("timestamp", BASE_TS)),
+        )
+        | overrides
     )
 
 
+def user_text(text: str, **overrides: Any) -> dict[str, Any]:
+    return user_line(overrides.pop("uuid", next_uuid()), text, **synthetic_meta(overrides))
+
+
+def assistant_text(text: str, **overrides: Any) -> dict[str, Any]:
+    return assistant_line(overrides.pop("uuid", next_uuid()), text, model="claude", **synthetic_meta(overrides))
+
+
 def assistant_tool_use(tool_id: str, name: str, tool_input: dict[str, Any], **overrides: Any) -> dict[str, Any]:
-    return envelope(
-        "assistant",
-        message={
-            "role": "assistant",
-            "model": "claude",
-            "content": [{"type": "tool_use", "id": tool_id, "name": name, "input": tool_input}],
-        },
-        **overrides,
+    return assistant_line(
+        overrides.pop("uuid", next_uuid()),
+        model="claude",
+        blocks=[tool_use(tool_id, name, tool_input)],
+        **synthetic_meta(overrides),
     )
 
 
 def tool_result(tool_id: str, content: str, *, is_error: bool = False, **overrides: Any) -> dict[str, Any]:
-    return envelope(
-        "user",
-        message={
-            "role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": tool_id, "content": content, "is_error": is_error}],
-        },
-        **overrides,
+    return user_line(
+        overrides.pop("uuid", next_uuid()),
+        blocks=[tool_result_block(tool_id, content, is_error=is_error)],
+        **synthetic_meta(overrides),
     )
 
 

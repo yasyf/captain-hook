@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from captain_hook import EditedSource
+from captain_hook import EditedSource, T
 from captain_hook.app import (
     _state,
     get_matching_hooks,
@@ -23,7 +23,6 @@ from tests.helpers import (
     make_post_tool_event,
     make_pre_tool_event,
     make_stop_event,
-    raw_tool_msg,
 )
 
 
@@ -963,7 +962,7 @@ class TestReviewGateDiff:
 
         ctx = build_ctx(
             transcript=fixture_session(
-                [raw_tool_msg("Edit", {"file_path": file_path, "old_string": "a", "new_string": "b"})]
+                [T.assistant(T.tool("Edit", file_path=file_path, old_string="a", new_string="b"))]
             ),
             session_dir=session_dir,
         )

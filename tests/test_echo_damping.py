@@ -11,13 +11,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from captain_hook import T
 from captain_hook.context import HookContext
 from captain_hook.events import PostToolUseEvent
 from captain_hook.session import SessionStore
 from captain_hook.state import PrimitiveState, normalize_ws
 from captain_hook.testing.helpers import fixture_session
 from captain_hook.types import Event, Signal, Signals
-from tests.helpers import make_ctx, make_post_tool_event, raw_msg
+from tests.helpers import make_ctx, make_post_tool_event
 
 
 def register_nudge(message: str, *, signals: Signals, max_fires: int | None = 5, **kwargs: Any) -> None:
@@ -27,7 +28,9 @@ def register_nudge(message: str, *, signals: Signals, max_fires: int | None = 5,
 
 
 def banner_ctx(session_dir: Path, messages: list[tuple[str, str]], *, n_pad: int = 0) -> HookContext:
-    lines = [raw_msg("assistant", "") for _ in range(n_pad)] + [raw_msg(role, text) for role, text in messages]
+    lines = [T.assistant("") for _ in range(n_pad)] + [
+        (T.user(text) if role == "user" else T.assistant(text)) for role, text in messages
+    ]
     return HookContext(session=SessionStore(session_dir), transcript=fixture_session(lines), settings=None)
 
 

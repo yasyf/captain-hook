@@ -44,10 +44,10 @@ SCRUB_ENV = (
 
 
 def make_project(root: Path, hook_src: str) -> Path:
-    (hooks := root / ".claude" / "hooks").mkdir(parents=True)
-    (hooks / "__init__.py").write_text("")
-    (hooks / "h.py").write_text(hook_src)
-    return root
+    """Scaffold ``hook_src`` into ``root`` as a package — the daemon worker imports ``hooks/`` as one."""
+    from tests.helpers import make_project as scaffold
+
+    return scaffold(root, hook_src, package=True)
 
 
 def short_run_dir() -> Path:

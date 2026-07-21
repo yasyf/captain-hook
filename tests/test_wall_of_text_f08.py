@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from captain_hook import T
 from captain_hook.context import HookContext
 from captain_hook.events import PostToolUseEvent, UserPromptSubmitEvent
 from captain_hook.session import SessionStore
@@ -20,7 +21,6 @@ from captain_hook.signals import score_signals, transcript_texts
 from captain_hook.state import PrimitiveState, text_hash
 from captain_hook.testing.helpers import fixture_session
 from captain_hook.types import Signal, Signals
-from tests.helpers import raw_msg
 
 # Mirrors cc-skills/plugins/show/hooks/wall_of_text.py (signals=Signals(...)), S1..S5, with
 # scope="window" added to pin the presence-union semantic this fixture relies on. The shipped
@@ -67,7 +67,7 @@ def ups_event(messages: list[dict[str, object]], prompt: str, tmp_path: Path) ->
 class TestF08GatePasses:
     def test_writeup_is_one_entry(self, tmp_path: Path) -> None:
         evt = post_tool_event(
-            [raw_msg("user", "sketch the event-bus architecture"), raw_msg("assistant", F08_WRITEUP)],
+            [T.user("sketch the event-bus architecture"), T.assistant(F08_WRITEUP)],
             tmp_path,
         )
         entries = transcript_texts(evt, WALL_OF_TEXT.window)
@@ -75,7 +75,7 @@ class TestF08GatePasses:
 
     def test_single_entry_scores_three(self, tmp_path: Path) -> None:
         evt = post_tool_event(
-            [raw_msg("user", "sketch the event-bus architecture"), raw_msg("assistant", F08_WRITEUP)],
+            [T.user("sketch the event-bus architecture"), T.assistant(F08_WRITEUP)],
             tmp_path,
         )
         entries = transcript_texts(evt, WALL_OF_TEXT.window)
@@ -88,7 +88,7 @@ class TestF08GatePasses:
 
     def test_match_signals_fires(self, tmp_path: Path) -> None:
         evt = post_tool_event(
-            [raw_msg("user", "sketch the event-bus architecture"), raw_msg("assistant", F08_WRITEUP)],
+            [T.user("sketch the event-bus architecture"), T.assistant(F08_WRITEUP)],
             tmp_path,
         )
         entries = transcript_texts(evt, WALL_OF_TEXT.window)
@@ -108,9 +108,9 @@ class TestSplitAcrossMessagesAggregates:
     def test_aggregate_fires_when_tells_split(self, tmp_path: Path) -> None:
         evt = post_tool_event(
             [
-                raw_msg("user", "sketch the event-bus architecture"),
-                raw_msg("assistant", self.LIST_ONLY),
-                raw_msg("assistant", self.FEEDBACK_ONLY),
+                T.user("sketch the event-bus architecture"),
+                T.assistant(self.LIST_ONLY),
+                T.assistant(self.FEEDBACK_ONLY),
             ],
             tmp_path,
         )
@@ -131,11 +131,11 @@ class TestF08UserPromptSubmitGatePasses:
     """
 
     def test_prompt_is_prepended_to_prior_writeup(self, tmp_path: Path) -> None:
-        evt = ups_event([raw_msg("assistant", F08_WRITEUP)], "hmm", tmp_path)
+        evt = ups_event([T.assistant(F08_WRITEUP)], "hmm", tmp_path)
         assert transcript_texts(evt, WALL_OF_TEXT.window) == ["hmm", F08_WRITEUP]
 
     def test_gate_passes_on_writeup_entry(self, tmp_path: Path) -> None:
-        evt = ups_event([raw_msg("assistant", F08_WRITEUP)], "hmm", tmp_path)
+        evt = ups_event([T.assistant(F08_WRITEUP)], "hmm", tmp_path)
         entries = transcript_texts(evt, WALL_OF_TEXT.window)
         assert [score_signals(WALL_OF_TEXT.patterns, e) for e in entries] == [0, 3]
         assert PrimitiveState().match_signals(WALL_OF_TEXT, entries, "h") == [F08_WRITEUP]

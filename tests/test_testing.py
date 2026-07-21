@@ -933,10 +933,11 @@ class TestInferTool:
 
 class TestTranscriptEventPayloads:
     def test_permission_request_yields_tool_payloads(self):
+        from captain_hook import T
         from captain_hook.testing.helpers import transcript_event_payloads
-        from tests.helpers import make_transcript, raw_tool_msg
+        from tests.helpers import make_transcript
 
-        transcript = make_transcript(raw_tool_msg("Bash", {"command": "ls"}))
+        transcript = make_transcript(T.assistant(T.tool("Bash", command="ls")))
         payloads = list(transcript_event_payloads(Event.PermissionRequest, transcript, "/tmp/t.jsonl"))
         assert payloads == [{"transcript_path": "/tmp/t.jsonl", "tool_name": "Bash", "tool_input": {"command": "ls"}}]
 

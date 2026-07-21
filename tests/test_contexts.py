@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from captain_hook import T
 from captain_hook.ast_grep import COMMENT_TYPES
 from captain_hook.builtin_packs.general.hooks.models import (
     ProseSpawn,
@@ -242,16 +243,7 @@ class TestWithDefaults:
 def prompts_event(*prompts: str) -> Any:
     return mock_event(
         "Stop",
-        transcript=fixture_session(
-            [
-                line
-                for p in prompts
-                for line in (
-                    {"type": "user", "message": {"content": p}},
-                    {"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}},
-                )
-            ]
-        ),
+        transcript=fixture_session([line for p in prompts for line in (T.user(p), T.assistant("ok"))]),
     )
 
 
@@ -290,7 +282,7 @@ class TestUserMessages:
     def test_no_user_turns_yields_none(self) -> None:
         empty = mock_event("Stop", transcript=fixture_session([]))
         assert UserMessages().content(empty) is None
-        assistant = [{"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}}]
+        assistant = [T.assistant("hi")]
         assistant_only = mock_event("Stop", transcript=fixture_session(assistant))
         assert UserMessages().content(assistant_only) is None
 

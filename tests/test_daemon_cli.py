@@ -17,15 +17,10 @@ from click.testing import CliRunner
 from capt_hook_client.key import PROTOCOL, worker_key
 from captain_hook.cli import cli
 from captain_hook.daemon import ops
+from tests.helpers import make_project
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-
-
-def make_project(root: Path) -> Path:
-    (hooks := root / ".claude" / "hooks").mkdir(parents=True)
-    (hooks / "__init__.py").write_text("")
-    return root
 
 
 def daemon_env(root: Path, run: Path, base: Path) -> dict[str, str]:
@@ -117,7 +112,7 @@ def write_meta_with_start(run: Path, key: str, root: Path, pid: int, proc_start:
 def live_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Path, Path, str, subprocess.Popen]]:
     run = short_run()
     base = tmp_path / "base"
-    root = make_project(tmp_path / "proj")
+    root = make_project(tmp_path / "proj", package=True)
     env = daemon_env(root, run, base)
     sock_path = str(run / f"{worker_key(str(root), env)}.sock")
     boot_log = run / "boot.log"
@@ -292,7 +287,7 @@ class TestNoSpawn:
         run = short_run()
         monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(run))
         monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path / "logs"))
-        root = make_project(tmp_path / "proj")
+        root = make_project(tmp_path / "proj", package=True)
         try:
             for argv in (
                 ["daemon", "status", "--all"],

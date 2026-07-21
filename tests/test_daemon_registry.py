@@ -15,6 +15,7 @@ from captain_hook.daemon import registry
 from captain_hook.daemon.registry import Fingerprint, Registry
 from captain_hook.packs import manager, plugins
 from captain_hook.util.paths import resolve_claude_config_dir
+from tests.helpers import make_project as scaffold
 
 HOOK = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 PLUGIN_HOOK = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='pp')\n"
@@ -54,12 +55,8 @@ def isolate_cache(
 
 
 def make_project(root: Path, *, hook_body: str = HOOK, gitignore: str | None = "*.log\n") -> CliState:
-    hooks = root / ".claude" / "hooks"
-    hooks.mkdir(parents=True, exist_ok=True)
-    (hooks / "h.py").write_text(hook_body)
-    if gitignore is not None:
-        (root / ".gitignore").write_text(gitignore)
-    return CliState(root=root, hooks=str(hooks))
+    scaffold(root, hook_body, gitignore=gitignore)
+    return CliState(root=root, hooks=str(root / ".claude" / "hooks"))
 
 
 @pytest.fixture

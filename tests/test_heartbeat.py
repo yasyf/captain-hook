@@ -9,6 +9,7 @@ from cc_transcript.heartbeats import Heartbeat, HeartbeatLog
 from captain_hook.cli import dispatch_event
 from captain_hook.heartbeat import record_heartbeat
 from captain_hook.types import Event
+from tests.helpers import tool_payload
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -58,7 +59,7 @@ def test_distinct_events_beat_separately(hb_db: Path) -> None:
 
 
 def test_dispatch_event_beats_on_sync_not_async(hb_db: Path, tmp_path: Path) -> None:
-    raw = {"session_id": "s1", "tool_name": "Bash", "tool_input": {"command": "ls"}}
+    raw = tool_payload("Bash", command="ls")
     dispatch_event(tmp_path, Event.PreToolUse, raw, session_dir=None, async_=True)
     assert beats(hb_db, "s1") == ()  # async process must not double-beat
     dispatch_event(tmp_path, Event.PreToolUse, raw, session_dir=None, async_=False)

@@ -12,6 +12,7 @@ from captain_hook.builtin_packs.general.hooks.comments import VerboseComment
 from captain_hook.cli import CliState
 from captain_hook.events import PostToolUseEvent, PreToolUseEvent
 from captain_hook.packs import manager, plugins
+from tests.helpers import make_project as scaffold
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -122,9 +123,8 @@ def write_snapshot(root: Path, roster: Sequence[tuple[str, Path]]) -> None:
 
 
 def make_project(root: Path) -> CliState:
-    (hooks := root / ".claude" / "hooks").mkdir(parents=True, exist_ok=True)
-    (hooks / "h.py").write_text("from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n")
-    return CliState(root=root, hooks=str(hooks))
+    scaffold(root, "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n")
+    return CliState(root=root, hooks=str(root / ".claude" / "hooks"))
 
 
 def write_plugin_pack(pack_root: Path, tools_body: str) -> None:

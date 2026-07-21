@@ -11,12 +11,25 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pytest
 
-from capt_hook_client.key import request_env, worker_key
+from capt_hook_client.key import worker_key
 from captain_hook.daemon.protocol import PROTOCOL
+from tests.daemon_helpers import (
+    cleanup_dirs,
+    control_req,
+    daemon_dirs,
+    daemon_env,
+    event_req,
+    make_project,
+    send,
+    spawn_daemon,
+    stop_daemon,
+    wait_ready,
+    worker_sock,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -88,106 +101,6 @@ hook(Event.PreToolUse, only_if=[Boom()], message="never", block=True)
 """
 
 
-def make_project(root: Path) -> Path:
-    (hooks := root / ".claude" / "hooks").mkdir(parents=True)
-    (hooks / "h.py").write_text(HOOK_SRC)
-    return root
-
-
-def daemon_env_for(root: Path, dirs: dict[str, Path]) -> dict[str, str]:
-    return os.environ | {
-        "CAPT_HOOK_RUN_DIR": str(dirs["run"]),
-        "CAPTAIN_HOOK_STATE_DIR": str(dirs["state"]),
-        "XDG_CACHE_HOME": str(dirs["cache"]),
-        "CAPTAIN_HOOK_LOG_DIR": str(dirs["logs"]),
-        "CAPT_HOOK_DECISIONS_DB": str(dirs["decisions"] / "d.db"),
-        "CLAUDE_PROJECT_DIR": str(root),
-    }
-
-
-def sock_for(root: Path, env: dict[str, str]) -> str:
-    return str(Path(env["CAPT_HOOK_RUN_DIR"]) / f"{worker_key(str(root), env)}.sock")
-
-
-def spawn_daemon(root: Path, env: dict[str, str], boot_log: Path) -> subprocess.Popen:
-    handle = boot_log.open("wb")
-    try:
-        return subprocess.Popen(
-            [sys.executable, "-m", "captain_hook", "daemon", "run", "--root", str(root)],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=handle,
-            stderr=handle,
-        )
-    finally:
-        handle.close()
-
-
-def wait_ready(sock_path: str, proc: subprocess.Popen, boot_log: Path, *, timeout: float = 20.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"daemon exited early (code {proc.returncode}); boot log:\n{boot_log.read_text()}")
-        if os.path.exists(sock_path):
-            with contextlib.suppress(OSError):
-                if send(sock_path, control_req("ping"))["status"] == "ok":
-                    return
-        time.sleep(0.05)
-    raise RuntimeError(f"daemon never became ready; boot log:\n{boot_log.read_text()}")
-
-
-def stop_daemon(sock_path: str, proc: subprocess.Popen) -> None:
-    if proc.poll() is None:
-        with contextlib.suppress(OSError):
-            send(sock_path, control_req("shutdown"), timeout=5)
-    with contextlib.suppress(subprocess.TimeoutExpired):
-        proc.wait(timeout=5)
-    if proc.poll() is None:
-        proc.kill()
-        proc.wait(timeout=5)
-
-
-def client_meta(build: str = "b1") -> dict[str, Any]:
-    return {"version": "", "build": build, "pid": os.getpid(), "ppid": os.getppid()}
-
-
-def event_req(
-    event: str, payload: dict | str, root: Path, env: dict[str, str], *, extra_env: dict | None = None
-) -> dict:
-    raw = payload if isinstance(payload, str) else json.dumps(payload)
-    return {
-        "v": PROTOCOL,
-        "kind": "event",
-        "client": client_meta(),
-        "event": event,
-        "async": False,
-        "root": str(root),
-        "cwd": str(root),
-        "env": request_env(env) | (extra_env or {}),
-        "payload_raw": raw,
-    }
-
-
-def control_req(kind: str, *, v: int = PROTOCOL) -> dict:
-    return {"v": v, "kind": kind, "client": client_meta()}
-
-
-def send(sock_path: str, request: dict, *, read: bool = True, timeout: float = 15.0):
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    sock.connect(sock_path)
-    sock.sendall((json.dumps(request) + "\n").encode())
-    if not read:
-        return sock
-    buf = b""
-    while b"\n" not in buf:
-        if not (chunk := sock.recv(65536)):
-            break
-        buf += chunk
-    sock.close()
-    return json.loads(buf.split(b"\n")[0])
-
-
 def cold_run(
     event: str, payload_raw: str, root: Path, env: dict[str, str], *, extra_env: dict | None = None
 ) -> subprocess.CompletedProcess:
@@ -223,21 +136,16 @@ def assert_matches_cold(
 
 @pytest.fixture(scope="module")
 def dirs() -> Iterator[dict[str, Path]]:
-    run = tempfile.mkdtemp(dir="/tmp", prefix="chd")
-    base = Path(tempfile.mkdtemp(prefix="chd-base"))
-    mapping = {"run": Path(run)} | {name: base / name for name in ("state", "cache", "logs", "decisions")}
-    for path in mapping.values():
-        path.mkdir(parents=True, exist_ok=True)
+    mapping = daemon_dirs()
     yield mapping
-    shutil.rmtree(run, ignore_errors=True)
-    shutil.rmtree(base, ignore_errors=True)
+    cleanup_dirs(mapping)
 
 
 @pytest.fixture(scope="module")
 def worker(dirs: dict[str, Path]) -> Iterator[tuple[str, Path, dict[str, str]]]:
-    root = make_project(Path(tempfile.mkdtemp(prefix="chd-proj")))
-    env = daemon_env_for(root, dirs)
-    sock_path = sock_for(root, env)
+    root = make_project(Path(tempfile.mkdtemp(prefix="chd-proj")), HOOK_SRC)
+    env = daemon_env(root, dirs)
+    sock_path = worker_sock(root, env)
     proc = spawn_daemon(root, env, dirs["run"] / "boot.log")
     try:
         wait_ready(sock_path, proc, dirs["run"] / "boot.log")
@@ -473,9 +381,9 @@ class TestStandaloneWorkers:
     def test_control_shutdown_stops_the_daemon(self, tmp_path: Path, dirs: dict[str, Path], kind: str) -> None:
         run = Path(tempfile.mkdtemp(dir="/tmp", prefix="chd4"))
         try:
-            root = make_project(tmp_path / "proj")
-            env = daemon_env_for(root, {**dirs, "run": run})
-            sock_path = sock_for(root, env)
+            root = make_project(tmp_path / "proj", HOOK_SRC)
+            env = daemon_env(root, {**dirs, "run": run})
+            sock_path = worker_sock(root, env)
             proc = spawn_daemon(root, env, run / "boot.log")
             try:
                 wait_ready(sock_path, proc, run / "boot.log")
@@ -493,9 +401,9 @@ class TestStandaloneWorkers:
     def test_stale_socket_takeover(self, tmp_path: Path, dirs: dict[str, Path]) -> None:
         run = Path(tempfile.mkdtemp(dir="/tmp", prefix="chd2"))
         try:
-            root = make_project(tmp_path / "proj")
-            env = daemon_env_for(root, {**dirs, "run": run})
-            sock_path = sock_for(root, env)
+            root = make_project(tmp_path / "proj", HOOK_SRC)
+            env = daemon_env(root, {**dirs, "run": run})
+            sock_path = worker_sock(root, env)
             Path(sock_path).write_bytes(b"")  # a dead file squatting the socket path
             proc = spawn_daemon(root, env, run / "boot.log")
             try:
@@ -509,8 +417,8 @@ class TestStandaloneWorkers:
     def test_client_roundtrip_matches_cold(self, tmp_path: Path, dirs: dict[str, Path]) -> None:
         run = Path(tempfile.mkdtemp(dir="/tmp", prefix="chd3"))
         try:
-            root = make_project(tmp_path / "cproj")
-            env = daemon_env_for(root, {**dirs, "run": run}) | {"CAPT_HOOK_DAEMON_FALLBACK": "closed"}
+            root = make_project(tmp_path / "cproj", HOOK_SRC)
+            env = daemon_env(root, {**dirs, "run": run}) | {"CAPT_HOOK_DAEMON_FALLBACK": "closed"}
             raw = json.dumps(
                 {
                     "session_id": "cx",
@@ -533,7 +441,7 @@ class TestStandaloneWorkers:
             assert proc.stdout == cold.stdout
             assert proc.stderr == cold.stderr
         finally:
-            sock_path = sock_for(root, env)
+            sock_path = worker_sock(root, env)
             if os.path.exists(sock_path):
                 with contextlib.suppress(OSError):
                     send(sock_path, control_req("shutdown"), timeout=5)
@@ -547,7 +455,7 @@ class TestClientBuildRestart:
     def test_client_header_change_alone_does_not_arm_restart(self, tmp_path: Path) -> None:
         from captain_hook.daemon.server import Server
 
-        root = make_project(tmp_path / "proj")
+        root = make_project(tmp_path / "proj", HOOK_SRC)
         server = Server(root, foreground=True)
         try:
             assert server._note_client_build("b1") is None  # first seen: record, no restart
@@ -563,7 +471,7 @@ class TestClientBuildRestart:
         from captain_hook.daemon import lifecycle
         from captain_hook.daemon.server import Server
 
-        root = make_project(tmp_path / "proj")
+        root = make_project(tmp_path / "proj", HOOK_SRC)
         server = Server(root, foreground=True)
         try:
             assert server._note_client_build("b1") is None
@@ -583,7 +491,7 @@ class TestRestartDrain:
         from captain_hook.daemon import server as server_mod
 
         assert server_mod.INFLIGHT_DRAIN_S >= 30, "the drain cap must cover realistic LLM-gate durations"
-        root = make_project(tmp_path / "proj")
+        root = make_project(tmp_path / "proj", HOOK_SRC)
         server = server_mod.Server(root, foreground=True)
         monkeypatch.setattr(server_mod.logger, "remove", lambda *a, **k: None)
         gate = threading.Event()
@@ -612,7 +520,7 @@ class TestRestartDrain:
         from captain_hook.daemon import server as server_mod
         from captain_hook.daemon.protocol import decode_request
 
-        root = make_project(tmp_path / "proj")
+        root = make_project(tmp_path / "proj", HOOK_SRC)
         server = server_mod.Server(root, foreground=True)
         try:
             started: list[object] = []
@@ -659,7 +567,7 @@ class TestRestartDrain:
         from captain_hook.daemon import server as server_mod
         from captain_hook.daemon.protocol import decode_request
 
-        root = make_project(tmp_path / "proj")
+        root = make_project(tmp_path / "proj", HOOK_SRC)
         server = server_mod.Server(root, foreground=True)
         monkeypatch.setattr(server_mod.logger, "remove", lambda *a, **k: None)
         monkeypatch.setattr(server_mod, "INFLIGHT_DRAIN_S", 0.3)
@@ -788,7 +696,7 @@ class TestSessionScheduler:
         from captain_hook.daemon.protocol import decode_request
         from captain_hook.daemon.server import Server
 
-        root = make_project(tmp_path / "proj")
+        root = make_project(tmp_path / "proj", HOOK_SRC)
         server = Server(root, foreground=True)
         try:
             calls = {"n": 0}
@@ -827,7 +735,7 @@ class TestTeardownRace:
         from captain_hook.daemon.protocol import decode_request
         from captain_hook.daemon.server import Server
 
-        root = make_project(tmp_path / "proj")
+        root = make_project(tmp_path / "proj", HOOK_SRC)
         server = Server(root, foreground=True)
         try:
             server.event_pool.shutdown(wait=False)  # the event pool is already down when scheduling runs
@@ -870,7 +778,7 @@ class TestNonStrSessionId:
         from captain_hook.daemon.protocol import decode_request
         from captain_hook.daemon.server import Server
 
-        root = make_project(tmp_path / "proj")
+        root = make_project(tmp_path / "proj", HOOK_SRC)
         server = Server(root, foreground=True)
         try:
             monkeypatch.setattr(server, "_process", lambda conn, _req: conn.close())
@@ -921,7 +829,7 @@ class TestPeerCredentialCheck:
         # S1/S2: a peer whose uid does not match our euid is dropped at intake, never admitted.
         from captain_hook.daemon import server as server_mod
 
-        root = make_project(tmp_path / "proj")
+        root = make_project(tmp_path / "proj", HOOK_SRC)
         server = server_mod.Server(root, foreground=True)
         try:
             monkeypatch.setattr(server_mod, "_peer_uid", lambda _conn: os.geteuid() + 1)
@@ -945,7 +853,7 @@ class TestMetaHardening:
 
         run = Path(tempfile.mkdtemp(dir="/tmp", prefix="chd-meta-"))
         monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(run))
-        server = Server(make_project(tmp_path / "proj"), foreground=True)
+        server = Server(make_project(tmp_path / "proj", HOOK_SRC), foreground=True)
         try:
             target = run / "target.json"
             target.write_text("ORIGINAL")
@@ -996,21 +904,15 @@ class TestDiscoveryDiagnosticsReplay:
         assert hit.stderr == built.stderr  # the cache hit replays the build's diagnostics verbatim
 
 
-def make_raising_project(root: Path) -> Path:
-    (hooks := root / ".claude" / "hooks").mkdir(parents=True)
-    (hooks / "h.py").write_text(RAISING_HOOK_SRC)
-    return root
-
-
 class TestErrorParity:
     def test_uncaught_dispatch_error_relays_the_traceback_like_cold(
         self, tmp_path: Path, dirs: dict[str, Path]
     ) -> None:
         run = Path(tempfile.mkdtemp(dir="/tmp", prefix="chderr"))
         try:
-            root = make_raising_project(tmp_path / "boomproj")
-            env = daemon_env_for(root, {**dirs, "run": run})
-            sock_path = sock_for(root, env)
+            root = make_project(tmp_path / "boomproj", RAISING_HOOK_SRC)
+            env = daemon_env(root, {**dirs, "run": run})
+            sock_path = worker_sock(root, env)
             proc = spawn_daemon(root, env, run / "boot.log")
             try:
                 wait_ready(sock_path, proc, run / "boot.log")

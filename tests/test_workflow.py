@@ -8,11 +8,12 @@ import pytest
 from cc_transcript.query import Session
 from pydantic import BaseModel
 
+from captain_hook import T
 from captain_hook.app import _state
 from captain_hook.events import SubagentStopEvent
 from captain_hook.primitives.workflow import Step
 from captain_hook.types import Action, Event, HookResult
-from tests.helpers import build_ctx, make_subagent_stop_event, make_transcript, raw_text
+from tests.helpers import build_ctx, make_subagent_stop_event, make_transcript
 
 
 class ArtifactModel(BaseModel):
@@ -25,7 +26,7 @@ def make_evt(
     *,
     session_dir: Path | None = None,
 ) -> SubagentStopEvent:
-    ctx = build_ctx(transcript=make_transcript(raw_text("assistant", full_text)), session_dir=session_dir)
+    ctx = build_ctx(transcript=make_transcript(T.assistant(full_text)), session_dir=session_dir)
     return make_subagent_stop_event(ctx)
 
 
@@ -46,7 +47,7 @@ class TestTextMatches:
     def test_match(self, text: str, expected: bool) -> None:
         from captain_hook.primitives.workflow import text_matches
 
-        t = make_transcript(raw_text("assistant", text))
+        t = make_transcript(T.assistant(text))
         assert text_matches(r"ALL_TESTS_PASS")(t) is expected
 
 
@@ -71,7 +72,7 @@ class TestStep:
             return True
 
         s = Step(name="test", check=checker, message="Stop Next")
-        t = make_transcript(raw_text("assistant", "hello"))
+        t = make_transcript(T.assistant("hello"))
         assert s.check(t) is True
         assert len(called_with) == 1
 

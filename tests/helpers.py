@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import textwrap
 from itertools import count
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -12,6 +13,7 @@ from captain_hook.context import HookContext
 from captain_hook.dispatch import dispatch as _dispatch
 from captain_hook.events import PostToolUseEvent, PreToolUseEvent, StopEvent, SubagentStopEvent
 from captain_hook.session import SessionStore
+from captain_hook.testing.fixtures import T
 from captain_hook.testing.helpers import (
     assert_result as assert_result,
 )
@@ -47,6 +49,9 @@ from captain_hook.testing.helpers import (
 )
 from captain_hook.testing.helpers import (
     mock_user_prompt_event as mock_user_prompt_event,
+)
+from captain_hook.testing.helpers import (
+    run_inline_tests as run_inline_tests,
 )
 from captain_hook.types import Event
 
@@ -201,6 +206,55 @@ def run_cli(
     )
 
 
+# --- Shared scenario vocabulary ---------------------------------------------
+
+
+def tool_payload(tool: str, /, *, session_id: str = "s1", **tool_input: Any) -> dict[str, Any]:
+    """The hook stdin payload for ``tool``: ``{session_id, tool_name, tool_input}``.
+
+    Tool-input fields pass as keyword arguments, so ``tool_payload("Bash", command="ls")``
+    yields ``{"session_id": "s1", "tool_name": "Bash", "tool_input": {"command": "ls"}}``.
+    """
+    return {"session_id": session_id, "tool_name": tool, "tool_input": tool_input}
+
+
+def write_hook(hooks_dir: Path, source: str, name: str = "my_hook.py") -> Path:
+    """Write a dedented hook ``source`` into ``hooks_dir/name``, returning the path."""
+    (path := hooks_dir / name).write_text(textwrap.dedent(source))
+    return path
+
+
+def make_project(
+    root: Path,
+    hook_src: str | None = None,
+    *,
+    package: bool = False,
+    gitignore: str | None = None,
+) -> Path:
+    """Scaffold a ``root/.claude/hooks`` project, returning ``root``.
+
+    Writes ``hook_src`` as ``h.py`` when given, an empty ``__init__.py`` when ``package``,
+    and a ``.gitignore`` when ``gitignore`` is set.
+    """
+    (hooks := root / ".claude" / "hooks").mkdir(parents=True, exist_ok=True)
+    if package:
+        (hooks / "__init__.py").write_text("")
+    if hook_src is not None:
+        write_hook(hooks, hook_src, "h.py")
+    if gitignore is not None:
+        (root / ".gitignore").write_text(gitignore)
+    return root
+
+
+def assert_inline_tests(label: str = "") -> None:
+    """Run every registered hook's inline ``tests`` and assert each passed, listing any failures."""
+    failures = [(name, detail) for name, _status, ok, detail in run_inline_tests() if not ok]
+    prefix = f"{label} " if label else ""
+    assert not failures, f"{prefix}inline test failures:\n" + "\n".join(
+        f"  {name}: {detail}" for name, detail in failures
+    )
+
+
 # --- Raw JSONL-line builders ------------------------------------------------
 # These return plain dicts in the shape Claude Code writes to transcript JSONL,
 # ready for ``fixture_session([...])``.
@@ -307,7 +361,7 @@ def raw_notification(
     from the queue, and delivered as a user turn carrying the ``<task-notification>``.
     """
     text = notification_text(tool_use_id, task_id, status)
-    return [raw_queue_op("enqueue", text), raw_queue_op("dequeue"), raw_text("user", text)]
+    return [raw_queue_op("enqueue", text), raw_queue_op("dequeue"), T.user(text)]
 
 
 def raw_notification_enqueued(
@@ -337,29 +391,25 @@ def raw_notification_attachment(
 def async_agent_launch(id: str = "tu_x", input: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """A two-line async Agent launch: tool_use + tool_result with ``isAsync`` toolUseResult."""
     return [
-        raw_assistant(raw_tool_use("Agent", input or {"subagent_type": "general-purpose", "prompt": "y"}, id)),
-        raw_tool_result(id, content=[], tool_use_result={"isAsync": True, "status": "async_launched", "agentId": "a"}),
+        T.assistant(T.tool("Agent", id=id, **(input or {"subagent_type": "general-purpose", "prompt": "y"}))),
+        T.user(T.result("", of=id), toolUseResult={"isAsync": True, "status": "async_launched", "agentId": "a"}),
     ]
 
 
 def workflow_launch(id: str = "tu_x") -> list[dict[str, Any]]:
     """A two-line Workflow launch: tool_use + tool_result whose toolUseResult has no ``isAsync``."""
     return [
-        raw_assistant(
-            raw_tool_use(
-                "Workflow",
-                {"script": "export const meta = {name: 'transcript-probe'}\nlog('probe')\nreturn 1"},
-                id,
-                caller={"type": "direct"},
-            )
+        T.assistant(
+            T.tool("Workflow", id=id, script="export const meta = {name: 'transcript-probe'}\nlog('probe')\nreturn 1")
+            | {"caller": {"type": "direct"}}
         ),
-        raw_tool_result(
-            id,
-            content=(
+        T.user(
+            T.result(
                 "Workflow launched in background. Task ID: waux9o41y\n"
-                "Summary: capture Workflow transcript shape\nRun ID: wf_a327db8a-07d"
+                "Summary: capture Workflow transcript shape\nRun ID: wf_a327db8a-07d",
+                of=id,
             ),
-            tool_use_result={
+            toolUseResult={
                 "status": "async_launched",
                 "taskId": "waux9o41y",
                 "runId": "wf_a327db8a-07d",
@@ -390,21 +440,3 @@ def waiting_stop_evt(
     """A ``StopEvent`` carrying ``raw`` (e.g. ``background_tasks``/``session_crons``) over the given transcript."""
     ctx = build_ctx(transcript=disk_fixture_session(raw_messages or []))
     return StopEvent(_raw=raw or {}, ctx=ctx)
-
-
-# --- Single-line message factories -------------------------------------------
-
-
-def assistant_msg(*tools: tuple[str, dict[str, Any]]) -> dict[str, Any]:
-    """A raw assistant line carrying a tool_use block per ``(name, input)`` tuple."""
-    return raw_assistant(*(raw_tool_use(name, inp, f"tu_{i}") for i, (name, inp) in enumerate(tools)))
-
-
-def text_msg(text: str = "done") -> dict[str, Any]:
-    """A raw assistant line carrying a single text block."""
-    return raw_text("assistant", text)
-
-
-def tool_result_msg(tool_use_id: str, text: str) -> dict[str, Any]:
-    """A raw user line carrying a single tool_result block."""
-    return raw_tool_result(tool_use_id, content=[{"type": "text", "text": text}])
