@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from captain_hook import (
     Allow,
-    BaseHookEvent,
     Block,
-    CustomCondition,
     Event,
     Input,
+    LambdaCondition,
     Tool,
     block_command,
     hook,
@@ -39,11 +36,9 @@ block_command(
 )
 
 
-@dataclass(frozen=True)
-class SecretsExfil(CustomCondition):
-    def check(self, evt: BaseHookEvent) -> bool:
-        cmd = evt.command.raw
-        return "get-secret-value" in cmd or "AWS_SECRET" in cmd or "PRIVATE_KEY" in cmd
+SecretsExfil = LambdaCondition(
+    lambda evt: any(s in evt.command.raw for s in ("get-secret-value", "AWS_SECRET", "PRIVATE_KEY"))
+)
 
 
 # Block commands that would copy a secret into the transcript or a log.
@@ -51,7 +46,7 @@ hook(
     Event.PreToolUse,
     message="BLOCKED: this prints a secret into the transcript. Read it from your secret store at runtime.",
     block=True,
-    only_if=[Tool("Bash"), SecretsExfil()],
+    only_if=[Tool("Bash"), SecretsExfil],
     tests={
         Input(command="aws secretsmanager get-secret-value --secret-id db"): Block(pattern="secret"),
         Input(command="env | grep AWS_SECRET_ACCESS_KEY"): Block(pattern="secret"),

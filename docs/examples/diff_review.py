@@ -13,7 +13,7 @@ llm_gate(
     "The working-tree diff is in <diff>. Did this change leave debugging artifacts in the "
     "code, such as a stray print/console.log/debugger, a commented-out block, or a "
     "temporary TODO marked for removal? Block only if the diff clearly adds one.",
-    message=lambda r: f"Remove the debugging leftovers before stopping: {r.reasoning}",
+    message="Remove the debugging leftovers before stopping: {reasoning}",
     diff=True,
     only_if=[TouchedFile("**/*.py")],
     events=Event.Stop,
