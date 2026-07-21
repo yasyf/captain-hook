@@ -24,7 +24,7 @@ uvx capt-hook transcripts register --session "$CLAUDE_CODE_SESSION_ID" \
 
 Pass exactly one of `--thread-id` or `--path`. `--provider` defaults to `codex`, and `--label` attaches a name for your own bookkeeping. Registration is idempotent by provider and locator: re-running the same command records nothing new.
 
-The codex plugin's `codex-ask` is picking this up natively — once its next release lands, every lane it dispatches registers its own rollout automatically, and the manual command stays for ad-hoc runs.
+The codex plugin's `codex-ask` does this natively as of its 1.3.0 release — every lane it dispatches registers its own rollout automatically and records the outcome in the lane's `register` file, so the manual command stays for ad-hoc runs.
 
 ## Register over MCP
 
