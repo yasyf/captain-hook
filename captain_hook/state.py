@@ -375,13 +375,13 @@ class SeenKeys(BaseModel):
 class RegisteredTranscript(BaseModel):
     """An external transcript folded into a session's deep view — a codex thread id or a file path.
 
-    Exactly one of ``thread_id`` and ``path`` locates the transcript: a thread id resolves lazily
+    Exactly one non-empty ``thread_id`` or ``path`` locates the transcript: a thread id resolves lazily
     against the codex sessions tree at dispatch time, while a path points straight at the file.
 
     Attributes:
         provider: The transcript's source, e.g. ``"codex"``.
         thread_id: The provider thread/session id, resolved to a rollout path at dispatch.
-        path: A direct path to the transcript file.
+        path: An absolute path to the transcript file.
         label: An optional human label for the registration.
         registered_at: The Unix timestamp the registration was recorded.
     """
@@ -396,8 +396,8 @@ class RegisteredTranscript(BaseModel):
 
     @model_validator(mode="after")
     def exactly_one_locator(self) -> Self:
-        if (self.thread_id is None) == (self.path is None):
-            raise ValueError("a registered transcript needs exactly one of thread_id or path")
+        if bool(self.thread_id) == bool(self.path):
+            raise ValueError("a registered transcript needs exactly one non-empty thread_id or path")
         return self
 
 

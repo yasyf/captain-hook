@@ -752,7 +752,7 @@ def transcripts_register(
     """Register one external transcript against a session — exactly one of --thread-id or --path."""
     from captain_hook.transcripts import register_transcript
 
-    if (thread_id is None) == (path is None):
+    if bool(thread_id) == bool(path):
         raise click.UsageError("pass exactly one of --thread-id or --path")
     try:
         entry = register_transcript(session_id, provider=provider, thread_id=thread_id, path=path, label=label)

@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 # must not smuggle path separators or traversal past that trust boundary.
 INVALID_SESSION_ID = re.compile(r"[/\\]|\x00|^\.\.?$")
 
+MAX_TRANSCRIPT_BYTES = 256 * 1024 * 1024
+
 
 def lift_session(events: Sequence[TranscriptEvent], *, path: Path | None = None) -> Session:
     """Lift parsed transcript events into a query ``Session``, injecting the detected user classifier.
@@ -109,16 +111,17 @@ def register_transcript(
 ) -> RegisteredTranscript:
     """Register an external transcript against ``session_id`` so it folds into the deep view.
 
-    Exactly one of ``thread_id`` (resolved lazily against the codex sessions tree at dispatch) or
-    ``path`` (a direct file path) locates the transcript. Registration is idempotent by
-    ``(provider, thread_id, path)`` — re-registering the same transcript is a no-op. This is the one
-    write codepath; the CLI and the ``capt-hook mcp`` server both delegate here.
+    Exactly one non-empty ``thread_id`` (resolved lazily against the codex sessions tree at dispatch)
+    or ``path`` (a direct file path, normalized to an absolute path against the registration cwd so a
+    relative locator still resolves once dispatch runs from the project root) locates the transcript.
+    Registration is idempotent by ``(provider, thread_id, path)`` — re-registering the same transcript
+    is a no-op. This is the one write codepath; the CLI and the ``capt-hook mcp`` server both delegate here.
 
     Args:
         session_id: The Claude Code session the transcript attaches to.
         provider: The transcript's source provider (default ``"codex"``).
         thread_id: The provider thread/session id to resolve at dispatch.
-        path: A direct path to the transcript file.
+        path: A path to the transcript file, stored absolute (a relative path anchors to the caller's cwd).
         label: An optional human label for the registration.
 
     Returns:
@@ -126,7 +129,12 @@ def register_transcript(
     """
     if not session_id or INVALID_SESSION_ID.search(session_id):
         raise ValueError(f"invalid session id {session_id!r}: must not contain path separators or traversal components")
-    entry = RegisteredTranscript(provider=provider, thread_id=thread_id, path=path, label=label)
+    entry = RegisteredTranscript(
+        provider=provider,
+        thread_id=thread_id,
+        path=str(Path(path).absolute()) if path else path,
+        label=label,
+    )
     key = (entry.provider, entry.thread_id, entry.path)
     with SessionSlot(ensure_session(SessionId(session_id)), RegisteredTranscripts).mutate() as blob:
         if key not in {(e.provider, e.thread_id, e.path) for e in blob.entries}:
@@ -134,11 +142,18 @@ def register_transcript(
     return entry
 
 
-def registered_paths(session_dir: Path | None) -> tuple[Path, ...]:
-    """The on-disk paths of every transcript registered against ``session_dir``, unresolved skipped.
+def readable_transcript(path: Path) -> bool:
+    # A special file (FIFO/device) hangs and an oversized blob OOMs the deep view's whole-file parse.
+    return path.is_file() and path.stat().st_size <= MAX_TRANSCRIPT_BYTES
 
-    A path entry resolves to itself; a thread-id entry resolves lazily via
-    :func:`cc_transcript.codex.find_transcript`, and a pruned or unresolvable id drops out silently.
+
+def registered_paths(session_dir: Path | None) -> tuple[Path, ...]:
+    """The on-disk paths of every transcript registered against ``session_dir``, unsafe entries skipped.
+
+    A path entry resolves to its stored absolute path; a thread-id entry resolves lazily via
+    :func:`cc_transcript.codex.find_transcript`. A pruned or unresolvable id, and any locator that no
+    longer points at a bounded regular file (a special file or oversized blob would hang or OOM the
+    deep view's whole-file parse), drops out silently.
     """
     from cc_transcript.codex import find_transcript
 
@@ -146,4 +161,5 @@ def registered_paths(session_dir: Path | None) -> tuple[Path, ...]:
         resolved
         for entry in SessionSlot(session_dir, RegisteredTranscripts).get(RegisteredTranscripts()).entries
         if (resolved := Path(entry.path) if entry.path else find_transcript(SessionId(entry.thread_id))) is not None
+        and readable_transcript(resolved)
     )

@@ -62,7 +62,7 @@ The bundled surfaces already look through the deep view: the `EditedSource` cond
 
 ## Session ids and paths
 
-The session id names a directory under capt-hook's state root, which makes it a trust boundary: an id containing a path separator, a NUL byte, or a bare `.`/`..` component is rejected with a usage error. Locators are stored verbatim. A thread id touches the filesystem only through the sessions-tree lookup at dispatch, and a `--path` entry resolves to exactly the file you gave it.
+The session id names a directory under capt-hook's state root, which makes it a trust boundary: an id containing a path separator, a NUL byte, or a bare `.`/`..` component is rejected with a usage error. A thread id touches the filesystem only through the sessions-tree lookup at dispatch. A `--path` entry is stored as an absolute path, so a relative path anchors to the directory you ran the command from and still resolves once a later dispatch runs from the project root. At dispatch the entry folds in only if it still points at a regular file; a special file or an unreadable path drops out silently instead of stalling the hook.
 
 ## See also
 

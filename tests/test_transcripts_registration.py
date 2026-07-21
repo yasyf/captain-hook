@@ -108,6 +108,13 @@ class TestRegisterCommand:
         assert result.exit_code == 2
         assert "exactly one" in result.output
 
+    @pytest.mark.parametrize("flag", ["--path", "--thread-id"])
+    def test_register_empty_locator_is_usage_error(self, flag: str) -> None:
+        result = CliRunner().invoke(cli, ["transcripts", "register", "--session", "s-empty", flag, ""])
+        assert result.exit_code == 2
+        assert "exactly one" in result.output
+        assert not slot_path("s-empty").exists()
+
     @pytest.mark.parametrize("bad", ["../evil", "a/b", "..", ".", "a\x00b"])
     def test_register_rejects_traversal_session_id(self, bad: str) -> None:
         result = CliRunner().invoke(cli, ["transcripts", "register", "--session", bad, "--thread-id", "t"])
@@ -152,6 +159,62 @@ class TestRegisteredPaths:
         rollout.write_text("{}\n")
         register_transcript("s-direct", provider="codex", path=str(rollout))
         assert registered_paths(ensure_session(SessionId("s-direct"))) == (rollout,)
+
+    def test_relative_path_is_anchored_to_registration_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        lane = tmp_path / "lane"
+        lane.mkdir()
+        (lane / "rollout.jsonl").write_text("{}\n")
+        monkeypatch.chdir(lane)
+        register_transcript("s-rel", provider="codex", path="rollout.jsonl")
+
+        (entry,) = read_entries("s-rel")
+        stored = Path(str(entry["path"]))
+        assert stored.is_absolute()
+        assert stored.samefile(lane / "rollout.jsonl")
+
+        # Dispatch runs from the project root, not the registration cwd; the absolute locator still folds in.
+        monkeypatch.chdir(tmp_path)
+        (resolved,) = registered_paths(ensure_session(SessionId("s-rel")))
+        assert resolved.is_absolute()
+        assert resolved.samefile(lane / "rollout.jsonl")
+
+
+class TestLocatorValidation:
+    @pytest.mark.parametrize("kwargs", [{"path": ""}, {"thread_id": ""}, {"path": "", "thread_id": ""}])
+    def test_empty_locator_is_rejected_without_writing_slot(self, kwargs: dict[str, str]) -> None:
+        with pytest.raises(ValueError, match="exactly one"):
+            register_transcript("s-empty-direct", provider="codex", **kwargs)
+        assert not slot_path("s-empty-direct").exists()
+
+
+class TestUnsafePathsSkipped:
+    def test_fifo_path_is_skipped_without_hanging(self, tmp_path: Path) -> None:
+        fifo = tmp_path / "rollout.fifo"
+        os.mkfifo(fifo)
+        register_transcript("s-fifo", provider="codex", path=str(fifo))
+        assert registered_paths(ensure_session(SessionId("s-fifo"))) == ()
+
+    def test_directory_path_is_skipped(self, tmp_path: Path) -> None:
+        target = tmp_path / "adir"
+        target.mkdir()
+        register_transcript("s-dir", provider="codex", path=str(target))
+        assert registered_paths(ensure_session(SessionId("s-dir"))) == ()
+
+    def test_oversized_file_is_skipped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        big = tmp_path / "big.jsonl"
+        big.write_text("{}\n" * 16)
+        monkeypatch.setattr("captain_hook.transcripts.MAX_TRANSCRIPT_BYTES", 4)
+        register_transcript("s-big", provider="codex", path=str(big))
+        assert registered_paths(ensure_session(SessionId("s-big"))) == ()
+
+    def test_regular_file_within_bound_is_kept(self, tmp_path: Path) -> None:
+        rollout = tmp_path / "ok.jsonl"
+        rollout.write_text("{}\n")
+        register_transcript("s-ok", provider="codex", path=str(rollout))
+        (resolved,) = registered_paths(ensure_session(SessionId("s-ok")))
+        assert resolved.samefile(rollout)
 
 
 def test_dispatch_folds_registered_rollout_into_deep_gate(tmp_path: Path) -> None:
