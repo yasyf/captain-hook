@@ -17,7 +17,7 @@ llm_gate(
     "code shown in <diff>, with the specific problem and the fix in `reasoning`. Otherwise "
     "block=false. Do not block on style nits absent from STYLEGUIDE, on unchanged "
     "pre-existing code, or on speculative concerns.",
-    message=lambda r: f"Review flagged an issue to fix before stopping: {r.reasoning}",
+    message="Review flagged an issue to fix before stopping: {reasoning}",
     diff=True,
     only_if=[EditedSource()],
     events=Event.Stop,

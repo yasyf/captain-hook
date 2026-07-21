@@ -8,13 +8,13 @@ from captain_hook import (
     FilePath,
     Input,
     RanCommand,
+    Runs,
     Tool,
     Warn,
     gate,
     nudge,
 )
 from captain_hook.conditions import AllEditsUnder, UserSaid
-from captain_hook.types import Command as CommandCondition
 
 nudge(
     """
@@ -28,7 +28,7 @@ nudge(
 
 gate(
     "No `go test` execution found. Run tests before committing Go changes.",
-    only_if=[Tool("Bash"), CommandCondition(r"git\s+commit"), Commits(".go")],
+    only_if=[Tool("Bash"), Runs("git", "commit"), Commits(".go")],
     skip_if=[
         RanCommand("go", "test"),
         UserSaid("commit", "just commit"),
@@ -45,7 +45,7 @@ gate(
 nudge(
     "No `go test` execution detected in this session. If you changed Go files, run tests "
     "before committing. If this is a docs/config-only change, proceed.",
-    only_if=[Tool("Bash"), CommandCondition(r"git\s+commit")],
+    only_if=[Tool("Bash"), Runs("git", "commit")],
     skip_if=[
         RanCommand("go", "test"),
         UserSaid("commit", "just commit"),

@@ -12,6 +12,7 @@ from captain_hook import (
     Event,
     InPlanMode,
     Input,
+    LambdaCondition,
     Signal,
     Signals,
     Tool,
@@ -30,23 +31,6 @@ IMPERATIVES = (
 )
 
 
-class TasksIncomplete(CustomCondition):
-    """Matches when the session's native task store has any open (pending/in_progress) task."""
-
-    def check(self, evt: BaseHookEvent) -> bool:
-        return not evt.tasks.all_completed
-
-
-class Acknowledged(CustomCondition):
-    """Matches when the agent emitted the override token and hasn't edited since."""
-
-    def __init__(self, token: str) -> None:
-        self.token = token
-
-    def check(self, evt: BaseHookEvent) -> bool:
-        return evt.ctx.t.has_override(self.token)
-
-
 class DriftedFromTasks(CustomCondition):
     """Matches when there are open tasks and many exploration calls since the last task touch."""
 
@@ -57,19 +41,12 @@ class DriftedFromTasks(CustomCondition):
         return since.tool_calls.named("Bash|Grep|Glob|WebSearch|WebFetch|LSP|Skill").count() >= TASK_DRIFT_THRESHOLD
 
 
-class TaskNotification(CustomCondition):
-    """Matches when the prompt is a system-injected background-task report, not free-form user text."""
-
-    def check(self, evt: BaseHookEvent) -> bool:
-        return (evt.user_prompt or "").strip().startswith(TASK_NOTIFICATION_MARKER)
-
-
 gate(
     "Open tasks remain. Before stopping, mark each finished task status='completed' via the "
     "TaskUpdate tool (add a note if you're deliberately deferring one), or output "
     f"{OVERRIDE_TOKEN} to acknowledge and stop. See: CLAUDE.md § Task Tracking.",
-    only_if=[TasksIncomplete()],
-    skip_if=[Waiting(), Acknowledged(OVERRIDE_TOKEN)],
+    only_if=[LambdaCondition(lambda evt: not evt.tasks.all_completed)],
+    skip_if=[Waiting(), LambdaCondition(lambda evt: evt.ctx.t.has_override(OVERRIDE_TOKEN))],
     events=Event.Stop,
     tests={
         Input(tasks=[{"id": "1", "subject": "a", "status": "completed"}]): Allow(),
@@ -129,7 +106,10 @@ nudge(
 nudge(
     "This message has several distinct requests. Use the TaskCreate tool for each item "
     "before starting work, so none gets dropped. See: CLAUDE.md § Task Tracking.",
-    skip_if=[InPlanMode(), TaskNotification()],
+    skip_if=[
+        InPlanMode(),
+        LambdaCondition(lambda evt: (evt.user_prompt or "").strip().startswith(TASK_NOTIFICATION_MARKER)),
+    ],
     events=Event.UserPromptSubmit,
     signals=Signals(
         [

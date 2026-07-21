@@ -11,7 +11,6 @@ nudge(
     See CLAUDE.md § Plan Execution & Orchestration (Speculate while you verify).
     """,
     only_if=[
-        Tool("Workflow"),
         WorkflowScript(
             pattern=r"(?i)(\badversar|\brefut|security\s+(review|audit)|ground.?truth|\brepro(duce|duction)?\b|-race\b)"
         ),

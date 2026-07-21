@@ -98,8 +98,8 @@ is clearly outside both the request and its prerequisites as `<user_messages>` r
 Put your reasoning (under 50 words, naming the detour and the requested task) in
 `reasoning`.""",
     label="detours",
-    message=lambda r: (
-        f"This looks like a detour — side work nobody asked for. {r.reasoning} "
+    message=(
+        "This looks like a detour — side work nobody asked for. {reasoning} "
         "Stop and check in before acting: say what you noticed, then propose 2-4 concrete "
         "options (finish the task and file this as a follow-up; pause and fix it now; ignore "
         "it) and let the user pick — or, if you are a delegated agent, stop and return early "

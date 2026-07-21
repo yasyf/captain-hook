@@ -1,26 +1,6 @@
 from __future__ import annotations
 
-from captain_hook import Allow, BaseHookEvent, Block, CustomCondition, Event, Input, Tool, hook
-
-
-class RewritingExistingPlan(CustomCondition):
-    """True when a Write targets a plan file (`.md` under `plans/` or `specs/`) that was
-    already written earlier this session, with no new plan cycle (EnterPlanMode) since the
-    last Write to it.
-
-    Reads from ``evt.ctx.prior`` (the window before the current turn's last exchange) so the
-    pending Write being evaluated is never itself counted as the prior edit. A write to the
-    file this session already implies it exists, so no filesystem check is needed.
-    """
-
-    def check(self, evt: BaseHookEvent) -> bool:
-        fp = evt.file
-        if not fp or fp.suffix != ".md" or not fp.under("plans/", "specs/"):
-            return False
-        if not evt.ctx.prior.has_edit_to(str(fp)):
-            return False
-        return not evt.ctx.prior.after(tool="Write", file=str(fp)).has_tool("EnterPlanMode")
-
+from captain_hook import Allow, Block, Event, Input, RewritingExistingPlan, Tool, hook
 
 hook(
     Event.PreToolUse,

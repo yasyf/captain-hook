@@ -56,8 +56,8 @@ llm_gate(
     "ONLY for a concrete gap, naming exactly which file and section to update in "
     "`reasoning`. Otherwise block=false. Do not block on internal refactors, test or "
     "tooling changes, or speculative staleness.",
-    message=lambda r: (
-        f"Docs freshness check found a gap to close before stopping: {r.reasoning} "
+    message=(
+        "Docs freshness check found a gap to close before stopping: {reasoning} "
         "Update README.md or docs/ via the writing-docs skill, or state that nothing "
         "user-facing changed and finish."
     ),
