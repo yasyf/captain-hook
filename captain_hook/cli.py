@@ -252,7 +252,7 @@ def dispatch_event(
     """
     from captain_hook.context import HookContext
     from captain_hook.heartbeat import record_heartbeat
-    from captain_hook.transcripts import lazy_transcript
+    from captain_hook.transcripts import lazy_transcript, registered_paths
 
     if not async_:
         record_heartbeat(event, raw)
@@ -265,7 +265,9 @@ def dispatch_event(
     resolved_path = raw.get("agent_transcript_path") or raw.get("transcript_path")
     ctx = HookContext(
         session=SessionStore(session_dir),
-        transcript=lazy_transcript(resolved_path, loader=transcript_loader),
+        transcript=lazy_transcript(
+            resolved_path, loader=transcript_loader, attach=lambda: registered_paths(session_dir)
+        ),
         settings=_state.settings,
         project_root=root,
     )
