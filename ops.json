@@ -1,1 +1,1 @@
-{"v":1,"lamport":4,"session":"88274330-8031-4314-a052-5353c53950af","ops":[{"kind":"set_criterion_status","id":"505f78f36df635c85cd35a8126145f4a","status":"met","note":"Rebased onto origin/main 47da9fb8; hook-1 conflict resolved to main's hoisted-import T form, dead BaseHookEvent/CustomCondition imports dropped"}]}
+{"v":1,"lamport":5,"session":"88274330-8031-4314-a052-5353c53950af","ops":[{"kind":"set_status","status":"done"},{"kind":"link_commit","sha":"47da9fb8058214e6d236ccc4ce3870928179adcf"}]}
