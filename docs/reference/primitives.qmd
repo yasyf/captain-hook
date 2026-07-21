@@ -136,7 +136,7 @@ llm_nudge(prompt: str | Prompt, *, message: str | Callable[[NudgeVerdict], str],
           model="small", agent=True, transcript=True, diff=False) -> None
 
 prompt_check(evt, template: str | Prompt, fmt=None, *, prefix: str, suffix="", timeout=45,
-             include_reasoning=True, response_model=PromptCheckVerdict) -> HookResult | None
+             include_reasoning=True, diff=False, response_model=PromptCheckVerdict) -> HookResult | None
 ```
 
 `llm_gate` defaults to `max_fires=1`, `llm_nudge` to `max_fires=3`; budgets count per agent
