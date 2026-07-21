@@ -937,6 +937,29 @@ class TestUsedSkillCondition:
     def test_usedskill(self, cond: TCondition, skill: str, expected: bool) -> None:
         assert check_condition(cond, skill_evt(skill)) is expected
 
+    def test_session_scope_spans_turns(self) -> None:
+        ctx = build_ctx(
+            transcript=make_transcript(
+                raw_text("user", "run codex on this"),
+                raw_tool_msg("Skill", {"skill": "codex"}),
+                raw_text("user", "now continue"),
+                raw_text("assistant", "ok"),
+            )
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(UsedSkill("codex"), evt) is True
+        assert check_condition(UsedSkill("codex", scope="turn"), evt) is False
+
+    def test_turn_scope_sees_current_turn(self) -> None:
+        ctx = build_ctx(
+            transcript=make_transcript(
+                raw_text("user", "run codex on this"),
+                raw_tool_msg("Skill", {"skill": "codex"}),
+            )
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(UsedSkill("codex", scope="turn"), evt) is True
+
 
 class TestUsedToolCondition:
     def test_session_scope_spans_turns(self) -> None:
@@ -980,6 +1003,20 @@ class TestUserSaidCondition:
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
         assert check_condition(UserSaid("just commit"), evt) is True
         assert check_condition(UserSaid(r"\bdeploy\b"), evt) is False
+
+    def test_turn_scope_sees_only_current_prompt(self) -> None:
+        ctx = build_ctx(
+            transcript=make_transcript(
+                raw_text("user", "re-enter plan mode"),
+                raw_text("assistant", "ok"),
+                raw_text("user", "now fix the typo"),
+                raw_text("assistant", "ok"),
+            )
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(UserSaid("plan mode"), evt) is True
+        assert check_condition(UserSaid("plan mode", scope="turn"), evt) is False
+        assert check_condition(UserSaid("fix the typo", scope="turn"), evt) is True
 
 
 class TestReadFileCondition:

@@ -36,9 +36,9 @@ These check what happened earlier in the session, from the transcript.
 | `ReadFile(*p, subagents=True)` | A file matching the glob was read | Glob | `ReadFile("TESTING.md")` |
 | `TouchedFile(*p, subagents=False)` | A file matching the glob was edited or written | Glob | `TouchedFile("**/*.py")` |
 | `RanCommand(*argv, subagents=True)` | A Bash command running the argv prefix ran (wrapper-transparent, launcher-literal) | Argv tokens | `RanCommand("uv", "run", "pytest")` |
-| `UsedSkill(*names, subagents=True)` | A skill named one of `names` was invoked (a bare name also matches `plugin:name`) | Exact names; a `\|`-joined string still works | `UsedSkill("codex")` |
+| `UsedSkill(*names, subagents=True, scope="session")` | A skill named one of `names` was invoked (a bare name also matches `plugin:name`); `scope="turn"` searches only the current turn | Exact names; a `\|`-joined string still works | `UsedSkill("codex")` |
 | `UsedTool(*names, subagents=True, scope="session")` | A tool use named one of `names` exists; `scope="turn"` searches only the current turn | Exact names; a `\|`-joined string still works | `UsedTool("EnterPlanMode", scope="turn")` |
-| `UserSaid(*patterns)` | Any user prompt matches a pattern | Case-insensitive regex strings and/or `Clause`s | `UserSaid("just commit")` |
+| `UserSaid(*patterns, scope="session")` | A user prompt matches a pattern; `scope="turn"` scans only the current turn's prompt | Case-insensitive regex strings and/or `Clause`s | `UserSaid("just commit")` |
 | `InPlanMode()` | The agent is in plan mode | — | `InPlanMode()` |
 | `Waiting()` | A background or async tool is still pending. Durable `Workflow` and async sub-agent launches count across turns until their completion notification lands | — | `Waiting()` |
 | `SkipPermissions()` | The session's `claude` process was launched with `--dangerously-skip-permissions` **or** `--allow-dangerously-skip-permissions`, found by walking the process tree to the nearest `claude` ancestor. Either spelling means the user made bypass *available* at launch, which counts as consent even while the active `permission_mode` is something else, such as `plan` | — | `SkipPermissions()` |

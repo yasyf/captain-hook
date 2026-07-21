@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.5.0] - 2026-07-21
+
+### Added
+- **`scope=` on the whole transcript-directive family.** `UsedSkill(*names, scope="turn")` and
+  `UserSaid(*patterns, scope="turn")` restrict their scan to the current turn, matching the
+  `scope=` knob `UsedTool` gained in 12.3.0; the default stays `"session"`.
+  `UserSaid(..., scope="turn")` is the declarative spelling of `evt.ctx.turn.matches(...)`,
+  so directive-reactive guards no longer need a `CustomCondition`.
+
 ## [12.4.0] - 2026-07-21
 
 ### Added

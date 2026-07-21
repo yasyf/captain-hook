@@ -153,7 +153,7 @@ CONDITION_DESCRIPTIONS: dict[tuple[str, ...], tuple[str, str]] = {
     ),
     ("UsedSkill",): (
         "Skill was invoked",
-        '`UsedSkill("codex")` — bare name also matches `plugin:name`',
+        '`UsedSkill("codex")` — bare name also matches `plugin:name`; `scope="turn"` searches only the current turn',
     ),
     ("UsedTool",): (
         "Tool was previously used",

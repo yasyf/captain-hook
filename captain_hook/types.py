@@ -321,6 +321,8 @@ class UsedSkill:
     Pass names variadically; a single ``|``-joined string still works for back-compat. A bare
     name also matches the plugin-qualified spelling, so ``UsedSkill("codex")`` matches a skill
     reported as ``codex:codex`` and ``UsedSkill("slop-cop-check")`` matches ``slop-cop:slop-cop-check``.
+    ``scope="turn"`` restricts the search to the current turn — the idiom for skipping
+    a guard once the agent has complied.
 
     Example:
         >>> nudge("run codex first", skip_if=[UsedSkill("codex")])
@@ -328,10 +330,12 @@ class UsedSkill:
 
     names: tuple[str, ...]
     subagents: bool = True
+    scope: Literal["session", "turn"] = "session"
 
-    def __init__(self, *names: str, subagents: bool = True) -> None:
+    def __init__(self, *names: str, subagents: bool = True, scope: Literal["session", "turn"] = "session") -> None:
         object.__setattr__(self, "names", _split_names(names))
         object.__setattr__(self, "subagents", subagents)
+        object.__setattr__(self, "scope", scope)
 
 
 @dataclass(frozen=True, slots=True)
