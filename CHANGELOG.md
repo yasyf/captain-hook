@@ -4,6 +4,27 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.9.0] - 2026-07-21
+
+### Changed
+- **`evt.llm` is the public in-handler LLM surface.** Ask the model from any handler and get a
+  typed answer back: a bare prompt returns `str | None`, `bool`/`int` return the parsed answer,
+  and a Pydantic model class returns a validated instance; `None` always means the call was
+  skipped. `prompt_check` is unchanged and stays public.
+- **Builtin packs rewritten onto the current helpers.** Hand-rolled predicate classes collapse
+  to `LambdaCondition`, verdict-splatting `message=lambda` callables become `{field}` templates,
+  a duplicated condition imports its public counterpart, and the go/python commit gates match
+  with `Runs` instead of a raw regex.
+- **The fixes pack's command analysis and the rm guard's blast-radius checks now ride the
+  fluent `Cmd`/`Call`/`Target` walk.** Three verified divergences, all strictly tighter or
+  benign: embedded-quote evasions (`''rm -rf /`) now decline, a wrapper-reached bare `sudo`
+  now declines, and git end-of-options `--` spellings git itself refuses to execute are no
+  longer flagged. A 46k-case adversarial differential found zero weakenings.
+
+### Removed
+- **`llm_evaluate` left the public exports.** It remains the internal engine behind `evt.llm`,
+  `llm_gate`, and `llm_nudge`; call `evt.llm` instead.
+
 ## [12.8.0] - 2026-07-21
 
 ### Added
