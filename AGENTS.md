@@ -76,8 +76,8 @@ When you write a plan — in plan mode, or any "here's what I'll do" before you 
 
 1. **Orient a repo** → `ccx repo overview`
 2. **"How does X work / where is Y" (intent)** → `ccx code search "<question>"` (semantic, semble-backed)
-3. **A specific symbol (where + signature)** → `ccx code symbol <name>` (alias `ccx code grok`; terse by default with a counts trailer — `--callers`/`--callees`/`--body`/`--full` expand)
-4. **Literal or regex text** → `ccx code grep <text> [paths...] [--regex] [--glob G] [--scope dir] [-i] [-w]` (`--regex`/`-i`/`-w` and explicit file operands run on ripgrep; `--glob` filters within explicit paths; system `grep` fills in when `rg` is missing; a glob or scope anchored at a real path — `.venv/…/pkg/*.py` — is searched even where ignore rules would hide it)
+3. **A specific symbol (where + signature)** → `ccx code symbol <name>` (alias `ccx code grok`; terse by default with a counts trailer — `--callers`/`--callees`/`--body`/`--full` expand, `--budget N` caps an expanded card)
+4. **Literal or regex text** → `ccx code grep <text> [paths...] [--regex] [--glob G] [--scope dir] [-i] [-w]` (literal-first with auto-regex: a zero-match literal pass whose pattern carries regex metachars and compiles reruns as a regex, the header saying `(auto-regex)` — so `a|b` works without the flag; `--regex` forces regex from the start; `--regex`/`-i`/`-w` and explicit file operands run on ripgrep; `--glob` filters within explicit paths; system `grep` fills in when `rg` is missing; a glob or scope anchored at a real path — `.venv/…/pkg/*.py` — is searched even where ignore rules would hide it)
 5. **List files** → `ccx repo find "<glob>" [--scope dir] [--budget N]` (gitignore-honoring, VCS stores skipped, sorted; budget-capped with a footer counting withheld rows and ignore-hidden files; a glob anchored at a real path — `.venv/**/*.py` — lists files ignore rules would hide; orientation is entry 1, not `"**/*"`)
 6. **Read a file** → `ccx code outline <file-or-dir>` first (ast-grep structural map for the languages it outlines and any directory, a markdown heading outline or an honest head window otherwise; top-level by default — `--deep` expands members, `--section A-B` windows a file), then `ccx code read <file> --section A-B` for the part you need (whole file: `ccx code read <file> --full`)
 7. **Edit a file** → `ccx code edit <file> --at A-B#hash --content <text>` (hash-verified write: refuses on anchor mismatch, re-anchors moved content, returns the new anchor so edits chain; `--content -` reads stdin, `--delete` removes the range; `--match <text>` addresses by exact bytes instead of a span — an ambiguous match errors listing candidate anchors, `--at` scopes the scan, `--all` replaces every occurrence)
@@ -94,6 +94,8 @@ When you write a plan — in plan mode, or any "here's what I'll do" before you 
 18. **Ask a question of a page** → `ccx web search <url> "<question>"` (top-k relevant chunks with `<url> §2.3#hash` cites; hybrid BM25 + local embeddings, BM25-only with a note when `uv` is absent)
 
 Entries 9–13 are CLI-only (entry 12's `locate` step included) — the MCP mirrors the query surface (1–8) plus exec (14), format (15, as `BashFormat`), and web (16–18, as `ccx_web_outline`/`ccx_web_read`/`ccx_web_search`), not these.
+
+A path operand missing its extension resolves itself across the path-taking ops: `pkg/events` where only `pkg/events.py` exists runs against the sibling and notes the substitution (`# note: pkg/events → pkg/events.py`); several candidates error listing them, none errors clean (exit 3) — never raw engine stderr.
 
 A one-shot question about a page → spawn the `cc-context:web-fetch` agent with the URL and your prompt verbatim (the WebFetch drop-in: cited answer out, the page never enters your context); research spanning several pages → `cc-context:web-researcher`.
 
