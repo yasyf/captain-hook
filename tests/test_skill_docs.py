@@ -154,6 +154,11 @@ CONDITION_DESCRIPTIONS: dict[tuple[str, ...], tuple[str, str]] = {
         "Skill was invoked",
         '`UsedSkill("codex")` — bare name also matches `plugin:name`',
     ),
+    ("UsedTool",): (
+        "Tool was previously used",
+        '`UsedTool("EnterPlanMode", scope="turn")` — exact names (a `\\|`-joined string works); `scope="turn"` '
+        "searches only the current turn",
+    ),
     ("ReadFile",): (
         "File was previously read",
         '`ReadFile("TESTING.md")` — fnmatch globs; anchor dirs with `**/`',
