@@ -29,7 +29,7 @@ classifiers = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "cc-transcript[judge]>=14.8,<15",
+    "cc-transcript[judge]>=14.9.0,<15",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "ast-grep-py>=0.44,<0.45",
@@ -47,6 +47,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mcp = ["mcp>=1.9"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
@@ -54,6 +55,7 @@ dev = [
     "pyyaml>=6",
     "ruff>=0.8",
     "hatchling>=1.27",
+    "capt-hook[mcp]",
 ]
 
 [project.scripts]
