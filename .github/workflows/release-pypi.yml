@@ -133,7 +133,7 @@ jobs:
     needs: [build, helper-version, github-release]
     permissions:
       contents: write
-    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@f45550932b0c8a42eb04e9ab0e5de8f82ad78b6a
+    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@0b8cc21418a6102d6670053a17c97f5723e9daa2
     with:
       app_name: Captain Hook
       asset_name: captain-hook
