@@ -3,9 +3,7 @@ title: "Test it, then ship it"
 description: "The same cases, as inline tests."
 ---
 
-Every preset you clicked in this tutorial is a test case, and hooks carry their tests inline. Here's page one's guard again — this time with its `tests`:
-
-<!-- gd-embed-fragment: tutorial_first_block_tested -->
+Every preset you clicked in this tutorial is a test case, and hooks carry their tests inline. The widget below shows page one's guard again — this time with its `tests` block.
 
 `uvx capt-hook test` runs every hook's cases through the real dispatch — the same engine the widgets here were verified against:
 

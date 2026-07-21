@@ -19,32 +19,42 @@ MATRIX = SOURCE / "tutorial" / "_src" / "matrix.json"
 WIDGETS_DIR = BUILD_DIR / "docs" / "tutorial" / "widgets"
 MARKER = re.compile(r"<!-- gd-embed-widget: (\w+) -->")
 
-LIVE_NOTE = "This runs a browser model of the demo subset — run `capt-hook test` for the real engine."
-CANNED_NOTE = "Recorded from the real engine, not evaluated in your browser."
-
 
 def widget_data(widget: dict) -> dict:
     if widget["mode"] == "canned":
         recordings = [{"id": c["id"], "input": c["input"], "verdict": c["verdict"]} for c in widget["cases"]]
         return {"mode": "canned", "hooks": [], "cases": [], "recordings": recordings}
-    compiled = compile_fragment(FRAGMENTS_SRC / f"{widget['fragment']}.py")
+    fragment = FRAGMENTS_SRC / f"{widget['fragment']}.py"
     event = widget.get("event", "PreToolUse")
     cases = [
-        {"event": event, **c.get("input", {}), **({"session": c["session"]} if "session" in c else {})}
+        {
+            "event": event,
+            **c.get("input", {}),
+            **({"session": c["session"]} if "session" in c else {}),
+            **({"label": c["label"]} if "label" in c else {}),
+            **({"featured": c["featured"]} if "featured" in c else {}),
+        }
         for c in widget["cases"]
     ]
-    return {"mode": "live", "hooks": compiled["hooks"], "cases": cases, "recordings": []}
+    return {
+        "mode": "live",
+        "source": fragment.read_text(),
+        "hooks": compile_fragment(fragment)["hooks"],
+        "cases": cases,
+        "recordings": [],
+    }
 
 
-def widget_block(widget_id: str, matrix: dict) -> str:
+def widget_block(widget_id: str, matrix: dict, qmd: Path) -> str:
     data = widget_data(matrix["widgets"][widget_id])
-    note = CANNED_NOTE if data["mode"] == "canned" else LIVE_NOTE
     payload = json.dumps(data).replace("</", "<\\/")
+    editor_js = os.path.relpath(WIDGETS_DIR / "editor.js", qmd.parent)
+    compiler_js = os.path.relpath(WIDGETS_DIR / "compiler.js", qmd.parent)
     return (
-        f'<div class="ch-widget" data-widget="{widget_id}" data-mode="{data["mode"]}">\n'
+        f'<div class="ch-widget" data-widget="{widget_id}" data-mode="{data["mode"]}"'
+        f' data-editor-js="{editor_js}" data-compiler-js="{compiler_js}">\n'
         f'<script type="application/json" class="ch-widget-data">{payload}</script>\n'
-        f"</div>\n"
-        f'<p class="ch-widget-note">{note}</p>'
+        f"</div>"
     )
 
 
@@ -59,10 +69,10 @@ def expand(text: str, matrix: dict, qmd: Path) -> str:
             css = os.path.relpath(WIDGETS_DIR / "emulator.css", qmd.parent)
             js = os.path.relpath(WIDGETS_DIR / "emulator.js", qmd.parent)
             parts.append(f'<link rel="stylesheet" href="{css}">')
-            parts.append(widget_block(match.group(1), matrix))
+            parts.append(widget_block(match.group(1), matrix, qmd))
             parts.append(f'<script type="module" src="{js}"></script>')
         else:
-            parts.append(widget_block(match.group(1), matrix))
+            parts.append(widget_block(match.group(1), matrix, qmd))
         return "```{=html}\n" + "\n".join(parts) + "\n```"
 
     return MARKER.sub(replace, text)

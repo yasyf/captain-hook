@@ -7,7 +7,7 @@ import type { SerializedHook } from "../specs";
 import { lower } from "./lower";
 import { CompileError, validate } from "./validate";
 
-export type CompileResult = { hooks: SerializedHook[] } | { error: string };
+export type CompileResult = { hooks: SerializedHook[] } | { error: string; from?: number; to?: number };
 
 export function compileSource(source: string): CompileResult {
   try {
@@ -15,7 +15,7 @@ export function compileSource(source: string): CompileResult {
     validate(tree, source);
     return { hooks: lower(tree, source) };
   } catch (e) {
-    if (e instanceof CompileError) return { error: e.message };
+    if (e instanceof CompileError) return { error: e.message, ...(e.pos ?? {}) };
     throw e;
   }
 }

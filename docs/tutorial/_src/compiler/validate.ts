@@ -3,7 +3,20 @@
 
 import type { Tree, SyntaxNode } from "@lezer/common";
 
-export class CompileError extends Error {}
+// Optional 0-based source span so callers can surface a CodeMirror lint squiggle at the offense.
+export interface Pos {
+  from: number;
+  to: number;
+}
+
+export class CompileError extends Error {
+  constructor(
+    message: string,
+    readonly pos?: Pos,
+  ) {
+    super(message);
+  }
+}
 
 // @lezer/python node name -> the construct name surfaced in the refusal message.
 const REFUSED_CONSTRUCT: Record<string, string> = {
@@ -54,11 +67,14 @@ export function validate(tree: Tree, source: string): void {
   const cursor = tree.cursor();
   do {
     if (cursor.type.isError) {
-      throw new CompileError(`syntax error near "${snippet(source, cursor.from, cursor.to)}"`);
+      throw new CompileError(`syntax error near "${snippet(source, cursor.from, cursor.to)}"`, {
+        from: cursor.from,
+        to: cursor.to,
+      });
     }
     const construct = REFUSED_CONSTRUCT[cursor.name];
     if (construct) {
-      throw new CompileError(`unsupported construct: ${construct}`);
+      throw new CompileError(`unsupported construct: ${construct}`, { from: cursor.from, to: cursor.to });
     }
   } while (cursor.next());
 
@@ -69,11 +85,12 @@ export function validate(tree: Tree, source: string): void {
       if (!inner || inner.name !== "CallExpression") {
         throw new CompileError(
           `top-level statements must be hook primitive calls, got "${snippet(source, child.from, child.to)}"`,
+          { from: child.from, to: child.to },
         );
       }
       continue;
     }
     const construct = REFUSED_CONSTRUCT[child.name] ?? child.name;
-    throw new CompileError(`unsupported top-level statement: ${construct}`);
+    throw new CompileError(`unsupported top-level statement: ${construct}`, { from: child.from, to: child.to });
   }
 }

@@ -1,16 +1,277 @@
-// capt-hook-widget src-sha256: ec5dff6469132682dad6a9d9d1853fb86a181efd2d98ccfc0edf994eccc82284
+// capt-hook-widget src-sha256: a5d509e494fc92c6433bb7b407189f614af72f24c2ce8f53e9da1703fd08cc5e
+
+// autocomplete.ts
+var counter = 0;
+function createCombobox(opts) {
+  const listId = `ch-widget-listbox-${counter++}`;
+  const root = el("div", "ch-widget-combobox");
+  const input = el("input", "ch-widget-input");
+  input.type = "text";
+  input.spellcheck = false;
+  input.placeholder = opts.placeholder;
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-label", opts.ariaLabel);
+  input.setAttribute("aria-autocomplete", "list");
+  input.setAttribute("aria-expanded", "false");
+  input.setAttribute("aria-controls", listId);
+  const toggle = el("button", "ch-widget-combobox-toggle", "\u25BE");
+  toggle.type = "button";
+  toggle.tabIndex = -1;
+  toggle.setAttribute("aria-label", "show scenarios");
+  const listbox = el("ul", "ch-widget-listbox");
+  listbox.id = listId;
+  listbox.setAttribute("role", "listbox");
+  listbox.hidden = true;
+  let filtered = [];
+  let active = -1;
+  let open = false;
+  const optionId = (i) => `${listId}-opt-${i}`;
+  const setOpen = (next) => {
+    open = next;
+    listbox.hidden = !next;
+    input.setAttribute("aria-expanded", String(next));
+    if (!next) {
+      active = -1;
+      input.removeAttribute("aria-activedescendant");
+    }
+  };
+  const highlight = () => {
+    for (const [i, li] of Array.from(listbox.children).entries()) {
+      const on = i === active;
+      li.classList.toggle("ch-widget-option--active", on);
+      li.setAttribute("aria-selected", String(on));
+    }
+    input.setAttribute("aria-activedescendant", active >= 0 ? optionId(active) : "");
+    if (active >= 0) listbox.children[active]?.scrollIntoView({ block: "nearest" });
+  };
+  const paint = (query) => {
+    const needle = query.trim().toLowerCase();
+    filtered = needle ? opts.items.filter((it) => it.label.toLowerCase().includes(needle)) : opts.items.slice();
+    listbox.textContent = "";
+    filtered.forEach((it, i) => {
+      const li = el("li", "ch-widget-option", it.label);
+      li.id = optionId(i);
+      li.setAttribute("role", "option");
+      li.setAttribute("aria-selected", "false");
+      li.addEventListener("mousedown", (e) => e.preventDefault());
+      li.addEventListener("click", () => choose(i));
+      listbox.append(li);
+    });
+    active = -1;
+    setOpen(filtered.length > 0);
+    highlight();
+  };
+  const choose = (i) => {
+    const item = filtered[i];
+    if (!item) return;
+    setOpen(false);
+    opts.onSelect(item.index);
+  };
+  const move = (delta) => {
+    if (!open) {
+      paint(input.value);
+      return;
+    }
+    if (filtered.length === 0) return;
+    active = (active + delta + filtered.length) % filtered.length;
+    highlight();
+  };
+  input.addEventListener("input", () => {
+    paint(input.value);
+    opts.onType?.(input.value);
+  });
+  input.addEventListener("focus", () => paint(input.value));
+  input.addEventListener("keydown", (e) => {
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        move(1);
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        move(-1);
+        break;
+      case "Enter":
+        if (open && active >= 0) {
+          e.preventDefault();
+          choose(active);
+        }
+        break;
+      case "Escape":
+        if (open) {
+          e.preventDefault();
+          setOpen(false);
+        }
+        break;
+    }
+  });
+  input.addEventListener("blur", () => setOpen(false));
+  toggle.addEventListener("mousedown", (e) => e.preventDefault());
+  toggle.addEventListener("click", () => {
+    open ? setOpen(false) : paint(input.value);
+    input.focus();
+  });
+  root.append(input, toggle, listbox);
+  return { root, input, setValue: (text) => input.value = text };
+}
+
+// controls.ts
+function walk(cond, visit) {
+  visit(cond);
+  switch (cond.kind) {
+    case "Not":
+      walk(cond.condition, visit);
+      return;
+    case "Or":
+    case "And":
+      cond.conditions.forEach((sub) => walk(sub, visit));
+      return;
+    default:
+      return;
+  }
+}
+function deriveControls(hooks) {
+  let touched = false;
+  let waiting = false;
+  const skills = [];
+  for (const hook of hooks) {
+    for (const cond of [...hook.only_if, ...hook.skip_if]) {
+      walk(cond, (c) => {
+        if (c.kind === "TouchedFile") touched = true;
+        else if (c.kind === "Waiting") waiting = true;
+        else if (c.kind === "UsedSkill") c.names.forEach((n) => skills.includes(n) || skills.push(n));
+      });
+    }
+  }
+  return [
+    ...touched ? [{ kind: "touchedFiles" }] : [],
+    ...skills.map((name) => ({ kind: "usedSkill", name })),
+    ...waiting ? [{ kind: "waiting" }] : []
+  ];
+}
+function basename(path) {
+  return path.split("/").pop() || path;
+}
+function fileChips(session, onChange) {
+  const row = el("div", "ch-widget-control ch-widget-control--files");
+  row.append(el("span", "ch-widget-control-label", "touched files"));
+  const chips = el("div", "ch-widget-filechips");
+  const add = el("input", "ch-widget-filechip-add");
+  const render = () => {
+    chips.textContent = "";
+    for (const path of session.touchedFiles ?? []) {
+      const chip = el("span", "ch-widget-filechip");
+      chip.title = path;
+      chip.append(el("span", "ch-widget-filechip-name", basename(path)));
+      const remove = el("button", "ch-widget-filechip-remove", "\xD7");
+      remove.type = "button";
+      remove.setAttribute("aria-label", `remove ${path}`);
+      remove.addEventListener("click", () => {
+        session.touchedFiles = (session.touchedFiles ?? []).filter((p) => p !== path);
+        render();
+        onChange();
+      });
+      chip.append(remove);
+      chips.append(chip);
+    }
+    chips.append(add);
+  };
+  add.type = "text";
+  add.placeholder = "add path\u2026";
+  add.spellcheck = false;
+  add.setAttribute("aria-label", "add a touched file path");
+  add.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const path = add.value.trim();
+    if (!path) return;
+    session.touchedFiles = [...session.touchedFiles ?? [], path];
+    add.value = "";
+    render();
+    onChange();
+    add.focus();
+  });
+  render();
+  row.append(chips);
+  return row;
+}
+function skillCheckbox(name, session, onChange) {
+  const label = el("label", "ch-widget-control ch-widget-control--check");
+  const box = el("input");
+  box.type = "checkbox";
+  box.checked = (session.usedSkills ?? []).includes(name);
+  box.addEventListener("change", () => {
+    const skills = new Set(session.usedSkills ?? []);
+    box.checked ? skills.add(name) : skills.delete(name);
+    session.usedSkills = [...skills];
+    onChange();
+  });
+  label.append(box, el("span", void 0, "used the "), el("code", void 0, name), el("span", void 0, " skill"));
+  return label;
+}
+function waitingToggle(session, onChange) {
+  const label = el("label", "ch-widget-control ch-widget-control--check");
+  const box = el("input");
+  box.type = "checkbox";
+  box.checked = session.waiting ?? false;
+  box.addEventListener("change", () => {
+    session.waiting = box.checked;
+    onChange();
+  });
+  label.append(box, el("span", void 0, "waiting on the user"));
+  return label;
+}
+function renderControls(controls, session, onChange) {
+  if (controls.length === 0) return null;
+  const panel = el("div", "ch-widget-controls");
+  for (const control of controls) {
+    switch (control.kind) {
+      case "touchedFiles":
+        panel.append(fileChips(session, onChange));
+        break;
+      case "usedSkill":
+        panel.append(skillCheckbox(control.name, session, onChange));
+        break;
+      case "waiting":
+        panel.append(waitingToggle(session, onChange));
+        break;
+    }
+  }
+  return panel;
+}
+
+// specs.ts
+var HONESTY_MESSAGE = "outside the demo subset \u2014 run `capt-hook test` for the real engine";
+var ADVISORY_SEPARATOR = "Additional advisories (not the reason for the deny):";
+var LIVE_NOTE = "This runs a browser model of the demo subset \u2014 run `capt-hook test` for the real engine.";
+var CANNED_NOTE = "Recorded from the real engine, not evaluated in your browser.";
 
 // dom.ts
+var RECOMPILE_DEBOUNCE_MS = 300;
 function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text != null) node.textContent = text;
   return node;
 }
+function sessionSummary(session) {
+  const files = (session?.touchedFiles ?? []).map((f) => f.split("/").pop() || f);
+  const skills = session?.usedSkills ?? [];
+  return `${files.length ? `edited ${files.join(", ")}` : "no edits"} \xB7 ${skills.length ? skills.join(", ") : "no skills"}`;
+}
 function caseLabel(input) {
+  if (input.label != null) return input.label;
   if (input.command != null) return input.command;
   if (input.file != null) return `${input.tool ?? "Edit"} ${input.file}`;
-  return input.tool ?? "event";
+  return sessionSummary(input.session);
+}
+function selectChips(cases) {
+  const featured = cases.filter((c) => c.featured);
+  return featured.length > 0 ? featured : cases.slice(0, 4);
+}
+function header(event, note) {
+  const bar = el("header", "ch-widget-header");
+  bar.append(el("span", "ch-widget-event", event), el("span", "ch-widget-mode-note", note));
+  return bar;
 }
 function renderVerdict(panel, verdict) {
   panel.textContent = "";
@@ -19,54 +280,172 @@ function renderVerdict(panel, verdict) {
   if (verdict.message) panel.appendChild(el("p", "ch-widget-message", verdict.message));
   if (verdict.rewritten) panel.appendChild(el("code", "ch-widget-rewrite", verdict.rewritten));
 }
-function presetRow(labels, onPick) {
-  const presets = el("div", "ch-widget-presets");
-  for (const input of labels) {
-    const button = el("button", "ch-widget-preset", caseLabel(input));
-    button.type = "button";
-    button.addEventListener("click", () => onPick(input));
-    presets.appendChild(button);
+function renderCompileError(panel, message) {
+  panel.textContent = "";
+  panel.className = "ch-widget-verdict ch-widget-verdict--compile-error";
+  panel.append(el("span", "ch-widget-badge", "compile error"), el("p", "ch-widget-message", message));
+}
+function chipRow(cases, onPick) {
+  const row = el("div", "ch-widget-chips");
+  for (const c of selectChips(cases.map((cc, index) => ({ ...cc, index })))) {
+    const chip = el("button", "ch-widget-chip", caseLabel(c));
+    chip.type = "button";
+    chip.addEventListener("click", () => onPick(c.index));
+    row.append(chip);
   }
-  return presets;
+  return row;
 }
-function renderLive(root, data, evaluate2) {
-  const event = data.cases[0]?.event ?? "PreToolUse";
-  const panel = el("div", "ch-widget-verdict");
-  const input = el("input", "ch-widget-input");
-  input.type = "text";
-  input.spellcheck = false;
-  input.setAttribute("aria-label", "Bash command to evaluate");
-  const run = (value) => renderVerdict(panel, evaluate2(data.hooks, { event, tool: "Bash", command: value }));
-  input.addEventListener("input", () => run(input.value));
-  const onPick = (picked) => {
-    if (picked.command != null) {
-      input.value = picked.command;
-      run(picked.command);
-    } else {
-      renderVerdict(panel, evaluate2(data.hooks, picked));
+function importModule(relative) {
+  return import(new URL(relative, document.baseURI).href);
+}
+var LiveWidget = class {
+  constructor(stage, data, event, evaluate2, editorJs, compilerJs) {
+    this.stage = stage;
+    this.data = data;
+    this.event = event;
+    this.evaluate = evaluate2;
+    this.editorJs = editorJs;
+    this.compilerJs = compilerJs;
+    this.hooks = data.hooks;
+    this.commandMode = data.cases.some((c) => c.command != null);
+  }
+  hooks;
+  session = {};
+  current = {};
+  compileError = null;
+  editor = null;
+  editorLoad = null;
+  compiler = null;
+  recompileTimer;
+  panel = el("div", "ch-widget-verdict");
+  controlsHost = el("div", "ch-widget-controls-host");
+  commandMode;
+  mount() {
+    this.stage.append(header(this.event, LIVE_NOTE));
+    if (this.data.source != null) this.stage.append(this.codePanel(this.data.source));
+    const combobox = createCombobox({
+      items: this.data.cases.map((c, index) => ({ label: caseLabel(c), index })),
+      placeholder: this.commandMode ? "type a command\u2026" : "pick a scenario\u2026",
+      ariaLabel: this.commandMode ? "command to evaluate" : "scenario to evaluate",
+      onSelect: (index) => this.applyCase(index, combobox.setValue),
+      onType: this.commandMode ? (text) => this.applyCommand(text) : void 0
+    });
+    this.stage.append(
+      combobox.root,
+      chipRow(this.data.cases, (index) => this.applyCase(index, combobox.setValue)),
+      this.controlsHost,
+      this.panel
+    );
+    this.renderControlsPanel();
+    if (this.data.cases.length > 0) this.applyCase(0, combobox.setValue);
+  }
+  codePanel(source) {
+    const wrap = el("div", "ch-widget-code");
+    const reset = el("button", "ch-widget-reset", "Reset");
+    reset.type = "button";
+    reset.disabled = true;
+    reset.addEventListener("click", () => {
+      this.editor?.setDoc(source);
+      void this.recompile(source);
+      reset.disabled = true;
+    });
+    const bar = el("div", "ch-widget-code-bar");
+    bar.append(el("span", "ch-widget-code-name", "hooks.py"), reset);
+    const body = el("div", "ch-widget-code-body");
+    const pre = el("pre", "ch-widget-code-pre", source);
+    body.append(pre);
+    wrap.append(bar, body);
+    const upgrade = () => void this.upgradeEditor(body, pre, source, reset);
+    body.addEventListener("pointerenter", upgrade, { once: true });
+    body.addEventListener("focusin", upgrade, { once: true });
+    new IntersectionObserver((entries, obs) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        this.editorLoad ??= importModule(this.editorJs);
+        obs.disconnect();
+      }
+    }).observe(wrap);
+    return wrap;
+  }
+  async upgradeEditor(body, pre, source, reset) {
+    if (this.editor) return;
+    body.style.minHeight = `${pre.offsetHeight}px`;
+    this.editorLoad ??= importModule(this.editorJs);
+    const mod = await this.editorLoad;
+    if (this.editor) return;
+    pre.remove();
+    this.editor = mod.createEditor({
+      parent: body,
+      doc: source,
+      onChange: (doc) => {
+        reset.disabled = doc === source;
+        this.scheduleRecompile(doc);
+      }
+    });
+  }
+  scheduleRecompile(source) {
+    clearTimeout(this.recompileTimer);
+    this.recompileTimer = setTimeout(() => void this.recompile(source), RECOMPILE_DEBOUNCE_MS);
+  }
+  async recompile(source) {
+    this.compiler ??= importModule(this.compilerJs);
+    const result = (await this.compiler).compileSource(source);
+    if ("error" in result) {
+      this.compileError = result.error;
+      this.editor?.setDiagnostics(
+        result.from != null && result.to != null ? [{ from: result.from, to: result.to, message: result.error }] : []
+      );
+      renderCompileError(this.panel, result.error);
+      return;
     }
-  };
-  if (data.cases.some((c) => c.command != null)) root.append(input);
-  root.append(presetRow(data.cases, onPick), panel);
-  const first = data.cases[0];
-  if (first) onPick(first);
-}
-function renderCanned(root, data) {
+    this.compileError = null;
+    this.hooks = result.hooks;
+    this.editor?.setDiagnostics([]);
+    this.renderControlsPanel();
+    this.evaluateNow();
+  }
+  applyCase(index, setValue) {
+    const c = this.data.cases[index];
+    if (!c) return;
+    const { label: _label, featured: _featured, session, ...input } = c;
+    this.current = input;
+    this.session = structuredClone(session ?? {});
+    setValue(this.commandMode ? c.command ?? "" : caseLabel(c));
+    this.renderControlsPanel();
+    this.evaluateNow();
+  }
+  applyCommand(text) {
+    this.current = { tool: "Bash", command: text };
+    this.evaluateNow();
+  }
+  renderControlsPanel() {
+    this.controlsHost.textContent = "";
+    const panel = renderControls(deriveControls(this.hooks), this.session, () => this.evaluateNow());
+    if (panel) this.controlsHost.append(panel);
+  }
+  evaluateNow() {
+    if (this.compileError != null) {
+      renderCompileError(this.panel, this.compileError);
+      return;
+    }
+    renderVerdict(this.panel, this.evaluate(this.hooks, { ...this.current, event: this.event, session: this.session }));
+  }
+};
+function renderCanned(stage, data, event) {
   const recordings = data.recordings;
+  const cases = recordings.map((r) => r.input);
   const panel = el("div", "ch-widget-verdict");
-  const onPick = (input) => {
-    const rec = recordings.find((r) => r.input === input);
-    if (rec) renderVerdict(panel, rec.verdict);
+  const show = (index) => {
+    combobox.setValue(caseLabel(cases[index]));
+    renderVerdict(panel, recordings[index].verdict);
   };
-  root.append(
-    el("p", "ch-widget-badge-recorded", "recorded run \u2014 not evaluated in your browser"),
-    presetRow(
-      recordings.map((r) => r.input),
-      onPick
-    ),
-    panel
-  );
-  if (recordings[0]) renderVerdict(panel, recordings[0].verdict);
+  const combobox = createCombobox({
+    items: cases.map((c, index) => ({ label: caseLabel(c), index })),
+    placeholder: "pick a recorded run\u2026",
+    ariaLabel: "recorded run to show",
+    onSelect: show
+  });
+  stage.append(header(event, CANNED_NOTE), combobox.root, chipRow(cases, show), panel);
+  if (recordings.length > 0) show(0);
 }
 function mountAll(evaluate2) {
   for (const root of Array.from(document.querySelectorAll(".ch-widget"))) {
@@ -77,14 +456,20 @@ function mountAll(evaluate2) {
     const data = JSON.parse(script.textContent);
     const stage = el("div", "ch-widget-stage");
     root.appendChild(stage);
-    if (data.mode === "canned") renderCanned(stage, data);
-    else renderLive(stage, data, evaluate2);
+    if (data.mode === "canned") {
+      renderCanned(stage, data, data.recordings[0]?.input.event ?? "PreToolUse");
+    } else {
+      new LiveWidget(
+        stage,
+        data,
+        data.cases[0]?.event ?? "PreToolUse",
+        evaluate2,
+        root.dataset.editorJs ?? "editor.js",
+        root.dataset.compilerJs ?? "compiler.js"
+      ).mount();
+    }
   }
 }
-
-// specs.ts
-var HONESTY_MESSAGE = "outside the demo subset \u2014 run `capt-hook test` for the real engine";
-var ADVISORY_SEPARATOR = "Additional advisories (not the reason for the deny):";
 
 // tokenizer.ts
 var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -414,5 +799,7 @@ if (typeof document !== "undefined") {
   }
 }
 export {
-  evaluate
+  caseLabel,
+  evaluate,
+  selectChips
 };

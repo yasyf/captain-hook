@@ -9,8 +9,6 @@ Write a hook, type a command at it, watch the verdict. Every widget on these pag
 
 Try it — this is the hook you'll build on the next page:
 
-<!-- gd-embed-fragment: tutorial_first_block -->
-
 <!-- gd-embed-widget: first_block -->
 
 Six short stops, each one interaction and one idea:

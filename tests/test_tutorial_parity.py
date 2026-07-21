@@ -17,6 +17,7 @@ SCRIPTS = ROOT / "docs" / "scripts"
 FRAGMENTS = ROOT / "docs" / "_fragments"
 SRC = ROOT / "docs" / "tutorial" / "_src"
 PARITY_MJS = SRC / "parity.mjs"
+COMPILER_TESTS_MJS = SRC / "tests" / "compiler.test.mjs"
 MATRIX = json.loads((SRC / "matrix.json").read_text())
 
 sys.path.insert(0, str(SCRIPTS))
@@ -308,3 +309,10 @@ def test_compile_refusal_parity(source: str) -> None:
     """Every source the Python compiler refuses is refused by the JS bundle too (message-agnostic)."""
     result = run_node_compile(source)
     assert result.get("error"), result
+
+
+@requires_node
+def test_compiler_node_unit_suite() -> None:
+    """Run the compiler.js `node --test` unit suite (refusals, kwarg ignoring, triple-quote lowering)."""
+    proc = subprocess.run([NODE, "--test", str(COMPILER_TESTS_MJS)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr

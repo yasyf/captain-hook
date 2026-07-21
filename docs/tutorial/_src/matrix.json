@@ -5,17 +5,17 @@
       "fragment": "tutorial_first_block",
       "event": "PreToolUse",
       "cases": [
-        { "id": "git-stash", "check": "parity", "input": { "tool": "Bash", "command": "git stash" } },
+        { "id": "git-stash", "check": "parity", "featured": true, "input": { "tool": "Bash", "command": "git stash" } },
         { "id": "cd-and-stash", "check": "parity", "input": { "tool": "Bash", "command": "cd /tmp && git stash" } },
-        { "id": "echo-quoted", "check": "parity", "input": { "tool": "Bash", "command": "echo \"git stash\"" } },
+        { "id": "echo-quoted", "check": "parity", "featured": true, "input": { "tool": "Bash", "command": "echo \"git stash\"" } },
         { "id": "stash-pop", "check": "parity", "input": { "tool": "Bash", "command": "git stash pop" } },
         { "id": "commit-message", "check": "parity", "input": { "tool": "Bash", "command": "git commit -m \"git stash\"" } },
-        { "id": "sudo-wrapper", "check": "parity", "input": { "tool": "Bash", "command": "sudo git stash" } },
+        { "id": "sudo-wrapper", "check": "parity", "featured": true, "input": { "tool": "Bash", "command": "sudo git stash" } },
         { "id": "env-prefix", "check": "parity", "input": { "tool": "Bash", "command": "FOO=1 git stash" } },
         { "id": "redirect", "check": "parity", "input": { "tool": "Bash", "command": "git stash > /tmp/x" } },
         { "id": "pipeline", "check": "parity", "input": { "tool": "Bash", "command": "true | git stash" } },
         { "id": "unrelated", "check": "parity", "input": { "tool": "Bash", "command": "ls -la" } },
-        { "id": "wrong-tool", "check": "parity", "input": { "tool": "Edit", "file": "notes.py", "content": "git stash" } },
+        { "id": "wrong-tool", "check": "parity", "featured": true, "input": { "tool": "Edit", "file": "notes.py", "content": "git stash" } },
         { "id": "eval-arg", "check": "parity", "input": { "tool": "Bash", "command": "git commit -m eval" } },
         { "id": "grep-eval", "check": "parity", "input": { "tool": "Bash", "command": "git log --grep eval" } },
         { "id": "echo-eval", "check": "parity", "input": { "tool": "Bash", "command": "echo eval me" } },
@@ -31,13 +31,13 @@
       "fragment": "tutorial_runs_guard",
       "event": "PreToolUse",
       "cases": [
-        { "id": "git-stash", "check": "parity", "input": { "tool": "Bash", "command": "git stash" } },
-        { "id": "sudo-wrapper", "check": "parity", "input": { "tool": "Bash", "command": "sudo git stash" } },
-        { "id": "echo-decoy", "check": "parity", "input": { "tool": "Bash", "command": "echo git stash" } },
+        { "id": "git-stash", "check": "parity", "featured": true, "input": { "tool": "Bash", "command": "git stash" } },
+        { "id": "sudo-wrapper", "check": "parity", "featured": true, "input": { "tool": "Bash", "command": "sudo git stash" } },
+        { "id": "echo-decoy", "check": "parity", "featured": true, "input": { "tool": "Bash", "command": "echo git stash" } },
         { "id": "stash-pop", "check": "parity", "input": { "tool": "Bash", "command": "git stash pop" } },
         { "id": "env-prefix", "check": "parity", "input": { "tool": "Bash", "command": "FOO=1 git stash" } },
         { "id": "pipeline", "check": "parity", "input": { "tool": "Bash", "command": "true | git stash" } },
-        { "id": "glued", "check": "parity", "input": { "tool": "Bash", "command": "git stashpop" } },
+        { "id": "glued", "check": "parity", "featured": true, "input": { "tool": "Bash", "command": "git stashpop" } },
         { "id": "backticks", "check": "honesty", "input": { "tool": "Bash", "command": "`git stash`" } },
         { "id": "sh-wrapper", "check": "honesty", "input": { "tool": "Bash", "command": "sh -c 'git stash'" } },
         { "id": "bash-wrapper", "check": "honesty", "input": { "tool": "Bash", "command": "bash -c \"git stash\"" } },
@@ -75,12 +75,12 @@
       "event": "PreToolUse",
       "repoRoot": "/repo",
       "cases": [
-        { "id": "env-secret", "check": "parity", "input": { "tool": "Write", "file": "/repo/.env", "content": "TOKEN=sk-live-abc" } },
-        { "id": "env-example-veto", "check": "parity", "input": { "tool": "Write", "file": "/repo/.env.example", "content": "TOKEN=placeholder" } },
+        { "id": "env-secret", "check": "parity", "featured": true, "input": { "tool": "Write", "file": "/repo/.env", "content": "TOKEN=sk-live-abc" } },
+        { "id": "env-example-veto", "check": "parity", "featured": true, "input": { "tool": "Write", "file": "/repo/.env.example", "content": "TOKEN=placeholder" } },
         { "id": "outside-repo", "check": "parity", "input": { "tool": "Write", "file": "/etc/app/.env", "content": "TOKEN=sk-live-abc" } },
         { "id": "wrong-path", "check": "parity", "input": { "tool": "Write", "file": "/repo/src/config.py", "content": "TOKEN=sk-live-abc" } },
-        { "id": "no-secret", "check": "parity", "input": { "tool": "Write", "file": "/repo/.env", "content": "just some notes here" } },
-        { "id": "read-ignored", "check": "parity", "input": { "tool": "Read", "file": "/repo/.env" } }
+        { "id": "no-secret", "check": "parity", "featured": true, "input": { "tool": "Write", "file": "/repo/.env", "content": "just some notes here" } },
+        { "id": "read-ignored", "check": "parity", "featured": true, "input": { "tool": "Read", "file": "/repo/.env" } }
       ]
     },
     "ui_gate": {
@@ -91,12 +91,16 @@
         {
           "id": "unreviewed-ui-edit",
           "check": "parity",
+          "featured": true,
+          "label": "edited Button.tsx, no review",
           "session": { "touchedFiles": ["/repo/src/components/Button.tsx"], "usedSkills": [] },
           "edits": ["/repo/src/components/Button.tsx"]
         },
         {
           "id": "reviewed-ui-edit",
           "check": "parity",
+          "featured": true,
+          "label": "edited Button.tsx, reviewed with agent-browser",
           "session": { "touchedFiles": ["/repo/src/components/Button.tsx"], "usedSkills": ["agent-browser"] },
           "edits": ["/repo/src/components/Button.tsx"],
           "skills": ["agent-browser"]
@@ -104,8 +108,33 @@
         {
           "id": "non-ui-edit",
           "check": "parity",
+          "featured": true,
+          "label": "edited README.md only",
           "session": { "touchedFiles": ["/repo/README.md"], "usedSkills": [] },
           "edits": ["/repo/README.md"]
+        },
+        {
+          "id": "multi-file-ui-edit",
+          "check": "parity",
+          "label": "edited Button.tsx and README.md, no review",
+          "session": { "touchedFiles": ["/repo/src/components/Button.tsx", "/repo/README.md"], "usedSkills": [] },
+          "edits": ["/repo/src/components/Button.tsx", "/repo/README.md"]
+        },
+        {
+          "id": "route-edit",
+          "check": "parity",
+          "label": "edited a route file, no review",
+          "session": { "touchedFiles": ["/repo/src/routes/home.tsx"], "usedSkills": [] },
+          "edits": ["/repo/src/routes/home.tsx"]
+        },
+        {
+          "id": "skill-no-edits",
+          "check": "parity",
+          "featured": true,
+          "label": "reviewed with agent-browser, touched nothing",
+          "session": { "touchedFiles": [], "usedSkills": ["agent-browser"] },
+          "edits": [],
+          "skills": ["agent-browser"]
         }
       ]
     },
@@ -165,52 +194,15 @@
       ]
     },
     "test_replay": {
-      "mode": "canned",
+      "mode": "live",
       "fragment": "tutorial_first_block_tested",
       "event": "PreToolUse",
       "cases": [
-        {
-          "id": "git-stash",
-          "verified": true,
-          "input": { "tool": "Bash", "command": "git stash" },
-          "verdict": {
-            "action": "block",
-            "message": "BLOCKED: Stashing loses uncommitted agent work. Commit to a WIP branch instead.",
-            "rewritten": null
-          }
-        },
-        {
-          "id": "cd-and-stash",
-          "verified": true,
-          "input": { "tool": "Bash", "command": "cd /tmp && git stash" },
-          "verdict": {
-            "action": "block",
-            "message": "BLOCKED: Stashing loses uncommitted agent work. Commit to a WIP branch instead.",
-            "rewritten": null
-          }
-        },
-        {
-          "id": "echo-quoted",
-          "verified": true,
-          "input": { "tool": "Bash", "command": "echo \"git stash\"" },
-          "verdict": {
-            "action": "block",
-            "message": "BLOCKED: Stashing loses uncommitted agent work. Commit to a WIP branch instead.",
-            "rewritten": null
-          }
-        },
-        {
-          "id": "git-status",
-          "verified": true,
-          "input": { "tool": "Bash", "command": "git status" },
-          "verdict": { "action": "pass", "message": null, "rewritten": null }
-        },
-        {
-          "id": "wip-commit",
-          "verified": true,
-          "input": { "tool": "Bash", "command": "git commit -m \"wip\"" },
-          "verdict": { "action": "pass", "message": null, "rewritten": null }
-        }
+        { "id": "git-stash", "check": "parity", "featured": true, "input": { "tool": "Bash", "command": "git stash" } },
+        { "id": "cd-and-stash", "check": "parity", "input": { "tool": "Bash", "command": "cd /tmp && git stash" } },
+        { "id": "echo-quoted", "check": "parity", "featured": true, "input": { "tool": "Bash", "command": "echo \"git stash\"" } },
+        { "id": "git-status", "check": "parity", "featured": true, "input": { "tool": "Bash", "command": "git status" } },
+        { "id": "wip-commit", "check": "parity", "featured": true, "input": { "tool": "Bash", "command": "git commit -m \"wip\"" } }
       ]
     },
     "llm_gate_teaser": {

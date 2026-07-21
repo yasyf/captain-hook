@@ -3,9 +3,7 @@ title: "Stop gates"
 description: "Gate the session, not the tool call."
 ---
 
-Everything so far fired on a single tool call. Stop gates fire on a different event entirely: the agent deciding it's done. This is the hook from the front page — it holds the session open until edited UI files got a visual review:
-
-<!-- gd-embed-fragment: canonical_hook -->
+Everything so far fired on a single tool call. Stop gates fire on a different event entirely: the agent deciding it's done. This is the hook from the front page — it holds the session open until edited UI files got a visual review.
 
 The widget below simulates a session instead of a command line. Toggle what happened this session, then try to stop:
 

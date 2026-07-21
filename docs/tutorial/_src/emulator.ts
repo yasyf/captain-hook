@@ -2,6 +2,8 @@
 // tests/test_tutorial_parity.py gates every branch against the real Python engine.
 
 import { mountAll } from "./dom";
+
+export { caseLabel, selectChips } from "./dom";
 import {
   ADVISORY_SEPARATOR,
   Condition,

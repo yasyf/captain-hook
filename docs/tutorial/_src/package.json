@@ -4,7 +4,10 @@
   "type": "module",
   "description": "Build inputs for the tutorial's in-browser emulator and DSL compiler bundles.",
   "dependencies": {
-    "@lezer/python": "^1.1.19"
+    "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/lint": "^6.9.7",
+    "@lezer/python": "^1.1.19",
+    "codemirror": "^6.0.2"
   },
   "devDependencies": {
     "esbuild": "0.24.2",

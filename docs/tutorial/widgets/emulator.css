@@ -8,10 +8,258 @@
   --ch-warn: #9a6700;
   --ch-pass: #1a7f37;
   --ch-subset: #8250df;
+  --ch-error: #bc4c00;
+  --ch-code-bg: #ffffff;
 
   margin: 1.25rem 0;
   font-size: 0.95rem;
   color: var(--ch-text);
+}
+
+.ch-widget-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.ch-widget-event {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  color: var(--ch-accent);
+  background: color-mix(in srgb, var(--ch-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ch-accent) 35%, transparent);
+}
+
+.ch-widget-mode-note {
+  font-size: 0.8rem;
+  color: var(--ch-muted);
+}
+
+.ch-widget-code {
+  border: 1px solid var(--ch-border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 0.85rem;
+  background: var(--ch-code-bg);
+}
+
+.ch-widget-code-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--ch-border);
+  background: var(--ch-surface);
+}
+
+.ch-widget-code-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--ch-muted);
+}
+
+.ch-widget-reset {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--ch-border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ch-accent);
+  cursor: pointer;
+}
+
+.ch-widget-reset:disabled {
+  color: var(--ch-muted);
+  cursor: default;
+  opacity: 0.6;
+}
+
+.ch-widget-code-body {
+  position: relative;
+}
+
+.ch-widget-code-pre {
+  margin: 0;
+  padding: 0.6rem 0.7rem;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--ch-text);
+  white-space: pre;
+}
+
+.ch-widget-combobox {
+  position: relative;
+}
+
+.ch-widget-combobox .ch-widget-input {
+  padding-right: 2rem;
+}
+
+.ch-widget-combobox-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--ch-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.ch-widget-listbox {
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  right: 0;
+  margin: 0.2rem 0 0;
+  padding: 0.2rem;
+  list-style: none;
+  max-height: 12rem;
+  overflow-y: auto;
+  border: 1px solid var(--ch-border);
+  border-radius: 6px;
+  background: var(--ch-code-bg);
+  box-shadow: 0 6px 18px rgba(31, 35, 40, 0.12);
+}
+
+.ch-widget-option {
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  color: var(--ch-text);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ch-widget-option--active,
+.ch-widget-option:hover {
+  background: color-mix(in srgb, var(--ch-accent) 14%, transparent);
+}
+
+.ch-widget-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.7rem 0;
+}
+
+.ch-widget-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--ch-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ch-accent);
+  cursor: pointer;
+}
+
+.ch-widget-chip:hover {
+  border-color: var(--ch-accent);
+}
+
+.ch-widget-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin: 0.2rem 0 0.5rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px dashed var(--ch-border);
+  border-radius: 6px;
+}
+
+.ch-widget-control {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--ch-text);
+}
+
+.ch-widget-control--check {
+  cursor: pointer;
+}
+
+.ch-widget-control--check code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  color: var(--ch-accent);
+}
+
+.ch-widget-control-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ch-muted);
+}
+
+.ch-widget-filechips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.ch-widget-filechip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.2rem 0.15rem 0.5rem;
+  border: 1px solid var(--ch-border);
+  border-radius: 999px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.ch-widget-filechip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ch-muted);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.ch-widget-filechip-remove:hover {
+  color: var(--ch-block);
+}
+
+.ch-widget-filechip-add {
+  min-width: 8rem;
+  flex: 1;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--ch-border);
+  border-radius: 5px;
+  background: var(--ch-code-bg);
+  color: var(--ch-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.ch-widget-verdict--compile-error .ch-widget-badge {
+  background: var(--ch-error);
 }
 
 .ch-widget-stage {
@@ -134,9 +382,16 @@ html.quarto-dark .ch-widget,
   --ch-warn: #d29922;
   --ch-pass: #3fb950;
   --ch-subset: #a371f7;
+  --ch-error: #db6d28;
+  --ch-code-bg: #0d1117;
 }
 
 html.quarto-dark .ch-widget-input,
 [data-bs-theme="dark"] .ch-widget-input {
   background: #0d1117;
+}
+
+html.quarto-dark .ch-widget-listbox,
+[data-bs-theme="dark"] .ch-widget-listbox {
+  box-shadow: 0 6px 18px rgba(1, 4, 9, 0.5);
 }

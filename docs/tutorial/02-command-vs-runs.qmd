@@ -3,11 +3,7 @@ title: "Precision with Runs"
 description: "The same guard two ways — recall vs precision."
 ---
 
-The conservative match has a cost: `git commit -m "git stash"` blocks too, and that's a command you actually want to run. capt-hook gives you both ends of the tradeoff. Page one's `block_command` sits at one end; here's the other — the same guard rebuilt on `Runs`, which matches the parsed argv of each command in the line:
-
-<!-- gd-embed-fragment: tutorial_runs_guard -->
-
-Same input, two verdicts, side by side:
+The conservative match has a cost: `git commit -m "git stash"` blocks too, and that's a command you actually want to run. capt-hook gives you both ends of the tradeoff. Page one's `block_command` sits at one end; here's the other — the same guard rebuilt on `Runs`, which matches the parsed argv of each command in the line. Same input, two verdicts, side by side:
 
 <!-- gd-embed-widget: runs_guard -->
 

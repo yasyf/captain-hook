@@ -65,11 +65,46 @@ export interface RecordedCase {
   verdict: Verdict;
 }
 
+// A live case is an EventInput enriched with the two presentation hints Lane B stamps in:
+// `label` overrides the derived caseLabel and `featured` promotes the case into the chip row.
+export interface WidgetCase extends EventInput {
+  label?: string;
+  featured?: boolean;
+}
+
 export interface WidgetData {
   mode: "live" | "canned";
+  source?: string;
   hooks: SerializedHook[];
-  cases: EventInput[];
+  cases: WidgetCase[];
   recordings: RecordedCase[];
+}
+
+// The init surface the core calls across the dynamic-import boundary to widgets/editor.js.
+// Kept structural so emulator.js never statically pulls CodeMirror into its own bundle.
+export interface EditorDiagnostic {
+  from: number;
+  to: number;
+  message: string;
+  severity?: "error" | "warning" | "info";
+}
+
+export interface EditorOptions {
+  parent: HTMLElement;
+  doc: string;
+  readOnly?: boolean;
+  onChange?: (doc: string) => void;
+}
+
+export interface EditorHandle {
+  getDoc(): string;
+  setDoc(doc: string): void;
+  setDiagnostics(diagnostics: EditorDiagnostic[]): void;
+  destroy(): void;
+}
+
+export interface EditorModule {
+  createEditor(options: EditorOptions): EditorHandle;
 }
 
 // The single subset-exceeded verdict message. When the tokenizer meets a construct it
@@ -78,3 +113,8 @@ export const HONESTY_MESSAGE = "outside the demo subset — run `capt-hook test`
 
 // Mirrors captain_hook.dispatch.ADVISORY_SEPARATOR: warns ride along on a deny under this line.
 export const ADVISORY_SEPARATOR = "Additional advisories (not the reason for the deny):";
+
+// The widget-header mode notes, verbatim from docs/scripts/embed_widgets.py, now that the
+// trailing <p class="ch-widget-note"> is gone and the note renders inside the header.
+export const LIVE_NOTE = "This runs a browser model of the demo subset — run `capt-hook test` for the real engine.";
+export const CANNED_NOTE = "Recorded from the real engine, not evaluated in your browser.";

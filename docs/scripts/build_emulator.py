@@ -31,6 +31,7 @@ class Bundle:
 BUNDLES = (
     Bundle("emulator.ts", WIDGETS_DIR / "emulator.js", ()),
     Bundle("compiler/index.ts", WIDGETS_DIR / "compiler.js", ("--minify",)),
+    Bundle("editor.ts", WIDGETS_DIR / "editor.js", ("--minify",)),
 )
 
 

@@ -3,13 +3,9 @@ title: "Your first block"
 description: "One line guards a whole command family."
 ---
 
-`git stash` is where an agent's uncommitted work goes to die: it stashes, forgets, and your changes are three `pop`s deep by the time you notice. Declare it off-limits:
+`git stash` is where an agent's uncommitted work goes to die: it stashes, forgets, and your changes are three `pop`s deep by the time you notice. Declare it off-limits — the hook below is the complete file. Drop it in `.claude/hooks/`, and every Bash call the agent makes passes through it before running.
 
-<!-- gd-embed-fragment: tutorial_first_block -->
-
-That's a complete hook file. Drop it in `.claude/hooks/`, and every Bash call the agent makes passes through it before running.
-
-Type at it. Try `git stash`, then get sneaky — hide it behind `cd`, chain it after `&&`, pipe into it:
+Type at it. Try `git stash`, then get sneaky — hide it behind `cd`, chain it after `&&`, pipe into it. The code is editable, too: change the pattern and the verdicts follow.
 
 <!-- gd-embed-widget: first_block -->
 

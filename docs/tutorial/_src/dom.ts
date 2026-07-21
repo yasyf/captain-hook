@@ -1,11 +1,28 @@
-// Renders the .ch-widget nodes embed_widgets.py stamps into the tutorial pages. Live
-// widgets drive evaluate() as the reader types; canned widgets replay recorded verdicts.
+// Renders the .ch-widget nodes embed_widgets.py stamps into the tutorial pages. Live widgets get
+// an editable code panel, a case combobox, derived session controls, and a recompiling verdict.
 
-import { EventInput, RecordedCase, Verdict, WidgetData } from "./specs";
+import { createCombobox } from "./autocomplete";
+import { deriveControls, renderControls } from "./controls";
+import {
+  CANNED_NOTE,
+  EditorHandle,
+  EditorModule,
+  EventInput,
+  LIVE_NOTE,
+  RecordedCase,
+  SessionState,
+  Verdict,
+  WidgetCase,
+  WidgetData,
+} from "./specs";
+import type { CompileResult } from "./compiler";
 
 type Evaluate = (hooks: WidgetData["hooks"], input: EventInput) => Verdict;
+type CompilerModule = { compileSource: (source: string) => CompileResult };
 
-function el<K extends keyof HTMLElementTagNameMap>(
+const RECOMPILE_DEBOUNCE_MS = 300;
+
+export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
   text?: string,
@@ -16,10 +33,28 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-function caseLabel(input: EventInput): string {
+function sessionSummary(session: SessionState | undefined): string {
+  const files = (session?.touchedFiles ?? []).map((f) => f.split("/").pop() || f);
+  const skills = session?.usedSkills ?? [];
+  return `${files.length ? `edited ${files.join(", ")}` : "no edits"} · ${skills.length ? skills.join(", ") : "no skills"}`;
+}
+
+export function caseLabel(input: WidgetCase): string {
+  if (input.label != null) return input.label;
   if (input.command != null) return input.command;
   if (input.file != null) return `${input.tool ?? "Edit"} ${input.file}`;
-  return input.tool ?? "event";
+  return sessionSummary(input.session);
+}
+
+export function selectChips<T extends { featured?: boolean }>(cases: T[]): T[] {
+  const featured = cases.filter((c) => c.featured);
+  return featured.length > 0 ? featured : cases.slice(0, 4);
+}
+
+function header(event: string, note: string): HTMLElement {
+  const bar = el("header", "ch-widget-header");
+  bar.append(el("span", "ch-widget-event", event), el("span", "ch-widget-mode-note", note));
+  return bar;
 }
 
 function renderVerdict(panel: HTMLElement, verdict: Verdict): void {
@@ -30,59 +65,195 @@ function renderVerdict(panel: HTMLElement, verdict: Verdict): void {
   if (verdict.rewritten) panel.appendChild(el("code", "ch-widget-rewrite", verdict.rewritten));
 }
 
-function presetRow(labels: EventInput[], onPick: (input: EventInput) => void): HTMLElement {
-  const presets = el("div", "ch-widget-presets");
-  for (const input of labels) {
-    const button = el("button", "ch-widget-preset", caseLabel(input));
-    button.type = "button";
-    button.addEventListener("click", () => onPick(input));
-    presets.appendChild(button);
+function renderCompileError(panel: HTMLElement, message: string): void {
+  panel.textContent = "";
+  panel.className = "ch-widget-verdict ch-widget-verdict--compile-error";
+  panel.append(el("span", "ch-widget-badge", "compile error"), el("p", "ch-widget-message", message));
+}
+
+function chipRow(cases: WidgetCase[], onPick: (index: number) => void): HTMLElement {
+  const row = el("div", "ch-widget-chips");
+  for (const c of selectChips(cases.map((cc, index) => ({ ...cc, index })))) {
+    const chip = el("button", "ch-widget-chip", caseLabel(c));
+    chip.type = "button";
+    chip.addEventListener("click", () => onPick(c.index));
+    row.append(chip);
   }
-  return presets;
+  return row;
 }
 
-function renderLive(root: HTMLElement, data: WidgetData, evaluate: Evaluate): void {
-  const event = data.cases[0]?.event ?? "PreToolUse";
-  const panel = el("div", "ch-widget-verdict");
-  const input = el("input", "ch-widget-input");
-  input.type = "text";
-  input.spellcheck = false;
-  input.setAttribute("aria-label", "Bash command to evaluate");
+function importModule<T>(relative: string): Promise<T> {
+  return import(new URL(relative, document.baseURI).href) as Promise<T>;
+}
 
-  const run = (value: string) => renderVerdict(panel, evaluate(data.hooks, { event, tool: "Bash", command: value }));
-  input.addEventListener("input", () => run(input.value));
+class LiveWidget {
+  private hooks: WidgetData["hooks"];
+  private session: SessionState = {};
+  private current: EventInput = {};
+  private compileError: string | null = null;
+  private editor: EditorHandle | null = null;
+  private editorLoad: Promise<EditorModule> | null = null;
+  private compiler: Promise<CompilerModule> | null = null;
+  private recompileTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly panel = el("div", "ch-widget-verdict");
+  private readonly controlsHost = el("div", "ch-widget-controls-host");
+  private readonly commandMode: boolean;
 
-  const onPick = (picked: EventInput) => {
-    if (picked.command != null) {
-      input.value = picked.command;
-      run(picked.command);
-    } else {
-      renderVerdict(panel, evaluate(data.hooks, picked));
+  constructor(
+    private readonly stage: HTMLElement,
+    private readonly data: WidgetData,
+    private readonly event: string,
+    private readonly evaluate: Evaluate,
+    private readonly editorJs: string,
+    private readonly compilerJs: string,
+  ) {
+    this.hooks = data.hooks;
+    this.commandMode = data.cases.some((c) => c.command != null);
+  }
+
+  mount(): void {
+    this.stage.append(header(this.event, LIVE_NOTE));
+    if (this.data.source != null) this.stage.append(this.codePanel(this.data.source));
+
+    const combobox = createCombobox({
+      items: this.data.cases.map((c, index) => ({ label: caseLabel(c), index })),
+      placeholder: this.commandMode ? "type a command…" : "pick a scenario…",
+      ariaLabel: this.commandMode ? "command to evaluate" : "scenario to evaluate",
+      onSelect: (index) => this.applyCase(index, combobox.setValue),
+      onType: this.commandMode ? (text) => this.applyCommand(text) : undefined,
+    });
+
+    this.stage.append(
+      combobox.root,
+      chipRow(this.data.cases, (index) => this.applyCase(index, combobox.setValue)),
+      this.controlsHost,
+      this.panel,
+    );
+    this.renderControlsPanel();
+    if (this.data.cases.length > 0) this.applyCase(0, combobox.setValue);
+  }
+
+  private codePanel(source: string): HTMLElement {
+    const wrap = el("div", "ch-widget-code");
+    const reset = el("button", "ch-widget-reset", "Reset");
+    reset.type = "button";
+    reset.disabled = true;
+    reset.addEventListener("click", () => {
+      this.editor?.setDoc(source);
+      void this.recompile(source);
+      reset.disabled = true;
+    });
+    const bar = el("div", "ch-widget-code-bar");
+    bar.append(el("span", "ch-widget-code-name", "hooks.py"), reset);
+    const body = el("div", "ch-widget-code-body");
+    const pre = el("pre", "ch-widget-code-pre", source);
+    body.append(pre);
+    wrap.append(bar, body);
+
+    const upgrade = () => void this.upgradeEditor(body, pre, source, reset);
+    body.addEventListener("pointerenter", upgrade, { once: true });
+    body.addEventListener("focusin", upgrade, { once: true });
+    new IntersectionObserver((entries, obs) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        this.editorLoad ??= importModule<EditorModule>(this.editorJs);
+        obs.disconnect();
+      }
+    }).observe(wrap);
+    return wrap;
+  }
+
+  private async upgradeEditor(
+    body: HTMLElement,
+    pre: HTMLElement,
+    source: string,
+    reset: HTMLButtonElement,
+  ): Promise<void> {
+    if (this.editor) return;
+    body.style.minHeight = `${pre.offsetHeight}px`;
+    this.editorLoad ??= importModule<EditorModule>(this.editorJs);
+    const mod = await this.editorLoad;
+    if (this.editor) return;
+    pre.remove();
+    this.editor = mod.createEditor({
+      parent: body,
+      doc: source,
+      onChange: (doc) => {
+        reset.disabled = doc === source;
+        this.scheduleRecompile(doc);
+      },
+    });
+  }
+
+  private scheduleRecompile(source: string): void {
+    clearTimeout(this.recompileTimer);
+    this.recompileTimer = setTimeout(() => void this.recompile(source), RECOMPILE_DEBOUNCE_MS);
+  }
+
+  private async recompile(source: string): Promise<void> {
+    this.compiler ??= importModule<CompilerModule>(this.compilerJs);
+    const result = (await this.compiler).compileSource(source);
+    if ("error" in result) {
+      this.compileError = result.error;
+      this.editor?.setDiagnostics(
+        result.from != null && result.to != null ? [{ from: result.from, to: result.to, message: result.error }] : [],
+      );
+      renderCompileError(this.panel, result.error);
+      return;
     }
-  };
+    this.compileError = null;
+    this.hooks = result.hooks;
+    this.editor?.setDiagnostics([]);
+    this.renderControlsPanel();
+    this.evaluateNow();
+  }
 
-  if (data.cases.some((c) => c.command != null)) root.append(input);
-  root.append(presetRow(data.cases, onPick), panel);
-  const first = data.cases[0];
-  if (first) onPick(first);
+  private applyCase(index: number, setValue: (text: string) => void): void {
+    const c = this.data.cases[index];
+    if (!c) return;
+    const { label: _label, featured: _featured, session, ...input } = c;
+    this.current = input;
+    this.session = structuredClone(session ?? {});
+    setValue(this.commandMode ? (c.command ?? "") : caseLabel(c));
+    this.renderControlsPanel();
+    this.evaluateNow();
+  }
+
+  private applyCommand(text: string): void {
+    this.current = { tool: "Bash", command: text };
+    this.evaluateNow();
+  }
+
+  private renderControlsPanel(): void {
+    this.controlsHost.textContent = "";
+    const panel = renderControls(deriveControls(this.hooks), this.session, () => this.evaluateNow());
+    if (panel) this.controlsHost.append(panel);
+  }
+
+  private evaluateNow(): void {
+    if (this.compileError != null) {
+      renderCompileError(this.panel, this.compileError);
+      return;
+    }
+    renderVerdict(this.panel, this.evaluate(this.hooks, { ...this.current, event: this.event, session: this.session }));
+  }
 }
 
-function renderCanned(root: HTMLElement, data: WidgetData): void {
+function renderCanned(stage: HTMLElement, data: WidgetData, event: string): void {
   const recordings = data.recordings as RecordedCase[];
+  const cases: WidgetCase[] = recordings.map((r) => r.input);
   const panel = el("div", "ch-widget-verdict");
-  const onPick = (input: EventInput) => {
-    const rec = recordings.find((r) => r.input === input);
-    if (rec) renderVerdict(panel, rec.verdict);
+  const show = (index: number) => {
+    combobox.setValue(caseLabel(cases[index]));
+    renderVerdict(panel, recordings[index].verdict);
   };
-  root.append(
-    el("p", "ch-widget-badge-recorded", "recorded run — not evaluated in your browser"),
-    presetRow(
-      recordings.map((r) => r.input),
-      onPick,
-    ),
-    panel,
-  );
-  if (recordings[0]) renderVerdict(panel, recordings[0].verdict);
+  const combobox = createCombobox({
+    items: cases.map((c, index) => ({ label: caseLabel(c), index })),
+    placeholder: "pick a recorded run…",
+    ariaLabel: "recorded run to show",
+    onSelect: show,
+  });
+  stage.append(header(event, CANNED_NOTE), combobox.root, chipRow(cases, show), panel);
+  if (recordings.length > 0) show(0);
 }
 
 export function mountAll(evaluate: Evaluate): void {
@@ -94,7 +265,17 @@ export function mountAll(evaluate: Evaluate): void {
     const data = JSON.parse(script.textContent) as WidgetData;
     const stage = el("div", "ch-widget-stage");
     root.appendChild(stage);
-    if (data.mode === "canned") renderCanned(stage, data);
-    else renderLive(stage, data, evaluate);
+    if (data.mode === "canned") {
+      renderCanned(stage, data, data.recordings[0]?.input.event ?? "PreToolUse");
+    } else {
+      new LiveWidget(
+        stage,
+        data,
+        data.cases[0]?.event ?? "PreToolUse",
+        evaluate,
+        root.dataset.editorJs ?? "editor.js",
+        root.dataset.compilerJs ?? "compiler.js",
+      ).mount();
+    }
   }
 }

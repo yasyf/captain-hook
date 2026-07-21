@@ -80,13 +80,24 @@ class Lowerer {
     return this.source.slice(node.from, node.to);
   }
 
+  // Attach a node's span to any position-less CompileError thrown while lowering it, so a
+  // refusal deep in a primitive call still points the editor squiggle at that call.
+  private atNode<T>(node: SyntaxNode, run: () => T): T {
+    try {
+      return run();
+    } catch (e) {
+      if (e instanceof CompileError && !e.pos) throw new CompileError(e.message, { from: node.from, to: node.to });
+      throw e;
+    }
+  }
+
   run(tree: Tree): SerializedHook[] {
     const hooks: SerializedHook[] = [];
     for (let child = tree.topNode.firstChild; child; child = child.nextSibling) {
       if (child.name !== "ExpressionStatement") continue;
       const call = this.firstMeaningful(child);
       if (!call || call.name !== "CallExpression") continue;
-      hooks.push(this.lowerCall(call));
+      hooks.push(this.atNode(call, () => this.lowerCall(call)));
     }
     return hooks;
   }
