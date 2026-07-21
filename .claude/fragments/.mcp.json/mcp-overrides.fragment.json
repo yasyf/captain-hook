@@ -1,1 +1,8 @@
-{}
+{
+  "mcpServers": {
+    "capt-hook": {
+      "command": ".venv/bin/capt-hook",
+      "args": ["mcp"]
+    }
+  }
+}

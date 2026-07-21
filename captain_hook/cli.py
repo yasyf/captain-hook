@@ -735,6 +735,44 @@ def pack_list(state: CliState) -> None:
         )
 
 
+@cli.group()
+def transcripts() -> None:
+    """Register external transcripts (codex rollouts, teammate runs) into a session's deep view."""
+
+
+@transcripts.command(name="register")
+@click.option("--session", "session_id", required=True, help="Claude Code session id to attach the transcript to")
+@click.option("--provider", default="codex", help="Transcript source provider")
+@click.option("--thread-id", "thread_id", default=None, help="Provider thread id, resolved to a rollout at dispatch")
+@click.option("--path", "path", default=None, help="Direct path to the transcript file")
+@click.option("--label", default=None, help="Optional human label for the registration")
+def transcripts_register(
+    session_id: str, provider: str, thread_id: str | None, path: str | None, label: str | None
+) -> None:
+    """Register one external transcript against a session — exactly one of --thread-id or --path."""
+    from captain_hook.transcripts import register_transcript
+
+    if (thread_id is None) == (path is None):
+        raise click.UsageError("pass exactly one of --thread-id or --path")
+    try:
+        entry = register_transcript(session_id, provider=provider, thread_id=thread_id, path=path, label=label)
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
+    click.echo(f"  registered {provider} transcript for session {session_id}: {entry.thread_id or entry.path}")
+
+
+@cli.command()
+def mcp() -> None:
+    """Serve the capt-hook MCP server over stdio, exposing the register_transcript tool."""
+    from captain_hook.mcp_server import build_mcp_server
+
+    try:
+        server = build_mcp_server()
+    except ImportError as e:
+        raise click.ClickException("capt-hook mcp needs the optional MCP SDK — install capt-hook[mcp]") from e
+    server.run()
+
+
 cli.add_command(review)
 cli.add_command(helper)
 
