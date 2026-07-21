@@ -120,6 +120,8 @@ from captain_hook.signals.nlp import has_nominal_subject as has_nominal_subject
 from captain_hook.signals.nlp import is_past_predicate as is_past_predicate
 from captain_hook.state import HookState as HookState
 from captain_hook.state import PrimitiveState as PrimitiveState
+from captain_hook.state import RegisteredTranscript as RegisteredTranscript
+from captain_hook.state import RegisteredTranscripts as RegisteredTranscripts
 from captain_hook.state import WorkflowState as WorkflowState
 from captain_hook.state import workflow_state as workflow_state
 from captain_hook.tasks import Task as Task
@@ -133,6 +135,8 @@ from captain_hook.testing.types import Input as Input
 from captain_hook.testing.types import Rewrite as Rewrite
 from captain_hook.testing.types import TranscriptFixture as TranscriptFixture
 from captain_hook.testing.types import Warn as Warn
+from captain_hook.transcripts import register_transcript as register_transcript
+from captain_hook.transcripts import registered_paths as registered_paths
 from captain_hook.types import Action as Action
 from captain_hook.types import Agent as Agent
 from captain_hook.types import And as And
