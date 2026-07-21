@@ -13,6 +13,7 @@ def test_helper_release_uses_exact_hard_cut_contract() -> None:
 
     assert f"release-app.yml@{RELEASE_APP_REF}" in helper
     assert "asset_name: captain-hook" in helper
+    assert ".github/workflows/release-pypi.yml" in helper
     assert "cask_token:" not in helper
     assert "cask_template_path:" not in helper
     assert "HOMEBREW_TAP_TOKEN:" not in helper
