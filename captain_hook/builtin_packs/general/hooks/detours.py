@@ -6,19 +6,12 @@ from captain_hook import (
     Input,
     Signal,
     Signals,
+    T,
     Tool,
     UserMessages,
     Warn,
     llm_nudge,
 )
-
-FILLER_TURNS = [
-    {
-        "type": "assistant",
-        "message": {"content": [{"type": "text", "text": f"Edited backends/store_{i}.go per the migration plan."}]},
-    }
-    for i in range(18)
-]
 
 llm_nudge(
     """You are a senior engineer watching another engineer ("the agent") mid-task. You are
@@ -130,65 +123,31 @@ Put your reasoning (under 50 words, naming the detour and the requested task) in
             file="client.py",
             content="retry = 3\n",
             transcript=[
-                {
-                    "type": "user",
-                    "message": {"content": [{"type": "text", "text": "Rename the config flag in settings.py."}]},
-                },
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "text", "text": "While I'm here, the retry logic looks wrong — fixing it too."}
-                        ]
-                    },
-                },
+                T.user("Rename the config flag in settings.py."),
+                T.assistant("While I'm here, the retry logic looks wrong — fixing it too."),
             ],
         ): Warn(pattern="detour"),
         Input(
             command="./scripts/cleanup.sh",
             transcript=[
-                {
-                    "type": "user",
-                    "message": {"content": [{"type": "text", "text": "Add retries to the fetch client."}]},
-                },
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "text", "text": "I also noticed stale artifacts. One more thing to clean up."}
-                        ]
-                    },
-                },
+                T.user("Add retries to the fetch client."),
+                T.assistant("I also noticed stale artifacts. One more thing to clean up."),
             ],
         ): Warn(pattern="options"),
         Input(
             file="flags.py",
             content="json_flag = True\n",
             transcript=[
-                {
-                    "type": "user",
-                    "message": {"content": [{"type": "text", "text": "Add a --json flag to the CLI."}]},
-                },
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "Implementing the requested --json flag now."}]},
-                },
+                T.user("Add a --json flag to the CLI."),
+                T.assistant("Implementing the requested --json flag now."),
             ],
         ): Allow(),
         Input(
             tool="Read",
             file="client.py",
             transcript=[
-                {
-                    "type": "user",
-                    "message": {"content": [{"type": "text", "text": "Rename the config flag."}]},
-                },
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [{"type": "text", "text": "While I'm here, might as well look at the retry logic."}]
-                    },
-                },
+                T.user("Rename the config flag."),
+                T.assistant("While I'm here, might as well look at the retry logic."),
             ],
         ): Allow(),
         Input(
@@ -196,46 +155,21 @@ Put your reasoning (under 50 words, naming the detour and the requested task) in
             content="client = ccnotes.New()\n",
             llm={"fire": False},
             transcript=[
-                {
-                    "type": "user",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Audit the changelog. Also migrate all our backends to the new ccnotes "
-                                "interface and clean up anything fleet-outdated while you're at it.",
-                            }
-                        ]
-                    },
-                },
-                *FILLER_TURNS,
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "text", "text": "Let me also migrate the last backend, then a quick cleanup."}
-                        ]
-                    },
-                },
+                T.user(
+                    "Audit the changelog. Also migrate all our backends to the new ccnotes "
+                    "interface and clean up anything fleet-outdated while you're at it."
+                ),
+                *(T.assistant(f"Edited backends/store_{i}.go per the migration plan.") for i in range(18)),
+                T.assistant("Let me also migrate the last backend, then a quick cleanup."),
             ],
         ): Allow(),
         Input(
             file="client.py",
             content="retry = 3\n",
             transcript=[
-                {
-                    "type": "user",
-                    "message": {"content": [{"type": "text", "text": "Rename the config flag in settings.py."}]},
-                },
-                *FILLER_TURNS,
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "text", "text": "Let me also fix the retry logic while I'm at it — quick fix."}
-                        ]
-                    },
-                },
+                T.user("Rename the config flag in settings.py."),
+                *(T.assistant(f"Edited backends/store_{i}.go per the migration plan.") for i in range(18)),
+                T.assistant("Let me also fix the retry logic while I'm at it — quick fix."),
             ],
         ): Warn(pattern="detour"),
     },

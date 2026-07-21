@@ -5,6 +5,7 @@ from captain_hook import (
     Event,
     FromTeammate,
     Input,
+    T,
     Warn,
     nudge,
 )
@@ -22,108 +23,32 @@ findings in your own context; if they matter, summarize them in a few sentences.
         Input(
             agent_type="general-purpose",
             transcript=[
-                {"type": "user", "message": {"content": [{"type": "text", "text": "go research the API"}]}},
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "Agent",
-                                "input": {"prompt": "dig in", "subagent_type": "general-purpose", "name": "researcher"},
-                                "id": "t1",
-                            }
-                        ]
-                    },
-                },
+                T.user("go research the API"),
+                T.assistant(T.tool("Agent", prompt="dig in", subagent_type="general-purpose", name="researcher")),
             ],
         ): Warn(pattern="tight digests"),
         Input(
             agent_type="general-purpose",
             transcript=[
-                {"type": "user", "message": {"content": [{"type": "text", "text": "go do the thing"}]}},
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "Agent",
-                                "input": {"prompt": "dig in", "subagent_type": "general-purpose"},
-                                "id": "t1",
-                            }
-                        ]
-                    },
-                },
+                T.user("go do the thing"),
+                T.assistant(T.tool("Agent", prompt="dig in", subagent_type="general-purpose")),
             ],
         ): Allow(),
         Input(
             agent_type="general-purpose",
             transcript=[
-                {"type": "user", "message": {"content": [{"type": "text", "text": "run both"}]}},
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "Agent",
-                                "input": {"prompt": "dig in", "subagent_type": "general-purpose", "name": "researcher"},
-                                "id": "t1",
-                            }
-                        ]
-                    },
-                },
-                {
-                    "type": "user",
-                    "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
-                },
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "Agent",
-                                "input": {"prompt": "next", "subagent_type": "general-purpose"},
-                                "id": "t2",
-                            }
-                        ]
-                    },
-                },
+                T.user("run both"),
+                *T.tool_turn("Agent", prompt="dig in", subagent_type="general-purpose", name="researcher"),
+                T.assistant(T.tool("Agent", prompt="next", subagent_type="general-purpose")),
             ],
         ): Allow(),
         Input(
             agent_type="general-purpose",
             transcript=[
-                {"type": "user", "message": {"content": [{"type": "text", "text": "spin up a researcher"}]}},
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "Agent",
-                                "input": {"prompt": "dig in", "subagent_type": "general-purpose", "name": "researcher"},
-                                "id": "t1",
-                            }
-                        ]
-                    },
-                },
-                {"type": "user", "message": {"content": [{"type": "text", "text": "now run the quick check"}]}},
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "Agent",
-                                "input": {"prompt": "quick check", "subagent_type": "general-purpose"},
-                                "id": "t2",
-                            }
-                        ]
-                    },
-                },
+                T.user("spin up a researcher"),
+                T.assistant(T.tool("Agent", prompt="dig in", subagent_type="general-purpose", name="researcher")),
+                T.user("now run the quick check"),
+                T.assistant(T.tool("Agent", prompt="quick check", subagent_type="general-purpose")),
             ],
         ): Allow(),
         Input(agent_type="general-purpose"): Allow(),

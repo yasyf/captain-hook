@@ -15,6 +15,7 @@ from captain_hook import (
     LambdaCondition,
     Signal,
     Signals,
+    T,
     Tool,
     Waiting,
     Warn,
@@ -53,7 +54,7 @@ gate(
         Input(tasks=[{"id": "1", "subject": "a", "status": "pending"}]): Block(),
         Input(
             tasks=[{"id": "1", "subject": "a", "status": "pending"}],
-            transcript=[{"type": "assistant", "message": {"content": [{"type": "text", "text": OVERRIDE_TOKEN}]}}],
+            transcript=[T.assistant(OVERRIDE_TOKEN)],
         ): Allow(),
     },
 )
@@ -72,19 +73,8 @@ nudge(
             content="x = 1\n",
             tasks=[{"id": "1", "subject": "a", "status": "in_progress"}],
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "tool_use", "name": "TaskCreate", "input": {}, "id": "t1"}]},
-                },
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}, "id": f"b{i}"}
-                            for i in range(TASK_DRIFT_THRESHOLD)
-                        ]
-                    },
-                },
+                T.assistant(T.tool("TaskCreate")),
+                T.assistant(*(T.tool("Bash", command="ls") for _ in range(TASK_DRIFT_THRESHOLD))),
             ],
         ): Warn(),
     },
@@ -133,19 +123,7 @@ nudge(
         Input(prompt="1. add foo\n2. fix bar\n3. update baz", permission_mode="plan"): Allow(),
         Input(
             prompt="thanks, that works",
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Done. I made three changes:\n1. Fixed X\n2. Added Y\n3. Updated Z",
-                            }
-                        ]
-                    },
-                }
-            ],
+            transcript=[T.assistant("Done. I made three changes:\n1. Fixed X\n2. Added Y\n3. Updated Z")],
         ): Allow(),
         Input(
             prompt=(

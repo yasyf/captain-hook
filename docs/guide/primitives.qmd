@@ -30,7 +30,7 @@ A custom predicate belongs in a [`CustomCondition.check()`](#write-a-custom-cond
 Advise the agent when a condition holds or when signals accumulate. A plain nudge with `only_if` fires once on the next matching tool use. Add `signals` to fire only after the transcript crosses a weighted threshold, which catches a pattern like repeated retries.
 
 ```python
-from captain_hook import Allow, Input, Signal, Signals, Warn, nudge
+from captain_hook import Allow, Input, Signal, Signals, T, Warn, nudge
 
 nudge(
     "You keep retrying. Narrow the failing test before running it again.",
@@ -45,37 +45,29 @@ nudge(
     ),
     tests={
         Input(transcript=[
-            {"type": "assistant", "message": {"content": [{"type": "text", "text": "let me try again"}]}},
-            {"type": "assistant", "message": {"content": [{"type": "text", "text": "retry the suite"}]}},
+            T.assistant("let me try again"),
+            T.assistant("retry the suite"),
         ]): Warn(pattern="failing test"),
-        Input(transcript=[
-            {"type": "assistant", "message": {"content": [{"type": "text", "text": "all green"}]}},
-        ]): Allow(),
+        Input(transcript=[T.assistant("all green")]): Allow(),
     },
 )
 ```
 
-`scope="window"` scores signals across the whole window; the default `scope="text"` requires one message to reach the threshold on its own. Transcript fixtures use the raw JSONL shape — `{"type": ..., "message": {"content": [...]}}` — exactly as Claude Code writes it; [Query the transcript](llm-hooks.qmd#query-the-transcript) shows how to capture one. A nudge with `signals` defaults to `PostToolUse`; without them it defaults to `PreToolUse`. See [Signals](llm-hooks.qmd#score-patterns-with-signals) for the scoring model.
+`scope="window"` scores signals across the whole window; the default `scope="text"` requires one message to reach the threshold on its own. `T` builds transcript fixtures in the exact shape Claude Code writes — `T.user`/`T.assistant` lines carrying text, `T.tool` calls, `T.result` blocks — and raw JSONL dicts (`{"type": ..., "message": {"content": [...]}}`) mix in freely for shapes `T` doesn't cover; [Query the transcript](llm-hooks.qmd#query-the-transcript) shows how to capture a real one. A nudge with `signals` defaults to `PostToolUse`; without them it defaults to `PreToolUse`. See [Signals](llm-hooks.qmd#score-patterns-with-signals) for the scoring model.
 
 ## gate {#gate}
 
 Require something done before the agent stops. A gate is a blocking nudge on the `Stop | SubagentStop` events — the same as `nudge(message, block=True, ...)` — so it holds the turn open until the work is complete.
 
 ```python
-from captain_hook import Allow, Block, Input, RanCommand, gate
+from captain_hook import Allow, Block, Input, RanCommand, T, gate
 
 gate(
     "Run the tests before stopping.",
     skip_if=[RanCommand("uv", "run", "mtest")],
     tests={
-        Input(transcript=[
-            {"type": "assistant", "message": {"content": [{"type": "text", "text": "edited the parser"}]}},
-        ]): Block(pattern="Run the tests"),
-        Input(transcript=[
-            {"type": "assistant", "message": {"content": [
-                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "uv run mtest"}},
-            ]}},
-        ]): Allow(),
+        Input(transcript=[T.assistant("edited the parser")]): Block(pattern="Run the tests"),
+        Input(transcript=[T.assistant(T.tool("Bash", command="uv run mtest"))]): Allow(),
     },
 )
 ```

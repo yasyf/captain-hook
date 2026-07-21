@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from captain_hook import Allow, Block, EditedSource, Event, Input, llm_gate
+from captain_hook import Allow, Block, EditedSource, Event, Input, T, llm_gate
 from captain_hook.builtin_packs.general.hooks._lib import SCRATCH_WORKFLOW_WRITE_FIXTURE
 
 llm_gate(
@@ -23,39 +23,9 @@ llm_gate(
     events=Event.Stop,
     tests={
         Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "Edit",
-                                "id": "e1",
-                                "input": {"file_path": "src/app.py", "old_string": "a", "new_string": "b"},
-                            }
-                        ]
-                    },
-                },
-            ]
+            transcript=[T.assistant(T.tool("Edit", file_path="src/app.py", old_string="a", new_string="b"))]
         ): Block(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "Edit",
-                                "id": "e1",
-                                "input": {"file_path": "README.md", "old_string": "a", "new_string": "b"},
-                            }
-                        ]
-                    },
-                },
-            ]
-        ): Allow(),
+        Input(transcript=[T.assistant(T.tool("Edit", file_path="README.md", old_string="a", new_string="b"))]): Allow(),
         Input(transcript=SCRATCH_WORKFLOW_WRITE_FIXTURE): Allow(),
     },
 )

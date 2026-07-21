@@ -67,7 +67,8 @@ class T:
 
         Args:
             name: The tool name, e.g. ``"Bash"`` or ``"EnterPlanMode"``.
-            id: The ``tool_use`` id; a fresh ``tu-N`` id is minted when omitted.
+            id: The ``tool_use`` id; a fresh ``tu-N`` id is minted when omitted. Keep
+                explicit ids outside the ``tu-<int>`` namespace auto-minting uses.
             input: The tool input fields, e.g. ``command="uv run pytest"``.
 
         Example:
@@ -100,7 +101,19 @@ class T:
                 pass
             case None:
                 tool_use_id = f"tu-{next(TOOL_USE_IDS)}"
+            case _:
+                raise TypeError(f"of must be a tool_use block, an id string, or None, got {of!r}")
         return synthetic.tool_result(tool_use_id, content, is_error=is_error)
+
+    @staticmethod
+    def thinking(text: str) -> dict[str, Any]:
+        """A ``thinking`` content block for :meth:`assistant`.
+
+        Example:
+            >>> T.assistant(T.thinking("The user asked for a rename only."))
+            {'type': 'assistant', 'message': {'content': [{'type': 'thinking', 'thinking': ...}]}}
+        """
+        return synthetic.thinking_block(text)
 
     @staticmethod
     def tool_turn(name: str, /, *, result: str = "ok", is_error: bool = False, **input: Any) -> list[dict[str, Any]]:

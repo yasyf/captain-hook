@@ -8,6 +8,7 @@ from captain_hook import (
     FilePath,
     Headless,
     Input,
+    T,
     Tool,
     TouchedFile,
     UsedSkill,
@@ -72,79 +73,20 @@ llm_gate(
     events=Event.Stop,
     max_fires=1,
     tests={
+        Input(transcript=[T.assistant(T.tool("Edit", file_path="src/app.py", old_string="a", new_string="b"))]): Block(
+            pattern="writing-docs"
+        ),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "Edit",
-                                "id": "e1",
-                                "input": {"file_path": "src/app.py", "old_string": "a", "new_string": "b"},
-                            }
-                        ]
-                    },
-                },
-            ]
-        ): Block(pattern="writing-docs"),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "Edit",
-                                "id": "e1",
-                                "input": {"file_path": "src/app.py", "old_string": "a", "new_string": "b"},
-                            },
-                            {
-                                "type": "tool_use",
-                                "name": "Edit",
-                                "id": "e2",
-                                "input": {"file_path": "docs/index.md", "old_string": "a", "new_string": "b"},
-                            },
-                        ]
-                    },
-                },
+                T.assistant(
+                    T.tool("Edit", file_path="src/app.py", old_string="a", new_string="b"),
+                    T.tool("Edit", file_path="docs/index.md", old_string="a", new_string="b"),
+                )
             ]
         ): Allow(),
+        Input(transcript=[T.assistant(T.tool("Edit", file_path="README.md", old_string="a", new_string="b"))]): Allow(),
         Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "Edit",
-                                "id": "e1",
-                                "input": {"file_path": "README.md", "old_string": "a", "new_string": "b"},
-                            }
-                        ]
-                    },
-                },
-            ]
-        ): Allow(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "Edit",
-                                "id": "e1",
-                                "input": {"file_path": "tests/test_app.py", "old_string": "a", "new_string": "b"},
-                            }
-                        ]
-                    },
-                },
-            ]
+            transcript=[T.assistant(T.tool("Edit", file_path="tests/test_app.py", old_string="a", new_string="b"))]
         ): Allow(),
         Input(transcript=SCRATCH_WORKFLOW_WRITE_FIXTURE): Allow(),
     },

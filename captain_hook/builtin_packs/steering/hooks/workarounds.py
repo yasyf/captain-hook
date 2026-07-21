@@ -16,6 +16,7 @@ from captain_hook import (
     Phrase,
     Signal,
     Signals,
+    T,
     Tool,
     Warn,
     llm_gate,
@@ -218,38 +219,15 @@ tell is clearly present and no do-not-fire condition applies. Put your reasoning
     tests={
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "cc-transcript views aren't constructible, so we round-trip through "
-                                    "the parser for now."
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant("cc-transcript views aren't constructible, so we round-trip through the parser for now.")
             ]
         ): Block(pattern="first-party"),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "I fixed cc-transcript upstream to add the synthetic event constructor, "
-                                    "bumped the pin, and deleted the old round-trip shim."
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    "I fixed cc-transcript upstream to add the synthetic event constructor, "
+                    "bumped the pin, and deleted the old round-trip shim."
+                )
             ],
             llm={"block": False},
         ): Allow(),

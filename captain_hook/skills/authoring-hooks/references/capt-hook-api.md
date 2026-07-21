@@ -21,7 +21,7 @@ from __future__ import annotations
 from captain_hook import (
     Allow, And, Agent, Ask, BaseHookEvent, Block, Event, FilePath, FromSubagent,
     HookResult, InlineTests, Input, Not, Or, Prompt, RanCommand, ReadFile, Rewrite, Runs,
-    Signal, Signals, SkipPermissions, SourceEdits, TestFile, Tool, ToolInput, TouchedFile,
+    Signal, Signals, SkipPermissions, SourceEdits, T, TestFile, Tool, ToolInput, TouchedFile,
     TranscriptFixture, UsedSkill, UsedTool, UserSaid, Warn, WorkflowScript,
     approve, block_command, deny, gate, hook, lint, llm_approve, llm_gate, llm_nudge, nudge, on,
     prompt_check, rewrite_command, set_tool_input, warn_command, workflow, Artifact, Step, text_matches,

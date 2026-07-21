@@ -18,6 +18,7 @@ from captain_hook import (
     Phrase,
     Prompt,
     Rewrite,
+    T,
     TaskCall,
     TestFile,
     Tool,
@@ -131,8 +132,7 @@ def browser_calls(
     n: int, *, tool: str = "Bash", field: str = "command", value: str = "agent-browser click '#next'"
 ) -> list[dict[str, object]]:
     """A same-turn run of ``n`` browser tool_use lines (Bash by default) for the delegation-nudge inline tests."""
-    calls = [{"type": "tool_use", "name": tool, "input": {field: value}, "id": f"tu-{tool}-{i}"} for i in range(n)]
-    return [{"type": "assistant", "message": {"content": [call]}} for call in calls]
+    return [T.assistant(T.tool(tool, **{field: value})) for _ in range(n)]
 
 
 @dataclass(frozen=True, slots=True)

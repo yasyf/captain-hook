@@ -247,7 +247,7 @@ event payload; set the fields the target event reads. All fields default to `Non
 | `skip_permissions` | `bool` | Pre-seeds `evt.skip_permissions`, replacing the process-tree walk; `None` keeps the real walk |
 | `offset` | `int` | `Read` call offset |
 | `limit` | `int` | `Read` call limit |
-| `transcript` | `Path \| TranscriptFixture \| list[dict]` | Session history for transcript conditions |
+| `transcript` | `Path \| TranscriptFixture \| list[dict]` | Session history for transcript conditions; build entries with `T` |
 | `tasks` | `list[dict]` | The native task list read via `evt.tasks` |
 | `cwd` | `str` | The session working directory, surfaced as `evt.cwd` |
 | `llm` | `dict` | Per-test LLM verdict stub overrides, e.g. `llm={"fire": False}` |
@@ -256,6 +256,12 @@ event payload; set the fields the target event reads. All fields default to `Non
 `name=...` sets the file name an extension- or path-based condition matches. Use it when the
 hook stats or reads the file; a plain `file="app.py"` is a virtual path with no bytes behind
 it.
+
+`T` builds `transcript` entries — `T.user("...")` and `T.assistant(...)` lines,
+`T.tool(name, **input)` call blocks, `T.result(...)` results, `T.thinking(text)`, and
+`T.tool_turn(name, result=..., **input)` for a paired call-and-result — in the exact JSONL
+shape a live session carries. Raw dicts are accepted unchanged and mix with `T` lines in
+one list.
 
 | Expectation | Asserts | Optional `pattern` |
 |-------------|---------|--------------------|

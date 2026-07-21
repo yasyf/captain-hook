@@ -162,9 +162,26 @@ tests={
 }
 ```
 
-When a hook depends on session history, pass a `transcript` fixture so the
-[transcript conditions](../reference/conditions.qmd) have something to read. The
-[Query the transcript](llm-hooks.qmd#query-the-transcript) guide shows how to build one.
+When a hook depends on session history, build the `transcript` fixture with `T`, which
+emits user and assistant lines in the exact shape Claude Code writes:
+
+```python
+from captain_hook import T
+
+tests={
+    Input(transcript=[
+        T.user("run the suite"),
+        T.assistant(T.tool("Bash", command="uv run pytest")),
+    ]): Allow(),
+}
+```
+
+`T.tool_turn("Bash", result="ModuleNotFoundError", is_error=True, command="uv run pytest")`
+returns a paired call-and-result line for failure scenarios, and raw JSONL dicts mix in
+freely for shapes `T` doesn't cover. The
+[transcript conditions](../reference/conditions.qmd) read the fixture exactly as they would
+a live session; [Query the transcript](llm-hooks.qmd#query-the-transcript) shows how to
+capture a real one.
 
 ## Run the same tests in CI
 
@@ -217,5 +234,5 @@ tests exercise wiring, not judgment — [LLM hooks](llm-hooks.qmd) owns that spl
 
 [Primitives & Verdicts](../reference/primitives.qmd) lists the full `Input` field set and
 the result-type contract. [Write an LLM hook](llm-hooks.qmd) covers splitting deterministic
-narrowing from model judgment, and [Query the transcript](llm-hooks.qmd#query-the-transcript) shows how to
-build transcript fixtures for `Stop` gates.
+narrowing from model judgment, and [Query the transcript](llm-hooks.qmd#query-the-transcript) tours the query
+API transcript conditions read at runtime.

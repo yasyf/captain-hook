@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from captain_hook import Allow, Event, Input, ReadFile, Signal, Signals, UsedSkill, Warn, nudge
+from captain_hook import Allow, Event, Input, ReadFile, Signal, Signals, T, UsedSkill, Warn, nudge
 
 RETRY_SIGNALS = Signals(
     patterns=[
@@ -18,29 +18,6 @@ RETRY_SIGNALS = Signals(
     scope="window",
 )
 
-THREE_FAILURES = [
-    msg
-    for i in range(3)
-    for msg in (
-        {
-            "type": "assistant",
-            "message": {
-                "content": [
-                    {"type": "tool_use", "name": "Bash", "id": f"b{i}", "input": {"command": "uv run pytest"}},
-                ]
-            },
-        },
-        {
-            "type": "user",
-            "message": {
-                "content": [
-                    {"type": "tool_result", "tool_use_id": f"b{i}", "is_error": True, "content": "ModuleNotFoundError"},
-                ]
-            },
-        },
-    )
-]
-
 
 nudge(
     "Repeated failures detected. Stop retrying and pick a debug tool:\n"
@@ -52,30 +29,8 @@ nudge(
     skip_if=[UsedSkill("codex", scope="session"), ReadFile("DEBUGGING.md")],
     max_fires=1,
     tests={
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "text", "text": "Same error again. Let me try again."},
-                        ]
-                    },
-                },
-            ]
-        ): Warn(pattern="debug tool"),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "text", "text": "All checks pass; wrapping up."},
-                        ]
-                    },
-                },
-            ]
-        ): Allow(),
+        Input(transcript=[T.assistant("Same error again. Let me try again.")]): Warn(pattern="debug tool"),
+        Input(transcript=[T.assistant("All checks pass; wrapping up.")]): Allow(),
     },
 )
 
@@ -87,7 +42,15 @@ nudge(
     skip_if=[ReadFile("DEBUGGING.md")],
     max_fires=2,
     tests={
-        Input(transcript=THREE_FAILURES): Warn(pattern="DEBUGGING.md"),
-        Input(transcript=THREE_FAILURES[:2]): Allow(),
+        Input(
+            transcript=[
+                line
+                for _ in range(3)
+                for line in T.tool_turn("Bash", result="ModuleNotFoundError", is_error=True, command="uv run pytest")
+            ]
+        ): Warn(pattern="DEBUGGING.md"),
+        Input(
+            transcript=T.tool_turn("Bash", result="ModuleNotFoundError", is_error=True, command="uv run pytest")
+        ): Allow(),
     },
 )

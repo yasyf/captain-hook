@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from captain_hook import Allow, Event, Input, Signal, Signals, Warn, nudge
+from captain_hook import Allow, Event, Input, Signal, Signals, T, Warn, nudge
 
 CORRECTION_SIGNALS = Signals(
     patterns=[
@@ -28,29 +28,9 @@ nudge(
     events=Event.Stop,
     max_fires=1,
     tests={
-        Input(
-            transcript=[
-                {
-                    "type": "user",
-                    "message": {
-                        "content": [
-                            {"type": "text", "text": "No — never force-push to main, always open a pull request."},
-                        ]
-                    },
-                },
-            ]
-        ): Warn(pattern="capt-hook status"),
-        Input(
-            transcript=[
-                {
-                    "type": "user",
-                    "message": {
-                        "content": [
-                            {"type": "text", "text": "Looks good to me, ship it."},
-                        ]
-                    },
-                },
-            ]
-        ): Allow(),
+        Input(transcript=[T.user("No — never force-push to main, always open a pull request.")]): Warn(
+            pattern="capt-hook status"
+        ),
+        Input(transcript=[T.user("Looks good to me, ship it.")]): Allow(),
     },
 )

@@ -17,6 +17,7 @@ from captain_hook import (
     RanCommand,
     Signal,
     Signals,
+    T,
     Tool,
     Warn,
     llm_gate,
@@ -77,479 +78,177 @@ nudge(
         window=15,
     ),
     tests={
+        Input(transcript=[T.assistant("Pre-existing, not caused by my changes.")]): Warn(),
+        Input(transcript=[T.assistant("I found an issue and will fix it now.")]): Allow(),
+        Input(transcript=[T.assistant("Pre-existing pyright type error, not caused by my changes.")]): Allow(),
+        Input(transcript=[T.assistant("Pre-existing diagnostic from LSP, not my changes.")]): Allow(),
+        Input(transcript=[T.assistant("No issues found in the code.")]): Allow(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "Pre-existing, not caused by my changes."}]},
-                }
+                T.assistant(
+                    "The pyright complaint here is the cached_property override one — "
+                    "per AGENTS.md this is trivial noise, pre-existing, not worth a "
+                    "type: ignore. Moving on to the actual feature work."
+                )
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                T.assistant(
+                    "When you edit an existing doc, fix tells only in the lines you're "
+                    "already changing — never reflow pre-existing untouched lines to "
+                    "satisfy the linter, which is scope creep over the author's "
+                    "deliberate voice."
+                )
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                T.user(
+                    "These are pre-existing lines, and cleaning them is beyond the scope of my change.",
+                    isMeta=True,
+                )
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                T.assistant("These are pre-existing lines, and cleaning them is beyond the scope of my change.")
             ]
         ): Warn(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "I found an issue and will fix it now."}]},
-                }
+                T.assistant(
+                    "When you edit an existing doc, fix tells only in the lines you're "
+                    "already changing — never reflow pre-existing untouched lines to "
+                    "satisfy the linter, which is scope creep over the author's "
+                    "deliberate voice."
+                ),
+                T.assistant("That refactor is beyond the scope of this task."),
             ]
         ): Allow(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "text", "text": "Pre-existing pyright type error, not caused by my changes."}
-                        ]
-                    },
-                }
+                T.user("Let's just leave the login issue for now; it's pre-existing and beyond the scope of my change.")
             ]
         ): Allow(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [{"type": "text", "text": "Pre-existing diagnostic from LSP, not my changes."}]
-                    },
-                }
-            ]
-        ): Allow(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "No issues found in the code."}]},
-                }
-            ]
-        ): Allow(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "The pyright complaint here is the cached_property override one — "
-                                    "per AGENTS.md this is trivial noise, pre-existing, not worth a "
-                                    "type: ignore. Moving on to the actual feature work."
-                                ),
-                            }
-                        ]
-                    },
-                }
-            ]
-        ): Allow(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "When you edit an existing doc, fix tells only in the lines you're "
-                                    "already changing — never reflow pre-existing untouched lines to "
-                                    "satisfy the linter, which is scope creep over the author's "
-                                    "deliberate voice."
-                                ),
-                            }
-                        ]
-                    },
-                }
-            ]
-        ): Allow(),
-        Input(
-            transcript=[
-                {
-                    "type": "user",
-                    "isMeta": True,
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "These are pre-existing lines, and cleaning them is beyond the scope of my change."
-                                ),
-                            }
-                        ]
-                    },
-                }
-            ]
-        ): Allow(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "These are pre-existing lines, and cleaning them is beyond the scope of my change."
-                                ),
-                            }
-                        ]
-                    },
-                }
-            ]
-        ): Warn(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "When you edit an existing doc, fix tells only in the lines you're "
-                                    "already changing — never reflow pre-existing untouched lines to "
-                                    "satisfy the linter, which is scope creep over the author's "
-                                    "deliberate voice."
-                                ),
-                            }
-                        ]
-                    },
-                },
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "That refactor is beyond the scope of this task.",
-                            }
-                        ]
-                    },
-                },
-            ]
-        ): Allow(),
-        Input(
-            transcript=[
-                {
-                    "type": "user",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Let's just leave the login issue for now; it's pre-existing "
-                                    "and beyond the scope of my change."
-                                ),
-                            }
-                        ]
-                    },
-                }
-            ]
-        ): Allow(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Let's just leave the login issue for now; it's pre-existing "
-                                    "and beyond the scope of my change."
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    "Let's just leave the login issue for now; it's pre-existing and beyond the scope of my change."
+                )
             ]
         ): Warn(),
         # FIX-mode regression matrix (misfires watched live 2026-07-10); message byte-identical.
         # m1 briefing-quote: dismissal quoted into a subagent briefing arrives user-role -> origin drop
         Input(
             transcript=[
-                {
-                    "type": "user",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Review this transcript excerpt for whether the nudge should have fired:\n"
-                                    "> That's a pre-existing issue, not caused by my change. I'll leave the broken "
-                                    "test as is since it's beyond the scope of my change.\n"
-                                    "Report your assessment."
-                                ),
-                            }
-                        ]
-                    },
-                },
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "Starting the review of that excerpt now."}]},
-                },
+                T.user(
+                    "Review this transcript excerpt for whether the nudge should have fired:\n"
+                    "> That's a pre-existing issue, not caused by my change. I'll leave the broken "
+                    "test as is since it's beyond the scope of my change.\n"
+                    "Report your assessment."
+                ),
+                T.assistant("Starting the review of that excerpt now."),
             ]
         ): Allow(),
         # m2 TaskUpdate-description: misfire note (PROSE_TOOLS path) scores "pre-existing" once post-merge
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "id": "tu_upd",
-                                "name": "TaskUpdate",
-                                "input": {
-                                    "subject": "Investigate steering nudge misfire",
-                                    "description": (
-                                        "The pre-existing issue nudge fired again on a quoted transcript; "
-                                        "capturing the offending shape for the fix."
-                                    ),
-                                },
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    T.tool(
+                        "TaskUpdate",
+                        subject="Investigate steering nudge misfire",
+                        description=(
+                            "The pre-existing issue nudge fired again on a quoted transcript; "
+                            "capturing the offending shape for the fix."
+                        ),
+                    )
+                )
             ]
         ): Allow(),
         # m3 salvage-assessment: salvage-vs-rerun reasoning naming the misfire scores "pre-existing" once
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Ignoring the pre-existing issue with the hook misfires for a moment — I'm "
-                                    "assessing the partial work to decide whether to salvage the existing progress "
-                                    "or rerun from scratch."
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    "Ignoring the pre-existing issue with the hook misfires for a moment — I'm "
+                    "assessing the partial work to decide whether to salvage the existing progress "
+                    "or rerun from scratch."
+                )
             ]
         ): Allow(),
         # m4 quoted-fixture: this file's own fixtures read back arrive user-role -> origin drop
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "Reading the steering pack fixtures."}]},
-                },
-                {
-                    "type": "user",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "steering.py fixtures:\n"
-                                    "  \"Let's just leave the login issue for now; it's pre-existing and beyond "
-                                    'the scope of my change."  -> Warn()\n'
-                                    '  "That\'s a pre-existing issue, not caused by my change."  -> Warn()'
-                                ),
-                            }
-                        ]
-                    },
-                },
+                T.assistant("Reading the steering pack fixtures."),
+                T.user(
+                    "steering.py fixtures:\n"
+                    "  \"Let's just leave the login issue for now; it's pre-existing and beyond "
+                    'the scope of my change."  -> Warn()\n'
+                    '  "That\'s a pre-existing issue, not caused by my change."  -> Warn()'
+                ),
             ]
         ): Allow(),
         # m5 self-echo: the nudge's own opening sentence echoed back scores "pre-existing" once post-merge
         # (verbatim cross-turn echoes are additionally damped by echo_verbatim on a real dispatch, 8.18.0)
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "You appear to be dismissing a pre-existing issue rather than fixing it. "
-                                    "Acknowledged — I'll actually fix it."
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    "You appear to be dismissing a pre-existing issue rather than fixing it. "
+                    "Acknowledged — I'll actually fix it."
+                )
             ]
         ): Allow(),
         # m6 user-origin: full dismissal in a user message (scores 4 as assistant prose) -> origin drop
         Input(
             transcript=[
-                {
-                    "type": "user",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "That's a pre-existing issue, not caused by my change, and it's beyond the "
-                                    "scope of my change — I'll leave the broken test as is."
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.user(
+                    "That's a pre-existing issue, not caused by my change, and it's beyond the "
+                    "scope of my change — I'll leave the broken test as is."
+                )
             ]
         ): Allow(),
         # fl1 fire-log completion: past-tense "left" (VBD) is not a prospective leave
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Fixed the failing test and left the flaky one documented in the tracking "
-                                    "issue so we can revisit it deliberately."
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    "Fixed the failing test and left the flaky one documented in the tracking "
+                    "issue so we can revisit it deliberately."
+                )
             ]
         ): Allow(),
         # fl2 fire-log completion: real report, "pre-existing" scored once + past "left" not matched
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Landed the parser fix; I left the pre-existing lint warnings alone since they "
-                                    "predate this change, and all 42 tests pass."
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    "Landed the parser fix; I left the pre-existing lint warnings alone since they "
+                    "predate this change, and all 42 tests pass."
+                )
             ]
         ): Allow(),
         # tp_existing_issue: genuine dismissal pairing "pre-existing" with change-not-caused still warns
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "That's a pre-existing issue, not caused by my change — I'm not going to touch it."
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant("That's a pre-existing issue, not caused by my change — I'm not going to touch it.")
             ]
         ): Warn(),
         # tp_prospective_leave: genuine prospective dismissal ("I'll leave the broken test") still warns
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "I'll leave the broken test as is."}]},
-                }
-            ]
-        ): Warn(),
+        Input(transcript=[T.assistant("I'll leave the broken test as is.")]): Warn(),
         # tp_leave_flaky_test: a flaky (ADJ) defect qualifier on "leave the test" still warns
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "I'll leave the flaky test as is."}]},
-                }
-            ]
-        ): Warn(),
+        Input(transcript=[T.assistant("I'll leave the flaky test as is.")]): Warn(),
         # f16 leave-test-no-defect: prospective "leave the test" with no defect qualifier is benign
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "I'll leave the integration test running while I inspect its logs.",
-                            }
-                        ]
-                    },
-                }
-            ]
-        ): Allow(),
+        Input(transcript=[T.assistant("I'll leave the integration test running while I inspect its logs.")]): Allow(),
         # f17 negated-scope: "made no changes outside the scope" is scope compliance, not dismissal
         Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "I fixed all known issues and made no changes outside the scope of the task.",
-                            }
-                        ]
-                    },
-                }
-            ]
+            transcript=[T.assistant("I fixed all known issues and made no changes outside the scope of the task.")]
         ): Allow(),
         # f18a modal-perfect counterfactual: "should have left ... but I fixed it" is not a prospective leave
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "text", "text": "I should have left the broken test alone, but I fixed it."}
-                        ]
-                    },
-                }
-            ]
-        ): Allow(),
+        Input(transcript=[T.assistant("I should have left the broken test alone, but I fixed it.")]): Allow(),
         # f18b negated prospective: "Leaving ... was never an option, so I fixed it" is not a dismissal
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "text", "text": "Leaving the test broken was never an option, so I fixed it."}
-                        ]
-                    },
-                }
-            ]
-        ): Allow(),
+        Input(transcript=[T.assistant("Leaving the test broken was never an option, so I fixed it.")]): Allow(),
         # f19 previous-issue dismissal: "the previous issue is beyond the scope" warns (regex arm restored)
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [{"type": "text", "text": "The previous issue is beyond the scope of this change."}]
-                    },
-                }
-            ]
-        ): Warn(),
+        Input(transcript=[T.assistant("The previous issue is beyond the scope of this change.")]): Warn(),
         # f21 word-boundary: "unknown bugs" must not match the "known bug" arm
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "There are no unknown bugs left outside scope."}]},
-                }
-            ]
-        ): Allow(),
+        Input(transcript=[T.assistant("There are no unknown bugs left outside scope.")]): Allow(),
     },
 )
 
@@ -595,112 +294,26 @@ nudge(
     tests={
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "The warnings are showing up again in strict mode, "
-                                    "which means pyright is catching them."
-                                ),
-                            },
-                        ]
-                    },
-                }
+                T.assistant("The warnings are showing up again in strict mode, which means pyright is catching them.")
             ]
         ): Allow(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Let me check the git history to see if these pyright "
-                                    "warnings existed before my changes."
-                                ),
-                            },
-                        ]
-                    },
-                }
+                T.assistant("Let me check the git history to see if these pyright warnings existed before my changes.")
             ]
         ): Warn(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "Let me check the git history."}]},
-                },
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "The warnings are appearing again."}]},
-                },
+                T.assistant("Let me check the git history."),
+                T.assistant("The warnings are appearing again."),
             ]
         ): Warn(),
         Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": ("Strict mode pyright is catching warnings — is this something I introduced?"),
-                            },
-                        ]
-                    },
-                }
-            ]
+            transcript=[T.assistant("Strict mode pyright is catching warnings — is this something I introduced?")]
         ): Allow(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "The wrong return type is the actual bug — let me fix it.",
-                            },
-                        ]
-                    },
-                }
-            ]
-        ): Allow(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "I'll fix this real type error in the engine.",
-                            },
-                        ]
-                    },
-                }
-            ]
-        ): Allow(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Let me check git history for the auth refactor.",
-                            },
-                        ]
-                    },
-                }
-            ]
-        ): Allow(),
+        Input(transcript=[T.assistant("The wrong return type is the actual bug — let me fix it.")]): Allow(),
+        Input(transcript=[T.assistant("I'll fix this real type error in the engine.")]): Allow(),
+        Input(transcript=[T.assistant("Let me check git history for the auth refactor.")]): Allow(),
     },
 )
 
@@ -969,496 +582,251 @@ tell that decided it) in `reasoning`.""",
     tests={
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Since fixing this requires a cc-interact release, the practical "
-                                    "solution is to improve the documentation and help text."
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    "Since fixing this requires a cc-interact release, the practical "
+                    "solution is to improve the documentation and help text."
+                )
             ]
         ): Block(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "The vcs.Root error still happens outside a repo. For now, as a "
-                                    "workaround, I've added a note to the help text telling users to "
-                                    "run these commands from the repo root."
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    "The vcs.Root error still happens outside a repo. For now, as a "
+                    "workaround, I've added a note to the help text telling users to "
+                    "run these commands from the repo root."
+                )
             ]
         ): Block(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Fixing this properly requires an upstream release of cc-interact, "
-                                    "so the pragmatic approach is to document the limitation in the README."
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    "Fixing this properly requires an upstream release of cc-interact, "
+                    "so the pragmatic approach is to document the limitation in the README."
+                )
             ]
         ): Block(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Fixing this properly requires a cc-interact release. Do you want "
-                                    "me to cut that release, or would you prefer to just document the "
-                                    "limitation for now?"
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    "Fixing this properly requires a cc-interact release. Do you want "
+                    "me to cut that release, or would you prefer to just document the "
+                    "limitation for now?"
+                )
             ]
         ): Allow(),
         Input(
             transcript=[
-                {
-                    "type": "user",
-                    "message": {
-                        "content": [
-                            {"type": "text", "text": "Please improve the documentation for the release commands."}
-                        ]
-                    },
-                },
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Done — I improved the documentation and help text as you asked me to.",
-                            }
-                        ]
-                    },
-                },
+                T.user("Please improve the documentation for the release commands."),
+                T.assistant("Done — I improved the documentation and help text as you asked me to."),
             ]
         ): Allow(),
+        Input(transcript=[T.assistant("I refactored the signal scoring in state.py and all 42 tests pass.")]): Allow(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "I refactored the signal scoring in state.py and all 42 tests pass.",
-                            }
-                        ]
-                    },
-                }
-            ]
-        ): Allow(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "The underlying bug is in the wheel we publish, so the clean fix is "
-                                    "to ship a new version to PyPI. I've left the code as-is for callers "
-                                    "to pin around."
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    "The underlying bug is in the wheel we publish, so the clean fix is "
+                    "to ship a new version to PyPI. I've left the code as-is for callers "
+                    "to pin around."
+                )
             ]
         ): Block(),
+        Input(transcript=[T.assistant("I documented the limitation and moved on to the next task.")]): Block(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "I documented the limitation and moved on to the next task.",
-                            }
-                        ]
-                    },
-                }
-            ]
-        ): Block(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Fixing this properly needs an upstream release and the pragmatic "
-                                    "approach is to document the limitation — do you want me to just "
-                                    "leave that as-is?"
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    "Fixing this properly needs an upstream release and the pragmatic "
+                    "approach is to document the limitation — do you want me to just "
+                    "leave that as-is?"
+                )
             ]
         ): Allow(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "I expanded the README troubleshooting section as we discussed and "
-                                    "filed a follow-up task to document the new error codes."
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    "I expanded the README troubleshooting section as we discussed and "
+                    "filed a follow-up task to document the new error codes."
+                )
             ]
         ): Allow(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Fixing this cleanly needs a new cc-transcript release. Do you want "
-                                    "me to cut that release, or handle it another way?"
-                                ),
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    "Fixing this cleanly needs a new cc-transcript release. Do you want "
+                    "me to cut that release, or handle it another way?"
+                )
             ]
         ): Allow(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
+                T.assistant(
+                    T.tool(
+                        "ReportFindings",
+                        findings=[
                             {
-                                "type": "tool_use",
-                                "id": "tu_findings",
-                                "name": "ReportFindings",
-                                "input": {
-                                    "findings": [
-                                        {
-                                            "file": "internal/daemon/daemon.go",
-                                            "line": 105,
-                                            "summary": (
-                                                "OpClose --stale and OpList are documented as cross-repo "
-                                                "commands, but cc-interact's dispatch runs ScopeResolve "
-                                                "(vcs.Root) on the caller's cwd for every domain op with a "
-                                                "hardcoded exemption set, so both error when invoked "
-                                                "outside a git/jj repo."
-                                            ),
-                                            "failure_scenario": (
-                                                "User cd ~ && cc-review list → error from vcs.Root instead "
-                                                "of the cross-repo listing; fix requires a cc-interact "
-                                                "release, so cc-review documents the run-inside-a-repo "
-                                                "constraint instead."
-                                            ),
-                                            "verdict": "CONFIRMED",
-                                        }
-                                    ]
-                                },
-                            }
-                        ]
-                    },
-                }
-            ]
-        ): Block(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "thinking",
-                                "thinking": (
-                                    "I'm seeing that cc-interact has hardcoded exemptions for certain "
-                                    "operations, which means any domain operation without an exemption "
-                                    "gets an error when the scope can't be resolved. The issue is that "
-                                    "`cc-review list` and `close --stale` commands don't have consumer "
-                                    "hooks to exempt them, so running these from outside a repo directory "
-                                    "triggers a vcs.Root error. Since fixing this requires a cc-interact "
-                                    "release, the practical solution is to improve the documentation and "
-                                    "help text to guide users on where to run these commands from."
+                                "file": "internal/daemon/daemon.go",
+                                "line": 105,
+                                "summary": (
+                                    "OpClose --stale and OpList are documented as cross-repo "
+                                    "commands, but cc-interact's dispatch runs ScopeResolve "
+                                    "(vcs.Root) on the caller's cwd for every domain op with a "
+                                    "hardcoded exemption set, so both error when invoked "
+                                    "outside a git/jj repo."
                                 ),
-                            }
-                        ]
-                    },
-                }
-            ]
-        ): Block(),
-        Input(
-            transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Since fixing this requires a cc-interact release, the practical "
-                                    "solution is to document the limitation in the help text."
+                                "failure_scenario": (
+                                    "User cd ~ && cc-review list → error from vcs.Root instead "
+                                    "of the cross-repo listing; fix requires a cc-interact "
+                                    "release, so cc-review documents the run-inside-a-repo "
+                                    "constraint instead."
                                 ),
+                                "verdict": "CONFIRMED",
                             }
-                        ]
-                    },
-                },
-                *(
-                    block
-                    for i in range(6)
-                    for block in (
-                        {
-                            "type": "assistant",
-                            "message": {
-                                "content": [
-                                    {
-                                        "type": "tool_use",
-                                        "id": f"tu_{i}",
-                                        "name": "Read",
-                                        "input": {"file_path": f"/tmp/f{i}.py"},
-                                    }
-                                ]
-                            },
-                        },
-                        {
-                            "type": "user",
-                            "message": {
-                                "content": [{"type": "tool_result", "tool_use_id": f"tu_{i}", "content": "ok"}]
-                            },
-                        },
+                        ],
                     )
+                )
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                T.assistant(
+                    T.thinking(
+                        "I'm seeing that cc-interact has hardcoded exemptions for certain "
+                        "operations, which means any domain operation without an exemption "
+                        "gets an error when the scope can't be resolved. The issue is that "
+                        "`cc-review list` and `close --stale` commands don't have consumer "
+                        "hooks to exempt them, so running these from outside a repo directory "
+                        "triggers a vcs.Root error. Since fixing this requires a cc-interact "
+                        "release, the practical solution is to improve the documentation and "
+                        "help text to guide users on where to run these commands from."
+                    )
+                )
+            ]
+        ): Block(),
+        Input(
+            transcript=[
+                T.assistant(
+                    "Since fixing this requires a cc-interact release, the practical "
+                    "solution is to document the limitation in the help text."
                 ),
+                *(line for i in range(6) for line in T.tool_turn("Read", file_path=f"/tmp/f{i}.py")),
             ]
         ): Block(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
+                T.assistant(
+                    T.tool(
+                        "ReportFindings",
+                        findings=[
                             {
-                                "type": "tool_use",
-                                "id": "tu_findings",
-                                "name": "ReportFindings",
-                                "input": {
-                                    "findings": [
-                                        {
-                                            "file": "captain_hook/signals/__init__.py",
-                                            "line": 46,
-                                            "summary": (
-                                                "Off-by-one in windowed() drops the final event when stop "
-                                                "lands on a turn boundary."
-                                            ),
-                                            "failure_scenario": (
-                                                "Session.recent(1) on a three-event transcript returns an "
-                                                "empty window, so signal scoring sees no text."
-                                            ),
-                                            "verdict": "CONFIRMED",
-                                        }
-                                    ]
-                                },
+                                "file": "captain_hook/signals/__init__.py",
+                                "line": 46,
+                                "summary": (
+                                    "Off-by-one in windowed() drops the final event when stop lands on a turn boundary."
+                                ),
+                                "failure_scenario": (
+                                    "Session.recent(1) on a three-event transcript returns an "
+                                    "empty window, so signal scoring sees no text."
+                                ),
+                                "verdict": "CONFIRMED",
                             }
-                        ]
-                    },
-                }
+                        ],
+                    )
+                )
             ]
         ): Allow(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
+                T.assistant(
+                    T.tool(
+                        "TodoWrite",
+                        todos=[
                             {
-                                "type": "tool_use",
-                                "id": "tu_todos",
-                                "name": "TodoWrite",
-                                "input": {
-                                    "todos": [
-                                        {
-                                            "content": "Add SSE reconnect test",
-                                            "status": "pending",
-                                            "activeForm": "Adding SSE reconnect test",
-                                        },
-                                        {
-                                            "content": "Wire the backoff cap into the client config",
-                                            "status": "in_progress",
-                                            "activeForm": "Wiring the backoff cap",
-                                        },
-                                    ]
-                                },
-                            }
-                        ]
-                    },
-                }
+                                "content": "Add SSE reconnect test",
+                                "status": "pending",
+                                "activeForm": "Adding SSE reconnect test",
+                            },
+                            {
+                                "content": "Wire the backoff cap into the client config",
+                                "status": "in_progress",
+                                "activeForm": "Wiring the backoff cap",
+                            },
+                        ],
+                    )
+                )
             ]
         ): Allow(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "id": "tu_task_workaround",
-                                "name": "TaskCreate",
-                                "input": {
-                                    "subject": "Workaround for the crash",
-                                    "description": (
-                                        "Wrap the call in try/except so the session survives; revisit later."
-                                    ),
-                                },
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    T.tool(
+                        "TaskCreate",
+                        subject="Workaround for the crash",
+                        description="Wrap the call in try/except so the session survives; revisit later.",
+                    )
+                )
             ]
         ): Block(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
+                T.assistant(
+                    T.tool(
+                        "TodoWrite",
+                        todos=[
                             {
-                                "type": "tool_use",
-                                "id": "tu_todo_defer",
-                                "name": "TodoWrite",
-                                "input": {
-                                    "todos": [
-                                        {
-                                            "content": "Defer the parser rewrite to a later pass",
-                                            "status": "pending",
-                                            "activeForm": "Deferring the parser rewrite",
-                                        },
-                                    ]
-                                },
-                            }
-                        ]
-                    },
-                }
+                                "content": "Defer the parser rewrite to a later pass",
+                                "status": "pending",
+                                "activeForm": "Deferring the parser rewrite",
+                            },
+                        ],
+                    )
+                )
             ]
         ): Block(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "id": "tu_task_skip",
-                                "name": "TaskCreate",
-                                "input": {
-                                    "subject": "Skip the real fix",
-                                    "description": (
-                                        "Too big for this pass; just note it somewhere and come back to it."
-                                    ),
-                                },
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    T.tool(
+                        "TaskCreate",
+                        subject="Skip the real fix",
+                        description="Too big for this pass; just note it somewhere and come back to it.",
+                    )
+                )
             ]
         ): Block(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
+                T.assistant(
+                    T.tool(
+                        "ReportFindings",
+                        findings=[
                             {
-                                "type": "tool_use",
-                                "id": "tu_findings_deadcode",
-                                "name": "ReportFindings",
-                                "input": {
-                                    "findings": [
-                                        {
-                                            "file": "captain_hook/signals/__init__.py",
-                                            "line": 90,
-                                            "summary": (
-                                                "The `document the limitation` fallback branch in "
-                                                "cite_message is dead code — no caller reaches it."
-                                            ),
-                                            "failure_scenario": (
-                                                "extract_signal_context always returns a non-empty list "
-                                                "for these patterns, so the else arm never runs."
-                                            ),
-                                            "verdict": "CONFIRMED",
-                                        }
-                                    ]
-                                },
+                                "file": "captain_hook/signals/__init__.py",
+                                "line": 90,
+                                "summary": (
+                                    "The `document the limitation` fallback branch in "
+                                    "cite_message is dead code — no caller reaches it."
+                                ),
+                                "failure_scenario": (
+                                    "extract_signal_context always returns a non-empty list "
+                                    "for these patterns, so the else arm never runs."
+                                ),
+                                "verdict": "CONFIRMED",
                             }
-                        ]
-                    },
-                }
+                        ],
+                    )
+                )
             ]
         ): Allow(),
         Input(
             transcript=[
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "id": "tu_task_spacy_docs",
-                                "name": "TaskCreate",
-                                "input": {
-                                    "subject": "Document the limitation",
-                                    "description": (
-                                        "Note in the README that NLP scoring needs the spaCy "
-                                        "en_core_web_sm model provisioned."
-                                    ),
-                                },
-                            }
-                        ]
-                    },
-                }
+                T.assistant(
+                    T.tool(
+                        "TaskCreate",
+                        subject="Document the limitation",
+                        description=(
+                            "Note in the README that NLP scoring needs the spaCy en_core_web_sm model provisioned."
+                        ),
+                    )
+                )
             ]
         ): Allow(),
     },

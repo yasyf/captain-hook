@@ -204,38 +204,29 @@ from captain_hook import (
     Prompt,
     RanCommand,
     SourceEdits,
+    T,
     TestFile,
     Tool,
     TouchedFile,
-    TranscriptFixture,
     gate,
     on,
     prompt_check,
 )
-
-EDITED_SOURCE = TranscriptFixture(messages=[
-    {"type": "assistant", "message": {"content": [
-        {"type": "tool_use", "name": "Edit", "id": "t1",
-         "input": {"file_path": "src/main.py", "old_string": "a", "new_string": "b"}},
-    ]}},
-])
-
-EDITED_THEN_TESTED = TranscriptFixture(messages=[
-    {"type": "assistant", "message": {"content": [
-        {"type": "tool_use", "name": "Edit", "id": "t1",
-         "input": {"file_path": "src/main.py", "old_string": "a", "new_string": "b"}},
-        {"type": "tool_use", "name": "Bash", "id": "t2",
-         "input": {"command": "uv run pytest"}},
-    ]}},
-])
 
 gate(
     "Source files were edited but the test suite has not run. Run `uv run pytest` before stopping.",
     only_if=[TouchedFile("**/*.py")],
     skip_if=[RanCommand("uv", "run", "pytest"), RanCommand("pytest")],
     tests={
-        Input(transcript=EDITED_SOURCE): Block(pattern="pytest"),
-        Input(transcript=EDITED_THEN_TESTED): Allow(),
+        Input(transcript=[
+            T.assistant(T.tool("Edit", file_path="src/main.py", old_string="a", new_string="b")),
+        ]): Block(pattern="pytest"),
+        Input(transcript=[
+            T.assistant(
+                T.tool("Edit", file_path="src/main.py", old_string="a", new_string="b"),
+                T.tool("Bash", command="uv run pytest"),
+            ),
+        ]): Allow(),
         Input(): Allow(),
     },
 )
@@ -273,8 +264,9 @@ def guard_test_edits(evt: BaseHookEvent) -> HookResult | None:
 Adaptation notes:
 
 - The gate defaults to `Stop | SubagentStop`, so its `Input`s describe *history*, not a
-  current tool call — hence the `TranscriptFixture`s. The exact fixture shape matters:
-  `{"type": "assistant", "message": {"content": [tool_use, ...]}}`.
+  current tool call — hence the `transcript=` fixtures. `T.assistant(T.tool(...))` emits
+  the exact Claude Code JSONL shape
+  (`{"type": "assistant", "message": {"content": [tool_use, ...]}}`).
 - `TouchedFile("**/*.py")` matches `src/main.py`; `src/**/*.py` would not (the `**` segment
   wants an intermediate directory). Prefer `**/*.py` or `src/*.py`.
 - Make the `RanCommand` argv match what the agent will actually type — matching is

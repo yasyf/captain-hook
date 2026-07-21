@@ -35,7 +35,7 @@ hook's conditions and handler, and asserts the outcome. Exit code 1 on any failu
 | `agent_id` | Subagent/teammate id; presence makes `evt.is_subagent` and `FromSubagent()` true | `Input(command="ls", agent_id="tm1")` |
 | `permission_mode` | e.g. plan mode | `Input(permission_mode="plan")` |
 | `skip_permissions` | Pre-seeds `evt.skip_permissions` / `SkipPermissions()`; `None` leaves the real process-tree walk in place | `Input(command="ls", skip_permissions=True)` |
-| `transcript` | Session history | `Input(transcript=TranscriptFixture(messages=[...]))` |
+| `transcript` | Session history | `Input(transcript=[T.user("ship it"), T.assistant(T.tool("Bash", command="uv run pytest"))])` |
 
 ## Expected outcomes
 
@@ -48,26 +48,34 @@ All fields are keyword-only — `Block(pattern="...")`, never `Block("...")`.
 - `Ask()` — the hook must return no result (`None`); for `PermissionRequest` hooks that
   means the dialog shows.
 
-## TranscriptFixture recipe
+## Transcript fixtures with `T`
 
 Transcript-history conditions (`TouchedFile`, `RanCommand`, `ReadFile`, `UsedSkill`, `UsedTool`) read
-the session transcript, so their tests supply one. The message shape is Claude Code JSONL:
-`{"type": "assistant", "message": {"content": [<tool_use blocks>]}}`.
+the session transcript, so their tests supply one. Build the lines with `T` — `T.user`/`T.assistant`
+for messages, `T.tool` for call blocks, `T.result`/`T.tool_turn` for results — inline in the
+`tests=` dict, never as a module constant. Raw Claude Code JSONL dicts
+(`{"type": ..., "message": {"content": [...]}}`) are accepted anywhere a `T` line is.
 
 ```python
-EDITED_THEN_TESTED = TranscriptFixture(messages=[
-    {"type": "assistant", "message": {"content": [
-        {"type": "tool_use", "name": "Edit", "id": "t1",
-         "input": {"file_path": "src/main.py", "old_string": "a", "new_string": "b"}},
-        {"type": "tool_use", "name": "Bash", "id": "t2",
-         "input": {"command": "uv run pytest"}},
-    ]}},
-])
+tests={
+    Input(transcript=[
+        T.assistant(T.tool("Edit", file_path="src/main.py", old_string="a", new_string="b")),
+    ]): Block(pattern="pytest"),
+    Input(transcript=[
+        T.assistant(
+            T.tool("Edit", file_path="src/main.py", old_string="a", new_string="b"),
+            T.tool("Bash", command="uv run pytest"),
+        ),
+    ]): Allow(),
+    Input(): Allow(),
+}
 ```
 
-A gate's three canonical tests: evidence-only fixture expects `Block`, evidence-plus-remedy
-fixture expects `Allow()` (the `skip_if` matched), and bare `Input()` expects `Allow()` (no
-evidence, `only_if` fails).
+Those are a gate's three canonical tests: evidence-only fixture expects `Block`,
+evidence-plus-remedy fixture expects `Allow()` (the `skip_if` matched), and bare `Input()`
+expects `Allow()` (no evidence, `only_if` fails). `T.tool_turn("Bash", result="boom",
+is_error=True, command="uv run pytest")` returns a paired call-and-result line for failure
+loops; `T.user("...", isMeta=True)` merges envelope fields.
 
 ## Output formats
 
@@ -93,10 +101,10 @@ Statuses: `pass`, `fail` (wrong outcome), `error` (exception in hook or test), `
 
 | Symptom | Likely cause and fix |
 |---|---|
-| `Expected Block, got None` on a Stop gate | The `Input` lacks transcript evidence for `only_if` — add a `TranscriptFixture` whose tool uses satisfy `TouchedFile`/`RanCommand`. Check the fixture shape: `type` + nested `message.content`, not `role`/`content`. |
+| `Expected Block, got None` on a Stop gate | The `Input` lacks transcript evidence for `only_if` — add lines whose tool uses satisfy `TouchedFile`/`RanCommand`, e.g. `T.assistant(T.tool("Edit", file_path="src/main.py"))`. |
 | `Expected Block, got None` on a glob condition | `src/**/*.py` does not match `src/main.py` — the `**` wants an intermediate directory. Use `**/*.py` or `src/*.py`. |
 | `Block message doesn't match '<pat>'` | `pattern` is regex-searched against the *rendered* message. `block_command` renders `BLOCKED: {reason}. {hint}.` — pick a word that survives rendering, or loosen the pattern. |
 | `@on` handler on a piped command never fires | `evt.command.q.runs(...)` checks the pipeline's *last* command. Use `.any_command(lambda c: c.program == "...")`. |
 | Edit/Write hook gets `None` content | The `Input` set `command=` but the hook's first event/tool is Edit — set `file=` and `content=` (and `tool=` if the hook matches several). |
-| `Input(command=...)` ignored | The hook's first event is `Stop` — the runner builds a Stop event without tool input. Encode the command as a Bash `tool_use` in `transcript=` instead. |
+| `Input(command=...)` ignored | The hook's first event is `Stop` — the runner builds a Stop event without tool input. Encode the command in `transcript=` instead: `T.assistant(T.tool("Bash", command="..."))`. |
 | LLM hook test always blocks | The default stub verdict always fires. Pass `Input(llm={"fire": False})` / `{"block": False}` to exercise the declines path, or remove `tests=` and test the static `only_if` narrowing on a deterministic sibling hook. |

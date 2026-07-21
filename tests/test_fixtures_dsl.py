@@ -51,6 +51,14 @@ class TestBuilderShapes:
                 id="assistant_tool_block",
             ),
             pytest.param(
+                T.assistant(T.thinking("The user asked for a rename only.")),
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "thinking", "thinking": "The user asked for a rename only."}]},
+                },
+                id="assistant_thinking_block",
+            ),
+            pytest.param(
                 T.tool("Bash", id="tu-fixed", command="uv run pytest"),
                 {"type": "tool_use", "id": "tu-fixed", "name": "Bash", "input": {"command": "uv run pytest"}},
                 id="tool_explicit_id",
@@ -105,6 +113,15 @@ class TestBuilderShapes:
         assert line["isMeta"] is True
         assert line["uuid"] == "a-1"
         assert line["message"] == {"content": [{"type": "text", "text": "thinking"}]}
+
+    def test_result_rejects_a_non_tool_dict(self) -> None:
+        with pytest.raises(TypeError, match="tool_use block"):
+            T.result("x", of={"foo": "bar"})
+
+    def test_testing_namespace_lists_t(self) -> None:
+        import captain_hook.testing as testing
+
+        assert "T" in dir(testing)
 
 
 class TestSessionRoundTrip:
