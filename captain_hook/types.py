@@ -125,17 +125,23 @@ class Tool:
     ``Write``/``Create``, …) and MCP suffixes (``mcp__github__Grep`` matches ``Grep``) —
     NOT a regex, so ``Tool("Edit.*")`` never matches. Pass names variadically, or as a
     single ``|``-joined string for back-compat (``Tool("Bash|Execute")`` is
-    ``Tool("Bash", "Execute")``).
+    ``Tool("Bash", "Execute")``). ``Tool.EditTools`` is the prebuilt full edit-shaped
+    set — ``Tool("Edit", "MultiEdit", "NotebookEdit", "Write")``.
 
     Example:
         >>> hook(Event.PreToolUse, only_if=[Tool("Bash", "Execute")], message="...", block=True)
+        >>> hook(Event.PreToolUse, only_if=[Tool.EditTools], message="...", block=True)
     """
 
     valid_events: ClassVar[Event] = TOOL_EVENTS
+    EditTools: ClassVar[Tool]
     names: tuple[str, ...]
 
     def __init__(self, *names: str) -> None:
         object.__setattr__(self, "names", _split_names(names))
+
+
+Tool.EditTools = Tool("Edit", "MultiEdit", "NotebookEdit", "Write")
 
 
 @dataclass(frozen=True, slots=True)

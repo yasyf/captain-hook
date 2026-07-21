@@ -179,6 +179,11 @@ class TestToolCondition:
     def test_tool(self, pattern: str, tool_name: str, expected: bool) -> None:
         assert check_condition(Tool(pattern), make_tool_event(tool_name)) is expected
 
+    def test_edit_tools_prebuilt(self) -> None:
+        assert Tool.EditTools == Tool("Edit", "MultiEdit", "NotebookEdit", "Write")
+        assert check_condition(Tool.EditTools, make_tool_event("NotebookEdit")) is True
+        assert check_condition(Tool.EditTools, make_tool_event("Bash")) is False
+
     @pytest.mark.parametrize(
         ("event_cls", "expected"),
         [

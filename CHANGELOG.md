@@ -4,6 +4,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.4.0] - 2026-07-21
+
+### Added
+- **`Tool.EditTools`** — the prebuilt full edit-shaped set, `Tool("Edit", "MultiEdit",
+  "NotebookEdit", "Write")`, so hooks stop spelling the edit tools by hand; the scratch-writes
+  approver and `rewrite_code` now use it.
+
+### Changed
+- **Review PRs open with an Issue/Fix/Example body.** The session reviewer's PR template
+  (`scanning-sessions` skill) drops the Rule/Hook/Evidence sections for three: what went wrong
+  (with the strongest verbatim correction woven in), what the hook does, and a short transcript
+  vignette of the situation going better with the guard live.
+
 ## [12.3.0] - 2026-07-20
 
 ### Added

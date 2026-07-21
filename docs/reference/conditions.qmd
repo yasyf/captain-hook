@@ -12,7 +12,7 @@ These match the event being processed right now.
 
 | Condition | Matches when | Pattern | Example |
 |-----------|--------------|---------|---------|
-| `Tool(*names)` | The tool name is one of `names` | Exact names (aliases + MCP suffixes auto-match); a `\|`-joined string still works | `Tool("Edit", "Write")` |
+| `Tool(*names)` | The tool name is one of `names` | Exact names (aliases + MCP suffixes auto-match); a `\|`-joined string still works; `Tool.EditTools` is the prebuilt edit-shaped set (Edit, MultiEdit, NotebookEdit, Write) | `Tool.EditTools` |
 | `FilePath(*p, project_only=True)` | The event's file path matches any glob | Glob | `FilePath("**/*.py")` |
 | `Command(p)` | The raw Bash line or any parsed command matches | Regex | `Command(r"curl.*\|.*sh")` |
 | `Runs(*argv)` | Any parsed command's argv starts with `argv` | Argv prefix (structural) | `Runs("git", "stash")` |

@@ -110,7 +110,8 @@ CONDITION_DESCRIPTIONS: dict[tuple[str, ...], tuple[str, str]] = {
     ("Tool",): (
         "Filter by tool name",
         '`Tool("Bash")` or `Tool("Edit", "Write")` — exact names (not regex), aliases auto-expand (Bash=Execute, '
-        "Write=Create, Agent=Task), MCP suffixes match",
+        "Write=Create, Agent=Task), MCP suffixes match; `Tool.EditTools` = the prebuilt edit-shaped set "
+        "(Edit, MultiEdit, NotebookEdit, Write)",
     ),
     ("FilePath",): ("Filter by file path", '`FilePath("*.py", "*.pyi")`'),
     ("Command",): (

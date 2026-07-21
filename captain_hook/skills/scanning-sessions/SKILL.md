@@ -103,7 +103,7 @@ Review Progress:
          gression test; create-as-edit: EXTEND mode — broaden + new test pair)
   - [ ] Step 5: Verify (uvx --isolated capt-hook test green in the worktree)
   - [ ] Step 6: Slot check (review slots --repo <the Step-3 target>), then commit,
-         push, gh pr create (verbatim evidence in the body)
+         push, gh pr create (Issue/Fix/Example body per pr-workflow.md)
   - [ ] Step 7: review update <ID> pr_open --pr-url <url>
 - [ ] Step 8: Final report
 ```

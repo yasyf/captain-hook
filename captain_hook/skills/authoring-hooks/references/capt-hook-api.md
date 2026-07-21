@@ -154,7 +154,7 @@ evaluated first.
 <!-- gen:conditions -->
 | Need | Use |
 |---|---|
-| Filter by tool name | `Tool("Bash")` or `Tool("Edit", "Write")` — exact names (not regex), aliases auto-expand (Bash=Execute, Write=Create, Agent=Task), MCP suffixes match |
+| Filter by tool name | `Tool("Bash")` or `Tool("Edit", "Write")` — exact names (not regex), aliases auto-expand (Bash=Execute, Write=Create, Agent=Task), MCP suffixes match; `Tool.EditTools` = the prebuilt edit-shaped set (Edit, MultiEdit, NotebookEdit, Write) |
 | Filter by file path | `FilePath("*.py", "*.pyi")` |
 | Filter by bash command text | `CommandCondition(r"git\s+push")` (`captain_hook.types.Command`) — regex over the raw line and each parsed command |
 | Filter by file content being written | `Content(r"print\(")` (multiline regex over Edit new / Write content) |
