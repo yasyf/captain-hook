@@ -149,12 +149,17 @@ def isolate_modules():
     snapshot_modules = set(sys.modules.keys())
     snapshot_path = sys.path[:]
     yield
-    removed = set(sys.modules.keys()) - snapshot_modules
+    removed = {key: sys.modules[key] for key in set(sys.modules.keys()) - snapshot_modules}
     for key in removed:
         del sys.modules[key]
     sys.path[:] = snapshot_path
-    # Removing a submodule leaves the root package's PEP 562 __getattr__ cache pinned to the
-    # orphaned object; drop cached exports sourced from a removed module so they re-resolve.
+    # Removing a submodule leaves its parent package's attribute (and captain_hook's PEP 562
+    # __getattr__ cache) pinned to the orphaned object; a later `from pkg import sub` then returns
+    # the orphan while a fresh `import pkg.sub` re-imports, splitting module identity mid-test.
+    for key, mod in removed.items():
+        parent, _, child = key.rpartition(".")
+        if parent and (pmod := sys.modules.get(parent)) is not None and pmod.__dict__.get(child) is mod:
+            del pmod.__dict__[child]
     if (root := sys.modules.get("captain_hook")) is not None:
         for name, target in EXPORTS.items():
             if target in removed:
