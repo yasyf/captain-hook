@@ -37,22 +37,18 @@ def test_decode_event_request_from_client_build_request() -> None:
         async_=False,
         root="/proj",
         cwd=os.getcwd(),
-        hooks=None,
         env=raw["env"],
         payload_raw="PAYLOAD-BYTES",
     )
 
 
-def test_decode_preserves_async_and_forward_compat_hooks() -> None:
-    # The client always sends hooks=None; the wire field is kept for forward-compat, so decode
-    # must still carry a hooks value a future client might set.
-    raw = thin_client.build_request("Stop", "/r", "{}", async_=True) | {"hooks": ".claude/hooks"}
+def test_decode_preserves_async() -> None:
+    raw = thin_client.build_request("Stop", "/r", "{}", async_=True)
     req = protocol.decode_request(json.dumps(raw).encode())
 
     assert req.kind == "event"
     assert req.event == "Stop"
     assert req.async_ is True
-    assert req.hooks == ".claude/hooks"
     assert req.payload_raw == "{}"
 
 
@@ -130,6 +126,27 @@ def test_decode_malformed_json_raises() -> None:
 def test_decode_invalid_shape_raises(wire: bytes) -> None:
     with pytest.raises(protocol.ProtocolError):
         protocol.decode_request(wire)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda request: request | {"hooks": None},
+        lambda request: request | {"future": True},
+        lambda request: {key: value for key, value in request.items() if key != "payload_raw"},
+        lambda request: request | {"async": 1},
+        lambda request: request | {"env": {"X": 1}},
+        lambda request: request | {"client": request["client"] | {"future": True}},
+        lambda request: (
+            request | {"client": {key: value for key, value in request["client"].items() if key != "build"}}
+        ),
+    ],
+    ids=["hooks", "unknown", "missing", "async-not-bool", "env-value", "client-unknown", "client-missing"],
+)
+def test_decode_event_requires_exact_v1_shape(mutate) -> None:
+    request = thin_client.build_request("Stop", "/r", "{}", async_=False)
+    with pytest.raises(protocol.ProtocolError):
+        protocol.decode_request(json.dumps(mutate(request)).encode())
 
 
 # --- response encode is accepted verbatim by the shipped client ------------------------
