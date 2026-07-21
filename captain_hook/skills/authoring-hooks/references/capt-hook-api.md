@@ -164,8 +164,8 @@ evaluated first.
 | Filter by subagent type | `Agent("cleanup")` or `Agent("Explore", "claude-code-guide")` |
 | Event comes from a subagent/teammate | `FromSubagent()` — the payload carries an `agent_id`; matches the ask's *origin*, where `Agent` matches its *type* |
 | Session launched with bypass available | `SkipPermissions()` — walks to the nearest `claude` ancestor process and matches `--dangerously-skip-permissions` **or** `--allow-dangerously-skip-permissions`; availability counts as consent, whatever the active `permission_mode` |
-| Skill was invoked | `UsedSkill("codex")` — bare name also matches `plugin:name`; `scope="turn"` searches only the current turn |
-| Tool was previously used | `UsedTool("EnterPlanMode", scope="turn")` — exact names (a `\|`-joined string works); `scope="turn"` searches only the current turn |
+| Skill was invoked | `UsedSkill("codex")` — bare name also matches `plugin:name`; searches the current turn by default; `scope="session"` widens to the whole session |
+| Tool was previously used | `UsedTool("EnterPlanMode")` — exact names (a `\|`-joined string works); searches the current turn by default; `scope="session"` widens to the whole session |
 | File was previously read | `ReadFile("TESTING.md")` — fnmatch globs; anchor dirs with `**/` |
 | Match only test files | `TestFile()` (`**/test_*.py`, `**/*_test.py`, `**/conftest.py`, `**/tests/**/*.py`, `**/*_test.go`, `**/*.test.*`, `**/*.spec.*`) |
 | Python source edits (skips tests by default, in-repo only) | `SourceEdits(lang="py")`; `lang` also `ts`, `go`, `rs`, ...; `project_only=False` to also match out-of-repo files |

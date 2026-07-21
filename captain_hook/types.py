@@ -321,8 +321,8 @@ class UsedSkill:
     Pass names variadically; a single ``|``-joined string still works for back-compat. A bare
     name also matches the plugin-qualified spelling, so ``UsedSkill("codex")`` matches a skill
     reported as ``codex:codex`` and ``UsedSkill("slop-cop-check")`` matches ``slop-cop:slop-cop-check``.
-    ``scope="turn"`` restricts the search to the current turn — the idiom for skipping
-    a guard once the agent has complied.
+    The search covers the current turn by default — the idiom for skipping a guard
+    once the agent has complied; ``scope="session"`` widens it to the whole session.
 
     Example:
         >>> nudge("run codex first", skip_if=[UsedSkill("codex")])
@@ -330,9 +330,9 @@ class UsedSkill:
 
     names: tuple[str, ...]
     subagents: bool = True
-    scope: Literal["session", "turn"] = "session"
+    scope: Literal["session", "turn"] = "turn"
 
-    def __init__(self, *names: str, subagents: bool = True, scope: Literal["session", "turn"] = "session") -> None:
+    def __init__(self, *names: str, subagents: bool = True, scope: Literal["session", "turn"] = "turn") -> None:
         object.__setattr__(self, "names", _split_names(names))
         object.__setattr__(self, "subagents", subagents)
         object.__setattr__(self, "scope", scope)
@@ -343,18 +343,18 @@ class UsedTool:
     """Transcript-history condition: true when a tool use named one of ``names`` exists.
 
     Pass names variadically; a single ``|``-joined string still works for back-compat.
-    ``scope="turn"`` restricts the search to the current turn — the idiom for skipping
-    a guard once the agent has complied.
+    The search covers the current turn by default — the idiom for skipping a guard
+    once the agent has complied; ``scope="session"`` widens it to the whole session.
 
     Example:
-        >>> hook(Event.PreToolUse, skip_if=[UsedTool("EnterPlanMode", scope="turn")], message="...", block=True)
+        >>> hook(Event.PreToolUse, skip_if=[UsedTool("EnterPlanMode")], message="...", block=True)
     """
 
     names: tuple[str, ...]
     subagents: bool = True
-    scope: Literal["session", "turn"] = "session"
+    scope: Literal["session", "turn"] = "turn"
 
-    def __init__(self, *names: str, subagents: bool = True, scope: Literal["session", "turn"] = "session") -> None:
+    def __init__(self, *names: str, subagents: bool = True, scope: Literal["session", "turn"] = "turn") -> None:
         object.__setattr__(self, "names", _split_names(names))
         object.__setattr__(self, "subagents", subagents)
         object.__setattr__(self, "scope", scope)

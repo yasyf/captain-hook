@@ -153,12 +153,13 @@ CONDITION_DESCRIPTIONS: dict[tuple[str, ...], tuple[str, str]] = {
     ),
     ("UsedSkill",): (
         "Skill was invoked",
-        '`UsedSkill("codex")` — bare name also matches `plugin:name`; `scope="turn"` searches only the current turn',
+        '`UsedSkill("codex")` — bare name also matches `plugin:name`; searches the current turn by default; '
+        '`scope="session"` widens to the whole session',
     ),
     ("UsedTool",): (
         "Tool was previously used",
-        '`UsedTool("EnterPlanMode", scope="turn")` — exact names (a `\\|`-joined string works); `scope="turn"` '
-        "searches only the current turn",
+        '`UsedTool("EnterPlanMode")` — exact names (a `\\|`-joined string works); searches the current turn '
+        'by default; `scope="session"` widens to the whole session',
     ),
     ("ReadFile",): (
         "File was previously read",

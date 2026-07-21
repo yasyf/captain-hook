@@ -912,7 +912,7 @@ class TestEditedSourceScoping:
 
 
 def skill_evt(skill: str) -> BaseHookEvent:
-    ctx = make_messages_ctx([raw_tool_msg("Skill", {"skill": skill})])
+    ctx = build_ctx(transcript=make_transcript(raw_text("user", "go"), raw_tool_msg("Skill", {"skill": skill})))
     return make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
 
 
@@ -947,10 +947,10 @@ class TestUsedSkillCondition:
             )
         )
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(UsedSkill("codex"), evt) is True
-        assert check_condition(UsedSkill("codex", scope="turn"), evt) is False
+        assert check_condition(UsedSkill("codex", scope="session"), evt) is True
+        assert check_condition(UsedSkill("codex"), evt) is False
 
-    def test_turn_scope_sees_current_turn(self) -> None:
+    def test_default_scope_sees_current_turn(self) -> None:
         ctx = build_ctx(
             transcript=make_transcript(
                 raw_text("user", "run codex on this"),
@@ -958,7 +958,7 @@ class TestUsedSkillCondition:
             )
         )
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(UsedSkill("codex", scope="turn"), evt) is True
+        assert check_condition(UsedSkill("codex"), evt) is True
 
 
 class TestUsedToolCondition:
@@ -972,10 +972,10 @@ class TestUsedToolCondition:
             )
         )
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(UsedTool("EnterPlanMode"), evt) is True
-        assert check_condition(UsedTool("EnterPlanMode", scope="turn"), evt) is False
+        assert check_condition(UsedTool("EnterPlanMode", scope="session"), evt) is True
+        assert check_condition(UsedTool("EnterPlanMode"), evt) is False
 
-    def test_turn_scope_sees_current_turn(self) -> None:
+    def test_default_scope_sees_current_turn(self) -> None:
         ctx = build_ctx(
             transcript=make_transcript(
                 raw_text("user", "stop and replan"),
@@ -983,7 +983,7 @@ class TestUsedToolCondition:
             )
         )
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(UsedTool("EnterPlanMode", scope="turn"), evt) is True
+        assert check_condition(UsedTool("EnterPlanMode"), evt) is True
 
     def test_pipe_and_variadic_names(self) -> None:
         ctx = build_ctx(
@@ -1004,7 +1004,7 @@ class TestUserSaidCondition:
         assert check_condition(UserSaid("just commit"), evt) is True
         assert check_condition(UserSaid(r"\bdeploy\b"), evt) is False
 
-    def test_turn_scope_sees_only_current_prompt(self) -> None:
+    def test_default_scope_sees_only_current_prompt(self) -> None:
         ctx = build_ctx(
             transcript=make_transcript(
                 raw_text("user", "re-enter plan mode"),
@@ -1014,9 +1014,9 @@ class TestUserSaidCondition:
             )
         )
         evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
-        assert check_condition(UserSaid("plan mode"), evt) is True
-        assert check_condition(UserSaid("plan mode", scope="turn"), evt) is False
-        assert check_condition(UserSaid("fix the typo", scope="turn"), evt) is True
+        assert check_condition(UserSaid("plan mode", scope="session"), evt) is True
+        assert check_condition(UserSaid("plan mode"), evt) is False
+        assert check_condition(UserSaid("fix the typo"), evt) is True
 
 
 class TestReadFileCondition:

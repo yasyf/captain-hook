@@ -189,16 +189,16 @@ class UserSaid(CustomCondition):
 
     A string pattern is a case-insensitive regex, so plain keywords keep their
     substring behavior; a :class:`~captain_hook.Clause` runs the dependency-clause
-    scan against each prompt. The default scans every prompt in the session;
-    ``scope="turn"`` restricts the scan to the prompt that opened the current
-    turn — the idiom for reacting to a directive the user just gave.
+    scan against each prompt. The default scans only what the user said in the
+    current turn — the idiom for reacting to a directive the user just gave;
+    ``scope="session"`` widens the scan to every prompt in the session.
 
     Example:
-        >>> UserSaid("just commit", Clause(noun=Phrase("test"), verb=Phrase("skip")))
-        >>> UserSaid(Clause(noun=Phrase("work"), verb=Phrase("stop", "halt")), scope="turn")
+        >>> UserSaid(Clause(noun=Phrase("work"), verb=Phrase("stop", "halt")))
+        >>> UserSaid("just commit", Clause(noun=Phrase("test"), verb=Phrase("skip")), scope="session")
     """
 
-    def __init__(self, *patterns: str | Clause, scope: Literal["session", "turn"] = "session") -> None:
+    def __init__(self, *patterns: str | Clause, scope: Literal["session", "turn"] = "turn") -> None:
         self.patterns = patterns
         self.scope = scope
 

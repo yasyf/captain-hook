@@ -6,6 +6,6 @@ gate(
     "You edited UI files. Open them with agent-browser and verify they render before finishing.",
     # fires only if UI files changed
     only_if=[TouchedFile("**/src/routes/**", "**/src/components/**")],
-    # already reviewed -> don't block
-    skip_if=[UsedSkill("agent-browser")],
+    # already reviewed this session -> don't block
+    skip_if=[UsedSkill("agent-browser", scope="session")],
 )
