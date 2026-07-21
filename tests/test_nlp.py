@@ -32,6 +32,12 @@ BE_ADVERB_CLAUSE = Clause(
 
 LEAVE_PROSPECTIVE_CLAUSE = Clause(verb=Phrase("leave"), tense="prospective")
 
+SWITCH_MODE_CLAUSE = Clause(
+    noun=Phrase("mode"),
+    verb=Phrase("enter", "switch", "return", "go"),
+    subject="none",
+)
+
 COMMENT_LEADERS = [
     pytest.param("", id="bare"),
     pytest.param("# ", id="hash"),
@@ -159,6 +165,10 @@ class TestClauseValidation:
         c = Clause(verb=Phrase("remove"), subject="no_nominal")
         assert c.subject == "no_nominal"
 
+    def test_verb_subject_none_valid(self) -> None:
+        c = Clause(verb=Phrase("remove"), subject="none")
+        assert c.subject == "none"
+
     def test_compound_verb_valid(self) -> None:
         c = Clause(verb=Phrase("garbage collect"))
         assert c.verb is not None
@@ -202,6 +212,20 @@ class TestSubjectGate:
     )
     def test_subject(self, text: str, word: str, expected: bool) -> None:
         assert has_nominal_subject(token_named(text, word)) is expected
+
+
+class TestSubjectNoneScan:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            pytest.param("switch back to plan mode", True, id="imperative"),
+            pytest.param("we should return to plan mode", True, id="pronoun_subject"),
+            pytest.param("the daemon switches to degraded mode on timeout", False, id="nominal_subject_intransitive"),
+            pytest.param("the app enters sleep mode when idle", False, id="nominal_subject_transitive"),
+        ],
+    )
+    def test_scan(self, text: str, expected: bool) -> None:
+        assert bool(nlp_scan([SWITCH_MODE_CLAUSE], text)) is expected
 
 
 class TestVerbAnchoredScan:

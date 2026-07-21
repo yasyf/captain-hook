@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.2.0] - 2026-07-20
+
+### Added
+- **`Clause(subject="none")`** — vetoes any verb with a substantive active subject, transitive
+  or not. `"no_nominal"` only suppresses descriptions with a direct object ("the parser removed
+  the node"); `"none"` also suppresses intransitive ones ("the daemon switches to degraded
+  mode"), so directive-detection clauses match imperatives and pronoun subjects while ignoring
+  described behavior.
+
 ## [12.1.0] - 2026-07-20
 
 ### Added

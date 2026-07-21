@@ -100,7 +100,11 @@ class Clause:
             subject (see ``has_nominal_subject``) and a direct object — "the
             parser removed the node" is vetoed while "we removed it", passives,
             and objectless elliptical passives ("config moved to settings.py",
-            "logic migrated to the worker") still match.
+            "logic migrated to the worker") still match. ``"none"`` vetoes any
+            verb with a substantive active subject, transitive or not —
+            imperatives and pronoun subjects ("switch back to plan mode",
+            "we should replan") still match while described behavior
+            ("the daemon switches to degraded mode") does not.
 
     Example:
         >>> Clause(verb=Phrase("remove", "delete"), tense="completed", subject="no_nominal")
@@ -111,7 +115,7 @@ class Clause:
     adj: Phrase | None = None
     negated: bool = False
     tense: Literal["any", "completed", "prospective"] = "any"
-    subject: Literal["any", "no_nominal"] = "any"
+    subject: Literal["any", "no_nominal", "none"] = "any"
 
     def __post_init__(self) -> None:
         if (anchor := self.noun or self.verb) is None:
@@ -230,6 +234,16 @@ def tense_matches(tense: Literal["any", "completed", "prospective"], tok: Token)
             return not is_past_predicate(tok) and not is_modal_perfect(tok)
 
 
+def subject_matches(subject: Literal["any", "no_nominal", "none"], tok: Token) -> bool:
+    match subject:
+        case "any":
+            return True
+        case "no_nominal":
+            return not (has_nominal_subject(tok) and any(c.dep_ == "dobj" for c in tok.children))
+        case "none":
+            return not has_nominal_subject(tok)
+
+
 def verb_candidates(clause: Clause, sent: Span) -> list[Token]:
     if clause.verb is None:
         return []
@@ -237,7 +251,7 @@ def verb_candidates(clause: Clause, sent: Span) -> list[Token]:
         v
         for v in find_lemma_matches(clause.verb, sent, {"VERB", "AUX"})
         if tense_matches(clause.tense, v)
-        and (clause.subject == "any" or not (has_nominal_subject(v) and any(c.dep_ == "dobj" for c in v.children)))
+        and subject_matches(clause.subject, v)
         and not (
             clause.tense == "prospective"
             and not clause.negated
