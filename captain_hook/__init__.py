@@ -130,6 +130,7 @@ EXPORTS: dict[str, str] = {
     "workflow_state": "captain_hook.state",
     "Task": "captain_hook.tasks",
     "Tasks": "captain_hook.tasks",
+    "T": "captain_hook.testing.fixtures",
     "Allow": "captain_hook.testing.types",
     "Turn": "captain_hook.turn",
     "Ask": "captain_hook.testing.types",

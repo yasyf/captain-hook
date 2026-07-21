@@ -1,6 +1,5 @@
 import AppKit
 import DaemonKit
-import ServiceManagement
 import SwiftUI
 import UserNotifications
 import WidgetKit
@@ -8,7 +7,9 @@ import WidgetKit
 @main
 struct CaptainHookApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
-    var body: some Scene { Settings { EmptyView() } } // agent app: no windows
+    var body: some Scene {
+        Settings { EmptyView() }
+    } // agent app: no windows
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -18,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let coalescer = ReloadCoalescer(interval: 30) { _ in
         WidgetCenter.shared.reloadAllTimelines()
     }
+
     private let refresher = SnapshotRefresher()
     private var server: SocketServer?
     private var watcher: SnapshotWatcher<Snapshot>?
@@ -27,9 +29,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillFinishLaunching(_: Notification) {
-        if CommandLine.arguments.contains("--unregister") {
-            unregisterLoginItem()
-            exit(0)
+        if Array(CommandLine.arguments.dropFirst()) == ["--stop-and-uninstall-service"] {
+            do {
+                try ExactAppServiceStop.run()
+                exit(0)
+            } catch {
+                let message = "Captain Hook exact stop failed: \(error)\n"
+                FileHandle.standardError.write(Data(message.utf8))
+                exit(1)
+            }
         }
         // Set before launch finishes so a cold-launch banner click still delivers.
         UNUserNotificationCenter.current().delegate = notifications
@@ -50,16 +58,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Log.app.notice("login item: \(String(describing: state), privacy: .public)")
         } catch {
             Log.app.error("login item reconcile failed: \(String(describing: error), privacy: .public)")
-        }
-    }
-
-    // DaemonKit's LoginItem has no unregister seam; go through SMAppService.
-    private func unregisterLoginItem() {
-        do {
-            try SMAppService.agent(plistName: Self.loginItemPlist).unregister()
-            Log.app.notice("login item unregistered")
-        } catch {
-            Log.app.error("login item unregister failed: \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -111,8 +109,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch state {
             case .loaded: Log.app.debug("snapshot loaded")
             case .missing: Log.app.debug("snapshot missing")
-            case .malformed(let error): Log.app.error("snapshot malformed: \(error.description, privacy: .public)")
-            case .versionSkew(let expected, let found):
+            case let .malformed(error): Log.app.error("snapshot malformed: \(error.description, privacy: .public)")
+            case let .versionSkew(expected, found):
                 Log.app.error("snapshot skew expected=\(expected) found=\(found)")
             }
             WidgetCenter.shared.reloadAllTimelines()

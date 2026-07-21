@@ -147,6 +147,7 @@ PINNED_EXPORTS: tuple[str, ...] = (
     "SubagentStartEvent",
     "SubagentStopEvent",
     "SyntaxNode",
+    "T",
     "TCondition",
     "Target",
     "Targets",

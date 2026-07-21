@@ -26,34 +26,33 @@ cask "captain-hook" do
   # (re)registers its login-item agent via LoginItem.reconcile() on launch.
   app "Captain Hook.app"
 
+  preflight do
+    installed_app = "#{appdir}/Captain Hook.app"
+    if Dir.exist?(installed_app)
+      system_command "#{installed_app}/Contents/MacOS/Captain Hook",
+                     args: ["--stop-and-uninstall-service"],
+                     must_succeed: true
+    end
+  end
+
   postflight do
     # Strip Homebrew's download quarantine so first launch is silent
     # (notarized + stapled).
     system_command "/usr/bin/xattr",
                    args: ["-dr", "com.apple.quarantine", "#{appdir}/Captain Hook.app"],
                    must_succeed: false
-    # Restart-on-upgrade: replace the resident process so it runs from the
-    # freshly installed bundle. TERM for a clean exit, then KILL any straggler.
-    system_command "/usr/bin/pkill", args: ["-TERM", "-x", "Captain Hook"], must_succeed: false
-    sleep 1
-    system_command "/usr/bin/pkill", args: ["-KILL", "-x", "Captain Hook"], must_succeed: false
     # Relaunch in the background (-g: no focus steal). Launching runs the app's
     # LoginItem.reconcile(), which re-registers the login-item agent.
     system_command "/usr/bin/open", args: ["-g", "#{appdir}/Captain Hook.app"], must_succeed: false
   end
 
   uninstall_preflight do
-    # Boot the login-item agent OUT before the app is quit/removed — quitting
-    # under a live SMAppService registration just triggers an instant relaunch.
-    # `--unregister` calls SMAppService.agent(plistName:).unregister() and exits.
+    # Remove the exact SMAppService registration, stop only processes belonging
+    # to this stable bundle, and prove absence before Homebrew removes it.
     system_command "#{appdir}/Captain Hook.app/Contents/MacOS/Captain Hook",
-                   args: ["--unregister"],
-                   must_succeed: false
+                   args: ["--stop-and-uninstall-service"],
+                   must_succeed: true
   end
-
-  # Runs AFTER uninstall_preflight: the agent is already booted out, so the quit
-  # cannot race a relaunch.
-  uninstall quit: "com.yasyf.capt-hook.helper"
 
   zap trash: [
     "~/Library/LaunchAgents/com.yasyf.capt-hook.helper.plist",

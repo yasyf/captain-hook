@@ -122,7 +122,9 @@ def plain(renderable: object, *, width: int = 200) -> str:
 
 def colored(renderable: object, *, width: int = 200) -> str:
     buf = StringIO()
-    Console(file=buf, force_terminal=True, color_system="standard", no_color=False, width=width).print(renderable)
+    Console(file=buf, force_terminal=True, color_system="standard", no_color=False, width=width, height=25).print(
+        renderable
+    )
     return buf.getvalue()
 
 
