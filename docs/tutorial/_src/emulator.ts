@@ -4,6 +4,7 @@
 import { mountAll } from "./dom";
 
 export { caseLabel, selectChips } from "./dom";
+export { evaluateRmWorld } from "./rm_world";
 import {
   ADVISORY_SEPARATOR,
   Condition,

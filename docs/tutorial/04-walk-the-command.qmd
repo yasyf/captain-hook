@@ -9,7 +9,7 @@ Blocking `rm` outright is a blunt instrument — agents delete build artifacts a
 
 This is the heart of the `rm` guard the shipped `general` pack runs. `calls("rm")` finds every `rm` across `&&`, `;`, and pipes; `targets.expand()` resolves the arguments — globs included — against the working directory; `sub` rewrites the call to `trash`, quoting intact, so a mistake is a restore instead of a loss.
 
-These verdicts are recorded from the real engine — a Python walk doesn't fit in a browser widget, so the presets replay what the pack actually decided. The rewrite rows were recorded on macOS, where a system Trash exists to rewrite into; without one the guard blocks instead:
+The widget below runs that guard for real: the full pack source, shown read-only, walks a declared virtual filesystem in your browser, and every preset verdict is parity-tested byte-for-byte against the real engine on a materialized copy of the same tree. The Trash toggle decides the recoverable lane: with a trash binary the guard rewrites `rm` to `trash`; without one it blocks. A command that needs more world than the demo declares (a brace expansion, a `sh -c` wrapper, an absolute path outside the tree) gets an honest "outside this demo" card instead of a guess:
 
 <!-- gd-embed-widget: rm_walk -->
 

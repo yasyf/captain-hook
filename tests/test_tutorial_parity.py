@@ -5,6 +5,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterator
 from dataclasses import replace
 from functools import cache
 from pathlib import Path
@@ -32,6 +34,8 @@ from captain_hook.loader import discover_pack  # noqa: E402
 from captain_hook.testing.helpers import input_to_event, isolated_state_root  # noqa: E402
 from captain_hook.testing.types import Input  # noqa: E402
 from captain_hook.types import Event  # noqa: E402
+from captain_hook.util.scratch import is_scratch_path  # noqa: E402
+from captain_hook.util.vcs import in_vcs_repo  # noqa: E402
 
 PACKS_DIR = Path(captain_hook.__file__).parent / "builtin_packs"
 
@@ -98,6 +102,35 @@ def run_node_compile(source: str) -> dict[str, Any]:
         check=True,
     )
     return json.loads(proc.stdout)
+
+
+def run_node_world(world: dict[str, Any], command: str) -> dict[str, Any]:
+    proc = subprocess.run(
+        ["node", str(PARITY_MJS)],
+        input=json.dumps({"mode": "world", "world": world, "input": {"command": command}}),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(proc.stdout)["verdict"]
+
+
+def materialize_world(world: dict[str, Any], base: Path) -> Path:
+    """Realize a WorldSpec under ``base`` for the real engine to walk: the declared files, empty dirs
+    (a trailing ``/``), and a ``git init`` per repo, mapping the world's absolute cwd to
+    ``base / <cwd without leading />``. Messages stay byte-equal because targets are world-relative."""
+    cwd = base / world["cwd"].lstrip("/")
+    cwd.mkdir(parents=True, exist_ok=True)
+    for entry in world["files"]:
+        if entry.endswith("/"):
+            (cwd / entry).mkdir(parents=True, exist_ok=True)
+        else:
+            (target := cwd / entry).parent.mkdir(parents=True, exist_ok=True)
+            target.touch()
+    for repo in world["repos"]:
+        (repo_dir := cwd / repo).mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q", str(repo_dir)], check=True)
+    return cwd
 
 
 def build_transcript(edits: list[str], skills: list[str]) -> list[dict[str, Any]]:
@@ -167,6 +200,16 @@ def _widget_cases(mode: str) -> list[Any]:
     ]
 
 
+def _world_cases() -> list[Any]:
+    """Every rm_walk case at the world's declared trash, plus the recoverable-rewrite case again with
+    trash absent — the one case whose verdict flips (rewrite ↔ unrecoverable block) on trash presence."""
+    widget = MATRIX["widgets"]["rm_walk"]
+    trash = widget["world"]["trash"]
+    return [pytest.param(c, trash, id=f"{c['id']}:trash") for c in widget["cases"]] + [
+        pytest.param(c, None, id=f"{c['id']}:no-trash") for c in widget["cases"] if c["id"] == "recoverable-rewrite"
+    ]
+
+
 @pytest.mark.parametrize("bundle", BUNDLES, ids=lambda b: b.outfile.name)
 def test_bundle_drift(bundle: Any) -> None:
     banner = bundle.outfile.read_text().splitlines()[0]
@@ -194,6 +237,47 @@ def test_canned_verdicts(widget_id: str, case: dict[str, Any]) -> None:
     widget = MATRIX["widgets"][widget_id]
     event = Event[case.get("event", widget.get("event", "PreToolUse"))]
     assert canned_verdict(widget, event, case) == case["verdict"]
+
+
+@pytest.fixture(scope="module")
+def rm_world_cwd() -> Iterator[Path]:
+    """Materialize the rm_walk world once under a non-scratch, non-repo base. Parity holds only there:
+    pytest's ``tmp_path`` sits under a temp root, which would make every relative target scratch-exempt
+    (breaking the rewrite/block cases), and any repo ancestor would make them all in-repo."""
+    world = MATRIX["widgets"]["rm_walk"]["world"]
+    (cache := Path.home() / ".cache").mkdir(parents=True, exist_ok=True)
+    base = Path(tempfile.mkdtemp(prefix="capt-hook-world-", dir=cache))
+    try:
+        cwd = materialize_world(world, base)
+        assert not is_scratch_path(cwd / "probe") and not in_vcs_repo(cwd), f"{base} is scratch or in a repo"
+        yield cwd
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+@requires_node
+@pytest.mark.parametrize(("case", "trash"), _world_cases())
+def test_rm_world_parity(
+    case: dict[str, Any], trash: str | None, rm_world_cwd: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each rm_walk case is byte-equal between the real general-pack ``guard_rm`` — dispatched over a
+    materialized tmpdir of the declared filesystem, with ``trash_binary`` pinned to the world's trash —
+    and parity.mjs's world engine on the same declaration, across both trash-present and trash-absent."""
+    world = MATRIX["widgets"]["rm_walk"]["world"] | {"trash": trash}
+    saved = list(_state.hooks)
+    try:
+        _state.hooks.clear()
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
+        deletions = sys.modules[next(h.handler.__module__ for h in _state.hooks if h.name == "guard_rm")]
+        monkeypatch.setattr(deletions, "trash_binary", lambda: trash)
+        with isolated_state_root():
+            evt = input_to_event(Event.PreToolUse, Input(**case["input"], cwd=str(rm_world_cwd)))
+            real = normalize(dispatch(Event.PreToolUse, evt))
+    finally:
+        _state.hooks[:] = saved
+    assert real == run_node_world(world, case["input"]["command"])
+    # Contract: world-relative / /tmp / / targets only, so no message embeds the materialized base.
+    assert str(rm_world_cwd) not in json.dumps(real)
 
 
 REFUSALS = {

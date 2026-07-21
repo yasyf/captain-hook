@@ -72,9 +72,20 @@ export interface WidgetCase extends EventInput {
   featured?: boolean;
 }
 
+// A declared virtual filesystem the world engine walks: an absolute cwd, relative file paths
+// (a trailing "/" marks an empty directory), relative git/jj repo roots, and the trash binary
+// path (null models a machine with no `trash`). Materialized to a real tmpdir for CI parity.
+export interface WorldSpec {
+  cwd: string;
+  files: string[];
+  repos: string[];
+  trash: string | null;
+}
+
 export interface WidgetData {
-  mode: "live" | "canned";
+  mode: "live" | "canned" | "world";
   source?: string;
+  world?: WorldSpec;
   hooks: SerializedHook[];
   cases: WidgetCase[];
   recordings: RecordedCase[];
@@ -118,3 +129,9 @@ export const ADVISORY_SEPARATOR = "Additional advisories (not the reason for the
 // trailing <p class="ch-widget-note"> is gone and the note renders inside the header.
 export const LIVE_NOTE = "This runs a browser model of the demo subset — run `capt-hook test` for the real engine.";
 export const CANNED_NOTE = "Recorded from the real engine, not evaluated in your browser.";
+
+// World-mode strings (placeholder wording — the orchestrator owns the final prose pass).
+// WORLD_NOTE heads the widget; WORLD_HONESTY_MESSAGE is the card shown when a typed command
+// reaches outside the filesystem this demo declares (a construct the world cannot answer).
+export const WORLD_NOTE = "This walks a declared virtual filesystem with a faithful port of the real hook — run `capt-hook test` for the real engine.";
+export const WORLD_HONESTY_MESSAGE = "outside the filesystem this demo declares — run `capt-hook test` for the real engine.";

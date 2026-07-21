@@ -1,4 +1,4 @@
-// capt-hook-widget src-sha256: b0c3bd3dddf985e85054aee426d52cadc4491d720c41fe1f9561128f354726f1
+// capt-hook-widget src-sha256: fb9ae7fb5d0eb12ab4913614f7442f117559e611b535784d58fddd1066dda8d9
 
 // autocomplete.ts
 var counter = 0;
@@ -244,6 +244,363 @@ var HONESTY_MESSAGE = "outside the demo subset \u2014 run `capt-hook test` for t
 var ADVISORY_SEPARATOR = "Additional advisories (not the reason for the deny):";
 var LIVE_NOTE = "This runs a browser model of the demo subset \u2014 run `capt-hook test` for the real engine.";
 var CANNED_NOTE = "Recorded from the real engine, not evaluated in your browser.";
+var WORLD_NOTE = "This walks a declared virtual filesystem with a faithful port of the real hook \u2014 run `capt-hook test` for the real engine.";
+var WORLD_HONESTY_MESSAGE = "outside the filesystem this demo declares \u2014 run `capt-hook test` for the real engine.";
+
+// rm_world.ts
+var GLOB_LIMIT = 10;
+var LEADING_WRAPPERS = /* @__PURE__ */ new Set(["sudo", "env", "timeout", "nohup", "command", "time", "xargs"]);
+var SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "dash", "zsh", "ksh", "ash", "fish", "csh", "tcsh"]);
+var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+var SAFE_WORD = /^[^\s'"\\$`;&|<>(){}#]+$/;
+var TEMP_ROOTS = ["/tmp", "/private/tmp", "/var/folders", "/dev/shm", "/run/user"];
+var SCRATCH_DIR_NAMES = /* @__PURE__ */ new Set(["tmp", "temp", "scratch", "scratchpad", "scratchpads"]);
+var commandSubBlock = (raw) => `BLOCKED: a command substitution supplies rm targets in '${raw}', so they cannot be verified against any git/jj repository or scratch exemption. Expand the substitution to explicit paths first, or ask the user to run it themselves.`;
+var globOverLimitBlock = (token) => `BLOCKED: the glob '${token}' matches more than ${GLOB_LIMIT} files \u2014 an easy way to delete far more than intended. List the matches first (ls ${token}), narrow the pattern, or name a directory explicitly with rm -r <dir>.`;
+var repoRootBlock = (token) => `BLOCKED: '${token}' is a git/jj repository root \u2014 deleting it destroys the repo and its entire history. If this is really intended, ask the user to run it themselves.`;
+var fsRootBlock = (token) => `BLOCKED: '${token}' is the filesystem root \u2014 deleting it destroys the entire system. If this is really intended, ask the user to run it themselves.`;
+var containsRepoBlock = (token) => `BLOCKED: '${token}' contains git/jj repositories \u2014 deleting it would destroy them and their entire history. Delete a narrower path instead, or ask the user to run it themselves.`;
+var unrecoverableBlock = (token) => `BLOCKED: rm target '${token}' resolves outside any git/jj repository, so nothing can restore it after deletion. Move it to the trash instead, or stop and ask the user to confirm this deletion. (Temp and scratch paths are exempt.)`;
+var recoverableNote = (token) => `Rewrote rm to trash: '${token}' resolves outside any git/jj repository, so rm would be unrecoverable. The targets were moved to the macOS Trash instead \u2014 restorable via Finder (Put Back). If permanent deletion is truly intended, ask the user to run the rm themselves.`;
+function norm(p) {
+  const abs = p.startsWith("/");
+  const out = [];
+  for (const part of p.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      if (out.length > 0 && out[out.length - 1] !== "..") out.pop();
+      else if (!abs) out.push("..");
+    } else out.push(part);
+  }
+  const joined = (abs ? "/" : "") + out.join("/");
+  return joined === "" ? abs ? "/" : "." : joined;
+}
+function join(cwd, p) {
+  return norm(p.startsWith("/") ? p : `${cwd}/${p}`);
+}
+function dirname(p) {
+  const i = p.lastIndexOf("/");
+  return i <= 0 ? "/" : p.slice(0, i);
+}
+function hasMagic(s) {
+  return /[*?[]/.test(s);
+}
+function isScratch(resolved) {
+  if (TEMP_ROOTS.some((root) => resolved === root || resolved.startsWith(`${root}/`))) return true;
+  return resolved.split("/").filter((s) => s.length > 0).slice(0, -1).some((seg) => SCRATCH_DIR_NAMES.has(seg));
+}
+var Vfs = class {
+  files = /* @__PURE__ */ new Set();
+  dirs = /* @__PURE__ */ new Set();
+  repos = /* @__PURE__ */ new Set();
+  cwd;
+  constructor(world) {
+    this.cwd = norm(world.cwd);
+    this.dirs.add(this.cwd);
+    this.addAncestors(this.cwd);
+    for (const f of world.files) {
+      if (f.endsWith("/")) this.addDir(join(this.cwd, f));
+      else this.addFile(join(this.cwd, f));
+    }
+    for (const r of world.repos) {
+      const p = join(this.cwd, r);
+      this.repos.add(p);
+      this.addDir(p);
+    }
+  }
+  addAncestors(p) {
+    let d = dirname(p);
+    while (!this.dirs.has(d)) {
+      this.dirs.add(d);
+      if (d === "/") break;
+      d = dirname(d);
+    }
+  }
+  addDir(p) {
+    this.dirs.add(p);
+    this.addAncestors(p);
+  }
+  addFile(p) {
+    this.files.add(p);
+    this.addAncestors(p);
+  }
+  isDir(p) {
+    return this.dirs.has(p);
+  }
+  isRepoRoot(p) {
+    return this.repos.has(p);
+  }
+  inRepo(p) {
+    return [...this.repos].some((r) => p === r || p.startsWith(`${r}/`));
+  }
+  containsRepo(p) {
+    return [...this.repos].some((r) => r.startsWith(`${p}/`));
+  }
+  childNames(dir) {
+    const prefix = dir === "/" ? "/" : `${dir}/`;
+    const names = /* @__PURE__ */ new Set();
+    for (const p of [...this.files, ...this.dirs]) {
+      if (p !== dir && p.startsWith(prefix)) {
+        const name = p.slice(prefix.length).split("/")[0];
+        if (name) names.add(name);
+      }
+    }
+    return [...names];
+  }
+};
+function inNamespace(cwd, p) {
+  return p === cwd || p.startsWith(`${cwd}/`);
+}
+function segToRegex(seg) {
+  let out = "";
+  for (let i = 0; i < seg.length; i++) {
+    const c = seg[i];
+    if (c === "*") out += "[^/]*";
+    else if (c === "?") out += "[^/]";
+    else if (c === "[") {
+      let j = i + 1;
+      if (seg[j] === "!") j++;
+      if (seg[j] === "]") j++;
+      while (j < seg.length && seg[j] !== "]") j++;
+      if (j >= seg.length) out += "\\[";
+      else {
+        let inner = seg.slice(i + 1, j);
+        if (inner[0] === "!") inner = `^${inner.slice(1)}`;
+        out += `[${inner}]`;
+        i = j;
+      }
+    } else out += c.replace(/[.\\+^$(){}|]/g, "\\$&");
+  }
+  return new RegExp(`^${out}$`);
+}
+function globExpand(vfs, token, cwd) {
+  let frontier = [{ abs: cwd, rel: "" }];
+  for (const seg of token.split("/")) {
+    const next = [];
+    for (const node of frontier) {
+      if (!hasMagic(seg)) {
+        const child = join(node.abs, seg);
+        if (vfs.isDir(child) || vfs.childNames(node.abs).includes(seg)) {
+          next.push({ abs: child, rel: node.rel ? `${node.rel}/${seg}` : seg });
+        }
+      } else {
+        const re = segToRegex(seg);
+        for (const name of vfs.childNames(node.abs)) {
+          if (!name.startsWith(".") && re.test(name)) {
+            next.push({ abs: join(node.abs, name), rel: node.rel ? `${node.rel}/${name}` : name });
+          }
+        }
+      }
+    }
+    frontier = next;
+  }
+  return frontier.map((n) => n.rel).slice(0, GLOB_LIMIT + 1);
+}
+function dequote(raw) {
+  let out = "";
+  let quote = null;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (quote === "'") {
+      if (c === "'") quote = null;
+      else out += c;
+      continue;
+    }
+    if (quote === '"') {
+      if (c === '"') quote = null;
+      else if (c === "\\" && i + 1 < raw.length && '"\\$`'.includes(raw[i + 1])) out += raw[++i];
+      else out += c;
+      continue;
+    }
+    if (c === "'" || c === '"') quote = c;
+    else if (c === "\\" && i + 1 < raw.length) out += raw[++i];
+    else out += c;
+  }
+  return out;
+}
+function emitToken(token, plainWords) {
+  if (!SAFE_WORD.test(token)) return null;
+  if ((hasMagic(token) || token.startsWith("~")) && !plainWords) return null;
+  return token.startsWith("-") ? `./${token}` : token;
+}
+function classifyTarget(raw) {
+  if (raw.includes("$(") || raw.includes("`")) return { kind: "substitution" };
+  if (raw.includes("${") || raw.includes("\\")) return { kind: "honesty" };
+  const value = dequote(raw);
+  const plain = !raw.includes("'") && !raw.includes('"');
+  if (value.startsWith("-")) return { kind: "flag" };
+  if (value.startsWith("~") || value.includes("**") || value.includes("{")) return { kind: "honesty" };
+  const isGlob = hasMagic(value);
+  if (isGlob && !plain) return { kind: "honesty" };
+  return { kind: "target", target: { raw, value, isGlob, emittable: emitToken(value, plain) !== null } };
+}
+function resolveTarget(value, cwd) {
+  return join(cwd, value);
+}
+function checkResolved(vfs, resolved, token, rewritable) {
+  if (isScratch(resolved)) return { kind: "allow" };
+  if (resolved !== "/" && !inNamespace(vfs.cwd, resolved)) return { kind: "honesty" };
+  if (vfs.isRepoRoot(resolved)) return { kind: "block", message: repoRootBlock(token) };
+  if (vfs.inRepo(resolved)) return { kind: "allow" };
+  if (rewritable) {
+    if (resolved === "/") return { kind: "block", message: fsRootBlock(token) };
+    if (vfs.isDir(resolved) && vfs.containsRepo(resolved)) return { kind: "block", message: containsRepoBlock(token) };
+  }
+  return { kind: "recoverable", token };
+}
+function checkTarget(vfs, target, rewritable) {
+  if (!target.isGlob) return checkResolved(vfs, resolveTarget(target.value, vfs.cwd), target.value, rewritable);
+  const matches = globExpand(vfs, target.value, vfs.cwd);
+  if (matches.length > GLOB_LIMIT) return { kind: "block", message: globOverLimitBlock(target.value) };
+  let recovery = null;
+  for (const match of matches) {
+    const result = checkResolved(vfs, resolveTarget(match, vfs.cwd), match, rewritable);
+    if (result.kind === "block" || result.kind === "honesty") return result;
+    if (result.kind === "recoverable" && recovery === null) recovery = result;
+  }
+  return recovery ?? { kind: "allow" };
+}
+function splitSegments(raw) {
+  const out = [];
+  let startIdx = 0;
+  let quote = null;
+  const push = (from, to) => {
+    let s = from;
+    let e = to;
+    while (s < e && /\s/.test(raw[s])) s++;
+    while (e > s && /\s/.test(raw[e - 1])) e--;
+    if (e > s) out.push({ text: raw.slice(s, e), start: s, end: e });
+  };
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    const n = raw[i + 1];
+    if (quote) {
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') quote = c;
+    else if (c === ";" || c === "\n") {
+      push(startIdx, i);
+      startIdx = i + 1;
+    } else if (c === "|" && n === "|" || c === "&" && n === "&") {
+      push(startIdx, i);
+      startIdx = ++i + 1;
+    } else if (c === "|") {
+      push(startIdx, i);
+      startIdx = i + 1;
+    } else if (c === "&" && !raw.slice(startIdx, i).trimEnd().endsWith(">") && n !== ">") {
+      push(startIdx, i);
+      startIdx = i + 1;
+    }
+  }
+  push(startIdx, raw.length);
+  return out;
+}
+function splitWords(segment) {
+  const words = [];
+  let cur = "";
+  let started = false;
+  let quote = null;
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment[i];
+    if (quote) {
+      cur += c;
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      cur += c;
+      started = true;
+    } else if (c === " " || c === "	") {
+      if (started) {
+        words.push(cur);
+        cur = "";
+        started = false;
+      }
+    } else if (c === "\\" && i + 1 < segment.length) {
+      cur += c + segment[++i];
+      started = true;
+    } else {
+      cur += c;
+      started = true;
+    }
+  }
+  if (started) words.push(cur);
+  return words;
+}
+function headBasename(raw) {
+  const stripped = raw.length >= 2 && raw[0] === raw[raw.length - 1] && (raw[0] === "'" || raw[0] === '"') ? raw.slice(1, -1) : raw;
+  const unescaped = stripped.replace(/\\(.)/g, "$1");
+  return (unescaped.split("/").pop() ?? unescaped).toLowerCase();
+}
+function headAndArgs(words) {
+  let i = 0;
+  while (i < words.length && (ASSIGNMENT.test(words[i]) || LEADING_WRAPPERS.has(headBasename(words[i])))) i++;
+  return i < words.length ? { head: headBasename(words[i]), args: words.slice(i + 1) } : null;
+}
+function honesty() {
+  return { action: "subset-exceeded", message: WORLD_HONESTY_MESSAGE, rewritten: null };
+}
+function block(message) {
+  return { action: "block", message, rewritten: null };
+}
+function applyReplacements(command, edits) {
+  let out = command;
+  for (const edit of [...edits].sort((a, b) => b.start - a.start)) {
+    out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);
+  }
+  return out;
+}
+function evaluateRmWorld(world, command) {
+  const vfs = new Vfs(world);
+  const rmCalls = [];
+  for (const segment of splitSegments(command)) {
+    const parsed = headAndArgs(splitWords(segment.text));
+    if (parsed === null) continue;
+    if (parsed.head === "eval" || SHELLS.has(parsed.head) && parsed.args.includes("-c")) return honesty();
+    if (parsed.head === "rm") rmCalls.push({ segment, args: parsed.args });
+  }
+  if (rmCalls.length === 0) return { action: "pass", message: null, rewritten: null };
+  const rewritable = world.trash !== null;
+  const edits = [];
+  const notes = [];
+  let result = null;
+  for (const call of rmCalls) {
+    const targets = [];
+    let substitution = false;
+    let honest = false;
+    for (const raw of call.args) {
+      const cls = classifyTarget(raw);
+      if (cls.kind === "substitution") substitution = true;
+      else if (cls.kind === "honesty") honest = true;
+      else if (cls.kind === "target") targets.push(cls.target);
+    }
+    if (substitution) return block(commandSubBlock(call.segment.text));
+    if (honest) return honesty();
+    let recovery = null;
+    for (const target of targets) {
+      const check = checkTarget(vfs, target, rewritable);
+      if (check.kind === "honesty") return honesty();
+      if (check.kind === "block") return block(check.message);
+      if (check.kind === "recoverable" && recovery === null) recovery = check.token;
+    }
+    if (recovery === null) continue;
+    if (rewritable && targets.every((t) => t.emittable)) {
+      const args = targets.map((t) => t.raw.startsWith("-") ? `./${t.raw}` : t.raw);
+      edits.push({ ...call.segment, text: [world.trash, ...args].join(" ") });
+      notes.push(recoverableNote(recovery));
+      result = {
+        action: "rewrite",
+        message: [...new Set(notes)].join("\n") || null,
+        rewritten: applyReplacements(command, edits)
+      };
+      continue;
+    }
+    return block(unrecoverableBlock(recovery));
+  }
+  return result ?? { action: "pass", message: null, rewritten: null };
+}
 
 // dom.ts
 var RECOMPILE_DEBOUNCE_MS = 300;
@@ -447,6 +804,74 @@ function renderCanned(stage, data, event) {
   stage.append(header(event, CANNED_NOTE), combobox.root, chipRow(cases, show), panel);
   if (recordings.length > 0) show(0);
 }
+function readOnlyCode(source, name) {
+  const wrap = el("div", "ch-widget-code ch-widget-code--readonly");
+  const bar = el("div", "ch-widget-code-bar");
+  bar.append(el("span", "ch-widget-code-name", name));
+  const body = el("div", "ch-widget-code-body");
+  body.append(el("pre", "ch-widget-code-pre", source));
+  wrap.append(bar, body);
+  return wrap;
+}
+var WorldWidget = class {
+  constructor(stage, data, event, world) {
+    this.stage = stage;
+    this.data = data;
+    this.event = event;
+    this.world = structuredClone(world);
+    this.declaredTrash = world.trash ?? "/usr/bin/trash";
+  }
+  world;
+  declaredTrash;
+  current = "";
+  panel = el("div", "ch-widget-verdict");
+  mount() {
+    this.stage.append(header(this.event, WORLD_NOTE));
+    if (this.data.source != null) this.stage.append(readOnlyCode(this.data.source, "deletions.py"));
+    const combobox = createCombobox({
+      items: this.data.cases.map((c, index) => ({ label: caseLabel(c), index })),
+      placeholder: "type an rm command\u2026",
+      ariaLabel: "command to evaluate",
+      onSelect: (index) => this.applyCase(index, combobox.setValue),
+      onType: (text) => this.applyCommand(text)
+    });
+    this.stage.append(
+      combobox.root,
+      chipRow(this.data.cases, (index) => this.applyCase(index, combobox.setValue)),
+      this.trashToggle(),
+      this.panel
+    );
+    if (this.data.cases.length > 0) this.applyCase(0, combobox.setValue);
+  }
+  applyCase(index, setValue) {
+    const c = this.data.cases[index];
+    if (!c) return;
+    this.current = c.command ?? "";
+    setValue(this.current);
+    this.evaluateNow();
+  }
+  applyCommand(text) {
+    this.current = text;
+    this.evaluateNow();
+  }
+  trashToggle() {
+    const panel = el("div", "ch-widget-controls");
+    const label = el("label", "ch-widget-control ch-widget-control--check");
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = this.world.trash !== null;
+    box.addEventListener("change", () => {
+      this.world.trash = box.checked ? this.declaredTrash : null;
+      this.evaluateNow();
+    });
+    label.append(box, el("span", void 0, "trash available "), el("code", void 0, this.declaredTrash));
+    panel.append(label);
+    return panel;
+  }
+  evaluateNow() {
+    renderVerdict(this.panel, evaluateRmWorld(this.world, this.current));
+  }
+};
 function mountAll(evaluate2) {
   for (const root of Array.from(document.querySelectorAll(".ch-widget"))) {
     if (root.dataset.mounted) continue;
@@ -458,6 +883,8 @@ function mountAll(evaluate2) {
     root.appendChild(stage);
     if (data.mode === "canned") {
       renderCanned(stage, data, data.recordings[0]?.input.event ?? "PreToolUse");
+    } else if (data.mode === "world" && data.world) {
+      new WorldWidget(stage, data, data.cases[0]?.event ?? "PreToolUse", data.world).mount();
     } else {
       new LiveWidget(
         stage,
@@ -472,7 +899,7 @@ function mountAll(evaluate2) {
 }
 
 // tokenizer.ts
-var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+var ASSIGNMENT2 = /^[A-Za-z_][A-Za-z0-9_]*=/;
 function detectHonesty(raw) {
   let singleQuoted = false;
   let doubleQuoted = false;
@@ -513,7 +940,7 @@ function detectHonesty(raw) {
   }
   return false;
 }
-function splitSegments(raw) {
+function splitSegments2(raw) {
   const segments = [];
   let cur = "";
   let quote = null;
@@ -566,7 +993,7 @@ function splitSegments(raw) {
   segments.push(cur);
   return segments.map((s) => s.trim()).filter((s) => s.length > 0);
 }
-function splitWords(segment) {
+function splitWords2(segment) {
   const words = [];
   let cur = "";
   let started = false;
@@ -611,7 +1038,7 @@ function redirectKind(word) {
   return null;
 }
 function parseCommand(segment) {
-  const words = splitWords(segment);
+  const words = splitWords2(segment);
   const kept = [];
   for (let i = 0; i < words.length; i++) {
     const kind = redirectKind(words[i]);
@@ -623,14 +1050,14 @@ function parseCommand(segment) {
     kept.push(words[i]);
   }
   let start = 0;
-  while (start < kept.length && ASSIGNMENT.test(kept[start])) start++;
+  while (start < kept.length && ASSIGNMENT2.test(kept[start])) start++;
   const argv = kept.slice(start);
   if (argv.length === 0) return null;
   return { argv, text: argv.join(" ") };
 }
 function tokenize(raw) {
   const commands = [];
-  for (const segment of splitSegments(raw)) {
+  for (const segment of splitSegments2(raw)) {
     const command = parseCommand(segment);
     if (command) commands.push(command);
   }
@@ -690,17 +1117,17 @@ function isProjectPath(path, repoRoot) {
   if (!repoRoot) return true;
   return path === repoRoot || path.startsWith(repoRoot.endsWith("/") ? repoRoot : `${repoRoot}/`);
 }
-var LEADING_WRAPPERS = /* @__PURE__ */ new Set(["sudo", "env", "timeout", "nohup", "command", "time", "xargs"]);
-var SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "dash", "zsh", "ksh"]);
+var LEADING_WRAPPERS2 = /* @__PURE__ */ new Set(["sudo", "env", "timeout", "nohup", "command", "time", "xargs"]);
+var SHELLS2 = /* @__PURE__ */ new Set(["sh", "bash", "dash", "zsh", "ksh"]);
 function commandExecutable(argv) {
   let i = 0;
-  while (i < argv.length && LEADING_WRAPPERS.has(argv[i])) i++;
+  while (i < argv.length && LEADING_WRAPPERS2.has(argv[i])) i++;
   return argv[i] ?? "";
 }
 function hasWrapper(cl) {
   return cl.commands.some((c) => {
     const exe = commandExecutable(c.argv);
-    return exe === "eval" || SHELLS.has(exe) && c.argv.includes("-c");
+    return exe === "eval" || SHELLS2.has(exe) && c.argv.includes("-c");
   });
 }
 function prefixEquals(argv, prefix) {
@@ -801,5 +1228,6 @@ if (typeof document !== "undefined") {
 export {
   caseLabel,
   evaluate,
+  evaluateRmWorld,
   selectChips
 };

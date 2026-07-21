@@ -139,58 +139,28 @@
       ]
     },
     "rm_walk": {
-      "mode": "canned",
+      "mode": "world",
       "pack": "general",
       "event": "PreToolUse",
+      "world": {
+        "cwd": "/home/user/project",
+        "files": [
+          "foo.txt",
+          "notes.md",
+          "src/app.ts",
+          "src/util.ts",
+          "junk/a.log", "junk/b.log", "junk/c.log", "junk/d.log", "junk/e.log", "junk/f.log",
+          "junk/g.log", "junk/h.log", "junk/i.log", "junk/j.log", "junk/k.log", "junk/l.log"
+        ],
+        "repos": ["vendor/lib"],
+        "trash": "/usr/bin/trash"
+      },
       "cases": [
-        {
-          "id": "recoverable-rewrite",
-          "verified": false,
-          "note": "rewrite target is the local trash binary — recorded on macOS, not engine-hermetic",
-          "input": { "tool": "Bash", "command": "rm foo.txt", "cwd": "/" },
-          "verdict": {
-            "action": "rewrite",
-            "message": "Rewrote rm to trash: 'foo.txt' resolves outside any git/jj repository, so rm would be unrecoverable. The targets were moved to the macOS Trash instead — restorable via Finder (Put Back). If permanent deletion is truly intended, ask the user to run the rm themselves.",
-            "rewritten": "/usr/bin/trash foo.txt"
-          }
-        },
-        {
-          "id": "filesystem-root",
-          "verified": false,
-          "note": "root-block message adapts to trash availability — illustrative",
-          "input": { "tool": "Bash", "command": "rm -rf /", "cwd": "/" },
-          "verdict": {
-            "action": "block",
-            "message": "BLOCKED: '/' is the filesystem root — deleting it destroys the entire system. If this is really intended, ask the user to run it themselves.",
-            "rewritten": null
-          }
-        },
-        {
-          "id": "glob-over-limit",
-          "verified": true,
-          "input": { "tool": "Bash", "command": "rm -rf /etc/*", "cwd": "/" },
-          "verdict": {
-            "action": "block",
-            "message": "BLOCKED: the glob '/etc/*' matches more than 10 files — an easy way to delete far more than intended. List the matches first (ls /etc/*), narrow the pattern, or name a directory explicitly with rm -r <dir>.",
-            "rewritten": null
-          }
-        },
-        {
-          "id": "command-substitution",
-          "verified": true,
-          "input": { "tool": "Bash", "command": "rm $(ls)", "cwd": "/" },
-          "verdict": {
-            "action": "block",
-            "message": "BLOCKED: a command substitution supplies rm targets in 'rm $(ls)', so they cannot be verified against any git/jj repository or scratch exemption. Expand the substitution to explicit paths first, or ask the user to run it themselves.",
-            "rewritten": null
-          }
-        },
-        {
-          "id": "scratch-allowed",
-          "verified": true,
-          "input": { "tool": "Bash", "command": "rm /tmp/x.py", "cwd": "/" },
-          "verdict": { "action": "pass", "message": null, "rewritten": null }
-        }
+        { "id": "recoverable-rewrite", "check": "parity", "featured": true, "input": { "tool": "Bash", "command": "rm foo.txt" } },
+        { "id": "blocked-root", "check": "parity", "featured": true, "input": { "tool": "Bash", "command": "rm -rf /" } },
+        { "id": "glob-over-limit", "check": "parity", "featured": true, "input": { "tool": "Bash", "command": "rm -rf junk/*" } },
+        { "id": "command-substitution", "check": "parity", "featured": true, "input": { "tool": "Bash", "command": "rm $(ls)" } },
+        { "id": "scratch-allowed", "check": "parity", "input": { "tool": "Bash", "command": "rm /tmp/x.py" } }
       ]
     },
     "test_replay": {

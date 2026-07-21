@@ -3,6 +3,7 @@
 
 import { createCombobox } from "./autocomplete";
 import { deriveControls, renderControls } from "./controls";
+import { evaluateRmWorld } from "./rm_world";
 import {
   CANNED_NOTE,
   EditorHandle,
@@ -14,6 +15,8 @@ import {
   Verdict,
   WidgetCase,
   WidgetData,
+  WORLD_NOTE,
+  WorldSpec,
 } from "./specs";
 import type { CompileResult } from "./compiler";
 
@@ -256,6 +259,86 @@ function renderCanned(stage: HTMLElement, data: WidgetData, event: string): void
   if (recordings.length > 0) show(0);
 }
 
+function readOnlyCode(source: string, name: string): HTMLElement {
+  const wrap = el("div", "ch-widget-code ch-widget-code--readonly");
+  const bar = el("div", "ch-widget-code-bar");
+  bar.append(el("span", "ch-widget-code-name", name));
+  const body = el("div", "ch-widget-code-body");
+  body.append(el("pre", "ch-widget-code-pre", source));
+  wrap.append(bar, body);
+  return wrap;
+}
+
+// The rm_walk world widget: a read-only view of the real pack hook, a command input over the
+// declared cases, and a trash-present toggle that flips world.trash and re-evaluates in place.
+class WorldWidget {
+  private readonly world: WorldSpec;
+  private readonly declaredTrash: string;
+  private current = "";
+  private readonly panel = el("div", "ch-widget-verdict");
+
+  constructor(
+    private readonly stage: HTMLElement,
+    private readonly data: WidgetData,
+    private readonly event: string,
+    world: WorldSpec,
+  ) {
+    this.world = structuredClone(world);
+    this.declaredTrash = world.trash ?? "/usr/bin/trash";
+  }
+
+  mount(): void {
+    this.stage.append(header(this.event, WORLD_NOTE));
+    if (this.data.source != null) this.stage.append(readOnlyCode(this.data.source, "deletions.py"));
+    const combobox = createCombobox({
+      items: this.data.cases.map((c, index) => ({ label: caseLabel(c), index })),
+      placeholder: "type an rm command…",
+      ariaLabel: "command to evaluate",
+      onSelect: (index) => this.applyCase(index, combobox.setValue),
+      onType: (text) => this.applyCommand(text),
+    });
+    this.stage.append(
+      combobox.root,
+      chipRow(this.data.cases, (index) => this.applyCase(index, combobox.setValue)),
+      this.trashToggle(),
+      this.panel,
+    );
+    if (this.data.cases.length > 0) this.applyCase(0, combobox.setValue);
+  }
+
+  private applyCase(index: number, setValue: (text: string) => void): void {
+    const c = this.data.cases[index];
+    if (!c) return;
+    this.current = c.command ?? "";
+    setValue(this.current);
+    this.evaluateNow();
+  }
+
+  private applyCommand(text: string): void {
+    this.current = text;
+    this.evaluateNow();
+  }
+
+  private trashToggle(): HTMLElement {
+    const panel = el("div", "ch-widget-controls");
+    const label = el("label", "ch-widget-control ch-widget-control--check");
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = this.world.trash !== null;
+    box.addEventListener("change", () => {
+      this.world.trash = box.checked ? this.declaredTrash : null;
+      this.evaluateNow();
+    });
+    label.append(box, el("span", undefined, "trash available "), el("code", undefined, this.declaredTrash));
+    panel.append(label);
+    return panel;
+  }
+
+  private evaluateNow(): void {
+    renderVerdict(this.panel, evaluateRmWorld(this.world, this.current));
+  }
+}
+
 export function mountAll(evaluate: Evaluate): void {
   for (const root of Array.from(document.querySelectorAll<HTMLElement>(".ch-widget"))) {
     if (root.dataset.mounted) continue;
@@ -267,6 +350,8 @@ export function mountAll(evaluate: Evaluate): void {
     root.appendChild(stage);
     if (data.mode === "canned") {
       renderCanned(stage, data, data.recordings[0]?.input.event ?? "PreToolUse");
+    } else if (data.mode === "world" && data.world) {
+      new WorldWidget(stage, data, data.cases[0]?.event ?? "PreToolUse", data.world).mount();
     } else {
       new LiveWidget(
         stage,

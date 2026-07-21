@@ -84,6 +84,11 @@
   position: relative;
 }
 
+.ch-widget-code--readonly .ch-widget-code-body {
+  max-height: 22rem;
+  overflow: auto;
+}
+
 .ch-widget-code-pre {
   margin: 0;
   padding: 0.6rem 0.7rem;
