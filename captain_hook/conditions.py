@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -140,11 +141,8 @@ def coerce_tool_input(value: object) -> str | None:
 
 
 def has_read_glob(t: Session, *globs: str, subagents: bool = True) -> bool:
-    from cc_transcript.query import sidechain_sessions
-
-    return any(f.matches(*globs) for f in t.tool_calls.named("Read").files()) or (
-        subagents and any(has_read_glob(sub, *globs) for sub in sidechain_sessions(t.path))
-    )
+    sessions = chain((t,), (d.session for d in t.walk())) if subagents else (t,)
+    return any(f.matches(*globs) for s in sessions for f in s.tool_calls.named("Read").files())
 
 
 def skill_name_matches(skill: str, names: tuple[str, ...]) -> bool:
@@ -152,12 +150,12 @@ def skill_name_matches(skill: str, names: tuple[str, ...]) -> bool:
 
 
 def has_used_skill(t: Session, names: tuple[str, ...], *, subagents: bool = True) -> bool:
-    from cc_transcript.query import sidechain_sessions
-
+    sessions = chain((t,), (d.session for d in t.walk())) if subagents else (t,)
     return any(
         isinstance(call := use.call, SkillCall) and skill_name_matches(call.skill, names)
-        for use in t.tool_calls.named("Skill")
-    ) or (subagents and any(has_used_skill(sub, names) for sub in sidechain_sessions(t.path)))
+        for s in sessions
+        for use in s.tool_calls.named("Skill")
+    )
 
 
 def is_project_path(path: str | Path, root: Path | None) -> bool:
@@ -326,7 +324,7 @@ class EditedSource(CustomCondition):
             and f.suffix not in self.exclude_suffixes
             and not f.under("docs", ".claude", ".github")
             and is_project_path(f.path, root)
-            for f in evt.ctx.t.tool_calls.named("Edit|Write").files()
+            for f in evt.ctx.t.deep.tool_calls.named("Edit|Write").files()
         )
 
 
