@@ -104,7 +104,6 @@ class Request:
     async_: bool = False
     root: str | None = None
     cwd: str | None = None
-    hooks: str | None = None
     env: dict[str, str] = field(default_factory=dict)
     payload_raw: str = ""
 
@@ -132,26 +131,50 @@ def decode_request(line: bytes) -> Request:
         data = json.loads(line)
     except (ValueError, UnicodeDecodeError) as exc:
         raise ProtocolError(f"malformed request JSON: {exc}") from exc
-    match data:
-        case {
-            "v": int() as v,
-            "kind": str() as kind,
-            "client": {"version": str() as cv, "build": str() as cb, "pid": int() as cpid, "ppid": int() as cppid},
-        } if kind in REQUEST_KINDS:
-            return Request(
-                v=v,
-                kind=kind,
-                client=ClientInfo(version=cv, build=cb, pid=cpid, ppid=cppid),
-                event=data.get("event"),
-                async_=bool(data.get("async", False)),
-                root=data.get("root"),
-                cwd=data.get("cwd"),
-                hooks=data.get("hooks"),
-                env=data.get("env") or {},
-                payload_raw=data.get("payload_raw", ""),
-            )
-        case _:
-            raise ProtocolError(f"invalid request shape: {data!r}")
+    if type(data) is not dict:
+        raise ProtocolError(f"invalid request shape: {data!r}")
+    kind = data.get("kind")
+    keys = {"v", "kind", "client"}
+    if kind == "event":
+        keys |= {"event", "async", "root", "cwd", "env", "payload_raw"}
+    if kind not in REQUEST_KINDS or set(data) != keys:
+        raise ProtocolError(f"invalid request shape: {data!r}")
+    client = data["client"]
+    if type(client) is not dict or set(client) != {"version", "build", "pid", "ppid"}:
+        raise ProtocolError(f"invalid request shape: {data!r}")
+    if not (
+        type(data["v"]) is int
+        and type(client["version"]) is str
+        and type(client["build"]) is str
+        and type(client["pid"]) is int
+        and type(client["ppid"]) is int
+    ):
+        raise ProtocolError(f"invalid request shape: {data!r}")
+    info = ClientInfo(version=client["version"], build=client["build"], pid=client["pid"], ppid=client["ppid"])
+    if kind != "event":
+        return Request(v=data["v"], kind=kind, client=info)
+    env = data["env"]
+    if not (
+        type(data["event"]) is str
+        and type(data["async"]) is bool
+        and type(data["root"]) is str
+        and type(data["cwd"]) is str
+        and type(env) is dict
+        and all(type(key) is str and type(value) is str for key, value in env.items())
+        and type(data["payload_raw"]) is str
+    ):
+        raise ProtocolError(f"invalid request shape: {data!r}")
+    return Request(
+        v=data["v"],
+        kind=kind,
+        client=info,
+        event=data["event"],
+        async_=data["async"],
+        root=data["root"],
+        cwd=data["cwd"],
+        env=env,
+        payload_raw=data["payload_raw"],
+    )
 
 
 def encode_response(response: Response) -> bytes:

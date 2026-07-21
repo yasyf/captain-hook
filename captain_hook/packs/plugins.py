@@ -209,7 +209,7 @@ def dedupe_scoped_roster(parsed: list[EnabledPlugin]) -> tuple[EnabledPlugin, ..
     return tuple(pick_scoped(pid, entries) for pid, entries in by_id.items())
 
 
-def list_plugins_cli(root: Path) -> tuple[EnabledPlugin, ...]:
+def list_plugins_cli(root: Path, executable: str) -> tuple[EnabledPlugin, ...]:
     """Run ``claude plugin list --json`` in ``root`` and return its enabled, installed plugins.
 
     The single subprocess boundary of discovery. Keeps only entries Claude Code reports as ``enabled``
@@ -222,7 +222,7 @@ def list_plugins_cli(root: Path) -> tuple[EnabledPlugin, ...]:
     """
     try:
         result = subprocess.run(
-            ["claude", "plugin", "list", "--json"],
+            [executable, "plugin", "list", "--json"],
             cwd=root,
             capture_output=True,
             text=True,
@@ -262,7 +262,7 @@ def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
     path = snapshot_path(root)
     if (snap := PluginSnapshot.load(path)) and snap.fresh(records):
         return snap.plugins
-    if which("claude") is None:
+    if (executable := which("claude")) is None:
         logger.debug("claude not on PATH; skipping plugin discovery")
         return ()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -271,7 +271,7 @@ def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
         if (snap := PluginSnapshot.load(path)) and snap.fresh(records):
             return snap.plugins
         try:
-            plugins = list_plugins_cli(root)
+            plugins = list_plugins_cli(root, executable)
         except (PluginListError, subprocess.TimeoutExpired, ValueError, KeyError):
             logger.opt(exception=True).warning(
                 "claude plugin list failed; caching an empty plugin roster until a watched file changes"

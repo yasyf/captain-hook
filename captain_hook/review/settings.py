@@ -13,7 +13,7 @@ from captain_hook.settings import HooksSettings, resolve_state_dir
 
 
 def resolve_review_db_path() -> Path:
-    return resolve_state_dir() / "review" / "review.db"
+    return resolve_state_dir() / "review" / "review-v1.db"
 
 
 class ReviewSettings(HooksSettings):

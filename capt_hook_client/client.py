@@ -140,7 +140,6 @@ def build_request(event: str, root: str, payload_raw: str, *, async_: bool) -> d
         "async": async_,
         "root": root,
         "cwd": os.getcwd(),
-        "hooks": None,
         "env": key.request_env(),
         "payload_raw": payload_raw,
     }

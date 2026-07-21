@@ -4,9 +4,8 @@ toc: false
 body-classes: "gd-homepage"
 ---
 
-::: {.grid}
+<!-- gd-embed-fragment: canonical_hook -->
 
-::: {.g-col-12 .g-col-md-6}
 Claude Code hooks are shell commands wired through JSON. I wanted them to be what every other guardrail in a Python repo already is: typed functions with tests. capt-hook gives you `block_command`, `gate`, and friends — one `init`, zero settings surgery.
 
 ```bash
@@ -19,13 +18,12 @@ uvx capt-hook init
 
 [{{< icon arrow-right >}} Quickstart](docs/getting-started/quickstart.qmd){.btn .btn-primary}
 [{{< icon arrow-right >}} Tutorial](docs/tutorial/index.qmd){.btn .btn-outline-primary}
-:::
 
-::: {.g-col-12 .g-col-md-6}
-<!-- gd-embed-fragment: canonical_hook -->
-:::
+## Poke the gate above
 
-:::
+That Stop gate is live on this page — flip the session state and watch the verdict change. Every preset is a row in the parity suite, so the browser's answer is `capt-hook test`'s answer.
+
+<!-- gd-embed-widget: ui_gate -->
 
 {{< termshow file="docs/assets/demo" autoplay="true" >}}
 
@@ -84,7 +82,7 @@ gate(
 )
 ```
 
-The agent can't end the turn until a pytest run shows up in the transcript, and the gate stands down on its own once one does. [More Stop-gate patterns.](docs/guide/workflows.qmd)
+The agent can't end the turn until a pytest run shows up in the transcript, and the gate stands down on its own once one does. [More Stop-gate patterns.](docs/guide/state.qmd#enforce-a-multi-step-workflow)
 
 ---
 

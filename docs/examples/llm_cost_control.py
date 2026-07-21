@@ -17,7 +17,7 @@ from captain_hook import (
 llm_gate(
     "Does this edit weaken a test, turning a real assertion into assertTrue(True), a "
     "no-op mock, or a skip, to make a failing test pass? Block only if unambiguous.",
-    message=lambda r: f"This looks like a weakened test: {r.reasoning}",
+    message="This looks like a weakened test: {reasoning}",
     # Cheap pre-filters first: only edits to a test file that actually touch
     # assert/mock/skip ever reach the model.
     only_if=[SourceEdits(lang="py", include_tests=True), TestFile(), Content(r"\b(assert|mock|skip)\b")],

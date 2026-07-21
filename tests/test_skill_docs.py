@@ -110,7 +110,8 @@ CONDITION_DESCRIPTIONS: dict[tuple[str, ...], tuple[str, str]] = {
     ("Tool",): (
         "Filter by tool name",
         '`Tool("Bash")` or `Tool("Edit", "Write")` — exact names (not regex), aliases auto-expand (Bash=Execute, '
-        "Write=Create, Agent=Task), MCP suffixes match",
+        "Write=Create, Agent=Task), MCP suffixes match; `Tool.EditTools` = the prebuilt edit-shaped set "
+        "(Edit, MultiEdit, NotebookEdit, Write)",
     ),
     ("FilePath",): ("Filter by file path", '`FilePath("*.py", "*.pyi")`'),
     ("Command",): (
@@ -152,7 +153,13 @@ CONDITION_DESCRIPTIONS: dict[tuple[str, ...], tuple[str, str]] = {
     ),
     ("UsedSkill",): (
         "Skill was invoked",
-        '`UsedSkill("codex")` — bare name also matches `plugin:name`',
+        '`UsedSkill("codex")` — bare name also matches `plugin:name`; searches the current turn by default; '
+        '`scope="session"` widens to the whole session',
+    ),
+    ("UsedTool",): (
+        "Tool was previously used",
+        '`UsedTool("EnterPlanMode")` — exact names (a `\\|`-joined string works); searches the current turn '
+        'by default; `scope="session"` widens to the whole session',
     ),
     ("ReadFile",): (
         "File was previously read",

@@ -19,6 +19,7 @@ from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import (
     PROMPT_VERSIONS,
     REVIEW_SCHEMA,
+    REVIEW_SCHEMA_VERSION,
     TRANSITIONS,
     TRIAGE_JUNK,
     TRIAGE_KEEP,
@@ -26,6 +27,7 @@ from captain_hook.review.store import (
     CandidateStatus,
     InvalidTransition,
     PromptVersions,
+    ReviewSchemaError,
     ReviewStore,
     prompt_version,
 )
@@ -179,7 +181,7 @@ async def candidate_row(store: ReviewStore, candidate_id: int) -> dict[str, obje
     return rows[0]
 
 
-PREWAVE_CANDIDATES_DDL = """
+FOREIGN_CANDIDATES_DDL = """
 CREATE TABLE candidates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   repo_key TEXT NOT NULL,
@@ -202,9 +204,9 @@ CREATE TABLE candidates (
 """
 
 
-def build_prewave_db(path: Path, rows: list[tuple[str, str, str]]) -> None:
+def build_foreign_db(path: Path, rows: list[tuple[str, str, str]]) -> None:
     conn = sqlite3.connect(str(path))
-    conn.executescript(PREWAVE_CANDIDATES_DDL)
+    conn.executescript(FOREIGN_CANDIDATES_DDL)
     conn.executemany(
         "INSERT INTO candidates (repo_key, candidate_kind, rule, source_kind, status, created_at, updated_at) "
         "VALUES ('github.com/x/y', 'create', ?, 'transcript_message', ?, ?, ?)",
@@ -1148,15 +1150,16 @@ class TestPurgeGating:
             assert {int(r["prompt_version"]) for r in await dump_table(again, "verdicts")} == {bumped.create - 1}
 
 
-class TestMigration:
-    WAVE_COLUMNS = {"generation", "resolved_at", "origin_repo_key", "pack_name", "announced_status"}
+class TestSchemaEpoch:
+    V1_COLUMNS = {"generation", "resolved_at", "origin_repo_key", "pack_name", "announced_status", "pr_title"}
 
-    async def test_open_adds_wave_columns_to_a_fresh_db(self, store: ReviewStore) -> None:
-        assert self.WAVE_COLUMNS <= await candidate_columns(store)
+    async def test_fresh_database_has_complete_exact_v1_schema(self, store: ReviewStore) -> None:
+        assert self.V1_COLUMNS <= await candidate_columns(store)
+        assert await store.db.sql("PRAGMA user_version") == [{"user_version": REVIEW_SCHEMA_VERSION}]
 
-    async def test_prewave_db_gains_columns_and_backfills_both_defaults(self, tmp_path: Path) -> None:
-        path = tmp_path / "prewave.db"
-        build_prewave_db(
+    async def test_unversioned_database_is_rejected_without_mutation(self, tmp_path: Path) -> None:
+        path = tmp_path / "foreign.db"
+        build_foreign_db(
             path,
             [
                 ("watching-rule", "watching", "2026-05-01T00:00:00+00:00"),
@@ -1166,34 +1169,49 @@ class TestMigration:
                 ("rejected-rule", "rejected", "2026-05-05T00:00:00+00:00"),
             ],
         )
-        async with await ReviewStore.open(path) as store:
-            assert self.WAVE_COLUMNS <= await candidate_columns(store)
-            rows = {str(row["rule"]): row for row in await dump_table(store, "candidates")}
-        assert {int(row["generation"]) for row in rows.values()} == {1}
-        assert rows["accepted-rule"]["resolved_at"] == "2026-05-03T00:00:00+00:00"
-        assert [rows[rule]["resolved_at"] for rule in ("watching-rule", "pr-rule", "stale-rule", "rejected-rule")] == [
-            None,
-            None,
-            None,
-            None,
-        ]
-        assert (rows["accepted-rule"]["announced_status"], rows["rejected-rule"]["announced_status"]) == (
-            "accepted",
-            "rejected",
-        )
-        assert rows["stale-rule"]["announced_status"] == "stale"
-        assert (rows["watching-rule"]["announced_status"], rows["pr-rule"]["announced_status"]) == (None, None)
+        connection = sqlite3.connect(path)
+        before = {str(row[1]) for row in connection.execute("PRAGMA table_info(candidates)")}
+        connection.close()
+        with pytest.raises(ReviewSchemaError) as raised:
+            await ReviewStore.open(path)
+        assert "schema epoch 0" in str(raised.value)
+        assert "manually transfer only those human-owned rows" in str(raised.value)
+        assert "Transcript-derived events and verdicts may be rebuilt" in str(raised.value)
+        connection = sqlite3.connect(path)
+        after = {str(row[1]) for row in connection.execute("PRAGMA table_info(candidates)")}
+        assert connection.execute("PRAGMA user_version").fetchone() == (0,)
+        connection.close()
+        assert after == before
+        assert not self.V1_COLUMNS & after
 
-    async def test_reopen_skips_migration_and_never_rebackfills(self, tmp_path: Path) -> None:
-        path = tmp_path / "prewave.db"
-        build_prewave_db(path, [("rejected-rule", "rejected", "2026-05-01T00:00:00+00:00")])
-        async with await ReviewStore.open(path) as store:
-            columns = await candidate_columns(store)
-            await store.db.execute("UPDATE candidates SET announced_status = NULL WHERE status = 'rejected'")
-        async with await ReviewStore.open(path) as reopened:
-            assert await candidate_columns(reopened) == columns
-            [row] = await dump_table(reopened, "candidates")
-            assert row["announced_status"] is None
+    async def test_foreign_epoch_is_rejected(self, tmp_path: Path) -> None:
+        path = tmp_path / "foreign.db"
+        connection = sqlite3.connect(path)
+        connection.execute("PRAGMA user_version = 2")
+        connection.close()
+        with pytest.raises(ReviewSchemaError, match="schema epoch 2"):
+            await ReviewStore.open(path)
+
+    async def test_claimed_v1_with_foreign_structure_is_rejected_without_repair(self, tmp_path: Path) -> None:
+        path = tmp_path / "foreign.db"
+        connection = sqlite3.connect(path)
+        connection.executescript("CREATE TABLE candidates (id INTEGER PRIMARY KEY); PRAGMA user_version = 1;")
+        connection.close()
+        with pytest.raises(ReviewSchemaError, match="table candidates is not exact"):
+            await ReviewStore.open(path)
+        connection = sqlite3.connect(path)
+        assert [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")] == [
+            "candidates"
+        ]
+        connection.close()
+
+    async def test_retired_default_namespace_requires_manual_transfer(self, tmp_path: Path) -> None:
+        legacy = tmp_path / "review.db"
+        sqlite3.connect(legacy).close()
+        current = tmp_path / "review-v1.db"
+        with pytest.raises(ReviewSchemaError, match="retired unversioned namespace"):
+            await ReviewStore.open(current)
+        assert not current.exists()
 
 
 class TestResolvedAtStamping:
@@ -1453,29 +1471,15 @@ async def feedback_columns(store: ReviewStore) -> set[str]:
 
 
 async def triage_of(store: ReviewStore, key: str) -> object:
-    rows = await store.db.sql("SELECT triage FROM feedback_events WHERE dedup_key = ?", (key,))
+    rows = await store.db.sql("SELECT triage FROM review_triage WHERE dedup_key = ?", (key,))
     return rows[0]["triage"]
 
 
-class TestFeedbackMigration:
-    async def test_open_adds_triage_column_to_a_fresh_db(self, store: ReviewStore) -> None:
-        assert "triage" in await feedback_columns(store)
-
-    async def test_prewave_feedback_events_gains_triage_column(self, tmp_path: Path) -> None:
-        from cc_transcript.mining.store import FEEDBACK_DDL
-
-        path = tmp_path / "prewave.db"
-        conn = sqlite3.connect(str(path))
-        conn.executescript(FEEDBACK_DDL)
-        conn.execute(
-            "INSERT INTO feedback_events (dedup_key, source_kind, occurred_at, text, context_json, ingested_at) "
-            "VALUES ('k', 'transcript_message', '2026-05-01T00:00:00+00:00', 'old', '{}', '2026-05-01T00:00:00+00:00')"
-        )
-        conn.commit()
-        conn.close()
-        async with await ReviewStore.open(path) as store:
-            assert "triage" in await feedback_columns(store)
-            assert await triage_of(store, "k") is None
+class TestFeedbackSchema:
+    async def test_fresh_schema_keeps_triage_out_of_transcript_events(self, store: ReviewStore) -> None:
+        assert "triage" not in await feedback_columns(store)
+        columns = {str(row["name"]) for row in await store.db.sql("PRAGMA table_info(review_triage)")}
+        assert columns == {"dedup_key", "triage"}
 
 
 class TestJunkTriage:

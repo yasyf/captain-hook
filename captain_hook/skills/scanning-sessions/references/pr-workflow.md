@@ -121,54 +121,67 @@ the amended hook and the mined rule.
 Title: `[capt-hook] <imperative rule statement>` — e.g.
 `[capt-hook] Block force-pushes to protected branches`.
 
-Body template:
+Body template — three sections and the footer, nothing else:
 
-```markdown
-## Rule
+````markdown
+## Issue
 
-<one-sentence rule the corrections imply>
+<1–2 sentences: the failure mode observed in this repo's sessions, with the
+strongest correction woven in verbatim — e.g. "the agent kept committing without
+running tests — corrected repeatedly ('run pytest before you commit', session
+`<session_id>`, <YYYY-MM-DD>)".>
 
-## Hook
+## Fix
 
-`.claude/hooks/<slug>.py` — <primitive> on <event>; fires on <offending shape>, stays
-silent on <benign neighbor>. Inline tests pass (`uvx --isolated capt-hook test`).
+<1–2 sentences: `.claude/hooks/<slug>.py` — <primitive> on <event>; fires on
+<offending shape>, stays silent on <benign neighbor>. Inline tests pass
+(`uvx --isolated capt-hook test`).>
 
-## Evidence
+## Example
 
-Corrections given in this repo's sessions, verbatim:
-
-- "<verbatim correction>" — session `<session_id>`, <YYYY-MM-DD>
-- "<verbatim correction>" — session `<session_id>`, <YYYY-MM-DD>
+```text
+agent › <the tool call or action that used to slip through>
+hook  › ⛔ <the hook's actual message>
+agent › <the corrected next step>
+```
 
 ---
 Opened by capt-hook's session reviewer (candidate #<ID>). Merging adopts the rule;
 closing rejects it and the reviewer will not re-propose this candidate.
-```
+````
 
-The Evidence section is the PR's case: every quote verbatim, each with its session id
-and date taken from the Step-2 verification — the transcript file the quote was found
-in names the session (the JSONL filename stem is the session id) and the matching
-line's `timestamp` field gives the date.
+The Issue section carries the case: weave the 1–2 strongest corrections in
+verbatim, each with its session id and date from the Step-2 verification (the
+transcript's JSONL filename stem is the session id; the matching line's
+`timestamp` field gives the date). Weaker duplicate quotes drop — one sharp quote
+beats four bullets. The Example section is the sell: a short transcript vignette
+of the recurring situation going better with the hook live, concrete enough that
+the reviewer sees the exact moment the guard lands and what the agent does
+instead. Keep the whole body under ~25 lines; anything the diff already shows
+stays out of it.
 
 A fix PR adapts the template: title `[capt-hook] Fix <slug> misfiring on
-<misfire-class>`; the Rule section states what the hook wrongly fired on and the
-amendment chosen (tightened condition, re-fire guard, live state, demoted severity, or
-removal); the Hook section names the regression test pair (silent on the misfiring
-input, still firing on the genuine case); the Evidence section quotes Claude's
-verbatim complaints with their session ids and dates, plus the decision-ledger attribution
-(`target_hook_name`, the fire's event/action, and its message).
+<misfire-class>`; Issue states what the hook wrongly fired on, quoting Claude's
+verbatim complaint (with session id and date) plus the decision-ledger
+attribution (`target_hook_name`, the fire's event/action, and its message); Fix
+names the amendment chosen (tightened condition, re-fire guard, live state,
+demoted severity, or removal) and the regression-test pair (silent on the
+misfiring input, still firing on the genuine case); Example replays the false
+positive going quiet — the once-misfiring input passing clean, beside the genuine
+case still blocked.
 
-A create-as-edit PR adapts it differently: title `[capt-hook] Broaden <hook-slug>:
-<imperative rule statement>`; the Hook section names the edited hook file
-(repo-relative), what broadened (condition, pattern, or carve-out), and the new test
-pair (fires on the newly covered shape, `Allow()` on its benign neighbor, all
-pre-existing tests untouched and green); Evidence is unchanged. When the edit
-targets a **pack** repo, the Rule section additionally carries a one-sentence
-universality justification — why the broadening is correct for every consumer of
-the pack; a body you cannot write that sentence for is a PR that should not exist
-(route repo-local instead) — and the footer notes the rule was mined from one
-repo's sessions and is proposed as universal, so the pack maintainer can reject on
-that axis alone. A repo-local edit needs neither; the repo's hooks are its own.
+A create-as-edit PR adapts it differently: title `[capt-hook] Broaden
+<hook-slug>: <imperative rule statement>`; Fix names the edited hook file
+(repo-relative), what broadened (condition, pattern, or carve-out), and the new
+test pair (fires on the newly covered shape, `Allow()` on its benign neighbor,
+all pre-existing tests untouched and green); Example shows the newly covered
+shape being caught. When the edit targets a **pack** repo, Issue additionally
+carries a one-sentence universality justification — why the broadening is correct
+for every consumer of the pack; a body you cannot write that sentence for is a PR
+that should not exist (route repo-local instead) — and the footer notes the rule
+was mined from one repo's sessions and is proposed as universal, so the pack
+maintainer can reject on that axis alone. A repo-local edit needs neither; the
+repo's hooks are its own.
 
 ```bash
 gh pr create --title "<title>" --body "<body>" \

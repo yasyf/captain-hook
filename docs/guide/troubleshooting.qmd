@@ -1,5 +1,6 @@
 ---
 title: "Troubleshooting"
+description: "Symptom-by-symptom fixes for hooks that don't fire, fire wrong, or fire twice."
 ---
 
 A hook misbehaved. captain-hook ships no `doctor` command. You diagnose with two tools, the dispatch logs and a re-run of your inline tests.
@@ -16,7 +17,7 @@ uvx capt-hook --hooks <dir> test            # Re-run inline tests; prints the In
 uvx capt-hook --hooks <dir> test --json     # One record per test: id, status, expected, reason
 ```
 
-`logs` reads from the log directory, which defaults to `~/.cache/captain-hook/logs`. Each session writes one log file there. To target a past session, pass its id, or pass the transcript path and `logs` hashes it for you. See [Configuration](configuration.qmd#log_dir) to relocate the directory.
+`logs` reads from the log directory, which defaults to `~/.cache/captain-hook/logs`. Each session writes one log file there. To target a past session, pass its id, or pass the transcript path and `logs` hashes it for you. See [Configuration](packs.qmd#log_dir) to relocate the directory.
 
 If a hook never appears in the log, dispatch never reached it. Work through [It never fires](#it-never-fires).
 
@@ -90,11 +91,11 @@ Then upgrade the plugin. From 9.7.0 the plugin wires every hook as `uvx --isolat
 
 A session that is already running keeps the old hook commands until you run `/reload-plugins` or start a new session. Claude Code refreshes a marketplace plugin's cache only when its `plugin.json` `version` increases; captain-hook's release workflow bumps and commits that version on every tagged release, so `/plugin update` picks up each release as soon as the sync commit lands on `main`.
 
-Last, hunt down legacy `capt-hook run <Event>` entries. Claude Code dedupes hook commands per registering source, not globally, so a `run` entry that survives anywhere besides the captain-hook plugin — a hand-wired line in a project's `.claude/settings.json`, or a pack-shipping plugin built before the discovery contract — dispatches the event again in a sibling process, and every hook on that event runs twice. The tell is doubled output: two permission prompts for one tool call, the same block message landing twice, or a side-effecting hook applying its effect twice. Delete hand-wired entries from the project settings yourself; a legacy pack plugin sheds its `run` entries when it releases against the fixed-path contract in [Ship a pack in a Claude plugin](plugin-packs.qmd), since the plugin cache re-pulls on a version bump.
+Last, hunt down legacy `capt-hook run <Event>` entries. Claude Code dedupes hook commands per registering source, not globally, so a `run` entry that survives anywhere besides the captain-hook plugin — a hand-wired line in a project's `.claude/settings.json`, or a pack-shipping plugin built before the discovery contract — dispatches the event again in a sibling process, and every hook on that event runs twice. The tell is doubled output: two permission prompts for one tool call, the same block message landing twice, or a side-effecting hook applying its effect twice. Delete hand-wired entries from the project settings yourself; a legacy pack plugin sheds its `run` entries when it releases against the fixed-path contract in [Ship a pack in a Claude plugin](packs.qmd#ship-a-pack-in-a-plugin), since the plugin cache re-pulls on a version bump.
 
 ## A SessionStart warning about `pack attach`
 
-Claude Code shows a non-blocking hook warning at session start naming a failed `capt-hook pack attach` command. An enabled plugin still ships the attach line from the pre-10.0.0 contract; the command no longer exists, so the hook exits non-zero and Claude Code reports it. The warning is not the real problem: a plugin that old also predates the fixed `capt-hook/` layout, so its pack no longer loads at all — `uvx capt-hook pack list` shows no `plugin` row for it. Both symptoms clear when the plugin ships a release on the current contract; [Ship a pack in a Claude plugin](plugin-packs.qmd) covers the layout.
+Claude Code shows a non-blocking hook warning at session start naming a failed `capt-hook pack attach` command. An enabled plugin still ships the attach line from the pre-10.0.0 contract; the command no longer exists, so the hook exits non-zero and Claude Code reports it. The warning is not the real problem: a plugin that old also predates the fixed `capt-hook/` layout, so its pack no longer loads at all — `uvx capt-hook pack list` shows no `plugin` row for it. Both symptoms clear when the plugin ships a release on the current contract; [Ship a pack in a Claude plugin](packs.qmd#ship-a-pack-in-a-plugin) covers the layout.
 
 ## A plugin lands disabled with `dependency-unsatisfied`
 
@@ -104,7 +105,7 @@ A pack plugin declares captain-hook as a `plugin.json` dependency, and Claude Co
 claude plugin marketplace add yasyf/captain-hook
 ```
 
-`capt-hook init` in any repo does the same as a side effect. See [Tell users how to install](plugin-packs.qmd#tell-users-how-to-install).
+`capt-hook init` in any repo does the same as a side effect. See [Tell users how to install](packs.qmd#tell-users-how-to-install).
 
 ## `NlpSignal` hooks need the spaCy model {#nlpsignal-hooks-need-the-spacy-model}
 

@@ -50,7 +50,7 @@ All fields are keyword-only — `Block(pattern="...")`, never `Block("...")`.
 
 ## TranscriptFixture recipe
 
-Transcript-history conditions (`TouchedFile`, `RanCommand`, `ReadFile`, `UsedSkill`) read
+Transcript-history conditions (`TouchedFile`, `RanCommand`, `ReadFile`, `UsedSkill`, `UsedTool`) read
 the session transcript, so their tests supply one. The message shape is Claude Code JSONL:
 `{"type": "assistant", "message": {"content": [<tool_use blocks>]}}`.
 

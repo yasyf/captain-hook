@@ -43,7 +43,11 @@ private enum CaptainHookBridge {
         do {
             let arguments = try Arguments(Array(CommandLine.arguments.dropFirst()))
             let input = try payload(for: arguments.operation)
-            let client = try SocketClient(path: arguments.socket, build: buildVersion)
+            let client = try SocketClient(
+                path: arguments.socket,
+                build: buildVersion,
+                trust: .sameEffectiveUser
+            )
             defer { client.close() }
             let terminal = try await client.call(
                 operation: arguments.operation,

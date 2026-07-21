@@ -65,7 +65,7 @@ def rewrite_code(
     handler.__name__ = handler.__qualname__ = hook_name("rewrite_code", None, f"{pattern}=>{replace}")
     on(
         Event.PreToolUse,
-        only_if=[Tool("Edit|Write|MultiEdit|NotebookEdit"), *only_if],
+        only_if=[Tool.EditTools, *only_if],
         skip_if=skip_if,
         tests=tests,
     )(handler)

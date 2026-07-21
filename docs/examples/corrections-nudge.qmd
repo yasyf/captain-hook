@@ -30,6 +30,6 @@ uvx capt-hook --hooks docs/examples test
 
 ## See also
 
-- [Signals guide](../guide/signals.qmd)
+- [Signals guide](../guide/llm-hooks.qmd#score-patterns-with-signals)
 - [Primitives guide](../guide/primitives.qmd)
-- [Corrections lifecycle](../guide/corrections-lifecycle.qmd)
+- [Corrections lifecycle](../guide/session-reviewer.qmd)

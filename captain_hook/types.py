@@ -125,17 +125,23 @@ class Tool:
     ``Write``/``Create``, …) and MCP suffixes (``mcp__github__Grep`` matches ``Grep``) —
     NOT a regex, so ``Tool("Edit.*")`` never matches. Pass names variadically, or as a
     single ``|``-joined string for back-compat (``Tool("Bash|Execute")`` is
-    ``Tool("Bash", "Execute")``).
+    ``Tool("Bash", "Execute")``). ``Tool.EditTools`` is the prebuilt full edit-shaped
+    set — ``Tool("Edit", "MultiEdit", "NotebookEdit", "Write")``.
 
     Example:
         >>> hook(Event.PreToolUse, only_if=[Tool("Bash", "Execute")], message="...", block=True)
+        >>> hook(Event.PreToolUse, only_if=[Tool.EditTools], message="...", block=True)
     """
 
     valid_events: ClassVar[Event] = TOOL_EVENTS
+    EditTools: ClassVar[Tool]
     names: tuple[str, ...]
 
     def __init__(self, *names: str) -> None:
         object.__setattr__(self, "names", _split_names(names))
+
+
+Tool.EditTools = Tool("Edit", "MultiEdit", "NotebookEdit", "Write")
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,6 +321,8 @@ class UsedSkill:
     Pass names variadically; a single ``|``-joined string still works for back-compat. A bare
     name also matches the plugin-qualified spelling, so ``UsedSkill("codex")`` matches a skill
     reported as ``codex:codex`` and ``UsedSkill("slop-cop-check")`` matches ``slop-cop:slop-cop-check``.
+    The search covers the current turn by default — the idiom for skipping a guard
+    once the agent has complied; ``scope="session"`` widens it to the whole session.
 
     Example:
         >>> nudge("run codex first", skip_if=[UsedSkill("codex")])
@@ -322,10 +330,34 @@ class UsedSkill:
 
     names: tuple[str, ...]
     subagents: bool = True
+    scope: Literal["session", "turn"] = "turn"
 
-    def __init__(self, *names: str, subagents: bool = True) -> None:
+    def __init__(self, *names: str, subagents: bool = True, scope: Literal["session", "turn"] = "turn") -> None:
         object.__setattr__(self, "names", _split_names(names))
         object.__setattr__(self, "subagents", subagents)
+        object.__setattr__(self, "scope", scope)
+
+
+@dataclass(frozen=True, slots=True)
+class UsedTool:
+    """Transcript-history condition: true when a tool use named one of ``names`` exists.
+
+    Pass names variadically; a single ``|``-joined string still works for back-compat.
+    The search covers the current turn by default — the idiom for skipping a guard
+    once the agent has complied; ``scope="session"`` widens it to the whole session.
+
+    Example:
+        >>> hook(Event.PreToolUse, skip_if=[UsedTool("EnterPlanMode")], message="...", block=True)
+    """
+
+    names: tuple[str, ...]
+    subagents: bool = True
+    scope: Literal["session", "turn"] = "turn"
+
+    def __init__(self, *names: str, subagents: bool = True, scope: Literal["session", "turn"] = "turn") -> None:
+        object.__setattr__(self, "names", _split_names(names))
+        object.__setattr__(self, "subagents", subagents)
+        object.__setattr__(self, "scope", scope)
 
 
 @dataclass(frozen=True, slots=True)
@@ -600,6 +632,24 @@ class CustomCondition(Protocol):
     def check(self, evt: BaseHookEvent) -> bool: ...
 
 
+@dataclass(frozen=True, slots=True)
+class LambdaCondition(CustomCondition):
+    """Condition from a bare callable — the inline form of [`CustomCondition`][captain_hook.CustomCondition].
+
+    Wraps ``fn`` as the condition's ``check``, so one-off matching logic drops into
+    ``only_if``/``skip_if`` without declaring a class.
+
+    Example:
+        >>> hook(Event.PreToolUse, only_if=[LambdaCondition(lambda evt: evt.file is not None)],
+        ...      message="File edits need review here", block=True)
+    """
+
+    fn: Callable[[BaseHookEvent], bool]
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return self.fn(evt)
+
+
 class CustomInputTypeCondition(CustomCondition, Generic[T]):  # noqa: UP046
     """CustomCondition that fires only for a specific typed tool call.
 
@@ -658,6 +708,7 @@ TCondition = (
     | FromSubagent
     | SkipPermissions
     | UsedSkill
+    | UsedTool
     | ReadFile
     | TestFile
     | SourceEdits

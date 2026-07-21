@@ -39,5 +39,5 @@ uvx capt-hook --hooks docs/examples test
 ## See also
 
 - [Compose primitives](../guide/primitives.qmd)
-- [Enforce a multi-step workflow](../guide/workflows.qmd)
+- [Enforce a multi-step workflow](../guide/state.qmd#enforce-a-multi-step-workflow)
 - [Test hooks inline](../guide/testing.qmd)

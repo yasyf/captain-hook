@@ -279,7 +279,6 @@ class TestBuildRequest:
         assert request["event"] == "PreToolUse"
         assert request["async"] is True
         assert request["root"] == "/proj"
-        assert request["hooks"] is None
         assert request["payload_raw"] == PAYLOAD
         assert request["client"] == {"version": "", "build": "b-1", "pid": os.getpid(), "ppid": os.getppid()}
         assert request["env"]["CAPT_HOOK_MARKER"] == "seen"
@@ -369,7 +368,6 @@ class TestRoundTrip:
         assert request["event"] == "PreToolUse"
         assert request["async"] is True
         assert request["root"] == root
-        assert request["hooks"] is None
         assert request["payload_raw"] == PAYLOAD
         assert os.path.realpath(str(request["cwd"])) == os.path.realpath(root)
 

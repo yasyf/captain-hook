@@ -49,7 +49,7 @@ nudge(
     "  - isolate the minimum failing case before changing more code",
     signals=RETRY_SIGNALS,
     events=Event.Stop,
-    skip_if=[UsedSkill("codex"), ReadFile("DEBUGGING.md")],
+    skip_if=[UsedSkill("codex", scope="session"), ReadFile("DEBUGGING.md")],
     max_fires=1,
     tests={
         Input(

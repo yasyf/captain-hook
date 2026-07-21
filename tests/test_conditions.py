@@ -11,7 +11,7 @@ from cc_transcript.activity_probe import SessionActivityProbe, session_activity_
 
 from captain_hook import EditedSource
 from captain_hook.app import on
-from captain_hook.conditions import check_condition, is_project_path, matches_conditions, workflow_opt_matches
+from captain_hook.conditions import UserSaid, check_condition, is_project_path, matches_conditions, workflow_opt_matches
 from captain_hook.events import (
     BaseHookEvent,
     PermissionRequestEvent,
@@ -48,6 +48,7 @@ from captain_hook.types import (
     ToolInput,
     TouchedFile,
     UsedSkill,
+    UsedTool,
     Waiting,
     WorkflowScript,
     condition_events,
@@ -177,6 +178,11 @@ class TestToolCondition:
     )
     def test_tool(self, pattern: str, tool_name: str, expected: bool) -> None:
         assert check_condition(Tool(pattern), make_tool_event(tool_name)) is expected
+
+    def test_edit_tools_prebuilt(self) -> None:
+        assert Tool.EditTools == Tool("Edit", "MultiEdit", "NotebookEdit", "Write")
+        assert check_condition(Tool.EditTools, make_tool_event("NotebookEdit")) is True
+        assert check_condition(Tool.EditTools, make_tool_event("Bash")) is False
 
     @pytest.mark.parametrize(
         ("event_cls", "expected"),
@@ -644,6 +650,26 @@ class TestRunsCondition:
         assert check_condition(Runs("git", "stash"), make_event(StopEvent)) is False
 
 
+class TestLambdaCondition:
+    def test_wraps_callable_as_check(self) -> None:
+        from captain_hook import LambdaCondition
+
+        cond = LambdaCondition(lambda evt: evt.tool_name == "Bash")
+        assert check_condition(cond, make_tool_event("Bash", {"command": "ls"})) is True
+        assert (
+            check_condition(cond, make_tool_event("Edit", {"file_path": "a.py", "old_string": "", "new_string": ""}))
+            is False
+        )
+
+    def test_is_custom_condition_valid_on_all_events(self) -> None:
+        from captain_hook import CustomCondition, LambdaCondition
+        from captain_hook.types import ALL_EVENTS, condition_events
+
+        cond = LambdaCondition(lambda evt: True)
+        assert isinstance(cond, CustomCondition)
+        assert condition_events(cond) == ALL_EVENTS
+
+
 class TestCombinators:
     def test_and_all_match(self) -> None:
         evt = make_tool_event("Bash", {"command": "git stash"})
@@ -886,7 +912,7 @@ class TestEditedSourceScoping:
 
 
 def skill_evt(skill: str) -> BaseHookEvent:
-    ctx = make_messages_ctx([raw_tool_msg("Skill", {"skill": skill})])
+    ctx = build_ctx(transcript=make_transcript(raw_text("user", "go"), raw_tool_msg("Skill", {"skill": skill})))
     return make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
 
 
@@ -910,6 +936,87 @@ class TestUsedSkillCondition:
     )
     def test_usedskill(self, cond: TCondition, skill: str, expected: bool) -> None:
         assert check_condition(cond, skill_evt(skill)) is expected
+
+    def test_session_scope_spans_turns(self) -> None:
+        ctx = build_ctx(
+            transcript=make_transcript(
+                raw_text("user", "run codex on this"),
+                raw_tool_msg("Skill", {"skill": "codex"}),
+                raw_text("user", "now continue"),
+                raw_text("assistant", "ok"),
+            )
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(UsedSkill("codex", scope="session"), evt) is True
+        assert check_condition(UsedSkill("codex"), evt) is False
+
+    def test_default_scope_sees_current_turn(self) -> None:
+        ctx = build_ctx(
+            transcript=make_transcript(
+                raw_text("user", "run codex on this"),
+                raw_tool_msg("Skill", {"skill": "codex"}),
+            )
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(UsedSkill("codex"), evt) is True
+
+
+class TestUsedToolCondition:
+    def test_session_scope_spans_turns(self) -> None:
+        ctx = build_ctx(
+            transcript=make_transcript(
+                raw_text("user", "plan this out"),
+                raw_tool_msg("EnterPlanMode", {}),
+                raw_text("user", "now continue"),
+                raw_text("assistant", "ok"),
+            )
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(UsedTool("EnterPlanMode", scope="session"), evt) is True
+        assert check_condition(UsedTool("EnterPlanMode"), evt) is False
+
+    def test_default_scope_sees_current_turn(self) -> None:
+        ctx = build_ctx(
+            transcript=make_transcript(
+                raw_text("user", "stop and replan"),
+                raw_tool_msg("EnterPlanMode", {}),
+            )
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(UsedTool("EnterPlanMode"), evt) is True
+
+    def test_pipe_and_variadic_names(self) -> None:
+        ctx = build_ctx(
+            transcript=make_transcript(raw_text("user", "go"), raw_tool_msg("Write", {"file_path": "x.py"}))
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(UsedTool("Edit", "Write"), evt) is True
+        assert check_condition(UsedTool("Edit|Write"), evt) is True
+        assert check_condition(UsedTool("EnterPlanMode"), evt) is False
+
+
+class TestUserSaidCondition:
+    def test_regex_over_prompts(self) -> None:
+        ctx = build_ctx(
+            transcript=make_transcript(raw_text("user", "please just COMMIT it"), raw_text("assistant", "ok"))
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(UserSaid("just commit"), evt) is True
+        assert check_condition(UserSaid(r"\bdeploy\b"), evt) is False
+
+    def test_default_scope_sees_only_current_prompt(self) -> None:
+        ctx = build_ctx(
+            transcript=make_transcript(
+                raw_text("user", "re-enter plan mode"),
+                raw_text("assistant", "ok"),
+                raw_text("user", "now fix the typo"),
+                raw_text("assistant", "ok"),
+            )
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(UserSaid("plan mode", scope="session"), evt) is True
+        assert check_condition(UserSaid("plan mode"), evt) is False
+        assert check_condition(UserSaid("fix the typo"), evt) is True
 
 
 class TestReadFileCondition:

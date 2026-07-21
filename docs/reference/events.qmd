@@ -23,13 +23,13 @@ can block.
 | Event | Event class | Fires | Key properties | Can block? |
 |-------|-------------|-------|----------------|------------|
 | `SessionStart` | `SessionStartEvent` | When a session starts, resumes, clears, or compacts | `source` | No — advisory |
-| `PreToolUse` | `PreToolUseEvent` | Before a tool runs | `tool_name`, `command`, `command_line`, `file`, `content`, `old`, `agent_type` | **Yes** — deny the tool |
-| `PermissionRequest` | `PermissionRequestEvent` | When a permission dialog would be shown | `permission_suggestions`, `agent_type`, plus the tool accessors `tool_name`, `command`, `file`, … | **Yes** — answer the dialog with allow, deny, or rewrite |
+| `PreToolUse` | `PreToolUseEvent` | Before a tool runs | `tool_name`, `cmd`, `file`, `content`, `old`, `agent_type` | **Yes** — deny the tool |
+| `PermissionRequest` | `PermissionRequestEvent` | When a permission dialog would be shown | `permission_suggestions`, `agent_type`, plus the tool accessors `tool_name`, `cmd`, `file`, … | **Yes** — answer the dialog with allow, deny, or rewrite |
 | `PostToolUse` | `PostToolUseEvent` | After a tool succeeds | `tool_name`, `command`, `file`, `content`, `tool_response` | No — advisory |
 | `PostToolUseFailure` | `PostToolUseFailureEvent` | After a tool fails | `tool_name`, `error`, `is_interrupt` | No — advisory |
 | `UserPromptSubmit` | `UserPromptSubmitEvent` | When the user submits a prompt | `user_prompt` | No — advisory |
-| `Stop` | `StopEvent` | When the agent is about to stop | `stop_hook_active` | **Yes** — force-continue |
-| `SubagentStop` | `SubagentStopEvent` | When a subagent finishes | `agent_type` | **Yes** — force-continue |
+| `Stop` | `StopEvent` | When the agent is about to stop | `stop_hook_active`, `background_tasks`, `session_crons` | **Yes** — force-continue |
+| `SubagentStop` | `SubagentStopEvent` | When a subagent finishes | `agent_type`, `background_tasks`, `session_crons` | **Yes** — force-continue |
 | `SubagentStart` | `SubagentStartEvent` | When a subagent launches | `agent_type` | No — advisory |
 | `PreCompact` | `PreCompactEvent` | Before context compaction | `trigger`, `custom_instructions` | No — advisory |
 | `Notification` | `NotificationEvent` | On a system notification | `message`, `title`, `notification_type` | No — advisory |
@@ -40,6 +40,10 @@ call outright, and a `PermissionRequest` result answers the pending dialog. `all
 `rewrite` approve it silently, `block` denies it with the message shown to the user, and
 `None` or a warn lets the dialog show normally. `Stop` and `SubagentStop` force the agent to
 keep going. Every other event is advisory — a hook injects context but cannot block.
+
+On `Stop` and `SubagentStop`, `background_tasks` and `session_crons` report the background work
+and scheduled prompts holding the session open — a non-empty tuple means it is paused for that
+work, not finished, which is what `Waiting()` reads.
 
 ## Shared properties
 

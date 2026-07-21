@@ -42,6 +42,7 @@ from captain_hook.conditions import Headless as Headless
 from captain_hook.conditions import Redirects as Redirects
 from captain_hook.conditions import RewritingExistingPlan as RewritingExistingPlan
 from captain_hook.conditions import ScratchPath as ScratchPath
+from captain_hook.conditions import UserSaid as UserSaid
 from captain_hook.conditions import workflow_opt_matches as workflow_opt_matches
 from captain_hook.conditions import workflow_opt_values as workflow_opt_values
 from captain_hook.conditions import workflow_script_source as workflow_script_source
@@ -118,6 +119,7 @@ from captain_hook.signals.nlp import NlpSignal as NlpSignal
 from captain_hook.signals.nlp import Phrase as Phrase
 from captain_hook.signals.nlp import has_nominal_subject as has_nominal_subject
 from captain_hook.signals.nlp import is_past_predicate as is_past_predicate
+from captain_hook.signals.nlp import subject_kind as subject_kind
 from captain_hook.state import HookState as HookState
 from captain_hook.state import PrimitiveState as PrimitiveState
 from captain_hook.state import RegisteredTranscript as RegisteredTranscript
@@ -126,6 +128,7 @@ from captain_hook.state import WorkflowState as WorkflowState
 from captain_hook.state import workflow_state as workflow_state
 from captain_hook.tasks import Task as Task
 from captain_hook.tasks import Tasks as Tasks
+from captain_hook.testing.fixtures import T as T
 from captain_hook.testing.types import Allow as Allow
 from captain_hook.testing.types import Ask as Ask
 from captain_hook.testing.types import Block as Block
@@ -137,6 +140,7 @@ from captain_hook.testing.types import TranscriptFixture as TranscriptFixture
 from captain_hook.testing.types import Warn as Warn
 from captain_hook.transcripts import register_transcript as register_transcript
 from captain_hook.transcripts import registered_paths as registered_paths
+from captain_hook.turn import Turn as Turn
 from captain_hook.types import Action as Action
 from captain_hook.types import Agent as Agent
 from captain_hook.types import And as And
@@ -150,6 +154,7 @@ from captain_hook.types import FromSubagent as FromSubagent
 from captain_hook.types import HookResponse as HookResponse
 from captain_hook.types import HookResult as HookResult
 from captain_hook.types import InPlanMode as InPlanMode
+from captain_hook.types import LambdaCondition as LambdaCondition
 from captain_hook.types import Not as Not
 from captain_hook.types import Or as Or
 from captain_hook.types import Pattern as Pattern
@@ -166,6 +171,7 @@ from captain_hook.types import Tool as Tool
 from captain_hook.types import ToolInput as ToolInput
 from captain_hook.types import TouchedFile as TouchedFile
 from captain_hook.types import UsedSkill as UsedSkill
+from captain_hook.types import UsedTool as UsedTool
 from captain_hook.types import Waiting as Waiting
 from captain_hook.types import WorkflowScript as WorkflowScript
 from captain_hook.util.fs import binary_supports as binary_supports

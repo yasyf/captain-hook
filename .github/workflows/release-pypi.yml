@@ -116,20 +116,27 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       marketing: ${{ steps.derive.outputs.marketing }}
+      stable: ${{ steps.derive.outputs.stable }}
     steps:
       - id: derive
         shell: bash
         run: |
           v="${GITHUB_REF_NAME#v}"
           echo "marketing=${v%%-*}" >> "$GITHUB_OUTPUT"
+          if [[ "$v" == *-* ]]; then
+            echo "stable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "stable=true" >> "$GITHUB_OUTPUT"
+          fi
 
   helper:
     needs: [build, helper-version, github-release]
     permissions:
       contents: write
-    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@v1
+    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@0b8cc21418a6102d6670053a17c97f5723e9daa2
     with:
       app_name: Captain Hook
+      asset_name: captain-hook
       project_dir: helper
       scheme: CaptainHook
       bundle_id: com.yasyf.capt-hook.helper
@@ -141,16 +148,125 @@ jobs:
       profile_names: |
         com.yasyf.capt-hook.helper=Captain Hook Helper App
         com.yasyf.capt-hook.helper.widget=Captain Hook Helper Widget
-      cask_token: captain-hook
-      cask_template_path: .github/cask/captain-hook.rb.tmpl
       assert_script: helper/scripts/assert-signed-bridge.sh
       changed_paths: |
         helper/**
         .github/cask/**
+        .github/workflows/release-pypi.yml
     secrets:
       MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
       MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
       MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
       MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
       MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
-      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+  helper-cask:
+    needs: [helper-version, helper]
+    if: ${{ needs.helper-version.outputs.stable == 'true' && needs.helper.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify the exact application release output
+        env:
+          ASSET_FILENAME: ${{ needs.helper.outputs.asset_filename }}
+          ASSET_URL: ${{ needs.helper.outputs.asset_url }}
+          ASSET_SHA256: ${{ needs.helper.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          expected_filename="captain-hook-${GITHUB_REF_NAME}-darwin.zip"
+          expected_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${expected_filename}"
+          [ "$ASSET_FILENAME" = "$expected_filename" ] \
+            || { echo "::error::verified app filename '$ASSET_FILENAME' != '$expected_filename'"; exit 1; }
+          [ "$ASSET_URL" = "$expected_url" ] \
+            || { echo "::error::verified app URL does not name the exact release asset"; exit 1; }
+          [[ "$ASSET_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+            || { echo "::error::verified app SHA-256 is malformed"; exit 1; }
+
+      - name: Verify the final distributed application bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_FILENAME: ${{ needs.helper.outputs.asset_filename }}
+          ASSET_SHA256: ${{ needs.helper.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/released
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --dir dist/released --pattern "$ASSET_FILENAME" --pattern "$ASSET_FILENAME.sha256"
+          cd dist/released
+          [ "$(awk 'NR == 1 { print $1 }' "$ASSET_FILENAME.sha256")" = "$ASSET_SHA256" ]
+          [ "$(shasum -a 256 "$ASSET_FILENAME" | awk '{print $1}')" = "$ASSET_SHA256" ]
+
+      - name: Guard cask registry name and version
+        env:
+          CASK_TOKEN: captain-hook
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${VERSION#v}"
+          tmp="$(mktemp -d)"
+
+          fetch() {
+            url="$1"
+            output="$2"
+            if ! code="$(curl --connect-timeout 15 --max-time 45 -sS -o "$output" -w '%{http_code}' "$url")"; then
+              echo "::error::registry guard could not reach $url; refusing to release blind"
+              exit 1
+            fi
+            case "$code" in
+              200|404) printf '%s' "$code" ;;
+              *) echo "::error::registry guard got HTTP $code from $url; refusing to release blind"; exit 1 ;;
+            esac
+          }
+
+          formula_url="https://raw.githubusercontent.com/yasyf/homebrew-tap/main/Formula/${CASK_TOKEN}.rb"
+          formula_code="$(fetch "$formula_url" "$tmp/formula.rb")"
+          if [ "$formula_code" = "200" ]; then
+            echo "::error::Formula/${CASK_TOKEN}.rb already exists; a same-named cask would make brew install ambiguous"
+            exit 1
+          fi
+
+          cask_url="https://raw.githubusercontent.com/yasyf/homebrew-tap/main/Casks/${CASK_TOKEN}.rb"
+          cask_code="$(fetch "$cask_url" "$tmp/cask.rb")"
+          if [ "$cask_code" = "404" ]; then
+            exit 0
+          fi
+          grep -Eq "^[[:space:]]*cask[[:space:]]+\"${CASK_TOKEN}\"[[:space:]]+do" "$tmp/cask.rb" \
+            || { echo "::error::the registered Casks/${CASK_TOKEN}.rb declares a different cask name"; exit 1; }
+          current="$(sed -n 's/^[[:space:]]*version[[:space:]]*\"\([0-9][0-9.]*\)\".*/\1/p' "$tmp/cask.rb" | sed -n '1p')"
+          [ -n "$current" ] \
+            || { echo "::error::could not parse the registered version for $CASK_TOKEN"; exit 1; }
+          first="$(printf '%s\n%s\n' "$current" "$version" | sort -V | sed -n '1p')"
+          if [ "$first" = "$version" ] && [ "$current" != "$version" ]; then
+            echo "::error::release version $version is older than registered cask version $current"
+            exit 1
+          fi
+
+      - name: Require a full-application cask template
+        run: |
+          set -euo pipefail
+          template=.github/cask/captain-hook.rb.tmpl
+          grep -Eq '^[[:space:]]*app[[:space:]]+' "$template" \
+            || { echo "::error::cask template must install the full .app with an app stanza"; exit 1; }
+          if grep -Eq '^[[:space:]]*binary[[:space:]]+' "$template"; then
+            echo "::error::cask template must not install this application as a bare binary"
+            exit 1
+          fi
+
+      - name: Render the cask from the verified release output
+        uses: yasyf/homebrew-tap/.github/actions/render-formula@f45550932b0c8a42eb04e9ab0e5de8f82ad78b6a
+        with:
+          template: .github/cask/captain-hook.rb.tmpl
+          output: Casks/captain-hook.rb
+          substitutions: |
+            __ASSET_URL__=${{ needs.helper.outputs.asset_url }}
+            __SHA_APP__=${{ needs.helper.outputs.sha256 }}
+
+      - name: Publish the verified application cask
+        uses: yasyf/homebrew-tap/.github/actions/publish@f45550932b0c8a42eb04e9ab0e5de8f82ad78b6a
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          dir: tap-staging
+          message: "captain-hook ${{ github.ref_name }}"

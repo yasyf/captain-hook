@@ -94,7 +94,6 @@ only-include = ["captain_hook", "capt_hook_client", "hatch_build.py"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = ["-ra", "--strict-markers", "--tb=short", "-q"]
-markers = ["unit: Pure unit tests", "integration: Integration tests"]
 
 [tool.pyright]
 pythonVersion = "3.13"

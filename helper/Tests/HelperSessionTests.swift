@@ -76,7 +76,7 @@ private func runBridge(
         let server = SocketServer(
             path: socket.path,
             build: "0.0.0",
-            trust: .testingUIDOnly,
+            trust: .sameEffectiveUser,
             handler: { await handler.handle($0) }
         )
         try server.start()

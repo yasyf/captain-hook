@@ -179,7 +179,6 @@ def event_req(
         "async": async_,
         "root": str(root),
         "cwd": str(root),
-        "hooks": None,
         "env": request_env(env) | (extra_env or {}),
         "payload_raw": raw,
     }

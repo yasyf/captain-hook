@@ -14,7 +14,7 @@ uvx capt-hook init
 
 `init` scaffolds `.claude/hooks/`, wires Claude Code's settings, and arms the session reviewer. One `block_command` later, a force-push dies at `PreToolUse` and the hook's inline tests run green:
 
-<img src="https://github.com/yasyf/captain-hook/raw/main/docs/assets/demo.png" alt="Terminal running 'uvx capt-hook test' — a hook blocks git push --force and both inline tests pass" width="700">
+<img src="https://github.com/yasyf/captain-hook/raw/main/docs/assets/demo.gif" alt="Animated terminal: a hook blocks git push --force at PreToolUse, then 'uvx capt-hook test' passes both inline tests" width="700">
 
 Driving with an agent? Paste this:
 
@@ -101,7 +101,7 @@ The agent can't end the turn until a pytest run shows up in the transcript, and 
 - **Session reviewer** — the full corrections lifecycle, from transcript to merged hook PR — [guide](https://yasyf.github.io/captain-hook/docs/guide/session-reviewer.html)
 - **Conditions** — typed filters over tools, files, commands, and transcript history — [guide](https://yasyf.github.io/captain-hook/docs/guide/primitives.html#filter-with-conditions)
 - **LLM hooks** — gate on a model's verdict when a regex can't decide — [guide](https://yasyf.github.io/captain-hook/docs/guide/llm-hooks.html)
-- **Workflows** — multi-step Stop gates with artifact checks and checklists — [guide](https://yasyf.github.io/captain-hook/docs/guide/workflows.html)
+- **Workflows** — multi-step Stop gates with artifact checks and checklists — [guide](https://yasyf.github.io/captain-hook/docs/guide/state.html#enforce-a-multi-step-workflow)
 - **Packs** — the shipped `general`, `python`, and `go` hook packs — [guide](https://yasyf.github.io/captain-hook/docs/guide/packs.html)
 - **Testing** — run `uvx capt-hook test --json` in CI so a regressed hook fails the build — [guide](https://yasyf.github.io/captain-hook/docs/guide/testing.html)
 

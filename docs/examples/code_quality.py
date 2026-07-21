@@ -67,7 +67,7 @@ nudge(
 llm_gate(
     "Does this diff add a print() that should be a logger call, where the surrounding "
     "module already imports a logger? Block only if the prod print is unambiguous.",
-    message=lambda r: f"Replace print() with logger: {r.reasoning}",
+    message="Replace print() with logger: {reasoning}",
     events=Event.PostToolUse,
     only_if=[SourceEdits(lang="py"), Pattern("print($$$)")],
     skip_if=[TestFile()],

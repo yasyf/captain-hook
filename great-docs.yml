@@ -22,22 +22,22 @@ hero:
   tagline: "Stop repeating yourself to Claude."
 
 sections:
-  - title: Getting Started
+  - title: Quickstart
     dir: docs/getting-started
     index: false
   - title: Tutorial
     dir: docs/tutorial
-    navbar_after: Getting Started
+    navbar_after: Quickstart
     index: true
     index_columns: 2
-  - title: Guide
+  - title: Guides
     dir: docs/guide
     navbar_after: Tutorial
     index: true
     index_columns: 2
   - title: Cheatsheet
     dir: docs/cheatsheet
-    navbar_after: Guide
+    navbar_after: Guides
     index: true
   - title: Examples
     dir: docs/examples
@@ -128,6 +128,8 @@ reference:
       - RanCommand
       - Runs
       - UsedSkill
+      - UsedTool
+      - UserSaid
       - InPlanMode
       - Waiting
       - FromSubagent
@@ -173,6 +175,7 @@ reference:
       - SessionStartEvent
       - SessionEndEvent
       - HookContext
+      - Turn
       - HookResult
       - Action
       - Agent
@@ -231,6 +234,7 @@ reference:
       - Phrase
       - is_past_predicate
       - has_nominal_subject
+      - subject_kind
 
   - title: State & Sessions
     desc: Session state, workflow state, and multi-step workflows.
@@ -292,9 +296,6 @@ reference:
       - Excerpts
       - excerpt_around
       - COMMENT_TYPES
-      - Edit
-      - SyntaxNode
-      - Match
 
 # Composed by concatenation after each repo's local fragment: top-level keys
 # here must not collide with any repo fragment (last key silently wins).

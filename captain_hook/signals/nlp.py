@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import functools
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, get_args
 
 if TYPE_CHECKING:
     from spacy.tokens import Doc, Span, Token
+
+SubjectKind = Literal["unnamed", "passive", "actor"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,14 +99,21 @@ class Clause:
             are *not* past predicates and *not* counterfactual modal-perfects —
             "will leave"/"leaving"/"leave it"/"will have left" but not
             "left the workspace", "left to clean up", or "should have left".
-        subject: ``"no_nominal"`` vetoes verbs with both a substantive active
-            subject (see ``has_nominal_subject``) and a direct object — "the
-            parser removed the node" is vetoed while "we removed it", passives,
-            and objectless elliptical passives ("config moved to settings.py",
-            "logic migrated to the worker") still match.
+        subject: The subject shapes the verb may have (see ``subject_kind``), as
+            a tuple — ``()`` (default) applies no constraint, and a bare string
+            means that one shape. ``"unnamed"``: no substantive active subject —
+            imperatives ("switch back to plan mode"), pronoun subjects
+            ("we should replan"), and true passives ("the file was removed").
+            ``"passive"``: a substantive subject but no direct object —
+            elliptical passives ("config moved to settings.py") and intransitive
+            actives ("the parser crashed"). ``"actor"``: a substantive subject
+            acting on a direct object — described behavior like "the parser
+            removed the node". ``("unnamed",)`` matches directives but not
+            descriptions; ``("unnamed", "passive")`` also admits statements
+            about the thing acted on.
 
     Example:
-        >>> Clause(verb=Phrase("remove", "delete"), tense="completed", subject="no_nominal")
+        >>> Clause(verb=Phrase("remove", "delete"), tense="completed", subject=("unnamed", "passive"))
     """
 
     noun: Phrase | None = None
@@ -111,19 +121,23 @@ class Clause:
     adj: Phrase | None = None
     negated: bool = False
     tense: Literal["any", "completed", "prospective"] = "any"
-    subject: Literal["any", "no_nominal"] = "any"
+    subject: SubjectKind | tuple[SubjectKind, ...] = ()
 
     def __post_init__(self) -> None:
+        if isinstance(self.subject, str):
+            object.__setattr__(self, "subject", (self.subject,))
+        if invalid := set(self.subject) - set(get_args(SubjectKind)):
+            raise ValueError(f"Unknown subject kinds: {sorted(invalid)}")
         if (anchor := self.noun or self.verb) is None:
             raise ValueError("Clause needs a noun or verb anchor")
-        if self.verb is None and (self.tense != "any" or self.subject != "any"):
+        if self.verb is None and (self.tense != "any" or self.subject):
             raise ValueError("Clause tense and subject constraints require a verb")
         if not (
             (self.noun and self.verb)
             or self.adj
             or self.negated
             or self.tense != "any"
-            or self.subject != "any"
+            or self.subject
             or any(" " in lemma for lemma in anchor.lemmas)
         ):
             raise ValueError("Clause needs a second constraint or a compound anchor phrase")
@@ -230,6 +244,20 @@ def tense_matches(tense: Literal["any", "completed", "prospective"], tok: Token)
             return not is_past_predicate(tok) and not is_modal_perfect(tok)
 
 
+def subject_kind(tok: Token) -> SubjectKind:
+    """The shape of ``tok``'s subject, as :class:`Clause`'s ``subject`` constraint sees it.
+
+    ``"unnamed"`` — no substantive active subject (see ``has_nominal_subject``);
+    ``"actor"`` — a substantive subject plus a direct object; ``"passive"`` — a
+    substantive subject without one.
+    """
+    if not has_nominal_subject(tok):
+        return "unnamed"
+    if any(c.dep_ == "dobj" for c in tok.children):
+        return "actor"
+    return "passive"
+
+
 def verb_candidates(clause: Clause, sent: Span) -> list[Token]:
     if clause.verb is None:
         return []
@@ -237,7 +265,7 @@ def verb_candidates(clause: Clause, sent: Span) -> list[Token]:
         v
         for v in find_lemma_matches(clause.verb, sent, {"VERB", "AUX"})
         if tense_matches(clause.tense, v)
-        and (clause.subject == "any" or not (has_nominal_subject(v) and any(c.dep_ == "dobj" for c in v.children)))
+        and (not clause.subject or subject_kind(v) in clause.subject)
         and not (
             clause.tense == "prospective"
             and not clause.negated
@@ -264,3 +292,10 @@ def nlp_scan(clauses: Sequence[Clause], text: str) -> list[str]:
     if not text.strip():
         return []
     return [sent.text.strip() for sent in parse(text).sents if any(match_clause(clause, sent) for clause in clauses)]
+
+
+def scan_text(text: str, patterns: Sequence[str | Clause]) -> bool:
+    clauses = [p for p in patterns if isinstance(p, Clause)]
+    return any(isinstance(p, str) and re.search(p, text, re.IGNORECASE) for p in patterns) or bool(
+        clauses and nlp_scan(clauses, text)
+    )

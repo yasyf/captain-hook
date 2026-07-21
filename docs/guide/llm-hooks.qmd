@@ -1,8 +1,10 @@
 ---
-title: "Write an LLM hook"
+title: "LLM hooks, signals & the transcript"
+description: "Put a model's judgment in a hook — LLM gates and nudges, signal scoring, and transcript queries."
+aliases: [signals.html, transcript.html]
 ---
 
-An LLM hook sends transcript context to a large language model and acts on its verdict. Reach for one when the judgment needs to read intent, tone, or reasoning quality, and a regex cannot express it.
+An LLM hook sends transcript context to a large language model and acts on its verdict. Reach for one when the judgment needs to read intent, tone, or reasoning quality, and a regex cannot express it. This page covers the four LLM primitives, the signal scoring that keeps them cheap, and the transcript query API both build on.
 
 ## Decide: LLM or static
 
@@ -15,7 +17,7 @@ Default to a static hook. It is free, instant, and deterministic, so a `block_co
 | The condition is structural, like a tool name or file path | The condition is about meaning, like excuses or speculation |
 | Cost matters more than subtlety | Accuracy on subtle behavior earns the cost |
 
-The static primitives live in [the primitives reference](../reference/primitives.qmd). The events you can target live in [the events reference](../reference/events.qmd), and the conditions you filter on live in [the conditions reference](../reference/conditions.qmd).
+The static primitives live in [Writing hooks](primitives.qmd) and [the primitives reference](../reference/primitives.qmd). The events you can target live in [the events reference](../reference/events.qmd), and the conditions you filter on live in [the conditions reference](../reference/conditions.qmd).
 
 ## Bound the cost first
 
@@ -47,7 +49,7 @@ llm_gate(
 )
 ```
 
-The signal patterns score the recent transcript. The prompt reaches the model only when that score clears `threshold=2`, so a clean session costs nothing.
+The signal patterns score the recent transcript. The prompt reaches the model only when that score clears `threshold=2`, so a clean session costs nothing. [Score patterns with signals](#score-patterns-with-signals) below explains the scoring pipeline.
 
 ## Pick the primitive
 
@@ -175,9 +177,240 @@ The stubbed verdict fires unless a test overrides it with `Input(llm=...)`, so a
 `llm_gate` and `llm_nudge` share a per-turn guard. Once one fires during a dispatch cycle, the other returns without calling the model, which stops several expensive hooks from stacking on the same event. `prompt_check` runs inside your own handler and does not participate.
 :::
 
+## Score patterns with signals {#score-patterns-with-signals}
+
+Signals score recent transcript text so a hook fires only when a pattern repeats hard enough to matter. You pass a `Signals` bundle to a primitive's `signals=` parameter, set a `threshold`, and let the cumulative score decide. Use this when a single match is noise but a run of matches is a real behavior, like a retry loop or a wave of blame-shifting. The same `signals=` parameter works on `nudge()`, `gate()`, `llm_gate()`, and `llm_nudge()`.
+
+### Match a literal phrase with a regex `Signal`
+
+A `Signal` is a regex worth `weight` points. A matching signal contributes `weight` to the score once, however many times its pattern hits. Pattern weights must be positive; suppress false positives with `vetoes` (shown below) instead of negative weights. Every `Signal` field is keyword-only.
+
+```python
+import re
+from captain_hook import Signal
+
+Signal(pattern=r"let me try again", weight=2)
+Signal(pattern=r"retry|retrying", weight=1)
+Signal(pattern=r"external.*service", weight=2, flags=re.IGNORECASE)
+```
+
+### Match meaning with an `NlpSignal`
+
+An `NlpSignal` matches a grammatical relationship instead of a fixed string. It parses each message with spaCy and checks whether a `Clause` you describe appears in the dependency tree. This catches paraphrases that a regex would miss.
+
+A `Clause(noun=..., verb=...)` means "this noun is the subject or object of this verb." So `Clause(noun=Phrase("test"), verb=Phrase("run"))` matches "run the test," "the tests ran," and "running a test," because spaCy links `test` to `run` in each. A `Phrase` holds one or more lemmas, so `Phrase("run", "rerun")` matches either verb.
+
+```python
+from captain_hook import NlpSignal, Clause, Phrase
+
+NlpSignal(
+    clauses=[
+        Clause(noun=Phrase("test"), verb=Phrase("run")),
+    ],
+    weight=3,
+)
+```
+
+A `Clause` accepts more than a noun and verb. Add `adj=` to match an adjective on the noun, set `negated=True` to require a negation, or pass a compound noun phrase on its own:
+
+```python
+from captain_hook import Clause, Phrase
+
+Clause(noun=Phrase.expand("issue"), adj=Phrase("existing", "previous"))
+Clause(noun=Phrase.expand("change"), verb=Phrase("cause", "introduce"), negated=True)
+```
+
+`Phrase.expand("issue")` pulls in WordNet synonyms of "issue" so the clause matches "problem," "bug," and other near-synonyms without you listing each one. The bare `Phrase("existing", "previous")` stays exact.
+
+### Bundle signals with a threshold and window
+
+A `Signals` bundle groups patterns, sets the score `threshold` that triggers the hook, and bounds the `window` of recent transcript events to score. The window is a rolling slice of the last N events, so old matches age out as the conversation moves on.
+
+```python
+from captain_hook import Signals, Signal
+
+Signals(
+    patterns=[
+        Signal(pattern=r"retry", weight=2),
+        Signal(pattern=r"again", weight=1),
+    ],
+    threshold=3,  # fire when a single message scores 3
+    window=10,    # look back over the last 10 events
+    vetoes=[Signal(pattern=r"investigating")],  # any match in the window cancels the fire
+)
+```
+
+By default (`scope="text"`) each text is scored on its own: every signal that matches contributes its weight once, and the hook fires when a single text reaches the threshold. The window only bounds how far back that text may sit. "Let me retry that again" scores 3 and fires; "retry" in one message and "again" in another does not, because neither message reaches 3 alone. That's deliberate. Pooling matches across unrelated turns lets quoted or referenced vocabulary sum to the threshold and misfire.
+
+When one tell legitimately splits across adjacent messages — a wall-of-text option dump whose preamble lands in one message and the options in the next — opt into pooling with `scope="window"`. Union scoring counts each distinct matching signal's weight once across the whole window, however many entries it matches, so "retry" and "again" in two separate messages now sum to 3 and fire. Under either scope, a `vetoes` match anywhere in the window holds the hook back.
+
+Set `window="turn"` instead of a count to score the whole current turn. Tool calls and their results eat window slots, so a fixed window at `Stop` reaches only the last few tool exchanges. The `"turn"` sentinel reaches back to the prompt that opened the turn and catches a tell dropped hundreds of events earlier.
+
+You can also pass a bare `list[Signal]` to a primitive. The framework wraps it with `threshold=1`, so any single match triggers.
+
+### Choose whose words count with `origin`
+
+`origin` selects which texts become scoring candidates in the first place — an upstream filter, orthogonal to `scope`, which decides how the threshold is met among the candidates. The default `origin="assistant"` keeps only the agent's own prose: assistant messages, thinking blocks, and prose-carrying tool calls. User messages drop out before scoring, so a stance hook watching the agent's behavior doesn't fire because the user quoted the trigger vocabulary back at it. Harness-injected events — teammate-message relay banners, scheduled-task injections — never count under either origin.
+
+Stamp `origin="any"` when the hook exists to score the human's words. A correction detector reads the user's prose by definition, and a `UserPromptSubmit` hook that scores the just-submitted prompt needs the stamp, because the prompt joins the scan only under `"any"`:
+
+```python
+import re
+from captain_hook import Event, Signal, Signals, nudge
+
+nudge(
+    "That reads like a durable correction — run `uvx capt-hook status` to mine it into a hook.",
+    events=Event.UserPromptSubmit,
+    signals=Signals(
+        patterns=[
+            Signal(pattern=r"\bno\b|actually", weight=1, flags=re.IGNORECASE),
+            Signal(pattern=r"\b(never|always)\b", weight=1, flags=re.IGNORECASE),
+        ],
+        threshold=2,
+        window=0,
+        origin="any",  # the prompt is user prose; the default drops it
+    ),
+)
+```
+
+::: {.callout-warning title="An un-stamped `UserPromptSubmit` hook is silently dead"}
+Under the default `origin`, the just-submitted prompt is excluded from the scan. A
+`UserPromptSubmit` bundle with `window=0` then has no candidates at all — it never
+fires and never errors. Stamp `origin="any"` on any bundle that scores the prompt.
+:::
+
+### Wire a bundle into a primitive
+
+Pass the bundle to `nudge(signals=...)` or `gate(signals=...)` — `gate` when crossing the threshold should block the turn instead of warning. The primitive pulls every prose source the bundle's `origin` allows from the window — each assistant message's visible text, each thinking block, and the prose fields of `ReportFindings`, `TaskCreate`/`TaskUpdate`, and `TodoWrite` calls, plus user messages under `origin="any"` — scores each one, and fires when the threshold is met. Each hook keeps its own consumed ledger, so the same triggering text doesn't fire that hook twice in a row.
+
+```python
+import re
+from captain_hook import nudge, Signals, Signal
+
+nudge(
+    "Stop retrying. Narrow the failing test first, then rerun it once.",
+    signals=Signals(
+        patterns=[
+            Signal(pattern=r"let me try again", weight=2, flags=re.IGNORECASE),
+            Signal(pattern=r"retry|retrying", weight=1, flags=re.IGNORECASE),
+        ],
+        threshold=3,
+        window=10,
+        vetoes=[Signal(pattern=r"investigating", flags=re.IGNORECASE)],
+    ),
+)
+```
+
+When a score crosses the threshold, the hook fires and appends a "Triggered by: ..." line naming the text that set it off, so the agent sees why. For the full signal type list and field defaults, see the [conditions reference](../reference/conditions.qmd).
+
+## Query the transcript {#query-the-transcript}
+
+Your handler often needs to know what already happened this session: whether the agent ran the tests, which files it edited this turn, whether the user asked for the change you're about to block. Reach the transcript through `evt.ctx.t` inside any handler — a typed, chainable query API.
+
+### Query tool calls
+
+`t.tool_calls` is a query over every tool invocation in the session. Narrow it with chainable methods and finish with a terminal:
+
+```python
+from captain_hook import on, Event
+
+@on(Event.Stop)
+def check_tests(evt):
+    t = evt.ctx.t
+    edits = t.tool_calls.named("Edit").touching("**/*.py")
+    return evt.block("No Python edits reviewed") if edits.any() else None
+```
+
+- `.named(spec)` filters by tool name — pipe-delimited and alias-aware, so `named("Bash")` also matches `Execute`.
+- `.touching(*globs)` filters to calls touching matching files; `.under(*prefixes)` to calls under path prefixes.
+- `.failed()` narrows to errored calls; `.with_errors` widens the query to include failures, which are hidden by default.
+- `.where(predicate)` takes a callable over the tool call for anything else; `.where_input(**rules)` matches raw input fields, each rule an exact value, an `re.Pattern`, or a predicate callable.
+
+```python
+import re
+
+deep = t.tool_calls.named("Bash").where_input(command=re.compile(r"rm\s+-rf"))
+backgrounded = t.tool_calls.named("Task").where_input(run_in_background=True)
+```
+
+Terminals pull results out: `.count()`, `.any()`, `.first()`, `.last()`, `.files()` (a tuple of file references, one per file-touching call), or iterate the query directly with `list(edits)`.
+
+### Ask a yes/no question
+
+When you only need a boolean, the convenience checks read better than a full query. They walk subagent transcripts too.
+
+```python
+t.has_tool("Bash")                    # alias-aware: matches Execute
+t.has_command("uv", "run", "pytest")  # argv-prefix on literal tokens, wrapper-transparent
+t.has_edit_to("**/*.py")
+t.has_read("TESTING.md")
+t.has_skill("codex")
+t.user_said("fix", "bug")             # any keyword, case-insensitive
+```
+
+`has_command` takes argv tokens, not a regex — `has_command("git", "push")` matches `sudo git push -f` because wrappers are stripped and the tokens prefix-match the argv.
+
+### Slice the history
+
+Slicing returns a smaller transcript you can query the same way. The tool-anchored slices take keyword arguments:
+
+```python
+after_edit = t.after(tool="Edit")     # messages after the last Edit
+before_test = t.before(tool="Bash")   # messages before the last Bash
+recent = t.recent(5)                  # last five messages
+prior = t.prior()                     # everything before the current turn
+```
+
+### Read the current turn
+
+`t.current_turn` is the slice from the last user message onward, with shortcuts for the two things you usually want:
+
+```python
+turn = t.current_turn
+turn.prompt             # the user text that opened the turn
+turn.edits              # one Edit per file modified this turn
+```
+
+### Extract text and commands
+
+When a check needs raw material instead of tool calls:
+
+```python
+t.assistant_text()      # recent assistant messages, truncated per message
+t.commands()            # every Bash command string, in order
+t.command_lines()       # the same commands, parsed into CommandLine objects
+```
+
+### Read the live task list
+
+For a completion gate, such as a `Stop` hook that holds the agent until its work is done, read `evt.tasks` instead of replaying `TaskCreate` and `TaskUpdate` from the transcript.
+
+```python
+@on(Event.Stop)
+def task_gate(evt):
+    if open_tasks := evt.tasks.open:
+        return evt.block(f"{len(open_tasks)} of {len(evt.tasks)} tasks still open")
+```
+
+`evt.tasks` reads Claude Code's native task store keyed by the event's session, so it matches what `TaskList` shows. It includes updates made by subagents and teammates, drops deleted tasks, and carries lists across resumed sessions, none of which transcript replay can see. A session with no store has no tasks; it never borrows another session's. Filter by state with `.pending`, `.in_progress`, `.completed`, or `.open`, and check `.all_completed` for the whole list.
+
+### Read the diff
+
+When a check needs the actual change instead of the transcript's scattered edits, call `evt.ctx.diff()`. It returns a compact diff of the working tree, preferring cc-context's token-budgeted `ccx diff` and falling back to a plain `git diff` when `ccx` is unavailable.
+
+```python
+@on(Event.Stop)
+def review(evt):
+    diff = evt.ctx.diff()                 # uncommitted working-tree diff
+    staged = evt.ctx.diff("staged")       # only the staged change
+    scoped = evt.ctx.diff(scope="src/")   # restrict to a path
+```
+
+`diff()` returns `None` only when neither `ccx` nor `git` produces output. To feed the diff straight to a model, prefer the `diff=` flag on the LLM primitives over calling `diff()` by hand, covered [above](#attach-the-working-tree-diff).
+
 ## See also
 
-- [Score patterns with signals](signals.qmd) explains the scoring pipeline behind `signals=`.
+- [Writing hooks](primitives.qmd) covers the static primitives and conditions these build on.
 - [Test hooks inline](testing.qmd) covers what the test runner stubs and skips.
-- The [primitives reference](../reference/primitives.qmd) lists the full `llm_gate`, `llm_nudge`, and `prompt_check` option set.
+- The [primitives reference](../reference/primitives.qmd) lists the full `llm_gate`, `llm_nudge`, and `prompt_check` option set; the [conditions reference](../reference/conditions.qmd) every signal type.
 - [LLM cost control](../examples/llm-cost-control.qmd) is a runnable cost-bounded gate, and [Test integrity](../examples/test-integrity.qmd) is a runnable `prompt_check` hook.

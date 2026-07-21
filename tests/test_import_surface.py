@@ -39,7 +39,7 @@ CONSUMER_SURFACE = {
     "workflow",
 }
 
-LEGACY_SURFACE = ("Transcript", "Turn", "ToolUse", "ToolUseQuery", "EditInput", "BashInput", "EditOp", "ToolResult")
+LEGACY_SURFACE = ("Transcript", "ToolUse", "ToolUseQuery", "EditInput", "BashInput", "EditOp", "ToolResult")
 
 PROBE = """
 import importlib, json, sys

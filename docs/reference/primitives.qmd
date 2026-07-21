@@ -3,7 +3,7 @@ title: "Primitives & verdicts"
 ---
 
 Every built-in primitive, its signature, and the verdict types the LLM primitives use.
-The [Guide](../guide/index.qmd) how-tos teach which one to reach for.
+The [Guide](../guide/how-it-works.qmd) how-tos teach which one to reach for.
 
 ## At a glance
 
@@ -17,8 +17,10 @@ The [Guide](../guide/index.qmd) how-tos teach which one to reach for.
 | `nudge` | warn (or block) | `PreToolUse`/`PostToolUse`/`Stop \| SubagentStop` | ✓ | advice |
 | `lint` | warn (or block) | `PostToolUse` | ✓ | edit (string/AST) |
 | `diff_lint` | warn (or block) | `PostToolUse` | ✓ | edit delta |
-| `llm_gate` | block | `Stop \| SubagentStop` | SKIP | judgment |
-| `llm_nudge` | warn | `PostToolUse` | SKIP | judgment |
+| `rewrite_code` | rewrite | `PreToolUse` | ✓ | edit (AST) |
+| `set_tool_input` | rewrite | `PreToolUse` | ✓ | tool input |
+| `llm_gate` | block | `Stop \| SubagentStop` | ✓ | judgment |
+| `llm_nudge` | warn | `PostToolUse` | ✓ | judgment |
 | `prompt_check` | warn/block | called in a handler | SKIP | handler |
 | `workflow` | block | `SubagentStop` | ✓ | checklist |
 | `approve` | allow | `PermissionRequest` | ✓ | permission dialog |
@@ -26,11 +28,14 @@ The [Guide](../guide/index.qmd) how-tos teach which one to reach for.
 | `llm_approve` | allow | `PermissionRequest` | ✓ | permission judgment |
 | `install_binary` | none — always allows | `SessionStart` | ✓ | provisioning |
 
-Deterministic primitives carry inline `tests={...}`; LLM-backed ones show `SKIP` under
-`uvx capt-hook test` because they need a live model. The exception is `llm_approve`: its
-stubbed judge always answers `safe=False`, so its inline tests deterministically expect
-`Ask()`. `nudge` defaults to `PreToolUse` with a `when=`
-predicate, `PostToolUse` with `signals=`, and `Stop | SubagentStop` when `block=True`.
+Deterministic primitives carry inline `tests={...}`. LLM-backed primitives run their inline
+tests too: `uvx capt-hook test` stubs the model with a deterministic verdict (`block=True` for
+`llm_gate`, `fire=True` for `llm_nudge`, `safe=False` for `llm_approve`), so a gate expects
+`Block()`, a nudge `Warn()`, and an approve `Ask()`. Override the stub per test with
+`Input(llm={...})`. `nudge` defaults to `PreToolUse` with a `when=` predicate, `PostToolUse`
+with `signals=`, and `Stop | SubagentStop` when `block=True`; `skip_planning_agents` defaults to
+`not block`, so a blocking gate enforces on every agent while a warning nudge skips planning and
+exploration subagents.
 [Deterministic primitives](../guide/primitives.qmd) and [LLM Hooks](../guide/llm-hooks.qmd) show
 which one to reach for, with worked examples.
 
@@ -50,7 +55,8 @@ rewrite_command(pattern: str | None = None, replace: str | None = None, *,
                 note: str | Callable[[PreToolUseEvent], str | None] | None = None,
                 tests: InlineTests | None = None) -> None
 
-rewrite_command_occurrences(*, to: Callable[[PreToolUseEvent, Occurrence], str | None],
+rewrite_command_occurrences(*, to: Callable[[PreToolUseEvent, Occurrence], str | None] | None = None,
+                            visit: Callable[[PreToolUseEvent, Occurrence, WalkContext], str | Rewritten | HookResult | None] | None = None,
                             only_if: Sequence[TCondition] = (), skip_if: Sequence[TCondition] = (),
                             block_if: Callable[[PreToolUseEvent, Occurrence], bool] | None = None,
                             block: str | Callable[[PreToolUseEvent, CommandLine], str] | None = None,
@@ -84,6 +90,15 @@ line actually blocks — never at registration, never on a successful rewrite �
 quote the live command. A callable `note`
 receives every `(Occurrence, replacement)` pair and composes the one note for the line.
 
+`rewrite_command_occurrences` takes `to` or `visit`, never both. The `visit` form is a stateful
+walk: `visit(evt, occ, ctx)` runs once per occurrence in order — span-less ones included — with a
+`WalkContext` carrying the effective `cwd` (threaded through resolvable `cd`s), whether the words
+are quote-free (`plain_words`), and whether a rewrite can splice back (`spliceable`). Each call
+returns one of four verdicts: a `HookResult` (typically `evt.block(...)`) aborts the walk and
+discards every pending rewrite; a `str` or `Rewritten` replaces the occurrence (`Rewritten.note`
+lines dedupe into one note); `None` leaves it untouched. The `visit` form takes no
+`block_if`/`block`/`note` — blocking and notes ride on the verdicts.
+
 ## Nudges & gates
 
 ```python
@@ -110,24 +125,33 @@ message is replaced with the joined results. `lint` fires on `.py` edits and wri
 ## LLM primitives
 
 ```python
-llm_gate(prompt: str, *, message: str | Callable[[GateVerdict], str], verdict=lambda r: r.block,
-         response_model=GateVerdict, signals=None, when=None, only_if=(), skip_if=(), events=None,
-         max_fires=None, tests=None, max_context=2000, specialty="review",
-         model="small", agent=True, transcript=True) -> None
+llm_gate(prompt: str | Prompt, *, message: str | Callable[[GateVerdict], str], verdict=lambda r: r.block,
+         response_model=GateVerdict, label=None, signals=None, when=None, contexts=(), only_if=(), skip_if=(),
+         events=None, max_fires=None, tests=None, max_context=2000, specialty="review",
+         model="small", agent=True, transcript=True, diff=False) -> None
 
-llm_nudge(prompt: str, *, message: str | Callable[[NudgeVerdict], str], verdict=lambda r: r.fire,
-          response_model=NudgeVerdict, signals=None, when=None, only_if=(), skip_if=(), events=None,
-          max_fires=None, tests=None, async_=False, max_context=2000, specialty="review",
-          model="small", agent=True, transcript=True) -> None
+llm_nudge(prompt: str | Prompt, *, message: str | Callable[[NudgeVerdict], str], verdict=lambda r: r.fire,
+          response_model=NudgeVerdict, label=None, signals=None, when=None, contexts=(), only_if=(), skip_if=(),
+          events=None, max_fires=None, tests=None, async_=False, max_context=2000, specialty="review",
+          model="small", agent=True, transcript=True, diff=False) -> None
 
 prompt_check(evt, template: str | Prompt, fmt=None, *, prefix: str, suffix="", timeout=45,
-             include_reasoning=True, response_model=PromptCheckVerdict) -> HookResult | None
+             include_reasoning=True, diff=False, response_model=PromptCheckVerdict) -> HookResult | None
 ```
 
 `llm_gate` defaults to `max_fires=1`, `llm_nudge` to `max_fires=3`; budgets count per agent
 context, so the main agent and each subagent get the full allowance. `prompt_check` is called
 from a handler and returns a `HookResult` (or `None`). `max_fires`, a narrow `only_if`, and
 `model="small"` bound the cost.
+
+The `str` form of `message` is a `{field}` template over the verdict's fields (e.g. `{reasoning}`),
+following `Prompt.from_template`'s placeholder rules — every other brace stays literal. `label`
+gives a gate a stable identity so its review verdicts and fire state survive prompt edits;
+otherwise the hook name derives from the prompt hash. `contexts` attaches declarative evidence
+blocks — `BeforeEdit`/`AfterEdit`/`Introduced` and other `PromptContext`s — each rendered as an
+XML block, and a `required` context with no content skips the call. `diff=True` (or
+`diff="staged"`/`diff="HEAD~1"`) attaches a working-tree diff as a `<diff>` block; an empty diff
+skips the call without spending a fire.
 
 ## Workflows
 
@@ -143,19 +167,24 @@ builds a transcript check for `Step.check`.
 ## Permissions
 
 ```python
-approve(label: str, *, only_if: Sequence[TCondition] = (), skip_if: Sequence[TCondition] = (),
+approve(label: str, *, events: Event = Event.PreToolUse | Event.PermissionRequest,
+        only_if: Sequence[TCondition] = (), skip_if: Sequence[TCondition] = (),
         tests: InlineTests | None = None) -> None
 
-deny(reason: str, *, only_if: Sequence[TCondition] = (), skip_if: Sequence[TCondition] = (),
+deny(reason: str, *, events: Event = Event.PreToolUse | Event.PermissionRequest,
+     only_if: Sequence[TCondition] = (), skip_if: Sequence[TCondition] = (),
      tests: InlineTests | None = None) -> None
 
-llm_approve(label: str, *, rubric: str | None = None, only_if: Sequence[TCondition] = (),
+llm_approve(label: str, *, rubric: str | None = None,
+            events: Event = Event.PermissionRequest, only_if: Sequence[TCondition] = (),
             skip_if: Sequence[TCondition] = (), model: TModel = "small",
             tests: InlineTests | None = None) -> None
 ```
 
-All three register on `PermissionRequest`, which fires when a permission dialog would be
-shown, and none carries a fire cap, so a matching dialog is always answered. `approve`
+`approve` and `deny` answer on `PreToolUse | PermissionRequest` by default, `llm_approve` on
+`PermissionRequest`; none carries a fire cap, so every matching event is answered. Answering on
+`PreToolUse` matters — a `deny` there blocks a call that would otherwise run without ever
+prompting, not just one that reached a dialog, and `events=` narrows the scope. `approve`
 answers with *allow*, so the tool runs and the user never sees the dialog. `deny` answers
 with *deny*, surfacing `reason` as the message. `llm_approve` consults an LLM safety judge
 whose rubric is seeded from `claude auto-mode defaults` plus your `rubric` text; the seeded
@@ -220,6 +249,8 @@ event payload; set the fields the target event reads. All fields default to `Non
 | `limit` | `int` | `Read` call limit |
 | `transcript` | `Path \| TranscriptFixture \| list[dict]` | Session history for transcript conditions |
 | `tasks` | `list[dict]` | The native task list read via `evt.tasks` |
+| `cwd` | `str` | The session working directory, surfaced as `evt.cwd` |
+| `llm` | `dict` | Per-test LLM verdict stub overrides, e.g. `llm={"fire": False}` |
 
 `FileFixture(size=N)` fills a temp file with `N` bytes, `content=...` writes exact text, and
 `name=...` sets the file name an extension- or path-based condition matches. Use it when the

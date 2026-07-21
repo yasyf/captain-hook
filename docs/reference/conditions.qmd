@@ -12,7 +12,7 @@ These match the event being processed right now.
 
 | Condition | Matches when | Pattern | Example |
 |-----------|--------------|---------|---------|
-| `Tool(*names)` | The tool name is one of `names` | Exact names (aliases + MCP suffixes auto-match); a `\|`-joined string still works | `Tool("Edit", "Write")` |
+| `Tool(*names)` | The tool name is one of `names` | Exact names (aliases + MCP suffixes auto-match); a `\|`-joined string still works; `Tool.EditTools` is the prebuilt edit-shaped set (Edit, MultiEdit, NotebookEdit, Write) | `Tool.EditTools` |
 | `FilePath(*p, project_only=True)` | The event's file path matches any glob | Glob | `FilePath("**/*.py")` |
 | `Command(p)` | The raw Bash line or any parsed command matches | Regex | `Command(r"curl.*\|.*sh")` |
 | `Runs(*argv)` | Any parsed command's argv starts with `argv` | Argv prefix (structural) | `Runs("git", "stash")` |
@@ -36,7 +36,9 @@ These check what happened earlier in the session, from the transcript.
 | `ReadFile(*p, subagents=True)` | A file matching the glob was read | Glob | `ReadFile("TESTING.md")` |
 | `TouchedFile(*p, subagents=False)` | A file matching the glob was edited or written | Glob | `TouchedFile("**/*.py")` |
 | `RanCommand(*argv, subagents=True)` | A Bash command running the argv prefix ran (wrapper-transparent, launcher-literal) | Argv tokens | `RanCommand("uv", "run", "pytest")` |
-| `UsedSkill(*names, subagents=True)` | A skill named one of `names` was invoked (a bare name also matches `plugin:name`) | Exact names; a `\|`-joined string still works | `UsedSkill("codex")` |
+| `UsedSkill(*names, subagents=True, scope="turn")` | A skill named one of `names` was invoked in the current turn (a bare name also matches `plugin:name`); `scope="session"` searches the whole session | Exact names; a `\|`-joined string still works | `UsedSkill("codex")` |
+| `UsedTool(*names, subagents=True, scope="turn")` | A tool use named one of `names` exists in the current turn; `scope="session"` searches the whole session | Exact names; a `\|`-joined string still works | `UsedTool("EnterPlanMode")` |
+| `UserSaid(*patterns, scope="turn")` | The current turn's prompt matches a pattern; `scope="session"` scans every prompt in the session | Case-insensitive regex strings and/or `Clause`s | `UserSaid("just commit")` |
 | `InPlanMode()` | The agent is in plan mode | — | `InPlanMode()` |
 | `Waiting()` | A background or async tool is still pending. Durable `Workflow` and async sub-agent launches count across turns until their completion notification lands | — | `Waiting()` |
 | `SkipPermissions()` | The session's `claude` process was launched with `--dangerously-skip-permissions` **or** `--allow-dangerously-skip-permissions`, found by walking the process tree to the nearest `claude` ancestor. Either spelling means the user made bypass *available* at launch, which counts as consent even while the active `permission_mode` is something else, such as `plan` | — | `SkipPermissions()` |
@@ -86,7 +88,7 @@ far back it may sit. Under `scope="window"` the score pools distinct signals acr
 instead, counting each once. `origin` filters candidates upstream of either scope: the default
 `"assistant"` scores only the agent's own prose, while `origin="any"` also scores user messages and
 the just-submitted `UserPromptSubmit` prompt. See
-[Score patterns with signals](../guide/signals.qmd).
+[Score patterns with signals](../guide/llm-hooks.qmd#score-patterns-with-signals).
 
 | Type | Purpose | Example |
 |------|---------|---------|

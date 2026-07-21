@@ -1,5 +1,6 @@
 ---
 title: "Writing hooks"
+description: "Primitives, conditions, and style rules — the vocabulary every hook is built from."
 aliases: [conditions.html, styleguide.html, patterns.html]
 ---
 
@@ -54,7 +55,7 @@ nudge(
 )
 ```
 
-`scope="window"` scores signals across the whole window; the default `scope="text"` requires one message to reach the threshold on its own. Transcript fixtures use the raw JSONL shape — `{"type": ..., "message": {"content": [...]}}` — exactly as Claude Code writes it; [Query the transcript](transcript.qmd) shows how to capture one. A nudge with `signals` defaults to `PostToolUse`; without them it defaults to `PreToolUse`. See [Signals](signals.qmd) for the scoring model.
+`scope="window"` scores signals across the whole window; the default `scope="text"` requires one message to reach the threshold on its own. Transcript fixtures use the raw JSONL shape — `{"type": ..., "message": {"content": [...]}}` — exactly as Claude Code writes it; [Query the transcript](llm-hooks.qmd#query-the-transcript) shows how to capture one. A nudge with `signals` defaults to `PostToolUse`; without them it defaults to `PreToolUse`. See [Signals](llm-hooks.qmd#score-patterns-with-signals) for the scoring model.
 
 ## gate {#gate}
 
@@ -209,7 +210,7 @@ executes your real installer in every repo that runs `uvx capt-hook test`. Keep 
 coverage in a standalone test file with a stub script.
 :::
 
-[Ship a pack in a Claude plugin](plugin-packs.qmd) shows the plugin-tier setup this primitive was built for.
+[Ship a pack in a Claude plugin](packs.qmd#ship-a-pack-in-a-plugin) shows the plugin-tier setup this primitive was built for.
 
 ## Filter with conditions
 
@@ -491,5 +492,5 @@ is reported — not just the ones you added.
 To turn an existing STYLEGUIDE.md — or the style sections of CONTRIBUTING, AGENTS, or CLAUDE.md — into rules, run the `translating-styleguides` skill instead of hand-writing every class. It atomizes the prose into candidate rules and sorts each into one of four tiers: a declarative matcher, a custom `check()`, an LLM hook for judgment calls, or unenforceable-with-a-reason. It writes the hook files, synthesizes inline tests from the guide's own examples, verifies them with `uvx capt-hook test`, and reports every statement including the rows it cannot enforce. See [Agent Skills](../reference/skills.qmd).
 
 ::: {.callout-note title="Related"}
-[Inspect and rewrite commands](commands.qmd) owns the command primitives and the fluent walk. [LLM hooks](llm-hooks.qmd) covers the model-backed primitives, [Workflows](workflows.qmd) multi-step enforcement, and the [reference](../reference/primitives.qmd) every full signature.
+[Inspect and rewrite commands](commands.qmd) owns the command primitives and the fluent walk. [LLM hooks](llm-hooks.qmd) covers the model-backed primitives, [Workflows](state.qmd#enforce-a-multi-step-workflow) multi-step enforcement, and the [reference](../reference/primitives.qmd) every full signature.
 :::

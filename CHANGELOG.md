@@ -36,6 +36,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   codex edits fire the gates that should see them (this repo's own style gate included). Bare
   `tool_calls` is unchanged — recursion stays opt-in.
 
+## [12.6.0] - 2026-07-21
+
+### Changed
+- **BREAKING: `scope=` defaults to `"turn"`.** `UsedSkill`, `UsedTool`, and `UserSaid` now
+  search only the current turn by default — the directive-and-compliance idiom nearly every
+  call site wants; pass `scope="session"` to keep the whole-session scan. The builtin packs
+  move with the default: the commit-test gates' `UserSaid("commit", "just commit")` now only
+  honors an exemption given this turn, not one from any earlier prompt.
+
+## [12.5.0] - 2026-07-21
+
+### Added
+- **`scope=` on the whole transcript-directive family.** `UsedSkill(*names, scope="turn")` and
+  `UserSaid(*patterns, scope="turn")` restrict their scan to the current turn, matching the
+  `scope=` knob `UsedTool` gained in 12.3.0; the default stays `"session"`.
+  `UserSaid(..., scope="turn")` is the declarative spelling of `evt.ctx.turn.matches(...)`,
+  so directive-reactive guards no longer need a `CustomCondition`.
+
+## [12.4.0] - 2026-07-21
+
+### Added
+- **`Tool.EditTools`** — the prebuilt full edit-shaped set, `Tool("Edit", "MultiEdit",
+  "NotebookEdit", "Write")`, so hooks stop spelling the edit tools by hand; the scratch-writes
+  approver and `rewrite_code` now use it.
+
+### Changed
+- **Review PRs open with an Issue/Fix/Example body.** The session reviewer's PR template
+  (`scanning-sessions` skill) drops the Rule/Hook/Evidence sections for three: what went wrong
+  (with the strongest verbatim correction woven in), what the hook does, and a short transcript
+  vignette of the situation going better with the guard live.
+
+## [12.3.0] - 2026-07-20
+
+### Added
+- **`UsedTool` condition** — transcript-history condition matching tool uses by name
+  (`UsedTool("Edit", "Write")`; a `|`-joined string still works). `scope="turn"` restricts the
+  search to the current turn — the idiom for skipping a guard once the agent has complied.
+- **`UserSaid` accepts regexes and clauses, and is exported from the package root.** String
+  patterns are case-insensitive regexes (plain keywords keep their substring behavior); `Clause`
+  patterns run the dependency-clause scan against each prompt.
+- **`evt.ctx.turn.matches(*patterns)` and `evt.ctx.nlp(text, *patterns)`** — public prose-matching
+  surfaces taking regex strings or `Clause`s, so hooks no longer import `captain_hook.signals.nlp`.
+  `evt.ctx.turn` is now a `Turn`, a one-turn `Session` view with `matches`; `subject_kind` joins
+  the exported NLP helpers.
+
+### Changed
+- **BREAKING: `Clause.subject` is now a tuple of allowed subject shapes** — `()` (default, no
+  constraint), composing the kinds `"unnamed"` (imperatives, pronoun subjects, true passives),
+  `"passive"` (a substantive subject without a direct object), and `"actor"` (a substantive
+  subject acting on one); a bare string works as singleton sugar. Replaces the
+  `"any"`/`"no_nominal"`/`"none"` literals: `subject="none"` → `subject=("unnamed",)` and
+  `subject="no_nominal"` → `subject=("unnamed", "passive")`.
+
+## [12.2.0] - 2026-07-20
+
+### Added
+- **`Clause(subject="none")`** — vetoes any verb with a substantive active subject, transitive
+  or not. `"no_nominal"` only suppresses descriptions with a direct object ("the parser removed
+  the node"); `"none"` also suppresses intransitive ones ("the daemon switches to degraded
+  mode"), so directive-detection clauses match imperatives and pronoun subjects while ignoring
+  described behavior.
+
 ## [12.1.0] - 2026-07-20
 
 ### Added
@@ -55,6 +117,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   escape hatch: {reasoning}.")` substitutes the verdict model's fields into a `{field}` template
   (same placeholder rules as `Prompt.from_template`: only `{identifier}` substitutes, stray braces
   stay literal), alongside the existing literal and callable forms.
+- **`LambdaCondition`** — inline conditions from a bare callable:
+  `only_if=[LambdaCondition(lambda evt: evt.file is not None)]` wraps the lambda as a
+  `CustomCondition`'s `check`, skipping the class declaration for one-off logic.
 
 ## [12.0.1] - 2026-07-20
 

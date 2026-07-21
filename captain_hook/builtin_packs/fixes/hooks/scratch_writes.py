@@ -15,7 +15,7 @@ from captain_hook.builtin_packs.fixes.hooks._lib import McpTool
 
 approve(
     "scratch-dir writes under skip-permissions",
-    only_if=[Tool("Edit|Write|MultiEdit|NotebookEdit"), ScratchPath(), SkipPermissions()],
+    only_if=[Tool.EditTools, ScratchPath(), SkipPermissions()],
     skip_if=[McpTool()],
     tests={
         Input(file="/tmp/sweep_arc.py", content="print(1)", skip_permissions=True): Allow(explicit=True),

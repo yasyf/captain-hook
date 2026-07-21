@@ -6,7 +6,7 @@ import re
 from collections.abc import Sequence
 from itertools import chain
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from cc_transcript.tools import SkillCall, TaskCall, WorkflowCall, tool_name_matches
 
@@ -34,6 +34,7 @@ from captain_hook.types import (
     ToolInput,
     TouchedFile,
     UsedSkill,
+    UsedTool,
     Waiting,
     WorkflowScript,
 )
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
     from cc_transcript.query import Session
 
     from captain_hook.events import BaseHookEvent
+    from captain_hook.signals.nlp import Clause
     from captain_hook.types import HookSpec
 
 # Prose and config file extensions that shouldn't, on their own, demand a code-review pass.
@@ -181,13 +183,31 @@ def is_project_file(evt: BaseHookEvent) -> bool:
 
 
 class UserSaid(CustomCondition):
-    """Matches when the user's messages contain any of the given keywords."""
+    """Matches when a user prompt matches one of ``patterns``.
 
-    def __init__(self, *keywords: str) -> None:
-        self.keywords = keywords
+    A string pattern is a case-insensitive regex, so plain keywords keep their
+    substring behavior; a :class:`~captain_hook.Clause` runs the dependency-clause
+    scan against each prompt. The default scans only what the user said in the
+    current turn — the idiom for reacting to a directive the user just gave;
+    ``scope="session"`` widens the scan to every prompt in the session.
+
+    Example:
+        >>> UserSaid(Clause(noun=Phrase("work"), verb=Phrase("stop", "halt")))
+        >>> UserSaid("just commit", Clause(noun=Phrase("test"), verb=Phrase("skip")), scope="session")
+    """
+
+    def __init__(self, *patterns: str | Clause, scope: Literal["session", "turn"] = "turn") -> None:
+        self.patterns = patterns
+        self.scope = scope
 
     def check(self, evt: BaseHookEvent) -> bool:
-        return evt.ctx.t.user_said(*self.keywords)
+        from captain_hook.signals.nlp import scan_text
+
+        return (
+            evt.ctx.turn.matches(*self.patterns)
+            if self.scope == "turn"
+            else any(scan_text(turn.prompt, self.patterns) for turn in evt.ctx.t.turns if turn.prompt)
+        )
 
 
 class AllEditsUnder(CustomCondition):
@@ -389,8 +409,12 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
                 and (include_tests or not f.is_test)
                 and (not paths or f.matches(*paths))
             )
-        case UsedSkill(names, subagents):
-            return has_used_skill(evt.ctx.transcript, names, subagents=subagents)
+        case UsedSkill(names, subagents, scope):
+            return has_used_skill(evt.ctx.turn if scope == "turn" else evt.ctx.transcript, names, subagents=subagents)
+        case UsedTool(names, subagents, scope):
+            return (evt.ctx.turn if scope == "turn" else evt.ctx.transcript).has_tool(
+                "|".join(names), subagents=subagents
+            )
         case ReadFile(patterns, subagents):
             return has_read_glob(evt.ctx.transcript, *patterns, subagents=subagents)
         case TouchedFile(patterns, subagents):

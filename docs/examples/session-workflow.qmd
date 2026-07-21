@@ -42,6 +42,6 @@ uvx capt-hook --hooks docs/examples test
 
 ## See also
 
-- [Workflows](../guide/workflows.qmd)
+- [Workflows](../guide/state.qmd#enforce-a-multi-step-workflow)
 - [State](../guide/state.qmd)
 - [Conditions](../reference/conditions.qmd)
