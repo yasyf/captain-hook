@@ -94,7 +94,6 @@ EXPORTS: dict[str, str] = {
     "GateVerdict": "captain_hook.primitives.llm",
     "NudgeVerdict": "captain_hook.primitives.llm",
     "PromptCheckVerdict": "captain_hook.primitives.llm",
-    "llm_evaluate": "captain_hook.primitives.llm",
     "llm_gate": "captain_hook.primitives.llm",
     "llm_nudge": "captain_hook.primitives.llm",
     "prompt_check": "captain_hook.primitives.llm",

@@ -199,7 +199,6 @@ PINNED_EXPORTS: tuple[str, ...] = (
     "is_past_predicate",
     "lint",
     "llm_approve",
-    "llm_evaluate",
     "llm_gate",
     "llm_nudge",
     "nudge",

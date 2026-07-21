@@ -106,6 +106,13 @@ def review_test_quality(evt):
 
 `Prompt.from_template` raises `KeyError` when a placeholder has no matching keyword, so a typo fails loud instead of leaking braces into the prompt. The full `Prompt` builder API lives in [the primitives reference](../reference/primitives.qmd).
 
+`evt.llm` is the raw form of the same call: ask the model from any handler and get a typed answer back, with no hook registration and no verdict plumbing. The return type follows what you pass — a bare prompt returns `str | None`, `bool` and `int` return the parsed answer, and a Pydantic model class returns a validated instance. `None` always means the call was skipped — already fired this turn, vetoed by `when`, or signals below threshold; a call that still fails after the final retry raises.
+
+```python
+verdict = evt.llm("Rate the risk of this action.", RiskVerdict)
+risky = evt.llm("Does this diff delete a public API?", bool, diff=True)
+```
+
 ## Auto-answer permission dialogs {#llm_approve}
 
 `llm_approve` is the fourth LLM primitive, and it answers whether a pending tool call is safe to run without asking. It fires on `PermissionRequest`, the event Claude Code raises when a permission dialog would appear, and sends the pending tool call to a safety judge. A `safe` verdict answers the dialog with *allow*, so the tool runs silently. An unsafe verdict, or any LLM failure, returns nothing, and the real dialog shows; it never auto-denies on a model's say-so.

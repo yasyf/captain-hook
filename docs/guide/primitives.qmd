@@ -275,6 +275,17 @@ hook(Event.Stop, message="Many edits, run a review", only_if=[MinEdits(threshold
 
 Use a custom condition like any built-in in either list. The predicate goes in `check()`; the firing goes through a primitive, never an `@on` body.
 
+For a one-expression predicate, skip the class: `LambdaCondition` wraps a bare callable as a condition inline.
+
+```python
+from captain_hook import LambdaCondition
+
+hook(Event.Stop, message="Finish the task list first", block=True,
+     only_if=[LambdaCondition(lambda evt: not evt.tasks.all_completed)])
+```
+
+A named class documents itself at every call site; reach for the lambda only when the predicate reads clearly on one line.
+
 ### Match a typed tool call {#match-a-typed-tool-call}
 
 When your predicate only makes sense for one tool, subclass `CustomInputTypeCondition[T]` instead of reading raw payload fields. Parameterize it with the tool-call type and implement `check_input(self, evt, call)`. The base narrows `evt.input` to that type and skips every other tool, so `call` arrives typed.

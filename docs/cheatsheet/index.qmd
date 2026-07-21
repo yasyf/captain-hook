@@ -119,9 +119,9 @@ prompt_check(evt, Prompt.from_template("Review {code}", code=evt.content),
              prefix="Test quality")
 ```
 
-**llm_evaluate** — a structured verdict for your own handler to act on
+**evt.llm** — a typed answer from the model, from inside any handler
 ```python
-verdict = llm_evaluate(evt, "Rate the risk of this action.", RiskVerdict, hook="risk")
+verdict = evt.llm("Rate the risk of this action.", RiskVerdict)
 ```
 
 ## 🎯 Decide when (conditions)
