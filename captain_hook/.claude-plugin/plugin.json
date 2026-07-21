@@ -15,11 +15,5 @@
     "hooks",
     "guardrails",
     "styleguide"
-  ],
-  "mcpServers": {
-    "capt-hook": {
-      "command": "uvx",
-      "args": ["--from", "capt-hook[mcp]", "capt-hook", "mcp"]
-    }
-  }
+  ]
 }
