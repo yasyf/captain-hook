@@ -1,4 +1,4 @@
-// capt-hook-widget src-sha256: fb9ae7fb5d0eb12ab4913614f7442f117559e611b535784d58fddd1066dda8d9
+// capt-hook-widget src-sha256: aeb8c2c8b6acbee59aca3d39b93afcd84b5acf2c8bf81d6e58a6a7d7827085af
 
 // autocomplete.ts
 var counter = 0;
@@ -249,11 +249,11 @@ var WORLD_HONESTY_MESSAGE = "outside the filesystem this demo declares \u2014 ru
 
 // rm_world.ts
 var GLOB_LIMIT = 10;
-var LEADING_WRAPPERS = /* @__PURE__ */ new Set(["sudo", "env", "timeout", "nohup", "command", "time", "xargs"]);
+var LEADING_WRAPPERS = /* @__PURE__ */ new Set(["command", "doas", "env", "exec", "nice", "nohup", "sudo", "timeout", "xargs"]);
 var SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "dash", "zsh", "ksh", "ash", "fish", "csh", "tcsh"]);
 var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 var SAFE_WORD = /^[^\s'"\\$`;&|<>(){}#]+$/;
-var TEMP_ROOTS = ["/tmp", "/private/tmp", "/var/folders", "/dev/shm", "/run/user"];
+var TEMP_ROOTS = ["/tmp", "/private/tmp", "/var/folders", "/dev/shm"];
 var SCRATCH_DIR_NAMES = /* @__PURE__ */ new Set(["tmp", "temp", "scratch", "scratchpad", "scratchpads"]);
 var commandSubBlock = (raw) => `BLOCKED: a command substitution supplies rm targets in '${raw}', so they cannot be verified against any git/jj repository or scratch exemption. Expand the substitution to explicit paths first, or ask the user to run it themselves.`;
 var globOverLimitBlock = (token) => `BLOCKED: the glob '${token}' matches more than ${GLOB_LIMIT} files \u2014 an easy way to delete far more than intended. List the matches first (ls ${token}), narrow the pattern, or name a directory explicitly with rm -r <dir>.`;
@@ -423,12 +423,12 @@ function emitToken(token, plainWords) {
   if ((hasMagic(token) || token.startsWith("~")) && !plainWords) return null;
   return token.startsWith("-") ? `./${token}` : token;
 }
-function classifyTarget(raw) {
+function classifyTarget(raw, afterTerminator) {
   if (raw.includes("$(") || raw.includes("`")) return { kind: "substitution" };
   if (raw.includes("${") || raw.includes("\\")) return { kind: "honesty" };
   const value = dequote(raw);
   const plain = !raw.includes("'") && !raw.includes('"');
-  if (value.startsWith("-")) return { kind: "flag" };
+  if (!afterTerminator && value.startsWith("-")) return { kind: "flag" };
   if (value.startsWith("~") || value.includes("**") || value.includes("{")) return { kind: "honesty" };
   const isGlob = hasMagic(value);
   if (isGlob && !plain) return { kind: "honesty" };
@@ -456,7 +456,10 @@ function checkTarget(vfs, target, rewritable) {
   for (const match of matches) {
     const result = checkResolved(vfs, resolveTarget(match, vfs.cwd), match, rewritable);
     if (result.kind === "block" || result.kind === "honesty") return result;
-    if (result.kind === "recoverable" && recovery === null) recovery = result;
+    if (result.kind === "recoverable") {
+      if (recovery !== null) return { kind: "honesty" };
+      recovery = result;
+    }
   }
   return recovery ?? { kind: "allow" };
 }
@@ -534,10 +537,63 @@ function headBasename(raw) {
   const unescaped = stripped.replace(/\\(.)/g, "$1");
   return (unescaped.split("/").pop() ?? unescaped).toLowerCase();
 }
-function headAndArgs(words) {
+function classifyRm(words) {
   let i = 0;
-  while (i < words.length && (ASSIGNMENT.test(words[i]) || LEADING_WRAPPERS.has(headBasename(words[i])))) i++;
-  return i < words.length ? { head: headBasename(words[i]), args: words.slice(i + 1) } : null;
+  let wrapped = false;
+  while (i < words.length && (ASSIGNMENT.test(words[i]) || LEADING_WRAPPERS.has(headBasename(words[i])))) {
+    if (!ASSIGNMENT.test(words[i])) wrapped = true;
+    i++;
+  }
+  if (i >= words.length) return { kind: "none" };
+  const head = headBasename(words[i]);
+  const rest = words.slice(i + 1);
+  if (head === "time") return classifyRm(rest).kind === "none" ? { kind: "none" } : { kind: "honesty" };
+  if (head === "eval" || SHELLS.has(head) && rest.includes("-c")) return { kind: "honesty" };
+  if (head === "rm") return { kind: "rm", args: rest };
+  if (wrapped && rest.some((w) => headBasename(w) === "rm")) return { kind: "honesty" };
+  return { kind: "none" };
+}
+function skipSubst(s, open) {
+  const opener = s[open];
+  const closer = opener === "(" ? ")" : "}";
+  let depth = 0;
+  let quote = null;
+  for (let i = open; i < s.length; i++) {
+    const c = s[i];
+    if (quote) {
+      if (c === quote) quote = null;
+    } else if (c === "'" || c === '"') quote = c;
+    else if (c === "\\") i++;
+    else if (c === opener) depth++;
+    else if (c === closer && --depth === 0) return i;
+  }
+  return s.length;
+}
+function hasGrouping(command) {
+  let quote = null;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote) {
+      if (c === quote) quote = null;
+    } else if (c === "'" || c === '"') quote = c;
+    else if (c === "\\") i++;
+    else if (c === "`") i = (i = command.indexOf("`", i + 1)) < 0 ? command.length : i;
+    else if (c === "$" && (command[i + 1] === "(" || command[i + 1] === "{")) i = skipSubst(command, i + 1);
+    else if (c === "(" || c === ")" || c === "{" || c === "}") return true;
+  }
+  return false;
+}
+function hasRedirectOperator(word) {
+  let quote = null;
+  for (let i = 0; i < word.length; i++) {
+    const c = word[i];
+    if (quote) {
+      if (c === quote) quote = null;
+    } else if (c === "'" || c === '"') quote = c;
+    else if (c === "\\") i++;
+    else if (c === "<" || c === ">") return true;
+  }
+  return false;
 }
 function honesty() {
   return { action: "subset-exceeded", message: WORLD_HONESTY_MESSAGE, rewritten: null };
@@ -554,12 +610,12 @@ function applyReplacements(command, edits) {
 }
 function evaluateRmWorld(world, command) {
   const vfs = new Vfs(world);
+  if (hasGrouping(command)) return honesty();
   const rmCalls = [];
   for (const segment of splitSegments(command)) {
-    const parsed = headAndArgs(splitWords(segment.text));
-    if (parsed === null) continue;
-    if (parsed.head === "eval" || SHELLS.has(parsed.head) && parsed.args.includes("-c")) return honesty();
-    if (parsed.head === "rm") rmCalls.push({ segment, args: parsed.args });
+    const parsed = classifyRm(splitWords(segment.text));
+    if (parsed.kind === "honesty") return honesty();
+    if (parsed.kind === "rm") rmCalls.push({ segment, args: parsed.args });
   }
   if (rmCalls.length === 0) return { action: "pass", message: null, rewritten: null };
   const rewritable = world.trash !== null;
@@ -567,11 +623,17 @@ function evaluateRmWorld(world, command) {
   const notes = [];
   let result = null;
   for (const call of rmCalls) {
+    if (call.args.some(hasRedirectOperator)) return honesty();
     const targets = [];
     let substitution = false;
     let honest = false;
+    let terminated = false;
     for (const raw of call.args) {
-      const cls = classifyTarget(raw);
+      if (!terminated && dequote(raw) === "--") {
+        terminated = true;
+        continue;
+      }
+      const cls = classifyTarget(raw, terminated);
       if (cls.kind === "substitution") substitution = true;
       else if (cls.kind === "honesty") honest = true;
       else if (cls.kind === "target") targets.push(cls.target);

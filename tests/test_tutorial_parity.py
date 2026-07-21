@@ -20,6 +20,7 @@ FRAGMENTS = ROOT / "docs" / "_fragments"
 SRC = ROOT / "docs" / "tutorial" / "_src"
 PARITY_MJS = SRC / "parity.mjs"
 COMPILER_TESTS_MJS = SRC / "tests" / "compiler.test.mjs"
+RM_WORLD_TESTS_MJS = SRC / "tests" / "rm_world.test.mjs"
 MATRIX = json.loads((SRC / "matrix.json").read_text())
 
 sys.path.insert(0, str(SCRIPTS))
@@ -280,6 +281,45 @@ def test_rm_world_parity(
     assert str(rm_world_cwd) not in json.dumps(real)
 
 
+# Faithfully-modelable review fixes the declared cases miss: completed no-arg wrappers and `--`.
+RM_WORLD_PARITY_EXTRAS = [
+    "exec rm -rf /",
+    "nice rm -rf /",
+    "doas rm -rf /",
+    "exec rm foo.txt",
+    "nice rm foo.txt",
+    "doas rm foo.txt",
+    "env FOO=1 rm foo.txt",
+    "rm -- -foo.txt",
+    "rm -- data.txt",
+    "rm foo.txt -- notes.md",
+    "rm -- -r junk/a.log",
+    "rm --",
+]
+
+
+@requires_node
+@pytest.mark.parametrize("command", RM_WORLD_PARITY_EXTRAS)
+def test_rm_world_parity_extras(command: str, rm_world_cwd: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Byte-parity between the real ``guard_rm`` and the world engine for the terminator and completed
+    no-arg wrapper cases, at the world's declared trash — the axis the declared cases leave uncovered."""
+    world = MATRIX["widgets"]["rm_walk"]["world"]
+    trash = world["trash"]
+    saved = list(_state.hooks)
+    try:
+        _state.hooks.clear()
+        discover_pack("general", PACKS_DIR / "general" / "hooks")
+        deletions = sys.modules[next(h.handler.__module__ for h in _state.hooks if h.name == "guard_rm")]
+        monkeypatch.setattr(deletions, "trash_binary", lambda: trash)
+        with isolated_state_root():
+            evt = input_to_event(Event.PreToolUse, Input(command=command, cwd=str(rm_world_cwd)))
+            real = normalize(dispatch(Event.PreToolUse, evt))
+    finally:
+        _state.hooks[:] = saved
+    assert real == run_node_world(world, command)
+    assert str(rm_world_cwd) not in json.dumps(real)
+
+
 REFUSALS = {
     "gate_signals": "from captain_hook import gate\nfrom captain_hook.types import Signal, Signals\n"
     "gate('x', signals=Signals([Signal(pattern='y')], threshold=1))\n",
@@ -407,6 +447,13 @@ def test_compile_refusal_parity(source: str) -> None:
 def test_compiler_node_unit_suite() -> None:
     """Run the compiler.js `node --test` unit suite (refusals, kwarg ignoring, triple-quote lowering)."""
     proc = subprocess.run([NODE, "--test", str(COMPILER_TESTS_MJS)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@requires_node
+def test_rm_world_node_unit_suite() -> None:
+    """Run the rm_walk world-engine `node --test` suite (redirect/wrapper/grouping/time/glob honesty)."""
+    proc = subprocess.run([NODE, "--test", str(RM_WORLD_TESTS_MJS)], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 

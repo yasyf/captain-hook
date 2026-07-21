@@ -5,12 +5,13 @@ import { Verdict, WORLD_HONESTY_MESSAGE, WorldSpec } from "./specs";
 
 const GLOB_LIMIT = 10;
 
-const LEADING_WRAPPERS = new Set(["sudo", "env", "timeout", "nohup", "command", "time", "xargs"]);
+// cc_transcript's WRAPPER_COMMANDS minus `time` (a reserved word handled in classifyRm).
+const LEADING_WRAPPERS = new Set(["command", "doas", "env", "exec", "nice", "nohup", "sudo", "timeout", "xargs"]);
 const SHELLS = new Set(["sh", "bash", "dash", "zsh", "ksh", "ash", "fish", "csh", "tcsh"]);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const SAFE_WORD = /^[^\s'"\\$`;&|<>(){}#]+$/;
-// util/scratch.py: temp roots plus scratch-named ancestor directories.
-const TEMP_ROOTS = ["/tmp", "/private/tmp", "/var/folders", "/dev/shm", "/run/user"];
+// util/scratch.py temp roots (`/run/user` is uid-scoped there, so a bare `/run/user/*` is not scratch).
+const TEMP_ROOTS = ["/tmp", "/private/tmp", "/var/folders", "/dev/shm"];
 const SCRATCH_DIR_NAMES = new Set(["tmp", "temp", "scratch", "scratchpad", "scratchpads"]);
 
 // --- verbatim message strings (captain_hook/builtin_packs/general/hooks/deletions.py) ----------
@@ -255,12 +256,12 @@ function emitToken(token: string, plainWords: boolean): string | null {
   return token.startsWith("-") ? `./${token}` : token;
 }
 
-function classifyTarget(raw: string): Classification {
+function classifyTarget(raw: string, afterTerminator: boolean): Classification {
   if (raw.includes("$(") || raw.includes("`")) return { kind: "substitution" };
   if (raw.includes("${") || raw.includes("\\")) return { kind: "honesty" };
   const value = dequote(raw);
   const plain = !raw.includes("'") && !raw.includes('"');
-  if (value.startsWith("-")) return { kind: "flag" };
+  if (!afterTerminator && value.startsWith("-")) return { kind: "flag" };
   if (value.startsWith("~") || value.includes("**") || value.includes("{")) return { kind: "honesty" };
   const isGlob = hasMagic(value);
   if (isGlob && !plain) return { kind: "honesty" };
@@ -299,7 +300,12 @@ function checkTarget(vfs: Vfs, target: RmTarget, rewritable: boolean): CheckResu
   for (const match of matches) {
     const result = checkResolved(vfs, resolveTarget(match, vfs.cwd), match, rewritable);
     if (result.kind === "block" || result.kind === "honesty") return result;
-    if (result.kind === "recoverable" && recovery === null) recovery = result;
+    // Which match the recovery note names is glob.iglob scandir-order-dependent — un-modelable
+    // once a second recoverable match exists, so decline rather than guess one.
+    if (result.kind === "recoverable") {
+      if (recovery !== null) return { kind: "honesty" };
+      recovery = result;
+    }
   }
   return recovery ?? { kind: "allow" };
 }
@@ -398,12 +404,75 @@ interface RmCall {
   args: string[];
 }
 
-// The unwrapped head basename and its argument words, leading env assignments and wrapper commands
-// stripped, or null when the segment has no command word.
-function headAndArgs(words: string[]): { head: string; args: string[] } | null {
+type RmSegment = { kind: "none" } | { kind: "honesty" } | { kind: "rm"; args: string[] };
+
+// A segment reduced to its rm classification: the rm call's operand words, a construct the world
+// cannot faithfully model (eval / `sh -c` payload, a `time` reserved word, or a wrapper that consumed
+// an argument and pushed rm out of head position) → honesty, or nothing rm-related.
+function classifyRm(words: string[]): RmSegment {
   let i = 0;
-  while (i < words.length && (ASSIGNMENT.test(words[i]) || LEADING_WRAPPERS.has(headBasename(words[i])))) i++;
-  return i < words.length ? { head: headBasename(words[i]), args: words.slice(i + 1) } : null;
+  let wrapped = false;
+  while (i < words.length && (ASSIGNMENT.test(words[i]) || LEADING_WRAPPERS.has(headBasename(words[i])))) {
+    if (!ASSIGNMENT.test(words[i])) wrapped = true;
+    i++;
+  }
+  if (i >= words.length) return { kind: "none" };
+  const head = headBasename(words[i]);
+  const rest = words.slice(i + 1);
+  if (head === "time") return classifyRm(rest).kind === "none" ? { kind: "none" } : { kind: "honesty" };
+  if (head === "eval" || (SHELLS.has(head) && rest.includes("-c"))) return { kind: "honesty" };
+  if (head === "rm") return { kind: "rm", args: rest };
+  if (wrapped && rest.some((w) => headBasename(w) === "rm")) return { kind: "honesty" };
+  return { kind: "none" };
+}
+
+// From an opening `(`/`{` at `open`, the index of its matching close, quotes and nesting honored.
+function skipSubst(s: string, open: number): number {
+  const opener = s[open];
+  const closer = opener === "(" ? ")" : "}";
+  let depth = 0;
+  let quote: "'" | '"' | null = null;
+  for (let i = open; i < s.length; i++) {
+    const c = s[i];
+    if (quote) {
+      if (c === quote) quote = null;
+    } else if (c === "'" || c === '"') quote = c;
+    else if (c === "\\") i++;
+    else if (c === opener) depth++;
+    else if (c === closer && --depth === 0) return i;
+  }
+  return s.length;
+}
+
+// An unquoted subshell `( … )` or brace-group `{ …; }` grouping construct, which the segment walk
+// never descends into. `$( … )` command substitution and `${ … }` parameter expansion are skipped.
+function hasGrouping(command: string): boolean {
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote) {
+      if (c === quote) quote = null;
+    } else if (c === "'" || c === '"') quote = c;
+    else if (c === "\\") i++;
+    else if (c === "`") i = (i = command.indexOf("`", i + 1)) < 0 ? command.length : i;
+    else if (c === "$" && (command[i + 1] === "(" || command[i + 1] === "{")) i = skipSubst(command, i + 1);
+    else if (c === "(" || c === ")" || c === "{" || c === "}") return true;
+  }
+  return false;
+}
+
+// An unquoted redirect operator (`>`, `>>`, `2>`, `&>`, `<`, …) anywhere in the word.
+function hasRedirectOperator(word: string): boolean {
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < word.length; i++) {
+    const c = word[i];
+    if (quote) {
+      if (c === quote) quote = null;
+    } else if (c === "'" || c === '"') quote = c;
+    else if (c === "\\") i++;
+    else if (c === "<" || c === ">") return true;
+  }
+  return false;
 }
 
 function honesty(): Verdict {
@@ -424,12 +493,12 @@ function applyReplacements(command: string, edits: Segment[]): string {
 
 export function evaluateRmWorld(world: WorldSpec, command: string): Verdict {
   const vfs = new Vfs(world);
+  if (hasGrouping(command)) return honesty();
   const rmCalls: RmCall[] = [];
   for (const segment of splitSegments(command)) {
-    const parsed = headAndArgs(splitWords(segment.text));
-    if (parsed === null) continue;
-    if (parsed.head === "eval" || (SHELLS.has(parsed.head) && parsed.args.includes("-c"))) return honesty();
-    if (parsed.head === "rm") rmCalls.push({ segment, args: parsed.args });
+    const parsed = classifyRm(splitWords(segment.text));
+    if (parsed.kind === "honesty") return honesty();
+    if (parsed.kind === "rm") rmCalls.push({ segment, args: parsed.args });
   }
   if (rmCalls.length === 0) return { action: "pass", message: null, rewritten: null };
 
@@ -439,11 +508,19 @@ export function evaluateRmWorld(world: WorldSpec, command: string): Verdict {
   let result: Verdict | null = null;
 
   for (const call of rmCalls) {
+    // A redirect operand lands in the operand list this engine keeps, so its bytes cannot be
+    // faithfully placed in a rewrite → honesty.
+    if (call.args.some(hasRedirectOperator)) return honesty();
     const targets: RmTarget[] = [];
     let substitution = false;
     let honest = false;
+    let terminated = false;
     for (const raw of call.args) {
-      const cls = classifyTarget(raw);
+      if (!terminated && dequote(raw) === "--") {
+        terminated = true;
+        continue;
+      }
+      const cls = classifyTarget(raw, terminated);
       if (cls.kind === "substitution") substitution = true;
       else if (cls.kind === "honesty") honest = true;
       else if (cls.kind === "target") targets.push(cls.target);
