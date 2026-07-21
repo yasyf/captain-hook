@@ -35,6 +35,64 @@ const FORBIDDEN_REGEX = ["(?P<", "(?P=", "\\A", "\\Z"];
 // captain_hook.ast_grep.TEMPLATE_VAR: a $NAME / $$$NAME metavar marks a structural rewrite.
 const TEMPLATE_VAR = /\$\$\$[A-Z_][A-Z0-9_]*|\$[A-Z_][A-Z0-9_]*/;
 
+interface Signature {
+  maxPositional: number;
+  keywords: Set<string>;
+}
+
+// Max positional slots + accepted keywords per captain_hook.primitives signature.
+const PRIMITIVE_SIGS: Record<string, Signature> = {
+  hook: {
+    maxPositional: 2,
+    keywords: new Set([
+      "events", "message", "only_if", "skip_if", "block",
+      "respect_gitignore", "max_fires", "tests", "async_", "skip_planning_agents",
+    ]),
+  },
+  block_command: {
+    maxPositional: 1,
+    keywords: new Set(["pattern", "reason", "hint", "only_if", "skip_if", "tests"]),
+  },
+  warn_command: {
+    maxPositional: 1,
+    keywords: new Set(["pattern", "message", "only_if", "skip_if", "tests", "events"]),
+  },
+  rewrite_command: {
+    maxPositional: 2,
+    keywords: new Set(["pattern", "replace", "only_if", "skip_if", "to", "block", "note", "tests"]),
+  },
+  gate: {
+    maxPositional: 1,
+    keywords: new Set([
+      "message", "when", "signals", "only_if", "skip_if",
+      "events", "max_fires", "tests", "async_", "skip_planning_agents",
+    ]),
+  },
+  nudge: {
+    maxPositional: 1,
+    keywords: new Set([
+      "message", "when", "signals", "only_if", "skip_if", "block",
+      "events", "max_fires", "tests", "async_", "skip_planning_agents",
+    ]),
+  },
+};
+
+// Same, per captain_hook.types condition signature (varargs conditions take unbounded positionals).
+const CONDITION_SIGS: Record<string, Signature> = {
+  Tool: { maxPositional: Infinity, keywords: new Set() },
+  Command: { maxPositional: 1, keywords: new Set(["pattern"]) },
+  Runs: { maxPositional: Infinity, keywords: new Set() },
+  FilePath: { maxPositional: Infinity, keywords: new Set(["project_only"]) },
+  Content: { maxPositional: 2, keywords: new Set(["pattern", "project_only"]) },
+  TouchedFile: { maxPositional: Infinity, keywords: new Set(["subagents"]) },
+  UsedSkill: { maxPositional: Infinity, keywords: new Set(["subagents", "scope"]) },
+  RanCommand: { maxPositional: Infinity, keywords: new Set(["subagents"]) },
+  Waiting: { maxPositional: 0, keywords: new Set() },
+  Not: { maxPositional: 1, keywords: new Set(["condition"]) },
+  Or: { maxPositional: Infinity, keywords: new Set() },
+  And: { maxPositional: Infinity, keywords: new Set() },
+};
+
 interface Args {
   positional: SyntaxNode[];
   keywords: Map<string, SyntaxNode>;
@@ -136,6 +194,7 @@ class Lowerer {
     const list = call.getChild("ArgList");
     if (!list) throw new CompileError(`malformed call to ${name}`);
     const args = this.parseArgs(list);
+    this.checkSignature(name, args, PRIMITIVE_SIGS);
     switch (name) {
       case "hook":
         return this.lowerHook(args);
@@ -184,6 +243,25 @@ class Lowerer {
     return node;
   }
 
+  private requiredKeyword(args: Args, name: string, prim: string): SyntaxNode {
+    const node = args.keywords.get(name);
+    if (!node) throw new CompileError(`${prim}() missing required keyword argument: ${name}`);
+    return node;
+  }
+
+  private checkSignature(name: string, args: Args, sigs: Record<string, Signature>): void {
+    const sig = sigs[name];
+    if (!sig) return;
+    if (args.positional.length > sig.maxPositional) {
+      throw new CompileError(
+        `${name}() takes at most ${sig.maxPositional} positional argument${sig.maxPositional === 1 ? "" : "s"} but ${args.positional.length} were given`,
+      );
+    }
+    for (const key of args.keywords.keys()) {
+      if (!sig.keywords.has(key)) throw new CompileError(`${name}() got an unexpected keyword argument '${key}'`);
+    }
+  }
+
   // A keyword given a non-None value, matching how the primitives treat `x=None` as absent.
   private hasFeature(args: Args, name: string): boolean {
     const node = args.keywords.get(name);
@@ -192,6 +270,15 @@ class Lowerer {
 
   private evalString(node: SyntaxNode): string {
     const n = this.unwrap(node);
+    if (n.name === "ContinuedString") {
+      return this.children(n, new Set(["Comment"]))
+        .map((seg) => this.evalStringLiteral(seg))
+        .join("");
+    }
+    return this.evalStringLiteral(n);
+  }
+
+  private evalStringLiteral(n: SyntaxNode): string {
     if (n.name === "FormatString") throw new CompileError("f-string is outside the demo subset");
     if (n.name !== "String") throw new CompileError(`expected a string literal, got ${n.name}`);
     return this.parsePyString(this.text(n));
@@ -251,6 +338,7 @@ class Lowerer {
     const list = n.getChild("ArgList");
     if (!list) throw new CompileError(`malformed condition ${name}`);
     const args = this.parseArgs(list);
+    this.checkSignature(name, args, CONDITION_SIGS);
     switch (name) {
       case "Tool":
         return this.toolCondition(this.splitNames(this.stringArgs(args)));
@@ -323,15 +411,18 @@ class Lowerer {
 
   private commandPattern(node: SyntaxNode): string {
     const n = this.unwrap(node);
-    if (n.name === "ArrayExpression" || n.name === "TupleExpression") {
+    if (n.name === "ArrayExpression") {
       return blockCommandPattern(this.listElements(n).map((e) => this.evalString(e)));
+    }
+    if (n.name === "TupleExpression") {
+      throw new CompileError("command pattern must be a string or list, not a tuple");
     }
     return this.evalString(n);
   }
 
   private lowerBlockCommand(args: Args): SerializedHook {
     const pattern = this.commandPattern(this.required(args, 0, "pattern", "block_command"));
-    const reason = this.evalString(this.required(args, -1, "reason", "block_command"));
+    const reason = this.evalString(this.requiredKeyword(args, "reason", "block_command"));
     const hintNode = args.keywords.get("hint");
     const hint = hintNode ? this.evalOptString(hintNode) : null;
     const message = `BLOCKED: ${rstripDot(reason)}.${hint ? ` ${rstripDot(hint)}.` : ""}`;
@@ -346,7 +437,7 @@ class Lowerer {
 
   private lowerWarnCommand(args: Args): SerializedHook {
     const pattern = this.commandPattern(this.required(args, 0, "pattern", "warn_command"));
-    const message = this.evalString(this.required(args, -1, "message", "warn_command"));
+    const message = this.evalString(this.requiredKeyword(args, "message", "warn_command"));
     const eventsNode = args.keywords.get("events");
     return {
       events: eventsNode ? this.evalEvents(eventsNode) : ["PostToolUse"],
@@ -423,6 +514,17 @@ class Lowerer {
         continue;
       }
       const c = s[i + 1];
+      if (c >= "0" && c <= "7") {
+        let oct = "";
+        while (oct.length < 3 && i + 1 + oct.length < s.length) {
+          const d = s[i + 1 + oct.length];
+          if (d < "0" || d > "7") break;
+          oct += d;
+        }
+        out += String.fromCharCode(parseInt(oct, 8));
+        i += oct.length;
+        continue;
+      }
       switch (c) {
         case "n": out += "\n"; i++; break;
         case "t": out += "\t"; i++; break;
@@ -434,14 +536,22 @@ class Lowerer {
         case "b": out += "\b"; i++; break;
         case "f": out += "\f"; i++; break;
         case "v": out += "\v"; i++; break;
-        case "0": out += "\0"; i++; break;
         case "\n": i++; break;
-        case "x": out += String.fromCharCode(parseInt(s.slice(i + 2, i + 4), 16)); i += 3; break;
-        case "u": out += String.fromCharCode(parseInt(s.slice(i + 2, i + 6), 16)); i += 5; break;
-        case "U": out += String.fromCodePoint(parseInt(s.slice(i + 2, i + 10), 16)); i += 9; break;
+        case "N": throw new CompileError("\\N{...} named escape is outside the demo subset");
+        case "x": out += String.fromCharCode(this.hexEscape(s, i + 2, 2, "x")); i += 3; break;
+        case "u": out += String.fromCharCode(this.hexEscape(s, i + 2, 4, "u")); i += 5; break;
+        case "U": out += String.fromCodePoint(this.hexEscape(s, i + 2, 8, "U")); i += 9; break;
         default: out += "\\"; break;
       }
     }
     return out;
+  }
+
+  private hexEscape(s: string, start: number, count: number, kind: string): number {
+    const hex = s.slice(start, start + count);
+    if (!new RegExp(`^[0-9a-fA-F]{${count}}$`).test(hex)) {
+      throw new CompileError(`truncated \\${kind} escape "${hex}"`);
+    }
+    return parseInt(hex, 16);
   }
 }

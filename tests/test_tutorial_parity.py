@@ -212,6 +212,14 @@ REFUSALS = {
     "hook(Event.PreToolUse, 'x', only_if=[Pattern('eval($$$)')], block=True)\n",
     "regex_dialect": "from captain_hook import Event, hook\nfrom captain_hook.types import Command\n"
     "hook(Event.PreToolUse, 'x', only_if=[Command('(?P<n>git)')], block=True)\n",
+    "named_escape": "from captain_hook import Event, hook\n"
+    "hook(Event.PreToolUse, 'bullet \\N{BULLET} here', block=True)\n",
+    "tuple_pattern": "from captain_hook import block_command\nblock_command(('git', 'push'), reason='x')\n",
+    "truncated_hex": "from captain_hook import Event, hook\nhook(Event.PreToolUse, 'oops \\x1', block=True)\n",
+    "not_arity": "from captain_hook import Event, hook\nfrom captain_hook.types import Command, Not\n"
+    "hook(Event.PreToolUse, 'x', only_if=[Not(Command('a'), Command('b'))], block=True)\n",
+    "unknown_kwarg": "from captain_hook import Event, hook\nhook(Event.PreToolUse, 'x', block=True, bogus=1)\n",
+    "top_level_assign": "from captain_hook import Event, hook\nx = hook(Event.PreToolUse, 'x', block=True)\n",
 }
 
 
@@ -316,3 +324,44 @@ def test_compiler_node_unit_suite() -> None:
     """Run the compiler.js `node --test` unit suite (refusals, kwarg ignoring, triple-quote lowering)."""
     proc = subprocess.run([NODE, "--test", str(COMPILER_TESTS_MJS)], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@requires_node
+def test_compile_parity_octal_and_concat(tmp_path: Path) -> None:
+    """Octal escapes (in a message and a Command pattern) and adjacent-string concatenation lower
+    to identical hooks through both compile_fragment and the JS compiler bundle."""
+    source = (
+        "from captain_hook import Event, hook\n"
+        "from captain_hook.types import Command\n"
+        "hook(\n"
+        "    Event.PreToolUse,\n"
+        "    'a\\012b ' '\\101\\162',\n"
+        "    only_if=[Command('\\162m' 'x\\012')],\n"
+        "    block=True,\n"
+        ")\n"
+    )
+    python_hooks = _compile_source(source, tmp_path)
+    result = run_node_compile(source)
+    assert "error" not in result, result
+    assert (
+        result["hooks"]
+        == python_hooks
+        == [
+            {
+                "events": ["PreToolUse"],
+                "message": "a\nb Ar",
+                "block": True,
+                "only_if": [{"kind": "Command", "pattern": "rmx\n"}],
+                "skip_if": [],
+            }
+        ]
+    )
+
+
+def test_tool_aliases_in_sync() -> None:
+    """The committed tool-alias map matches what the installed cc_transcript expands to, so a package
+    drift fails here instead of shipping a stale bundle."""
+    from build_emulator import tool_alias_map
+
+    committed = json.loads((SRC / "generated" / "tool_aliases.json").read_text())
+    assert committed == tool_alias_map()

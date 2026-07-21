@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
+import io
 import re
+import tokenize
 from typing import TYPE_CHECKING, Any
 
 from cc_transcript.tools import expand_tool_names
@@ -36,6 +39,9 @@ REWRITE_FREEVARS = frozenset({"pattern", "replace", "note"})
 INLINE_FLAG = re.compile(r"\(\?[aiLmsux]+[):]")
 FORBIDDEN_REGEX = ("(?P<", "(?P=", "\\A", "\\Z")
 
+# A \N{name} escape preceded by an even number of backslashes: a real named escape, not \\N literal.
+NAMED_ESCAPE = re.compile(r"(?<!\\)(?:\\\\)*\\N\{")
+
 
 def check_regex_dialect(pattern: str) -> str:
     if INLINE_FLAG.search(pattern) or any(tok in pattern for tok in FORBIDDEN_REGEX):
@@ -47,10 +53,36 @@ def closure_freevars(fn: Callable[..., Any]) -> dict[str, Any]:
     return {n: cell.cell_contents for n, cell in zip(fn.__code__.co_freevars, fn.__closure__ or (), strict=True)}
 
 
+def prescan(source: str) -> None:
+    # Refuse, before exec, the shapes the JS compiler refuses statically: invalid syntax, any
+    # module-level statement that is not an import or a call expression, and \N{...} named escapes.
+    try:
+        module = ast.parse(source)
+    except SyntaxError as err:
+        raise ValueError(f"fragment is not valid Python in the demo subset: {err}") from err
+    for stmt in module.body:
+        match stmt:
+            case ast.Import() | ast.ImportFrom() | ast.Expr(value=ast.Call()):
+                continue
+            case _:
+                raise ValueError(f"top-level statement is not an import or primitive call: {type(stmt).__name__}")
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type != tokenize.STRING:
+            continue
+        prefix = token.string[: len(token.string) - len(token.string.lstrip("rRbBuUfF"))]
+        if "r" not in prefix.lower() and NAMED_ESCAPE.search(token.string):
+            raise ValueError(r"\N{...} named escape is outside the demo subset")
+
+
 def load_hooks(path: Path) -> list[RegisteredHook]:
     """Execute a fragment under the real registration machinery, returning its registered hooks."""
+    source = path.read_text()
+    prescan(source)
     _state.hooks.clear()
-    exec(compile(path.read_text(), str(path), "exec"), {"__name__": "__fragment__", "__file__": str(path)})
+    try:
+        exec(compile(source, str(path), "exec"), {"__name__": "__fragment__", "__file__": str(path)})
+    except TypeError as err:
+        raise ValueError(f"fragment uses an unsupported call shape: {err}") from err
     return list(_state.hooks)
 
 
