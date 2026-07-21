@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from spawnllm import TModel, TSpecialty
 
     from captain_hook.settings import HooksSettings
+    from captain_hook.signals.nlp import Clause
+    from captain_hook.turn import Turn
 
 
 RECENT_WINDOW = 15
@@ -70,14 +72,30 @@ class HookContext:
         return self.conf
 
     @cached_property
-    def turn(self) -> Session:
-        """The one-turn view of the current turn (cached)."""
-        return self.transcript.current_turn
+    def turn(self) -> Turn:
+        """The one-turn view of the current turn (cached), with prompt matching via ``matches``."""
+        from captain_hook.turn import Turn
+
+        return Turn((current := self.transcript.current_turn).turns, current.path)
 
     @cached_property
     def prior(self) -> Session:
         """The session window before the current turn's last exchange (cached)."""
         return self.transcript.prior()
+
+    def nlp(self, text: str, *patterns: str | Clause) -> bool:
+        """Whether ``text`` matches any pattern — the escape hatch for matching arbitrary prose.
+
+        A string pattern is a case-insensitive regex; a :class:`~captain_hook.Clause`
+        runs the dependency-clause scan. For the current turn's prompt, prefer
+        ``evt.ctx.turn.matches(*patterns)``.
+
+        Example:
+            >>> evt.ctx.nlp(evt.ctx.t.assistant_text(), Clause(noun=Phrase("test"), verb=Phrase("skip")))
+        """
+        from captain_hook.signals.nlp import scan_text
+
+        return scan_text(text, patterns)
 
     def transcript_text(self, *, window: int | None = None) -> str:
         """The transcript rendered turn by turn under the default budget.

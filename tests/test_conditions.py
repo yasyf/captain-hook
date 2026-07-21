@@ -11,7 +11,7 @@ from cc_transcript.activity_probe import SessionActivityProbe, session_activity_
 
 from captain_hook import EditedSource
 from captain_hook.app import on
-from captain_hook.conditions import check_condition, is_project_path, matches_conditions, workflow_opt_matches
+from captain_hook.conditions import UserSaid, check_condition, is_project_path, matches_conditions, workflow_opt_matches
 from captain_hook.events import (
     BaseHookEvent,
     PermissionRequestEvent,
@@ -48,6 +48,7 @@ from captain_hook.types import (
     ToolInput,
     TouchedFile,
     UsedSkill,
+    UsedTool,
     Waiting,
     WorkflowScript,
     condition_events,
@@ -930,6 +931,50 @@ class TestUsedSkillCondition:
     )
     def test_usedskill(self, cond: TCondition, skill: str, expected: bool) -> None:
         assert check_condition(cond, skill_evt(skill)) is expected
+
+
+class TestUsedToolCondition:
+    def test_session_scope_spans_turns(self) -> None:
+        ctx = build_ctx(
+            transcript=make_transcript(
+                raw_text("user", "plan this out"),
+                raw_tool_msg("EnterPlanMode", {}),
+                raw_text("user", "now continue"),
+                raw_text("assistant", "ok"),
+            )
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(UsedTool("EnterPlanMode"), evt) is True
+        assert check_condition(UsedTool("EnterPlanMode", scope="turn"), evt) is False
+
+    def test_turn_scope_sees_current_turn(self) -> None:
+        ctx = build_ctx(
+            transcript=make_transcript(
+                raw_text("user", "stop and replan"),
+                raw_tool_msg("EnterPlanMode", {}),
+            )
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(UsedTool("EnterPlanMode", scope="turn"), evt) is True
+
+    def test_pipe_and_variadic_names(self) -> None:
+        ctx = build_ctx(
+            transcript=make_transcript(raw_text("user", "go"), raw_tool_msg("Write", {"file_path": "x.py"}))
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(UsedTool("Edit", "Write"), evt) is True
+        assert check_condition(UsedTool("Edit|Write"), evt) is True
+        assert check_condition(UsedTool("EnterPlanMode"), evt) is False
+
+
+class TestUserSaidCondition:
+    def test_regex_over_prompts(self) -> None:
+        ctx = build_ctx(
+            transcript=make_transcript(raw_text("user", "please just COMMIT it"), raw_text("assistant", "ok"))
+        )
+        evt = make_tool_event("Bash", {"command": "echo"}, ctx=ctx)
+        assert check_condition(UserSaid("just commit"), evt) is True
+        assert check_condition(UserSaid(r"\bdeploy\b"), evt) is False
 
 
 class TestReadFileCondition:

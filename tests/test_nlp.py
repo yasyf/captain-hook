@@ -13,6 +13,8 @@ from captain_hook.signals.nlp import (
     is_past_predicate,
     nlp_scan,
     parse,
+    scan_text,
+    subject_kind,
 )
 
 if TYPE_CHECKING:
@@ -21,7 +23,7 @@ if TYPE_CHECKING:
 TOMBSTONE_CLAUSE = Clause(
     verb=Phrase("remove", "delete", "drop", "move", "migrate", "rename"),
     tense="completed",
-    subject="no_nominal",
+    subject=("unnamed", "passive"),
 )
 
 BE_ADVERB_CLAUSE = Clause(
@@ -35,7 +37,7 @@ LEAVE_PROSPECTIVE_CLAUSE = Clause(verb=Phrase("leave"), tense="prospective")
 SWITCH_MODE_CLAUSE = Clause(
     noun=Phrase("mode"),
     verb=Phrase("enter", "switch", "return", "go"),
-    subject="none",
+    subject=("unnamed",),
 )
 
 COMMENT_LEADERS = [
@@ -124,7 +126,12 @@ class TestClauseValidation:
                 id="prospective_without_verb_rejected",
             ),
             pytest.param(
-                {"noun": Phrase("quota"), "subject": "no_nominal"}, "require a verb", id="subject_without_verb_rejected"
+                {"noun": Phrase("quota"), "subject": "unnamed"}, "require a verb", id="subject_without_verb_rejected"
+            ),
+            pytest.param(
+                {"verb": Phrase("remove"), "subject": ("named",)},
+                "Unknown subject kinds",
+                id="unknown_subject_kind_rejected",
             ),
         ],
     )
@@ -162,12 +169,12 @@ class TestClauseValidation:
         assert c.tense == "any"
 
     def test_verb_subject_valid(self) -> None:
-        c = Clause(verb=Phrase("remove"), subject="no_nominal")
-        assert c.subject == "no_nominal"
+        c = Clause(verb=Phrase("remove"), subject=("unnamed", "passive"))
+        assert c.subject == ("unnamed", "passive")
 
-    def test_verb_subject_none_valid(self) -> None:
-        c = Clause(verb=Phrase("remove"), subject="none")
-        assert c.subject == "none"
+    def test_verb_subject_string_normalized(self) -> None:
+        c = Clause(verb=Phrase("remove"), subject="unnamed")
+        assert c.subject == ("unnamed",)
 
     def test_compound_verb_valid(self) -> None:
         c = Clause(verb=Phrase("garbage collect"))
@@ -214,7 +221,43 @@ class TestSubjectGate:
         assert has_nominal_subject(token_named(text, word)) is expected
 
 
-class TestSubjectNoneScan:
+class TestSubjectKind:
+    @pytest.mark.parametrize(
+        ("text", "word", "expected"),
+        [
+            pytest.param("switch back to plan mode", "switch", "unnamed", id="imperative"),
+            pytest.param("we removed it", "removed", "unnamed", id="pronoun_subject"),
+            pytest.param("the file was removed", "removed", "unnamed", id="true_passive"),
+            pytest.param("config moved to settings.py", "moved", "passive", id="elliptical_passive"),
+            pytest.param("the daemon switches to degraded mode", "switches", "passive", id="intransitive_active"),
+            pytest.param("the parser removed the node", "removed", "actor", id="named_actor"),
+        ],
+    )
+    def test_kind(self, text: str, word: str, expected: str) -> None:
+        assert subject_kind(token_named(text, word)) == expected
+
+
+class TestScanText:
+    def test_regex_case_insensitive(self) -> None:
+        assert scan_text("Re-enter PLAN MODE now", ["plan mode"])
+
+    def test_regex_no_match(self) -> None:
+        assert not scan_text("fix the typo in main.py", [r"plan mode"])
+
+    def test_clause_match(self) -> None:
+        assert scan_text("we should return to plan mode", [SWITCH_MODE_CLAUSE])
+
+    def test_clause_no_match(self) -> None:
+        assert not scan_text("the app enters sleep mode when idle", [SWITCH_MODE_CLAUSE])
+
+    def test_mixed_patterns(self) -> None:
+        assert scan_text("STOP all edits", [SWITCH_MODE_CLAUSE, r"\bstop\b"])
+
+    def test_empty_text(self) -> None:
+        assert not scan_text("", [r"stop", SWITCH_MODE_CLAUSE])
+
+
+class TestSubjectUnnamedScan:
     @pytest.mark.parametrize(
         ("text", "expected"),
         [

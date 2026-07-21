@@ -329,6 +329,28 @@ class UsedSkill:
 
 
 @dataclass(frozen=True, slots=True)
+class UsedTool:
+    """Transcript-history condition: true when a tool use named one of ``names`` exists.
+
+    Pass names variadically; a single ``|``-joined string still works for back-compat.
+    ``scope="turn"`` restricts the search to the current turn — the idiom for skipping
+    a guard once the agent has complied.
+
+    Example:
+        >>> hook(Event.PreToolUse, skip_if=[UsedTool("EnterPlanMode", scope="turn")], message="...", block=True)
+    """
+
+    names: tuple[str, ...]
+    subagents: bool = True
+    scope: Literal["session", "turn"] = "session"
+
+    def __init__(self, *names: str, subagents: bool = True, scope: Literal["session", "turn"] = "session") -> None:
+        object.__setattr__(self, "names", _split_names(names))
+        object.__setattr__(self, "subagents", subagents)
+        object.__setattr__(self, "scope", scope)
+
+
+@dataclass(frozen=True, slots=True)
 class ReadFile(PatternsCondition):
     """Transcript-history condition: true when a Read tool use targeted a matching file.
 
@@ -676,6 +698,7 @@ TCondition = (
     | FromSubagent
     | SkipPermissions
     | UsedSkill
+    | UsedTool
     | ReadFile
     | TestFile
     | SourceEdits

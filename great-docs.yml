@@ -128,6 +128,8 @@ reference:
       - RanCommand
       - Runs
       - UsedSkill
+      - UsedTool
+      - UserSaid
       - InPlanMode
       - Waiting
       - FromSubagent
@@ -173,6 +175,7 @@ reference:
       - SessionStartEvent
       - SessionEndEvent
       - HookContext
+      - Turn
       - HookResult
       - Action
       - Agent
@@ -231,6 +234,7 @@ reference:
       - Phrase
       - is_past_predicate
       - has_nominal_subject
+      - subject_kind
 
   - title: State & Sessions
     desc: Session state, workflow state, and multi-step workflows.

@@ -4,6 +4,28 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.3.0] - 2026-07-20
+
+### Added
+- **`UsedTool` condition** — transcript-history condition matching tool uses by name
+  (`UsedTool("Edit", "Write")`; a `|`-joined string still works). `scope="turn"` restricts the
+  search to the current turn — the idiom for skipping a guard once the agent has complied.
+- **`UserSaid` accepts regexes and clauses, and is exported from the package root.** String
+  patterns are case-insensitive regexes (plain keywords keep their substring behavior); `Clause`
+  patterns run the dependency-clause scan against each prompt.
+- **`evt.ctx.turn.matches(*patterns)` and `evt.ctx.nlp(text, *patterns)`** — public prose-matching
+  surfaces taking regex strings or `Clause`s, so hooks no longer import `captain_hook.signals.nlp`.
+  `evt.ctx.turn` is now a `Turn`, a one-turn `Session` view with `matches`; `subject_kind` joins
+  the exported NLP helpers.
+
+### Changed
+- **BREAKING: `Clause.subject` is now a tuple of allowed subject shapes** — `()` (default, no
+  constraint), composing the kinds `"unnamed"` (imperatives, pronoun subjects, true passives),
+  `"passive"` (a substantive subject without a direct object), and `"actor"` (a substantive
+  subject acting on one); a bare string works as singleton sugar. Replaces the
+  `"any"`/`"no_nominal"`/`"none"` literals: `subject="none"` → `subject=("unnamed",)` and
+  `subject="no_nominal"` → `subject=("unnamed", "passive")`.
+
 ## [12.2.0] - 2026-07-20
 
 ### Added

@@ -159,7 +159,7 @@ SourceEdits(lang="py", include_tests=False)
 RanCommand("uv", "run", "pytest")
 ```
 
-**UsedSkill** / **InPlanMode** / **Waiting** — session mode and history
+**UsedSkill** / **UsedTool** / **InPlanMode** / **Waiting** — session mode and history
 ```python
 only_if=[InPlanMode()]
 ```

@@ -20,6 +20,7 @@ from captain_hook.session import (
     ensure_session,
     state_root,
 )
+from captain_hook.turn import Turn
 
 
 class MyModel(BaseModel):
@@ -189,7 +190,9 @@ class TestContextCaching:
         transcript.current_turn = turn_mock
         ctx = HookContext(session=SessionStore(None), transcript=transcript, settings=None)
         assert ctx.turn is ctx.turn
-        assert ctx.turn is turn_mock
+        assert isinstance(ctx.turn, Turn)
+        assert ctx.turn.turns is turn_mock.turns
+        assert ctx.turn.path is turn_mock.path
 
     def test_prior_cached(self) -> None:
         transcript = MagicMock()
@@ -198,6 +201,23 @@ class TestContextCaching:
         ctx = HookContext(session=SessionStore(None), transcript=transcript, settings=None)
         assert ctx.prior is prior_mock
         assert ctx.prior is ctx.prior
+
+
+class TestTurnMatches:
+    def test_regex_against_opening_prompt(self) -> None:
+        from tests.helpers import make_transcript, raw_text
+
+        transcript = make_transcript(raw_text("user", "Re-enter plan mode, don't do any more work."))
+        ctx = HookContext(session=SessionStore(None), transcript=transcript, settings=None)
+        assert ctx.turn.matches(r"plan mode") is True
+        assert ctx.turn.matches(r"\bdeploy\b") is False
+
+
+class TestNlpEscapeHatch:
+    def test_regex(self) -> None:
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        assert ctx.nlp("Stop ALL work", r"\bstop\b") is True
+        assert ctx.nlp("keep going", r"\bstop\b") is False
 
 
 class TestCallCli:

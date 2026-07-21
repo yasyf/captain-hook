@@ -22,7 +22,7 @@ from captain_hook import (
     Allow, And, Agent, Ask, BaseHookEvent, Block, Event, FilePath, FromSubagent,
     HookResult, InlineTests, Input, Not, Or, Prompt, RanCommand, ReadFile, Rewrite, Runs,
     Signal, Signals, SkipPermissions, SourceEdits, TestFile, Tool, ToolInput, TouchedFile,
-    TranscriptFixture, UsedSkill, Warn, WorkflowScript,
+    TranscriptFixture, UsedSkill, UsedTool, UserSaid, Warn, WorkflowScript,
     approve, block_command, deny, gate, hook, lint, llm_approve, llm_gate, llm_nudge, nudge, on,
     prompt_check, rewrite_command, set_tool_input, warn_command, workflow, Artifact, Step, text_matches,
 )
@@ -165,6 +165,8 @@ evaluated first.
 | Event comes from a subagent/teammate | `FromSubagent()` — the payload carries an `agent_id`; matches the ask's *origin*, where `Agent` matches its *type* |
 | Session launched with bypass available | `SkipPermissions()` — walks to the nearest `claude` ancestor process and matches `--dangerously-skip-permissions` **or** `--allow-dangerously-skip-permissions`; availability counts as consent, whatever the active `permission_mode` |
 | Skill was invoked | `UsedSkill("codex")` — bare name also matches `plugin:name` |
+| Tool was previously used | `UsedTool("EnterPlanMode", scope="turn")` — exact names (a `\|`-joined string works); `scope="turn"` searches only the current turn |
+| User said something | `UserSaid("just commit")` — case-insensitive regexes and/or `Clause`s over every user prompt |
 | File was previously read | `ReadFile("TESTING.md")` — fnmatch globs; anchor dirs with `**/` |
 | Match only test files | `TestFile()` (`**/test_*.py`, `**/*_test.py`, `**/conftest.py`, `**/tests/**/*.py`, `**/*_test.go`, `**/*.test.*`, `**/*.spec.*`) |
 | Python source edits (skips tests by default, in-repo only) | `SourceEdits(lang="py")`; `lang` also `ts`, `go`, `rs`, ...; `project_only=False` to also match out-of-repo files |
@@ -177,7 +179,7 @@ evaluated first.
 | Custom logic | implement `CustomCondition` |
 <!-- /gen:conditions -->
 
-`ReadFile`/`TouchedFile`/`RanCommand`/`UsedSkill` inspect the session transcript — they are
+`ReadFile`/`TouchedFile`/`RanCommand`/`UsedSkill`/`UsedTool` inspect the session transcript — they are
 how Stop gates know what already happened. Custom conditions are any object with a
 `check(self, evt: BaseHookEvent) -> bool` method (a Protocol — no inheritance needed):
 
