@@ -93,7 +93,6 @@ reference:
       - rewrite_code
       - llm_gate
       - llm_nudge
-      - llm_evaluate
       - prompt_check
       - approve
       - deny

@@ -754,9 +754,9 @@ When uncertain, return fire=false. A missed band-aid costs nothing; a false alar
 trains the agent to ignore this nudge. Fire only when a specific tell is clearly present and no
 "do not fire" condition applies. Put your reasoning (under 60 words, ending with the one tell that
 decided it) in `reasoning`.""",
-    message=lambda r: (
+    message=(
         "This plan looks like a band-aid — it treats the symptom rather than removing the "
-        f"cause of the problem you were asked to solve. Why: {r.reasoning} "
+        "cause of the problem you were asked to solve. Why: {reasoning} "
         "Re-derive from first principles: name the actual root cause, then make the failure "
         "impossible (propagate/classify the error, fix the general computation, or delete the "
         "code that creates it) rather than catching, defaulting, retrying, suppressing, or "
@@ -827,10 +827,10 @@ When uncertain, return block=false. A missed deferral costs one nag; a false ala
 stop teaches the agent to ignore this gate. Fire only when a specific tell is clearly present
 and no "do not fire" condition applies. Put your reasoning (under 60 words, ending with the one
 tell that decided it) in `reasoning`.""",
-    message=lambda r: (
+    message=(
         "You appear to be deferring the real fix — whether closing the turn or still mid-work, "
         "you have declared it out of reach and substituted a softer deliverable (or filed one "
-        f"as the plan of record) without asking. Why: {r.reasoning} "
+        "as the plan of record) without asking. Why: {reasoning} "
         "Do the fix the user asked for: a release, version bump, or cross-repo change is "
         "routine work here, not a blocker — plan it and do it. If you are genuinely blocked, "
         "stop and ask the user how to proceed instead of substituting docs, help text, or a "

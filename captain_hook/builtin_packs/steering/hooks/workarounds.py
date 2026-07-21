@@ -102,9 +102,9 @@ Platform branching, not a dependency workaround.
 When uncertain whether the subject is first-party or the accommodation is deliberate,
 return fire=false. Put your reasoning (under 40 words, naming the dependency and the
 gap) in `reasoning`.""",
-    message=lambda r: (
+    message=(
         "This edit works around a first-party dependency instead of fixing it. "
-        f"Why: {r.reasoning} "
+        "Why: {reasoning} "
         "The dependency is a sibling repo with tag-driven releases — fix the primitive "
         "there: add the missing surface upstream, bump the pin, and skip the accommodation. "
         "If a local workaround is genuinely correct here, say why in your reply and proceed."
@@ -188,9 +188,9 @@ block on honest work teaches the agent to ignore this gate. Fire only when a spe
 tell is clearly present and no do-not-fire condition applies. Put your reasoning
 (under 60 words, naming the dependency and the primitive it should grow) in
 `reasoning`.""",
-    message=lambda r: (
+    message=(
         "This turn lands a consumer-side workaround for a first-party dependency instead of "
-        f"fixing the dependency. Why: {r.reasoning} "
+        "fixing the dependency. Why: {reasoning} "
         "The dependency is a sibling repo with tag-driven releases — fix the primitive "
         "there: add the missing surface upstream, bump the pin, and delete the local "
         "accommodation. If a local workaround is genuinely correct, say why in your reply "

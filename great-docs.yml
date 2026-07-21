@@ -94,7 +94,6 @@ reference:
       - rewrite_code
       - llm_gate
       - llm_nudge
-      - llm_evaluate
       - prompt_check
       - approve
       - deny
@@ -268,6 +267,7 @@ reference:
     desc: Inline tests for hooks.
     contents:
       - Input
+      - T
       - Allow
       - Block
       - Warn

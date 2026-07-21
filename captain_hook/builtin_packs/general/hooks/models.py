@@ -222,9 +222,9 @@ hook(
 
 llm_gate(
     PROSE_SPAWN_GATE,
-    message=lambda r: (
+    message=(
         "This subagent is pinned to a non-fable model but its deliverable is prose/writing work. "
-        f"{r.reasoning} All writing — docs, READMEs, release notes, any user-facing text — routes "
+        "{reasoning} All writing — docs, READMEs, release notes, any user-facing text — routes "
         "to fable: drop model to inherit the session model, or pass model='fable'. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
@@ -283,8 +283,8 @@ set_tool_input(
 
 llm_nudge(
     IMPLEMENTATION_SPAWN_NUDGE,
-    message=lambda r: (
-        f"This delegation would run on fable, but it reads as routine implementation. {r.reasoning} "
+    message=(
+        "This delegation would run on fable, but it reads as routine implementation. {reasoning} "
         "Bounded, decision-light implementation — the decisions are already made and what remains is "
         "execution (terminal-heavy included) — routes to gpt-5.6-sol: spawn the codex:codex-wrapper agent "
         "with a self-contained prompt. Ambiguous, decision-dense, or long-run implementation goes to "
@@ -317,8 +317,8 @@ llm_nudge(
 
 llm_nudge(
     INLINE_EDIT_NUDGE,
-    message=lambda r: (
-        f"This inline edit reads as routine implementation on fable. {r.reasoning} "
+    message=(
+        "This inline edit reads as routine implementation on fable. {reasoning} "
         "Implementation delegates: a bounded, decision-light change routes to gpt-5.6-sol via the "
         "codex skill; ambiguous, decision-dense, or long-running work goes to a model='opus', "
         "effort='xhigh' subagent. Keep "
@@ -365,8 +365,8 @@ llm_nudge(
 
 llm_nudge(
     BROWSER_DELEGATION_NUDGE,
-    message=lambda r: (
-        f"This is sustained browser automation running inline on fable. {r.reasoning} "
+    message=(
+        "This is sustained browser automation running inline on fable. {reasoning} "
         "Hands-on browser work delegates like any implementation: spawn a model='opus', effort='xhigh' "
         "subagent to drive agent-browser and return findings, or an agent-browser-with-cookies teammate "
         "when the site needs your login. Keep driving the browser inline only for a single gated, stateful, "
@@ -419,8 +419,8 @@ llm_nudge(
 llm_nudge(
     REVIEW_ROUTING_SPAWN_NUDGE,
     label="review_routing_spawn",
-    message=lambda r: (
-        f"This review/diagnosis delegation would run on fable. {r.reasoning} "
+    message=(
+        "This review/diagnosis delegation would run on fable. {reasoning} "
         "Code/diff review, security review/audit and verification of security-sensitive code, "
         "and bug diagnosis route to gpt-5.6-sol: spawn the codex:codex-wrapper agent with the "
         "self-contained question as its prompt (from the main conversation, run the codex skill "
@@ -497,8 +497,8 @@ nudge(
 
 llm_nudge(
     PROSE_WORKFLOW_NUDGE,
-    message=lambda r: (
-        f"This workflow script pins a non-fable model on a stage whose deliverable is prose. {r.reasoning} "
+    message=(
+        "This workflow script pins a non-fable model on a stage whose deliverable is prose. {reasoning} "
         "All writing — docs, READMEs, release notes, any user-facing text — routes to fable: inherit the "
         "session model or pin model: 'fable' on that stage. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
@@ -530,8 +530,8 @@ llm_nudge(
 llm_nudge(
     REVIEW_ROUTING_WORKFLOW_NUDGE,
     label="review_routing_workflow",
-    message=lambda r: (
-        f"This workflow runs review/diagnosis stages on fable. {r.reasoning} "
+    message=(
+        "This workflow runs review/diagnosis stages on fable. {reasoning} "
         "Route finder, refuter, security-audit, and diagnosis stages to gpt-5.6-sol: give each stage "
         "agentType: 'codex:codex-wrapper' with the self-contained question as its prompt; "
         "keep the synthesis/accept-reject stage on fable (inherit the session model). "
@@ -608,9 +608,9 @@ llm_nudge(
 
 llm_nudge(
     WRITING_DOCS_SPAWN_NUDGE,
-    message=lambda r: (
+    message=(
         "This prompt delegates prose but paraphrases the writing rules instead of pointing at them. "
-        f"{r.reasoning} A paraphrase drifts and silently overrides the skill — rewrite the prompt to "
+        "{reasoning} A paraphrase drifts and silently overrides the skill — rewrite the prompt to "
         "direct the agent to READ the writing-docs skill and its references (the installed plugin under "
         "~/.claude/plugins/cache/skills/writing-docs, or plugins/writing-docs in the cc-skills repo) "
         "before it writes."
@@ -644,9 +644,9 @@ llm_nudge(
 
 llm_nudge(
     WRITING_DOCS_WORKFLOW_NUDGE,
-    message=lambda r: (
+    message=(
         "This workflow script delegates prose but paraphrases the writing rules instead of pointing at "
-        f"them. {r.reasoning} A paraphrase drifts and silently overrides the skill — rewrite the offending "
+        "them. {reasoning} A paraphrase drifts and silently overrides the skill — rewrite the offending "
         "agent() prompt to direct its subagent to READ the writing-docs skill and its references (the "
         "installed plugin under ~/.claude/plugins/cache/skills/writing-docs, or plugins/writing-docs in "
         "the cc-skills repo) before it writes."

@@ -7,6 +7,7 @@ from captain_hook import (
     Event,
     Input,
     RanCommand,
+    Runs,
     TestFile,
     Tool,
     Warn,
@@ -14,7 +15,6 @@ from captain_hook import (
     nudge,
 )
 from captain_hook.conditions import AllEditsUnder, UserSaid
-from captain_hook.types import Command as CommandCondition
 
 nudge(
     """
@@ -28,7 +28,7 @@ nudge(
 
 gate(
     "No `uv run pytest` execution found. Run tests before committing Python changes.",
-    only_if=[Tool("Bash"), CommandCondition(r"git\s+commit"), Commits(".py")],
+    only_if=[Tool("Bash"), Runs("git", "commit"), Commits(".py")],
     skip_if=[
         RanCommand("uv", "run", "pytest"),
         RanCommand("pytest"),
@@ -46,7 +46,7 @@ gate(
 nudge(
     "No `uv run pytest` execution detected in this session. If you changed Python files, run "
     "tests before committing. If this is a docs/config-only change, proceed.",
-    only_if=[Tool("Bash"), CommandCondition(r"git\s+commit")],
+    only_if=[Tool("Bash"), Runs("git", "commit")],
     skip_if=[
         RanCommand("uv", "run", "pytest"),
         RanCommand("pytest"),

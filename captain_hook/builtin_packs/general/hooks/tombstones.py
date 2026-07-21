@@ -153,9 +153,9 @@ Set fire=true only when at least one entry in <tombstone_comments> is clearly a
 tombstone. When uncertain, set fire=false — a stray tombstone costs little,
 while a false alarm teaches the agent to ignore this nudge. Keep reasoning
 under 60 words and quote the offending comment verbatim.""",
-    message=lambda r: (
+    message=(
         "Tombstone comment: the edit adds a comment describing code that no longer exists. "
-        f"{r.reasoning} Delete the comment line itself; do NOT restore the removed code "
+        "{reasoning} Delete the comment line itself; do NOT restore the removed code "
         "(git history records it). If it can instead document the behavior of the code "
         "that remains, rewrite it to say that."
     ),
