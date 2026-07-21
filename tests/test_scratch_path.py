@@ -15,10 +15,11 @@ def scratch_matches(file: str) -> bool:
 
 @pytest.fixture
 def temp_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    # Pin the temp roots under tmp_path so the rest of tmp_path is deterministically non-scratch.
+    # Pin both scratch signals: on Linux tmp_path sits under /tmp, so an ancestor spells "tmp".
     root = (tmp_path / "tmproot").resolve()
     root.mkdir()
     monkeypatch.setattr("captain_hook.util.scratch.TEMP_ROOTS", (root,))
+    monkeypatch.setattr("captain_hook.util.scratch.SCRATCH_DIR_NAMES", frozenset({"scratch"}))
     return root
 
 
