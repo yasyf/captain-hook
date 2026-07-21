@@ -3,6 +3,8 @@ import Testing
 @testable import DaemonKit
 
 private final class SessionBundleToken {}
+private let buildVersion = Bundle(for: SessionBundleToken.self)
+    .object(forInfoDictionaryKey: "CFBundleShortVersionString") as! String
 private let signedBridgeExecutable = ProcessInfo.processInfo.environment["CAPT_HOOK_SIGNED_BRIDGE_PATH"]
     .map { URL(fileURLWithPath: $0) }
 
@@ -72,10 +74,10 @@ private func runBridge(
         let (directory, socket) = try temporarySocket()
         defer { try? FileManager.default.removeItem(at: directory) }
         let recorder = NotificationRecorder()
-        let handler = HelperHandler(version: "0.0.0", onNotify: recorder.append)
+        let handler = HelperHandler(version: buildVersion, onNotify: recorder.append)
         let server = SocketServer(
             path: socket.path,
-            build: "0.0.0",
+            build: buildVersion,
             trust: .sameEffectiveUser,
             handler: { await handler.handle($0) }
         )
@@ -84,7 +86,7 @@ private func runBridge(
 
         let ping = try runBridge(socket: socket, operation: "ping")
         #expect(ping.status == 0)
-        #expect(try JSONDecoder().decode(HelperReply.self, from: ping.output) == .ping(version: "0.0.0"))
+        #expect(try JSONDecoder().decode(HelperReply.self, from: ping.output) == .ping(version: buildVersion))
 
         let request = NotifyRequest(
             kind: "pr_open",
@@ -113,14 +115,14 @@ private func runBridge(
         let (directory, socket) = try temporarySocket()
         defer { try? FileManager.default.removeItem(at: directory) }
         let recorder = NotificationRecorder()
-        let handler = HelperHandler(version: "0.0.0", onNotify: recorder.append)
+        let handler = HelperHandler(version: buildVersion, onNotify: recorder.append)
         let requirement = try PeerTrust.Requirement(
             teamIdentifier: "SXKCTF23Q2",
             signingIdentifier: "com.yasyf.capt-hook.helper.bridge"
         )
         let server = SocketServer(
             path: socket.path,
-            build: "0.0.0",
+            build: buildVersion,
             trust: PeerTrust(requirement: requirement),
             handler: { await handler.handle($0) }
         )
@@ -129,7 +131,7 @@ private func runBridge(
 
         let ping = try runBridge(executable: executable, socket: socket, operation: "ping")
         #expect(ping.status == 0)
-        #expect(try JSONDecoder().decode(HelperReply.self, from: ping.output) == .ping(version: "0.0.0"))
+        #expect(try JSONDecoder().decode(HelperReply.self, from: ping.output) == .ping(version: buildVersion))
 
         let request = NotifyRequest(
             kind: "pr_open",
