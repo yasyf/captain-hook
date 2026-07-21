@@ -3,14 +3,15 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/release-pypi.yml"
 CASK = ROOT / ".github/cask/captain-hook.rb.tmpl"
-HOME_BREW_REF = "f45550932b0c8a42eb04e9ab0e5de8f82ad78b6a"
+RELEASE_APP_REF = "0b8cc21418a6102d6670053a17c97f5723e9daa2"
+HOME_BREW_ACTION_REF = "f45550932b0c8a42eb04e9ab0e5de8f82ad78b6a"
 
 
 def test_helper_release_uses_exact_hard_cut_contract() -> None:
     workflow = WORKFLOW.read_text()
     helper = workflow[workflow.index("\n  helper:") : workflow.index("\n  helper-cask:")]
 
-    assert f"release-app.yml@{HOME_BREW_REF}" in helper
+    assert f"release-app.yml@{RELEASE_APP_REF}" in helper
     assert "asset_name: captain-hook" in helper
     assert "cask_token:" not in helper
     assert "cask_template_path:" not in helper
@@ -33,8 +34,8 @@ def test_cask_publication_uses_verified_release_outputs() -> None:
         "Require a full-application cask template",
         "__ASSET_URL__=${{ needs.helper.outputs.asset_url }}",
         "__SHA_APP__=${{ needs.helper.outputs.sha256 }}",
-        f"render-formula@{HOME_BREW_REF}",
-        f"publish@{HOME_BREW_REF}",
+        f"render-formula@{HOME_BREW_ACTION_REF}",
+        f"publish@{HOME_BREW_ACTION_REF}",
     ):
         assert required in cask_job
 
