@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -56,6 +57,20 @@ CMD1_LINE2 = "    uvx capt-hook run PreToolUse | jq -r .hookSpecificOutput.permi
 CMD2 = "$ uvx capt-hook test"
 
 BOLD, RESET = "\x1b[1m", "\x1b[0m"
+RED, GREEN = "\x1b[1;31m", "\x1b[1;32m"
+
+
+def paint(line: str) -> str:
+    """Cosmetic ANSI color for semantic tokens; the text itself stays authentic."""
+    if line.startswith("BLOCKED:"):
+        return f"{RED}BLOCKED:{RESET}{line.removeprefix('BLOCKED:')}"
+    if (stripped := line.lstrip()).startswith("PASS  "):
+        return line.replace("PASS", f"{GREEN}PASS{RESET}", 1)
+    if stripped.startswith("FAIL  "):
+        return line.replace("FAIL", f"{RED}FAIL{RESET}", 1)
+    if " passed, " in line:
+        return re.sub(r"(\d+ passed)", f"{GREEN}\\1{RESET}", line, count=1)
+    return line
 
 
 def capture(scratch: Path, config: Path) -> tuple[str, list[str]]:
@@ -100,13 +115,13 @@ def build_reel(reason: str, test_lines: list[str]) -> Reel:
     # Prompt one: replay the PreToolUse payload, watch the guard block it.
     r.type_line(CMD1_LINE1, lead=0.5, cps=0.022, bold=True)
     r.type_line(CMD1_LINE2, lead=0.05, cps=0.02, bold=True)
-    r.print_line(reason, lead=0.55)
+    r.print_line(paint(reason), lead=0.55)
 
     # Prompt two: prove the guard with its inline tests.
     r.print_line("", lead=0.3)
     r.type_line(CMD2, lead=1.1, cps=0.05, bold=True)
     for i, line in enumerate(test_lines):
-        r.print_line(line, lead=0.5 if i == 0 else 0.14)
+        r.print_line(paint(line), lead=0.5 if i == 0 else 0.14)
 
     # Hold the final frame so the last read lands.
     r.out(2.2, "")

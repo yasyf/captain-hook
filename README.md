@@ -14,7 +14,7 @@ uvx capt-hook init
 
 `init` scaffolds `.claude/hooks/`, wires Claude Code's settings, and arms the session reviewer. One `block_command` later, a force-push dies at `PreToolUse` and the hook's inline tests run green:
 
-<img src="https://github.com/yasyf/captain-hook/raw/main/docs/assets/demo.png" alt="Terminal running 'uvx capt-hook test' — a hook blocks git push --force and both inline tests pass" width="700">
+<img src="https://github.com/yasyf/captain-hook/raw/main/docs/assets/demo.gif" alt="Animated terminal: a hook blocks git push --force at PreToolUse, then 'uvx capt-hook test' passes both inline tests" width="700">
 
 Driving with an agent? Paste this:
 
