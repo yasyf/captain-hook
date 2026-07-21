@@ -21,7 +21,7 @@ MATRIX = json.loads((SRC / "matrix.json").read_text())
 
 sys.path.insert(0, str(SCRIPTS))
 
-from build_emulator import BANNER_PREFIX, BUNDLE, src_hash  # noqa: E402
+from build_emulator import BANNER_PREFIX, BUNDLES, src_hash  # noqa: E402
 from widget_compiler import compile_fragment, load_hooks  # noqa: E402
 
 import captain_hook  # noqa: E402
@@ -86,6 +86,17 @@ def run_node(hooks: list[dict[str, Any]], cases: list[dict[str, Any]]) -> dict[s
         check=True,
     )
     return {v["id"]: v["verdict"] for v in json.loads(proc.stdout)["verdicts"]}
+
+
+def run_node_compile(source: str) -> dict[str, Any]:
+    proc = subprocess.run(
+        ["node", str(PARITY_MJS)],
+        input=json.dumps({"mode": "compile", "source": source}),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(proc.stdout)
 
 
 def build_transcript(edits: list[str], skills: list[str]) -> list[dict[str, Any]]:
@@ -155,10 +166,11 @@ def _widget_cases(mode: str) -> list[Any]:
     ]
 
 
-def test_bundle_drift() -> None:
-    banner = BUNDLE.read_text().splitlines()[0]
+@pytest.mark.parametrize("bundle", BUNDLES, ids=lambda b: b.outfile.name)
+def test_bundle_drift(bundle: Any) -> None:
+    banner = bundle.outfile.read_text().splitlines()[0]
     assert banner == f"{BANNER_PREFIX}{src_hash()}", (
-        "committed emulator.js is stale — run `python docs/scripts/build_emulator.py`"
+        f"committed {bundle.outfile.name} is stale — run `python docs/scripts/build_emulator.py`"
     )
 
 
@@ -267,3 +279,32 @@ def test_fragment_inline_tests(fragment: str) -> None:
         _state.hooks[:] = saved
     assert results, f"{fragment} registered no inline tests"
     assert [(name, msg) for name, _status, ok, msg in results if not ok] == []
+
+
+FRAGMENT_WIDGETS = [
+    pytest.param(widget["fragment"], id=widget_id)
+    for widget_id, widget in MATRIX["widgets"].items()
+    if "fragment" in widget
+]
+
+
+@requires_node
+@pytest.mark.parametrize("fragment", FRAGMENT_WIDGETS)
+def test_compile_parity(fragment: str) -> None:
+    """Each matrix fragment lowers to identical hooks through the JS compiler bundle and Python."""
+    saved = list(_state.hooks)
+    try:
+        python_hooks = compile_fragment(FRAGMENTS / f"{fragment}.py")["hooks"]
+    finally:
+        _state.hooks[:] = saved
+    result = run_node_compile((FRAGMENTS / f"{fragment}.py").read_text())
+    assert "error" not in result, result
+    assert result["hooks"] == python_hooks
+
+
+@requires_node
+@pytest.mark.parametrize("source", REFUSALS.values(), ids=list(REFUSALS))
+def test_compile_refusal_parity(source: str) -> None:
+    """Every source the Python compiler refuses is refused by the JS bundle too (message-agnostic)."""
+    result = run_node_compile(source)
+    assert result.get("error"), result

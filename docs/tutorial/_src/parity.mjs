@@ -1,5 +1,5 @@
-// CI parity runner: {hooks, cases:[{id, input}]} on stdin -> [{id, verdict}] on stdout,
-// each case driven through the committed emulator bundle the browser also loads.
+// CI parity runner over the committed browser bundles. `mode:"compile"` drives widgets/compiler.js;
+// otherwise the {hooks, cases} shape drives widgets/emulator.js like the browser does.
 
 import { fileURLToPath } from "node:url";
 import { evaluate } from "../widgets/emulator.js";
@@ -12,6 +12,13 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-const { hooks, cases } = JSON.parse(await readStdin());
-const verdicts = cases.map(({ id, input }) => ({ id, verdict: evaluate(hooks, input) }));
-process.stdout.write(JSON.stringify({ bundle, verdicts }));
+const request = JSON.parse(await readStdin());
+
+if (request.mode === "compile") {
+  const { compileSource } = await import("../widgets/compiler.js");
+  process.stdout.write(JSON.stringify(compileSource(request.source)));
+} else {
+  const { hooks, cases } = request;
+  const verdicts = cases.map(({ id, input }) => ({ id, verdict: evaluate(hooks, input) }));
+  process.stdout.write(JSON.stringify({ bundle, verdicts }));
+}

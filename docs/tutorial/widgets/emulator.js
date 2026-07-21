@@ -1,4 +1,4 @@
-// capt-hook-widget src-sha256: 120927a6a869a4d04ada9479ca9f9aafe5c1f8b97633bfb0a9fe8a1b5e715f9a
+// capt-hook-widget src-sha256: ec5dff6469132682dad6a9d9d1853fb86a181efd2d98ccfc0edf994eccc82284
 
 // dom.ts
 function el(tag, className, text) {

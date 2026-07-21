@@ -1,0 +1,53 @@
+{
+  "Agent": [
+    "Agent",
+    "Task"
+  ],
+  "Bash": [
+    "Bash",
+    "Execute",
+    "exec_command"
+  ],
+  "Create": [
+    "Create",
+    "Write"
+  ],
+  "Edit": [
+    "Edit",
+    "apply_patch"
+  ],
+  "Execute": [
+    "Bash",
+    "Execute",
+    "exec_command"
+  ],
+  "ExitPlanMode": [
+    "ExitPlanMode",
+    "ExitSpecMode"
+  ],
+  "ExitSpecMode": [
+    "ExitPlanMode",
+    "ExitSpecMode"
+  ],
+  "FetchUrl": [
+    "FetchUrl",
+    "WebFetch"
+  ],
+  "Task": [
+    "Agent",
+    "Task"
+  ],
+  "WebFetch": [
+    "FetchUrl",
+    "WebFetch"
+  ],
+  "Write": [
+    "Create",
+    "Write"
+  ],
+  "exec_command": [
+    "Bash",
+    "Execute",
+    "exec_command"
+  ]
+}
