@@ -4,6 +4,38 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`capt-hook transcripts register` — attach an external transcript to a session.**
+  `--session <id>` plus exactly one of `--thread-id` (a codex thread, resolved lazily against
+  the codex sessions tree at each dispatch; unresolvable ids drop out silently) or `--path`
+  (a transcript file, resolved to itself); `--provider` defaults to `codex`, `--label` is
+  optional. Idempotent by provider and locator. The session id names a state directory, so it
+  is a trust boundary: ids containing path separators or traversal components are rejected.
+- **`capt-hook mcp` — a stdio MCP server exposing `register_transcript`.** The tool takes the
+  same arguments and hits the same write path as the CLI. The MCP SDK ships behind the new
+  `capt-hook[mcp]` extra; running without it fails with an install hint naming the extra. The
+  plugin declares the server via a plugin-root `.mcp.json`
+  (`uvx --from capt-hook[mcp] capt-hook mcp`), so plugin users get the tool with no wiring;
+  this repo's `.mcp.json` wires the dev venv binary.
+- New exports: `register_transcript`, `registered_paths`, `RegisteredTranscript`,
+  `RegisteredTranscripts`.
+
+### Changed
+- **Registered transcripts fold into the deep view at dispatch.** `lazy_transcript` gains an
+  `attach=` callback that resolves registered entries after the loader returns, on the one
+  codepath the cold CLI and the daemon share — `evt.ctx.t.deep` now includes registered
+  rollouts alongside subagent sidechains.
+- cc-transcript pin raised to `>=14.9.0` for the `deep`/`walk`/attachments surface.
+
+### Fixed
+- **Stop-time gap sites now look through the deep view.** `EditedSource` reads
+  `evt.ctx.t.deep.tool_calls`, and the `subagents=True` recursion behind `ReadFile` and
+  `UsedSkill` rides `walk()` instead of a bespoke sidechain scan, so subagent and registered
+  codex edits fire the gates that should see them (this repo's own style gate included). Bare
+  `tool_calls` is unchanged — recursion stays opt-in.
+
 ## [12.1.0] - 2026-07-20
 
 ### Added

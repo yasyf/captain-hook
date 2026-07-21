@@ -1,0 +1,70 @@
+---
+title: "Register an external transcript"
+---
+
+The session transcript only records what Claude did. When a codex lane or any other external agent edits the tree mid-session, those edits are invisible to your Stop-time gates: the style review never triggers, `EditedSource` never matches. Registration closes the gap. Attach the external transcript to the session, and every later dispatch folds it into the session's deep view.
+
+## Register with the CLI
+
+Register a codex thread by id:
+
+```bash
+uvx capt-hook transcripts register --session "$CLAUDE_CODE_SESSION_ID" \
+  --thread-id 019f6800-3b4c-7d5e-9f60-0000000000ab
+```
+
+The thread id resolves against the codex sessions tree (`~/.codex/sessions`) lazily, at each dispatch — the rollout only has to exist by the time a hook reads the transcript, so registering the moment the thread starts is fine. An id that never resolves, or whose rollout gets pruned, drops out silently.
+
+For a transcript file that already sits on disk, pass its path instead:
+
+```bash
+uvx capt-hook transcripts register --session "$CLAUDE_CODE_SESSION_ID" \
+  --path /path/to/rollout.jsonl
+```
+
+Pass exactly one of `--thread-id` or `--path`. `--provider` defaults to `codex`, and `--label` attaches a name for your own bookkeeping. Registration is idempotent by provider and locator: re-running the same command records nothing new.
+
+The codex plugin's `codex-ask` is picking this up natively — once its next release lands, every lane it dispatches registers its own rollout automatically, and the manual command stays for ad-hoc runs.
+
+## Register over MCP
+
+`capt-hook mcp` serves a stdio MCP server whose one tool, `register_transcript`, takes the same arguments (`session_id`, `thread_id` or `path`, optional `provider` and `label`) and hits the same write path, idempotency included. The capt-hook plugin declares the server for you, so in a plugin-enabled session the agent calls the tool with no wiring. To wire it into a project yourself, add it to `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "capt-hook": {
+      "command": "uvx",
+      "args": ["--from", "capt-hook[mcp]", "capt-hook", "mcp"]
+    }
+  }
+}
+```
+
+The server needs the MCP SDK, which ships behind the `capt-hook[mcp]` extra; the `--from capt-hook[mcp]` form pulls it in. Running `capt-hook mcp` without the extra fails with an install hint naming it.
+
+## What Stop-time gates see
+
+At dispatch, each registered entry resolves to its rollout file and folds into `evt.ctx.t.deep` — the recursive view over the session, its subagent sidechains, and every registered transcript. A gate predicated on the deep view fires on external edits exactly as it fires on Claude's own:
+
+```python
+from captain_hook import gate
+
+gate(
+    "Run the style pass over everything this session touched.",
+    when=lambda evt: any(
+        f.matches("**/*.py") for f in evt.ctx.t.deep.tool_calls.named("Edit|Write").files()
+    ),
+)
+```
+
+The bundled surfaces already look through the deep view: the `EditedSource` condition counts subagent and registered codex edits with no change on your side, and conditions that recurse with `subagents=True` (`ReadFile`, `UsedSkill`) see registered transcripts too. Bare `t.tool_calls` stays scoped to the main window — recursion is opt-in, so a hook that asks "what did Claude do here" keeps asking exactly that.
+
+## Session ids and paths
+
+The session id names a directory under capt-hook's state root, which makes it a trust boundary: an id containing a path separator, a NUL byte, or a bare `.`/`..` component is rejected with a usage error. Locators are stored verbatim. A thread id touches the filesystem only through the sessions-tree lookup at dispatch, and a `--path` entry resolves to exactly the file you gave it.
+
+## See also
+
+- [Query the transcript](transcript.qmd) — the query API the deep view returns.
+- [Reference](../reference/index.qmd) — `register_transcript`, `RegisteredTranscript`, and `RegisteredTranscripts` signatures.

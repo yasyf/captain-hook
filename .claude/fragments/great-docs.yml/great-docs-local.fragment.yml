@@ -252,6 +252,13 @@ reference:
       - text_matches
       - workflow
 
+  - title: Transcripts
+    desc: Registering external transcripts into a session's deep view.
+    contents:
+      - register_transcript
+      - RegisteredTranscript
+      - RegisteredTranscripts
+
   - title: Testing
     desc: Inline tests for hooks.
     contents:
@@ -284,3 +291,6 @@ reference:
       - Excerpts
       - excerpt_around
       - COMMENT_TYPES
+      - Edit
+      - SyntaxNode
+      - Match
