@@ -1,6 +1,8 @@
 ---
 title: "Tutorial: hooks you can poke"
 description: "Block your first command in the browser, then graduate to the real engine."
+resources:
+  - widgets
 ---
 
 Write a hook, type a command at it, watch the verdict. Every widget on these pages runs a JavaScript port of capt-hook's dispatch — and every preset button is a row in a parity test, so what the widget answers is what `capt-hook test` answers. When a command uses shell features the port doesn't model (substitution, heredocs), the widget says so instead of guessing.

@@ -1,5 +1,6 @@
 ---
 title: "LLM hooks, signals & the transcript"
+description: "Put a model's judgment in a hook — LLM gates and nudges, signal scoring, and transcript queries."
 aliases: [signals.html, transcript.html]
 ---
 

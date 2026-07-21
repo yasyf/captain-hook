@@ -1,5 +1,6 @@
 ---
 title: "Session reviewer"
+description: "How repeated corrections become hooks: the reviewer, its thresholds, and the PR it opens."
 aliases: [corrections-lifecycle.html]
 ---
 

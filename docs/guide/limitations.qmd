@@ -1,5 +1,6 @@
 ---
 title: "What captain-hook does not do"
+description: "The blunt list: what capt-hook deliberately does not do."
 ---
 
 captain-hook guards a Claude Code session from the inside, with the information a single hook

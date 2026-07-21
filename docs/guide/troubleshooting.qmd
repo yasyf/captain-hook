@@ -1,5 +1,6 @@
 ---
 title: "Troubleshooting"
+description: "Symptom-by-symptom fixes for hooks that don't fire, fire wrong, or fire twice."
 ---
 
 A hook misbehaved. captain-hook ships no `doctor` command. You diagnose with two tools, the dispatch logs and a re-run of your inline tests.

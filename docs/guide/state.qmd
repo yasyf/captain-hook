@@ -1,5 +1,6 @@
 ---
 title: "State & workflows"
+description: "Typed session state, durable state, and multi-step workflow gates."
 aliases: [workflows.html]
 ---
 

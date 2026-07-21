@@ -1,5 +1,6 @@
 ---
 title: "Packs & configuration"
+description: "Use the packs you have, ship your own in a Claude plugin, and tune hook settings."
 aliases: [plugin-packs.html, configuration.html]
 ---
 

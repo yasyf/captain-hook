@@ -1,5 +1,6 @@
 ---
 title: "Writing hooks"
+description: "Primitives, conditions, and style rules — the vocabulary every hook is built from."
 aliases: [conditions.html, styleguide.html, patterns.html]
 ---
 

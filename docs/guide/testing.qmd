@@ -1,5 +1,6 @@
 ---
 title: "Test hooks inline"
+description: "Inline tests={...}, the test runner, and replaying recorded sessions."
 ---
 
 captain-hook ships the test next to the hook. You attach a `tests` dict to any

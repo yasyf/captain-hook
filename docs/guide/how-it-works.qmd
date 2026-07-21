@@ -1,5 +1,6 @@
 ---
 title: "Under the hood"
+description: "The dispatch pipeline, verdict precedence, the trust model, and the resident daemon."
 aliases: [philosophy.html, security.html, daemon.html]
 ---
 
