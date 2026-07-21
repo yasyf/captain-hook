@@ -27,7 +27,8 @@ def test_cask_publication_uses_verified_release_outputs() -> None:
         "needs.helper.outputs.asset_url",
         "needs.helper.outputs.sha256",
         "Verify the final distributed application bytes",
-        'shasum -a 256 -c "$ASSET_FILENAME.sha256"',
+        "awk 'NR == 1 { print $1 }' \"$ASSET_FILENAME.sha256\"",
+        'shasum -a 256 "$ASSET_FILENAME"',
         "Guard cask registry name and version",
         "Require a full-application cask template",
         "__ASSET_URL__=${{ needs.helper.outputs.asset_url }}",
@@ -39,6 +40,7 @@ def test_cask_publication_uses_verified_release_outputs() -> None:
 
     assert cask_job.count("homebrew-tap/.github/actions/publish@") == 1
     assert "homebrew-tap/.github/actions/publish@v" not in cask_job
+    assert "shasum -a 256 -c" not in cask_job
 
 
 def test_cask_uses_authoritative_asset_url_and_full_application() -> None:

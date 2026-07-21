@@ -195,7 +195,7 @@ jobs:
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --dir dist/released --pattern "$ASSET_FILENAME" --pattern "$ASSET_FILENAME.sha256"
           cd dist/released
-          shasum -a 256 -c "$ASSET_FILENAME.sha256"
+          [ "$(awk 'NR == 1 { print $1 }' "$ASSET_FILENAME.sha256")" = "$ASSET_SHA256" ]
           [ "$(shasum -a 256 "$ASSET_FILENAME" | awk '{print $1}')" = "$ASSET_SHA256" ]
 
       - name: Guard cask registry name and version
