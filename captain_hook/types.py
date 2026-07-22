@@ -576,6 +576,27 @@ class Runs:
         object.__setattr__(self, "argv", argv)
 
 
+@dataclass(frozen=True, slots=True)
+class CwdHasFiles:
+    """Condition matching when every named file exists under the event's working directory.
+
+    All names must be present (AND) directly under ``evt.cwd`` for the condition to hold; a ``None``
+    cwd or any missing name fails it. Names resolve relative to the working directory only — no
+    parent walk — matching the vantage the command itself runs from. Pairs a command filter with an
+    on-disk repo shape, e.g. gating a maturin-only nudge on ``Cargo.toml`` and ``pyproject.toml``
+    both being present.
+
+    Example:
+        >>> nudge("uv sync no-ops on Rust-only changes",
+        ...       only_if=[Runs("uv", "sync"), CwdHasFiles("Cargo.toml", "pyproject.toml")])
+    """
+
+    names: tuple[str, ...]
+
+    def __init__(self, *names: str) -> None:
+        object.__setattr__(self, "names", names)
+
+
 @dataclass(frozen=True)
 class ConditionList:
     """Container for a tuple of conditions; base class for combinators like ``Or``/``And``."""
@@ -715,6 +736,7 @@ TCondition = (
     | TouchedFile
     | RanCommand
     | Runs
+    | CwdHasFiles
     | InPlanMode
     | Waiting
     | Or

@@ -69,6 +69,7 @@ PINNED_EXPORTS: tuple[str, ...] = (
     "CustomCommandLineCondition",
     "CustomCondition",
     "CustomInputTypeCondition",
+    "CwdHasFiles",
     "Deque",
     "DurableSlot",
     "DurableState",

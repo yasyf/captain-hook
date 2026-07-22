@@ -181,6 +181,10 @@ CONDITION_DESCRIPTIONS: dict[tuple[str, ...], tuple[str, str]] = {
         "Bash argv prefix (structural, no false positives)",
         '`Runs("git", "stash")` — matches `git stash [...]`, not `echo git stash`',
     ),
+    ("CwdHasFiles",): (
+        "Working directory contains files",
+        '`CwdHasFiles("Cargo.toml", "pyproject.toml")` — all names present under `evt.cwd` (AND), no parent walk',
+    ),
     ("InPlanMode",): ("During plan mode", "`InPlanMode()`"),
     ("Waiting",): (
         "Session is parked on background work",

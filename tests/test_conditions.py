@@ -29,6 +29,7 @@ from captain_hook.types import (
     Command,
     Content,
     CustomCondition,
+    CwdHasFiles,
     Event,
     FilePath,
     FromSubagent,
@@ -645,6 +646,43 @@ class TestRunsCondition:
 
     def test_runs_false_for_non_bash(self) -> None:
         assert check_condition(Runs("git", "stash"), make_event(StopEvent)) is False
+
+
+class TestCwdHasFilesCondition:
+    def _event(self, cwd: str | None) -> PreToolUseEvent:
+        raw: dict[str, Any] = {"tool_name": "Bash", "tool_input": {"command": "uv sync"}}
+        if cwd is not None:
+            raw["cwd"] = cwd
+        return PreToolUseEvent(_raw=raw, ctx=build_ctx())
+
+    def test_all_markers_present_matches(self, tmp_path: Path) -> None:
+        (tmp_path / "Cargo.toml").write_text("[package]\n")
+        (tmp_path / "pyproject.toml").write_text("[project]\n")
+        assert check_condition(CwdHasFiles("Cargo.toml", "pyproject.toml"), self._event(str(tmp_path))) is True
+
+    def test_missing_one_marker_fails_and_semantics(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text("[project]\n")  # Cargo.toml absent
+        assert check_condition(CwdHasFiles("Cargo.toml", "pyproject.toml"), self._event(str(tmp_path))) is False
+
+    def test_single_marker_present_matches(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text("[project]\n")
+        assert check_condition(CwdHasFiles("pyproject.toml"), self._event(str(tmp_path))) is True
+
+    def test_no_cwd_never_matches(self, tmp_path: Path) -> None:
+        (tmp_path / "Cargo.toml").write_text("")
+        (tmp_path / "pyproject.toml").write_text("")
+        assert check_condition(CwdHasFiles("Cargo.toml", "pyproject.toml"), self._event(None)) is False
+
+    def test_empty_names_never_matches(self, tmp_path: Path) -> None:
+        assert check_condition(CwdHasFiles(), self._event(str(tmp_path))) is False
+
+    def test_directory_named_like_marker_fails(self, tmp_path: Path) -> None:
+        (tmp_path / "Cargo.toml").mkdir()  # a directory, not a file
+        (tmp_path / "pyproject.toml").write_text("")
+        assert check_condition(CwdHasFiles("Cargo.toml", "pyproject.toml"), self._event(str(tmp_path))) is False
+
+    def test_event_agnostic_valid_events(self) -> None:
+        assert condition_events(CwdHasFiles("Cargo.toml")) == ALL_EVENTS
 
 
 class TestLambdaCondition:

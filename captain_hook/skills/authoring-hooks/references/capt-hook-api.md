@@ -172,6 +172,7 @@ evaluated first.
 | File was previously edited | `TouchedFile("**/*.py")` |
 | Command was previously run | `RanCommand("uv", "run", "pytest")` — argv-prefix tokens, wrapper-transparent (`sudo`/`env`/`timeout` stripped) but launcher-literal (`uv run pytest` ≠ `pytest`; list each spelling as its own entry) |
 | Bash argv prefix (structural, no false positives) | `Runs("git", "stash")` — matches `git stash [...]`, not `echo git stash` |
+| Working directory contains files | `CwdHasFiles("Cargo.toml", "pyproject.toml")` — all names present under `evt.cwd` (AND), no parent walk |
 | During plan mode | `InPlanMode()` |
 | Session is parked on background work | `Waiting()` — background shells/subagents/workflows in flight, or an undelivered task notification; typically `skip_if=[Waiting()]` on Stop gates |
 | Combine across types | `Or(...)`, `And(...)`, `Not(...)` |

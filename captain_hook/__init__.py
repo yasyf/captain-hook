@@ -151,6 +151,7 @@ EXPORTS: dict[str, str] = {
     "CustomCommandLineCondition": "captain_hook.types",
     "CustomCondition": "captain_hook.types",
     "CustomInputTypeCondition": "captain_hook.types",
+    "CwdHasFiles": "captain_hook.types",
     "Event": "captain_hook.types",
     "FilePath": "captain_hook.types",
     "FromSubagent": "captain_hook.types",

@@ -147,6 +147,7 @@ from captain_hook.types import Content as Content
 from captain_hook.types import CustomCommandLineCondition as CustomCommandLineCondition
 from captain_hook.types import CustomCondition as CustomCondition
 from captain_hook.types import CustomInputTypeCondition as CustomInputTypeCondition
+from captain_hook.types import CwdHasFiles as CwdHasFiles
 from captain_hook.types import Event as Event
 from captain_hook.types import FilePath as FilePath
 from captain_hook.types import FromSubagent as FromSubagent
