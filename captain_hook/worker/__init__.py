@@ -1,0 +1,1 @@
+"""Captain Hook product worker."""

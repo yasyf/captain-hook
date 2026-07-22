@@ -125,3 +125,9 @@ def install() -> DecisionWriter:
     decisions._WRITER = writer.submit
     heartbeat._WRITER = writer.submit_heartbeat
     return writer
+
+
+def uninstall(writer: DecisionWriter, timeout: float | None = None) -> None:
+    decisions._WRITER = None
+    heartbeat._WRITER = None
+    writer.drain(timeout)

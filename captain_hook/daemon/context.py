@@ -17,7 +17,7 @@ import sys
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from loguru import logger
 
@@ -25,10 +25,24 @@ from captain_hook.util import reqenv
 from captain_hook.util.paths import resolve_log_dir
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
     from typing import TextIO
 
-    from captain_hook.daemon.protocol import Request
+
+class _ClientRequest(Protocol):
+    @property
+    def ppid(self) -> int: ...
+
+
+class RequestContext(Protocol):
+    @property
+    def env(self) -> Mapping[str, str]: ...
+
+    @property
+    def cwd(self) -> str | None: ...
+
+    @property
+    def client(self) -> _ClientRequest: ...
 
 
 @dataclass(slots=True)
@@ -45,7 +59,7 @@ def bound_buffers() -> RequestBuffers | None:
 
 
 @contextmanager
-def request_scope(req: Request, session_id: str | None) -> Iterator[RequestBuffers]:
+def request_scope(req: RequestContext, session_id: str | None) -> Iterator[RequestBuffers]:
     sid = session_id or "unknown"
     overrides = reqenv.RequestOverrides(
         env=req.env,
