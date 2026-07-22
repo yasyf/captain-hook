@@ -4,6 +4,30 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.9.1] - 2026-07-21
+
+### Added
+
+- **One signed per-user host now owns every hook worker.** `capt-hookd` is an
+  exact-versioned universal Go helper embedded in `Captain Hook.app`; it uses
+  daemonkit v0.4.1 to own persistent framed Python workers, bound concurrency,
+  terminate timed-out process groups, and reap them before returning.
+- **The app, helper, wheel, and worker share one exact build identity.** Release
+  packaging and signature checks reject architecture, identity, entitlement,
+  or version drift before installation.
+
+### Changed
+
+- **Plugin hooks invoke the fixed signed host.** Requests use one exact framed
+  protocol and a semantic worker key, so session and account environment cannot
+  leak between clients while compatible requests reuse the same warm worker.
+
+### Removed
+
+- **The Python socket daemon is gone.** Per-project listeners, PID files,
+  watchdogs, re-exec, fallback dispatch, legacy client grammar, and their tests
+  were deleted rather than retained behind compatibility paths.
+
 ## [12.9.0] - 2026-07-21
 
 ### Changed
