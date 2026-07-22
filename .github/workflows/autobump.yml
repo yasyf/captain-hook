@@ -1,6 +1,9 @@
 name: Autobump
-# Guard lane (binary-pinned/release-synced plugin): dispatch-only until armed.
 on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 10 * * 1"
   workflow_dispatch:
     inputs:
       dry_run:
