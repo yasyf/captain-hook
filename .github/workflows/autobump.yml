@@ -1,0 +1,20 @@
+name: Autobump
+# Guard lane (binary-pinned/release-synced plugin): dispatch-only until armed.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        type: boolean
+        default: false
+      strict:
+        type: boolean
+        default: false
+permissions:
+  contents: write
+jobs:
+  autobump:
+    uses: yasyf/cc-skills/.github/workflows/plugin-autobump.yml@plugin-v1
+    with:
+      dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+      strict: ${{ github.event_name == 'workflow_dispatch' && inputs.strict || false }}
+      guard-plugins: "captain-hook"
