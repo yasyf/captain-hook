@@ -2,7 +2,7 @@ module github.com/yasyf/captain-hook
 
 go 1.26.3
 
-require github.com/yasyf/daemonkit v0.3.5-0.20260722045842-d5c55a3f75f4
+require github.com/yasyf/daemonkit v0.4.0
 
 require (
 	github.com/creack/pty v1.1.24 // indirect
