@@ -4,8 +4,9 @@ import importlib.resources
 import json
 from typing import Any
 
-from captain_hook.cli import DEFAULT_PREFIX, run_command
 from captain_hook.types import Event
+
+PLUGIN_PREFIX = "uvx --isolated --from capt-hook hook"
 
 
 def load_plugin_hooks() -> dict[str, Any]:
@@ -19,10 +20,10 @@ def expected_command_set(name: str) -> set[str]:
 
     Every event registers both dispatch variants (sync + async) and nothing else: the reviewer and
     the throttled sweep now ride the async ``run <Event>`` dispatch natively, so no ``review run`` or
-    ``review sweep`` entry is wired. Everything flows from ``DEFAULT_PREFIX``, so a prefix change is a
-    one-line edit.
+    ``review sweep`` entry is wired. Plugin dispatch enters the signed-host shim, not the product CLI.
     """
-    return {run_command(name, async_=False), run_command(name, async_=True)}
+    command = f"{PLUGIN_PREFIX} run {name}"
+    return {command, f"{command} --async"}
 
 
 class TestPluginHooksJson:
@@ -46,11 +47,12 @@ class TestPluginHooksJson:
             entries = group["hooks"]
             assert all(entry["type"] == "command" for entry in entries)
             by_command = {entry["command"]: entry for entry in entries}
-            # The command SET is fully derived from DEFAULT_PREFIX — sync + async, nothing else.
+            sync_command = f"{PLUGIN_PREFIX} run {name}"
+            async_command = f"{sync_command} --async"
             assert set(by_command) == expected_command_set(name)
             # Sync dispatcher foreground (restores additionalContext hooks); async is background.
-            assert "async" not in by_command[run_command(name, async_=False)]
-            assert by_command[run_command(name, async_=True)]["async"] is True
+            assert "async" not in by_command[sync_command]
+            assert by_command[async_command]["async"] is True
 
     def test_ships_no_raw_review_or_sweep_entries(self) -> None:
         # The reviewer and sweep are native `run <Event>` dispatch now; no raw entry survives.
@@ -61,7 +63,9 @@ class TestPluginHooksJson:
         ]
         assert not any("review run" in c or "review sweep" in c for c in commands)
 
-    def test_canonical_prefix_is_uvx_isolated_capt_hook(self) -> None:
-        assert DEFAULT_PREFIX == "uvx --isolated capt-hook"
-        assert run_command("PreToolUse", async_=False) == "uvx --isolated capt-hook run PreToolUse"
-        assert run_command("Stop", async_=True) == "uvx --isolated capt-hook run Stop --async"
+    def test_canonical_prefix_enters_the_signed_host_shim(self) -> None:
+        assert PLUGIN_PREFIX == "uvx --isolated --from capt-hook hook"
+        assert expected_command_set("PreToolUse") == {
+            "uvx --isolated --from capt-hook hook run PreToolUse",
+            "uvx --isolated --from capt-hook hook run PreToolUse --async",
+        }
