@@ -9,10 +9,15 @@
 ## Get started
 
 ```bash
+brew install --cask yasyf/tap/captain-hook
 uvx capt-hook init
 ```
 
-`init` scaffolds `.claude/hooks/`, wires Claude Code's settings, and arms the session reviewer. One `block_command` later, a force-push dies at `PreToolUse` and the hook's inline tests run green:
+The cask installs the fixed, signed host at `/Applications/Captain Hook.app`; `init` scaffolds
+`.claude/hooks/`, wires Claude Code's settings, and arms the session reviewer. The app and
+Python package must be the same release: dispatch rejects a build mismatch instead of running
+different code or falling back to a cold process. One `block_command` later, a force-push dies
+at `PreToolUse` and the hook's inline tests run green:
 
 <img src="https://github.com/yasyf/captain-hook/raw/main/docs/assets/demo.gif" alt="Animated terminal: a hook blocks git push --force at PreToolUse, then 'uvx capt-hook test' passes both inline tests" width="700">
 
@@ -27,7 +32,8 @@ Driving with an agent? Paste this:
 <summary>Prefer a prompt over the plugin?</summary>
 
 ```text
-Run `uvx capt-hook init` in this repo, write one hook that blocks force-pushes,
+Install the `yasyf/tap/captain-hook` Homebrew cask, then run `uvx capt-hook init`
+in this repo, write one hook that blocks force-pushes,
 and verify it with `uvx capt-hook test`. Read https://yasyf.github.io/captain-hook/
 if you get stuck.
 ```

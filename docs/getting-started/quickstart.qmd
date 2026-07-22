@@ -4,9 +4,21 @@ description: "Write your first tested hook in under five minutes."
 aliases: [index.html, installation.html, project-structure.html, skills.html]
 ---
 
-A hook is an event, some conditions, an action, and a verdict Claude Code has to obey. In the next five minutes you'll scaffold a project, write a hook that blocks a dangerous command, and watch its inline tests pass.
+A hook is an event, some conditions, an action, and a verdict Claude Code has to obey. In the next five minutes you'll install the signed host, scaffold a project, write a hook that blocks a dangerous command, and watch its inline tests pass.
 
-## 1. Scaffold
+## 1. Install the signed host
+
+captain-hook dispatches through one fixed, signed application on macOS 15 or newer:
+
+```bash
+brew install --cask yasyf/tap/captain-hook
+```
+
+The cask installs `/Applications/Captain Hook.app`. The helper embedded in that exact path owns
+the per-user host and its Python workers. There is no unsigned or project-local daemon and
+no cold fallback when the host is missing.
+
+## 2. Scaffold
 
 From your repo root:
 
@@ -14,9 +26,13 @@ From your repo root:
 uvx capt-hook init
 ```
 
-`init` creates `.claude/hooks/` with a starter hook, wires Claude Code's settings to dispatch every hook event through capt-hook, and registers the plugin so the authoring skills load from it (nothing is copied into your repo). Prefer `uv tool install capt-hook` if you want the bare `capt-hook` on your PATH, or `uv add capt-hook` only if you're consuming it as a library — every command here uses the `uvx` form.
+`init` creates `.claude/hooks/` with a starter hook, wires Claude Code's settings to dispatch every hook event through the signed host, and registers the plugin so the authoring skills load from it (nothing is copied into your repo). Prefer `uv tool install capt-hook` if you want the bare `capt-hook` on your PATH, or `uv add capt-hook` only if you're consuming it as a library — every command here uses the `uvx` form.
 
-## 2. Read a hook
+The plugin and app are one exact release unit. If their versions differ, the host rejects the
+event before dispatch. Upgrade the cask and plugin together; captain-hook never substitutes an
+older protocol, starts a private daemon, or reruns the event cold.
+
+## 3. Read a hook
 
 `init` scaffolds `.claude/hooks/example.py` with a tour of the primitives — skim it later. First, the shape of a hook, using the gate from the front page:
 
@@ -24,7 +40,7 @@ uvx capt-hook init
 
 Read it top to bottom: the event is the agent trying to finish, `only_if` scopes it to sessions that touched UI files, `skip_if` stands it down once a visual review happened, and the message is what the agent sees when the gate holds.
 
-## 3. Write your own
+## 4. Write your own
 
 Create `.claude/hooks/safety.py`:
 
@@ -45,7 +61,7 @@ block_command(
 
 One declaration, and the block covers the whole command family — chained after `&&`, buried in a pipeline, even mentioned in quotes. The `tests` dict is the hook's contract: each `Input` is a synthetic event, each value the verdict you expect.
 
-## 4. Test it
+## 5. Test it
 
 ```bash
 uvx capt-hook test

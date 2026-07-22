@@ -41,12 +41,13 @@ the cost with `max_fires`, a narrow `only_if`, and `signals` short-circuiting, t
 the judgment by replaying real sessions. When a regex or matcher can answer the question, it is
 the better tool every time.
 
-## Hooks share nothing but the session store
+## Process memory is not hook state
 
-Each hook runs in its own process and forgets everything when it exits. Two hooks coordinate
-only through the `SessionStore`, and only within one session — there is no shared memory across
-sessions, machines, or concurrent agents. State keyed to a session is cleaned up once that
-session's transcript is gone.
+The signed host reuses Python workers, but worker memory is deliberately disposable. A timeout,
+protocol error, explicit worker restart, or build change kills and reaps that worker; another
+semantic environment for the same project uses a different worker from the start. Never use a
+module global to coordinate events. Use `SessionStore` for one session and `DurableStore` for
+intentional cross-session state. Neither store provides shared memory across machines.
 
 ## A hook reacts to one event at a time
 

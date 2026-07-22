@@ -65,24 +65,30 @@ Plugin not enabled. The captain-hook plugin registers every hook event; without 
 
 Session not fresh. Claude Code loads plugin hooks at session start. A hook on a brand-new event, or a just-enabled plugin, takes effect when the next session starts.
 
-## Hooks run a stale capt-hook
+## The signed host is missing or the builds differ
 
-The hooks fire, but they behave like an old release: a feature you just read about is missing, a misfire the changelog says is fixed keeps firing. The framework version is the problem, not your hook.
-
-Check for an installed tool first.
-
-```bash
-uv tool list
-```
-
-If `capt-hook` appears there, that install is the cause on plugin versions before 9.7.0. A bare `uvx capt-hook` prefers an installed tool over resolving fresh — `uv` documents this shortcut — so one `uv tool install capt-hook`, however long ago, pins every hook on the machine to that version. Fix it either way:
+Every event uses `/Applications/Captain Hook.app/Contents/Helpers/capt-hookd`. If that helper is
+missing, the `hook` shim exits non-zero and names the path. Install or repair the application:
 
 ```bash
-uv tool upgrade capt-hook      # keep the PATH binary, current again
-uv tool uninstall capt-hook    # drop it; uvx resolves fresh without it
+brew install --cask yasyf/tap/captain-hook
 ```
 
-Then upgrade the plugin. From 9.7.0 the plugin wires every hook as `uvx --isolated capt-hook run <Event>`, which ignores installed tools entirely, so a stale install can't capture dispatch again. Claude Code checks marketplace plugins for updates at session start only, and auto-update is off by default for third-party marketplaces, so on most machines the upgrade is manual:
+The app and Python wheel must also carry the exact same release. Check the installed host:
+
+```bash
+"/Applications/Captain Hook.app/Contents/Helpers/capt-hookd" version
+```
+
+A build-mismatch error names both versions. Upgrade the cask and plugin together; do not try to
+route around the fence with a private daemon or direct `capt-hook run` command:
+
+```bash
+brew upgrade --cask yasyf/tap/captain-hook
+```
+
+Claude Code checks marketplace plugins for updates at session start only, and auto-update is off
+by default for third-party marketplaces, so on most machines the plugin upgrade is manual:
 
 ```
 /plugin marketplace update captain-hook
@@ -91,7 +97,13 @@ Then upgrade the plugin. From 9.7.0 the plugin wires every hook as `uvx --isolat
 
 A session that is already running keeps the old hook commands until you run `/reload-plugins` or start a new session. Claude Code refreshes a marketplace plugin's cache only when its `plugin.json` `version` increases; captain-hook's release workflow bumps and commits that version on every tagged release, so `/plugin update` picks up each release as soon as the sync commit lands on `main`.
 
-Last, hunt down legacy `capt-hook run <Event>` entries. Claude Code dedupes hook commands per registering source, not globally, so a `run` entry that survives anywhere besides the captain-hook plugin — a hand-wired line in a project's `.claude/settings.json`, or a pack-shipping plugin built before the discovery contract — dispatches the event again in a sibling process, and every hook on that event runs twice. The tell is doubled output: two permission prompts for one tool call, the same block message landing twice, or a side-effecting hook applying its effect twice. Delete hand-wired entries from the project settings yourself; a legacy pack plugin sheds its `run` entries when it releases against the fixed-path contract in [Ship a pack in a Claude plugin](packs.qmd#ship-a-pack-in-a-plugin), since the plugin cache re-pulls on a version bump.
+Last, hunt down legacy `capt-hook run <Event>` and project-local `hook run <Event>` entries. The
+only consumer command is `uvx --isolated --from capt-hook hook run <Event>` from the captain-hook
+plugin. Claude Code dedupes hook commands per registering source, not globally, so a hand-wired
+entry dispatches the event again and every hook on that event can run twice. The tell is doubled
+output: two permission prompts for one tool call, the same block message landing twice, or a
+side-effecting hook applying its effect twice. Delete hand-wired entries from project settings;
+do not preserve them as a fallback.
 
 ## A SessionStart warning about `pack attach`
 

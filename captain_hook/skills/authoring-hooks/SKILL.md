@@ -8,7 +8,7 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash(uvx capt-hook:*, uvx --isolat
 # Authoring a Hook from a Correction
 
 capt-hook is a declarative hook framework for Claude Code. Hooks are Python files in
-`.claude/hooks/`, dispatched by the `uvx --isolated capt-hook run <Event>` entries the
+`.claude/hooks/`, dispatched by the `uvx --isolated --from capt-hook hook run <Event>` entries the
 captain-hook plugin registers for every event. Each hook carries inline tests —
 `tests={Input(...): Block() | Warn() | Allow()}` — run with `uvx --isolated capt-hook test`. This
 skill turns **one durable correction** (the user's verbatim feedback plus the context it

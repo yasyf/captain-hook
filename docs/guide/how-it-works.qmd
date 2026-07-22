@@ -1,10 +1,10 @@
 ---
 title: "Under the hood"
-description: "The dispatch pipeline, verdict precedence, the trust model, and the resident daemon."
+description: "The dispatch pipeline, verdict precedence, the trust model, and the signed host."
 aliases: [philosophy.html, security.html, daemon.html]
 ---
 
-This is the conceptual layer: how a hook fires, why a hook is typed data rather than a shell snippet, where the trust boundary sits, and how the resident daemon makes dispatch fast. Nothing here is required to write your first hook — the [quickstart](../getting-started/quickstart.qmd) and [Writing hooks](primitives.qmd) are the task-oriented paths — but when you want to know what actually happens between a tool call and a verdict, it's all on this page.
+This is the conceptual layer: how a hook fires, why a hook is typed data rather than a shell snippet, where the trust boundary sits, and how the signed host makes dispatch fast. Nothing here is required to write your first hook — the [quickstart](../getting-started/quickstart.qmd) and [Writing hooks](primitives.qmd) are the task-oriented paths — but when you want to know what actually happens between a tool call and a verdict, it's all on this page.
 
 ## A hook firing
 
@@ -160,7 +160,7 @@ Same rule, same verdict. The event target, the conditions, and the verdict are n
 
 **You can test a hook before it ships.** Each primitive carries inline `tests`, and `uvx capt-hook test` runs every case, exiting non-zero on the first failure — so a broken matcher fails in your terminal or in CI instead of in a live session. A native `settings.json` hook has nowhere to put this: you discover a regex mistake when the hook either blocks the wrong command or stays silent on the right one, mid-conversation, with no record of why.
 
-**The wiring is mechanical.** You never hand-edit a matcher block in `settings.json` — it carries no hook wiring at all. The captain-hook plugin ships a static `hooks.json` that registers every Claude Code event once, globally, with the same `uvx --isolated capt-hook run <Event>` command on every machine. The wiring can't drift from your hook definitions because it doesn't vary with them: which hooks actually fire in a repo is decided by the wheel builtins (fixes/general/steering/performance always, go/python by detected build manifests) plus any pack an enabled Claude Code plugin ships, and an event no pack subscribes to dispatches as a clean no-op.
+**The wiring is mechanical.** You never hand-edit a matcher block in `settings.json` — it carries no hook wiring at all. The captain-hook plugin ships a static `hooks.json` that registers every Claude Code event once, globally, with the same `uvx --isolated --from capt-hook hook run <Event>` command on every machine. The `hook` shim execs the fixed signed helper; it cannot start a project-local daemon or substitute the Python CLI. Which hooks actually fire in a repo is decided by the wheel builtins (fixes/general/steering/performance always, go/python by detected build manifests) plus any pack an enabled Claude Code plugin ships, and an event no pack subscribes to dispatches as a clean no-op.
 
 As a directory of native string-hooks grows, the cost of each compounds, because none of them composes, none carries a test, and none fails loudly when it breaks. captain-hook spends a dependency and a Python file to buy back that visibility. For a directory you maintain over months, that is the trade worth making.
 
@@ -173,9 +173,10 @@ The trade isn't always worth it. Reach for a native `settings.json` hook, and sk
   is the lighter tool.
 - The logic already lives in a script you trust. If you run an existing linter or a vetted shell
   script, wrapping it in a Python hook adds a layer without adding a check.
-- You can't take the dependency. captain-hook runs through `uvx`, which needs
-  [uv](https://docs.astral.sh/uv/) on the machine. An environment without uv, or one that forbids
-  fetching a tool at runtime, rules it out. A native hook needs only the shell.
+- You can't take the dependency. captain-hook needs macOS 15 or newer, the signed
+  `Captain Hook.app`, and [uv](https://docs.astral.sh/uv/). An environment without any one of
+  them, or one that forbids fetching a tool at runtime, rules it out. A native hook needs only
+  the shell.
 - You are wiring a handful of hooks, once. The payoff comes from testability and mechanical wiring
   across many hooks over time. For two or three hooks you never touch again, the JSON is
   enough.
@@ -190,7 +191,7 @@ A hook is real Python that runs on your machine whenever Claude Code fires an ev
 
 Two distinct bodies of code meet at a hook.
 
-The framework is captain-hook itself, published to PyPI as `capt-hook`. You run it with `uvx --isolated capt-hook run <Event>`, so you trust the maintainers and PyPI the same way you trust any other dependency.
+The framework has two exact-version parts: the `capt-hook` wheel published to PyPI and the Developer ID-signed, notarized `Captain Hook.app` published through the Homebrew cask. The plugin resolves the wheel with `uvx --isolated --from capt-hook` and its `hook` shim execs `/Applications/Captain Hook.app/Contents/Helpers/capt-hookd`. You trust the maintainers, PyPI, the GitHub release, and the Homebrew tap as one release path.
 
 Your hooks are the Python files under `.claude/hooks/`. You write them, so they carry whatever logic you put there. captain-hook loads every file in that directory and executes it on the matching event. The framework does not sandbox your hook code, because your hook code is yours.
 
@@ -198,9 +199,9 @@ The boundary, then, sits between the framework you install and the hooks you aut
 
 ### `uvx` isolation as a safety guarantee
 
-`uvx --isolated capt-hook` runs captain-hook from an ephemeral environment that `uv` builds on demand. The framework and its dependencies install into a cache that `uv` manages, separate from your project. Your project's virtualenv stays untouched: captain-hook never lands in your `pyproject.toml`, your lockfile, or your site-packages, so you can add a hook to any repository without changing a single dependency in it.
+`uvx --isolated --from capt-hook hook` runs the wheel's tiny dispatch shim from an ephemeral environment that `uv` builds on demand. The Python worker and its dependencies come from that same environment, separate from your project. Your project's virtualenv stays untouched: captain-hook never lands in your `pyproject.toml`, your lockfile, or your site-packages, so you can add a hook to any repository without changing a single dependency in it.
 
-The `--isolated` flag is load-bearing. A bare `uvx capt-hook` prefers an installed tool when one exists: run `uv tool install capt-hook` once, and every bare invocation on that machine silently resolves to the environment that install froze — `uv` documents this shortcut — so hooks keep running a months-old framework while looking current. `--isolated` ignores installed tools entirely. Dispatch always resolves from `uv`'s ephemeral-environment cache instead: a cache hit needs no network, so hooks fire offline, and revalidation picks up a new release within about a day of publish. Version drift stays contained without a copy pinned into your project that silently rots.
+Both `--isolated` and `--from capt-hook` are load-bearing. They select the `hook` executable from a fresh resolution of the named distribution instead of an unrelated installed command. A cache hit needs no network, so hooks still fire offline. The shim sends its exact wheel version and Python executable to the signed host; the host rejects any version mismatch before Python dispatch. Isolation prevents accidental tool capture, while the build fence prevents the cache and app from drifting silently.
 
 Removing the wiring removes captain-hook. Disable the captain-hook plugin in `.claude/settings.json` and nothing in your project still references the framework, because nothing in your project ever did. This isolation is the guarantee: adding hooks to a repository is reversible and leaves no trace in the code you ship.
 
@@ -218,106 +219,138 @@ Because hooks are code, treat them like code. `.claude/hooks/` is committed to t
 
 This is the practical control on the trust boundary above. A hook can run any command and read any file the agent's session can reach, which is exactly why the diff belongs in front of a reviewer. The framework you install is audited at the PyPI layer. The hooks you author are audited at the pull-request layer, by you.
 
-## The resident daemon
+## The signed host
 
-Every hook event normally costs a fresh Python process: interpreter startup, the `captain_hook` import, hook discovery, then dispatch — roughly 380-490ms per event, two or three times per tool call, multiplied by every concurrent session on the machine. The resident daemon deletes that cost. One warm worker per project serves events over a Unix socket at a measured ~70ms p50, about 7x faster than cold, and the fork storm from many concurrent sessions collapses into a single process.
+Every hook event used to pay for a fresh Python interpreter, framework import, and hook discovery.
+The current runtime has one per-user Go host and long-lived Python product workers. It is the
+only dispatch path, not an opt-in accelerator beside a cold path.
 
-The daemon is opt-in. Nothing changes until you point a wired hook command at the `hook` client, and the cold path stays fully supported; it is also the fallback whenever a worker is unreachable.
+The host executable is fixed at
+`/Applications/Captain Hook.app/Contents/Helpers/capt-hookd`. The app release embeds a universal
+binary, signs it as nested code, and ships it with the wheel and plugin at the same version. A
+hook event with a different wheel build is rejected before Python runs.
 
-### Turn it on
+### Exact dispatch path
 
-Installing capt-hook gives you the full `capt-hook` CLI plus `hook`, a thin stdlib-only client binary that forwards events to the project's worker. To serve a project warm, swap the binary in its wired hook commands:
-
-```bash
-# cold — a fresh process per event
-"$CLAUDE_PROJECT_DIR"/.venv/bin/capt-hook run PreToolUse
-
-# warm — forwards to the project's resident worker
-"$CLAUDE_PROJECT_DIR"/.venv/bin/hook run PreToolUse
-```
-
-Flip each `run <Event>` line (and its `--async` twin) the same way. The client recognizes `run <Event>` and `ping`; every other invocation — `review run`, or anything carrying an explicit `--hooks` — passes through to the cold CLI untouched, so leaving those lines on either binary behaves identically.
-
-On the first event the client spawns the worker, detached, and waits for its socket; every later event connects directly. You never start the daemon by hand.
-
-Plugin consumers are unchanged for now: the plugin's shipped `hooks.json` keeps dispatching cold with `uvx --isolated capt-hook run`, so installing the plugin never boots a daemon. Opt in per project, in a repo where capt-hook runs from a project virtualenv — the client has to be cheap to exec, and a project-relative `.venv` path keeps the committed command [machine-invariant](#committed-hook-commands-must-be-machine-invariant).
-
-### One worker per project
-
-A worker serves exactly one project root. Its identity is the root's real path plus a small, explicit environment subset: the state, log, tasks, and decisions-db overrides, the run directory, `XDG_CACHE_HOME`, and every `HOOKS_*` variable. Change any of those and you address a different worker; everything else — per-session variables included — is deliberately excluded, so one worker serves all of a project's sessions, and pooled accounts share it too. Each request carries its own environment, working directory, and session identity, and the worker binds them per dispatch, so state, logs, and tasks land exactly where a cold run would put them.
-
-Workers are disposable. One exits after two hours without a request (`HOOKS_DAEMON_IDLE_S`), and the next event respawns it, paying roughly one cold dispatch. A watchdog also restarts the worker when the installed capt-hook build changes, so an upgrade — or an edit to an editable checkout — never leaves stale code serving events.
-
-### When a worker is unreachable
-
-Whether the request was fully sent decides what a failure does. Before the request reaches the worker — no reachable socket, a spawn that dies at startup, a connect error, a pre-send deadline — the worker provably never dispatched, so the client applies `CAPT_HOOK_DAEMON_FALLBACK`: `cold` (the default) reruns the event in a fresh process, `open` exits 0, and `closed` exits 1, which is how CI keeps daemon bugs loud instead of masked by cold.
-
-Once the request is sent, the worker may already be running your hooks. Any failure after that point — a crash mid-response, a truncated or malformed response, a deadline that expires while waiting — fails open: the client exits 0 with no output instead of rerunning cold, because a cold rerun would double-fire hooks that carry side effects. A hook never runs twice for one event; the trade is that a post-send failure can drop one verdict.
-
-Two response statuses refine this. `rejected` — a protocol-version mismatch or a saturated worker shedding load — is a provable non-dispatch, so the client reruns cold even though the request was sent. `error` means a hook raised: the worker's output is relayed verbatim, exactly as the cold CLI would print it, and never rerun.
-
-One exception overrides the fallback mode entirely: an untrusted run directory (wrong owner, wrong mode, a symlink) or a socket whose peer is not your uid forces the cold path unconditionally. A planted socket must never be able to swallow a gate's deny by failing open.
-
-Set `CAPT_HOOK_NO_DAEMON=1` to skip the daemon entirely and run every event cold, without touching the wired commands.
-
-### Operate workers
-
-The `hookd` binary, installed alongside `capt-hook` and `hook`, is the ops surface. It is also the worker itself — the client spawns it as `hookd run --root <project>`, so you never start it by hand:
+The plugin registers this command for every event (plus its `--async` twin):
 
 ```bash
-hookd status              # this project's workers: root, pid, build, uptime, state
-hookd status --all --json # every worker on the machine, machine-readable
-hookd stop                # shut down over the socket; clean a dead worker's files
-hookd restart             # drain: exit after in-flight work; the next event respawns
-hookd logs --tail 40      # the worker's boot log and rotated daemon log
+uvx --isolated --from capt-hook hook run PreToolUse
 ```
 
-`status`, `stop`, and `logs` are connect-only: inspecting a project never boots a worker. `restart` drains instead of killing: in-flight dispatches finish first, so a slow LLM gate is never cut off mid-decision.
+`hook` is a stdlib-only exec shim. It accepts only `[--root ROOT] run EVENT [--async]`, resolves
+the current Python executable and wheel version, then replaces itself with the fixed
+`capt-hookd run` client. It does not accept arbitrary `capt-hook` commands and never passes an
+unknown command through.
 
-Logs live in three places. Per-session hook logs keep the same files and format as cold, so `uvx capt-hook logs` works unchanged (see [Troubleshooting](troubleshooting.qmd)). The worker's own records go to a rotated `daemon-<key>.log` in the log directory, and its boot stdio — spawn failures from before logging comes up — to `<key>.log` in the run directory; `hookd logs` prints both.
+The signed Go client ensures the one exact host is running, then sends the event over daemonkit's
+length-framed persistent transport. The host selects a Python worker and exchanges multiplexed,
+length-framed messages over that child's stdin and stdout. Python does not listen on a socket,
+create a PID file, detach itself, or spawn another daemon.
 
-### Environment reference
+The first event starts the host from the same fixed signed executable. Daemonkit owns listener
+takeover, admission, draining, process identity, and ordered shutdown. An exact newer build
+replaces the prior host generation; there is no watchdog polling files or versions in the
+background.
 
-| Variable | Default | Effect |
-|---|---|---|
-| `CAPT_HOOK_NO_DAEMON` | unset | `1` makes the client run every event cold, skipping the daemon entirely. |
-| `CAPT_HOOK_DAEMON_FALLBACK` | `cold` | What a pre-send failure does: `cold` reruns the event in a fresh process, `open` exits 0, `closed` exits 1. Post-send failures always fail open regardless. |
-| `CAPT_HOOK_CLIENT_TIMEOUT` | `30` (`20` for UserPromptSubmit) | End-to-end client deadline in seconds. The UserPromptSubmit default undercuts Claude Code's own 30s prompt-hook timeout. |
-| `CAPT_HOOK_RUN_DIR` | `$XDG_CACHE_HOME/captain-hook/run`, else `~/.cache/captain-hook/run` | Where worker sockets, spawn locks, meta files, and boot logs live. Part of the worker key. |
-| `HOOKS_DAEMON_IDLE_S` | `7200` | Seconds without a request before a worker exits. The next event respawns one. |
-| `CAPT_HOOK_CLIENT_BUILD` | derived from `client.py` | Overrides the build fingerprint the client sends with each request; a testing knob for exercising client/worker version skew. |
+### One host, semantically keyed workers
 
-The worker key also includes `CAPTAIN_HOOK_STATE_DIR`, `CAPTAIN_HOOK_LOG_DIR`, `CAPTAIN_HOOK_TASKS_DIR`, `CAPT_HOOK_DECISIONS_DB`, `XDG_CACHE_HOME`, and every `HOOKS_*` variable: sessions that differ on any of these get separate workers, by design.
+There is one host socket per user, at
+`~/Library/Caches/captain-hook/host-v1/capt-hookd.sock`. Projects do not receive private sockets,
+spawn locks, PID files, or lifecycle processes.
 
-### Committed hook commands must be machine-invariant
+A Python worker key contains the canonical project root, exact Python executable, exact build,
+and the environment values that change product semantics: `XDG_CACHE_HOME`,
+`CAPTAIN_HOOK_STATE_DIR`, `CAPTAIN_HOOK_LOG_DIR`, `CAPTAIN_HOOK_TASKS_DIR`,
+`CAPT_HOOK_DECISIONS_DB`, and every `HOOKS_*` value. Sessions and pooled accounts that share
+those facts share a worker. Session, Claude, and Factory variables stay request-scoped and cannot
+leak from the first client into the worker's base environment.
 
-Claude Code unions the `hooks` blocks across every settings file (`settings.json`, `settings.local.json`, managed policy) and deduplicates by exact command string. A committed command that only resolves on one machine — an absolute path into your home directory, a tool shim — strands every other clone, and the same hook spelled two ways fires twice. Commit only project-relative commands, like the `"$CLAUDE_PROJECT_DIR"/.venv/bin/...` shape shown here; keep machine-local experiments in `settings.local.json`, which stays out of git.
+The host serializes events from the same session while allowing different sessions to overlap,
+with a global maximum of 16 product dispatches. A worker can serve concurrent sessions over one
+framed channel; response IDs keep their output and exit codes separate.
 
-### Parity limitations
+### Failure is terminal for that dispatch
 
-Warm dispatch is byte-identical to cold — stdout, stderr, and exit code — and a 12-case parity suite enforces that on every commit. Three edges sit outside the parity contract; each was reviewed and accepted:
+There is no cold fallback, fail-open mode, replay, or compatibility protocol. A missing app,
+build mismatch, malformed frame, unavailable host, or expired deadline returns a non-zero hook
+process. Once an event is admitted, no transport outcome causes captain-hook to run it a second
+time.
 
-- A hook that spawns its own thread and logs from it writes those records to the daemon log, not the per-session log or the request's stderr. The routing context lives in a `ContextVar`, and Python does not propagate context to threads the hook creates. Logging from the hook's own call stack routes correctly.
-- An uncaught hook error served warm prints a traceback whose framework frames are the daemon's, where a cold run shows the CLI's. The exception type and message, the hook's own frame, and the exit code all match; only the surrounding framework frames differ.
-- Events from one session that land at the same moment serialize on the worker — one dispatch per session at a time — but not necessarily in arrival order. Cold has the same non-guarantee: Claude Code spawns independent processes and the kernel schedules them. Events from different sessions interleave freely.
+Workers are disposable. When a worker call times out or its protocol fails, the host retires that
+exact generation, sends `TERM`, escalates to `KILL` after the bounded grace period, waits for it,
+and reaps it before releasing the semantic lane. The next event may create a clean worker; the
+failed event is not replayed.
 
-### Daemon security posture
+### Operate the host
 
-The daemon is same-user local tooling, not a privilege boundary. The worker listens on a 0600 socket inside a 0700 run directory, the worker refuses connections from other uids, and the client verifies the kernel-reported peer uid of any socket it connects to. An untrusted run directory or a foreign peer forces the cold path unconditionally. Everything a warm dispatch can do, running the cold CLI as the same user could already do; the daemon adds speed, not capability.
+The fixed helper exposes a small exact operations surface:
 
-### Daemon troubleshooting
+```bash
+host="/Applications/Captain Hook.app/Contents/Helpers/capt-hookd"
+"$host" version          # exact schema and release build
+"$host" status           # host PID and every live worker generation as JSON
+"$host" restart-workers  # stop and reap every worker; keep the host
+"$host" shutdown         # ordered host and worker shutdown
+```
 
-**Everything runs cold.** The client leaves one breadcrumb line per fallback on stderr, naming the reason. Run `hookd status` — no worker listed means spawns are failing; check the boot log via `hookd logs`. Also check that `CAPT_HOOK_NO_DAEMON` isn't set in the session's environment.
+The wheel's `hookd` command is only an exec shim for the same helper, so
+`uvx --isolated --from capt-hook hookd status` is equivalent. Status and control commands never
+start a missing host. Only event dispatch ensures it is running.
 
-**A worker won't start.** The boot log (`hookd logs`, or `<key>.log` in the run directory) captures the worker's startup stderr. The usual cause is a project venv whose capt-hook can't import — a broken editable checkout, a half-finished `uv sync`. The client detects the early exit and runs cold instantly, so hooks keep working while you fix the venv.
+Per-session hook logs keep their existing files and remain visible through `uvx capt-hook logs`.
+Host startup and worker stderr go to
+`~/Library/Caches/captain-hook/host-v1/capt-hookd.log`. Durable worker identity lives beside it in
+`workers.json` so daemonkit can recover and reap a leftover generation after a host crash.
 
-**A stale socket after `kill -9`.** Harmless. The next event's spawn unlinks the dead socket and boots a fresh worker; `hookd stop` reports such workers as `cleaned` and removes their files.
+### Environment and state
 
-**A worker seems stale.** Hook-file edits and pack changes invalidate the worker's registry cache automatically, and the build watchdog restarts it when the installed capt-hook changes. When in doubt, `hookd restart` drains the worker and the next event gets a fresh one.
+`CAPT_HOOK_CLIENT_TIMEOUT` sets the end-to-end event deadline in seconds; the default is 30.
+There are no daemon-disable, fallback-mode, run-directory, idle-timeout, or client-build
+overrides. Host state always uses the fixed per-user `host-v1` directory. Product state and logs
+remain configurable through their existing `CAPTAIN_HOOK_*`, `CAPT_HOOK_DECISIONS_DB`,
+`XDG_CACHE_HOME`, and `HOOKS_*` variables, which participate in the worker key as described
+above.
 
-**Force cold.** Set `CAPT_HOOK_NO_DAEMON=1` to bypass the daemon for a session, or flip the wired commands back from `hook` to `capt-hook` to opt the project out.
+### Do not hand-wire dispatch
 
-For hook-level failure modes — a hook that doesn't fire, a stale capt-hook install, missing NLP resources — see [Troubleshooting](troubleshooting.qmd).
+The plugin owns the one canonical hook command. A surviving `capt-hook run <Event>` or old
+project-local `hook` entry is a second registration, so Claude Code can dispatch the event twice.
+Delete those entries rather than trying to make their strings match. Disable the plugin when you
+want captain-hook out of a project; there is no supported cold or private-daemon mode.
+
+### Security posture
+
+The host is same-user local tooling, not a sandbox for hook code. Its stable Developer ID-signed,
+hardened executable owns the lifecycle boundary; the state directory is mode 0700 and the global
+socket is mode 0600. Daemonkit attaches kernel peer identity to the accepted session, and the host
+rejects an event whose claimed client PID differs from that authenticated peer. Python workers
+receive framed events over owned pipes and never open the host socket themselves.
+
+Hooks still run with your permissions and can do anything your Claude Code session can do. The
+signed topology prevents an accidental project daemon or stale executable from becoming the
+runtime owner; it does not make untrusted hook code safe.
+
+### Host troubleshooting
+
+**The signed host is missing.** Install or repair it with
+`brew install --cask yasyf/tap/captain-hook`. The shim fails non-zero and names the exact missing
+path; it does not run the Python CLI instead.
+
+**The wheel and app builds differ.** Upgrade the cask and captain-hook plugin to the same release,
+then run `/reload-plugins` or start a new Claude Code session. Exact build rejection is expected
+until both artifacts agree.
+
+**A worker is stuck or stale.** Run `uvx --isolated --from capt-hook hookd status`, inspect
+`capt-hookd.log`, then use `uvx --isolated --from capt-hook hookd restart-workers`. Restart kills
+and reaps the current worker generations; it is not a cache invalidation hint or a graceful
+watchdog cycle.
+
+**The host was killed.** The next event starts a fresh host generation and daemonkit recovers any
+durable worker records before admitting work. Do not delete the socket or `workers.json` by hand.
+
+For hook-level failure modes — a hook that doesn't fire, stale release artifacts, missing NLP
+resources — see [Troubleshooting](troubleshooting.qmd).
 
 ## See also
 

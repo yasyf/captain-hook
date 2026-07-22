@@ -6,7 +6,7 @@ in CI. The release lane builds and signs the app itself.
 | Script | What it does |
 |---|---|
 | `make-appicon.sh` | Resizes `docs/assets/logo.png` into the `AppIcon.appiconset` PNGs (sizes 16 to 1024) with `sips`. Run it before generating the project so the asset catalog has icons. |
-| `build-local.sh [version]` | Generates the project, builds Release, signs with your Developer ID, verifies the embedded bridge identity and hardened runtime, exercises signed ping/notify sessions, then installs to `/Applications` and relaunches. |
+| `build-local.sh [version]` | Builds the universal Go host, generates the project, builds Release, signs with your Developer ID, verifies the embedded host and bridge identities, exact versions, architectures, and hardened runtime, exercises signed ping/notify sessions, then installs to `/Applications` and relaunches. |
 | `notify-test.sh [ping\|notify]` | Invokes the installed signed bridge. `ping` returns the version; `notify` posts a sample `pr_open` banner. |
 
 ## Build without installing
