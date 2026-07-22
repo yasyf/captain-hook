@@ -86,30 +86,6 @@ func (w *workerClient) call(ctx context.Context, request EventRequest) (EventRes
 	}
 }
 
-func (w *workerClient) dropCaches(ctx context.Context) error {
-	w.mu.Lock()
-	if w.closed {
-		err := w.err
-		w.mu.Unlock()
-		return err
-	}
-	w.nextID++
-	id := w.nextID
-	result := make(chan workerResult, 1)
-	w.pending[id] = result
-	w.mu.Unlock()
-	if err := w.write(ctx, workerFrame{Protocol: Schema, Op: "drop_caches", ID: id}); err != nil {
-		w.removePending(id)
-		return err
-	}
-	select {
-	case received := <-result:
-		return received.err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
 func (w *workerClient) write(ctx context.Context, frame workerFrame) error {
 	w.writeMu.Lock()
 	defer w.writeMu.Unlock()
