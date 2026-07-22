@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **One signed per-user host now owns every hook worker.** `capt-hookd` is an
   exact-versioned universal Go helper embedded in `Captain Hook.app`; it uses
-  daemonkit v0.4.1 to own persistent framed Python workers, bound concurrency,
+  daemonkit v0.4.2 to own persistent framed Python workers, bound concurrency,
   terminate timed-out process groups, and reap them before returning.
 - **The app, helper, wheel, and worker share one exact build identity.** Release
   packaging and signature checks reject architecture, identity, entitlement,

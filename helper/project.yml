@@ -21,7 +21,7 @@ settings:
 packages:
   DaemonKit:
     url: https://github.com/yasyf/daemonkit
-    exactVersion: 0.4.1
+    exactVersion: 0.4.2
 
 targetTemplates:
   HostApp:
