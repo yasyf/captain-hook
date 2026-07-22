@@ -48,7 +48,7 @@ private func runBridge(
     socket: URL,
     operation: String,
     input: Data = Data()
-) throws -> BridgeResult {
+) async throws -> BridgeResult {
     let process = Process()
     process.executableURL = executable
     process.arguments = ["--socket", socket.path, operation]
@@ -58,15 +58,38 @@ private func runBridge(
     process.standardInput = standardInput
     process.standardOutput = standardOutput
     process.standardError = standardError
-    try process.run()
-    standardInput.fileHandleForWriting.write(input)
-    try standardInput.fileHandleForWriting.close()
-    process.waitUntilExit()
-    return BridgeResult(
-        status: process.terminationStatus,
-        output: standardOutput.fileHandleForReading.readDataToEndOfFile(),
-        error: standardError.fileHandleForReading.readDataToEndOfFile()
-    )
+    return try await withCheckedThrowingContinuation { continuation in
+        process.terminationHandler = { process in
+            continuation.resume(returning: BridgeResult(
+                status: process.terminationStatus,
+                output: standardOutput.fileHandleForReading.readDataToEndOfFile(),
+                error: standardError.fileHandleForReading.readDataToEndOfFile()
+            ))
+        }
+        do {
+            try process.run()
+            standardInput.fileHandleForWriting.write(input)
+            try standardInput.fileHandleForWriting.close()
+        } catch {
+            process.terminationHandler = nil
+            continuation.resume(throwing: error)
+        }
+    }
+}
+
+private func withStartedServer<Result>(
+    _ server: SocketServer,
+    body: () async throws -> Result
+) async throws -> Result {
+    try await server.start()
+    do {
+        let result = try await body()
+        await server.stop()
+        return result
+    } catch {
+        await server.stop()
+        throw error
+    }
 }
 
 @Suite(.serialized) struct HelperSessionTests {
@@ -74,36 +97,35 @@ private func runBridge(
         let (directory, socket) = try temporarySocket()
         defer { try? FileManager.default.removeItem(at: directory) }
         let recorder = NotificationRecorder()
-        let handler = HelperHandler(version: buildVersion, onNotify: recorder.append)
+        let handler = HelperHandler(version: buildVersion) { payload in recorder.append(payload) }
         let server = SocketServer(
             path: socket.path,
             build: buildVersion,
             trust: .sameEffectiveUser,
             handler: { await handler.handle($0) }
         )
-        try server.start()
-        defer { server.stop() }
+        try await withStartedServer(server) {
+            let ping = try await runBridge(socket: socket, operation: "ping")
+            #expect(ping.status == 0)
+            #expect(try JSONDecoder().decode(HelperReply.self, from: ping.output) == .ping(version: buildVersion))
 
-        let ping = try runBridge(socket: socket, operation: "ping")
-        #expect(ping.status == 0)
-        #expect(try JSONDecoder().decode(HelperReply.self, from: ping.output) == .ping(version: buildVersion))
-
-        let request = NotifyRequest(
-            kind: "pr_open",
-            title: "Block force-pushes",
-            subtitle: "captain-hook",
-            body: "Rule guard-rm-rf opened",
-            url: "https://github.com/yasyf/captain-hook/pull/12",
-            repo: "github.com/yasyf/captain-hook"
-        )
-        let notify = try runBridge(
-            socket: socket,
-            operation: "notify",
-            input: try JSONEncoder().encode(request)
-        )
-        #expect(notify.status == 0)
-        #expect(try JSONDecoder().decode(HelperReply.self, from: notify.output) == .ok)
-        #expect(recorder.payloads.map(\.title) == ["Block force-pushes"])
+            let request = NotifyRequest(
+                kind: "pr_open",
+                title: "Block force-pushes",
+                subtitle: "captain-hook",
+                body: "Rule guard-rm-rf opened",
+                url: "https://github.com/yasyf/captain-hook/pull/12",
+                repo: "github.com/yasyf/captain-hook"
+            )
+            let notify = try await runBridge(
+                socket: socket,
+                operation: "notify",
+                input: try JSONEncoder().encode(request)
+            )
+            #expect(notify.status == 0)
+            #expect(try JSONDecoder().decode(HelperReply.self, from: notify.output) == .ok)
+            #expect(recorder.payloads.map(\.title) == ["Block force-pushes"])
+        }
     }
 
     @Test(.enabled(
@@ -115,7 +137,7 @@ private func runBridge(
         let (directory, socket) = try temporarySocket()
         defer { try? FileManager.default.removeItem(at: directory) }
         let recorder = NotificationRecorder()
-        let handler = HelperHandler(version: buildVersion, onNotify: recorder.append)
+        let handler = HelperHandler(version: buildVersion) { payload in recorder.append(payload) }
         let requirement = try PeerTrust.Requirement(
             teamIdentifier: "SXKCTF23Q2",
             signingIdentifier: "com.yasyf.capt-hook.helper.bridge"
@@ -126,30 +148,29 @@ private func runBridge(
             trust: PeerTrust(requirement: requirement),
             handler: { await handler.handle($0) }
         )
-        try server.start()
-        defer { server.stop() }
+        try await withStartedServer(server) {
+            let ping = try await runBridge(executable: executable, socket: socket, operation: "ping")
+            #expect(ping.status == 0)
+            #expect(try JSONDecoder().decode(HelperReply.self, from: ping.output) == .ping(version: buildVersion))
 
-        let ping = try runBridge(executable: executable, socket: socket, operation: "ping")
-        #expect(ping.status == 0)
-        #expect(try JSONDecoder().decode(HelperReply.self, from: ping.output) == .ping(version: buildVersion))
-
-        let request = NotifyRequest(
-            kind: "pr_open",
-            title: "Signed bridge",
-            subtitle: nil,
-            body: nil,
-            url: nil,
-            repo: nil
-        )
-        let notify = try runBridge(
-            executable: executable,
-            socket: socket,
-            operation: "notify",
-            input: try JSONEncoder().encode(request)
-        )
-        #expect(notify.status == 0)
-        #expect(try JSONDecoder().decode(HelperReply.self, from: notify.output) == .ok)
-        #expect(recorder.payloads.map(\.title) == ["Signed bridge"])
+            let request = NotifyRequest(
+                kind: "pr_open",
+                title: "Signed bridge",
+                subtitle: nil,
+                body: nil,
+                url: nil,
+                repo: nil
+            )
+            let notify = try await runBridge(
+                executable: executable,
+                socket: socket,
+                operation: "notify",
+                input: try JSONEncoder().encode(request)
+            )
+            #expect(notify.status == 0)
+            #expect(try JSONDecoder().decode(HelperReply.self, from: notify.output) == .ok)
+            #expect(recorder.payloads.map(\.title) == ["Signed bridge"])
+        }
     }
 
     @Test(arguments: [
@@ -160,7 +181,7 @@ private func runBridge(
         let (directory, socket) = try temporarySocket()
         defer { try? FileManager.default.removeItem(at: directory) }
         let recorder = NotificationRecorder()
-        let handler = HelperHandler(version: "0.0.0", onNotify: recorder.append)
+        let handler = HelperHandler(version: "0.0.0") { payload in recorder.append(payload) }
         let requirement = try PeerTrust.Requirement(
             teamIdentifier: "SXKCTF23Q2",
             signingIdentifier: signingIdentifier
@@ -171,16 +192,15 @@ private func runBridge(
             trust: PeerTrust(requirement: requirement),
             handler: { await handler.handle($0) }
         )
-        try server.start()
-        defer { server.stop() }
-
-        let result = try runBridge(
-            executable: unsignedBridgeExecutable(),
-            socket: socket,
-            operation: "ping"
-        )
-        #expect(result.status != 0)
-        #expect(result.output.isEmpty)
-        #expect(recorder.payloads.isEmpty)
+        try await withStartedServer(server) {
+            let result = try await runBridge(
+                executable: unsignedBridgeExecutable(),
+                socket: socket,
+                operation: "ping"
+            )
+            #expect(result.status != 0)
+            #expect(result.output.isEmpty)
+            #expect(recorder.payloads.isEmpty)
+        }
     }
 }

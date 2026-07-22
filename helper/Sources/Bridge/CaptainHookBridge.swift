@@ -43,17 +43,23 @@ private enum CaptainHookBridge {
         do {
             let arguments = try Arguments(Array(CommandLine.arguments.dropFirst()))
             let input = try payload(for: arguments.operation)
-            let client = try SocketClient(
+            let client = try await SocketClient(
                 path: arguments.socket,
                 build: buildVersion,
                 trust: .sameEffectiveUser
             )
-            defer { client.close() }
-            let terminal = try await client.call(
-                operation: arguments.operation,
-                payload: input,
-                deadline: Date().addingTimeInterval(5)
-            )
+            let terminal: SocketTerminal
+            do {
+                terminal = try await client.call(
+                    operation: arguments.operation,
+                    payload: input,
+                    deadline: Date().addingTimeInterval(5)
+                )
+                await client.close()
+            } catch {
+                await client.close()
+                throw error
+            }
             guard !terminal.rejected else {
                 throw BridgeError.rejected(terminal.reason ?? "unspecified")
             }

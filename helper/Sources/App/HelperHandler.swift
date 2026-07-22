@@ -13,22 +13,22 @@ struct NotifyPayload: Sendable {
 
 final class HelperHandler: @unchecked Sendable {
     private let version: String
-    private let onNotify: @Sendable (NotifyPayload) -> Void
+    private let onNotify: @Sendable (NotifyPayload) async -> Void
 
-    init(version: String, onNotify: @escaping @Sendable (NotifyPayload) -> Void) {
+    init(version: String, onNotify: @escaping @Sendable (NotifyPayload) async -> Void) {
         self.version = version
         self.onNotify = onNotify
     }
 
     func handle(_ request: SocketRequest) async -> SocketResponse {
         do {
-            return .terminal(SocketTerminal(payload: try JSONEncoder().encode(process(request))))
+            return .terminal(SocketTerminal(payload: try JSONEncoder().encode(await process(request))))
         } catch {
             return .terminal(SocketTerminal(error: "encode reply: \(error)"))
         }
     }
 
-    func process(_ request: SocketRequest) -> HelperReply {
+    func process(_ request: SocketRequest) async -> HelperReply {
         switch request.operation {
         case "ping":
             guard request.payload.isEmpty else { return .failure("ping payload must be empty") }
@@ -37,13 +37,13 @@ final class HelperHandler: @unchecked Sendable {
             guard let payload = try? JSONDecoder().decode(NotifyRequest.self, from: request.payload) else {
                 return .failure("bad notify request")
             }
-            return notify(payload)
+            return await notify(payload)
         default:
             return .failure("unknown operation")
         }
     }
 
-    private func notify(_ request: NotifyRequest) -> HelperReply {
+    private func notify(_ request: NotifyRequest) async -> HelperReply {
         guard !request.title.isEmpty else { return .failure("title required") }
         if let url = request.url, !isHTTPURL(url) { return .failure("url must be http or https") }
         let payload = NotifyPayload(
@@ -60,7 +60,7 @@ final class HelperHandler: @unchecked Sendable {
             url: request.url,
             repo: request.repo
         )
-        onNotify(payload)
+        await onNotify(payload)
         return .ok
     }
 }

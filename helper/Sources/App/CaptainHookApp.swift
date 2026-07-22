@@ -12,7 +12,7 @@ struct CaptainHookApp: App {
     } // agent app: no windows
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
     static let loginItemPlist = "com.yasyf.capt-hook.helper.plist"
 
     private let notifications = NotificationController()
@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let refresher = SnapshotRefresher()
     private var server: SocketServer?
+    private var serverStartTask: Task<Void, Never>?
     private var watcher: SnapshotWatcher<Snapshot>?
 
     private var appVersion: String {
@@ -47,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notifications.requestAuthorizationIfNeeded()
         notifications.registerCategories()
         reconcileLoginItem()
-        startServer()
+        serverStartTask = Task { await startServer() }
         startWatcher()
         refresher.start()
     }
@@ -61,12 +62,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func startServer() {
-        let handler = HelperHandler(version: appVersion) { [weak self] payload in
+    private func startServer() async {
+        let deliver: @MainActor @Sendable (NotifyPayload) -> Void = { [weak self] payload in
             guard let self else { return }
             self.notifications.post(payload)
             self.coalescer.record(trigger: payload.kind)
             self.refresher.debouncedRefresh()
+        }
+        let handler = HelperHandler(version: appVersion) { payload in
+            await deliver(payload)
         }
         do {
             let requirement = try PeerTrust.Requirement(
@@ -88,7 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 handler: { await handler.handle($0) }
             )
             try FileManager.default.createDirectory(at: HelperPaths.directory, withIntermediateDirectories: true)
-            try server.start()
+            try await server.start()
             self.server = server
             Log.socket.notice("serving on \(HelperPaths.socket.path, privacy: .public)")
         } catch {
@@ -96,8 +100,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationWillTerminate(_: Notification) {
-        server?.stop()
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let serverStartTask else { return .terminateNow }
+        self.serverStartTask = nil
+        Task {
+            await serverStartTask.value
+            if let server {
+                self.server = nil
+                await server.stop()
+            }
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     private func startWatcher() {
