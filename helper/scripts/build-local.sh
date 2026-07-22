@@ -12,11 +12,12 @@ team="${DEVELOPMENT_TEAM:-SXKCTF23Q2}"
 app_name="Captain Hook"
 
 ./scripts/make-appicon.sh
+./scripts/build-capt-hookd.sh "$version"
 ./gen-version-xcconfig.sh "$version"
 xcodegen generate
 
 derived="$(mktemp -d)"
-xcodebuild -scheme CaptainHook -configuration Release \
+GITHUB_REF_NAME="v$version" xcodebuild -scheme CaptainHook -configuration Release \
   -derivedDataPath "$derived" \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="$identity" \
@@ -30,7 +31,7 @@ app="$derived/Build/Products/Release/$app_name.app"
 # Assert the App Group entitlement and the stamped version survived signing.
 codesign -d --entitlements :- "$app" 2>/dev/null | grep -q 'com.yasyf.capt-hook.helper'
 plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist"
-APP_PATH="$app" bash scripts/assert-signed-bridge.sh
+CAPT_HOOK_VERSION="$version" APP_PATH="$app" bash scripts/assert-signed-bridge.sh
 
 # Install: settle the exact old signed bundle and its login item before replacement.
 if [ -d "/Applications/$app_name.app" ]; then

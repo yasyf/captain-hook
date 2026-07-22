@@ -13,7 +13,9 @@ def test_helper_release_uses_exact_hard_cut_contract() -> None:
 
     assert f"release-app.yml@{RELEASE_APP_REF}" in helper
     assert "asset_name: captain-hook" in helper
-    assert ".github/workflows/release-pypi.yml" in helper
+    assert "go_version: 1.26.5" in helper
+    assert "prebuild_script: helper/scripts/build-capt-hookd.sh" in helper
+    assert "changed_paths:" not in helper
     assert "cask_token:" not in helper
     assert "cask_template_path:" not in helper
     assert "HOMEBREW_TAP_TOKEN:" not in helper
@@ -24,7 +26,6 @@ def test_cask_publication_uses_verified_release_outputs() -> None:
     cask_job = workflow[workflow.index("\n  helper-cask:") :]
 
     for required in (
-        "needs.helper.outputs.changed == 'true'",
         "needs.helper.outputs.asset_filename",
         "needs.helper.outputs.asset_url",
         "needs.helper.outputs.sha256",

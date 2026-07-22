@@ -19,13 +19,18 @@ jobs:
         with:
           xcode-version: "26"
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.5
+
       - name: Test Captain Hook helper
         run: |
           brew install xcodegen
+          helper/scripts/build-capt-hookd.sh 0.0.0 helper/Generated/capt-hookd tests/fixtures/capt-hookd
           cd helper
           ./gen-version-xcconfig.sh 0.0.0
           xcodegen generate
-          xcodebuild test -project CaptainHook.xcodeproj -scheme CaptainHook \
+          GITHUB_REF_NAME=v0.0.0 xcodebuild test -project CaptainHook.xcodeproj -scheme CaptainHook \
             -destination 'platform=macOS' -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO
 

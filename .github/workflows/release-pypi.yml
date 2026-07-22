@@ -110,8 +110,8 @@ jobs:
           echo "::error::failed to push plugin.json sync after 3 attempts"
           exit 1
 
-  # Signed Captain Hook.app; release-app.yml's changed_paths gate no-ops a
-  # wheel-only release. After github-release so softprops appends, not recreates.
+  # Every package release carries the exact same versioned, signed application.
+  # After github-release so softprops appends, not recreates.
   helper-version:
     runs-on: ubuntu-latest
     outputs:
@@ -149,10 +149,8 @@ jobs:
         com.yasyf.capt-hook.helper=Captain Hook Helper App
         com.yasyf.capt-hook.helper.widget=Captain Hook Helper Widget
       assert_script: helper/scripts/assert-signed-bridge.sh
-      changed_paths: |
-        helper/**
-        .github/cask/**
-        .github/workflows/release-pypi.yml
+      go_version: 1.26.5
+      prebuild_script: helper/scripts/build-capt-hookd.sh
     secrets:
       MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
       MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
@@ -162,7 +160,7 @@ jobs:
 
   helper-cask:
     needs: [helper-version, helper]
-    if: ${{ needs.helper-version.outputs.stable == 'true' && needs.helper.outputs.changed == 'true' }}
+    if: ${{ needs.helper-version.outputs.stable == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
