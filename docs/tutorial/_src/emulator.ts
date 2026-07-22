@@ -21,6 +21,7 @@ interface Fired {
   action: "block" | "warn" | "rewrite";
   message: string | null;
   rewritten: string | null;
+  advisoryOnDeny: boolean;
 }
 
 function compileRegex(pattern: string, flags = ""): RegExp {
@@ -148,20 +149,35 @@ function fire(hook: SerializedHook, command: string | null): Fired | null {
   if (hook.rewrite) {
     if (command === null) return null;
     const re = compileRegex(hook.rewrite.pattern, "g");
-    return { action: "rewrite", message: hook.rewrite.note, rewritten: command.replace(re, pyReplacementToJs(hook.rewrite.replace)) };
+    return {
+      action: "rewrite",
+      message: hook.rewrite.note,
+      rewritten: command.replace(re, pyReplacementToJs(hook.rewrite.replace)),
+      advisoryOnDeny: false,
+    };
   }
   if (hook.message == null) return null;
-  return { action: hook.block ? "block" : "warn", message: hook.message, rewritten: null };
+  return {
+    action: hook.block ? "block" : "warn",
+    message: hook.message,
+    rewritten: null,
+    advisoryOnDeny: hook.advisory_on_deny,
+  };
 }
 
 function combine(fired: Fired[]): Verdict {
   const blocks = fired.filter((f) => f.action === "block").map((f) => f.message).filter((m): m is string => m != null);
-  const warns = fired.filter((f) => f.action === "warn").map((f) => f.message).filter((m): m is string => m != null);
+  const warnResults = fired.filter((f) => f.action === "warn");
+  const warns = warnResults.map((f) => f.message).filter((m): m is string => m != null);
   if (fired.some((f) => f.action === "block")) {
+    const denyAdvisories = warnResults
+      .filter((f) => f.advisoryOnDeny)
+      .map((f) => f.message)
+      .filter((m): m is string => m != null);
     const parts = [...blocks];
-    if (warns.length > 0) {
+    if (denyAdvisories.length > 0) {
       if (parts.length > 0) parts.push(ADVISORY_SEPARATOR);
-      parts.push(...warns);
+      parts.push(...denyAdvisories);
     }
     return { action: "block", message: parts.join("\n\n") || null, rewritten: null };
   }

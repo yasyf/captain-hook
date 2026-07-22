@@ -876,6 +876,7 @@ class HookSpec:
     skip_if: tuple[TCondition, ...] = ()
     message: str | None = None
     block: bool = False
+    advisory_on_deny: bool = False
     respect_gitignore: bool = True
     max_fires: int | None = None
     tests: InlineTests | None = None

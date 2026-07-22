@@ -140,6 +140,7 @@ def serialize_hook(entry: RegisteredHook) -> dict[str, Any]:
     return {
         "events": [e.name for e in entry.spec.events],
         **lowered_payload(entry),
+        "advisory_on_deny": entry.spec.advisory_on_deny,
         "only_if": [serialize_condition(c) for c in entry.spec.only_if],
         "skip_if": [serialize_condition(c) for c in entry.spec.skip_if],
     }

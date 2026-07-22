@@ -1,4 +1,4 @@
-// capt-hook-widget src-sha256: aeb8c2c8b6acbee59aca3d39b93afcd84b5acf2c8bf81d6e58a6a7d7827085af
+// capt-hook-widget src-sha256: 96cc2c0e9f388309567cead6ac8d64bf89652d5e12f868e4eec552655e61fa99
 
 // autocomplete.ts
 var counter = 0;
@@ -1230,19 +1230,31 @@ function fire(hook, command) {
   if (hook.rewrite) {
     if (command === null) return null;
     const re = compileRegex(hook.rewrite.pattern, "g");
-    return { action: "rewrite", message: hook.rewrite.note, rewritten: command.replace(re, pyReplacementToJs(hook.rewrite.replace)) };
+    return {
+      action: "rewrite",
+      message: hook.rewrite.note,
+      rewritten: command.replace(re, pyReplacementToJs(hook.rewrite.replace)),
+      advisoryOnDeny: false
+    };
   }
   if (hook.message == null) return null;
-  return { action: hook.block ? "block" : "warn", message: hook.message, rewritten: null };
+  return {
+    action: hook.block ? "block" : "warn",
+    message: hook.message,
+    rewritten: null,
+    advisoryOnDeny: hook.advisory_on_deny
+  };
 }
 function combine(fired) {
   const blocks = fired.filter((f) => f.action === "block").map((f) => f.message).filter((m) => m != null);
-  const warns = fired.filter((f) => f.action === "warn").map((f) => f.message).filter((m) => m != null);
+  const warnResults = fired.filter((f) => f.action === "warn");
+  const warns = warnResults.map((f) => f.message).filter((m) => m != null);
   if (fired.some((f) => f.action === "block")) {
+    const denyAdvisories = warnResults.filter((f) => f.advisoryOnDeny).map((f) => f.message).filter((m) => m != null);
     const parts = [...blocks];
-    if (warns.length > 0) {
+    if (denyAdvisories.length > 0) {
       if (parts.length > 0) parts.push(ADVISORY_SEPARATOR);
-      parts.push(...warns);
+      parts.push(...denyAdvisories);
     }
     return { action: "block", message: parts.join("\n\n") || null, rewritten: null };
   }

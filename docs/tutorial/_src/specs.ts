@@ -33,6 +33,7 @@ export interface SerializedHook {
   events: string[];
   message: string | null;
   block: boolean;
+  advisory_on_deny: boolean;
   rewrite?: RewriteSpec;
   only_if: Condition[];
   skip_if: Condition[];
@@ -122,7 +123,7 @@ export interface EditorModule {
 // cannot faithfully model, the emulator says so plainly rather than guessing a verdict.
 export const HONESTY_MESSAGE = "outside the demo subset — run `capt-hook test` for the real engine";
 
-// Mirrors captain_hook.dispatch.ADVISORY_SEPARATOR: warns ride along on a deny under this line.
+// Mirrors captain_hook.dispatch.ADVISORY_SEPARATOR: opted-in warns ride along on a deny under this line.
 export const ADVISORY_SEPARATOR = "Additional advisories (not the reason for the deny):";
 
 // The widget-header mode notes, verbatim from docs/scripts/embed_widgets.py, now that the

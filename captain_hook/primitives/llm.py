@@ -188,6 +188,7 @@ def llm_primitive[M: BaseModel](
     max_fires: int | None = DEFAULT_FIRES,
     tests: InlineTests | None = None,
     async_: bool = False,
+    advisory_on_deny: bool = False,
     max_context: int = 2000,
     specialty: TSpecialty = "review",
     model: TModel = "small",
@@ -243,6 +244,7 @@ def llm_primitive[M: BaseModel](
         tests=tests,
         async_=async_,
         skip_planning_agents=action is not Action.block,
+        advisory_on_deny=advisory_on_deny,
     )(handler)
 
 
@@ -343,6 +345,7 @@ def llm_nudge(
     response_model: type[NudgeVerdict] = NudgeVerdict,
     verdict: Callable[[NudgeVerdict], bool] = lambda r: r.fire,
     label: str | None = None,
+    advisory_on_deny: bool = False,
     signals: Sequence[Signal | NlpSignal] | Signals | None = None,
     when: Callable[[BaseHookEvent], bool] | None = None,
     contexts: Sequence[PromptContext] = (),
@@ -391,6 +394,8 @@ def llm_nudge(
             resolve to the same hook name. Uniqueness within the module is the author's
             responsibility. Omit it to derive the name from the prompt (the name then
             shifts whenever the prompt text changes).
+        advisory_on_deny: Include this nudge after another hook's deny. Leave disabled
+            when the message assumes the denied action ran.
 
     Example:
         >>> llm_nudge("Is the agent speculating instead of observing?",
@@ -420,6 +425,7 @@ def llm_nudge(
         max_fires=max_fires,
         tests=tests,
         async_=async_,
+        advisory_on_deny=advisory_on_deny,
         max_context=max_context,
         specialty=specialty,
         model=model,

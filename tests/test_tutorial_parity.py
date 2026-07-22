@@ -380,6 +380,7 @@ def test_compiler_lowers_gate(tmp_path: Path) -> None:
             "events": ["PreToolUse"],
             "message": "run tests",
             "block": True,
+            "advisory_on_deny": False,
             "only_if": [{"kind": "Runs", "argv": ["git", "push"]}],
             "skip_if": [],
         }
@@ -482,6 +483,7 @@ def test_compile_parity_octal_and_concat(tmp_path: Path) -> None:
                 "events": ["PreToolUse"],
                 "message": "a\nb Ar",
                 "block": True,
+                "advisory_on_deny": False,
                 "only_if": [{"kind": "Command", "pattern": "rmx\n"}],
                 "skip_if": [],
             }

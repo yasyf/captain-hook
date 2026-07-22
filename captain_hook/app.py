@@ -178,6 +178,7 @@ def hook(
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     block: bool = False,
+    advisory_on_deny: bool = False,
     respect_gitignore: bool = True,
     max_fires: int | None = None,
     tests: InlineTests | None = None,
@@ -195,6 +196,7 @@ def hook(
                 skip_if=tuple(skip_if),
                 message=message,
                 block=block,
+                advisory_on_deny=advisory_on_deny,
                 respect_gitignore=respect_gitignore,
                 max_fires=max_fires,
                 tests=tests,
@@ -217,6 +219,7 @@ def on(
     tests: InlineTests | None = None,
     async_: bool = False,
     skip_planning_agents: bool = True,
+    advisory_on_deny: bool = False,
 ) -> Callable[[HookHandler], HookHandler]:
     reject_async_decision(events, async_)
     validate_conditions(only_if, "only_if", events)
@@ -230,6 +233,7 @@ def on(
         tests=tests,
         async_=async_,
         skip_planning_agents=skip_planning_agents,
+        advisory_on_deny=advisory_on_deny,
     )
 
     def decorator(fn: HookHandler) -> HookHandler:

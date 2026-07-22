@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   watchdogs, re-exec, fallback dispatch, legacy client grammar, and their tests
   were deleted rather than retained behind compatibility paths.
 
+### Fixed
+
+- **Denied events no longer inherit ordinary warnings.** Warning registrations now
+  opt in with `advisory_on_deny=True` only when their advice remains valid after a
+  deny, avoiding contradictory output that says a blocked action still runs.
+
 ## [12.9.0] - 2026-07-21
 
 ### Changed

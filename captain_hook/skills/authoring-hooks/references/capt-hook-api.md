@@ -61,10 +61,10 @@ Three forms, simplest first. Prefer primitives; use `hook()` for custom conditio
 use `@on` only for runtime logic.
 
 ```python
-hook(Event.PreToolUse, message="...", block=False, only_if=[...], skip_if=[...],
-     max_fires=None, tests=None)               # declarative; message required
+hook(Event.PreToolUse, message="...", block=False, advisory_on_deny=False,
+     only_if=[...], skip_if=[...], max_fires=None, tests=None)  # declarative; message required
 
-@on(Event.PreToolUse, only_if=[Tool("Bash")], tests=None)
+@on(Event.PreToolUse, only_if=[Tool("Bash")], advisory_on_deny=False, tests=None)
 def handler(evt: BaseHookEvent) -> HookResult | None:
     return evt.block("...")                     # or evt.warn("..."), evt.allow(), None
 ```
@@ -79,12 +79,12 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 | `rewrite_command` | `(pattern=None, replace=None, *, only_if=(), skip_if=(), to=None, block=None, note=None, tests=None)` | `PreToolUse` + `Tool("Bash")`; a pattern with an ast-grep metavar (`cat $$$ARGS`) rewrites structurally via `ast_grep.rewrite`, otherwise `re.sub(pattern, replace, command)`; allows with the rewritten command |
 | `set_tool_input` | `(field, value, *, tool, only_if=(), skip_if=(), note=None, tests=None)` | `PreToolUse` + `Tool(tool)`; fills a **missing** top-level input field with `value` and allows, never clobbering a present one |
 | `gate` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), events=None, max_fires=-1, tests=None, async_=False, skip_planning_agents=None)` | `Stop \| SubagentStop`; blocks, defaults to **unlimited** fires (keeps enforcing); `skip_if` is additive with an automatic `Waiting()` |
-| `nudge` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), block=False, events=None, max_fires=-1, tests=None, async_=False, skip_planning_agents=None)` | `PostToolUse` (with signals) else `PreToolUse`; default fires 3 / 1; `when` vetoes even with `signals`; warns |
+| `nudge` | `(message, *, when=None, signals=None, only_if=(), skip_if=(), block=False, advisory_on_deny=False, events=None, max_fires=-1, tests=None, async_=False, skip_planning_agents=None)` | `PostToolUse` (with signals) else `PreToolUse`; default fires 3 / 1; `when` vetoes even with `signals`; warns |
 | `lint` | `(check=None, *, pattern=None, message, lang='py', trigger=None, sep=', ', block=False, events=None, tests=None, max_shown=5)` | `PostToolUse`, `Tool("Edit\|Write")` + the `lang` globs, skips test files; `trigger` pre-filters string **and** ast checks |
 | `workflow` | `(*, label, marker, steps, artifacts=None, post_complete=None, on_start=None, only_if=(), skip_if=(), tests=None)` | guard on `SubagentStop`, `max_fires=1` |
 | `install_binary` | `(script, *, label=None, timeout=600, only_if=(), skip_if=(), tests=None)` | `SessionStart`, async; runs `script` via `/bin/sh` from the calling pack file's dir; always allows |
 | `llm_gate` | `(prompt, *, message, response_model=GateVerdict, verdict=…, label=None, signals=None, when=None, contexts=(), only_if=(), skip_if=(), events=None, max_fires=-1, tests=None, max_context=2000, specialty='review', model='small', agent=True, transcript=True, diff=False)` | `Stop \| SubagentStop`; defaults to **unlimited** fires (keeps enforcing); blocks when `verdict(result)` — default `GateVerdict.block` |
-| `llm_nudge` | `(prompt, *, message, response_model=NudgeVerdict, verdict=…, label=None, signals=None, when=None, contexts=(), only_if=(), skip_if=(), events=None, max_fires=-1, tests=None, async_=False, max_context=2000, specialty='review', model='small', agent=True, transcript=True, diff=False)` | `PostToolUse`, `max_fires=3`; warns when `verdict(result)` — default `NudgeVerdict.fire` |
+| `llm_nudge` | `(prompt, *, message, response_model=NudgeVerdict, verdict=…, label=None, advisory_on_deny=False, signals=None, when=None, contexts=(), only_if=(), skip_if=(), events=None, max_fires=-1, tests=None, async_=False, max_context=2000, specialty='review', model='small', agent=True, transcript=True, diff=False)` | `PostToolUse`, `max_fires=3`; warns when `verdict(result)` — default `NudgeVerdict.fire` |
 | `prompt_check` | `(evt, template, fmt=None, *, prefix, suffix='', timeout=45, include_reasoning=True, diff=False, response_model=PromptCheckVerdict)` | call inside an `@on` handler; returns `HookResult \| None` from `PromptCheckVerdict` |
 | `styleguide` | `(*rules, block=False, only_if=(), skip_if=(), events=None, max_shown=5)` | AST style rules — owned by the `translating-styleguides` skill |
 | `approve` | `(label, *, events=Event.PreToolUse \| Event.PermissionRequest, only_if=(), skip_if=(), tests=None)` | `PreToolUse \| PermissionRequest`; pre-authorizes matching tools before the prompt and answers matching dialogs with allow; **no fire cap**. Unconditioned == a permanent `--dangerously-skip-permissions`; always scope with conditions |
@@ -93,6 +93,9 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 <!-- /gen:primitives -->
 
 Notes:
+
+- `advisory_on_deny=True` keeps a warning after another matching hook denies the event. Use it only
+  when the message stays true even though the denied action did not run.
 
 - `block_command` / `warn_command` accept a token list or a raw regex string. Token list
   `["git", "stash"]` becomes `r"git\s+stash"`; `"*"` becomes `\S+`; `"a|b"` becomes an

@@ -157,9 +157,9 @@ def dispatch(
 
     Follows Claude Code's own ``deny > ask > allow`` precedence: a ``block`` from any matching hook
     beats an ``allow``/``rewrite``, so one hook's approval can never short-circuit another hook's
-    block. ``warn`` messages ride along on the deny rather than being lost to it — when any block
-    fired the result is one block whose message joins the block messages, an advisory separator, then
-    the surviving warn messages (encounter order, ``"\n\n"``-separated). Once a block has fired,
+    block. ``warn`` messages registered with ``advisory_on_deny=True`` ride along on the deny — when
+    any block fired the result is one block whose message joins the block messages, an advisory
+    separator, then the opted-in warn messages (encounter order, ``"\n\n"``-separated). Once a block has fired,
     remaining *handler-backed* hooks are skipped (their verdict is doomed and they'd burn API cost
     and ``max_fires`` budget); message-only declarative hooks still run, so a declarative warn still
     surfaces on the deny. Absent a block, a ``rewrite`` beats a plain ``allow`` — a rewrite *is* an
@@ -180,6 +180,7 @@ def dispatch(
     blocked = False
     blocks: list[str] = []
     warns: list[str] = []
+    deny_advisories: list[str] = []
     warn_approve = False
     for entry in matching:
         if blocked and entry.handler is not None:
@@ -195,16 +196,18 @@ def dispatch(
                 approval = r
             case HookResult(action=Action.warn, message=msg) as r if msg:
                 warns.append(msg)
+                if entry.spec.advisory_on_deny:
+                    deny_advisories.append(msg)
                 warn_approve = warn_approve or r.approve
             case _:
                 pass
 
     if blocked:
         parts = list(blocks)
-        if warns:
+        if deny_advisories:
             if parts:
                 parts.append(ADVISORY_SEPARATOR)
-            parts.extend(warns)
+            parts.extend(deny_advisories)
         return format_output(event, HookResult(action=Action.block, message="\n\n".join(parts) or None))
     if (winner := rewrite or approval) is not None:
         if warns:

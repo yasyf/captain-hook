@@ -13,6 +13,7 @@ from captain_hook.app import (
 )
 from captain_hook.dispatch import ADVISORY_SEPARATOR, dispatch, execute_hook, format_output, run_declarative
 from captain_hook.events import PermissionRequestEvent
+from captain_hook.primitives.nudge import nudge
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from tests.helpers import (
     make_ctx,
@@ -513,7 +514,7 @@ class TestDispatch:
     def test_warn_then_block_denies_with_both(self) -> None:
         # A (declarative) warn that fired before a block rides along on the deny, behind an advisory
         # separator — block text first, then the warns.
-        register_hook(Event.PreToolUse, message="warning first")
+        register_hook(Event.PreToolUse, message="warning first", advisory_on_deny=True)
 
         @on(Event.PreToolUse)
         def blocker(evt: Any) -> HookResult:
@@ -525,6 +526,31 @@ class TestDispatch:
         assert (
             result["hookSpecificOutput"]["permissionDecisionReason"]
             == f"blocked\n\n{ADVISORY_SEPARATOR}\n\nwarning first"
+        )
+
+    def test_default_nudge_does_not_ride_along_on_block(self) -> None:
+        nudge("command will still run", events=Event.PreToolUse, max_fires=None)
+        register_hook(Event.PreToolUse, message="blocked", block=True)
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "command will still run" not in reason
+
+    def test_opted_in_nudge_rides_along_on_block(self) -> None:
+        nudge(
+            "retry with safer arguments",
+            events=Event.PreToolUse,
+            max_fires=None,
+            advisory_on_deny=True,
+        )
+        register_hook(Event.PreToolUse, message="blocked", block=True)
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        assert (
+            result["hookSpecificOutput"]["permissionDecisionReason"]
+            == f"blocked\n\n{ADVISORY_SEPARATOR}\n\nretry with safer arguments"
         )
 
     def test_warns_combined_with_newline(self) -> None:
@@ -637,10 +663,10 @@ class TestDispatch:
         assert result["hookSpecificOutput"]["permissionDecisionReason"] == "stop here"
         assert counter == 0
 
-    def test_declarative_warn_after_block_rides_along(self) -> None:
-        # A message-only declarative warn still runs after a block and lands on the deny.
+    def test_opted_in_declarative_warn_after_block_rides_along(self) -> None:
+        # A message-only declarative warn still runs after a block and can opt into the deny.
         register_hook(Event.PreToolUse, message="stop here", block=True)
-        register_hook(Event.PreToolUse, message="advisory note")
+        register_hook(Event.PreToolUse, message="advisory note", advisory_on_deny=True)
 
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None

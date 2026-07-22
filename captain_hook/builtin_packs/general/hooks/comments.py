@@ -441,6 +441,7 @@ nudge(
     only_if=[Tool("Edit", "Write", "MultiEdit"), VerboseDocComment()],
     events=Event.PreToolUse,
     max_fires=None,
+    advisory_on_deny=True,
     tests={
         Input(file="lib.rs", content=RS_LONG_DOC): Warn(pattern="documentation comment"),
         Input(file="doc.go", content=GO_DOC_RUN): Warn(pattern="documentation comment"),
@@ -485,6 +486,7 @@ nudge(
     only_if=[Tool("Edit", "Write", "MultiEdit"), CommentDenseEdit()],
     events=Event.PreToolUse,
     max_fires=None,
+    advisory_on_deny=True,
     tests={
         Input(file="dense.py", content=PY_DENSE_FIRES): Warn(pattern="Comment-dense"),
         # The block already covers an all-comment edit; the density warn stands down.

@@ -46,6 +46,7 @@ def nudge(
     only_if: Sequence[TCondition] = (),
     skip_if: Sequence[TCondition] = (),
     block: bool = False,
+    advisory_on_deny: bool = False,
     events: Event | None = None,
     max_fires: int | None = DEFAULT_FIRES,
     tests: InlineTests | None = None,
@@ -63,6 +64,8 @@ def nudge(
     ``skip_planning_agents`` defaults to ``None``, resolving to ``not block``: a blocking gate
     enforces on every agent type, while a warning nudge skips planning/exploration subagents
     (only ``SubagentStop``/``SubagentStart`` are affected). Pass ``True``/``False`` to override.
+    Set ``advisory_on_deny=True`` only when the advice remains valid if another hook blocks
+    the same event.
 
     Example:
         >>> nudge("Remember to run tests", only_if=[TouchedFile("**/*.py")])
@@ -117,6 +120,7 @@ def nudge(
         tests=tests,
         async_=async_,
         skip_planning_agents=(not block) if skip_planning_agents is None else skip_planning_agents,
+        advisory_on_deny=advisory_on_deny,
     )(handler)
 
 

@@ -46,7 +46,7 @@ const PRIMITIVE_SIGS: Record<string, Signature> = {
     maxPositional: 2,
     keywords: new Set([
       "events", "message", "only_if", "skip_if", "block",
-      "respect_gitignore", "max_fires", "tests", "async_", "skip_planning_agents",
+      "advisory_on_deny", "respect_gitignore", "max_fires", "tests", "async_", "skip_planning_agents",
     ]),
   },
   block_command: {
@@ -72,7 +72,7 @@ const PRIMITIVE_SIGS: Record<string, Signature> = {
     maxPositional: 1,
     keywords: new Set([
       "message", "when", "signals", "only_if", "skip_if", "block",
-      "events", "max_fires", "tests", "async_", "skip_planning_agents",
+      "advisory_on_deny", "events", "max_fires", "tests", "async_", "skip_planning_agents",
     ]),
   },
 };
@@ -404,6 +404,7 @@ class Lowerer {
       events: this.evalEvents(this.required(args, 0, "events", "hook")),
       message: this.evalString(this.required(args, 1, "message", "hook")),
       block: this.evalBool(args.keywords.get("block"), false),
+      advisory_on_deny: this.evalBool(args.keywords.get("advisory_on_deny"), false),
       only_if: this.conditions(args.keywords.get("only_if")),
       skip_if: this.conditions(args.keywords.get("skip_if")),
     };
@@ -430,6 +431,7 @@ class Lowerer {
       events: ["PreToolUse"],
       message,
       block: true,
+      advisory_on_deny: false,
       only_if: [this.toolCondition(["Bash"]), { kind: "Command", pattern: checkRegexDialect(pattern) }, ...this.conditions(args.keywords.get("only_if"))],
       skip_if: this.conditions(args.keywords.get("skip_if")),
     };
@@ -443,6 +445,7 @@ class Lowerer {
       events: eventsNode ? this.evalEvents(eventsNode) : ["PostToolUse"],
       message,
       block: false,
+      advisory_on_deny: false,
       only_if: [this.toolCondition(["Bash"]), { kind: "Command", pattern: checkRegexDialect(pattern) }, ...this.conditions(args.keywords.get("only_if"))],
       skip_if: this.conditions(args.keywords.get("skip_if")),
     };
@@ -462,6 +465,7 @@ class Lowerer {
       events: ["PreToolUse"],
       message: null,
       block: false,
+      advisory_on_deny: false,
       rewrite: { pattern: checked, replace, note },
       only_if: [this.toolCondition(["Bash"]), { kind: "Command", pattern: checked }, ...this.conditions(args.keywords.get("only_if"))],
       skip_if: this.conditions(args.keywords.get("skip_if")),
@@ -487,6 +491,7 @@ class Lowerer {
       events,
       message,
       block,
+      advisory_on_deny: this.evalBool(args.keywords.get("advisory_on_deny"), false),
       only_if: this.conditions(args.keywords.get("only_if")),
       skip_if: guardsWaiting ? [{ kind: "Waiting" }, ...skipIf] : skipIf,
     };
