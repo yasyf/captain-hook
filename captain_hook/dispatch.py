@@ -159,14 +159,15 @@ def dispatch(
     beats an ``allow``/``rewrite``, so one hook's approval can never short-circuit another hook's
     block. ``warn`` messages registered with ``advisory_on_deny=True`` ride along on the deny — when
     any block fired the result is one block whose message joins the block messages, an advisory
-    separator, then the opted-in warn messages (encounter order, ``"\n\n"``-separated). Once a block has fired,
-    remaining *handler-backed* hooks are skipped (their verdict is doomed and they'd burn API cost
-    and ``max_fires`` budget); message-only declarative hooks still run, so a declarative warn still
-    surfaces on the deny. Absent a block, a ``rewrite`` beats a plain ``allow`` — a rewrite *is* an
-    allow carrying corrected input, so a broad approval must not drop another hook's rewrite; among
-    rewrites the first wins, else the first allow, else the accumulated warns surface alone. Warns
-    are never lost to a winner either: they ride along on the winning allow/rewrite as its advisory
-    context (``additionalContext``), joined after the rewrite's own note.
+    separator, then the opted-in warn messages (encounter order, ``"\n\n"``-separated). Once a block
+    has fired, remaining *handler-backed* hooks are skipped unless they opt into the deny advisory;
+    those handlers run regardless of registration order, while the rest avoid doomed API cost and
+    ``max_fires`` budget. Message-only declarative hooks still run, but only opted-in warnings join
+    the deny. Absent a block, a ``rewrite`` beats a plain ``allow`` — a rewrite *is* an allow carrying
+    corrected input, so a broad approval must not drop another hook's rewrite; among rewrites the
+    first wins, else the first allow, else the accumulated warns surface alone. Warns are never lost
+    to a winner either: they ride along on the winning allow/rewrite as its advisory context
+    (``additionalContext``), joined after the rewrite's own note.
 
     A warn's ``approve`` flag survives the warn-only merge: the rebuilt result carries
     ``any(contributing warns' approve)``, so a context-only merge (every part ``approve=False``,
@@ -183,7 +184,7 @@ def dispatch(
     deny_advisories: list[str] = []
     warn_approve = False
     for entry in matching:
-        if blocked and entry.handler is not None:
+        if blocked and entry.handler is not None and not entry.spec.advisory_on_deny:
             continue
         match execute_hook(entry, evt, session_dir):
             case HookResult(action=Action.block, message=msg):
@@ -205,8 +206,7 @@ def dispatch(
     if blocked:
         parts = list(blocks)
         if deny_advisories:
-            if parts:
-                parts.append(ADVISORY_SEPARATOR)
+            parts.append(ADVISORY_SEPARATOR)
             parts.extend(deny_advisories)
         return format_output(event, HookResult(action=Action.block, message="\n\n".join(parts) or None))
     if (winner := rewrite or approval) is not None:

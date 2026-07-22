@@ -1,4 +1,4 @@
-// capt-hook-widget src-sha256: 96cc2c0e9f388309567cead6ac8d64bf89652d5e12f868e4eec552655e61fa99
+// capt-hook-widget src-sha256: 55261089e225afb7da75b2e05af8b4a6b48c70d75f456a728fb1bd1712d66c71
 
 // autocomplete.ts
 var counter = 0;
@@ -1237,7 +1237,7 @@ function fire(hook, command) {
       advisoryOnDeny: false
     };
   }
-  if (hook.message == null) return null;
+  if (hook.message == null && !hook.block) return null;
   return {
     action: hook.block ? "block" : "warn",
     message: hook.message,
@@ -1246,14 +1246,14 @@ function fire(hook, command) {
   };
 }
 function combine(fired) {
-  const blocks = fired.filter((f) => f.action === "block").map((f) => f.message).filter((m) => m != null);
+  const blocks = fired.filter((f) => f.action === "block").map((f) => f.message).filter((m) => Boolean(m));
   const warnResults = fired.filter((f) => f.action === "warn");
-  const warns = warnResults.map((f) => f.message).filter((m) => m != null);
+  const warns = warnResults.map((f) => f.message).filter((m) => Boolean(m));
   if (fired.some((f) => f.action === "block")) {
-    const denyAdvisories = warnResults.filter((f) => f.advisoryOnDeny).map((f) => f.message).filter((m) => m != null);
+    const denyAdvisories = warnResults.filter((f) => f.advisoryOnDeny).map((f) => f.message).filter((m) => Boolean(m));
     const parts = [...blocks];
     if (denyAdvisories.length > 0) {
-      if (parts.length > 0) parts.push(ADVISORY_SEPARATOR);
+      parts.push(ADVISORY_SEPARATOR);
       parts.push(...denyAdvisories);
     }
     return { action: "block", message: parts.join("\n\n") || null, rewritten: null };

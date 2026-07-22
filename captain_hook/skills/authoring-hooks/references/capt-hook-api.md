@@ -94,8 +94,9 @@ def handler(evt: BaseHookEvent) -> HookResult | None:
 
 Notes:
 
-- `advisory_on_deny=True` keeps a warning after another matching hook denies the event. Use it only
-  when the message stays true even though the denied action did not run.
+- `advisory_on_deny=True` keeps a warning after another matching hook denies the event, whether the
+  warning was registered before or after the denying hook. Use it only when the message stays true
+  even though the denied action did not run.
 
 - `block_command` / `warn_command` accept a token list or a raw regex string. Token list
   `["git", "stash"]` becomes `r"git\s+stash"`; `"*"` becomes `\S+`; `"a|b"` becomes an

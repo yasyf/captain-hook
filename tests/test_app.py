@@ -104,6 +104,7 @@ class TestRegistrationFields:
             skip_if=[TestFile()],
             message="test",
             block=True,
+            advisory_on_deny=True,
             max_fires=3,
             respect_gitignore=False,
             async_=True,
@@ -114,6 +115,7 @@ class TestRegistrationFields:
         assert spec.skip_if == (TestFile(),)
         assert spec.message == "test"
         assert spec.block is True
+        assert spec.advisory_on_deny is True
         assert spec.max_fires == 3
         assert spec.respect_gitignore is False
         assert spec.async_ is True

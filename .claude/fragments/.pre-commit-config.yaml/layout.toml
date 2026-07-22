@@ -1,4 +1,4 @@
-fragments = ["cc-skills:precommit-base", "cc-skills:precommit-python"]
+fragments = ["cc-skills:precommit-base", "cc-skills:precommit-python", "exclude-generated-widgets"]
 
 [sources.cc-skills]
 source = "github:yasyf/cc-skills@main"

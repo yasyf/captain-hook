@@ -553,6 +553,41 @@ class TestDispatch:
             == f"blocked\n\n{ADVISORY_SEPARATOR}\n\nretry with safer arguments"
         )
 
+    def test_opted_in_nudge_after_block_rides_along(self) -> None:
+        register_hook(Event.PreToolUse, message="blocked", block=True)
+        nudge(
+            "retry with safer arguments",
+            events=Event.PreToolUse,
+            max_fires=None,
+            advisory_on_deny=True,
+        )
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        assert (
+            result["hookSpecificOutput"]["permissionDecisionReason"]
+            == f"blocked\n\n{ADVISORY_SEPARATOR}\n\nretry with safer arguments"
+        )
+
+    def test_message_less_block_keeps_advisory_out_of_deny_reason(self) -> None:
+        nudge(
+            "retry with safer arguments",
+            events=Event.PreToolUse,
+            max_fires=None,
+            advisory_on_deny=True,
+        )
+
+        @on(Event.PreToolUse)
+        def blocker(evt: Any) -> HookResult:
+            return HookResult(action=Action.block)
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        assert (
+            result["hookSpecificOutput"]["permissionDecisionReason"]
+            == f"{ADVISORY_SEPARATOR}\n\nretry with safer arguments"
+        )
+
     def test_warns_combined_with_newline(self) -> None:
         register_hook(Event.PreToolUse, message="warn1")
         register_hook(Event.PreToolUse, message="warn2")

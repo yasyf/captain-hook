@@ -156,7 +156,7 @@ function fire(hook: SerializedHook, command: string | null): Fired | null {
       advisoryOnDeny: false,
     };
   }
-  if (hook.message == null) return null;
+  if (hook.message == null && !hook.block) return null;
   return {
     action: hook.block ? "block" : "warn",
     message: hook.message,
@@ -166,17 +166,17 @@ function fire(hook: SerializedHook, command: string | null): Fired | null {
 }
 
 function combine(fired: Fired[]): Verdict {
-  const blocks = fired.filter((f) => f.action === "block").map((f) => f.message).filter((m): m is string => m != null);
+  const blocks = fired.filter((f) => f.action === "block").map((f) => f.message).filter((m): m is string => Boolean(m));
   const warnResults = fired.filter((f) => f.action === "warn");
-  const warns = warnResults.map((f) => f.message).filter((m): m is string => m != null);
+  const warns = warnResults.map((f) => f.message).filter((m): m is string => Boolean(m));
   if (fired.some((f) => f.action === "block")) {
     const denyAdvisories = warnResults
       .filter((f) => f.advisoryOnDeny)
       .map((f) => f.message)
-      .filter((m): m is string => m != null);
+      .filter((m): m is string => Boolean(m));
     const parts = [...blocks];
     if (denyAdvisories.length > 0) {
-      if (parts.length > 0) parts.push(ADVISORY_SEPARATOR);
+      parts.push(ADVISORY_SEPARATOR);
       parts.push(...denyAdvisories);
     }
     return { action: "block", message: parts.join("\n\n") || null, rewritten: null };

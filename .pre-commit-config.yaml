@@ -47,3 +47,6 @@ repos:
       - id: ty
         # A passing hook hides its output by default; verbose surfaces the warnings.
         verbose: true
+
+# Generated bundles must remain byte-identical to the locked esbuild output.
+exclude: ^docs/tutorial/widgets/(compiler|editor|emulator)\.js$

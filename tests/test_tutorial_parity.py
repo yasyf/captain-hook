@@ -9,6 +9,7 @@ import tempfile
 from collections.abc import Iterator
 from dataclasses import replace
 from functools import cache
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,11 @@ PARITY_MJS = SRC / "parity.mjs"
 COMPILER_TESTS_MJS = SRC / "tests" / "compiler.test.mjs"
 RM_WORLD_TESTS_MJS = SRC / "tests" / "rm_world.test.mjs"
 MATRIX = json.loads((SRC / "matrix.json").read_text())
+BUNDLE_SHA256 = {
+    "compiler.js": "88354cf846acb6fd53fd23f90712b4cdc5c1eb7d1884c80aef614c33985f8101",
+    "editor.js": "b9888c8927dbb026837f62e2874825e61a34a9df9e1e069482915ba79cc404a6",
+    "emulator.js": "064f6d57586932a2b032faf8466620a33cd1b048156045a8bfd39e57739131a9",
+}
 
 sys.path.insert(0, str(SCRIPTS))
 
@@ -30,7 +36,7 @@ from widget_compiler import compile_fragment, load_hooks  # noqa: E402
 
 import captain_hook  # noqa: E402
 from captain_hook.app import _state  # noqa: E402
-from captain_hook.dispatch import dispatch  # noqa: E402
+from captain_hook.dispatch import ADVISORY_SEPARATOR, dispatch  # noqa: E402
 from captain_hook.loader import discover_pack  # noqa: E402
 from captain_hook.testing.helpers import input_to_event, isolated_state_root  # noqa: E402
 from captain_hook.testing.types import Input  # noqa: E402
@@ -217,6 +223,9 @@ def test_bundle_drift(bundle: Any) -> None:
     assert banner == f"{BANNER_PREFIX}{src_hash()}", (
         f"committed {bundle.outfile.name} is stale — run `python docs/scripts/build_emulator.py`"
     )
+    assert sha256(bundle.outfile.read_bytes()).hexdigest() == BUNDLE_SHA256[bundle.outfile.name], (
+        f"committed {bundle.outfile.name} content differs from the pinned bundle"
+    )
 
 
 @requires_node
@@ -385,6 +394,41 @@ def test_compiler_lowers_gate(tmp_path: Path) -> None:
             "skip_if": [],
         }
     ]
+
+
+def test_compiler_serializes_advisory_on_deny(tmp_path: Path) -> None:
+    (hook,) = _compile_source(
+        "from captain_hook import Event, nudge\n"
+        "nudge('retry safely', events=Event.PreToolUse, advisory_on_deny=True)\n",
+        tmp_path,
+    )
+    assert hook["advisory_on_deny"] is True
+
+
+@requires_node
+def test_deny_with_later_opted_in_nudge_parity(tmp_path: Path) -> None:
+    source = (
+        "from captain_hook import Event, nudge\n"
+        "nudge('', block=True, events=Event.PreToolUse, max_fires=None)\n"
+        "nudge('retry safely', events=Event.PreToolUse, max_fires=None, advisory_on_deny=True)\n"
+    )
+    fragment = tmp_path / "fragment.py"
+    fragment.write_text(source)
+    saved = list(_state.hooks)
+    try:
+        compiled = compile_fragment(fragment)
+        with isolated_state_root():
+            python = normalize(dispatch(Event.PreToolUse, input_to_event(Event.PreToolUse, Input())))
+    finally:
+        _state.hooks[:] = saved
+
+    [node] = run_node(compiled["hooks"], [{"id": "deny-with-advisory", "input": {}}]).values()
+    expected = {
+        "action": "block",
+        "message": f"{ADVISORY_SEPARATOR}\n\nretry safely",
+        "rewritten": None,
+    }
+    assert python == node == expected
 
 
 def test_compiler_lowers_rewrite(tmp_path: Path) -> None:
