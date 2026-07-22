@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import stat
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -14,28 +15,33 @@ from captain_hook.daemon.logsink import (
     create_private_log,
     daemon_log_path,
 )
-from captain_hook.daemon.protocol import ClientInfo, Request
 
 KEY = "deadbeefcafe0001"
 
 
+@dataclass(frozen=True, slots=True)
+class ClientInfo:
+    ppid: int
+
+
+@dataclass(frozen=True, slots=True)
+class Request:
+    client: ClientInfo
+    cwd: str
+    env: dict[str, str]
+
+
 def make_request(log_dir: Path) -> Request:
     return Request(
-        v=1,
-        kind="event",
-        client=ClientInfo(version="", build="b", pid=1, ppid=2),
-        event="PreToolUse",
-        root="/tmp/proj",
+        client=ClientInfo(ppid=2),
         cwd="/tmp/proj",
         env={"CAPTAIN_HOOK_LOG_DIR": str(log_dir)},
-        payload_raw="{}",
     )
 
 
 @pytest.fixture(autouse=True)
 def restore_loguru(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path / "logs"))
-    monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(tmp_path / "run"))
     yield
     logger.remove()
 

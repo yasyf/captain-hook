@@ -12,7 +12,6 @@ harness leakage and fails the whole run regardless of scenario outcomes.
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import sqlite3
@@ -30,18 +29,8 @@ DROPPED_ENV = (
     "CAPTAIN_HOOK_STATE_DIR",
     "CAPT_HOOK_DECISIONS_DB",
     "CLAUDE_PROJECT_DIR",
-    # Daemon/client steering: a scenario sets exactly what it needs on its DaemonWorld env, so an
-    # ambient value (a dogfood session, CI) can never route a client at the real run dir or perturb
-    # a measurement.
-    "CAPT_HOOK_RUN_DIR",
-    "CAPT_HOOK_DAEMON_FALLBACK",
-    "CAPT_HOOK_NO_DAEMON",
     "CAPT_HOOK_CLIENT_TIMEOUT",
-    "CAPT_HOOK_CLIENT_BUILD",
-    "CAPT_HOOK_DAEMON_DEBUG",
-    "HOOKS_DAEMON_IDLE_S",
 )
-REAL_RUN_DIR = Path.home() / ".cache" / "captain-hook" / "run"
 GIT_IDENTITY = ("-c", "user.email=stress@capt-hook.test", "-c", "user.name=capt-hook-stress")
 SESSION_PREFIX = "stress-"
 ORIGIN_ORG = "capt-hook-stress"
@@ -164,29 +153,10 @@ def leak_count(db: Path, query: str) -> int:
             return 0
 
 
-def real_run_dir_leaks() -> list[str]:
-    if not REAL_RUN_DIR.exists():
-        return []
-    fingerprints = (str(RUN_ROOT), os.path.realpath(RUN_ROOT))
-    return [
-        f"real run dir worker for sandbox root: {meta.name} -> {root}"
-        for meta in REAL_RUN_DIR.glob("*.json")
-        if (root := meta_root(meta)) and any(fingerprint in root for fingerprint in fingerprints)
-    ]
-
-
-def meta_root(path: Path) -> str:
-    try:
-        return str(json.loads(path.read_text()).get("root") or "")
-    except (OSError, ValueError):
-        return ""
-
-
 def real_state_leaks() -> list[str]:
     counts = [f"{db.name}: {query} -> {n}" for db, query in LEAK_QUERIES if (n := leak_count(db, query))]
     spawn_log = REAL_SPAWN_LOG.read_text() if REAL_SPAWN_LOG.exists() else ""
     return (
         counts
         + (["real spawn.log mentions /tmp/capt-stress"] if "/tmp/capt-stress" in spawn_log else [])
-        + real_run_dir_leaks()
     )

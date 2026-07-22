@@ -18,7 +18,7 @@ class TestWhitelist:
         [
             "CAPT_HOOK_X",
             "CAPTAIN_HOOK_STATE_DIR",
-            "HOOKS_DAEMON_IDLE_S",
+            "HOOKS_PROFILE",
             "CLAUDE_PROJECT_DIR",
             "FACTORY_A",
             "XDG_CACHE_HOME",
@@ -46,7 +46,7 @@ class TestGetenv:
     def test_bound_whitelisted_absent_is_authoritatively_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # A daemon-inherited whitelisted var must never leak into a request that omits it.
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/daemon-inherited")
-        with reqenv.use_request(overrides({"CAPT_HOOK_RUN_DIR": "/run"})):
+        with reqenv.use_request(overrides({"CAPT_HOOK_CLIENT_TIMEOUT": "1s"})):
             assert reqenv.getenv("CLAUDE_PROJECT_DIR") is None
             assert reqenv.getenv("CLAUDE_PROJECT_DIR", "fallback") == "fallback"
 
@@ -56,8 +56,8 @@ class TestGetenv:
             assert reqenv.getenv("PATH") == "/bin:/usr/bin"
 
     def test_default_survives_typed_non_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("CAPT_HOOK_CLIENT_BUILD", raising=False)
-        assert reqenv.getenv("CAPT_HOOK_CLIENT_BUILD", 10.0) == 10.0
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        assert reqenv.getenv("CLAUDE_PROJECT_DIR", 10.0) == 10.0
 
 
 class TestEnvMap:

@@ -49,7 +49,6 @@ def isolate_cache(
     # keep it off the real ~/.cache. isolate_modules drops the per-test `hooks.*` imports so a later
     # project's discover can't reload a prior one's module from its stale spec under random ordering.
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("cache")))
-    monkeypatch.setenv("CAPT_HOOK_RUN_DIR", str(tmp_path_factory.mktemp("run")))
     yield
     cli.register_pack_tools([])  # drop any tools this test registered into the process-global registry
 

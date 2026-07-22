@@ -3,44 +3,51 @@ from __future__ import annotations
 import io
 import sys
 import threading
+from dataclasses import dataclass
 
 from loguru import logger
 
 from captain_hook.daemon import context
 from captain_hook.daemon.context import ContextIO, install_context_io, request_scope
-from captain_hook.daemon.protocol import ClientInfo, Request
 from captain_hook.util import reqenv
+
+
+@dataclass(frozen=True, slots=True)
+class ClientInfo:
+    ppid: int
+
+
+@dataclass(frozen=True, slots=True)
+class Request:
+    client: ClientInfo
+    cwd: str
+    env: dict[str, str]
 
 
 def make_request(*, env: dict[str, str] | None = None, cwd: str = "/tmp/proj") -> Request:
     return Request(
-        v=1,
-        kind="event",
-        client=ClientInfo(version="", build="b", pid=111, ppid=222),
-        event="PreToolUse",
-        root="/tmp/proj",
+        client=ClientInfo(ppid=222),
         cwd=cwd,
         env=env or {},
-        payload_raw="{}",
     )
 
 
 class TestRequestScope:
     def test_binds_env_cwd_and_client_identity(self) -> None:
-        req = make_request(env={"CAPT_HOOK_DAEMON_DEBUG": "1"}, cwd="/tmp/here")
+        req = make_request(env={"HOOKS_PROFILE": "strict"}, cwd="/tmp/here")
         with request_scope(req, "sess-A"):
             ov = reqenv.current()
             assert ov is not None
             assert ov.session_id == "sess-A"
             assert ov.client_ppid == 222
-            assert reqenv.getenv("CAPT_HOOK_DAEMON_DEBUG") == "1"
+            assert reqenv.getenv("HOOKS_PROFILE") == "strict"
             assert str(reqenv.cwd()) == "/tmp/here"
         assert reqenv.current() is None
 
     def test_absent_whitelisted_key_reads_as_unset(self) -> None:
         # A daemon-inherited var must not leak into a request that did not send it.
         with request_scope(make_request(env={}), "sess-B"):
-            assert reqenv.getenv("CAPT_HOOK_DAEMON_DEBUG") is None
+            assert reqenv.getenv("HOOKS_PROFILE") is None
 
     def test_log_path_computed_inside_env_bind(self, tmp_path: object) -> None:
         req = make_request(env={"CAPTAIN_HOOK_LOG_DIR": "/req/logs"})

@@ -25,7 +25,7 @@ from captain_hook.util import reqenv
 from captain_hook.util.paths import resolve_log_dir
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Generator, Mapping
     from typing import TextIO
 
 
@@ -59,7 +59,7 @@ def bound_buffers() -> RequestBuffers | None:
 
 
 @contextmanager
-def request_scope(req: RequestContext, session_id: str | None) -> Iterator[RequestBuffers]:
+def request_scope(req: RequestContext, session_id: str | None) -> Generator[RequestBuffers]:
     sid = session_id or "unknown"
     overrides = reqenv.RequestOverrides(
         env=req.env,
@@ -79,7 +79,7 @@ def request_scope(req: RequestContext, session_id: str | None) -> Iterator[Reque
 
 
 @contextmanager
-def capture_output() -> Iterator[RequestBuffers]:
+def capture_output() -> Generator[RequestBuffers]:
     """Bind a fresh capture for the duration, isolating stdout/stderr written within it from any outer request's.
 
     The registry builds a discovered hook set once and replays its diagnostics on every later cache hit;
