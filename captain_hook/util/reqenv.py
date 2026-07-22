@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from capt_hook_client.key import ENV_EXACT, ENV_PREFIXES
+ENV_PREFIXES = ("CAPT_HOOK_", "CAPTAIN_HOOK_", "HOOKS_", "CLAUDE_", "FACTORY_")
+ENV_EXACT = frozenset({"XDG_CACHE_HOME"})
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Generator, Mapping
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +34,7 @@ def current() -> RequestOverrides | None:
 
 
 @contextmanager
-def use_request(overrides: RequestOverrides) -> Iterator[RequestOverrides]:
+def use_request(overrides: RequestOverrides) -> Generator[RequestOverrides]:
     token = _OVERRIDES.set(overrides)
     try:
         yield overrides

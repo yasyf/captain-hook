@@ -61,7 +61,7 @@ dev = [
 [project.scripts]
 capt-hook = "captain_hook.cli:main"
 hook = "capt_hook_client.client:main"
-hookd = "captain_hook.cli:daemon"
+hookd = "capt_hook_client.client:ops_main"
 
 [project.urls]
 Homepage = "https://github.com/yasyf/captain-hook"
