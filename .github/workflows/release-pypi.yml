@@ -176,7 +176,7 @@ jobs:
     needs: [build, helper-version]
     permissions:
       contents: read
-    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@1666a5363ad6f2ed7ac0be901702e523cc1fba66
+    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@19c3d5013032ad9c88f9a8f1170d1f366c19b8d9
     with:
       app_name: Captain Hook
       asset_name: captain-hook
@@ -324,7 +324,7 @@ jobs:
           fi
 
       - name: Render the cask from the verified release output
-        uses: yasyf/homebrew-tap/.github/actions/render-formula@1666a5363ad6f2ed7ac0be901702e523cc1fba66
+        uses: yasyf/homebrew-tap/.github/actions/render-formula@19c3d5013032ad9c88f9a8f1170d1f366c19b8d9
         with:
           template: .github/cask/captain-hook.rb.tmpl
           output: Casks/captain-hook.rb
@@ -333,7 +333,7 @@ jobs:
             __SHA_APP__=${{ needs.helper.outputs.sha256 }}
 
       - name: Publish the verified application cask
-        uses: yasyf/homebrew-tap/.github/actions/publish@1666a5363ad6f2ed7ac0be901702e523cc1fba66
+        uses: yasyf/homebrew-tap/.github/actions/publish@19c3d5013032ad9c88f9a8f1170d1f366c19b8d9
         with:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           dir: tap-staging

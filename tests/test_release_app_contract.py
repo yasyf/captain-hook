@@ -3,8 +3,8 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/release-pypi.yml"
 CASK = ROOT / ".github/cask/captain-hook.rb.tmpl"
-RELEASE_APP_REF = "1666a5363ad6f2ed7ac0be901702e523cc1fba66"
-HOME_BREW_ACTION_REF = "1666a5363ad6f2ed7ac0be901702e523cc1fba66"
+RELEASE_APP_REF = "19c3d5013032ad9c88f9a8f1170d1f366c19b8d9"
+HOME_BREW_ACTION_REF = "19c3d5013032ad9c88f9a8f1170d1f366c19b8d9"
 
 
 def test_helper_release_uses_exact_hard_cut_contract() -> None:
