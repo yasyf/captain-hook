@@ -203,6 +203,13 @@ jobs:
           title: ${{ needs.build.outputs.tag }}
           prerelease: ${{ contains(needs.build.outputs.tag, '-') }}
 
+      - name: Preserve the exact verified staged bytes
+        uses: actions/upload-artifact@v7
+        with:
+          name: staged-release-${{ steps.draft.outputs['release-id'] }}
+          path: ${{ steps.draft.outputs['download-dir'] }}/*
+          if-no-files-found: error
+
   smoke-draft:
     needs: [build, helper, stage-release]
     runs-on: macos-15
@@ -211,25 +218,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: actions/download-artifact@v8
+        with:
+          name: staged-release-${{ needs.stage-release.outputs.release_id }}
+          path: released
+
       - name: Smoke-test the final staged application bytes
         env:
-          GH_TOKEN: ${{ github.token }}
           ASSET_FILENAME: ${{ needs.helper.outputs.asset_filename }}
           ASSET_SHA256: ${{ needs.helper.outputs.sha256 }}
-          RELEASE_ID: ${{ needs.stage-release.outputs.release_id }}
           RELEASE_TAG: ${{ needs.build.outputs.tag }}
         run: |
           set -euo pipefail
-          mkdir released unpacked
-          assets="$(mktemp)"
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?per_page=100" \
-            --jq '.[] | [.id, .name] | @tsv' > "$assets"
-          for asset in "$ASSET_FILENAME" "$ASSET_FILENAME.sha256"; do
-            asset_id="$(awk -F '\t' -v name="$asset" '$2 == name { print $1 }' "$assets")"
-            [[ "$asset_id" =~ ^[0-9]+$ ]]
-            gh api -H "Accept: application/octet-stream" \
-              "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" > "released/$asset"
-          done
+          mkdir unpacked
           test "$(awk 'NR == 1 { print $1 }' "released/$ASSET_FILENAME.sha256")" = "$ASSET_SHA256"
           test "$(shasum -a 256 "released/$ASSET_FILENAME" | awk '{print $1}')" = "$ASSET_SHA256"
           ditto -x -k "released/$ASSET_FILENAME" unpacked

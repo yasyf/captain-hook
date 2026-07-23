@@ -58,13 +58,20 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
         f"stage-draft-release@{STAGE_DRAFT_RELEASE_REF}",
         "manifest: ${{ runner.temp }}/captain-release-assets",
         "prerelease: ${{ contains(needs.build.outputs.tag, '-') }}",
+        "name: staged-release-${{ steps.draft.outputs['release-id'] }}",
+        "path: ${{ steps.draft.outputs['download-dir'] }}/*",
     ):
         assert required in stage
     assert "needs: [build, helper, stage-release]" in smoke
-    assert "RELEASE_ID: ${{ needs.stage-release.outputs.release_id }}" in smoke
+    assert "name: staged-release-${{ needs.stage-release.outputs.release_id }}" in smoke
+    assert "path: released" in smoke
     assert "Smoke-test the final staged application bytes" in smoke
     assert "xcrun stapler validate" in smoke
     assert "bash helper/scripts/assert-signed-bridge.sh" in smoke
+    assert "RELEASE_ID:" not in smoke
+    assert "GH_TOKEN:" not in smoke
+    assert "gh api" not in smoke
+    assert "contents: write" not in smoke
 
     for required in (
         "needs: [build, stage-release, smoke-draft]",
@@ -99,6 +106,7 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
     assert "gh release upload" not in draft_flow
     assert "gh release download" not in draft_flow
     assert "gh release edit" not in draft_flow
+    assert "gh api" not in smoke
     assert "/releases/tags/" not in draft_flow
     assert "softprops/action-gh-release" not in workflow
 
