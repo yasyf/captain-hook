@@ -49,8 +49,8 @@ if TYPE_CHECKING:
 SPLIT_THRESHOLD = 0.9
 REVIEW_SCHEMA_COMPONENT = "captain-hook-review-v1"
 REVIEW_SCHEMA_VERSION = 1
-REVIEW_DDL_FINGERPRINT = "c98cdf0a97df3de0a75b63f985c51fde6508f1e7015ebbfb30a9dada129f0b9e"
-REVIEW_OBJECT_FINGERPRINT = "09665e63576b1217c87fff54643f61809af9935c40dd1ab0d50c02796eaab5e7"
+REVIEW_DDL_FINGERPRINT = "3a9b085ef22ea58708d5b608ab1df9e815653ba6a7548e0820d2d855e5a99bc7"
+REVIEW_OBJECT_FINGERPRINT = "3cf90b7ab7031238a7665e6c785caf0f739a970db54ba43c804038aa596fbcb8"
 
 PROMPT_FINGERPRINT_KEY = "prompt_fingerprint"
 
@@ -106,6 +106,18 @@ CREATE TABLE verdicts (
   UNIQUE(dedup_key, role, prompt_version)
 );
 CREATE INDEX idx_verdicts_dedup ON verdicts(dedup_key);
+CREATE VIRTUAL TABLE verdict_vectors USING vec0(
+  vector_id TEXT PRIMARY KEY,
+  embedding float[512] distance_metric=cosine
+);
+CREATE TABLE verdict_evidence (
+  vector_id TEXT PRIMARY KEY,
+  dedup_key TEXT NOT NULL,
+  role TEXT NOT NULL,
+  prompt_version INTEGER NOT NULL,
+  canonical_key TEXT NOT NULL,
+  evidence_text TEXT NOT NULL
+);
 CREATE TABLE candidates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   repo_key TEXT NOT NULL,
@@ -312,6 +324,11 @@ def _create_review_schema(path: Path) -> None:
     connection = sqlite3.connect(path)
     created = False
     try:
+        import sqlite_vec
+
+        connection.enable_load_extension(True)
+        connection.load_extension(sqlite_vec.loadable_path())
+        connection.enable_load_extension(False)
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("BEGIN IMMEDIATE")
         rows = connection.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
