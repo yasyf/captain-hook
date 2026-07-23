@@ -3,7 +3,8 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/release-pypi.yml"
 CASK = ROOT / ".github/cask/captain-hook.rb.tmpl"
-RELEASE_APP_REF = "8f422c652d836c40f9cc5a9d893d4120b26bc681"
+RELEASE_APP_REF = "83ee384b1d4fe25a8e4aa7258bb76d55e1593735"
+DRAFT_RELEASE_REF = "54e3e194bda69896894a82c17fcdb2822beefab5"
 HOME_BREW_ACTION_REF = "19c3d5013032ad9c88f9a8f1170d1f366c19b8d9"
 PYPI_PUBLISH_REF = "ba38be9e461d3875417946c167d0b5f3d385a247"
 
@@ -48,15 +49,12 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
         'sha256sum -c "$HELPER_ASSET_FILENAME.sha256"',
         "SHA256SUMS.txt",
         "name: release-assets",
-        "release_id: ${{ steps.draft.outputs.release_id }}",
-        'gh api --method POST "repos/${GITHUB_REPOSITORY}/releases"',
-        "--jq '.upload_url | split(\"{\")[0]'",
-        '"${upload_url}?name=${asset}"',
-        "release assets do not exactly match the verified dist",
+        "release_id: ${{ steps.draft.outputs['release-id'] }}",
+        f"stage-draft-release@{DRAFT_RELEASE_REF}",
+        "manifest: ${{ runner.temp }}/captain-release-assets",
+        "prerelease: ${{ contains(needs.build.outputs.tag, '-') }}",
     ):
         assert required in stage
-    assert "multiple releases exist for $RELEASE_TAG" in stage
-
     assert "needs: [build, helper, stage-release]" in smoke
     assert "RELEASE_ID: ${{ needs.stage-release.outputs.release_id }}" in smoke
     assert "Smoke-test the final staged application bytes" in smoke
@@ -66,13 +64,16 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
     for required in (
         "needs: [build, stage-release, smoke-draft]",
         "name: release-assets",
-        "skip-existing: true",
+        "Resolve the exact PyPI publication state",
+        "existing PyPI assets differ",
+        "steps.pypi-state.outputs.publish == 'true'",
         "Verify exact PyPI publication",
         f"pypa/gh-action-pypi-publish@{PYPI_PUBLISH_REF}",
     ):
         assert required in publish_pypi
     assert "id-token: write" in publish_pypi
     assert "contents: write" not in publish_pypi
+    assert "skip-existing:" not in publish_pypi
     assert "pypa/gh-action-pypi-publish@release/v1" not in workflow
     assert publish_pypi.index(f"pypa/gh-action-pypi-publish@{PYPI_PUBLISH_REF}") < publish_pypi.index(
         "Verify exact PyPI publication"
@@ -81,9 +82,10 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
     assert "needs: [build, stage-release, publish-pypi]" in publish_github
     assert "contents: write" in publish_github
     assert "id-token: write" not in publish_github
-    assert "Publish the already-complete GitHub draft" in publish_github
-    assert "RELEASE_ID: ${{ needs.stage-release.outputs.release_id }}" in publish_github
-    assert 'gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -F draft=false' in publish_github
+    assert "Publish the exact already-complete GitHub draft" in publish_github
+    assert f"publish-draft-release@{DRAFT_RELEASE_REF}" in publish_github
+    assert "release-id: ${{ needs.stage-release.outputs.release_id }}" in publish_github
+    assert "make-latest: ${{ !contains(needs.build.outputs.tag, '-') }}" in publish_github
 
     assert "needs: publish-github" in sync
     assert "needs: [helper-version, helper, publish-github, sync-plugin-version]" in cask
@@ -101,20 +103,13 @@ def test_release_rerun_converges_the_unique_draft_by_release_id() -> None:
     stage = workflow[workflow.index("\n  stage-release:") : workflow.index("\n  smoke-draft:")]
     publish_github = workflow[workflow.index("\n  publish-github:") : workflow.index("\n  # Consumer plugin caches")]
 
-    lookup = 'gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100"'
-    delete = 'gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"'
-    upload = '"${upload_url}?name=${asset}"'
-    verify = '"repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100"'
-
-    assert lookup in stage
-    assert stage.index(delete) < stage.index(upload) < stage.rindex(verify)
-    assert "state=\"${releases[0]#*$'\\t'}\"" in stage
-    assert "true|false" in stage
-    assert '"repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"' in stage
-
-    assert 'state="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --jq .draft)"' in publish_github
-    assert '"repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -F draft=false' in publish_github
-    assert "already public with the exact verified assets" in publish_github
+    assert f"stage-draft-release@{DRAFT_RELEASE_REF}" in stage
+    assert f"publish-draft-release@{DRAFT_RELEASE_REF}" in publish_github
+    assert "release_id: ${{ steps.draft.outputs['release-id'] }}" in stage
+    assert "release-id: ${{ needs.stage-release.outputs.release_id }}" in publish_github
+    assert "/releases?per_page=" not in stage
+    assert "releases/assets/" not in stage
+    assert "--method PATCH" not in publish_github
 
 
 def test_cask_publication_uses_verified_release_outputs() -> None:

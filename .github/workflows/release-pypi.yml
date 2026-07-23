@@ -5,7 +5,7 @@ on:
     tags: ["v*"]
 
 concurrency:
-  group: release-pypi
+  group: release-pypi-${{ github.repository }}-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -98,7 +98,7 @@ jobs:
     needs: [build, python-assets, helper-version]
     permissions:
       contents: read
-    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@8f422c652d836c40f9cc5a9d893d4120b26bc681
+    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@83ee384b1d4fe25a8e4aa7258bb76d55e1593735
     with:
       app_name: Captain Hook
       asset_name: captain-hook
@@ -129,7 +129,7 @@ jobs:
     permissions:
       contents: write
     outputs:
-      release_id: ${{ steps.draft.outputs.release_id }}
+      release_id: ${{ steps.draft.outputs['release-id'] }}
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -181,87 +181,18 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-      - name: Create or refresh the caller-owned draft
+      - name: Record the exact complete release manifest
+        run: find dist -maxdepth 1 -type f | LC_ALL=C sort > "$RUNNER_TEMP/captain-release-assets"
+
+      - name: Stage and verify the exact complete draft
         id: draft
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.build.outputs.tag }}
-        run: |
-          set -euo pipefail
-          mapfile -t releases < <(
-            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-              --jq '.[] | select(.tag_name == env.RELEASE_TAG) | [.id, .draft] | @tsv'
-          )
-          if [ "${#releases[@]}" -gt 1 ]; then
-            echo "::error::multiple releases exist for $RELEASE_TAG"
-            exit 1
-          fi
-          state=missing
-          if [ "${#releases[@]}" = 1 ]; then
-            release_id="${releases[0]%%$'\t'*}"
-            state="${releases[0]#*$'\t'}"
-          fi
-
-          case "$state" in
-            missing)
-              gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null
-              prerelease=false
-              [[ "$RELEASE_TAG" == *-* ]] && prerelease=true
-              release_id="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
-                -f tag_name="$RELEASE_TAG" -f name="$RELEASE_TAG" \
-                -F draft=true -F prerelease="$prerelease" -F generate_release_notes=true \
-                --jq .id)"
-              state=true
-              ;;
-            true|false) ;;
-            *) echo "::error::release $RELEASE_TAG returned invalid draft state '$state'"; exit 1 ;;
-          esac
-          [[ "$release_id" =~ ^[0-9]+$ ]]
-          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
-
-          if [ "$state" = true ]; then
-            upload_url="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
-              --jq '.upload_url | split("{")[0]')"
-            while IFS=$'\t' read -r asset_id _; do
-              [ -n "$asset_id" ] || continue
-              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
-            done < <(gh api --paginate \
-              "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" \
-              --jq '.[] | [.id, .name] | @tsv')
-
-            while IFS= read -r path; do
-              asset="$(basename "$path")"
-              [[ "$asset" =~ ^[A-Za-z0-9._-]+$ ]]
-              curl --fail-with-body --silent --show-error \
-                -X POST \
-                -H "Authorization: Bearer $GH_TOKEN" \
-                -H "Accept: application/vnd.github+json" \
-                -H "X-GitHub-Api-Version: 2022-11-28" \
-                -H "Content-Type: application/octet-stream" \
-                --data-binary "@$path" \
-                "${upload_url}?name=${asset}" \
-                >/dev/null
-            done < <(find dist -maxdepth 1 -type f | LC_ALL=C sort)
-          fi
-
-          expected="$(find dist -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort)"
-          remote_assets="$(mktemp)"
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" \
-            --jq '.[] | [.id, .name] | @tsv' > "$remote_assets"
-          actual="$(cut -f2 "$remote_assets" | LC_ALL=C sort)"
-          test "$actual" = "$expected" \
-            || { echo "::error::release assets do not exactly match the verified dist"; exit 1; }
-
-          verify_dir="$(mktemp -d)"
-          while IFS= read -r asset; do
-            asset_id="$(awk -F '\t' -v name="$asset" '$2 == name { print $1 }' "$remote_assets")"
-            [[ "$asset_id" =~ ^[0-9]+$ ]]
-            gh api -H "Accept: application/octet-stream" \
-              "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" > "$verify_dir/$asset"
-            test "$(sha256sum "dist/$asset" | awk '{print $1}')" = \
-              "$(sha256sum "$verify_dir/$asset" | awk '{print $1}')" \
-              || { echo "::error::release asset '$asset' differs from the verified dist"; exit 1; }
-          done <<< "$expected"
+        uses: yasyf/homebrew-tap/.github/actions/stage-draft-release@54e3e194bda69896894a82c17fcdb2822beefab5
+        with:
+          token: ${{ github.token }}
+          tag: ${{ needs.build.outputs.tag }}
+          manifest: ${{ runner.temp }}/captain-release-assets
+          title: ${{ needs.build.outputs.tag }}
+          prerelease: ${{ contains(needs.build.outputs.tag, '-') }}
 
   smoke-draft:
     needs: [build, helper, stage-release]
@@ -330,10 +261,48 @@ jobs:
               "$(sha256sum "release-dist/$asset" | awk '{print $1}')"
           done
 
+      - name: Resolve the exact PyPI publication state
+        id: pypi-state
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 - "${VERSION#v}" python-dist "$GITHUB_OUTPUT" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+          import urllib.error
+          import urllib.request
+
+          version, directory, output = sys.argv[1:]
+          expected = {
+              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in pathlib.Path(directory).iterdir()
+              if path.is_file()
+          }
+          try:
+              with urllib.request.urlopen(f"https://pypi.org/pypi/capt-hook/{version}/json") as response:
+                  urls = json.load(response)["urls"]
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+              with pathlib.Path(output).open("a") as stream:
+                  stream.write("publish=true\n")
+              raise SystemExit
+
+          actual = {item["filename"]: item["digests"]["sha256"] for item in urls}
+          if actual != expected:
+              raise SystemExit(f"::error::existing PyPI assets differ: expected {expected}, got {actual}")
+          with pathlib.Path(output).open("a") as stream:
+              stream.write("publish=false\n")
+          print("PyPI already contains the exact staged Python assets")
+          PY
+
       - uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247
+        if: ${{ steps.pypi-state.outputs.publish == 'true' }}
         with:
           packages-dir: python-dist
-          skip-existing: true
 
       - name: Verify exact PyPI publication
         env:
@@ -382,36 +351,18 @@ jobs:
           name: release-assets
           path: release-dist
 
-      - name: Publish the already-complete GitHub draft
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_ID: ${{ needs.stage-release.outputs.release_id }}
-          RELEASE_TAG: ${{ needs.build.outputs.tag }}
-        run: |
-          set -euo pipefail
-          assets="$(mktemp)"
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?per_page=100" \
-            --jq '.[] | [.id, .name] | @tsv' > "$assets"
-          verify_dir="$(mktemp -d)"
-          expected="$(find release-dist -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort)"
-          actual="$(cut -f2 "$assets" | LC_ALL=C sort)"
-          test "$actual" = "$expected"
-          while IFS= read -r asset; do
-            asset_id="$(awk -F '\t' -v name="$asset" '$2 == name { print $1 }' "$assets")"
-            [[ "$asset_id" =~ ^[0-9]+$ ]]
-            gh api -H "Accept: application/octet-stream" \
-              "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" > "$verify_dir/$asset"
-            test "$(sha256sum "release-dist/$asset" | awk '{print $1}')" = \
-              "$(sha256sum "$verify_dir/$asset" | awk '{print $1}')"
-          done <<< "$expected"
+      - name: Record the exact complete release manifest
+        run: find release-dist -maxdepth 1 -type f | LC_ALL=C sort > "$RUNNER_TEMP/captain-release-assets"
 
-          state="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --jq .draft)"
-          case "$state" in
-            true) gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -F draft=false >/dev/null ;;
-            false) echo "release $RELEASE_TAG is already public with the exact verified assets" ;;
-            *) echo "::error::release $RELEASE_TAG returned invalid draft state '$state'"; exit 1 ;;
-          esac
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --jq .draft)" = false
+      - name: Publish the exact already-complete GitHub draft
+        uses: yasyf/homebrew-tap/.github/actions/publish-draft-release@54e3e194bda69896894a82c17fcdb2822beefab5
+        with:
+          token: ${{ github.token }}
+          release-id: ${{ needs.stage-release.outputs.release_id }}
+          tag: ${{ needs.build.outputs.tag }}
+          manifest: ${{ runner.temp }}/captain-release-assets
+          prerelease: ${{ contains(needs.build.outputs.tag, '-') }}
+          make-latest: ${{ !contains(needs.build.outputs.tag, '-') }}
 
   # Consumer plugin caches refresh only when plugin.json's version increases.
   sync-plugin-version:
