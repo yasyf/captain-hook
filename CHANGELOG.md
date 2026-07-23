@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.15.0] - 2026-07-23
+
+### Changed
+
+- **The signed helper stack now requires daemonkit 0.10.0 end to end.** The Go
+  worker host and generated Swift helper project resolve the same exact hard-cut
+  runtime release.
+
 ## [12.14.0] - 2026-07-23
 
 ### Changed
