@@ -50,7 +50,8 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
         "name: release-assets",
         "release_id: ${{ steps.draft.outputs.release_id }}",
         'gh api --method POST "repos/${GITHUB_REPOSITORY}/releases"',
-        '"https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${asset}"',
+        "--jq '.upload_url | split(\"{\")[0]'",
+        '"${upload_url}?name=${asset}"',
         "release assets do not exactly match the verified dist",
     ):
         assert required in stage
@@ -102,7 +103,7 @@ def test_release_rerun_converges_the_unique_draft_by_release_id() -> None:
 
     lookup = 'gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100"'
     delete = 'gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"'
-    upload = '"https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${asset}"'
+    upload = '"${upload_url}?name=${asset}"'
     verify = '"repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100"'
 
     assert lookup in stage
