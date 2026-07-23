@@ -4,8 +4,10 @@ ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/release-pypi.yml"
 CASK = ROOT / ".github/cask/captain-hook.rb.tmpl"
 RELEASE_APP_REF = "83ee384b1d4fe25a8e4aa7258bb76d55e1593735"
-DRAFT_RELEASE_REF = "54e3e194bda69896894a82c17fcdb2822beefab5"
+STAGE_DRAFT_RELEASE_REF = "e4c3108e693681df1a3c666bae80e890bc44cf3e"
+PUBLISH_DRAFT_RELEASE_REF = "54e3e194bda69896894a82c17fcdb2822beefab5"
 HOME_BREW_ACTION_REF = "19c3d5013032ad9c88f9a8f1170d1f366c19b8d9"
+TAP_PUBLISH_REF = "9ca67392d45d66b6ae01e262383c8f3138d56f5e"
 PYPI_PUBLISH_REF = "ba38be9e461d3875417946c167d0b5f3d385a247"
 
 
@@ -27,6 +29,7 @@ def test_helper_release_uses_exact_hard_cut_contract() -> None:
 
 def test_release_stages_and_smokes_every_asset_before_one_public_transition() -> None:
     workflow = WORKFLOW.read_text()
+    release_tests = workflow[workflow.index("\n  release-tests:") : workflow.index("\n  build:")]
     build = workflow[workflow.index("\n  build:") : workflow.index("\n  python-assets:")]
     python_assets = workflow[workflow.index("\n  python-assets:") : workflow.index("\n  helper-version:")]
     stage = workflow[workflow.index("\n  stage-release:") : workflow.index("\n  smoke-draft:")]
@@ -36,8 +39,10 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
     sync = workflow[workflow.index("\n  sync-plugin-version:") : workflow.index("\n  helper-cask:")]
     cask = workflow[workflow.index("\n  helper-cask:") :]
 
+    assert "uses: ./.github/actions/python-tests" in release_tests
+    assert "needs: release-tests" in build
     assert "check-version: false" in build
-    assert "run-tests: true" in build
+    assert "run-tests: false" in build
     assert "name: dist" in python_assets
     assert 'test "${#assets[@]}" = 2' in python_assets
     assert "Smoke-test the built wheel" in python_assets
@@ -50,7 +55,7 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
         "SHA256SUMS.txt",
         "name: release-assets",
         "release_id: ${{ steps.draft.outputs['release-id'] }}",
-        f"stage-draft-release@{DRAFT_RELEASE_REF}",
+        f"stage-draft-release@{STAGE_DRAFT_RELEASE_REF}",
         "manifest: ${{ runner.temp }}/captain-release-assets",
         "prerelease: ${{ contains(needs.build.outputs.tag, '-') }}",
     ):
@@ -83,7 +88,7 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
     assert "contents: write" in publish_github
     assert "id-token: write" not in publish_github
     assert "Publish the exact already-complete GitHub draft" in publish_github
-    assert f"publish-draft-release@{DRAFT_RELEASE_REF}" in publish_github
+    assert f"publish-draft-release@{PUBLISH_DRAFT_RELEASE_REF}" in publish_github
     assert "release-id: ${{ needs.stage-release.outputs.release_id }}" in publish_github
     assert "make-latest: ${{ !contains(needs.build.outputs.tag, '-') }}" in publish_github
 
@@ -103,8 +108,8 @@ def test_release_rerun_converges_the_unique_draft_by_release_id() -> None:
     stage = workflow[workflow.index("\n  stage-release:") : workflow.index("\n  smoke-draft:")]
     publish_github = workflow[workflow.index("\n  publish-github:") : workflow.index("\n  # Consumer plugin caches")]
 
-    assert f"stage-draft-release@{DRAFT_RELEASE_REF}" in stage
-    assert f"publish-draft-release@{DRAFT_RELEASE_REF}" in publish_github
+    assert f"stage-draft-release@{STAGE_DRAFT_RELEASE_REF}" in stage
+    assert f"publish-draft-release@{PUBLISH_DRAFT_RELEASE_REF}" in publish_github
     assert "release_id: ${{ steps.draft.outputs['release-id'] }}" in stage
     assert "release-id: ${{ needs.stage-release.outputs.release_id }}" in publish_github
     assert "/releases?per_page=" not in stage
@@ -128,7 +133,7 @@ def test_cask_publication_uses_verified_release_outputs() -> None:
         "__ASSET_URL__=${{ needs.helper.outputs.asset_url }}",
         "__SHA_APP__=${{ needs.helper.outputs.sha256 }}",
         f"render-formula@{HOME_BREW_ACTION_REF}",
-        f"publish@{HOME_BREW_ACTION_REF}",
+        f"publish@{TAP_PUBLISH_REF}",
     ):
         assert required in cask_job
 

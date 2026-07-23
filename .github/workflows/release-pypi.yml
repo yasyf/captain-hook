@@ -195,7 +195,7 @@ jobs:
 
       - name: Stage and verify the exact complete draft
         id: draft
-        uses: yasyf/homebrew-tap/.github/actions/stage-draft-release@54e3e194bda69896894a82c17fcdb2822beefab5
+        uses: yasyf/homebrew-tap/.github/actions/stage-draft-release@e4c3108e693681df1a3c666bae80e890bc44cf3e
         with:
           token: ${{ github.token }}
           tag: ${{ needs.build.outputs.tag }}
@@ -529,7 +529,7 @@ jobs:
             __SHA_APP__=${{ needs.helper.outputs.sha256 }}
 
       - name: Publish the verified application cask
-        uses: yasyf/homebrew-tap/.github/actions/publish@19c3d5013032ad9c88f9a8f1170d1f366c19b8d9
+        uses: yasyf/homebrew-tap/.github/actions/publish@9ca67392d45d66b6ae01e262383c8f3138d56f5e
         with:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           dir: tap-staging
