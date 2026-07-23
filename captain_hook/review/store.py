@@ -308,9 +308,6 @@ def _ddl_statements(script: str) -> list[str]:
 
 
 def _create_review_schema(path: Path) -> None:
-    compiled_ddl = _ddl_fingerprint()
-    if compiled_ddl != REVIEW_DDL_FINGERPRINT:
-        raise RuntimeError(f"review compiled DDL fingerprint drifted to {compiled_ddl}")
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
     created = False
@@ -359,6 +356,9 @@ def _is_empty_review_database(path: Path) -> bool:
 
 
 def _prepare_review_schema(path: Path) -> None:
+    compiled_ddl = _ddl_fingerprint()
+    if compiled_ddl != REVIEW_DDL_FINGERPRINT:
+        raise RuntimeError(f"review compiled DDL fingerprint drifted to {compiled_ddl}")
     if not path.exists() or path.stat().st_size == 0 or _is_empty_review_database(path):
         _create_review_schema(path)
     else:

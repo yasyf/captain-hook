@@ -1246,6 +1246,15 @@ class TestSchemaEpoch:
             async with await ReviewStore.open(path) as opened:
                 assert await opened.db.sql("PRAGMA user_version") == [{"user_version": 1}]
 
+    async def test_compiled_ddl_drift_is_rejected_before_disk_creation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("captain_hook.review.store.REVIEW_V1_DDL", REVIEW_V1_DDL + "\n")
+        path = tmp_path / "drift.db"
+        with pytest.raises(RuntimeError, match="compiled DDL fingerprint drifted"):
+            await ReviewStore.open(path)
+        assert not path.exists()
+
     async def test_retired_sibling_is_never_inspected(self, tmp_path: Path) -> None:
         legacy = tmp_path / "review.db"
         legacy.write_bytes(b"not sqlite")
