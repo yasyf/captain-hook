@@ -11,9 +11,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/yasyf/daemonkit/service"
+	"github.com/yasyf/daemonkit/wire"
 )
 
-const defaultRequestTimeout = 30 * time.Second
+const (
+	defaultRequestTimeout  = 30 * time.Second
+	defaultShutdownTimeout = 60 * time.Second
+)
 
 // Main executes one capt-hookd client or host command and returns its exit code.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -26,6 +32,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return versionCommand(args[1:], stdout, stderr)
 	case "serve":
 		return serveCommand(args[1:], stderr)
+	case "stop-control":
+		return stopControlCommand(args[1:], stderr)
 	case "run":
 		return runCommand(args[1:], stdin, stdout, stderr)
 	case "status":
@@ -68,6 +76,23 @@ func serveCommand(args []string, stderr io.Writer) int {
 	server, err := NewServer(role)
 	if err == nil {
 		err = server.Run(context.Background())
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func stopControlCommand(args []string, stderr io.Writer) int {
+	if len(args) != 0 {
+		return 2
+	}
+	resolved, err := resolvePaths()
+	if err == nil {
+		_, err = service.RunStopControlChild(context.Background(), service.StopControlClientConfig{
+			Dial: wire.UnixDialer(resolved.socket), WireBuild: WireBuild, RuntimeProtocol: Schema,
+		})
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -193,7 +218,7 @@ func shutdownCommand(args []string, stderr io.Writer) int {
 	if len(args) != 0 {
 		return 2
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
 	defer cancel()
 	client, err := NewClient()
 	if err == nil {

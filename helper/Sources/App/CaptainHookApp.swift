@@ -79,7 +79,7 @@ struct CaptainHookApp: App {
             )
             let server = SocketServer(
                 path: HelperPaths.socket.path,
-                build: appVersion,
+                wireBuild: helperWireBuild,
                 configuration: .init(
                     maximumFrameBytes: 64 * 1024,
                     maximumActiveRequests: 8,

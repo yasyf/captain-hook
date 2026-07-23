@@ -7,23 +7,24 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	dkdaemon "github.com/yasyf/daemonkit/daemon"
 	"github.com/yasyf/daemonkit/proc"
+	"github.com/yasyf/daemonkit/service"
 	"github.com/yasyf/daemonkit/wire"
 )
 
 // ErrDaemonUnavailable means the exact signed host cannot be reached.
 var ErrDaemonUnavailable = errors.New("captain: daemon unavailable")
 
-// Client owns exact persistent business and lifecycle sessions.
+// Client owns one exact persistent product session.
 type Client struct {
 	paths paths
 
-	mu        sync.Mutex
-	business  *wire.Client
-	lifecycle *wire.LifecyclePeer
+	mu       sync.Mutex
+	business *wire.Client
 }
 
 // NewClient returns a lazy client for the only host schema and build.
@@ -36,38 +37,69 @@ func NewClient() (*Client, error) {
 }
 
 func newClientWithPaths(resolved paths) *Client {
-	client := &Client{paths: resolved}
-	client.lifecycle = &wire.LifecyclePeer{Config: wire.ClientConfig{
-		Dial: wire.UnixDialer(resolved.socket), Build: Build, LifecycleBuild: Build, MaxFrame: maxHostFrame,
-	}}
-	return client
+	return &Client{paths: resolved}
 }
 
-// Close settles the business and lifecycle sessions.
+// Close settles the product session.
 func (c *Client) Close() error {
 	c.mu.Lock()
 	business := c.business
 	c.business = nil
 	c.mu.Unlock()
-	var businessErr error
 	if business != nil {
-		businessErr = business.Close()
+		return business.Close()
 	}
-	return errors.Join(businessErr, c.lifecycle.Close())
+	return nil
 }
 
 // EnsureCurrent starts or upgrades the one exact host build.
 func (c *Client) EnsureCurrent(ctx context.Context, timeout time.Duration) error {
-	if health, err := c.lifecycle.Health(ctx); err == nil && health.Build == Build &&
-		health.Protocol == int(wire.ProtocolVersion) {
+	if timeout <= 0 {
+		return errors.New("captain: ensure timeout must be positive")
+	}
+	if health, err := c.RuntimeHealth(ctx); err == nil && health.current() {
 		return nil
 	}
 	if err := c.paths.ensure(); err != nil {
 		return err
 	}
+	lock, err := (proc.FileLockSpec{
+		Path: c.paths.startLock, Mode: proc.FileLockExclusive, Deadline: timeout,
+	}).Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("captain: acquire host start lock: %w", err)
+	}
+	defer lock.Close()
+
+	health, healthErr := c.RuntimeHealth(ctx)
+	if healthErr == nil && health.current() {
+		return nil
+	}
 	role, err := DaemonRole()
 	if err != nil {
 		return err
+	}
+	if healthErr == nil {
+		if health.RuntimeProtocol != Schema {
+			return fmt.Errorf("captain: runtime protocol %d is not exact v%d", health.RuntimeProtocol, Schema)
+		}
+		intent := wire.StopIntentUpgrade
+		if health.RuntimeBuild == Build {
+			intent = wire.StopIntentRestart
+		}
+		if err := c.stopRuntime(ctx, role.RolePath, health, intent); err != nil {
+			return err
+		}
+		c.resetBusiness(ErrDaemonUnavailable)
+	} else if !errors.Is(healthErr, ErrDaemonUnavailable) {
+		present, endpointErr := c.endpointPresent(ctx)
+		if endpointErr != nil {
+			return errors.Join(healthErr, endpointErr)
+		}
+		if present {
+			return fmt.Errorf("captain: incompatible host must be stopped before the hard cut: %w", healthErr)
+		}
+		c.resetBusiness(ErrDaemonUnavailable)
 	}
 	spawn := proc.Spawn{
 		Socket: c.paths.socket, LogPath: c.paths.log, ExecPath: role.RolePath,
@@ -75,15 +107,50 @@ func (c *Client) EnsureCurrent(ctx context.Context, timeout time.Duration) error
 		Available: func() bool {
 			probeCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
-			health, err := c.lifecycle.Health(probeCtx)
-			return err == nil && health.Build == Build && health.Protocol == int(wire.ProtocolVersion)
+			health, err := c.RuntimeHealth(probeCtx)
+			return err == nil && health.current()
 		},
-		CanHost: func() error { return nil },
+		CanHost: func() error {
+			probeCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			present, err := c.endpointPresent(probeCtx)
+			if err != nil {
+				return err
+			}
+			if present {
+				return errors.New("captain: another host still owns the endpoint")
+			}
+			return nil
+		},
 	}
-	return dkdaemon.EnsureCurrent(ctx, dkdaemon.EnsureConfig{
-		Peer: c.lifecycle, Protocol: int(wire.ProtocolVersion), LockPath: c.paths.startLock,
-		Ensure: spawn.EnsureRunning, Timeout: timeout,
-	}, Build)
+	return spawn.EnsureRunning(ctx)
+}
+
+// RuntimeHealth observes the exact product runtime without mutating it.
+func (c *Client) RuntimeHealth(ctx context.Context) (runtimeHealthResponse, error) {
+	result, err := c.call(ctx, wire.Op(opRuntimeHealth), nil)
+	if err != nil {
+		return runtimeHealthResponse{}, err
+	}
+	var health runtimeHealthResponse
+	if err := decodeStrict(result, &health); err != nil {
+		return runtimeHealthResponse{}, fmt.Errorf("captain: decode runtime health: %w", err)
+	}
+	if health.Schema != Schema || health.RuntimeBuild == "" || health.RuntimeProtocol <= 0 ||
+		health.ProcessGeneration == "" || health.PID <= 1 {
+		return runtimeHealthResponse{}, errors.New("captain: runtime health identity is incomplete")
+	}
+	switch dkdaemon.State(health.State) {
+	case dkdaemon.StateHealthy, dkdaemon.StateDegraded, dkdaemon.StateFailed:
+	default:
+		return runtimeHealthResponse{}, fmt.Errorf("captain: invalid runtime health state %q", health.State)
+	}
+	return health, nil
+}
+
+func (h runtimeHealthResponse) current() bool {
+	return h.RuntimeBuild == Build && h.RuntimeProtocol == Schema && h.State == string(dkdaemon.StateHealthy) &&
+		h.Ready && !h.Draining
 }
 
 // Event dispatches exactly once. No transport outcome is replayed.
@@ -121,12 +188,68 @@ func (c *Client) Status(ctx context.Context) (statusResponse, error) {
 
 // RestartWorkers kills and reaps every product worker generation.
 func (c *Client) RestartWorkers(ctx context.Context) error {
-	_, err := c.call(ctx, wire.Op(opRestartWorkers), nil)
+	payload, err := json.Marshal(restartWorkersRequest{Schema: Schema, Build: Build})
+	if err != nil {
+		return err
+	}
+	_, err = c.call(ctx, wire.Op(opRestartWorkers), payload)
 	return err
 }
 
 // Shutdown requests daemonkit's ordered host shutdown.
-func (c *Client) Shutdown(ctx context.Context) error { return c.lifecycle.Shutdown(ctx) }
+func (c *Client) Shutdown(ctx context.Context) error {
+	if err := c.paths.ensure(); err != nil {
+		return err
+	}
+	lock, err := (proc.FileLockSpec{
+		Path: c.paths.startLock, Mode: proc.FileLockExclusive, Deadline: 30 * time.Second,
+	}).Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("captain: acquire host start lock: %w", err)
+	}
+	defer lock.Close()
+	health, err := c.RuntimeHealth(ctx)
+	if err != nil {
+		return err
+	}
+	if health.RuntimeProtocol != Schema {
+		return fmt.Errorf("captain: runtime protocol %d is not exact v%d", health.RuntimeProtocol, Schema)
+	}
+	role, err := DaemonRole()
+	if err != nil {
+		return err
+	}
+	if err := c.stopRuntime(ctx, role.RolePath, health, wire.StopIntentUninstall); err != nil {
+		return err
+	}
+	c.resetBusiness(ErrDaemonUnavailable)
+	return nil
+}
+
+func (c *Client) stopRuntime(
+	ctx context.Context,
+	executable string,
+	health runtimeHealthResponse,
+	intent wire.StopIntent,
+) (returnErr error) {
+	controller, err := service.NewController(ctx, service.ControllerConfig{
+		StatePath: c.paths.stopState, ProcessPath: c.paths.stopProcesses, WorkerLimit: 1,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		returnErr = errors.Join(returnErr, controller.Close(closeCtx))
+	}()
+	_, err = controller.StopRuntime(ctx, service.StopControlSpec{
+		Executable: executable, Args: []string{"stop-control"}, Role: stopControlRoleID,
+		RuntimeBuild: Build, RuntimeProtocol: Schema,
+		TargetProcessGeneration: health.ProcessGeneration, Intent: intent,
+	})
+	return err
+}
 
 func (c *Client) call(ctx context.Context, op wire.Op, payload []byte) ([]byte, error) {
 	session, err := c.businessSession(ctx)
@@ -158,10 +281,10 @@ func (c *Client) businessSession(ctx context.Context) (*wire.Client, error) {
 		return c.business, nil
 	}
 	session, err := wire.NewClient(ctx, wire.ClientConfig{
-		Dial: wire.UnixDialer(c.paths.socket), Build: Build, MaxFrame: maxHostFrame,
+		Dial: wire.UnixDialer(c.paths.socket), WireBuild: WireBuild, MaxFrame: maxHostFrame,
 	})
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
 			return nil, ErrDaemonUnavailable
 		}
 		return nil, err
@@ -177,4 +300,26 @@ func (c *Client) retireBusiness(session *wire.Client, cause error) {
 	}
 	c.mu.Unlock()
 	_ = session.Abort(cause)
+}
+
+func (c *Client) resetBusiness(cause error) {
+	c.mu.Lock()
+	session := c.business
+	c.business = nil
+	c.mu.Unlock()
+	if session != nil {
+		_ = session.Abort(cause)
+	}
+}
+
+func (c *Client) endpointPresent(ctx context.Context) (bool, error) {
+	conn, err := wire.UnixDialer(c.paths.socket)(ctx)
+	if err == nil {
+		_ = conn.Close()
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
+		return false, nil
+	}
+	return false, fmt.Errorf("captain: probe host endpoint: %w", err)
 }

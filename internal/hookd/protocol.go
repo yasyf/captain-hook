@@ -21,7 +21,11 @@ const (
 	opEvent          = "captain.event.v1"
 	opStatus         = "captain.status.v1"
 	opRestartWorkers = "captain.restart-workers.v1"
+	opRuntimeHealth  = "captain.host.v1.runtime.health"
 )
+
+// WireBuild is the stable v1 transport identity shared across runtime releases.
+const WireBuild = "captain-hook.host.v1"
 
 // Build is stamped from the release tag into the wheel and signed helper.
 var Build = "0.0.0"
@@ -66,6 +70,23 @@ type statusResponse struct {
 	Build   string         `json:"build"`
 	PID     int            `json:"pid"`
 	Workers []workerStatus `json:"workers"`
+}
+
+type runtimeHealthResponse struct {
+	Schema            int    `json:"schema"`
+	RuntimeBuild      string `json:"runtime_build"`
+	RuntimeProtocol   int    `json:"runtime_protocol"`
+	ProcessGeneration string `json:"process_generation"`
+	PID               int    `json:"pid"`
+	State             string `json:"state"`
+	Draining          bool   `json:"draining"`
+	Busy              bool   `json:"busy"`
+	Ready             bool   `json:"ready"`
+}
+
+type restartWorkersRequest struct {
+	Schema int    `json:"schema"`
+	Build  string `json:"build"`
 }
 
 type workerStatus struct {

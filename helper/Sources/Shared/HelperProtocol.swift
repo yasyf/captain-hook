@@ -1,6 +1,8 @@
 import CryptoKit
 import Foundation
 
+let helperWireBuild = "captain-hook.helper.v1"
+
 struct NotifyRequest: Codable, Equatable, Sendable {
     let kind: String
     let title: String

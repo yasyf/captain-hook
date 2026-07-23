@@ -8,14 +8,19 @@ import (
 	"runtime"
 )
 
-const daemonRoleID = "com.yasyf.captain-hook.daemon"
+const (
+	daemonRoleID      = "com.yasyf.captain-hook.daemon"
+	stopControlRoleID = "com.yasyf.captain-hook.stop-control"
+)
 
 type paths struct {
-	dir       string
-	socket    string
-	startLock string
-	processes string
-	log       string
+	dir           string
+	socket        string
+	startLock     string
+	processes     string
+	stopState     string
+	stopProcesses string
+	log           string
 }
 
 func resolvePaths() (paths, error) {
@@ -30,9 +35,11 @@ func resolvePaths() (paths, error) {
 	dir := filepath.Join(cache, "captain-hook", "host-v1")
 	return paths{
 		dir: dir, socket: filepath.Join(dir, "capt-hookd.sock"),
-		startLock: filepath.Join(dir, "start.lock"),
-		processes: filepath.Join(dir, "workers.json"),
-		log:       filepath.Join(dir, "capt-hookd.log"),
+		startLock:     filepath.Join(dir, "start.lock"),
+		processes:     filepath.Join(dir, "workers.json"),
+		stopState:     filepath.Join(dir, "stop-controller.db"),
+		stopProcesses: filepath.Join(dir, "stop-processes.db"),
+		log:           filepath.Join(dir, "capt-hookd.log"),
 	}, nil
 }
 

@@ -2,7 +2,7 @@ package hookd
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
@@ -12,7 +12,7 @@ import (
 	"github.com/yasyf/daemonkit/wire"
 )
 
-func TestHostRuntimeExactStatusLifecycleAndOldLFRejection(t *testing.T) {
+func TestHostRuntimeExactStatusHealthAndOldLFRejection(t *testing.T) {
 	role, err := DaemonRole()
 	if err != nil {
 		t.Skipf("exact executable identity unavailable: %v", err)
@@ -24,16 +24,17 @@ func TestHostRuntimeExactStatusLifecycleAndOldLFRejection(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	resolved := paths{
 		dir: dir, socket: filepath.Join(dir, "capt-hookd.sock"),
-		startLock: filepath.Join(dir, "start.lock"),
-		processes: filepath.Join(dir, "workers.json"),
-		log:       filepath.Join(dir, "capt-hookd.log"),
+		startLock:     filepath.Join(dir, "start.lock"),
+		processes:     filepath.Join(dir, "workers.json"),
+		stopState:     filepath.Join(dir, "stop-controller.db"),
+		stopProcesses: filepath.Join(dir, "stop-processes.db"),
+		log:           filepath.Join(dir, "capt-hookd.log"),
 	}
 	server := &Server{paths: resolved, role: role}
-	wireServer, runtime, err := server.runtime()
+	_, runtime, err := server.runtime()
 	if err != nil {
 		t.Fatal(err)
 	}
-	wireServer.RegisterLifecycle(runtime)
 	runResult := make(chan error, 1)
 	go func() { runResult <- runtime.Run(context.Background()) }()
 	readyCtx, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
@@ -53,6 +54,48 @@ func TestHostRuntimeExactStatusLifecycleAndOldLFRejection(t *testing.T) {
 	if status.Schema != Schema || status.Build != Build || status.PID != os.Getpid() || len(status.Workers) != 0 {
 		t.Fatalf("status = %#v", status)
 	}
+	healthCtx, cancelHealth := context.WithTimeout(context.Background(), 5*time.Second)
+	health, err := client.RuntimeHealth(healthCtx)
+	cancelHealth()
+	if err != nil {
+		t.Fatalf("RuntimeHealth: %v", err)
+	}
+	if !health.current() || health.PID != os.Getpid() {
+		t.Fatalf("runtime health = %#v", health)
+	}
+	restartCtx, cancelRestart := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := client.RestartWorkers(restartCtx); err != nil {
+		cancelRestart()
+		t.Fatalf("RestartWorkers: %v", err)
+	}
+	stalePayload, err := json.Marshal(restartWorkersRequest{Schema: Schema, Build: Build + "-stale"})
+	if err != nil {
+		cancelRestart()
+		t.Fatal(err)
+	}
+	if _, err := client.call(restartCtx, wire.Op(opRestartWorkers), stalePayload); err == nil {
+		cancelRestart()
+		t.Fatal("stale build restarted workers")
+	}
+	cancelRestart()
+
+	skewCtx, cancelSkew := context.WithTimeout(context.Background(), 5*time.Second)
+	skewed, err := wire.NewClient(skewCtx, wire.ClientConfig{
+		Dial: wire.UnixDialer(resolved.socket), WireBuild: Build, MaxFrame: maxHostFrame,
+	})
+	if err != nil {
+		cancelSkew()
+		t.Fatalf("open skewed client: %v", err)
+	}
+	skewResult, err := skewed.Call(skewCtx, wire.Op(opStatus), "", nil)
+	cancelSkew()
+	_ = skewed.Close()
+	if err != nil {
+		t.Fatalf("call from skewed client: %v", err)
+	}
+	if skewResult.Outcome == wire.Delivered {
+		t.Fatal("runtime build was accepted as the stable wire build on dispatch")
+	}
 
 	conn, err := net.DialTimeout("unix", resolved.socket, time.Second)
 	if err != nil {
@@ -69,14 +112,14 @@ func TestHostRuntimeExactStatusLifecycleAndOldLFRejection(t *testing.T) {
 	_ = conn.Close()
 
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := client.Shutdown(shutdownCtx); err != nil {
+	if err := runtime.Shutdown(shutdownCtx); err != nil {
 		cancelShutdown()
-		t.Fatalf("Shutdown: %v", err)
+		t.Fatalf("runtime Shutdown: %v", err)
 	}
 	cancelShutdown()
 	select {
 	case err := <-runResult:
-		if err != nil && !errors.Is(err, wire.ErrDraining) {
+		if err != nil {
 			t.Fatalf("runtime Run: %v", err)
 		}
 	case <-time.After(5 * time.Second):

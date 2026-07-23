@@ -2,13 +2,11 @@ package hookd
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 
 	dkdaemon "github.com/yasyf/daemonkit/daemon"
 	"github.com/yasyf/daemonkit/daemonrole"
@@ -39,11 +37,10 @@ func NewServer(role daemonrole.Classifier) (*Server, error) {
 
 // Run serves the exact v1 host until daemonkit completes ordered shutdown.
 func (s *Server) Run(ctx context.Context) error {
-	server, runtime, err := s.runtime()
+	_, runtime, err := s.runtime()
 	if err != nil {
 		return err
 	}
-	server.RegisterLifecycle(runtime)
 	err = runtime.Run(ctx)
 	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 		return nil
@@ -59,13 +56,13 @@ func (s *Server) runtime() (*wire.Server, *dkdaemon.Runtime, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("captain: open host log: %w", err)
 	}
-	var generation [16]byte
-	if _, err := rand.Read(generation[:]); err != nil {
+	generation, err := proc.ProcessGeneration()
+	if err != nil {
 		_ = logFile.Close()
 		return nil, nil, fmt.Errorf("captain: generate host generation: %w", err)
 	}
 	reaper := &proc.Reaper{
-		Store: &proc.FileStore{Path: s.paths.processes}, Generation: hex.EncodeToString(generation[:]),
+		Store: &proc.FileStore{Path: s.paths.processes}, Generation: generation,
 	}
 	pool, err := supervise.NewPool(64, reaper)
 	if err != nil {
@@ -74,19 +71,44 @@ func (s *Server) runtime() (*wire.Server, *dkdaemon.Runtime, error) {
 	}
 	manager := newWorkerManager(pool, reaper, logFile)
 	wireServer := &wire.Server{
-		Build: Build, LifecycleBuild: Build, Workers: 64, Backlog: 192,
-		InboundQueue: 256, MaxFrame: maxHostFrame, ReservedProtectedSessions: 1,
-		ProtectedSessionClassifier: s.role,
+		WireBuild: WireBuild, Trust: s.trust, Workers: 64, Backlog: 192,
+		InboundQueue: 256, MaxFrame: maxHostFrame, MaxSessions: 64,
 	}
 	s.registerHandlers(wireServer, manager)
-	peer := &wire.LifecyclePeer{Config: wire.ClientConfig{
-		Dial: wire.UnixDialer(s.paths.socket), Build: Build, LifecycleBuild: Build, MaxFrame: maxHostFrame,
-	}}
-	runtime, err := dkdaemon.NewRuntime(dkdaemon.RuntimeConfig{
-		Socket: s.paths.socket, Build: Build, Protocol: int(wire.ProtocolVersion),
-		Peer: peer, Contract: dkdaemon.RequestDaemon, WaitMode: dkdaemon.PIDExit,
-		Admission: &drain.Intake{}, Server: wireServer, Workers: manager,
-		State: runtimeState{}, Resources: &runtimeResources{peer: peer, log: logFile},
+	var runtime *dkdaemon.Runtime
+	runtimeHealth := wire.ObservationRoute{
+		Op: wire.Op(opRuntimeHealth), MaxResponseBytes: 4 << 10, AvailableBeforeReady: true,
+		Handler: func(ctx context.Context, request wire.ObservationRequest) (wire.ObservationResponse, error) {
+			if request.Tenant != "" || len(request.Payload) != 0 {
+				return wire.ObservationResponse{}, errors.New("captain: runtime health request must be empty")
+			}
+			if runtime == nil {
+				return wire.ObservationResponse{}, errors.New("captain: runtime health is unavailable")
+			}
+			health, err := runtime.Health(ctx)
+			if err != nil {
+				return wire.ObservationResponse{}, err
+			}
+			payload, err := json.Marshal(runtimeHealthResponse{
+				Schema: Schema, RuntimeBuild: health.RuntimeBuild, RuntimeProtocol: health.RuntimeProtocol,
+				ProcessGeneration: health.ProcessGeneration, PID: health.PID, State: string(health.State),
+				Draining: health.Draining, Busy: health.Busy, Ready: health.Ready,
+			})
+			if err != nil {
+				return wire.ObservationResponse{}, err
+			}
+			return wire.ObservationResponse{Payload: payload}, nil
+		},
+	}
+	runtime, err = wire.NewRuntime(wire.RuntimeConfig{
+		Socket: s.paths.socket, RuntimeBuild: Build, RuntimeProtocol: Schema,
+		Wire: wireServer, Classifier: s.role, ReservedProtectedSessions: 1,
+		StopVerifier: wire.StopVerifier{
+			Classifier: s.role, Role: stopControlRoleID,
+			Store: &proc.FileStore{Path: s.paths.stopProcesses},
+		},
+		Observations: []wire.ObservationRoute{runtimeHealth}, Admission: &drain.Intake{}, Workers: manager,
+		State: runtimeState{}, Resources: logFile,
 		Activate: func(activation dkdaemon.Activation) error {
 			return manager.recover(activation.Startup)
 		},
@@ -96,7 +118,6 @@ func (s *Server) runtime() (*wire.Server, *dkdaemon.Runtime, error) {
 		manager.Close()
 		manager.Cancel()
 		_ = manager.Wait(context.Background())
-		_ = peer.Close()
 		_ = logFile.Close()
 		return nil, nil, err
 	}
@@ -127,8 +148,15 @@ func (s *Server) registerHandlers(server *wire.Server, manager *workerManager) {
 		return statusResponse{Schema: Schema, Build: Build, PID: os.Getpid(), Workers: manager.status()}, nil
 	})
 	server.RegisterControl(wire.Op(opRestartWorkers), func(ctx context.Context, request wire.Request) (any, error) {
-		if request.Tenant != "" || len(request.Payload) != 0 {
-			return nil, errors.New("captain: restart-workers request must be empty")
+		if request.Tenant != "" {
+			return nil, errors.New("captain: restart-workers request must not carry a tenant")
+		}
+		var restart restartWorkersRequest
+		if err := decodeStrict(request.Payload, &restart); err != nil {
+			return nil, fmt.Errorf("captain: decode restart-workers request: %w", err)
+		}
+		if restart.Schema != Schema || restart.Build != Build {
+			return nil, errors.New("captain: restart-workers requires the exact runtime build")
 		}
 		if err := manager.restart(ctx); err != nil {
 			return nil, err
@@ -143,16 +171,15 @@ type runtimeState struct{}
 
 func (runtimeState) Close() error { return nil }
 
-type runtimeResources struct {
-	peer *wire.LifecyclePeer
-	log  *os.File
-	once sync.Once
-	err  error
-}
-
-func (r *runtimeResources) Close() error {
-	r.once.Do(func() { r.err = errors.Join(r.peer.Close(), r.log.Close()) })
-	return r.err
+func (s *Server) trust(ctx context.Context, peer wire.Peer) error {
+	accepted, err := s.role.Classify(ctx, peer)
+	if err != nil {
+		return err
+	}
+	if !accepted {
+		return daemonrole.ErrUntrustedPeer
+	}
+	return nil
 }
 
 // DaemonRole resolves the exact stable executable role used for launch and trust.

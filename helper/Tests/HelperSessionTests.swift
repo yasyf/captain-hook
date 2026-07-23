@@ -100,7 +100,7 @@ private func withStartedServer<Result>(
         let handler = HelperHandler(version: buildVersion) { payload in recorder.append(payload) }
         let server = SocketServer(
             path: socket.path,
-            build: buildVersion,
+            wireBuild: helperWireBuild,
             trust: .sameEffectiveUser,
             handler: { await handler.handle($0) }
         )
@@ -144,7 +144,7 @@ private func withStartedServer<Result>(
         )
         let server = SocketServer(
             path: socket.path,
-            build: buildVersion,
+            wireBuild: helperWireBuild,
             trust: PeerTrust(requirement: requirement),
             handler: { await handler.handle($0) }
         )
@@ -188,7 +188,7 @@ private func withStartedServer<Result>(
         )
         let server = SocketServer(
             path: socket.path,
-            build: "0.0.0",
+            wireBuild: helperWireBuild,
             trust: PeerTrust(requirement: requirement),
             handler: { await handler.handle($0) }
         )

@@ -45,7 +45,7 @@ private enum CaptainHookBridge {
             let input = try payload(for: arguments.operation)
             let client = try await SocketClient(
                 path: arguments.socket,
-                build: buildVersion,
+                wireBuild: helperWireBuild,
                 trust: .sameEffectiveUser
             )
             let terminal: SocketTerminal
@@ -73,10 +73,6 @@ private enum CaptainHookBridge {
             FileHandle.standardError.write(Data("\(error)\n".utf8))
             exit(error is BridgeError ? 2 : 1)
         }
-    }
-
-    private static var buildVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
     }
 
     private static func payload(for operation: String) throws -> Data {
