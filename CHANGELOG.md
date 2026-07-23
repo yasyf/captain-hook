@@ -4,6 +4,22 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.13.0] - 2026-07-23
+
+### Changed
+
+- **Review persistence is one exact schema v1.** A component marker, compiled-DDL
+  fingerprint, and complete `sqlite_schema` fingerprint fence the base ledger,
+  review state, verdict evidence, and sqlite-vec shadow objects as one schema.
+- **Shared decisions use cc-transcript's exact v1 store.** Captain Hook now requires
+  exactly cc-transcript 14.13.0.
+
+### Removed
+
+- **Open-time schema repair and retired-store probing are gone.** Captain Hook creates
+  only an empty review database and rejects every old, partial, missing, or extra schema
+  before mutation.
+
 ## [12.10.0] - 2026-07-23
 
 ### Changed
