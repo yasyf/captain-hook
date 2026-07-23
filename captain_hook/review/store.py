@@ -13,7 +13,6 @@ enough confidence count toward the thresholds.
 from __future__ import annotations
 
 import json
-import sqlite3
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -21,8 +20,10 @@ from enum import StrEnum
 from hashlib import sha256
 from typing import TYPE_CHECKING, Self
 
+import sqlite_vec
+from cc_transcript.judge.similar import VECTOR_SCHEMA
 from cc_transcript.mining.confidence import NOISE_FLOOR, from_payload
-from cc_transcript.mining.store import FeedbackStore, StoreSchema, now
+from cc_transcript.mining.store import DEFAULT_SCHEMA_DDL, FeedbackStore, StoreSchema, now
 
 from captain_hook.review.fix import HOOK_COMPLAINT
 from captain_hook.review.prompts import CREATE_TEMPLATE, FIX_TEMPLATE
@@ -47,10 +48,6 @@ if TYPE_CHECKING:
     from captain_hook.review.sync import CachedPrState, PrState
 
 SPLIT_THRESHOLD = 0.9
-REVIEW_SCHEMA_COMPONENT = "captain-hook-review-v1"
-REVIEW_SCHEMA_VERSION = 1
-REVIEW_DDL_FINGERPRINT = "3a9b085ef22ea58708d5b608ab1df9e815653ba6a7548e0820d2d855e5a99bc7"
-REVIEW_OBJECT_FINGERPRINT = "3cf90b7ab7031238a7665e6c785caf0f739a970db54ba43c804038aa596fbcb8"
 
 PROMPT_FINGERPRINT_KEY = "prompt_fingerprint"
 
@@ -62,62 +59,10 @@ SELECT c.*,
 FROM candidates c
 """
 
-REVIEW_V1_DDL = """
-CREATE TABLE captain_hook_review_schema_v1 (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  component TEXT NOT NULL CHECK (component = 'captain-hook-review-v1'),
-  schema_version INTEGER NOT NULL CHECK (schema_version = 1),
-  ddl_fingerprint TEXT NOT NULL,
-  object_fingerprint TEXT NOT NULL
-);
-CREATE TABLE files (
-  path TEXT PRIMARY KEY,
-  mtime REAL NOT NULL
-);
-CREATE TABLE feedback_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  dedup_key TEXT NOT NULL UNIQUE,
-  source_kind TEXT NOT NULL,
-  session_id TEXT,
-  event_uuid TEXT,
-  occurred_at TEXT NOT NULL,
-  text TEXT NOT NULL,
-  payload_json TEXT,
-  context_json TEXT NOT NULL,
-  cc_version TEXT,
-  ingested_at TEXT NOT NULL
-);
-CREATE INDEX idx_feedback_source ON feedback_events(source_kind);
-CREATE INDEX idx_feedback_session ON feedback_events(session_id);
-CREATE TABLE verdicts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  dedup_key TEXT NOT NULL REFERENCES feedback_events(dedup_key),
-  role TEXT NOT NULL,
-  prompt_version INTEGER NOT NULL,
-  model TEXT NOT NULL,
-  category TEXT NOT NULL,
-  accepted INTEGER NOT NULL,
-  summary TEXT NOT NULL,
-  confidence REAL NOT NULL,
-  rationale TEXT NOT NULL,
-  canonical_key TEXT,
-  fidelity TEXT NOT NULL CHECK(fidelity IN ('full','summary')),
-  judged_at TEXT NOT NULL,
-  UNIQUE(dedup_key, role, prompt_version)
-);
-CREATE INDEX idx_verdicts_dedup ON verdicts(dedup_key);
-CREATE VIRTUAL TABLE verdict_vectors USING vec0(
-  vector_id TEXT PRIMARY KEY,
-  embedding float[512] distance_metric=cosine
-);
-CREATE TABLE verdict_evidence (
-  vector_id TEXT PRIMARY KEY,
-  dedup_key TEXT NOT NULL,
-  role TEXT NOT NULL,
-  prompt_version INTEGER NOT NULL,
-  canonical_key TEXT NOT NULL,
-  evidence_text TEXT NOT NULL
-);
+REVIEW_V1_DDL = (
+    DEFAULT_SCHEMA_DDL
+    + VECTOR_SCHEMA
+    + """
 CREATE TABLE candidates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   repo_key TEXT NOT NULL,
@@ -187,6 +132,7 @@ CREATE TABLE pr_states (
   fetched_at TEXT NOT NULL
 );
 """
+)
 
 
 class InvalidTransition(Exception):
@@ -246,140 +192,14 @@ TRANSITIONS: Mapping[CandidateStatus, frozenset[CandidateStatus]] = {
 }
 
 
-REVIEW_SCHEMA = StoreSchema()
+REVIEW_SCHEMA = StoreSchema(identity="captain-hook-review", ddl=REVIEW_V1_DDL)
+REVIEW_EXTENSIONS = (sqlite_vec.loadable_path(),)
 VERDICT_TABLE = REVIEW_SCHEMA.verdict_table
 ACCEPTED_COLUMN = REVIEW_SCHEMA.accepted_column
 SUMMARY_COLUMN = REVIEW_SCHEMA.summary_column
 
 TRIAGE_JUNK = "junk"
 TRIAGE_KEEP = "keep"
-
-
-class ReviewSchemaError(RuntimeError):
-    """The review database is not the exact hard-cut schema epoch."""
-
-
-def _ddl_fingerprint() -> str:
-    return sha256(b"captain-hook-review-ddl-v1\0" + REVIEW_V1_DDL.encode()).hexdigest()
-
-
-def _object_fingerprint(connection: sqlite3.Connection) -> str:
-    digest = sha256(b"captain-hook-review-objects-v1\0")
-    for object_type, name, table, statement in connection.execute(
-        "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name"
-    ):
-        for field in (object_type, name, table, statement or ""):
-            digest.update(str(field).encode())
-            digest.update(b"\0")
-    return digest.hexdigest()
-
-
-def _schema_error(path: Path, detail: str) -> ReviewSchemaError:
-    return ReviewSchemaError(f"review database {path} {detail}; expected exact schema v{REVIEW_SCHEMA_VERSION}")
-
-
-def _validate_review_schema(path: Path) -> None:
-    try:
-        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
-        try:
-            row = connection.execute("PRAGMA user_version").fetchone()
-            version = int(row[0]) if row is not None else 0
-            if version != REVIEW_SCHEMA_VERSION:
-                raise _schema_error(path, f"has schema marker {version}")
-            fingerprint = _object_fingerprint(connection)
-            if fingerprint != REVIEW_OBJECT_FINGERPRINT:
-                raise _schema_error(path, f"has schema fingerprint {fingerprint}")
-            marker = connection.execute(
-                "SELECT component, schema_version, ddl_fingerprint, object_fingerprint "
-                "FROM captain_hook_review_schema_v1 WHERE id = 1"
-            ).fetchone()
-            if marker is None:
-                raise _schema_error(path, "has no schema identity row")
-            component, marker_version, stored_ddl, stored_objects = marker
-            if component != REVIEW_SCHEMA_COMPONENT or marker_version != REVIEW_SCHEMA_VERSION:
-                raise _schema_error(path, "has a foreign schema identity")
-            if stored_ddl != REVIEW_DDL_FINGERPRINT or stored_objects != REVIEW_OBJECT_FINGERPRINT:
-                raise _schema_error(path, "has foreign stored schema fingerprints")
-        finally:
-            connection.close()
-    except sqlite3.DatabaseError as error:
-        raise _schema_error(path, "is not a readable SQLite database") from error
-
-
-def _ddl_statements(script: str) -> list[str]:
-    statements: list[str] = []
-    pending = ""
-    for line in script.splitlines(keepends=True):
-        pending += line
-        if sqlite3.complete_statement(pending):
-            statements.append(pending.strip())
-            pending = ""
-    if pending.strip():
-        raise RuntimeError("review schema DDL contains an incomplete statement")
-    return statements
-
-
-def _create_review_schema(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
-    created = False
-    try:
-        import sqlite_vec
-
-        connection.enable_load_extension(True)
-        connection.load_extension(sqlite_vec.loadable_path())
-        connection.enable_load_extension(False)
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("BEGIN IMMEDIATE")
-        rows = connection.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
-        marker = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if rows is not None or marker != 0:
-            connection.rollback()
-            _validate_review_schema(path)
-            return
-        created = True
-        for statement in _ddl_statements(REVIEW_V1_DDL):
-            connection.execute(statement)
-        connection.execute(f"PRAGMA user_version = {REVIEW_SCHEMA_VERSION}")
-        fingerprint = _object_fingerprint(connection)
-        if fingerprint != REVIEW_OBJECT_FINGERPRINT:
-            raise RuntimeError(f"review schema object fingerprint drifted to {fingerprint}")
-        connection.execute(
-            "INSERT INTO captain_hook_review_schema_v1 "
-            "(id, component, schema_version, ddl_fingerprint, object_fingerprint) VALUES (1, ?, 1, ?, ?)",
-            (REVIEW_SCHEMA_COMPONENT, REVIEW_DDL_FINGERPRINT, REVIEW_OBJECT_FINGERPRINT),
-        )
-        connection.commit()
-    except BaseException:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-    if created:
-        path.chmod(0o600)
-
-
-def _is_empty_review_database(path: Path) -> bool:
-    try:
-        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
-        try:
-            marker = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            objects = int(connection.execute("SELECT count(*) FROM sqlite_schema").fetchone()[0])
-            return marker == 0 and objects == 0
-        finally:
-            connection.close()
-    except sqlite3.DatabaseError as error:
-        raise _schema_error(path, "is not a readable SQLite database") from error
-
-
-def _prepare_review_schema(path: Path) -> None:
-    compiled_ddl = _ddl_fingerprint()
-    if compiled_ddl != REVIEW_DDL_FINGERPRINT:
-        raise RuntimeError(f"review compiled DDL fingerprint drifted to {compiled_ddl}")
-    if not path.exists() or path.stat().st_size == 0 or _is_empty_review_database(path):
-        _create_review_schema(path)
-    else:
-        _validate_review_schema(path)
 
 
 def signal_confidence(payload_json: object) -> Confidence:
@@ -515,11 +335,10 @@ class ReviewStore:
     async def open(
         cls, path: Path, *, versions: PromptVersions = PROMPT_VERSIONS, busy_timeout_ms: int | None = None
     ) -> Self:
-        """Opens the exact-v1 review database at ``path``, self-healing stale verdicts.
+        """Opens the exact-v1 review database at ``path`` and removes stale verdicts.
 
-        Rejects every existing foreign or unversioned store before the native engine can
-        mutate it. A fresh database receives the complete base ledger, verdict table, and
-        six review tables directly at epoch 1. It then sweeps verdict rows recorded at a
+        The native engine creates or attests the complete ledger, verdict, vector, and
+        review schema in one transaction. It then sweeps verdict rows recorded at a
         prompt version their lane no longer runs — the single purge codepath, so
         ``list``/``show``/``status``/``threshold-check`` never count orphans.
 
@@ -532,10 +351,13 @@ class ReviewStore:
                 SQLite's default five seconds. The SessionStart announcer passes ``0``;
                 the normal reviewer path leaves the default.
         """
-        _prepare_review_schema(path)
-        db = await FeedbackStore.open(path, REVIEW_SCHEMA, busy_timeout_ms=busy_timeout_ms)
+        db = await FeedbackStore.open(
+            path,
+            REVIEW_SCHEMA,
+            busy_timeout_ms=busy_timeout_ms,
+            extensions=REVIEW_EXTENSIONS,
+        )
         try:
-            _validate_review_schema(path)
             store = cls(db, versions)
             await store.purge_stale_verdicts_if_changed()
             return store
@@ -1593,14 +1415,12 @@ ORDER BY repo
     async def has_verdict_evidence(self) -> bool:
         """Whether any canonical-key evidence is stored at the create lane's bound version to suggest from.
 
-        Gates the judge pass's per-row slug suggestions: with the companion
-        ``verdict_evidence`` table absent or empty at that version, no suggestion
-        is possible by construction, so the pass skips the embedder load entirely.
+        Gates the judge pass's per-row slug suggestions: with no companion evidence
+        at that version, no suggestion is possible by construction, so the pass
+        skips the embedder load entirely.
         FIX verdicts never carry a ``canonical_key``, so the evidence store is
         create-lane-only and this reads the create version.
         """
-        if not await self.db.sql("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'verdict_evidence'"):
-            return False
         return bool(
             await self.db.sql(
                 "SELECT 1 FROM verdict_evidence WHERE prompt_version = ? LIMIT 1", (self.versions.create,)

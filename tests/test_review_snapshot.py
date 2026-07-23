@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -139,10 +140,16 @@ async def test_build_snapshot_matches_golden_dict(
     assert await snap.build_snapshot(store, settings=settings) == json.loads(GOLDEN.read_text())
 
 
+def test_snapshot_contract_fingerprint_matches_descriptor() -> None:
+    assert sha256(snap.SCHEMA_DESCRIPTOR.encode()).hexdigest() == snap.SCHEMA_FINGERPRINT
+
+
 async def test_empty_store_snapshot(store: ReviewStore, settings: ReviewSettings, pinned: None) -> None:
     path = await snap.write_status(store, settings=settings)
     assert path.read_bytes() == (
-        b'{"schema_version":1,"generated_at":"2026-07-15T12:00:00Z","capt_hook_version":"9.4.0",'
+        b'{"identity":"captain-hook.status.v1","schema_version":1,'
+        b'"fingerprint":"ef46e55d15f15bc622e6cbf032fbb23f7917e232e01a44a94f426643c10738bc",'
+        b'"generated_at":"2026-07-15T12:00:00Z","capt_hook_version":"9.4.0",'
         b'"repos":[],"health":{"ok":true,"consecutive_failures":0,"failing_since":null,'
         b'"last_run_at":null,"judge_pending":0}}\n'
     )

@@ -18,10 +18,7 @@ from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import (
     PROMPT_VERSIONS,
-    REVIEW_DDL_FINGERPRINT,
-    REVIEW_OBJECT_FINGERPRINT,
     REVIEW_SCHEMA,
-    REVIEW_SCHEMA_VERSION,
     REVIEW_V1_DDL,
     TRANSITIONS,
     TRIAGE_JUNK,
@@ -30,7 +27,6 @@ from captain_hook.review.store import (
     CandidateStatus,
     InvalidTransition,
     PromptVersions,
-    ReviewSchemaError,
     ReviewStore,
     prompt_version,
 )
@@ -1158,17 +1154,19 @@ class TestSchemaEpoch:
 
     async def test_fresh_database_has_complete_exact_v1_schema(self, store: ReviewStore) -> None:
         assert self.V1_COLUMNS <= await candidate_columns(store)
-        assert await store.db.sql("PRAGMA user_version") == [{"user_version": REVIEW_SCHEMA_VERSION}]
-        assert await store.db.sql(
-            "SELECT component, schema_version, ddl_fingerprint, object_fingerprint FROM captain_hook_review_schema_v1"
-        ) == [
-            {
-                "component": "captain-hook-review-v1",
-                "schema_version": 1,
-                "ddl_fingerprint": REVIEW_DDL_FINGERPRINT,
-                "object_fingerprint": REVIEW_OBJECT_FINGERPRINT,
-            }
-        ]
+        assert await store.db.sql("PRAGMA user_version") == [{"user_version": 1}]
+        marker = (
+            await store.db.sql(
+                "SELECT schema_identity, schema_version, ddl_fingerprint, object_fingerprint "
+                "FROM cc_transcript_schema_v1"
+            )
+        )[0]
+        assert marker["schema_identity"] == "captain-hook-review"
+        assert marker["schema_version"] == 1
+        assert len(str(marker["ddl_fingerprint"])) == 64
+        assert len(str(marker["object_fingerprint"])) == 64
+        assert REVIEW_SCHEMA.ddl == REVIEW_V1_DDL
+        assert "captain_hook_review_schema_v1" not in REVIEW_V1_DDL
         assert "IF NOT EXISTS" not in REVIEW_V1_DDL
         assert "ALTER TABLE" not in REVIEW_V1_DDL
 
@@ -1185,9 +1183,9 @@ class TestSchemaEpoch:
             ],
         )
         before = path.read_bytes()
-        with pytest.raises(ReviewSchemaError) as raised:
+        with pytest.raises(sqlite3.DatabaseError) as raised:
             await ReviewStore.open(path)
-        assert "schema marker 0" in str(raised.value)
+        assert "schema version is 0" in str(raised.value)
         assert "transfer" not in str(raised.value)
         assert "migration" not in str(raised.value)
         assert path.read_bytes() == before
@@ -1198,7 +1196,7 @@ class TestSchemaEpoch:
         connection.execute("PRAGMA user_version = 2")
         connection.close()
         before = path.read_bytes()
-        with pytest.raises(ReviewSchemaError, match="schema marker 2"):
+        with pytest.raises(sqlite3.DatabaseError, match="schema version is 2"):
             await ReviewStore.open(path)
         assert path.read_bytes() == before
 
@@ -1208,7 +1206,7 @@ class TestSchemaEpoch:
         connection.executescript("CREATE TABLE candidates (id INTEGER PRIMARY KEY); PRAGMA user_version = 1;")
         connection.close()
         before = path.read_bytes()
-        with pytest.raises(ReviewSchemaError, match="schema fingerprint"):
+        with pytest.raises(sqlite3.DatabaseError, match="schema"):
             await ReviewStore.open(path)
         assert path.read_bytes() == before
 
@@ -1220,7 +1218,7 @@ class TestSchemaEpoch:
         connection.execute("DROP INDEX idx_feedback_source")
         connection.close()
         before_missing = missing.read_bytes()
-        with pytest.raises(ReviewSchemaError, match="schema fingerprint"):
+        with pytest.raises(sqlite3.DatabaseError, match="schema"):
             await ReviewStore.open(missing)
         assert missing.read_bytes() == before_missing
 
@@ -1231,7 +1229,7 @@ class TestSchemaEpoch:
         connection.execute("CREATE TABLE foreign_object (id INTEGER PRIMARY KEY)")
         connection.close()
         before_extra = extra.read_bytes()
-        with pytest.raises(ReviewSchemaError, match="schema fingerprint"):
+        with pytest.raises(sqlite3.DatabaseError, match="schema"):
             await ReviewStore.open(extra)
         assert extra.read_bytes() == before_extra
 
@@ -1245,15 +1243,6 @@ class TestSchemaEpoch:
         for path in (zero, header):
             async with await ReviewStore.open(path) as opened:
                 assert await opened.db.sql("PRAGMA user_version") == [{"user_version": 1}]
-
-    async def test_compiled_ddl_drift_is_rejected_before_disk_creation(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr("captain_hook.review.store.REVIEW_V1_DDL", REVIEW_V1_DDL + "\n")
-        path = tmp_path / "drift.db"
-        with pytest.raises(RuntimeError, match="compiled DDL fingerprint drifted"):
-            await ReviewStore.open(path)
-        assert not path.exists()
 
     async def test_retired_sibling_is_never_inspected(self, tmp_path: Path) -> None:
         legacy = tmp_path / "review.db"

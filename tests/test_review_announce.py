@@ -16,7 +16,7 @@ from captain_hook.review.announce import (
     pending_announcements,
 )
 from captain_hook.review.repo import RepoKey
-from captain_hook.review.store import CandidateKind, CandidateStatus, ReviewStore
+from captain_hook.review.store import REVIEW_EXTENSIONS, REVIEW_SCHEMA, CandidateKind, CandidateStatus, ReviewStore
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -41,7 +41,14 @@ def held_write_lock(path: Path) -> Iterator[None]:
 
     def hold() -> None:
         async def run() -> None:
-            async with await FeedbackStore.open(path) as blocker, blocker.transaction():
+            async with (
+                await FeedbackStore.open(
+                    path,
+                    REVIEW_SCHEMA,
+                    extensions=REVIEW_EXTENSIONS,
+                ) as blocker,
+                blocker.transaction(),
+            ):
                 ready.set()
                 await asyncio.to_thread(release.wait)
 
