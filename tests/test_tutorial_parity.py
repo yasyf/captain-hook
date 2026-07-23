@@ -535,6 +535,10 @@ def test_rm_world_node_unit_suite() -> None:
 
 @requires_node
 @requires_ts_module_mocks
+@pytest.mark.skipif(
+    not (SRC / "node_modules" / "pocket-llm").exists(),
+    reason="pocket-llm not installed in _src (node's mock loader still resolves the specifier); run npm ci there",
+)
 def test_llm_node_unit_suite() -> None:
     """Run the llm-adapter `node --test` suite: the adapter passes system/schema/assets through and
     never creates a session (the download gate) before start(), with pocket-llm's surface stubbed."""
