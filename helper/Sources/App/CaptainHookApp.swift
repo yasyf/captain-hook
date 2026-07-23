@@ -9,7 +9,7 @@ struct CaptainHookApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     var body: some Scene {
         Settings { EmptyView() }
-    } // agent app: no windows
+    }
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -19,14 +19,22 @@ struct CaptainHookApp: App {
     private let coalescer = ReloadCoalescer(interval: 30) { _ in
         WidgetCenter.shared.reloadAllTimelines()
     }
-
     private let refresher = SnapshotRefresher()
-    private var server: SocketServer?
-    private var serverStartTask: Task<Void, Never>?
+    private var broker: BrokerSocketBridge?
+    private var brokerTask: Task<Void, Never>?
+    private var notificationClient: ServiceSocketClient?
+    private var notificationTask: Task<Void, Never>?
     private var watcher: SnapshotWatcher<Snapshot>?
 
     private var appVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+    }
+
+    private var runtimeBuild: String {
+        guard let stamped = Bundle.main.object(forInfoDictionaryKey: "CaptHookBuild") as? String,
+              !stamped.isEmpty
+        else { return appVersion }
+        return stamped.hasPrefix("v") ? String(stamped.dropFirst()) : stamped
     }
 
     func applicationWillFinishLaunching(_: Notification) {
@@ -40,7 +48,6 @@ struct CaptainHookApp: App {
                 exit(1)
             }
         }
-        // Set before launch finishes so a cold-launch banner click still delivers.
         UNUserNotificationCenter.current().delegate = notifications
     }
 
@@ -48,7 +55,8 @@ struct CaptainHookApp: App {
         notifications.requestAuthorizationIfNeeded()
         notifications.registerCategories()
         reconcileLoginItem()
-        serverStartTask = Task { await startServer() }
+        brokerTask = Task { await runBroker() }
+        notificationTask = Task { await runNotificationConsumer() }
         startWatcher()
         refresher.start()
     }
@@ -62,53 +70,97 @@ struct CaptainHookApp: App {
         }
     }
 
-    private func startServer() async {
-        let deliver: @MainActor @Sendable (NotifyPayload) -> Void = { [weak self] payload in
-            guard let self else { return }
-            self.notifications.post(payload)
-            self.coalescer.record(trigger: payload.kind)
-            self.refresher.debouncedRefresh()
-        }
-        let handler = HelperHandler(version: appVersion) { payload in
-            await deliver(payload)
-        }
+    private func runBroker() async {
         do {
-            let requirement = try PeerTrust.Requirement(
-                teamIdentifier: "SXKCTF23Q2",
-                signingIdentifier: "com.yasyf.capt-hook.helper.bridge"
-            )
-            let server = SocketServer(
-                path: HelperPaths.socket.path,
+            let lifecycle = RuntimeClientConfiguration(
+                path: HelperPaths.hostSocket.path,
                 wireBuild: helperWireBuild,
-                configuration: .init(
-                    maximumFrameBytes: 64 * 1024,
-                    maximumActiveRequests: 8,
-                    maximumSessions: 8,
-                    streamQueueDepth: 4,
-                    handshakeTimeout: 5,
-                    writeTimeout: 5
-                ),
-                trust: PeerTrust(requirement: requirement),
-                handler: { await handler.handle($0) }
+                role: helperBrokerLifecycleRole,
+                noProgressTimeout: 30,
+                socket: .init(maximumFrameBytes: 64 * 1024)
             )
-            try FileManager.default.createDirectory(at: HelperPaths.directory, withIntermediateDirectories: true)
-            try await server.start()
-            self.server = server
-            Log.socket.notice("serving on \(HelperPaths.socket.path, privacy: .public)")
+            let bridge = try BrokerSocketBridge(
+                container: HelperPaths.appGroup(),
+                socket: HelperPaths.brokerSocket(),
+                lifecycle: lifecycle,
+                handoffRole: helperBrokerHandoffRole,
+                expectedRuntimeBuild: runtimeBuild
+            )
+            broker = bridge
+            try await bridge.run()
+        } catch is CancellationError {
+            return
         } catch {
-            Log.socket.error("socket start failed: \(String(describing: error), privacy: .public)")
+            Log.socket.error("broker failed: \(String(describing: error), privacy: .public)")
         }
     }
 
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let serverStartTask else { return .terminateNow }
-        self.serverStartTask = nil
-        Task {
-            await serverStartTask.value
-            if let server {
-                self.server = nil
-                await server.stop()
+    private func runNotificationConsumer() async {
+        while !Task.isCancelled {
+            var client: ServiceSocketClient?
+            do {
+                let connected = try ServiceSocketClient(
+                    path: HelperPaths.hostSocket.path,
+                    wireBuild: helperWireBuild,
+                    role: helperConsumerRole,
+                    noProgressTimeout: 30,
+                    configuration: .init(maximumFrameBytes: 64 * 1024)
+                )
+                client = connected
+                notificationClient = connected
+                try await consumeNotifications(from: connected)
+            } catch is CancellationError {
+                if let client { await client.close() }
+                return
+            } catch {
+                Log.socket.error("notification consumer failed: \(String(describing: error), privacy: .public)")
+                if let client { await client.close() }
+                notificationClient = nil
+                try? await Task.sleep(for: .seconds(1))
             }
+        }
+    }
+
+    private func consumeNotifications(from client: ServiceSocketClient) async throws {
+        while !Task.isCancelled {
+            let terminal = try await client.call(ServiceSocketCall(
+                operation: helperNextOperation,
+                replay: .provenNonDispatch,
+                runtimeTarget: .anyAuthenticatedSuccessor,
+                deadline: Date().addingTimeInterval(300)
+            ))
+            guard !terminal.rejected else {
+                throw HelperConsumerError.rejected(terminal.reason ?? "helper next rejected")
+            }
+            if let error = terminal.error { throw HelperConsumerError.remote(error) }
+            guard let data = terminal.payload else { throw HelperConsumerError.missingPayload }
+            deliver(try NotifyPayload(JSONDecoder().decode(NotifyRequest.self, from: data)))
+        }
+    }
+
+    private func deliver(_ payload: NotifyPayload) {
+        notifications.post(payload)
+        coalescer.record(trigger: payload.kind)
+        refresher.debouncedRefresh()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard brokerTask != nil || notificationTask != nil else { return .terminateNow }
+        let brokerTask = brokerTask
+        let notificationTask = notificationTask
+        let broker = broker
+        let notificationClient = notificationClient
+        self.brokerTask = nil
+        self.notificationTask = nil
+        self.broker = nil
+        self.notificationClient = nil
+        brokerTask?.cancel()
+        notificationTask?.cancel()
+        Task {
+            await broker?.shutdown()
+            await notificationClient?.close()
+            await brokerTask?.value
+            await notificationTask?.value
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
@@ -143,4 +195,10 @@ struct CaptainHookApp: App {
             Log.app.error("snapshot watch failed: \(String(describing: error), privacy: .public)")
         }
     }
+}
+
+private enum HelperConsumerError: Error {
+    case rejected(String)
+    case remote(String)
+    case missingPayload
 }

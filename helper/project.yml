@@ -21,7 +21,7 @@ settings:
 packages:
   DaemonKit:
     url: https://github.com/yasyf/daemonkit
-    exactVersion: 0.10.0
+    exactVersion: 0.14.0
 
 targetTemplates:
   HostApp:
@@ -88,6 +88,7 @@ targets:
     sources:
       - path: Sources/Bridge
       - path: Sources/Shared/HelperProtocol.swift
+      - path: Sources/Shared/HelperPaths.swift
     info:
       path: Generated/Bridge-Info.plist
       properties:
@@ -95,7 +96,9 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
     entitlements:
       path: Generated/CaptainHookBridge.entitlements
-      properties: {}
+      properties:
+        com.apple.security.application-groups:
+          - $(TeamIdentifierPrefix)com.yasyf.capt-hook.helper
     settings:
       base:
         PRODUCT_NAME: capt-hook-helper-client

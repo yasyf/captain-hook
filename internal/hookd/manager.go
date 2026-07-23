@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,10 +15,13 @@ import (
 	"time"
 
 	"github.com/yasyf/daemonkit/proc"
-	"github.com/yasyf/daemonkit/supervise"
 )
 
-const workerReadinessTimeout = 10 * time.Second
+const (
+	workerReadinessTimeout                  = 10 * time.Second
+	workerSettlementTimeout                 = 5 * time.Second
+	workerRecoveryID        proc.RecoveryID = "captain-hook.worker.v1"
+)
 
 var workerEnvExact = map[string]struct{}{
 	"XDG_CACHE_HOME": {}, "CAPTAIN_HOOK_STATE_DIR": {}, "CAPTAIN_HOOK_LOG_DIR": {},
@@ -42,8 +44,7 @@ type workerKey struct {
 }
 
 type workerManager struct {
-	pool      *supervise.Pool
-	reaper    *proc.Reaper
+	children  *proc.Manager
 	logWriter io.Writer
 	scheduler *scheduler
 
@@ -53,21 +54,11 @@ type workerManager struct {
 	wg      sync.WaitGroup
 }
 
-func newWorkerManager(pool *supervise.Pool, reaper *proc.Reaper, logWriter io.Writer) *workerManager {
+func newWorkerManager(children *proc.Manager, logWriter io.Writer) *workerManager {
 	return &workerManager{
-		pool: pool, reaper: reaper, logWriter: logWriter, scheduler: newScheduler(16),
+		children: children, logWriter: logWriter, scheduler: newScheduler(16),
 		entries: make(map[string]*workerEntry),
 	}
-}
-
-func (m *workerManager) recover(ctx context.Context) error {
-	if err := m.pool.Recover(ctx); err != nil {
-		return err
-	}
-	_, err := m.reaper.RecoverReapReceipts(
-		ctx, proc.RecoveryTask, func(context.Context, proc.ReapReceipt) error { return nil },
-	)
-	return err
 }
 
 func (m *workerManager) dispatch(ctx context.Context, request EventRequest) (EventResponse, error) {
@@ -129,34 +120,84 @@ func (m *workerManager) worker(ctx context.Context, key workerKey) (*workerClien
 }
 
 func (m *workerManager) start(ctx context.Context, key workerKey) (*workerClient, error) {
-	ready := make(chan *workerClient, 1)
-	process, err := m.pool.StartSession(ctx, supervise.SessionProcessSpec{
-		RecoveryClass: proc.RecoveryTask,
-		Path:          key.python, Args: []string{"-m", "captain_hook.worker"}, Dir: key.root,
-		Env: mergeEnvironment(workerBaseEnvironment(os.Environ()), key.env), Stderr: m.logWriter,
-		ReadinessTimeout: workerReadinessTimeout,
-		Ready: func(readyCtx context.Context, _ proc.Record, conn net.Conn) error {
-			worker, err := handshakeWorker(readyCtx, conn, key.build)
-			if err == nil {
-				ready <- worker
-			}
-			return err
-		},
+	request, err := proc.NewSpawnRequest(proc.SpawnConfig{
+		RecoveryID: workerRecoveryID, Executable: key.python,
+		Args: []string{"-m", "captain_hook.worker"}, Dir: key.root,
+		Env:   mergeEnvironment(workerBaseEnvironment(os.Environ()), key.env),
+		Stdin: proc.StdioPipe, Stdout: proc.StdioPipe, Stderr: proc.StdioPipe,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("captain: start Python product worker: %w", err)
+		return nil, fmt.Errorf("captain: define Python product worker: %w", err)
 	}
-	worker := <-ready
-	worker.process = process
+	readyCtx, cancel := context.WithTimeout(ctx, workerReadinessTimeout)
+	defer cancel()
+	child, receipt, err := m.children.Prepare(readyCtx, request)
+	if err != nil {
+		return nil, fmt.Errorf("captain: prepare Python product worker: %w", err)
+	}
+	stdin, err := child.TakeStdin()
+	if err != nil {
+		return nil, m.stopPrepared(child, errors.New("captain: take Python worker stdin"), err)
+	}
+	stdout, err := child.TakeStdout()
+	if err != nil {
+		_ = stdin.Close()
+		return nil, m.stopPrepared(child, errors.New("captain: take Python worker stdout"), err)
+	}
+	stderr, err := child.TakeStderr()
+	if err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		return nil, m.stopPrepared(child, errors.New("captain: take Python worker stderr"), err)
+	}
+	conn := newWorkerPipeConn(stdout, stdin)
+	stderrDone := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(m.logWriter, stderr)
+		stderrDone <- errors.Join(copyErr, stderr.Close())
+	}()
+	if err := child.Start(readyCtx); err != nil {
+		_ = conn.Close()
+		stopErr := m.stopPrepared(child, errors.New("captain: start Python product worker"), err)
+		return nil, errors.Join(stopErr, <-stderrDone)
+	}
+	worker, err := handshakeWorker(readyCtx, conn, key.build)
+	if err != nil {
+		_ = conn.Close()
+		stopErr := m.stopPrepared(child, errors.New("captain: handshake Python product worker"), err)
+		return nil, errors.Join(stopErr, <-stderrDone)
+	}
+	worker.child = child
+	worker.receipt = receipt
 	m.wg.Add(1)
-	go m.watch(key.id, worker, process)
+	go m.watch(key.id, worker, child, stderrDone)
 	return worker, nil
 }
 
-func (m *workerManager) watch(id string, worker *workerClient, process *supervise.SessionProcess) {
+func (m *workerManager) stopPrepared(child *proc.PreparedChild, message, cause error) error {
+	stopCtx, cancel := context.WithTimeout(context.Background(), workerSettlementTimeout)
+	defer cancel()
+	return errors.Join(message, cause, child.Stop(stopCtx))
+}
+
+func (m *workerManager) watch(
+	id string,
+	worker *workerClient,
+	child *proc.PreparedChild,
+	stderrDone <-chan error,
+) {
 	defer m.wg.Done()
-	err := process.Wait(context.Background())
-	worker.fail(err)
+	<-child.Done()
+	exit, settled := child.Exit()
+	var exitErr error
+	if !settled {
+		exitErr = errors.New("captain: Python worker exited without settlement")
+	} else if exit.Error != "" {
+		exitErr = errors.New(exit.Error)
+	} else if exit.Code != 0 && !exit.Stopped {
+		exitErr = fmt.Errorf("captain: Python worker exited with status %d", exit.Code)
+	}
+	worker.fail(errors.Join(exitErr, <-stderrDone))
 	m.mu.Lock()
 	if entry := m.entries[id]; entry != nil && entry.worker == worker {
 		delete(m.entries, id)
@@ -177,12 +218,12 @@ func (m *workerManager) status() []workerStatus {
 	defer m.mu.Unlock()
 	result := make([]workerStatus, 0, len(m.entries))
 	for _, entry := range m.entries {
-		if entry.worker == nil || entry.worker.process == nil {
+		if entry.worker == nil || entry.worker.child == nil {
 			continue
 		}
 		result = append(result, workerStatus{
 			Key: entry.key.id, Root: entry.key.root, Build: entry.key.build,
-			Python: entry.key.python, PID: entry.worker.process.Record().PID,
+			Python: entry.key.python, PID: entry.worker.receipt.ProcessIdentity().PID,
 		})
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Key < result[j].Key })
@@ -206,25 +247,28 @@ func (m *workerManager) restart(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func (m *workerManager) Close() {
+func (m *workerManager) Close(ctx context.Context) (bool, error) {
 	m.mu.Lock()
 	m.closed = true
+	workers := make([]*workerClient, 0, len(m.entries))
+	for _, entry := range m.entries {
+		if entry.worker != nil {
+			workers = append(workers, entry.worker)
+		}
+	}
+	m.entries = make(map[string]*workerEntry)
 	m.mu.Unlock()
-	m.pool.Close()
-}
-
-func (m *workerManager) Cancel() { m.pool.Cancel() }
-
-func (m *workerManager) Wait(ctx context.Context) error {
-	poolErr := m.pool.Wait(ctx)
+	var errs []error
+	for _, worker := range workers {
+		errs = append(errs, worker.stop(ctx))
+	}
 	done := make(chan struct{})
 	go func() { m.wg.Wait(); close(done) }()
 	select {
 	case <-done:
-		return poolErr
+		return true, errors.Join(errs...)
 	case <-ctx.Done():
-		<-done
-		return errors.Join(poolErr, ctx.Err())
+		return false, errors.Join(append(errs, ctx.Err())...)
 	}
 }
 
@@ -298,7 +342,7 @@ func workerBaseEnvironment(environ []string) []string {
 		if !ok {
 			continue
 		}
-		if name == "XDG_CACHE_HOME" || strings.HasPrefix(name, "CAPT_HOOK_") ||
+		if name == "PATH" || name == "LANG" || name == "XDG_CACHE_HOME" || strings.HasPrefix(name, "CAPT_HOOK_") ||
 			strings.HasPrefix(name, "CAPTAIN_HOOK_") || strings.HasPrefix(name, "HOOKS_") ||
 			strings.HasPrefix(name, "CLAUDE_") || strings.HasPrefix(name, "FACTORY_") {
 			continue

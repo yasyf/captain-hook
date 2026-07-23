@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	dkdaemon "github.com/yasyf/daemonkit/daemon"
+	"github.com/yasyf/daemonkit/service"
 )
 
 func TestRuntimeHealthCurrentRequiresExactReadyIdentity(t *testing.T) {
@@ -28,5 +29,17 @@ func TestRuntimeHealthCurrentRequiresExactReadyIdentity(t *testing.T) {
 				t.Fatalf("non-current health accepted: %#v", health)
 			}
 		})
+	}
+}
+
+func TestHostAgentPinsSignedBundleAndFailureOnlyRestart(t *testing.T) {
+	client := newClientWithPaths(paths{log: "/tmp/captain-hook.log"})
+	agent := client.hostAgent("/Applications/Captain Hook.app/Contents/Helpers/capt-hookd")
+	if agent.Label != hostServiceLabel || agent.RestartPolicy != service.RestartOnFailure ||
+		agent.Program != "/Applications/Captain Hook.app/Contents/Helpers/capt-hookd" ||
+		len(agent.Args) != 1 || agent.Args[0] != "serve" ||
+		len(agent.AssociatedBundleIdentifiers) != 1 ||
+		agent.AssociatedBundleIdentifiers[0] != "com.yasyf.capt-hook.helper" {
+		t.Fatalf("host agent = %#v", agent)
 	}
 }

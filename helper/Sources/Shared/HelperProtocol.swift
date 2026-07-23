@@ -1,7 +1,14 @@
 import CryptoKit
 import Foundation
 
-let helperWireBuild = "captain-hook.helper.v1"
+let helperWireBuild = "captain-hook.host.v1"
+let helperPingOperation = "captain.helper.ping.v1"
+let helperNotifyOperation = "captain.helper.notify.v1"
+let helperNextOperation = "captain.helper.next.v1"
+let helperConsumerRole = "com.yasyf.captain-hook.helper.consumer.v1"
+let helperBrokerLifecycleRole = "com.yasyf.captain-hook.helper.broker-lifecycle.v1"
+let helperBrokerHandoffRole = "com.yasyf.captain-hook.helper.broker-handoff.v1"
+let helperClientRole = "com.yasyf.captain-hook.helper.client.v1"
 
 struct NotifyRequest: Codable, Equatable, Sendable {
     let kind: String

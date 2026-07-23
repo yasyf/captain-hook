@@ -38,12 +38,11 @@ def test_paths_honor_overrides(helper_paths: tuple[Path, Path]) -> None:
     directory, bridge = helper_paths
     assert client.helper_dir() == directory
     assert client.bridge_path() == bridge
-    assert client.socket_path() == directory / "helper.sock"
     assert client.status_path() == directory / "status.json"
 
 
 def test_ping_invokes_explicit_bridge_path(helper_paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
-    directory, bridge = helper_paths
+    _, bridge = helper_paths
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -54,7 +53,7 @@ def test_ping_invokes_explicit_bridge_path(helper_paths: tuple[Path, Path], monk
     assert client.send("ping") == {"ok": True, "version": "1.2.3"}
     assert calls == [
         (
-            [str(bridge), "--socket", str(directory / "helper.sock"), "ping"],
+            [str(bridge), "ping"],
             {"input": None, "capture_output": True, "timeout": client.BRIDGE_TIMEOUT, "check": False},
         )
     ]

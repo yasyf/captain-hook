@@ -9,8 +9,14 @@ import (
 )
 
 const (
-	daemonRoleID      = "com.yasyf.captain-hook.daemon"
-	stopControlRoleID = "com.yasyf.captain-hook.stop-control"
+	businessRoleID              = "com.yasyf.captain-hook.business.v1"
+	lifecycleRoleID             = "com.yasyf.captain-hook.lifecycle.v1"
+	stopControlRoleID           = "com.yasyf.captain-hook.stop-control.v1"
+	helperConsumerRoleID        = "com.yasyf.captain-hook.helper.consumer.v1"
+	helperBrokerLifecycleRoleID = "com.yasyf.captain-hook.helper.broker-lifecycle.v1"
+	helperBrokerHandoffRoleID   = "com.yasyf.captain-hook.helper.broker-handoff.v1"
+	helperClientRoleID          = "com.yasyf.captain-hook.helper.client.v1"
+	hostServiceLabel            = "com.yasyf.captain-hook.host.v1"
 )
 
 type paths struct {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -13,6 +14,7 @@ import (
 	dkdaemon "github.com/yasyf/daemonkit/daemon"
 	"github.com/yasyf/daemonkit/proc"
 	"github.com/yasyf/daemonkit/service"
+	"github.com/yasyf/daemonkit/trust"
 	"github.com/yasyf/daemonkit/wire"
 )
 
@@ -22,6 +24,7 @@ var ErrDaemonUnavailable = errors.New("captain: daemon unavailable")
 // Client owns one exact persistent product session.
 type Client struct {
 	paths paths
+	role  trust.PeerRole
 
 	mu       sync.Mutex
 	business *wire.Client
@@ -37,7 +40,7 @@ func NewClient() (*Client, error) {
 }
 
 func newClientWithPaths(resolved paths) *Client {
-	return &Client{paths: resolved}
+	return &Client{paths: resolved, role: businessRoleID}
 }
 
 // Close settles the product session.
@@ -75,7 +78,7 @@ func (c *Client) EnsureCurrent(ctx context.Context, timeout time.Duration) error
 	if healthErr == nil && health.current() {
 		return nil
 	}
-	role, err := DaemonRole()
+	executable, err := hostExecutable()
 	if err != nil {
 		return err
 	}
@@ -83,11 +86,7 @@ func (c *Client) EnsureCurrent(ctx context.Context, timeout time.Duration) error
 		if health.RuntimeProtocol != Schema {
 			return fmt.Errorf("captain: runtime protocol %d is not exact v%d", health.RuntimeProtocol, Schema)
 		}
-		intent := wire.StopIntentUpgrade
-		if health.RuntimeBuild == Build {
-			intent = wire.StopIntentRestart
-		}
-		if err := c.stopRuntime(ctx, role.RolePath, health, intent); err != nil {
+		if err := c.stopRuntime(ctx, health); err != nil {
 			return err
 		}
 		c.resetBusiness(ErrDaemonUnavailable)
@@ -101,29 +100,23 @@ func (c *Client) EnsureCurrent(ctx context.Context, timeout time.Duration) error
 		}
 		c.resetBusiness(ErrDaemonUnavailable)
 	}
-	spawn := proc.Spawn{
-		Socket: c.paths.socket, LogPath: c.paths.log, ExecPath: role.RolePath,
-		Args: []string{"serve"}, Timeout: timeout,
-		Available: func() bool {
-			probeCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-			defer cancel()
-			health, err := c.RuntimeHealth(probeCtx)
-			return err == nil && health.current()
-		},
-		CanHost: func() error {
-			probeCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-			defer cancel()
-			present, err := c.endpointPresent(probeCtx)
-			if err != nil {
-				return err
-			}
-			if present {
-				return errors.New("captain: another host still owns the endpoint")
-			}
-			return nil
-		},
+	controller, err := c.serviceController(ctx)
+	if err != nil {
+		return err
 	}
-	return spawn.EnsureRunning(ctx)
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = controller.Close(closeCtx)
+	}()
+	if err := controller.Converge(ctx, nil); err != nil {
+		return fmt.Errorf("captain: settle host service: %w", err)
+	}
+	if err := controller.Converge(ctx, []service.Agent{c.hostAgent(executable)}); err != nil {
+		return fmt.Errorf("captain: start host service: %w", err)
+	}
+	_, err = wire.AcquireReadyRuntime(ctx, c.runtimeClientConfig(lifecycleRoleID, timeout), Build)
+	return err
 }
 
 // RuntimeHealth observes the exact product runtime without mutating it.
@@ -197,7 +190,7 @@ func (c *Client) RestartWorkers(ctx context.Context) error {
 }
 
 // Shutdown requests daemonkit's ordered host shutdown.
-func (c *Client) Shutdown(ctx context.Context) error {
+func (c *Client) Shutdown(ctx context.Context) (returnErr error) {
 	if err := c.paths.ensure(); err != nil {
 		return err
 	}
@@ -215,26 +208,10 @@ func (c *Client) Shutdown(ctx context.Context) error {
 	if health.RuntimeProtocol != Schema {
 		return fmt.Errorf("captain: runtime protocol %d is not exact v%d", health.RuntimeProtocol, Schema)
 	}
-	role, err := DaemonRole()
-	if err != nil {
+	if err := c.stopRuntime(ctx, health); err != nil {
 		return err
 	}
-	if err := c.stopRuntime(ctx, role.RolePath, health, wire.StopIntentUninstall); err != nil {
-		return err
-	}
-	c.resetBusiness(ErrDaemonUnavailable)
-	return nil
-}
-
-func (c *Client) stopRuntime(
-	ctx context.Context,
-	executable string,
-	health runtimeHealthResponse,
-	intent wire.StopIntent,
-) (returnErr error) {
-	controller, err := service.NewController(ctx, service.ControllerConfig{
-		StatePath: c.paths.stopState, ProcessPath: c.paths.stopProcesses, WorkerLimit: 1,
-	})
+	controller, err := c.serviceController(ctx)
 	if err != nil {
 		return err
 	}
@@ -243,12 +220,68 @@ func (c *Client) stopRuntime(
 		defer cancel()
 		returnErr = errors.Join(returnErr, controller.Close(closeCtx))
 	}()
-	_, err = controller.StopRuntime(ctx, service.StopControlSpec{
-		Executable: executable, Args: []string{"stop-control"}, Role: stopControlRoleID,
-		RuntimeBuild: Build, RuntimeProtocol: Schema,
-		TargetProcessGeneration: health.ProcessGeneration, Intent: intent,
+	if err := controller.Converge(ctx, nil); err != nil {
+		return err
+	}
+	c.resetBusiness(ErrDaemonUnavailable)
+	return nil
+}
+
+func (c *Client) stopRuntime(ctx context.Context, health runtimeHealthResponse) (returnErr error) {
+	controller, err := c.serviceController(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		returnErr = errors.Join(returnErr, controller.Close(closeCtx))
+	}()
+	_, err = controller.StopRuntime(ctx, service.StopRuntimeRequest{
+		OperationID:          "captain-hook.stop.v1:" + health.ProcessGeneration,
+		RuntimeClientConfig:  c.runtimeClientConfig(stopControlRoleID, 30*time.Second),
+		ExpectedRuntimeBuild: health.RuntimeBuild,
+		ControlRole:          stopControlRoleID,
 	})
 	return err
+}
+
+func (c *Client) serviceController(ctx context.Context) (*service.Controller, error) {
+	return service.NewController(ctx, service.ControllerConfig{
+		StatePath: c.paths.stopState, ProcessPath: c.paths.stopProcesses, WorkerLimit: 1,
+	})
+}
+
+func (c *Client) hostAgent(executable string) service.Agent {
+	return service.Agent{
+		Label: hostServiceLabel, Program: executable, Args: []string{"serve"}, LogPath: c.paths.log,
+		AssociatedBundleIdentifiers: []string{"com.yasyf.capt-hook.helper"},
+		RestartPolicy:               service.RestartOnFailure,
+	}
+}
+
+func (c *Client) runtimeClientConfig(role trust.PeerRole, timeout time.Duration) wire.RuntimeClientConfig {
+	return wire.RuntimeClientConfig{
+		Client: wire.ClientConfig{
+			Dial: wire.UnixDialer(c.paths.socket), WireBuild: WireBuild, Role: role, MaxFrame: maxHostFrame,
+		},
+		NoProgressTimeout: timeout,
+	}
+}
+
+func hostExecutable() (string, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("captain: resolve host executable: %w", err)
+	}
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		return "", fmt.Errorf("captain: resolve host executable identity: %w", err)
+	}
+	if !filepath.IsAbs(executable) || filepath.Clean(executable) != executable {
+		return "", errors.New("captain: host executable identity is not exact")
+	}
+	return executable, nil
 }
 
 func (c *Client) call(ctx context.Context, op wire.Op, payload []byte) ([]byte, error) {
@@ -281,7 +314,7 @@ func (c *Client) businessSession(ctx context.Context) (*wire.Client, error) {
 		return c.business, nil
 	}
 	session, err := wire.NewClient(ctx, wire.ClientConfig{
-		Dial: wire.UnixDialer(c.paths.socket), WireBuild: WireBuild, MaxFrame: maxHostFrame,
+		Dial: wire.UnixDialer(c.paths.socket), WireBuild: WireBuild, Role: c.role, MaxFrame: maxHostFrame,
 	})
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {

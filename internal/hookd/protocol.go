@@ -22,6 +22,9 @@ const (
 	opStatus         = "captain.status.v1"
 	opRestartWorkers = "captain.restart-workers.v1"
 	opRuntimeHealth  = "captain.host.v1.runtime.health"
+	opHelperPing     = "captain.helper.ping.v1"
+	opHelperNotify   = "captain.helper.notify.v1"
+	opHelperNext     = "captain.helper.next.v1"
 )
 
 // WireBuild is the stable v1 transport identity shared across runtime releases.

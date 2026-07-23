@@ -6,33 +6,41 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
+	"time"
 
 	dkdaemon "github.com/yasyf/daemonkit/daemon"
-	"github.com/yasyf/daemonkit/daemonrole"
-	"github.com/yasyf/daemonkit/drain"
 	"github.com/yasyf/daemonkit/proc"
-	"github.com/yasyf/daemonkit/supervise"
+	"github.com/yasyf/daemonkit/trust"
 	"github.com/yasyf/daemonkit/wire"
+	"github.com/yasyf/daemonkit/worker"
+)
+
+const (
+	hostTeamID                    = "SXKCTF23Q2"
+	hostSigningIdentifier         = "capt-hookd"
+	helperSigningIdentifier       = "com.yasyf.capt-hook.helper"
+	helperClientSigningIdentifier = "com.yasyf.capt-hook.helper.bridge"
+	hostShutdownTimeout           = 30 * time.Second
 )
 
 // Server is the captain-hook product host. Daemonkit owns its listener,
 // lifecycle, transport, admission, child identities, and reaping.
 type Server struct {
 	paths paths
-	role  daemonrole.Classifier
+	trust trust.TrustPolicy
 }
 
-// NewServer builds the one stable captain-hook host role.
-func NewServer(role daemonrole.Classifier) (*Server, error) {
-	if err := role.Validate(); err != nil {
-		return nil, err
-	}
+// NewServer builds the one stable captain-hook host.
+func NewServer() (*Server, error) {
 	resolved, err := resolvePaths()
 	if err != nil {
 		return nil, err
 	}
-	return &Server{paths: resolved, role: role}, nil
+	policy, err := hostTrustPolicy()
+	if err != nil {
+		return nil, err
+	}
+	return &Server{paths: resolved, trust: policy}, nil
 }
 
 // Run serves the exact v1 host until daemonkit completes ordered shutdown.
@@ -41,14 +49,65 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	err = runtime.Run(ctx)
-	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
-		return nil
-	}
-	return err
+	return runtime.run(ctx)
 }
 
-func (s *Server) runtime() (*wire.Server, *dkdaemon.Runtime, error) {
+type hostRuntime struct {
+	daemon  *dkdaemon.Runtime
+	slot    *dkdaemon.PublicationSlot[*workerManager]
+	manager *workerManager
+	log     *os.File
+}
+
+func (r *hostRuntime) run(ctx context.Context) error {
+	activation, err := r.daemon.Begin(ctx)
+	if err != nil {
+		return errors.Join(err, r.closeProduct())
+	}
+	publication, err := r.slot.Stage(activation, r.manager)
+	if err != nil {
+		_ = activation.Fail(err)
+		return errors.Join(err, r.daemon.Wait(context.Background()), r.closeProduct())
+	}
+	settlement, err := activation.ClaimProductSettlement()
+	if err != nil {
+		_ = activation.Fail(err)
+		return errors.Join(err, r.daemon.Wait(context.Background()), r.closeProduct())
+	}
+	settled := make(chan error, 1)
+	go func() {
+		<-activation.Context().Done()
+		settleCtx, cancel := context.WithTimeout(context.Background(), hostShutdownTimeout)
+		defer cancel()
+		joined, managerErr := r.manager.Close(settleCtx)
+		logErr := r.log.Close()
+		if !joined {
+			settled <- errors.Join(managerErr, logErr)
+			return
+		}
+		settled <- errors.Join(managerErr, logErr, settlement.Complete())
+	}()
+	if err := activation.CommitReady(publication); err != nil {
+		_ = activation.Fail(err)
+		return errors.Join(err, r.daemon.Wait(context.Background()), <-settled)
+	}
+	stopContext := context.AfterFunc(ctx, func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), hostShutdownTimeout)
+		defer cancel()
+		_ = r.daemon.Shutdown(shutdownCtx)
+	})
+	defer stopContext()
+	return errors.Join(r.daemon.Wait(context.Background()), <-settled)
+}
+
+func (r *hostRuntime) closeProduct() error {
+	closeCtx, cancel := context.WithTimeout(context.Background(), hostShutdownTimeout)
+	defer cancel()
+	_, managerErr := r.manager.Close(closeCtx)
+	return errors.Join(managerErr, r.log.Close())
+}
+
+func (s *Server) runtime() (*wire.Server, *hostRuntime, error) {
 	if err := s.paths.ensure(); err != nil {
 		return nil, nil, err
 	}
@@ -64,20 +123,29 @@ func (s *Server) runtime() (*wire.Server, *dkdaemon.Runtime, error) {
 	reaper := &proc.Reaper{
 		Store: &proc.FileStore{Path: s.paths.processes}, Generation: generation,
 	}
-	pool, err := supervise.NewPool(64, reaper)
+	children, err := proc.NewManager(64, reaper)
 	if err != nil {
 		_ = logFile.Close()
 		return nil, nil, err
 	}
-	manager := newWorkerManager(pool, reaper, logFile)
+	disposable, err := worker.NewPool(worker.Config{
+		Capacity: 1, QueueCapacity: 0, MaxTotalRun: 30 * time.Second,
+		MaxStdinBytes: 1, MaxStdoutBytes: 1, MaxStderrBytes: 1,
+	}, reaper)
+	if err != nil {
+		_ = logFile.Close()
+		return nil, nil, err
+	}
+	manager := newWorkerManager(children, logFile)
+	hub := newNotificationHub()
 	wireServer := &wire.Server{
-		WireBuild: WireBuild, Trust: s.trust, Workers: 64, Backlog: 192,
+		WireBuild: WireBuild, Workers: 64, Backlog: 192,
 		InboundQueue: 256, MaxFrame: maxHostFrame, MaxSessions: 64,
 	}
-	s.registerHandlers(wireServer, manager)
+	s.registerHandlers(wireServer, manager, hub)
 	var runtime *dkdaemon.Runtime
 	runtimeHealth := wire.ObservationRoute{
-		Op: wire.Op(opRuntimeHealth), MaxResponseBytes: 4 << 10, AvailableBeforeReady: true,
+		Op: wire.Op(opRuntimeHealth), MaxResponseBytes: 4 << 10,
 		Handler: func(ctx context.Context, request wire.ObservationRequest) (wire.ObservationResponse, error) {
 			if request.Tenant != "" || len(request.Payload) != 0 {
 				return wire.ObservationResponse{}, errors.New("captain: runtime health request must be empty")
@@ -91,7 +159,7 @@ func (s *Server) runtime() (*wire.Server, *dkdaemon.Runtime, error) {
 			}
 			payload, err := json.Marshal(runtimeHealthResponse{
 				Schema: Schema, RuntimeBuild: health.RuntimeBuild, RuntimeProtocol: health.RuntimeProtocol,
-				ProcessGeneration: health.ProcessGeneration, PID: health.PID, State: string(health.State),
+				ProcessGeneration: health.ProcessGeneration.String(), PID: health.PID, State: string(health.State),
 				Draining: health.Draining, Busy: health.Busy, Ready: health.Ready,
 			})
 			if err != nil {
@@ -102,30 +170,21 @@ func (s *Server) runtime() (*wire.Server, *dkdaemon.Runtime, error) {
 	}
 	runtime, err = wire.NewRuntime(wire.RuntimeConfig{
 		Socket: s.paths.socket, RuntimeBuild: Build, RuntimeProtocol: Schema,
-		Wire: wireServer, Classifier: s.role, ReservedProtectedSessions: 1,
-		StopVerifier: wire.StopVerifier{
-			Classifier: s.role, Role: stopControlRoleID,
-			Store: &proc.FileStore{Path: s.paths.stopProcesses},
-		},
-		Observations: []wire.ObservationRoute{runtimeHealth}, Admission: &drain.Intake{}, Workers: manager,
-		State: runtimeState{}, Resources: logFile,
-		Activate: func(activation dkdaemon.Activation) error {
-			return manager.recover(activation.Startup)
-		},
-		Busy: func() bool { return len(manager.status()) != 0 },
+		Wire: wireServer, TrustPolicy: s.trust,
+		StopControlStore: &proc.FileStore{Path: s.paths.stopProcesses},
+		Observations:     []wire.ObservationRoute{runtimeHealth},
+		Workers:          disposable, Children: children, ShutdownTimeout: hostShutdownTimeout,
 	})
 	if err != nil {
-		manager.Close()
-		manager.Cancel()
-		_ = manager.Wait(context.Background())
 		_ = logFile.Close()
 		return nil, nil, err
 	}
-	return wireServer, runtime, nil
+	slot := dkdaemon.NewPublicationSlot[*workerManager](runtime)
+	return wireServer, &hostRuntime{daemon: runtime, slot: slot, manager: manager, log: logFile}, nil
 }
 
-func (s *Server) registerHandlers(server *wire.Server, manager *workerManager) {
-	server.RegisterConcurrent(wire.Op(opEvent), func(ctx context.Context, request wire.Request) (any, error) {
+func (s *Server) registerHandlers(server *wire.Server, manager *workerManager, hub *notificationHub) {
+	server.Register(wire.HandlerSpec{Op: wire.Op(opEvent), Concurrent: true, Handler: func(ctx context.Context, request wire.Request) (any, error) {
 		if request.Tenant != "" {
 			return nil, errors.New("captain: event request must not carry a tenant")
 		}
@@ -140,14 +199,14 @@ func (s *Server) registerHandlers(server *wire.Server, manager *workerManager) {
 			return nil, errors.New("captain: event client pid does not match authenticated peer")
 		}
 		return manager.dispatch(ctx, event)
-	})
-	server.RegisterControl(wire.Op(opStatus), func(_ context.Context, request wire.Request) (any, error) {
+	}})
+	server.Register(wire.HandlerSpec{Op: wire.Op(opStatus), Handler: func(_ context.Context, request wire.Request) (any, error) {
 		if request.Tenant != "" || len(request.Payload) != 0 {
 			return nil, errors.New("captain: status request must be empty")
 		}
 		return statusResponse{Schema: Schema, Build: Build, PID: os.Getpid(), Workers: manager.status()}, nil
-	})
-	server.RegisterControl(wire.Op(opRestartWorkers), func(ctx context.Context, request wire.Request) (any, error) {
+	}})
+	server.Register(wire.HandlerSpec{Op: wire.Op(opRestartWorkers), Handler: func(ctx context.Context, request wire.Request) (any, error) {
 		if request.Tenant != "" {
 			return nil, errors.New("captain: restart-workers request must not carry a tenant")
 		}
@@ -164,37 +223,51 @@ func (s *Server) registerHandlers(server *wire.Server, manager *workerManager) {
 		return struct {
 			Schema int `json:"schema"`
 		}{Schema: Schema}, nil
+	}})
+	server.Register(wire.HandlerSpec{Op: wire.Op(opHelperPing), Handler: func(_ context.Context, request wire.Request) (any, error) {
+		if request.Tenant != "" || len(request.Payload) != 0 {
+			return nil, errors.New("captain: helper ping request must be empty")
+		}
+		version := Build
+		return helperReply{OK: true, Version: &version}, nil
+	}})
+	server.Register(wire.HandlerSpec{Op: wire.Op(opHelperNotify), Handler: func(ctx context.Context, request wire.Request) (any, error) {
+		if request.Tenant != "" {
+			return nil, errors.New("captain: helper notify request must not carry a tenant")
+		}
+		_, payload, err := decodeHelperNotification(request.Payload)
+		if err != nil {
+			return nil, err
+		}
+		if err := hub.publish(ctx, payload); err != nil {
+			return nil, err
+		}
+		return helperReply{OK: true}, nil
+	}})
+	server.Register(wire.HandlerSpec{Op: wire.Op(opHelperNext), Concurrent: true, Handler: func(ctx context.Context, request wire.Request) (any, error) {
+		if request.Tenant != "" || len(request.Payload) != 0 {
+			return nil, errors.New("captain: helper next request must be empty")
+		}
+		return hub.next(ctx)
+	}})
+}
+
+func hostTrustPolicy() (trust.TrustPolicy, error) {
+	hostRequirement := trust.Requirement{TeamID: hostTeamID, SigningIdentifier: hostSigningIdentifier}
+	helperRequirement := trust.Requirement{TeamID: hostTeamID, SigningIdentifier: helperSigningIdentifier}
+	helperClientRequirement := trust.Requirement{TeamID: hostTeamID, SigningIdentifier: helperClientSigningIdentifier}
+	return trust.NewTrustPolicy(trust.TrustPolicyConfig{
+		ExpectedUID: os.Geteuid(),
+		Roles: map[trust.PeerRole]trust.Requirement{
+			businessRoleID: hostRequirement, lifecycleRoleID: hostRequirement, stopControlRoleID: hostRequirement,
+			helperConsumerRoleID:        helperRequirement,
+			helperBrokerLifecycleRoleID: helperRequirement,
+			helperBrokerHandoffRoleID:   helperRequirement,
+			helperClientRoleID:          helperClientRequirement,
+		},
+		StopRoles:      []trust.PeerRole{stopControlRoleID},
+		ReceiptRoles:   []trust.PeerRole{lifecycleRoleID, helperConsumerRoleID, helperBrokerLifecycleRoleID},
+		ReadinessRoles: []trust.PeerRole{lifecycleRoleID, helperConsumerRoleID, helperBrokerLifecycleRoleID},
+		HandoffRoles:   []trust.PeerRole{helperBrokerHandoffRoleID},
 	})
-}
-
-type runtimeState struct{}
-
-func (runtimeState) Close() error { return nil }
-
-func (s *Server) trust(ctx context.Context, peer wire.Peer) error {
-	accepted, err := s.role.Classify(ctx, peer)
-	if err != nil {
-		return err
-	}
-	if !accepted {
-		return daemonrole.ErrUntrustedPeer
-	}
-	return nil
-}
-
-// DaemonRole resolves the exact stable executable role used for launch and trust.
-func DaemonRole() (daemonrole.Classifier, error) {
-	executable, err := os.Executable()
-	if err != nil {
-		return daemonrole.Classifier{}, fmt.Errorf("captain: resolve host executable: %w", err)
-	}
-	executable, err = filepath.EvalSymlinks(executable)
-	if err != nil {
-		return daemonrole.Classifier{}, fmt.Errorf("captain: resolve host role: %w", err)
-	}
-	role := daemonrole.Classifier{RoleID: daemonRoleID, RolePath: executable}
-	if err := role.Validate(); err != nil {
-		return daemonrole.Classifier{}, err
-	}
-	return role, nil
 }

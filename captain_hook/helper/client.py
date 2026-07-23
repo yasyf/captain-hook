@@ -63,11 +63,6 @@ def bridge_path() -> Path:
     return INSTALLED_BRIDGE
 
 
-def socket_path() -> Path:
-    """The DaemonKit session socket passed only to the signed bridge."""
-    return helper_dir() / "helper.sock"
-
-
 def status_path() -> Path:
     """The snapshot the widget reads."""
     return helper_dir() / "status.json"
@@ -85,7 +80,7 @@ def send(
     timeout: float = BRIDGE_TIMEOUT,
 ) -> dict[str, object]:
     """Invoke the signed bridge for one typed operation and validate its terminal result."""
-    argv = [str(bridge_path()), "--socket", str(socket_path()), operation]
+    argv = [str(bridge_path()), operation]
     try:
         completed = subprocess.run(
             argv,

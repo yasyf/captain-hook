@@ -11,7 +11,7 @@ private enum BridgeError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            "usage: capt-hook-helper-client --socket PATH ping|notify"
+            "usage: capt-hook-helper-client ping|notify"
         case let .input(message):
             message
         case let .rejected(message):
@@ -25,15 +25,12 @@ private enum BridgeError: Error, CustomStringConvertible {
 }
 
 private struct Arguments {
-    let socket: String
     let operation: String
 
     init(_ arguments: [String]) throws {
-        guard arguments.count == 3, arguments[0] == "--socket",
-              !arguments[1].isEmpty, ["ping", "notify"].contains(arguments[2])
+        guard arguments.count == 1, ["ping", "notify"].contains(arguments[0])
         else { throw BridgeError.usage }
-        socket = arguments[1]
-        operation = arguments[2]
+        operation = arguments[0]
     }
 }
 
@@ -43,15 +40,18 @@ private enum CaptainHookBridge {
         do {
             let arguments = try Arguments(Array(CommandLine.arguments.dropFirst()))
             let input = try payload(for: arguments.operation)
+            let container = try AppGroupContainer(identifier: HelperPaths.appGroupIdentifier)
+            let socket = try container.socketPath(leaf: AppGroupContainer.SocketLeaf("helper.sock"))
             let client = try await SocketClient(
-                path: arguments.socket,
+                path: socket,
                 wireBuild: helperWireBuild,
-                trust: .sameEffectiveUser
+                role: helperClientRole,
+                configuration: .init(maximumFrameBytes: 64 * 1024)
             )
             let terminal: SocketTerminal
             do {
                 terminal = try await client.call(
-                    operation: arguments.operation,
+                    operation: operation(for: arguments.operation),
                     payload: input,
                     deadline: Date().addingTimeInterval(5)
                 )
@@ -85,5 +85,9 @@ private enum CaptainHookBridge {
         } catch {
             throw BridgeError.input("invalid notify request: \(error)")
         }
+    }
+
+    private static func operation(for command: String) -> String {
+        command == "ping" ? helperPingOperation : helperNotifyOperation
     }
 }

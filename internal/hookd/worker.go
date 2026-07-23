@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"time"
 
-	"github.com/yasyf/daemonkit/supervise"
+	"github.com/yasyf/daemonkit/proc"
 )
 
 type workerResult struct {
@@ -20,7 +21,8 @@ type workerResult struct {
 type workerClient struct {
 	conn    net.Conn
 	build   string
-	process *supervise.SessionProcess
+	child   *proc.PreparedChild
+	receipt proc.ProcessReceipt
 
 	writeMu sync.Mutex
 	mu      sync.Mutex
@@ -31,6 +33,44 @@ type workerClient struct {
 
 	stopOnce sync.Once
 	stopErr  error
+}
+
+type workerPipeConn struct {
+	reader *os.File
+	writer *os.File
+	once   sync.Once
+	err    error
+}
+
+type workerPipeAddr struct{}
+
+func (workerPipeAddr) Network() string { return "pipe" }
+func (workerPipeAddr) String() string  { return "captain-hook-worker" }
+
+func newWorkerPipeConn(reader, writer *os.File) net.Conn {
+	return &workerPipeConn{reader: reader, writer: writer}
+}
+
+func (c *workerPipeConn) Read(payload []byte) (int, error)  { return c.reader.Read(payload) }
+func (c *workerPipeConn) Write(payload []byte) (int, error) { return c.writer.Write(payload) }
+func (c *workerPipeConn) LocalAddr() net.Addr               { return workerPipeAddr{} }
+func (c *workerPipeConn) RemoteAddr() net.Addr              { return workerPipeAddr{} }
+
+func (c *workerPipeConn) Close() error {
+	c.once.Do(func() { c.err = errors.Join(c.reader.Close(), c.writer.Close()) })
+	return c.err
+}
+
+func (c *workerPipeConn) SetDeadline(deadline time.Time) error {
+	return errors.Join(c.reader.SetReadDeadline(deadline), c.writer.SetWriteDeadline(deadline))
+}
+
+func (c *workerPipeConn) SetReadDeadline(deadline time.Time) error {
+	return c.reader.SetReadDeadline(deadline)
+}
+
+func (c *workerPipeConn) SetWriteDeadline(deadline time.Time) error {
+	return c.writer.SetWriteDeadline(deadline)
 }
 
 func handshakeWorker(ctx context.Context, conn net.Conn, build string) (*workerClient, error) {
@@ -166,8 +206,8 @@ func (w *workerClient) fail(err error) {
 func (w *workerClient) stop(ctx context.Context) error {
 	w.stopOnce.Do(func() {
 		w.fail(net.ErrClosed)
-		if w.process != nil {
-			w.stopErr = w.process.Stop(ctx)
+		if w.child != nil {
+			w.stopErr = w.child.Stop(ctx)
 		}
 	})
 	return w.stopErr

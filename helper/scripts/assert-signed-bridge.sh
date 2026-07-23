@@ -8,6 +8,7 @@ host="$APP_PATH/Contents/Helpers/capt-hookd"
 app="$APP_PATH/Contents/MacOS/Captain Hook"
 expected_team="SXKCTF23Q2"
 expected_identifier="com.yasyf.capt-hook.helper.bridge"
+expected_group="$expected_team.com.yasyf.capt-hook.helper"
 release_version="${CAPT_HOOK_VERSION:-${GITHUB_REF_NAME#v}}"
 
 test -n "$release_version"
@@ -68,26 +69,35 @@ for key in \
     exit 1
   fi
 done
+grep -q "$expected_group" "$entitlements"
 
 state="$(mktemp -d /tmp/capt-hook-bridge.XXXXXX)"
 app_log="$state/app.log"
+host_log="$state/host.log"
 cleanup() {
   if [[ -n "${app_pid:-}" ]]; then
     kill "$app_pid" 2>/dev/null || true
     wait "$app_pid" 2>/dev/null || true
   fi
+  if [[ -n "${host_pid:-}" ]]; then
+    kill "$host_pid" 2>/dev/null || true
+    wait "$host_pid" 2>/dev/null || true
+  fi
   rm -rf "$state" "$entitlements" "$host_entitlements"
 }
 trap cleanup EXIT
 
+"$host" serve > "$host_log" 2>&1 &
+host_pid=$!
 CAPT_HOOK_HELPER_DIR="$state" "$app" > "$app_log" 2>&1 &
 app_pid=$!
 
 for _ in $(seq 1 40); do
-  if ping="$("$bridge" --socket "$state/helper.sock" ping 2>/dev/null)"; then
+  if ping="$("$bridge" ping 2>/dev/null)"; then
     break
   fi
   kill -0 "$app_pid" 2>/dev/null || { cat "$app_log" >&2; exit 1; }
+  kill -0 "$host_pid" 2>/dev/null || { cat "$host_log" >&2; exit 1; }
   sleep 0.25
 done
 : "${ping:?signed bridge ping did not complete}"
@@ -96,7 +106,7 @@ version="$(plutil -extract CFBundleShortVersionString raw "$APP_PATH/Contents/In
 test "$version" = "${release_version%%-*}"
 app_build="$(plutil -extract CaptHookBuild raw "$APP_PATH/Contents/Info.plist")"
 test "$app_build" = "v$release_version"
-python3 - "$version" "$ping" <<'PY'
+python3 - "$release_version" "$ping" <<'PY'
 import json
 import sys
 
@@ -104,7 +114,7 @@ version, raw = sys.argv[1:]
 assert json.loads(raw) == {"ok": True, "version": version}
 PY
 
-notify="$("$bridge" --socket "$state/helper.sock" notify <<'JSON'
+notify="$("$bridge" notify <<'JSON'
 {"kind":"pr_open","title":"Captain Hook signed bridge","subtitle":"release assertion","body":"typed notify session","url":"https://github.com/yasyf/captain-hook","repo":"github.com/yasyf/captain-hook"}
 JSON
 )"

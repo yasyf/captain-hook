@@ -1,6 +1,10 @@
 package hookd
 
-import "testing"
+import (
+	"context"
+	"io"
+	"testing"
+)
 
 func TestWorkerKeyExcludesSessionAndAccountEnvironment(t *testing.T) {
 	t.Parallel()
@@ -52,7 +56,7 @@ func TestWorkerBaseEnvironmentDoesNotLeakFirstClientScope(t *testing.T) {
 		"PATH=/bin", "HOME=/tmp/home", "CLAUDE_CONFIG_DIR=/account/18",
 		"CLAUDE_CODE_SESSION_ID=session-a", "HOOKS_PROFILE=strict", "CAPT_HOOK_RUN_DIR=/old",
 	})
-	want := map[string]bool{"PATH=/bin": true, "HOME=/tmp/home": true}
+	want := map[string]bool{"HOME=/tmp/home": true}
 	if len(base) != len(want) {
 		t.Fatalf("base environment = %v", base)
 	}
@@ -60,5 +64,13 @@ func TestWorkerBaseEnvironmentDoesNotLeakFirstClientScope(t *testing.T) {
 		if !want[item] {
 			t.Fatalf("unexpected base environment entry %q", item)
 		}
+	}
+}
+
+func TestWorkerManagerCloseReportsJoinedProductGraph(t *testing.T) {
+	manager := newWorkerManager(nil, io.Discard)
+	joined, err := manager.Close(context.Background())
+	if err != nil || !joined {
+		t.Fatalf("Close = joined %t, err %v", joined, err)
 	}
 }
