@@ -21,7 +21,7 @@ jobs:
   # (and PyPI does not support reusable workflows for Trusted Publishing). Running publish here
   # makes job_workflow_ref this repo's release-pypi.yml, matching the existing trusted publisher.
   publish:
-    needs: build
+    needs: [build, helper, verify-release-artifacts]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -35,7 +35,7 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   github-release:
-    needs: [build, publish]
+    needs: [build, helper, publish, sync-plugin-version, verify-release-artifacts]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -45,17 +45,60 @@ jobs:
           pattern: dist*
           path: dist
           merge-multiple: true
-      - name: Create GitHub release
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.helper.outputs.artifact_name }}
+          path: helper-dist
+
+      - name: Stage and publish the complete verified release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HELPER_ASSET: ${{ needs.helper.outputs.asset_filename }}
+          HELPER_SHA256: ${{ needs.helper.outputs.sha256 }}
           TAG: ${{ needs.build.outputs.tag }}
-        run: >
-          gh release create "$TAG"
-          --title "$TAG"
-          --generate-notes
-          --latest
-          --repo "${{ github.repository }}"
-          dist/*
+        run: |
+          set -euo pipefail
+          test -f "helper-dist/$HELPER_ASSET"
+          test -f "helper-dist/$HELPER_ASSET.sha256"
+          [ "$(shasum -a 256 "helper-dist/$HELPER_ASSET" | awk '{print $1}')" = "$HELPER_SHA256" ]
+          read -r sidecar_sha sidecar_path < "helper-dist/$HELPER_ASSET.sha256"
+          [ "$sidecar_sha" = "$HELPER_SHA256" ]
+          [ "$(basename "$sidecar_path")" = "$HELPER_ASSET" ]
+
+          if state="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,tagName 2>/dev/null)"; then
+            [ "$(jq -r .tagName <<<"$state")" = "$TAG" ]
+            [ "$(jq -r .isDraft <<<"$state")" = true ] || {
+              echo "::error::release $TAG is already public; refusing to mutate it"
+              exit 1
+            }
+          else
+            args=(--draft --title "$TAG" --generate-notes --verify-tag)
+            if [[ "$TAG" == *-* ]]; then
+              args+=(--prerelease)
+            fi
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" "${args[@]}"
+          fi
+
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            dist/* helper-dist/*
+
+          expected="$RUNNER_TEMP/expected-release-assets"
+          actual="$RUNNER_TEMP/actual-release-assets"
+          find dist helper-dist -maxdepth 1 -type f -exec basename {} \; | sort > "$expected"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+            --jq '.assets[].name' | sort > "$actual"
+          diff -u "$expected" "$actual" || {
+            echo "::error::draft release does not contain the exact staged asset set"
+            exit 1
+          }
+
+          if [[ "$TAG" == *-* ]]; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --draft=false --prerelease=true
+          else
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --draft=false --prerelease=false --latest
+          fi
 
   # Consumer plugin caches refresh only when plugin.json's version increases, so every
   # release must advance it on main. The sync runs as its own job: a failure turns the
@@ -130,10 +173,10 @@ jobs:
           fi
 
   helper:
-    needs: [build, helper-version, github-release]
+    needs: [build, helper-version]
     permissions:
-      contents: write
-    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@0b8cc21418a6102d6670053a17c97f5723e9daa2
+      contents: read
+    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@1666a5363ad6f2ed7ac0be901702e523cc1fba66
     with:
       app_name: Captain Hook
       asset_name: captain-hook
@@ -158,8 +201,35 @@ jobs:
       MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
       MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
 
+  verify-release-artifacts:
+    needs: [build, helper]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: dist*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.helper.outputs.artifact_name }}
+          path: helper-dist
+      - name: Verify the staged helper and Python artifacts
+        env:
+          HELPER_ASSET: ${{ needs.helper.outputs.asset_filename }}
+          HELPER_SHA256: ${{ needs.helper.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          find dist -maxdepth 1 -type f | grep -q .
+          test -f "helper-dist/$HELPER_ASSET"
+          test -f "helper-dist/$HELPER_ASSET.sha256"
+          [ "$(shasum -a 256 "helper-dist/$HELPER_ASSET" | awk '{print $1}')" = "$HELPER_SHA256" ]
+          read -r sidecar_sha sidecar_path < "helper-dist/$HELPER_ASSET.sha256"
+          [ "$sidecar_sha" = "$HELPER_SHA256" ]
+          [ "$(basename "$sidecar_path")" = "$HELPER_ASSET" ]
+
   helper-cask:
-    needs: [helper-version, helper]
+    needs: [github-release, helper-version, helper]
     if: ${{ needs.helper-version.outputs.stable == 'true' }}
     runs-on: ubuntu-latest
     permissions:
@@ -254,7 +324,7 @@ jobs:
           fi
 
       - name: Render the cask from the verified release output
-        uses: yasyf/homebrew-tap/.github/actions/render-formula@f45550932b0c8a42eb04e9ab0e5de8f82ad78b6a
+        uses: yasyf/homebrew-tap/.github/actions/render-formula@1666a5363ad6f2ed7ac0be901702e523cc1fba66
         with:
           template: .github/cask/captain-hook.rb.tmpl
           output: Casks/captain-hook.rb
@@ -263,7 +333,7 @@ jobs:
             __SHA_APP__=${{ needs.helper.outputs.sha256 }}
 
       - name: Publish the verified application cask
-        uses: yasyf/homebrew-tap/.github/actions/publish@f45550932b0c8a42eb04e9ab0e5de8f82ad78b6a
+        uses: yasyf/homebrew-tap/.github/actions/publish@1666a5363ad6f2ed7ac0be901702e523cc1fba66
         with:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           dir: tap-staging

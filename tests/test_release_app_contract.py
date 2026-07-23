@@ -3,8 +3,8 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/release-pypi.yml"
 CASK = ROOT / ".github/cask/captain-hook.rb.tmpl"
-RELEASE_APP_REF = "0b8cc21418a6102d6670053a17c97f5723e9daa2"
-HOME_BREW_ACTION_REF = "f45550932b0c8a42eb04e9ab0e5de8f82ad78b6a"
+RELEASE_APP_REF = "1666a5363ad6f2ed7ac0be901702e523cc1fba66"
+HOME_BREW_ACTION_REF = "1666a5363ad6f2ed7ac0be901702e523cc1fba66"
 
 
 def test_helper_release_uses_exact_hard_cut_contract() -> None:
@@ -19,6 +19,27 @@ def test_helper_release_uses_exact_hard_cut_contract() -> None:
     assert "cask_token:" not in helper
     assert "cask_template_path:" not in helper
     assert "HOMEBREW_TAP_TOKEN:" not in helper
+
+
+def test_release_is_published_only_after_helper_and_python_artifacts_are_verified() -> None:
+    workflow = WORKFLOW.read_text()
+    publish = workflow[workflow.index("\n  github-release:") : workflow.index("\n  sync-plugin-version:")]
+
+    for required in (
+        "needs: [build, helper, publish, sync-plugin-version, verify-release-artifacts]",
+        "needs.helper.outputs.artifact_name",
+        "needs.helper.outputs.asset_filename",
+        "needs.helper.outputs.sha256",
+        'gh release create "$TAG"',
+        "--draft --title",
+        'gh release upload "$TAG"',
+        'gh release edit "$TAG"',
+        "--draft=false",
+    ):
+        assert required in publish
+
+    assert publish.index("--draft") < publish.index("gh release upload")
+    assert publish.index("gh release upload") < publish.index("--draft=false")
 
 
 def test_cask_publication_uses_verified_release_outputs() -> None:
