@@ -9,7 +9,28 @@ import {
   EditorHandle,
   EditorModule,
   EventInput,
+  GATE_SCHEMA,
   LIVE_NOTE,
+  LlmAdapter,
+  LlmDetection,
+  LlmModule,
+  LlmProgress,
+  LlmSession,
+  LLM_BUILTIN_READY,
+  LLM_DETECTING,
+  LLM_DOWNLOAD_LABEL,
+  LLM_DOWNLOAD_OFFER,
+  LLM_DOWNLOADING,
+  LLM_GENERATING,
+  LLM_LOADING,
+  LLM_NOTE,
+  LLM_RECORDED_BADGE,
+  LLM_RUN_LABEL,
+  LLM_RUN_LIVE_LABEL,
+  LLM_SIZE_UNKNOWN,
+  LLM_UNAVAILABLE,
+  LLM_USER_PROMPT,
+  LLM_VERDICT_BADGE,
   RecordedCase,
   SessionState,
   Verdict,
@@ -339,6 +360,124 @@ class WorldWidget {
   }
 }
 
+function fill(template: string, values: Record<string, string>): string {
+  return template.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? `{${key}}`);
+}
+
+function formatSize(bytes: number | null): string {
+  return bytes ? `${Math.round(bytes / 1_000_000)} MB` : LLM_SIZE_UNKNOWN;
+}
+
+// The llm_gate teaser: a read-only view of the real fragment, the recorded verdict shown instantly
+// and badged as a recording, and an opt-in on-device run. Detection previews the lane without
+// downloading; a model download starts only on an explicit click of the offer. Out of the parity
+// suite by design — a live model verdict is nondeterministic.
+class LlmWidget {
+  private adapter: LlmAdapter | null = null;
+  private session: LlmSession | null = null;
+  private load: Promise<LlmModule> | null = null;
+  private readonly panel = el("div", "ch-widget-verdict");
+  private readonly action = el("div", "ch-widget-llm-action");
+
+  constructor(
+    private readonly stage: HTMLElement,
+    private readonly data: WidgetData,
+    private readonly event: string,
+    private readonly llmJs: string,
+    private readonly wllamaWasm: string,
+  ) {}
+
+  mount(): void {
+    this.stage.append(header(this.event, LLM_NOTE));
+    if (this.data.source != null) this.stage.append(readOnlyCode(this.data.source, "hooks.py"));
+    this.stage.append(this.panel, this.action);
+    this.renderRecorded();
+    this.button(LLM_RUN_LIVE_LABEL, () => void this.detect());
+    window.addEventListener("pagehide", () => void this.session?.destroy(), { once: true });
+  }
+
+  private button(label: string, onClick: () => void): void {
+    this.action.textContent = "";
+    const btn = el("button", "ch-widget-chip", label);
+    btn.type = "button";
+    btn.addEventListener("click", onClick, { once: true });
+    this.action.append(btn);
+  }
+
+  private status(text: string): void {
+    this.action.textContent = "";
+    this.panel.className = "ch-widget-verdict";
+    this.panel.textContent = "";
+    this.panel.append(el("p", "ch-widget-message", text));
+  }
+
+  private renderRecorded(): void {
+    const verdict = this.data.recordings[0]?.verdict;
+    if (!verdict) return;
+    renderVerdict(this.panel, verdict);
+    this.panel.prepend(el("p", "ch-widget-badge-recorded", LLM_RECORDED_BADGE));
+  }
+
+  private caption(text: string, verdict: Verdict): void {
+    renderVerdict(this.panel, verdict);
+    this.panel.prepend(el("p", "ch-widget-badge-recorded", text));
+  }
+
+  private module(): Promise<LlmModule> {
+    return (this.load ??= importModule<LlmModule>(this.llmJs));
+  }
+
+  private ensureAdapter(mod: LlmModule): LlmAdapter {
+    return (this.adapter ??= mod.initLlm({
+      system: this.data.rubric ?? "",
+      schema: GATE_SCHEMA,
+      assets: { wllama: { default: new URL(this.wllamaWasm, document.baseURI).href } },
+      onProgress: (p) => this.onProgress(p),
+    }));
+  }
+
+  private onProgress(p: LlmProgress): void {
+    const frac = p.total ? p.loaded / p.total : p.loaded;
+    const percent = `${Math.min(100, Math.max(0, Math.round(frac * 100)))}%`;
+    this.status(fill(LLM_DOWNLOADING, { percent }));
+  }
+
+  private async detect(): Promise<void> {
+    this.status(LLM_DETECTING);
+    try {
+      const detection: LlmDetection = await this.ensureAdapter(await this.module()).detect();
+      if (detection.availability === "ready") {
+        this.status(LLM_BUILTIN_READY);
+        this.button(LLM_RUN_LABEL, () => void this.run());
+      } else {
+        this.status(fill(LLM_DOWNLOAD_OFFER, { model: detection.model, size: formatSize(detection.downloadBytes) }));
+        this.button(LLM_DOWNLOAD_LABEL, () => void this.run());
+      }
+    } catch {
+      this.status(LLM_UNAVAILABLE);
+    }
+  }
+
+  private async run(): Promise<void> {
+    this.status(LLM_LOADING);
+    try {
+      this.session = await this.ensureAdapter(await this.module()).start();
+      this.status(LLM_GENERATING);
+      const input: EventInput = this.data.recordings[0]?.input ?? {};
+      const result = (await this.session.prompt(
+        fill(LLM_USER_PROMPT, { tool: input.tool ?? "", command: input.command ?? "" }),
+      )) as { block?: boolean; reasoning?: string };
+      this.caption(LLM_VERDICT_BADGE, {
+        action: result.block ? "block" : "pass",
+        message: result.reasoning ?? null,
+        rewritten: null,
+      });
+    } catch {
+      this.status(LLM_UNAVAILABLE);
+    }
+  }
+}
+
 export function mountAll(evaluate: Evaluate): void {
   for (const root of Array.from(document.querySelectorAll<HTMLElement>(".ch-widget"))) {
     if (root.dataset.mounted) continue;
@@ -350,6 +489,14 @@ export function mountAll(evaluate: Evaluate): void {
     root.appendChild(stage);
     if (data.mode === "canned") {
       renderCanned(stage, data, data.recordings[0]?.input.event ?? "PreToolUse");
+    } else if (data.mode === "llm") {
+      new LlmWidget(
+        stage,
+        data,
+        data.recordings[0]?.input.event ?? "PreToolUse",
+        root.dataset.llmJs ?? "llm.js",
+        root.dataset.wllamaWasm ?? "wllama/wllama.wasm",
+      ).mount();
     } else if (data.mode === "world" && data.world) {
       new WorldWidget(stage, data, data.cases[0]?.event ?? "PreToolUse", data.world).mount();
     } else {

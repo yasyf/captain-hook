@@ -22,16 +22,19 @@ SRC = ROOT / "docs" / "tutorial" / "_src"
 PARITY_MJS = SRC / "parity.mjs"
 COMPILER_TESTS_MJS = SRC / "tests" / "compiler.test.mjs"
 RM_WORLD_TESTS_MJS = SRC / "tests" / "rm_world.test.mjs"
+LLM_TESTS_MJS = SRC / "tests" / "llm.test.mjs"
 MATRIX = json.loads((SRC / "matrix.json").read_text())
 BUNDLE_SHA256 = {
-    "compiler.js": "88354cf846acb6fd53fd23f90712b4cdc5c1eb7d1884c80aef614c33985f8101",
-    "editor.js": "b9888c8927dbb026837f62e2874825e61a34a9df9e1e069482915ba79cc404a6",
-    "emulator.js": "064f6d57586932a2b032faf8466620a33cd1b048156045a8bfd39e57739131a9",
+    "compiler.js": "a3bca578cd1d2cfe8a0b9576257052da06ef88d83e06992a27a73c9df1bcaeb8",
+    "editor.js": "f9b7c07811302cf0dd5c8234821d0573df1941096e300dd847e3e261a84497af",
+    "emulator.js": "709d907a735ca66684839d3cb6ed86ac9a95efaab7aed4ca973a6016556b2136",
+    "llm.js": "4656b9c16693c3d3b5689378df37df512297505d48ee6bb6ce62400f1bc65bf4",
 }
+WLLAMA_WASM_SHA256 = "4197ce6d3dc9240c42ee52b4197dc99638875a06b0083901f8a57767338a0cfa"
 
 sys.path.insert(0, str(SCRIPTS))
 
-from build_emulator import BANNER_PREFIX, BUNDLES, src_hash  # noqa: E402
+from build_emulator import BANNER_PREFIX, BUNDLES, WLLAMA_WASM_DST, src_hash  # noqa: E402
 from widget_compiler import compile_fragment, load_hooks  # noqa: E402
 
 import captain_hook  # noqa: E402
@@ -48,6 +51,21 @@ PACKS_DIR = Path(captain_hook.__file__).parent / "builtin_packs"
 
 NODE = shutil.which("node")
 requires_node = pytest.mark.skipif(NODE is None and not os.environ.get("CI"), reason="node absent and CI unset")
+
+
+def _node_supports_ts_module_mocks() -> bool:
+    """The llm adapter test imports the .ts source and mocks pocket-llm, needing native TS type
+    stripping (node >= 22.6, flagged) and the experimental module-mock API. Older node skips it."""
+    if NODE is None:
+        return False
+    version = subprocess.run([NODE, "--version"], capture_output=True, text=True).stdout.strip().lstrip("v")
+    major, minor, *_ = (int(part) for part in version.split("."))
+    return (major, minor) >= (22, 6)
+
+
+requires_ts_module_mocks = pytest.mark.skipif(
+    not _node_supports_ts_module_mocks(), reason="node < 22.6 lacks --experimental-strip-types / module mocks"
+)
 
 
 def normalize(envelope: dict[str, Any] | None) -> dict[str, Any]:
@@ -228,6 +246,17 @@ def test_bundle_drift(bundle: Any) -> None:
     )
 
 
+def test_wllama_wasm_drift() -> None:
+    """The self-hosted wllama runtime is present and byte-identical to the pinned artifact — a wllama
+    version bump (which moves the wasm) fails here until `python docs/scripts/build_emulator.py` reruns."""
+    assert WLLAMA_WASM_DST.exists(), (
+        f"committed {WLLAMA_WASM_DST.name} is missing — run `python docs/scripts/build_emulator.py`"
+    )
+    assert sha256(WLLAMA_WASM_DST.read_bytes()).hexdigest() == WLLAMA_WASM_SHA256, (
+        f"committed {WLLAMA_WASM_DST.name} content differs from the pinned wasm"
+    )
+
+
 @requires_node
 @pytest.mark.parametrize(("widget_id", "case"), _widget_cases("live"))
 def test_parity(widget_id: str, case: dict[str, Any]) -> None:
@@ -240,7 +269,7 @@ def test_parity(widget_id: str, case: dict[str, Any]) -> None:
         assert verdict == results["python"][case["id"]]
 
 
-@pytest.mark.parametrize(("widget_id", "case"), _widget_cases("canned"))
+@pytest.mark.parametrize(("widget_id", "case"), _widget_cases("llm"))
 def test_canned_verdicts(widget_id: str, case: dict[str, Any]) -> None:
     if not case.get("verified"):
         pytest.skip("illustrative recording, not engine-verified")
@@ -459,10 +488,12 @@ def test_fragment_inline_tests(fragment: str) -> None:
     assert [(name, msg) for name, _status, ok, msg in results if not ok] == []
 
 
+# Only live widgets lower through the DSL compiler; the llm widget carries a fragment for its rubric
+# but registers an llm_gate, which sits outside the serializable grammar, so it stays off compile parity.
 FRAGMENT_WIDGETS = [
     pytest.param(widget["fragment"], id=widget_id)
     for widget_id, widget in MATRIX["widgets"].items()
-    if "fragment" in widget
+    if "fragment" in widget and widget["mode"] == "live"
 ]
 
 
@@ -499,6 +530,19 @@ def test_compiler_node_unit_suite() -> None:
 def test_rm_world_node_unit_suite() -> None:
     """Run the rm_walk world-engine `node --test` suite (redirect/wrapper/grouping/time/glob honesty)."""
     proc = subprocess.run([NODE, "--test", str(RM_WORLD_TESTS_MJS)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@requires_node
+@requires_ts_module_mocks
+def test_llm_node_unit_suite() -> None:
+    """Run the llm-adapter `node --test` suite: the adapter passes system/schema/assets through and
+    never creates a session (the download gate) before start(), with pocket-llm's surface stubbed."""
+    proc = subprocess.run(
+        [NODE, "--test", "--experimental-strip-types", "--experimental-test-module-mocks", str(LLM_TESTS_MJS)],
+        capture_output=True,
+        text=True,
+    )
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 

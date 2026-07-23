@@ -179,6 +179,13 @@
   border-color: var(--ch-accent);
 }
 
+.ch-widget-llm-action {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+}
+
 .ch-widget-controls {
   display: flex;
   flex-wrap: wrap;

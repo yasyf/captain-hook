@@ -176,7 +176,8 @@
       ]
     },
     "llm_gate_teaser": {
-      "mode": "canned",
+      "mode": "llm",
+      "fragment": "tutorial_llm_gate",
       "event": "PreToolUse",
       "cases": [
         {

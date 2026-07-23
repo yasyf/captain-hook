@@ -12,7 +12,8 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 
 - `general` — language-agnostic guards: git/jj command safety, doc and prompt nudges, task and
   plan discipline, model-routing nudges, a code-review gate, a docs-freshness gate, a detour
-  check-in nudge, verbose-comment enforcement, and `rm` safety.
+  check-in nudge, verbose-comment enforcement (a new over-budget comment is denied; an edit to a
+  comment that was already over budget only warns), and `rm` safety.
 - `fixes` — workarounds for upstream Claude Code issues: auto-approving a teammate's permission
   dialogs and scratch-file writes when the session ran with `--dangerously-skip-permissions`.
 - `steering` — judgment nudges: prefer first-principles fixes over band-aids, don't dismiss a real

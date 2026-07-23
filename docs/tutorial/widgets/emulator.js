@@ -1,4 +1,4 @@
-// capt-hook-widget src-sha256: 55261089e225afb7da75b2e05af8b4a6b48c70d75f456a728fb1bd1712d66c71
+// capt-hook-widget src-sha256: e00147c54ca6898ecf9d08fab2d6bdd1176cdba49d8711125402b12e91def85d
 
 // autocomplete.ts
 var counter = 0;
@@ -246,6 +246,26 @@ var LIVE_NOTE = "This runs a browser model of the demo subset \u2014 run `capt-h
 var CANNED_NOTE = "Recorded from the real engine, not evaluated in your browser.";
 var WORLD_NOTE = "This walks a declared virtual filesystem with a faithful port of the real hook \u2014 run `capt-hook test` for the real engine.";
 var WORLD_HONESTY_MESSAGE = "outside the filesystem this demo declares \u2014 run `capt-hook test` for the real engine.";
+var GATE_SCHEMA = {
+  type: "object",
+  properties: { block: { type: "boolean" }, reasoning: { type: "string" } },
+  required: ["block", "reasoning"]
+};
+var LLM_NOTE = "A recorded model verdict \u2014 run it live on-device, nothing leaves your browser.";
+var LLM_RECORDED_BADGE = "recording";
+var LLM_RUN_LIVE_LABEL = "Run it live on-device";
+var LLM_DETECTING = "Checking what this browser can run\u2026";
+var LLM_BUILTIN_READY = "This browser has a built-in model ready \u2014 no download needed.";
+var LLM_RUN_LABEL = "Run the gate";
+var LLM_DOWNLOAD_OFFER = "Running on-device needs a one-time download of {model} ({size}).";
+var LLM_DOWNLOAD_LABEL = "Download & run";
+var LLM_LOADING = "Starting the model\u2026";
+var LLM_DOWNLOADING = "Downloading the model\u2026 {percent}";
+var LLM_GENERATING = "Asking the model\u2026";
+var LLM_VERDICT_BADGE = "model verdict \u2014 nondeterministic, not part of the parity suite";
+var LLM_UNAVAILABLE = "No on-device model lane is available in this browser \u2014 the recorded verdict above is what a real run produced.";
+var LLM_SIZE_UNKNOWN = "unknown size";
+var LLM_USER_PROMPT = "Evaluate this pending action:\n\nTool: {tool}\nCommand: {command}";
 
 // rm_world.ts
 var GLOB_LIMIT = 10;
@@ -934,6 +954,106 @@ var WorldWidget = class {
     renderVerdict(this.panel, evaluateRmWorld(this.world, this.current));
   }
 };
+function fill(template, values) {
+  return template.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? `{${key}}`);
+}
+function formatSize(bytes) {
+  return bytes ? `${Math.round(bytes / 1e6)} MB` : LLM_SIZE_UNKNOWN;
+}
+var LlmWidget = class {
+  constructor(stage, data, event, llmJs, wllamaWasm) {
+    this.stage = stage;
+    this.data = data;
+    this.event = event;
+    this.llmJs = llmJs;
+    this.wllamaWasm = wllamaWasm;
+  }
+  adapter = null;
+  session = null;
+  load = null;
+  panel = el("div", "ch-widget-verdict");
+  action = el("div", "ch-widget-llm-action");
+  mount() {
+    this.stage.append(header(this.event, LLM_NOTE));
+    if (this.data.source != null) this.stage.append(readOnlyCode(this.data.source, "hooks.py"));
+    this.stage.append(this.panel, this.action);
+    this.renderRecorded();
+    this.button(LLM_RUN_LIVE_LABEL, () => void this.detect());
+    window.addEventListener("pagehide", () => void this.session?.destroy(), { once: true });
+  }
+  button(label, onClick) {
+    this.action.textContent = "";
+    const btn = el("button", "ch-widget-chip", label);
+    btn.type = "button";
+    btn.addEventListener("click", onClick, { once: true });
+    this.action.append(btn);
+  }
+  status(text) {
+    this.action.textContent = "";
+    this.panel.className = "ch-widget-verdict";
+    this.panel.textContent = "";
+    this.panel.append(el("p", "ch-widget-message", text));
+  }
+  renderRecorded() {
+    const verdict = this.data.recordings[0]?.verdict;
+    if (!verdict) return;
+    renderVerdict(this.panel, verdict);
+    this.panel.prepend(el("p", "ch-widget-badge-recorded", LLM_RECORDED_BADGE));
+  }
+  caption(text, verdict) {
+    renderVerdict(this.panel, verdict);
+    this.panel.prepend(el("p", "ch-widget-badge-recorded", text));
+  }
+  module() {
+    return this.load ??= importModule(this.llmJs);
+  }
+  ensureAdapter(mod) {
+    return this.adapter ??= mod.initLlm({
+      system: this.data.rubric ?? "",
+      schema: GATE_SCHEMA,
+      assets: { wllama: { default: new URL(this.wllamaWasm, document.baseURI).href } },
+      onProgress: (p) => this.onProgress(p)
+    });
+  }
+  onProgress(p) {
+    const frac = p.total ? p.loaded / p.total : p.loaded;
+    const percent = `${Math.min(100, Math.max(0, Math.round(frac * 100)))}%`;
+    this.status(fill(LLM_DOWNLOADING, { percent }));
+  }
+  async detect() {
+    this.status(LLM_DETECTING);
+    try {
+      const detection = await this.ensureAdapter(await this.module()).detect();
+      if (detection.availability === "ready") {
+        this.status(LLM_BUILTIN_READY);
+        this.button(LLM_RUN_LABEL, () => void this.run());
+      } else {
+        this.status(fill(LLM_DOWNLOAD_OFFER, { model: detection.model, size: formatSize(detection.downloadBytes) }));
+        this.button(LLM_DOWNLOAD_LABEL, () => void this.run());
+      }
+    } catch {
+      this.status(LLM_UNAVAILABLE);
+    }
+  }
+  async run() {
+    this.status(LLM_LOADING);
+    try {
+      this.session = await this.ensureAdapter(await this.module()).start();
+      this.status(LLM_GENERATING);
+      const input = this.data.recordings[0]?.input ?? {};
+      const result = await this.session.prompt(
+        fill(LLM_USER_PROMPT, { tool: input.tool ?? "", command: input.command ?? "" })
+      );
+      this.caption(LLM_VERDICT_BADGE, {
+        action: result.block ? "block" : "pass",
+        message: result.reasoning ?? null,
+        rewritten: null
+      });
+    } catch {
+      this.status(LLM_UNAVAILABLE);
+    }
+  }
+};
 function mountAll(evaluate2) {
   for (const root of Array.from(document.querySelectorAll(".ch-widget"))) {
     if (root.dataset.mounted) continue;
@@ -945,6 +1065,14 @@ function mountAll(evaluate2) {
     root.appendChild(stage);
     if (data.mode === "canned") {
       renderCanned(stage, data, data.recordings[0]?.input.event ?? "PreToolUse");
+    } else if (data.mode === "llm") {
+      new LlmWidget(
+        stage,
+        data,
+        data.recordings[0]?.input.event ?? "PreToolUse",
+        root.dataset.llmJs ?? "llm.js",
+        root.dataset.wllamaWasm ?? "wllama/wllama.wasm"
+      ).mount();
     } else if (data.mode === "world" && data.world) {
       new WorldWidget(stage, data, data.cases[0]?.event ?? "PreToolUse", data.world).mount();
     } else {

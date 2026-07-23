@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -23,6 +24,19 @@ PACKS = Path(captain_hook.__file__).parent / "builtin_packs"
 MARKER = re.compile(r"<!-- gd-embed-widget: (\w+) -->")
 
 
+def extract_rubric(source: str) -> str:
+    """Lift the ``llm_gate`` prompt (the model's rubric) out of a fragment by static ast.parse.
+
+    The llm_gate primitive sits outside the DSL compiler's serializable grammar, so the rubric is
+    read from the source rather than a compiled payload — the fragment source is shown read-only.
+    """
+    for node in ast.walk(ast.parse(source)):
+        match node:
+            case ast.Call(func=ast.Name(id="llm_gate"), args=[first, *_]):
+                return ast.literal_eval(first)
+    raise ValueError("fragment has no llm_gate(...) call to lift a rubric from")
+
+
 def presentation_case(case: dict, event: str) -> dict:
     return {
         "event": event,
@@ -37,6 +51,20 @@ def widget_data(widget: dict) -> dict:
     if widget["mode"] == "canned":
         recordings = [{"id": c["id"], "input": c["input"], "verdict": c["verdict"]} for c in widget["cases"]]
         return {"mode": "canned", "hooks": [], "cases": [], "recordings": recordings}
+    if widget["mode"] == "llm":
+        source = (FRAGMENTS_SRC / f"{widget['fragment']}.py").read_text()
+        event = widget.get("event", "PreToolUse")
+        return {
+            "mode": "llm",
+            "source": source,
+            "rubric": extract_rubric(source),
+            "hooks": [],
+            "cases": [],
+            "recordings": [
+                {"id": c["id"], "input": {"event": event, **c["input"]}, "verdict": c["verdict"]}
+                for c in widget["cases"]
+            ],
+        }
     if widget["mode"] == "world":
         event = widget.get("event", "PreToolUse")
         return {
@@ -62,9 +90,12 @@ def widget_block(widget_id: str, matrix: dict, qmd: Path) -> str:
     payload = json.dumps(data).replace("</", "<\\/")
     editor_js = os.path.relpath(WIDGETS_DIR / "editor.js", qmd.parent)
     compiler_js = os.path.relpath(WIDGETS_DIR / "compiler.js", qmd.parent)
+    llm_js = os.path.relpath(WIDGETS_DIR / "llm.js", qmd.parent)
+    wllama_wasm = os.path.relpath(WIDGETS_DIR / "wllama" / "wllama.wasm", qmd.parent)
     return (
         f'<div class="ch-widget" data-widget="{widget_id}" data-mode="{data["mode"]}"'
-        f' data-editor-js="{editor_js}" data-compiler-js="{compiler_js}">\n'
+        f' data-editor-js="{editor_js}" data-compiler-js="{compiler_js}"'
+        f' data-llm-js="{llm_js}" data-wllama-wasm="{wllama_wasm}">\n'
         f'<script type="application/json" class="ch-widget-data">{payload}</script>\n'
         f"</div>"
     )

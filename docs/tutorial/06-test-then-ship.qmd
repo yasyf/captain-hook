@@ -11,7 +11,7 @@ Every preset you clicked in this tutorial is a test case, and hooks carry their 
 
 A hook without tests is a regex you're hoping about. A hook with tests fails your CI when someone loosens the pattern — run `uvx capt-hook test --json` in a workflow and a regressed guard breaks the build, not the incident review.
 
-One thing the widgets couldn't show you: hooks can ask a model. When no pattern can decide — "is this SQL migration destructive?" — `llm_gate` hands the verdict to an LLM with your rubric. Here's a recorded run:
+One last thing: hooks can ask a model. When no pattern can decide — "is this SQL migration destructive?" — `llm_gate` hands the verdict to an LLM with your rubric. Below is a recorded verdict, and you can run the same gate live on-device: Chrome's built-in model, WebGPU, or CPU WASM, whichever this browser supports. The model downloads once, and nothing you type leaves the page:
 
 <!-- gd-embed-widget: llm_gate_teaser -->
 

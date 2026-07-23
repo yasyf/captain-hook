@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,12 @@ NODE_MODULES = SRC_DIR / "node_modules"
 TOOL_ALIASES_JSON = SRC_DIR / "generated" / "tool_aliases.json"
 LOCK = SRC_DIR / "package-lock.json"
 CI_STAMP = NODE_MODULES / ".capt-hook-ci-stamp"
+
+# The wllama single-thread WebAssembly runtime is the one asset esbuild can't bundle (a binary
+# loaded by URL at runtime), so it is copied out of node_modules and self-hosted alongside the
+# bundles; llm.js passes its committed URL through as the wllama lane's `assets.default`.
+WLLAMA_WASM_SRC = NODE_MODULES / "@wllama" / "wllama" / "esm" / "wasm" / "wllama.wasm"
+WLLAMA_WASM_DST = WIDGETS_DIR / "wllama" / "wllama.wasm"
 
 BANNER_PREFIX = "// capt-hook-widget src-sha256: "
 COMMON_FLAGS = ("--bundle", "--format=esm", "--target=es2022", "--platform=browser", "--log-level=warning")
@@ -32,6 +39,7 @@ BUNDLES = (
     Bundle("emulator.ts", WIDGETS_DIR / "emulator.js", ()),
     Bundle("compiler/index.ts", WIDGETS_DIR / "compiler.js", ("--minify",)),
     Bundle("editor.ts", WIDGETS_DIR / "editor.js", ("--minify",)),
+    Bundle("llm.ts", WIDGETS_DIR / "llm.js", ("--minify",)),
 )
 
 
@@ -62,6 +70,11 @@ def ensure_node_modules() -> None:
     CI_STAMP.write_text(want)
 
 
+def copy_wllama_wasm() -> None:
+    WLLAMA_WASM_DST.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(WLLAMA_WASM_SRC, WLLAMA_WASM_DST)
+
+
 def typecheck() -> None:
     subprocess.run([str(NODE_MODULES / ".bin" / "tsc"), "--noEmit"], cwd=SRC_DIR, check=True)
 
@@ -86,6 +99,10 @@ def src_hash() -> str:
         digest.update(b"\0")
         digest.update((SRC_DIR / name).read_bytes())
         digest.update(b"\0")
+    digest.update(WLLAMA_WASM_DST.name.encode())
+    digest.update(b"\0")
+    digest.update(WLLAMA_WASM_DST.read_bytes())
+    digest.update(b"\0")
     return digest.hexdigest()
 
 
@@ -105,9 +122,10 @@ def esbuild(bundle: Bundle, banner: str) -> None:
 
 
 def build() -> None:
-    """Regenerate aliases, install/typecheck, then bundle every widget target with its src hash."""
+    """Regenerate aliases, install/typecheck, self-host the wasm, then bundle every target."""
     ensure_node_modules()
     write_tool_aliases()
+    copy_wllama_wasm()
     typecheck()
     banner = src_hash()
     for bundle in BUNDLES:

@@ -84,8 +84,9 @@ export interface WorldSpec {
 }
 
 export interface WidgetData {
-  mode: "live" | "canned" | "world";
+  mode: "live" | "canned" | "world" | "llm";
   source?: string;
+  rubric?: string;
   world?: WorldSpec;
   hooks: SerializedHook[];
   cases: WidgetCase[];
@@ -136,3 +137,65 @@ export const CANNED_NOTE = "Recorded from the real engine, not evaluated in your
 // reaches outside the filesystem this demo declares (a construct the world cannot answer).
 export const WORLD_NOTE = "This walks a declared virtual filesystem with a faithful port of the real hook — run `capt-hook test` for the real engine.";
 export const WORLD_HONESTY_MESSAGE = "outside the filesystem this demo declares — run `capt-hook test` for the real engine.";
+
+// The init surface the core calls across the dynamic-import boundary to widgets/llm.js. Kept
+// structural (no pocket-llm types) so emulator.js never statically pulls pocket-llm or its
+// on-device engines into its own bundle — llm.js is imported by URL on first interaction.
+export interface LlmDetection {
+  lane: string;
+  availability: "ready" | "needs-download";
+  model: string;
+  downloadBytes: number | null;
+}
+
+export interface LlmProgress {
+  loaded: number;
+  total: number | null;
+}
+
+export interface LlmSession {
+  prompt(text: string): Promise<unknown>;
+  destroy(): Promise<void>;
+}
+
+export interface LlmAdapter {
+  detect(): Promise<LlmDetection>;
+  start(): Promise<LlmSession>;
+}
+
+export interface LlmInitOptions {
+  system: string;
+  schema: unknown;
+  assets: { wllama: { default: string } };
+  onProgress?: (progress: LlmProgress) => void;
+}
+
+export interface LlmModule {
+  initLlm(options: LlmInitOptions): LlmAdapter;
+}
+
+// The structured-output constraint the live gate answers under, mirroring the read fields of
+// captain_hook.primitives.llm.GateVerdict.model_json_schema() (block: deny, reasoning: why).
+export const GATE_SCHEMA = {
+  type: "object",
+  properties: { block: { type: "boolean" }, reasoning: { type: "string" } },
+  required: ["block", "reasoning"],
+};
+
+// LLM-widget copy (placeholder wording — the orchestrator owns the final prose pass). The verdict
+// badge is verbatim from the phase spec: a live model verdict is nondeterministic and uncheckable.
+export const LLM_NOTE = "A recorded model verdict — run it live on-device, nothing leaves your browser.";
+export const LLM_RECORDED_BADGE = "recording";
+export const LLM_RUN_LIVE_LABEL = "Run it live on-device";
+export const LLM_DETECTING = "Checking what this browser can run…";
+export const LLM_BUILTIN_READY = "This browser has a built-in model ready — no download needed.";
+export const LLM_RUN_LABEL = "Run the gate";
+export const LLM_DOWNLOAD_OFFER = "Running on-device needs a one-time download of {model} ({size}).";
+export const LLM_DOWNLOAD_LABEL = "Download & run";
+export const LLM_LOADING = "Starting the model…";
+export const LLM_DOWNLOADING = "Downloading the model… {percent}";
+export const LLM_GENERATING = "Asking the model…";
+export const LLM_VERDICT_BADGE = "model verdict — nondeterministic, not part of the parity suite";
+export const LLM_UNAVAILABLE = "No on-device model lane is available in this browser — the recorded verdict above is what a real run produced.";
+export const LLM_SIZE_UNKNOWN = "unknown size";
+export const LLM_USER_PROMPT = "Evaluate this pending action:\n\nTool: {tool}\nCommand: {command}";
