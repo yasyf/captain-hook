@@ -3,7 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/release-pypi.yml"
 CASK = ROOT / ".github/cask/captain-hook.rb.tmpl"
-RELEASE_APP_REF = "19c3d5013032ad9c88f9a8f1170d1f366c19b8d9"
+RELEASE_APP_REF = "8f422c652d836c40f9cc5a9d893d4120b26bc681"
 HOME_BREW_ACTION_REF = "19c3d5013032ad9c88f9a8f1170d1f366c19b8d9"
 
 
