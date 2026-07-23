@@ -48,14 +48,16 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
         'sha256sum -c "$HELPER_ASSET_FILENAME.sha256"',
         "SHA256SUMS.txt",
         "name: release-assets",
-        "--generate-notes --draft --verify-tag",
-        'gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" dist/* --clobber',
+        "release_id: ${{ steps.draft.outputs.release_id }}",
+        'gh api --method POST "repos/${GITHUB_REPOSITORY}/releases"',
+        '"https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${asset}"',
         "release assets do not exactly match the verified dist",
     ):
         assert required in stage
-    assert "--draft=false" not in stage
+    assert "multiple releases exist for $RELEASE_TAG" in stage
 
     assert "needs: [build, helper, stage-release]" in smoke
+    assert "RELEASE_ID: ${{ needs.stage-release.outputs.release_id }}" in smoke
     assert "Smoke-test the final staged application bytes" in smoke
     assert "xcrun stapler validate" in smoke
     assert "bash helper/scripts/assert-signed-bridge.sh" in smoke
@@ -79,14 +81,39 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
     assert "contents: write" in publish_github
     assert "id-token: write" not in publish_github
     assert "Publish the already-complete GitHub draft" in publish_github
-    assert 'gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false' in publish_github
+    assert "RELEASE_ID: ${{ needs.stage-release.outputs.release_id }}" in publish_github
+    assert 'gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -F draft=false' in publish_github
 
     assert "needs: publish-github" in sync
     assert "needs: [helper-version, helper, publish-github, sync-plugin-version]" in cask
-    assert workflow.count("gh release create") == 1
-    assert workflow.count("--draft=false") == 1
-    assert "/releases/tags/" not in workflow
+    draft_flow = stage + smoke + publish_github
+    assert "gh release view" not in draft_flow
+    assert "gh release upload" not in draft_flow
+    assert "gh release download" not in draft_flow
+    assert "gh release edit" not in draft_flow
+    assert "/releases/tags/" not in draft_flow
     assert "softprops/action-gh-release" not in workflow
+
+
+def test_release_rerun_converges_the_unique_draft_by_release_id() -> None:
+    workflow = WORKFLOW.read_text()
+    stage = workflow[workflow.index("\n  stage-release:") : workflow.index("\n  smoke-draft:")]
+    publish_github = workflow[workflow.index("\n  publish-github:") : workflow.index("\n  # Consumer plugin caches")]
+
+    lookup = 'gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100"'
+    delete = 'gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"'
+    upload = '"https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${asset}"'
+    verify = '"repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100"'
+
+    assert lookup in stage
+    assert stage.index(delete) < stage.index(upload) < stage.rindex(verify)
+    assert "state=\"${releases[0]#*$'\\t'}\"" in stage
+    assert "true|false" in stage
+    assert '"repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"' in stage
+
+    assert 'state="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --jq .draft)"' in publish_github
+    assert '"repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -F draft=false' in publish_github
+    assert "already public with the exact verified assets" in publish_github
 
 
 def test_cask_publication_uses_verified_release_outputs() -> None:
