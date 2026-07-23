@@ -5,6 +5,7 @@ WORKFLOW = ROOT / ".github/workflows/release-pypi.yml"
 CASK = ROOT / ".github/cask/captain-hook.rb.tmpl"
 RELEASE_APP_REF = "8f422c652d836c40f9cc5a9d893d4120b26bc681"
 HOME_BREW_ACTION_REF = "19c3d5013032ad9c88f9a8f1170d1f366c19b8d9"
+PYPI_PUBLISH_REF = "ba38be9e461d3875417946c167d0b5f3d385a247"
 
 
 def test_helper_release_uses_exact_hard_cut_contract() -> None:
@@ -15,31 +16,77 @@ def test_helper_release_uses_exact_hard_cut_contract() -> None:
     assert "asset_name: captain-hook" in helper
     assert "go_version: 1.26.5" in helper
     assert "prebuild_script: helper/scripts/build-capt-hookd.sh" in helper
+    assert "needs: [build, python-assets, helper-version]" in helper
+    assert "contents: read" in helper
     assert "changed_paths:" not in helper
     assert "cask_token:" not in helper
     assert "cask_template_path:" not in helper
     assert "HOMEBREW_TAP_TOKEN:" not in helper
 
 
-def test_release_is_published_only_after_helper_and_python_artifacts_are_verified() -> None:
+def test_release_stages_and_smokes_every_asset_before_one_public_transition() -> None:
     workflow = WORKFLOW.read_text()
-    publish = workflow[workflow.index("\n  github-release:") : workflow.index("\n  sync-plugin-version:")]
+    build = workflow[workflow.index("\n  build:") : workflow.index("\n  python-assets:")]
+    python_assets = workflow[workflow.index("\n  python-assets:") : workflow.index("\n  helper-version:")]
+    stage = workflow[workflow.index("\n  stage-release:") : workflow.index("\n  smoke-draft:")]
+    smoke = workflow[workflow.index("\n  smoke-draft:") : workflow.index("\n  # PyPI Trusted Publishing")]
+    publish_pypi = workflow[workflow.index("\n  publish-pypi:") : workflow.index("\n  publish-github:")]
+    publish_github = workflow[workflow.index("\n  publish-github:") : workflow.index("\n  # Consumer plugin caches")]
+    sync = workflow[workflow.index("\n  sync-plugin-version:") : workflow.index("\n  helper-cask:")]
+    cask = workflow[workflow.index("\n  helper-cask:") :]
+
+    assert "check-version: false" in build
+    assert "run-tests: true" in build
+    assert "name: dist" in python_assets
+    assert 'test "${#assets[@]}" = 2' in python_assets
+    assert "Smoke-test the built wheel" in python_assets
 
     for required in (
-        "needs: [build, helper, publish, sync-plugin-version, verify-release-artifacts]",
-        "needs.helper.outputs.artifact_name",
-        "needs.helper.outputs.asset_filename",
-        "needs.helper.outputs.sha256",
-        'gh release create "$TAG"',
-        "--draft --title",
-        'gh release upload "$TAG"',
-        'gh release edit "$TAG"',
-        "--draft=false",
+        "needs: [build, python-assets, helper]",
+        "name: ${{ needs.helper.outputs.artifact_name }}",
+        'helper_sidecar="${helper_assets[0]}.sha256"',
+        'sha256sum -c "$HELPER_ASSET_FILENAME.sha256"',
+        "SHA256SUMS.txt",
+        "name: release-assets",
+        "--generate-notes --draft --verify-tag",
+        'gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" dist/* --clobber',
+        "release assets do not exactly match the verified dist",
     ):
-        assert required in publish
+        assert required in stage
+    assert "--draft=false" not in stage
 
-    assert publish.index("--draft") < publish.index("gh release upload")
-    assert publish.index("gh release upload") < publish.index("--draft=false")
+    assert "needs: [build, helper, stage-release]" in smoke
+    assert "Smoke-test the final staged application bytes" in smoke
+    assert "xcrun stapler validate" in smoke
+    assert "bash helper/scripts/assert-signed-bridge.sh" in smoke
+
+    for required in (
+        "needs: [build, stage-release, smoke-draft]",
+        "name: release-assets",
+        "skip-existing: true",
+        "Verify exact PyPI publication",
+        f"pypa/gh-action-pypi-publish@{PYPI_PUBLISH_REF}",
+    ):
+        assert required in publish_pypi
+    assert "id-token: write" in publish_pypi
+    assert "contents: write" not in publish_pypi
+    assert "pypa/gh-action-pypi-publish@release/v1" not in workflow
+    assert publish_pypi.index(f"pypa/gh-action-pypi-publish@{PYPI_PUBLISH_REF}") < publish_pypi.index(
+        "Verify exact PyPI publication"
+    )
+
+    assert "needs: [build, stage-release, publish-pypi]" in publish_github
+    assert "contents: write" in publish_github
+    assert "id-token: write" not in publish_github
+    assert "Publish the already-complete GitHub draft" in publish_github
+    assert 'gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false' in publish_github
+
+    assert "needs: publish-github" in sync
+    assert "needs: [helper-version, helper, publish-github, sync-plugin-version]" in cask
+    assert workflow.count("gh release create") == 1
+    assert workflow.count("--draft=false") == 1
+    assert "/releases/tags/" not in workflow
+    assert "softprops/action-gh-release" not in workflow
 
 
 def test_cask_publication_uses_verified_release_outputs() -> None:

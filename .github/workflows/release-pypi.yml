@@ -15,13 +15,246 @@ jobs:
     with:
       dist-name: capt-hook
       python-version: "3.13"
+      check-version: false
+      run-tests: true
 
-  # PyPI Trusted Publishing must run in THIS repo's workflow — it authenticates via the OIDC
-  # job_workflow_ref claim, which inside a reusable workflow points at homebrew-tap, not here
-  # (and PyPI does not support reusable workflows for Trusted Publishing). Running publish here
-  # makes job_workflow_ref this repo's release-pypi.yml, matching the existing trusted publisher.
-  publish:
-    needs: [build, helper, verify-release-artifacts]
+  python-assets:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Verify the exact Python release assets
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find dist -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          mapfile -t wheels < <(printf '%s\n' "${assets[@]}" | grep -E '\.whl$')
+          mapfile -t sdists < <(printf '%s\n' "${assets[@]}" | grep -E '\.tar\.gz$')
+          test "${#assets[@]}" = 2
+          test "${#wheels[@]}" = 1
+          test "${#sdists[@]}" = 1
+
+          uv run --no-project --with packaging python - "$TAG" <<'PY'
+          import json
+          import sys
+          import urllib.request
+
+          from packaging.version import Version
+
+          target = Version(sys.argv[1].removeprefix("v"))
+          with urllib.request.urlopen("https://pypi.org/pypi/capt-hook/json") as response:
+              latest = Version(json.load(response)["info"]["version"])
+          if target < latest:
+              raise SystemExit(f"::error::release {target} is older than PyPI {latest}")
+          print(f"PyPI registry permits {target} (latest: {latest})")
+          PY
+
+      - name: Smoke-test the built wheel
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          uv venv --seed .release-smoke
+          uv pip install --python .release-smoke/bin/python dist/*.whl
+          .release-smoke/bin/capt-hook --help >/dev/null
+          test -x .release-smoke/bin/hook
+          test -x .release-smoke/bin/hookd
+          .release-smoke/bin/python - "$TAG" <<'PY'
+          import importlib.metadata
+          import sys
+
+          assert importlib.metadata.version("capt-hook") == sys.argv[1].removeprefix("v")
+          PY
+
+  helper-version:
+    runs-on: ubuntu-latest
+    outputs:
+      marketing: ${{ steps.derive.outputs.marketing }}
+      stable: ${{ steps.derive.outputs.stable }}
+    steps:
+      - id: derive
+        shell: bash
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          echo "marketing=${v%%-*}" >> "$GITHUB_OUTPUT"
+          if [[ "$v" == *-* ]]; then
+            echo "stable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "stable=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  helper:
+    needs: [build, python-assets, helper-version]
+    permissions:
+      contents: read
+    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@8f422c652d836c40f9cc5a9d893d4120b26bc681
+    with:
+      app_name: Captain Hook
+      asset_name: captain-hook
+      project_dir: helper
+      scheme: CaptainHook
+      bundle_id: com.yasyf.capt-hook.helper
+      appexes: Contents/PlugIns/CaptainHookWidget.appex
+      marketing_version: ${{ needs.helper-version.outputs.marketing }}
+      app_groups: |
+        com.yasyf.capt-hook.helper=SXKCTF23Q2.com.yasyf.capt-hook.helper
+        com.yasyf.capt-hook.helper.widget=SXKCTF23Q2.com.yasyf.capt-hook.helper
+      profile_names: |
+        com.yasyf.capt-hook.helper=Captain Hook Helper App
+        com.yasyf.capt-hook.helper.widget=Captain Hook Helper Widget
+      assert_script: helper/scripts/assert-signed-bridge.sh
+      go_version: 1.26.5
+      prebuild_script: helper/scripts/build-capt-hookd.sh
+    secrets:
+      MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+      MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+      MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+      MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+
+  stage-release:
+    needs: [build, python-assets, helper]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: python-artifacts
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.helper.outputs.artifact_name }}
+          path: helper-artifact
+
+      - name: Assemble the exact complete release
+        env:
+          HELPER_ASSET_FILENAME: ${{ needs.helper.outputs.asset_filename }}
+          HELPER_ASSET_URL: ${{ needs.helper.outputs.asset_url }}
+          HELPER_SHA256: ${{ needs.helper.outputs.sha256 }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir dist
+          mapfile -t python_assets < <(find python-artifacts -maxdepth 1 -type f | LC_ALL=C sort)
+          mapfile -t wheels < <(printf '%s\n' "${python_assets[@]}" | grep -E '\.whl$')
+          mapfile -t sdists < <(printf '%s\n' "${python_assets[@]}" | grep -E '\.tar\.gz$')
+          test "${#python_assets[@]}" = 2
+          test "${#wheels[@]}" = 1
+          test "${#sdists[@]}" = 1
+          cp "${python_assets[@]}" dist/
+
+          mapfile -t helper_assets < <(find helper-artifact -type f -name "$HELPER_ASSET_FILENAME")
+          test "${#helper_assets[@]}" = 1
+          helper_sidecar="${helper_assets[0]}.sha256"
+          test -f "$helper_sidecar"
+          cp "${helper_assets[0]}" "dist/$HELPER_ASSET_FILENAME"
+          cp "$helper_sidecar" "dist/$HELPER_ASSET_FILENAME.sha256"
+          (cd dist && sha256sum -c "$HELPER_ASSET_FILENAME.sha256")
+          test "$(sha256sum "dist/$HELPER_ASSET_FILENAME" | awk '{print $1}')" = "$HELPER_SHA256"
+          test "$HELPER_ASSET_URL" = \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${HELPER_ASSET_FILENAME}"
+
+          checksums="$(mktemp)"
+          (cd dist && find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 \
+            | LC_ALL=C sort -z | xargs -0 sha256sum) > "$checksums"
+          mv "$checksums" dist/SHA256SUMS.txt
+          (cd dist && sha256sum -c SHA256SUMS.txt)
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Create or refresh the caller-owned draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mapfile -t releases < <(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq '.[] | select(.tag_name == env.RELEASE_TAG) | [.id, .draft] | @tsv'
+          )
+          test "${#releases[@]}" -le 1
+          state=missing
+          if [ "${#releases[@]}" = 1 ]; then
+            state="${releases[0]#*$'\t'}"
+          fi
+
+          case "$state" in
+            missing)
+              args=(--title "$RELEASE_TAG" --generate-notes --draft --verify-tag)
+              [[ "$RELEASE_TAG" == *-* ]] && args+=(--prerelease)
+              gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" "${args[@]}"
+              state=true
+              ;;
+            true|false) ;;
+            *) echo "::error::release $RELEASE_TAG returned invalid draft state '$state'"; exit 1 ;;
+          esac
+
+          if [ "$state" = true ]; then
+            gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" dist/* --clobber
+          fi
+
+          expected="$(find dist -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort)"
+          verify_dir="$(mktemp -d)"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$verify_dir"
+          actual="$(find "$verify_dir" -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort)"
+          test "$actual" = "$expected" \
+            || { echo "::error::release assets do not exactly match the verified dist"; exit 1; }
+          while IFS= read -r asset; do
+            test "$(sha256sum "dist/$asset" | awk '{print $1}')" = \
+              "$(sha256sum "$verify_dir/$asset" | awk '{print $1}')" \
+              || { echo "::error::release asset '$asset' differs from the verified dist"; exit 1; }
+          done <<< "$expected"
+
+  smoke-draft:
+    needs: [build, helper, stage-release]
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Smoke-test the final staged application bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_FILENAME: ${{ needs.helper.outputs.asset_filename }}
+          ASSET_SHA256: ${{ needs.helper.outputs.sha256 }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir released unpacked
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir released \
+            --pattern "$ASSET_FILENAME" --pattern "$ASSET_FILENAME.sha256"
+          test "$(awk 'NR == 1 { print $1 }' "released/$ASSET_FILENAME.sha256")" = "$ASSET_SHA256"
+          test "$(shasum -a 256 "released/$ASSET_FILENAME" | awk '{print $1}')" = "$ASSET_SHA256"
+          ditto -x -k "released/$ASSET_FILENAME" unpacked
+          app="unpacked/Captain Hook.app"
+          test -d "$app"
+          codesign --verify --strict --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          APP_PATH="$app" CAPT_HOOK_VERSION="${RELEASE_TAG#v}" bash helper/scripts/assert-signed-bridge.sh
+
+  # PyPI Trusted Publishing must run in this repository's workflow so its OIDC
+  # job_workflow_ref matches the configured publisher. The GitHub draft becomes
+  # public only after PyPI exposes the exact staged Python bytes.
+  publish-pypi:
+    needs: [build, stage-release, smoke-draft]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -29,82 +262,108 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          pattern: dist*
-          path: dist
-          merge-multiple: true
-      - uses: pypa/gh-action-pypi-publish@release/v1
+          name: dist
+          path: python-dist
 
-  github-release:
-    needs: [build, helper, publish, sync-plugin-version, verify-release-artifacts]
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-assets
+          path: release-dist
+
+      - name: Match the PyPI upload to the staged release
+        run: |
+          set -euo pipefail
+          mapfile -t python_assets < <(find python-dist -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          test "${#python_assets[@]}" = 2
+          for asset in "${python_assets[@]}"; do
+            test -f "release-dist/$asset"
+            test "$(sha256sum "python-dist/$asset" | awk '{print $1}')" = \
+              "$(sha256sum "release-dist/$asset" | awk '{print $1}')"
+          done
+
+      - uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247
+        with:
+          packages-dir: python-dist
+          skip-existing: true
+
+      - name: Verify exact PyPI publication
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 - "${VERSION#v}" python-dist <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          version, directory = sys.argv[1:]
+          expected = {
+              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in pathlib.Path(directory).iterdir()
+              if path.is_file()
+          }
+          actual = {}
+          for attempt in range(12):
+              try:
+                  with urllib.request.urlopen(f"https://pypi.org/pypi/capt-hook/{version}/json") as response:
+                      urls = json.load(response)["urls"]
+                  actual = {item["filename"]: item["digests"]["sha256"] for item in urls}
+                  if actual == expected:
+                      break
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      raise
+              if attempt == 11:
+                  raise SystemExit(f"::error::PyPI assets differ: expected {expected}, got {actual}")
+              time.sleep(5)
+          PY
+
+  publish-github:
+    needs: [build, stage-release, publish-pypi]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v8
         with:
-          pattern: dist*
-          path: dist
-          merge-multiple: true
-      - uses: actions/download-artifact@v8
-        with:
-          name: ${{ needs.helper.outputs.artifact_name }}
-          path: helper-dist
+          name: release-assets
+          path: release-dist
 
-      - name: Stage and publish the complete verified release
+      - name: Publish the already-complete GitHub draft
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HELPER_ASSET: ${{ needs.helper.outputs.asset_filename }}
-          HELPER_SHA256: ${{ needs.helper.outputs.sha256 }}
-          TAG: ${{ needs.build.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
         run: |
           set -euo pipefail
-          test -f "helper-dist/$HELPER_ASSET"
-          test -f "helper-dist/$HELPER_ASSET.sha256"
-          [ "$(shasum -a 256 "helper-dist/$HELPER_ASSET" | awk '{print $1}')" = "$HELPER_SHA256" ]
-          read -r sidecar_sha sidecar_path < "helper-dist/$HELPER_ASSET.sha256"
-          [ "$sidecar_sha" = "$HELPER_SHA256" ]
-          [ "$(basename "$sidecar_path")" = "$HELPER_ASSET" ]
+          verify_dir="$(mktemp -d)"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$verify_dir"
+          expected="$(find release-dist -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort)"
+          actual="$(find "$verify_dir" -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort)"
+          test "$actual" = "$expected"
+          while IFS= read -r asset; do
+            test "$(sha256sum "release-dist/$asset" | awk '{print $1}')" = \
+              "$(sha256sum "$verify_dir/$asset" | awk '{print $1}')"
+          done <<< "$expected"
 
-          if state="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,tagName 2>/dev/null)"; then
-            [ "$(jq -r .tagName <<<"$state")" = "$TAG" ]
-            [ "$(jq -r .isDraft <<<"$state")" = true ] || {
-              echo "::error::release $TAG is already public; refusing to mutate it"
-              exit 1
-            }
-          else
-            args=(--draft --title "$TAG" --generate-notes --verify-tag)
-            if [[ "$TAG" == *-* ]]; then
-              args+=(--prerelease)
-            fi
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" "${args[@]}"
-          fi
+          mapfile -t releases < <(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq '.[] | select(.tag_name == env.RELEASE_TAG) | [.id, .draft] | @tsv'
+          )
+          test "${#releases[@]}" = 1
+          state="${releases[0]#*$'\t'}"
+          case "$state" in
+            true) gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false ;;
+            false) echo "release $RELEASE_TAG is already public with the exact verified assets" ;;
+            *) echo "::error::release $RELEASE_TAG returned invalid draft state '$state'"; exit 1 ;;
+          esac
 
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-            dist/* helper-dist/*
-
-          expected="$RUNNER_TEMP/expected-release-assets"
-          actual="$RUNNER_TEMP/actual-release-assets"
-          find dist helper-dist -maxdepth 1 -type f -exec basename {} \; | sort > "$expected"
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
-            --jq '.assets[].name' | sort > "$actual"
-          diff -u "$expected" "$actual" || {
-            echo "::error::draft release does not contain the exact staged asset set"
-            exit 1
-          }
-
-          if [[ "$TAG" == *-* ]]; then
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --draft=false --prerelease=true
-          else
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --draft=false --prerelease=false --latest
-          fi
-
-  # Consumer plugin caches refresh only when plugin.json's version increases, so every
-  # release must advance it on main. The sync runs as its own job: a failure turns the
-  # run red without blocking the already-published artifacts or the GitHub release.
+  # Consumer plugin caches refresh only when plugin.json's version increases.
   sync-plugin-version:
-    needs: publish
+    needs: publish-github
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -153,83 +412,8 @@ jobs:
           echo "::error::failed to push plugin.json sync after 3 attempts"
           exit 1
 
-  # Every package release carries the exact same versioned, signed application.
-  # After github-release so softprops appends, not recreates.
-  helper-version:
-    runs-on: ubuntu-latest
-    outputs:
-      marketing: ${{ steps.derive.outputs.marketing }}
-      stable: ${{ steps.derive.outputs.stable }}
-    steps:
-      - id: derive
-        shell: bash
-        run: |
-          v="${GITHUB_REF_NAME#v}"
-          echo "marketing=${v%%-*}" >> "$GITHUB_OUTPUT"
-          if [[ "$v" == *-* ]]; then
-            echo "stable=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "stable=true" >> "$GITHUB_OUTPUT"
-          fi
-
-  helper:
-    needs: [build, helper-version]
-    permissions:
-      contents: read
-    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@8f422c652d836c40f9cc5a9d893d4120b26bc681
-    with:
-      app_name: Captain Hook
-      asset_name: captain-hook
-      project_dir: helper
-      scheme: CaptainHook
-      bundle_id: com.yasyf.capt-hook.helper
-      appexes: Contents/PlugIns/CaptainHookWidget.appex
-      marketing_version: ${{ needs.helper-version.outputs.marketing }}
-      app_groups: |
-        com.yasyf.capt-hook.helper=SXKCTF23Q2.com.yasyf.capt-hook.helper
-        com.yasyf.capt-hook.helper.widget=SXKCTF23Q2.com.yasyf.capt-hook.helper
-      profile_names: |
-        com.yasyf.capt-hook.helper=Captain Hook Helper App
-        com.yasyf.capt-hook.helper.widget=Captain Hook Helper Widget
-      assert_script: helper/scripts/assert-signed-bridge.sh
-      go_version: 1.26.5
-      prebuild_script: helper/scripts/build-capt-hookd.sh
-    secrets:
-      MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
-      MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
-      MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
-      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-      MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
-
-  verify-release-artifacts:
-    needs: [build, helper]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: dist*
-          path: dist
-          merge-multiple: true
-      - uses: actions/download-artifact@v8
-        with:
-          name: ${{ needs.helper.outputs.artifact_name }}
-          path: helper-dist
-      - name: Verify the staged helper and Python artifacts
-        env:
-          HELPER_ASSET: ${{ needs.helper.outputs.asset_filename }}
-          HELPER_SHA256: ${{ needs.helper.outputs.sha256 }}
-        run: |
-          set -euo pipefail
-          find dist -maxdepth 1 -type f | grep -q .
-          test -f "helper-dist/$HELPER_ASSET"
-          test -f "helper-dist/$HELPER_ASSET.sha256"
-          [ "$(shasum -a 256 "helper-dist/$HELPER_ASSET" | awk '{print $1}')" = "$HELPER_SHA256" ]
-          read -r sidecar_sha sidecar_path < "helper-dist/$HELPER_ASSET.sha256"
-          [ "$sidecar_sha" = "$HELPER_SHA256" ]
-          [ "$(basename "$sidecar_path")" = "$HELPER_ASSET" ]
-
   helper-cask:
-    needs: [github-release, helper-version, helper]
+    needs: [helper-version, helper, publish-github, sync-plugin-version]
     if: ${{ needs.helper-version.outputs.stable == 'true' }}
     runs-on: ubuntu-latest
     permissions:

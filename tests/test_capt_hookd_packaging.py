@@ -1,4 +1,5 @@
 import json
+import os
 import platform
 import subprocess
 from pathlib import Path
@@ -50,3 +51,21 @@ def test_release_contract_signs_and_verifies_embedded_host() -> None:
     assert "needs.helper.outputs.changed" not in workflow
     assert 'v="${GITHUB_REF_NAME#v}"' in workflow
     assert "${GITHUB_REF_NAME#v}" in (ROOT / "helper/scripts/build-capt-hookd.sh").read_text()
+
+
+def test_release_runs_the_non_executable_app_assertion_through_bash(tmp_path: Path) -> None:
+    assertion = ROOT / "helper/scripts/assert-signed-bridge.sh"
+    workflow = (ROOT / ".github/workflows/release-pypi.yml").read_text()
+
+    assert assertion.stat().st_mode & 0o111 == 0
+    assert "bash helper/scripts/assert-signed-bridge.sh" in workflow
+
+    result = subprocess.run(
+        ["bash", assertion],
+        env={**os.environ, "APP_PATH": str(tmp_path / "missing.app")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "Permission denied" not in result.stderr
