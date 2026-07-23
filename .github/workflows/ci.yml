@@ -43,60 +43,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.2.0
+      - uses: ./.github/actions/python-tests
         with:
           python-version: ${{ matrix.python-version }}
-          cache-dependency-glob: uv.lock
-
-      # langs.py is derived from ast-grep's sdist + grammar crates, cached here.
-      # Restored before the first uv run so an editable install builds offline.
-      - name: Cache build derivation
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/capt-hook-build
-          key: capt-hook-build-v1-${{ hashFiles('uv.lock') }}
-          restore-keys: capt-hook-build-v1-
-
-      # The spacy pipeline (~/.cache/spacy/models, via ensure_spacy_model) and
-      # the wordnet lexicon (~/.wn_data) live outside the venv, so the restored
-      # cache survives uv recreating .venv between runs. Caching .venv instead
-      # poisoned the key: a sync that rebuilt the venv silently dropped the
-      # model while the hit still skipped provisioning. Both assets are
-      # interpreter-independent, so the key is shared across the matrix and
-      # with the docs workflow. The key tracks the locked spaCy minor and the
-      # resolved Open English WordNet version, so unrelated lockfile churn no
-      # longer evicts the cache and re-downloads from GitHub (which rate-limits,
-      # 403).
-      - name: Resolve spaCy minor (cache key)
-        id: spacy
-        run: echo "minor=$(grep -A1 '^name = "spacy"$' uv.lock | grep '^version' | grep -o '[0-9]*\.[0-9]*' | head -1)" >> "$GITHUB_OUTPUT"
-
-      - name: Resolve OEWN version (cache key)
-        id: oewn
-        run: |
-          version=$(uv run python -c "import wn; print(wn.config.get_project_info('oewn')['version'])")
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Cache NLP assets
-        id: nlp-cache
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cache/spacy/models
-            ~/.wn_data
-          key: nlp-v4-${{ runner.os }}-spacy-${{ steps.spacy.outputs.minor }}-oewn-${{ steps.oewn.outputs.version }}
-
-      - name: Sync (dev)
-        run: uv sync --extra dev
-
-      - name: Provision NLP assets
-        if: steps.nlp-cache.outputs.cache-hit != 'true'
-        run: |
-          uv run python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensure_nlp_resources()"
-
-      - name: Test (pytest)
-        run: uv run pytest
 
       - name: Build + smoke-test wheel in a fresh venv
         run: |
@@ -111,9 +60,9 @@ jobs:
           # captain_hook.* nor any third-party module before it execs the signed host.
           .wheel-smoke/bin/python -c 'import sys; b=set(sys.modules); import capt_hook_client.client; new=set(sys.modules)-b; std=set(sys.stdlib_module_names); cap=sorted(m for m in new if m.startswith("captain_hook")); bad=sorted(m for m in new if m.split(".")[0] not in std and not m.startswith("capt_hook_client")); assert not cap, f"client imported captain_hook: {cap}"; assert not bad, f"client imported non-stdlib: {bad}"; print("client purity OK")'
           unzip -l dist/*.whl | grep -q 'capt_hook_client/client.py'
-          ! unzip -l dist/*.whl | grep -q 'capt_hook_client/key.py' || exit 1
+          if unzip -l dist/*.whl | grep -q 'capt_hook_client/key.py'; then exit 1; fi
           unzip -l dist/*.whl | grep -q 'captain_hook/langs.py'
-          ! unzip -l dist/*.whl | grep -q 'captain_hook/exports.py'
+          if unzip -l dist/*.whl | grep -q 'captain_hook/exports.py'; then exit 1; fi
           unzip -l dist/*.whl | grep -q 'captain_hook/skills/.*/SKILL.md'
           unzip -l dist/*.whl | grep -q 'captain_hook/.claude-plugin/plugin.json'
           # Only the NLP builtins carry a pack.toml descriptor; every builtin ships its hooks/ payload.
@@ -122,8 +71,8 @@ jobs:
           unzip -l dist/*.whl | grep -qE 'captain_hook/builtin_packs/general/hooks/[^/]+\.py'
           unzip -l dist/*.whl | grep -qE 'captain_hook/builtin_packs/fixes/hooks/[^/]+\.py'
           unzip -l dist/*.whl | grep -q 'captain_hook/builtin_packs/general/hooks/prompts/'
-          ! unzip -l dist/*.whl | grep -q 'stress/' || exit 1
-          ! tar tzf dist/*.tar.gz | grep -q '/stress/' || exit 1
+          if unzip -l dist/*.whl | grep -q 'stress/'; then exit 1; fi
+          if tar tzf dist/*.tar.gz | grep -q '/stress/'; then exit 1; fi
           smoke_proj="$(mktemp -d)"
           (cd "$smoke_proj" && "$GITHUB_WORKSPACE/.wheel-smoke/bin/capt-hook" skills install)
           grep -q '"captain-hook@captain-hook": true' "$smoke_proj/.claude/settings.json"

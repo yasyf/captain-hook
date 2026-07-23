@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.15.1] - 2026-07-23
+
+### Fixed
+
+- **CI and PyPI release tests now share one cache-backed Python test action.**
+  Both restore version-keyed spaCy and Open English WordNet assets, provision only
+  on a real cache miss, and run the same development-environment test command.
+
 ## [12.15.0] - 2026-07-23
 
 ### Changed

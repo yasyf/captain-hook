@@ -1,0 +1,59 @@
+name: Python tests
+description: Run the cache-backed Captain Hook Python test gate.
+
+inputs:
+  python-version:
+    description: Python version passed to setup-uv.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@v8.2.0
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache-dependency-glob: uv.lock
+
+    - name: Cache build derivation
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/capt-hook-build
+        key: capt-hook-build-v1-${{ hashFiles('uv.lock') }}
+        restore-keys: capt-hook-build-v1-
+
+    - name: Resolve spaCy minor
+      id: spacy
+      shell: bash
+      run: echo "minor=$(grep -A1 '^name = \"spacy\"$' uv.lock | grep '^version' | grep -o '[0-9]*\.[0-9]*' | head -1)" >> "$GITHUB_OUTPUT"
+
+    - name: Resolve OEWN version
+      id: oewn
+      shell: bash
+      run: |
+        version=$(uv run python -c "import wn; print(wn.config.get_project_info('oewn')['version'])")
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    - name: Cache NLP assets
+      id: nlp-cache
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cache/spacy/models
+          ~/.wn_data
+        key: nlp-v4-${{ runner.os }}-spacy-${{ steps.spacy.outputs.minor }}-oewn-${{ steps.oewn.outputs.version }}
+
+    - name: Sync development environment
+      shell: bash
+      run: uv sync --extra dev
+
+    - name: Provision NLP assets
+      if: steps.nlp-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: uv run python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensure_nlp_resources()"
+
+    - name: Test
+      shell: bash
+      run: uv run pytest
