@@ -43,12 +43,18 @@ jobs:
       # poisoned the key: a sync that rebuilt the venv silently dropped the
       # model while the hit still skipped provisioning. The key is shared with
       # the CI workflow — the assets are identical and interpreter-independent —
-      # and tracks the locked spaCy minor and pinned Open English WordNet
-      # digest, so unrelated lockfile churn no longer evicts the cache and
+      # and tracks the locked spaCy minor and resolved Open English WordNet
+      # version, so unrelated lockfile churn no longer evicts the cache and
       # re-downloads from GitHub (which rate-limits).
       - name: Resolve spaCy minor (cache key)
         id: spacy
         run: echo "minor=$(grep -A1 '^name = "spacy"$' uv.lock | grep '^version' | grep -o '[0-9]*\.[0-9]*' | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve OEWN version (cache key)
+        id: oewn
+        run: |
+          version=$(uv run python -c "import wn; print(wn.config.get_project_info('oewn')['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Cache NLP assets
         id: nlp-cache
@@ -57,7 +63,7 @@ jobs:
           path: |
             ~/.cache/spacy/models
             ~/.wn_data
-          key: nlp-v5-${{ runner.os }}-spacy-${{ steps.spacy.outputs.minor }}-oewn-31f4af16c54b532fd5484d4cc33aee588a31bb5b70683ae8197842fde5b586bc
+          key: nlp-v4-${{ runner.os }}-spacy-${{ steps.spacy.outputs.minor }}-oewn-${{ steps.oewn.outputs.version }}
 
       - name: Sync (docs)
         run: uv sync --group docs
