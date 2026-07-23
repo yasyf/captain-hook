@@ -18,8 +18,11 @@ from captain_hook.review.repo import RepoKey
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import (
     PROMPT_VERSIONS,
+    REVIEW_DDL_FINGERPRINT,
+    REVIEW_OBJECT_FINGERPRINT,
     REVIEW_SCHEMA,
     REVIEW_SCHEMA_VERSION,
+    REVIEW_V1_DDL,
     TRANSITIONS,
     TRIAGE_JUNK,
     TRIAGE_KEEP,
@@ -1156,6 +1159,18 @@ class TestSchemaEpoch:
     async def test_fresh_database_has_complete_exact_v1_schema(self, store: ReviewStore) -> None:
         assert self.V1_COLUMNS <= await candidate_columns(store)
         assert await store.db.sql("PRAGMA user_version") == [{"user_version": REVIEW_SCHEMA_VERSION}]
+        assert await store.db.sql(
+            "SELECT component, schema_version, ddl_fingerprint, object_fingerprint FROM captain_hook_review_schema_v1"
+        ) == [
+            {
+                "component": "captain-hook-review-v1",
+                "schema_version": 1,
+                "ddl_fingerprint": REVIEW_DDL_FINGERPRINT,
+                "object_fingerprint": REVIEW_OBJECT_FINGERPRINT,
+            }
+        ]
+        assert "IF NOT EXISTS" not in REVIEW_V1_DDL
+        assert "ALTER TABLE" not in REVIEW_V1_DDL
 
     async def test_unversioned_database_is_rejected_without_mutation(self, tmp_path: Path) -> None:
         path = tmp_path / "foreign.db"
@@ -1169,49 +1184,75 @@ class TestSchemaEpoch:
                 ("rejected-rule", "rejected", "2026-05-05T00:00:00+00:00"),
             ],
         )
-        connection = sqlite3.connect(path)
-        before = {str(row[1]) for row in connection.execute("PRAGMA table_info(candidates)")}
-        connection.close()
+        before = path.read_bytes()
         with pytest.raises(ReviewSchemaError) as raised:
             await ReviewStore.open(path)
-        assert "schema epoch 0" in str(raised.value)
-        assert "manually transfer only those human-owned rows" in str(raised.value)
-        assert "Transcript-derived events and verdicts may be rebuilt" in str(raised.value)
-        connection = sqlite3.connect(path)
-        after = {str(row[1]) for row in connection.execute("PRAGMA table_info(candidates)")}
-        assert connection.execute("PRAGMA user_version").fetchone() == (0,)
-        connection.close()
-        assert after == before
-        assert not self.V1_COLUMNS & after
+        assert "schema marker 0" in str(raised.value)
+        assert "transfer" not in str(raised.value)
+        assert "migration" not in str(raised.value)
+        assert path.read_bytes() == before
 
-    async def test_foreign_epoch_is_rejected(self, tmp_path: Path) -> None:
+    async def test_foreign_marker_is_rejected_without_mutation(self, tmp_path: Path) -> None:
         path = tmp_path / "foreign.db"
         connection = sqlite3.connect(path)
         connection.execute("PRAGMA user_version = 2")
         connection.close()
-        with pytest.raises(ReviewSchemaError, match="schema epoch 2"):
+        before = path.read_bytes()
+        with pytest.raises(ReviewSchemaError, match="schema marker 2"):
             await ReviewStore.open(path)
+        assert path.read_bytes() == before
 
     async def test_claimed_v1_with_foreign_structure_is_rejected_without_repair(self, tmp_path: Path) -> None:
         path = tmp_path / "foreign.db"
         connection = sqlite3.connect(path)
         connection.executescript("CREATE TABLE candidates (id INTEGER PRIMARY KEY); PRAGMA user_version = 1;")
         connection.close()
-        with pytest.raises(ReviewSchemaError, match="table candidates is not exact"):
+        before = path.read_bytes()
+        with pytest.raises(ReviewSchemaError, match="schema fingerprint"):
             await ReviewStore.open(path)
-        connection = sqlite3.connect(path)
-        assert [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")] == [
-            "candidates"
-        ]
-        connection.close()
+        assert path.read_bytes() == before
 
-    async def test_retired_default_namespace_requires_manual_transfer(self, tmp_path: Path) -> None:
+    async def test_missing_or_extra_objects_are_rejected_without_mutation(self, tmp_path: Path) -> None:
+        missing = tmp_path / "missing.db"
+        async with await ReviewStore.open(missing):
+            pass
+        connection = sqlite3.connect(missing)
+        connection.execute("DROP INDEX idx_feedback_source")
+        connection.close()
+        before_missing = missing.read_bytes()
+        with pytest.raises(ReviewSchemaError, match="schema fingerprint"):
+            await ReviewStore.open(missing)
+        assert missing.read_bytes() == before_missing
+
+        extra = tmp_path / "extra.db"
+        async with await ReviewStore.open(extra):
+            pass
+        connection = sqlite3.connect(extra)
+        connection.execute("CREATE TABLE foreign_object (id INTEGER PRIMARY KEY)")
+        connection.close()
+        before_extra = extra.read_bytes()
+        with pytest.raises(ReviewSchemaError, match="schema fingerprint"):
+            await ReviewStore.open(extra)
+        assert extra.read_bytes() == before_extra
+
+    async def test_existing_empty_database_is_initialized(self, tmp_path: Path) -> None:
+        zero = tmp_path / "zero.db"
+        zero.touch()
+        header = tmp_path / "header.db"
+        connection = sqlite3.connect(header)
+        connection.execute("VACUUM")
+        connection.close()
+        for path in (zero, header):
+            async with await ReviewStore.open(path) as opened:
+                assert await opened.db.sql("PRAGMA user_version") == [{"user_version": 1}]
+
+    async def test_retired_sibling_is_never_inspected(self, tmp_path: Path) -> None:
         legacy = tmp_path / "review.db"
-        sqlite3.connect(legacy).close()
+        legacy.write_bytes(b"not sqlite")
         current = tmp_path / "review-v1.db"
-        with pytest.raises(ReviewSchemaError, match="retired unversioned namespace"):
-            await ReviewStore.open(current)
-        assert not current.exists()
+        async with await ReviewStore.open(current):
+            pass
+        assert legacy.read_bytes() == b"not sqlite"
 
 
 class TestResolvedAtStamping:

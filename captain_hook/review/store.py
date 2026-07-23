@@ -47,36 +47,10 @@ if TYPE_CHECKING:
     from captain_hook.review.sync import CachedPrState, PrState
 
 SPLIT_THRESHOLD = 0.9
+REVIEW_SCHEMA_COMPONENT = "captain-hook-review-v1"
 REVIEW_SCHEMA_VERSION = 1
-REVIEW_V1_TABLE_COLUMNS = {
-    "candidates": {
-        "id",
-        "repo_key",
-        "candidate_kind",
-        "rule",
-        "source_kind",
-        "status",
-        "pr_url",
-        "pr_opened_at",
-        "target_source_file",
-        "target_hook_name",
-        "misfire_class",
-        "created_at",
-        "updated_at",
-        "generation",
-        "resolved_at",
-        "origin_repo_key",
-        "pack_name",
-        "announced_status",
-        "pr_title",
-    },
-    "candidate_observations": {"id", "candidate_id", "dedup_key", "session_id", "occurred_at"},
-    "repos": {"repo_key", "watching"},
-    "spawn_runs": {"id", "started_at", "finished_at", "transcript", "ok", "error", "report_json"},
-    "review_meta": {"key", "value"},
-    "pr_states": {"pr_url", "state", "merged_at", "fetched_at"},
-    "review_triage": {"dedup_key", "triage"},
-}
+REVIEW_DDL_FINGERPRINT = "c98cdf0a97df3de0a75b63f985c51fde6508f1e7015ebbfb30a9dada129f0b9e"
+REVIEW_OBJECT_FINGERPRINT = "09665e63576b1217c87fff54643f61809af9935c40dd1ab0d50c02796eaab5e7"
 
 PROMPT_FINGERPRINT_KEY = "prompt_fingerprint"
 
@@ -88,8 +62,51 @@ SELECT c.*,
 FROM candidates c
 """
 
-HOOK_REVIEW_DDL = """
-CREATE TABLE IF NOT EXISTS candidates (
+REVIEW_V1_DDL = """
+CREATE TABLE captain_hook_review_schema_v1 (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  component TEXT NOT NULL CHECK (component = 'captain-hook-review-v1'),
+  schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+  ddl_fingerprint TEXT NOT NULL,
+  object_fingerprint TEXT NOT NULL
+);
+CREATE TABLE files (
+  path TEXT PRIMARY KEY,
+  mtime REAL NOT NULL
+);
+CREATE TABLE feedback_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  dedup_key TEXT NOT NULL UNIQUE,
+  source_kind TEXT NOT NULL,
+  session_id TEXT,
+  event_uuid TEXT,
+  occurred_at TEXT NOT NULL,
+  text TEXT NOT NULL,
+  payload_json TEXT,
+  context_json TEXT NOT NULL,
+  cc_version TEXT,
+  ingested_at TEXT NOT NULL
+);
+CREATE INDEX idx_feedback_source ON feedback_events(source_kind);
+CREATE INDEX idx_feedback_session ON feedback_events(session_id);
+CREATE TABLE verdicts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  dedup_key TEXT NOT NULL REFERENCES feedback_events(dedup_key),
+  role TEXT NOT NULL,
+  prompt_version INTEGER NOT NULL,
+  model TEXT NOT NULL,
+  category TEXT NOT NULL,
+  accepted INTEGER NOT NULL,
+  summary TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  rationale TEXT NOT NULL,
+  canonical_key TEXT,
+  fidelity TEXT NOT NULL CHECK(fidelity IN ('full','summary')),
+  judged_at TEXT NOT NULL,
+  UNIQUE(dedup_key, role, prompt_version)
+);
+CREATE INDEX idx_verdicts_dedup ON verdicts(dedup_key);
+CREATE TABLE candidates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   repo_key TEXT NOT NULL,
   candidate_kind TEXT NOT NULL CHECK (candidate_kind IN ('create', 'fix')),
@@ -103,7 +120,7 @@ CREATE TABLE IF NOT EXISTS candidates (
   misfire_class TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  generation INTEGER NOT NULL DEFAULT 1,
+  generation INTEGER NOT NULL,
   resolved_at TEXT,
   origin_repo_key TEXT,
   pack_name TEXT,
@@ -115,12 +132,12 @@ CREATE TABLE IF NOT EXISTS candidates (
     OR (candidate_kind = 'fix' AND target_source_file IS NOT NULL AND target_hook_name IS NOT NULL)
   )
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_create_key
+CREATE UNIQUE INDEX idx_candidates_create_key
   ON candidates(repo_key, rule) WHERE candidate_kind = 'create';
-CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_fix_key
+CREATE UNIQUE INDEX idx_candidates_fix_key
   ON candidates(repo_key, target_hook_name, target_source_file) WHERE candidate_kind = 'fix';
-CREATE INDEX IF NOT EXISTS idx_candidates_repo_status ON candidates(repo_key, status);
-CREATE TABLE IF NOT EXISTS candidate_observations (
+CREATE INDEX idx_candidates_repo_status ON candidates(repo_key, status);
+CREATE TABLE candidate_observations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   candidate_id INTEGER NOT NULL REFERENCES candidates(id),
   dedup_key TEXT NOT NULL REFERENCES feedback_events(dedup_key),
@@ -128,16 +145,16 @@ CREATE TABLE IF NOT EXISTS candidate_observations (
   occurred_at TEXT NOT NULL,
   UNIQUE(candidate_id, dedup_key)
 );
-CREATE INDEX IF NOT EXISTS idx_observations_dedup ON candidate_observations(dedup_key);
-CREATE TABLE IF NOT EXISTS repos (
+CREATE INDEX idx_observations_dedup ON candidate_observations(dedup_key);
+CREATE TABLE repos (
   repo_key TEXT PRIMARY KEY,
   watching INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS review_triage (
+CREATE TABLE review_triage (
   dedup_key TEXT PRIMARY KEY REFERENCES feedback_events(dedup_key) ON DELETE CASCADE,
   triage TEXT NOT NULL CHECK (triage IN ('junk', 'keep'))
 );
-CREATE TABLE IF NOT EXISTS spawn_runs (
+CREATE TABLE spawn_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   started_at TEXT NOT NULL,
   finished_at TEXT NOT NULL,
@@ -147,17 +164,16 @@ CREATE TABLE IF NOT EXISTS spawn_runs (
   report_json TEXT,
   CHECK ((ok = 1) = (error IS NULL))
 );
-CREATE TABLE IF NOT EXISTS review_meta (
+CREATE TABLE review_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS pr_states (
+CREATE TABLE pr_states (
   pr_url TEXT PRIMARY KEY,
   state TEXT NOT NULL,
   merged_at TEXT,
   fetched_at TEXT NOT NULL
 );
-PRAGMA user_version = 1;
 """
 
 
@@ -218,7 +234,7 @@ TRANSITIONS: Mapping[CandidateStatus, frozenset[CandidateStatus]] = {
 }
 
 
-REVIEW_SCHEMA = StoreSchema(extra_ddl=(HOOK_REVIEW_DDL,))
+REVIEW_SCHEMA = StoreSchema()
 VERDICT_TABLE = REVIEW_SCHEMA.verdict_table
 ACCEPTED_COLUMN = REVIEW_SCHEMA.accepted_column
 SUMMARY_COLUMN = REVIEW_SCHEMA.summary_column
@@ -231,37 +247,122 @@ class ReviewSchemaError(RuntimeError):
     """The review database is not the exact hard-cut schema epoch."""
 
 
-def _manual_transfer_guidance(path: Path, detail: str) -> ReviewSchemaError:
-    return ReviewSchemaError(
-        f"review database {path} {detail}; captain-hook requires exact schema v{REVIEW_SCHEMA_VERSION} in "
-        "review-v1.db. Automatic migration is intentionally unavailable because triage decisions, candidates, "
-        "and PR lifecycle state are human-owned source-of-truth. Stop captain-hook, move the incompatible "
-        "database aside, create a fresh review-v1.db, then manually transfer only those human-owned rows with a "
-        "one-time SQLite operation. Transcript-derived events and verdicts may be rebuilt by rescanning transcripts."
-    )
+def _ddl_fingerprint() -> str:
+    return sha256(b"captain-hook-review-ddl-v1\0" + REVIEW_V1_DDL.encode()).hexdigest()
 
 
-def _require_review_schema(path: Path) -> None:
-    legacy = path.with_name("review.db")
-    if path.name == "review-v1.db" and not path.exists() and legacy.exists():
-        raise _manual_transfer_guidance(legacy, "uses the retired unversioned namespace")
-    if not path.exists():
-        return
+def _object_fingerprint(connection: sqlite3.Connection) -> str:
+    digest = sha256(b"captain-hook-review-objects-v1\0")
+    for object_type, name, table, statement in connection.execute(
+        "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name"
+    ):
+        for field in (object_type, name, table, statement or ""):
+            digest.update(str(field).encode())
+            digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _schema_error(path: Path, detail: str) -> ReviewSchemaError:
+    return ReviewSchemaError(f"review database {path} {detail}; expected exact schema v{REVIEW_SCHEMA_VERSION}")
+
+
+def _validate_review_schema(path: Path) -> None:
     try:
         connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
         try:
             row = connection.execute("PRAGMA user_version").fetchone()
             version = int(row[0]) if row is not None else 0
             if version != REVIEW_SCHEMA_VERSION:
-                raise _manual_transfer_guidance(path, f"has schema epoch {version}")
-            for table, expected in REVIEW_V1_TABLE_COLUMNS.items():
-                found = {str(column[1]) for column in connection.execute(f"PRAGMA table_info({table})")}
-                if found != expected:
-                    raise _manual_transfer_guidance(path, f"claims schema epoch 1 but table {table} is not exact")
+                raise _schema_error(path, f"has schema marker {version}")
+            fingerprint = _object_fingerprint(connection)
+            if fingerprint != REVIEW_OBJECT_FINGERPRINT:
+                raise _schema_error(path, f"has schema fingerprint {fingerprint}")
+            marker = connection.execute(
+                "SELECT component, schema_version, ddl_fingerprint, object_fingerprint "
+                "FROM captain_hook_review_schema_v1 WHERE id = 1"
+            ).fetchone()
+            if marker is None:
+                raise _schema_error(path, "has no schema identity row")
+            component, marker_version, stored_ddl, stored_objects = marker
+            if component != REVIEW_SCHEMA_COMPONENT or marker_version != REVIEW_SCHEMA_VERSION:
+                raise _schema_error(path, "has a foreign schema identity")
+            if stored_ddl != REVIEW_DDL_FINGERPRINT or stored_objects != REVIEW_OBJECT_FINGERPRINT:
+                raise _schema_error(path, "has foreign stored schema fingerprints")
         finally:
             connection.close()
     except sqlite3.DatabaseError as error:
-        raise _manual_transfer_guidance(path, "is not a readable SQLite v1 database") from error
+        raise _schema_error(path, "is not a readable SQLite database") from error
+
+
+def _ddl_statements(script: str) -> list[str]:
+    statements: list[str] = []
+    pending = ""
+    for line in script.splitlines(keepends=True):
+        pending += line
+        if sqlite3.complete_statement(pending):
+            statements.append(pending.strip())
+            pending = ""
+    if pending.strip():
+        raise RuntimeError("review schema DDL contains an incomplete statement")
+    return statements
+
+
+def _create_review_schema(path: Path) -> None:
+    compiled_ddl = _ddl_fingerprint()
+    if compiled_ddl != REVIEW_DDL_FINGERPRINT:
+        raise RuntimeError(f"review compiled DDL fingerprint drifted to {compiled_ddl}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    created = False
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("BEGIN IMMEDIATE")
+        rows = connection.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
+        marker = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if rows is not None or marker != 0:
+            connection.rollback()
+            _validate_review_schema(path)
+            return
+        created = True
+        for statement in _ddl_statements(REVIEW_V1_DDL):
+            connection.execute(statement)
+        connection.execute(f"PRAGMA user_version = {REVIEW_SCHEMA_VERSION}")
+        fingerprint = _object_fingerprint(connection)
+        if fingerprint != REVIEW_OBJECT_FINGERPRINT:
+            raise RuntimeError(f"review schema object fingerprint drifted to {fingerprint}")
+        connection.execute(
+            "INSERT INTO captain_hook_review_schema_v1 "
+            "(id, component, schema_version, ddl_fingerprint, object_fingerprint) VALUES (1, ?, 1, ?, ?)",
+            (REVIEW_SCHEMA_COMPONENT, REVIEW_DDL_FINGERPRINT, REVIEW_OBJECT_FINGERPRINT),
+        )
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+    if created:
+        path.chmod(0o600)
+
+
+def _is_empty_review_database(path: Path) -> bool:
+    try:
+        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            marker = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            objects = int(connection.execute("SELECT count(*) FROM sqlite_schema").fetchone()[0])
+            return marker == 0 and objects == 0
+        finally:
+            connection.close()
+    except sqlite3.DatabaseError as error:
+        raise _schema_error(path, "is not a readable SQLite database") from error
+
+
+def _prepare_review_schema(path: Path) -> None:
+    if not path.exists() or path.stat().st_size == 0 or _is_empty_review_database(path):
+        _create_review_schema(path)
+    else:
+        _validate_review_schema(path)
 
 
 def signal_confidence(payload_json: object) -> Confidence:
@@ -414,12 +515,10 @@ class ReviewStore:
                 SQLite's default five seconds. The SessionStart announcer passes ``0``;
                 the normal reviewer path leaves the default.
         """
-        _require_review_schema(path)
+        _prepare_review_schema(path)
         db = await FeedbackStore.open(path, REVIEW_SCHEMA, busy_timeout_ms=busy_timeout_ms)
         try:
-            [epoch] = await db.sql("PRAGMA user_version")
-            if int(epoch["user_version"]) != REVIEW_SCHEMA_VERSION:
-                raise _manual_transfer_guidance(path, f"has schema epoch {epoch['user_version']}")
+            _validate_review_schema(path)
             store = cls(db, versions)
             await store.purge_stale_verdicts_if_changed()
             return store
@@ -541,8 +640,8 @@ class ReviewStore:
             """
 INSERT INTO candidates (
   repo_key, candidate_kind, rule, source_kind, status,
-  target_source_file, target_hook_name, misfire_class, origin_repo_key, pack_name, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
+  target_source_file, target_hook_name, misfire_class, origin_repo_key, pack_name, generation, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?) ON CONFLICT DO NOTHING
 """,
             (
                 repo,
