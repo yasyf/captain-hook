@@ -101,3 +101,41 @@ def test_general_comment_advisories_require_opt_in(content_name: str, file_name:
     reason = dispatch_comment_case(content_name, file_name, advisory_on_deny=False)
     assert reason == "blocked first"
     assert message not in reason
+
+
+def dispatch_edit_comment_case(seed: str, old: str, new: str, file_name: str) -> str | None:
+    from captain_hook.dispatch import dispatch
+    from captain_hook.testing.helpers import input_to_event
+    from captain_hook.testing.types import FileFixture, Input
+    from captain_hook.types import Event
+
+    dotted = "captain_hook.builtin_packs.general.hooks.comments"
+    if (loaded := sys.modules.get(dotted)) is not None:
+        importlib.reload(loaded)
+    else:
+        importlib.import_module(dotted)
+    evt = input_to_event(
+        Event.PreToolUse,
+        Input(tool="Edit", file=FileFixture(name=file_name, content=seed), old=old, content=new),
+    )
+    result = dispatch(Event.PreToolUse, evt)
+    assert result is not None
+    return result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_general_verbose_block_carries_legacy_advisory() -> None:
+    # One Edit that adds a new over-budget comment (blocks) while reworking a legacy over-budget one
+    # (advisory): the deny message leads with the block and rides the legacy advisory behind it.
+    seed = "# legacy one here\n# legacy two here\n# legacy three here\n# legacy four here\nx = 1\ny = 2\n"
+    old = "# legacy two here\n# legacy three here\n# legacy four here\nx = 1\ny = 2"
+    new = (
+        "# legacy two REWORDED here\n# legacy three here\n# legacy four here\nx = 1\n"
+        "# fresh one here\n# fresh two here\n# fresh three here\n# fresh four here\ny = 2"
+    )
+    reason = dispatch_edit_comment_case(seed, old, new, "combined.py")
+    assert reason is not None
+    assert "Verbose comment" in reason
+    assert "Additional advisories (not the reason for the deny):" in reason
+    assert "Legacy long comment" in reason
+    # The block is the reason; the advisory rides behind the separator.
+    assert reason.index("Verbose comment") < reason.index("Additional advisories") < reason.index("Legacy long comment")

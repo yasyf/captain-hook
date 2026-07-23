@@ -4,6 +4,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.10.0] - 2026-07-23
+
+### Changed
+
+- **Editing an already-over-budget comment now warns instead of denying.** The `general` pack's
+  verbose-comment guard blocks only comment runs an edit genuinely creates — a brand-new over-budget
+  run, or a within-budget run grown past budget. Reworking a run that was already over budget before
+  the edit draws an advisory instead, so tidying an oversized legacy comment is no longer blocked by
+  the act of touching it. Ancestry is position-mapped, so a full in-place rewrite — even a
+  delete-and-replace at the same spot — still counts as an edit of the old run.
+
 ## [12.9.1] - 2026-07-21
 
 ### Added

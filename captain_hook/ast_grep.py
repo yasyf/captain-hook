@@ -13,10 +13,10 @@ long names (``"python"``).
 
 from __future__ import annotations
 
+import difflib
 import functools
 import re
 import tomllib
-from collections import Counter
 from collections.abc import Iterable, Iterator, Set
 from dataclasses import dataclass
 from functools import cached_property
@@ -302,6 +302,14 @@ class CommentBlock:
         return head.over(6, 400) or tail.over(MAX_COMMENT_LINES, MAX_COMMENT_CHARS)
 
 
+class TouchedComment(NamedTuple):
+    """A comment block an edit created or grew, paired with the pre-edit over-budget block it descends
+    from — ``ancestor`` is ``None`` when the block is genuinely new (or grown into budget from within)."""
+
+    block: CommentBlock
+    ancestor: CommentBlock | None
+
+
 def line_span(node: SyntaxNode) -> tuple[int, int]:
     """1-based line span of a comment's text — trailing newlines excluded, so a grammar that folds
     the newline into the node (rust ``///``) doesn't inflate the run onto the code line below it."""
@@ -417,29 +425,91 @@ def comment_blocks(source: str, lang: str) -> list[CommentBlock]:
     return [CommentBlock(runs=tuple(runs)) for runs in blocks]
 
 
-def touched_comment_blocks(old: str, new: str, lang: str) -> list[CommentBlock]:
-    """Comment blocks of ``new`` this edit created or grew — a multiset diff over :attr:`CommentBlock.key`.
+Opcodes = list[tuple[str, int, int, int, int]]
 
-    An old block exempts one identically-keyed new block (a genuine move stays exempt; a duplicated
-    copy past the first counts as touched). An over-budget new block is exempt only when an old block
-    with the same key was *also* over budget, so a legacy oversized run stays quiet while a reflow
-    that pushes a previously-fine run over its budget does not.
+
+def mapped_line_span(block: CommentBlock, opcodes: Opcodes) -> tuple[int, int] | None:
+    """Project a pre-edit block's line span through diff opcodes to a 0-based half-open new-line hull.
+
+    ``equal`` lines shift by the opcode offset, ``replace`` lines map onto the whole target range, and
+    ``delete``/``insert`` lines contribute nothing — a block whose every line was deleted has no image
+    (``None``), so a delete-and-insert-elsewhere never masquerades as an in-place edit.
+    """
+    a, b = block.line - 1, block.end_line
+    lo = hi = None
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag in ("delete", "insert") or i2 <= a or i1 >= b:
+            continue
+        s, e = (max(i1, a) + j1 - i1, min(i2, b) + j1 - i1) if tag == "equal" else (j1, j2)
+        lo, hi = (s if lo is None else min(lo, s)), (e if hi is None else max(hi, e))
+    return None if lo is None else (lo, hi)
+
+
+def span_overlaps(span: tuple[int, int] | None, block: CommentBlock) -> bool:
+    """Whether a mapped new-line hull intersects a new block's own 0-based half-open line span."""
+    return span is not None and span[0] < block.end_line and block.line - 1 < span[1]
+
+
+def touched_comment_ancestry(old: str, new: str, lang: str) -> list[TouchedComment]:
+    """Comment blocks of ``new`` this edit created or grew, each paired with its pre-edit ancestor.
+
+    Two passes consume old-block instances at most once each. The **exact-key pass** exempts a new block
+    that carries an old block's whitespace-normalized :attr:`CommentBlock.key` — a genuine move stays
+    quiet, a duplicated copy past the first counts as touched, and an over-budget new block is exempt
+    only when a same-key old instance was *also* over budget (so a legacy oversized run stays quiet
+    while a reflow that pushes a within-budget run over its budget does not); among several same-key old
+    instances it consumes the one whose diff-mapped position overlaps the new block. The **position
+    pass** then hands each still-touched over-budget block the nearest unconsumed *over-budget* old block
+    whose mapped span overlaps it (document order, once each) as its ``ancestor``. Because ancestry is
+    position-mapped, a full in-place rewrite — even a delete-and-replace at the same spot — pairs as an
+    edit of the old run, while a moved-and-edited comment finds no aligned candidate and stays unpaired.
     """
     old_blocks = comment_blocks(old, lang)
-    remaining = Counter(block.key for block in old_blocks)
-    old_too_long = Counter(block.key for block in old_blocks if block.too_long)
+    opcodes: Opcodes = difflib.SequenceMatcher(a=old.splitlines(), b=new.splitlines(), autojunk=False).get_opcodes()
+    old_spans = [mapped_line_span(block, opcodes) for block in old_blocks]
+    by_key: dict[str, list[int]] = {}
+    for i, block in enumerate(old_blocks):
+        by_key.setdefault(block.key, []).append(i)
+
+    consumed: set[int] = set()
+    consumed_too_long: set[int] = set()
     touched: list[CommentBlock] = []
+
+    def take(key: str, block: CommentBlock, exclude: set[int], *, too_long_only: bool) -> int | None:
+        pool = [i for i in by_key.get(key, ()) if i not in exclude and (not too_long_only or old_blocks[i].too_long)]
+        return next((i for i in pool if span_overlaps(old_spans[i], block)), pool[0]) if pool else None
+
     for block in comment_blocks(new, lang):
-        if remaining[block.key] > 0:
-            remaining[block.key] -= 1
-            if block.too_long:
-                if old_too_long[block.key] > 0:
-                    old_too_long[block.key] -= 1
-                else:
-                    touched.append(block)
+        if (match := take(block.key, block, consumed, too_long_only=False)) is None:
+            touched.append(block)
+            continue
+        consumed.add(match)
+        if not block.too_long:
+            continue
+        if (survivor := take(block.key, block, consumed_too_long, too_long_only=True)) is not None:
+            consumed_too_long.add(survivor)
         else:
             touched.append(block)
-    return touched
+
+    accounted = consumed | consumed_too_long
+    candidates = [i for i, block in enumerate(old_blocks) if block.too_long and i not in accounted]
+    used: set[int] = set()
+
+    def ancestor(block: CommentBlock) -> CommentBlock | None:
+        if not block.too_long:
+            return None
+        i = next((c for c in candidates if c not in used and span_overlaps(old_spans[c], block)), None)
+        if i is None:
+            return None
+        used.add(i)
+        return old_blocks[i]
+
+    return [TouchedComment(block=block, ancestor=ancestor(block)) for block in touched]
+
+
+def touched_comment_blocks(old: str, new: str, lang: str) -> list[CommentBlock]:
+    """Comment blocks of ``new`` this edit created or grew — the blocks of :func:`touched_comment_ancestry`."""
+    return [touched.block for touched in touched_comment_ancestry(old, new, lang)]
 
 
 def comment_line_numbers(source: str, lang: str, *, include_doc: bool) -> set[int]:

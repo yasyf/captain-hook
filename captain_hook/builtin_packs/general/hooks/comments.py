@@ -32,9 +32,11 @@ Design notes — accepted tradeoffs, by construction, not bugs:
   interior newlines.
 * Density classification stays run-level, so doc-tail lines remain excluded from comment density.
 * A new-path ``Write`` has no pre-image, so a carried-over legacy oversized comment re-trips as
-  "created"; move provenance only survives an in-place edit.
-* Any non-whitespace edit to a legacy oversized run re-trips it at full size — the exemption is for
-  untouched and whitespace-only-reflowed runs, not for editing an oversized comment's words.
+  "created" (blocks, not warns); move provenance only survives an in-place edit.
+* Editing a legacy oversized run's words draws an advisory at full size, not a block — only a new run,
+  or one grown over budget from within it, blocks. Ancestry is position-mapped, so a delete-and-replace
+  at the same spot classifies as an edit of the old run, while a moved-and-edited run finds no aligned
+  ancestor and blocks.
 * ``yaml`` and ``json`` (through a JSONC-tolerant grammar) parse and fire comment hooks; ``toml`` and
   ``sql`` have no bundled grammar; ``md`` parses but defines no comment nodes.
 * Threshold boundaries are permissive (``> 3`` lines / ``> 200`` chars, and ``> 6`` lines /
@@ -67,11 +69,12 @@ from captain_hook.ast_grep import (
     MAX_COMMENT_LINES,
     comment_line_numbers,
     lang_for_path,
+    touched_comment_ancestry,
     touched_comment_blocks,
 )
 
 if TYPE_CHECKING:
-    from captain_hook.ast_grep import CommentBlock
+    from captain_hook.ast_grep import CommentBlock, TouchedComment
 
 COMMENT_DENSITY_MIN_ADDED = 6
 COMMENT_DENSITY_FRACTION = 0.5
@@ -129,8 +132,9 @@ PY_ALL_COMMENT = (
 PY_DENSE_FIRES = "# c1 here\na = 1\n# c2 here\nb = 2\n# c3 here\n# c4 here\nc = 3\n# c5 here\n"
 
 
-def touched(evt: BaseHookEvent) -> list[CommentBlock]:
-    """The comment blocks this edit created or grew, or ``[]`` when the language is unparsable."""
+def touched_ancestry(evt: BaseHookEvent) -> list[TouchedComment]:
+    """The comment blocks this edit created or grew, each paired with its pre-edit over-budget ancestor,
+    or ``[]`` when the language is unparsable."""
     if not (file := evt.file) or not (lang := lang_for_path(file.path)):
         return []
     if (post := evt.post_image) is None:
@@ -141,14 +145,26 @@ def touched(evt: BaseHookEvent) -> list[CommentBlock]:
             return []
     elif (pre := evt.pre_image) is None:
         return []
-    return touched_comment_blocks(pre, post, lang)
+    return touched_comment_ancestry(pre, post, lang)
+
+
+def touched(evt: BaseHookEvent) -> list[CommentBlock]:
+    """The comment blocks this edit created or grew, or ``[]`` when the language is unparsable."""
+    return [t.block for t in touched_ancestry(evt)]
 
 
 class VerboseComment(CustomCondition):
-    """True when the edit leaves an over-budget comment block it created or grew."""
+    """True when the edit leaves an over-budget comment block it created or grew from within budget."""
 
     def check(self, evt: BaseHookEvent) -> bool:
-        return any(block.too_long for block in touched(evt))
+        return any(t.block.too_long and t.ancestor is None for t in touched_ancestry(evt))
+
+
+class LegacyCommentEdit(CustomCondition):
+    """True when the edit reworks a comment that was already over budget before it."""
+
+    def check(self, evt: BaseHookEvent) -> bool:
+        return any(t.block.too_long and t.ancestor is not None for t in touched_ancestry(evt))
 
 
 class VerboseDocComment(CustomCondition):
@@ -337,6 +353,16 @@ hook(
             old="x = 1",
             content="# a here\n# b here\n# c here\n# d here\n# e here\nx = 1",
         ): Block(pattern="Verbose comment"),
+        # A legacy long comment deleted while an unrelated long comment lands elsewhere in the same
+        # edit: the new run has no positional ancestor, so it is created, not an edit — blocked.
+        Input(
+            file=FileFixture(
+                name="relocate.py",
+                content="# gone one here\n# gone two here\n# gone three here\n# gone four here\nx = 1\ny = 2\n",
+            ),
+            old="# gone one here\n# gone two here\n# gone three here\n# gone four here\nx = 1\ny = 2",
+            content="x = 1\n# new one here\n# new two here\n# new three here\n# new four here\ny = 2",
+        ): Block(pattern="Verbose comment"),
         # Boundaries, trailing comments, shebangs, and untouched / exempt blocks — allowed.
         Input(file="m.py", content="# one here\n# two here\n# three here\nx = 1\n"): Allow(),
         Input(file="ok.go", content="package p\n\nfunc F() {\n\t// " + "x" * 197 + "\n\tx := 1\n}\n"): Allow(),
@@ -414,6 +440,24 @@ hook(
             old="// deliberately: the mint-verify TOCTOU",
             content="//  deliberately: the mint-verify TOCTOU",
         ): Allow(),
+        # Reworking a comment already over budget before the edit is an advisory, not a block —
+        # a light word change, and a full in-place rewrite of the legacy run, both stay allowed here.
+        Input(
+            file=FileFixture(name="legacy-light.py", content=PY_LONG_RUN),
+            old="# note two here",
+            content="# note two reworded here",
+        ): Allow(),
+        Input(
+            file=FileFixture(name="legacy-rewrite.py", content=PY_LONG_RUN),
+            old=(
+                "# note one here\n# note two here\n# note three here\n"
+                "# note four here\n# note five here\n# note six here"
+            ),
+            content=(
+                "# fully rewritten line a\n# fully rewritten line b\n# fully rewritten line c\n"
+                "# fully rewritten line d\n# fully rewritten line e\n# fully rewritten line f"
+            ),
+        ): Allow(),
         Input(tool="Write", file="write.go", content=GO_TAIL_DOC): Block(pattern="Verbose comment"),
         Input(file="f.yaml", content="# a\n# b\n# c\n# d\n# e\n# f\n# g\n# h\n# i\n# j\n"): Block(
             pattern="Verbose comment"
@@ -427,6 +471,70 @@ hook(
             content="// line one here\n// line two here\n// line three here\n// line four here\nfn f() {}\n",
         ): Allow(),
         Input(file="dense.py", content=PY_DENSE_FIRES): Allow(),
+    },
+)
+
+nudge(
+    (
+        "Legacy long comment: you reworked a comment that was already over budget before this edit, so "
+        "that rework alone isn't the reason for any deny. Still, while you're in it, trim it to the one "
+        "non-obvious fact — or delete it and let the code speak. A comment you newly push over budget — "
+        "including growing a shorter one past it — is still denied. See: STYLEGUIDE.md § Comments."
+    ),
+    only_if=[Tool("Edit", "Write", "MultiEdit"), LegacyCommentEdit()],
+    events=Event.PreToolUse,
+    max_fires=None,
+    advisory_on_deny=True,
+    tests={
+        # Reworking a legacy over-budget run — a light word change, a full in-place rewrite, or a
+        # doc-tail edit — warns instead of blocking.
+        Input(
+            file=FileFixture(name="legacy-light.py", content=PY_LONG_RUN),
+            old="# note two here",
+            content="# note two reworded here",
+        ): Warn(pattern="Legacy long comment"),
+        Input(
+            file=FileFixture(name="legacy-rewrite.py", content=PY_LONG_RUN),
+            old=(
+                "# note one here\n# note two here\n# note three here\n"
+                "# note four here\n# note five here\n# note six here"
+            ),
+            content=(
+                "# fully rewritten line a\n# fully rewritten line b\n# fully rewritten line c\n"
+                "# fully rewritten line d\n# fully rewritten line e\n# fully rewritten line f"
+            ),
+        ): Warn(pattern="Legacy long comment"),
+        Input(
+            file=FileFixture(name="legacy-tail.go", content=GO_TAIL_DOC),
+            old="// stale token from an earlier session.",
+            content="// stale token from a much earlier session.",
+        ): Warn(pattern="Legacy long comment"),
+        # A brand-new over-budget comment, a within-budget run grown past budget, and a trim back
+        # under budget are the blocking hook's business (or nobody's) — the legacy advisory stays quiet.
+        Input(file="new.py", content=PY_LONG_RUN): Allow(),
+        Input(
+            file=FileFixture(name="grow.py", content="# a here\n# b here\n# c here\nx = 1\n"),
+            old="# a here\n# b here\n# c here",
+            content="# a here\n# b here\n# c here\n# d here\n# e here\n# f here",
+        ): Allow(),
+        Input(
+            file=FileFixture(name="trim.py", content=PY_LONG_RUN),
+            old=(
+                "# note one here\n# note two here\n# note three here\n"
+                "# note four here\n# note five here\n# note six here"
+            ),
+            content="# just one terse note",
+        ): Allow(),
+        # An identical resave, a whitespace-only reflow, and a Write to a brand-new file all stay quiet.
+        Input(file=FileFixture(name="resave.py", content=PY_LONG_RUN), content=PY_LONG_RUN): Allow(),
+        Input(
+            file=FileFixture(
+                name="reflow.py", content="# alpha here\n# beta here\n# gamma here\n# delta here\nx = 1\n"
+            ),
+            old="# alpha here\n# beta here\n# gamma here\n# delta here",
+            content="#  alpha here\n#  beta here\n#  gamma here\n#  delta here",
+        ): Allow(),
+        Input(tool="Write", file="write.go", content=GO_TAIL_DOC): Allow(),
     },
 )
 

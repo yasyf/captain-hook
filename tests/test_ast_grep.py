@@ -19,6 +19,7 @@ from captain_hook.ast_grep import (
     introduced_comments,
     lang_for_path,
     parse,
+    touched_comment_ancestry,
     touched_comment_blocks,
 )
 
@@ -458,6 +459,84 @@ class TestTouchedCommentBlocks:
         new = "/* Head here\n\nalpha\nbeta gamma\ndelta epsilon\nzeta */\nfn f() {}\n"
         [block] = touched_comment_blocks(old, new, "rs")
         assert block.too_long
+
+
+class TestTouchedCommentAncestry:
+    def test_light_edit_carries_ancestor(self) -> None:
+        old = "# note one here\n# note two here\n# note three here\n# note four here\nx = 1\n"
+        new = "# note one here\n# note two reworded here\n# note three here\n# note four here\nx = 1\n"
+        [touched] = touched_comment_ancestry(old, new, "py")
+        assert touched.block.too_long
+        assert touched.ancestor is not None
+        assert touched.ancestor.line == 1
+
+    def test_full_rewrite_carries_ancestor(self) -> None:
+        # However much the words change, an over-budget run occupying the old run's slot is an edit.
+        old = "# alpha one line\n# alpha two line\n# alpha three line\n# alpha four line\nx = 1\n"
+        new = "# beta one line here\n# beta two line here\n# beta three line here\n# beta four line here\nx = 1\n"
+        [touched] = touched_comment_ancestry(old, new, "py")
+        assert touched.ancestor is not None
+
+    def test_insert_at_different_location_has_no_ancestor(self) -> None:
+        # The legacy run is deleted and an unrelated long run inserted elsewhere: no positional
+        # ancestor maps through, so the new run is created (blocks), not an edit.
+        old = "# gone one here\n# gone two here\n# gone three here\n# gone four here\nx = 1\ny = 2\n"
+        new = "x = 1\n# new one here\n# new two here\n# new three here\n# new four here\ny = 2\n"
+        [touched] = touched_comment_ancestry(old, new, "py")
+        assert touched.block.too_long
+        assert touched.ancestor is None
+
+    def test_duplicate_paste_candidate_consumed(self) -> None:
+        # The lone legacy candidate is spent exempting the surviving copy, so the paste finds none.
+        old = "# a\n# b\n# c\n# d\nx = 1\n"
+        new = "# a\n# b\n# c\n# d\nx = 1\n# a\n# b\n# c\n# d\n"
+        [touched] = touched_comment_ancestry(old, new, "py")
+        assert touched.ancestor is None
+
+    def test_identical_twins_one_edited_pairs_positionally(self) -> None:
+        old = (
+            "# twin one here\n# twin two here\n# twin three here\n# twin four here\nx = 1\n"
+            "# twin one here\n# twin two here\n# twin three here\n# twin four here\ny = 2\n"
+        )
+        new = (
+            "# twin one here\n# twin two here\n# twin three here\n# twin four here\nx = 1\n"
+            "# twin one here\n# twin two EDITED here\n# twin three here\n# twin four here\ny = 2\n"
+        )
+        [touched] = touched_comment_ancestry(old, new, "py")
+        # The edited twin pairs with the second (positionally corresponding) old instance, not the first.
+        assert touched.ancestor is not None
+        assert touched.ancestor.line == 6
+
+    def test_identical_twins_first_edited_pairs_positionally(self) -> None:
+        # Mirror arrangement: the survivor must not consume the first instance the edited twin needs —
+        # the exact-key pass's span preference is what keeps this a warn, not a block.
+        old = (
+            "# twin one here\n# twin two here\n# twin three here\n# twin four here\nx = 1\n"
+            "# twin one here\n# twin two here\n# twin three here\n# twin four here\ny = 2\n"
+        )
+        new = (
+            "# twin one here\n# twin two EDITED here\n# twin three here\n# twin four here\nx = 1\n"
+            "# twin one here\n# twin two here\n# twin three here\n# twin four here\ny = 2\n"
+        )
+        [touched] = touched_comment_ancestry(old, new, "py")
+        assert touched.ancestor is not None
+        assert touched.ancestor.line == 1
+
+    def test_reflow_to_oversize_has_no_ancestor(self) -> None:
+        # The old run was within budget, so it is not an ancestor candidate — the reflow blocks.
+        old = "fn f() {\n    /* one two three */\n}\n"
+        new = "fn f() {\n    /*\n     one\n     two\n     three\n    */\n}\n"
+        [touched] = touched_comment_ancestry(old, new, "rs")
+        assert touched.block.too_long
+        assert touched.ancestor is None
+
+    def test_whole_file_pre_fragment_post_pairs(self) -> None:
+        # The span-edit fallback compares a whole-file pre-image against the reworked fragment; the
+        # legacy run still maps positionally onto the fragment.
+        old = "x = 1\n# span one here\n# span two here\n# span three here\n# span four here\ny = 2\n"
+        new = "# span one REWORDED here\n# span two here\n# span three here\n# span four here\n"
+        [touched] = touched_comment_ancestry(old, new, "py")
+        assert touched.ancestor is not None
 
 
 class TestLangForPath:
