@@ -115,17 +115,24 @@ struct CaptainHookApp: App {
     }
 
     private func startWatcher() {
+        let codec: SnapshotCodec<Snapshot>
+        do {
+            codec = try SnapshotContract.codec()
+        } catch {
+            Log.app.error("snapshot codec invalid: \(String(describing: error), privacy: .public)")
+            return
+        }
         let watcher = SnapshotWatcher<Snapshot>(
             fileURL: HelperPaths.status,
-            expectedSchemaVersion: 1,
+            codec: codec,
             callbackQueue: .main
         ) { state in
             switch state {
             case .loaded: Log.app.debug("snapshot loaded")
             case .missing: Log.app.debug("snapshot missing")
             case let .malformed(error): Log.app.error("snapshot malformed: \(error.description, privacy: .public)")
-            case let .versionSkew(expected, found):
-                Log.app.error("snapshot skew expected=\(expected) found=\(found)")
+            case let .schemaSkew(expected, foundIdentity, foundVersion, foundFingerprint):
+                Log.app.error("snapshot skew expected=\(expected.identity, privacy: .public)/\(expected.version)/\(expected.fingerprint, privacy: .public) found=\(foundIdentity, privacy: .public)/\(foundVersion)/\(foundFingerprint, privacy: .public)")
             }
             WidgetCenter.shared.reloadAllTimelines()
         }

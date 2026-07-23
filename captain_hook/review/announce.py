@@ -86,8 +86,8 @@ def collect_announcements(root: Path | None) -> str | None:
     a session start never opens or creates a store in an unrelated repo and stays silent in
     a repo the reviewer isn't tracking.
 
-    The store opens with ``busy_timeout = 0`` — set before the schema migration and the
-    first-upgrade verdict purge, which would otherwise stall on a detached reviewer's write
+    The store opens with ``busy_timeout = 0`` — set before exact schema attestation and the
+    prompt-version verdict purge, which would otherwise stall on a detached reviewer's write
     lock — and the announce pass marks all rows in one transaction, so a contended lock at
     any point fails immediately (``SQLITE_BUSY``) rather than stalling the synchronous hook
     for SQLite's default five seconds; the outcome is announced at the next uncontended

@@ -3,7 +3,9 @@ import WidgetKit
 
 extension Snapshot {
     static let sample = Snapshot(
+        identity: SnapshotContract.identity,
         schemaVersion: 1,
+        fingerprint: SnapshotContract.fingerprint,
         generatedAt: .now,
         captHookVersion: "9.4.0",
         repos: [
@@ -32,7 +34,9 @@ extension Snapshot {
     )
 
     static let sampleFailing = Snapshot(
+        identity: SnapshotContract.identity,
         schemaVersion: 1,
+        fingerprint: SnapshotContract.fingerprint,
         generatedAt: .now,
         captHookVersion: "9.4.0",
         repos: [

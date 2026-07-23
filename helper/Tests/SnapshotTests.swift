@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 
@@ -11,9 +12,11 @@ private final class SnapshotBundleToken {}
     }
 
     @Test func decodesGoldenSnapshotFully() throws {
-        let snapshot = try JSONDecoder.snapshot.decode(Snapshot.self, from: golden())
+        let snapshot = try SnapshotContract.decode(golden(), using: .snapshot)
 
+        #expect(snapshot.identity == SnapshotContract.identity)
         #expect(snapshot.schemaVersion == 1)
+        #expect(snapshot.fingerprint == SnapshotContract.fingerprint)
         #expect(snapshot.captHookVersion == "9.4.0")
         #expect(snapshot.generatedAt == ISO8601DateFormatter().date(from: "2026-07-15T12:00:00Z"))
 
@@ -46,7 +49,7 @@ private final class SnapshotBundleToken {}
     }
 
     @Test func derivedHelpersMatchGolden() throws {
-        let snapshot = try JSONDecoder.snapshot.decode(Snapshot.self, from: golden())
+        let snapshot = try SnapshotContract.decode(golden(), using: .snapshot)
         #expect(snapshot.openPRCount == 1)
         #expect(snapshot.allOpenPRs.map(\.candidateID) == [42])
     }
@@ -54,9 +57,29 @@ private final class SnapshotBundleToken {}
     @Test func decodesFractionalTimestamp() throws {
         let text = String(decoding: try golden(), as: UTF8.self)
             .replacingOccurrences(of: "2026-07-15T11:30:00Z", with: "2026-07-15T11:30:00.500Z")
-        let snapshot = try JSONDecoder.snapshot.decode(Snapshot.self, from: Data(text.utf8))
+        let snapshot = try SnapshotContract.decode(Data(text.utf8), using: .snapshot)
         let pr = try #require(snapshot.repos.first?.openPRs.first)
         let whole = try #require(ISO8601DateFormatter().date(from: "2026-07-15T11:30:00Z"))
         #expect(pr.openedAt == whole.addingTimeInterval(0.5))
+    }
+
+    @Test func contractFingerprintMatchesDescriptor() {
+        let digest = SHA256.hash(data: Data(SnapshotContract.descriptor.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        #expect(digest == SnapshotContract.fingerprint)
+    }
+
+    @Test func rejectsSchemaIdentityAndFingerprintSkew() throws {
+        let data = try golden()
+        for (old, replacement) in [
+            (SnapshotContract.identity, "captain-hook.foreign.v1"),
+            (SnapshotContract.fingerprint, String(repeating: "0", count: 64)),
+        ] {
+            let text = String(decoding: data, as: UTF8.self).replacingOccurrences(of: old, with: replacement)
+            #expect(throws: SnapshotContractError.self) {
+                try SnapshotContract.decode(Data(text.utf8), using: .snapshot)
+            }
+        }
     }
 }

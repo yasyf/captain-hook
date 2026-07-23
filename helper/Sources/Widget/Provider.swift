@@ -53,9 +53,7 @@ struct StatusProvider: TimelineProvider {
         } catch {
             return StatusEntry(date: now, state: .denied)
         }
-        guard let snapshot = try? JSONDecoder.snapshot.decode(Snapshot.self, from: data),
-              snapshot.schemaVersion == 1
-        else {
+        guard let snapshot = try? SnapshotContract.decode(data, using: .snapshot) else {
             return StatusEntry(date: now, state: .unreadable)
         }
         let stale = now.timeIntervalSince(snapshot.generatedAt) > Self.staleAfter

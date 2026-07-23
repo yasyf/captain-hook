@@ -1,17 +1,55 @@
+import DaemonKit
 import Foundation
 
 // Models for ~/.capt-hook/status.json (schema_version 1), pinned byte-for-byte by
 // tests/fixtures/status-json-v1.golden.json. Written by Python, read by the widget.
 
+enum SnapshotContract {
+    static let identity = "captain-hook.status.v1"
+    static let descriptor = "captain-hook.status.v1|identity:string|schema_version:uint64|fingerprint:sha256hex|" +
+        "generated_at:rfc3339|capt_hook_version:string|repos:[{key:string,name:string,watching:bool," +
+        "counts:{watching:int64,eligible:int64,pr_open:int64,accepted:int64,rejected:int64,stale:int64}," +
+        "open_prs:[{candidate_id:int64,rule:string,kind:string,title:string,url:string,opened_at:rfc3339}]}]|" +
+        "health:{ok:bool,consecutive_failures:int64,failing_since:rfc3339|null,last_run_at:rfc3339|null," +
+        "judge_pending:int64}"
+    static let fingerprint = "ef46e55d15f15bc622e6cbf032fbb23f7917e232e01a44a94f426643c10738bc"
+
+    static func codec() throws -> SnapshotCodec<Snapshot> {
+        let schema = try SnapshotSchema(identity: identity, fingerprint: fingerprint)
+        return SnapshotCodec(schema: schema) { data, decoder in
+            try decode(data, using: decoder)
+        }
+    }
+
+    static func decode(_ data: Data, using decoder: JSONDecoder) throws -> Snapshot {
+        let snapshot = try decoder.decode(Snapshot.self, from: data)
+        guard snapshot.identity == identity,
+              snapshot.schemaVersion == 1,
+              snapshot.fingerprint == fingerprint
+        else {
+            throw SnapshotContractError.schemaSkew
+        }
+        return snapshot
+    }
+}
+
+enum SnapshotContractError: Error {
+    case schemaSkew
+}
+
 struct Snapshot: Decodable, Sendable {
+    let identity: String
     let schemaVersion: Int
+    let fingerprint: String
     let generatedAt: Date
     let captHookVersion: String
     let repos: [RepoStatus]
     let health: Health
 
     enum CodingKeys: String, CodingKey {
+        case identity
         case schemaVersion = "schema_version"
+        case fingerprint
         case generatedAt = "generated_at"
         case captHookVersion = "capt_hook_version"
         case repos, health

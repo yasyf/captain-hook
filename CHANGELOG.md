@@ -4,6 +4,25 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.14.0] - 2026-07-23
+
+### Changed
+
+- **Review persistence now uses cc-transcript's authoritative exact-v1 schema
+  engine.** Captain Hook contributes only its product DDL and sqlite-vec extension;
+  cc-transcript 14.14.0 compiles and attests the complete database before use.
+- **The signed helper stack now requires daemonkit 0.9.0 end to end.** The Go
+  worker host and Swift application resolve the same hard-cut runtime release.
+- **Widget snapshots now carry an exact caller-owned v1 identity and schema
+  fingerprint.** The Python producer, Swift watcher, and WidgetKit reader reject
+  identity, version, or shape drift instead of decoding it as current state.
+
+### Removed
+
+- **Captain Hook no longer carries a second schema marker, fingerprint layer, or
+  open-time schema implementation.** Foreign, partial, or drifted databases are
+  rejected before journal-mode or application-byte mutation.
+
 ## [12.13.0] - 2026-07-23
 
 ### Changed
