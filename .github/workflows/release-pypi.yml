@@ -265,10 +265,14 @@ jobs:
           set -euo pipefail
           mapfile -t python_assets < <(find python-dist -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           test "${#python_assets[@]}" = 2
+          manifest="$RUNNER_TEMP/captain-pypi-assets.tsv"
+          : > "$manifest"
           for asset in "${python_assets[@]}"; do
             test -f "release-dist/$asset"
-            test "$(sha256sum "python-dist/$asset" | awk '{print $1}')" = \
-              "$(sha256sum "release-dist/$asset" | awk '{print $1}')"
+            python_sha="$(sha256sum "python-dist/$asset" | awk '{print $1}')"
+            staged_sha="$(sha256sum "release-dist/$asset" | awk '{print $1}')"
+            test "$python_sha" = "$staged_sha"
+            printf '%s\t%s\n' "$staged_sha" "$asset" >> "$manifest"
           done
 
       - name: Resolve the exact PyPI publication state
@@ -277,19 +281,20 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          python3 - "${VERSION#v}" python-dist "$GITHUB_OUTPUT" <<'PY'
-          import hashlib
+          python3 - "${VERSION#v}" "$RUNNER_TEMP/captain-pypi-assets.tsv" "$GITHUB_OUTPUT" <<'PY'
           import json
           import pathlib
           import sys
           import urllib.error
           import urllib.request
 
-          version, directory, output = sys.argv[1:]
+          version, manifest, output = sys.argv[1:]
           expected = {
-              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-              for path in pathlib.Path(directory).iterdir()
-              if path.is_file()
+              name: digest
+              for digest, name in (
+                  line.split("\t", 1)
+                  for line in pathlib.Path(manifest).read_text().splitlines()
+              )
           }
           try:
               with urllib.request.urlopen(f"https://pypi.org/pypi/capt-hook/{version}/json") as response:
@@ -319,8 +324,7 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          python3 - "${VERSION#v}" python-dist <<'PY'
-          import hashlib
+          python3 - "${VERSION#v}" "$RUNNER_TEMP/captain-pypi-assets.tsv" <<'PY'
           import json
           import pathlib
           import sys
@@ -328,11 +332,13 @@ jobs:
           import urllib.error
           import urllib.request
 
-          version, directory = sys.argv[1:]
+          version, manifest = sys.argv[1:]
           expected = {
-              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-              for path in pathlib.Path(directory).iterdir()
-              if path.is_file()
+              name: digest
+              for digest, name in (
+                  line.split("\t", 1)
+                  for line in pathlib.Path(manifest).read_text().splitlines()
+              )
           }
           actual = {}
           for attempt in range(12):

@@ -80,12 +80,17 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
         "existing PyPI assets differ",
         "steps.pypi-state.outputs.publish == 'true'",
         "Verify exact PyPI publication",
+        'manifest="$RUNNER_TEMP/captain-pypi-assets.tsv"',
+        'printf \'%s\\t%s\\n\' "$staged_sha" "$asset" >> "$manifest"',
         f"pypa/gh-action-pypi-publish@{PYPI_PUBLISH_REF}",
     ):
         assert required in publish_pypi
     assert "id-token: write" in publish_pypi
     assert "contents: write" not in publish_pypi
     assert "skip-existing:" not in publish_pypi
+    assert publish_pypi.count('"$RUNNER_TEMP/captain-pypi-assets.tsv"') == 3
+    assert "pathlib.Path(directory).iterdir()" not in publish_pypi
+    assert "if path.is_file()" not in publish_pypi
     assert "pypa/gh-action-pypi-publish@release/v1" not in workflow
     assert publish_pypi.index(f"pypa/gh-action-pypi-publish@{PYPI_PUBLISH_REF}") < publish_pypi.index(
         "Verify exact PyPI publication"
@@ -109,6 +114,26 @@ def test_release_stages_and_smokes_every_asset_before_one_public_transition() ->
     assert "gh api" not in smoke
     assert "/releases/tags/" not in draft_flow
     assert "softprops/action-gh-release" not in workflow
+
+
+def test_pypi_publisher_sidecars_cannot_mutate_expected_assets(tmp_path: Path) -> None:
+    workflow = WORKFLOW.read_text()
+    publish = workflow[workflow.index("\n  publish-pypi:") : workflow.index("\n  publish-github:")]
+    wheel = "capt_hook-12.15.3-py3-none-any.whl"
+    source = "capt_hook-12.15.3.tar.gz"
+    manifest = tmp_path / "captain-pypi-assets.tsv"
+    manifest.write_text(f"{'1' * 64}\t{wheel}\n{'2' * 64}\t{source}\n")
+    expected = {name: digest for digest, name in (line.split("\t", 1) for line in manifest.read_text().splitlines())}
+
+    (tmp_path / f"{wheel}.publish.attestation").write_text("publisher output")
+    (tmp_path / f"{source}.publish.attestation").write_text("publisher output")
+
+    assert expected == {wheel: "1" * 64, source: "2" * 64}
+    publisher = publish.index(f"pypa/gh-action-pypi-publish@{PYPI_PUBLISH_REF}")
+    verifier = publish.index("Verify exact PyPI publication")
+    assert publish.index('manifest="$RUNNER_TEMP/captain-pypi-assets.tsv"') < publisher < verifier
+    assert "python-dist" not in publish[verifier:]
+    assert "pathlib.Path(manifest).read_text()" in publish[verifier:]
 
 
 def test_release_rerun_converges_the_unique_draft_by_release_id() -> None:
