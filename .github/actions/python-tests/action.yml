@@ -27,13 +27,6 @@ runs:
       shell: bash
       run: echo "minor=$(grep -A1 '^name = \"spacy\"$' uv.lock | grep '^version' | grep -o '[0-9]*\.[0-9]*' | head -1)" >> "$GITHUB_OUTPUT"
 
-    - name: Resolve OEWN version
-      id: oewn
-      shell: bash
-      run: |
-        version=$(uv run python -c "import wn; print(wn.config.get_project_info('oewn')['version'])")
-        echo "version=$version" >> "$GITHUB_OUTPUT"
-
     - name: Cache NLP assets
       id: nlp-cache
       uses: actions/cache@v5
@@ -41,7 +34,7 @@ runs:
         path: |
           ~/.cache/spacy/models
           ~/.wn_data
-        key: nlp-v4-${{ runner.os }}-spacy-${{ steps.spacy.outputs.minor }}-oewn-${{ steps.oewn.outputs.version }}
+        key: nlp-v5-${{ runner.os }}-spacy-${{ steps.spacy.outputs.minor }}-oewn-31f4af16c54b532fd5484d4cc33aee588a31bb5b70683ae8197842fde5b586bc
 
     - name: Sync development environment
       shell: bash

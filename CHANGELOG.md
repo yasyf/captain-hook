@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI and PyPI release tests now share one cache-backed Python test action.**
   Both restore version-keyed spaCy and Open English WordNet assets, provision only
   on a real cache miss, and run the same development-environment test command.
+- **Open English WordNet provisioning no longer depends on en-word.net.** The
+  exact 2025+ archive comes from the official GitHub release, is size- and
+  SHA-256-verified before installation, and has no registry or fallback path.
 
 ## [12.15.0] - 2026-07-23
 

@@ -223,19 +223,18 @@ def test_model_sha256_raises_when_checksum_absent(monkeypatch: pytest.MonkeyPatc
 
 class FakeWn:
     def __init__(self, data_dir: Path, *, installed: bool) -> None:
-        self.config = SimpleNamespace(
-            data_directory=str(data_dir),
-            get_project_info=lambda lexicon: {"version": "2025+"} if lexicon == model_cache.WN_LEXICON else None,
-        )
+        self.config = SimpleNamespace(data_directory=str(data_dir))
         self.installed = installed
-        self.downloads: list[str] = []
+        self.adds: list[Path] = []
 
     def lexicons(self, lexicon: str) -> list[str]:
-        assert lexicon == f"{model_cache.WN_LEXICON}:2025+"
+        assert lexicon == model_cache.WN_SPEC
         return ["oewn"] if self.installed else []
 
-    def download(self, spec: str, progress_handler: object = None) -> None:
-        self.downloads.append(spec)
+    def add(self, path: Path, progress_handler: object = None) -> None:
+        assert progress_handler is None
+        assert path.is_file()
+        self.adds.append(path)
         self.installed = True
 
 
@@ -246,25 +245,70 @@ def fake_wn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeWn:
     return fake
 
 
-def test_wn_lexicon_cached_skips_download(fake_wn: FakeWn) -> None:
+def test_wn_lexicon_source_is_exactly_pinned() -> None:
+    assert model_cache.WN_SPEC == "oewn:2025+"
+    assert model_cache.WN_ASSET_URL == (
+        "https://github.com/globalwordnet/english-wordnet/releases/download/"
+        "2025-edition/english-wordnet-2025-plus.xml.gz"
+    )
+    assert model_cache.WN_ARCHIVE_SIZE == 12_925_887
+    assert model_cache.WN_ARCHIVE_SHA256 == "31f4af16c54b532fd5484d4cc33aee588a31bb5b70683ae8197842fde5b586bc"
+
+
+def test_wn_lexicon_cached_skips_download(fake_wn: FakeWn, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_wn.installed = True
+    monkeypatch.setattr(
+        model_cache.http,
+        "github_download",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("cached lexicon must not access the network")),
+    )
 
     model_cache.ensure_wn_lexicon()
 
-    assert fake_wn.downloads == []
+    assert fake_wn.adds == []
 
 
-def test_wn_lexicon_downloads_once_under_filelock(
+def test_wn_lexicon_adds_verified_atomic_archive_once_under_idempotent_filelock(
     tmp_path: Path, fake_wn: FakeWn, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    payload = b"pinned-oewn-archive"
     locks: list[str] = []
+    downloads: list[tuple[str, Path]] = []
+
+    def download(url: str, dest: Path) -> None:
+        downloads.append((url, dest))
+        dest.write_bytes(payload)
+
+    monkeypatch.setattr(model_cache, "WN_ARCHIVE_SIZE", len(payload))
+    monkeypatch.setattr(model_cache, "WN_ARCHIVE_SHA256", hashlib.sha256(payload).hexdigest())
+    monkeypatch.setattr(model_cache.http, "github_download", download)
     monkeypatch.setattr(model_cache, "FileLock", lambda path: (locks.append(path), contextlib.nullcontext())[1])
 
     model_cache.ensure_wn_lexicon()
     model_cache.ensure_wn_lexicon()
 
-    assert fake_wn.downloads == [f"{model_cache.WN_LEXICON}:2025+"]
+    archive = tmp_path / "wn-data" / model_cache.WN_ARCHIVE_NAME
+    assert downloads == [(model_cache.WN_ASSET_URL, archive.with_name(f".{archive.name}.part"))]
+    assert fake_wn.adds == [archive]
+    assert archive.read_bytes() == payload
+    assert not archive.with_name(f".{archive.name}.part").exists()
     assert locks == [str(tmp_path / "wn-data" / "oewn-2025+.lock")]
+
+
+def test_wn_lexicon_digest_mismatch_never_adds(fake_wn: FakeWn, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        model_cache.http,
+        "github_download",
+        lambda _url, dest: dest.write_bytes(b"wrong-oewn-archive"),
+    )
+
+    with pytest.raises(RuntimeError, match="integrity mismatch for oewn:2025\\+"):
+        model_cache.ensure_wn_lexicon()
+
+    archive = Path(fake_wn.config.data_directory) / model_cache.WN_ARCHIVE_NAME
+    assert fake_wn.adds == []
+    assert not archive.exists()
+    assert not archive.with_name(f".{archive.name}.part").exists()
 
 
 def test_ensure_nlp_resources_composes(monkeypatch: pytest.MonkeyPatch) -> None:

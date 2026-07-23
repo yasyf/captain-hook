@@ -17,6 +17,14 @@ from captain_hook.util.paths import resolve_cache_home
 
 MODEL_NAME = "en_core_web_sm"
 WN_LEXICON = "oewn"
+WN_VERSION = "2025+"
+WN_SPEC = f"{WN_LEXICON}:{WN_VERSION}"
+WN_ARCHIVE_NAME = "english-wordnet-2025-plus.xml.gz"
+WN_ASSET_URL = (
+    "https://github.com/globalwordnet/english-wordnet/releases/download/2025-edition/english-wordnet-2025-plus.xml.gz"
+)
+WN_ARCHIVE_SIZE = 12_925_887
+WN_ARCHIVE_SHA256 = "31f4af16c54b532fd5484d4cc33aee588a31bb5b70683ae8197842fde5b586bc"
 WHEEL_CHECKSUM = re.compile(r"Checksum \.whl:\*\*\s*`([0-9a-f]{64})`")
 
 
@@ -91,22 +99,49 @@ def ensure_spacy_model() -> Path:
     return extract / MODEL_NAME / extract.name
 
 
+def wn_archive_matches(path: Path) -> bool:
+    return (
+        path.is_file()
+        and path.stat().st_size == WN_ARCHIVE_SIZE
+        and hashlib.sha256(path.read_bytes()).hexdigest() == WN_ARCHIVE_SHA256
+    )
+
+
+def fetch_wn_archive(data_dir: Path) -> Path:
+    archive = data_dir / WN_ARCHIVE_NAME
+    if wn_archive_matches(archive):
+        return archive
+    pending = archive.with_name(f".{archive.name}.part")
+    try:
+        http.github_download(WN_ASSET_URL, pending)
+        size = pending.stat().st_size
+        digest = hashlib.sha256(pending.read_bytes()).hexdigest()
+        if size != WN_ARCHIVE_SIZE or digest != WN_ARCHIVE_SHA256:
+            raise RuntimeError(
+                f"integrity mismatch for {WN_SPEC}: got {size} bytes sha256 {digest}, "
+                f"expected {WN_ARCHIVE_SIZE} bytes sha256 {WN_ARCHIVE_SHA256}"
+            )
+        pending.replace(archive)
+    finally:
+        pending.unlink(missing_ok=True)
+    return archive
+
+
 def ensure_wn_lexicon() -> None:
     import wn
 
-    lexicon = f"{WN_LEXICON}:{wn.config.get_project_info(WN_LEXICON)['version']}"
-    if wn.lexicons(lexicon=lexicon):
+    if wn.lexicons(lexicon=WN_SPEC):
         return
     data_dir = Path(wn.config.data_directory)
     data_dir.mkdir(parents=True, exist_ok=True)
-    with FileLock(str(data_dir / f"{lexicon.replace(':', '-')}.lock")):
-        if wn.lexicons(lexicon=lexicon):
+    with FileLock(str(data_dir / f"{WN_SPEC.replace(':', '-')}.lock")):
+        if wn.lexicons(lexicon=WN_SPEC):
             return
-        wn.download(lexicon, progress_handler=None)
+        wn.add(fetch_wn_archive(data_dir), progress_handler=None)
 
 
 def ensure_nlp_resources() -> None:
-    """Provision the NLP resources hooks need: the pinned spaCy pipeline and latest oewn lexicon.
+    """Provision the NLP resources hooks need: the pinned spaCy pipeline and oewn lexicon.
 
     Idempotent and cheap once cached; downloads are filelock-guarded so concurrent
     sessions never race a fetch.

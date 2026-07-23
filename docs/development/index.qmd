@@ -19,8 +19,7 @@ uv sync --extra dev
 Tests that exercise NLP signals need the spaCy English model and WordNet data:
 
 ```bash
-uv run python -m spacy download en_core_web_sm
-uv run python -c "import wn; wn.download('oewn:2025')"
+uv run python -c "from captain_hook.util.model_cache import ensure_nlp_resources; ensure_nlp_resources()"
 ```
 
 This mirrors what CI provisions — see `.github/workflows/ci.yml`.
