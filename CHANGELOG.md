@@ -4,6 +4,13 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.18.0] - 2026-07-24
+
+### Changed
+
+- Pin daemonkit v0.17.4 so helper shutdown separates request cancellation,
+  product-admission settlement, and terminal transport acknowledgement.
+
 ## [12.17.0] - 2026-07-24
 
 ### Added
