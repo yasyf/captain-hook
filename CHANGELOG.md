@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Trust-verifier children can deliver their verdict.** The host's disposable
+  worker pool capped child stdout at one byte; daemonkit claims that pool for
+  its trust-verifier children, so every verdict was killed mid-write and every
+  peer stayed untrusted even after 12.18.1 wired the verifier verb. The pool
+  now fits verifier verdicts and verifies connections concurrently.
 - **Homebrew publication accepts packaged product helpers.** The release now
   pins the corrected tap publisher, which rejects retired standalone helper
   casks without rejecting `CCNotesHelper.app` inside the supported `cc-notes`
