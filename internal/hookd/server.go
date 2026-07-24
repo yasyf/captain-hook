@@ -134,9 +134,12 @@ func (s *Server) runtime() (*wire.Server, *hostRuntime, error) {
 		_ = logFile.Close()
 		return nil, nil, err
 	}
+	// daemonkit claims this pool for its trust-verifier children: the caps must
+	// fit the verifier's verdict JSON on stdout or every peer is rejected as
+	// untrusted, and concurrent connections verify through it.
 	disposable, err := worker.NewPool(worker.Config{
-		Capacity: 1, QueueCapacity: 0, MaxTotalRun: 30 * time.Second,
-		MaxStdinBytes: 1, MaxStdoutBytes: 1, MaxStderrBytes: 1,
+		Capacity: 4, QueueCapacity: 16, MaxTotalRun: 30 * time.Second,
+		MaxStdinBytes: 1 << 10, MaxStdoutBytes: 4 << 10, MaxStderrBytes: 4 << 10,
 	}, reaper)
 	if err != nil {
 		_ = logFile.Close()
