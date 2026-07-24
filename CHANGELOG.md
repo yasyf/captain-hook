@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.16.0] - 2026-07-23
+
+### Changed
+
+- **The signed host and helper now use daemonkit's exact runtime, persistent
+  session, disposable-worker, App Group broker, and separated trust-role
+  surfaces.** Product-owned lifecycle and the raw helper socket are removed;
+  the Go host and generated Swift project both require daemonkit 0.15.0.
+
 ## [12.15.3] - 2026-07-23
 
 ### Fixed
