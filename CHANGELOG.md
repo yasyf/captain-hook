@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.18.3] - 2026-07-24
+
+### Fixed
+
+- **Homebrew publication accepts packaged product helpers.** The release now
+  pins the corrected tap publisher, which rejects retired standalone helper
+  casks without rejecting `CCNotesHelper.app` inside the supported `cc-notes`
+  formula.
+
 ## [12.18.2] - 2026-07-24
 
 ### Fixed
