@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.19.1] - 2026-07-24
+
+### Fixed
+
+- **Peer verification survives loaded machines.** The trust-verifier child is
+  a full process re-exec, and wire's 2s default verify budget left it ~0.5s
+  after the worker pool's settlement reserve — on a machine under heavy load
+  (an agent fleet, say) every verification timed out and every peer was
+  rejected as untrusted. The host now allows verification 10 seconds.
+
 ## [12.19.0] - 2026-07-24
 
 ### Changed

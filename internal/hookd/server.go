@@ -150,6 +150,10 @@ func (s *Server) runtime() (*wire.Server, *hostRuntime, error) {
 	wireServer := &wire.Server{
 		WireBuild: WireBuild, Workers: 64, Backlog: 192,
 		InboundQueue: 256, MaxFrame: maxHostFrame, MaxSessions: 64,
+		// The verifier child is a full process re-exec; wire's 2s default
+		// leaves it ~0.5s after the pool's settlement reserve, which starves
+		// it on loaded machines and rejects every peer as untrusted.
+		PeerVerificationTimeout: 10 * time.Second,
 	}
 	var runtime *dkdaemon.Runtime
 	runtimeHealth := wire.ObservationRoute{
