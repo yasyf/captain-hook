@@ -4,6 +4,24 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.19.0] - 2026-07-24
+
+### Changed
+
+- **The MCP server launches through the plugin's binrun wrapper.** The
+  plugin's `.mcp.json` now runs `bin/capt-hook mcp` — a second binrun shim
+  resolving the same version-exact tool environment the hooks use — replacing
+  the unpinned `uvx --from capt-hook[mcp]` form that chased PyPI latest and
+  held uv's global cache lock for the server's whole lifetime.
+- **The `mcp` extra is gone**: the MCP SDK is now a base dependency, so
+  `capt-hook mcp` works from any install and both plugin surfaces share one
+  materialized environment.
+- **The host refuses to start when trust verification cannot work.**
+  daemonkit v0.18.0 sizes the trust-verifier lane itself (a product pool
+  configuration can never truncate a verdict again) and self-probes the
+  verifier exchange before serving, turning the 12.16.0–12.18.3
+  untrusted-peer incident class into a loud startup failure.
+
 ## [12.18.4] - 2026-07-24
 
 ### Fixed
