@@ -54,9 +54,14 @@ func (s *Server) Run(ctx context.Context) error {
 
 type hostRuntime struct {
 	daemon  *dkdaemon.Runtime
-	slot    *dkdaemon.PublicationSlot[*workerManager]
-	manager *workerManager
+	slot    *dkdaemon.PublicationSlot[*hostProduct]
+	product *hostProduct
 	log     *os.File
+}
+
+type hostProduct struct {
+	manager *workerManager
+	hub     *notificationHub
 }
 
 func (r *hostRuntime) run(ctx context.Context) error {
@@ -64,7 +69,7 @@ func (r *hostRuntime) run(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(err, r.closeProduct())
 	}
-	publication, err := r.slot.Stage(activation, r.manager)
+	publication, err := r.slot.Stage(activation, r.product)
 	if err != nil {
 		_ = activation.Fail(err)
 		return errors.Join(err, r.daemon.Wait(context.Background()), r.closeProduct())
@@ -79,7 +84,7 @@ func (r *hostRuntime) run(ctx context.Context) error {
 		<-activation.Context().Done()
 		settleCtx, cancel := context.WithTimeout(context.Background(), hostShutdownTimeout)
 		defer cancel()
-		joined, managerErr := r.manager.Close(settleCtx)
+		joined, managerErr := r.product.manager.Close(settleCtx)
 		logErr := r.log.Close()
 		if !joined {
 			settled <- errors.Join(managerErr, logErr)
@@ -103,7 +108,7 @@ func (r *hostRuntime) run(ctx context.Context) error {
 func (r *hostRuntime) closeProduct() error {
 	closeCtx, cancel := context.WithTimeout(context.Background(), hostShutdownTimeout)
 	defer cancel()
-	_, managerErr := r.manager.Close(closeCtx)
+	_, managerErr := r.product.manager.Close(closeCtx)
 	return errors.Join(managerErr, r.log.Close())
 }
 
@@ -138,12 +143,11 @@ func (s *Server) runtime() (*wire.Server, *hostRuntime, error) {
 		return nil, nil, err
 	}
 	manager := newWorkerManager(children, logFile)
-	hub := newNotificationHub()
+	product := &hostProduct{manager: manager, hub: newNotificationHub()}
 	wireServer := &wire.Server{
 		WireBuild: WireBuild, Workers: 64, Backlog: 192,
 		InboundQueue: 256, MaxFrame: maxHostFrame, MaxSessions: 64,
 	}
-	s.registerHandlers(wireServer, manager, hub)
 	var runtime *dkdaemon.Runtime
 	runtimeHealth := wire.ObservationRoute{
 		Op: wire.Op(opRuntimeHealth), MaxResponseBytes: 4 << 10,
@@ -180,11 +184,12 @@ func (s *Server) runtime() (*wire.Server, *hostRuntime, error) {
 		_ = logFile.Close()
 		return nil, nil, err
 	}
-	slot := dkdaemon.NewPublicationSlot[*workerManager](runtime)
-	return wireServer, &hostRuntime{daemon: runtime, slot: slot, manager: manager, log: logFile}, nil
+	slot := dkdaemon.NewPublicationSlot[*hostProduct](runtime)
+	s.registerHandlers(wireServer, slot)
+	return wireServer, &hostRuntime{daemon: runtime, slot: slot, product: product, log: logFile}, nil
 }
 
-func (s *Server) registerHandlers(server *wire.Server, manager *workerManager, hub *notificationHub) {
+func (s *Server) registerHandlers(server *wire.Server, slot *dkdaemon.PublicationSlot[*hostProduct]) {
 	server.Register(wire.HandlerSpec{Op: wire.Op(opEvent), Concurrent: true, Handler: func(ctx context.Context, request wire.Request) (any, error) {
 		if request.Tenant != "" {
 			return nil, errors.New("captain: event request must not carry a tenant")
@@ -199,13 +204,21 @@ func (s *Server) registerHandlers(server *wire.Server, manager *workerManager, h
 		if event.ClientPID != request.Peer.PID {
 			return nil, errors.New("captain: event client pid does not match authenticated peer")
 		}
-		return manager.dispatch(ctx, event)
+		product, err := slot.Value(request.Publication)
+		if err != nil {
+			return nil, err
+		}
+		return product.manager.dispatch(ctx, event)
 	}})
 	server.Register(wire.HandlerSpec{Op: wire.Op(opStatus), Handler: func(_ context.Context, request wire.Request) (any, error) {
 		if request.Tenant != "" || len(request.Payload) != 0 {
 			return nil, errors.New("captain: status request must be empty")
 		}
-		return statusResponse{Schema: Schema, Build: Build, PID: os.Getpid(), Workers: manager.status()}, nil
+		product, err := slot.Value(request.Publication)
+		if err != nil {
+			return nil, err
+		}
+		return statusResponse{Schema: Schema, Build: Build, PID: os.Getpid(), Workers: product.manager.status()}, nil
 	}})
 	server.Register(wire.HandlerSpec{Op: wire.Op(opRestartWorkers), Handler: func(ctx context.Context, request wire.Request) (any, error) {
 		if request.Tenant != "" {
@@ -218,7 +231,11 @@ func (s *Server) registerHandlers(server *wire.Server, manager *workerManager, h
 		if restart.Schema != Schema || restart.Build != Build {
 			return nil, errors.New("captain: restart-workers requires the exact runtime build")
 		}
-		if err := manager.restart(ctx); err != nil {
+		product, err := slot.Value(request.Publication)
+		if err != nil {
+			return nil, err
+		}
+		if err := product.manager.restart(ctx); err != nil {
 			return nil, err
 		}
 		return struct {
@@ -240,7 +257,11 @@ func (s *Server) registerHandlers(server *wire.Server, manager *workerManager, h
 		if err != nil {
 			return nil, err
 		}
-		if err := hub.publish(ctx, payload); err != nil {
+		product, err := slot.Value(request.Publication)
+		if err != nil {
+			return nil, err
+		}
+		if err := product.hub.publish(ctx, payload); err != nil {
 			return nil, err
 		}
 		return helperReply{OK: true}, nil
@@ -249,7 +270,11 @@ func (s *Server) registerHandlers(server *wire.Server, manager *workerManager, h
 		if request.Tenant != "" || len(request.Payload) != 0 {
 			return nil, errors.New("captain: helper next request must be empty")
 		}
-		return hub.next(ctx)
+		product, err := slot.Value(request.Publication)
+		if err != nil {
+			return nil, err
+		}
+		return product.hub.next(ctx)
 	}})
 }
 
