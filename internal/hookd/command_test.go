@@ -2,6 +2,8 @@ package hookd
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,36 @@ func TestMainRejectsUnknownCommandsWithoutPassThrough(t *testing.T) {
 	}
 	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "unknown command") {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestMainAnswersTrustVerifierChild(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	request := base64.RawURLEncoding.EncodeToString([]byte(`{"protocol":1}`))
+	if code := Main([]string{"--daemonkit-trust-verifier-v1", request}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	var response struct {
+		Protocol int    `json:"protocol"`
+		Result   string `json:"result"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("decode verifier response %q: %v", stdout.String(), err)
+	}
+	if response.Protocol != 1 || response.Result != "untrusted" {
+		t.Fatalf("response = %+v, want protocol 1 result untrusted", response)
+	}
+}
+
+func TestMainRejectsMalformedTrustVerifierRequest(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	if code := Main([]string{"--daemonkit-trust-verifier-v1", "not-base64!"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "trust:") || strings.Contains(stderr.String(), "unknown command") {
+		t.Fatalf("stderr = %q, want a trust error, not unknown-command", stderr.String())
 	}
 }
 

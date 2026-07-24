@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/yasyf/daemonkit/trust"
 )
 
 const (
@@ -23,6 +25,16 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: capt-hookd version|serve|run|status|restart-workers|shutdown")
 		return 2
+	}
+	// The serving daemon re-execs this binary as daemonkit's trust-verifier
+	// child for every connecting peer; without this dispatch every peer is
+	// rejected as untrusted.
+	if handled, err := trust.RunVerifierChild(args, stdout); handled {
+		if err != nil {
+			fmt.Fprintf(stderr, "capt-hookd: %v\n", err)
+			return 2
+		}
+		return 0
 	}
 	switch args[0] {
 	case "version":
