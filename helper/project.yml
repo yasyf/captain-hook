@@ -147,7 +147,7 @@ targets:
       - path: Sources/Shared
         excludes:
           - HelperPaths.swift
-      - path: Sources/App/HelperHandler.swift
+      - path: Sources/App/NotifyPayload.swift
       - path: ../tests/fixtures/status-json-v1.golden.json
         buildPhase: resources
     settings:
