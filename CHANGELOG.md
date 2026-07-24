@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.18.2] - 2026-07-24
+
+### Fixed
+
+- **The signed Swift helper now uses the same daemonkit release as the Go
+  host.** The helper's generated Xcode project was still pinned to v0.16.0
+  after the Go host moved to v0.17.4. Both halves now build against the exact
+  v0.17.4 lifecycle and transport contract.
+
 ## [12.18.1] - 2026-07-24
 
 ### Fixed
