@@ -773,11 +773,7 @@ def mcp() -> None:
     """Serve the capt-hook MCP server over stdio, exposing the register_transcript tool."""
     from captain_hook.mcp_server import build_mcp_server
 
-    try:
-        server = build_mcp_server()
-    except ImportError as e:
-        raise click.ClickException("capt-hook mcp needs the optional MCP SDK — install capt-hook[mcp]") from e
-    server.run()
+    build_mcp_server().run()
 
 
 cli.add_command(review)

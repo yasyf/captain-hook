@@ -262,6 +262,7 @@ dependencies = [
     { name = "funcy", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "lazy-object-proxy", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "loguru", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "mcp", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "orjsonl", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "pathspec", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "pydantic", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -275,15 +276,11 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "hatchling", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "mcp", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "pyright", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "pytest", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "pytest-asyncio", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "pyyaml", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "ruff", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-]
-mcp = [
-    { name = "mcp", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
 
 [package.dev-dependencies]
@@ -295,7 +292,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "ast-grep-py", specifier = ">=0.44,<0.45" },
-    { name = "capt-hook", extras = ["mcp"], marker = "extra == 'dev'" },
+    { name = "capt-hook", marker = "extra == 'dev'" },
     { name = "cc-transcript", extras = ["judge"], specifier = "==14.14.0" },
     { name = "click", specifier = ">=8" },
     { name = "filelock", specifier = ">=3" },
@@ -303,7 +300,7 @@ requires-dist = [
     { name = "hatchling", marker = "extra == 'dev'", specifier = ">=1.27" },
     { name = "lazy-object-proxy", specifier = ">=1.12.0" },
     { name = "loguru", specifier = ">=0.7.3" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.9" },
+    { name = "mcp", specifier = ">=1.9" },
     { name = "orjsonl", specifier = ">=1.0" },
     { name = "pathspec", specifier = ">=0.12" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -318,7 +315,7 @@ requires-dist = [
     { name = "spawnllm", specifier = ">=0.5.5,<0.6" },
     { name = "wn", specifier = ">=1.1.0" },
 ]
-provides-extras = ["mcp", "dev"]
+provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 docs = [

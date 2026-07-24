@@ -44,10 +44,10 @@ dependencies = [
     "pathspec>=0.12",
     "loguru>=0.7.3",
     "spawnllm>=0.5.5,<0.6",
+    "mcp>=1.9",
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.9"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
@@ -55,7 +55,7 @@ dev = [
     "pyyaml>=6",
     "ruff>=0.8",
     "hatchling>=1.27",
-    "capt-hook[mcp]",
+    "capt-hook",
 ]
 
 [project.scripts]

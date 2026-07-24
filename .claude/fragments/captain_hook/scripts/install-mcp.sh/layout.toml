@@ -1,0 +1,6 @@
+fragments = [
+  { use = "cc-skills:binrun-shim", args = { binary = "capt-hook" } },
+]
+
+[sources.cc-skills]
+source = "github:yasyf/cc-skills@main"

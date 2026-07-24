@@ -28,20 +28,24 @@ The codex plugin's `codex-ask` does this natively as of its 1.3.0 release — ev
 
 ## Register over MCP
 
-`capt-hook mcp` serves a stdio MCP server whose one tool, `register_transcript`, takes the same arguments (`session_id`, `thread_id` or `path`, optional `provider` and `label`) and hits the same write path, idempotency included. The capt-hook plugin declares the server for you, so in a plugin-enabled session the agent calls the tool with no wiring. To wire it into a project yourself, add it to `.mcp.json`:
+`capt-hook mcp` serves a stdio MCP server whose one tool, `register_transcript`, takes the same arguments (`session_id`, `thread_id` or `path`, optional `provider` and `label`) and hits the same write path, idempotency included. The capt-hook plugin declares the server for you — through its `bin/capt-hook` wrapper, from the same version-exact environment the hooks run in — so in a plugin-enabled session the agent calls the tool with no wiring. To wire it into a project yourself, install the CLI once and point `.mcp.json` at it:
+
+```bash
+uv tool install capt-hook
+```
 
 ```json
 {
   "mcpServers": {
     "capt-hook": {
-      "command": "uvx",
-      "args": ["--from", "capt-hook[mcp]", "capt-hook", "mcp"]
+      "command": "capt-hook",
+      "args": ["mcp"]
     }
   }
 }
 ```
 
-The server needs the MCP SDK, which ships behind the `capt-hook[mcp]` extra; the `--from capt-hook[mcp]` form pulls it in. Running `capt-hook mcp` without the extra fails with an install hint naming it.
+The install step matters: an MCP server is a long-running process, and a `uvx` parent would hold uv's global cache lock for the server's whole lifetime, stalling every other uv operation on the machine.
 
 ## What Stop-time gates see
 
