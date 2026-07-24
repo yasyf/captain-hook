@@ -28,10 +28,15 @@ cask "captain-hook" do
 
   preflight do
     installed_app = "#{appdir}/Captain Hook.app"
-    if Dir.exist?(installed_app)
-      system_command "#{installed_app}/Contents/MacOS/Captain Hook",
+    installed_binary = "#{installed_app}/Contents/MacOS/Captain Hook"
+    if File.executable?(installed_binary)
+      # Stop only the exact installed service before replacing the app.
+      system_command installed_binary,
                      args: ["--stop-and-uninstall-service"],
                      must_succeed: true
+    elsif Dir.exist?(installed_app)
+      # Remove an incomplete bundle so Homebrew can install the replacement.
+      FileUtils.rm_rf(installed_app)
     end
   end
 
@@ -47,11 +52,13 @@ cask "captain-hook" do
   end
 
   uninstall_preflight do
-    # Remove the exact SMAppService registration, stop only processes belonging
-    # to this stable bundle, and prove absence before Homebrew removes it.
-    system_command "#{appdir}/Captain Hook.app/Contents/MacOS/Captain Hook",
-                   args: ["--stop-and-uninstall-service"],
-                   must_succeed: true
+    installed_binary = "#{appdir}/Captain Hook.app/Contents/MacOS/Captain Hook"
+    if File.executable?(installed_binary)
+      # Stop only the exact installed service before Homebrew removes the app.
+      system_command installed_binary,
+                     args: ["--stop-and-uninstall-service"],
+                     must_succeed: true
+    end
   end
 
   zap trash: [
