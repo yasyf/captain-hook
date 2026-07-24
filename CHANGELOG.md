@@ -4,6 +4,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.18.1] - 2026-07-24
+
+### Fixed
+
+- **Peer verification answers daemonkit's trust-verifier child.** The serving
+  daemon re-execs `capt-hookd` as a verifier child for every connecting peer;
+  `Main` never dispatched that mode, so each child exited 2 ("unknown
+  command") and every peer — dispatch, status, stop, and lifecycle alike —
+  was rejected as `wire: untrusted peer` from 12.16.0 through 12.18.0. The
+  verifier verb now runs `trust.RunVerifierChild`, restoring all traffic.
+
 ## [12.18.0] - 2026-07-24
 
 ### Changed
