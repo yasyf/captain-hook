@@ -4,6 +4,36 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.17.0] - 2026-07-24
+
+### Added
+
+- **Plugin hooks dispatch through a committed binrun wrapper and a dynamic
+  descriptor.** Every hooks.json command runs `bin/hook`, a symlink to the
+  rendered shim that resolves the `binrun` runner and materializes the exact
+  `capt-hook` wheel named by the installed signed host (`capt-hookd version`,
+  `build` field). Unpinned `uvx` dispatch is gone, the wheel/app fence cannot
+  skew, and the wrapper tree stays out of the wheel and sdist.
+- **The host keeps itself current.** An async SessionStart job checks the
+  latest release and runs a throttled `brew upgrade --cask captain-hook`
+  (force-reinstall repair on failure), posting `update_installed` or
+  `update_failed` notifications. `HOOKS_UPDATE_ENABLED` and
+  `HOOKS_UPDATE_INTERVAL_MINUTES` govern it; a failure never touches a hook
+  dispatch.
+
+### Changed
+
+- **Schema-fenced host stores archive and continue.** The reaper and
+  stop-control stores adopt daemonkit's `ArchiveUnsupportedSchema` policy: a
+  definitive record-schema mismatch renames the store to a timestamped `.bak`
+  and opens fresh instead of refusing to start, while transient errors still
+  fail closed.
+
+### Fixed
+
+- **Infrastructure failures in the signed-host client exit 1, never 2.**
+  Exit 2 is reserved for a blocking hook verdict alone.
+
 ## [12.16.1] - 2026-07-24
 
 ### Fixed
