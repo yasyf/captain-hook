@@ -14,9 +14,9 @@ uvx capt-hook init
 ```
 
 The cask installs the fixed, signed host at `/Applications/Captain Hook.app`; `init` scaffolds
-`.claude/hooks/`, wires Claude Code's settings, and arms the session reviewer. The app and
-Python package must be the same release: dispatch rejects a build mismatch instead of running
-different code or falling back to a cold process. One `block_command` later, a force-push dies
+`.claude/hooks/`, wires Claude Code's settings, and arms the session reviewer. Every event runs
+the exact `capt-hook` build the installed app names — nothing resolves "latest" mid-session, and
+the app keeps itself current in the background. One `block_command` later, a force-push dies
 at `PreToolUse` and the hook's inline tests run green:
 
 <img src="https://github.com/yasyf/captain-hook/raw/main/docs/assets/demo.gif" alt="Animated terminal: a hook blocks git push --force at PreToolUse, then 'uvx capt-hook test' passes both inline tests" width="700">

@@ -35,6 +35,8 @@ from captain_hook.review.cli import review
 from captain_hook.review.pipeline import DISPATCH_EVENTS, dispatch_review
 from captain_hook.session import SessionStore, cleanup_stale, ensure_session
 from captain_hook.types import Event
+from captain_hook.update.cli import update
+from captain_hook.update.updater import dispatch_update
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -261,6 +263,11 @@ def dispatch_event(
             dispatch_review(event.name, raw)
         except Exception:
             logger.exception("native review dispatch failed")
+        if event is Event.SessionStart:
+            try:
+                dispatch_update()
+            except Exception:
+                logger.exception("native update dispatch failed")
 
     resolved_path = raw.get("agent_transcript_path") or raw.get("transcript_path")
     ctx = HookContext(
@@ -775,6 +782,7 @@ def mcp() -> None:
 
 cli.add_command(review)
 cli.add_command(helper)
+cli.add_command(update)
 
 
 main = cli

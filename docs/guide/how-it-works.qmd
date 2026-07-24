@@ -160,7 +160,7 @@ Same rule, same verdict. The event target, the conditions, and the verdict are n
 
 **You can test a hook before it ships.** Each primitive carries inline `tests`, and `uvx capt-hook test` runs every case, exiting non-zero on the first failure — so a broken matcher fails in your terminal or in CI instead of in a live session. A native `settings.json` hook has nowhere to put this: you discover a regex mistake when the hook either blocks the wrong command or stays silent on the right one, mid-conversation, with no record of why.
 
-**The wiring is mechanical.** You never hand-edit a matcher block in `settings.json` — it carries no hook wiring at all. The captain-hook plugin ships a static `hooks.json` that registers every Claude Code event once, globally, with the same `uvx --isolated --from capt-hook hook run <Event>` command on every machine. The `hook` shim execs the fixed signed helper; it cannot start a project-local daemon or substitute the Python CLI. Which hooks actually fire in a repo is decided by the wheel builtins (fixes/general/steering/performance always, go/python by detected build manifests) plus any pack an enabled Claude Code plugin ships, and an event no pack subscribes to dispatches as a clean no-op.
+**The wiring is mechanical.** You never hand-edit a matcher block in `settings.json` — it carries no hook wiring at all. The captain-hook plugin ships a static `hooks.json` that registers every Claude Code event once, globally, with the same `"${CLAUDE_PLUGIN_ROOT}/bin/hook" run <Event>` command on every machine. That wrapper dispatches through the fixed signed helper at the exact build the helper itself names; it cannot start a project-local daemon or substitute the Python CLI. Which hooks actually fire in a repo is decided by the wheel builtins (fixes/general/steering/performance always, go/python by detected build manifests) plus any pack an enabled Claude Code plugin ships, and an event no pack subscribes to dispatches as a clean no-op.
 
 As a directory of native string-hooks grows, the cost of each compounds, because none of them composes, none carries a test, and none fails loudly when it breaks. captain-hook spends a dependency and a Python file to buy back that visibility. For a directory you maintain over months, that is the trade worth making.
 
@@ -191,17 +191,17 @@ A hook is real Python that runs on your machine whenever Claude Code fires an ev
 
 Two distinct bodies of code meet at a hook.
 
-The framework has two exact-version parts: the `capt-hook` wheel published to PyPI and the Developer ID-signed, notarized `Captain Hook.app` published through the Homebrew cask. The plugin resolves the wheel with `uvx --isolated --from capt-hook` and its `hook` shim execs `/Applications/Captain Hook.app/Contents/Helpers/capt-hookd`. You trust the maintainers, PyPI, the GitHub release, and the Homebrew tap as one release path.
+The framework has two exact-version parts: the `capt-hook` wheel published to PyPI and the Developer ID-signed, notarized `Captain Hook.app` published through the Homebrew cask. The plugin's `bin/hook` wrapper materializes the wheel at exactly the build the installed app names — resolved by `uv` with registry hash checking — and the wheel's `hook` shim execs `/Applications/Captain Hook.app/Contents/Helpers/capt-hookd`. You trust the maintainers, PyPI, the GitHub release, and the Homebrew tap as one release path; the wrapper's tiny runner, [binrun](https://github.com/yasyf/binrun), is itself pinned by sha256 in the committed plugin script.
 
 Your hooks are the Python files under `.claude/hooks/`. You write them, so they carry whatever logic you put there. captain-hook loads every file in that directory and executes it on the matching event. The framework does not sandbox your hook code, because your hook code is yours.
 
 The boundary, then, sits between the framework you install and the hooks you author. captain-hook gives the hooks a typed event and reads back a verdict. It never sees more of your machine than the hook itself does.
 
-### `uvx` isolation as a safety guarantee
+### The app names the wheel
 
-`uvx --isolated --from capt-hook hook` runs the wheel's tiny dispatch shim from an ephemeral environment that `uv` builds on demand. The Python worker and its dependencies come from that same environment, separate from your project. Your project's virtualenv stays untouched: captain-hook never lands in your `pyproject.toml`, your lockfile, or your site-packages, so you can add a hook to any repository without changing a single dependency in it.
+Dispatch never resolves "latest". The plugin's `bin/hook` wrapper asks the installed helper for its build and runs the `capt-hook` wheel at exactly that version, from a dedicated per-version environment under `~/.daemonkit` that `uv` materializes on first use. The signed app is the single version authority: the same binary that answers the version question verifies the build at dispatch, so the wheel and app cannot drift apart. A build needs the network once, when its environment is first materialized; after that, hooks fire offline.
 
-Both `--isolated` and `--from capt-hook` are load-bearing. They select the `hook` executable from a fresh resolution of the named distribution instead of an unrelated installed command. A cache hit needs no network, so hooks still fire offline. The shim sends its exact wheel version and Python executable to the signed host; the host rejects any version mismatch before Python dispatch. Isolation prevents accidental tool capture, while the build fence prevents the cache and app from drifting silently.
+That environment is separate from your project. The Python worker and its dependencies come from it, never from your repo: captain-hook never lands in your `pyproject.toml`, your lockfile, or your site-packages, so you can add a hook to any repository without changing a single dependency in it.
 
 Removing the wiring removes captain-hook. Disable the captain-hook plugin in `.claude/settings.json` and nothing in your project still references the framework, because nothing in your project ever did. This isolation is the guarantee: adding hooks to a repository is reversible and leaves no trace in the code you ship.
 
@@ -235,13 +235,20 @@ hook event with a different wheel build is rejected before Python runs.
 The plugin registers this command for every event (plus its `--async` twin):
 
 ```bash
-uvx --isolated --from capt-hook hook run PreToolUse
+"${CLAUDE_PLUGIN_ROOT}/bin/hook" run PreToolUse
 ```
+
+`bin/hook` is a committed wrapper that hands the arguments to binrun with the descriptor
+committed beside it. The descriptor's version is dynamic: binrun runs `capt-hookd version`,
+reads the installed build, and execs the `hook` entrypoint from a `capt-hook` environment
+materialized at exactly that version. On a machine without binrun, the wrapper bootstraps the
+one pinned runner release, sha256-verified, before handing off.
 
 `hook` is a stdlib-only exec shim. It accepts only `[--root ROOT] run EVENT [--async]`, resolves
 the current Python executable and wheel version, then replaces itself with the fixed
 `capt-hookd run` client. It does not accept arbitrary `capt-hook` commands and never passes an
-unknown command through.
+unknown command through. Everything in front of the engine — wrapper, runner, shim — exits 1 on
+its own failures; exit 2 belongs to a hook's blocking verdict alone.
 
 The signed Go client ensures the one exact host is running, then sends the event over daemonkit's
 length-framed persistent transport. The host selects a Python worker and exchanges multiplexed,
@@ -294,14 +301,19 @@ host="/Applications/Captain Hook.app/Contents/Helpers/capt-hookd"
 "$host" shutdown         # ordered host and worker shutdown
 ```
 
-The wheel's `hookd` command is only an exec shim for the same helper, so
-`uvx --isolated --from capt-hook hookd status` is equivalent. Status and control commands never
-start a missing host. Only event dispatch ensures it is running.
+The wheel's `hookd` command is only an exec shim for the same helper. Status and control
+commands never start a missing host. Only event dispatch ensures it is running.
 
 Per-session hook logs keep their existing files and remain visible through `uvx capt-hook logs`.
 Host startup and worker stderr go to
 `~/Library/Caches/captain-hook/host-v1/capt-hookd.log`. Durable worker identity lives beside it in
 `workers.json` so daemonkit can recover and reap a leftover generation after a host crash.
+
+A state store whose on-disk schema definitively no longer matches cannot wedge the host. On
+startup the host renames the mismatched file aside with a timestamped `.bak` suffix, logs one
+line naming the archive, and continues with a fresh store. Only that definitive mismatch is
+archived — a transient read or permission error still fails loudly, so a healthy store is never
+discarded for a recoverable reason.
 
 ### Environment and state
 
@@ -311,6 +323,20 @@ overrides. Host state always uses the fixed per-user `host-v1` directory. Produc
 remain configurable through their existing `CAPTAIN_HOOK_*`, `CAPT_HOOK_DECISIONS_DB`,
 `XDG_CACHE_HOME`, and `HOOKS_*` variables, which participate in the worker key as described
 above.
+
+### The host keeps itself current
+
+A new release reaches your machine without a manual `brew upgrade`. On the async `SessionStart`
+pass the dispatcher checks — at most once per 12 hours across all your sessions — whether the
+latest GitHub release is newer than the installed host. When it is, it detaches a background
+`brew upgrade --cask` (retried as a forced reinstall, which also repairs a half-removed app) and
+posts a notification banner when the upgrade lands or fails. The check never blocks a hook and
+never touches a verdict; every failure becomes a log line, not an exit code.
+
+Because dispatch resolves the wheel from the installed app's build, the upgrade is complete on
+its own: the next event materializes the matching wheel automatically. Set
+`HOOKS_UPDATE_ENABLED=false` to turn the check off, or `HOOKS_UPDATE_INTERVAL_MINUTES` to change
+the throttle window.
 
 ### Do not hand-wire dispatch
 
@@ -334,17 +360,17 @@ runtime owner; it does not make untrusted hook code safe.
 ### Host troubleshooting
 
 **The signed host is missing.** Install or repair it with
-`brew install --cask yasyf/tap/captain-hook`. The shim fails non-zero and names the exact missing
-path; it does not run the Python CLI instead.
+`brew install --cask yasyf/tap/captain-hook`. Dispatch fails non-zero — the version probe has
+nothing to ask — and never runs the Python CLI instead.
 
-**The wheel and app builds differ.** Upgrade the cask and captain-hook plugin to the same release,
-then run `/reload-plugins` or start a new Claude Code session. Exact build rejection is expected
-until both artifacts agree.
+**A build-mismatch error appears.** Plugin dispatch cannot skew — the wheel is resolved from the
+installed app's own build — so a mismatch names a dispatch entry outside the plugin's wrapper: a
+hand-wired legacy command, or a development checkout running its own wheel.
+[Troubleshooting](troubleshooting.qmd#the-signed-host-is-missing-or-dispatch-fails) walks both.
 
-**A worker is stuck or stale.** Run `uvx --isolated --from capt-hook hookd status`, inspect
-`capt-hookd.log`, then use `uvx --isolated --from capt-hook hookd restart-workers`. Restart kills
-and reaps the current worker generations; it is not a cache invalidation hint or a graceful
-watchdog cycle.
+**A worker is stuck or stale.** Run `"$host" status`, inspect `capt-hookd.log`, then use
+`"$host" restart-workers`. Restart kills and reaps the current worker generations; it is not a
+cache invalidation hint or a graceful watchdog cycle.
 
 **The host was killed.** The next event starts a fresh host generation and daemonkit recovers any
 durable worker records before admitting work. Do not delete the socket or `workers.json` by hand.

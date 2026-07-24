@@ -121,7 +121,8 @@ func (s *Server) runtime() (*wire.Server, *hostRuntime, error) {
 		return nil, nil, fmt.Errorf("captain: generate host generation: %w", err)
 	}
 	reaper := &proc.Reaper{
-		Store: &proc.FileStore{Path: s.paths.processes}, Generation: generation,
+		Store:      &proc.FileStore{Path: s.paths.processes, UnsupportedSchema: proc.ArchiveUnsupportedSchema},
+		Generation: generation,
 	}
 	children, err := proc.NewManager(64, reaper)
 	if err != nil {
@@ -171,7 +172,7 @@ func (s *Server) runtime() (*wire.Server, *hostRuntime, error) {
 	runtime, err = wire.NewRuntime(wire.RuntimeConfig{
 		Socket: s.paths.socket, RuntimeBuild: Build, RuntimeProtocol: Schema,
 		Wire: wireServer, TrustPolicy: s.trust,
-		StopControlStore: &proc.FileStore{Path: s.paths.stopProcesses},
+		StopControlStore: &proc.FileStore{Path: s.paths.stopProcesses, UnsupportedSchema: proc.ArchiveUnsupportedSchema},
 		Observations:     []wire.ObservationRoute{runtimeHealth},
 		Workers:          disposable, Children: children, ShutdownTimeout: hostShutdownTimeout,
 	})

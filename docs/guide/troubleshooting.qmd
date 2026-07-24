@@ -65,45 +65,54 @@ Plugin not enabled. The captain-hook plugin registers every hook event; without 
 
 Session not fresh. Claude Code loads plugin hooks at session start. A hook on a brand-new event, or a just-enabled plugin, takes effect when the next session starts.
 
-## The signed host is missing or the builds differ
+## The signed host is missing or dispatch fails
 
 Every event uses `/Applications/Captain Hook.app/Contents/Helpers/capt-hookd`. If that helper is
-missing, the `hook` shim exits non-zero and names the path. Install or repair the application:
+missing, dispatch exits non-zero instead of falling back to an unfenced wheel. Install or repair
+the application:
 
 ```bash
 brew install --cask yasyf/tap/captain-hook
 ```
 
-The app and Python wheel must also carry the exact same release. Check the installed host:
+The wheel that handles each event is chosen by the app itself: the plugin's `bin/hook` wrapper
+asks the installed helper for its build and runs the `capt-hook` wheel at exactly that version,
+so the wheel and app cannot drift apart through the plugin. The app also keeps itself current — a
+session-start check, at most one per 12 hours, upgrades the cask in the background and posts a
+notification when the upgrade lands ([how it works](how-it-works.qmd#the-host-keeps-itself-current)).
+The manual path still works — check what's installed, then upgrade:
 
 ```bash
 "/Applications/Captain Hook.app/Contents/Helpers/capt-hookd" version
-```
-
-A build-mismatch error names both versions. Upgrade the cask and plugin together; do not try to
-route around the fence with a private daemon or direct `capt-hook run` command:
-
-```bash
 brew upgrade --cask yasyf/tap/captain-hook
 ```
 
-Claude Code checks marketplace plugins for updates at session start only, and auto-update is off
-by default for third-party marketplaces, so on most machines the plugin upgrade is manual:
+A build-mismatch error names both versions, and it points at a dispatch entry outside the
+plugin's wrapper. Two things produce one.
+
+Legacy dispatch entries. The only consumer command is `"${CLAUDE_PLUGIN_ROOT}/bin/hook" run
+<Event>` from the captain-hook plugin. A surviving `uvx --isolated --from capt-hook hook run
+<Event>` line — an old plugin release, or a hand-copied settings entry — resolves whatever wheel
+PyPI serves at that moment, so it mismatches as soon as the installed app is one release behind.
+It is also a second registration: Claude Code dedupes hook commands per registering source, not
+globally, so every hook on that event can run twice. The tell is doubled output: two permission
+prompts for one tool call, the same block message landing twice, or a side-effecting hook
+applying its effect twice. Update the plugin and delete hand-wired entries from project settings;
+do not preserve them as a fallback:
 
 ```
 /plugin marketplace update captain-hook
 /plugin update
 ```
 
-A session that is already running keeps the old hook commands until you run `/reload-plugins` or start a new session. Claude Code refreshes a marketplace plugin's cache only when its `plugin.json` `version` increases; captain-hook's release workflow bumps and commits that version on every tagged release, so `/plugin update` picks up each release as soon as the sync commit lands on `main`.
+A session that is already running keeps the old hook commands until you run `/reload-plugins` or
+start a new session.
 
-Last, hunt down legacy `capt-hook run <Event>` and project-local `hook run <Event>` entries. The
-only consumer command is `uvx --isolated --from capt-hook hook run <Event>` from the captain-hook
-plugin. Claude Code dedupes hook commands per registering source, not globally, so a hand-wired
-entry dispatches the event again and every hook on that event can run twice. The tell is doubled
-output: two permission prompts for one tool call, the same block message landing twice, or a
-side-effecting hook applying its effect twice. Delete hand-wired entries from project settings;
-do not preserve them as a fallback.
+A development checkout. A repo wired to dispatch through its own checkout's `hook` shim —
+captain-hook's own tree runs `.venv/bin/hook` — reports that checkout's wheel version, and the
+host rejects it unless the same-version app is installed. That fence is deliberate: rebuild and
+install the matching app rather than routing around it with a private daemon or a direct
+`capt-hook run` command.
 
 ## A SessionStart warning about `pack attach`
 

@@ -18,7 +18,7 @@ PR, what it takes to run, and the knobs that decide what crosses the bar.
 
 The reviewer runs entirely on your machine, riding captain-hook's own event dispatch:
 
-1. The plugin's hook wiring runs `uvx --isolated --from capt-hook hook run <Event>` for every
+1. The plugin's hook wiring runs `"${CLAUDE_PLUGIN_ROOT}/bin/hook" run <Event>` for every
    lifecycle event, and the
    **reviewer rides that dispatch natively** — the async `SessionStart` and `SessionEnd` passes
    fire the enrollment-gated reviewer, and the throttled sweep rides `Stop`. There is no dedicated

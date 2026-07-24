@@ -4,7 +4,7 @@ import UserNotifications
 // UNUserNotificationCenter delegate. Categories carry NO action buttons — the
 // whole banner is the click target. No .timeSensitive (restricted entitlement).
 final class NotificationController: NSObject, UNUserNotificationCenterDelegate {
-    private static let categories = ["pr_open", "pr_merged", "review_failure"]
+    private static let categories = ["pr_open", "pr_merged", "review_failure", "update_installed", "update_failed"]
 
     func requestAuthorizationIfNeeded() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in

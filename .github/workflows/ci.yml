@@ -77,3 +77,20 @@ jobs:
           (cd "$smoke_proj" && "$GITHUB_WORKSPACE/.wheel-smoke/bin/capt-hook" skills install)
           grep -q '"captain-hook@captain-hook": true' "$smoke_proj/.claude/settings.json"
           test ! -e "$smoke_proj/.claude/skills"
+
+  descriptor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.5
+
+      - name: Parse-validate the binrun descriptor
+        # GOSUMDB/GOPROXY: the binrun module is public but not yet indexed by the
+        # checksum DB; fetch it directly instead of through sum.golang.org.
+        env:
+          GOSUMDB: "off"
+          GOPROXY: direct
+        run: go run github.com/yasyf/binrun/cmd/binrun@v0.1.1 -- parse captain_hook/bin/hook.binrun

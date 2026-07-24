@@ -64,6 +64,6 @@ def _exec(argv: list[str]) -> NoReturn:
         _die(f"captain-hook signed host unavailable at {HOST}: {exc}", code=1)
 
 
-def _die(message: str, *, code: int = 2) -> NoReturn:
+def _die(message: str, *, code: int = 1) -> NoReturn:
     print(message, file=sys.stderr)
     raise SystemExit(code)

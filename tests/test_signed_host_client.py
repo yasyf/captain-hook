@@ -13,6 +13,7 @@ from capt_hook_client import client
 def test_run_execs_fixed_host_with_exact_product_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["hook", "--root", "/spelled/root", "run", "PreToolUse", "--async"])
     monkeypatch.setattr(os, "getcwd", lambda: "/request/cwd")
+
     def version(_name: str) -> str:
         return "12.9.1"
 
@@ -52,8 +53,9 @@ def test_run_execs_fixed_host_with_exact_product_identity(monkeypatch: pytest.Mo
 )
 def test_unknown_or_obsolete_client_grammar_fails(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["hook", *argv])
-    with pytest.raises(SystemExit, match="2"):
+    with pytest.raises(SystemExit) as excinfo:
         client.main()
+    assert excinfo.value.code == 1  # a usage/grammar failure is infrastructure, not a hook verdict (exit 2)
 
 
 def test_ops_execs_fixed_host_without_python_daemon(monkeypatch: pytest.MonkeyPatch) -> None:

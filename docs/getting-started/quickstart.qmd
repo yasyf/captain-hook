@@ -28,9 +28,10 @@ uvx capt-hook init
 
 `init` creates `.claude/hooks/` with a starter hook, wires Claude Code's settings to dispatch every hook event through the signed host, and registers the plugin so the authoring skills load from it (nothing is copied into your repo). Prefer `uv tool install capt-hook` if you want the bare `capt-hook` on your PATH, or `uv add capt-hook` only if you're consuming it as a library — every command here uses the `uvx` form.
 
-The plugin and app are one exact release unit. If their versions differ, the host rejects the
-event before dispatch. Upgrade the cask and plugin together; captain-hook never substitutes an
-older protocol, starts a private daemon, or reruns the event cold.
+The app is the version authority: every event runs the exact `capt-hook` build the installed
+host names, and the host upgrades itself in the background when a new release ships — the wheel
+and app cannot drift apart. captain-hook never substitutes an older protocol, starts a private
+daemon, or reruns the event cold.
 
 ## 3. Read a hook
 

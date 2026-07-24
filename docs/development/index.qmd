@@ -68,6 +68,18 @@ From a consumer project, point `uv run --project` at your clone:
 uv run --project path/to/captain-hook capt-hook test
 ```
 
+## Live hooks in this checkout
+
+This repo dispatches its own hooks through `"$CLAUDE_PROJECT_DIR"/.venv/bin/hook`, wired by the
+committed `.claude/settings.json` — not through the plugin's `bin/hook` wrapper that consumer
+repos get. The shim execs the fixed signed app, and the app fences dispatch on the exact wheel
+build, so a checkout whose `.venv` doesn't match the installed app is rejected. That fence is
+deliberate: after a dependency change, run `uv sync --extra dev` and rebuild and install the
+same-version app, or live dispatch in this repo stays fenced off.
+
+The plugin's dispatch surface is the committed `captain_hook/bin/hook` symlink plus its
+`hook.binrun` descriptor; CI parse-validates the descriptor.
+
 ## Releasing
 
 Add the CHANGELOG entry and commit it, together with `uv.lock` when a dependency change moved it. Then tag the new version and push. `.github/workflows/release-pypi.yml` builds the sdist and wheel, publishes to PyPI via trusted publishing, cuts a GitHub release, builds and signs the universal `Captain Hook.app` with the exact same versioned `capt-hookd`, and publishes the stable release to the `yasyf/tap/captain-hook` cask. It also commits `captain_hook/.claude-plugin/plugin.json` back to `main` with its `version` synced to the tag — that bump is what makes consumer plugin caches pick up the release, so no manual plugin.json edit is needed (a hand-bump before tagging is harmless; the sync no-ops):
