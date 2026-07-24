@@ -6,7 +6,7 @@ from typing import Any
 
 from captain_hook.types import Event
 
-PLUGIN_PREFIX = "uvx --isolated --from capt-hook hook"
+PLUGIN_PREFIX = '"${CLAUDE_PLUGIN_ROOT}/bin/hook"'
 
 
 def load_plugin_hooks() -> dict[str, Any]:
@@ -64,8 +64,8 @@ class TestPluginHooksJson:
         assert not any("review run" in c or "review sweep" in c for c in commands)
 
     def test_canonical_prefix_enters_the_signed_host_shim(self) -> None:
-        assert PLUGIN_PREFIX == "uvx --isolated --from capt-hook hook"
+        assert PLUGIN_PREFIX == '"${CLAUDE_PLUGIN_ROOT}/bin/hook"'
         assert expected_command_set("PreToolUse") == {
-            "uvx --isolated --from capt-hook hook run PreToolUse",
-            "uvx --isolated --from capt-hook hook run PreToolUse --async",
+            '"${CLAUDE_PLUGIN_ROOT}/bin/hook" run PreToolUse',
+            '"${CLAUDE_PLUGIN_ROOT}/bin/hook" run PreToolUse --async',
         }

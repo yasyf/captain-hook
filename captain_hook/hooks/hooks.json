@@ -3,96 +3,96 @@
     "PreToolUse": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run PreToolUse" },
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run PreToolUse --async", "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PreToolUse" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PreToolUse --async", "async": true }
         ]
       }
     ],
     "PostToolUse": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run PostToolUse" },
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run PostToolUse --async", "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PostToolUse" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PostToolUse --async", "async": true }
         ]
       }
     ],
     "PostToolUseFailure": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run PostToolUseFailure" },
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run PostToolUseFailure --async", "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PostToolUseFailure" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PostToolUseFailure --async", "async": true }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run UserPromptSubmit" },
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run UserPromptSubmit --async", "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run UserPromptSubmit" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run UserPromptSubmit --async", "async": true }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run Stop" },
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run Stop --async", "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run Stop" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run Stop --async", "async": true }
         ]
       }
     ],
     "SubagentStop": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run SubagentStop" },
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run SubagentStop --async", "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SubagentStop" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SubagentStop --async", "async": true }
         ]
       }
     ],
     "SubagentStart": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run SubagentStart" },
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run SubagentStart --async", "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SubagentStart" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SubagentStart --async", "async": true }
         ]
       }
     ],
     "PreCompact": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run PreCompact" },
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run PreCompact --async", "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PreCompact" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PreCompact --async", "async": true }
         ]
       }
     ],
     "Notification": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run Notification" },
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run Notification --async", "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run Notification" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run Notification --async", "async": true }
         ]
       }
     ],
     "PermissionRequest": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run PermissionRequest" },
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run PermissionRequest --async", "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PermissionRequest" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PermissionRequest --async", "async": true }
         ]
       }
     ],
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run SessionStart" },
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run SessionStart --async", "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SessionStart" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SessionStart --async", "async": true }
         ]
       }
     ],
     "SessionEnd": [
       {
         "hooks": [
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run SessionEnd" },
-          { "type": "command", "command": "uvx --isolated --from capt-hook hook run SessionEnd --async", "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SessionEnd" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SessionEnd --async", "async": true }
         ]
       }
     ]
