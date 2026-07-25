@@ -1,6 +1,6 @@
 {
   "name": "captain-hook",
-  "version": "12.20.7",
+  "version": "12.20.8",
   "displayName": "Captain Hook",
   "description": "Skills for the capt-hook declarative hook framework: bootstrap gates and nudges from a repo's conventions, and translate style guides into enforced StyleRules.",
   "author": {
