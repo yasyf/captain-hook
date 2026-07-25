@@ -15,7 +15,6 @@ RETRY_SIGNALS = Signals(
     ],
     threshold=4,
     window=10,
-    scope="window",
 )
 
 

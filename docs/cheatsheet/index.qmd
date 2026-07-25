@@ -209,8 +209,8 @@ class ReviewState(WorkflowState):
 Signal(pattern=r"\bretry\b", weight=2)
 ```
 
-**Signals** — a bundle that fires when a single message in the last `window` events
-scores `threshold`; `scope="window"` pools signals across the window,
+**Signals** — a bundle that fires when distinct signals pooled across the last
+`window` events score `threshold`; `scope="text"` requires a single message to score it alone,
 `origin="any"` scores user text too (the default scores only the agent's prose),
 `window="turn"` scores the whole current turn
 ```python

@@ -8,7 +8,7 @@ After two or three back-to-back failures the agent often spirals. It retries the
 
 <!-- gd-embed: failure_recovery.py -->
 
-This page composes two `nudge` primitives: a `signals`-driven Stop nudge that scores the agent's narration, and a `PostToolUseFailure` nudge gated on the turn's failure count. The retry bundle sets `scope="window"` because its tells span attempts — one retry phrase per failed try pools toward the threshold, where the default per-text scope needs a single message to reach it alone.
+This page composes two `nudge` primitives: a `signals`-driven Stop nudge that scores the agent's narration, and a `PostToolUseFailure` nudge gated on the turn's failure count. The retry bundle's tells span attempts — one retry phrase per failed try pools toward the threshold under the default `scope="window"`, where `scope="text"` would need a single message to reach it alone.
 
 ## What it catches
 

@@ -41,7 +41,6 @@ nudge(
         ],
         threshold=3,
         window=10,
-        scope="window",
     ),
     tests={
         Input(transcript=[
@@ -53,7 +52,7 @@ nudge(
 )
 ```
 
-`scope="window"` scores signals across the whole window; the default `scope="text"` requires one message to reach the threshold on its own. `T` builds transcript fixtures in the exact shape Claude Code writes — `T.user`/`T.assistant` lines carrying text, `T.tool` calls, `T.result` blocks — and raw JSONL dicts (`{"type": ..., "message": {"content": [...]}}`) mix in freely for shapes `T` doesn't cover; [Query the transcript](llm-hooks.qmd#query-the-transcript) shows how to capture a real one. A nudge with `signals` defaults to `PostToolUse`; without them it defaults to `PreToolUse`. See [Signals](llm-hooks.qmd#score-patterns-with-signals) for the scoring model.
+Signals score across the whole window by default (`scope="window"`); `scope="text"` requires one message to reach the threshold on its own. `T` builds transcript fixtures in the exact shape Claude Code writes — `T.user`/`T.assistant` lines carrying text, `T.tool` calls, `T.result` blocks — and raw JSONL dicts (`{"type": ..., "message": {"content": [...]}}`) mix in freely for shapes `T` doesn't cover; [Query the transcript](llm-hooks.qmd#query-the-transcript) shows how to capture a real one. A nudge with `signals` defaults to `PostToolUse`; without them it defaults to `PreToolUse`. See [Signals](llm-hooks.qmd#score-patterns-with-signals) for the scoring model.
 
 ## gate {#gate}
 

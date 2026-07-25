@@ -76,6 +76,7 @@ nudge(
         ],
         threshold=2,
         window=15,
+        scope="text",
     ),
     tests={
         Input(transcript=[T.assistant("Pre-existing, not caused by my changes.")]): Warn(),

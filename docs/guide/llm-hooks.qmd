@@ -241,15 +241,15 @@ Signals(
         Signal(pattern=r"retry", weight=2),
         Signal(pattern=r"again", weight=1),
     ],
-    threshold=3,  # fire when a single message scores 3
+    threshold=3,  # fire when the window's union score reaches 3
     window=10,    # look back over the last 10 events
     vetoes=[Signal(pattern=r"investigating")],  # any match in the window cancels the fire
 )
 ```
 
-By default (`scope="text"`) each text is scored on its own: every signal that matches contributes its weight once, and the hook fires when a single text reaches the threshold. The window only bounds how far back that text may sit. "Let me retry that again" scores 3 and fires; "retry" in one message and "again" in another does not, because neither message reaches 3 alone. That's deliberate. Pooling matches across unrelated turns lets quoted or referenced vocabulary sum to the threshold and misfire.
+By default (`scope="window"`) union scoring counts each distinct matching signal's weight once across the whole window, however many entries it matches — so a tell that splits across adjacent messages still accumulates: "retry" in one message and "again" in another sum to 3 and fire, just as "Let me retry that again" does in a single message.
 
-When one tell legitimately splits across adjacent messages — a wall-of-text option dump whose preamble lands in one message and the options in the next — opt into pooling with `scope="window"`. Union scoring counts each distinct matching signal's weight once across the whole window, however many entries it matches, so "retry" and "again" in two separate messages now sum to 3 and fire. Under either scope, a `vetoes` match anywhere in the window holds the hook back.
+Pooling across turns can misfire when quoted or referenced vocabulary sums to the threshold. When co-occurrence in a single message is the tell, opt into per-text scoring with `scope="text"`: each text is scored on its own, the hook fires only when one text reaches the threshold alone, and the window only bounds how far back that text may sit. Under either scope, a `vetoes` match anywhere in the window holds the hook back.
 
 Set `window="turn"` instead of a count to score the whole current turn. Tool calls and their results eat window slots, so a fixed window at `Stop` reaches only the last few tool exchanges. The `"turn"` sentinel reaches back to the prompt that opened the turn and catches a tell dropped hundreds of events earlier.
 

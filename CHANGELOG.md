@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`Signals.scope` now defaults to `"window"`.** Union scoring across the
+  window is the default, so a tell split across adjacent messages accumulates
+  toward `threshold`; pass `scope="text"` to require a single message to meet
+  it alone. The steering pack's code-stewardship nudge pins `scope="text"` to
+  keep its per-message tuning.
+
 ## [12.20.1] - 2026-07-24
 
 ### Changed

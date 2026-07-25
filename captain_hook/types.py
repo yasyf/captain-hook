@@ -787,13 +787,14 @@ class Signals:
     Pass a higher threshold to require multiple signals to fire together.
 
     ``scope`` selects how ``threshold`` is met across the scored candidate texts.
-    The default ``"text"`` requires a single candidate text to meet ``threshold`` on
-    its own; ``window`` then only bounds how far back a qualifying text may sit.
-    ``"window"`` instead sums by presence-union across the window: each signal counts
-    once toward ``threshold`` however many entries it matches, and the union score is
-    the sum of the distinct matching signals' weights. Reach for ``"window"`` only
-    when one tell is deliberately split across turns (a checklist in one message, its
-    sign-off in the next). Pattern weights must be positive under either scope.
+    The default ``"window"`` sums by presence-union across the window: each signal
+    counts once toward ``threshold`` however many entries it matches, and the union
+    score is the sum of the distinct matching signals' weights — so a tell split
+    across turns (a checklist in one message, its sign-off in the next) still
+    accumulates. ``"text"`` instead requires a single candidate text to meet
+    ``threshold`` on its own, with ``window`` only bounding how far back a
+    qualifying text may sit; reach for it when co-occurrence in one message is the
+    tell. Pattern weights must be positive under either scope.
 
     ``origin`` selects which candidate texts are eligible before scoring — an
     upstream filter orthogonal to ``scope`` (which decides how ``threshold`` is met
@@ -818,7 +819,7 @@ class Signals:
     patterns: Sequence[Signal | NlpSignal]
     threshold: int
     window: int | Literal["turn"] = 15
-    scope: Literal["text", "window"] = field(default="text", kw_only=True)
+    scope: Literal["text", "window"] = field(default="window", kw_only=True)
     origin: Literal["assistant", "any"] = field(default="assistant", kw_only=True)
     vetoes: Sequence[Signal | NlpSignal] = ()
 

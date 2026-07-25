@@ -326,22 +326,30 @@ class TestMatchSignalsAggregation:
 
 
 class TestMatchSignalsPerText:
-    """Default ``scope="text"`` thresholding: a fire needs one candidate text to meet threshold alone."""
+    """``scope="text"`` thresholding: a fire needs one candidate text to meet threshold alone."""
 
     HOOK = "per_text_hook"
 
-    def test_scope_defaults_to_text(self) -> None:
-        assert Signals(patterns=[Signal(pattern=r"x", weight=1)], threshold=1).scope == "text"
+    def test_scope_defaults_to_window(self) -> None:
+        assert Signals(patterns=[Signal(pattern=r"x", weight=1)], threshold=1).scope == "window"
 
     def test_split_weak_tells_do_not_fire(self) -> None:
         ps = PrimitiveState()
-        sig = Signals(patterns=[Signal(pattern=r"alpha", weight=1), Signal(pattern=r"beta", weight=1)], threshold=2)
+        sig = Signals(
+            patterns=[Signal(pattern=r"alpha", weight=1), Signal(pattern=r"beta", weight=1)],
+            threshold=2,
+            scope="text",
+        )
         assert ps.match_signals(sig, ["alpha only", "beta only"], self.HOOK) is None
         assert ps.consumed == {}
 
     def test_qualifying_entry_consumes_only_itself(self) -> None:
         ps = PrimitiveState()
-        sig = Signals(patterns=[Signal(pattern=r"alpha", weight=2), Signal(pattern=r"beta", weight=1)], threshold=2)
+        sig = Signals(
+            patterns=[Signal(pattern=r"alpha", weight=2), Signal(pattern=r"beta", weight=1)],
+            threshold=2,
+            scope="text",
+        )
         assert ps.match_signals(sig, ["alpha strong", "beta weak"], self.HOOK) == ["alpha strong"]
         assert ps.consumed == {self.HOOK: {text_hash("alpha strong")}}
         # the sub-threshold sibling was never consumed → a threshold-1 sig still fires on it
@@ -350,7 +358,7 @@ class TestMatchSignalsPerText:
 
     def test_two_qualifying_entries_returned_in_window_order(self) -> None:
         ps = PrimitiveState()
-        sig = Signals(patterns=[Signal(pattern=r"alpha", weight=2)], threshold=2)
+        sig = Signals(patterns=[Signal(pattern=r"alpha", weight=2)], threshold=2, scope="text")
         assert ps.match_signals(sig, ["first alpha", "middle", "second alpha"], self.HOOK) == [
             "first alpha",
             "second alpha",
@@ -358,7 +366,9 @@ class TestMatchSignalsPerText:
 
     def test_veto_suppresses_even_when_an_entry_qualifies(self) -> None:
         ps = PrimitiveState()
-        sig = Signals(patterns=[Signal(pattern=r"alpha", weight=2)], threshold=2, vetoes=[Signal(pattern=r"nope")])
+        sig = Signals(
+            patterns=[Signal(pattern=r"alpha", weight=2)], threshold=2, scope="text", vetoes=[Signal(pattern=r"nope")]
+        )
         assert ps.match_signals(sig, ["alpha strong", "nope veto here"], self.HOOK) is None
         assert ps.consumed == {}
 

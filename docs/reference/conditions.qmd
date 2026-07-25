@@ -82,10 +82,10 @@ methods are `runs`, `has_subcommand`, `contains_token`, and `uses_redirect`. See
 ## Signals (scoring)
 
 `Signal` and `Signals` aren't `only_if`/`skip_if` filters — they pass to a primitive's
-`signals=` parameter to score patterns against recent transcript prose. By default (`scope="text"`)
-a single message must meet the threshold on its own matched weights, and the window only bounds how
-far back it may sit. Under `scope="window"` the score pools distinct signals across the window
-instead, counting each once. `origin` filters candidates upstream of either scope: the default
+`signals=` parameter to score patterns against recent transcript prose. By default (`scope="window"`)
+the score pools distinct signals across the window, counting each once. Under `scope="text"` a
+single message must instead meet the threshold on its own matched weights, with the window only
+bounding how far back it may sit. `origin` filters candidates upstream of either scope: the default
 `"assistant"` scores only the agent's own prose, while `origin="any"` also scores user messages and
 the just-submitted `UserPromptSubmit` prompt. See
 [Score patterns with signals](../guide/llm-hooks.qmd#score-patterns-with-signals).
@@ -93,4 +93,4 @@ the just-submitted `UserPromptSubmit` prompt. See
 | Type | Purpose | Example |
 |------|---------|---------|
 | `Signal(pattern=..., weight=1, flags=0)` | A regex worth `weight` points when it matches (fields are keyword-only) | `Signal(pattern=r"\bretry\b", weight=2)` |
-| `Signals(patterns, threshold, window=15, scope="text", origin="assistant")` | A bundle that fires at `threshold`; `scope="text"` (default) requires a single text in the window to meet the threshold alone, `scope="window"` counts each matching signal once across the whole window; `origin="assistant"` (default) scores only the agent's own prose, `origin="any"` also scores user text and the `UserPromptSubmit` prompt; vetoes match window-wide under either scope; `window="turn"` scores the whole current turn | `Signals([Signal(pattern=r"retry", weight=2), Signal(pattern=r"again")], threshold=3)` |
+| `Signals(patterns, threshold, window=15, scope="window", origin="assistant")` | A bundle that fires at `threshold`; `scope="window"` (default) counts each matching signal once across the whole window, `scope="text"` requires a single text in the window to meet the threshold alone; `origin="assistant"` (default) scores only the agent's own prose, `origin="any"` also scores user text and the `UserPromptSubmit` prompt; vetoes match window-wide under either scope; `window="turn"` scores the whole current turn | `Signals([Signal(pattern=r"retry", weight=2), Signal(pattern=r"again")], threshold=3)` |
