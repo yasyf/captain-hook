@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import sys
 from dataclasses import dataclass
 from typing import Any
@@ -143,3 +144,32 @@ def test_hook_writes_are_captured_inside_the_product_response() -> None:
 
     assert response.stdout == "discovered out\nhook stdout\n"
     assert response.stderr == "discovered err\nhook stderr\n"
+
+
+def test_augment_path_appends_missing_user_bin_dirs(monkeypatch, tmp_path) -> None:
+    from captain_hook.worker import __main__ as worker_main
+
+    present = tmp_path / "present"
+    present.mkdir()
+    already = tmp_path / "already"
+    already.mkdir()
+    absent = tmp_path / "absent"
+    monkeypatch.setattr(worker_main, "PATH_FALLBACKS", (str(present), str(already), str(absent)))
+    monkeypatch.setenv("PATH", f"/usr/bin:{already}")
+
+    worker_main.augment_path()
+
+    assert os.environ["PATH"] == f"/usr/bin:{already}:{present}"
+
+
+def test_augment_path_leaves_complete_path_untouched(monkeypatch, tmp_path) -> None:
+    from captain_hook.worker import __main__ as worker_main
+
+    covered = tmp_path / "covered"
+    covered.mkdir()
+    monkeypatch.setattr(worker_main, "PATH_FALLBACKS", (str(covered),))
+    monkeypatch.setenv("PATH", f"/usr/bin:{covered}")
+
+    worker_main.augment_path()
+
+    assert os.environ["PATH"] == f"/usr/bin:{covered}"

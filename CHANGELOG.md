@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.20.6] - 2026-07-25
+
+### Fixed
+
+- LLM-gated hooks and the review judge work in daemon context again: the
+  Python product worker now appends the well-known user bin directories
+  (`~/.local/bin`, `~/.bun/bin`, `/opt/homebrew/bin`, `/usr/local/bin`) to
+  its hermetic launchd `PATH` at startup, so spawnllm's `claude`/`codex`
+  probes and hook subprocesses like `gh` resolve — previously every
+  LLM-backed evaluation failed with `BackendUnavailable: no installed,
+  authenticated LLM backend found` because daemonkit spawns workers with
+  `PATH=/usr/bin:/bin:/usr/sbin:/sbin` and forbids overriding it.
+
 ## [12.20.5] - 2026-07-25
 
 ### Fixed
