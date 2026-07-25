@@ -8,7 +8,7 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 
 ## Builtin packs activate themselves
 
-`capt-hook` ships six builtin packs. Four are always active in every repo:
+`capt-hook` ships seven builtin packs. Five are always active in every repo:
 
 - `general` — language-agnostic guards: git/jj command safety, doc and prompt nudges, task and
   plan discipline, model-routing nudges, a code-review gate, a docs-freshness gate, a detour
@@ -19,6 +19,10 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 - `steering` — judgment nudges: prefer first-principles fixes over band-aids, don't dismiss a real
   pre-existing issue, don't chase trivial type noise, don't swap the requested fix for docs.
 - `performance` — wall-clock pipelining nudges that speculate a held fix while verification runs.
+- `graphite` — Graphite (gt) workflow guards that stay inert outside a `gt repo init`'d repo
+  (every hook checks for `.git/.graphite_repo_config`, worktree-aware): a jj ban, steers from raw
+  `git commit`/`git push`/branch writes to `gt create`/`gt modify`, a pre-submit review reminder
+  that quiets once a cc-review pass has run, and restack nudges.
 
 Two more activate by language, detected from the repo's build manifests:
 
@@ -44,6 +48,7 @@ uvx capt-hook pack list
 ```
   builtin:fixes                      builtin  2 hooks
   builtin:general                    builtin  12 hooks
+  builtin:graphite                   builtin  4 hooks
   builtin:performance                builtin  1 hooks
   builtin:python                     builtin  3 hooks
   builtin:steering                   builtin  3 hooks

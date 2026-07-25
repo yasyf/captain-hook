@@ -4,6 +4,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [12.20.0] - 2026-07-24
+
+### Added
+
+- **New `graphite` builtin pack.** Loads in every repo but stays inert
+  outside Graphite ones — each hook bails unless `.git/.graphite_repo_config`
+  exists at the git common dir (worktree-aware). In a gt repo it blocks jj,
+  steers raw `git commit`/`git push`/branch creation to `gt create`/
+  `gt modify` (`ccx vcs ship` preferred), reminds before `gt submit` or
+  `ccx vcs ship` until a cc-review pass has run this session (and that PRs
+  publish, never draft), and nudges `git rebase`/`git merge`/`git pull`
+  toward `gt restack`/`gt sync`.
+
 ## [12.19.1] - 2026-07-24
 
 ### Fixed
