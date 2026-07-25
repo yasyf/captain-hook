@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [12.20.0] - 2026-07-24
 
+### Fixed
+
+- **A wedged trust-verifier lane now restarts the host instead of rejecting
+  every peer forever.** Under heavy load a verifier child's settlement could
+  overrun its fixed budget, closing the verifier worker pool permanently while
+  the daemon kept serving — every hook on the machine failed as
+  `wire: untrusted peer` until a manual restart, which the launchd agent never
+  performed because the process stayed alive. daemonkit v0.19.0 makes a
+  post-activation lane terminalization fatal: the host exits nonzero, launchd
+  relaunches it clean, and the reaper now settles children with an early-settle
+  poll instead of sleeping the full termination grace, returning up to 500ms of
+  the settlement budget that made the overrun likely.
+- **WordNet expansion works from every dispatch thread.** wn pools one
+  process-global sqlite connection, created thread-bound by default; the
+  worker dispatches on a 16-thread pool, so the first thread to expand a
+  phrase claimed the connection and every other thread's NLP signal died with
+  `sqlite3.ProgrammingError`, silently dropping steering signals under
+  concurrent dispatch. `ensure_wn_lexicon` now opts wn into multithreading
+  before the connection exists (safe: sqlite ships serialized,
+  `threadsafety == 3`, and lexicon queries are read-only).
+
 ### Added
 
 - **New `graphite` builtin pack.** Loads in every repo but stays inert
