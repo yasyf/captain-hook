@@ -523,7 +523,7 @@ jobs:
           grep -Fq '"package-install"' "$template"
           grep -Fq '$HOME/Applications/Captain Hook.app' "$template"
           ! grep -Eq '^[[:space:]]*cask[[:space:]]+' "$template"
-          ! grep -Eq '(^|[^$[:alnum:]_])/Applications/Captain Hook\.app' "$template"
+          ! grep -Eq '(^|[^$~[:alnum:]_])/Applications/Captain Hook\.app' "$template"
 
       - name: Render the formula from the verified release output
         uses: yasyf/homebrew-tap/.github/actions/render-formula@19c3d5013032ad9c88f9a8f1170d1f366c19b8d9

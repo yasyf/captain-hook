@@ -184,3 +184,11 @@ def test_formula_uses_authoritative_asset_and_bundled_application() -> None:
     assert '"package-install"' in formula
     assert '$HOME/Applications/Captain Hook.app' in formula
     assert "\n  cask " not in formula
+
+
+def test_formula_release_guard_allows_only_user_scoped_applications() -> None:
+    workflow = WORKFLOW.read_text()
+    formula_job = workflow[workflow.index("\n  helper-formula:") :]
+
+    assert r"(^|[^$~[:alnum:]_])/Applications/Captain Hook\.app" in formula_job
+    assert r"(^|[^$[:alnum:]_])/Applications/Captain Hook\.app" not in formula_job

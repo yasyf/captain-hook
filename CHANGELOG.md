@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.20.2] - 2026-07-24
+
+### Fixed
+
+- **Formula publication now distinguishes the user application directory from
+  the system directory.** The immutable release guard accepts
+  `~/Applications/Captain Hook.app` while continuing to reject
+  `/Applications/Captain Hook.app`.
+
 ### Changed
 
 - **`Signals.scope` now defaults to `"window"`.** Union scoring across the
