@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from captain_hook.util.vcs import contains_repo, in_vcs_repo, is_repo_root
+from captain_hook.util.vcs import GRAPHITE_MARKER, contains_repo, in_vcs_repo, is_graphite_repo, is_repo_root
 
 
 def test_contains_repo_marker_directory(tmp_path: Path) -> None:
@@ -64,3 +64,39 @@ def test_vcs_marker_file(tmp_path: Path) -> None:
 
 def test_vcs_marker_absent(tmp_path: Path) -> None:
     assert is_repo_root(tmp_path) is False
+
+
+def test_is_graphite_repo_gt_repo(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".git" / GRAPHITE_MARKER).write_text("")
+    assert is_graphite_repo(repo) is True
+    assert is_graphite_repo(repo / "one" / "two") is True
+
+
+def test_is_graphite_repo_worktree(tmp_path: Path) -> None:
+    git = tmp_path / "main" / ".git"
+    (wt_meta := git / "worktrees" / "wt").mkdir(parents=True)
+    (git / GRAPHITE_MARKER).write_text("")
+    (wt_meta / "commondir").write_text("../..\n")
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / ".git").write_text(f"gitdir: {wt_meta}\n")
+    assert is_graphite_repo(worktree) is True
+    assert is_graphite_repo(worktree / "nested") is True
+
+
+def test_is_graphite_repo_plain_git(tmp_path: Path) -> None:
+    (tmp_path / "plain" / ".git").mkdir(parents=True)
+    assert is_graphite_repo(tmp_path / "plain") is False
+
+
+def test_is_graphite_repo_outside_repo(tmp_path: Path) -> None:
+    assert is_graphite_repo(tmp_path / "nowhere") is False
+
+
+def test_is_graphite_repo_dangling_pointer(tmp_path: Path) -> None:
+    dangling = tmp_path / "dangling"
+    dangling.mkdir()
+    (dangling / ".git").write_text("gitdir: ../does-not-exist\n")
+    assert is_graphite_repo(dangling) is False

@@ -18,8 +18,8 @@ from captain_hook.testing.types import Input
 from captain_hook.types import Event
 
 BUILTIN_PACKS_DIR = Path(captain_hook.__file__).parent / "builtin_packs"
-EXPECTED_BUILTINS = {"general", "python", "go", "steering", "fixes", "performance"}
-UNCONDITIONAL = {"fixes", "general", "steering", "performance"}
+EXPECTED_BUILTINS = {"general", "python", "go", "steering", "fixes", "performance", "graphite"}
+UNCONDITIONAL = {"fixes", "general", "steering", "performance", "graphite"}
 GENERAL_HOOKS = {
     "commands",
     "comments",
@@ -39,6 +39,7 @@ GO_HOOKS = {"testing", "toolchain"}
 STEERING_HOOKS = {"steering", "teammates", "workarounds"}
 FIXES_HOOKS = {"teammate_permissions", "scratch_writes"}
 PERFORMANCE_HOOKS = {"pipelining"}
+GRAPHITE_HOOKS = {"vcs"}
 HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 SRC_USES_FILE = (
     "from pathlib import Path\n"
@@ -67,8 +68,9 @@ def test_expected_builtin_packs_present() -> None:
         ("steering", STEERING_HOOKS),
         ("fixes", FIXES_HOOKS),
         ("performance", PERFORMANCE_HOOKS),
+        ("graphite", GRAPHITE_HOOKS),
     ],
-    ids=["general", "python", "go", "steering", "fixes", "performance"],
+    ids=["general", "python", "go", "steering", "fixes", "performance", "graphite"],
 )
 def test_builtin_pack_layout(name: str, hook_stems: set[str]) -> None:
     resolved = manager.resolve_builtin(name)
@@ -86,7 +88,7 @@ def test_nlp_builtins_declare_resources(name: str) -> None:
     assert manager.resolve_builtin(name).descriptor.resources == ("spacy:en_core_web_sm", "wordnet:oewn:2025")
 
 
-@pytest.mark.parametrize("name", ["fixes", "go", "python", "performance"])
+@pytest.mark.parametrize("name", ["fixes", "go", "python", "performance", "graphite"])
 def test_plain_builtins_have_empty_descriptor(name: str) -> None:
     descriptor = manager.resolve_builtin(name).descriptor
     assert descriptor == manager.PackDescriptor()
