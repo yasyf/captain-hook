@@ -1,14 +1,39 @@
-import re
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
-SYSTEM_APPLICATION = re.compile(
-    r"(^|[^$~A-Za-z0-9_])/Applications/Captain Hook\.app"
+FORMULA = ROOT / ".github/formula/captain-hook.rb.tmpl"
+SYSTEM_APPLICATION_GREP = (
+    r"(^|[^$~[:alnum:]_])/Applications/Captain Hook\.app"
 )
 
 
+def _render_formula() -> str:
+    return (
+        FORMULA.read_text()
+        .replace("__VERSION__", "12.20.2")
+        .replace(
+            "__ASSET_URL__",
+            "https://github.com/yasyf/captain-hook/releases/download/"
+            "v12.20.2/captain-hook-v12.20.2-darwin.zip",
+        )
+        .replace("__SHA_APP__", "a" * 64)
+    )
+
+
+def _grep_finds_system_application(formula: str) -> bool:
+    result = subprocess.run(
+        ["grep", "-Eq", SYSTEM_APPLICATION_GREP],
+        input=formula,
+        text=True,
+        check=False,
+    )
+    assert result.returncode in (0, 1)
+    return result.returncode == 0
+
+
 def test_formula_bundles_and_applies_the_exact_signed_application() -> None:
-    formula = (ROOT / ".github/formula/captain-hook.rb.tmpl").read_text()
+    formula = FORMULA.read_text()
     assert 'libexec.install "Captain Hook.app"' in formula
     assert '"package-install"' in formula
     assert '$HOME/Applications/Captain Hook.app' in formula
@@ -19,11 +44,21 @@ def test_formula_bundles_and_applies_the_exact_signed_application() -> None:
     assert "/Applications/Captain Hook.app" not in user_scoped
 
 
-def test_system_application_guard_does_not_reject_user_applications() -> None:
-    assert SYSTEM_APPLICATION.search("/Applications/Captain Hook.app")
-    assert SYSTEM_APPLICATION.search("at /Applications/Captain Hook.app")
-    assert not SYSTEM_APPLICATION.search("$HOME/Applications/Captain Hook.app")
-    assert not SYSTEM_APPLICATION.search("~/Applications/Captain Hook.app")
+def test_shell_guard_accepts_user_paths_and_rejects_system_path() -> None:
+    formula = _render_formula()
+
+    assert "$HOME/Applications/Captain Hook.app" in formula
+    assert "~/Applications/Captain Hook.app" in formula
+    assert not _grep_finds_system_application(formula)
+
+    system_formula = formula.replace(
+        "$HOME/Applications/Captain Hook.app",
+        "/Applications/Captain Hook.app",
+    ).replace(
+        "~/Applications/Captain Hook.app",
+        "/Applications/Captain Hook.app",
+    )
+    assert _grep_finds_system_application(system_formula)
 
 
 def test_signed_controller_stops_only_the_exact_installed_generation() -> None:
