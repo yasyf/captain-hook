@@ -3,12 +3,13 @@ Decide whether this delegated subagent's work should route off fable-5 — to op
 <delegated_spawn> holds the pending Agent/Task call: its model pin (or that it inherits
 the session model, fable), agent type, and prompt.
 
-The Models rubric: implementation delegates off fable — the split is decision density.
-Bounded, decision-light work (the plan, work order, or repeated pattern already made the
-decisions; terminal-heavy included) goes to gpt-5.6-sol via the codex:codex-wrapper agent;
-ambiguous, exploratory, long-run, or decision-dense work — mid-flight judgment calls pile
-up even when the scope is bounded — goes to opus-5 at xhigh (~2x cheaper
-than fable and nearly as capable). Fable's lanes are
+The Models rubric: implementation delegates off fable, and the default lane is opus-5
+(~2x cheaper than fable and nearly as capable) — at high effort when the work is bounded
+and decision-light (the plan, work order, or repeated pattern already made the decisions),
+at xhigh when it is ambiguous, exploratory, long-run, or decision-dense. Only a repetitive
+N-unit sweep (migrations, test conversions, mechanical refactors as parallel lanes) or
+terminal/shell-heavy execution goes to gpt-5.6-sol via the codex:codex-wrapper agent —
+sol's per-task token efficiency pays only multiplied across a fan-out. Fable's lanes are
 orchestration, design/architecture review, hard planning, all prose/writing, and
 implementation that is very sensitive or error-prone (auth, migrations, concurrency,
 data loss, crypto, subtle algorithms). Code/diff review, security review/audit, and bug
@@ -24,15 +25,19 @@ reasoning under 40 words.
 <examples>
 <example fire="true">
 Implement the pagination endpoint in api/users.py per the spec in the plan.
-Spec'd, decision-light implementation — the gpt-5.6-sol lane; off fable either way.
+Spec'd, decision-light implementation — the opus high lane; off fable either way.
 </example>
 <example fire="true">
 Add a --json flag to the export command and thread it through the formatter.
-Decision-light feature wiring — the gpt-5.6-sol lane.
+Decision-light feature wiring — the opus high lane.
 </example>
 <example fire="true">
 Build out the new ingestion subsystem: parser, store, and CLI wiring, shape TBD.
 Exploratory, decision-dense implementation — the opus xhigh lane.
+</example>
+<example fire="true">
+Convert the eleven test modules under tests/legacy/ to pytest, one per lane, per the worked example.
+Repetitive N-unit sweep — the gpt-5.6-sol fan-out lane.
 </example>
 <example fire="false">
 Review the diff for correctness and concurrency issues.

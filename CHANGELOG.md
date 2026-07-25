@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.20.8] - 2026-07-25
+
+### Changed
+
+- The general pack's models nudges follow the fleet's Opus 5 recalibration
+  (2026-07-25): the implementation-spawn and inline-edit nudges now route
+  bounded, decision-light implementation to a delegated opus-5 subagent
+  (`high` effort; `xhigh` when ambiguous or decision-dense) and reserve
+  gpt-5.6-sol for repetitive N-unit sweeps and terminal-heavy execution.
+  Review/diagnosis routing is unchanged.
+
 ## [12.20.7] - 2026-07-25
 
 ### Changed

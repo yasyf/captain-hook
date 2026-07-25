@@ -36,27 +36,8 @@ from captain_hook.contexts import WORKFLOW_SCRIPT_CAP
 from captain_hook.langs import LANG_GLOBS
 from captain_hook.signals.nlp import nlp_scan
 
-DELIVERABLE_GATE_RUBRIC = str(Prompt.load("fragments/deliverable_rubric", verdict_attr="block"))
 DELIVERABLE_NUDGE_RUBRIC = str(Prompt.load("fragments/deliverable_rubric", verdict_attr="fire"))
 WORKFLOW_HEADER = str(Prompt.load("fragments/workflow_script_header"))
-
-PROSE_SPAWN_GATE = Prompt.load("models/prose_spawn_gate", deliverable_rubric=DELIVERABLE_GATE_RUBRIC)
-IMPLEMENTATION_SPAWN_NUDGE = Prompt.load("models/implementation_spawn_nudge")
-INLINE_EDIT_NUDGE = Prompt.load("models/inline_edit_nudge")
-BROWSER_DELEGATION_NUDGE = Prompt.load("models/browser_delegation_nudge")
-REVIEW_ROUTING_SPAWN_NUDGE = Prompt.load("models/review_routing_spawn_nudge")
-PROSE_WORKFLOW_NUDGE = Prompt.load(
-    "models/prose_workflow_nudge",
-    workflow_script_header=WORKFLOW_HEADER,
-    deliverable_rubric=DELIVERABLE_NUDGE_RUBRIC,
-)
-REVIEW_ROUTING_WORKFLOW_NUDGE = Prompt.load(
-    "models/review_routing_workflow_nudge",
-    workflow_script_header=WORKFLOW_HEADER,
-    deliverable_rubric=DELIVERABLE_NUDGE_RUBRIC,
-)
-WRITING_DOCS_SPAWN_NUDGE = Prompt.load("models/writing_docs_spawn_nudge")
-WRITING_DOCS_WORKFLOW_NUDGE = Prompt.load("models/writing_docs_workflow_nudge", workflow_script_header=WORKFLOW_HEADER)
 REVIEW_ROUTING_PATTERN = (
     r"(?i)(\b(review|refut|adversari|audit|correctness|diagnos|root.?caus|secur|vuln|pentest)"
     r"|\bverif\w*[\s\S]{0,160}?\b(auth|crypt|secret|sanitiz|inject|input.?valid|token|session))"
@@ -221,7 +202,10 @@ hook(
 )
 
 llm_gate(
-    PROSE_SPAWN_GATE,
+    Prompt.load(
+        "models/prose_spawn_gate",
+        deliverable_rubric=str(Prompt.load("fragments/deliverable_rubric", verdict_attr="block")),
+    ),
     message=(
         "This subagent is pinned to a non-fable model but its deliverable is prose/writing work. "
         "{reasoning} All writing — docs, READMEs, release notes, any user-facing text — routes "
@@ -282,13 +266,14 @@ set_tool_input(
 )
 
 llm_nudge(
-    IMPLEMENTATION_SPAWN_NUDGE,
+    Prompt.load("models/implementation_spawn_nudge"),
     message=(
         "This delegation would run on fable, but it reads as routine implementation. {reasoning} "
-        "Bounded, decision-light implementation — the decisions are already made and what remains is "
-        "execution (terminal-heavy included) — routes to gpt-5.6-sol: spawn the codex:codex-wrapper agent "
-        "with a self-contained prompt. Ambiguous, decision-dense, or long-run implementation goes to "
-        "model='opus' + effort='xhigh' (~2x cheaper than fable, nearly as capable). "
+        "Implementation defaults to model='opus' (~2x cheaper than fable, nearly as capable): "
+        "effort='high' when bounded and decision-light — the decisions are already made and what "
+        "remains is execution — effort='xhigh' when ambiguous, decision-dense, or long-run. "
+        "Repetitive N-unit sweeps and terminal-heavy execution route to gpt-5.6-sol: spawn the "
+        "codex:codex-wrapper agent with a self-contained prompt. "
         "Keep fable if this genuinely is sensitive or error-prone. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
@@ -302,12 +287,15 @@ llm_nudge(
     agent=False,
     transcript=False,
     tests={
-        Input(prompt="implement the pagination endpoint in api/users.py"): Warn(pattern="gpt-5.6"),
-        Input(model="fable", prompt="add a --json flag to the export command"): Warn(pattern="gpt-5.6"),
-        Input(prompt="add a retry wrapper around the upload call in api/files.py"): Warn(pattern="gpt-5.6"),
+        Input(prompt="implement the pagination endpoint in api/users.py"): Warn(pattern="opus"),
+        Input(model="fable", prompt="add a --json flag to the export command"): Warn(pattern="opus"),
+        Input(prompt="add a retry wrapper around the upload call in api/files.py"): Warn(pattern="opus"),
         Input(prompt="Build out the new ingestion subsystem: parser, store, and CLI wiring, shape TBD"): Warn(
             pattern="opus"
         ),
+        Input(
+            prompt="Convert the eleven test modules under tests/legacy/ to pytest, one per lane, per the worked example"
+        ): Warn(pattern="gpt-5.6"),
         Input(model="opus", prompt="implement the pagination endpoint in api/users.py"): Allow(),
         Input(model="sonnet", prompt="scan the repo for TODO markers"): Allow(),
         Input(agent_type="Explore", prompt="find where the config loader lives"): Allow(),
@@ -316,12 +304,13 @@ llm_nudge(
 )
 
 llm_nudge(
-    INLINE_EDIT_NUDGE,
+    Prompt.load("models/inline_edit_nudge"),
     message=(
         "This inline edit reads as routine implementation on fable. {reasoning} "
-        "Implementation delegates: a bounded, decision-light change routes to gpt-5.6-sol via the "
-        "codex skill; ambiguous, decision-dense, or long-running work goes to a model='opus', "
-        "effort='xhigh' subagent. Keep "
+        "Implementation delegates to a model='opus' subagent: effort='high' for a bounded, "
+        "decision-light change, effort='xhigh' for ambiguous, decision-dense, or long-running "
+        "work; a repetitive sweep or terminal-heavy execution routes to gpt-5.6-sol via the "
+        "codex skill. Keep "
         "editing inline only when the change is small, sensitive, or bound to judgment you just exercised. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
@@ -344,7 +333,7 @@ llm_nudge(
         Input(
             file="src/core/cache.py",
             content="def get(key: str):\n    return store.lookup(key)\n" * 12,
-        ): Warn(pattern="gpt-5.6"),
+        ): Warn(pattern="opus"),
         Input(
             file="README.md",
             content="Pagination lands in the users API.\n" * 20,
@@ -364,7 +353,7 @@ llm_nudge(
 
 
 llm_nudge(
-    BROWSER_DELEGATION_NUDGE,
+    Prompt.load("models/browser_delegation_nudge"),
     message=(
         "This is sustained browser automation running inline on fable. {reasoning} "
         "Hands-on browser work delegates like any implementation: spawn a model='opus', effort='xhigh' "
@@ -417,7 +406,7 @@ llm_nudge(
 )
 
 llm_nudge(
-    REVIEW_ROUTING_SPAWN_NUDGE,
+    Prompt.load("models/review_routing_spawn_nudge"),
     label="review_routing_spawn",
     message=(
         "This review/diagnosis delegation would run on fable. {reasoning} "
@@ -496,7 +485,11 @@ nudge(
 )
 
 llm_nudge(
-    PROSE_WORKFLOW_NUDGE,
+    Prompt.load(
+        "models/prose_workflow_nudge",
+        workflow_script_header=WORKFLOW_HEADER,
+        deliverable_rubric=DELIVERABLE_NUDGE_RUBRIC,
+    ),
     message=(
         "This workflow script pins a non-fable model on a stage whose deliverable is prose. {reasoning} "
         "All writing — docs, READMEs, release notes, any user-facing text — routes to fable: inherit the "
@@ -528,7 +521,11 @@ llm_nudge(
 )
 
 llm_nudge(
-    REVIEW_ROUTING_WORKFLOW_NUDGE,
+    Prompt.load(
+        "models/review_routing_workflow_nudge",
+        workflow_script_header=WORKFLOW_HEADER,
+        deliverable_rubric=DELIVERABLE_NUDGE_RUBRIC,
+    ),
     label="review_routing_workflow",
     message=(
         "This workflow runs review/diagnosis stages on fable. {reasoning} "
@@ -607,7 +604,7 @@ llm_nudge(
 )
 
 llm_nudge(
-    WRITING_DOCS_SPAWN_NUDGE,
+    Prompt.load("models/writing_docs_spawn_nudge"),
     message=(
         "This prompt delegates prose but paraphrases the writing rules instead of pointing at them. "
         "{reasoning} A paraphrase drifts and silently overrides the skill — rewrite the prompt to "
@@ -643,7 +640,7 @@ llm_nudge(
 )
 
 llm_nudge(
-    WRITING_DOCS_WORKFLOW_NUDGE,
+    Prompt.load("models/writing_docs_workflow_nudge", workflow_script_header=WORKFLOW_HEADER),
     message=(
         "This workflow script delegates prose but paraphrases the writing rules instead of pointing at "
         "them. {reasoning} A paraphrase drifts and silently overrides the skill — rewrite the offending "

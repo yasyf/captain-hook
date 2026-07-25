@@ -5,11 +5,12 @@ The main loop runs on fable-5; this pending edit is fable implementing directly.
 <edit_target> names the file; <before_edit>/<after_edit> hold the text being replaced
 and written.
 
-The Models rubric: implementation belongs off the main loop — a bounded,
-decision-light change (the decisions are already made; execution remains) goes to
-gpt-5.6-sol via the codex skill; ambiguous, decision-dense, or long-running work goes
-to a delegated opus-5 subagent at xhigh (~2x cheaper than
-fable and nearly as capable). Fable edits inline when the change is small or
+The Models rubric: implementation belongs off the main loop, and the default lane is a
+delegated opus-5 subagent (~2x cheaper than fable and nearly as capable) — at high
+effort for a bounded, decision-light change (the decisions are already made; execution
+remains), at xhigh for ambiguous, decision-dense, or long-running work. Only a
+repetitive N-unit sweep or terminal-heavy execution goes to gpt-5.6-sol via the codex
+skill. Fable edits inline when the change is small or
 judgment-bound: a fix-up finishing work it just reasoned through, a subtle algorithm,
 or a sensitive surface (auth, migrations, concurrency, data loss, crypto).
 
@@ -23,11 +24,11 @@ nudge. Keep reasoning under 40 words.
 <examples>
 <example fire="true">
 after_edit: a new 180-line pagination module written to src/api/pagination.py.
-Substantial net-new code — delegate it: gpt-5.6-sol when decision-light, opus xhigh when judgment calls remain.
+Substantial net-new code — delegate it: opus high when decision-light, opus xhigh when judgment calls remain.
 </example>
 <example fire="true">
 after_edit: rewiring three call sites and adding a formatter class in export.py.
-Routine decision-light refactor — the gpt-5.6-sol lane.
+Routine decision-light refactor — the opus high lane.
 </example>
 <example fire="false">
 after_edit: a two-line fix to the retry counter the agent just diagnosed.
