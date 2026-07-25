@@ -292,7 +292,7 @@ def test_wn_lexicon_adds_verified_atomic_archive_once_under_idempotent_filelock(
     assert fake_wn.adds == [archive]
     assert archive.read_bytes() == payload
     assert not archive.with_name(f".{archive.name}.part").exists()
-    assert locks == [str(tmp_path / "wn-data" / "oewn-2025+.lock")]
+    assert locks == [str(tmp_path / "wn-data" / "oewn-2025+.lock")] * 2
 
 
 def test_wn_lexicon_digest_mismatch_never_adds(fake_wn: FakeWn, monkeypatch: pytest.MonkeyPatch) -> None:
