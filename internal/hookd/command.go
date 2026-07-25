@@ -23,7 +23,7 @@ const (
 // Main executes one capt-hookd client or host command and returns its exit code.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: capt-hookd version|serve|run|status|restart-workers|shutdown")
+		fmt.Fprintln(stderr, "usage: capt-hookd version|serve|run|status|restart-workers|package-install|package-uninstall")
 		return 2
 	}
 	// The serving daemon re-execs this binary as daemonkit's trust-verifier
@@ -47,8 +47,10 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return statusCommand(args[1:], stdout, stderr)
 	case "restart-workers":
 		return restartWorkersCommand(args[1:], stderr)
-	case "shutdown":
-		return shutdownCommand(args[1:], stderr)
+	case "package-install":
+		return packageInstallCommand(args[1:], stderr)
+	case "package-uninstall":
+		return packageUninstallCommand(args[1:], stderr)
 	default:
 		fmt.Fprintf(stderr, "capt-hookd: unknown command %q\n", args[0])
 		return 2
@@ -199,18 +201,26 @@ func restartWorkersCommand(args []string, stderr io.Writer) int {
 	return 0
 }
 
-func shutdownCommand(args []string, stderr io.Writer) int {
+func packageInstallCommand(args []string, stderr io.Writer) int {
 	if len(args) != 0 {
 		return 2
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
 	defer cancel()
-	client, err := NewClient()
-	if err == nil {
-		defer client.Close()
-		err = client.Shutdown(ctx)
+	if err := applyPackagedApplication(ctx); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
-	if err != nil {
+	return 0
+}
+
+func packageUninstallCommand(args []string, stderr io.Writer) int {
+	if len(args) != 0 {
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
+	defer cancel()
+	if err := uninstallPackagedApplication(ctx); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}

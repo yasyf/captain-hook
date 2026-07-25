@@ -432,7 +432,7 @@ jobs:
           echo "::error::failed to push plugin.json sync after 3 attempts"
           exit 1
 
-  helper-cask:
+  helper-formula:
     needs: [helper-version, helper, publish-github, sync-plugin-version]
     if: ${{ needs.helper-version.outputs.stable == 'true' }}
     runs-on: ubuntu-latest
@@ -471,9 +471,9 @@ jobs:
           [ "$(awk 'NR == 1 { print $1 }' "$ASSET_FILENAME.sha256")" = "$ASSET_SHA256" ]
           [ "$(shasum -a 256 "$ASSET_FILENAME" | awk '{print $1}')" = "$ASSET_SHA256" ]
 
-      - name: Guard cask registry name and version
+      - name: Guard formula registry name and version
         env:
-          CASK_TOKEN: captain-hook
+          FORMULA_TOKEN: captain-hook
           VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -493,50 +493,48 @@ jobs:
             esac
           }
 
-          formula_url="https://raw.githubusercontent.com/yasyf/homebrew-tap/main/Formula/${CASK_TOKEN}.rb"
+          formula_url="https://raw.githubusercontent.com/yasyf/homebrew-tap/main/Formula/${FORMULA_TOKEN}.rb"
           formula_code="$(fetch "$formula_url" "$tmp/formula.rb")"
           if [ "$formula_code" = "200" ]; then
-            echo "::error::Formula/${CASK_TOKEN}.rb already exists; a same-named cask would make brew install ambiguous"
-            exit 1
+            grep -Eq "^class[[:space:]]+CaptainHook[[:space:]]+<[[:space:]]+Formula" "$tmp/formula.rb" \
+              || { echo "::error::the registered Formula/${FORMULA_TOKEN}.rb declares a different formula"; exit 1; }
+            current="$(sed -n 's/^[[:space:]]*version[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' "$tmp/formula.rb" | sed -n '1p')"
+            [ -n "$current" ] \
+              || { echo "::error::could not parse the registered formula version"; exit 1; }
+            first="$(printf '%s\n%s\n' "$current" "$version" | sort -V | sed -n '1p')"
+            if [ "$first" = "$version" ] && [ "$current" != "$version" ]; then
+              echo "::error::release version $version is older than registered formula version $current"
+              exit 1
+            fi
           fi
 
-          cask_url="https://raw.githubusercontent.com/yasyf/homebrew-tap/main/Casks/${CASK_TOKEN}.rb"
+          cask_url="https://raw.githubusercontent.com/yasyf/homebrew-tap/main/Casks/${FORMULA_TOKEN}.rb"
           cask_code="$(fetch "$cask_url" "$tmp/cask.rb")"
-          if [ "$cask_code" = "404" ]; then
-            exit 0
-          fi
-          grep -Eq "^[[:space:]]*cask[[:space:]]+\"${CASK_TOKEN}\"[[:space:]]+do" "$tmp/cask.rb" \
-            || { echo "::error::the registered Casks/${CASK_TOKEN}.rb declares a different cask name"; exit 1; }
-          current="$(sed -n 's/^[[:space:]]*version[[:space:]]*\"\([0-9][0-9.]*\)\".*/\1/p' "$tmp/cask.rb" | sed -n '1p')"
-          [ -n "$current" ] \
-            || { echo "::error::could not parse the registered version for $CASK_TOKEN"; exit 1; }
-          first="$(printf '%s\n%s\n' "$current" "$version" | sort -V | sed -n '1p')"
-          if [ "$first" = "$version" ] && [ "$current" != "$version" ]; then
-            echo "::error::release version $version is older than registered cask version $current"
+          if [ "$cask_code" != "404" ]; then
+            echo "::error::legacy Casks/${FORMULA_TOKEN}.rb must be removed before publishing the hard-cut formula"
             exit 1
           fi
 
-      - name: Require a full-application cask template
+      - name: Require the bundled signed application formula
         run: |
           set -euo pipefail
-          template=.github/cask/captain-hook.rb.tmpl
-          grep -Eq '^[[:space:]]*app[[:space:]]+' "$template" \
-            || { echo "::error::cask template must install the full .app with an app stanza"; exit 1; }
-          if grep -Eq '^[[:space:]]*binary[[:space:]]+' "$template"; then
-            echo "::error::cask template must not install this application as a bare binary"
-            exit 1
-          fi
+          template=.github/formula/captain-hook.rb.tmpl
+          grep -Fq 'libexec.install "Captain Hook.app"' "$template"
+          grep -Fq '"package-install"' "$template"
+          grep -Fq '$HOME/Applications/Captain Hook.app' "$template"
+          ! grep -Eq '^[[:space:]]*cask[[:space:]]+' "$template"
+          ! grep -Eq '(^|[^$[:alnum:]_])/Applications/Captain Hook\.app' "$template"
 
-      - name: Render the cask from the verified release output
+      - name: Render the formula from the verified release output
         uses: yasyf/homebrew-tap/.github/actions/render-formula@19c3d5013032ad9c88f9a8f1170d1f366c19b8d9
         with:
-          template: .github/cask/captain-hook.rb.tmpl
-          output: Casks/captain-hook.rb
+          template: .github/formula/captain-hook.rb.tmpl
+          output: Formula/captain-hook.rb
           substitutions: |
             __ASSET_URL__=${{ needs.helper.outputs.asset_url }}
             __SHA_APP__=${{ needs.helper.outputs.sha256 }}
 
-      - name: Publish the verified application cask
+      - name: Publish the verified bundled-application formula
         uses: yasyf/homebrew-tap/.github/actions/publish@9525763796fce4d1042cf3393d9479f791908eaa
         with:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}

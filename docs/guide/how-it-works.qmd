@@ -191,7 +191,7 @@ A hook is real Python that runs on your machine whenever Claude Code fires an ev
 
 Two distinct bodies of code meet at a hook.
 
-The framework has two exact-version parts: the `capt-hook` wheel published to PyPI and the Developer ID-signed, notarized `Captain Hook.app` published through the Homebrew cask. The plugin's `bin/hook` wrapper materializes the wheel at exactly the build the installed app names — resolved by `uv` with registry hash checking — and the wheel's `hook` shim execs `/Applications/Captain Hook.app/Contents/Helpers/capt-hookd`. You trust the maintainers, PyPI, the GitHub release, and the Homebrew tap as one release path; the wrapper's tiny runner, [binrun](https://github.com/yasyf/binrun), is itself pinned by sha256 in the committed plugin script.
+The framework has two exact-version parts: the `capt-hook` wheel published to PyPI and the Developer ID-signed, notarized `Captain Hook.app` bundled into the Homebrew formula. The plugin's `bin/hook` wrapper materializes the wheel at exactly the build the installed app names — resolved by `uv` with registry hash checking — and the wheel's `hook` shim execs `~/Applications/Captain Hook.app/Contents/Helpers/capt-hookd`. You trust the maintainers, PyPI, the GitHub release, and the Homebrew tap as one release path; the wrapper's tiny runner, [binrun](https://github.com/yasyf/binrun), is itself pinned by sha256 in the committed plugin script.
 
 Your hooks are the Python files under `.claude/hooks/`. You write them, so they carry whatever logic you put there. captain-hook loads every file in that directory and executes it on the matching event. The framework does not sandbox your hook code, because your hook code is yours.
 
@@ -226,7 +226,7 @@ The current runtime has one per-user Go host and long-lived Python product worke
 only dispatch path, not an opt-in accelerator beside a cold path.
 
 The host executable is fixed at
-`/Applications/Captain Hook.app/Contents/Helpers/capt-hookd`. The app release embeds a universal
+`~/Applications/Captain Hook.app/Contents/Helpers/capt-hookd`. The app release embeds a universal
 binary, signs it as nested code, and ships it with the wheel and plugin at the same version. A
 hook event with a different wheel build is rejected before Python runs.
 
@@ -250,15 +250,14 @@ the current Python executable and wheel version, then replaces itself with the f
 unknown command through. Everything in front of the engine — wrapper, runner, shim — exits 1 on
 its own failures; exit 2 belongs to a hook's blocking verdict alone.
 
-The signed Go client ensures the one exact host is running, then sends the event over daemonkit's
+The signed Go client requires the deployment-owned exact host, then sends the event over daemonkit's
 length-framed persistent transport. The host selects a Python worker and exchanges multiplexed,
 length-framed messages over that child's stdin and stdout. Python does not listen on a socket,
 create a PID file, detach itself, or spawn another daemon.
 
-The first event starts the host from the same fixed signed executable. Daemonkit owns listener
-takeover, admission, draining, process identity, and ordered shutdown. An exact newer build
-replaces the prior host generation; there is no watchdog polling files or versions in the
-background.
+The formula's deployment transaction starts the host and app from the fixed signed bundle.
+Daemonkit owns listener takeover, admission, draining, process identity, and ordered shutdown.
+An exact newer formula replaces the prior generation; request dispatch never starts or repairs it.
 
 ### One host, semantically keyed workers
 
@@ -294,7 +293,7 @@ failed event is not replayed.
 The fixed helper exposes a small exact operations surface:
 
 ```bash
-host="/Applications/Captain Hook.app/Contents/Helpers/capt-hookd"
+host="$HOME/Applications/Captain Hook.app/Contents/Helpers/capt-hookd"
 "$host" version          # exact schema and release build
 "$host" status           # host PID and every live worker generation as JSON
 "$host" restart-workers  # stop and reap every worker; keep the host
@@ -329,7 +328,7 @@ above.
 A new release reaches your machine without a manual `brew upgrade`. On the async `SessionStart`
 pass the dispatcher checks — at most once per 12 hours across all your sessions — whether the
 latest GitHub release is newer than the installed host. When it is, it detaches a background
-`brew upgrade --cask` (retried as a forced reinstall, which also repairs a half-removed app) and
+`brew upgrade --formula` (retried as a formula reinstall, which also repairs the deployment) and
 posts a notification banner when the upgrade lands or fails. The check never blocks a hook and
 never touches a verdict; every failure becomes a log line, not an exit code.
 
@@ -360,7 +359,7 @@ runtime owner; it does not make untrusted hook code safe.
 ### Host troubleshooting
 
 **The signed host is missing.** Install or repair it with
-`brew install --cask yasyf/tap/captain-hook`. Dispatch fails non-zero — the version probe has
+`brew install --formula yasyf/tap/captain-hook`. Dispatch fails non-zero — the version probe has
 nothing to ask — and never runs the Python CLI instead.
 
 **A build-mismatch error appears.** Plugin dispatch cannot skew — the wheel is resolved from the

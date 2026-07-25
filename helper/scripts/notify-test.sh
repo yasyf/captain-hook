@@ -2,7 +2,7 @@
 # Exercise the installed signed bridge. Usage: notify-test.sh [ping|notify]
 set -euo pipefail
 
-bridge="/Applications/Captain Hook.app/Contents/Helpers/capt-hook-helper-client"
+bridge="$HOME/Applications/Captain Hook.app/Contents/Helpers/capt-hook-helper-client"
 
 case "${1:-ping}" in
   ping)

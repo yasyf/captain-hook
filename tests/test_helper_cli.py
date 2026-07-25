@@ -1,7 +1,6 @@
-"""The ``capt-hook helper`` command group: install/launch argv, ping, and the notify test surface.
+"""The ``capt-hook helper`` command group: formula convergence, ping, and notify.
 
-Every side effect (brew, ``open``, the bridge) is stubbed, so the suite drives the commands
-without touching Homebrew, launching the app, or invoking the installed executable.
+Every side effect (brew or the bridge) is stubbed.
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ def test_helper_group_lists_subcommands() -> None:
         assert command in result.output
 
 
-def test_install_installs_and_launches(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_install_converges_formula_without_launching_directly(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
 
     def fake_run(argv: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
@@ -37,9 +36,24 @@ def test_install_installs_and_launches(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subprocess, "run", fake_run)
     result = invoke("install")
     assert result.exit_code == 0, result.output
-    assert ["brew", "install", "--cask", "--force", "yasyf/tap/captain-hook"] in calls
-    assert ["open", "-g", "/Applications/Captain Hook.app"] in calls
+    assert calls == [["brew", "install", "--formula", "yasyf/tap/captain-hook"]]
     assert "System Settings" in result.output and "widget" in result.output.lower()
+
+
+def test_install_repairs_existing_formula(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 1 if len(calls) == 1 else 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = invoke("install")
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        ["brew", "install", "--formula", "yasyf/tap/captain-hook"],
+        ["brew", "reinstall", "--formula", "yasyf/tap/captain-hook"],
+    ]
 
 
 def test_status_pings_and_prints_version(monkeypatch: pytest.MonkeyPatch) -> None:

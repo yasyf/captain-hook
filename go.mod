@@ -8,4 +8,5 @@ require (
 	github.com/ebitengine/purego v0.10.1 // indirect
 	go.etcd.io/bbolt v1.5.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
+	howett.net/plist v1.0.1 // indirect
 )

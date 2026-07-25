@@ -33,11 +33,7 @@ codesign -d --entitlements :- "$app" 2>/dev/null | grep -q 'com.yasyf.capt-hook.
 plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist"
 CAPT_HOOK_VERSION="$version" APP_PATH="$app" bash scripts/assert-signed-bridge.sh
 
-# Install: settle the exact old signed bundle and its login item before replacement.
-if [ -d "/Applications/$app_name.app" ]; then
-  "/Applications/$app_name.app/Contents/MacOS/$app_name" --stop-and-uninstall-service
-fi
-ditto "$app" "/Applications/$app_name.app"
-open -g "/Applications/$app_name.app"
+# Install through the same exact daemonkit deployment transaction as the formula.
+"$app/Contents/Helpers/capt-hookd" package-install
 
-echo "installed /Applications/$app_name.app"
+echo "installed $HOME/Applications/$app_name.app"

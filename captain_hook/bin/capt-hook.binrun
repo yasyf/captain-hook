@@ -4,7 +4,7 @@
   "name": "capt-hook",
   "kind": "python-tool",
   "version": {
-    "command": ["/Applications/Captain Hook.app/Contents/Helpers/capt-hookd", "version"],
+    "command": ["/usr/bin/env", "capt-hook-host", "version"],
     "json_field": "build"
   },
   "tool": {

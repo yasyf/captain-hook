@@ -1,6 +1,8 @@
 package hookd
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	dkdaemon "github.com/yasyf/daemonkit/daemon"
@@ -32,14 +34,46 @@ func TestRuntimeHealthCurrentRequiresExactReadyIdentity(t *testing.T) {
 	}
 }
 
-func TestHostAgentPinsSignedBundleAndFailureOnlyRestart(t *testing.T) {
-	client := newClientWithPaths(paths{log: "/tmp/captain-hook.log"})
-	agent := client.hostAgent("/Applications/Captain Hook.app/Contents/Helpers/capt-hookd")
-	if agent.Label != hostServiceLabel || agent.RestartPolicy != service.RestartOnFailure ||
-		agent.Program != "/Applications/Captain Hook.app/Contents/Helpers/capt-hookd" ||
-		len(agent.Args) != 1 || agent.Args[0] != "serve" ||
-		len(agent.AssociatedBundleIdentifiers) != 1 ||
-		agent.AssociatedBundleIdentifiers[0] != "com.yasyf.capt-hook.helper" {
-		t.Fatalf("host agent = %#v", agent)
+func TestServicePlanPinsSignedUserBundleAndFailureOnlyRestarts(t *testing.T) {
+	root, err := os.MkdirTemp("/private/tmp", "captain-hook-plan-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	app := filepath.Join(root, helperApplicationLeaf)
+	for _, executable := range []string{appExecutablePath(app), hostExecutablePath(app)} {
+		if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(executable, []byte("fixture"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan, err := exactServicePlan(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agents := plan.Agents()
+	if len(agents) != 2 {
+		t.Fatalf("agents = %#v", agents)
+	}
+	var host, helper service.Agent
+	for _, agent := range agents {
+		switch agent.Label {
+		case hostServiceLabel:
+			host = agent
+		case helperServiceLabel:
+			helper = agent
+		}
+	}
+	if host.RestartPolicy != service.RestartOnFailure || host.Program != hostExecutablePath(app) ||
+		len(host.Args) != 1 || host.Args[0] != "serve" ||
+		len(host.AssociatedBundleIdentifiers) != 1 || host.AssociatedBundleIdentifiers[0] != helperBundleID {
+		t.Fatalf("host agent = %#v", host)
+	}
+	if helper.RestartPolicy != service.RestartOnFailure || helper.Program != appExecutablePath(app) ||
+		len(helper.Args) != 0 || len(helper.AssociatedBundleIdentifiers) != 1 ||
+		helper.AssociatedBundleIdentifiers[0] != helperBundleID {
+		t.Fatalf("helper agent = %#v", helper)
 	}
 }

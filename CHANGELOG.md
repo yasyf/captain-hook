@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [12.20.1] - 2026-07-24
 
+### Changed
+
+- **The signed desktop runtime is one formula-owned daemonkit deployment.**
+  Homebrew stages the notarized app inside the formula and its post-install
+  transaction attests, installs, and activates the exact generation at
+  `~/Applications/Captain Hook.app`. The standalone cask, `/Applications`
+  install, self-managed LoginItem, and client-side daemon spawning are gone.
+- **Go and Swift use daemonkit v0.19.1 exactly.** Deployment now seals bundle,
+  entitlement, executable, service-plan, runtime-generation, broker-ping, and
+  quiescence proofs before an upgrade commits.
+- **Hook delivery is observation-only.** Python invokes the deployment-owned
+  signed host once and reports an unavailable deployment instead of launching
+  or repairing services from the request path.
+
+## [12.20.0] - 2026-07-24
+
 ### Fixed
 
 - **A wedged trust-verifier lane now restarts the host instead of rejecting
@@ -13,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overrun its fixed budget, closing the verifier worker pool permanently while
   the daemon kept serving — every hook on the machine failed as
   `wire: untrusted peer` until a manual restart, which the launchd agent never
-  performed because the process stayed alive. daemonkit v0.19.1 makes a
+  performed because the process stayed alive. daemonkit v0.19.0 makes a
   post-activation lane terminalization fatal: the host exits nonzero, launchd
   relaunches it clean, and the reaper now settles children with an early-settle
   poll instead of sleeping the full termination grace, returning up to 500ms of
@@ -126,8 +142,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `build` field). Unpinned `uvx` dispatch is gone, the wheel/app fence cannot
   skew, and the wrapper tree stays out of the wheel and sdist.
 - **The host keeps itself current.** An async SessionStart job checks the
-  latest release and runs a throttled `brew upgrade --cask captain-hook`
-  (force-reinstall repair on failure), posting `update_installed` or
+  latest release and runs a throttled `brew upgrade --formula captain-hook`
+  (formula reinstall repair on failure), posting `update_installed` or
   `update_failed` notifications. `HOOKS_UPDATE_ENABLED` and
   `HOOKS_UPDATE_INTERVAL_MINUTES` govern it; a failure never touches a hook
   dispatch.

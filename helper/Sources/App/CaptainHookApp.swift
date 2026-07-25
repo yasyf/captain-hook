@@ -13,8 +13,6 @@ struct CaptainHookApp: App {
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
-    static let loginItemPlist = "com.yasyf.capt-hook.helper.plist"
-
     private let notifications = NotificationController()
     private let coalescer = ReloadCoalescer(interval: 30) { _ in
         WidgetCenter.shared.reloadAllTimelines()
@@ -38,12 +36,13 @@ struct CaptainHookApp: App {
     }
 
     func applicationWillFinishLaunching(_: Notification) {
-        if Array(CommandLine.arguments.dropFirst()) == ["--stop-and-uninstall-service"] {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.count == 2, arguments[0] == "--deployment-stop-installed-generation" {
             do {
-                try ExactAppServiceStop.run()
+                try ExactInstalledAppStop.run(appPath: arguments[1])
                 exit(0)
             } catch {
-                let message = "Captain Hook exact stop failed: \(error)\n"
+                let message = "Captain Hook exact deployment stop failed: \(error)\n"
                 FileHandle.standardError.write(Data(message.utf8))
                 exit(1)
             }
@@ -54,20 +53,10 @@ struct CaptainHookApp: App {
     func applicationDidFinishLaunching(_: Notification) {
         notifications.requestAuthorizationIfNeeded()
         notifications.registerCategories()
-        reconcileLoginItem()
         brokerTask = Task { await runBroker() }
         notificationTask = Task { await runNotificationConsumer() }
         startWatcher()
         refresher.start()
-    }
-
-    private func reconcileLoginItem() {
-        do {
-            let state = try LoginItem(plistName: Self.loginItemPlist).reconcile()
-            Log.app.notice("login item: \(String(describing: state), privacy: .public)")
-        } catch {
-            Log.app.error("login item reconcile failed: \(String(describing: error), privacy: .public)")
-        }
     }
 
     private func runBroker() async {

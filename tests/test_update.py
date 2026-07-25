@@ -1,4 +1,4 @@
-"""The async self-updater: release check, throttled dispatch, and brew upgrade with force-retry.
+"""The async self-updater: release check, throttled dispatch, and formula repair.
 
 Every test mocks only the boundaries — the GitHub release fetch, the signed-bridge ping that
 reports the installed version, ``brew``, and the notification seam — and leaves
@@ -50,8 +50,9 @@ def record_brew(monkeypatch: pytest.MonkeyPatch, returncode: Any) -> list[list[s
     return calls
 
 
-UPGRADE = ["brew", "upgrade", "--cask", updater.CASK]
-FORCE = ["brew", "install", "--cask", "--force", updater.CASK]
+UPGRADE = ["brew", "upgrade", "--formula", updater.FORMULA]
+REINSTALL = ["brew", "reinstall", "--formula", updater.FORMULA]
+INSTALL = ["brew", "install", "--formula", updater.FORMULA]
 
 
 @pytest.mark.parametrize(
@@ -93,7 +94,7 @@ def test_run_update_skips_when_host_is_current(monkeypatch: pytest.MonkeyPatch, 
     assert notes == []
 
 
-def test_run_update_force_retries_and_recovers_husk(
+def test_run_update_reinstalls_and_recovers_husk(
     monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
 ) -> None:
     stub_release(monkeypatch, "v2.0.0")
@@ -102,7 +103,7 @@ def test_run_update_force_retries_and_recovers_husk(
 
     updater.run_update()
 
-    assert brew == [UPGRADE, FORCE]
+    assert brew == [UPGRADE, REINSTALL]
     assert [n["kind"] for n in notes] == ["update_installed"]
 
 
@@ -115,7 +116,7 @@ def test_run_update_notifies_failure_without_raising(
 
     updater.run_update()
 
-    assert brew == [UPGRADE, FORCE]
+    assert brew == [UPGRADE, REINSTALL, INSTALL]
     assert notes == [
         {
             "kind": "update_failed",

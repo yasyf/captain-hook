@@ -11,10 +11,10 @@ A hook is an event, some conditions, an action, and a verdict Claude Code has to
 captain-hook dispatches through one fixed, signed application on macOS 15 or newer:
 
 ```bash
-brew install --cask yasyf/tap/captain-hook
+brew install --formula yasyf/tap/captain-hook
 ```
 
-The cask installs `/Applications/Captain Hook.app`. The helper embedded in that exact path owns
+The formula deploys `~/Applications/Captain Hook.app`. The helper embedded in that exact path owns
 the per-user host and its Python workers. There is no unsigned or project-local daemon and
 no cold fallback when the host is missing.
 

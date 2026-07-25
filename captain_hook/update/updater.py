@@ -5,8 +5,8 @@ Wired as a sibling of the review dispatcher on the async SessionStart path
 the dispatch only guards, throttles via the shared :func:`_claim_stamp`, and detaches
 ``capt-hook update run``. The detached child (:func:`run_update`) compares the latest
 ``yasyf/captain-hook`` release against the installed signed host and, when the host is older,
-runs ``brew upgrade --cask`` — force-retrying with ``brew install --cask --force``, which also
-repairs a broken husk — then posts a success or failure banner. Every failure is a notification
+runs ``brew upgrade --formula`` — retrying with an exact formula reinstall/install to repair a
+broken deployment — then posts a success or failure banner. Every failure is a notification
 or a breadcrumb; nothing here raises into the dispatch or sets an exit code.
 """
 
@@ -20,7 +20,7 @@ from pathlib import Path
 from loguru import logger
 
 from captain_hook.helper import client
-from captain_hook.helper.cli import CASK
+from captain_hook.helper.cli import FORMULA
 from captain_hook.review.pipeline import SPAWNED_ENV, _claim_stamp
 from captain_hook.settings import resolve_state_dir
 from captain_hook.update.settings import UpdateSettings
@@ -77,8 +77,12 @@ def brew(args: list[str]) -> bool:
 
 
 def brew_upgrade() -> bool:
-    """``brew upgrade --cask``, force-retrying with ``brew install --cask --force`` (repairs a husk)."""
-    return brew(["upgrade", "--cask", CASK]) or brew(["install", "--cask", "--force", CASK])
+    """Upgrade or repair the exact formula-owned signed deployment."""
+    return (
+        brew(["upgrade", "--formula", FORMULA])
+        or brew(["reinstall", "--formula", FORMULA])
+        or brew(["install", "--formula", FORMULA])
+    )
 
 
 def notify(*, kind: str, title: str, body: str) -> None:

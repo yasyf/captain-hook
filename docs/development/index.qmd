@@ -82,7 +82,7 @@ The plugin's dispatch surface is the committed `captain_hook/bin/hook` symlink p
 
 ## Releasing
 
-Add the CHANGELOG entry and commit it, together with `uv.lock` when a dependency change moved it. Then tag the new version and push. `.github/workflows/release-pypi.yml` builds the sdist and wheel, publishes to PyPI via trusted publishing, cuts a GitHub release, builds and signs the universal `Captain Hook.app` with the exact same versioned `capt-hookd`, and publishes the stable release to the `yasyf/tap/captain-hook` cask. It also commits `captain_hook/.claude-plugin/plugin.json` back to `main` with its `version` synced to the tag — that bump is what makes consumer plugin caches pick up the release, so no manual plugin.json edit is needed (a hand-bump before tagging is harmless; the sync no-ops):
+Add the CHANGELOG entry and commit it, together with `uv.lock` when a dependency change moved it. Then tag the new version and push. `.github/workflows/release-pypi.yml` builds the sdist and wheel, publishes to PyPI via trusted publishing, cuts a GitHub release, builds and signs the universal `Captain Hook.app` with the exact same versioned `capt-hookd`, and publishes the stable release as the bundled application resource in the `yasyf/tap/captain-hook` formula. It also commits `captain_hook/.claude-plugin/plugin.json` back to `main` with its `version` synced to the tag — that bump is what makes consumer plugin caches pick up the release, so no manual plugin.json edit is needed (a hand-bump before tagging is harmless; the sync no-ops):
 
 ```bash
 git tag v0.9.1

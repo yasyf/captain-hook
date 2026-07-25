@@ -1,4 +1,4 @@
-"""The Python-to-signed-bridge seam and notification retry loop."""
+"""The Python-to-signed-bridge seam and single-attempt notification delivery."""
 
 from __future__ import annotations
 
@@ -123,43 +123,23 @@ def test_notify_omits_none_optional_fields(monkeypatch: pytest.MonkeyPatch) -> N
     assert seen == ["notify", {"kind": "pr_open", "title": "t"}]
 
 
-def test_notify_launch_retry_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
-    outcomes = iter([None, NotifyOutcome(Lane.bridge, ok=True, error=None)])
-    monkeypatch.setattr(client, "_try_bridge", lambda _payload: next(outcomes))
-    monkeypatch.setattr(client, "_launch", lambda: True)
-    monkeypatch.setattr(client.time, "sleep", lambda _: None)
-    assert client.notify(**NOTIFY_FIELDS) == NotifyOutcome(Lane.bridge, ok=True, error=None)
-
-
-def test_notify_not_installed_fast_path(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_notify_unreachable_is_a_single_typed_drop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "_try_bridge", lambda _payload: None)
-    monkeypatch.setattr(client, "_launch", lambda: False)
-    assert client.notify(**NOTIFY_FIELDS) == NotifyOutcome(Lane.dropped, ok=False, error="helper not installed")
-
-
-def test_notify_timeout_after_launch_drops(monkeypatch: pytest.MonkeyPatch) -> None:
-    ticks = iter([0.0, 0.0, 1.0])
-    monkeypatch.setattr(client, "_try_bridge", lambda _payload: None)
-    monkeypatch.setattr(client, "_launch", lambda: True)
-    monkeypatch.setattr(client.time, "monotonic", lambda: next(ticks))
-    monkeypatch.setattr(client.time, "sleep", lambda _: None)
-    monkeypatch.setattr(client, "LAUNCH_POLL_BUDGET", 0.5)
     assert client.notify(**NOTIFY_FIELDS) == NotifyOutcome(
-        Lane.dropped, ok=False, error="helper unreachable after launch"
+        Lane.dropped, ok=False, error="helper unreachable; run `capt-hook helper install`"
     )
 
 
 def test_notify_never_raises_on_malformed_bridge_reply(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "send", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad")))
-    monkeypatch.setattr(client, "_launch", lambda: False)
     assert client.notify(**NOTIFY_FIELDS).lane is Lane.dropped
 
 
-def test_notify_drops_oversized_payload_without_launch(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_notify_drops_oversized_payload_without_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         client,
-        "_launch",
-        lambda: (_ for _ in ()).throw(AssertionError("launch must not run")),
+        "_try_bridge",
+        lambda _: (_ for _ in ()).throw(AssertionError("bridge must not run")),
     )
     outcome = client.notify(title="t", kind="pr_open", body="x" * (client.PAYLOAD_CAP + 1))
     assert outcome == NotifyOutcome(Lane.dropped, ok=False, error="payload exceeds frame cap")

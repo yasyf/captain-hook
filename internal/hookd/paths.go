@@ -20,13 +20,12 @@ const (
 )
 
 type paths struct {
-	dir           string
-	socket        string
-	startLock     string
-	processes     string
-	stopState     string
-	stopProcesses string
-	log           string
+	dir                 string
+	socket              string
+	processes           string
+	stopProcesses       string
+	deploymentProcesses string
+	log                 string
 }
 
 func resolvePaths() (paths, error) {
@@ -41,11 +40,10 @@ func resolvePaths() (paths, error) {
 	dir := filepath.Join(cache, "captain-hook", "host-v1")
 	return paths{
 		dir: dir, socket: filepath.Join(dir, "capt-hookd.sock"),
-		startLock:     filepath.Join(dir, "start.lock"),
-		processes:     filepath.Join(dir, "workers.json"),
-		stopState:     filepath.Join(dir, "stop-controller.db"),
-		stopProcesses: filepath.Join(dir, "stop-processes.db"),
-		log:           filepath.Join(dir, "capt-hookd.log"),
+		processes:           filepath.Join(dir, "workers.json"),
+		stopProcesses:       filepath.Join(dir, "stop-processes.db"),
+		deploymentProcesses: filepath.Join(dir, "deployment-processes.db"),
+		log:                 filepath.Join(dir, "capt-hookd.log"),
 	}, nil
 }
 

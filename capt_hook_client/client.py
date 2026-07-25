@@ -7,7 +7,14 @@ import os
 import sys
 from typing import NoReturn
 
-HOST = "/Applications/Captain Hook.app/Contents/Helpers/capt-hookd"
+HOST = os.path.join(
+    os.path.expanduser("~"),
+    "Applications",
+    "Captain Hook.app",
+    "Contents",
+    "Helpers",
+    "capt-hookd",
+)
 DIST_NAME = "capt-hook"
 
 

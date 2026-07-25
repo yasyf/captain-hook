@@ -27,11 +27,10 @@ func TestHostRuntimeExactStatusHealthAndOldLFRejection(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	resolved := paths{
 		dir: dir, socket: filepath.Join(dir, "capt-hookd.sock"),
-		startLock:     filepath.Join(dir, "start.lock"),
-		processes:     filepath.Join(dir, "workers.json"),
-		stopState:     filepath.Join(dir, "stop-controller.db"),
-		stopProcesses: filepath.Join(dir, "stop-processes.db"),
-		log:           filepath.Join(dir, "capt-hookd.log"),
+		processes:           filepath.Join(dir, "workers.json"),
+		stopProcesses:       filepath.Join(dir, "stop-processes.db"),
+		deploymentProcesses: filepath.Join(dir, "deployment-processes.db"),
+		log:                 filepath.Join(dir, "capt-hookd.log"),
 	}
 	server := &Server{paths: resolved, trust: policy}
 	_, runtime, err := server.runtime()
@@ -42,8 +41,15 @@ func TestHostRuntimeExactStatusHealthAndOldLFRejection(t *testing.T) {
 	go func() { runResult <- runtime.run(context.Background()) }()
 	readyCtx, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelReady()
-	if err := runtime.daemon.WaitReady(readyCtx); err != nil {
-		t.Fatalf("WaitReady: %v", err)
+	readyResult := make(chan error, 1)
+	go func() { readyResult <- runtime.daemon.WaitReady(readyCtx) }()
+	select {
+	case err := <-runResult:
+		t.Fatalf("runtime exited before readiness: %v", err)
+	case err := <-readyResult:
+		if err != nil {
+			t.Fatalf("WaitReady: %v", err)
+		}
 	}
 
 	client := newClientWithPaths(resolved)

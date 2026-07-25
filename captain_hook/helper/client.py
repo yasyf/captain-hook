@@ -2,15 +2,14 @@
 
 Python never connects to the helper socket. It invokes the fixed signed bridge embedded in
 ``Captain Hook.app``; that bridge owns the exact DaemonKit session, peer authentication, and
-typed ping/notify exchange. ``notify`` retries once through an explicit app launch and never
-raises into the review pipeline.
+typed ping/notify exchange. The deployment-owned LaunchAgents keep the app and host available;
+``notify`` never mutates service state and never raises into the review pipeline.
 """
 
 from __future__ import annotations
 
 import json
 import subprocess
-import time
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -23,13 +22,10 @@ from captain_hook.util import reqenv
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-APP_PATH = Path("/Applications/Captain Hook.app")
+APP_PATH = Path.home() / "Applications" / "Captain Hook.app"
 INSTALLED_BRIDGE = APP_PATH / "Contents" / "Helpers" / "capt-hook-helper-client"
 
 BRIDGE_TIMEOUT = 7.0
-OPEN_TIMEOUT = 5.0
-LAUNCH_POLL_INTERVAL = 0.25
-LAUNCH_POLL_BUDGET = 3.0
 PAYLOAD_CAP = 64 * 1024
 
 
@@ -115,7 +111,7 @@ def notify(
     url: str | None = None,
     repo: str | None = None,
 ) -> NotifyOutcome:
-    """Deliver one notification through the signed bridge, launching the app if needed."""
+    """Deliver once through the deployment-owned signed bridge."""
     payload: dict[str, object] = {"kind": kind, "title": title}
     for field, value in (("subtitle", subtitle), ("body", body), ("url", url), ("repo", repo)):
         if value is not None:
@@ -126,20 +122,12 @@ def notify(
 
     if (outcome := _try_bridge(payload)) is not None:
         return outcome
-    if not _launch():
-        logger.info("capt-hook helper not reachable and not launchable — notification dropped", kind=kind)
-        return NotifyOutcome(Lane.dropped, ok=False, error="helper not installed")
-    deadline = time.monotonic() + LAUNCH_POLL_BUDGET
-    while time.monotonic() < deadline:
-        time.sleep(LAUNCH_POLL_INTERVAL)
-        if (outcome := _try_bridge(payload)) is not None:
-            return outcome
-    logger.warning("capt-hook helper did not answer after launch — notification dropped", kind=kind)
-    return NotifyOutcome(Lane.dropped, ok=False, error="helper unreachable after launch")
+    logger.warning("capt-hook deployed helper is unreachable — notification dropped", kind=kind)
+    return NotifyOutcome(Lane.dropped, ok=False, error="helper unreachable; run `capt-hook helper install`")
 
 
 def _try_bridge(payload: Mapping[str, object]) -> NotifyOutcome | None:
-    """Return a bridge result, or ``None`` when relaunching the app may recover transport."""
+    """Return a bridge result, or ``None`` when the deployment is unavailable."""
     try:
         reply = send("notify", payload)
     except (OSError, ValueError, json.JSONDecodeError):
@@ -149,17 +137,3 @@ def _try_bridge(payload: Mapping[str, object]) -> NotifyOutcome | None:
 
 def _reply_error(reply: Mapping[str, object]) -> str | None:
     return str(error) if (error := reply.get("error")) is not None else None
-
-
-def _launch() -> bool:
-    """Launch the one installed app path; return false when it is absent or fails."""
-    try:
-        subprocess.run(
-            ["open", "-g", str(APP_PATH)],
-            check=True,
-            capture_output=True,
-            timeout=OPEN_TIMEOUT,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return True
