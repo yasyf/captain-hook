@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.20.7] - 2026-07-25
+
+### Changed
+
+- Daemon-context CLI discovery now comes from daemonkit 0.20.4's PATH
+  inheritance (the daemon extends its own `PATH` once at startup and worker
+  children inherit it), replacing 12.20.6's worker-local `augment_path`
+  workaround, which is reverted.
+
 ## [12.20.6] - 2026-07-25
 
 ### Fixed
