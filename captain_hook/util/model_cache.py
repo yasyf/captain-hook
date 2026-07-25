@@ -4,6 +4,7 @@ import functools
 import hashlib
 import re
 import shutil
+import sqlite3
 import zipfile
 from collections.abc import Callable, Iterable
 from importlib.metadata import version as installed_version
@@ -130,8 +131,12 @@ def fetch_wn_archive(data_dir: Path) -> Path:
 def ensure_wn_lexicon() -> None:
     import wn
 
-    if wn.lexicons(lexicon=WN_SPEC):
-        return
+    if sqlite3.threadsafety != 3:
+        raise RuntimeError(f"wn multithreading requires serialized sqlite (threadsafety 3), got {sqlite3.threadsafety}")
+    # wn pools one process-global sqlite connection; worker dispatch reads it from many
+    # threads, which serialized sqlite makes safe. The existence check stays under the
+    # FileLock so a concurrent first-run `wn.add` can't leak a half-imported lexicon.
+    wn.config.allow_multithreading = True
     data_dir = Path(wn.config.data_directory)
     data_dir.mkdir(parents=True, exist_ok=True)
     with FileLock(str(data_dir / f"{WN_SPEC.replace(':', '-')}.lock")):

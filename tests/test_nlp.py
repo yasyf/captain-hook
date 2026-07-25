@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -103,6 +104,13 @@ class TestPhraseExpand:
     def test_expand_unknown_word_returns_original(self) -> None:
         p = Phrase.expand("xyzzyplugh")
         assert p.lemmas == ("xyzzyplugh",)
+
+    def test_expand_usable_on_worker_thread(self) -> None:
+        assert any(syn in Phrase.expand("change", pos="v").lemmas for syn in ("alter", "modify"))
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            lemmas = pool.submit(lambda: Phrase.expand("modify", pos="v").lemmas).result(timeout=30)
+        assert any(syn in lemmas for syn in ("change", "alter"))
 
 
 class TestClauseValidation:
