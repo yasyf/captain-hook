@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.20.3] - 2026-07-24
+
+### Changed
+
+- Helper deployment hard-cuts to daemonkit 0.20.1 across the Go module and
+  Swift package pins, picking up the tolerate-and-heal handling of stale
+  stored launchd programs in daemonkit's service controller.
+
 ## [12.20.2] - 2026-07-24
 
 ### Fixed
