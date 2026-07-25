@@ -145,7 +145,24 @@ def isolate_modules():
     snapshot_modules = set(sys.modules.keys())
     snapshot_path = sys.path[:]
     yield
-    removed = {key: sys.modules[key] for key in set(sys.modules.keys()) - snapshot_modules}
+    # Evict only modules the test both loaded and owns: captain_hook.* (so the next discover_pack
+    # re-registers cleanly) and anything imported from a sys.path entry the test added (tmp hooks
+    # dirs). Evicting a lazily-imported third-party tree (spacy/thinc/pydantic submodules) strands
+    # that package's internal import caches on orphans, and the next `import spacy` dies with
+    # KeyError: 'pydantic.root_model'.
+    added_paths = [Path(entry) for entry in sys.path if entry not in snapshot_path]
+    removed = {
+        key: mod
+        for key in set(sys.modules.keys()) - snapshot_modules
+        if (mod := sys.modules[key])
+        and (
+            key.partition(".")[0] == "captain_hook"
+            or (
+                (origin := getattr(mod, "__file__", None))
+                and any(Path(origin).is_relative_to(parent) for parent in added_paths)
+            )
+        )
+    }
     for key in removed:
         del sys.modules[key]
     sys.path[:] = snapshot_path
