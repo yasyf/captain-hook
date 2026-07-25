@@ -1,4 +1,4 @@
-Decide whether this delegated subagent's work should route off fable-5 — to opus-4.8, or to gpt-5.6-sol via the codex:codex-wrapper agent.
+Decide whether this delegated subagent's work should route off fable-5 — to opus-5, or to gpt-5.6-sol via the codex:codex-wrapper agent.
 
 <delegated_spawn> holds the pending Agent/Task call: its model pin (or that it inherits
 the session model, fable), agent type, and prompt.
@@ -7,7 +7,7 @@ The Models rubric: implementation delegates off fable — the split is decision 
 Bounded, decision-light work (the plan, work order, or repeated pattern already made the
 decisions; terminal-heavy included) goes to gpt-5.6-sol via the codex:codex-wrapper agent;
 ambiguous, exploratory, long-run, or decision-dense work — mid-flight judgment calls pile
-up even when the scope is bounded — goes to opus-4.8 at xhigh (~2x cheaper
+up even when the scope is bounded — goes to opus-5 at xhigh (~2x cheaper
 than fable and nearly as capable). Fable's lanes are
 orchestration, design/architecture review, hard planning, all prose/writing, and
 implementation that is very sensitive or error-prone (auth, migrations, concurrency,

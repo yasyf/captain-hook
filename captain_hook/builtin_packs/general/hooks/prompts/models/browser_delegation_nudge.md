@@ -5,7 +5,7 @@ The main loop runs on fable-5; this session has been driving the browser directl
 a run of `agent-browser` / `playwright` calls (click, fill, snapshot, scrape, QA
 step) through the recent tool calls shown below.
 
-The Models rubric: hands-on implementation belongs to a delegated opus-4.8 subagent
+The Models rubric: hands-on implementation belongs to a delegated opus-5 subagent
 at xhigh — ~2x cheaper than fable and nearly as capable — and that includes sustained
 browser automation, QA sweeps, and bulk extract/fill/snapshot, not just code edits.
 When the site needs the user's own login, an agent-browser-with-cookies teammate owns

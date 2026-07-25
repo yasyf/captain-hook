@@ -8,7 +8,7 @@ and written.
 The Models rubric: implementation belongs off the main loop — a bounded,
 decision-light change (the decisions are already made; execution remains) goes to
 gpt-5.6-sol via the codex skill; ambiguous, decision-dense, or long-running work goes
-to a delegated opus-4.8 subagent at xhigh (~2x cheaper than
+to a delegated opus-5 subagent at xhigh (~2x cheaper than
 fable and nearly as capable). Fable edits inline when the change is small or
 judgment-bound: a fix-up finishing work it just reasoned through, a subtle algorithm,
 or a sensitive surface (auth, migrations, concurrency, data loss, crypto).
