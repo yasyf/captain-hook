@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.20.4] - 2026-07-25
+
+### Fixed
+
+- Package deployment works on machines with no prior installed generation:
+  the deployment bridge probe and the application-stop command now carry an
+  exact working directory, so daemonkit's worker validation no longer rejects
+  every readiness ping — previously `package-install` always timed out
+  (`wait for exact app readiness: context deadline exceeded`) and rolled the
+  candidate back, wedging first installs and 12.19.x-to-12.20.x upgrades
+  alike.
+
 ## [12.20.3] - 2026-07-24
 
 ### Changed

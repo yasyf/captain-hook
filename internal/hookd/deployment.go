@@ -33,7 +33,7 @@ const (
 	deploymentPolicyID      = "captain-hook.deployment-policy.v1"
 	deploymentProofID       = "captain-hook.deployment-proof.v1"
 	deploymentConsumerID    = "captain-hook.deployment-consumer.v1@sha256:"
-	deploymentDaemonkitLine = "0.20.0"
+	deploymentDaemonkitLine = "0.20.1"
 )
 
 var strictMarketingVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
@@ -552,6 +552,7 @@ func (h deploymentHooks) stopApplication(ctx context.Context, appPath string) er
 	}
 	result, err := h.runDeploymentTool(ctx, worker.CommandRequest{
 		Path:         appExecutablePath(controllerApp),
+		Dir:          filepath.Dir(appExecutablePath(controllerApp)),
 		Args:         []string{"--deployment-stop-installed-generation", appPath},
 		TotalTimeout: 10 * time.Second,
 	})
@@ -577,7 +578,8 @@ func (h deploymentHooks) stopApplication(ctx context.Context, appPath string) er
 
 func (h deploymentHooks) runBridge(ctx context.Context, appPath string) (helperReply, error) {
 	result, err := h.runDeploymentTool(ctx, worker.CommandRequest{
-		Path: bridgeExecutablePath(appPath), Args: []string{"ping"},
+		Path: bridgeExecutablePath(appPath), Dir: filepath.Dir(bridgeExecutablePath(appPath)),
+		Args:         []string{"ping"},
 		TotalTimeout: 8 * time.Second,
 	})
 	if err != nil {
