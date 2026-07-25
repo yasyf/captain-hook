@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.20.9] - 2026-07-25
+
+### Fixed
+
+- Package deployment can cold-upgrade past a running build-mismatched host:
+  daemonkit 0.20.5 recognizes `launchctl print` exit 113 as not-loaded, so
+  stopping the prior host no longer wedges controller recovery during
+  `package-install` (previously `recover desired set … process exited with
+  code 113` after the required stop).
+
 ## [12.20.8] - 2026-07-25
 
 ### Changed
