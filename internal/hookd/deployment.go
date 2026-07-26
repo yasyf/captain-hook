@@ -33,7 +33,7 @@ const (
 	deploymentPolicyID      = "captain-hook.deployment-policy.v1"
 	deploymentProofID       = "captain-hook.deployment-proof.v1"
 	deploymentConsumerID    = "captain-hook.deployment-consumer.v1@sha256:"
-	deploymentDaemonkitLine = "0.20.5"
+	deploymentDaemonkitLine = "0.20.8"
 )
 
 var strictMarketingVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
@@ -73,11 +73,10 @@ type deploymentProtocolPolicy struct {
 }
 
 type deploymentServicePolicy struct {
-	Label       string                `json:"label"`
-	Program     string                `json:"program"`
-	Arguments   []string              `json:"arguments"`
-	Restart     service.RestartPolicy `json:"restart"`
-	SessionType service.SessionType   `json:"session_type"`
+	Label     string                `json:"label"`
+	Program   string                `json:"program"`
+	Arguments []string              `json:"arguments"`
+	Restart   service.RestartPolicy `json:"restart"`
 }
 
 type deploymentQuiescencePolicy struct {
@@ -173,13 +172,11 @@ func exactServicePlan(appPath string) (service.Plan, error) {
 		{
 			Label: helperServiceLabel, Program: appExecutablePath(appPath),
 			LogPath: resolved.log, RestartPolicy: service.RestartOnFailure,
-			LimitLoadToSessionType:      service.SessionTypeAqua,
 			AssociatedBundleIdentifiers: []string{helperBundleID},
 		},
 		{
 			Label: hostServiceLabel, Program: hostExecutablePath(appPath), Args: []string{"serve"},
 			LogPath: resolved.log, RestartPolicy: service.RestartOnFailure,
-			LimitLoadToSessionType:      service.SessionTypeAqua,
 			AssociatedBundleIdentifiers: []string{helperBundleID},
 		},
 	})
@@ -227,12 +224,11 @@ func deploymentIdentity() (string, deployment.SHA256, error) {
 		Services: []deploymentServicePolicy{
 			{
 				Label: helperServiceLabel, Program: "Contents/MacOS/" + helperApplicationName,
-				Restart: service.RestartOnFailure, SessionType: service.SessionTypeAqua,
+				Restart: service.RestartOnFailure,
 			},
 			{
 				Label: hostServiceLabel, Program: "Contents/Helpers/capt-hookd",
 				Arguments: []string{"serve"}, Restart: service.RestartOnFailure,
-				SessionType: service.SessionTypeAqua,
 			},
 		},
 		Quiescence: deploymentQuiescencePolicy{

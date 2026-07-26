@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.20.11] - 2026-07-26
+
+### Fixed
+
+- Helper installation no longer wedges in `launchctl bootstrap`: neither the
+  `Captain Hook.app` agent nor the `capt-hookd` host agent emits
+  `LimitLoadToSessionType`. launchctl refuses some session-keyed plists
+  outright, failing every helper reinstall with `Bootstrap failed: 5:
+  Input/output error`. The key was redundant for user LaunchAgents anyway, since
+  the `gui/<uid>` domain they bootstrap into is already the Aqua session. The
+  deployment-identity policy drops its mirrored `session_type` field with them,
+  so the first upgrade onto this build re-registers both agents under a new
+  policy digest.
+- Machines whose prior apply rolled back converge on that upgrade instead of
+  refusing it. A failed agent bootstrap leaves a rolled-back apply receipt
+  behind, and daemonkit 0.20.8 retires and restages one whose fingerprint no
+  longer matches, where earlier releases returned `ErrInstallConflict` on every
+  retry.
+
 ## [12.20.9] - 2026-07-25
 
 ### Fixed

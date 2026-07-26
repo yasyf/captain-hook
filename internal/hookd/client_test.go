@@ -3,6 +3,7 @@ package hookd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	dkdaemon "github.com/yasyf/daemonkit/daemon"
@@ -34,7 +35,7 @@ func TestRuntimeHealthCurrentRequiresExactReadyIdentity(t *testing.T) {
 	}
 }
 
-func TestServicePlanPinsSignedUserBundleAndFailureOnlyRestarts(t *testing.T) {
+func TestServicePlanPinsSignedUserBundleFailureOnlyRestartsAndUnrestrictedSession(t *testing.T) {
 	root, err := os.MkdirTemp("/private/tmp", "captain-hook-plan-")
 	if err != nil {
 		t.Fatal(err)
@@ -75,5 +76,17 @@ func TestServicePlanPinsSignedUserBundleAndFailureOnlyRestarts(t *testing.T) {
 		len(helper.Args) != 0 || len(helper.AssociatedBundleIdentifiers) != 1 ||
 		helper.AssociatedBundleIdentifiers[0] != helperBundleID {
 		t.Fatalf("helper agent = %#v", helper)
+	}
+	for _, agent := range agents {
+		body, err := agent.Plist()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), "LimitLoadToSessionType") {
+			t.Fatalf(
+				"agent %q pins a launchd session type; launchctl bootstrap refuses it with EIO:\n%s",
+				agent.Label, body,
+			)
+		}
 	}
 }
