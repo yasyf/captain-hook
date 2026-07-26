@@ -27,6 +27,10 @@ RUNNER_SHA_linux_arm64="7a1fff9270843f66df1a41edccb5d7f1c61e94da024d501634c2f888
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DESCRIPTOR="$ROOT/bin/capt-hook.binrun"
+# binrun execs the cached artifact out of ~/.daemonkit/cache/<xx>/<digest>/, so the
+# exec'd binary cannot derive the plugin root from its own path. Export it: a tool
+# that overrides its embedded copies with plugin-root files reads this first.
+export BINRUN_PLUGIN_ROOT="$ROOT"
 RUNNER_HOME="${DAEMONKIT_HOME:-$HOME/.daemonkit}"
 RUNNER_BIN="$RUNNER_HOME/bin/binrun"
 
