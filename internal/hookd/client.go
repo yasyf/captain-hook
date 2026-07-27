@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"sync"
 	"syscall"
@@ -59,7 +61,7 @@ func (c *Client) EnsureCurrent(ctx context.Context, timeout time.Duration) error
 	}
 	health, err := c.RuntimeHealth(ctx)
 	if err != nil {
-		return fmt.Errorf("captain: signed host is not installed and ready; run `capt-hook helper install`: %w", err)
+		return probeFailure(err)
 	}
 	if health.RuntimeProtocol != Schema {
 		return fmt.Errorf("captain: runtime protocol %d is not exact v%d", health.RuntimeProtocol, Schema)
@@ -71,6 +73,35 @@ func (c *Client) EnsureCurrent(ctx context.Context, timeout time.Duration) error
 		return errors.New("captain: exact signed host is not ready; run `capt-hook helper install`")
 	}
 	return nil
+}
+
+func probeFailure(err error) error {
+	if probeRanOutOfTime(err) {
+		return fmt.Errorf(
+			"captain: signed host did not answer the readiness probe in time; it is running but slow, "+
+				"most likely under machine load, and hooks retry on the next event: %w", err,
+		)
+	}
+	return fmt.Errorf("captain: signed host is not installed and ready; run `capt-hook helper install`: %w", err)
+}
+
+func probeRanOutOfTime(err error) bool {
+	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, syscall.ETIMEDOUT) {
+		return true
+	}
+	var timeout net.Error
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return true
+	}
+	// *wire.HandshakeRejectionError unwraps to this sentinel alone, never to
+	// wire.ErrHandshake, so a capacity refusal cannot ride the pairing below.
+	if errors.Is(err, wire.ErrSessionCapacity) {
+		return true
+	}
+	return errors.Is(err, wire.ErrHandshake) &&
+		(errors.Is(err, io.EOF) || errors.Is(err, wire.ErrFrameTruncated) ||
+			errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET))
 }
 
 // RuntimeHealth observes the exact product runtime without mutating it.

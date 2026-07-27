@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.20.13] - 2026-07-27
+
+### Fixed
+
+- A hook session no longer reports a busy host as an uninstalled one. The
+  readiness probe classified every wire handshake failure as "signed host is not
+  installed and ready" and prescribed `capt-hook helper install`, so a machine
+  under load, where the host serves fine but misses the acknowledge deadline,
+  told users to reinstall a healthy deployment. Deadline and timeout failures, a
+  peer dropped mid-handshake, and a refusal from a saturated session table now
+  say the host is running but slow and that hooks retry on the next event. An
+  absent or wrong-build host still points at install, as does a session lost
+  after the handshake completed.
+
 ## [12.20.12] - 2026-07-26
 
 ### Fixed
