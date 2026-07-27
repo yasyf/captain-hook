@@ -19,6 +19,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   say the host is running but slow and that hooks retry on the next event. An
   absent or wrong-build host still points at install, as does a session lost
   after the handshake completed.
+- The signed Swift helper is built against the same daemonkit release as the Go
+  host again. The generated Xcode project had stayed on daemonkit 0.20.0 while
+  the host advanced through the 0.20.x line, so every Swift-side fix below
+  reaches the shipped app only now.
+- One slow handshake no longer bricks the helper's broker bridge until the app
+  restarts: daemonkit 0.20.10's `ServiceSocketClient` stops reading a deadline
+  expiry as proof the session ended, so an expiry under load retires that
+  generation and the call retries on a successor instead of leaving every later
+  probe answering `bridge failed: disconnected`.
+- A helper session read that runs out of time reports a timeout instead of
+  `errno 35`. daemonkit 0.20.10 surfaces poll-deadline expiry as `ETIMEDOUT`,
+  and a `poll(2)` call that itself returns `EAGAIN` retries within the same
+  deadline instead of surfacing as a permanent system-call failure.
+- Broker-bridge handoff failures land in the helper's file log, not just
+  `os_log`: daemonkit 0.20.10 writes that line to standard error too, which the
+  helper's launchd plist captures.
+- Host logs no longer fill with `peer verification infrastructure failure` under
+  load. A peer that exits before code-identity verification finishes is now
+  daemonkit's `trust.ErrPeerGone` and takes the quiet path a policy denial
+  takes; genuine verifier-infrastructure failures stay loud.
 
 ## [12.20.12] - 2026-07-26
 
