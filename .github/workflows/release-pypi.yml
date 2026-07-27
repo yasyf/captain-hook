@@ -20,7 +20,7 @@ jobs:
 
   build:
     needs: release-tests
-    uses: yasyf/homebrew-tap/.github/workflows/release-pypi-build.yml@7cc8a6c981cbec10fcb7f19bd75b36e9ee65ea7e
+    uses: yasyf/homebrew-tap/.github/workflows/release-pypi-build.yml@41f8de6765b3b833ef333b0b98f5683f0e46685b
     secrets: inherit
     with:
       dist-name: capt-hook
@@ -108,7 +108,7 @@ jobs:
     needs: [build, python-assets, helper-version]
     permissions:
       contents: read
-    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@7cc8a6c981cbec10fcb7f19bd75b36e9ee65ea7e
+    uses: yasyf/homebrew-tap/.github/workflows/release-app.yml@41f8de6765b3b833ef333b0b98f5683f0e46685b
     with:
       app_name: Captain Hook
       asset_name: captain-hook
