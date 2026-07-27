@@ -33,7 +33,7 @@ const (
 	deploymentPolicyID      = "captain-hook.deployment-policy.v1"
 	deploymentProofID       = "captain-hook.deployment-proof.v1"
 	deploymentConsumerID    = "captain-hook.deployment-consumer.v1@sha256:"
-	deploymentDaemonkitLine = "0.20.8"
+	deploymentDaemonkitLine = "0.20.9"
 )
 
 var strictMarketingVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)

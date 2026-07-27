@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.20.12] - 2026-07-26
+
+### Fixed
+
+- Helper installation now survives Homebrew postinstall's sandboxed temp
+  `HOME`: daemonkit 0.20.9 resolves install paths against the real home
+  directory instead of the sandbox-scoped one, so `brew postinstall` no longer
+  stages the helper into a directory that vanishes with the sandbox.
+- `launchctl` exit code 5 is no longer retried as transient. Bootstrap refusals
+  surface immediately instead of burning the retry budget on an error launchd
+  will keep returning.
+- Recovery-mode reconcile clears self-wedged installs: an install the daemon
+  itself left half-applied is detected and re-staged rather than reported as a
+  conflict on every subsequent convergence pass.
+
 ## [12.20.11] - 2026-07-26
 
 ### Fixed
