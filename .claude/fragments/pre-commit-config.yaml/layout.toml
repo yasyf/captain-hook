@@ -1,3 +1,5 @@
+target = ".pre-commit-config.yaml"
+
 fragments = ["cc-skills:precommit-base", "cc-skills:precommit-python", "exclude-generated-widgets"]
 
 [sources.cc-skills]

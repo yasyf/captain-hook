@@ -1,3 +1,5 @@
+target = ".gitignore"
+
 fragments = [
   "cc-skills:gitignore-base",
   "cc-skills:gitignore-python",
