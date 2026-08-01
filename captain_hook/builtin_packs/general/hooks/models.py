@@ -271,7 +271,8 @@ llm_nudge(
         "This delegation would run on fable, but it reads as routine implementation. {reasoning} "
         "Implementation defaults to model='opus' (~2x cheaper than fable, nearly as capable): "
         "effort='high' when bounded and decision-light — the decisions are already made and what "
-        "remains is execution — effort='xhigh' when ambiguous, decision-dense, or long-run. "
+        "remains is execution — effort='xhigh' when the implementation is ambiguous, "
+        "decision-dense, or a long-running build. "
         "Repetitive N-unit sweeps and terminal-heavy execution route to gpt-5.6-sol: spawn the "
         "codex:codex-wrapper agent with a self-contained prompt. "
         "Keep fable if this genuinely is sensitive or error-prone. "
@@ -355,9 +356,9 @@ llm_nudge(
 llm_nudge(
     Prompt.load("models/browser_delegation_nudge"),
     message=(
-        "This is sustained browser automation running inline on fable. {reasoning} "
-        "Hands-on browser work delegates like any implementation: spawn a model='opus', effort='xhigh' "
-        "subagent to drive agent-browser and return findings, or an agent-browser-with-cookies teammate "
+        "This is sustained browser automation running inline on the main loop. {reasoning} "
+        "Sustained tool-driving is fable's lane, but delegated: spawn a model='fable' subagent "
+        "to drive agent-browser and return findings, or an agent-browser-with-cookies teammate "
         "when the site needs your login. Keep driving the browser inline only for a single gated, stateful, "
         "or authenticated interaction you just decided to run (a go/no-go verification). "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
@@ -386,18 +387,18 @@ llm_nudge(
     agent=False,
     transcript=True,
     tests={
-        Input(command="agent-browser click '#submit'", transcript=browser_calls(5)): Warn(pattern="opus"),
-        Input(command="npx agent-browser click '#next'", transcript=browser_calls(5)): Warn(pattern="opus"),
-        Input(command="playwright-cli click e15", transcript=browser_calls(5)): Warn(pattern="opus"),
+        Input(command="agent-browser click '#submit'", transcript=browser_calls(5)): Warn(pattern="model='fable'"),
+        Input(command="npx agent-browser click '#next'", transcript=browser_calls(5)): Warn(pattern="model='fable'"),
+        Input(command="playwright-cli click e15", transcript=browser_calls(5)): Warn(pattern="model='fable'"),
         Input(
             tool="Skill",
             tool_input={"skill": "agent-browser-with-cookies"},
             transcript=browser_calls(5),
-        ): Warn(pattern="opus"),
+        ): Warn(pattern="model='fable'"),
         Input(
             command="agent-browser click '#submit'",
             transcript=browser_calls(3) + browser_calls(2, tool="Skill", field="skill", value="agent-browser"),
-        ): Warn(pattern="opus"),
+        ): Warn(pattern="model='fable'"),
         Input(command="agent-browser click '#submit'", agent_id="tm1", transcript=browser_calls(5)): Allow(),
         Input(command="agent-browser screenshot out.png"): Allow(),
         Input(command="agent-browser click '#submit'", transcript=browser_calls(5), llm={"fire": False}): Allow(),

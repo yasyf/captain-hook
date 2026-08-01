@@ -6,11 +6,13 @@ the session model, fable), agent type, and prompt.
 The Models rubric: implementation delegates off fable, and the default lane is opus-5
 (~2x cheaper than fable and nearly as capable) — at high effort when the work is bounded
 and decision-light (the plan, work order, or repeated pattern already made the decisions),
-at xhigh when it is ambiguous, exploratory, long-run, or decision-dense. Only a repetitive
-N-unit sweep (migrations, test conversions, mechanical refactors as parallel lanes) or
+at xhigh when the implementation is ambiguous, exploratory, decision-dense, or a
+long-running build. Only a repetitive N-unit sweep (migrations, test conversions,
+mechanical refactors as parallel lanes) or
 terminal/shell-heavy execution goes to gpt-5.6-sol via the codex:codex-wrapper agent —
 sol's per-task token efficiency pays only multiplied across a fan-out. Fable's lanes are
-orchestration, design/architecture review, hard planning, all prose/writing, and
+orchestration, design/architecture review, hard planning, all prose/writing, long-horizon
+agentic driving and sustained tool-driving (browser automation, QA sweeps), and
 implementation that is very sensitive or error-prone (auth, migrations, concurrency,
 data loss, crypto, subtle algorithms). Code/diff review, security review/audit, and bug
 diagnosis have their own gpt-5.6-sol lanes with separate nudges.
