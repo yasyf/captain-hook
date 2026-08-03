@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"sync"
 	"time"
 
-	"github.com/yasyf/daemonkit/proc"
+	"github.com/yasyf/daemonkit"
 )
 
 type workerResult struct {
@@ -19,10 +18,9 @@ type workerResult struct {
 }
 
 type workerClient struct {
-	conn    net.Conn
-	build   string
-	child   *proc.PreparedChild
-	receipt proc.ProcessReceipt
+	conn  net.Conn
+	build string
+	child *daemonkit.Child
 
 	writeMu sync.Mutex
 	mu      sync.Mutex
@@ -31,46 +29,9 @@ type workerClient struct {
 	closed  bool
 	err     error
 
-	stopOnce sync.Once
-	stopErr  error
-}
-
-type workerPipeConn struct {
-	reader *os.File
-	writer *os.File
-	once   sync.Once
-	err    error
-}
-
-type workerPipeAddr struct{}
-
-func (workerPipeAddr) Network() string { return "pipe" }
-func (workerPipeAddr) String() string  { return "captain-hook-worker" }
-
-func newWorkerPipeConn(reader, writer *os.File) net.Conn {
-	return &workerPipeConn{reader: reader, writer: writer}
-}
-
-func (c *workerPipeConn) Read(payload []byte) (int, error)  { return c.reader.Read(payload) }
-func (c *workerPipeConn) Write(payload []byte) (int, error) { return c.writer.Write(payload) }
-func (c *workerPipeConn) LocalAddr() net.Addr               { return workerPipeAddr{} }
-func (c *workerPipeConn) RemoteAddr() net.Addr              { return workerPipeAddr{} }
-
-func (c *workerPipeConn) Close() error {
-	c.once.Do(func() { c.err = errors.Join(c.reader.Close(), c.writer.Close()) })
-	return c.err
-}
-
-func (c *workerPipeConn) SetDeadline(deadline time.Time) error {
-	return errors.Join(c.reader.SetReadDeadline(deadline), c.writer.SetWriteDeadline(deadline))
-}
-
-func (c *workerPipeConn) SetReadDeadline(deadline time.Time) error {
-	return c.reader.SetReadDeadline(deadline)
-}
-
-func (c *workerPipeConn) SetWriteDeadline(deadline time.Time) error {
-	return c.writer.SetWriteDeadline(deadline)
+	stopMu  sync.Mutex
+	stopped bool
+	stopErr error
 }
 
 func handshakeWorker(ctx context.Context, conn net.Conn, build string) (*workerClient, error) {
@@ -203,12 +164,25 @@ func (w *workerClient) fail(err error) {
 	}
 }
 
+// stop closes the session and terminates the child, latching only a proven
+// exit. An unsettled stop stays retryable: the next caller — restart, Close, or
+// the manager's own settlement — asks again instead of reading a cached refusal
+// for a process that is still running.
 func (w *workerClient) stop(ctx context.Context) error {
-	w.stopOnce.Do(func() {
-		w.fail(net.ErrClosed)
-		if w.child != nil {
-			w.stopErr = w.child.Stop(ctx)
-		}
-	})
-	return w.stopErr
+	w.stopMu.Lock()
+	defer w.stopMu.Unlock()
+	if w.stopped {
+		return w.stopErr
+	}
+	w.fail(net.ErrClosed)
+	if w.child == nil {
+		w.stopped = true
+		return nil
+	}
+	if _, err := w.child.Stop(ctx); err != nil {
+		w.stopErr = err
+		return err
+	}
+	w.stopped, w.stopErr = true, nil
+	return nil
 }

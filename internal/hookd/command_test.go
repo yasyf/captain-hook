@@ -2,8 +2,6 @@ package hookd
 
 import (
 	"bytes"
-	"encoding/base64"
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -17,36 +15,6 @@ func TestMainRejectsUnknownCommandsWithoutPassThrough(t *testing.T) {
 	}
 	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "unknown command") {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
-	}
-}
-
-func TestMainAnswersTrustVerifierChild(t *testing.T) {
-	t.Parallel()
-	var stdout, stderr bytes.Buffer
-	request := base64.RawURLEncoding.EncodeToString([]byte(`{"protocol":1}`))
-	if code := Main([]string{"--daemonkit-trust-verifier-v1", request}, strings.NewReader(""), &stdout, &stderr); code != 0 {
-		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
-	}
-	var response struct {
-		Protocol int    `json:"protocol"`
-		Result   string `json:"result"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
-		t.Fatalf("decode verifier response %q: %v", stdout.String(), err)
-	}
-	if response.Protocol != 1 || response.Result != "untrusted" {
-		t.Fatalf("response = %+v, want protocol 1 result untrusted", response)
-	}
-}
-
-func TestMainRejectsMalformedTrustVerifierRequest(t *testing.T) {
-	t.Parallel()
-	var stdout, stderr bytes.Buffer
-	if code := Main([]string{"--daemonkit-trust-verifier-v1", "not-base64!"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
-		t.Fatalf("exit = %d, want 2", code)
-	}
-	if !strings.Contains(stderr.String(), "trust:") || strings.Contains(stderr.String(), "unknown command") {
-		t.Fatalf("stderr = %q, want a trust error, not unknown-command", stderr.String())
 	}
 }
 
@@ -72,6 +40,35 @@ func TestRunRejectsBuildSkewBeforeDaemonWork(t *testing.T) {
 	if code != 1 || !strings.Contains(stderr.String(), "does not match signed host build") {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
+}
+
+// TestRunRefusesANonPositiveTimeout covers both inputs that reach the request
+// deadline: a zero or negative deadline is a usage error, not the slow, loaded
+// machine an immediately-expired context reports it as.
+func TestRunRefusesANonPositiveTimeout(t *testing.T) {
+	run := func(t *testing.T, extra ...string) (int, string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		args := append([]string{
+			"run", "--event", "PreToolUse", "--root", t.TempDir(), "--cwd", t.TempDir(),
+			"--python", "/usr/bin/python3", "--build", Build,
+		}, extra...)
+		code := Main(args, strings.NewReader(`{"session_id":"abc"}`), &stdout, &stderr)
+		return code, stderr.String()
+	}
+	t.Run("flag", func(t *testing.T) {
+		code, stderr := run(t, "--timeout", "0s")
+		if code != 2 || !strings.Contains(stderr, "must be positive") {
+			t.Fatalf("exit=%d stderr=%q", code, stderr)
+		}
+	})
+	t.Run("environment", func(t *testing.T) {
+		t.Setenv("CAPT_HOOK_CLIENT_TIMEOUT", "-1")
+		code, stderr := run(t)
+		if code != 2 || !strings.Contains(stderr, "must be positive") {
+			t.Fatalf("exit=%d stderr=%q", code, stderr)
+		}
+	})
 }
 
 func TestRequestEnvironmentHasExactScope(t *testing.T) {

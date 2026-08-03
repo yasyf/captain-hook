@@ -4,123 +4,73 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
-	"time"
 
-	dkdaemon "github.com/yasyf/daemonkit/daemon"
-	"github.com/yasyf/daemonkit/service"
-	"github.com/yasyf/daemonkit/wire"
+	"github.com/yasyf/daemonkit"
+	"github.com/yasyf/daemonkit/launchd"
 )
 
-const installRemedy = "run `capt-hook helper install`"
+const (
+	installRemedy = "run `capt-hook helper install`"
+	absentMessage = "captain: signed host is not installed and ready"
+)
 
-func fieldAckTimeout(socket string) error {
-	rawRead := &net.OpError{
-		Op:     "raw-read",
-		Net:    "unix",
-		Source: &net.UnixAddr{Net: "unix"},
-		Addr:   &net.UnixAddr{Name: socket, Net: "unix"},
-		Err:    os.ErrDeadlineExceeded,
-	}
-	return fmt.Errorf(
-		"%w: read acknowledge: %w", wire.ErrHandshake, fmt.Errorf("wire: wait for frame: %w", rawRead),
-	)
-}
-
-func TestFieldAckTimeoutChainShape(t *testing.T) {
-	socket := "/Users/agent/Library/Application Support/captain-hook/host.sock"
-	err := fieldAckTimeout(socket)
-	want := "wire: handshake failed: read acknowledge: wire: wait for frame: raw-read unix ->" +
-		socket + ": i/o timeout"
-	if err.Error() != want {
-		t.Fatalf("chain = %q, want %q", err.Error(), want)
-	}
-	if !errors.Is(err, wire.ErrHandshake) {
-		t.Error("chain does not carry wire.ErrHandshake")
-	}
-	if !errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Error("chain does not carry os.ErrDeadlineExceeded")
-	}
-	var timeout net.Error
-	if !errors.As(err, &timeout) || !timeout.Timeout() {
-		t.Error("chain does not carry a timing-out net.Error")
-	}
-}
-
-func TestProbeFailurePrescribesInstallOnlyForAnAbsentHost(t *testing.T) {
-	socket := "/Users/agent/Library/Application Support/captain-hook/host.sock"
+// TestProbeFailureNamesTheOutcomeItMet pins the five distinct next steps: a
+// transition and a deadline both resolve themselves, a trust failure and a
+// missing verifier never do, and only an unclassified failure is a host that
+// was never installed.
+func TestProbeFailureNamesTheOutcomeItMet(t *testing.T) {
+	t.Parallel()
+	transition := []string{"between generations", "retry on the next event"}
+	slow := []string{"running but slow", "machine load", "retry on the next event"}
+	absent := []string{absentMessage, installRemedy}
 	tests := []struct {
-		name        string
-		cause       error
-		wantInstall bool
+		name  string
+		cause error
+		want  []string
+		deny  []string
 	}{
-		{"field acknowledge timeout", fieldAckTimeout(socket), false},
 		{
-			"dial deadline",
-			fmt.Errorf("wire: dial: %w", &net.OpError{
-				Op: "dial", Net: "unix", Addr: &net.UnixAddr{Name: socket, Net: "unix"},
-				Err: os.ErrDeadlineExceeded,
-			}),
-			false,
-		},
-		{"request deadline on a live session", fmt.Errorf("wire: call: %w", context.DeadlineExceeded), false},
-		{"kernel connect timeout", fmt.Errorf("wire: dial: %w", syscall.ETIMEDOUT), false},
-		{
-			"peer dropped mid-handshake",
-			fmt.Errorf("%w: read acknowledge: %w", wire.ErrHandshake, io.EOF),
-			false,
+			"request deadline on a live session", fmt.Errorf("captain: call: %w", context.DeadlineExceeded),
+			slow, []string{absentMessage, installRemedy},
 		},
 		{
-			// daemonkit's frame decoders substitute this sentinel for a mid-frame
-			// EOF, so a truncated acknowledge never arrives as io.ErrUnexpectedEOF.
-			"partial acknowledge frame",
-			fmt.Errorf("%w: read acknowledge: %w", wire.ErrHandshake, wire.ErrFrameTruncated),
-			false,
+			"transport deadline", fmt.Errorf("captain: call: %w", os.ErrDeadlineExceeded),
+			slow, []string{absentMessage, installRemedy},
 		},
 		{
-			"truncated acknowledge payload",
-			fmt.Errorf("%w: acknowledge: %w", wire.ErrHandshake, io.ErrUnexpectedEOF),
-			false,
+			"runtime still starting", fmt.Errorf("captain: call: %w", daemonkit.ErrNotReady),
+			transition, []string{absentMessage, installRemedy, "machine load"},
 		},
 		{
-			"peer reset mid-handshake",
-			fmt.Errorf("%w: read acknowledge: %w", wire.ErrHandshake, syscall.ECONNRESET),
-			false,
+			"incumbent leaving", fmt.Errorf("captain: call: %w", daemonkit.ErrDraining),
+			transition, []string{absentMessage, installRemedy, "machine load"},
 		},
 		{
-			"saturated session table",
-			&wire.HandshakeRejectionError{
-				Code: wire.ResponseCodeSessionCapacity, Reason: "wire: session capacity exhausted",
-			},
-			false,
-		},
-		{"unreachable host", ErrDaemonUnavailable, true},
-		{
-			"socket path missing",
-			fmt.Errorf("wire: dial: %w", &net.OpError{
-				Op: "dial", Net: "unix", Addr: &net.UnixAddr{Name: socket, Net: "unix"},
-				Err: &os.SyscallError{Syscall: "connect", Err: syscall.ENOENT},
-			}),
-			true,
+			"peer exited mid-attach", fmt.Errorf("captain: call: %w", daemonkit.ErrPeerGone),
+			transition, []string{absentMessage, installRemedy, "machine load"},
 		},
 		{
-			"nobody listening",
-			fmt.Errorf("wire: dial: %w", &net.OpError{
-				Op: "dial", Net: "unix", Addr: &net.UnixAddr{Name: socket, Net: "unix"},
-				Err: &os.SyscallError{Syscall: "connect", Err: syscall.ECONNREFUSED},
-			}),
-			true,
+			"untrusted server", fmt.Errorf("captain: attach: %w", daemonkit.ErrUntrusted),
+			[]string{"is not the signed capt-hookd", "reinstall the helper"},
+			[]string{absentMessage, "retry on the next event", "machine load"},
 		},
-		{"foreign host build", fmt.Errorf("%w: server=%q client=%q", wire.ErrBuildMismatch, "1.0.0", "2.0.0"), true},
-		{"incomplete health identity", errors.New("captain: runtime health identity is incomplete"), true},
-		{"session closed outside a handshake", fmt.Errorf("wire: read frame: %w", io.EOF), true},
+		{
+			"no codesign verifier", fmt.Errorf("captain: attach: %w", daemonkit.ErrNoVerifier),
+			[]string{"no code-signing verifier"},
+			[]string{absentMessage, installRemedy, "retry on the next event"},
+		},
+		{"unreachable host", ErrDaemonUnavailable, absent, []string{"retry on the next event"}},
+		{"nobody listening", fmt.Errorf("captain: dial: %w", daemonkit.ErrAbsent), absent, []string{"machine load"}},
+		{"connect refused", fmt.Errorf("captain: dial: %w", syscall.ECONNREFUSED), absent, []string{"machine load"}},
+		{
+			"incomplete health identity", errors.New("captain: runtime health identity is incomplete"),
+			absent, []string{"machine load"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -129,160 +79,57 @@ func TestProbeFailurePrescribesInstallOnlyForAnAbsentHost(t *testing.T) {
 				t.Fatalf("probeFailure(%v) dropped its cause: %v", tt.cause, got)
 			}
 			message := got.Error()
-			if strings.Contains(message, installRemedy) != tt.wantInstall {
-				t.Fatalf("install remedy present = %t, want %t: %s",
-					strings.Contains(message, installRemedy), tt.wantInstall, message)
-			}
-			if tt.wantInstall {
-				if !strings.Contains(message, "captain: signed host is not installed and ready") {
-					t.Fatalf("absent host is not named: %s", message)
-				}
-				return
-			}
-			for _, want := range []string{"running but slow", "machine load", "retry on the next event"} {
+			for _, want := range tt.want {
 				if !strings.Contains(message, want) {
-					t.Fatalf("transient message is missing %q: %s", want, message)
+					t.Fatalf("message is missing %q: %s", want, message)
+				}
+			}
+			for _, deny := range tt.deny {
+				if strings.Contains(message, deny) {
+					t.Fatalf("message wrongly claims %q: %s", deny, message)
 				}
 			}
 		})
 	}
 }
 
-func TestEnsureCurrentClassifiesItsOwnProbeFailure(t *testing.T) {
-	tests := []struct {
-		name        string
-		listen      bool
-		probe       time.Duration
-		wantInstall bool
-	}{
-		{"host accepts and never acknowledges", true, 250 * time.Millisecond, false},
-		{"no host listening", false, 10 * time.Second, true},
+func TestRuntimeHealthRequiresExactIdentity(t *testing.T) {
+	t.Parallel()
+	current := runtimeHealthResponse{
+		Schema: Schema, RuntimeBuild: Build, RuntimeProtocol: Schema, PID: 42,
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root, err := os.MkdirTemp("/private/tmp", "captain-hook-probe-")
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = os.RemoveAll(root) })
-			socket := filepath.Join(root, "capt-hookd.sock")
-			if tt.listen {
-				acceptWithoutAcknowledging(t, socket)
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), tt.probe)
-			defer cancel()
-			client := newClientWithPaths(paths{dir: root, socket: socket})
-			t.Cleanup(func() { _ = client.Close() })
-
-			err = client.EnsureCurrent(ctx, time.Second)
-			if err == nil {
-				t.Fatal("EnsureCurrent accepted a host that never answered a readiness probe")
-			}
-			message := err.Error()
-			if strings.Contains(message, installRemedy) != tt.wantInstall {
-				t.Fatalf("install remedy present = %t, want %t: %s",
-					strings.Contains(message, installRemedy), tt.wantInstall, message)
-			}
-			if tt.wantInstall {
-				if !strings.Contains(message, "captain: signed host is not installed and ready") {
-					t.Fatalf("absent host is not named: %s", message)
-				}
-				return
-			}
-			for _, want := range []string{"running but slow", "machine load", "retry on the next event"} {
-				if !strings.Contains(message, want) {
-					t.Fatalf("transient message is missing %q: %s", want, message)
-				}
-			}
-		})
+	if err := current.exact(); err != nil {
+		t.Fatalf("exact health refused: %v", err)
 	}
-}
-
-func acceptWithoutAcknowledging(t *testing.T, socket string) {
-	t.Helper()
-	listener, err := net.Listen("unix", socket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var (
-		mu       sync.Mutex
-		held     []net.Conn
-		accepted sync.WaitGroup
-	)
-	accepted.Add(1)
-	go func() {
-		defer accepted.Done()
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			mu.Lock()
-			held = append(held, conn)
-			mu.Unlock()
-		}
-	}()
-	t.Cleanup(func() {
-		_ = listener.Close()
-		accepted.Wait()
-		mu.Lock()
-		defer mu.Unlock()
-		for _, conn := range held {
-			_ = conn.Close()
-		}
-	})
-}
-
-func TestRuntimeHealthCurrentRequiresExactReadyIdentity(t *testing.T) {
-	exact := runtimeHealthResponse{
-		Schema: Schema, RuntimeBuild: Build, RuntimeProtocol: Schema,
-		ProcessGeneration: "generation", PID: 42, State: string(dkdaemon.StateHealthy), Ready: true,
-	}
-	if !exact.current() {
-		t.Fatal("exact ready health is not current")
-	}
-
 	tests := map[string]runtimeHealthResponse{
-		"stale build":    func() runtimeHealthResponse { h := exact; h.RuntimeBuild += "-stale"; return h }(),
-		"wrong protocol": func() runtimeHealthResponse { h := exact; h.RuntimeProtocol++; return h }(),
-		"degraded":       func() runtimeHealthResponse { h := exact; h.State = string(dkdaemon.StateDegraded); return h }(),
-		"draining":       func() runtimeHealthResponse { h := exact; h.Draining = true; return h }(),
-		"not ready":      func() runtimeHealthResponse { h := exact; h.Ready = false; return h }(),
+		"stale build":    func() runtimeHealthResponse { h := current; h.RuntimeBuild += "-stale"; return h }(),
+		"wrong protocol": func() runtimeHealthResponse { h := current; h.RuntimeProtocol++; return h }(),
 	}
 	for name, health := range tests {
 		t.Run(name, func(t *testing.T) {
-			if health.current() {
+			if err := health.exact(); err == nil {
 				t.Fatalf("non-current health accepted: %#v", health)
 			}
 		})
 	}
 }
 
-func TestServicePlanPinsSignedUserBundleFailureOnlyRestartsAndUnrestrictedSession(t *testing.T) {
+func TestExactAgentsPinSignedBundleFailureRestartsDrainBudgetAndUnrestrictedSession(t *testing.T) {
+	t.Parallel()
 	root, err := os.MkdirTemp("/private/tmp", "captain-hook-plan-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	app := filepath.Join(root, helperApplicationLeaf)
-	for _, executable := range []string{appExecutablePath(app), hostExecutablePath(app)} {
-		if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(executable, []byte("fixture"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	plan, err := exactServicePlan(app)
+	agents, err := exactAgents(app)
 	if err != nil {
 		t.Fatal(err)
 	}
-	agents := plan.Agents()
 	if len(agents) != 2 {
 		t.Fatalf("agents = %#v", agents)
 	}
-	var host, helper service.Agent
+	var host, helper launchd.Agent
 	for _, agent := range agents {
 		switch agent.Label {
 		case hostServiceLabel:
@@ -291,12 +138,12 @@ func TestServicePlanPinsSignedUserBundleFailureOnlyRestartsAndUnrestrictedSessio
 			helper = agent
 		}
 	}
-	if host.RestartPolicy != service.RestartOnFailure || host.Program != hostExecutablePath(app) ||
-		len(host.Args) != 1 || host.Args[0] != "serve" ||
+	if host.RestartPolicy != launchd.RestartOnFailure || host.Program != hostExecutablePath(app) ||
+		len(host.Args) != 1 || host.Args[0] != "serve" || host.ExitTimeOut != hostShutdownTimeout ||
 		len(host.AssociatedBundleIdentifiers) != 1 || host.AssociatedBundleIdentifiers[0] != helperBundleID {
 		t.Fatalf("host agent = %#v", host)
 	}
-	if helper.RestartPolicy != service.RestartOnFailure || helper.Program != appExecutablePath(app) ||
+	if helper.RestartPolicy != launchd.RestartOnFailure || helper.Program != appExecutablePath(app) ||
 		len(helper.Args) != 0 || len(helper.AssociatedBundleIdentifiers) != 1 ||
 		helper.AssociatedBundleIdentifiers[0] != helperBundleID {
 		t.Fatalf("helper agent = %#v", helper)

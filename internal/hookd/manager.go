@@ -14,14 +14,25 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yasyf/daemonkit/proc"
+	"github.com/yasyf/daemonkit"
 )
 
 const (
-	workerReadinessTimeout                  = 10 * time.Second
-	workerSettlementTimeout                 = 5 * time.Second
-	workerRecoveryID        proc.RecoveryID = "captain-hook.worker.v1"
+	workerReadinessTimeout  = 10 * time.Second
+	workerSettlementTimeout = 5 * time.Second
+
+	maxLiveWorkers = 64
 )
+
+// ErrWorkerCapacity refuses a dispatch that would start a worker past the live
+// cache bound. One worker is cached per distinct {root, python, build, semantic
+// environment} tuple, so the natural population is the number of projects a
+// machine runs hooks in at once — reaching maxLiveWorkers means either far more
+// than that or a key that is churning, and either way the machine is already
+// carrying 64 live Python interpreters. Admission is refused rather than
+// queued: a hook that waits behind a full cache stalls the tool call that
+// triggered it, and a hook that is told why does not.
+var ErrWorkerCapacity = errors.New("captain: live worker capacity is exhausted")
 
 var workerEnvExact = map[string]struct{}{
 	"XDG_CACHE_HOME": {}, "CAPTAIN_HOOK_STATE_DIR": {}, "CAPTAIN_HOOK_LOG_DIR": {},
@@ -44,7 +55,7 @@ type workerKey struct {
 }
 
 type workerManager struct {
-	children  *proc.Manager
+	owner     daemonkit.Ctx
 	logWriter io.Writer
 	scheduler *scheduler
 
@@ -54,9 +65,9 @@ type workerManager struct {
 	wg      sync.WaitGroup
 }
 
-func newWorkerManager(children *proc.Manager, logWriter io.Writer) *workerManager {
+func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) *workerManager {
 	return &workerManager{
-		children: children, logWriter: logWriter, scheduler: newScheduler(16),
+		owner: owner, logWriter: logWriter, scheduler: newScheduler(16),
 		entries: make(map[string]*workerEntry),
 	}
 }
@@ -82,8 +93,7 @@ func (m *workerManager) dispatch(ctx context.Context, request EventRequest) (Eve
 		response, err := worker.call(ctx, request)
 		if err != nil {
 			m.retire(key.id, worker)
-			stopErr := worker.stop(context.Background())
-			return EventResponse{}, errors.Join(err, stopErr)
+			return EventResponse{}, errors.Join(err, m.settle(worker))
 		}
 		return response, nil
 	})
@@ -104,6 +114,11 @@ func (m *workerManager) worker(ctx context.Context, key workerKey) (*workerClien
 			return nil, ctx.Err()
 		}
 	}
+	if len(m.entries) >= maxLiveWorkers {
+		live := len(m.entries)
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w: %d live workers, limit is %d", ErrWorkerCapacity, live, maxLiveWorkers)
+	}
 	entry := &workerEntry{ready: make(chan struct{}), key: key}
 	m.entries[key.id] = entry
 	m.mu.Unlock()
@@ -119,85 +134,72 @@ func (m *workerManager) worker(ctx context.Context, key workerKey) (*workerClien
 	return worker, err
 }
 
+// start spawns one Python worker on ChannelStdio: daemonkit joins the child's
+// stdin and stdout into one deadline-aware conn, drains its stderr into the
+// host log for the child's whole life, and records the process durably under
+// the daemon's own ownership scope before the child runs an instruction. The
+// exec posture is the named waiver — the executable is whatever interpreter
+// the requesting project points at. Session gives the worker its own session,
+// so settlement covers the hook subprocesses it spawns and not just the
+// interpreter.
 func (m *workerManager) start(ctx context.Context, key workerKey) (*workerClient, error) {
-	request, err := proc.NewSpawnRequest(proc.SpawnConfig{
-		RecoveryID: workerRecoveryID, Executable: key.python,
-		Args: []string{"-m", "captain_hook.worker"}, Dir: key.root,
-		Env:   mergeEnvironment(workerBaseEnvironment(os.Environ()), key.env),
-		Stdin: proc.StdioPipe, Stdout: proc.StdioPipe, Stderr: proc.StdioPipe,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("captain: define Python product worker: %w", err)
-	}
 	readyCtx, cancel := context.WithTimeout(ctx, workerReadinessTimeout)
 	defer cancel()
-	child, receipt, err := m.children.Prepare(readyCtx, request)
+	child, err := m.owner.Spawn(readyCtx, workerCmd(key), daemonkit.ChannelStdio, m.logWriter)
 	if err != nil {
-		return nil, fmt.Errorf("captain: prepare Python product worker: %w", err)
+		return nil, fmt.Errorf("captain: spawn Python product worker: %w", err)
 	}
-	stdin, err := child.TakeStdin()
+	conn, err := child.Conn()
 	if err != nil {
-		return nil, m.stopPrepared(child, errors.New("captain: take Python worker stdin"), err)
-	}
-	stdout, err := child.TakeStdout()
-	if err != nil {
-		_ = stdin.Close()
-		return nil, m.stopPrepared(child, errors.New("captain: take Python worker stdout"), err)
-	}
-	stderr, err := child.TakeStderr()
-	if err != nil {
-		_ = stdin.Close()
-		_ = stdout.Close()
-		return nil, m.stopPrepared(child, errors.New("captain: take Python worker stderr"), err)
-	}
-	conn := newWorkerPipeConn(stdout, stdin)
-	stderrDone := make(chan error, 1)
-	go func() {
-		_, copyErr := io.Copy(m.logWriter, stderr)
-		stderrDone <- errors.Join(copyErr, stderr.Close())
-	}()
-	if err := child.Start(readyCtx); err != nil {
-		_ = conn.Close()
-		stopErr := m.stopPrepared(child, errors.New("captain: start Python product worker"), err)
-		return nil, errors.Join(stopErr, <-stderrDone)
+		return nil, m.stopChild(child, errors.New("captain: take Python worker channel"), err)
 	}
 	worker, err := handshakeWorker(readyCtx, conn, key.build)
 	if err != nil {
 		_ = conn.Close()
-		stopErr := m.stopPrepared(child, errors.New("captain: handshake Python product worker"), err)
-		return nil, errors.Join(stopErr, <-stderrDone)
+		return nil, m.stopChild(child, errors.New("captain: handshake Python product worker"), err)
 	}
 	worker.child = child
-	worker.receipt = receipt
 	m.wg.Add(1)
-	go m.watch(key.id, worker, child, stderrDone)
+	go m.watch(key.id, worker, child)
 	return worker, nil
 }
 
-func (m *workerManager) stopPrepared(child *proc.PreparedChild, message, cause error) error {
-	stopCtx, cancel := context.WithTimeout(context.Background(), workerSettlementTimeout)
-	defer cancel()
-	return errors.Join(message, cause, child.Stop(stopCtx))
+func workerCmd(key workerKey) daemonkit.Cmd {
+	return daemonkit.Cmd{
+		Path: key.python, Args: []string{"-m", "captain_hook.worker"}, Dir: key.root,
+		Env:     mergeEnvironment(workerBaseEnvironment(os.Environ()), key.env),
+		Session: true,
+		Exec:    daemonkit.ServingSameUser(),
+	}
 }
 
-func (m *workerManager) watch(
-	id string,
-	worker *workerClient,
-	child *proc.PreparedChild,
-	stderrDone <-chan error,
-) {
+// settle terminates one retired worker on a budget of its own: the request
+// context that just failed carries a spent deadline, and Child.Stop refuses a
+// context without one — which would retire the child from the map without ever
+// signalling it.
+func (m *workerManager) settle(worker *workerClient) error {
+	stopCtx, cancel := context.WithTimeout(context.Background(), workerSettlementTimeout)
+	defer cancel()
+	return worker.stop(stopCtx)
+}
+
+func (m *workerManager) stopChild(child *daemonkit.Child, message, cause error) error {
+	stopCtx, cancel := context.WithTimeout(context.Background(), workerSettlementTimeout)
+	defer cancel()
+	_, stopErr := child.Stop(stopCtx)
+	return errors.Join(message, cause, stopErr, child.StderrErr())
+}
+
+func (m *workerManager) watch(id string, worker *workerClient, child *daemonkit.Child) {
 	defer m.wg.Done()
-	<-child.Done()
-	exit, settled := child.Exit()
+	exit := <-child.Done()
 	var exitErr error
-	if !settled {
-		exitErr = errors.New("captain: Python worker exited without settlement")
-	} else if exit.Error != "" {
-		exitErr = errors.New(exit.Error)
-	} else if exit.Code != 0 && !exit.Stopped {
+	if exit.Signal != 0 {
+		exitErr = fmt.Errorf("captain: Python worker died on signal %s", exit.Signal)
+	} else if exit.Code != 0 {
 		exitErr = fmt.Errorf("captain: Python worker exited with status %d", exit.Code)
 	}
-	worker.fail(errors.Join(exitErr, <-stderrDone))
+	worker.fail(errors.Join(exitErr, child.StderrErr()))
 	m.mu.Lock()
 	if entry := m.entries[id]; entry != nil && entry.worker == worker {
 		delete(m.entries, id)
@@ -223,7 +225,7 @@ func (m *workerManager) status() []workerStatus {
 		}
 		result = append(result, workerStatus{
 			Key: entry.key.id, Root: entry.key.root, Build: entry.key.build,
-			Python: entry.key.python, PID: entry.worker.receipt.ProcessIdentity().PID,
+			Python: entry.key.python, PID: entry.worker.child.PID(),
 		})
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Key < result[j].Key })
@@ -240,9 +242,11 @@ func (m *workerManager) restart(ctx context.Context) error {
 	}
 	m.entries = make(map[string]*workerEntry)
 	m.mu.Unlock()
+	stopCtx, cancel := context.WithTimeout(ctx, workerSettlementTimeout)
+	defer cancel()
 	var errs []error
 	for _, worker := range workers {
-		errs = append(errs, worker.stop(ctx))
+		errs = append(errs, worker.stop(stopCtx))
 	}
 	return errors.Join(errs...)
 }
@@ -335,8 +339,16 @@ func mergeEnvironment(base []string, overrides map[string]string) []string {
 	return result
 }
 
+// workerBaseEnvironment is the host environment a worker inherits, with every
+// name a request may set semantically stripped so only the worker key decides
+// it. PATH and LANG are seeded here rather than inherited: a non-nil Cmd.Env is
+// the child's exact environment and v0.21 injects nothing into it, so without
+// this the worker would lose user-installed command discovery and a stable
+// locale. They are stripped from the inherited set too, so no request overrides
+// them and neither reaches the key.
 func workerBaseEnvironment(environ []string) []string {
-	base := make([]string, 0, len(environ))
+	base := make([]string, 0, len(environ)+2)
+	base = append(base, "PATH="+parentPath(environ), "LANG=C")
 	for _, item := range environ {
 		name, _, ok := strings.Cut(item, "=")
 		if !ok {
@@ -350,6 +362,15 @@ func workerBaseEnvironment(environ []string) []string {
 		base = append(base, item)
 	}
 	return base
+}
+
+func parentPath(environ []string) string {
+	for _, item := range environ {
+		if name, value, ok := strings.Cut(item, "="); ok && name == "PATH" && value != "" {
+			return value
+		}
+	}
+	return "/usr/bin:/bin:/usr/sbin:/sbin"
 }
 
 func sessionID(payload string) string {

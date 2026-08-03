@@ -1,14 +1,12 @@
 import CryptoKit
 import Foundation
 
-let helperWireBuild = "captain-hook.host.v1"
+let hostServiceLabel = "com.yasyf.captain-hook.host.v1"
+let helperSchema = "captain-hook.host.v1"
 let helperPingOperation = "captain.helper.ping.v1"
 let helperNotifyOperation = "captain.helper.notify.v1"
 let helperNextOperation = "captain.helper.next.v1"
-let helperConsumerRole = "com.yasyf.captain-hook.helper.consumer.v1"
-let helperBrokerLifecycleRole = "com.yasyf.captain-hook.helper.broker-lifecycle.v1"
-let helperBrokerHandoffRole = "com.yasyf.captain-hook.helper.broker-handoff.v1"
-let helperClientRole = "com.yasyf.captain-hook.helper.client.v1"
+let hostRuntimeHealthOperation = "captain.host.v1.runtime.health"
 
 struct NotifyRequest: Codable, Equatable, Sendable {
     let kind: String
@@ -32,6 +30,26 @@ struct HelperReply: Codable, Equatable, Sendable {
 
     static func failure(_ message: String) -> HelperReply {
         HelperReply(ok: false, version: nil, error: message)
+    }
+}
+
+struct RuntimeHealth: Decodable, Equatable, Sendable {
+    let runtimeBuild: String
+
+    enum CodingKeys: String, CodingKey {
+        case runtimeBuild = "runtime_build"
+    }
+}
+
+// The release build this executable was stamped with, in the form the Go host
+// reports it: CaptHookBuild carries the tag, so its leading "v" comes off.
+enum StampedBuild {
+    static var current: String {
+        let info = Bundle.main.infoDictionary
+        if let stamped = info?["CaptHookBuild"] as? String, !stamped.isEmpty {
+            return stamped.hasPrefix("v") ? String(stamped.dropFirst()) : stamped
+        }
+        return info?["CFBundleShortVersionString"] as? String ?? "0.0.0"
     }
 }
 

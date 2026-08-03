@@ -2,17 +2,41 @@ import Foundation
 import Testing
 
 @Suite struct HelperSessionTests {
-    @Test func protocolUsesOneExactHostWireAndDistinctAuthorityRoles() {
-        #expect(helperWireBuild == "captain-hook.host.v1")
+    @Test func protocolPinsTheOneHostLabelSchemaAndOperations() {
+        #expect(hostServiceLabel == "com.yasyf.captain-hook.host.v1")
+        #expect(helperSchema == "captain-hook.host.v1")
         #expect(helperPingOperation == "captain.helper.ping.v1")
         #expect(helperNotifyOperation == "captain.helper.notify.v1")
         #expect(helperNextOperation == "captain.helper.next.v1")
-        #expect(Set([
-            helperConsumerRole,
-            helperBrokerLifecycleRole,
-            helperBrokerHandoffRole,
-            helperClientRole,
-        ]).count == 4)
+        #expect(hostRuntimeHealthOperation == "captain.host.v1.runtime.health")
+    }
+
+    @Test func runtimeHealthDecodesTheServingHostBuild() throws {
+        let data = Data(#"{"schema":1,"runtime_build":"1.2.3","runtime_protocol":1,"pid":4242}"#.utf8)
+        #expect(try JSONDecoder().decode(RuntimeHealth.self, from: data) == RuntimeHealth(runtimeBuild: "1.2.3"))
+    }
+
+    @Test func businessTerminalUnwrapsTheProductReplyBody() throws {
+        let inner = Data(#"{"schema":1,"runtime_build":"1.2.3","runtime_protocol":1,"pid":4242}"#.utf8)
+        let envelope = Data(#"{"Body":"\#(inner.base64EncodedString())"}"#.utf8)
+        let body = try businessReplyBody(envelope, operation: hostRuntimeHealthOperation)
+        #expect(try JSONDecoder().decode(RuntimeHealth.self, from: body) == RuntimeHealth(runtimeBuild: "1.2.3"))
+    }
+
+    @Test func businessTerminalSurfacesTheProductErrorItCarriesAsData() {
+        let envelope = Data(#"{"Body":null,"error":{"code":"captain.busy","message":"worker is gone"}}"#.utf8)
+        #expect(throws: BusinessTerminalError.product(code: "captain.busy", message: "worker is gone")) {
+            try businessReplyBody(envelope, operation: helperNotifyOperation)
+        }
+    }
+
+    @Test func businessTerminalRefusesABodilessTerminalAndTheBareV020Reply() {
+        #expect(throws: BusinessTerminalError.emptyBody(operation: helperNextOperation)) {
+            try businessReplyBody(Data(#"{"Body":null}"#.utf8), operation: helperNextOperation)
+        }
+        #expect(throws: BusinessTerminalError.emptyBody(operation: helperPingOperation)) {
+            try businessReplyBody(Data(#"{"ok":true,"version":"1.2.3"}"#.utf8), operation: helperPingOperation)
+        }
     }
 
     @Test func notificationPayloadDerivesStablePresentationIdentity() throws {

@@ -21,7 +21,7 @@ settings:
 packages:
   DaemonKit:
     url: https://github.com/yasyf/daemonkit
-    exactVersion: 0.20.10
+    exactVersion: 0.21.0
 
 targetTemplates:
   HostApp:
@@ -53,6 +53,12 @@ targets:
         attributes:
           - CodeSignOnCopy
     # App Group only, non-sandboxed host (xcodegen writes the file from these).
+    # TODO: drop the App Group from all three targets — this app, the bridge, and
+    # the widget — once a signed release build can prove the removal. No source
+    # opens the group container any more, but scripts/assert-signed-bridge.sh:72
+    # still requires the entitlement on the bridge, and both the local and CI
+    # helper runs build with CODE_SIGNING_ALLOWED=NO, so nothing available here
+    # can verify that dropping it leaves the family signable.
     entitlements:
       path: Generated/CaptainHook.entitlements
       properties:
@@ -81,6 +87,7 @@ targets:
     platform: macOS
     sources:
       - path: Sources/Bridge
+      - path: Sources/Shared/BusinessTerminal.swift
       - path: Sources/Shared/HelperProtocol.swift
       - path: Sources/Shared/HelperPaths.swift
     info:
@@ -88,6 +95,7 @@ targets:
       properties:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CaptHookBuild: $(GITHUB_REF_NAME)
     entitlements:
       path: Generated/CaptainHookBridge.entitlements
       properties:

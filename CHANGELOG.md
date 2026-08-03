@@ -6,6 +6,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.21.0] - 2026-08-03
+
+### Changed
+
+- Captain Hook runs on daemonkit v0.21.2. The host declares one `Daemon` value
+  both halves share, serves over a socket derived from its launchd label
+  rather than a path under `Library/Caches`, and the four peer roles collapse
+  into daemonkit's two session lanes. The broker sidecar is gone: broker
+  handoff is control-lane-only in v0.21, so the bridge CLI dials the host
+  socket directly on the business lane, verifying the host's stamped build
+  over that same session before it forwards anything.
+- Workers are supervised through daemonkit's process ownership. Each Python
+  worker runs in its own session group so hook subprocesses die with it, and
+  the worker environment seeds the host's `PATH` and `LANG=C` exactly as it
+  did before the migration.
+
+### Fixed
+
+- Installing over a running helper works again. Both the upgrade and the
+  uninstall inventory every executable in the installed bundle and refuse while
+  any of them is alive, but nothing stopped the helper app first — so a machine
+  with Captain Hook running met a live-process refusal instead of an upgrade.
+  The packaged app's signed stop entrypoint now terminates the
+  installed generation before either verb touches the bundle. Finding nothing to
+  stop counts as success, so a first install on a clean machine is unaffected.
+- Upgrading from a release older than this one no longer fails on its own
+  running host. That host predates the current ownership records, which makes it
+  invisible to the check that would otherwise drain it and fatal to the
+  executable inventory that runs next, so the upgrade refused every machine it
+  was meant to migrate. An installation with no such record is now stopped
+  before the upgrade proceeds. One that has a record is left alone, since the
+  ordinary drain already covers it.
+- Uninstalling a helper installed by an earlier release no longer leaves its
+  LaunchAgents loaded. Those installations wrote plists carrying no ownership
+  marker, and the current deployment machinery removes only labels it has a
+  record of applying — so an uninstall could delete the application while
+  launchd kept both jobs loaded against the path it had just removed, trying to
+  relaunch a binary that was gone. Uninstall now drains whatever serves the host
+  label and takes both agents down, whichever era wrote them.
+- A machine can no longer accumulate unbounded Python workers. The host caches
+  one worker per distinct project, interpreter, build, and hook environment, and
+  the 64-worker ceiling enforced before the process manager was replaced went
+  with it. That ceiling is back as an admission bound: past 64 live workers a
+  dispatch is refused by name rather than queued, because a hook waiting behind
+  a full cache stalls the tool call that triggered it.
+- A large hook payload full of `<`, `>`, or `&` reaches the host again. Those
+  three characters were being rewritten as six-byte escapes, so a payload of
+  ordinary markup or JSX expanded sixfold against the ceiling one session
+  carries: 32 MiB of them claimed 192 MiB of frame. They now travel as
+  themselves, and admission is decided by measuring the serialized request
+  instead of inferring it from the raw size, so a payload that cannot fit is
+  refused by name instead of failing deeper in the transport.
+
 ## [12.20.13] - 2026-07-27
 
 ### Fixed

@@ -18,22 +18,11 @@ struct CaptainHookApp: App {
         WidgetCenter.shared.reloadAllTimelines()
     }
     private let refresher = SnapshotRefresher()
-    private var broker: BrokerSocketBridge?
-    private var brokerTask: Task<Void, Never>?
     private var notificationClient: ServiceSocketClient?
     private var notificationTask: Task<Void, Never>?
     private var watcher: SnapshotWatcher<Snapshot>?
 
-    private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
-    }
-
-    private var runtimeBuild: String {
-        guard let stamped = Bundle.main.object(forInfoDictionaryKey: "CaptHookBuild") as? String,
-              !stamped.isEmpty
-        else { return appVersion }
-        return stamped.hasPrefix("v") ? String(stamped.dropFirst()) : stamped
-    }
+    private var runtimeBuild: String { StampedBuild.current }
 
     func applicationWillFinishLaunching(_: Notification) {
         let arguments = Array(CommandLine.arguments.dropFirst())
@@ -53,35 +42,9 @@ struct CaptainHookApp: App {
     func applicationDidFinishLaunching(_: Notification) {
         notifications.requestAuthorizationIfNeeded()
         notifications.registerCategories()
-        brokerTask = Task { await runBroker() }
         notificationTask = Task { await runNotificationConsumer() }
         startWatcher()
         refresher.start()
-    }
-
-    private func runBroker() async {
-        do {
-            let lifecycle = RuntimeClientConfiguration(
-                path: HelperPaths.hostSocket.path,
-                wireBuild: helperWireBuild,
-                role: helperBrokerLifecycleRole,
-                noProgressTimeout: 30,
-                socket: .init(maximumFrameBytes: 64 * 1024)
-            )
-            let bridge = try BrokerSocketBridge(
-                container: HelperPaths.appGroup(),
-                socket: HelperPaths.brokerSocket(),
-                lifecycle: lifecycle,
-                handoffRole: helperBrokerHandoffRole,
-                expectedRuntimeBuild: runtimeBuild
-            )
-            broker = bridge
-            try await bridge.run()
-        } catch is CancellationError {
-            return
-        } catch {
-            Log.socket.error("broker failed: \(String(describing: error), privacy: .public)")
-        }
     }
 
     private func runNotificationConsumer() async {
@@ -90,13 +53,11 @@ struct CaptainHookApp: App {
             do {
                 let connected = try ServiceSocketClient(
                     path: HelperPaths.hostSocket.path,
-                    wireBuild: helperWireBuild,
-                    role: helperConsumerRole,
-                    noProgressTimeout: 30,
-                    configuration: .init(maximumFrameBytes: 64 * 1024)
+                    schema: helperSchema
                 )
                 client = connected
                 notificationClient = connected
+                try await requireExactRuntime(connected)
                 try await consumeNotifications(from: connected)
             } catch is CancellationError {
                 if let client { await client.close() }
@@ -110,21 +71,41 @@ struct CaptainHookApp: App {
         }
     }
 
+    // The installed runtime and this app ship as one signed generation, so a
+    // build that is not this one is an upgrade the deployment has yet to
+    // finish restarting: refuse the session and reconnect.
+    private func requireExactRuntime(_ client: ServiceSocketClient) async throws {
+        let terminal = try await client.call(ServiceSocketCall(
+            operation: hostRuntimeHealthOperation,
+            replay: .idempotent,
+            deadline: Date().addingTimeInterval(30)
+        ))
+        let data = try payload(of: terminal, operation: hostRuntimeHealthOperation)
+        let health = try JSONDecoder().decode(RuntimeHealth.self, from: data)
+        guard health.runtimeBuild == runtimeBuild else {
+            throw HelperConsumerError.runtimeSkew(expected: runtimeBuild, found: health.runtimeBuild)
+        }
+    }
+
     private func consumeNotifications(from client: ServiceSocketClient) async throws {
         while !Task.isCancelled {
             let terminal = try await client.call(ServiceSocketCall(
                 operation: helperNextOperation,
                 replay: .provenNonDispatch,
-                runtimeTarget: .anyAuthenticatedSuccessor,
                 deadline: Date().addingTimeInterval(300)
             ))
-            guard !terminal.rejected else {
-                throw HelperConsumerError.rejected(terminal.reason ?? "helper next rejected")
-            }
-            if let error = terminal.error { throw HelperConsumerError.remote(error) }
-            guard let data = terminal.payload else { throw HelperConsumerError.missingPayload }
+            let data = try payload(of: terminal, operation: helperNextOperation)
             deliver(try NotifyPayload(JSONDecoder().decode(NotifyRequest.self, from: data)))
         }
+    }
+
+    private func payload(of terminal: SocketTerminal, operation: String) throws -> Data {
+        guard !terminal.rejected else {
+            throw HelperConsumerError.rejected(terminal.reason ?? "\(operation) rejected")
+        }
+        if let error = terminal.error { throw HelperConsumerError.remote(error) }
+        guard let payload = terminal.payload else { throw HelperConsumerError.missingPayload }
+        return try businessReplyBody(payload, operation: operation)
     }
 
     private func deliver(_ payload: NotifyPayload) {
@@ -134,22 +115,14 @@ struct CaptainHookApp: App {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard brokerTask != nil || notificationTask != nil else { return .terminateNow }
-        let brokerTask = brokerTask
-        let notificationTask = notificationTask
-        let broker = broker
+        guard let notificationTask else { return .terminateNow }
         let notificationClient = notificationClient
-        self.brokerTask = nil
         self.notificationTask = nil
-        self.broker = nil
         self.notificationClient = nil
-        brokerTask?.cancel()
-        notificationTask?.cancel()
+        notificationTask.cancel()
         Task {
-            await broker?.shutdown()
             await notificationClient?.close()
-            await brokerTask?.value
-            await notificationTask?.value
+            await notificationTask.value
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
@@ -190,4 +163,5 @@ private enum HelperConsumerError: Error {
     case rejected(String)
     case remote(String)
     case missingPayload
+    case runtimeSkew(expected: String, found: String)
 }

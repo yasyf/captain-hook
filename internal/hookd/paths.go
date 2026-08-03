@@ -8,24 +8,12 @@ import (
 	"runtime"
 )
 
-const (
-	businessRoleID              = "com.yasyf.captain-hook.business.v1"
-	lifecycleRoleID             = "com.yasyf.captain-hook.lifecycle.v1"
-	stopControlRoleID           = "com.yasyf.captain-hook.stop-control.v1"
-	helperConsumerRoleID        = "com.yasyf.captain-hook.helper.consumer.v1"
-	helperBrokerLifecycleRoleID = "com.yasyf.captain-hook.helper.broker-lifecycle.v1"
-	helperBrokerHandoffRoleID   = "com.yasyf.captain-hook.helper.broker-handoff.v1"
-	helperClientRoleID          = "com.yasyf.captain-hook.helper.client.v1"
-	hostServiceLabel            = "com.yasyf.captain-hook.host.v1"
-)
+const hostServiceLabel = "com.yasyf.captain-hook.host.v1"
 
 type paths struct {
-	dir                 string
-	socket              string
-	processes           string
-	stopProcesses       string
-	deploymentProcesses string
-	log                 string
+	dir               string
+	log               string
+	deploymentRecords string
 }
 
 func resolvePaths() (paths, error) {
@@ -39,11 +27,9 @@ func resolvePaths() (paths, error) {
 	}
 	dir := filepath.Join(cache, "captain-hook", "host-v1")
 	return paths{
-		dir: dir, socket: filepath.Join(dir, "capt-hookd.sock"),
-		processes:           filepath.Join(dir, "workers.json"),
-		stopProcesses:       filepath.Join(dir, "stop-processes.db"),
-		deploymentProcesses: filepath.Join(dir, "deployment-processes.db"),
-		log:                 filepath.Join(dir, "capt-hookd.log"),
+		dir:               dir,
+		log:               filepath.Join(dir, "capt-hookd.log"),
+		deploymentRecords: filepath.Join(dir, "deployment.records"),
 	}, nil
 }
 

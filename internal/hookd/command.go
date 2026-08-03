@@ -11,13 +11,18 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/yasyf/daemonkit/trust"
 )
 
 const (
 	defaultRequestTimeout  = 30 * time.Second
 	defaultShutdownTimeout = 60 * time.Second
+
+	// packageLifecycleTimeout is one install or uninstall end to end: stopping
+	// the installed app generation, draining a serving host through the grace
+	// its own LaunchAgent promises it, and the sealed deployment verb after
+	// them. A budget that cannot hold that drain fails on exactly the machine
+	// the command exists to repair.
+	packageLifecycleTimeout = 3 * time.Minute
 )
 
 // Main executes one capt-hookd client or host command and returns its exit code.
@@ -25,16 +30,6 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: capt-hookd version|serve|run|status|restart-workers|package-install|package-uninstall")
 		return 2
-	}
-	// The serving daemon re-execs this binary as daemonkit's trust-verifier
-	// child for every connecting peer; without this dispatch every peer is
-	// rejected as untrusted.
-	if handled, err := trust.RunVerifierChild(args, stdout); handled {
-		if err != nil {
-			fmt.Fprintf(stderr, "capt-hookd: %v\n", err)
-			return 2
-		}
-		return 0
 	}
 	switch args[0] {
 	case "version":
@@ -103,6 +98,10 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
 		return 2
 	}
+	if *timeout <= 0 {
+		fmt.Fprintf(stderr, "capt-hookd: request timeout %s must be positive\n", *timeout)
+		return 2
+	}
 	if *cwd == "" {
 		*cwd, _ = os.Getwd()
 	}
@@ -133,7 +132,7 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	client, err := NewClient()
 	if err == nil {
 		defer client.Close()
-		err = client.EnsureCurrent(ctx, *timeout)
+		err = client.EnsureCurrent(ctx)
 	}
 	var response EventResponse
 	if err == nil {
@@ -205,7 +204,7 @@ func packageInstallCommand(args []string, stderr io.Writer) int {
 	if len(args) != 0 {
 		return 2
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), packageLifecycleTimeout)
 	defer cancel()
 	if err := applyPackagedApplication(ctx); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -218,7 +217,7 @@ func packageUninstallCommand(args []string, stderr io.Writer) int {
 	if len(args) != 0 {
 		return 2
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), packageLifecycleTimeout)
 	defer cancel()
 	if err := uninstallPackagedApplication(ctx); err != nil {
 		fmt.Fprintln(stderr, err)

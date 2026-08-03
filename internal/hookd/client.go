@@ -2,111 +2,88 @@ package hookd
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net"
 	"os"
-	"sync"
-	"syscall"
 	"time"
 
-	dkdaemon "github.com/yasyf/daemonkit/daemon"
-	"github.com/yasyf/daemonkit/trust"
-	"github.com/yasyf/daemonkit/wire"
+	"github.com/yasyf/daemonkit"
 )
 
 // ErrDaemonUnavailable means the exact signed host cannot be reached.
 var ErrDaemonUnavailable = errors.New("captain: daemon unavailable")
 
+const closeTimeout = 5 * time.Second
+
 // Client owns one exact persistent product session.
 type Client struct {
-	paths paths
-	role  trust.PeerRole
-
-	mu       sync.Mutex
-	business *wire.Client
+	daemon   *daemonkit.Client
+	business *daemonkit.Business
 }
 
 // NewClient returns a lazy client for the only host schema and build.
 func NewClient() (*Client, error) {
-	resolved, err := resolvePaths()
+	daemon, err := daemonkit.Open(hostDaemon())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("captain: open signed host: %w", err)
 	}
-	return newClientWithPaths(resolved), nil
-}
-
-func newClientWithPaths(resolved paths) *Client {
-	return &Client{paths: resolved, role: businessRoleID}
+	return &Client{daemon: daemon, business: daemon.Business()}, nil
 }
 
 // Close settles the product session.
 func (c *Client) Close() error {
-	c.mu.Lock()
-	business := c.business
-	c.business = nil
-	c.mu.Unlock()
-	if business != nil {
-		return business.Close()
-	}
-	return nil
+	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+	defer cancel()
+	return c.business.Close(ctx)
 }
 
 // EnsureCurrent requires the exact deployment-owned host build.
-func (c *Client) EnsureCurrent(ctx context.Context, timeout time.Duration) error {
-	if timeout <= 0 {
-		return errors.New("captain: ensure timeout must be positive")
-	}
+func (c *Client) EnsureCurrent(ctx context.Context) error {
 	health, err := c.RuntimeHealth(ctx)
 	if err != nil {
 		return probeFailure(err)
 	}
-	if health.RuntimeProtocol != Schema {
-		return fmt.Errorf("captain: runtime protocol %d is not exact v%d", health.RuntimeProtocol, Schema)
-	}
-	if health.RuntimeBuild != Build {
-		return fmt.Errorf("captain: runtime build %q is not exact build %q", health.RuntimeBuild, Build)
-	}
-	if !health.current() {
-		return errors.New("captain: exact signed host is not ready; run `capt-hook helper install`")
-	}
-	return nil
+	return health.exact()
 }
 
+// probeFailure names what the probe actually met, because the five outcomes
+// have five different next steps. ErrNotReady, ErrDraining, and ErrPeerGone are
+// one runtime mid-transition and answer again on the next event; a deadline is
+// a host that is there and slow; ErrUntrusted is a live peer that failed the
+// signed-host requirement, which reinstalling fixes and waiting does not; and
+// ErrNoVerifier is a machine that cannot answer the question at all. Only what
+// is left is a host that is not installed.
 func probeFailure(err error) error {
-	if probeRanOutOfTime(err) {
+	switch {
+	case errors.Is(err, daemonkit.ErrNotReady), errors.Is(err, daemonkit.ErrDraining),
+		errors.Is(err, daemonkit.ErrPeerGone):
+		return fmt.Errorf(
+			"captain: signed host is between generations — starting, draining, or restarting — "+
+				"and hooks retry on the next event: %w", err,
+		)
+	case errors.Is(err, os.ErrDeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
 		return fmt.Errorf(
 			"captain: signed host did not answer the readiness probe in time; it is running but slow, "+
 				"most likely under machine load, and hooks retry on the next event: %w", err,
 		)
+	case errors.Is(err, daemonkit.ErrUntrusted):
+		return fmt.Errorf(
+			"captain: the process serving the host socket is not the signed capt-hookd; "+
+				"reinstall the helper with `capt-hook helper install`: %w", err,
+		)
+	case errors.Is(err, daemonkit.ErrNoVerifier):
+		return fmt.Errorf(
+			"captain: this machine offers no code-signing verifier, so the signed host cannot be "+
+				"trusted and hooks stay unserved: %w", err,
+		)
+	default:
+		return fmt.Errorf("captain: signed host is not installed and ready; run `capt-hook helper install`: %w", err)
 	}
-	return fmt.Errorf("captain: signed host is not installed and ready; run `capt-hook helper install`: %w", err)
-}
-
-func probeRanOutOfTime(err error) bool {
-	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, syscall.ETIMEDOUT) {
-		return true
-	}
-	var timeout net.Error
-	if errors.As(err, &timeout) && timeout.Timeout() {
-		return true
-	}
-	// *wire.HandshakeRejectionError unwraps to this sentinel alone, never to
-	// wire.ErrHandshake, so a capacity refusal cannot ride the pairing below.
-	if errors.Is(err, wire.ErrSessionCapacity) {
-		return true
-	}
-	return errors.Is(err, wire.ErrHandshake) &&
-		(errors.Is(err, io.EOF) || errors.Is(err, wire.ErrFrameTruncated) ||
-			errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET))
 }
 
 // RuntimeHealth observes the exact product runtime without mutating it.
 func (c *Client) RuntimeHealth(ctx context.Context) (runtimeHealthResponse, error) {
-	result, err := c.call(ctx, wire.Op(opRuntimeHealth), nil)
+	result, err := c.call(ctx, opRuntimeHealth, nil)
 	if err != nil {
 		return runtimeHealthResponse{}, err
 	}
@@ -114,30 +91,29 @@ func (c *Client) RuntimeHealth(ctx context.Context) (runtimeHealthResponse, erro
 	if err := decodeStrict(result, &health); err != nil {
 		return runtimeHealthResponse{}, fmt.Errorf("captain: decode runtime health: %w", err)
 	}
-	if health.Schema != Schema || health.RuntimeBuild == "" || health.RuntimeProtocol <= 0 ||
-		health.ProcessGeneration == "" || health.PID <= 1 {
+	if health.Schema != Schema || health.RuntimeBuild == "" || health.RuntimeProtocol <= 0 || health.PID <= 1 {
 		return runtimeHealthResponse{}, errors.New("captain: runtime health identity is incomplete")
-	}
-	switch dkdaemon.State(health.State) {
-	case dkdaemon.StateHealthy, dkdaemon.StateDegraded, dkdaemon.StateFailed:
-	default:
-		return runtimeHealthResponse{}, fmt.Errorf("captain: invalid runtime health state %q", health.State)
 	}
 	return health, nil
 }
 
-func (h runtimeHealthResponse) current() bool {
-	return h.RuntimeBuild == Build && h.RuntimeProtocol == Schema && h.State == string(dkdaemon.StateHealthy) &&
-		h.Ready && !h.Draining
+func (h runtimeHealthResponse) exact() error {
+	if h.RuntimeProtocol != Schema {
+		return fmt.Errorf("captain: runtime protocol %d is not exact v%d", h.RuntimeProtocol, Schema)
+	}
+	if h.RuntimeBuild != Build {
+		return fmt.Errorf("captain: runtime build %q is not exact build %q", h.RuntimeBuild, Build)
+	}
+	return nil
 }
 
 // Event dispatches exactly once. No transport outcome is replayed.
 func (c *Client) Event(ctx context.Context, request EventRequest) (EventResponse, error) {
-	payload, err := json.Marshal(request)
+	payload, err := marshalEventRequest(request)
 	if err != nil {
-		return EventResponse{}, fmt.Errorf("captain: encode event request: %w", err)
+		return EventResponse{}, err
 	}
-	result, err := c.call(ctx, wire.Op(opEvent), payload)
+	result, err := c.call(ctx, opEvent, payload)
 	if err != nil {
 		return EventResponse{}, err
 	}
@@ -153,7 +129,7 @@ func (c *Client) Event(ctx context.Context, request EventRequest) (EventResponse
 
 // Status returns the live host and worker generations without spawning.
 func (c *Client) Status(ctx context.Context) (statusResponse, error) {
-	result, err := c.call(ctx, wire.Op(opStatus), nil)
+	result, err := c.call(ctx, opStatus, nil)
 	if err != nil {
 		return statusResponse{}, err
 	}
@@ -166,70 +142,21 @@ func (c *Client) Status(ctx context.Context) (statusResponse, error) {
 
 // RestartWorkers kills and reaps every product worker generation.
 func (c *Client) RestartWorkers(ctx context.Context) error {
-	payload, err := json.Marshal(restartWorkersRequest{Schema: Schema, Build: Build})
+	payload, err := marshalHostJSON(restartWorkersRequest{Schema: Schema, Build: Build})
 	if err != nil {
 		return err
 	}
-	_, err = c.call(ctx, wire.Op(opRestartWorkers), payload)
+	_, err = c.call(ctx, opRestartWorkers, payload)
 	return err
 }
 
-func (c *Client) runtimeClientConfig(role trust.PeerRole, timeout time.Duration) wire.RuntimeClientConfig {
-	return wire.RuntimeClientConfig{
-		Client: wire.ClientConfig{
-			Dial: wire.UnixDialer(c.paths.socket), WireBuild: WireBuild, Role: role, MaxFrame: maxHostFrame,
-		},
-		NoProgressTimeout: timeout,
+func (c *Client) call(ctx context.Context, op string, payload []byte) ([]byte, error) {
+	reply, err := c.business.Call(ctx, op, payload)
+	if errors.Is(err, daemonkit.ErrAbsent) {
+		return nil, errors.Join(ErrDaemonUnavailable, err)
 	}
-}
-
-func (c *Client) call(ctx context.Context, op wire.Op, payload []byte) ([]byte, error) {
-	session, err := c.businessSession(ctx)
 	if err != nil {
 		return nil, err
 	}
-	result, err := session.Call(ctx, op, "", payload)
-	if err != nil {
-		c.retireBusiness(session, err)
-		return nil, err
-	}
-	if result.Outcome != wire.Delivered {
-		reason := result.Response.Reason
-		if reason == "" {
-			reason = result.Outcome.String()
-		}
-		return nil, fmt.Errorf("captain: request rejected before dispatch: %s", reason)
-	}
-	if result.Response.Err != "" {
-		return nil, errors.New(result.Response.Err)
-	}
-	return result.Response.Payload, nil
-}
-
-func (c *Client) businessSession(ctx context.Context) (*wire.Client, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.business != nil {
-		return c.business, nil
-	}
-	session, err := wire.NewClient(ctx, wire.ClientConfig{
-		Dial: wire.UnixDialer(c.paths.socket), WireBuild: WireBuild, Role: c.role, MaxFrame: maxHostFrame,
-	})
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
-			return nil, ErrDaemonUnavailable
-		}
-		return nil, err
-	}
-	c.business = session
-	return session, nil
-}
-
-func (c *Client) retireBusiness(session *wire.Client, cause error) {
-	c.mu.Lock()
-	if c.business == session {
-		c.business = nil
-	}
-	c.mu.Unlock()
-	_ = session.Abort(cause)
+	return reply.Body, nil
 }

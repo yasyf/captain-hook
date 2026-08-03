@@ -7,14 +7,45 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/yasyf/daemonkit"
 )
 
 const (
 	// Schema is the only captain-hook host and worker schema.
-	Schema         = 1
-	maxEventInput  = 32 << 20
-	maxHostFrame   = 64 << 20
-	maxWorkerFrame = maxHostFrame
+	Schema = 1
+
+	// maxEventInput is the raw hook payload capt-hookd will read from stdin. It
+	// bounds one read; it does not bound what that payload becomes on the wire.
+	maxEventInput = 32 << 20
+
+	// maxEventEnvelope is what an EventRequest spends outside PayloadRaw: the
+	// event name, both paths, the interpreter, the build, the client identity,
+	// and the semantic environment the worker key is cut from.
+	maxEventEnvelope = 1 << 20
+
+	// maxHostPayload is the ceiling on a serialized request or reply body, and
+	// the only size that binds: JSON string escaping decides how many bytes a
+	// payload becomes and no raw size predicts it. Embedding maxEventInput bytes
+	// of well-formed JSON text costs at most two bytes per byte — quotes and
+	// backslashes double, and marshalHostJSON keeps `<`, `>`, and `&` at one
+	// apiece — so this admits every such payload with room for the envelope
+	// beside it. Escaping past 2:1 means bytes JSON cannot carry literally,
+	// control codes and invalid UTF-8 at six bytes each, and those are refused
+	// by name with ErrPayloadTooLarge rather than sized for.
+	maxHostPayload = 2*maxEventInput + maxEventEnvelope
+
+	// maxHostFrame is the frame that carries maxHostPayload. A session base64s
+	// its terminal at four bytes per three and reserves 4 KiB for the envelope,
+	// so the frame is sized from the payload and never the other way round;
+	// TestHostSessionCarriesTheWholeEventPayload proves the pair end to end.
+	maxHostFrame daemonkit.Bytes = (maxHostPayload*4+2)/3 + 4<<10
+
+	// maxWorkerFrame carries one maxHostPayload body inside the frame that names
+	// it. The frame wraps the request in its protocol, op, and id fields, so it
+	// cannot be the payload ceiling itself without refusing a request the host
+	// already admitted.
+	maxWorkerFrame = maxHostPayload + 4<<10
 )
 
 const (
@@ -27,8 +58,8 @@ const (
 	opHelperNext     = "captain.helper.next.v1"
 )
 
-// WireBuild is the stable v1 transport identity shared across runtime releases.
-const WireBuild = "captain-hook.host.v1"
+// hostSchema is the stable v1 application protocol shared across runtime releases.
+const hostSchema daemonkit.Schema = "captain-hook.host.v1"
 
 // Build is stamped from the release tag into the wheel and signed helper.
 var Build = "0.0.0"
@@ -75,16 +106,15 @@ type statusResponse struct {
 	Workers []workerStatus `json:"workers"`
 }
 
+// runtimeHealthResponse is the serving host's own identity. Nothing in it
+// restates a phase: the business lane dispatches to a product only once the
+// runtime is ready and not draining, so an answer to this op is itself the
+// readiness the fields used to carry.
 type runtimeHealthResponse struct {
-	Schema            int    `json:"schema"`
-	RuntimeBuild      string `json:"runtime_build"`
-	RuntimeProtocol   int    `json:"runtime_protocol"`
-	ProcessGeneration string `json:"process_generation"`
-	PID               int    `json:"pid"`
-	State             string `json:"state"`
-	Draining          bool   `json:"draining"`
-	Busy              bool   `json:"busy"`
-	Ready             bool   `json:"ready"`
+	Schema          int    `json:"schema"`
+	RuntimeBuild    string `json:"runtime_build"`
+	RuntimeProtocol int    `json:"runtime_protocol"`
+	PID             int    `json:"pid"`
 }
 
 type restartWorkersRequest struct {
@@ -135,13 +165,54 @@ func validateEventResponse(response EventResponse) error {
 	}
 }
 
+// ErrPayloadTooLarge refuses a body whose serialized size clears the host
+// payload ceiling. It names the one failure a raw byte count cannot predict:
+// JSON escaping expands control codes and invalid UTF-8 six bytes to one, so a
+// payload that read small off the wire can still exceed what a session carries.
+// A refusal here is the loud alternative to a truncated hook decision.
+var ErrPayloadTooLarge = errors.New("captain: payload exceeds the host ceiling")
+
+// marshalHostJSON encodes one value the way every captain-hook body travels,
+// with HTML escaping off. PayloadRaw carries arbitrary hook JSON, and Go's
+// default would render each `<`, `>`, and `&` in it as a six-byte Unicode
+// escape — a 6:1 expansion on punctuation hook payloads are full of, against a
+// ceiling sized for 2:1.
+func marshalHostJSON(value any) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
+}
+
+// marshalEventRequest serializes one event and admits it on the size that
+// binds. The stdin bound at maxEventInput still caps what capt-hookd reads, but
+// it is no longer the load-bearing check: what a session must carry is this
+// serialized body, and only measuring it says whether the session can.
+func marshalEventRequest(request EventRequest) ([]byte, error) {
+	payload, err := marshalHostJSON(request)
+	if err != nil {
+		return nil, fmt.Errorf("captain: encode event request: %w", err)
+	}
+	if len(payload) > maxHostPayload {
+		return nil, fmt.Errorf(
+			"%w: event serializes to %d bytes; ceiling is %d", ErrPayloadTooLarge, len(payload), maxHostPayload,
+		)
+	}
+	return payload, nil
+}
+
 func encodeWorkerFrame(writer io.Writer, frame workerFrame) error {
-	payload, err := json.Marshal(frame)
+	payload, err := marshalHostJSON(frame)
 	if err != nil {
 		return fmt.Errorf("captain: encode worker frame: %w", err)
 	}
 	if len(payload) > maxWorkerFrame {
-		return fmt.Errorf("captain: worker frame is %d bytes; limit is %d", len(payload), maxWorkerFrame)
+		return fmt.Errorf(
+			"%w: worker frame is %d bytes; limit is %d", ErrPayloadTooLarge, len(payload), maxWorkerFrame,
+		)
 	}
 	var header [4]byte
 	binary.BigEndian.PutUint32(header[:], uint32(len(payload)))
