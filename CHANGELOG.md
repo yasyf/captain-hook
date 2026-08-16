@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.21.3] - 2026-08-16
+
+### Fixed
+
+- Releases publish again. `uv` now emits core packaging metadata 2.5, which the
+  pinned `gh-action-pypi-publish` rejected outright — so `publish-pypi` failed
+  and took `publish-github`, `sync-plugin-version`, and `helper-formula` down
+  with it, leaving `12.21.1` and `12.21.2` as draft releases with no published
+  Homebrew formula. The action moves to v1.14.2, whose Twine 7 accepts that
+  metadata version.
+
 ## [12.21.2] - 2026-08-16
 
 ### Fixed

@@ -315,7 +315,8 @@ jobs:
           print("PyPI already contains the exact staged Python assets")
           PY
 
-      - uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247
+      # v1.14.2 — its Twine 7 bump is what accepts the metadata 2.5 uv now emits; v1.14.1 rejects it.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
         if: ${{ steps.pypi-state.outputs.publish == 'true' }}
         with:
           packages-dir: python-dist
