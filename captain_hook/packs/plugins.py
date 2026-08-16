@@ -12,9 +12,16 @@ the CLI once; every other event reads the snapshot. The fixed-path probe itself 
 discovery (cheap stats), so a pack edit inside a plugin dir needs no snapshot invalidation.
 
 Pack load is all-or-nothing: a plugin advertising ``capt-hook/`` with a missing descriptor or hooks
-dir raises rather than silently dropping guards. Claude Code re-lists an enabled plugin once per scope
-it resolves through, so the roster is deduped to one entry per full plugin id by scope precedence
-(``local`` > ``project`` > ``user``); two install paths at the same scope is a corrupt roster.
+dir raises rather than silently dropping guards. The CLI's roster is machine-wide — a ``project`` or
+``local`` entry names the ``projectPath`` it was installed under, and one plugin id is legitimately
+installed at the same scope in many projects — so the roster is first scoped to the discovering root
+and then deduped to one entry per full plugin id by scope precedence (``local`` > ``project`` >
+``user``); two install paths at the same scope *within one project* is a corrupt roster.
+
+A roster that cannot be enumerated raises :class:`PluginListError` and caches nothing. An empty
+roster means "this project enables no pack-shipping plugin" and must never also mean "the roster
+could not be read": :meth:`~captain_hook.cli.CliState.plugin_packs` is the one seam that catches the
+failure, and it records it where a person looks instead of discarding the whole pack layer silently.
 """
 
 from __future__ import annotations
@@ -35,6 +42,8 @@ from captain_hook.util.fs import atomic_write, read_json
 from captain_hook.util.paths import resolve_cache_dir, resolve_claude_config_dir
 
 CLI_TIMEOUT_SECONDS = 60
+# Bumped whenever a snapshot's meaning changes, so every older one is recomputed instead of served.
+SNAPSHOT_VERSION = 2
 # Claude Code layers plugin scopes; when one id resolves at more than one scope the earlier entry here
 # outranks the later, mirroring settings precedence. An unknown scope ranks lowest.
 SCOPE_PRECEDENCE = ("local", "project", "user")
@@ -111,6 +120,7 @@ class EnabledPlugin:
     version: str
     root: str
     scope: str | None = None
+    project_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,13 +130,26 @@ class PluginSnapshot:
 
     @classmethod
     def load(cls, path: Path) -> PluginSnapshot | None:
-        if (data := read_json(path)) is None:
+        """The snapshot at ``path``, or ``None`` when it is absent, unreadable, or an older format.
+
+        The version gate is load-bearing rather than housekeeping: a snapshot written before the
+        roster was scoped per project holds entries this root may not own, and a snapshot written by
+        the discarded warning-and-empty path holds a failure posing as an answer. Neither may be
+        served, and neither moves the stat tuple that would otherwise invalidate it.
+        """
+        if (data := read_json(path)) is None or data.get("version") != SNAPSHOT_VERSION:
             return None
         try:
             return cls(
                 stat=tuple(tuple(rec) for rec in data["stat"]),
                 plugins=tuple(
-                    EnabledPlugin(id=p["id"], version=p["version"], root=p["root"], scope=p.get("scope"))
+                    EnabledPlugin(
+                        id=p["id"],
+                        version=p["version"],
+                        root=p["root"],
+                        scope=p.get("scope"),
+                        project_path=p["project_path"],
+                    )
                     for p in data["plugins"]
                 ),
             )
@@ -138,9 +161,17 @@ class PluginSnapshot:
             path,
             json.dumps(
                 {
+                    "version": SNAPSHOT_VERSION,
                     "stat": [list(rec) for rec in self.stat],
                     "plugins": [
-                        {"id": p.id, "version": p.version, "root": p.root, "scope": p.scope} for p in self.plugins
+                        {
+                            "id": p.id,
+                            "version": p.version,
+                            "root": p.root,
+                            "scope": p.scope,
+                            "project_path": p.project_path,
+                        }
+                        for p in self.plugins
                     ],
                 }
             ),
@@ -156,6 +187,8 @@ def parse_plugin_entry(entry: object) -> EnabledPlugin | None:
     A non-object entry, or one whose ``id``/``installPath`` is missing or not a string, is skipped with
     a debug line so a single malformed sibling never suppresses the valid ones; an entry Claude Code did
     not report ``enabled`` with an install path is skipped silently (the ordinary not-enabled case).
+    ``projectPath`` is the project a ``project``/``local`` entry belongs to; a ``user``-scope entry
+    carries none.
     """
     if not isinstance(entry, dict):
         logger.debug(f"skipping non-object plugin roster entry {entry!r}")
@@ -169,11 +202,13 @@ def parse_plugin_entry(entry: object) -> EnabledPlugin | None:
         return None
     version = entry.get("version", "")
     scope = entry.get("scope")
+    project = entry.get("projectPath")
     return EnabledPlugin(
         id=pid,
         version=version if isinstance(version, str) else "",
         root=path,
         scope=scope if isinstance(scope, str) else None,
+        project_path=project if isinstance(project, str) and project else None,
     )
 
 
@@ -181,12 +216,24 @@ def scope_rank(scope: str | None) -> int:
     return SCOPE_PRECEDENCE.index(scope) if scope in SCOPE_PRECEDENCE else len(SCOPE_PRECEDENCE)
 
 
+def governs(plugin: EnabledPlugin, root: Path) -> bool:
+    """Whether a roster entry governs ``root``.
+
+    ``claude plugin list`` answers machine-wide whatever directory it runs in: a ``project`` or
+    ``local`` entry carries the ``projectPath`` it was installed under and governs that project
+    alone, while a ``user``-scope entry carries none and governs every root. Without this the same
+    plugin installed at ``local`` scope in six projects reads as six competing installs of one id.
+    """
+    return plugin.project_path is None or Path(plugin.project_path).resolve() == root
+
+
 def pick_scoped(pid: str, entries: list[EnabledPlugin]) -> EnabledPlugin:
     """The single :class:`EnabledPlugin` a plugin id resolves to across its scope-layered roster entries.
 
     Entries sharing an install path collapse. Across differing install paths the highest-precedence scope
     wins (``local`` > ``project`` > ``user``), mirroring Claude Code's own settings layering. Two distinct
-    install paths at the *same* scope is a corrupt roster and raises :class:`PluginListError`.
+    install paths at the *same* scope of the *same* project is a corrupt roster and raises
+    :class:`PluginListError`.
     """
     roots_by_scope: dict[str | None, set[str]] = {}
     for plugin in entries:
@@ -197,15 +244,18 @@ def pick_scoped(pid: str, entries: list[EnabledPlugin]) -> EnabledPlugin:
     return min(entries, key=lambda p: scope_rank(p.scope))
 
 
-def dedupe_scoped_roster(parsed: list[EnabledPlugin]) -> tuple[EnabledPlugin, ...]:
-    """Collapse Claude Code's scope-layered roster to one :class:`EnabledPlugin` per plugin id.
+def dedupe_scoped_roster(parsed: list[EnabledPlugin], root: Path) -> tuple[EnabledPlugin, ...]:
+    """Collapse Claude Code's machine-wide roster to one :class:`EnabledPlugin` per plugin id for ``root``.
 
-    Claude re-lists an enabled plugin once per scope (``project``/``user``) it resolves through; grouping
-    by id and resolving each group with :func:`pick_scoped` yields one deterministic entry per id.
+    Entries belonging to another project are dropped by :func:`governs`; Claude re-lists what remains
+    once per scope (``local``/``project``/``user``) it resolves through, so grouping by id and resolving
+    each group with :func:`pick_scoped` yields one deterministic entry per id.
     """
+    resolved = root.resolve()
     by_id: dict[str, list[EnabledPlugin]] = {}
     for plugin in parsed:
-        by_id.setdefault(plugin.id, []).append(plugin)
+        if governs(plugin, resolved):
+            by_id.setdefault(plugin.id, []).append(plugin)
     return tuple(pick_scoped(pid, entries) for pid, entries in by_id.items())
 
 
@@ -213,12 +263,10 @@ def list_plugins_cli(root: Path, executable: str) -> tuple[EnabledPlugin, ...]:
     """Run ``claude plugin list --json`` in ``root`` and return its enabled, installed plugins.
 
     The single subprocess boundary of discovery. Keeps only entries Claude Code reports as ``enabled``
-    with a string ``installPath``. Raises :class:`PluginListError` on a nonzero exit, on an ``OSError``
-    that keeps the CLI from executing (a ``claude`` on PATH with a dead shebang passes ``shutil.which``
-    but fails ``exec``), and on any roster shape it cannot use — a non-array top level, unparseable JSON,
-    or an entry that trips the parser — so every failure lands on ``enabled_plugins``'
-    warning-and-empty-snapshot path, never crashing dispatch. A subprocess timeout still surfaces as the
-    native ``subprocess.TimeoutExpired``.
+    with a string ``installPath``. Every failure is one :class:`PluginListError` — a nonzero exit, a
+    timeout, an ``OSError`` that keeps the CLI from executing (a ``claude`` on PATH with a dead shebang
+    passes ``shutil.which`` but fails ``exec``), and any roster shape it cannot use: a non-array top
+    level, unparseable JSON, or an entry that trips the parser.
     """
     try:
         result = subprocess.run(
@@ -228,6 +276,8 @@ def list_plugins_cli(root: Path, executable: str) -> tuple[EnabledPlugin, ...]:
             text=True,
             timeout=CLI_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired as e:
+        raise PluginListError(f"claude plugin list timed out after {CLI_TIMEOUT_SECONDS}s") from e
     except OSError as e:
         raise PluginListError(f"claude plugin list could not be executed: {e}") from e
     if result.returncode != 0:
@@ -242,19 +292,23 @@ def list_plugins_cli(root: Path, executable: str) -> tuple[EnabledPlugin, ...]:
         parsed = [plugin for entry in roster if (plugin := parse_plugin_entry(entry)) is not None]
     except (TypeError, AttributeError, KeyError) as e:
         raise PluginListError(f"claude plugin list returned an unusable roster shape: {e!r}") from e
-    # Claude Code re-lists an enabled plugin once per scope it resolves through; collapse to one per id.
-    return dedupe_scoped_roster(parsed)
+    # The roster is machine-wide and scope-layered; scope it to this root and collapse to one per id.
+    return dedupe_scoped_roster(parsed, root)
 
 
 def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
     """The plugins Claude Code has enabled for ``root``, cached per project with stat invalidation.
 
-    Returns ``()`` without spawning the CLI when Claude Code has no ``installed_plugins.json``
-    (the existence gate that keeps discovery — and every test — hermetic) or when ``claude`` is
-    off PATH. A fresh snapshot is served directly; otherwise the CLI re-runs once under a file
-    lock with a re-stat double-check inside it, so a burst of concurrent events pays a single
-    spawn. A CLI failure caches an empty roster against the current stat tuple, so a persistently
-    broken CLI costs nothing per event until a watched file changes and re-triggers it.
+    Returns ``()`` without spawning the CLI only when Claude Code has no ``installed_plugins.json`` —
+    the existence gate that keeps discovery, and every test, hermetic, and the one state where "no
+    plugins" is the truth. A fresh snapshot is served directly; otherwise the CLI re-runs once under a
+    file lock with a re-stat double-check inside it, so a burst of concurrent events pays a single
+    spawn.
+
+    Raises :class:`PluginListError` when the roster cannot be read at all, ``claude`` missing from a
+    daemon's minimal ``PATH`` included, and caches nothing: an unreadable roster cached as an empty one
+    would make a broken pack layer indistinguishable from a project that enables no packs, which is how
+    every plugin-shipped pack on a machine went dead behind one warning line.
     """
     if not installed_plugins_path().is_file():
         return ()
@@ -263,21 +317,13 @@ def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
     if (snap := PluginSnapshot.load(path)) and snap.fresh(records):
         return snap.plugins
     if (executable := which("claude")) is None:
-        logger.debug("claude not on PATH; skipping plugin discovery")
-        return ()
+        raise PluginListError("claude is not on PATH, so the plugin roster cannot be enumerated")
     path.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(str(path.with_name(path.name + ".lock"))):
         records = stat_records(root)
         if (snap := PluginSnapshot.load(path)) and snap.fresh(records):
             return snap.plugins
-        try:
-            plugins = list_plugins_cli(root, executable)
-        except (PluginListError, subprocess.TimeoutExpired, ValueError, KeyError):
-            logger.opt(exception=True).warning(
-                "claude plugin list failed; caching an empty plugin roster until a watched file changes"
-            )
-            PluginSnapshot(stat=records, plugins=()).write(path)
-            return ()
+        plugins = list_plugins_cli(root, executable)
         PluginSnapshot(stat=records, plugins=plugins).write(path)
         return plugins
 

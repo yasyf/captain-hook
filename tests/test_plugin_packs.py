@@ -55,9 +55,24 @@ def write_plugin_pack(
 
 
 def roster_entry(
-    plugin_id: str, root: Path, *, version: str = "1.0.0", enabled: bool = True, scope: str = "user"
+    plugin_id: str,
+    root: Path,
+    *,
+    version: str = "1.0.0",
+    enabled: bool = True,
+    scope: str = "user",
+    project_path: Path | None = None,
 ) -> dict[str, object]:
-    return {"id": plugin_id, "version": version, "enabled": enabled, "installPath": str(root), "scope": scope}
+    entry: dict[str, object] = {
+        "id": plugin_id,
+        "version": version,
+        "enabled": enabled,
+        "installPath": str(root),
+        "scope": scope,
+    }
+    if project_path is not None:
+        entry["projectPath"] = str(project_path)
+    return entry
 
 
 def fake_claude(
@@ -234,8 +249,9 @@ def test_scope_precedence_project_over_user(tmp_path: Path, monkeypatch: pytest.
     assert rp.entry.root == str(proj)  # the project-scope install wins
 
 
-def test_same_scope_conflict_degrades_to_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Two different install paths at the SAME scope is a corrupt roster: PluginListError, damped to empty.
+def test_same_scope_conflict_in_one_project_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Two install paths at the same scope OF THE SAME PROJECT is a corrupt roster: it raises, and the
+    # failure is never cached as if the machine simply had no plugin packs.
     plant_installed()
     (root := tmp_path / "proj").mkdir()
     a = write_plugin_pack(tmp_path, "show", slot="a")
@@ -244,10 +260,60 @@ def test_same_scope_conflict_degrades_to_empty(tmp_path: Path, monkeypatch: pyte
         tmp_path,
         monkeypatch,
         calls=tmp_path / "calls",
-        roster=[roster_entry("show@mkt", a, scope="project"), roster_entry("show@mkt", b, scope="project")],
+        roster=[
+            roster_entry("show@mkt", a, scope="project", project_path=root),
+            roster_entry("show@mkt", b, scope="project", project_path=root),
+        ],
     )
-    assert plugins.enabled_plugins(root) == ()  # PluginListError damped to an empty roster
-    assert plugins.resolve_plugin_packs(root) == []
+    with pytest.raises(plugins.PluginListError, match="2 install paths at scope 'project'"):
+        plugins.enabled_plugins(root)
+    assert not plugins.snapshot_path(root).exists()
+
+
+def test_same_scope_in_different_projects_resolves_per_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The live P1: one plugin id installed at `local` scope in several projects is normal, not corrupt.
+    # projectPath is what tells the installs apart, and each root resolves to its own.
+    plant_installed()
+    (here := tmp_path / "here").mkdir()
+    (there := tmp_path / "there").mkdir()
+    mine = write_plugin_pack(tmp_path, "codex", "1.9.0", slot="mine")
+    theirs = write_plugin_pack(tmp_path, "codex", "1.8.4", slot="theirs")
+    install_claude(
+        tmp_path,
+        monkeypatch,
+        calls=tmp_path / "calls",
+        roster=[
+            roster_entry("codex@skills", theirs, version="1.8.4", scope="local", project_path=there),
+            roster_entry("codex@skills", mine, version="1.9.0", scope="local", project_path=here),
+        ],
+    )
+    (ours,) = plugins.resolve_plugin_packs(here)
+    assert ours.entry.root == str(mine)
+    (yours,) = plugins.resolve_plugin_packs(there)
+    assert yours.entry.root == str(theirs)
+
+
+def test_foreign_project_entry_does_not_govern_this_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A project-scoped install belongs to its own project: it neither loads here nor outranks the
+    # user-scope entry that does.
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    (other := tmp_path / "other").mkdir()
+    ours = write_plugin_pack(tmp_path, "show", slot="ours")
+    foreign = write_plugin_pack(tmp_path, "show", slot="foreign")
+    only_theirs = write_plugin_pack(tmp_path, "theirs", slot="theirs")
+    install_claude(
+        tmp_path,
+        monkeypatch,
+        calls=tmp_path / "calls",
+        roster=[
+            roster_entry("show@mkt", ours, scope="user"),
+            roster_entry("show@mkt", foreign, scope="local", project_path=other),
+            roster_entry("theirs@mkt", only_theirs, scope="project", project_path=other),
+        ],
+    )
+    (resolved,) = plugins.resolve_plugin_packs(root)
+    assert resolved.entry.root == str(ours)
 
 
 # --- snapshot & CLI invocation -------------------------------------------------------
@@ -263,6 +329,34 @@ def test_two_calls_run_cli_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     first, second = plugins.enabled_plugins(root), plugins.enabled_plugins(root)
     assert first == second and len(first) == 1
     assert calls.read_text() == "x"  # the second event served the snapshot, no re-spawn
+
+
+@pytest.mark.parametrize("stale_plugins", [pytest.param([], id="poisoned-empty"), pytest.param(None, id="populated")])
+def test_pre_scoping_snapshot_is_recomputed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stale_plugins: list[object] | None
+) -> None:
+    # Neither a pre-scoping roster nor the empty one the old failure path wrote moves the stat tuple,
+    # so the format version is what invalidates them.
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    calls = tmp_path / "calls"
+    plugin = write_plugin_pack(tmp_path, "show", "1.0.0")
+    install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("show@mkt", plugin)])
+
+    plugins.enabled_plugins(root)
+    snapshot = plugins.snapshot_path(root)
+    stale = json.loads(snapshot.read_text())
+    del stale["version"]
+    for entry in stale["plugins"]:
+        del entry["project_path"]
+    if stale_plugins is not None:
+        stale["plugins"] = stale_plugins
+    snapshot.write_text(json.dumps(stale))
+
+    assert plugins.PluginSnapshot.load(snapshot) is None
+    (only,) = plugins.enabled_plugins(root)
+    assert only.id == "show@mkt"
+    assert calls.read_text() == "xx"  # the pre-scoping snapshot was discarded and the CLI re-asked
 
 
 @pytest.mark.parametrize("idx", range(len(plugins.watched_paths(Path("/x")))))
@@ -314,28 +408,24 @@ def test_ctime_only_watched_rewrite_refreshes_roster(tmp_path: Path, monkeypatch
         pytest.param({"raw_stdout": "not json", "returncode": 0}, id="bad_json"),
     ],
 )
-def test_cli_failure_caches_empty_roster_and_damps(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, logcap, failure: dict[str, object]
-) -> None:  # type: ignore[no-untyped-def]
+def test_cli_failure_raises_and_caches_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: dict[str, object]
+) -> None:
     plant_installed()
     (root := tmp_path / "proj").mkdir()
     calls = tmp_path / "calls"
     install_claude(tmp_path, monkeypatch, calls=calls, roster=[], **failure)
 
-    assert plugins.enabled_plugins(root) == ()
-    assert plugins.snapshot_path(root).is_file()  # an empty-roster snapshot was written
-    assert plugins.enabled_plugins(root) == ()
-    assert calls.read_text() == "x"  # a broken CLI is not re-invoked per event
-    assert [r for r in logcap.records if r.levelno == logging.WARNING and "claude plugin list failed" in r.message]
-
-    plugins.installed_plugins_path().write_text("x" * 500)  # a watched-file change re-triggers
-    plugins.enabled_plugins(root)
-    assert calls.read_text() == "xx"
+    with pytest.raises(plugins.PluginListError):
+        plugins.enabled_plugins(root)
+    assert not plugins.snapshot_path(root).exists()  # a failure is never cached as an authoritative roster
+    with pytest.raises(plugins.PluginListError):
+        plugins.enabled_plugins(root)
+    assert calls.read_text() == "xx"  # the next event re-asks instead of serving the failure back
 
 
-def test_dead_shebang_claude_caches_empty_roster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, logcap) -> None:  # type: ignore[no-untyped-def]
-    # R1: a `claude` with a dead shebang passes shutil.which but fails exec with OSError — that must
-    # damp to an empty snapshot, not crash dispatch.
+def test_dead_shebang_claude_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # R1: a `claude` with a dead shebang passes shutil.which but fails exec with OSError.
     plant_installed()
     (root := tmp_path / "proj").mkdir()
     (bindir := tmp_path / "bin").mkdir(parents=True)
@@ -343,10 +433,32 @@ def test_dead_shebang_claude_caches_empty_roster(tmp_path: Path, monkeypatch: py
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
 
-    assert plugins.enabled_plugins(root) == ()
-    snap = plugins.PluginSnapshot.load(plugins.snapshot_path(root))
-    assert snap is not None and snap.plugins == ()  # empty-roster snapshot written, no exception escaped
-    assert [r for r in logcap.records if r.levelno == logging.WARNING and "claude plugin list failed" in r.message]
+    with pytest.raises(plugins.PluginListError, match="could not be executed"):
+        plugins.enabled_plugins(root)
+    assert not plugins.snapshot_path(root).exists()
+
+
+def test_roster_failure_is_recorded_where_a_person_looks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, logcap
+) -> None:  # type: ignore[no-untyped-def]
+    # Discovery keeps serving the builtins, and the failure reaches the status dashboard's load
+    # errors and the fault store the next session start drains.
+    from captain_hook import faults
+    from captain_hook.app import _state
+    from captain_hook.cli import PLUGIN_ROSTER_SOURCE, CliState
+
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[], returncode=1)
+
+    packs = CliState(root=root).discover()
+
+    assert packs and all(isinstance(p.entry, manager.BuiltinPack) for p in packs)
+    (error,) = _state.load_errors
+    assert error.source == PLUGIN_ROSTER_SOURCE and isinstance(error.exc, plugins.PluginListError)
+    assert [r for r in logcap.records if r.levelno == logging.ERROR and "plugin roster unusable" in r.message]
+    (line,) = faults.drain()
+    assert line.startswith(faults.ANNOUNCE_PREFIX) and PLUGIN_ROSTER_SOURCE in line
 
 
 def test_managed_settings_dropin_changes_invalidate_snapshot(tmp_path: Path) -> None:
@@ -397,12 +509,13 @@ def test_parse_plugin_entry(entry: object, expected: tuple[str, str, str] | None
     "raw_stdout",
     [pytest.param('{"id": "x", "enabled": true}', id="top-level-dict"), pytest.param("42", id="numeric-top-level")],
 )
-def test_non_list_roster_degrades_to_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_stdout: str) -> None:
+def test_non_list_roster_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_stdout: str) -> None:
     plant_installed()
     (root := tmp_path / "proj").mkdir()
     install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", raw_stdout=raw_stdout)
-    assert plugins.enabled_plugins(root) == ()  # a non-array roster is a PluginListError, damped to empty
-    assert plugins.snapshot_path(root).is_file()  # an empty-roster snapshot was written, so it damps
+    with pytest.raises(plugins.PluginListError):
+        plugins.enabled_plugins(root)
+    assert not plugins.snapshot_path(root).exists()
 
 
 def test_malformed_entry_does_not_suppress_valid_siblings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -432,13 +545,16 @@ def test_installed_plugins_absent_runs_no_cli(tmp_path: Path, monkeypatch: pytes
     assert not plugins.snapshot_path(root).exists()  # and no snapshot is written
 
 
-def test_claude_off_path_returns_empty_no_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_claude_off_path_raises_no_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Claude Code is installed (installed_plugins.json exists) but its CLI is unreachable — the state
+    # a daemon's launchd PATH produces. Unenumerable is not the same answer as "no plugins".
     plant_installed()
     (root := tmp_path / "proj").mkdir()
     (empty := tmp_path / "empty-bin").mkdir()
     monkeypatch.setenv("PATH", str(empty))  # no claude reachable
 
-    assert plugins.enabled_plugins(root) == ()
+    with pytest.raises(plugins.PluginListError, match="not on PATH"):
+        plugins.enabled_plugins(root)
     assert not plugins.snapshot_path(root).exists()
 
 

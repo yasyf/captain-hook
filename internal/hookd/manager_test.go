@@ -97,16 +97,18 @@ func TestWorkerCmdOwnsTheWholeWorkerSession(t *testing.T) {
 		t.Fatal("worker spawn does not own its descendants")
 	}
 	if cmd.Path != "/usr/bin/python3" || cmd.Dir != "/tmp/repo" ||
-		len(cmd.Args) != 2 || cmd.Args[0] != "-m" || cmd.Args[1] != "captain_hook.worker" {
-		t.Fatalf("worker cmd = %#v", cmd)
+		len(cmd.Args) != 3 || cmd.Args[0] != "-P" || cmd.Args[1] != "-m" || cmd.Args[2] != "captain_hook.worker" {
+		t.Fatalf("worker spawn = %q %q in %q", cmd.Path, cmd.Args, cmd.Dir)
 	}
 	seen := map[string]string{}
 	for _, item := range cmd.Env {
 		name, value, _ := strings.Cut(item, "=")
 		seen[name] = value
 	}
+	// The whole inherited environment carries the user's secrets, so a failure names only what it asserts.
 	if seen["LANG"] != "C" || seen["PATH"] == "" || seen["HOOKS_PROFILE"] != "strict" {
-		t.Fatalf("worker environment = %v", cmd.Env)
+		t.Fatalf("worker environment: LANG=%q PATH set=%t HOOKS_PROFILE=%q",
+			seen["LANG"], seen["PATH"] != "", seen["HOOKS_PROFILE"])
 	}
 }
 

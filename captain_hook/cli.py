@@ -18,7 +18,8 @@ from cc_transcript.ids import SessionId
 from cc_transcript.tools import register_mcp_tool, unregister_mcp_tool
 from loguru import logger
 
-from captain_hook.app import _state, load_gitignore, reset
+from captain_hook import faults
+from captain_hook.app import LoadError, _state, load_gitignore, reset
 from captain_hook.dispatch import dispatch
 from captain_hook.helper.cli import helper
 from captain_hook.loader import (
@@ -26,6 +27,7 @@ from captain_hook.loader import (
     discover_hooks,
     discover_pack,
     is_skip_marked,
+    register_fault_announcements,
     register_pr_announcements,
     register_resource_provisioning,
 )
@@ -71,6 +73,8 @@ def search_upward(start: Path, *rel: str, stop: Path | None = None) -> Path | No
 
 EVENT_NAMES = ", ".join(n for e in Event if (n := e.name))
 
+PLUGIN_ROSTER_SOURCE = "claude plugin list"
+
 DECISION_EVENTS = frozenset({Event.PreToolUse, Event.Stop, Event.SubagentStop, Event.PermissionRequest})
 
 type DiscoveryScope = Literal["all", "hooks"]
@@ -85,6 +89,23 @@ class CliState:
     def hooks_dir(self) -> str:
         return self.hooks or str(self.root / ".claude" / "hooks")
 
+    def plugin_packs(self) -> list[manager.ResolvedPack]:
+        """The pack each of this root's enabled plugins ships, or ``[]`` with the failure on the record.
+
+        A roster that cannot be enumerated is not a machine without plugin packs. Hard-failing here
+        would take every Claude Code session on the machine down over one broken CLI, so the failure
+        is instead logged at ERROR, recorded as a :class:`~captain_hook.app.LoadError` that
+        ``capt-hook status`` and ``capt-hook pack list`` print, and recorded as a fault that the next
+        session start tells the user about — three places a person looks, none of them silent.
+        """
+        try:
+            return plugins.resolve_plugin_packs(self.root)
+        except plugins.PluginListError as exc:
+            logger.opt(exception=True).error("plugin roster unusable; no plugin-shipped pack is loaded")
+            _state.load_errors.append(LoadError(PLUGIN_ROSTER_SOURCE, exc))
+            faults.record(PLUGIN_ROSTER_SOURCE, exc)
+            return []
+
     def discover(self, *, scope: DiscoveryScope = "all") -> list[manager.ResolvedPack]:
         reset()
         load_gitignore(self.root)
@@ -92,7 +113,7 @@ class CliState:
         if scope == "hooks":
             return []
         builtins = [manager.resolve_builtin(name) for name in manager.active_builtins(self.root)]
-        packs = [*builtins, *plugins.resolve_plugin_packs(self.root)]
+        packs = [*builtins, *self.plugin_packs()]
         for pack_ in packs:
             discover_pack(pack_.name, pack_.path)
         register_pack_tools(packs)
@@ -101,6 +122,7 @@ class CliState:
             register_resource_provisioning(resources)
         # The PR announcer's gating all lives in collect_announcements, so it registers unconditionally.
         register_pr_announcements()
+        register_fault_announcements()
         return packs
 
 
@@ -261,13 +283,15 @@ def dispatch_event(
     elif event in DISPATCH_EVENTS:
         try:
             dispatch_review(event.name, raw)
-        except Exception:
+        except Exception as exc:
             logger.exception("native review dispatch failed")
+            faults.record("async review dispatch", exc)
         if event is Event.SessionStart:
             try:
                 dispatch_update()
-            except Exception:
+            except Exception as exc:
                 logger.exception("native update dispatch failed")
+                faults.record("async update dispatch", exc)
 
     resolved_path = raw.get("agent_transcript_path") or raw.get("transcript_path")
     ctx = HookContext(
@@ -726,11 +750,11 @@ def hook_count(path: Path) -> int:
 @click.pass_obj
 def pack_list(state: CliState) -> None:
     """List the active wheel builtins and the pack each enabled Claude plugin ships (read-only)."""
+    reset()
     packs = [
         *(manager.resolve_builtin(name) for name in manager.active_builtins(state.root)),
-        *plugins.resolve_plugin_packs(state.root),
+        *state.plugin_packs(),
     ]
-    reset()
     for r in packs:
         discover_pack(r.name, r.path)
     for r in packs:
@@ -738,7 +762,8 @@ def pack_list(state: CliState) -> None:
         click.echo(f"  {r.pack_id:34} {kind:8} {hook_count(r.path)} hooks")
     for error in _state.load_errors:
         click.echo(
-            f"!  {error.pack}: {Path(error.source).name} failed to import - {type(error.exc).__name__}: {error.exc}"
+            f"!  {f'[{error.pack}] ' if error.pack else ''}{Path(error.source).name}: "
+            f"{type(error.exc).__name__}: {error.exc}"
         )
 
 

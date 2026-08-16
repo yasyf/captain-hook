@@ -126,7 +126,9 @@ def run_update() -> None:
 
 
 def update_argv() -> list[str]:
-    return [sys.executable, "-m", "captain_hook", "update", "run"]
+    # -P: detach() runs this from the session's repo, and `-m` would otherwise put that repo at the
+    # head of sys.path, where a directory sharing a dependency's name shadows the installed one.
+    return [sys.executable, "-P", "-m", "captain_hook", "update", "run"]
 
 
 def detach() -> None:
