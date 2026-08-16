@@ -164,9 +164,13 @@ func (m *workerManager) start(ctx context.Context, key workerKey) (*workerClient
 	return worker, nil
 }
 
+// workerCmd runs the worker with -P, so the session repo the worker's Dir names
+// stays off sys.path: a directory there sharing an installed dependency's name
+// otherwise shadows it, failing the import inside the worker thread where no
+// hook response can carry it.
 func workerCmd(key workerKey) daemonkit.Cmd {
 	return daemonkit.Cmd{
-		Path: key.python, Args: []string{"-m", "captain_hook.worker"}, Dir: key.root,
+		Path: key.python, Args: []string{"-P", "-m", "captain_hook.worker"}, Dir: key.root,
 		Env:     mergeEnvironment(workerBaseEnvironment(os.Environ()), key.env),
 		Session: true,
 		Exec:    daemonkit.ServingSameUser(),

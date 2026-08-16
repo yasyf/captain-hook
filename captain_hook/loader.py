@@ -163,6 +163,25 @@ def register_pr_announcements() -> None:
         return None
 
 
+def register_fault_announcements() -> None:
+    """Register the shared sync SessionStart hook that tells the user what failed where nobody looked.
+
+    Called once per discovery pass, unconditionally. A worker-thread dispatch, a hook handler, or a
+    plugin roster that would not enumerate all fail after — or beside — the response Claude Code
+    reads, so draining :mod:`captain_hook.faults` at session start is the one moment their failure
+    reaches a person rather than only the daemon log.
+    """
+
+    @on(Event.SessionStart, max_fires=1)
+    def announce_faults(evt: BaseHookEvent) -> HookResult | None:
+        from captain_hook.faults import drain
+        from captain_hook.types import Action, HookResult
+
+        if lines := drain():
+            return HookResult(action=Action.warn, message="\n".join(lines))
+        return None
+
+
 def discover_pack(name: str, pack_dir: Path) -> None:
     from captain_hook.packs.manager import pack_module_name
 

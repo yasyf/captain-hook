@@ -305,7 +305,7 @@ class TestGuardAndSpawn:
         )
         [(argv, kwargs)] = popen_calls
         assert argv == spawn_argv(str(transcript), str(tmp_path))
-        assert argv[:5] == [sys.executable, "-m", "captain_hook", "review", "spawn"]
+        assert argv[:6] == [sys.executable, "-P", "-m", "captain_hook", "review", "spawn"]
         assert kwargs["start_new_session"] is True
         assert kwargs["env"][SPAWNED_ENV] == "1"
         assert kwargs["stdin"] is subprocess.DEVNULL

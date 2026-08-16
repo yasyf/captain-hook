@@ -137,8 +137,11 @@ def sweep_key(cwd: str) -> str:
 
 
 def spawn_argv(transcript: str, cwd: str | None, *, sweep: bool = False) -> list[str]:
+    # -P: the reviewer runs with the session's repo as its cwd, and `-m` would otherwise put that repo
+    # at the head of sys.path, where a directory sharing a dependency's name shadows the installed one.
     return [
         sys.executable,
+        "-P",
         "-m",
         "captain_hook",
         "review",
