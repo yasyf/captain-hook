@@ -56,6 +56,41 @@ jobs:
           .wheel-smoke/bin/capt-hook --help
           test -x .wheel-smoke/bin/hook
           test -x .wheel-smoke/bin/hookd
+          # This venv resolves dependencies from the index, not uv.lock, so it is the only
+          # CI environment shaped like a release install. `capt-hook mcp` must speak protocol
+          # here: an `mcp` major the lock never tested is exactly how the server shipped dead.
+          .wheel-smoke/bin/python - .wheel-smoke/bin/capt-hook <<'PY'
+          import json, subprocess, sys, threading
+
+          proc = subprocess.Popen([sys.argv[1], "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+          threading.Timer(120, proc.kill).start()
+
+
+          def send(message):
+              proc.stdin.write(json.dumps(message) + "\n")
+              proc.stdin.flush()
+
+
+          def receive(method):
+              line = proc.stdout.readline()
+              if not line:
+                  raise SystemExit(f"capt-hook mcp closed stdout during {method} (traceback above)")
+              return json.loads(line)
+
+
+          send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+              "protocolVersion": "2025-06-18", "capabilities": {},
+              "clientInfo": {"name": "wheel-smoke", "version": "1"}}})
+          init = receive("initialize")
+          send({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+          send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+          listed = receive("tools/list")
+          proc.terminate()
+
+          assert init["result"]["serverInfo"]["name"] == "capt-hook", init
+          assert [t["name"] for t in listed["result"]["tools"]] == ["register_transcript"], listed
+          print("MCP liveness OK")
+          PY
           # The thin client must stay stdlib-pure: importing it may pull in neither
           # captain_hook.* nor any third-party module before it execs the signed host.
           .wheel-smoke/bin/python -c 'import sys; b=set(sys.modules); import capt_hook_client.client; new=set(sys.modules)-b; std=set(sys.stdlib_module_names); cap=sorted(m for m in new if m.startswith("captain_hook")); bad=sorted(m for m in new if m.split(".")[0] not in std and not m.startswith("capt_hook_client")); assert not cap, f"client imported captain_hook: {cap}"; assert not bad, f"client imported non-stdlib: {bad}"; print("client purity OK")'

@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import json
 import os
+import subprocess
+import sys
+import threading
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from cc_transcript.ids import SessionId
@@ -126,11 +132,122 @@ class TestMcpTool:
     def test_mcp_tool_hits_the_same_slot(self) -> None:
         from captain_hook.mcp_server import build_mcp_server
 
-        server = build_mcp_server()  # importing succeeds only with the mcp extra installed
+        server = build_mcp_server()
         asyncio.run(server.call_tool("register_transcript", {"session_id": "s-mcp", "thread_id": "thread-mcp"}))
         (entry,) = read_entries("s-mcp")
         assert entry["provider"] == "codex"
         assert entry["thread_id"] == "thread-mcp"
+
+
+MCP_PROTOCOL_VERSION = "2025-06-18"
+MCP_SESSION_TIMEOUT_S = 60.0
+
+
+class McpStdioSession:
+    def __init__(self, proc: subprocess.Popen[str]) -> None:
+        self.proc = proc
+        self._last_id = 0
+
+    def _send(self, message: dict[str, Any]) -> None:
+        assert self.proc.stdin is not None
+        self.proc.stdin.write(json.dumps(message) + "\n")
+        self.proc.stdin.flush()
+
+    def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
+        self._send({"jsonrpc": "2.0", "method": method, "params": params or {}})
+
+    def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        self._last_id += 1
+        self._send({"jsonrpc": "2.0", "id": self._last_id, "method": method, "params": params or {}})
+        assert self.proc.stdout is not None
+        while True:
+            line = self.proc.stdout.readline()
+            if not line:
+                assert self.proc.stderr is not None
+                raise AssertionError(f"server closed stdout during {method}; stderr:\n{self.proc.stderr.read()}")
+            message = json.loads(line)
+            if message.get("id") == self._last_id:
+                assert "error" not in message, message["error"]
+                return message["result"]
+
+
+@pytest.fixture
+def mcp_session() -> Iterator[McpStdioSession]:
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "captain_hook", "mcp"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    watchdog = threading.Timer(MCP_SESSION_TIMEOUT_S, proc.kill)
+    watchdog.start()
+    try:
+        yield McpStdioSession(proc)
+    finally:
+        watchdog.cancel()
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+@pytest.fixture
+def initialized_mcp_session(mcp_session: McpStdioSession) -> Iterator[tuple[McpStdioSession, dict[str, Any]]]:
+    result = mcp_session.request(
+        "initialize",
+        {
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "capt-hook-tests", "version": "1"},
+        },
+    )
+    mcp_session.notify("notifications/initialized")
+    yield mcp_session, result
+
+
+class TestMcpServerLiveness:
+    """`capt-hook mcp` must actually start and speak MCP — registration in a manifest is not liveness."""
+
+    def test_initialize_handshake_completes(
+        self, initialized_mcp_session: tuple[McpStdioSession, dict[str, Any]]
+    ) -> None:
+        _, result = initialized_mcp_session
+        assert result["serverInfo"]["name"] == "capt-hook"
+        assert result["serverInfo"]["version"] == importlib.metadata.version("capt-hook")
+        assert result["protocolVersion"] == MCP_PROTOCOL_VERSION
+        assert "tools" in result["capabilities"]
+
+    def test_tools_list_exposes_exactly_register_transcript(
+        self, initialized_mcp_session: tuple[McpStdioSession, dict[str, Any]]
+    ) -> None:
+        session, _ = initialized_mcp_session
+        (tool,) = session.request("tools/list")["tools"]
+        assert tool["name"] == "register_transcript"
+        assert tool["inputSchema"]["required"] == ["session_id"]
+        assert set(tool["inputSchema"]["properties"]) == {"session_id", "provider", "thread_id", "path", "label"}
+
+    def test_tools_call_registers_through_the_protocol(
+        self, initialized_mcp_session: tuple[McpStdioSession, dict[str, Any]]
+    ) -> None:
+        session, _ = initialized_mcp_session
+        result = session.request(
+            "tools/call",
+            {"name": "register_transcript", "arguments": {"session_id": "s-live", "thread_id": "thread-live"}},
+        )
+        assert result["isError"] is False
+        (entry,) = read_entries("s-live")
+        assert entry["provider"] == "codex"
+        assert entry["thread_id"] == "thread-live"
+
+    def test_server_stays_up_across_requests(
+        self, initialized_mcp_session: tuple[McpStdioSession, dict[str, Any]]
+    ) -> None:
+        session, _ = initialized_mcp_session
+        session.request("tools/list")
+        session.request("ping")
+        assert session.proc.poll() is None
 
 
 class TestRegisteredPaths:
