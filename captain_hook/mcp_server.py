@@ -5,18 +5,19 @@ from typing import TYPE_CHECKING, Any
 from captain_hook.transcripts import register_transcript
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
 
-def build_mcp_server() -> FastMCP:
+def build_mcp_server() -> MCPServer:
     """Build the stdio MCP server that exposes ``register_transcript`` as its one tool.
 
-    The ``mcp`` SDK is an optional extra, so it imports lazily: a missing install surfaces as
-    :class:`ImportError` for the ``capt-hook mcp`` command to translate into an install hint.
+    The ``mcp`` SDK imports lazily so that it stays off every other subcommand's startup path.
     """
-    from mcp.server.fastmcp import FastMCP
+    import importlib.metadata
 
-    server = FastMCP("capt-hook")
+    from mcp.server.mcpserver import MCPServer
+
+    server = MCPServer("capt-hook", version=importlib.metadata.version("capt-hook"))
 
     @server.tool(name="register_transcript")
     def register_transcript_tool(

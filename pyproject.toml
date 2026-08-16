@@ -44,7 +44,7 @@ dependencies = [
     "pathspec>=0.12",
     "loguru>=0.7.3",
     "spawnllm>=0.5.5,<0.6",
-    "mcp>=1.9",
+    "mcp>=2.0,<3",
 ]
 
 [project.optional-dependencies]
