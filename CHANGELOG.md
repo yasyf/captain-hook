@@ -6,6 +6,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.21.2] - 2026-08-16
+
+### Fixed
+
+- The worker no longer searches the session's own repository for the commands it
+  shells out to. `12.21.1` adopted the user's login `PATH` verbatim, and POSIX
+  resolves an empty entry against the current directory — which for a worker is
+  the repository under review. A user whose `PATH` carried an empty, `.`, or
+  relative entry would have let an executable named `claude`, `codex`, or `gh`,
+  committed to any repository they opened, run automatically as them. Only
+  absolute entries are kept now, from the inherited `PATH` as well as the login
+  one.
+- A transient `claude plugin list` failure no longer disables plugin-shipped
+  guards until something else changes. `12.21.1` stopped caching the failure in
+  the roster snapshot, but the daemon's registry still cached the builtins-only
+  discovery it produced, so one bad enumeration held every plugin guard off
+  until a watched file moved or the worker restarted. A discovery whose roster
+  failed is now served and dropped rather than kept.
+- The login-shell `PATH` probe no longer reads the worker's stdin, where an
+  unguarded `read` in a startup file would consume the daemon's length-prefixed
+  hello frame and cost the worker its readiness handshake.
+- The probe finds its answer by tag rather than by position. It previously took
+  the last non-empty line, which `.zlogout` output would displace — installing
+  something like `session closed` as the `PATH` and making every user command
+  invisible.
+- A recorded fault is announced only to the project it came from. Fault text is
+  a raw exception, the store is machine-wide, and a session start injects it
+  into that session's context, so one project's paths could surface in another's.
+  Faults from captain-hook's own machinery stay machine-wide.
+- `first seen` is now the first occurrence. A repeat used to overwrite the
+  record's timestamp while still being labelled as the first.
+- At the record cap the oldest fault makes way instead of the newest being
+  dropped, so a hook whose error text carries a changing path can no longer fill
+  the store and mask everything after it.
+
 ## [12.21.1] - 2026-08-16
 
 ### Added

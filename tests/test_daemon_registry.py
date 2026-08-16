@@ -346,3 +346,29 @@ def test_concurrent_get_builds_once(project: CliState) -> None:
 
     assert builds == 1
     assert all(s is snaps[0] for s in snaps)
+
+
+def test_a_roster_that_would_not_enumerate_is_served_but_never_cached(
+    project: CliState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A builtins-only answer is indistinguishable from a machine with no plugin packs. Caching one
+    # would hold every plugin guard off until a watched input moves, long after `claude` recovered.
+    calls: list[int] = []
+    real = plugins.resolve_plugin_packs
+
+    def flaky(root: Path) -> list[manager.ResolvedPack]:
+        calls.append(1)
+        if len(calls) == 1:
+            raise plugins.PluginListError("claude plugin list exited 1")
+        return real(root)
+
+    monkeypatch.setattr(plugins, "resolve_plugin_packs", flaky)
+    reg = Registry(project)
+
+    failed = reg.get()
+    assert not failed.cacheable
+    assert any(e.source == cli.PLUGIN_ROSTER_SOURCE for e in failed.state.load_errors)
+
+    recovered = reg.get()
+    assert len(calls) == 2, "the second request served a cached failure instead of retrying"
+    assert recovered.cacheable

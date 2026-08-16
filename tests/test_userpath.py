@@ -14,6 +14,10 @@ if TYPE_CHECKING:
 LAUNCHD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 
 
+def tagged(path: str) -> str:
+    return f"{userpath.PATH_TAG}{path}\n"
+
+
 def fake_shell(tmp_path: Path, body: str, *, exit_code: int = 0) -> str:
     """A shell stand-in for the passwd login shell: it ignores ``-l -c`` and prints ``body``."""
     (script := tmp_path / "login-shell").write_text(f"#!/bin/sh\ncat <<'EOF'\n{body}EOF\nexit {exit_code}\n")
@@ -22,14 +26,51 @@ def fake_shell(tmp_path: Path, body: str, *, exit_code: int = 0) -> str:
 
 
 def test_login_path_reads_the_exported_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(userpath, "login_shell", lambda: fake_shell(tmp_path, "/opt/tools/bin:/usr/bin\n"))
+    monkeypatch.setattr(userpath, "login_shell", lambda: fake_shell(tmp_path, tagged("/opt/tools/bin:/usr/bin")))
     assert userpath.login_path() == "/opt/tools/bin:/usr/bin"
 
 
 def test_login_path_survives_a_chatty_login_banner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A login shell sources the user's profile, which may print before printenv answers.
-    monkeypatch.setattr(userpath, "login_shell", lambda: fake_shell(tmp_path, "you have new mail\n/opt/tools/bin\n"))
+    body = f"you have new mail\n{tagged('/opt/tools/bin')}"
+    monkeypatch.setattr(userpath, "login_shell", lambda: fake_shell(tmp_path, body))
     assert userpath.login_path() == "/opt/tools/bin"
+
+
+def test_login_path_survives_logout_chatter_after_the_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # zsh runs .zlogout after the -c command, so the answer is not the last line either.
+    body = f"{tagged('/opt/tools/bin')}session closed\n"
+    monkeypatch.setattr(userpath, "login_shell", lambda: fake_shell(tmp_path, body))
+    assert userpath.login_path() == "/opt/tools/bin"
+
+
+def test_login_path_runs_the_real_pipeline_in_a_real_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Stub shells prove the parsing; this proves the command string. path_helper rebuilds a login
+    # shell's PATH, so the marker is carried rather than kept in place.
+    monkeypatch.setattr(userpath, "login_shell", lambda: "/bin/sh")
+    monkeypatch.setenv("PATH", f"/opt/marker/bin:{LAUNCHD_PATH}")
+    entries = userpath.login_path().split(os.pathsep)
+    assert "/opt/marker/bin" in entries
+    assert "/usr/bin" in entries
+
+
+def test_login_path_does_not_read_the_callers_stdin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # An rc file with an unguarded `read` would otherwise eat hookd's length-prefixed hello frame.
+    import subprocess
+
+    seen: dict[str, object] = {}
+    real = subprocess.run
+
+    def spy(*args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(userpath, "login_shell", lambda: fake_shell(tmp_path, tagged("/opt/tools/bin")))
+    monkeypatch.setattr(subprocess, "run", spy)
+    userpath.login_path()
+    assert seen["stdin"] is subprocess.DEVNULL
 
 
 @pytest.mark.parametrize(
@@ -61,6 +102,28 @@ def test_merged_path_puts_the_user_first_and_keeps_the_rest() -> None:
     assert merged == "/opt/tools/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 
+@pytest.mark.parametrize(
+    "login",
+    [
+        pytest.param(":/opt/tools/bin", id="leading-empty"),
+        pytest.param("/opt/tools/bin:", id="trailing-empty"),
+        pytest.param("/opt/tools/bin::/usr/bin", id="interior-empty"),
+        pytest.param(".:/opt/tools/bin", id="dot"),
+        pytest.param("relative/bin:/opt/tools/bin", id="relative"),
+    ],
+)
+def test_merged_path_drops_entries_that_would_search_the_session_repo(login: str) -> None:
+    # POSIX resolves an empty entry against cwd, and a worker's cwd is the repository under review —
+    # so an executable committed there must never answer a bare `claude` lookup.
+    merged = userpath.merged_path(LAUNCHD_PATH, login)
+    assert all(entry and os.path.isabs(entry) for entry in merged.split(os.pathsep))
+    assert "/opt/tools/bin" in merged.split(os.pathsep)
+
+
+def test_merged_path_drops_unsafe_inherited_entries_too() -> None:
+    assert userpath.merged_path(f".:{LAUNCHD_PATH}", "/opt/tools/bin") == f"/opt/tools/bin:{LAUNCHD_PATH}"
+
+
 def test_adopt_user_path_replaces_the_launchd_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from captain_hook.worker.__main__ import adopt_user_path
 
@@ -68,7 +131,7 @@ def test_adopt_user_path_replaces_the_launchd_path(tmp_path: Path, monkeypatch: 
     (claude := bindir / "claude").write_text("#!/bin/sh\nexit 0\n")
     claude.chmod(0o755)
     monkeypatch.setenv("PATH", LAUNCHD_PATH)
-    monkeypatch.setattr(userpath, "login_shell", lambda: fake_shell(tmp_path, f"{bindir}:{LAUNCHD_PATH}\n"))
+    monkeypatch.setattr(userpath, "login_shell", lambda: fake_shell(tmp_path, tagged(f"{bindir}:{LAUNCHD_PATH}")))
 
     import shutil
 

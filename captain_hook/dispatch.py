@@ -35,7 +35,7 @@ def run_handler(entry: RegisteredHook, evt: BaseHookEvent) -> HookResult | None:
         raise
     except Exception as exc:
         logger.bind(hook=entry.name).exception("hook handler failed")
-        faults.record(f"hook {entry.name}", exc)
+        faults.record(f"hook {entry.name}", exc, str(evt.cwd) if evt.cwd else None)
         return None
 
 

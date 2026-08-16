@@ -132,3 +132,43 @@ def test_swallowed_hook_handler_failure_is_recorded(tmp_path: Path) -> None:
 
     (line,) = faults.drain()
     assert "hook explode" in line and "wasmtime" in line
+
+
+def test_a_record_is_only_read_by_the_project_that_owns_it() -> None:
+    # The store is machine-wide but a raw exception text carries the failing project's paths, and a
+    # session start injects the announcement into that session's model context.
+    faults.record("hook secret_guard", RuntimeError("token leaked for /private/a"), "/private/a")
+
+    assert faults.drain("/other/project") == []
+    (line,) = faults.drain("/private/a")
+    assert "/private/a" in line
+
+
+def test_an_unowned_record_reaches_every_project() -> None:
+    faults.record("login shell PATH probe", RuntimeError("boom"))
+
+    (line,) = faults.drain("/any/project")
+    assert "login shell PATH probe" in line
+
+
+def test_first_seen_is_the_first_occurrence_not_the_latest() -> None:
+    faults.record("hook flaky", RuntimeError("boom"))
+    (first,) = faults.drain()
+    faults.record("hook flaky", RuntimeError("boom"))
+    faults.record("hook flaky", RuntimeError("boom"))
+
+    (again,) = faults.drain()
+    assert first.rsplit("first seen ", 1)[1] != ""
+    assert again.count("first seen") == 1
+
+
+def test_the_cap_makes_room_for_the_newest_fault() -> None:
+    # A hook whose error text carries a changing path would otherwise fill the store and mask every
+    # later failure, including the one worth reading.
+    for i in range(faults.MAX_RECORDS + 8):
+        faults.record("hook noisy", RuntimeError(f"boom {i}"))
+    faults.record("async review dispatch", ModuleNotFoundError("No module named 'wasmtime'"))
+
+    lines = faults.drain()
+    assert len(lines) <= faults.MAX_RECORDS
+    assert any("async review dispatch" in line for line in lines)

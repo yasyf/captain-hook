@@ -177,7 +177,7 @@ def register_fault_announcements() -> None:
         from captain_hook.faults import drain
         from captain_hook.types import Action, HookResult
 
-        if lines := drain():
+        if lines := drain(str(evt.cwd) if evt.cwd else None):
             return HookResult(action=Action.warn, message="\n".join(lines))
         return None
 

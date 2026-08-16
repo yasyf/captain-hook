@@ -185,7 +185,7 @@ class Registry:
         return replace(latest, cacheable=False)
 
     def _discover_once(self) -> RegistrySnapshot:
-        from captain_hook.cli import pack_tool_specs
+        from captain_hook.cli import PLUGIN_ROSTER_SOURCE, pack_tool_specs
         from captain_hook.daemon.context import capture_output
 
         state = app.State()
@@ -202,4 +202,5 @@ class Registry:
             tools=pack_tool_specs(resolved),
             discovery_stdout=captured.stdout.getvalue(),
             discovery_stderr=captured.stderr.getvalue(),
+            cacheable=not any(e.source == PLUGIN_ROSTER_SOURCE for e in state.load_errors),
         )

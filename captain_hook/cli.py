@@ -285,13 +285,13 @@ def dispatch_event(
             dispatch_review(event.name, raw)
         except Exception as exc:
             logger.exception("native review dispatch failed")
-            faults.record("async review dispatch", exc)
+            faults.record("async review dispatch", exc, raw.get("cwd"))
         if event is Event.SessionStart:
             try:
                 dispatch_update()
             except Exception as exc:
                 logger.exception("native update dispatch failed")
-                faults.record("async update dispatch", exc)
+                faults.record("async update dispatch", exc, raw.get("cwd"))
 
     resolved_path = raw.get("agent_transcript_path") or raw.get("transcript_path")
     ctx = HookContext(

@@ -63,7 +63,9 @@ jobs:
           import json, subprocess, sys, threading
 
           proc = subprocess.Popen([sys.argv[1], "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-          threading.Timer(120, proc.kill).start()
+          # Non-daemon, so leaving it armed after a pass stalls every matrix job for its full delay.
+          watchdog = threading.Timer(120, proc.kill)
+          watchdog.start()
 
 
           def send(message):
@@ -86,6 +88,8 @@ jobs:
           send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
           listed = receive("tools/list")
           proc.terminate()
+          proc.wait(timeout=30)
+          watchdog.cancel()
 
           assert init["result"]["serverInfo"]["name"] == "capt-hook", init
           assert [t["name"] for t in listed["result"]["tools"]] == ["register_transcript"], listed

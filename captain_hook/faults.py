@@ -29,31 +29,43 @@ def faults_dir() -> Path:
     return resolve_state_dir() / "faults"
 
 
-def record(source: str, exc: BaseException) -> None:
+def record(source: str, exc: BaseException, root: str | None = None) -> None:
     """Record one fault under ``source``, keyed by its own text so a per-event failure stays one line.
 
-    The store is machine-wide and drains only at a session start, so the first :data:`MAX_RECORDS`
-    distinct failures are kept and the rest dropped: an error text carrying a path or a tool name
-    keys differently every event, and an announcement nobody can read is the silence this replaces.
-    Called from inside ``except`` blocks, so an unwritable state dir is logged and dropped rather
-    than replacing the failure being reported with a second one.
+    ``root`` is the project the failure belongs to; only a session under that root ever reads it back.
+    A record already on disk is left alone, so ``at`` is when the fault first appeared rather than
+    when it last repeated. At :data:`MAX_RECORDS` the oldest record makes way, because a hook whose
+    error text carries a changing path would otherwise fill the store and mask everything after it.
+    Called from inside ``except`` blocks: an unwritable state dir is logged, never raised over the
+    failure being reported.
     """
     error = f"{type(exc).__name__}: {exc}"
-    key = sha256(f"{source}\n{error}".encode()).hexdigest()[:16]
+    key = sha256(f"{root}\n{source}\n{error}".encode()).hexdigest()[:16]
     path = faults_dir() / f"{key}.json"
     try:
-        if not path.exists() and len(list(faults_dir().glob("*.json"))) >= MAX_RECORDS:
+        if path.exists():
             return
-        atomic_write(path, json.dumps({"source": source, "error": error, "at": datetime.now(UTC).isoformat()}))
+        while len(records := sorted(faults_dir().glob("*.json"), key=lambda p: p.stat().st_mtime)) >= MAX_RECORDS:
+            records[0].unlink(missing_ok=True)
+        payload = {"source": source, "error": error, "root": root, "at": datetime.now(UTC).isoformat()}
+        atomic_write(path, json.dumps(payload))
     except OSError:
         logger.opt(exception=True).debug("fault record failed")
 
 
-def drain() -> list[str]:
-    """Every recorded fault as one announcement line, removing each record as it is read."""
+def drain(root: str | None = None) -> list[str]:
+    """Every fault this root may read, removing each record as it is read.
+
+    A record owned by another project stays put: the text is a raw exception, and announcing it
+    injects that project's paths into this session's model context.
+    """
     lines: list[str] = []
     for path in sorted(faults_dir().glob("*.json")):
-        if (data := read_json(path)) is not None:
-            lines.append(f"{ANNOUNCE_PREFIX} {data['source']} — {data['error']} (first seen {data['at']})")
+        if (data := read_json(path)) is None:
+            path.unlink(missing_ok=True)
+            continue
+        if (owner := data.get("root")) is not None and owner != root:
+            continue
+        lines.append(f"{ANNOUNCE_PREFIX} {data['source']} — {data['error']} (first seen {data['at']})")
         path.unlink(missing_ok=True)
     return lines
