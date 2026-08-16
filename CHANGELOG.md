@@ -6,6 +6,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.21.1] - 2026-08-16
+
+### Added
+
+- Failures that land where no hook response can carry them now reach the user.
+  Async review and update dispatch run on a worker thread after the response
+  Claude Code reads has gone back, and a hook handler's exception is caught so
+  one bad hook cannot take the event down. Both used to land in the daemon log
+  and nowhere else, which is how a live `ModuleNotFoundError` on every
+  `SessionStart` survived a green bill of health. Those failures are now
+  recorded as durable machine-wide faults, drained and announced at the next
+  session start. Repeats collapse into one line, and the record caps at 32 so
+  an error text carrying a path cannot flood it.
+
+### Fixed
+
+- Plugin-shipped guards fire again on a machine that installs one plugin in
+  more than one project. `claude plugin list` answers machine-wide whatever
+  directory it runs in, and grouping its roster by plugin id alone read one
+  plugin installed at the same scope in several projects as that many competing
+  installs of one id. The caller swallowed that error into an empty roster, so
+  every plugin-shipped hook on the machine silently stopped firing while
+  everything reported healthy. The roster is now scoped to the discovering
+  project before deduping, an unreadable roster raises instead of caching empty
+  — surfaced in `capt-hook status`, `capt-hook pack list`, and at the next
+  session start — and a snapshot version gate recomputes caches written by
+  either broken path.
+- A session driven from a repo named after one of capt-hook's own dependencies
+  no longer crashes every hook routed through the worker. Spawning
+  `-m captain_hook…` with the session's repo as cwd put that repo at the head
+  of `sys.path`, so a directory sharing an installed dependency's import name
+  shadowed it, and the import died inside the worker thread, after the
+  response Claude Code reads had already gone back, with a traceback pointing
+  at the user's source tree. Every spawn site now passes `-P`, keeping cwd off
+  `sys.path`.
+- The detached reviewer finds its judge backend again. launchd starts the
+  helper with `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, so `claude`, `codex`, and
+  `gh` were invisible to the daemon and everything it spawned: the reviewer
+  raised `BackendUnavailable` while the identical probe from a terminal
+  succeeded. The worker now asks the user's login shell for its exported `PATH`
+  once at startup, resolving the shell through the passwd database because
+  launchd sets no `SHELL`.
+- `capt-hook mcp` starts. The server has been dead in every shipped build since
+  mcp 2.0.0's release: `pyproject.toml` pinned `mcp>=1.9` unbounded while
+  `uv.lock` froze 1.28.1, so CI tested 1.x while every release-shaped install
+  resolved 2.0.0, which removed `mcp.server.fastmcp` outright. The server now
+  runs on the 2.x `MCPServer` with the pin bounded to `mcp>=2.0,<3`; the one
+  tool, `register_transcript`, keeps its exact name and schemas, and
+  `serverInfo.version` reports capt-hook's own version instead of the MCP
+  SDK's. CI's wheel smoke now drives a real stdio handshake, because a server
+  listed in the plugin manifest is not a server that starts.
+
 ## [12.21.0] - 2026-08-03
 
 ### Changed
