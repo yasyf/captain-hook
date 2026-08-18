@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,16 +23,26 @@ const (
 	workerSettlementTimeout = 5 * time.Second
 
 	maxLiveWorkers = 64
+
+	// workerIdleTTL retires an interpreter no dispatch has wanted for this
+	// long. The cache is keyed on root, so a machine whose roots churn —
+	// per-invocation scratch checkouts, short-lived worktrees — mints keys that
+	// are never revisited, and without a TTL their interpreters are held until
+	// the daemon restarts.
+	workerIdleTTL = 30 * time.Minute
+
+	workerSweepInterval = 5 * time.Minute
 )
 
-// ErrWorkerCapacity refuses a dispatch that would start a worker past the live
-// cache bound. One worker is cached per distinct {root, python, build, semantic
+// ErrWorkerCapacity refuses a dispatch that can neither start a worker nor
+// reuse one. One worker is cached per distinct {root, python, build, semantic
 // environment} tuple, so the natural population is the number of projects a
-// machine runs hooks in at once — reaching maxLiveWorkers means either far more
-// than that or a key that is churning, and either way the machine is already
-// carrying 64 live Python interpreters. Admission is refused rather than
-// queued: a hook that waits behind a full cache stalls the tool call that
-// triggered it, and a hook that is told why does not.
+// machine runs hooks in at once. A full cache is normally resolved by evicting
+// its least recently used idle interpreter — a machine whose roots churn fills
+// every slot with keys no dispatch will ask for again — so this is reached only
+// when all maxLiveWorkers are in flight at once. Admission is then refused
+// rather than queued: a hook that waits behind a full cache stalls the tool
+// call that triggered it, and a hook that is told why does not.
 var ErrWorkerCapacity = errors.New("captain: live worker capacity is exhausted")
 
 var workerEnvExact = map[string]struct{}{
@@ -44,6 +55,25 @@ type workerEntry struct {
 	worker *workerClient
 	err    error
 	key    workerKey
+
+	// lastUsed and inflight are guarded by workerManager.mu. inflight counts
+	// dispatches holding this entry, so eviction never pulls an interpreter out
+	// from under a call in progress.
+	lastUsed  time.Time
+	inflight  int
+	ephemeral bool
+}
+
+// idle reports whether the entry can be retired right now: it has finished
+// starting and no dispatch holds it. An entry mid-start is never evicted —
+// the caller waiting on ready would be left with a worker that is going away.
+func (e *workerEntry) idle() bool {
+	select {
+	case <-e.ready:
+	default:
+		return false
+	}
+	return e.inflight == 0
 }
 
 type workerKey struct {
@@ -59,6 +89,9 @@ type workerManager struct {
 	logWriter io.Writer
 	scheduler *scheduler
 
+	now  func() time.Time
+	done chan struct{}
+
 	mu      sync.Mutex
 	closed  bool
 	entries map[string]*workerEntry
@@ -69,6 +102,7 @@ func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) *workerManager {
 	return &workerManager{
 		owner: owner, logWriter: logWriter, scheduler: newScheduler(16),
 		entries: make(map[string]*workerEntry),
+		now:     time.Now, done: make(chan struct{}),
 	}
 }
 
@@ -86,10 +120,12 @@ func (m *workerManager) dispatch(ctx context.Context, request EventRequest) (Eve
 	}
 	laneKey := key.id + "\x00" + session
 	return m.scheduler.run(ctx, laneKey, func() (EventResponse, error) {
-		worker, err := m.worker(ctx, key)
+		entry, err := m.acquire(ctx, key)
 		if err != nil {
 			return EventResponse{}, err
 		}
+		defer m.release(entry)
+		worker := entry.worker
 		response, err := worker.call(ctx, request)
 		if err != nil {
 			m.retire(key.id, worker)
@@ -99,29 +135,54 @@ func (m *workerManager) dispatch(ctx context.Context, request EventRequest) (Eve
 	})
 }
 
-func (m *workerManager) worker(ctx context.Context, key workerKey) (*workerClient, error) {
+// acquire hands back the cached entry for key, starting its interpreter on
+// first use, and marks it in flight for the caller — release drops that hold. A
+// full cache evicts its least recently used idle entry rather than refusing
+// outright: admission is refused only when every live worker is busy, which is
+// real saturation rather than the accumulated residue of keys that never
+// repeat.
+func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntry, error) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
 		return nil, errors.New("captain: worker manager is closed")
 	}
 	if entry := m.entries[key.id]; entry != nil {
+		entry.lastUsed = m.now()
+		entry.inflight++
 		m.mu.Unlock()
 		select {
 		case <-entry.ready:
-			return entry.worker, entry.err
 		case <-ctx.Done():
+			m.release(entry)
 			return nil, ctx.Err()
 		}
+		if entry.err != nil {
+			m.release(entry)
+			return nil, entry.err
+		}
+		return entry, nil
 	}
+	var evicted *workerClient
 	if len(m.entries) >= maxLiveWorkers {
-		live := len(m.entries)
-		m.mu.Unlock()
-		return nil, fmt.Errorf("%w: %d live workers, limit is %d", ErrWorkerCapacity, live, maxLiveWorkers)
+		victim := m.evictIdleLocked()
+		if victim == nil {
+			live := len(m.entries)
+			m.mu.Unlock()
+			return nil, fmt.Errorf("%w: %d live workers, limit is %d", ErrWorkerCapacity, live, maxLiveWorkers)
+		}
+		evicted = victim.worker
 	}
-	entry := &workerEntry{ready: make(chan struct{}), key: key}
+	entry := &workerEntry{
+		ready: make(chan struct{}), key: key,
+		lastUsed: m.now(), inflight: 1, ephemeral: ephemeralRoot(key.root),
+	}
 	m.entries[key.id] = entry
 	m.mu.Unlock()
+
+	if evicted != nil {
+		_ = m.settle(evicted)
+	}
 
 	worker, err := m.start(ctx, key)
 	m.mu.Lock()
@@ -131,7 +192,119 @@ func (m *workerManager) worker(ctx context.Context, key workerKey) (*workerClien
 	}
 	close(entry.ready)
 	m.mu.Unlock()
-	return worker, err
+	if err != nil {
+		m.release(entry)
+		return nil, err
+	}
+	return entry, nil
+}
+
+// release drops the caller's hold on entry. An ephemeral entry — one keyed on a
+// scratch root that will never be revisited — retires the moment its last
+// dispatch finishes rather than waiting for the sweep to notice it.
+func (m *workerManager) release(entry *workerEntry) {
+	m.mu.Lock()
+	entry.inflight--
+	retire := entry.ephemeral && entry.inflight == 0
+	if retire {
+		if cached := m.entries[entry.key.id]; cached == entry {
+			delete(m.entries, entry.key.id)
+		}
+	}
+	worker := entry.worker
+	m.mu.Unlock()
+	if retire && worker != nil {
+		_ = m.settle(worker)
+	}
+}
+
+// evictIdleLocked removes the least recently used idle entry and returns it for
+// the caller to stop off the lock. Returns nil only when every entry is still
+// starting or in flight, which is the one state that still refuses admission —
+// an entry whose interpreter never started is nil-worker but still a freed
+// slot, so the entry rather than its worker is what reports the eviction.
+func (m *workerManager) evictIdleLocked() *workerEntry {
+	var victim *workerEntry
+	for _, entry := range m.entries {
+		if !entry.idle() {
+			continue
+		}
+		if victim == nil || entry.lastUsed.Before(victim.lastUsed) {
+			victim = entry
+		}
+	}
+	if victim == nil {
+		return nil
+	}
+	delete(m.entries, victim.key.id)
+	return victim
+}
+
+// sweep retires every cached entry that no longer earns its interpreter: one
+// idle past workerIdleTTL, and one keyed on a root that has since been deleted
+// — a reaped scratch directory or a removed worktree. Returns the workers it
+// removed so the caller stops them off the lock.
+func (m *workerManager) sweep(now time.Time) []*workerClient {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var retired []*workerClient
+	for id, entry := range m.entries {
+		if !entry.idle() {
+			continue
+		}
+		if rootExists(entry.key.root) && now.Sub(entry.lastUsed) < workerIdleTTL {
+			continue
+		}
+		delete(m.entries, id)
+		if entry.worker != nil {
+			retired = append(retired, entry.worker)
+		}
+	}
+	return retired
+}
+
+// startSweeper runs the idle sweep until Close. The daemon owns this loop; unit
+// tests drive sweep directly so the cache stays deterministic under -race.
+func (m *workerManager) startSweeper(interval time.Duration) {
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.done:
+				return
+			case <-ticker.C:
+				for _, worker := range m.sweep(m.now()) {
+					_ = m.settle(worker)
+				}
+			}
+		}
+	}()
+}
+
+// rootExists treats anything but a definite absence as present: a permissions
+// or I/O blip must not retire a live project's interpreter.
+func rootExists(root string) bool {
+	_, err := os.Stat(root)
+	return !errors.Is(err, fs.ErrNotExist)
+}
+
+// ephemeralRoot reports whether root lives inside the system temp directory. A
+// scratch root there is a tool's per-invocation working copy — it is never
+// revisited, so an interpreter cached against one holds a slot that only
+// eviction can ever reclaim.
+func ephemeralRoot(root string) bool {
+	tmp := os.TempDir()
+	if resolved, err := filepath.EvalSymlinks(tmp); err == nil {
+		tmp = resolved
+	}
+	rel, err := filepath.Rel(tmp, root)
+	if err != nil || rel == "." {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // start spawns one Python worker on ChannelStdio: daemonkit joins the child's
@@ -257,7 +430,10 @@ func (m *workerManager) restart(ctx context.Context) error {
 
 func (m *workerManager) Close(ctx context.Context) (bool, error) {
 	m.mu.Lock()
-	m.closed = true
+	if !m.closed {
+		m.closed = true
+		close(m.done)
+	}
 	workers := make([]*workerClient, 0, len(m.entries))
 	for _, entry := range m.entries {
 		if entry.worker != nil {

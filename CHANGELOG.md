@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The daemon no longer holds a Python interpreter for every project root it has
+  ever seen. Workers are cached per `{root, python, build, environment}` tuple,
+  and were dropped only when one died, failed a call, or the daemon restarted.
+  Roots that never repeat then accumulated. Per-invocation scratch directories
+  and short-lived worktrees filled all 64 slots with interpreters no dispatch
+  would ask for again. One machine was carrying 12.3 GB of them, idle, one key
+  away from refusing every new project. Four changes now bound the cache. An
+  idle worker retires after 30 minutes. A full cache evicts its least recently
+  used idle worker instead of refusing admission. A scratch root under `TMPDIR`
+  retires as soon as its last dispatch finishes, without caching at all. And a
+  worker whose root has been deleted is swept.
+
 ## [12.21.3] - 2026-08-16
 
 ### Fixed

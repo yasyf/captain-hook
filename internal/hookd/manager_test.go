@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yasyf/daemonkit"
 )
@@ -112,32 +115,137 @@ func TestWorkerCmdOwnsTheWholeWorkerSession(t *testing.T) {
 	}
 }
 
-// TestWorkerManagerRefusesPastTheLiveBound pins the admission bound at
-// maxLiveWorkers: the 65th distinct key is refused by name rather than queued,
-// while a key already in the cache is still served from it — the bound gates
-// starting an interpreter, not reusing one.
-func TestWorkerManagerRefusesPastTheLiveBound(t *testing.T) {
-	t.Parallel()
-	cached := errors.New("served from the cache")
-	manager := newWorkerManager(daemonkit.Ctx{}, io.Discard)
+// fillIdleWorkers seeds the cache to the bound with idle entries whose last use
+// walks backwards, so live-0 is the least recently used of them.
+func fillIdleWorkers(manager *workerManager, base time.Time, cached error) {
 	for index := range maxLiveWorkers {
 		id := fmt.Sprintf("live-%d", index)
-		entry := &workerEntry{ready: make(chan struct{}), key: workerKey{id: id}, err: cached}
+		entry := &workerEntry{
+			ready: make(chan struct{}), key: workerKey{id: id, root: "/live"},
+			err: cached, lastUsed: base.Add(time.Duration(index) * time.Minute),
+		}
 		close(entry.ready)
 		manager.entries[id] = entry
 	}
+}
 
-	_, err := manager.worker(t.Context(), workerKey{id: "one-past-the-bound"})
+// TestWorkerManagerEvictsLeastRecentlyUsedAtTheBound pins the bound as an
+// eviction trigger rather than a wall: a cache full of idle interpreters gives
+// up its coldest one so a new root is admitted. Before this, a machine whose
+// roots churn — scratch checkouts, short-lived worktrees — filled the cache
+// with keys it would never ask for again and then refused every new project.
+func TestWorkerManagerEvictsLeastRecentlyUsedAtTheBound(t *testing.T) {
+	t.Parallel()
+	cached := errors.New("served from the cache")
+	manager := newWorkerManager(daemonkit.Ctx{}, io.Discard)
+	fillIdleWorkers(manager, time.Unix(0, 0), cached)
+
+	if _, err := manager.acquire(t.Context(), workerKey{id: "one-past-the-bound", root: "/fresh"}); errors.Is(err, ErrWorkerCapacity) {
+		t.Fatal("a full cache of idle workers refused admission instead of evicting")
+	}
+	if _, live := manager.entries["live-0"]; live {
+		t.Fatal("the least recently used worker survived the bound")
+	}
+	if _, live := manager.entries["live-63"]; !live {
+		t.Fatal("eviction took a warm worker instead of the coldest one")
+	}
+}
+
+// TestWorkerManagerRefusesWhenEveryWorkerIsBusy keeps the admission refusal for
+// the one state it describes — real saturation. An in-flight entry is never
+// evicted: the dispatch holding it would lose its interpreter mid-call.
+func TestWorkerManagerRefusesWhenEveryWorkerIsBusy(t *testing.T) {
+	t.Parallel()
+	manager := newWorkerManager(daemonkit.Ctx{}, io.Discard)
+	fillIdleWorkers(manager, time.Unix(0, 0), errors.New("served from the cache"))
+	for _, entry := range manager.entries {
+		entry.inflight = 1
+	}
+
+	_, err := manager.acquire(t.Context(), workerKey{id: "one-past-the-bound", root: "/fresh"})
 	if !errors.Is(err, ErrWorkerCapacity) {
-		t.Fatalf("worker past the bound = %v, want %v", err, ErrWorkerCapacity)
+		t.Fatalf("acquire past a fully busy bound = %v, want %v", err, ErrWorkerCapacity)
 	}
-	if _, err := manager.worker(t.Context(), workerKey{id: "live-0"}); !errors.Is(err, cached) {
-		t.Fatalf("a cached key at the bound = %v, want the cache's own answer", err)
-	}
+}
 
-	delete(manager.entries, "live-0")
-	if _, err := manager.worker(t.Context(), workerKey{id: "one-past-the-bound"}); errors.Is(err, ErrWorkerCapacity) {
-		t.Fatal("admission still refused with room in the cache")
+// TestWorkerManagerSweepRetiresIdleAndDeadRoots pins the two reasons a cached
+// interpreter stops earning its slot — nothing has wanted it for workerIdleTTL,
+// or its root has been deleted — and the two that keep it: recent use, and a
+// dispatch still holding it.
+func TestWorkerManagerSweepRetiresIdleAndDeadRoots(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1<<32, 0)
+	live := t.TempDir()
+	dead := filepath.Join(t.TempDir(), "reaped")
+	manager := newWorkerManager(daemonkit.Ctx{}, io.Discard)
+	seed := func(id, root string, lastUsed time.Time, inflight int) {
+		entry := &workerEntry{
+			ready: make(chan struct{}), key: workerKey{id: id, root: root},
+			lastUsed: lastUsed, inflight: inflight,
+		}
+		close(entry.ready)
+		manager.entries[id] = entry
+	}
+	seed("warm", live, now.Add(-time.Minute), 0)
+	seed("cold", live, now.Add(-2*workerIdleTTL), 0)
+	seed("dead-root", dead, now, 0)
+	seed("busy", live, now.Add(-2*workerIdleTTL), 1)
+
+	manager.sweep(now)
+
+	if _, kept := manager.entries["warm"]; !kept {
+		t.Error("sweep retired a worker used a minute ago")
+	}
+	if _, kept := manager.entries["cold"]; kept {
+		t.Error("sweep kept a worker idle past the TTL")
+	}
+	if _, kept := manager.entries["dead-root"]; kept {
+		t.Error("sweep kept a worker whose root no longer exists")
+	}
+	if _, kept := manager.entries["busy"]; !kept {
+		t.Error("sweep retired a worker with a dispatch in flight")
+	}
+}
+
+// TestEphemeralRootIsScoped keeps the ephemeral test narrow: a scratch root
+// under the system temp directory, and nothing else. Misreading a real project
+// as ephemeral would stop it ever caching an interpreter.
+func TestEphemeralRootIsScoped(t *testing.T) {
+	t.Parallel()
+	tmp, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ephemeralRoot(filepath.Join(tmp, "slop-cop-llm-906868983")) {
+		t.Error("a scratch root under TMPDIR was not treated as ephemeral")
+	}
+	if ephemeralRoot(tmp) {
+		t.Error("the temp directory itself was treated as an ephemeral root")
+	}
+	for _, root := range []string{"/Users/someone/Code/project", "/live"} {
+		if ephemeralRoot(root) {
+			t.Errorf("project root %q was treated as ephemeral", root)
+		}
+	}
+}
+
+// TestReleaseRetiresEphemeralEntryImmediately pins the scratch-root path: the
+// entry leaves the cache as soon as its last dispatch finishes, rather than
+// occupying a slot until the sweep notices it.
+func TestReleaseRetiresEphemeralEntryImmediately(t *testing.T) {
+	t.Parallel()
+	manager := newWorkerManager(daemonkit.Ctx{}, io.Discard)
+	entry := &workerEntry{
+		ready: make(chan struct{}), key: workerKey{id: "scratch", root: "/tmp/scratch"},
+		inflight: 1, ephemeral: true,
+	}
+	close(entry.ready)
+	manager.entries["scratch"] = entry
+
+	manager.release(entry)
+
+	if _, cached := manager.entries["scratch"]; cached {
+		t.Fatal("an ephemeral entry stayed cached after its last dispatch")
 	}
 }
 

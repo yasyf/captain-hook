@@ -39,8 +39,10 @@ func (s *Server) Run(ctx context.Context) error {
 		return fmt.Errorf("captain: open host log: %w", err)
 	}
 	_, err = daemonkit.Serve(ctx, s.daemon, func(hostCtx daemonkit.Ctx) (daemonkit.Product, error) {
+		manager := newWorkerManager(hostCtx, logFile)
+		manager.startSweeper(workerSweepInterval)
 		return &hostProduct{
-			manager: newWorkerManager(hostCtx, logFile),
+			manager: manager,
 			hub:     newNotificationHub(),
 		}, nil
 	})
