@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -191,3 +192,95 @@ def test_git_write_warns_every_time(isolate_modules: None, gt_repo: Path, tmp_pa
 def test_quoted_flag_mentions_still_warn(isolate_modules: None, gt_repo: Path, tmp_path: Path, command: str) -> None:
     discover_pack("graphite", GRAPHITE_HOOKS)
     assert warn_context(dispatch_command(command, gt_repo, tmp_path))
+
+
+# A real `git init`, unlike the fake `.git` directories above: gt_disabled shells out to
+# git config, and only a genuine repository can answer it. A fake dir is not a hazard —
+# `git --git-dir=<not-a-repo> config --get` exits 1 silently, which is why every fixture
+# above keeps working — but it can never report the key as set.
+def real_gt_repo(tmp_path: Path, nogt: str | None) -> Path:
+    repo = tmp_path / "real_gt"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / ".git" / ".graphite_repo_config").write_text("")
+    if nogt is not None:
+        subprocess.run(["git", "-C", str(repo), "config", "ccx.nogt", nogt], check=True)
+    return repo
+
+
+@pytest.mark.parametrize(("command", "kind", "needle"), HOOK_CASES)
+def test_hooks_stay_silent_when_nogt_set(
+    isolate_modules: None, tmp_path: Path, command: str, kind: str, needle: str
+) -> None:
+    """ccx.nogt is the repository's opt-out from the gt lane; ccx honours it, so these must too."""
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert dispatch_command(command, real_gt_repo(tmp_path, "true"), tmp_path) is None
+
+
+@pytest.mark.parametrize(("command", "kind", "needle"), HOOK_CASES)
+def test_hooks_fire_in_real_gt_repo(
+    isolate_modules: None, tmp_path: Path, command: str, kind: str, needle: str
+) -> None:
+    """The regression half: without ccx.nogt every hook still fires, through a real config read."""
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert_fires(dispatch_command(command, real_gt_repo(tmp_path, None), tmp_path), kind, needle)
+
+
+@pytest.mark.parametrize(
+    ("value", "disabled"),
+    [
+        ("true", True),
+        ("1", True),
+        ("t", True),
+        ("TRUE", True),
+        ("false", False),
+        ("0", False),
+        ("yes", False),
+        ("on", False),
+        ("maybe", False),
+    ],
+)
+def test_nogt_value_parity_with_ccx(isolate_modules: None, tmp_path: Path, value: str, disabled: bool) -> None:
+    """ccx parses ccx.nogt with Go's strconv.ParseBool; yes/on are not in that set, and a hook
+    that silenced itself on them would disagree with the lane ccx actually rides."""
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    result = dispatch_command("jj new", real_gt_repo(tmp_path, value), tmp_path)
+    assert (result is None) is disabled
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "jj log",
+        "jj st",
+        "jj status",
+        "jj show @",
+        "jj diff --stat",
+        "jj bookmark list",
+        "jj op log",
+        "jj --help",
+        "jj log && jj status",
+    ],
+)
+def test_read_only_jj_is_allowed(isolate_modules: None, gt_repo: Path, tmp_path: Path, command: str) -> None:
+    """The ban protects stack metadata; a read mutates none, so blocking it only costs work."""
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert dispatch_command(command, gt_repo, tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "jj new",
+        "jj commit -m x",
+        "jj bookmark set foo",
+        "jj op undo",
+        "jj describe -m x",
+        "jj log && jj new",
+        "jj status; jj abandon",
+    ],
+)
+def test_mutating_jj_still_blocked(isolate_modules: None, gt_repo: Path, tmp_path: Path, command: str) -> None:
+    """Every jj call on the line must be a read: skip_if is an any(), so a per-call carve-out
+    would let the mutation in `jj log && jj new` through."""
+    discover_pack("graphite", GRAPHITE_HOOKS)
+    assert_fires(dispatch_command(command, gt_repo, tmp_path), "deny", "Graphite")

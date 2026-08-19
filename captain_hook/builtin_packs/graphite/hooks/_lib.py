@@ -8,24 +8,81 @@ from typing import TYPE_CHECKING
 from cc_transcript.tools import SkillCall
 
 from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition
-from captain_hook.util.vcs import is_graphite_repo
+from captain_hook.util.vcs import graphite_lane
 
 if TYPE_CHECKING:
     from cc_transcript.command import CommandLine
 
+    from captain_hook.cmd import Call
+
 REVIEW_SKILL_PREFIX = "cc-review"
 REVIEW_COMMAND = re.compile(r"<command-name>/?cc-review", re.IGNORECASE)
+
+JJ_INFO_FLAGS = frozenset({"-h", "--help", "-V", "--version"})
+JJ_READS = frozenset(
+    {
+        ("log",),
+        ("status",),
+        ("st",),
+        ("show",),
+        ("diff",),
+        ("evolog",),
+        ("interdiff",),
+        ("files",),
+        ("root",),
+        ("version",),
+        ("help",),
+        ("bookmark", "list"),
+        ("tag", "list"),
+        ("op", "log"),
+        ("op", "show"),
+        ("op", "diff"),
+        ("operation", "log"),
+        ("operation", "show"),
+        ("operation", "diff"),
+        ("file", "show"),
+        ("file", "list"),
+        ("config", "list"),
+        ("config", "get"),
+        ("config", "path"),
+        ("workspace", "list"),
+        ("workspace", "root"),
+        ("sparse", "list"),
+    }
+)
 
 
 def is_review_skill(skill: str) -> bool:
     return skill.startswith(REVIEW_SKILL_PREFIX) or skill.split(":", 1)[-1].startswith(REVIEW_SKILL_PREFIX)
 
 
+def jj_read(call: Call) -> bool:
+    verbs = tuple(target.value for target in call.targets)
+    return not JJ_INFO_FLAGS.isdisjoint(call.flags) or any(verbs[: len(read)] == read for read in JJ_READS)
+
+
 class GraphiteActive(CustomCondition):
-    """Matches when the session cwd sits inside a repo initialized with ``gt repo init``."""
+    """Matches when Graphite owns the workflow at the session cwd.
+
+    A live ``gt repo init`` marker is necessary but not sufficient: a repository that sets
+    ``ccx.nogt`` has opted out of the gt lane — ccx itself declines it there — so a stale
+    marker must not make these hooks steer toward gt.
+    """
 
     def check(self, evt: BaseHookEvent) -> bool:
-        return evt.cwd is not None and is_graphite_repo(evt.cwd)
+        return evt.cwd is not None and graphite_lane(evt.cwd)
+
+
+class JJReads(CustomCommandLineCondition):
+    """Matches when every ``jj`` call on the line is a read.
+
+    Every call, not any: ``skip_if`` is an any() over its conditions, so a per-call match
+    would let ``jj log && jj new`` skip the block the mutation earns. A verb outside the
+    read set — a new one included — leaves the line blocked.
+    """
+
+    def check_command_line(self, evt: BaseHookEvent, cl: CommandLine) -> bool:
+        return bool(jj := evt.cmd.calls("jj")) and all(jj_read(call) for call in jj)
 
 
 @dataclass(frozen=True, slots=True)

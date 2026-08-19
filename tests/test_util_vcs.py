@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from captain_hook.util.vcs import GRAPHITE_MARKER, contains_repo, in_vcs_repo, is_graphite_repo, is_repo_root
+from captain_hook.util.vcs import (
+    GRAPHITE_MARKER,
+    contains_repo,
+    graphite_lane,
+    in_vcs_repo,
+    is_graphite_repo,
+    is_repo_root,
+)
 
 
 def test_contains_repo_marker_directory(tmp_path: Path) -> None:
@@ -100,3 +108,39 @@ def test_is_graphite_repo_dangling_pointer(tmp_path: Path) -> None:
     dangling.mkdir()
     (dangling / ".git").write_text("gitdir: ../does-not-exist\n")
     assert is_graphite_repo(dangling) is False
+
+
+# graphite_lane needs a real repository: is_graphite_repo answers off the filesystem, but the
+# ccx.nogt half shells out to git config, which only a genuine repo can answer.
+def gt_repo_with(tmp_path: Path, nogt: str | None) -> Path:
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / ".git" / GRAPHITE_MARKER).write_text("")
+    if nogt is not None:
+        subprocess.run(["git", "-C", str(repo), "config", "ccx.nogt", nogt], check=True)
+    return repo
+
+
+def test_graphite_lane_splits_fact_from_policy(tmp_path: Path) -> None:
+    repo = gt_repo_with(tmp_path, "true")
+    assert is_graphite_repo(repo) is True
+    assert graphite_lane(repo) is False
+
+
+def test_graphite_lane_without_optout(tmp_path: Path) -> None:
+    repo = gt_repo_with(tmp_path, None)
+    assert is_graphite_repo(repo) is True
+    assert graphite_lane(repo) is True
+
+
+def test_graphite_lane_outside_repo(tmp_path: Path) -> None:
+    assert graphite_lane(tmp_path / "nowhere") is False
+
+
+def test_graphite_lane_worktree_inherits_optout(tmp_path: Path) -> None:
+    main = gt_repo_with(tmp_path, "true")
+    worktree = tmp_path / "wt"
+    subprocess.run(["git", "-C", str(main), "commit", "-q", "--allow-empty", "-m", "seed"], check=True)
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", str(worktree), "-b", "wt"], check=True)
+    assert is_graphite_repo(worktree) is True
+    assert graphite_lane(worktree) is False

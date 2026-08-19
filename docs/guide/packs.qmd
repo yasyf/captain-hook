@@ -20,9 +20,12 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
   pre-existing issue, don't chase trivial type noise, don't swap the requested fix for docs.
 - `performance` — wall-clock pipelining nudges that speculate a held fix while verification runs.
 - `graphite` — Graphite (gt) workflow guards that stay inert outside a `gt repo init`'d repo
-  (every hook checks for `.git/.graphite_repo_config`, worktree-aware): a jj ban, steers from raw
-  `git commit`/`git push`/branch writes to `gt create`/`gt modify`, a pre-submit review reminder
-  that quiets once a cc-review pass has run, and restack nudges.
+  (every hook checks for `.git/.graphite_repo_config`, worktree-aware, and honours `ccx.nogt`, the
+  git-config key a repository sets to opt out of the gt lane — ccx declines the lane there, so a
+  stale marker must not steer you toward gt): a jj ban that carves out read-only `jj`
+  (`log`, `status`, `diff`, `bookmark list`, …, and only when *every* `jj` call on the line is a
+  read), steers from raw `git commit`/`git push`/branch writes to `gt create`/`gt modify`, a
+  pre-submit review reminder that quiets once a cc-review pass has run, and restack nudges.
 
 Two more activate by language, detected from the repo's build manifests:
 

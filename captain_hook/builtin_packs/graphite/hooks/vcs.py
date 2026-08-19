@@ -9,15 +9,18 @@ from captain_hook import (
     Tool,
     hook,
 )
-from captain_hook.builtin_packs.graphite.hooks._lib import GraphiteActive, HasFlag, PushesTagRef, ReviewPassRan
+from captain_hook.builtin_packs.graphite.hooks._lib import GraphiteActive, HasFlag, JJReads, PushesTagRef, ReviewPassRan
 
 # Inline tests are Allow-only: a FileFixture can't stage a nested `.git/.graphite_repo_config`, so
 # GraphiteActive() is always off at cwd="/" and every matcher short-circuits to allow. The fire path
-# (marker present, in a real gt repo/worktree) is covered by tests/test_pack_graphite.py.
+# (marker present, in a real gt repo/worktree) is covered by tests/test_pack_graphite.py, and so are
+# the two things inline rows cannot see: the ccx.nogt opt-out, and the JJReads carve-out, which
+# matches_conditions collapses into the same allow a failed only_if produces.
 
 hook(
     Event.PreToolUse,
     only_if=[Tool("Bash"), Runs("jj"), GraphiteActive()],
+    skip_if=[JJReads()],
     message=(
         "BLOCKED: this repository's workflow is Graphite (gt), not jj — its stack metadata lives in "
         'Graphite. Use `gt create -m "<msg>"` to start a stacked branch, `gt modify` to amend, `gt log` '
@@ -28,6 +31,8 @@ hook(
         Input(command="jj new", cwd="/"): Allow(),
         Input(command="jj commit -m x", cwd="/"): Allow(),
         Input(command="git status", cwd="/"): Allow(),
+        Input(command="jj log", cwd="/"): Allow(),
+        Input(command="jj bookmark list", cwd="/"): Allow(),
     },
 )
 

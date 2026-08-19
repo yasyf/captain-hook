@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The `graphite` pack fired in repositories that had opted out of the gt lane.** Every
+  hook gated on `GraphiteActive`, which tested only for a `.git/.graphite_repo_config`
+  marker — so a repository carrying a stale marker while setting `ccx.nogt` (ccx's own
+  durable opt-out, which makes `ccx vcs ship` decline the gt lane) was still told its
+  workflow was Graphite. The jj ban is the sharp end: it is `block=True`, so a colocated
+  jj repo that had opted out could not run `jj` at all. `GraphiteActive` now resolves the
+  lane, not just the marker, reading `ccx.nogt` through the git common dir so a linked
+  worktree inherits its main checkout's answer, and memoizing it — the probe runs only in
+  a repository that already carries the marker, so nothing else pays for it. A `git` that
+  cannot answer leaves the guards armed, matching ccx, which treats an unreadable key as
+  "not set". Note the accepted spellings are Go's `strconv.ParseBool` set, not
+  `git config --type=bool`'s: `yes`/`on` do **not** disable the lane, in either tool.
+- **The jj ban blocked reads.** `jj log`, `jj status`, `jj diff`, `jj bookmark list`, even
+  `jj --help` were denied, though the ban exists to protect stack metadata and a read
+  mutates none. Read-only `jj` is now carved out — but only when *every* `jj` call on the
+  line is a read, so `jj log && jj new` is still blocked, and a verb outside the read set
+  (a newly added one included) still blocks rather than leaking.
+
 ## [12.21.4] - 2026-08-17
 
 ### Fixed
