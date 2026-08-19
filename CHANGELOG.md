@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.21.5] - 2026-08-19
+
 ### Fixed
 - **The `graphite` pack fired in repositories that had opted out of the gt lane.** Every
   hook gated on `GraphiteActive`, which tested only for a `.git/.graphite_repo_config`
