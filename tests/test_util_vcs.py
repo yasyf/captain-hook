@@ -140,7 +140,8 @@ def test_graphite_lane_outside_repo(tmp_path: Path) -> None:
 def test_graphite_lane_worktree_inherits_optout(tmp_path: Path) -> None:
     main = gt_repo_with(tmp_path, "true")
     worktree = tmp_path / "wt"
-    subprocess.run(["git", "-C", str(main), "commit", "-q", "--allow-empty", "-m", "seed"], check=True)
+    ident = ["-c", "user.name=capt-hook tests", "-c", "user.email=tests@example.invalid"]
+    subprocess.run(["git", "-C", str(main), *ident, "commit", "-q", "--allow-empty", "-m", "seed"], check=True)
     subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", str(worktree), "-b", "wt"], check=True)
     assert is_graphite_repo(worktree) is True
     assert graphite_lane(worktree) is False
