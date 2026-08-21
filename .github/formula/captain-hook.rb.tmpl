@@ -19,8 +19,11 @@ class CaptainHook < Formula
     system "/usr/bin/codesign", "--verify", "--deep", "--strict", "--verbose=2", "Captain Hook.app"
     system "/usr/bin/xcrun", "stapler", "validate", "Captain Hook.app"
     libexec.install "Captain Hook.app"
+    # bash, not sh: binrun runs this wrapper as the descriptor's version command on
+    # every resolve, and an endpoint-security agent that deep-inspects /bin/sh can
+    # put seconds on each exec, enough to blow daemonkit's 10 s version timeout.
     (bin/"capt-hook-host").write <<~SH
-      #!/bin/sh
+      #!/bin/bash
       exec "$HOME/Applications/Captain Hook.app/Contents/Helpers/capt-hookd" "$@"
     SH
   end
