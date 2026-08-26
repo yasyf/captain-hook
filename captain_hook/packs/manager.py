@@ -243,6 +243,20 @@ def anchor_pattern(line: str, rel_dir: str) -> str:
     return f"{prefix}{rel_dir}/{tail}" if "/" in pat.rstrip("/") else f"{prefix}{rel_dir}/**/{tail}"
 
 
+def descend_spec(parent: GitIgnoreSpec | None, own: list[str], rel_dir: str) -> GitIgnoreSpec | None:
+    """The gitignore spec governing ``rel_dir``: ``parent`` extended by that directory's own patterns.
+
+    Compiling the accumulated pattern set per directory is quadratic in a deep tree, so a directory
+    that carries no ``.gitignore`` reuses its parent's compiled spec and one that does compiles only
+    its own lines and concatenates the compiled patterns — the same last-match-wins order, and the
+    same result as compiling the accumulation from scratch.
+    """
+    if not own:
+        return parent
+    added = GitIgnoreSpec.from_lines(own if not rel_dir else [anchor_pattern(line, rel_dir) for line in own])
+    return added if parent is None else parent + added
+
+
 def detect_languages(root: Path) -> frozenset[str]:
     """The languages in :data:`LANGUAGE_MARKERS` whose recursive, non-``.gitignore``d build manifest is under ``root``.
 
@@ -254,18 +268,15 @@ def detect_languages(root: Path) -> frozenset[str]:
     """
     pending = dict(LANGUAGE_MARKERS)
     found: set[str] = set()
-    lines_by_dir: dict[str, list[str]] = {}
+    specs: dict[str, GitIgnoreSpec | None] = {}
     for dirpath, dirnames, filenames in os.walk(root):
         rel = os.path.relpath(dirpath, root)
         rel_dir = "" if rel == "." else rel
-        own = gitignore_lines(Path(dirpath) / ".gitignore")
-        acc = (
-            own
-            if not rel_dir
-            else lines_by_dir.get(os.path.dirname(dirpath), []) + [anchor_pattern(line, rel_dir) for line in own]
+        spec = specs[dirpath] = descend_spec(
+            specs.get(os.path.dirname(dirpath)),
+            gitignore_lines(Path(dirpath) / ".gitignore"),
+            rel_dir,
         )
-        lines_by_dir[dirpath] = acc
-        spec = GitIgnoreSpec.from_lines(acc) if acc else None
         for lang, markers in list(pending.items()):
             if any(
                 m in filenames and (spec is None or not spec.match_file(f"{rel_dir}/{m}" if rel_dir else m))
