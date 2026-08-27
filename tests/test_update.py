@@ -38,6 +38,22 @@ def stub_installed(monkeypatch: pytest.MonkeyPatch, version: str) -> None:
     monkeypatch.setattr(client, "send", lambda *a, **k: {"ok": True, "version": version})
 
 
+def stub_converging(monkeypatch: pytest.MonkeyPatch, before: str, after: str, *, on: str) -> dict[str, str]:
+    """Report ``before`` until the ``on`` brew lane runs, then ``after`` — a landed supersede."""
+    host = {"version": before}
+    monkeypatch.setattr(client, "send", lambda *a, **k: {"ok": True, "version": host["version"]})
+    original = updater.brew
+
+    def converging(args: list[str]) -> bool:
+        outcome = original(args)
+        if args[0] == on:
+            host["version"] = after
+        return outcome
+
+    monkeypatch.setattr(updater, "brew", converging)
+    return host
+
+
 def record_brew(monkeypatch: pytest.MonkeyPatch, returncode: Any) -> list[list[str]]:
     calls: list[list[str]] = []
 
@@ -72,15 +88,79 @@ def test_run_update_upgrades_when_host_is_older(
     monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
 ) -> None:
     stub_release(monkeypatch, "v2.0.0")
-    stub_installed(monkeypatch, "1.0.0")
     brew = record_brew(monkeypatch, 0)
+    stub_converging(monkeypatch, "1.0.0", "2.0.0", on="upgrade")
 
     updater.run_update()
 
     assert brew == [UPGRADE]
     assert notes == [
-        {"kind": "update_installed", "title": "Captain Hook updated", "body": "Upgraded the signed host to v2.0.0."}
+        {"kind": "update_installed", "title": "Captain Hook updated", "body": "Upgraded the signed host to 2.0.0."}
     ]
+
+
+def test_run_update_escalates_when_upgrade_exits_clean_without_converging(
+    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
+) -> None:
+    """PIN: a Cellar already carrying the release makes ``brew upgrade`` a successful no-op.
+
+    The deployed app stays behind, so exit 0 must not be read as an upgrade — the escalation
+    that re-runs ``post_install`` is what supersedes it.
+    """
+    stub_release(monkeypatch, "v2.0.0")
+    brew = record_brew(monkeypatch, 0)
+    stub_converging(monkeypatch, "1.0.0", "2.0.0", on="reinstall")
+
+    updater.run_update()
+
+    assert brew == [UPGRADE, REINSTALL]
+    assert [n["kind"] for n in notes] == ["update_installed"]
+
+
+def test_run_update_reports_a_failure_when_nothing_converges(
+    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
+) -> None:
+    stub_release(monkeypatch, "v2.0.0")
+    stub_installed(monkeypatch, "1.0.0")
+    brew = record_brew(monkeypatch, 0)
+
+    updater.run_update()
+
+    assert brew == [UPGRADE, REINSTALL, INSTALL]
+    assert [n["kind"] for n in notes] == ["update_failed"]
+
+
+def test_run_update_stops_escalating_after_the_budget(
+    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
+) -> None:
+    stub_release(monkeypatch, "v2.0.0")
+    stub_installed(monkeypatch, "1.0.0")
+    brew = record_brew(monkeypatch, 0)
+
+    for _ in range(updater.MAX_ESCALATIONS + 2):
+        updater.run_update()
+
+    assert brew.count(REINSTALL) == updater.MAX_ESCALATIONS
+    assert brew.count(UPGRADE) == updater.MAX_ESCALATIONS + 2
+    assert [n["kind"] for n in notes] == ["update_failed"] * updater.MAX_ESCALATIONS
+
+
+def test_run_update_gives_a_newer_release_a_fresh_budget(
+    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
+) -> None:
+    stub_release(monkeypatch, "v2.0.0")
+    stub_installed(monkeypatch, "1.0.0")
+    record_brew(monkeypatch, 0)
+    for _ in range(updater.MAX_ESCALATIONS):
+        updater.run_update()
+
+    stub_release(monkeypatch, "v3.0.0")
+    brew = record_brew(monkeypatch, 0)
+    stub_converging(monkeypatch, "1.0.0", "3.0.0", on="reinstall")
+    updater.run_update()
+
+    assert brew == [UPGRADE, REINSTALL]
+    assert notes[-1]["kind"] == "update_installed"
 
 
 def test_run_update_skips_when_host_is_current(monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]) -> None:
@@ -98,8 +178,8 @@ def test_run_update_reinstalls_and_recovers_husk(
     monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
 ) -> None:
     stub_release(monkeypatch, "v2.0.0")
-    stub_installed(monkeypatch, "1.0.0")
     brew = record_brew(monkeypatch, lambda argv: 1 if argv[1] == "upgrade" else 0)
+    stub_converging(monkeypatch, "1.0.0", "2.0.0", on="reinstall")
 
     updater.run_update()
 
