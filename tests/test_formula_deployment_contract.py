@@ -71,9 +71,12 @@ def test_signed_controller_stops_only_the_exact_installed_generation() -> None:
         assert forbidden not in source
 
 
-def test_binrun_version_probes_use_the_formula_owned_host() -> None:
-    expected = '["/usr/bin/env", "capt-hook-host", "version"]'
+def test_binrun_version_probes_use_the_stable_signed_host() -> None:
+    expected = (
+        '["/bin/bash", "-c", "exec \\"$HOME/Applications/Captain Hook.app'
+        '/Contents/Helpers/capt-hookd\\" version"]'
+    )
     for name in ("capt-hook.binrun", "hook.binrun"):
         descriptor = (ROOT / "captain_hook/bin" / name).read_text()
         assert expected in descriptor
-        assert "/Applications/Captain Hook.app" not in descriptor
+        assert "capt-hook-host" not in descriptor
