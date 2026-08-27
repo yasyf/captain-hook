@@ -223,22 +223,26 @@ def test_run_update_skips_when_installed_version_unavailable(
     assert notes == []
 
 
+def record_detach(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    detaches: list[bool] = []
+    monkeypatch.setattr(updater, "detach", lambda *, apply: detaches.append(apply))
+    return detaches
+
+
 def test_dispatch_detaches_once_per_throttle_window(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CAPT_HOOK_SPAWNED", raising=False)
-    detaches: list[int] = []
-    monkeypatch.setattr(updater, "detach", lambda: detaches.append(1))
+    detaches = record_detach(monkeypatch)
 
     updater.dispatch_update()
     updater.dispatch_update()
 
-    assert detaches == [1]
+    assert detaches == [True]
 
 
 def test_dispatch_skips_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CAPT_HOOK_SPAWNED", raising=False)
     monkeypatch.setenv("HOOKS_UPDATE_ENABLED", "false")
-    detaches: list[int] = []
-    monkeypatch.setattr(updater, "detach", lambda: detaches.append(1))
+    detaches = record_detach(monkeypatch)
 
     updater.dispatch_update()
 
@@ -247,9 +251,83 @@ def test_dispatch_skips_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_dispatch_skips_a_spawned_session(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CAPT_HOOK_SPAWNED", "1")
-    detaches: list[int] = []
-    monkeypatch.setattr(updater, "detach", lambda: detaches.append(1))
+    detaches = record_detach(monkeypatch)
 
     updater.dispatch_update()
 
     assert detaches == []
+
+
+def test_dispatch_checks_an_agent_session_without_letting_it_apply(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PIN: a headless session participates in the check and can never supersede the daemon.
+
+    Converging quiesces and replaces the running host, so an agent-launched session acting on it
+    would drain hook dispatch under every other session the daemon serves.
+    """
+    monkeypatch.delenv("CAPT_HOOK_SPAWNED", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "sdk-py")
+    detaches = record_detach(monkeypatch)
+
+    updater.dispatch_update()
+
+    assert detaches == [False]
+    assert updater.update_argv(apply=False)[-1] == "--check-only"
+
+
+def test_the_check_only_flag_reaches_run_update(monkeypatch: pytest.MonkeyPatch) -> None:
+    from click.testing import CliRunner
+
+    from captain_hook.update.cli import update
+
+    applied: list[bool] = []
+    monkeypatch.setattr(updater, "run_update", lambda *, apply: applied.append(apply))
+
+    assert CliRunner().invoke(update, ["run", "--check-only"]).exit_code == 0
+    assert CliRunner().invoke(update, ["run"]).exit_code == 0
+    assert applied == [False, True]
+
+
+def test_check_only_records_the_divergence_and_runs_no_brew_lane(
+    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
+) -> None:
+    stub_release(monkeypatch, "v2.0.0")
+    stub_installed(monkeypatch, "1.0.0")
+    brew = record_brew(monkeypatch, 0)
+
+    updater.run_update(apply=False)
+
+    assert brew == []
+    assert notes == []
+    assert updater.pending() == "v2.0.0"
+
+
+def test_a_deferred_update_is_applied_by_the_next_interactive_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CAPT_HOOK_SPAWNED", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "sdk-py")
+    stub_release(monkeypatch, "v2.0.0")
+    stub_installed(monkeypatch, "1.0.0")
+    record_brew(monkeypatch, 0)
+    detaches = record_detach(monkeypatch)
+
+    updater.dispatch_update()
+    updater.run_update(apply=False)
+    assert updater.pending() == "v2.0.0"
+
+    monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
+    updater.dispatch_update()
+    updater.dispatch_update()
+
+    assert detaches == [False, True]
+
+
+def test_a_converged_host_drops_the_deferral(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub_release(monkeypatch, "v2.0.0")
+    stub_installed(monkeypatch, "1.0.0")
+    record_brew(monkeypatch, 0)
+    updater.run_update(apply=False)
+    assert updater.pending() == "v2.0.0"
+
+    stub_installed(monkeypatch, "2.0.0")
+    updater.run_update(apply=False)
+
+    assert updater.pending() is None

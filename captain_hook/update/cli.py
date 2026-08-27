@@ -11,8 +11,9 @@ def update() -> None:
 
 
 @update.command(name="run")
-def run_hook() -> None:
+@click.option("--check-only", is_flag=True, help="Record a newer release for the next session to act on.")
+def run_hook(check_only: bool) -> None:
     """Check the latest release and brew-upgrade an older host (spawned by the SessionStart dispatch)."""
     from captain_hook.update.updater import run_update
 
-    run_update()
+    run_update(apply=not check_only)

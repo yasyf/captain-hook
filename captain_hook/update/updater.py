@@ -17,6 +17,11 @@ Cellar 12.21.6 for six days while its host stayed 12.21.4 and every check logged
 app, so the escalation is what actually repairs that split. It is bounded per release tag by
 :data:`MAX_ESCALATIONS`: a reinstall is heavy, and one that cannot converge must not run on
 every window forever.
+
+Checking and acting are separate lanes because superseding the daemon interrupts every session it
+serves. Every session checks; only one that may take hook dispatch down acts. A headless session
+runs :func:`run_update` with ``apply=False``, which records the divergence and stops; the next
+interactive session picks that deferral up and converges.
 """
 
 from __future__ import annotations
@@ -38,7 +43,9 @@ from captain_hook.util.http import GitHubFetchError, github_get_json
 
 RELEASES_URL = "https://api.github.com/repos/yasyf/captain-hook/releases/latest"
 UPDATE_STAMP = "check.stamp"
+APPLY_STAMP = "apply.stamp"
 ESCALATION_RECORD = "escalation"
+PENDING_RECORD = "pending"
 MAX_ESCALATIONS = 3
 BREW_TIMEOUT = 1800.0
 
@@ -102,6 +109,29 @@ def host_at_least(target: str) -> str | None:
         return None
 
 
+def pending() -> str | None:
+    """The release a check-only run deferred to the next session allowed to act on it."""
+    try:
+        return (update_dir() / PENDING_RECORD).read_text().strip() or None
+    except OSError:
+        return None
+
+
+def record_pending(target: str) -> None:
+    try:
+        (record := update_dir() / PENDING_RECORD).parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(target)
+    except OSError:
+        breadcrumb(f"pending record unwritable for {target}")
+
+
+def clear_pending() -> None:
+    try:
+        (update_dir() / PENDING_RECORD).unlink(missing_ok=True)
+    except OSError:
+        breadcrumb("pending record unclearable")
+
+
 def escalations(target: str) -> int:
     """Reinstall escalations already spent on ``target``; a newer tag starts a fresh budget."""
     try:
@@ -132,8 +162,13 @@ def notify(*, kind: str, title: str, body: str) -> None:
         )
 
 
-def run_update() -> None:
-    """The detached child: check the latest release and converge an older host onto it.
+def run_update(*, apply: bool = True) -> None:
+    """The detached child: check the latest release and, when allowed to act, converge onto it.
+
+    ``apply=False`` is the agent-session lane. It runs the same release check and records the
+    divergence it finds, but never runs a brew lane: converging supersedes the running daemon, and
+    an agent-launched session is precisely where that would drain hook dispatch under work already
+    in flight. The next session that may act picks the deferral up from :func:`pending`.
 
     Never raises — a network, version, or brew failure becomes a breadcrumb or an
     ``update_failed`` banner, so the async dispatch can never be affected.
@@ -152,8 +187,14 @@ def run_update() -> None:
         breadcrumb(f"update skip: unparseable version (installed {installed}, latest {latest})")
         return
     if current:
+        clear_pending()
         breadcrumb(f"update skip: host {installed} current (latest {latest})")
         return
+    if not apply:
+        record_pending(latest)
+        breadcrumb(f"update deferred: host {installed} short of {latest}; an agent session may not supersede")
+        return
+    clear_pending()
     brew(["upgrade", "--formula", FORMULA])
     if (host := host_at_least(latest)) is not None:
         settled(installed, host)
@@ -171,18 +212,18 @@ def run_update() -> None:
     notify(kind="update_failed", title="Captain Hook update failed", body=f"Could not upgrade the host to {latest}.")
 
 
-def update_argv() -> list[str]:
+def update_argv(*, apply: bool) -> list[str]:
     # -P: detach() runs this from the session's repo, and `-m` would otherwise put that repo at the
     # head of sys.path, where a directory sharing a dependency's name shadows the installed one.
-    return [sys.executable, "-P", "-m", "captain_hook", "update", "run"]
+    return [sys.executable, "-P", "-m", "captain_hook", "update", "run", *([] if apply else ["--check-only"])]
 
 
-def detach() -> None:
+def detach(*, apply: bool) -> None:
     try:
         (log_path := update_log_path()).parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("ab") as log:
             subprocess.Popen(
-                update_argv(),
+                update_argv(apply=apply),
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=log,
@@ -193,13 +234,13 @@ def detach() -> None:
     except OSError:
         breadcrumb("detach failed: update run")
         return
-    breadcrumb("spawned update run")
+    breadcrumb(f"spawned update run{'' if apply else ' (check only)'}")
 
 
-def claim_update(settings: UpdateSettings) -> bool:
+def claim(stamp: str, settings: UpdateSettings) -> bool:
     try:
         (stamps := update_dir()).mkdir(parents=True, exist_ok=True)
-        return _claim_stamp(stamps / UPDATE_STAMP, timedelta(minutes=settings.interval_minutes))
+        return _claim_stamp(stamps / stamp, timedelta(minutes=settings.interval_minutes))
     except OSError:
         return False
 
@@ -207,19 +248,27 @@ def claim_update(settings: UpdateSettings) -> bool:
 def dispatch_update() -> None:
     """Async SessionStart entry (sibling of the review dispatcher): throttle and detach the updater.
 
-    Never raises and never blocks: skips a disabled config, a spawned or headless session, claims the
-    shared interval stamp so a burst of sessions triggers at most one check per window, then detaches
+    Never raises and never blocks: skips a disabled config and a spawned session, claims an interval
+    stamp so a burst of sessions triggers at most one run per window, then detaches
     ``capt-hook update run`` so a multi-minute ``brew upgrade`` runs off the hook's thread.
+
+    Every session checks; only a session that may supersede the daemon acts. A headless one detaches
+    the check-only lane, which records what it finds without running a brew lane, so an
+    agent-launched session can never interrupt hook dispatch in flight. An interactive session
+    carrying a deferral acts on it immediately, claiming :data:`APPLY_STAMP` instead of waiting out a
+    check window a headless peer already claimed — one apply per window, whichever session brings it.
     """
     if not (settings := UpdateSettings()).enabled:
         return
     if reqenv.getenv(SPAWNED_ENV):
         breadcrumb("update skip: CAPT_HOOK_SPAWNED set")
         return
-    if reqenv.is_headless():
-        breadcrumb("update skip: sdk entrypoint")
-        return
-    if not claim_update(settings):
+    apply = not reqenv.is_headless()
+    if apply and pending() is not None:
+        if not claim(APPLY_STAMP, settings):
+            breadcrumb("update skip: a deferred update is already claimed")
+            return
+    elif not claim(UPDATE_STAMP, settings):
         breadcrumb("update skip: throttled")
         return
-    detach()
+    detach(apply=apply)

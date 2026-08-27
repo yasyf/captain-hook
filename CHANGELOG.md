@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Agent-launched sessions now take part in the update check. `dispatch_update` skipped every
+  headless session outright, so on a machine where most sessions are agent-launched the check fell
+  to whichever interactive session happened along — 1,403 of 1,516 lines in one update log were
+  `update skip: sdk entrypoint`. A headless session now runs the same release check and records
+  what it finds, but never runs a brew lane: converging supersedes the running daemon, and an agent
+  session acting on that would drain hook dispatch under every other session the daemon serves. The
+  next interactive session applies the deferral immediately, claiming an apply stamp of its own
+  rather than waiting out a check window its headless peer already claimed, and only one such apply
+  runs per window.
+
 ### Fixed
 
 - The self-updater reported success on every window while never converging. `run_update` read
