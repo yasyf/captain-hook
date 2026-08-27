@@ -6,7 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.22.0] - 2026-08-26
+
 ### Changed
+
+- Requires daemonkit v0.23.0 on both halves, and `HelperPaths` no longer derives the host socket
+  itself. The Swift side hand-reimplemented daemonkit's label-to-socket formula because the Swift
+  package had no such helper, and the SPM pin sat a release behind the Go one to keep that copy
+  agreeing; daemonkit v0.23.0 adds `AgentPaths`, so both halves now derive the path from the same
+  place and the copy is gone. The host's state moves from `~/com.yasyf.captain-hook.host.v1` to
+  `~/.daemonkit/a/com.yasyf.captain-hook.host.v1`. There is no migration and no fallback read: the
+  host comes up fresh under the new root, and the old directory stays where it lies until deleted
+  by hand once the host is confirmed serving under the new one.
 
 - cc-transcript pin raised to exactly `14.15.0`, which stops a deep predicate reparsing the whole
   sidechain tree on every call. `has_command` and its siblings walk every reachable transcript when
