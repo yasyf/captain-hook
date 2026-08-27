@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- cc-transcript pin raised to exactly `14.15.0`, which stops a deep predicate reparsing the whole
+  sidechain tree on every call. `has_command` and its siblings walk every reachable transcript when
+  `subagents=True`, and each walk used to parse and lift every node from disk again — ~100 walks and
+  ~480 transcript parses per dispatch on a session with 60 sidechains. Together with the gitignore
+  fix below, one `PostToolUse` dispatch against a large monorepo and a 27 MB transcript drops from
+  1678 ms to 198 ms, measured against this pin.
+
 - Agent-launched sessions now take part in the update check. `dispatch_update` skipped every
   headless session outright, so on a machine where most sessions are agent-launched the check fell
   to whichever interactive session happened along — 1,403 of 1,516 lines in one update log were
