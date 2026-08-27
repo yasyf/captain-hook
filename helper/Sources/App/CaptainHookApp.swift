@@ -52,7 +52,7 @@ struct CaptainHookApp: App {
             var client: ServiceSocketClient?
             do {
                 let connected = try ServiceSocketClient(
-                    path: HelperPaths.hostSocket.path,
+                    path: HelperPaths.hostSocket().path,
                     schema: helperSchema
                 )
                 client = connected

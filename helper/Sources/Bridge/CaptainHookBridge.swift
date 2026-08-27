@@ -45,7 +45,7 @@ private enum CaptainHookBridge {
             let input = try payload(for: arguments.operation)
             let deadline = Date().addingTimeInterval(5)
             let client = try await SocketClient(
-                path: HelperPaths.hostSocket.path,
+                path: HelperPaths.hostSocket().path,
                 schema: helperSchema,
                 lane: .business
             )
