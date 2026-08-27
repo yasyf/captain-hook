@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The self-updater reported success on every window while never converging. `run_update` read
+  `brew upgrade`'s exit status as proof of an upgrade, but `brew upgrade` exits 0 against a Cellar
+  that already carries the release, and only `reinstall`/`install` re-run the formula's
+  `post_install` — the step that supersedes the deployed app under `~/Applications`. A machine
+  whose Cellar upgraded without landing the app therefore logged `update ok: 12.21.4 -> v12.21.6`
+  every window while the host it actually ran stayed 12.21.4; one went six days and two releases
+  that way, and would have swallowed every release after them. Each brew lane's outcome is now read
+  back from the host's own ping, `update ok` is written only once the host has reached the release,
+  and the reinstall escalation is bounded to three attempts per release tag so a deployment that
+  cannot converge stops reinstalling forever.
 - Dispatch no longer recompiles a repository's gitignore patterns once per directory
   it walks. Every event fingerprints the project to decide whether the cached hook
   registry still holds, and that fingerprint walks the tree for build manifests with

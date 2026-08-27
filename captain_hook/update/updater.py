@@ -5,9 +5,18 @@ Wired as a sibling of the review dispatcher on the async SessionStart path
 the dispatch only guards, throttles via the shared :func:`_claim_stamp`, and detaches
 ``capt-hook update run``. The detached child (:func:`run_update`) compares the latest
 ``yasyf/captain-hook`` release against the installed signed host and, when the host is older,
-runs ``brew upgrade --formula`` — retrying with an exact formula reinstall/install to repair a
+runs ``brew upgrade --formula`` — escalating to an exact formula reinstall/install to repair a
 broken deployment — then posts a success or failure banner. Every failure is a notification
 or a breadcrumb; nothing here raises into the dispatch or sets an exit code.
+
+Every outcome is read back from the host, never from brew's exit status. ``brew upgrade``
+exits 0 against a Cellar that is already current, so exit 0 covers both a real upgrade and a
+no-op that left the deployment untouched — the state this converges, where one machine carried
+Cellar 12.21.6 for six days while its host stayed 12.21.4 and every check logged success. Only
+``reinstall``/``install`` re-run the formula's ``post_install``, which supersedes the deployed
+app, so the escalation is what actually repairs that split. It is bounded per release tag by
+:data:`MAX_ESCALATIONS`: a reinstall is heavy, and one that cannot converge must not run on
+every window forever.
 """
 
 from __future__ import annotations
@@ -29,6 +38,8 @@ from captain_hook.util.http import GitHubFetchError, github_get_json
 
 RELEASES_URL = "https://api.github.com/repos/yasyf/captain-hook/releases/latest"
 UPDATE_STAMP = "check.stamp"
+ESCALATION_RECORD = "escalation"
+MAX_ESCALATIONS = 3
 BREW_TIMEOUT = 1800.0
 
 
@@ -76,13 +87,41 @@ def brew(args: list[str]) -> bool:
     return completed.returncode == 0
 
 
-def brew_upgrade() -> bool:
-    """Upgrade or repair the exact formula-owned signed deployment."""
-    return (
-        brew(["upgrade", "--formula", FORMULA])
-        or brew(["reinstall", "--formula", FORMULA])
-        or brew(["install", "--formula", FORMULA])
-    )
+def host_at_least(target: str) -> str | None:
+    """The running host's version once it has reached ``target``; ``None`` while it has not.
+
+    ``package-install`` — the formula's ``post_install`` step — supersedes the deployed app and
+    returns only once the new host answers a ping, so the host's own reply is the proof that a
+    brew lane landed rather than no-opped.
+    """
+    if (installed := installed_version()) is None:
+        return None
+    try:
+        return installed if version_tuple(installed) >= version_tuple(target) else None
+    except ValueError:
+        return None
+
+
+def escalations(target: str) -> int:
+    """Reinstall escalations already spent on ``target``; a newer tag starts a fresh budget."""
+    try:
+        tag, spent = (update_dir() / ESCALATION_RECORD).read_text().split()
+        return int(spent) if tag == target else 0
+    except (OSError, ValueError):
+        return 0
+
+
+def record_escalation(target: str, spent: int) -> None:
+    try:
+        (record := update_dir() / ESCALATION_RECORD).parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(f"{target} {spent}")
+    except OSError:
+        breadcrumb(f"escalation record unwritable for {target}")
+
+
+def settled(previous: str, host: str) -> None:
+    breadcrumb(f"update ok: {previous} -> {host}")
+    notify(kind="update_installed", title="Captain Hook updated", body=f"Upgraded the signed host to {host}.")
 
 
 def notify(*, kind: str, title: str, body: str) -> None:
@@ -94,7 +133,7 @@ def notify(*, kind: str, title: str, body: str) -> None:
 
 
 def run_update() -> None:
-    """The detached child: check the latest release and brew-upgrade an older host.
+    """The detached child: check the latest release and converge an older host onto it.
 
     Never raises — a network, version, or brew failure becomes a breadcrumb or an
     ``update_failed`` banner, so the async dispatch can never be affected.
@@ -115,14 +154,21 @@ def run_update() -> None:
     if current:
         breadcrumb(f"update skip: host {installed} current (latest {latest})")
         return
-    if brew_upgrade():
-        breadcrumb(f"update ok: {installed} -> {latest}")
-        notify(kind="update_installed", title="Captain Hook updated", body=f"Upgraded the signed host to {latest}.")
-    else:
-        breadcrumb(f"update failed: could not upgrade to {latest}")
-        notify(
-            kind="update_failed", title="Captain Hook update failed", body=f"Could not upgrade the host to {latest}."
-        )
+    brew(["upgrade", "--formula", FORMULA])
+    if (host := host_at_least(latest)) is not None:
+        settled(installed, host)
+        return
+    if (spent := escalations(latest)) >= MAX_ESCALATIONS:
+        breadcrumb(f"update stalled: host {installed} short of {latest} after {spent} escalations")
+        return
+    record_escalation(latest, spent + 1)
+    for lane in ("reinstall", "install"):
+        brew([lane, "--formula", FORMULA])
+        if (host := host_at_least(latest)) is not None:
+            settled(installed, host)
+            return
+    breadcrumb(f"update failed: host {installed} did not reach {latest}")
+    notify(kind="update_failed", title="Captain Hook update failed", body=f"Could not upgrade the host to {latest}.")
 
 
 def update_argv() -> list[str]:
