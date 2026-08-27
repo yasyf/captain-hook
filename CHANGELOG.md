@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Dispatch no longer recompiles a repository's gitignore patterns once per directory
+  it walks. Every event fingerprints the project to decide whether the cached hook
+  registry still holds, and that fingerprint walks the tree for build manifests with
+  real gitignore semantics: patterns accumulate down the tree, and the accumulation
+  was compiled into a fresh `GitIgnoreSpec` at every directory. On a large monorepo
+  that came to 85,000 pattern compilations and ~390 ms of CPU per hook event, paid
+  again by every hook process the event fans out to. A directory carrying no
+  `.gitignore` now inherits its parent's compiled spec, and one carrying its own
+  compiles only its own lines and concatenates the patterns — the same order, the
+  same matches. The walk drops to ~47 ms on the same repository, and a differential
+  run over 216 trees, three real repositories and 200 generated gitignore layouts
+  among them, agrees with the old walk on every one.
+
 ## [12.21.6] - 2026-08-19
 
 ### Fixed

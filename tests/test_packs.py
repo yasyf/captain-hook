@@ -275,6 +275,12 @@ def test_detect_languages_finds_both(tmp_path: Path) -> None:
         pytest.param({".gitignore": "**/pyproject.toml\n", "svc/pyproject.toml": "x"}, frozenset(), id="double-star"),
         # A negation re-includes a marker an earlier pattern excluded, so it counts.
         pytest.param({".gitignore": "*.mod\n!go.mod\n", "go.mod": "x"}, frozenset({"go"}), id="negation-reincludes"),
+        # A nested negation re-includes a marker the parent's pattern excluded, across both levels.
+        pytest.param(
+            {".gitignore": "*.mod\n", "sub/.gitignore": "!go.mod\n", "sub/go.mod": "x"},
+            frozenset({"go"}),
+            id="nested-negation-reincludes",
+        ),
     ],
 )
 def test_detect_languages_gitignore_semantics(tmp_path: Path, files: dict[str, str], expected: frozenset[str]) -> None:
