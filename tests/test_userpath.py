@@ -183,4 +183,4 @@ def test_update_spawn_is_import_isolated() -> None:
     # updater.detach() spawns from the session's repo too, so it needs the same isolation.
     from captain_hook.update.updater import update_argv
 
-    assert update_argv()[:4] == [sys.executable, "-P", "-m", "captain_hook"]
+    assert update_argv(apply=True)[:4] == [sys.executable, "-P", "-m", "captain_hook"]
