@@ -153,3 +153,66 @@ class TestReserveThenRelease:
         assert execute_hook(entry, edit_evt(), tmp_path) is None
         r = execute_hook(entry, edit_evt(), tmp_path)
         assert r is not None and r.message == "ok"
+
+
+class FakeSynset:
+    def __init__(self, *lemmas: str) -> None:
+        self._lemmas = lemmas
+
+    def lemmas(self) -> tuple[str, ...]:
+        return self._lemmas
+
+
+class FakeWn:
+    """A lexicon stand-in that records how many readers are inside a query at once."""
+
+    def __init__(self) -> None:
+        self.inside = 0
+        self.peak = 0
+
+    def synsets(self, term: str, pos: str) -> list[FakeSynset]:
+        self.inside += 1
+        self.peak = max(self.peak, self.inside)
+        time.sleep(0.002)
+        self.inside -= 1
+        return [FakeSynset(f"{term}_one", f"{term}_two")]
+
+
+class TestWnConnectionRace:
+    def test_lemma_reads_admit_one_thread_at_a_time(self) -> None:
+        """Concurrent lemma reads must never overlap inside the lexicon.
+
+        wn pools one process-global sqlite connection, and `ensure_wn_lexicon` turns off Python's
+        same-thread assertion. Serialized sqlite protects the C handle but not the connection's
+        prepared-statement cache, so two threads running one query is `SQLITE_MISUSE` — an
+        `InterfaceError`, or a short row that reads like a real answer.
+
+        Asserts the observed peak, not the returned lemmas: the unlocked version returns the right
+        answer most of the time, so a result assertion stays green against the bug.
+        """
+        from captain_hook.state import NlpResources
+
+        resources = NlpResources()
+        fake = FakeWn()
+        resources.__dict__["wn"] = fake
+
+        threads = [threading.Thread(target=lambda i=i: resources.wn_lemmas((f"term{i}",), "n")) for i in range(16)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert fake.peak == 1
+
+    def test_lemma_reads_return_every_lemma_and_the_terms(self) -> None:
+        from captain_hook.state import NlpResources
+
+        resources = NlpResources()
+        resources.__dict__["wn"] = FakeWn()
+
+        assert resources.wn_lemmas(("alpha", "beta"), "n") == {
+            "alpha one",
+            "alpha two",
+            "beta one",
+            "beta two",
+        }
