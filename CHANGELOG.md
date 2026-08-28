@@ -6,6 +6,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.22.2] - 2026-08-28
+
+### Fixed
+
+- A worker no longer loses its readiness handshake to the login shell it asks for the user's
+  `PATH`. `adopt_user_path()` probed `printenv PATH` through the passwd login shell on every
+  worker spawn, ahead of the readiness frame and inside hookd's 10s `workerReadinessTimeout`, and
+  a login shell is the most expensive thing that happens in that window: `fish -l` measured
+  1495 ms per run on an idle machine, against 450 ms for the worker's entire import graph. Under a
+  parallel agent fleet it went past the 5s probe cap outright, hookd tore the child down, and the
+  hook reported `captain: handshake Python product worker` over a pipe `Wait()` had already
+  closed. A worker that survived the timeout was worse: the probe failure is non-fatal, so `PATH`
+  stayed launchd-minimal, `which("claude")` returned `None`, and every plugin-shipped pack went
+  quietly unloaded behind one `PluginListError` — 2130 of them in a single machine's log. The
+  answer is now cached, keyed on the login shell so changing shells is a miss rather than a stale
+  hit, and a refresh sitting behind a usable record runs on a 1s budget and falls back to that
+  record rather than surrendering the worker's `PATH`. 1500 ms cold, 0.3 ms warm.
+
+- The binrun descriptors' version probe execs the signed helper by absolute path instead of
+  resolving `capt-hook-host` through `PATH`. Homebrew unlinks the active keg before installing its
+  replacement, so any upgrade of the formula opened a window in which the probe exited 127 and live
+  sessions failed with `binrun: run version command: exit status 127`.
+
 ## [12.22.0] - 2026-08-26
 
 ### Changed
