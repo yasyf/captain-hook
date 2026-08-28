@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.22.3] - 2026-08-28
+
 ### Fixed
 
 - NLP signal matching no longer reads the WordNet lexicon from several dispatch threads at once.
