@@ -67,15 +67,7 @@ class ExpandedPhrase(Phrase):
     def lemmas(self) -> tuple[str, ...]:
         from captain_hook.state import RESOURCES
 
-        return tuple(
-            {
-                lemma.replace("_", " ")
-                for term in self.terms
-                for ss in RESOURCES.wn.synsets(term, pos=self.pos)
-                for lemma in ss.lemmas()
-            }
-            | set(self.terms)
-        )
+        return tuple(RESOURCES.wn_lemmas(self.terms, self.pos) | set(self.terms))
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

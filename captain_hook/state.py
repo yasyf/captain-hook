@@ -32,6 +32,7 @@ PACK_PACKAGE_PREFIX = "captain_hook._packs"
 class NlpResources:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._wn_lock = threading.Lock()
 
     @cached_property
     def spacy(self) -> spacy.language.Language:
@@ -68,6 +69,23 @@ class NlpResources:
                 return self.__dict__["wn"]
             ensure_wn_lexicon()
             return wn
+
+    def wn_lemmas(self, terms: tuple[str, ...], pos: str) -> frozenset[str]:
+        # wn pools one process-global sqlite connection, and ensure_wn_lexicon sets
+        # allow_multithreading, which only drops Python's same-thread assertion. Serialized sqlite
+        # protects the C handle, not the connection's prepared-statement cache: two dispatch
+        # threads running one query share a cached statement, and resetting it under another's
+        # step is SQLITE_MISUSE — an InterfaceError, or a short row indistinguishable from an
+        # answer (16 threads: 2521 failures in 6400 calls, 534 of them short rows). Resolved to
+        # strings inside the lock because a Synset queries again on attribute access.
+        module = self.wn
+        with self._wn_lock:
+            return frozenset(
+                lemma.replace("_", " ")
+                for term in terms
+                for synset in module.synsets(term, pos=pos)
+                for lemma in synset.lemmas()
+            )
 
 
 RESOURCES = NlpResources()

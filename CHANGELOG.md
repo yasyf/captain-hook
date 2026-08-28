@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- NLP signal matching no longer reads the WordNet lexicon from several dispatch threads at once.
+  `ensure_wn_lexicon` sets `wn.config.allow_multithreading`, which drops Python's same-thread
+  assertion but leaves wn pooling a single process-global sqlite connection; serialized sqlite
+  protects the C handle, not that connection's prepared-statement cache, so two threads running
+  one query reset a statement under the other's step. Sixteen threads reproduced 2521 failures in
+  6400 calls — 1985 `sqlite3.InterfaceError: bad parameter or other API misuse`, and 534
+  `IndexError` short rows, which is the worse half: a row read from a statement already reset
+  looks like a real answer, so a clause could match on lemmas the lexicon never returned. One
+  machine's daemon log carried 62 of the visible failures. Lemma lookups now run one thread at a
+  time and resolve to strings inside the lock, since a `Synset` queries again on attribute access.
+  Lemmas stay cached per phrase, so steady-state dispatch never reaches the lock.
+
+
 ## [12.22.2] - 2026-08-28
 
 ### Fixed
