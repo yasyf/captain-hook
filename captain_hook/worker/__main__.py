@@ -16,15 +16,15 @@ def adopt_user_path() -> None:
 
     A worker inherits ``/usr/bin:/bin:/usr/sbin:/sbin`` from the daemon, which hides every CLI the
     product resolves — ``claude`` for the plugin roster, ``claude``/``codex`` for the reviewer's
-    judge — so it asks the user's login shell once instead. A probe that fails is recorded as a
-    fault: the alternative is the state this fixes, where a backend nobody can find looks exactly
-    like a machine with no backend installed.
+    judge — so it takes the user's own ``PATH`` instead, from cache where one is fresh. A probe
+    that fails with nothing cached is recorded as a fault: the alternative is the state this
+    fixes, where a backend nobody can find looks exactly like a machine with no backend installed.
     """
     from captain_hook import faults
-    from captain_hook.util.userpath import LoginShellError, login_path, merged_path
+    from captain_hook.util.userpath import LoginShellError, merged_path, user_path
 
     try:
-        login = login_path()
+        login = user_path()
     except LoginShellError as exc:
         logger.opt(exception=True).error("login shell PATH probe failed; user-installed CLIs stay invisible")
         faults.record("login shell PATH probe", exc)
