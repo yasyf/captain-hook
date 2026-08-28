@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
@@ -12,6 +14,10 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 LAUNCHD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+
+# A budget for tests that spawn a real shell. The production constant is a policy about hookd's
+# readiness handshake, and an endpoint-security agent can put seconds on any exec of /bin/sh.
+PROBE_BUDGET = 60
 
 
 def tagged(path: str) -> str:
@@ -27,23 +33,21 @@ def fake_shell(tmp_path: Path, body: str, *, exit_code: int = 0) -> str:
 
 def test_login_path_reads_the_exported_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(userpath, "login_shell", lambda: fake_shell(tmp_path, tagged("/opt/tools/bin:/usr/bin")))
-    assert userpath.login_path() == "/opt/tools/bin:/usr/bin"
+    assert userpath.login_path(PROBE_BUDGET) == "/opt/tools/bin:/usr/bin"
 
 
 def test_login_path_survives_a_chatty_login_banner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A login shell sources the user's profile, which may print before printenv answers.
     body = f"you have new mail\n{tagged('/opt/tools/bin')}"
     monkeypatch.setattr(userpath, "login_shell", lambda: fake_shell(tmp_path, body))
-    assert userpath.login_path() == "/opt/tools/bin"
+    assert userpath.login_path(PROBE_BUDGET) == "/opt/tools/bin"
 
 
-def test_login_path_survives_logout_chatter_after_the_answer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_login_path_survives_logout_chatter_after_the_answer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # zsh runs .zlogout after the -c command, so the answer is not the last line either.
     body = f"{tagged('/opt/tools/bin')}session closed\n"
     monkeypatch.setattr(userpath, "login_shell", lambda: fake_shell(tmp_path, body))
-    assert userpath.login_path() == "/opt/tools/bin"
+    assert userpath.login_path(PROBE_BUDGET) == "/opt/tools/bin"
 
 
 def test_login_path_runs_the_real_pipeline_in_a_real_shell(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -51,7 +55,7 @@ def test_login_path_runs_the_real_pipeline_in_a_real_shell(monkeypatch: pytest.M
     # shell's PATH, so the marker is carried rather than kept in place.
     monkeypatch.setattr(userpath, "login_shell", lambda: "/bin/sh")
     monkeypatch.setenv("PATH", f"/opt/marker/bin:{LAUNCHD_PATH}")
-    entries = userpath.login_path().split(os.pathsep)
+    entries = userpath.login_path(PROBE_BUDGET).split(os.pathsep)
     assert "/opt/marker/bin" in entries
     assert "/usr/bin" in entries
 
@@ -69,7 +73,7 @@ def test_login_path_does_not_read_the_callers_stdin(tmp_path: Path, monkeypatch:
 
     monkeypatch.setattr(userpath, "login_shell", lambda: fake_shell(tmp_path, tagged("/opt/tools/bin")))
     monkeypatch.setattr(subprocess, "run", spy)
-    userpath.login_path()
+    userpath.login_path(PROBE_BUDGET)
     assert seen["stdin"] is subprocess.DEVNULL
 
 
@@ -82,13 +86,13 @@ def test_login_path_raises_when_the_shell_will_not_answer(
 ) -> None:
     monkeypatch.setattr(userpath, "login_shell", lambda: fake_shell(tmp_path, body, exit_code=exit_code))
     with pytest.raises(userpath.LoginShellError):
-        userpath.login_path()
+        userpath.login_path(PROBE_BUDGET)
 
 
 def test_login_path_raises_when_the_shell_cannot_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(userpath, "login_shell", lambda: str(tmp_path / "no-such-shell"))
     with pytest.raises(userpath.LoginShellError, match="could not be probed"):
-        userpath.login_path()
+        userpath.login_path(PROBE_BUDGET)
 
 
 def test_login_shell_comes_from_the_passwd_database(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -131,6 +135,8 @@ def test_adopt_user_path_replaces_the_launchd_path(tmp_path: Path, monkeypatch: 
     (claude := bindir / "claude").write_text("#!/bin/sh\nexit 0\n")
     claude.chmod(0o755)
     monkeypatch.setenv("PATH", LAUNCHD_PATH)
+    monkeypatch.setattr(userpath, "PROBE_TIMEOUT_SECONDS", PROBE_BUDGET)
+    monkeypatch.setattr(userpath, "cache_file", lambda: tmp_path / "login-path.json")
     monkeypatch.setattr(userpath, "login_shell", lambda: fake_shell(tmp_path, tagged(f"{bindir}:{LAUNCHD_PATH}")))
 
     import shutil
@@ -145,6 +151,7 @@ def test_adopt_user_path_records_a_fault_when_the_probe_fails(tmp_path: Path, mo
     from captain_hook.worker.__main__ import adopt_user_path
 
     monkeypatch.setenv("PATH", LAUNCHD_PATH)
+    monkeypatch.setattr(userpath, "cache_file", lambda: tmp_path / "login-path.json")
     monkeypatch.setattr(userpath, "login_shell", lambda: str(tmp_path / "no-such-shell"))
 
     adopt_user_path()
@@ -184,3 +191,112 @@ def test_update_spawn_is_import_isolated() -> None:
     from captain_hook.update.updater import update_argv
 
     assert update_argv(apply=True)[:4] == [sys.executable, "-P", "-m", "captain_hook"]
+
+
+def recording_probe(value: str, timeouts: list[float]) -> object:
+    """A ``login_path`` stand-in that records the budget each call was given."""
+
+    def probe(timeout: float = userpath.PROBE_TIMEOUT_SECONDS) -> str:
+        timeouts.append(timeout)
+        return value
+
+    return probe
+
+
+def stale(shell: str, path: str) -> str:
+    aged = datetime.now(UTC) - userpath.CACHE_TTL - timedelta(minutes=1)
+    return json.dumps({"shell": shell, "path": path, "at": aged.isoformat()})
+
+
+def test_user_path_probes_once_and_then_reads_the_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    timeouts: list[float] = []
+    monkeypatch.setattr(userpath, "cache_file", lambda: tmp_path / "login-path.json")
+    monkeypatch.setattr(userpath, "login_shell", lambda: "/bin/fish")
+    monkeypatch.setattr(userpath, "login_path", recording_probe("/opt/tools/bin", timeouts))
+
+    assert userpath.user_path() == "/opt/tools/bin"
+    assert userpath.user_path() == "/opt/tools/bin"
+    assert timeouts == [userpath.PROBE_TIMEOUT_SECONDS]
+
+
+def test_user_path_refreshes_a_stale_record_on_the_shorter_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A refresh that fails still has the stale answer behind it, so it may not spend the cold budget.
+    (cache := tmp_path / "login-path.json").write_text(stale("/bin/fish", "/opt/old/bin"))
+    timeouts: list[float] = []
+    monkeypatch.setattr(userpath, "cache_file", lambda: cache)
+    monkeypatch.setattr(userpath, "login_shell", lambda: "/bin/fish")
+    monkeypatch.setattr(userpath, "login_path", recording_probe("/opt/tools/bin", timeouts))
+
+    assert userpath.user_path() == "/opt/tools/bin"
+    assert timeouts == [userpath.REFRESH_TIMEOUT_SECONDS]
+
+
+def test_user_path_falls_back_to_a_stale_record_when_the_refresh_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The failure this fixes: a login shell that answers late blows hookd's readiness handshake, so
+    # a worker that already has an answer must never be lost to one.
+    (cache := tmp_path / "login-path.json").write_text(stale("/bin/fish", "/opt/tools/bin"))
+    monkeypatch.setattr(userpath, "cache_file", lambda: cache)
+    monkeypatch.setattr(userpath, "login_shell", lambda: "/bin/fish")
+    monkeypatch.setattr(
+        userpath, "login_path", lambda timeout=0: (_ for _ in ()).throw(userpath.LoginShellError("late"))
+    )
+
+    assert userpath.user_path() == "/opt/tools/bin"
+
+
+def test_user_path_raises_when_the_probe_fails_with_nothing_cached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(userpath, "cache_file", lambda: tmp_path / "login-path.json")
+    monkeypatch.setattr(userpath, "login_shell", lambda: str(tmp_path / "no-such-shell"))
+    with pytest.raises(userpath.LoginShellError):
+        userpath.user_path()
+
+
+def test_user_path_ignores_a_record_written_by_another_login_shell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fresh = json.dumps({"shell": "/bin/other", "path": "/opt/stale/bin", "at": datetime.now(UTC).isoformat()})
+    (cache := tmp_path / "login-path.json").write_text(fresh)
+    timeouts: list[float] = []
+    monkeypatch.setattr(userpath, "cache_file", lambda: cache)
+    monkeypatch.setattr(userpath, "login_shell", lambda: "/bin/fish")
+    monkeypatch.setattr(userpath, "login_path", recording_probe("/opt/tools/bin", timeouts))
+
+    assert userpath.user_path() == "/opt/tools/bin"
+    assert timeouts == [userpath.PROBE_TIMEOUT_SECONDS]
+
+
+def test_user_path_survives_a_corrupt_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (cache := tmp_path / "login-path.json").write_text("{not json")
+    monkeypatch.setattr(userpath, "cache_file", lambda: cache)
+    monkeypatch.setattr(userpath, "login_shell", lambda: "/bin/fish")
+    monkeypatch.setattr(userpath, "login_path", recording_probe("/opt/tools/bin", []))
+
+    assert userpath.user_path() == "/opt/tools/bin"
+
+
+def test_adopt_user_path_takes_the_cached_answer_without_a_shell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The whole point: a worker that finds a fresh record never runs a login shell before readiness.
+    from captain_hook.worker.__main__ import adopt_user_path
+
+    (bindir := tmp_path / "tools").mkdir()
+    (claude := bindir / "claude").write_text("#!/bin/sh\nexit 0\n")
+    claude.chmod(0o755)
+    record = {"shell": "/bin/fish", "path": f"{bindir}:{LAUNCHD_PATH}", "at": datetime.now(UTC).isoformat()}
+    (cache := tmp_path / "login-path.json").write_text(json.dumps(record))
+    monkeypatch.setenv("PATH", LAUNCHD_PATH)
+    monkeypatch.setattr(userpath, "cache_file", lambda: cache)
+    monkeypatch.setattr(userpath, "login_shell", lambda: "/bin/fish")
+    monkeypatch.setattr(userpath, "login_path", lambda timeout=0: pytest.fail("the login shell was probed"))
+
+    import shutil
+
+    adopt_user_path()
+    assert shutil.which("claude") == str(claude)
