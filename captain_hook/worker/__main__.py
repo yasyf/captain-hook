@@ -7,6 +7,7 @@ import sys
 from loguru import logger
 
 from captain_hook.daemon.context import ContextIO
+from captain_hook.daemon.logsink import configure_daemon_logging
 from captain_hook.worker.runtime import ProductRuntime
 from captain_hook.worker.service import WorkerService
 
@@ -33,6 +34,8 @@ def adopt_user_path() -> None:
 
 
 def main() -> None:
+    build = importlib.metadata.version("capt-hook")
+    router = configure_daemon_logging(build)
     adopt_user_path()
     protocol_output = os.fdopen(os.dup(sys.stdout.fileno()), "wb", buffering=0)
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
@@ -41,13 +44,9 @@ def main() -> None:
     sys.stderr = ContextIO("stderr", fallback)
     runtime = ProductRuntime()
     try:
-        WorkerService(
-            sys.stdin.buffer,
-            protocol_output,
-            build=importlib.metadata.version("capt-hook"),
-            dispatch=runtime.dispatch,
-        ).run()
+        WorkerService(sys.stdin.buffer, protocol_output, build=build, dispatch=runtime.dispatch).run()
     finally:
+        router.close()
         runtime.close()
         protocol_output.close()
 

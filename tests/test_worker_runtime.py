@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from captain_hook import app
@@ -143,3 +144,27 @@ def test_hook_writes_are_captured_inside_the_product_response() -> None:
 
     assert response.stdout == "discovered out\nhook stdout\n"
     assert response.stderr == "discovered err\nhook stderr\n"
+
+
+def test_worker_entrypoint_installs_the_daemon_log_sinks(tmp_path: Path) -> None:
+    """PIN: ``capt-hook logs`` reads files only ``configure_daemon_logging`` writes.
+
+    d7d554d deleted the Python daemon that called it, and the worker that took over dispatch
+    never did — ``request_scope`` kept binding ``session_log_path`` with no sink consuming it,
+    so every per-session log stopped being written on 2026-07-21.
+    """
+    import importlib.metadata
+    import os
+    import subprocess
+
+    logs = tmp_path / "logs"
+    worker = subprocess.run(
+        [sys.executable, "-m", "captain_hook.worker"],
+        input=b"",
+        capture_output=True,
+        env={**os.environ, "CAPTAIN_HOOK_LOG_DIR": str(logs)},
+        timeout=180,
+    )
+
+    assert worker.returncode == 0, worker.stderr.decode()
+    assert (logs / f"daemon-{importlib.metadata.version('capt-hook')}.log").exists()
