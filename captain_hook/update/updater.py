@@ -224,12 +224,12 @@ def run_update(*, apply: bool = True) -> None:
         breadcrumb(f"update deferred: host {installed} short of {latest}; an agent session may not supersede")
         return
     clear_pending()
+    if (spent := escalations(latest)) >= MAX_ESCALATIONS:
+        breadcrumb(f"update stalled: host {installed} short of {latest} after {spent} escalations")
+        return
     brew(["upgrade", "--formula", FORMULA])
     if (host := deploy(latest)) is not None:
         settled(installed, host)
-        return
-    if (spent := escalations(latest)) >= MAX_ESCALATIONS:
-        breadcrumb(f"update stalled: host {installed} short of {latest} after {spent} escalations")
         return
     record_escalation(latest, spent + 1)
     for lane in ("reinstall", "install"):

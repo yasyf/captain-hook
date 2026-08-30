@@ -151,7 +151,29 @@ def test_run_update_stops_escalating_after_the_budget(
         updater.run_update()
 
     assert lanes(brew).count(REINSTALL) == updater.MAX_ESCALATIONS
-    assert lanes(brew).count(UPGRADE) == updater.MAX_ESCALATIONS + 2
+    assert lanes(brew).count(UPGRADE) == updater.MAX_ESCALATIONS
+    assert [n["kind"] for n in notes] == ["update_failed"] * updater.MAX_ESCALATIONS
+
+
+def test_run_update_runs_no_package_install_once_the_budget_is_spent(
+    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
+) -> None:
+    """PIN: an exhausted tag does no work at all — not even the upgrade + deploy lane.
+
+    ``deploy`` quiesces and supersedes the running daemon, so a release that cannot converge
+    must not take hook dispatch down on every throttle window forever; the budget gates the
+    whole apply lane, not just the reinstall escalation.
+    """
+    stub_release(monkeypatch, "v2.0.0")
+    stub_installed(monkeypatch, "1.0.0")
+    record_brew(monkeypatch, 0)
+    for _ in range(updater.MAX_ESCALATIONS):
+        updater.run_update()
+
+    calls = record_brew(monkeypatch, 0)
+    updater.run_update()
+
+    assert calls == []
     assert [n["kind"] for n in notes] == ["update_failed"] * updater.MAX_ESCALATIONS
 
 
