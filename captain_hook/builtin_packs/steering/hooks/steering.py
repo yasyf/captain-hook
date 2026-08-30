@@ -63,6 +63,7 @@ nudge(
                         noun=Phrase("issue", "bug", "problem", "error", "failure", "violation", "warning"),
                         verb=Phrase("leave"),
                         tense="prospective",
+                        subject=("unnamed",),
                     ),
                     Clause(
                         noun=Phrase("test"),
@@ -250,6 +251,20 @@ nudge(
         Input(transcript=[T.assistant("The previous issue is beyond the scope of this change.")]): Warn(),
         # f21 word-boundary: "unknown bugs" must not match the "known bug" arm
         Input(transcript=[T.assistant("There are no unknown bugs left outside scope.")]): Allow(),
+        # f22 subject-of-leave: a substantive noun subject (the bug itself, not the
+        # agent) on prospective "leave" describes a consequence, not a dismissal
+        # (misfire 2026-08-24, session 30c00a95)
+        Input(
+            transcript=[
+                T.assistant(
+                    "A mixed batch plus one transient S3 failure would leave a partition "
+                    "looking more recently used than it was, inverting the LRU order this "
+                    "PR exists to establish."
+                )
+            ]
+        ): Allow(),
+        # f22-genuine: pronoun-subject prospective "leave" on the same noun class still warns
+        Input(transcript=[T.assistant("I'll leave that failure unresolved for now.")]): Warn(),
     },
 )
 
