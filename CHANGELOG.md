@@ -6,6 +6,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.22.5] - 2026-08-30
+
+### Fixed
+
+- **`brew upgrade captain-hook` stops failing on every host, and the deployment
+  moves out of Homebrew's sandbox.** The formula's `post_install` shelled
+  `capt-hookd package-install`, whose last step writes
+  `~/Library/LaunchAgents/<label>.plist` — a write Homebrew's post-install
+  sandbox denies. Every `brew upgrade`/`reinstall` therefore exited non-zero,
+  on both fleet machines, every time. What made it survivable was also what
+  hid it: the denial lands *after* the app bundle is superseded, so the
+  deployment converged anyway and only the exit code was wrong. `post_install`
+  is gone. A new `deploy(target)` runs `brew --prefix` → that Cellar's
+  `capt-hookd package-install` → a host ping, outside any sandbox, and both
+  `capt-hook helper install` and the self-updater's `run_update` go through it.
+  **A bare `brew install captain-hook` no longer deploys the application** — it
+  fills the Cellar, and `capt-hook helper install` (which the formula's
+  `caveats` already names) lands and activates it. Because `package-install`
+  supersedes the running daemon, `MAX_ESCALATIONS` now gates the whole apply
+  lane rather than only the reinstall/install rungs: a host that cannot
+  converge stops trying after its budget instead of taking hook dispatch
+  down once per window forever.
+
+- **`capt-hook helper install` no longer reports success it did not verify.**
+  It read `brew install`'s exit status and printed "Captain Hook installed"
+  unconditionally — the last instance of the brew-exit-code bug 12.22.4 fixed
+  in the updater. It now compares the Cellar version against the version the
+  running host reports over a ping, and fails naming both when they disagree.
+
+- **A hook module that fails to import is now announced.** `loader.py` logged
+  the `LoadError` and appended it to the load-error list but never called
+  `faults.record`, unlike the plugin-roster path. Nothing surfaced at session
+  start, so a broken `PreToolUse` guard silently let every tool call through.
+
+- **A repo-local hook can import a sibling module at the project root.**
+  `CliState.discover` now appends the resolved project root to `sys.path`.
+  Appending, never inserting: the root stays below site-packages, so this
+  cannot reopen the import shadowing the `-P` flag closed.
+
+- **The worker installs the daemon log sinks again.** `configure_daemon_logging`
+  lost its only production caller when `d7d554d` (2026-07-21) deleted the Python
+  daemon lifecycle; the replacement entry point picked up that commit's other
+  two responsibilities but not this one. Per-session log files have been empty
+  since — 69 of the 81 files in `~/.cache/captain-hook/logs` are zero bytes, and
+  the newest with content is dated the day after that commit. The sink is keyed
+  on the build plus a digest of the worker's project root, matching the per-root
+  key the deleted helper used: the host runs one worker per root, and loguru
+  rotates per process, so a shared file would let one worker's rename strand the
+  others' handles on the unlinked inode.
+
+- **Three release gates that could never fail now can.** In `release-pypi.yml`,
+  `! grep -Fq …` does not trip `errexit`, so the formula's cask, absolute-path,
+  and `package-install` guards passed against any template. Each is now an
+  explicit `if grep …; then exit 1; fi`.
+
+- **A namespace hooks package no longer leaks between tests.**
+  `conftest.isolate_modules` evicted only modules with a truthy `__file__`,
+  which a namespace package never has, so a `hooks` package survived with its
+  `__path__` pinned to a deleted temp directory.
+
 ## [12.22.4] - 2026-08-29
 
 ### Fixed
