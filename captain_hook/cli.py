@@ -109,6 +109,8 @@ class CliState:
     def discover(self, *, scope: DiscoveryScope = "all") -> list[manager.ResolvedPack]:
         reset()
         load_gitignore(self.root)
+        if (root := str(self.root)) not in sys.path:
+            sys.path.append(root)
         discover_hooks(self.hooks_dir)
         if scope == "hooks":
             return []

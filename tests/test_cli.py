@@ -658,6 +658,38 @@ class TestDefaultResolution:
         assert "default hooks dir resolved" not in result.stdout
 
 
+class TestProjectRootOnPath:
+    @staticmethod
+    def scaffold_project(root: Path) -> None:
+        (root / "repo_guardrails.py").write_text("FORBIDDEN = 'curl-pipe-sh'\n")
+        hooks_dir = root / ".claude" / "hooks"
+        hooks_dir.mkdir(parents=True)
+        (hooks_dir / "__init__.py").write_text("")
+        write_hook(
+            hooks_dir,
+            """\
+            from repo_guardrails import FORBIDDEN
+
+            from captain_hook.app import hook
+            from captain_hook.types import Event
+
+            hook(Event.PreToolUse, message=f"blocked {FORBIDDEN}", block=True)
+        """,
+        )
+
+    def test_cli_017_hook_imports_a_sibling_module_at_the_project_root(self, tmp_path: Path) -> None:
+        self.scaffold_project(tmp_path)
+        result = run_cli(
+            "run",
+            "PreToolUse",
+            stdin_data=BLOCK_STDIN,
+            env={"CLAUDE_PROJECT_DIR": str(tmp_path)},
+        )
+        assert result.returncode == 0
+        assert "skipped unloadable hook module" not in result.stderr
+        assert "blocked curl-pipe-sh" in result.stdout
+
+
 class TestNlpProvisioning:
     @pytest.fixture(autouse=True)
     def _purge_hooks_modules(self) -> Iterator[None]:
@@ -844,3 +876,35 @@ class TestTestSubcommand:
         result = run_cli("test", hooks_dir=str(probe_hooks), root_dir=str(tmp_path), env={"HOME": str(fake_home)})
         assert result.returncode == 0, result.stdout + result.stderr
         assert "1 tests: 1 passed" in result.stdout
+
+
+def test_discover_lets_a_hook_import_a_module_at_the_project_root(tmp_path: Path, isolate_modules: None) -> None:
+    from captain_hook.app import _state
+    from captain_hook.cli import CliState
+    from tests.helpers import dispatch_test, write_hook
+
+    (root := tmp_path / "proj").mkdir()
+    (root / "sibling_policy.py").write_text("BANNED = 'echo sibling-policy-probe'\n")
+    (hooks := root / ".claude" / "hooks").mkdir(parents=True)
+    write_hook(
+        hooks,
+        """\
+        from sibling_policy import BANNED
+
+        from captain_hook.app import on
+        from captain_hook.types import Event
+
+        @on(Event.PreToolUse)
+        def refuse_banned(evt):
+            return evt.block("banned by the project root's policy") if evt.command.raw == BANNED else None
+        """,
+        name="guard.py",
+    )
+
+    CliState(root=root, hooks=str(hooks)).discover()
+
+    assert [f"{err.source}: {err.exc}" for err in _state.load_errors] == []
+    result = dispatch_test("PreToolUse", tool="Bash", command="echo sibling-policy-probe")
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert result["hookSpecificOutput"]["permissionDecisionReason"] == "banned by the project root's policy"
