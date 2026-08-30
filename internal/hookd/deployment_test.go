@@ -56,20 +56,3 @@ func TestHostStopDaemonNamesNoProgram(t *testing.T) {
 		t.Fatalf("host daemon is not openable as a client: %v", err)
 	}
 }
-
-// TestLaunchctlRunnerReportsExitStatusAsACode holds daemonkit's Runner
-// contract: launchctl's own refusal is a status the caller classifies, while an
-// error is reserved for a command that never ran and therefore produced none.
-func TestLaunchctlRunnerReportsExitStatusAsACode(t *testing.T) {
-	t.Parallel()
-	output, code, err := launchctlRunner(t.Context(), "/bin/sh", "-c", "echo refused >&2; exit 3")
-	if err != nil {
-		t.Fatalf("launchctlRunner returned an error for a command that ran: %v", err)
-	}
-	if code != 3 || output != "refused\n" {
-		t.Fatalf("launchctlRunner = %q, code %d, want %q, code 3", output, code, "refused\n")
-	}
-	if _, code, err := launchctlRunner(t.Context(), filepath.Join(t.TempDir(), "absent")); err == nil {
-		t.Fatalf("launchctlRunner accepted an executable that never ran, code %d", code)
-	}
-}

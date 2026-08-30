@@ -10,7 +10,6 @@ import (
 	"hash"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"time"
@@ -114,21 +113,6 @@ func packagedApplicationPath() (string, error) {
 
 func hostExecutablePath(appPath string) string {
 	return filepath.Join(appPath, hostBundleExecutable)
-}
-
-// launchctlRunner is the process boundary daemonkit drives launchctl through.
-// daemonkit exports the seam but no default, so each consumer states how its
-// own subprocesses run.
-func launchctlRunner(ctx context.Context, path string, args ...string) (string, int, error) {
-	output, err := exec.CommandContext(ctx, path, args...).CombinedOutput()
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		return string(output), exit.ExitCode(), nil
-	}
-	if err != nil {
-		return string(output), -1, err
-	}
-	return string(output), 0, nil
 }
 
 func appExecutablePath(appPath string) string {
@@ -266,9 +250,6 @@ func uninstallPackagedApplication(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("captain package: uninstall installed app: %w", err)
 	}
-	if err := removeLegacyAgents(ctx); err != nil {
-		return err
-	}
 	if !removal.Runtime.Absent() || removal.Runtime.Digest() == (deploy.SHA256{}) {
 		return errors.New("captain package: daemonkit returned an inexact absence proof")
 	}
@@ -337,30 +318,6 @@ func quiesceInstalledApplication(ctx context.Context, controllerApp, installedAp
 	}
 	if len(result.Stderr) != 0 {
 		return fmt.Errorf("captain package: stopping the installed app wrote stderr: %q", string(result.Stderr))
-	}
-	return nil
-}
-
-// removeLegacyAgents sweeps away the LaunchAgents a pre-v0.21 install left at
-// captain-hook's two labels. Those plists carry no ownership marker — the shape
-// every install before daemonkit v0.21 wrote — so deploy's own convergence
-// never reaches them: without a services record it knows no labels to remove at
-// all, and an uninstall that stopped there would delete the bundle while
-// launchd kept both jobs loaded against the path it had just removed.
-//
-// It runs after Uninstall rather than before, because Remove and RemoveUnmarked
-// partition plist shapes exactly: RemoveUnmarked refuses a marked plist with
-// launchd.ErrMarked, and until deploy has converged its own agents away a
-// marked plist is precisely what sits at these labels on a v0.21 machine.
-// Afterwards, anything still there is legacy by construction. Naming both
-// labels is captain-hook's assertion that they are its own, the only ownership
-// proof a markerless plist admits, and the verb is idempotent, so a machine
-// with nothing left over runs this to no effect.
-func removeLegacyAgents(ctx context.Context) error {
-	for _, label := range []string{hostServiceLabel, helperServiceLabel} {
-		if err := launchd.RemoveUnmarked(ctx, launchctlRunner, label); err != nil {
-			return fmt.Errorf("captain package: remove legacy agent %q: %w", label, err)
-		}
 	}
 	return nil
 }
