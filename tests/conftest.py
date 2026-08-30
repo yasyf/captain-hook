@@ -149,7 +149,9 @@ def isolate_modules():
     # re-registers cleanly) and anything imported from a sys.path entry the test added (tmp hooks
     # dirs). Evicting a lazily-imported third-party tree (spacy/thinc/pydantic submodules) strands
     # that package's internal import caches on orphans, and the next `import spacy` dies with
-    # KeyError: 'pydantic.root_model'.
+    # KeyError: 'pydantic.root_model'. A hooks dir carries no __init__.py, so the `hooks` package
+    # itself is a namespace package with no __file__; left behind, its __path__ pins the deleted
+    # tmp dir and the next test's `import hooks.conf` fails. Match on __path__ for those.
     added_paths = [Path(entry) for entry in sys.path if entry not in snapshot_path]
     removed = {
         key: mod
@@ -157,9 +159,10 @@ def isolate_modules():
         if (mod := sys.modules[key])
         and (
             key.partition(".")[0] == "captain_hook"
-            or (
-                (origin := getattr(mod, "__file__", None))
-                and any(Path(origin).is_relative_to(parent) for parent in added_paths)
+            or any(
+                Path(origin).is_relative_to(parent)
+                for origin in ([mod.__file__] if getattr(mod, "__file__", None) else getattr(mod, "__path__", ()))
+                for parent in added_paths
             )
         )
     }
