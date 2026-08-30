@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.22.4] - 2026-08-29
+
+### Fixed
+
+- The Code Stewardship nudge (`steering.steering:nudge_1ebed8c4`) no longer fires on
+  consequence-describing prose. Its prospective-tense `leave` clause matched any sentence
+  naming the noun class (bug, issue, failure, ...) as the grammatical subject, including
+  a bug's own consequences ("a failure would leave a partition looking more recently used
+  than it was") rather than an agent choosing to leave something unfixed. The clause now
+  requires a pronoun or imperative subject, and the regression pair from the misfire
+  (session `30c00a95`) is checked in alongside the genuine pronoun-subject case.
+
 ## [12.22.3] - 2026-08-28
 
 ### Fixed
