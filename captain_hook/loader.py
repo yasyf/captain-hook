@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from captain_hook import faults
 from captain_hook.app import LoadError, _state, on
 from captain_hook.state import PACK_PACKAGE_PREFIX
 from captain_hook.types import Event
@@ -99,6 +100,7 @@ def discover_hooks(hooks_dir: str | Path) -> None:
         except Exception as exc:
             logger.bind(module=fqn).opt(exception=True).warning("skipped unloadable hook module")
             _state.load_errors.append(LoadError(fqn, exc))
+            faults.record(fqn, exc)
         else:
             stamp_identity(before, root=hooks_path)
 
