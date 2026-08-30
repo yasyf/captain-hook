@@ -8,11 +8,12 @@ when the command is invoked, never at import.
 
 from __future__ import annotations
 
+import subprocess
+
 import click
 
-from captain_hook.helper import client
-
-FORMULA = "yasyf/tap/captain-hook"
+from captain_hook.helper import FORMULA, client
+from captain_hook.update.updater import brew, deploy, installed_version
 
 
 @click.group()
@@ -20,16 +21,26 @@ def helper() -> None:
     """Manage the Captain Hook desktop notification helper."""
 
 
+def cellar_version() -> str:
+    """The version Homebrew holds in the Cellar for :data:`captain_hook.helper.FORMULA`."""
+    listed = subprocess.run(["brew", "list", "--versions", FORMULA], capture_output=True, text=True, check=True)
+    return listed.stdout.split()[-1]
+
+
 @helper.command()
 def install() -> None:
     """Install or repair the exact signed helper deployment via Homebrew."""
-    import subprocess
-
-    installed = subprocess.run(["brew", "install", "--formula", FORMULA], check=False)
-    if installed.returncode != 0:
-        subprocess.run(["brew", "reinstall", "--formula", FORMULA], check=True)
+    if not brew(["install", "--formula", FORMULA]):
+        brew(["reinstall", "--formula", FORMULA])
+    cellar = cellar_version()
+    if (host := deploy(cellar)) is None:
+        raise click.ClickException(
+            f"Homebrew holds {cellar} but the running helper reports "
+            f"{installed_version() or 'no version (unreachable)'} — the deployment did not converge. "
+            "The Cellar copy is not the deployment; nothing is installed until the host answers."
+        )
     click.echo(
-        "Captain Hook installed. Grant notification permission under "
+        f"Captain Hook {host} installed. Grant notification permission under "
         "System Settings > Notifications > Captain Hook, then add the review widget via "
         "Edit Widgets in Notification Center."
     )

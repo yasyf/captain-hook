@@ -6,3 +6,5 @@ and the ``capt-hook helper`` command group (:mod:`captain_hook.helper.cli`).
 """
 
 from __future__ import annotations
+
+FORMULA = "yasyf/tap/captain-hook"

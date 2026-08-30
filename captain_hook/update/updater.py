@@ -5,18 +5,18 @@ Wired as a sibling of the review dispatcher on the async SessionStart path
 the dispatch only guards, throttles via the shared :func:`_claim_stamp`, and detaches
 ``capt-hook update run``. The detached child (:func:`run_update`) compares the latest
 ``yasyf/captain-hook`` release against the installed signed host and, when the host is older,
-runs ``brew upgrade --formula`` — escalating to an exact formula reinstall/install to repair a
-broken deployment — then posts a success or failure banner. Every failure is a notification
-or a breadcrumb; nothing here raises into the dispatch or sets an exit code.
+runs ``brew upgrade --formula`` and then :func:`deploy` — escalating to an exact formula
+reinstall/install to repair a broken Cellar — then posts a success or failure banner. Every
+failure is a notification or a breadcrumb; nothing here raises into the dispatch or sets an
+exit code.
 
 Every outcome is read back from the host, never from brew's exit status. ``brew upgrade``
 exits 0 against a Cellar that is already current, so exit 0 covers both a real upgrade and a
 no-op that left the deployment untouched — the state this converges, where one machine carried
-Cellar 12.21.6 for six days while its host stayed 12.21.4 and every check logged success. Only
-``reinstall``/``install`` re-run the formula's ``post_install``, which supersedes the deployed
-app, so the escalation is what actually repairs that split. It is bounded per release tag by
-:data:`MAX_ESCALATIONS`: a reinstall is heavy, and one that cannot converge must not run on
-every window forever.
+Cellar 12.21.6 for six days while its host stayed 12.21.4 and every check logged success. Brew
+only fills the Cellar; :func:`deploy` is what supersedes the deployed app, and the escalation
+repairs a Cellar that brew left short. It is bounded per release tag by :data:`MAX_ESCALATIONS`:
+a reinstall is heavy, and one that cannot converge must not run on every window forever.
 
 Checking and acting are separate lanes because superseding the daemon interrupts every session it
 serves. Every session checks; only one that may take hook dispatch down acts. A headless session
@@ -33,8 +33,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from captain_hook.helper import client
-from captain_hook.helper.cli import FORMULA
+from captain_hook.helper import FORMULA, client
 from captain_hook.review.pipeline import SPAWNED_ENV, _claim_stamp
 from captain_hook.settings import resolve_state_dir
 from captain_hook.update.settings import UpdateSettings
@@ -48,6 +47,7 @@ ESCALATION_RECORD = "escalation"
 PENDING_RECORD = "pending"
 MAX_ESCALATIONS = 3
 BREW_TIMEOUT = 1800.0
+CELLAR_HOST = "libexec/Captain Hook.app/Contents/Helpers/capt-hookd"
 
 
 def update_dir() -> Path:
@@ -97,9 +97,8 @@ def brew(args: list[str]) -> bool:
 def host_at_least(target: str) -> str | None:
     """The running host's version once it has reached ``target``; ``None`` while it has not.
 
-    ``package-install`` — the formula's ``post_install`` step — supersedes the deployed app and
-    returns only once the new host answers a ping, so the host's own reply is the proof that a
-    brew lane landed rather than no-opped.
+    :func:`deploy` supersedes the deployed app and returns only once the new host answers a ping,
+    so the host's own reply is the proof that a brew lane landed rather than no-opped.
     """
     if (installed := installed_version()) is None:
         return None
@@ -107,6 +106,36 @@ def host_at_least(target: str) -> str | None:
         return installed if version_tuple(installed) >= version_tuple(target) else None
     except ValueError:
         return None
+
+
+def deploy(target: str) -> str | None:
+    """Land the Cellar's application over the deployment, and the host's version once it reaches ``target``.
+
+    ``package-install`` was the formula's ``post_install`` step until Homebrew's post-install sandbox
+    denied the ``~/Library/LaunchAgents`` write it makes, failing every ``brew`` lane on every host.
+    Outside that sandbox the same command installs, activates, and pings, so the deployment converges
+    here rather than inside brew — which is why ``brew`` alone never proves anything.
+    """
+    try:
+        prefix = subprocess.run(
+            ["brew", "--prefix", FORMULA], capture_output=True, text=True, timeout=BREW_TIMEOUT, check=False
+        )
+        if prefix.returncode != 0:
+            breadcrumb(f"brew --prefix exit {prefix.returncode}: {prefix.stderr.strip()[:200]}")
+            return None
+        landed = subprocess.run(
+            [str(Path(prefix.stdout.strip()) / CELLAR_HOST), "package-install"],
+            capture_output=True,
+            text=True,
+            timeout=BREW_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        breadcrumb(f"package-install errored: {exc}")
+        return None
+    if landed.returncode != 0:
+        breadcrumb(f"package-install exit {landed.returncode}: {landed.stderr.strip()[:200]}")
+    return host_at_least(target)
 
 
 def pending() -> str | None:
@@ -196,7 +225,7 @@ def run_update(*, apply: bool = True) -> None:
         return
     clear_pending()
     brew(["upgrade", "--formula", FORMULA])
-    if (host := host_at_least(latest)) is not None:
+    if (host := deploy(latest)) is not None:
         settled(installed, host)
         return
     if (spent := escalations(latest)) >= MAX_ESCALATIONS:
@@ -205,7 +234,7 @@ def run_update(*, apply: bool = True) -> None:
     record_escalation(latest, spent + 1)
     for lane in ("reinstall", "install"):
         brew([lane, "--formula", FORMULA])
-        if (host := host_at_least(latest)) is not None:
+        if (host := deploy(latest)) is not None:
             settled(installed, host)
             return
     breadcrumb(f"update failed: host {installed} did not reach {latest}")

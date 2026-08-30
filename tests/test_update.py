@@ -59,16 +59,25 @@ def record_brew(monkeypatch: pytest.MonkeyPatch, returncode: Any) -> list[list[s
 
     def fake_run(argv: list[str], **_: Any) -> SimpleNamespace:
         calls.append(argv)
-        rc = returncode(argv) if callable(returncode) else returncode
-        return SimpleNamespace(returncode=rc, stderr="brew error")
+        prefix = argv[:2] == PREFIX[:2]
+        rc = 0 if prefix else returncode(argv) if callable(returncode) else returncode
+        return SimpleNamespace(returncode=rc, stdout=CELLAR if prefix else "", stderr="brew error")
 
     monkeypatch.setattr(updater.subprocess, "run", fake_run)
     return calls
 
 
+CELLAR = "/opt/homebrew/opt/captain-hook"
 UPGRADE = ["brew", "upgrade", "--formula", updater.FORMULA]
 REINSTALL = ["brew", "reinstall", "--formula", updater.FORMULA]
 INSTALL = ["brew", "install", "--formula", updater.FORMULA]
+PREFIX = ["brew", "--prefix", updater.FORMULA]
+PACKAGE_INSTALL = [f"{CELLAR}/{updater.CELLAR_HOST}", "package-install"]
+
+
+def lanes(calls: list[list[str]]) -> list[list[str]]:
+    """Only the brew install lanes; deploy's prefix lookup and package-install are its own."""
+    return [call for call in calls if call[0] == "brew" and call[1] != "--prefix"]
 
 
 @pytest.mark.parametrize(
@@ -93,7 +102,7 @@ def test_run_update_upgrades_when_host_is_older(
 
     updater.run_update()
 
-    assert brew == [UPGRADE]
+    assert lanes(brew) == [UPGRADE]
     assert notes == [
         {"kind": "update_installed", "title": "Captain Hook updated", "body": "Upgraded the signed host to 2.0.0."}
     ]
@@ -105,7 +114,8 @@ def test_run_update_escalates_when_upgrade_exits_clean_without_converging(
     """PIN: a Cellar already carrying the release makes ``brew upgrade`` a successful no-op.
 
     The deployed app stays behind, so exit 0 must not be read as an upgrade — the escalation
-    that re-runs ``post_install`` is what supersedes it.
+    is what fills a Cellar brew left short, and :func:`~captain_hook.update.updater.deploy` is
+    what supersedes the deployment from it.
     """
     stub_release(monkeypatch, "v2.0.0")
     brew = record_brew(monkeypatch, 0)
@@ -113,7 +123,7 @@ def test_run_update_escalates_when_upgrade_exits_clean_without_converging(
 
     updater.run_update()
 
-    assert brew == [UPGRADE, REINSTALL]
+    assert lanes(brew) == [UPGRADE, REINSTALL]
     assert [n["kind"] for n in notes] == ["update_installed"]
 
 
@@ -126,7 +136,7 @@ def test_run_update_reports_a_failure_when_nothing_converges(
 
     updater.run_update()
 
-    assert brew == [UPGRADE, REINSTALL, INSTALL]
+    assert lanes(brew) == [UPGRADE, REINSTALL, INSTALL]
     assert [n["kind"] for n in notes] == ["update_failed"]
 
 
@@ -140,8 +150,8 @@ def test_run_update_stops_escalating_after_the_budget(
     for _ in range(updater.MAX_ESCALATIONS + 2):
         updater.run_update()
 
-    assert brew.count(REINSTALL) == updater.MAX_ESCALATIONS
-    assert brew.count(UPGRADE) == updater.MAX_ESCALATIONS + 2
+    assert lanes(brew).count(REINSTALL) == updater.MAX_ESCALATIONS
+    assert lanes(brew).count(UPGRADE) == updater.MAX_ESCALATIONS + 2
     assert [n["kind"] for n in notes] == ["update_failed"] * updater.MAX_ESCALATIONS
 
 
@@ -159,7 +169,7 @@ def test_run_update_gives_a_newer_release_a_fresh_budget(
     stub_converging(monkeypatch, "1.0.0", "3.0.0", on="reinstall")
     updater.run_update()
 
-    assert brew == [UPGRADE, REINSTALL]
+    assert lanes(brew) == [UPGRADE, REINSTALL]
     assert notes[-1]["kind"] == "update_installed"
 
 
@@ -170,7 +180,7 @@ def test_run_update_skips_when_host_is_current(monkeypatch: pytest.MonkeyPatch, 
 
     updater.run_update()
 
-    assert brew == []
+    assert lanes(brew) == []
     assert notes == []
 
 
@@ -183,7 +193,7 @@ def test_run_update_reinstalls_and_recovers_husk(
 
     updater.run_update()
 
-    assert brew == [UPGRADE, REINSTALL]
+    assert lanes(brew) == [UPGRADE, REINSTALL]
     assert [n["kind"] for n in notes] == ["update_installed"]
 
 
@@ -196,7 +206,7 @@ def test_run_update_notifies_failure_without_raising(
 
     updater.run_update()
 
-    assert brew == [UPGRADE, REINSTALL, INSTALL]
+    assert lanes(brew) == [UPGRADE, REINSTALL, INSTALL]
     assert notes == [
         {
             "kind": "update_failed",
@@ -219,7 +229,7 @@ def test_run_update_skips_when_installed_version_unavailable(
 
     updater.run_update()
 
-    assert brew == []
+    assert lanes(brew) == []
     assert notes == []
 
 
@@ -296,7 +306,7 @@ def test_check_only_records_the_divergence_and_runs_no_brew_lane(
 
     updater.run_update(apply=False)
 
-    assert brew == []
+    assert lanes(brew) == []
     assert notes == []
     assert updater.pending() == "v2.0.0"
 
@@ -331,3 +341,32 @@ def test_a_converged_host_drops_the_deferral(monkeypatch: pytest.MonkeyPatch) ->
     updater.run_update(apply=False)
 
     assert updater.pending() is None
+
+
+def test_run_update_deploys_the_cellar_after_every_brew_lane(
+    monkeypatch: pytest.MonkeyPatch, notes: list[dict[str, object]]
+) -> None:
+    """PIN: brew only fills the Cellar; ``package-install`` is what lands and activates the app.
+
+    The formula cannot run it — Homebrew's post-install sandbox denies the
+    ``~/Library/LaunchAgents`` write — so the updater and ``capt-hook helper install`` share
+    :func:`~captain_hook.update.updater.deploy` and run it outside that sandbox.
+    """
+    stub_release(monkeypatch, "v2.0.0")
+    stub_installed(monkeypatch, "1.0.0")
+    calls = record_brew(monkeypatch, 0)
+
+    updater.run_update()
+
+    assert calls == [
+        UPGRADE,
+        PREFIX,
+        PACKAGE_INSTALL,
+        REINSTALL,
+        PREFIX,
+        PACKAGE_INSTALL,
+        INSTALL,
+        PREFIX,
+        PACKAGE_INSTALL,
+    ]
+    assert [n["kind"] for n in notes] == ["update_failed"]
