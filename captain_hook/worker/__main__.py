@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata
 import os
 import sys
@@ -33,9 +34,21 @@ def adopt_user_path() -> None:
     os.environ["PATH"] = merged_path(os.environ.get("PATH", ""), login)
 
 
+def worker_log_key(build: str) -> str:
+    """The daemon-log key for this worker: the build plus a digest of the project root.
+
+    The host runs one worker per project root and sets that root as the worker's cwd, so
+    concurrent same-build workers keyed on the build alone would rotate one shared log file —
+    loguru's rotation is per-process, and one worker's rename strands the others' handles on
+    the unlinked inode.
+    """
+    root = hashlib.sha256(os.path.realpath(os.getcwd()).encode("utf-8", "surrogatepass")).hexdigest()[:16]
+    return f"{build}-{root}"
+
+
 def main() -> None:
     build = importlib.metadata.version("capt-hook")
-    router = configure_daemon_logging(build)
+    router = configure_daemon_logging(worker_log_key(build))
     adopt_user_path()
     protocol_output = os.fdopen(os.dup(sys.stdout.fileno()), "wb", buffering=0)
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())

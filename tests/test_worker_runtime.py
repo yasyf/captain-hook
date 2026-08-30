@@ -157,6 +157,8 @@ def test_worker_entrypoint_installs_the_daemon_log_sinks(tmp_path: Path) -> None
     import os
     import subprocess
 
+    from captain_hook.worker.__main__ import worker_log_key
+
     logs = tmp_path / "logs"
     worker = subprocess.run(
         [sys.executable, "-m", "captain_hook.worker"],
@@ -167,4 +169,30 @@ def test_worker_entrypoint_installs_the_daemon_log_sinks(tmp_path: Path) -> None
     )
 
     assert worker.returncode == 0, worker.stderr.decode()
-    assert (logs / f"daemon-{importlib.metadata.version('capt-hook')}.log").exists()
+    assert (logs / f"daemon-{worker_log_key(importlib.metadata.version('capt-hook'))}.log").exists()
+
+
+def test_workers_in_different_roots_write_different_daemon_logs(tmp_path: Path) -> None:
+    """PIN: the host runs one worker per project root, all of the same build, concurrently.
+
+    A log keyed on the build alone made them share one file with independent loguru rotation
+    state — one process's rotation rename silently drops the others' lines into the unlinked
+    inode — so the key carries a digest of the root the host set as the worker's cwd.
+    """
+    import os
+    import subprocess
+
+    logs = tmp_path / "logs"
+    for root in (tmp_path / "a", tmp_path / "b"):
+        root.mkdir()
+        worker = subprocess.run(
+            [sys.executable, "-m", "captain_hook.worker"],
+            input=b"",
+            capture_output=True,
+            cwd=root,
+            env={**os.environ, "CAPTAIN_HOOK_LOG_DIR": str(logs)},
+            timeout=180,
+        )
+        assert worker.returncode == 0, worker.stderr.decode()
+
+    assert len(list(logs.glob("daemon-*.log"))) == 2
