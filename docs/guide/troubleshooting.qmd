@@ -72,7 +72,7 @@ missing, dispatch exits non-zero instead of falling back to an unfenced wheel. I
 the application:
 
 ```bash
-brew install --formula yasyf/tap/captain-hook
+uvx capt-hook helper install
 ```
 
 The wheel that handles each event is chosen by the app itself: the plugin's `bin/hook` wrapper
@@ -80,11 +80,12 @@ asks the installed helper for its build and runs the `capt-hook` wheel at exactl
 so the wheel and app cannot drift apart through the plugin. The app also keeps itself current — a
 session-start check, at most one per 12 hours, upgrades the formula in the background and posts a
 notification when the upgrade lands ([how it works](how-it-works.qmd#the-host-keeps-itself-current)).
-The manual path still works — check what's installed, then upgrade:
+The manual path still works — check what's installed, upgrade the Cellar, then deploy from it:
 
 ```bash
 "$HOME/Applications/Captain Hook.app/Contents/Helpers/capt-hookd" version
 brew upgrade --formula yasyf/tap/captain-hook
+uvx capt-hook helper install
 ```
 
 A build-mismatch error names both versions, and it points at a dispatch entry outside the

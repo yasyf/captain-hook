@@ -10,10 +10,12 @@
 
 ```bash
 brew install --formula yasyf/tap/captain-hook
+uvx capt-hook helper install
 uvx capt-hook init
 ```
 
-The formula deploys the fixed, signed host at `~/Applications/Captain Hook.app`; `init` scaffolds
+The formula fills the Cellar and `helper install` deploys the fixed, signed host at
+`~/Applications/Captain Hook.app`; `init` scaffolds
 `.claude/hooks/`, wires Claude Code's settings, and arms the session reviewer. Every event runs
 the exact `capt-hook` build the installed app names — nothing resolves "latest" mid-session, and
 the app keeps itself current in the background. One `block_command` later, a force-push dies
@@ -32,8 +34,8 @@ Driving with an agent? Paste this:
 <summary>Prefer a prompt over the plugin?</summary>
 
 ```text
-Install the `yasyf/tap/captain-hook` Homebrew formula, then run `uvx capt-hook init`
-in this repo, write one hook that blocks force-pushes,
+Install the `yasyf/tap/captain-hook` Homebrew formula, run `uvx capt-hook helper install`,
+then run `uvx capt-hook init` in this repo, write one hook that blocks force-pushes,
 and verify it with `uvx capt-hook test`. Read https://yasyf.github.io/captain-hook/
 if you get stuck.
 ```

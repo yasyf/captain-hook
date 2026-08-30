@@ -359,7 +359,7 @@ runtime owner; it does not make untrusted hook code safe.
 ### Host troubleshooting
 
 **The signed host is missing.** Install or repair it with
-`brew install --formula yasyf/tap/captain-hook`. Dispatch fails non-zero — the version probe has
+`uvx capt-hook helper install`. Dispatch fails non-zero — the version probe has
 nothing to ask — and never runs the Python CLI instead.
 
 **A build-mismatch error appears.** Plugin dispatch cannot skew — the wheel is resolved from the
