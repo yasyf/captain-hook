@@ -181,7 +181,8 @@ def test_formula_uses_authoritative_asset_and_bundled_application() -> None:
     assert 'url "__ASSET_URL__", using: :nounzip' in formula
     assert "/releases/download/" not in formula
     assert 'libexec.install "Captain Hook.app"' in formula
-    assert '"package-install"' in formula
+    assert '"package-install"' not in formula
+    assert "capt-hook helper install" in formula
     assert '$HOME/Applications/Captain Hook.app' in formula
     assert "\n  cask " not in formula
 

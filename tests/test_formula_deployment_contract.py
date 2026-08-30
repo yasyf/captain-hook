@@ -35,7 +35,8 @@ def _grep_finds_system_application(formula: str) -> bool:
 def test_formula_bundles_and_applies_the_exact_signed_application() -> None:
     formula = FORMULA.read_text()
     assert 'libexec.install "Captain Hook.app"' in formula
-    assert '"package-install"' in formula
+    assert '"package-install"' not in formula
+    assert "capt-hook helper install" in formula
     assert '$HOME/Applications/Captain Hook.app' in formula
     assert "--cask" not in formula
     user_scoped = formula.replace("$HOME/Applications/Captain Hook.app", "").replace(

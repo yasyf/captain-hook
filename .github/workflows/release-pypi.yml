@@ -521,10 +521,21 @@ jobs:
           set -euo pipefail
           template=.github/formula/captain-hook.rb.tmpl
           grep -Fq 'libexec.install "Captain Hook.app"' "$template"
-          grep -Fq '"package-install"' "$template"
+          grep -Fq 'capt-hook helper install' "$template"
           grep -Fq '$HOME/Applications/Captain Hook.app' "$template"
-          ! grep -Eq '^[[:space:]]*cask[[:space:]]+' "$template"
-          ! grep -Eq '(^|[^$~[:alnum:]_])/Applications/Captain Hook\.app' "$template"
+          # `! cmd` never trips errexit, so every negative gate exits for itself.
+          if grep -Fq '"package-install"' "$template"; then
+            echo "::error::post_install runs package-install in Homebrew's sandbox, which denies the LaunchAgents write; capt-hook helper install owns the deployment"
+            exit 1
+          fi
+          if grep -Eq '^[[:space:]]*cask[[:space:]]+' "$template"; then
+            echo "::error::the hard-cut formula must not declare a cask"
+            exit 1
+          fi
+          if grep -Eq '(^|[^$~[:alnum:]_])/Applications/Captain Hook\.app' "$template"; then
+            echo "::error::the application must stay user-scoped under \$HOME/Applications"
+            exit 1
+          fi
 
       - name: Render the formula from the verified release output
         uses: yasyf/homebrew-tap/.github/actions/render-formula@19c3d5013032ad9c88f9a8f1170d1f366c19b8d9

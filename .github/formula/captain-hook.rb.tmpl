@@ -28,10 +28,6 @@ class CaptainHook < Formula
     SH
   end
 
-  def post_install
-    system libexec/"Captain Hook.app/Contents/Helpers/capt-hookd", "package-install"
-  end
-
   def caveats
     <<~EOS
       Captain Hook's signed helper is deployment-owned at:
