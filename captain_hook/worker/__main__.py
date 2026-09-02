@@ -41,9 +41,15 @@ def worker_log_key(build: str) -> str:
     concurrent same-build workers keyed on the build alone would rotate one shared log file —
     loguru's rotation is per-process, and one worker's rename strands the others' handles on
     the unlinked inode.
+
+    A root deleted under a live session leaves the worker with an unresolvable cwd; the pid
+    stands in for it, keeping such workers on separate log files rather than killing dispatch.
     """
-    root = hashlib.sha256(os.path.realpath(os.getcwd()).encode("utf-8", "surrogatepass")).hexdigest()[:16]
-    return f"{build}-{root}"
+    try:
+        root = os.path.realpath(os.getcwd())
+    except FileNotFoundError:
+        root = f"deleted-root-{os.getpid()}"
+    return f"{build}-{hashlib.sha256(root.encode('utf-8', 'surrogatepass')).hexdigest()[:16]}"
 
 
 def main() -> None:
