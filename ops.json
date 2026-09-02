@@ -1,1 +1,1 @@
-{"v":1,"lamport":2,"session":"02b12144-78d4-4ba3-9031-66ab2b152652","ops":[{"kind":"add_comment","body":"Landed: PR #26 pins cc-transcript[judge]==14.16.0 (uv.lock updated, CHANGELOG records 12.23.0); merged as 926bfd9e, released via tag v12.23.0"}]}
+{"v":1,"lamport":3,"session":"02b12144-78d4-4ba3-9031-66ab2b152652","ops":[{"kind":"set_criterion_status","id":"608b6f17bb520f30a7d544733b794727","status":"met"}]}
