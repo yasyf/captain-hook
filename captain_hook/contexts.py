@@ -293,7 +293,9 @@ class UserMessages:
     so a judge can order them. The first prompt leads so the original ask survives the
     tail clip :func:`apply_contexts` applies. Yields ``None`` when the session carries no
     user prompt; being ``required`` by default, that skips the LLM call rather than
-    judging a hook against an empty authorization record.
+    judging a hook against an empty authorization record. In a delegated lane the detected
+    classifier keeps the sidechain prompts, so the record is the lane's own brief and the
+    later messages its team sent it, never the orchestrator's conversation.
 
     Attributes:
         last: How many of the most recent prompts to render after the first.

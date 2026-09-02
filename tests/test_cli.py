@@ -399,6 +399,117 @@ class TestTranscriptWiring:
         raw = json.dumps(output)
         assert "transcript has 4 messages" in raw, f"expected agent transcript (4 msgs), got: {raw}"
 
+    def test_cli_lane_transcript_derived_from_agent_id(self, tmp_path: Path, hooks_dir: Path) -> None:
+        parent_transcript = tmp_path / "parent.jsonl"
+        parent_transcript.write_text(json.dumps(raw_text("user", "parent")) + "\n")
+
+        lane_transcript = tmp_path / "parent" / "subagents" / "agent-tm1.jsonl"
+        lane_transcript.parent.mkdir(parents=True)
+        self._make_transcript_jsonl(lane_transcript)
+
+        write_hook(
+            hooks_dir,
+            """\
+            from captain_hook.app import hook, on
+            from captain_hook.types import Event, Action, HookResult
+
+
+            @on(Event.PreToolUse)
+            def check_lane_transcript(evt):
+                t = evt.ctx.t
+                return HookResult(
+                    action=Action.warn,
+                    message=f"transcript has {len(t)} messages",
+                )
+        """,
+        )
+
+        stdin = stdin_json(
+            tool_name="Bash",
+            tool_input={"command": "echo hi"},
+            transcript_path=str(parent_transcript),
+            agent_id="tm1",
+        )
+        result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
+        assert result.returncode == 0
+        raw = json.dumps(json.loads(result.stdout))
+        assert "transcript has 4 messages" in raw, f"expected the lane transcript (4 msgs), got: {raw}"
+
+    def test_cli_agent_transcript_path_beats_lane_derivation(self, tmp_path: Path, hooks_dir: Path) -> None:
+        parent_transcript = tmp_path / "parent.jsonl"
+        parent_transcript.write_text(json.dumps(raw_text("user", "parent")) + "\n")
+
+        lane_transcript = tmp_path / "parent" / "subagents" / "agent-tm1.jsonl"
+        lane_transcript.parent.mkdir(parents=True)
+        lane_transcript.write_text(json.dumps(raw_text("user", "derived lane")) + "\n")
+
+        agent_transcript = tmp_path / "agent.jsonl"
+        self._make_transcript_jsonl(agent_transcript)
+
+        write_hook(
+            hooks_dir,
+            """\
+            from captain_hook.app import hook, on
+            from captain_hook.types import Event, Action, HookResult
+
+
+            @on(Event.PreToolUse)
+            def check_lane_transcript(evt):
+                t = evt.ctx.t
+                return HookResult(
+                    action=Action.warn,
+                    message=f"transcript has {len(t)} messages",
+                )
+        """,
+        )
+
+        stdin = stdin_json(
+            tool_name="Bash",
+            tool_input={"command": "echo hi"},
+            transcript_path=str(parent_transcript),
+            agent_transcript_path=str(agent_transcript),
+            agent_id="tm1",
+        )
+        result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
+        assert result.returncode == 0
+        raw = json.dumps(json.loads(result.stdout))
+        assert "transcript has 4 messages" in raw, f"expected the agent transcript (4 msgs), got: {raw}"
+
+    def test_cli_subagent_start_reads_parent_transcript(self, tmp_path: Path, hooks_dir: Path) -> None:
+        parent_transcript = tmp_path / "parent.jsonl"
+        self._make_transcript_jsonl(parent_transcript)
+
+        lane_transcript = tmp_path / "parent" / "subagents" / "agent-tm1.jsonl"
+        lane_transcript.parent.mkdir(parents=True)
+        lane_transcript.write_text(json.dumps(raw_text("user", "derived lane")) + "\n")
+
+        write_hook(
+            hooks_dir,
+            """\
+            from captain_hook.app import hook, on
+            from captain_hook.types import Event, Action, HookResult
+
+
+            @on(Event.SubagentStart)
+            def check_parent_transcript(evt):
+                t = evt.ctx.t
+                return HookResult(
+                    action=Action.warn,
+                    message=f"transcript has {len(t)} messages",
+                )
+        """,
+        )
+
+        stdin = stdin_json(
+            transcript_path=str(parent_transcript),
+            agent_id="tm1",
+            agent_type="worker",
+        )
+        result = run_cli("run", "SubagentStart", hooks_dir=str(hooks_dir), stdin_data=stdin)
+        assert result.returncode == 0
+        raw = json.dumps(json.loads(result.stdout))
+        assert "transcript has 4 messages" in raw, f"expected the parent transcript (4 msgs), got: {raw}"
+
     def test_cli_session_scoped_to_session_id(self, tmp_path: Path, hooks_dir: Path) -> None:
         transcript = tmp_path / "transcript.jsonl"
         self._make_transcript_jsonl(transcript)

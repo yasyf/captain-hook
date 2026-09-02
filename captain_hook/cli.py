@@ -36,7 +36,7 @@ from captain_hook.packs import manager, plugins
 from captain_hook.review.cli import review
 from captain_hook.review.pipeline import DISPATCH_EVENTS, dispatch_review
 from captain_hook.session import SessionStore, cleanup_stale, ensure_session
-from captain_hook.types import Event
+from captain_hook.types import TOOL_EVENTS, Event
 from captain_hook.update.cli import update
 from captain_hook.update.updater import dispatch_update
 
@@ -278,7 +278,7 @@ def dispatch_event(
     """
     from captain_hook.context import HookContext
     from captain_hook.heartbeat import record_heartbeat
-    from captain_hook.transcripts import lazy_transcript, registered_paths
+    from captain_hook.transcripts import lane_transcript_path, lazy_transcript, registered_paths
 
     if not async_:
         record_heartbeat(event, raw)
@@ -295,7 +295,11 @@ def dispatch_event(
                 logger.exception("native update dispatch failed")
                 faults.record("async update dispatch", exc, raw.get("cwd"))
 
-    resolved_path = raw.get("agent_transcript_path") or raw.get("transcript_path")
+    resolved_path = raw.get("agent_transcript_path") or (
+        lane_transcript_path(parent, agent_id)
+        if event in TOOL_EVENTS and (parent := raw.get("transcript_path")) and (agent_id := raw.get("agent_id"))
+        else raw.get("transcript_path")
+    )
     ctx = HookContext(
         session=SessionStore(session_dir),
         transcript=lazy_transcript(
