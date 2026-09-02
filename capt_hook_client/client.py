@@ -18,13 +18,25 @@ HOST = os.path.join(
 DIST_NAME = "capt-hook"
 
 
+def _cwd() -> str:
+    """The invocation's directory, or the filesystem root once that directory is gone.
+
+    A workspace deleted under a live session leaves every later hook with an unresolvable
+    cwd, and ``os.getcwd()`` raises there — failing the dispatch before it is even spelled.
+    """
+    try:
+        return os.getcwd()
+    except FileNotFoundError:
+        return os.path.sep
+
+
 def main() -> NoReturn:
     """Translate the one hook-event grammar and exec the fixed Go client."""
     parsed = _parse_run(sys.argv[1:])
     if parsed is None:
         _die("usage: hook [--root ROOT] run EVENT [--async]")
     root, event, async_ = parsed
-    cwd = os.getcwd()
+    cwd = _cwd()
     argv = [
         HOST,
         "run",
