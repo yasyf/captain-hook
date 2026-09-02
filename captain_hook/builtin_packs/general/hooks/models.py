@@ -122,11 +122,12 @@ class DelegatedSpawn:
 
     tag: str = "delegated_spawn"
     required: bool = True
+    unpinned_note: str = "(none — inherits the session model, fable)"
 
     def content(self, evt: BaseHookEvent) -> str | None:
         if (call := evt.as_input(TaskCall)) is None or not call.prompt:
             return None
-        model = call.model or "(none — inherits the session model, fable)"
+        model = call.model or self.unpinned_note
         return f"model: {model}\nagent_type: {call.agent_type or '(default)'}\nprompt:\n{call.prompt}"
 
 
@@ -146,6 +147,8 @@ class InlineEdit:
 @dataclass(frozen=True, slots=True)
 class ProseSpawn(DelegatedSpawn):
     """Gating context: the pending spawn, present only when its prompt asks to produce a prose artifact."""
+
+    unpinned_note: str = "(none — an unpinned subagent runs opus; subagents never inherit fable)"
 
     def content(self, evt: BaseHookEvent) -> str | None:
         # zero-arg super() breaks under @dataclass(slots=True) — the decorator rebuilds the class
@@ -207,18 +210,17 @@ llm_gate(
         deliverable_rubric=str(Prompt.load("fragments/deliverable_rubric", verdict_attr="block")),
     ),
     message=(
-        "This subagent is pinned to a non-fable model but its deliverable is prose/writing work. "
+        "This subagent's deliverable is prose/writing work, but it will not run on fable. "
         "{reasoning} All writing — docs, READMEs, release notes, any user-facing text — routes "
-        "to fable: drop model to inherit the session model, or pass model='fable'. "
+        "to fable, and a spawn naming no model runs opus rather than inheriting the session "
+        "model: pass model='fable' explicitly. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
     contexts=[ProseSpawn()],
     events=Event.PreToolUse,
-    only_if=[
-        Tool("Agent|Task"),
-        ToolInput("model", r"(?i)\b(haiku|sonnet|opus)\b"),
-    ],
+    only_if=[Tool("Agent|Task")],
     skip_if=[
+        ToolInput("model", r"(?i)\bfable\b"),
         ToolInput("prompt", r"(?i)\b(classif|label|tag|categoriz|count|extract|mechanical)"),
         Agent("Explore|claude-code-guide"),
     ],
@@ -230,9 +232,11 @@ llm_gate(
         Input(model="opus", prompt="draft the release notes for v2"): Block(),
         Input(model="haiku", prompt="update the CHANGELOG entry for the fix"): Block(),
         Input(model="fable", prompt="write the README quickstart"): Allow(),
-        Input(prompt="write the README quickstart"): Allow(),
+        Input(prompt="write the README quickstart"): Block(),
+        Input(prompt="draft the release notes for v2"): Block(),
         Input(model="sonnet", prompt="review the README for factual errors"): Allow(),
         Input(model="sonnet", prompt="update the retry backoff config"): Allow(),
+        Input(prompt="update the retry backoff config"): Allow(),
         Input(model="haiku", prompt="label each README section with its Diataxis mode"): Allow(),
         Input(agent_type="Explore", model="sonnet", prompt="find where the README quickstart is written"): Allow(),
         Input(agent_type="claude-code-guide", model="sonnet", prompt="explain how the docs get updated"): Allow(),
@@ -492,28 +496,27 @@ llm_nudge(
         deliverable_rubric=DELIVERABLE_NUDGE_RUBRIC,
     ),
     message=(
-        "This workflow script pins a non-fable model on a stage whose deliverable is prose. {reasoning} "
-        "All writing — docs, READMEs, release notes, any user-facing text — routes to fable: inherit the "
-        "session model or pin model: 'fable' on that stage. "
+        "This workflow script runs a stage whose deliverable is prose off fable. {reasoning} "
+        "All writing — docs, READMEs, release notes, any user-facing text — routes to fable, and a "
+        "stage with no model pin runs opus rather than inheriting the session model: pin "
+        "model: 'fable' on that stage. "
         "See CLAUDE.md § Plan Execution & Orchestration (Models)."
     ),
     contexts=[ProseWorkflowScript()],
     events=Event.PreToolUse,
-    only_if=[
-        Tool("Workflow"),
-        WorkflowScript(model="haiku|sonnet|opus"),
-    ],
+    only_if=[Tool("Workflow")],
     max_fires=2,
     max_context=16_000,
     agent=False,
     transcript=False,
     tests={
         Input(script="steps:\n  - agent: write the README intro\n    model: 'sonnet'\n"): Warn(pattern="fable"),
-        Input(script="steps:\n  - agent: write the README intro\n    model: 'fable'\n"): Allow(),
+        Input(script="steps:\n  - agent: write the README intro\n"): Warn(pattern="fable"),
+        Input(script="steps:\n  - agent: write the README intro\n    model: 'fable'\n", llm={"fire": False}): Allow(),
         Input(script="steps:\n  - agent: fix the retry backoff\n    model: 'sonnet'\n"): Allow(),
         Input(script="agent('Audit docs/architecture.md for stale claims', {model: 'opus'})"): Allow(),
         Input(
-            script="agent('recon the module map', {model: 'sonnet'})\n// all prose stays with the main agent on fable\n"
+            script="agent('recon the module map', {model: 'sonnet'})\n// every prose stage is pinned to fable\n"
         ): Allow(),
         Input(
             script="agent('Fix the import in cli.py. Do NOT edit CHANGELOG.md — a sibling owns it', {model: 'opus'})",

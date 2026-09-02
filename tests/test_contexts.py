@@ -444,7 +444,7 @@ class TestWorkflowScriptSource:
         assert content is not None
         assert "more model pins not excerpted" not in content
         assert content.startswith(
-            "excerpts around every model pin in this script (a stage not quoted here inherits the session model):"
+            "excerpts around every model pin in this script (a stage not quoted here carries no pin):"
         )
 
     def test_no_pins_says_none(self) -> None:

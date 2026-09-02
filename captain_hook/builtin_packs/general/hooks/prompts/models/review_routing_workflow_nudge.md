@@ -21,7 +21,7 @@ security-sensitive implementation, which is not review.
 {deliverable_rubric}
 
 Set fire=true when at least one review or diagnosis stage would run on a Claude
-model: unpinned (inherits fable), pinned 'fable', or pinned to any model with a
+model: unpinned (which runs opus), pinned 'fable', or pinned to any model with a
 prompt that runs the codex skill itself — the retired wrapper stays fire=true
 wherever it appears, fallback branches included. Stages routed via agentType
 'codex:codex-wrapper', synthesis stages, and design judgment are routed right:
@@ -42,11 +42,11 @@ ignore this nudge. Keep reasoning under 40 words and name the offending stage.
 <examples>
 <example fire="true">
 agent(`Sweep the diff for go-correctness issues; return findings as JSON`)
-An unpinned finder inherits fable; finder sweeps are the codex-wrapper agent's lane.
+An unpinned finder runs opus; finder sweeps are the codex-wrapper agent's lane.
 </example>
 <example fire="true">
 findings.map(f => agent(`Adversarially refute: ${f.title}`, {effort: 'max'}))
-Refuters over code findings inherit fable — route them via agentType 'codex:codex-wrapper'.
+Refuters over code findings run on a Claude model — route them via agentType 'codex:codex-wrapper'.
 </example>
 <example fire="true">
 agent('Write a self-contained codex prompt reviewing this diff, then run the codex skill', {model: 'sonnet', effort: 'low'})
@@ -78,6 +78,6 @@ An unconditional fable review with no codex-wrapper attempt and no declared esca
 </example>
 <example fire="true">
 agent(`Audit the auth flow for injection and session-fixation issues; return findings as JSON`)
-An unpinned security audit inherits fable; security review/audit is the codex-wrapper agent's lane.
+An unpinned security audit runs opus; security review/audit is the codex-wrapper agent's lane.
 </example>
 </examples>

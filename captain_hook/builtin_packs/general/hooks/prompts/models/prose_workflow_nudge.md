@@ -1,26 +1,28 @@
-Decide whether this workflow script pins a non-fable model on a stage whose
-deliverable is prose.
+Decide whether this workflow script runs a stage whose deliverable is prose on
+anything but fable — a non-fable pin, or no pin at all.
 
 <workflow_script> holds the pending Workflow call's script source.
 {workflow_script_header}
 The header is followed by the sentences a clause prefilter matched: each asks a
 writing verb of a prose artifact, with negated asks ("do NOT edit CHANGELOG.md")
-already screened out. Your job is precision: does a PINNED stage have prose as its
-own deliverable?
+already screened out. Your job is precision: does any stage have prose as its own
+deliverable, and would that stage run off fable?
 
 The Models rubric: all writing a user reads — READMEs, docs, changelogs, release
-notes, blog posts, announcements, any user-facing text — routes to fable. A stage's
-deliverable is prose when its agent() prompt asks it to write, draft, revise, or
-polish such an artifact.
+notes, blog posts, announcements, any user-facing text — routes to fable, and it
+gets there only through an explicit pin: a stage carrying no model pin runs opus,
+never the session model, so an unpinned prose stage is misrouted exactly as an
+opus-pinned one is. A stage's deliverable is prose when its agent() prompt asks it
+to write, draft, revise, or polish such an artifact.
 
 {deliverable_rubric}
 
-Set fire=true only when at least one agent() call both pins haiku/sonnet/opus and
-has prose as its deliverable. A prose stage with no pin of its own is fine, even
-when other stages pin opus. A prose keyword that appears as a constraint ("do NOT
-edit CHANGELOG.md"), an ownership note, a file the stage merely reads, a
-meta.description, or prose the orchestrator script assembles itself outside any
-pinned agent() call is not that stage's deliverable: fire=false. When uncertain,
+Set fire=true when at least one agent() call has prose as its deliverable and does
+not pin model: 'fable' — whether it pins haiku/sonnet/opus or pins nothing at all.
+Only an explicit fable pin on that stage clears it. A prose keyword that appears as
+a constraint ("do NOT edit CHANGELOG.md"), an ownership note, a file the stage
+merely reads, a meta.description, or prose the orchestrator script assembles itself
+outside any agent() call is not a stage's deliverable: fire=false. When uncertain,
 fire=false — a false alarm teaches the agent to ignore this nudge. Keep reasoning
 under 40 words and name the offending stage.
 
@@ -37,10 +39,14 @@ A docs page is user-facing prose; the pin is non-fable.
 agent('Fix the failing import in cli.py. Do NOT edit CHANGELOG.md — a sibling owns it', {model: 'opus'})
 CHANGELOG appears only as a constraint; the deliverable is a code fix.
 </example>
-<example fire="false">
+<example fire="true">
 agent('Fix the CLI error handling', {label: 'fix:cli', model: 'opus'}) alongside
 agent('Reword the troubleshooting guide and CHANGELOG bullet', {label: 'fix:docs'})
-The prose stage carries no pin — it inherits fable; the opus pin is on code.
+The prose stage carries no pin, so it runs opus; prose needs model: 'fable' spelled out.
+</example>
+<example fire="false">
+agent('Rewrite the quickstart section of the README', {model: 'fable'})
+The prose stage pins fable — routed right.
 </example>
 <example fire="false">
 meta: {description: 'verify the doc claims against actual behavior'}, then agent('run the test matrix', {model: 'opus'})

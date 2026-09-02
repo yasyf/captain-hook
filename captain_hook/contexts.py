@@ -270,7 +270,7 @@ class WorkflowScriptSource:
             f"excerpts around the first model pins in this script (+{pins.dropped} more noted below; "
             "a stage not quoted here is NOT necessarily unpinned):"
             if pins.capped
-            else "excerpts around every model pin in this script (a stage not quoted here inherits the session model):"
+            else "excerpts around every model pin in this script (a stage not quoted here carries no pin):"
         )
         return f"{lead}\n{pins.block('model pins')}", source
 
