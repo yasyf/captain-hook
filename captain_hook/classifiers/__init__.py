@@ -18,7 +18,7 @@ def detect(
     """Auto-detect the environment and return the user classifier for turn segmentation."""
     return next(
         mod.classifier
-        for name in ("droid", "conductor", "native")
+        for name in ("lane", "droid", "conductor", "native")
         if (mod := importlib.import_module(f".{name}", __package__))
         and mod.detect(cwd=cwd, transcript_path=transcript_path, events=events)
     )

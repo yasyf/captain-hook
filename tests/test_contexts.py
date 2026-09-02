@@ -286,6 +286,21 @@ class TestUserMessages:
         assistant_only = mock_event("Stop", transcript=fixture_session(assistant))
         assert UserMessages().content(assistant_only) is None
 
+    def test_lane_brief_leads_and_team_messages_follow(self) -> None:
+        brief = '<teammate-message teammate_id="team-lead">Watch PRs 17371 and 17372.</teammate-message>'
+        inbound = '<teammate-message teammate_id="pr-watcher">17371 merged.</teammate-message>'
+        evt = mock_event(
+            "Stop",
+            transcript=fixture_session(
+                [
+                    T.user(brief, isSidechain=True),
+                    T.assistant("Polling merge state for #17371.", isSidechain=True),
+                    T.user(inbound, isSidechain=True),
+                ]
+            ),
+        )
+        assert UserMessages().content(evt) == f"[first]\n{brief}\n\n[recent -1]\n{inbound}"
+
     def test_required_empty_skips_llm_call(self) -> None:
         empty = mock_event("Stop", transcript=fixture_session([]))
         assert apply_contexts(Prompt().system("s"), empty, [UserMessages()]) is None

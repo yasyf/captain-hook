@@ -64,6 +64,17 @@ def load_transcript(path: str | Path | None) -> Session:
     return lift_session(parse_events_from_bytes(path.read_bytes()), path=path)
 
 
+def lane_transcript_path(transcript_path: str | Path, agent_id: str) -> Path:
+    """The lane transcript a subagent or teammate writes beside its parent session transcript.
+
+    Claude Code attaches ``agent_transcript_path`` only to ``SubagentStop``; every other event
+    fired inside a lane carries the lane's ``agent_id`` and the *parent* session's
+    ``transcript_path``, so the lane's own file resolves by convention:
+    ``<parent-dir>/<parent-stem>/subagents/agent-<agent_id>.jsonl``.
+    """
+    return Path(transcript_path).with_suffix("") / "subagents" / f"agent-{agent_id}.jsonl"
+
+
 class TranscriptLoadError(Exception):
     """Raised when the lazy transcript proxy fails to parse or read a transcript.
 

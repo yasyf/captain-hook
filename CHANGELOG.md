@@ -6,6 +6,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A hook firing inside a subagent or teammate lane now reads the lane's own
+  transcript, not its orchestrator's.** Claude Code attaches
+  `agent_transcript_path` only to `SubagentStop`; every tool event fired inside a
+  lane carries the lane's `agent_id` and the *parent* session's
+  `transcript_path`, so `dispatch_event` built `evt.ctx.transcript` from the
+  parent and every LLM judge read the orchestrator's prompts as the lane's task.
+  On a tool event carrying `agent_id` but no `agent_transcript_path`, the lane
+  file now resolves by convention through the new
+  `transcripts.lane_transcript_path` — `<parent-dir>/<parent-stem>/subagents/agent-<agent_id>.jsonl`.
+  An `agent_transcript_path` on the payload still wins. Every other event keeps
+  reading `transcript_path` as given: `SubagentStart` fires in the *parent's*
+  turn while carrying the spawned lane's `agent_id`, and steering hooks that read
+  the in-flight `Agent` call need the parent transcript, not a lane file Claude
+  Code has yet to write.
+
+- **Lane transcripts segment into turns instead of yielding zero prompts.** A
+  lane's brief and the messages its team sends it are sidechain user events,
+  which the native classifier rejects — a real 122-event lane file lifted to one
+  turn and no prompts, so `UserMessages()` rendered nothing and `required`
+  contexts skipped the judge outright. The new `lane` classifier keeps sidechain
+  and teammate-relayed prompts (dropping only meta, compact-summary,
+  interrupted, and text-less events) and is detected first in the chain — from a
+  `subagents/` transcript path, or from an event stream whose user events are all
+  sidechain — since a lane under droid or conductor still needs lane semantics.
+
+- **The `detours` judge no longer reads a lane's brief as an orchestrator
+  conversation.** Its `<user_messages>` evidence bullet now states that for a
+  delegated agent the block is the lane's own brief plus later messages from the
+  team, that the orchestrator's conversation is not in evidence, and that a peer
+  teammate's message is information, not authorization.
+
 ## [12.22.5] - 2026-08-30
 
 ### Fixed

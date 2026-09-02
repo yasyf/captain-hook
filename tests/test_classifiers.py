@@ -12,10 +12,15 @@ from cc_transcript.query import Session
 
 from captain_hook import T
 from captain_hook.testing.helpers import fixture_session
-from tests.helpers import raw_text
+from tests.helpers import raw_msg, raw_text, raw_tool_result_block
 
 if TYPE_CHECKING:
     from cc_transcript.models import UserEvent
+
+
+SIDECHAIN = {"isSidechain": True}
+TEAMMATE_BRIEF = '<teammate-message teammate_id="team-lead">Watch PRs 17371 and 17372.</teammate-message>'
+PEER_MESSAGE = '<teammate-message teammate_id="pr-watcher">17371 merged.</teammate-message>'
 
 
 def user_event(text: str, **extra: Any) -> UserEvent:
@@ -162,6 +167,83 @@ class TestNativeClassifier:
         assert classifier(user_event(text, **extra)) is expected
 
 
+class TestLaneDetect:
+    @pytest.mark.parametrize(
+        ("kwargs", "expected"),
+        [
+            pytest.param(
+                {"transcript_path": "/home/user/.claude/projects/p/sess/subagents/agent-tm1.jsonl"},
+                True,
+                id="detects_via_subagent_transcript_path",
+            ),
+            pytest.param(
+                {"transcript_path": "/home/user/.claude/projects/p/sess.jsonl"},
+                False,
+                id="no_detect_parent_transcript_path",
+            ),
+            pytest.param(
+                {
+                    "events": events_from(
+                        raw_text("user", '<teammate-message teammate_id="team-lead">Watch PR 17371.') | SIDECHAIN,
+                        raw_text("assistant", "Polling merge state.") | SIDECHAIN,
+                    )
+                },
+                True,
+                id="detects_via_all_sidechain_user_events",
+            ),
+            pytest.param(
+                {
+                    "events": events_from(
+                        raw_text("user", '<teammate-message teammate_id="team-lead">Watch PR 17371.') | SIDECHAIN,
+                        raw_text("user", "fix the bug"),
+                    )
+                },
+                False,
+                id="no_detect_mixed_sidechain",
+            ),
+            pytest.param({}, False, id="no_detect_all_none"),
+        ],
+    )
+    def test_detect(self, kwargs: dict[str, Any], expected: bool):
+        from captain_hook.classifiers.lane import detect
+
+        assert detect(**kwargs) is expected
+
+
+class TestLaneClassifier:
+    @pytest.mark.parametrize(
+        ("line", "expected"),
+        [
+            pytest.param(
+                raw_text("user", TEAMMATE_BRIEF) | SIDECHAIN,
+                True,
+                id="teammate_message_brief",
+            ),
+            pytest.param(
+                raw_text("user", "<system-reminder>plan mode is active</system-reminder>")
+                | SIDECHAIN
+                | {"isMeta": True},
+                False,
+                id="rejects_meta_system_reminder",
+            ),
+            pytest.param(
+                raw_msg("user", [raw_tool_result_block()]) | SIDECHAIN,
+                False,
+                id="rejects_tool_result_only",
+            ),
+            pytest.param(
+                raw_text("user", "[Request interrupted by user]") | SIDECHAIN,
+                False,
+                id="rejects_interrupted",
+            ),
+        ],
+    )
+    def test_classifier(self, line: dict[str, Any], expected: bool):
+        from captain_hook.classifiers.lane import classifier
+
+        assert classifier(parse_event(line)) is expected
+
+
 class TestDetectPriorityChain:
     def test_droid_wins_when_env_set(self):
         from captain_hook.classifiers import detect
@@ -169,6 +251,19 @@ class TestDetectPriorityChain:
 
         with patch.dict(os.environ, {"FACTORY_PROJECT_DIR": "/tmp/project"}):
             assert detect(cwd="/Users/yasyf/conductor/workspaces/bioqa/test") is droid_classifier
+
+    def test_lane_wins_over_conductor_and_native(self):
+        from captain_hook.classifiers import detect
+        from captain_hook.classifiers.lane import classifier as lane_classifier
+
+        env = dict(os.environ)
+        env.pop("FACTORY_PROJECT_DIR", None)
+        with patch.dict(os.environ, env, clear=True):
+            lane_path = "/Users/yasyf/.claude/projects/p/sess/subagents/agent-tm1.jsonl"
+            assert detect(transcript_path=lane_path) is lane_classifier
+            assert (
+                detect(cwd="/Users/yasyf/conductor/workspaces/bioqa/test", transcript_path=lane_path) is lane_classifier
+            )
 
     def test_conductor_when_path_matches(self):
         from captain_hook.classifiers import detect
@@ -229,6 +324,19 @@ class TestClassifierSegmentsSession:
             ]
         )
         assert session.first_prompt == "Real user message"
+
+    def test_lane_classifier_keeps_the_brief_and_team_messages(self, monkeypatch):
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        monkeypatch.delenv("FACTORY_PROJECT_DIR", raising=False)
+        session = fixture_session(
+            [
+                T.user(TEAMMATE_BRIEF, isSidechain=True),
+                T.assistant("ok", isSidechain=True),
+                T.user(PEER_MESSAGE, isSidechain=True),
+            ]
+        )
+        assert session.first_prompt == TEAMMATE_BRIEF
+        assert len(session.turns) == 2
 
     def test_fixture_session_native_keeps_all_prompts(self, monkeypatch):
         monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
