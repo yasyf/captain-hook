@@ -10,6 +10,41 @@ import pytest
 from capt_hook_client import client
 
 
+def test_deleted_cwd_still_spells_a_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PIN: a workspace deleted under a live session leaves every later hook with no cwd.
+
+    ``os.getcwd()`` raises ``FileNotFoundError`` there, which failed the dispatch before it was
+    spelled — observed 2026-09-02 against a deleted ``~/.orca/workspaces`` root, one layer above
+    the worker crash fixed in the same release.
+    """
+
+    def gone() -> Never:
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(sys, "argv", ["hook", "run", "Stop"])
+    monkeypatch.setattr(os, "getcwd", gone)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("FACTORY_PROJECT_DIR", raising=False)
+
+    def version(_name: str) -> str:
+        return "12.9.1"
+
+    monkeypatch.setattr(importlib.metadata, "version", version)
+    captured: list[object] = []
+
+    def execv(path: str, argv: list[str]) -> None:
+        captured.extend((path, argv))
+        raise RuntimeError("exec")
+
+    monkeypatch.setattr(os, "execv", execv)
+    with pytest.raises(RuntimeError, match="exec"):
+        client.main()
+    argv = captured[1]
+    assert isinstance(argv, list)
+    assert argv[argv.index("--cwd") + 1] == os.path.sep
+    assert argv[argv.index("--root") + 1] == os.path.sep
+
+
 def test_run_execs_fixed_host_with_exact_product_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["hook", "--root", "/spelled/root", "run", "PreToolUse", "--async"])
     monkeypatch.setattr(os, "getcwd", lambda: "/request/cwd")
