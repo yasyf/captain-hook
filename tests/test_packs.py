@@ -410,3 +410,17 @@ def test_steering_deferral_gate_skips_in_plan_mode() -> None:
         if h.spec.events & (Event.Stop | Event.SubagentStop) and InPlanMode() in h.spec.skip_if
     )
     assert gate.spec.skip_if == (Waiting(), InPlanMode())
+
+
+def test_gitignore_lines_survives_an_unstattable_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PIN: a walk root wide enough to reach a synthetic path stats it with EINVAL, not ENOENT.
+
+    ``detect_languages`` rooted at ``/`` reached macOS's ``/.resolve`` and died on the
+    ``OSError`` ``is_file`` propagates, taking the whole dispatch with it (2026-09-02).
+    """
+
+    def einval(self: Path, *, follow_symlinks: bool = True) -> bool:
+        raise OSError(22, "Invalid argument")
+
+    monkeypatch.setattr(Path, "is_file", einval)
+    assert manager.gitignore_lines(Path("/.resolve/.gitignore")) == []

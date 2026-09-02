@@ -224,8 +224,15 @@ def resolve_builtin(name: str) -> ResolvedPack:
 
 
 def gitignore_lines(path: Path) -> list[str]:
-    """The non-comment, non-blank pattern lines of a ``.gitignore``, or ``[]`` when it is absent."""
-    if not path.is_file():
+    """The non-comment, non-blank pattern lines of a ``.gitignore``, or ``[]`` when it is unreadable.
+
+    A walk root wide enough to reach a synthetic path — macOS mounts ``/.resolve`` under ``/`` —
+    stats it with ``EINVAL`` rather than a missing-file error, which ``is_file`` propagates.
+    """
+    try:
+        if not path.is_file():
+            return []
+    except OSError:
         return []
     return [line for raw in path.read_text().splitlines() if (line := raw.strip()) and not line.startswith("#")]
 
