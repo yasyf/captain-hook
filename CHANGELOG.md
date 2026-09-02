@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.23.0] - 2026-09-02
+
+### Changed
+
+- cc-transcript pin raised to exactly `14.16.0`: relay envelopes (`Another Claude session sent a
+  message:`, `<agent-message>`, `<cross-session-message>`) are now `is_agent_injected`, so a root
+  session's recent prompts are the human's asks, never relays.
+
 ### Fixed
 
 - **A hook firing inside a subagent or teammate lane now reads the lane's own
