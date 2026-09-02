@@ -343,11 +343,23 @@ func (m *workerManager) start(ctx context.Context, key workerKey) (*workerClient
 // hook response can carry it.
 func workerCmd(key workerKey) daemonkit.Cmd {
 	return daemonkit.Cmd{
-		Path: key.python, Args: []string{"-P", "-m", "captain_hook.worker"}, Dir: key.root,
+		Path: key.python, Args: []string{"-P", "-m", "captain_hook.worker"}, Dir: workerDir(key.root),
 		Env:     mergeEnvironment(workerBaseEnvironment(os.Environ()), key.env),
 		Session: true,
 		Exec:    daemonkit.ServingSameUser(),
 	}
+}
+
+// workerDir is the root, or the temp directory once that root is gone. A session
+// outlives the workspace it was started in — a deleted worktree, a reaped Orca
+// workspace — and spawning into a missing Dir fails the chdir, which posix_spawn
+// reports as a missing interpreter, so the dispatch dies before a worker exists.
+// An empty directory detects the same languages a deleted one would.
+func workerDir(root string) string {
+	if info, err := os.Stat(root); err == nil && info.IsDir() {
+		return root
+	}
+	return os.TempDir()
 }
 
 // settle terminates one retired worker on a budget of its own: the request

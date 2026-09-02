@@ -92,14 +92,15 @@ func TestWorkerBaseEnvironmentSeedsDiscoveryWithoutLeakingFirstClientScope(t *te
 // running under a retired generation.
 func TestWorkerCmdOwnsTheWholeWorkerSession(t *testing.T) {
 	t.Parallel()
+	root := t.TempDir()
 	cmd := workerCmd(workerKey{
-		id: "abc", root: "/tmp/repo", python: "/usr/bin/python3", build: "12.9.1",
+		id: "abc", root: root, python: "/usr/bin/python3", build: "12.9.1",
 		env: map[string]string{"HOOKS_PROFILE": "strict"},
 	})
 	if !cmd.Session {
 		t.Fatal("worker spawn does not own its descendants")
 	}
-	if cmd.Path != "/usr/bin/python3" || cmd.Dir != "/tmp/repo" ||
+	if cmd.Path != "/usr/bin/python3" || cmd.Dir != root ||
 		len(cmd.Args) != 3 || cmd.Args[0] != "-P" || cmd.Args[1] != "-m" || cmd.Args[2] != "captain_hook.worker" {
 		t.Fatalf("worker spawn = %q %q in %q", cmd.Path, cmd.Args, cmd.Dir)
 	}
@@ -112,6 +113,19 @@ func TestWorkerCmdOwnsTheWholeWorkerSession(t *testing.T) {
 	if seen["LANG"] != "C" || seen["PATH"] == "" || seen["HOOKS_PROFILE"] != "strict" {
 		t.Fatalf("worker environment: LANG=%q PATH set=%t HOOKS_PROFILE=%q",
 			seen["LANG"], seen["PATH"] != "", seen["HOOKS_PROFILE"])
+	}
+}
+
+// TestWorkerCmdSurvivesARootDeletedUnderTheSession pins the fallback: a chdir
+// into a missing Dir surfaces as posix_spawn reporting the interpreter absent,
+// which killed every dispatch from a session whose workspace had been reaped
+// before it first needed a worker (observed 2026-09-02).
+func TestWorkerCmdSurvivesARootDeletedUnderTheSession(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "reaped")
+	cmd := workerCmd(workerKey{id: "abc", root: root, python: "/usr/bin/python3", build: "12.9.1"})
+	if cmd.Dir != os.TempDir() {
+		t.Fatalf("worker spawn Dir = %q, want the temp dir for a missing root", cmd.Dir)
 	}
 }
 
