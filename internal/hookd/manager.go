@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,17 @@ const (
 	workerIdleTTL = 30 * time.Minute
 
 	workerSweepInterval = 5 * time.Minute
+
+	minParallelDispatch = 16
+
+	// No wider budget can reach more interpreters than the worker cache holds.
+	maxParallelDispatch = maxLiveWorkers
+
+	// Nothing awaits a background dispatch, so it never competes for the
+	// blocking budget.
+	asyncParallelDispatch = 4
+
+	parallelCeilingVar = "CAPT_HOOK_MAX_PARALLEL"
 )
 
 // ErrWorkerCapacity refuses a dispatch that can neither start a worker nor
@@ -98,12 +110,32 @@ type workerManager struct {
 	wg      sync.WaitGroup
 }
 
-func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) *workerManager {
-	return &workerManager{
-		owner: owner, logWriter: logWriter, scheduler: newScheduler(16),
-		entries: make(map[string]*workerEntry),
-		now:     time.Now, done: make(chan struct{}),
+func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) (*workerManager, error) {
+	ceiling, err := parallelCeiling(os.Getenv(parallelCeilingVar))
+	if err != nil {
+		return nil, err
 	}
+	return &workerManager{
+		owner: owner, logWriter: logWriter,
+		// A ceiling set below the floor is meant, so the floor follows it down.
+		scheduler: newScheduler(min(minParallelDispatch, ceiling), ceiling, asyncParallelDispatch),
+		entries:   make(map[string]*workerEntry),
+		now:       time.Now, done: make(chan struct{}),
+	}, nil
+}
+
+func parallelCeiling(override string) (int, error) {
+	if strings.TrimSpace(override) == "" {
+		return maxParallelDispatch, nil
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(override))
+	if err != nil {
+		return 0, fmt.Errorf("captain: %s must be a positive integer, got %q", parallelCeilingVar, override)
+	}
+	if parsed <= 0 {
+		return 0, fmt.Errorf("captain: %s must be positive, got %d", parallelCeilingVar, parsed)
+	}
+	return parsed, nil
 }
 
 func (m *workerManager) dispatch(ctx context.Context, request EventRequest) (EventResponse, error) {
@@ -118,8 +150,8 @@ func (m *workerManager) dispatch(ctx context.Context, request EventRequest) (Eve
 	if session == "" {
 		session = fmt.Sprintf("pid:%d", request.ClientPID)
 	}
-	laneKey := key.id + "\x00" + session
-	return m.scheduler.run(ctx, laneKey, func() (EventResponse, error) {
+	laneKey := key.id + "\x00" + session + "\x00" + strconv.FormatBool(request.Async)
+	return m.scheduler.run(ctx, laneKey, request.Async, func() (EventResponse, error) {
 		entry, err := m.acquire(ctx, key)
 		if err != nil {
 			return EventResponse{}, err
