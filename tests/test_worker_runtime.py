@@ -196,3 +196,29 @@ def test_workers_in_different_roots_write_different_daemon_logs(tmp_path: Path) 
         assert worker.returncode == 0, worker.stderr.decode()
 
     assert len(list(logs.glob("daemon-*.log"))) == 2
+
+
+def test_worker_survives_a_root_deleted_under_it(tmp_path: Path) -> None:
+    """PIN: an Orca workspace deleted under a live session leaves the worker with no cwd.
+
+    ``worker_log_key`` resolved the root through ``os.getcwd()``, which raises
+    ``FileNotFoundError`` once that directory is gone, so every dispatch from such a session
+    killed its worker before ``WorkerService`` ever ran — observed 2026-09-02 crash-looping
+    against ``~/.orca/workspaces/monorepo-old``, which took the host's socket down with it.
+    """
+    import os
+    import subprocess
+
+    root = tmp_path / "gone"
+    root.mkdir()
+    logs = tmp_path / "logs"
+    worker = subprocess.run(
+        ["/bin/sh", "-c", 'cd "$1" && rmdir "$1" && exec "$0" -m captain_hook.worker', sys.executable, str(root)],
+        input=b"",
+        capture_output=True,
+        env={**os.environ, "CAPTAIN_HOOK_LOG_DIR": str(logs)},
+        timeout=180,
+    )
+
+    assert worker.returncode == 0, worker.stderr.decode()
+    assert len(list(logs.glob("daemon-*.log"))) == 1
