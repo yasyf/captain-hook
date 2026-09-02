@@ -25,6 +25,7 @@ def test_deleted_cwd_still_spells_a_dispatch(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(os, "getcwd", gone)
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     monkeypatch.delenv("FACTORY_PROJECT_DIR", raising=False)
+    monkeypatch.setenv("PWD", "/deleted/workspace")
 
     def version(_name: str) -> str:
         return "12.9.1"
@@ -41,8 +42,19 @@ def test_deleted_cwd_still_spells_a_dispatch(monkeypatch: pytest.MonkeyPatch) ->
         client.main()
     argv = captured[1]
     assert isinstance(argv, list)
-    assert argv[argv.index("--cwd") + 1] == os.path.sep
-    assert argv[argv.index("--root") + 1] == os.path.sep
+    assert argv[argv.index("--cwd") + 1] == "/deleted/workspace"
+    assert argv[argv.index("--root") + 1] == "/deleted/workspace"
+
+
+def test_deleted_cwd_without_pwd_falls_back_to_the_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PIN: the root is the last resort only, since a pack walk rooted there scans the machine."""
+
+    def gone() -> Never:
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(os, "getcwd", gone)
+    monkeypatch.delenv("PWD", raising=False)
+    assert client._cwd() == os.path.sep
 
 
 def test_run_execs_fixed_host_with_exact_product_identity(monkeypatch: pytest.MonkeyPatch) -> None:

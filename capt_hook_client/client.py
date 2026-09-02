@@ -19,15 +19,17 @@ DIST_NAME = "capt-hook"
 
 
 def _cwd() -> str:
-    """The invocation's directory, or the filesystem root once that directory is gone.
+    """The invocation's directory, named by the shell once the directory itself is gone.
 
     A workspace deleted under a live session leaves every later hook with an unresolvable
     cwd, and ``os.getcwd()`` raises there — failing the dispatch before it is even spelled.
+    ``PWD`` still carries the path, which keeps the dispatch truthful and inert: a root that
+    does not exist walks to nothing, where the filesystem root would walk the whole machine.
     """
     try:
         return os.getcwd()
     except FileNotFoundError:
-        return os.path.sep
+        return os.environ.get("PWD") or os.path.sep
 
 
 def main() -> NoReturn:
