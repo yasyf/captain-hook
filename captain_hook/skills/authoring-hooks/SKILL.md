@@ -65,7 +65,7 @@ has the full decision rules and defaults:
 
 | The rule is... | Primitive |
 |---|---|
-| A guard that must hold on **every** occurrence (safety, correctness) | `hook(..., block=True)`; for bash commands `block_command` |
+| A guard that must hold on **every** occurrence (safety, correctness) | `hook(..., block=True)`; for bash commands `hook(..., only_if=[Tool("Bash"), Runs(...)], block=True)` — `block_command` only when the match is textual (a flag's value, a substring no argv prefix names) |
 | A dangerous-command pattern, advisory | `warn_command` |
 | A done-criterion to check once at stop ("run tests before stopping") | `gate(only_if=[...], skip_if=[RanCommand(...)])` |
 | Advice worth surfacing once per session | `nudge` |

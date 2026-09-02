@@ -69,8 +69,12 @@ is born with its own removal ticket attached.
 
 Condition on the narrowest pattern that still captures the correction:
 
-- Anchor command regexes to tokens (`r"git\s+push\s+--force(?!-)"`), not substrings
-  (`"force"`).
+- Match commands structurally: `Runs("git", "stash")` compares exact tokens against the
+  argv prefix of every parsed command in the line, so `echo git stash` and a heredoc
+  body never fire (and `-pl` is not `-p`). A regex is for text no argv prefix names — a
+  flag's value, a substring.
+- When a regex is required, anchor it to tokens
+  (`r"git\s+push\s+--force(?!-)"`), not substrings (`"force"`).
 - Scope file rules with `FilePath(...)` / `SourceEdits(...)` and carve out the benign
   neighbor with `skip_if` (e.g. `TestFile()`).
 - If the rule only bites in one phase (stopping, pushing, editing source), pick the
