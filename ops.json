@@ -1,1 +1,1 @@
-{"v":1,"lamport":3,"session":"02b12144-78d4-4ba3-9031-66ab2b152652","ops":[{"kind":"set_criterion_status","id":"608b6f17bb520f30a7d544733b794727","status":"met"}]}
+{"v":1,"lamport":4,"session":"02b12144-78d4-4ba3-9031-66ab2b152652","ops":[{"kind":"set_status","status":"done"},{"kind":"link_commit","sha":"b7865c162881acdfbd2dce7ab74caf462ee40430"}]}
