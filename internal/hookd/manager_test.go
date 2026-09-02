@@ -151,7 +151,7 @@ func fillIdleWorkers(manager *workerManager, base time.Time, cached error) {
 func TestWorkerManagerEvictsLeastRecentlyUsedAtTheBound(t *testing.T) {
 	t.Parallel()
 	cached := errors.New("served from the cache")
-	manager := newWorkerManager(daemonkit.Ctx{}, io.Discard)
+	manager := mustWorkerManager(t)
 	fillIdleWorkers(manager, time.Unix(0, 0), cached)
 
 	if _, err := manager.acquire(t.Context(), workerKey{id: "one-past-the-bound", root: "/fresh"}); errors.Is(err, ErrWorkerCapacity) {
@@ -170,7 +170,7 @@ func TestWorkerManagerEvictsLeastRecentlyUsedAtTheBound(t *testing.T) {
 // evicted: the dispatch holding it would lose its interpreter mid-call.
 func TestWorkerManagerRefusesWhenEveryWorkerIsBusy(t *testing.T) {
 	t.Parallel()
-	manager := newWorkerManager(daemonkit.Ctx{}, io.Discard)
+	manager := mustWorkerManager(t)
 	fillIdleWorkers(manager, time.Unix(0, 0), errors.New("served from the cache"))
 	for _, entry := range manager.entries {
 		entry.inflight = 1
@@ -191,7 +191,7 @@ func TestWorkerManagerSweepRetiresIdleAndDeadRoots(t *testing.T) {
 	now := time.Unix(1<<32, 0)
 	live := t.TempDir()
 	dead := filepath.Join(t.TempDir(), "reaped")
-	manager := newWorkerManager(daemonkit.Ctx{}, io.Discard)
+	manager := mustWorkerManager(t)
 	seed := func(id, root string, lastUsed time.Time, inflight int) {
 		entry := &workerEntry{
 			ready: make(chan struct{}), key: workerKey{id: id, root: root},
@@ -248,7 +248,7 @@ func TestEphemeralRootIsScoped(t *testing.T) {
 // occupying a slot until the sweep notices it.
 func TestReleaseRetiresEphemeralEntryImmediately(t *testing.T) {
 	t.Parallel()
-	manager := newWorkerManager(daemonkit.Ctx{}, io.Discard)
+	manager := mustWorkerManager(t)
 	entry := &workerEntry{
 		ready: make(chan struct{}), key: workerKey{id: "scratch", root: "/tmp/scratch"},
 		inflight: 1, ephemeral: true,
@@ -264,9 +264,18 @@ func TestReleaseRetiresEphemeralEntryImmediately(t *testing.T) {
 }
 
 func TestWorkerManagerCloseReportsJoinedProductGraph(t *testing.T) {
-	manager := newWorkerManager(daemonkit.Ctx{}, io.Discard)
+	manager := mustWorkerManager(t)
 	joined, err := manager.Close(context.Background())
 	if err != nil || !joined {
 		t.Fatalf("Close = joined %t, err %v", joined, err)
 	}
+}
+
+func mustWorkerManager(t *testing.T) *workerManager {
+	t.Helper()
+	manager, err := newWorkerManager(daemonkit.Ctx{}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manager
 }

@@ -4,7 +4,11 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
+import threading
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -408,7 +412,7 @@ def test_ctime_only_watched_rewrite_refreshes_roster(tmp_path: Path, monkeypatch
         pytest.param({"raw_stdout": "not json", "returncode": 0}, id="bad_json"),
     ],
 )
-def test_cli_failure_raises_and_caches_nothing(
+def test_cli_failure_raises_and_is_never_cached_as_a_roster(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: dict[str, object]
 ) -> None:
     plant_installed()
@@ -419,9 +423,79 @@ def test_cli_failure_raises_and_caches_nothing(
     with pytest.raises(plugins.PluginListError):
         plugins.enabled_plugins(root)
     assert not plugins.snapshot_path(root).exists()  # a failure is never cached as an authoritative roster
+    assert plugins.failure_path(root).exists()  # it is recorded as a failure instead
     with pytest.raises(plugins.PluginListError):
         plugins.enabled_plugins(root)
-    assert calls.read_text() == "xx"  # the next event re-asks instead of serving the failure back
+    assert calls.read_text() == "x"  # the recorded failure is re-raised rather than re-spawning the CLI
+
+
+def test_empty_roster_is_cached_as_success_not_as_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The distinction the negative cache must never blur: "this project enables no pack-shipping
+    # plugin" is an authoritative empty roster, not an enumeration that failed.
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    calls = tmp_path / "calls"
+    install_claude(tmp_path, monkeypatch, calls=calls, roster=[])
+
+    assert plugins.enabled_plugins(root) == ()
+    assert plugins.snapshot_path(root).exists()
+    assert not plugins.failure_path(root).exists()
+    assert plugins.enabled_plugins(root) == ()
+    assert calls.read_text() == "x"
+
+
+def test_recorded_failure_expires_with_its_ttl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    calls = tmp_path / "calls"
+    install_claude(tmp_path, monkeypatch, calls=calls, roster=[], returncode=1)
+
+    with pytest.raises(plugins.PluginListError):
+        plugins.enabled_plugins(root)
+    recorded = plugins.RosterFailure.load(plugins.failure_path(root))
+    assert recorded is not None
+    aged = plugins.RosterFailure(
+        stat=recorded.stat, at=recorded.at - plugins.FAILURE_TTL - timedelta(seconds=1), message=recorded.message
+    )
+    aged.write(plugins.failure_path(root))
+
+    with pytest.raises(plugins.PluginListError):
+        plugins.enabled_plugins(root)
+    assert calls.read_text() == "xx"  # the expired record re-asks
+
+
+def test_recorded_failure_is_retried_when_a_watched_file_moves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    calls = tmp_path / "calls"
+    install_claude(tmp_path, monkeypatch, calls=calls, roster=[], returncode=1)
+
+    with pytest.raises(plugins.PluginListError):
+        plugins.enabled_plugins(root)
+    (settings := root / ".claude" / "settings.json").parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text("{}")
+
+    with pytest.raises(plugins.PluginListError):
+        plugins.enabled_plugins(root)
+    assert calls.read_text() == "xx"  # a settings change retries at once rather than after the TTL
+
+
+def test_recovered_roster_clears_the_recorded_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    plugin = write_plugin_pack(tmp_path, "show", "1.0.0")
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[], returncode=1)
+
+    with pytest.raises(plugins.PluginListError):
+        plugins.enabled_plugins(root)
+    assert plugins.failure_path(root).exists()
+
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls2", roster=[roster_entry("mkt/show", plugin)])
+    (settings := root / ".claude" / "settings.json").parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text("{}")
+
+    assert len(plugins.enabled_plugins(root)) == 1
+    assert not plugins.failure_path(root).exists()
 
 
 def test_dead_shebang_claude_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -661,3 +735,203 @@ def test_pack_list_renders_builtin_and_plugin_ids(tmp_path: Path, monkeypatch: p
     assert result.returncode == 0, result.stdout + result.stderr
     assert "builtin:general" in result.stdout  # an active wheel builtin renders with its namespaced id
     assert "plugin:show@mkt" in result.stdout  # the enabled plugin's pack renders with its full plugin id
+
+
+# --- machine-wide roster gate ---------------------------------------------------------
+
+
+def test_gate_bounds_concurrent_roots_under_one_invalidation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The stampede this gate exists for: one machine-wide file change invalidates every root at once.
+    plant_installed()
+    roots = [tmp_path / f"proj{i}" for i in range(10)]
+    for root in roots:
+        root.mkdir()
+    plugin = write_plugin_pack(tmp_path, "show")
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
+
+    overlap = 0
+    live = 0
+    real = plugins.list_plugins_cli
+
+    def watched(root: Path, executable: str) -> tuple[plugins.EnabledPlugin, ...]:
+        nonlocal overlap, live
+        live += 1
+        overlap = max(overlap, live)
+        try:
+            return real(root, executable)
+        finally:
+            live -= 1
+
+    monkeypatch.setattr(plugins, "list_plugins_cli", watched)
+    errors: list[BaseException] = []
+
+    def enumerate_root(root: Path) -> None:
+        try:
+            plugins.enabled_plugins(root)
+        except BaseException as exc:  # noqa: BLE001 - surfaced by the assertion below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=enumerate_root, args=(root,)) for root in roots]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert errors == []
+    assert overlap <= plugins.GATE_WIDTH  # the gate held
+    assert overlap < len(roots)  # and it bounded them: never all ten at once
+
+
+def test_gate_never_shares_one_root_enablement_with_another(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The correctness line the gate must not cross: `enabled` resolves against each project's
+    # settings stack, so a roster is never served to a root that did not ask for it.
+    plant_installed()
+    (enabled_root := tmp_path / "on").mkdir()
+    (disabled_root := tmp_path / "off").mkdir()
+    plugin = write_plugin_pack(tmp_path, "show")
+
+    def per_root(root: Path, executable: str) -> tuple[plugins.EnabledPlugin, ...]:
+        del executable
+        return (plugins.EnabledPlugin(id="mkt/show", version="1.0.0", root=str(plugin), scope="user"),) * (
+            root.resolve() == enabled_root.resolve()
+        )
+
+    monkeypatch.setattr(plugins, "list_plugins_cli", per_root)
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
+
+    assert len(plugins.enabled_plugins(enabled_root)) == 1
+    assert plugins.enabled_plugins(disabled_root) == ()
+    assert len(plugins.enabled_plugins(enabled_root)) == 1  # served from its own snapshot, not the sibling's
+
+
+def test_gate_held_by_a_dead_holder_does_not_wedge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # flock is released by the kernel when its holder dies, so a crashed session cannot withhold the
+    # roster from the machine. Proven with a real killed process, not a released lock object.
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    plugins.gate_path(0).parent.mkdir(parents=True, exist_ok=True)
+    plugin = write_plugin_pack(tmp_path, "show")
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
+
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import fcntl,sys,time\n"
+            "handles = [open(p, 'w') for p in sys.argv[1:]]\n"
+            "for h in handles: fcntl.flock(h, fcntl.LOCK_EX)\n"
+            "time.sleep(300)",
+            *[str(plugins.gate_path(slot)) for slot in range(plugins.GATE_WIDTH)],
+        ],
+        stdin=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not all(plugins.gate_path(s).exists() for s in range(plugins.GATE_WIDTH)):
+            time.sleep(0.05)
+        holder.kill()
+        holder.wait(timeout=10)
+    finally:
+        if holder.poll() is None:
+            holder.kill()
+
+    assert len(plugins.enabled_plugins(root)) == 1  # the dead holder's lock was reclaimed
+
+
+def test_spawn_outage_is_recorded_machine_wide_and_spares_queued_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plant_installed()
+    (first := tmp_path / "one").mkdir()
+    (second := tmp_path / "two").mkdir()
+    plugin = write_plugin_pack(tmp_path, "show")
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
+
+    spawns = 0
+
+    def exhausted(root: Path, executable: str) -> tuple[plugins.EnabledPlugin, ...]:
+        del root, executable
+        nonlocal spawns
+        spawns += 1
+        raise plugins.RosterUnavailable(
+            "claude plugin list could not be executed: [Errno 35] Resource temporarily unavailable"
+        )
+
+    monkeypatch.setattr(plugins, "list_plugins_cli", exhausted)
+
+    with pytest.raises(plugins.RosterUnavailable):
+        plugins.enabled_plugins(first)
+    with pytest.raises(plugins.RosterUnavailable):
+        plugins.enabled_plugins(second)  # a different root, never spawned for
+    assert spawns == 1
+    assert plugins.outage_path().exists()
+
+
+def test_roster_shape_failure_stays_local_to_its_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only an unspawnable CLI is a machine condition. A roster the CLI answered unusably says
+    # something about that root alone, so it must never suppress a sibling.
+    plant_installed()
+    (broken := tmp_path / "broken").mkdir()
+    (healthy := tmp_path / "healthy").mkdir()
+    plugin = write_plugin_pack(tmp_path, "show")
+    real = plugins.list_plugins_cli
+
+    def selective(root: Path, executable: str) -> tuple[plugins.EnabledPlugin, ...]:
+        if root.resolve() == broken.resolve():
+            raise plugins.PluginListError("claude plugin list returned unparseable JSON")
+        return real(root, executable)
+
+    monkeypatch.setattr(plugins, "list_plugins_cli", selective)
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
+
+    with pytest.raises(plugins.PluginListError):
+        plugins.enabled_plugins(broken)
+    assert not plugins.outage_path().exists()
+    assert len(plugins.enabled_plugins(healthy)) == 1
+
+
+def test_recovered_spawn_clears_the_machine_wide_outage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    plugin = write_plugin_pack(tmp_path, "show")
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
+    plugins.outage_path().parent.mkdir(parents=True, exist_ok=True)
+    plugins.RosterOutage(
+        at=datetime.now(UTC) - plugins.FAILURE_TTL - timedelta(seconds=1), message="stale outage"
+    ).write(plugins.outage_path())
+
+    assert len(plugins.enabled_plugins(root)) == 1  # the expired outage did not suppress the spawn
+    assert not plugins.outage_path().exists()
+
+
+def test_gate_admits_exactly_its_width_at_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    del tmp_path, monkeypatch
+    plugins.gate_path(0).parent.mkdir(parents=True, exist_ok=True)
+    inside = threading.Semaphore(0)
+    release = threading.Event()
+
+    def hold() -> None:
+        with plugins.roster_gate():
+            inside.release()
+            release.wait(timeout=30)
+
+    holders = [threading.Thread(target=hold, daemon=True) for _ in range(plugins.GATE_WIDTH)]
+    for thread in holders:
+        thread.start()
+    for _ in range(plugins.GATE_WIDTH):
+        assert inside.acquire(timeout=10)  # every slot is usable concurrently
+
+    entered = threading.Event()
+
+    def overflow() -> None:
+        with plugins.roster_gate():
+            entered.set()
+
+    extra = threading.Thread(target=overflow, daemon=True)
+    extra.start()
+    assert not entered.wait(timeout=1)  # the width+1 caller waits for a slot
+
+    release.set()
+    assert entered.wait(timeout=10)  # and is admitted once one frees
+    for thread in [*holders, extra]:
+        thread.join(timeout=10)

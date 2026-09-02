@@ -3,7 +3,6 @@ package hookd
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"os"
 	"strings"
 	"testing"
@@ -52,7 +51,7 @@ func TestHostDaemonValidatesOnBothHalves(t *testing.T) {
 func TestHostProductHandleDispatchesEveryOpAndRefusesTheRest(t *testing.T) {
 	t.Parallel()
 	product := &hostProduct{
-		manager: newWorkerManager(daemonkit.Ctx{}, io.Discard),
+		manager: mustWorkerManager(t),
 		hub:     newNotificationHub(),
 	}
 	ctx := context.Background()

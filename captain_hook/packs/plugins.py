@@ -29,12 +29,16 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from shutil import which
 
-from filelock import FileLock
+from filelock import FileLock, Timeout
 from loguru import logger
 
 from captain_hook.packs import manager
@@ -42,6 +46,17 @@ from captain_hook.util.fs import atomic_write, read_json
 from captain_hook.util.paths import resolve_cache_dir, resolve_claude_config_dir
 
 CLI_TIMEOUT_SECONDS = 60
+# A roster that cannot be read is retried on this timer rather than once per dispatch. The CLI spawns
+# Node, so a machine that has run out of fork capacity fails it — and re-running it per event is what
+# turns that shortage into a sustained spawn storm feeding itself.
+FAILURE_TTL = timedelta(seconds=15)
+# A root overtakes the machine-wide gate rather than queueing behind a holder this slow: the gate
+# exists to stagger a stampede, never to make one stuck session withhold the roster from every other.
+GATE_TIMEOUT_SECONDS = 10
+# How many spawns the gate admits at once. Wide enough that a handful of roots do not serialize,
+# narrow enough that a machine-wide invalidation cannot put every session's Node start in flight.
+GATE_WIDTH = 4
+GATE_POLL_SECONDS = 0.05
 # Bumped whenever a snapshot's meaning changes, so every older one is recomputed instead of served.
 SNAPSHOT_VERSION = 2
 # Claude Code layers plugin scopes; when one id resolves at more than one scope the earlier entry here
@@ -63,6 +78,15 @@ def managed_settings_dirs(config: Path) -> tuple[Path, ...]:
 
 class PluginListError(Exception):
     """``claude plugin list --json`` exited nonzero or returned unusable output."""
+
+
+class RosterUnavailable(PluginListError):
+    """The CLI could not be run at all, rather than running and answering unusably.
+
+    The one failure that says nothing about the project: a machine out of fork capacity fails it for
+    every root at once. It is recorded machine-wide so the roots queued behind the gate are told
+    rather than each re-spawning, which is what turns a fork shortage into a sustained storm.
+    """
 
 
 def installed_plugins_path() -> Path:
@@ -112,6 +136,47 @@ def snapshot_cache_root() -> Path:
 
 def snapshot_path(root: Path) -> Path:
     return snapshot_cache_root() / f"{sha256(str(root.resolve()).encode()).hexdigest()[:16]}.plugins"
+
+
+def failure_path(root: Path) -> Path:
+    return snapshot_path(root).with_suffix(".failure")
+
+
+def gate_path(slot: int) -> Path:
+    return snapshot_cache_root() / f"roster.gate.{slot}"
+
+
+def outage_path() -> Path:
+    return snapshot_cache_root() / "roster.outage"
+
+
+@contextmanager
+def roster_gate() -> Iterator[None]:
+    """Admit at most :data:`GATE_WIDTH` roster CLI spawns machine-wide, degrading rather than failing.
+
+    A watched file is machine-wide, so one change invalidates every root's snapshot at once and every
+    session spawns Node together — the stampede that exhausts fork capacity. Holding a slot while
+    spawning bounds that instead. A slot is one ``flock``, which the kernel drops when its holder
+    dies, so a crashed session cannot wedge the machine; a machine still busy past
+    :data:`GATE_TIMEOUT_SECONDS` is overtaken rather than waited on.
+    """
+    deadline = time.monotonic() + GATE_TIMEOUT_SECONDS
+    while True:
+        for slot in range(GATE_WIDTH):
+            lock = FileLock(str(gate_path(slot)), timeout=0)
+            try:
+                lock.acquire()
+            except Timeout:
+                continue
+            try:
+                yield
+            finally:
+                lock.release()
+            return
+        if time.monotonic() >= deadline:
+            yield
+            return
+        time.sleep(GATE_POLL_SECONDS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +244,85 @@ class PluginSnapshot:
 
     def fresh(self, records: tuple[StatRecord, ...]) -> bool:
         return self.stat == records
+
+
+@dataclass(frozen=True, slots=True)
+class RosterFailure:
+    """A recorded enumeration failure, so an unreadable roster costs one CLI spawn per TTL.
+
+    This is the negative half of the cache and never a roster: :func:`enabled_plugins` re-raises from
+    it rather than serving anything, so a failure stays a failure. "This project enables no
+    pack-shipping plugin" is a different fact and reaches disk only as a :class:`PluginSnapshot` — an
+    empty roster is never recorded here, and a failure is never recorded there.
+
+    Freshness is bounded twice. The stat tuple retires the record the moment a watched file moves, so
+    a fixed roster is picked up at once rather than after the timer; :data:`FAILURE_TTL` retires it
+    otherwise, so a transient failure — the fork exhaustion this exists for — recovers on its own.
+    """
+
+    stat: tuple[StatRecord, ...]
+    at: datetime
+    message: str
+
+    @classmethod
+    def load(cls, path: Path) -> RosterFailure | None:
+        if (data := read_json(path)) is None or data.get("version") != SNAPSHOT_VERSION:
+            return None
+        try:
+            return cls(
+                stat=tuple(tuple(rec) for rec in data["stat"]),
+                at=datetime.fromisoformat(data["at"]),
+                message=str(data["message"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def write(self, path: Path) -> None:
+        atomic_write(
+            path,
+            json.dumps(
+                {
+                    "version": SNAPSHOT_VERSION,
+                    "stat": [list(rec) for rec in self.stat],
+                    "at": self.at.isoformat(),
+                    "message": self.message,
+                }
+            ),
+        )
+
+    def fresh(self, records: tuple[StatRecord, ...], now: datetime) -> bool:
+        return self.stat == records and now - self.at < FAILURE_TTL
+
+
+@dataclass(frozen=True, slots=True)
+class RosterOutage:
+    """A machine-wide record that the CLI could not be spawned, bounded by :data:`FAILURE_TTL`.
+
+    Carries no roster and no stat tuple, because it records a condition of the machine rather than of
+    any project — so it never stands in for a root's answer. Enablement is resolved against the
+    project's settings stack and differs between roots, so it stays per root in
+    :class:`PluginSnapshot`; only the inability to ask at all is shared.
+    """
+
+    at: datetime
+    message: str
+
+    @classmethod
+    def load(cls, path: Path) -> RosterOutage | None:
+        if (data := read_json(path)) is None or data.get("version") != SNAPSHOT_VERSION:
+            return None
+        try:
+            return cls(at=datetime.fromisoformat(data["at"]), message=str(data["message"]))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def write(self, path: Path) -> None:
+        atomic_write(
+            path, json.dumps({"version": SNAPSHOT_VERSION, "at": self.at.isoformat(), "message": self.message})
+        )
+
+    def fresh(self, now: datetime) -> bool:
+        return now - self.at < FAILURE_TTL
 
 
 def parse_plugin_entry(entry: object) -> EnabledPlugin | None:
@@ -277,9 +421,9 @@ def list_plugins_cli(root: Path, executable: str) -> tuple[EnabledPlugin, ...]:
             timeout=CLI_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as e:
-        raise PluginListError(f"claude plugin list timed out after {CLI_TIMEOUT_SECONDS}s") from e
+        raise RosterUnavailable(f"claude plugin list timed out after {CLI_TIMEOUT_SECONDS}s") from e
     except OSError as e:
-        raise PluginListError(f"claude plugin list could not be executed: {e}") from e
+        raise RosterUnavailable(f"claude plugin list could not be executed: {e}") from e
     if result.returncode != 0:
         raise PluginListError(f"claude plugin list exited {result.returncode}: {result.stderr.strip()}")
     try:
@@ -306,16 +450,30 @@ def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
     spawn.
 
     Raises :class:`PluginListError` when the roster cannot be read at all, ``claude`` missing from a
-    daemon's minimal ``PATH`` included, and caches nothing: an unreadable roster cached as an empty one
-    would make a broken pack layer indistinguishable from a project that enables no packs, which is how
-    every plugin-shipped pack on a machine went dead behind one warning line.
+    daemon's minimal ``PATH`` included, and never caches that as a roster: an unreadable roster cached
+    as an empty one would make a broken pack layer indistinguishable from a project that enables no
+    packs, which is how every plugin-shipped pack on a machine went dead behind one warning line. The
+    failure is instead recorded as a :class:`RosterFailure` and re-raised from for
+    :data:`FAILURE_TTL`, which keeps that distinction while bounding what a broken roster costs — the
+    CLI spawns Node, and re-running it per event is what lets a machine out of fork capacity fail the
+    spawn, cache nothing, and immediately spawn again.
+
+    The spawn itself runs under :func:`roster_gate`, which staggers the roots a machine-wide
+    invalidation would otherwise stampede, and a spawn that fails outright is recorded as a
+    :class:`RosterOutage` so the roots queued behind the gate are told rather than each re-spawning.
+    Only that inability is shared: enablement resolves against each project's settings stack, so a
+    root's roster is never served to another.
     """
     if not installed_plugins_path().is_file():
         return ()
     records = stat_records(root)
-    path = snapshot_path(root)
+    path, failure = snapshot_path(root), failure_path(root)
     if (snap := PluginSnapshot.load(path)) and snap.fresh(records):
         return snap.plugins
+    if (recorded := RosterFailure.load(failure)) and recorded.fresh(records, datetime.now(UTC)):
+        raise PluginListError(recorded.message)
+    if (outage := RosterOutage.load(outage_path())) and outage.fresh(datetime.now(UTC)):
+        raise RosterUnavailable(outage.message)
     if (executable := which("claude")) is None:
         raise PluginListError("claude is not on PATH, so the plugin roster cannot be enumerated")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -323,9 +481,24 @@ def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
         records = stat_records(root)
         if (snap := PluginSnapshot.load(path)) and snap.fresh(records):
             return snap.plugins
-        plugins = list_plugins_cli(root, executable)
-        PluginSnapshot(stat=records, plugins=plugins).write(path)
-        return plugins
+        if (recorded := RosterFailure.load(failure)) and recorded.fresh(records, datetime.now(UTC)):
+            raise PluginListError(recorded.message)
+        with roster_gate():
+            if (outage := RosterOutage.load(outage_path())) and outage.fresh(datetime.now(UTC)):
+                raise RosterUnavailable(outage.message)
+            try:
+                plugins = list_plugins_cli(root, executable)
+            except RosterUnavailable as exc:
+                RosterOutage(at=datetime.now(UTC), message=str(exc)).write(outage_path())
+                RosterFailure(stat=records, at=datetime.now(UTC), message=str(exc)).write(failure)
+                raise
+            except PluginListError as exc:
+                RosterFailure(stat=records, at=datetime.now(UTC), message=str(exc)).write(failure)
+                raise
+            PluginSnapshot(stat=records, plugins=plugins).write(path)
+            failure.unlink(missing_ok=True)
+            outage_path().unlink(missing_ok=True)
+            return plugins
 
 
 def plugin_pack_root(plugin: EnabledPlugin) -> Path:
