@@ -46,15 +46,8 @@ from captain_hook.util.fs import atomic_write, read_json
 from captain_hook.util.paths import resolve_cache_dir, resolve_claude_config_dir
 
 CLI_TIMEOUT_SECONDS = 60
-# A roster that cannot be read is retried on this timer rather than once per dispatch. The CLI spawns
-# Node, so a machine that has run out of fork capacity fails it — and re-running it per event is what
-# turns that shortage into a sustained spawn storm feeding itself.
 FAILURE_TTL = timedelta(seconds=15)
-# A root overtakes the machine-wide gate rather than queueing behind a holder this slow: the gate
-# exists to stagger a stampede, never to make one stuck session withhold the roster from every other.
 GATE_TIMEOUT_SECONDS = 10
-# How many spawns the gate admits at once. Wide enough that a handful of roots do not serialize,
-# narrow enough that a machine-wide invalidation cannot put every session's Node start in flight.
 GATE_WIDTH = 4
 GATE_POLL_SECONDS = 0.05
 # Bumped whenever a snapshot's meaning changes, so every older one is recomputed instead of served.

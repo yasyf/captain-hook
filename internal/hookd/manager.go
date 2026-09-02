@@ -39,8 +39,7 @@ const (
 	// No wider budget can reach more interpreters than the worker cache holds.
 	maxParallelDispatch = maxLiveWorkers
 
-	// Nothing awaits a background dispatch, so it never competes for the
-	// blocking budget.
+	// Nothing awaits a background dispatch, so it never competes for the blocking budget.
 	asyncParallelDispatch = 4
 
 	parallelCeilingVar = "CAPT_HOOK_MAX_PARALLEL"

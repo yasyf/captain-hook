@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// blockingRun holds every admitted dispatch inside execute until release closes,
-// recording how many ran at once so a test can assert the admitted width.
 type blockingRun struct {
 	scheduler *scheduler
 	active    atomic.Int32
@@ -136,9 +134,6 @@ func TestSchedulerHonorsGlobalParallelism(t *testing.T) {
 	run.finish(t, 8)
 }
 
-// The regression this fix exists for: a fixed budget narrower than the number of
-// live sessions forced unrelated sessions to queue behind each other, because a
-// lane gate already limits each of them to one executing dispatch.
 func TestSchedulerWidensWithSessionDemand(t *testing.T) {
 	t.Parallel()
 	run := newBlockingRun(newScheduler(1, 16, 2))
@@ -234,7 +229,6 @@ func TestSchedulerCapsBackgroundLaneSeparately(t *testing.T) {
 	run.finish(t, 6)
 }
 
-// Claude Code awaits the blocking dispatch and nothing awaits the background one.
 func TestSchedulerBackgroundSaturationLeavesBlockingLaneFree(t *testing.T) {
 	t.Parallel()
 	scheduler := newScheduler(1, 16, 2)

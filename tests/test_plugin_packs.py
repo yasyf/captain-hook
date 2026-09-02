@@ -423,15 +423,13 @@ def test_cli_failure_raises_and_is_never_cached_as_a_roster(
     with pytest.raises(plugins.PluginListError):
         plugins.enabled_plugins(root)
     assert not plugins.snapshot_path(root).exists()  # a failure is never cached as an authoritative roster
-    assert plugins.failure_path(root).exists()  # it is recorded as a failure instead
+    assert plugins.failure_path(root).exists()
     with pytest.raises(plugins.PluginListError):
         plugins.enabled_plugins(root)
     assert calls.read_text() == "x"  # the recorded failure is re-raised rather than re-spawning the CLI
 
 
 def test_empty_roster_is_cached_as_success_not_as_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # The distinction the negative cache must never blur: "this project enables no pack-shipping
-    # plugin" is an authoritative empty roster, not an enumeration that failed.
     plant_installed()
     (root := tmp_path / "proj").mkdir()
     calls = tmp_path / "calls"
@@ -737,11 +735,7 @@ def test_pack_list_renders_builtin_and_plugin_ids(tmp_path: Path, monkeypatch: p
     assert "plugin:show@mkt" in result.stdout  # the enabled plugin's pack renders with its full plugin id
 
 
-# --- machine-wide roster gate ---------------------------------------------------------
-
-
 def test_gate_bounds_concurrent_roots_under_one_invalidation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # The stampede this gate exists for: one machine-wide file change invalidates every root at once.
     plant_installed()
     roots = [tmp_path / f"proj{i}" for i in range(10)]
     for root in roots:
@@ -778,13 +772,12 @@ def test_gate_bounds_concurrent_roots_under_one_invalidation(tmp_path: Path, mon
         thread.join(timeout=30)
 
     assert errors == []
-    assert overlap <= plugins.GATE_WIDTH  # the gate held
-    assert overlap < len(roots)  # and it bounded them: never all ten at once
+    assert overlap <= plugins.GATE_WIDTH
+    assert overlap < len(roots)
 
 
 def test_gate_never_shares_one_root_enablement_with_another(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # The correctness line the gate must not cross: `enabled` resolves against each project's
-    # settings stack, so a roster is never served to a root that did not ask for it.
+    # `enabled` resolves against each project's settings stack, so it differs between roots.
     plant_installed()
     (enabled_root := tmp_path / "on").mkdir()
     (disabled_root := tmp_path / "off").mkdir()
@@ -801,12 +794,11 @@ def test_gate_never_shares_one_root_enablement_with_another(tmp_path: Path, monk
 
     assert len(plugins.enabled_plugins(enabled_root)) == 1
     assert plugins.enabled_plugins(disabled_root) == ()
-    assert len(plugins.enabled_plugins(enabled_root)) == 1  # served from its own snapshot, not the sibling's
+    assert len(plugins.enabled_plugins(enabled_root)) == 1
 
 
 def test_gate_held_by_a_dead_holder_does_not_wedge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # flock is released by the kernel when its holder dies, so a crashed session cannot withhold the
-    # roster from the machine. Proven with a real killed process, not a released lock object.
+    # flock is released by the kernel when its holder dies, so a killed process frees its slot.
     plant_installed()
     (root := tmp_path / "proj").mkdir()
     plugins.gate_path(0).parent.mkdir(parents=True, exist_ok=True)
@@ -835,7 +827,7 @@ def test_gate_held_by_a_dead_holder_does_not_wedge(tmp_path: Path, monkeypatch: 
         if holder.poll() is None:
             holder.kill()
 
-    assert len(plugins.enabled_plugins(root)) == 1  # the dead holder's lock was reclaimed
+    assert len(plugins.enabled_plugins(root)) == 1
 
 
 def test_spawn_outage_is_recorded_machine_wide_and_spares_queued_roots(
@@ -862,14 +854,13 @@ def test_spawn_outage_is_recorded_machine_wide_and_spares_queued_roots(
     with pytest.raises(plugins.RosterUnavailable):
         plugins.enabled_plugins(first)
     with pytest.raises(plugins.RosterUnavailable):
-        plugins.enabled_plugins(second)  # a different root, never spawned for
+        plugins.enabled_plugins(second)
     assert spawns == 1
     assert plugins.outage_path().exists()
 
 
 def test_roster_shape_failure_stays_local_to_its_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Only an unspawnable CLI is a machine condition. A roster the CLI answered unusably says
-    # something about that root alone, so it must never suppress a sibling.
+    # Only an unspawnable CLI is a machine condition; an unusable answer is about that root alone.
     plant_installed()
     (broken := tmp_path / "broken").mkdir()
     (healthy := tmp_path / "healthy").mkdir()
@@ -900,7 +891,7 @@ def test_recovered_spawn_clears_the_machine_wide_outage(tmp_path: Path, monkeypa
         at=datetime.now(UTC) - plugins.FAILURE_TTL - timedelta(seconds=1), message="stale outage"
     ).write(plugins.outage_path())
 
-    assert len(plugins.enabled_plugins(root)) == 1  # the expired outage did not suppress the spawn
+    assert len(plugins.enabled_plugins(root)) == 1
     assert not plugins.outage_path().exists()
 
 
@@ -919,7 +910,7 @@ def test_gate_admits_exactly_its_width_at_once(tmp_path: Path, monkeypatch: pyte
     for thread in holders:
         thread.start()
     for _ in range(plugins.GATE_WIDTH):
-        assert inside.acquire(timeout=10)  # every slot is usable concurrently
+        assert inside.acquire(timeout=10)
 
     entered = threading.Event()
 
@@ -929,9 +920,9 @@ def test_gate_admits_exactly_its_width_at_once(tmp_path: Path, monkeypatch: pyte
 
     extra = threading.Thread(target=overflow, daemon=True)
     extra.start()
-    assert not entered.wait(timeout=1)  # the width+1 caller waits for a slot
+    assert not entered.wait(timeout=1)
 
     release.set()
-    assert entered.wait(timeout=10)  # and is admitted once one frees
+    assert entered.wait(timeout=10)
     for thread in [*holders, extra]:
         thread.join(timeout=10)
