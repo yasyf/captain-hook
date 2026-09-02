@@ -10,17 +10,11 @@ type lane struct {
 	refs int
 }
 
-// pool is one admission budget: dispatches executing against it, and the FIFO
-// queue waiting for a slot.
 type pool struct {
 	holders int
 	waiters []chan struct{}
 }
 
-// scheduler runs one dispatch per lane at a time, under two budgets. The
-// blocking one tracks the live sync lane count clamped to [floor, ceiling] —
-// below that count, unrelated sessions merely queue behind each other.
-// Background dispatches, which nothing awaits, get a fixed budget of their own.
 type scheduler struct {
 	mu        sync.Mutex
 	lanes     map[string]*lane
@@ -65,9 +59,7 @@ func (s *scheduler) acquireLane(key string, async bool) *lane {
 		l = &lane{gate: make(chan struct{}, 1)}
 		s.lanes[key] = l
 		if !async {
-			// A new sync lane widens the limit, so queued callers may now fit.
-			s.syncLanes++
-			s.promoteLocked(&s.sync, s.syncLimitLocked())
+			s.admitSyncLaneLocked()
 		}
 	}
 	l.refs++
@@ -84,6 +76,11 @@ func (s *scheduler) releaseLane(key string, async bool, l *lane) {
 			s.syncLanes--
 		}
 	}
+}
+
+func (s *scheduler) admitSyncLaneLocked() {
+	s.syncLanes++
+	s.promoteLocked(&s.sync, s.syncLimitLocked())
 }
 
 func (s *scheduler) syncLimitLocked() int {
@@ -122,10 +119,9 @@ func (s *scheduler) acquireSlot(ctx context.Context, async bool) error {
 	case <-ctx.Done():
 		s.mu.Lock()
 		p, _ := s.poolLocked(async)
-		dropped := dropWaiter(p, granted)
+		withdrawn := withdrawWaiter(p, granted)
 		s.mu.Unlock()
-		// A concurrent release already granted the slot; hand it back.
-		if !dropped {
+		if !withdrawn {
 			s.releaseSlot(async)
 		}
 		return ctx.Err()
@@ -140,8 +136,6 @@ func (s *scheduler) releaseSlot(async bool) {
 	s.promoteLocked(p, limit)
 }
 
-// promoteLocked admits queued callers in arrival order. holders may exceed the
-// limit when a closing lane narrowed it under callers already executing.
 func (s *scheduler) promoteLocked(p *pool, limit int) {
 	for len(p.waiters) > 0 && p.holders < limit {
 		granted := p.waiters[0]
@@ -151,7 +145,7 @@ func (s *scheduler) promoteLocked(p *pool, limit int) {
 	}
 }
 
-func dropWaiter(p *pool, granted chan struct{}) bool {
+func withdrawWaiter(p *pool, granted chan struct{}) bool {
 	for i, waiter := range p.waiters {
 		if waiter == granted {
 			p.waiters = append(p.waiters[:i], p.waiters[i+1:]...)
