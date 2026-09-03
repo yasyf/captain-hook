@@ -31,7 +31,9 @@ from captain_hook.util.paths import resolve_cache_dir
 # Only a worker with no cached answer to fall back to spends this much.
 PROBE_TIMEOUT_SECONDS = 5
 
-REFRESH_TIMEOUT_SECONDS = 1
+# A bound under the shell's real cost never completes: it times out, falls back, and leaves the
+# record stale for the next worker to retry. A login fish measures 1.43-1.50s.
+REFRESH_TIMEOUT_SECONDS = 3
 
 CACHE_TTL = timedelta(hours=12)
 

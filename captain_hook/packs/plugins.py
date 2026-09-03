@@ -5,11 +5,13 @@ under the plugin root; the dispatcher loads every enabled plugin whose root ship
 plugins come from ``claude plugin list --json`` — the sanctioned interface, which resolves
 ``enabled`` against the project's settings stack — but that CLI spawns Node (~1s), far too slow
 for the ~3ms dispatch hot path. So the roster is cached per project in a ``<key>.plugins``
-snapshot, invalidated by the stat tuple of the files that shape it: Claude Code's
-``installed_plugins.json`` (mtime only — undocumented, never parsed), the user settings, and the
-project's two settings files. A watched-file change (a plugin install, an enable or disable) re-runs
-the CLI once; every other event reads the snapshot. The fixed-path probe itself runs live per
-discovery (cheap stats), so a pack edit inside a plugin dir needs no snapshot invalidation.
+snapshot, invalidated by a fingerprint over the files that shape it: Claude Code's
+``installed_plugins.json`` by stat (undocumented, never parsed) and every settings file by a digest
+of the keys that decide enablement, so a session rewriting its settings for unrelated reasons no
+longer costs every root a spawn. An invalidation re-runs the CLI once; every other event reads the
+snapshot, and a snapshot that has merely gone stale is served while the re-run happens behind it.
+The fixed-path probe itself runs live per discovery (cheap stats), so a pack edit inside a plugin
+dir needs no snapshot invalidation.
 
 Pack load is all-or-nothing: a plugin advertising ``capt-hook/`` with a missing descriptor or hooks
 dir raises rather than silently dropping guards. The CLI's roster is machine-wide — a ``project`` or
@@ -29,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -51,7 +54,12 @@ GATE_TIMEOUT_SECONDS = 10
 GATE_WIDTH = 4
 GATE_POLL_SECONDS = 0.05
 # Bumped whenever a snapshot's meaning changes, so every older one is recomputed instead of served.
-SNAPSHOT_VERSION = 2
+SNAPSHOT_VERSION = 3
+# The settings keys a roster answer turns on. Marketplaces cannot move it alone, but are digested
+# anyway: a key wrongly left out serves a stale roster as a fresh one.
+PLUGIN_SETTINGS_KEYS = ("enabledPlugins", "extraKnownMarketplaces")
+REFRESHING: set[str] = set()
+REFRESHING_GUARD = threading.Lock()
 # Claude Code layers plugin scopes; when one id resolves at more than one scope the earlier entry here
 # outranks the later, mirroring settings precedence. An unknown scope ranks lowest.
 SCOPE_PRECEDENCE = ("local", "project", "user")
@@ -63,6 +71,8 @@ MANAGED_SETTINGS_DIRS = (
 )
 
 type StatRecord = tuple[str, int, int, int] | tuple[str, None]
+type SettingsRecord = tuple[str, str]
+type FingerprintRecord = StatRecord | SettingsRecord
 
 
 def managed_settings_dirs(config: Path) -> tuple[Path, ...]:
@@ -108,19 +118,44 @@ def stat_record(path: Path) -> StatRecord:
     return (abs_path, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
 
 
-def dropin_records(dropin_dir: Path) -> tuple[StatRecord, ...]:
-    """A ``managed-settings.d`` dir's own stat plus one per contained ``*.json`` (sorted); a lone
-    ``(path, None)`` when the dir is absent. The dir stat catches drop-in adds/removes, the per-file
-    records catch edits."""
+def settings_record(path: Path) -> FingerprintRecord:
+    """A settings file digested down to the keys that decide a roster, or its stat when it has none.
+
+    An unparseable or non-object file falls back to :func:`stat_record`, so a corrupt settings file
+    keeps the coarse behaviour rather than reading as "declares no plugins" — the digest may only ever
+    make invalidation rarer for files it actually understands.
+    """
+    if not isinstance(data := read_json(path), dict):
+        return stat_record(path)
+    payload = json.dumps({k: data[k] for k in PLUGIN_SETTINGS_KEYS if k in data}, sort_keys=True)
+    return (os.path.abspath(path), sha256(payload.encode()).hexdigest()[:16])
+
+
+def fingerprint_record(path: Path) -> FingerprintRecord:
+    """One watched path's contribution to the fingerprint.
+
+    ``installed_plugins.json`` stays a stat rather than a digest: Claude Code's format for it is
+    undocumented and this module has never parsed it, so a digest could silently miss a field that
+    moves the roster. It changes only when a plugin is installed, updated, or removed — rare enough
+    that invalidating every root on it costs little, unlike the settings files a session rewrites for
+    reasons that have nothing to do with plugins.
+    """
+    return stat_record(path) if path == installed_plugins_path() else settings_record(path)
+
+
+def dropin_records(dropin_dir: Path) -> tuple[FingerprintRecord, ...]:
+    """A ``managed-settings.d`` dir's own stat plus one digest per contained ``*.json`` (sorted); a
+    lone ``(path, None)`` when the dir is absent. The dir stat catches drop-in adds/removes, the
+    per-file records catch edits."""
     if not dropin_dir.is_dir():
         return (stat_record(dropin_dir),)
-    return (stat_record(dropin_dir), *(stat_record(p) for p in sorted(dropin_dir.glob("*.json"))))
+    return (stat_record(dropin_dir), *(settings_record(p) for p in sorted(dropin_dir.glob("*.json"))))
 
 
-def stat_records(root: Path) -> tuple[StatRecord, ...]:
+def fingerprint(root: Path) -> tuple[FingerprintRecord, ...]:
     config = resolve_claude_config_dir()
     dropins = tuple(rec for d in managed_settings_dirs(config) for rec in dropin_records(d / "managed-settings.d"))
-    return tuple(stat_record(p) for p in watched_paths(root)) + dropins
+    return tuple(fingerprint_record(p) for p in watched_paths(root)) + dropins
 
 
 def snapshot_cache_root() -> Path:
@@ -183,7 +218,7 @@ class EnabledPlugin:
 
 @dataclass(frozen=True, slots=True)
 class PluginSnapshot:
-    stat: tuple[StatRecord, ...]
+    stat: tuple[FingerprintRecord, ...]
     plugins: tuple[EnabledPlugin, ...]
 
     @classmethod
@@ -235,7 +270,7 @@ class PluginSnapshot:
             ),
         )
 
-    def fresh(self, records: tuple[StatRecord, ...]) -> bool:
+    def fresh(self, records: tuple[FingerprintRecord, ...]) -> bool:
         return self.stat == records
 
 
@@ -253,7 +288,7 @@ class RosterFailure:
     otherwise, so a transient failure — the fork exhaustion this exists for — recovers on its own.
     """
 
-    stat: tuple[StatRecord, ...]
+    stat: tuple[FingerprintRecord, ...]
     at: datetime
     message: str
 
@@ -283,7 +318,7 @@ class RosterFailure:
             ),
         )
 
-    def fresh(self, records: tuple[StatRecord, ...], now: datetime) -> bool:
+    def fresh(self, records: tuple[FingerprintRecord, ...], now: datetime) -> bool:
         return self.stat == records and now - self.at < FAILURE_TTL
 
 
@@ -433,6 +468,33 @@ def list_plugins_cli(root: Path, executable: str) -> tuple[EnabledPlugin, ...]:
     return dedupe_scoped_roster(parsed, root)
 
 
+def refresh_behind(root: Path) -> None:
+    """Re-resolve ``root``'s roster on a background thread, at most one in flight per root.
+
+    The stale snapshot has already been served by the time this runs, so the CLI's Node start — 3.3s
+    on a loaded machine — stops sitting on the dispatch a session is waiting for. A refresh that
+    fails records through the same :class:`RosterFailure` and :class:`RosterOutage` path as any other
+    spawn, which is also what stops it retrying: the next attempt reads that record and returns
+    without spawning until it expires.
+    """
+    key = str(root.resolve())
+    with REFRESHING_GUARD:
+        if key in REFRESHING:
+            return
+        REFRESHING.add(key)
+    threading.Thread(target=run_refresh, args=(root, key), daemon=True).start()
+
+
+def run_refresh(root: Path, key: str) -> None:
+    try:
+        resolve_roster(root, fingerprint(root))
+    except PluginListError:
+        logger.opt(exception=True).debug("background roster refresh failed")
+    finally:
+        with REFRESHING_GUARD:
+            REFRESHING.discard(key)
+
+
 def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
     """The plugins Claude Code has enabled for ``root``, cached per project with stat invalidation.
 
@@ -459,10 +521,23 @@ def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
     """
     if not installed_plugins_path().is_file():
         return ()
-    records = stat_records(root)
-    path, failure = snapshot_path(root), failure_path(root)
-    if (snap := PluginSnapshot.load(path)) and snap.fresh(records):
+    records = fingerprint(root)
+    if snap := PluginSnapshot.load(snapshot_path(root)):
+        if not snap.fresh(records):
+            refresh_behind(root)
         return snap.plugins
+    return resolve_roster(root, records)
+
+
+def resolve_roster(root: Path, records: tuple[FingerprintRecord, ...]) -> tuple[EnabledPlugin, ...]:
+    """Re-run the CLI for ``root`` and rewrite its snapshot, blocking until it answers.
+
+    The one path that spawns. :func:`enabled_plugins` reaches it only for a root with no snapshot at
+    all, where there is nothing to serve and guessing an empty roster would be the very collapse
+    :class:`RosterFailure` exists to prevent; every refresh of an existing snapshot comes through
+    :func:`refresh_behind` instead.
+    """
+    path, failure = snapshot_path(root), failure_path(root)
     if (recorded := RosterFailure.load(failure)) and recorded.fresh(records, datetime.now(UTC)):
         raise PluginListError(recorded.message)
     if (outage := RosterOutage.load(outage_path())) and outage.fresh(datetime.now(UTC)):
@@ -471,7 +546,7 @@ def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
         raise PluginListError("claude is not on PATH, so the plugin roster cannot be enumerated")
     path.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(str(path.with_name(path.name + ".lock"))):
-        records = stat_records(root)
+        records = fingerprint(root)
         if (snap := PluginSnapshot.load(path)) and snap.fresh(records):
             return snap.plugins
         if (recorded := RosterFailure.load(failure)) and recorded.fresh(records, datetime.now(UTC)):
