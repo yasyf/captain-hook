@@ -4,8 +4,8 @@
   "name": "capt-hook",
   "kind": "python-tool",
   "version": {
-    "command": ["/bin/bash", "-c", "exec \"$HOME/Applications/Captain Hook.app/Contents/Helpers/capt-hookd\" version"],
-    "json_field": "build"
+    "file": "~/Applications/Captain Hook.app/Contents/Info.plist",
+    "plist_key": "CFBundleShortVersionString"
   },
   "tool": {
     "dist": "capt-hook",

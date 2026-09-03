@@ -72,12 +72,16 @@ def test_signed_controller_stops_only_the_exact_installed_generation() -> None:
         assert forbidden not in source
 
 
-def test_binrun_version_probes_use_the_stable_signed_host() -> None:
-    expected = (
-        '["/bin/bash", "-c", "exec \\"$HOME/Applications/Captain Hook.app'
-        '/Contents/Helpers/capt-hookd\\" version"]'
-    )
+def test_binrun_version_reads_the_stable_signed_host_without_spawning_it() -> None:
+    """PIN: the version comes off the fixed signed bundle, and costs no execve to read.
+
+    Spawning the host cost two execve per hook — a bash and a multi-MB signed Mach-O —
+    to read a string the bundle already publishes, which on a machine whose endpoint
+    security inspects every exec dominated the whole dispatch.
+    """
     for name in ("capt-hook.binrun", "hook.binrun"):
         descriptor = (ROOT / "captain_hook/bin" / name).read_text()
-        assert expected in descriptor
+        assert '"file": "~/Applications/Captain Hook.app/Contents/Info.plist"' in descriptor
+        assert '"plist_key": "CFBundleShortVersionString"' in descriptor
+        assert '"command"' not in descriptor
         assert "capt-hook-host" not in descriptor
