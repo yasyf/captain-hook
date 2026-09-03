@@ -5,9 +5,9 @@
 # This renders to plugin scripts/install-binary.sh — the successor to the
 # provision-a-symlink installer. bin/hook is a committed symlink to it, so
 # hooks, MCP servers, and the CLI reach this script with the tool's own
-# arguments. Its whole job is to find binrun — on PATH, at the shared
-# ~/.daemonkit/bin/binrun, or by a one-time virgin-machine bootstrap of the
-# pinned runner release — and hand off to "binrun <descriptor> $@", which
+# arguments. Its whole job is to find binrun — named in BINRUN_BIN, stamped at
+# the pinned tag in ~/.daemonkit/bin, on PATH, or bootstrapped once from the
+# pinned release — and hand off to "binrun <descriptor> $@", which
 # resolves and execs the version-exact artifact the sidecar bin/hook.binrun
 # descriptor pins. Every failure here exits 1: exit 2 is reserved for a real
 # hook verdict, and the only other codes come from the exec'd artifact itself.
@@ -45,9 +45,9 @@ fail() {
   exit 1
 }
 
-# Arm 1: binrun already on PATH (brew-installed for humans, or a dev build).
-if binrun="$(command -v binrun 2>/dev/null)"; then
-  exec "$binrun" "$DESCRIPTOR" "$@"
+# Arm 1: an explicitly chosen runner — a dev build, named on purpose.
+if [ -n "${BINRUN_BIN:-}" ]; then
+  exec "$BINRUN_BIN" "$DESCRIPTOR" "$@"
 fi
 
 # Arm 2: the runner a previous bootstrap installed, at the pinned tag. The stamp
@@ -59,7 +59,13 @@ if [ -x "$RUNNER_BIN" ] && [ "$stamp" = "$RUNNER_TAG" ]; then
   exec "$RUNNER_BIN" "$DESCRIPTOR" "$@"
 fi
 
-# Arm 3: virgin machine — download the pinned runner release, sha256-verify it,
+# Arm 3: a binrun on PATH. It carries no stamp, so it ranks below the pinned
+# runner: an older one rejects a descriptor whose source the pin was raised for.
+if binrun="$(command -v binrun 2>/dev/null)"; then
+  exec "$binrun" "$DESCRIPTOR" "$@"
+fi
+
+# Arm 4: virgin machine — download the pinned runner release, sha256-verify it,
 # install it atomically to the shared bin, and exec. Mirrors the exact-release
 # curl+verify semantics of install-binary-pinned's final arm.
 case "$RUNNER_TAG" in
