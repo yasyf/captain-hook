@@ -22,11 +22,11 @@ set -eu
 # and its checksums.txt sha256 values for binrun_<version>_<os>_<arch>.tar.gz.
 # Bump all five together when adopting a newer binrun.
 RUNNER_REPO="yasyf/binrun"
-RUNNER_TAG="v0.1.1"
-RUNNER_SHA_darwin_arm64="11a6ed5837171e8ae1b005f14be0fdd79286ef6bce039362bcfad7c944b9abdf"
-RUNNER_SHA_darwin_amd64="b168fd14d1c87d6457aaa064243fba53ac9fc83a1a084df615e6e426a7f8e157"
-RUNNER_SHA_linux_amd64="e33d95055002e1ebff80db5bb175e60ee0be83f031778a659e29ab3f8bffb7ec"
-RUNNER_SHA_linux_arm64="7a1fff9270843f66df1a41edccb5d7f1c61e94da024d501634c2f888fa7d2929"
+RUNNER_TAG="v0.4.0"
+RUNNER_SHA_darwin_arm64="6bec07bf776182fcd35e5d7d108d47907c9b0bb49d4214de46d1de6e74f45b4a"
+RUNNER_SHA_darwin_amd64="9f2ee46636dc816e76f59edb9ad5749c897173ff5dd177a5824845b25e669462"
+RUNNER_SHA_linux_amd64="f32d0e58e03fdc1387e5291bf60324a616ef9c4d96bebb403500cd365c107b36"
+RUNNER_SHA_linux_arm64="42e412c99a68931816ace3cf2e0e00388b402b820c81889f0c905451a5a6fdf3"
 # ------------------------------------------------------------------------------
 
 # ${0%/*}, not dirname: skips an exec an endpoint-security agent can serialize fleet-wide.
@@ -50,8 +50,12 @@ if binrun="$(command -v binrun 2>/dev/null)"; then
   exec "$binrun" "$DESCRIPTOR" "$@"
 fi
 
-# Arm 2: the shared daemonkit-managed runner a previous bootstrap installed.
-if [ -x "$RUNNER_BIN" ]; then
+# Arm 2: the runner a previous bootstrap installed, at the pinned tag. The stamp
+# is read by the shell builtin — an exec here would outcost the pin it checks.
+RUNNER_STAMP="$RUNNER_HOME/bin/.binrun-tag"
+stamp=""
+[ -r "$RUNNER_STAMP" ] && read -r stamp < "$RUNNER_STAMP"
+if [ -x "$RUNNER_BIN" ] && [ "$stamp" = "$RUNNER_TAG" ]; then
   exec "$RUNNER_BIN" "$DESCRIPTOR" "$@"
 fi
 
@@ -109,6 +113,7 @@ tar -xzf "$tmpd/$asset" -C "$tmpd" \
 [ -x "$tmpd/binrun" ] \
   || fail "$asset did not contain a binrun executable"
 mv -f "$tmpd/binrun" "$RUNNER_BIN"
+printf '%s\n' "$RUNNER_TAG" > "$tmpd/tag" && mv -f "$tmpd/tag" "$RUNNER_STAMP"
 rm -rf "$tmpd"
 trap - EXIT
 exec "$RUNNER_BIN" "$DESCRIPTOR" "$@"
