@@ -117,7 +117,7 @@ def plant_installed() -> None:
 def write_snapshot(root: Path, roster: Sequence[tuple[str, Path]]) -> None:
     (path := plugins.snapshot_path(root)).parent.mkdir(parents=True, exist_ok=True)
     plugins.PluginSnapshot(
-        stat=plugins.stat_records(root),
+        stat=plugins.fingerprint(root),
         plugins=tuple(plugins.EnabledPlugin(id=pid, version="1.0.0", root=str(proot)) for pid, proot in roster),
     ).write(path)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -27,7 +28,7 @@ def write_snapshot(root: Path, roster: list[tuple[str, str]]) -> Path:
     path = plugins.snapshot_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     plugins.PluginSnapshot(
-        stat=plugins.stat_records(root),
+        stat=plugins.fingerprint(root),
         plugins=tuple(plugins.EnabledPlugin(id=pid, version="1.0.0", root=proot) for pid, proot in roster),
     ).write(path)
     return path
@@ -177,16 +178,20 @@ def test_plugin_tree_skips_a_plugin_whose_hooks_dir_vanishes(
 
 @pytest.mark.parametrize("idx", range(len(plugins.watched_paths(Path("/x")))))
 def test_watched_file_mtime_bump_changes_fingerprint(project: CliState, idx: int) -> None:
-    # An mtime bump on any watched roster input misses the cache; the absolute managed-settings system
-    # paths (/Library, /etc) aren't sandbox-writable, so skip those slots.
+    # A change to any watched roster input misses the cache — an mtime bump on the installed-plugin
+    # roster, an enablement edit on a settings file. The absolute managed-settings system paths
+    # (/Library, /etc) aren't sandbox-writable, so skip those slots.
     path = plugins.watched_paths(project.root)[idx]
     if not (path.is_relative_to(project.root) or path.is_relative_to(resolve_claude_config_dir())):
         pytest.skip(f"{path} is an absolute managed-settings system path — not sandbox-writable")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{}\n")
     before = fp(project)
-    st = path.stat()
-    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    if path == plugins.installed_plugins_path():
+        st = path.stat()
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    else:
+        path.write_text(json.dumps({"enabledPlugins": {"marker@mkt": True}}))
     assert fp(project) != before
 
 

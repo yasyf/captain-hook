@@ -86,14 +86,16 @@ def fake_claude(
     calls: Path,
     returncode: int = 0,
     raw_stdout: str | None = None,
+    delay: float = 0.0,
 ) -> Path:
     """An executable ``claude`` shim: appends to ``calls`` per invocation and prints the roster JSON."""
     bindir.mkdir(parents=True, exist_ok=True)
     payload = raw_stdout if raw_stdout is not None else json.dumps(roster or [])
     (script := bindir / "claude").write_text(
         f"#!{sys.executable}\n"
-        "import sys, pathlib\n"
+        "import sys, pathlib, time\n"
         f"pathlib.Path({str(calls)!r}).open('a').write('x')\n"
+        f"time.sleep({delay!r})\n"
         f"sys.stdout.write({payload!r})\n"
         f"sys.exit({returncode})\n"
     )
@@ -109,9 +111,21 @@ def install_claude(
     roster: list[dict[str, object]] | None = None,
     returncode: int = 0,
     raw_stdout: str | None = None,
+    delay: float = 0.0,
 ) -> None:
-    bindir = fake_claude(tmp / "bin", roster, calls=calls, returncode=returncode, raw_stdout=raw_stdout)
+    bindir = fake_claude(tmp / "bin", roster, calls=calls, returncode=returncode, raw_stdout=raw_stdout, delay=delay)
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+
+
+def settle_refresh(timeout: float = 20.0) -> None:
+    """Wait out any background roster refresh, so an assertion sees the settled snapshot."""
+    deadline = time.monotonic() + timeout
+    while plugins.REFRESHING and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+def enable_marker(value: str) -> str:
+    return json.dumps({"enabledPlugins": {"marker@mkt": value}})
 
 
 def plant_installed() -> None:
@@ -377,32 +391,72 @@ def test_refresh_on_each_watched_change(tmp_path: Path, monkeypatch: pytest.Monk
     if not (watched.is_relative_to(root) or watched.is_relative_to(resolve_claude_config_dir())):
         pytest.skip(f"{watched} is an absolute managed-settings system path — not sandbox-writable")
     watched.parent.mkdir(parents=True, exist_ok=True)
-    watched.write_text("x" * 500)  # absent -> present, or a size bump: either moves the stat tuple
+    watched.write_text("x" * 500 if watched == plugins.installed_plugins_path() else enable_marker("on"))
+    plugins.enabled_plugins(root)
+    settle_refresh()
     plugins.enabled_plugins(root)
     assert calls.read_text() == "xx"  # the watched-file change re-ran the CLI
 
 
-def test_ctime_only_watched_rewrite_refreshes_roster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # A same-size, mtime-restored rewrite of a watched settings file moves only ctime; without ctime in
-    # the stat record the snapshot would stay "fresh" and miss a plugin enable/disable landing that way.
+def test_mtime_restored_enablement_rewrite_refreshes_roster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # An enable/disable can land as a same-size rewrite with mtime restored, moving neither size nor
+    # mtime; the digest reads the key itself, so it is caught however the file was written.
     plant_installed()
     (root := tmp_path / "proj").mkdir()
     calls = tmp_path / "calls"
     settings = root / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text('{"a": 1}')
+    settings.write_text(enable_marker("on_"))
     plugin = write_plugin_pack(tmp_path, "show", "1.0.0")
     install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/show", plugin)])
 
     plugins.enabled_plugins(root)
     assert calls.read_text() == "x"
     st = settings.stat()
-    settings.write_text('{"b": 2}')  # same byte length, different content
-    os.utime(settings, ns=(st.st_atime_ns, st.st_mtime_ns))  # restore mtime; only ctime moves
+    settings.write_text(enable_marker("off"))  # same byte length, different enablement
+    os.utime(settings, ns=(st.st_atime_ns, st.st_mtime_ns))
     after = settings.stat()
     assert after.st_size == st.st_size and after.st_mtime_ns == st.st_mtime_ns
     plugins.enabled_plugins(root)
-    assert calls.read_text() == "xx"  # ctime move re-ran the CLI
+    settle_refresh()
+    plugins.enabled_plugins(root)
+    assert calls.read_text() == "xx"  # the enablement change re-ran the CLI
+
+
+def test_settings_rewrite_that_cannot_change_enablement_serves_the_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The whole point of the digest: a session rewriting its settings for reasons that have nothing to
+    # do with plugins used to cost every root a Node spawn.
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    calls = tmp_path / "calls"
+    settings = root / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps({"model": "opus", "enabledPlugins": {"marker@mkt": "on"}}))
+    plugin = write_plugin_pack(tmp_path, "show", "1.0.0")
+    install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/show", plugin)])
+
+    plugins.enabled_plugins(root)
+    assert calls.read_text() == "x"
+    settings.write_text(json.dumps({"model": "sonnet", "effortLevel": "high", "enabledPlugins": {"marker@mkt": "on"}}))
+    plugins.enabled_plugins(root)
+    settle_refresh()
+    plugins.enabled_plugins(root)
+    assert calls.read_text() == "x"  # never re-ran: enablement is untouched
+
+
+def test_unparseable_settings_still_invalidate_coarsely(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A file the digest cannot read falls back to its stat, so a corrupt settings file never reads as
+    # "declares no plugins" and quietly pins a stale roster.
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    settings = root / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text("{not json")
+    before = plugins.fingerprint(root)
+    settings.write_text("{still not json, but longer}")
+    assert plugins.fingerprint(root) != before
 
 
 @pytest.mark.parametrize(
@@ -538,18 +592,18 @@ def test_managed_settings_dropin_changes_invalidate_snapshot(tmp_path: Path) -> 
     # drop-in moves the stat tuple, invalidating a stale roster snapshot.
     (root := tmp_path / "proj").mkdir()
     dropin = resolve_claude_config_dir() / "managed-settings.d"
-    absent = plugins.stat_records(root)
+    absent = plugins.fingerprint(root)
 
     dropin.mkdir(parents=True)
-    (drop := dropin / "10-policy.json").write_text('{"a": 1}')
-    added = plugins.stat_records(root)
-    assert added != absent  # a new drop-in moves the stat tuple
+    (drop := dropin / "10-policy.json").write_text(enable_marker("on"))
+    added = plugins.fingerprint(root)
+    assert added != absent  # a new drop-in moves the fingerprint
 
-    drop.write_text('{"policy": "changed and now longer"}')  # different byte length
-    assert plugins.stat_records(root) != added  # editing a drop-in moves it
+    drop.write_text(enable_marker("off"))
+    assert plugins.fingerprint(root) != added  # editing a drop-in moves it
 
     drop.unlink()
-    assert plugins.stat_records(root) != added  # removing the drop-in moves it back off
+    assert plugins.fingerprint(root) != added  # removing the drop-in moves it back off
 
 
 @pytest.mark.parametrize(
@@ -646,6 +700,8 @@ def test_newer_plugin_version_rebinds(tmp_path: Path, monkeypatch: pytest.Monkey
     install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/show", v2, version="2.0.0")])
     plugins.installed_plugins_path().write_text("x" * 500)
 
+    plugins.enabled_plugins(root)
+    settle_refresh()
     (second,) = plugins.resolve_plugin_packs(root)
     assert second.entry.root == str(v2)
     assert second.path == v2 / manager.PLUGIN_PACK_DIRNAME / manager.HOOKS_DIRNAME
@@ -926,3 +982,83 @@ def test_gate_admits_exactly_its_width_at_once(tmp_path: Path, monkeypatch: pyte
     assert entered.wait(timeout=10)
     for thread in [*holders, extra]:
         thread.join(timeout=10)
+
+
+def test_root_with_no_snapshot_blocks_on_the_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Nothing to serve, and an empty roster is the forbidden collapse — a first-ever root must wait.
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    calls = tmp_path / "calls"
+    plugin = write_plugin_pack(tmp_path, "show", "1.0.0")
+    install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/show", plugin)], delay=1.0)
+
+    started = time.monotonic()
+    (only,) = plugins.enabled_plugins(root)
+    assert time.monotonic() - started >= 1.0  # it waited for the answer rather than guessing
+    assert only.id == "mkt/show"
+    assert calls.read_text() == "x"
+
+
+def test_stale_snapshot_is_served_without_waiting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    calls = tmp_path / "calls"
+    v1 = write_plugin_pack(tmp_path, "show", "1.0.0")
+    install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/show", v1)])
+    (first,) = plugins.enabled_plugins(root)
+
+    settings = root / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(enable_marker("flipped"))
+    v2 = write_plugin_pack(tmp_path, "other", "1.0.0", slot="other")
+    install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/other", v2)], delay=2.0)
+
+    started = time.monotonic()
+    (served,) = plugins.enabled_plugins(root)
+    assert time.monotonic() - started < 1.0  # the stale snapshot came back, the 2s spawn ran behind it
+    assert served.id == first.id == "mkt/show"
+
+    settle_refresh()
+    (refreshed,) = plugins.enabled_plugins(root)
+    assert refreshed.id == "mkt/other"  # one event later, the refresh has landed
+
+
+def test_background_refresh_does_not_stack_up(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    calls = tmp_path / "calls"
+    plugin = write_plugin_pack(tmp_path, "show", "1.0.0")
+    install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/show", plugin)])
+    plugins.enabled_plugins(root)
+
+    settings = root / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(enable_marker("flipped"))
+    install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/show", plugin)], delay=1.0)
+    for _ in range(5):
+        plugins.enabled_plugins(root)
+    settle_refresh()
+    assert calls.read_text() == "xx"  # five stale reads, one refresh spawn
+
+
+def test_failed_background_refresh_records_and_stops_respawning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plant_installed()
+    (root := tmp_path / "proj").mkdir()
+    calls = tmp_path / "calls"
+    plugin = write_plugin_pack(tmp_path, "show", "1.0.0")
+    install_claude(tmp_path, monkeypatch, calls=calls, roster=[roster_entry("mkt/show", plugin)])
+    plugins.enabled_plugins(root)
+
+    settings = root / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(enable_marker("flipped"))
+    install_claude(tmp_path, monkeypatch, calls=calls, roster=[], returncode=1)
+    for _ in range(4):
+        plugins.enabled_plugins(root)
+        settle_refresh()
+
+    assert plugins.failure_path(root).exists()  # the failure was recorded, not swallowed
+    assert calls.read_text() == "xx"  # and the record stopped the retries
+    assert plugins.enabled_plugins(root)  # the stale snapshot is still served throughout

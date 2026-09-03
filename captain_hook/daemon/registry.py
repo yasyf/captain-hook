@@ -78,10 +78,10 @@ def _language_markers(root: Path) -> tuple[str, ...]:
     return tuple(sorted(manager.detect_languages(root)))
 
 
-def _claude_stats(root: Path) -> tuple[plugins.StatRecord, ...]:
-    # The stat tuple whose change means a plugin was installed, enabled, or disabled — discovery then
+def _claude_stats(root: Path) -> tuple[plugins.FingerprintRecord, ...]:
+    # The fingerprint whose change means a plugin was installed, enabled, or disabled — discovery then
     # re-runs the CLI and rewrites the roster snapshot the next fingerprint reads.
-    return plugins.stat_records(root)
+    return plugins.fingerprint(root)
 
 
 def _plugin_trees(root: Path) -> tuple[PluginTree, ...]:
