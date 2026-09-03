@@ -29,7 +29,9 @@ RUNNER_SHA_linux_amd64="e33d95055002e1ebff80db5bb175e60ee0be83f031778a659e29ab3f
 RUNNER_SHA_linux_arm64="7a1fff9270843f66df1a41edccb5d7f1c61e94da024d501634c2f888fa7d2929"
 # ------------------------------------------------------------------------------
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# ${0%/*}, not dirname: skips an exec an endpoint-security agent can serialize fleet-wide.
+case "$0" in */*) d=${0%/*} ;; *) d=. ;; esac
+ROOT="$(cd "$d/.." && pwd)"
 DESCRIPTOR="$ROOT/bin/capt-hook.binrun"
 # binrun execs the cached artifact out of ~/.daemonkit/cache/<xx>/<digest>/, so the
 # exec'd binary cannot derive the plugin root from its own path. Export it: a tool
