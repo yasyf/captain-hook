@@ -6,6 +6,192 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.24.0] - 2026-09-02
+
+### Added
+
+- **`CAPT_HOOK_MAX_PARALLEL` overrides the dispatch ceiling.** The demand-scaled
+  budget below is clamped to a ceiling of `maxLiveWorkers` (64); this variable
+  replaces that ceiling. An unparseable or non-positive value is fatal at daemon
+  startup — `parallelCeiling` returns `(int, error)`, `newWorkerManager` returns
+  it, and `server.go` surfaces it — so a typo fails loudly instead of silently
+  halving throughput. Unset or blank is still the default.
+
+### Changed
+
+- **The dispatch budget scales with live sessions instead of sitting at 16.**
+  `internal/hookd/scheduler.go` admitted dispatches through a fixed
+  `chan struct{}` of 16. A lane gate already caps one session at one executing
+  dispatch, so any global limit below the live session count made unrelated
+  sessions queue behind each other for nothing: on a busy machine a warm hook
+  invocation measured 8–17s wall for about 0.06s of CPU, blocking rather than
+  computing. The semaphore is now a pool with an explicit FIFO waiter queue
+  whose limit is re-evaluated on every admission, so the width changes while
+  callers are queued. The limit tracks the live sync lane count clamped to
+  [16, `maxLiveWorkers` (64)]: 16 is the old value, so a quiet machine behaves
+  as before; 64 is the worker cache cap, past which no width reaches another
+  interpreter. The same invocation on the same machine now takes 1.16–1.32s.
+  Daemon-side scheduling only; the wire protocol is untouched.
+
+- **Background dispatches have their own pool and their own lane.** They shared
+  the 16 slots and the per-session lane with blocking dispatches, so background
+  work took slots the blocking lane needed, and a session's blocking hook could
+  serialize behind its own background one. `asyncParallelDispatch = 4` gives
+  them a separate budget, and the async flag joins the lane key. `Async` was
+  already on the wire.
+
+### Fixed
+
+- **A machine out of fork capacity no longer respawns `claude plugin list` on
+  every dispatch.** `enabled_plugins` in `captain_hook/packs/plugins.py` cached
+  nothing on a roster failure: the spawn failed with EAGAIN, nothing was
+  written, and the next dispatch spawned it again — a self-feeding loop, with
+  813 `PluginListError` and 167 `BlockingIOError: [Errno 35]` in one daemon
+  log. The snapshot is also invalidated by machine-wide files, so one write to
+  `installed_plugins.json` invalidated every cached root snapshot at once and
+  every session spawned the CLI together. Four pieces. A `RosterFailure`
+  negative cache re-raises for `FAILURE_TTL` (15s), bounded both by the
+  watched-file stat tuple, so a fixed roster is picked up at once, and by the
+  timer; an empty roster is still cached as a `PluginSnapshot`, never as a
+  failure. `roster_gate()` admits at most `GATE_WIDTH` (4) concurrent spawns
+  through per-slot `flock`s nested inside the existing per-root lock, so a
+  machine-wide invalidation staggers rather than stampedes; the kernel releases
+  an `flock` when its holder dies, so a crashed session cannot wedge a slot,
+  and past `GATE_TIMEOUT_SECONDS` (10) a waiter overtakes the gate and spawns
+  ungated rather than raising. `RosterUnavailable` is raised only where the
+  CLI could not run at all (`TimeoutExpired`, `OSError`, EAGAIN) and records a
+  machine-wide `RosterOutage` that queued waiters see on release, so a
+  fork-exhausted machine costs one spawn per TTL instead of one per root;
+  every other `PluginListError` (nonzero exit, bad JSON, corrupt shape) stays
+  per-root. Enablement is never shared across roots: a single machine-wide
+  roster snapshot was tried and rejected on evidence, because the `enabled`
+  flag varies by cwd and drifted 120 → 124 between two back-to-back CLI runs
+  from the same root with `installed_plugins.json` unchanged — concurrent
+  sessions rewrite their own `settings.local.json`. One blast radius grew: a
+  machine-wide outage suppresses plugin packs for every root for up to 15s,
+  where `cli.py` already degrades to `[]` with the fault recorded rather than
+  failing the session.
+
+- **A session whose workspace was reaped before it first needed a worker gets
+  one.** Fourth and last fix for the deleted-workspace condition 12.23.2
+  through 12.23.4 chased. `workerCmd` in `internal/hookd/manager.go` spawned
+  the Python worker with `Dir: key.root`; when that root no longer exists the
+  chdir fails, and Go reports the failure as `ENOENT` naming the executable,
+  so the operator saw `posix_spawn .../bin/python: no such file or directory`
+  for an interpreter that exists and runs. It stayed hidden through the
+  earlier fixes because workers are pooled per root: one spawned while the
+  root existed kept serving after the deletion, which is why the outage
+  presented as a crash deep in `worker_log_key` rather than a spawn failure.
+  `workerDir` returns the root when it is an existing directory and
+  `os.TempDir()` otherwise. An empty directory detects the same languages a
+  deleted one would, and `-P` still keeps the Dir off `sys.path`.
+  `capt-hookd serve` still treats a live pid in `daemon.records` as proof the
+  daemon is serving, with no check that the socket exists.
+
+## [12.23.4] - 2026-09-02
+
+### Fixed
+
+- **A hook fired from a deleted workspace no longer walks the whole
+  filesystem.** 12.23.3 made `_cwd()` return `/` when `os.getcwd()` raised, and
+  with neither `CLAUDE_PROJECT_DIR` nor `FACTORY_PROJECT_DIR` set `--root` is
+  spelled from the same value, so `packs/manager.detect_languages` walked the
+  machine from `/`. On macOS that walk reaches the synthetic `/.resolve`, which
+  stats with `EINVAL` rather than a missing-file error, and `Path.is_file`
+  propagated it: `OSError: [Errno 22] Invalid argument: '/.resolve/.gitignore'`.
+  `_cwd()` now falls back to `PWD` before the filesystem root — the shell still
+  carries the path after the directory is unlinked, so a root that does not
+  exist walks to nothing — and `/` remains the last resort when `PWD` is unset
+  too. A real Claude Code session always sets `CLAUDE_PROJECT_DIR`; a probe
+  that deliberately unset it found the walk, and no user hit it.
+
+- **`gitignore_lines` returns `[]` on any `OSError`, not only an absent file.**
+  Any walk root can contain a path that stats with something other than
+  `ENOENT`, and one such path should not end a dispatch.
+
+## [12.23.3] - 2026-09-02
+
+### Fixed
+
+- **A hook fired from a deleted workspace is spelled instead of failing before
+  dispatch.** Verifying 12.23.2 on the machine with a real dispatch from a
+  deleted directory surfaced the same condition one layer up, in the client
+  shim. `capt_hook_client/client.py` read `os.getcwd()` to spell `--cwd`, and
+  `--root` too when neither `CLAUDE_PROJECT_DIR` nor `FACTORY_PROJECT_DIR` is
+  set, so every later hook from a session whose workspace Orca had deleted died
+  with `FileNotFoundError` at `client.py:27`. The new `_cwd()` returns
+  `os.getcwd()`, or the filesystem root once that directory is gone. The blast
+  radius is why this is its own release rather than part of 12.23.2: the worker
+  crash took the host's socket down for every session on the machine, where
+  this failed only the one invocation that had no cwd — with 12.23.2 deployed,
+  `daemon.sock` survived such a dispatch. `--root` precedence is unchanged: an
+  explicit `--root`, then `CLAUDE_PROJECT_DIR`, then `FACTORY_PROJECT_DIR`,
+  then the cwd.
+
+## [12.23.2] - 2026-09-02
+
+### Fixed
+
+- **A session whose workspace was deleted under it no longer takes the host
+  down.** Every prompt on a machine was failing its Stop hook with
+  `daemon unavailable`: `capt-hookd` was alive but its socket was gone,
+  `capt-hookd serve` refused to start a replacement because the pids in
+  `daemon.records` were running, and launchd did not own the process, so only
+  killing the process group and kickstarting restored it. The daemon log held
+  one traceback on repeat, from dispatches under an `~/.orca/workspaces/…` root
+  that no longer existed. `worker_log_key` in `captain_hook/worker/__main__.py`
+  resolved the root through `os.path.realpath(os.getcwd())`, which raises
+  `FileNotFoundError` once the process's cwd has been deleted, and the call
+  sits in `main()` before `WorkerService` starts — so every dispatch from such
+  a session killed its worker at startup, and the crash-looping workers took
+  the socket with them. The per-root key stays (loguru rotation is
+  per-process, and same-build workers sharing one file strand each other's
+  handles on the unlinked inode); when the cwd is unresolvable the key derives
+  from the pid instead. Orca reaps workspace directories under sessions that
+  are still alive and firing hooks, so the worker tolerates the condition
+  rather than crashing.
+
+## [12.23.1] - 2026-09-02
+
+### Changed
+
+- **`authoring-hooks` routes bash-command guards to `Runs`, not a regex.** The
+  primitive table sent every bash guard to `block_command`, whose first
+  positional argument is a pattern, and pitfall 5 presupposed a regex for
+  command rules while offering file rules a structural alternative; `Runs`
+  appeared once, in a reference table off the decision path. The table now
+  names `hook(..., only_if=[Tool("Bash"), Runs(...)], block=True)`, with
+  `block_command` reserved for text no argv prefix names (a flag's value, a
+  substring), and the pitfall explains that `Runs("git", "stash")` compares
+  exact tokens against the argv prefix of every parsed command, so
+  `echo git stash` and a heredoc body never fire.
+
+### Fixed
+
+- **The `general` pack's prose guards fire on an unpinned spawn or stage, not
+  only a wrong pin.** Both were built on a premise the routing doctrine no
+  longer holds: that a delegated lane naming no model inherits the session
+  model, fable. A subagent or workflow stage with no `model` runs opus whatever
+  the root runs, so a missing pin misroutes prose exactly as an opus pin does,
+  and `prose_spawn_gate` (requiring `ToolInput("model", haiku|sonnet|opus)`)
+  and `prose_workflow_nudge` (requiring `WorkflowScript(model=…)`) let it
+  through silently. Worse, the gate's own context told the judge the opposite:
+  the unpinned line read `(none — inherits the session model, fable)`, and the
+  shared workflow header fragment said an unquoted stage was already correctly
+  routed. The gate now fires on every `Agent`/`Task` spawn behind the same
+  `ProseSpawn` prefilter, with `skip_if` on `ToolInput("model", fable)`; the
+  nudge drops the model condition and lets the judge decide per stage, with
+  deliberately no per-script fable skip, since one pinned stage would mask an
+  unpinned prose stage elsewhere in the script. `ProseSpawn` overrides a new
+  `DelegatedSpawn.unpinned_note` so the context reads
+  `(none — an unpinned subagent runs opus; subagents never inherit fable)`; the
+  default is unchanged for the other spawn hooks.
+  `fragments/workflow_script_header.md`, the four "inherits fable"
+  parentheticals in `review_routing_workflow_nudge.md`, and the
+  `WorkflowScriptSource` header lead in `contexts.py` say the same.
+  `implementation_spawn_nudge` and `review_routing_spawn_nudge` still describe
+  an unpinned spawn as inheriting fable through the unchanged default.
+
 ## [12.23.0] - 2026-09-02
 
 ### Changed
