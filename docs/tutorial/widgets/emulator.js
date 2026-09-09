@@ -1,4 +1,4 @@
-// capt-hook-widget src-sha256: e00147c54ca6898ecf9d08fab2d6bdd1176cdba49d8711125402b12e91def85d
+// capt-hook-widget src-sha256: 38fa85efb636f81ea6deff89763a9dd7e9e1583539af806f3c55a4dc293483d7
 
 // autocomplete.ts
 var counter = 0;
@@ -8,6 +8,7 @@ function createCombobox(opts) {
   const input = el("input", "ch-widget-input");
   input.type = "text";
   input.spellcheck = false;
+  input.readOnly = opts.readOnly ?? false;
   input.placeholder = opts.placeholder;
   input.setAttribute("role", "combobox");
   input.setAttribute("aria-label", opts.ariaLabel);
@@ -45,7 +46,7 @@ function createCombobox(opts) {
     if (active >= 0) listbox.children[active]?.scrollIntoView({ block: "nearest" });
   };
   const paint = (query) => {
-    const needle = query.trim().toLowerCase();
+    const needle = input.readOnly ? "" : query.trim().toLowerCase();
     filtered = needle ? opts.items.filter((it) => it.label.toLowerCase().includes(needle)) : opts.items.slice();
     listbox.textContent = "";
     filtered.forEach((it, i) => {
@@ -108,14 +109,239 @@ function createCombobox(opts) {
   input.addEventListener("blur", () => setOpen(false));
   toggle.addEventListener("mousedown", (e) => e.preventDefault());
   toggle.addEventListener("click", () => {
-    open ? setOpen(false) : paint(input.value);
+    const wasOpen = open;
     input.focus();
+    wasOpen ? setOpen(false) : paint("");
   });
   root.append(input, toggle, listbox);
   return { root, input, setValue: (text) => input.value = text };
 }
 
+// specs.ts
+function relativePath(path, repoRoot) {
+  const prefix = repoRoot ? `${repoRoot}/` : "";
+  return prefix && path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+function absolutePath(path, repoRoot) {
+  return path.startsWith("/") || !repoRoot ? path : `${repoRoot}/${path}`;
+}
+var HONESTY_MESSAGE = "outside the demo subset \u2014 run `capt-hook test` for the real engine";
+var ADVISORY_SEPARATOR = "Additional advisories (not the reason for the deny):";
+var LIVE_NOTE = "Simulated in the browser. Each preset is checked against the real engine in CI.";
+var CANNED_NOTE = "Recorded from the real engine, not evaluated in your browser.";
+var EVENT_FRAMING = {
+  Stop: {
+    pill: "Stop hook",
+    title: "A Stop hook runs when Claude tries to end its turn.",
+    caption: "Runs when Claude says it is done, and decides whether it may stop.",
+    blockedLead: "Claude can't stop yet.",
+    allowedLead: "Claude may stop."
+  }
+};
+var CODE_EDITABLE_NAME = "hooks.py \xB7 editable";
+var CODE_EDITABLE_HINT = "try changing the glob or the message";
+var SESSION_HEADING = "This session so far:";
+var FILE_CHIP_PLACEHOLDER = "add a path, e.g. src/routes/home.tsx";
+var COMMAND_CHIP_PLACEHOLDER = "add a command, e.g. uv run pytest";
+function unmodelledNote(kind) {
+  return `${kind} isn't modelled here; run capt-hook test`;
+}
+var WORLD_NOTE = "This walks a declared virtual filesystem with a faithful port of the real hook \u2014 run `capt-hook test` for the real engine.";
+var WORLD_HONESTY_MESSAGE = "outside the filesystem this demo declares \u2014 run `capt-hook test` for the real engine.";
+var GATE_SCHEMA = {
+  type: "object",
+  properties: { block: { type: "boolean" }, reasoning: { type: "string" } },
+  required: ["block", "reasoning"]
+};
+var LLM_NOTE = "A recorded model verdict \u2014 run it live on-device, nothing leaves your browser.";
+var LLM_RECORDED_BADGE = "recording";
+var LLM_RUN_LIVE_LABEL = "Run it live on-device";
+var LLM_DETECTING = "Checking what this browser can run\u2026";
+var LLM_BUILTIN_READY = "This browser has a built-in model ready \u2014 no download needed.";
+var LLM_RUN_LABEL = "Run the gate";
+var LLM_DOWNLOAD_OFFER = "Running on-device needs a one-time download of {model} ({size}).";
+var LLM_DOWNLOAD_LABEL = "Download & run";
+var LLM_LOADING = "Starting the model\u2026";
+var LLM_DOWNLOADING = "Downloading the model\u2026 {percent}";
+var LLM_GENERATING = "Asking the model\u2026";
+var LLM_VERDICT_BADGE = "model verdict \u2014 nondeterministic, not part of the parity suite";
+var LLM_UNAVAILABLE = "No on-device model lane is available in this browser \u2014 the recorded verdict above is what a real run produced.";
+var LLM_SIZE_UNKNOWN = "unknown size";
+var LLM_USER_PROMPT = "Evaluate this pending action:\n\nTool: {tool}\nCommand: {command}";
+
+// tokenizer.ts
+var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+function detectHonesty(raw) {
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    const n = raw[i + 1];
+    const p = raw[i - 1];
+    if (singleQuoted) {
+      if (c === "'") singleQuoted = false;
+      continue;
+    }
+    if (doubleQuoted) {
+      if (c === "\\") {
+        i++;
+        continue;
+      }
+      if (c === "`") return true;
+      if (c === "$" && (n === "(" || n === "{")) return true;
+      if (c === '"') doubleQuoted = false;
+      continue;
+    }
+    if (c === "'") {
+      singleQuoted = true;
+      continue;
+    }
+    if (c === '"') {
+      doubleQuoted = true;
+      continue;
+    }
+    if (c === "\\") return true;
+    if (c === "`") return true;
+    if (c === "$" && (n === "(" || n === "{")) return true;
+    if (c === "<" && (n === "(" || n === "<")) return true;
+    if (c === ">" && n === "(") return true;
+    if (c === "(") return true;
+    if (c === "{" && (n === " " || n === "	")) return true;
+    if (c === "#" && (i === 0 || p === " " || p === "	")) return true;
+  }
+  return false;
+}
+function splitSegments(raw) {
+  const segments = [];
+  let cur = "";
+  let quote = null;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    const n = raw[i + 1];
+    if (quote) {
+      cur += c;
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      cur += c;
+      continue;
+    }
+    if (c === ";" || c === "\n") {
+      segments.push(cur);
+      cur = "";
+      continue;
+    }
+    if (c === "|" && n === "|") {
+      segments.push(cur);
+      cur = "";
+      i++;
+      continue;
+    }
+    if (c === "|") {
+      segments.push(cur);
+      cur = "";
+      continue;
+    }
+    if (c === "&" && n === "&") {
+      segments.push(cur);
+      cur = "";
+      i++;
+      continue;
+    }
+    if (c === "&") {
+      if (cur.trimEnd().endsWith(">") || n === ">") {
+        cur += c;
+        continue;
+      }
+      segments.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  segments.push(cur);
+  return segments.map((s) => s.trim()).filter((s) => s.length > 0);
+}
+function splitWords(segment) {
+  const words = [];
+  let cur = "";
+  let started = false;
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment[i];
+    if (c === "'") {
+      started = true;
+      i++;
+      while (i < segment.length && segment[i] !== "'") cur += segment[i++];
+      continue;
+    }
+    if (c === '"') {
+      started = true;
+      i++;
+      while (i < segment.length && segment[i] !== '"') {
+        if (segment[i] === "\\" && i + 1 < segment.length) {
+          cur += segment[i + 1];
+          i += 2;
+        } else {
+          cur += segment[i++];
+        }
+      }
+      continue;
+    }
+    if (c === " " || c === "	") {
+      if (started) {
+        words.push(cur);
+        cur = "";
+        started = false;
+      }
+      continue;
+    }
+    started = true;
+    cur += c;
+  }
+  if (started) words.push(cur);
+  return words;
+}
+function redirectKind(word) {
+  if (/^&?\d*(>>|>|<)$/.test(word)) return "operator";
+  if (/^&?\d*(>>|>|<)./.test(word)) return "attached";
+  return null;
+}
+function parseCommand(segment) {
+  const words = splitWords(segment);
+  const kept = [];
+  for (let i = 0; i < words.length; i++) {
+    const kind = redirectKind(words[i]);
+    if (kind === "operator") {
+      i++;
+      continue;
+    }
+    if (kind === "attached") continue;
+    kept.push(words[i]);
+  }
+  let start = 0;
+  while (start < kept.length && ASSIGNMENT.test(kept[start])) start++;
+  const argv = kept.slice(start);
+  if (argv.length === 0) return null;
+  return { argv, text: argv.join(" ") };
+}
+function tokenize(raw) {
+  const commands = [];
+  for (const segment of splitSegments(raw)) {
+    const command = parseCommand(segment);
+    if (command) commands.push(command);
+  }
+  return { raw, commands };
+}
+function parseRanCommand(raw) {
+  if (detectHonesty(raw)) return null;
+  const { commands } = tokenize(raw);
+  return commands.length === 1 ? commands[0].argv : null;
+}
+
 // controls.ts
+var COMPOSITE_KINDS = /* @__PURE__ */ new Set(["Not", "Or", "And"]);
 function walk(cond, visit) {
   visit(cond);
   switch (cond.kind) {
@@ -130,61 +356,76 @@ function walk(cond, visit) {
       return;
   }
 }
-function deriveControls(hooks) {
+function deriveControls(hooks, options) {
   let touched = false;
+  let ran = false;
   let waiting = false;
   const skills = [];
+  const unmodelled = [];
   for (const hook of hooks) {
     for (const cond of [...hook.only_if, ...hook.skip_if]) {
       walk(cond, (c) => {
         if (c.kind === "TouchedFile") touched = true;
-        else if (c.kind === "Waiting") waiting = true;
+        else if (c.kind === "RanCommand") ran = true;
+        else if (c.kind === "Waiting") waiting = waiting || !c.implicit;
         else if (c.kind === "UsedSkill") c.names.forEach((n) => skills.includes(n) || skills.push(n));
+        else if (!COMPOSITE_KINDS.has(c.kind) && !unmodelled.includes(c.kind)) unmodelled.push(c.kind);
       });
     }
   }
+  if (options.lite) {
+    return [
+      ...touched ? [{ kind: "touchedFiles", addable: false }] : [],
+      ...skills.map((name) => ({ kind: "usedSkill", name }))
+    ];
+  }
   return [
-    ...touched ? [{ kind: "touchedFiles" }] : [],
+    ...touched ? [{ kind: "touchedFiles", addable: true }] : [],
+    ...ran ? [{ kind: "ranCommands" }] : [],
     ...skills.map((name) => ({ kind: "usedSkill", name })),
-    ...waiting ? [{ kind: "waiting" }] : []
+    ...waiting ? [{ kind: "waiting" }] : [],
+    ...options.commandMode ? [] : unmodelled.map((name) => ({ kind: "unmodelled", name }))
   ];
 }
-function basename(path) {
-  return path.split("/").pop() || path;
-}
-function fileChips(session, onChange) {
+function chipControl(options, onChange) {
   const row = el("div", "ch-widget-control ch-widget-control--files");
-  row.append(el("span", "ch-widget-control-label", "touched files"));
+  row.append(el("span", "ch-widget-control-label", options.label));
   const chips = el("div", "ch-widget-filechips");
   const add = el("input", "ch-widget-filechip-add");
+  const honesty2 = el("span", "ch-widget-chip-honesty", HONESTY_MESSAGE);
+  honesty2.hidden = true;
   const render = () => {
     chips.textContent = "";
-    for (const path of session.touchedFiles ?? []) {
+    options.read().forEach((value, index) => {
       const chip = el("span", "ch-widget-filechip");
-      chip.title = path;
-      chip.append(el("span", "ch-widget-filechip-name", basename(path)));
+      chip.title = options.title(value);
+      chip.append(el("span", "ch-widget-filechip-name", options.display(value)));
       const remove = el("button", "ch-widget-filechip-remove", "\xD7");
       remove.type = "button";
-      remove.setAttribute("aria-label", `remove ${path}`);
+      remove.setAttribute("aria-label", `remove ${options.display(value)}`);
       remove.addEventListener("click", () => {
-        session.touchedFiles = (session.touchedFiles ?? []).filter((p) => p !== path);
+        options.write(options.read().filter((_, i) => i !== index));
         render();
         onChange();
       });
       chip.append(remove);
       chips.append(chip);
-    }
-    chips.append(add);
+    });
+    if (options.addable) chips.append(add);
+    chips.append(honesty2);
   };
   add.type = "text";
-  add.placeholder = "add path\u2026";
+  add.placeholder = options.placeholder;
   add.spellcheck = false;
-  add.setAttribute("aria-label", "add a touched file path");
+  add.setAttribute("aria-label", options.placeholder);
   add.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
-    const path = add.value.trim();
-    if (!path) return;
-    session.touchedFiles = [...session.touchedFiles ?? [], path];
+    const text = add.value.trim();
+    if (!text) return;
+    const value = options.parse(text);
+    honesty2.hidden = value !== null;
+    if (value === null) return;
+    options.write([...options.read(), value]);
     add.value = "";
     render();
     onChange();
@@ -193,6 +434,36 @@ function fileChips(session, onChange) {
   render();
   row.append(chips);
   return row;
+}
+function fileChips(session, addable, onChange) {
+  return chipControl(
+    {
+      label: "touched files",
+      placeholder: FILE_CHIP_PLACEHOLDER,
+      addable,
+      read: () => session.touchedFiles ?? [],
+      write: (values) => session.touchedFiles = values,
+      display: (path) => relativePath(path, session.repoRoot),
+      title: (path) => path,
+      parse: (text) => absolutePath(text, session.repoRoot)
+    },
+    onChange
+  );
+}
+function commandChips(session, onChange) {
+  return chipControl(
+    {
+      label: "ran commands",
+      placeholder: COMMAND_CHIP_PLACEHOLDER,
+      addable: true,
+      read: () => session.ranCommands ?? [],
+      write: (values) => session.ranCommands = values,
+      display: (argv) => argv.join(" "),
+      title: (argv) => argv.join(" "),
+      parse: parseRanCommand
+    },
+    onChange
+  );
 }
 function skillCheckbox(name, session, onChange) {
   const label = el("label", "ch-widget-control ch-widget-control--check");
@@ -223,10 +494,14 @@ function waitingToggle(session, onChange) {
 function renderControls(controls, session, onChange) {
   if (controls.length === 0) return null;
   const panel = el("div", "ch-widget-controls");
+  panel.append(el("p", "ch-widget-controls-heading", SESSION_HEADING));
   for (const control of controls) {
     switch (control.kind) {
       case "touchedFiles":
-        panel.append(fileChips(session, onChange));
+        panel.append(fileChips(session, control.addable, onChange));
+        break;
+      case "ranCommands":
+        panel.append(commandChips(session, onChange));
         break;
       case "usedSkill":
         panel.append(skillCheckbox(control.name, session, onChange));
@@ -234,44 +509,19 @@ function renderControls(controls, session, onChange) {
       case "waiting":
         panel.append(waitingToggle(session, onChange));
         break;
+      case "unmodelled":
+        panel.append(el("p", "ch-widget-unmodelled", unmodelledNote(control.name)));
+        break;
     }
   }
   return panel;
 }
 
-// specs.ts
-var HONESTY_MESSAGE = "outside the demo subset \u2014 run `capt-hook test` for the real engine";
-var ADVISORY_SEPARATOR = "Additional advisories (not the reason for the deny):";
-var LIVE_NOTE = "This runs a browser model of the demo subset \u2014 run `capt-hook test` for the real engine.";
-var CANNED_NOTE = "Recorded from the real engine, not evaluated in your browser.";
-var WORLD_NOTE = "This walks a declared virtual filesystem with a faithful port of the real hook \u2014 run `capt-hook test` for the real engine.";
-var WORLD_HONESTY_MESSAGE = "outside the filesystem this demo declares \u2014 run `capt-hook test` for the real engine.";
-var GATE_SCHEMA = {
-  type: "object",
-  properties: { block: { type: "boolean" }, reasoning: { type: "string" } },
-  required: ["block", "reasoning"]
-};
-var LLM_NOTE = "A recorded model verdict \u2014 run it live on-device, nothing leaves your browser.";
-var LLM_RECORDED_BADGE = "recording";
-var LLM_RUN_LIVE_LABEL = "Run it live on-device";
-var LLM_DETECTING = "Checking what this browser can run\u2026";
-var LLM_BUILTIN_READY = "This browser has a built-in model ready \u2014 no download needed.";
-var LLM_RUN_LABEL = "Run the gate";
-var LLM_DOWNLOAD_OFFER = "Running on-device needs a one-time download of {model} ({size}).";
-var LLM_DOWNLOAD_LABEL = "Download & run";
-var LLM_LOADING = "Starting the model\u2026";
-var LLM_DOWNLOADING = "Downloading the model\u2026 {percent}";
-var LLM_GENERATING = "Asking the model\u2026";
-var LLM_VERDICT_BADGE = "model verdict \u2014 nondeterministic, not part of the parity suite";
-var LLM_UNAVAILABLE = "No on-device model lane is available in this browser \u2014 the recorded verdict above is what a real run produced.";
-var LLM_SIZE_UNKNOWN = "unknown size";
-var LLM_USER_PROMPT = "Evaluate this pending action:\n\nTool: {tool}\nCommand: {command}";
-
 // rm_world.ts
 var GLOB_LIMIT = 10;
 var LEADING_WRAPPERS = /* @__PURE__ */ new Set(["command", "doas", "env", "exec", "nice", "nohup", "sudo", "timeout", "xargs"]);
 var SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "dash", "zsh", "ksh", "ash", "fish", "csh", "tcsh"]);
-var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+var ASSIGNMENT2 = /^[A-Za-z_][A-Za-z0-9_]*=/;
 var SAFE_WORD = /^[^\s'"\\$`;&|<>(){}#]+$/;
 var TEMP_ROOTS = ["/tmp", "/private/tmp", "/var/folders", "/dev/shm"];
 var SCRATCH_DIR_NAMES = /* @__PURE__ */ new Set(["tmp", "temp", "scratch", "scratchpad", "scratchpads"]);
@@ -483,7 +733,7 @@ function checkTarget(vfs, target, rewritable) {
   }
   return recovery ?? { kind: "allow" };
 }
-function splitSegments(raw) {
+function splitSegments2(raw) {
   const out = [];
   let startIdx = 0;
   let quote = null;
@@ -519,7 +769,7 @@ function splitSegments(raw) {
   push(startIdx, raw.length);
   return out;
 }
-function splitWords(segment) {
+function splitWords2(segment) {
   const words = [];
   let cur = "";
   let started = false;
@@ -560,8 +810,8 @@ function headBasename(raw) {
 function classifyRm(words) {
   let i = 0;
   let wrapped = false;
-  while (i < words.length && (ASSIGNMENT.test(words[i]) || LEADING_WRAPPERS.has(headBasename(words[i])))) {
-    if (!ASSIGNMENT.test(words[i])) wrapped = true;
+  while (i < words.length && (ASSIGNMENT2.test(words[i]) || LEADING_WRAPPERS.has(headBasename(words[i])))) {
+    if (!ASSIGNMENT2.test(words[i])) wrapped = true;
     i++;
   }
   if (i >= words.length) return { kind: "none" };
@@ -632,8 +882,8 @@ function evaluateRmWorld(world, command) {
   const vfs = new Vfs(world);
   if (hasGrouping(command)) return honesty();
   const rmCalls = [];
-  for (const segment of splitSegments(command)) {
-    const parsed = classifyRm(splitWords(segment.text));
+  for (const segment of splitSegments2(command)) {
+    const parsed = classifyRm(splitWords2(segment.text));
     if (parsed.kind === "honesty") return honesty();
     if (parsed.kind === "rm") rmCalls.push({ segment, args: parsed.args });
   }
@@ -709,13 +959,34 @@ function selectChips(cases) {
 }
 function header(event, note) {
   const bar = el("header", "ch-widget-header");
-  bar.append(el("span", "ch-widget-event", event), el("span", "ch-widget-mode-note", note));
+  const framing = EVENT_FRAMING[event];
+  const pill = el("span", "ch-widget-event", framing ? framing.pill : event);
+  if (framing) pill.title = framing.title;
+  bar.append(pill);
+  if (framing) bar.append(el("span", "ch-widget-caption", framing.caption));
+  if (note) bar.append(el("span", "ch-widget-mode-note", note));
   return bar;
 }
-function renderVerdict(panel, verdict) {
+function reasonClause(reason) {
+  if (reason.skipIfMatched !== null) return `skip_if matched: ${reason.skipIfMatched}.`;
+  if (reason.onlyIfUnmatched !== null) return `only_if did not match: ${reason.onlyIfUnmatched}.`;
+  return [
+    ...reason.onlyIfMatched.length > 0 ? [`only_if matched: ${reason.onlyIfMatched.join(", ")}.`] : [],
+    ...reason.skipIfDeclared ? ["Nothing in skip_if applied."] : []
+  ].join(" ");
+}
+function reasonLines(verdict, framing) {
+  const reasons = verdict.reasons ?? [];
+  const lead = verdict.action === "block" ? framing.blockedLead : framing.allowedLead;
+  if (reasons.length === 0) return [];
+  if (reasons.length === 1) return [[lead, reasonClause(reasons[0])].filter(Boolean).join(" ")];
+  return [lead, ...reasons.map((r) => [r.outcome, reasonClause(r)].filter(Boolean).join(": "))];
+}
+function renderVerdict(panel, verdict, framing) {
   panel.textContent = "";
   panel.className = `ch-widget-verdict ch-widget-verdict--${verdict.action}`;
   panel.appendChild(el("span", "ch-widget-badge", verdict.action));
+  if (framing) for (const line of reasonLines(verdict, framing)) panel.appendChild(el("p", "ch-widget-reason", line));
   if (verdict.message) panel.appendChild(el("p", "ch-widget-message", verdict.message));
   if (verdict.rewritten) panel.appendChild(el("code", "ch-widget-rewrite", verdict.rewritten));
 }
@@ -738,13 +1009,14 @@ function importModule(relative) {
   return import(new URL(relative, document.baseURI).href);
 }
 var LiveWidget = class {
-  constructor(stage, data, event, evaluate2, editorJs, compilerJs) {
+  constructor(stage, data, event, evaluate2, editorJs, compilerJs, lite) {
     this.stage = stage;
     this.data = data;
     this.event = event;
     this.evaluate = evaluate2;
     this.editorJs = editorJs;
     this.compilerJs = compilerJs;
+    this.lite = lite;
     this.hooks = data.hooks;
     this.commandMode = data.cases.some((c) => c.command != null);
   }
@@ -756,27 +1028,34 @@ var LiveWidget = class {
   editorLoad = null;
   compiler = null;
   recompileTimer;
+  combobox = null;
   panel = el("div", "ch-widget-verdict");
   controlsHost = el("div", "ch-widget-controls-host");
   commandMode;
   mount() {
-    this.stage.append(header(this.event, LIVE_NOTE));
-    if (this.data.source != null) this.stage.append(this.codePanel(this.data.source));
-    const combobox = createCombobox({
-      items: this.data.cases.map((c, index) => ({ label: caseLabel(c), index })),
-      placeholder: this.commandMode ? "type a command\u2026" : "pick a scenario\u2026",
-      ariaLabel: this.commandMode ? "command to evaluate" : "scenario to evaluate",
-      onSelect: (index) => this.applyCase(index, combobox.setValue),
-      onType: this.commandMode ? (text) => this.applyCommand(text) : void 0
-    });
+    this.stage.append(header(this.event));
+    if (this.data.source != null) {
+      this.stage.append(this.lite ? readOnlyCode(this.data.source, "hooks.py") : this.codePanel(this.data.source));
+    }
+    if (!this.lite) {
+      this.combobox = createCombobox({
+        items: this.data.cases.map((c, index) => ({ label: caseLabel(c), index })),
+        placeholder: this.commandMode ? "type a command\u2026" : "pick a scenario\u2026",
+        ariaLabel: this.commandMode ? "command to evaluate" : "scenario to evaluate",
+        readOnly: !this.commandMode,
+        onSelect: (index) => this.applyCase(index),
+        onType: this.commandMode ? (text) => this.applyCommand(text) : void 0
+      });
+      this.stage.append(this.combobox.root);
+    }
     this.stage.append(
-      combobox.root,
-      chipRow(this.data.cases, (index) => this.applyCase(index, combobox.setValue)),
+      chipRow(this.data.cases, (index) => this.applyCase(index)),
       this.controlsHost,
-      this.panel
+      this.panel,
+      el("p", "ch-widget-note", LIVE_NOTE)
     );
     this.renderControlsPanel();
-    if (this.data.cases.length > 0) this.applyCase(0, combobox.setValue);
+    if (this.data.cases.length > 0) this.applyCase(0);
   }
   codePanel(source) {
     const wrap = el("div", "ch-widget-code");
@@ -789,7 +1068,11 @@ var LiveWidget = class {
       reset.disabled = true;
     });
     const bar = el("div", "ch-widget-code-bar");
-    bar.append(el("span", "ch-widget-code-name", "hooks.py"), reset);
+    bar.append(
+      el("span", "ch-widget-code-name", CODE_EDITABLE_NAME),
+      el("span", "ch-widget-code-hint", CODE_EDITABLE_HINT),
+      reset
+    );
     const body = el("div", "ch-widget-code-body");
     const pre = el("pre", "ch-widget-code-pre", source);
     body.append(pre);
@@ -842,13 +1125,13 @@ var LiveWidget = class {
     this.renderControlsPanel();
     this.evaluateNow();
   }
-  applyCase(index, setValue) {
+  applyCase(index) {
     const c = this.data.cases[index];
     if (!c) return;
     const { label: _label, featured: _featured, session, ...input } = c;
     this.current = input;
     this.session = structuredClone(session ?? {});
-    setValue(this.commandMode ? c.command ?? "" : caseLabel(c));
+    this.combobox?.setValue(this.commandMode ? c.command ?? "" : caseLabel(c));
     this.renderControlsPanel();
     this.evaluateNow();
   }
@@ -858,7 +1141,8 @@ var LiveWidget = class {
   }
   renderControlsPanel() {
     this.controlsHost.textContent = "";
-    const panel = renderControls(deriveControls(this.hooks), this.session, () => this.evaluateNow());
+    const controls = deriveControls(this.hooks, { commandMode: this.commandMode, lite: this.lite });
+    const panel = renderControls(controls, this.session, () => this.evaluateNow());
     if (panel) this.controlsHost.append(panel);
   }
   evaluateNow() {
@@ -866,7 +1150,8 @@ var LiveWidget = class {
       renderCompileError(this.panel, this.compileError);
       return;
     }
-    renderVerdict(this.panel, this.evaluate(this.hooks, { ...this.current, event: this.event, session: this.session }));
+    const input = { ...this.current, event: this.event, session: this.session };
+    renderVerdict(this.panel, this.evaluate(this.hooks, input), EVENT_FRAMING[this.event]);
   }
 };
 function renderCanned(stage, data, event) {
@@ -1082,176 +1367,11 @@ function mountAll(evaluate2) {
         data.cases[0]?.event ?? "PreToolUse",
         evaluate2,
         root.dataset.editorJs ?? "editor.js",
-        root.dataset.compilerJs ?? "compiler.js"
+        root.dataset.compilerJs ?? "compiler.js",
+        root.dataset.variant === "lite"
       ).mount();
     }
   }
-}
-
-// tokenizer.ts
-var ASSIGNMENT2 = /^[A-Za-z_][A-Za-z0-9_]*=/;
-function detectHonesty(raw) {
-  let singleQuoted = false;
-  let doubleQuoted = false;
-  for (let i = 0; i < raw.length; i++) {
-    const c = raw[i];
-    const n = raw[i + 1];
-    const p = raw[i - 1];
-    if (singleQuoted) {
-      if (c === "'") singleQuoted = false;
-      continue;
-    }
-    if (doubleQuoted) {
-      if (c === "\\") {
-        i++;
-        continue;
-      }
-      if (c === "`") return true;
-      if (c === "$" && (n === "(" || n === "{")) return true;
-      if (c === '"') doubleQuoted = false;
-      continue;
-    }
-    if (c === "'") {
-      singleQuoted = true;
-      continue;
-    }
-    if (c === '"') {
-      doubleQuoted = true;
-      continue;
-    }
-    if (c === "\\") return true;
-    if (c === "`") return true;
-    if (c === "$" && (n === "(" || n === "{")) return true;
-    if (c === "<" && (n === "(" || n === "<")) return true;
-    if (c === ">" && n === "(") return true;
-    if (c === "(") return true;
-    if (c === "{" && (n === " " || n === "	")) return true;
-    if (c === "#" && (i === 0 || p === " " || p === "	")) return true;
-  }
-  return false;
-}
-function splitSegments2(raw) {
-  const segments = [];
-  let cur = "";
-  let quote = null;
-  for (let i = 0; i < raw.length; i++) {
-    const c = raw[i];
-    const n = raw[i + 1];
-    if (quote) {
-      cur += c;
-      if (c === quote) quote = null;
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      quote = c;
-      cur += c;
-      continue;
-    }
-    if (c === ";" || c === "\n") {
-      segments.push(cur);
-      cur = "";
-      continue;
-    }
-    if (c === "|" && n === "|") {
-      segments.push(cur);
-      cur = "";
-      i++;
-      continue;
-    }
-    if (c === "|") {
-      segments.push(cur);
-      cur = "";
-      continue;
-    }
-    if (c === "&" && n === "&") {
-      segments.push(cur);
-      cur = "";
-      i++;
-      continue;
-    }
-    if (c === "&") {
-      if (cur.trimEnd().endsWith(">") || n === ">") {
-        cur += c;
-        continue;
-      }
-      segments.push(cur);
-      cur = "";
-      continue;
-    }
-    cur += c;
-  }
-  segments.push(cur);
-  return segments.map((s) => s.trim()).filter((s) => s.length > 0);
-}
-function splitWords2(segment) {
-  const words = [];
-  let cur = "";
-  let started = false;
-  for (let i = 0; i < segment.length; i++) {
-    const c = segment[i];
-    if (c === "'") {
-      started = true;
-      i++;
-      while (i < segment.length && segment[i] !== "'") cur += segment[i++];
-      continue;
-    }
-    if (c === '"') {
-      started = true;
-      i++;
-      while (i < segment.length && segment[i] !== '"') {
-        if (segment[i] === "\\" && i + 1 < segment.length) {
-          cur += segment[i + 1];
-          i += 2;
-        } else {
-          cur += segment[i++];
-        }
-      }
-      continue;
-    }
-    if (c === " " || c === "	") {
-      if (started) {
-        words.push(cur);
-        cur = "";
-        started = false;
-      }
-      continue;
-    }
-    started = true;
-    cur += c;
-  }
-  if (started) words.push(cur);
-  return words;
-}
-function redirectKind(word) {
-  if (/^&?\d*(>>|>|<)$/.test(word)) return "operator";
-  if (/^&?\d*(>>|>|<)./.test(word)) return "attached";
-  return null;
-}
-function parseCommand(segment) {
-  const words = splitWords2(segment);
-  const kept = [];
-  for (let i = 0; i < words.length; i++) {
-    const kind = redirectKind(words[i]);
-    if (kind === "operator") {
-      i++;
-      continue;
-    }
-    if (kind === "attached") continue;
-    kept.push(words[i]);
-  }
-  let start = 0;
-  while (start < kept.length && ASSIGNMENT2.test(kept[start])) start++;
-  const argv = kept.slice(start);
-  if (argv.length === 0) return null;
-  return { argv, text: argv.join(" ") };
-}
-function tokenize(raw) {
-  const commands = [];
-  for (const segment of splitSegments2(raw)) {
-    const command = parseCommand(segment);
-    if (command) commands.push(command);
-  }
-  return { raw, commands };
 }
 
 // emulator.ts
@@ -1354,6 +1474,68 @@ function checkCondition(cond, ev, cl) {
       return cond.conditions.every((sub) => checkCondition(sub, ev, cl));
   }
 }
+function describeMatch(cond, ev) {
+  switch (cond.kind) {
+    case "TouchedFile": {
+      const hits = (ev.session?.touchedFiles ?? []).filter((f) => cond.patterns.some((p) => fnmatch(f, p)));
+      return `TouchedFile on ${hits.map((f) => relativePath(f, ev.session?.repoRoot)).join(", ")}`;
+    }
+    case "UsedSkill":
+      return `UsedSkill ${cond.names.join(", ")}`;
+    case "RanCommand":
+      return `RanCommand ${cond.argv.join(" ")}`;
+    case "Runs":
+      return `Runs ${cond.argv.join(" ")}`;
+    case "Tool":
+      return `Tool ${ev.tool}`;
+    case "Command":
+      return `Command ${cond.pattern}`;
+    case "Content":
+      return `Content ${cond.pattern}`;
+    case "FilePath":
+      return `FilePath ${ev.file}`;
+    default:
+      return cond.kind;
+  }
+}
+function describeUnmatched(cond) {
+  switch (cond.kind) {
+    case "TouchedFile":
+      return `no touched file under ${cond.patterns.join(" or ")}`;
+    case "UsedSkill":
+      return `no ${cond.names.join(" or ")} skill used`;
+    case "RanCommand":
+      return `no ${cond.argv.join(" ")} command run`;
+    case "Waiting":
+      return "not waiting on the user";
+    default:
+      return `no ${cond.kind} match`;
+  }
+}
+function hookReason(hook, ev, cl) {
+  const skipIfDeclared = hook.skip_if.length > 0;
+  const onlyIfMatched = [];
+  for (const c of hook.only_if) {
+    if (!checkCondition(c, ev, cl)) {
+      return {
+        outcome: "did not apply",
+        onlyIfMatched,
+        onlyIfUnmatched: describeUnmatched(c),
+        skipIfMatched: null,
+        skipIfDeclared
+      };
+    }
+    onlyIfMatched.push(describeMatch(c, ev));
+  }
+  const skipped = hook.skip_if.find((c) => checkCondition(c, ev, cl));
+  return {
+    outcome: skipped ? "stood down" : hook.block ? "blocked" : "warned",
+    onlyIfMatched,
+    onlyIfUnmatched: null,
+    skipIfMatched: skipped ? describeMatch(skipped, ev) : null,
+    skipIfDeclared
+  };
+}
 function fire(hook, command) {
   if (hook.rewrite) {
     if (command === null) return null;
@@ -1407,14 +1589,16 @@ function evaluate(hooks, input) {
       return { action: "subset-exceeded", message: HONESTY_MESSAGE, rewritten: null };
     }
     const fired = [];
+    const reasons = [];
     for (const hook of hooks) {
       if (!hook.events.includes(event)) continue;
-      if (!hook.only_if.every((c) => checkCondition(c, ev, cl))) continue;
-      if (hook.skip_if.some((c) => checkCondition(c, ev, cl))) continue;
+      const reason = hookReason(hook, ev, cl);
+      reasons.push(reason);
+      if (reason.onlyIfUnmatched !== null || reason.skipIfMatched !== null) continue;
       const result = fire(hook, command);
       if (result) fired.push(result);
     }
-    return combine(fired);
+    return { ...combine(fired), reasons };
   } catch (e) {
     if (e instanceof SubsetExceeded) return { action: "subset-exceeded", message: HONESTY_MESSAGE, rewritten: null };
     throw e;
@@ -1431,5 +1615,6 @@ export {
   caseLabel,
   evaluate,
   evaluateRmWorld,
+  parseRanCommand,
   selectChips
 };

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+from html import escape
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1].parent / "docs" / "scripts"))
@@ -13,15 +14,15 @@ from widget_compiler import compile_fragment  # noqa: E402
 
 import captain_hook  # noqa: E402
 
-# Expands "<!-- gd-embed-widget: id -->" markers into an emulator widget, mirroring
-# embed_fragments.py's build-dir / source-tree split.
+# Expands "<!-- gd-embed-widget: id [lite] -->" markers into an emulator widget, mirroring
+# embed_fragments.py's build-dir / source-tree split. `lite` is the trimmed homepage variant.
 BUILD_DIR = Path(__file__).resolve().parents[1]
 SOURCE = BUILD_DIR.parent / "docs"
 FRAGMENTS_SRC = SOURCE / "_fragments"
 MATRIX = SOURCE / "tutorial" / "_src" / "matrix.json"
 WIDGETS_DIR = BUILD_DIR / "docs" / "tutorial" / "widgets"
 PACKS = Path(captain_hook.__file__).parent / "builtin_packs"
-MARKER = re.compile(r"<!-- gd-embed-widget: (\w+) -->")
+MARKER = re.compile(r"<!-- gd-embed-widget: (\w+)(?: (lite))? -->")
 
 
 def extract_rubric(source: str) -> str:
@@ -85,19 +86,25 @@ def widget_data(widget: dict) -> dict:
     }
 
 
-def widget_block(widget_id: str, matrix: dict, qmd: Path) -> str:
+def widget_block(widget_id: str, variant: str | None, matrix: dict, qmd: Path) -> str:
     data = widget_data(matrix["widgets"][widget_id])
     payload = json.dumps(data).replace("</", "<\\/")
     editor_js = os.path.relpath(WIDGETS_DIR / "editor.js", qmd.parent)
     compiler_js = os.path.relpath(WIDGETS_DIR / "compiler.js", qmd.parent)
     llm_js = os.path.relpath(WIDGETS_DIR / "llm.js", qmd.parent)
     wllama_wasm = os.path.relpath(WIDGETS_DIR / "wllama" / "wllama.wasm", qmd.parent)
+    variant_attr = f' data-variant="{variant}"' if variant else ""
+    static = (
+        f'\n<pre class="ch-widget-static"><code class="language-python">{escape(source)}</code></pre>'
+        if (source := data.get("source"))
+        else ""
+    )
     return (
         f'<div class="ch-widget" data-widget="{widget_id}" data-mode="{data["mode"]}"'
-        f' data-editor-js="{editor_js}" data-compiler-js="{compiler_js}"'
+        f'{variant_attr} data-editor-js="{editor_js}" data-compiler-js="{compiler_js}"'
         f' data-llm-js="{llm_js}" data-wllama-wasm="{wllama_wasm}">\n'
         f'<script type="application/json" class="ch-widget-data">{payload}</script>\n'
-        f"</div>"
+        f"</div>{static}"
     )
 
 
@@ -112,10 +119,10 @@ def expand(text: str, matrix: dict, qmd: Path) -> str:
             css = os.path.relpath(WIDGETS_DIR / "emulator.css", qmd.parent)
             js = os.path.relpath(WIDGETS_DIR / "emulator.js", qmd.parent)
             parts.append(f'<link rel="stylesheet" href="{css}">')
-            parts.append(widget_block(match.group(1), matrix, qmd))
+            parts.append(widget_block(match.group(1), match.group(2), matrix, qmd))
             parts.append(f'<script type="module" src="{js}"></script>')
         else:
-            parts.append(widget_block(match.group(1), matrix, qmd))
+            parts.append(widget_block(match.group(1), match.group(2), matrix, qmd))
         return "```{=html}\n" + "\n".join(parts) + "\n```"
 
     return MARKER.sub(replace, text)

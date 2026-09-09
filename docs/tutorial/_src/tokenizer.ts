@@ -182,3 +182,11 @@ export function tokenize(raw: string): CommandLine {
   }
   return { raw, commands };
 }
+
+// One session-history entry's argv, quote-aware like Session.has_command's parse. Null when the
+// text leaves the subset: real expansion, or anything other than a single command.
+export function parseRanCommand(raw: string): string[] | null {
+  if (detectHonesty(raw)) return null;
+  const { commands } = tokenize(raw);
+  return commands.length === 1 ? commands[0].argv : null;
+}

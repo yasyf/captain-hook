@@ -1,5 +1,6 @@
 // CI parity runner over the committed browser bundles. `mode:"compile"` drives widgets/compiler.js;
-// otherwise the {hooks, cases} shape drives widgets/emulator.js like the browser does.
+// otherwise the {hooks, cases} shape drives widgets/emulator.js like the browser does. The parity
+// contract is the {action, message, rewritten} verdict, so the renderer-only `reasons` is projected out.
 
 import { fileURLToPath } from "node:url";
 import { evaluate, evaluateRmWorld } from "../widgets/emulator.js";
@@ -21,6 +22,9 @@ if (request.mode === "compile") {
   process.stdout.write(JSON.stringify({ verdict: evaluateRmWorld(request.world, request.input.command) }));
 } else {
   const { hooks, cases } = request;
-  const verdicts = cases.map(({ id, input }) => ({ id, verdict: evaluate(hooks, input) }));
+  const verdicts = cases.map(({ id, input }) => {
+    const { action, message, rewritten } = evaluate(hooks, input);
+    return { id, verdict: { action, message, rewritten } };
+  });
   process.stdout.write(JSON.stringify({ bundle, verdicts }));
 }

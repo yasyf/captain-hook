@@ -1,4 +1,5 @@
-.ch-widget {
+.ch-widget,
+.ch-widget-static {
   --ch-surface: #f6f8fa;
   --ch-border: #d0d7de;
   --ch-text: #1f2328;
@@ -14,6 +15,14 @@
   margin: 1.25rem 0;
   font-size: 0.95rem;
   color: var(--ch-text);
+}
+
+.ch-widget-static {
+  display: none;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
 }
 
 .ch-widget-header {
@@ -36,7 +45,8 @@
   border: 1px solid color-mix(in srgb, var(--ch-accent) 35%, transparent);
 }
 
-.ch-widget-mode-note {
+.ch-widget-mode-note,
+.ch-widget-caption {
   font-size: 0.8rem;
   color: var(--ch-muted);
 }
@@ -60,6 +70,13 @@
 
 .ch-widget-code-name {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--ch-muted);
+}
+
+.ch-widget-code-hint {
+  margin-left: auto;
+  margin-right: 0.6rem;
   font-size: 0.75rem;
   color: var(--ch-muted);
 }
@@ -97,7 +114,7 @@
   font-size: 0.85rem;
   line-height: 1.5;
   color: var(--ch-text);
-  white-space: pre;
+  white-space: pre-wrap;
 }
 
 .ch-widget-combobox {
@@ -215,6 +232,22 @@
   color: var(--ch-accent);
 }
 
+.ch-widget-controls-heading {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ch-text);
+}
+
+.ch-widget-unmodelled {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.8rem;
+  font-style: italic;
+  color: var(--ch-muted);
+}
+
 .ch-widget-control-label {
   font-size: 0.75rem;
   text-transform: uppercase;
@@ -256,6 +289,13 @@
 
 .ch-widget-filechip-remove:hover {
   color: var(--ch-block);
+}
+
+.ch-widget-chip-honesty {
+  flex-basis: 100%;
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--ch-muted);
 }
 
 .ch-widget-filechip-add {
@@ -364,6 +404,12 @@
   color: var(--ch-muted);
 }
 
+.ch-widget-reason {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: var(--ch-text);
+}
+
 .ch-widget-message {
   margin: 0.5rem 0 0;
   white-space: pre-wrap;
@@ -384,7 +430,9 @@
 }
 
 html.quarto-dark .ch-widget,
-[data-bs-theme="dark"] .ch-widget {
+html.quarto-dark .ch-widget-static,
+[data-bs-theme="dark"] .ch-widget,
+[data-bs-theme="dark"] .ch-widget-static {
   --ch-surface: #161b22;
   --ch-border: #30363d;
   --ch-text: #e6edf3;
@@ -406,4 +454,14 @@ html.quarto-dark .ch-widget-input,
 html.quarto-dark .ch-widget-listbox,
 [data-bs-theme="dark"] .ch-widget-listbox {
   box-shadow: 0 6px 18px rgba(1, 4, 9, 0.5);
+}
+
+@media (max-width: 767px) {
+  .gd-homepage .ch-widget {
+    display: none;
+  }
+
+  .gd-homepage .ch-widget-static {
+    display: block;
+  }
 }

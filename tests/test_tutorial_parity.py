@@ -21,14 +21,15 @@ FRAGMENTS = ROOT / "docs" / "_fragments"
 SRC = ROOT / "docs" / "tutorial" / "_src"
 PARITY_MJS = SRC / "parity.mjs"
 COMPILER_TESTS_MJS = SRC / "tests" / "compiler.test.mjs"
+EMULATOR_TESTS_MJS = SRC / "tests" / "emulator.test.mjs"
 RM_WORLD_TESTS_MJS = SRC / "tests" / "rm_world.test.mjs"
 LLM_TESTS_MJS = SRC / "tests" / "llm.test.mjs"
 MATRIX = json.loads((SRC / "matrix.json").read_text())
 BUNDLE_SHA256 = {
-    "compiler.js": "a3bca578cd1d2cfe8a0b9576257052da06ef88d83e06992a27a73c9df1bcaeb8",
-    "editor.js": "f9b7c07811302cf0dd5c8234821d0573df1941096e300dd847e3e261a84497af",
-    "emulator.js": "709d907a735ca66684839d3cb6ed86ac9a95efaab7aed4ca973a6016556b2136",
-    "llm.js": "4656b9c16693c3d3b5689378df37df512297505d48ee6bb6ce62400f1bc65bf4",
+    "compiler.js": "4282694b8f6a30a384cf1206efb77632e2659c366e7f727196204c1c0f81beed",
+    "editor.js": "c212fa045718214fcffadbd52ebbcf9aabb83634166fc9bfda62eb9405ed5eaf",
+    "emulator.js": "6a5135189d363eb5d8e25c7ee33c8cb17722bbb9cc11d66d33874e54f1e7eedb",
+    "llm.js": "ad6b14cfef3f15dfecd1c70e9c0ea118fcf4a204d0e8e6f8ada89e0933c394d3",
 }
 WLLAMA_WASM_SHA256 = "4197ce6d3dc9240c42ee52b4197dc99638875a06b0083901f8a57767338a0cfa"
 
@@ -523,6 +524,13 @@ def test_compile_refusal_parity(source: str) -> None:
 def test_compiler_node_unit_suite() -> None:
     """Run the compiler.js `node --test` unit suite (refusals, kwarg ignoring, triple-quote lowering)."""
     proc = subprocess.run([NODE, "--test", str(COMPILER_TESTS_MJS)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@requires_node
+def test_emulator_node_unit_suite() -> None:
+    """Run the emulator.js `node --test` suite (only_if/skip_if short-circuit, ran-command chips)."""
+    proc = subprocess.run([NODE, "--test", str(EMULATOR_TESTS_MJS)], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 

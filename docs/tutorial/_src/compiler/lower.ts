@@ -98,6 +98,31 @@ interface Args {
   keywords: Map<string, SyntaxNode>;
 }
 
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = row;
+  }
+  return prev[b.length];
+}
+
+function nearestCondition(name: string): string | null {
+  let best: string | null = null;
+  let bestScore = 3;
+  for (const known of Object.keys(CONDITION_SIGS)) {
+    const score = editDistance(name.toLowerCase(), known.toLowerCase());
+    if (score < bestScore) {
+      best = known;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
 function reEscape(token: string): string {
   let out = "";
   for (const ch of token) out += RE_SPECIAL.has(ch) ? `\\${ch}` : ch;
@@ -366,8 +391,13 @@ class Lowerer {
         return { kind: "Or", conditions: args.positional.map((p) => this.serializeCondition(p)) };
       case "And":
         return { kind: "And", conditions: args.positional.map((p) => this.serializeCondition(p)) };
-      default:
-        throw new CompileError(`unsupported condition: ${name}`);
+      default: {
+        const near = nearestCondition(name);
+        throw new CompileError(`unsupported condition: ${name}${near ? ` — did you mean ${near}?` : ""}`, {
+          from: callee.from,
+          to: callee.to,
+        });
+      }
     }
   }
 
@@ -493,7 +523,7 @@ class Lowerer {
       block,
       advisory_on_deny: this.evalBool(args.keywords.get("advisory_on_deny"), false),
       only_if: this.conditions(args.keywords.get("only_if")),
-      skip_if: guardsWaiting ? [{ kind: "Waiting" }, ...skipIf] : skipIf,
+      skip_if: guardsWaiting ? [{ kind: "Waiting", implicit: true }, ...skipIf] : skipIf,
     };
   }
 

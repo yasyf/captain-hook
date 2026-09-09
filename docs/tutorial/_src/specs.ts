@@ -7,6 +7,20 @@ export interface Verdict {
   action: Action;
   message: string | null;
   rewritten: string | null;
+  reasons?: HookReason[];
+}
+
+// What one hook did and why: its own outcome plus the phrases evaluate() collects from the
+// conditions it actually checked. Evaluation short-circuits like the Python engine — only_if
+// stops at its first failure, skip_if at its first match — hence one phrase each, not a list.
+export type HookOutcome = "blocked" | "warned" | "stood down" | "did not apply";
+
+export interface HookReason {
+  outcome: HookOutcome;
+  onlyIfMatched: string[];
+  onlyIfUnmatched: string | null;
+  skipIfMatched: string | null;
+  skipIfDeclared: boolean;
 }
 
 export type Condition =
@@ -18,7 +32,7 @@ export type Condition =
   | { kind: "TouchedFile"; patterns: string[] }
   | { kind: "UsedSkill"; names: string[] }
   | { kind: "RanCommand"; argv: string[] }
-  | { kind: "Waiting" }
+  | { kind: "Waiting"; implicit?: boolean }
   | { kind: "Not"; condition: Condition }
   | { kind: "Or"; conditions: Condition[] }
   | { kind: "And"; conditions: Condition[] };
@@ -45,6 +59,15 @@ export interface SessionState {
   touchedFiles?: string[];
   ranCommands?: string[][];
   repoRoot?: string;
+}
+
+export function relativePath(path: string, repoRoot: string | undefined): string {
+  const prefix = repoRoot ? `${repoRoot}/` : "";
+  return prefix && path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
+export function absolutePath(path: string, repoRoot: string | undefined): string {
+  return path.startsWith("/") || !repoRoot ? path : `${repoRoot}/${path}`;
 }
 
 export interface EventInput {
@@ -127,10 +150,39 @@ export const HONESTY_MESSAGE = "outside the demo subset — run `capt-hook test`
 // Mirrors captain_hook.dispatch.ADVISORY_SEPARATOR: opted-in warns ride along on a deny under this line.
 export const ADVISORY_SEPARATOR = "Additional advisories (not the reason for the deny):";
 
-// The widget-header mode notes, verbatim from docs/scripts/embed_widgets.py, now that the
-// trailing <p class="ch-widget-note"> is gone and the note renders inside the header.
-export const LIVE_NOTE = "This runs a browser model of the demo subset — run `capt-hook test` for the real engine.";
+// The live widget's footer line under the verdict; the other modes still note their mode in the header.
+export const LIVE_NOTE = "Simulated in the browser. Each preset is checked against the real engine in CI.";
 export const CANNED_NOTE = "Recorded from the real engine, not evaluated in your browser.";
+
+// Per-event framing for the header pill and the verdict's reason line. An event with no entry
+// keeps a bare pill and no reason line, since only the Stop copy below is written.
+export interface EventFraming {
+  pill: string;
+  title: string;
+  caption: string;
+  blockedLead: string;
+  allowedLead: string;
+}
+
+export const EVENT_FRAMING: Record<string, EventFraming> = {
+  Stop: {
+    pill: "Stop hook",
+    title: "A Stop hook runs when Claude tries to end its turn.",
+    caption: "Runs when Claude says it is done, and decides whether it may stop.",
+    blockedLead: "Claude can't stop yet.",
+    allowedLead: "Claude may stop.",
+  },
+};
+
+export const CODE_EDITABLE_NAME = "hooks.py · editable";
+export const CODE_EDITABLE_HINT = "try changing the glob or the message";
+export const SESSION_HEADING = "This session so far:";
+export const FILE_CHIP_PLACEHOLDER = "add a path, e.g. src/routes/home.tsx";
+export const COMMAND_CHIP_PLACEHOLDER = "add a command, e.g. uv run pytest";
+
+export function unmodelledNote(kind: string): string {
+  return `${kind} isn't modelled here; run capt-hook test`;
+}
 
 // World-mode strings (placeholder wording — the orchestrator owns the final prose pass).
 // WORLD_NOTE heads the widget; WORLD_HONESTY_MESSAGE is the card shown when a typed command

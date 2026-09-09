@@ -1,15 +1,20 @@
 // Renders the .ch-widget nodes embed_widgets.py stamps into the tutorial pages. Live widgets get
 // an editable code panel, a case combobox, derived session controls, and a recompiling verdict.
 
-import { createCombobox } from "./autocomplete";
+import { Combobox, createCombobox } from "./autocomplete";
 import { deriveControls, renderControls } from "./controls";
 import { evaluateRmWorld } from "./rm_world";
 import {
   CANNED_NOTE,
+  CODE_EDITABLE_HINT,
+  CODE_EDITABLE_NAME,
   EditorHandle,
   EditorModule,
+  EventFraming,
   EventInput,
+  EVENT_FRAMING,
   GATE_SCHEMA,
+  HookReason,
   LIVE_NOTE,
   LlmAdapter,
   LlmDetection,
@@ -75,16 +80,41 @@ export function selectChips<T extends { featured?: boolean }>(cases: T[]): T[] {
   return featured.length > 0 ? featured : cases.slice(0, 4);
 }
 
-function header(event: string, note: string): HTMLElement {
+function header(event: string, note?: string): HTMLElement {
   const bar = el("header", "ch-widget-header");
-  bar.append(el("span", "ch-widget-event", event), el("span", "ch-widget-mode-note", note));
+  const framing = EVENT_FRAMING[event];
+  const pill = el("span", "ch-widget-event", framing ? framing.pill : event);
+  if (framing) pill.title = framing.title;
+  bar.append(pill);
+  if (framing) bar.append(el("span", "ch-widget-caption", framing.caption));
+  if (note) bar.append(el("span", "ch-widget-mode-note", note));
   return bar;
 }
 
-function renderVerdict(panel: HTMLElement, verdict: Verdict): void {
+function reasonClause(reason: HookReason): string {
+  if (reason.skipIfMatched !== null) return `skip_if matched: ${reason.skipIfMatched}.`;
+  if (reason.onlyIfUnmatched !== null) return `only_if did not match: ${reason.onlyIfUnmatched}.`;
+  return [
+    ...(reason.onlyIfMatched.length > 0 ? [`only_if matched: ${reason.onlyIfMatched.join(", ")}.`] : []),
+    ...(reason.skipIfDeclared ? ["Nothing in skip_if applied."] : []),
+  ].join(" ");
+}
+
+// One hook keeps the aggregate and its reason on a single line. Several hooks reach different
+// outcomes, so the aggregate leads alone and each hook's line names what that hook did.
+function reasonLines(verdict: Verdict, framing: EventFraming): string[] {
+  const reasons = verdict.reasons ?? [];
+  const lead = verdict.action === "block" ? framing.blockedLead : framing.allowedLead;
+  if (reasons.length === 0) return [];
+  if (reasons.length === 1) return [[lead, reasonClause(reasons[0])].filter(Boolean).join(" ")];
+  return [lead, ...reasons.map((r) => [r.outcome, reasonClause(r)].filter(Boolean).join(": "))];
+}
+
+function renderVerdict(panel: HTMLElement, verdict: Verdict, framing?: EventFraming): void {
   panel.textContent = "";
   panel.className = `ch-widget-verdict ch-widget-verdict--${verdict.action}`;
   panel.appendChild(el("span", "ch-widget-badge", verdict.action));
+  if (framing) for (const line of reasonLines(verdict, framing)) panel.appendChild(el("p", "ch-widget-reason", line));
   if (verdict.message) panel.appendChild(el("p", "ch-widget-message", verdict.message));
   if (verdict.rewritten) panel.appendChild(el("code", "ch-widget-rewrite", verdict.rewritten));
 }
@@ -119,6 +149,7 @@ class LiveWidget {
   private editorLoad: Promise<EditorModule> | null = null;
   private compiler: Promise<CompilerModule> | null = null;
   private recompileTimer: ReturnType<typeof setTimeout> | undefined;
+  private combobox: Combobox | null = null;
   private readonly panel = el("div", "ch-widget-verdict");
   private readonly controlsHost = el("div", "ch-widget-controls-host");
   private readonly commandMode: boolean;
@@ -130,31 +161,38 @@ class LiveWidget {
     private readonly evaluate: Evaluate,
     private readonly editorJs: string,
     private readonly compilerJs: string,
+    private readonly lite: boolean,
   ) {
     this.hooks = data.hooks;
     this.commandMode = data.cases.some((c) => c.command != null);
   }
 
   mount(): void {
-    this.stage.append(header(this.event, LIVE_NOTE));
-    if (this.data.source != null) this.stage.append(this.codePanel(this.data.source));
+    this.stage.append(header(this.event));
+    if (this.data.source != null) {
+      this.stage.append(this.lite ? readOnlyCode(this.data.source, "hooks.py") : this.codePanel(this.data.source));
+    }
 
-    const combobox = createCombobox({
-      items: this.data.cases.map((c, index) => ({ label: caseLabel(c), index })),
-      placeholder: this.commandMode ? "type a command…" : "pick a scenario…",
-      ariaLabel: this.commandMode ? "command to evaluate" : "scenario to evaluate",
-      onSelect: (index) => this.applyCase(index, combobox.setValue),
-      onType: this.commandMode ? (text) => this.applyCommand(text) : undefined,
-    });
+    if (!this.lite) {
+      this.combobox = createCombobox({
+        items: this.data.cases.map((c, index) => ({ label: caseLabel(c), index })),
+        placeholder: this.commandMode ? "type a command…" : "pick a scenario…",
+        ariaLabel: this.commandMode ? "command to evaluate" : "scenario to evaluate",
+        readOnly: !this.commandMode,
+        onSelect: (index) => this.applyCase(index),
+        onType: this.commandMode ? (text) => this.applyCommand(text) : undefined,
+      });
+      this.stage.append(this.combobox.root);
+    }
 
     this.stage.append(
-      combobox.root,
-      chipRow(this.data.cases, (index) => this.applyCase(index, combobox.setValue)),
+      chipRow(this.data.cases, (index) => this.applyCase(index)),
       this.controlsHost,
       this.panel,
+      el("p", "ch-widget-note", LIVE_NOTE),
     );
     this.renderControlsPanel();
-    if (this.data.cases.length > 0) this.applyCase(0, combobox.setValue);
+    if (this.data.cases.length > 0) this.applyCase(0);
   }
 
   private codePanel(source: string): HTMLElement {
@@ -168,7 +206,11 @@ class LiveWidget {
       reset.disabled = true;
     });
     const bar = el("div", "ch-widget-code-bar");
-    bar.append(el("span", "ch-widget-code-name", "hooks.py"), reset);
+    bar.append(
+      el("span", "ch-widget-code-name", CODE_EDITABLE_NAME),
+      el("span", "ch-widget-code-hint", CODE_EDITABLE_HINT),
+      reset,
+    );
     const body = el("div", "ch-widget-code-body");
     const pre = el("pre", "ch-widget-code-pre", source);
     body.append(pre);
@@ -231,13 +273,13 @@ class LiveWidget {
     this.evaluateNow();
   }
 
-  private applyCase(index: number, setValue: (text: string) => void): void {
+  private applyCase(index: number): void {
     const c = this.data.cases[index];
     if (!c) return;
     const { label: _label, featured: _featured, session, ...input } = c;
     this.current = input;
     this.session = structuredClone(session ?? {});
-    setValue(this.commandMode ? (c.command ?? "") : caseLabel(c));
+    this.combobox?.setValue(this.commandMode ? (c.command ?? "") : caseLabel(c));
     this.renderControlsPanel();
     this.evaluateNow();
   }
@@ -249,7 +291,8 @@ class LiveWidget {
 
   private renderControlsPanel(): void {
     this.controlsHost.textContent = "";
-    const panel = renderControls(deriveControls(this.hooks), this.session, () => this.evaluateNow());
+    const controls = deriveControls(this.hooks, { commandMode: this.commandMode, lite: this.lite });
+    const panel = renderControls(controls, this.session, () => this.evaluateNow());
     if (panel) this.controlsHost.append(panel);
   }
 
@@ -258,7 +301,8 @@ class LiveWidget {
       renderCompileError(this.panel, this.compileError);
       return;
     }
-    renderVerdict(this.panel, this.evaluate(this.hooks, { ...this.current, event: this.event, session: this.session }));
+    const input = { ...this.current, event: this.event, session: this.session };
+    renderVerdict(this.panel, this.evaluate(this.hooks, input), EVENT_FRAMING[this.event]);
   }
 }
 
@@ -507,6 +551,7 @@ export function mountAll(evaluate: Evaluate): void {
         evaluate,
         root.dataset.editorJs ?? "editor.js",
         root.dataset.compilerJs ?? "compiler.js",
+        root.dataset.variant === "lite",
       ).mount();
     }
   }
