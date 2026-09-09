@@ -4,8 +4,6 @@ toc: false
 body-classes: "gd-homepage"
 ---
 
-<!-- gd-embed-widget: ui_gate -->
-
 Claude Code hooks are shell commands wired through JSON. I wanted them to be what every other guardrail in a Python repo already is: typed functions with tests. capt-hook gives you `block_command`, `gate`, and friends — one `init`, zero settings surgery.
 
 ```bash
@@ -19,9 +17,11 @@ uvx capt-hook init
 [{{< icon arrow-right >}} Quickstart](docs/getting-started/quickstart.qmd){.btn .btn-primary}
 [{{< icon arrow-right >}} Tutorial](docs/tutorial/index.qmd){.btn .btn-outline-primary}
 
-## Poke the gate above
+## Poke the gate
 
-That Stop gate is live on this page — flip the session state and watch the verdict change. Every preset is a row in the parity suite, so the browser's answer is `capt-hook test`'s answer.
+The gate below is live. Change what happened in the session and watch the verdict flip.
+
+<!-- gd-embed-widget: ui_gate lite -->
 
 {{< termshow file="docs/assets/demo" autoplay="true" >}}
 

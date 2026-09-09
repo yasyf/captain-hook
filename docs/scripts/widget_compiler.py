@@ -136,13 +136,23 @@ def lowered_payload(entry: RegisteredHook) -> dict[str, Any]:
     raise ValueError(f"the emulator cannot serialize handler-backed hook {entry.name!r} ({entry.handler.__qualname__})")
 
 
+def gate_backed(entry: RegisteredHook) -> bool:
+    return entry.handler is not None and GATE_FREEVARS <= closure_freevars(entry.handler).keys()
+
+
 def serialize_hook(entry: RegisteredHook) -> dict[str, Any]:
+    payload = lowered_payload(entry)
+    events = [e.name for e in entry.spec.events]
+    skip_if = [serialize_condition(c) for c in entry.spec.skip_if]
+    # gate/nudge prepend a Waiting the fragment never wrote; the widget derives no control for it.
+    if gate_backed(entry) and payload["block"] and not {"Stop", "SubagentStop"}.isdisjoint(events):
+        skip_if[0] |= {"implicit": True}
     return {
-        "events": [e.name for e in entry.spec.events],
-        **lowered_payload(entry),
+        "events": events,
+        **payload,
         "advisory_on_deny": entry.spec.advisory_on_deny,
         "only_if": [serialize_condition(c) for c in entry.spec.only_if],
-        "skip_if": [serialize_condition(c) for c in entry.spec.skip_if],
+        "skip_if": skip_if,
     }
 
 

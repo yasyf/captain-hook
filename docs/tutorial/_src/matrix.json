@@ -93,15 +93,15 @@
           "check": "parity",
           "featured": true,
           "label": "edited Button.tsx, no review",
-          "session": { "touchedFiles": ["/repo/src/components/Button.tsx"], "usedSkills": [] },
+          "session": { "touchedFiles": ["/repo/src/components/Button.tsx"], "usedSkills": [], "repoRoot": "/repo" },
           "edits": ["/repo/src/components/Button.tsx"]
         },
         {
           "id": "reviewed-ui-edit",
           "check": "parity",
           "featured": true,
-          "label": "edited Button.tsx, reviewed with agent-browser",
-          "session": { "touchedFiles": ["/repo/src/components/Button.tsx"], "usedSkills": ["agent-browser"] },
+          "label": "…then reviewed it with agent-browser",
+          "session": { "touchedFiles": ["/repo/src/components/Button.tsx"], "usedSkills": ["agent-browser"], "repoRoot": "/repo" },
           "edits": ["/repo/src/components/Button.tsx"],
           "skills": ["agent-browser"]
         },
@@ -109,30 +109,32 @@
           "id": "non-ui-edit",
           "check": "parity",
           "featured": true,
-          "label": "edited README.md only",
-          "session": { "touchedFiles": ["/repo/README.md"], "usedSkills": [] },
+          "label": "edited only README.md",
+          "session": { "touchedFiles": ["/repo/README.md"], "usedSkills": [], "repoRoot": "/repo" },
           "edits": ["/repo/README.md"]
         },
         {
           "id": "multi-file-ui-edit",
           "check": "parity",
+          "featured": false,
           "label": "edited Button.tsx and README.md, no review",
-          "session": { "touchedFiles": ["/repo/src/components/Button.tsx", "/repo/README.md"], "usedSkills": [] },
+          "session": { "touchedFiles": ["/repo/src/components/Button.tsx", "/repo/README.md"], "usedSkills": [], "repoRoot": "/repo" },
           "edits": ["/repo/src/components/Button.tsx", "/repo/README.md"]
         },
         {
           "id": "route-edit",
           "check": "parity",
+          "featured": false,
           "label": "edited a route file, no review",
-          "session": { "touchedFiles": ["/repo/src/routes/home.tsx"], "usedSkills": [] },
+          "session": { "touchedFiles": ["/repo/src/routes/home.tsx"], "usedSkills": [], "repoRoot": "/repo" },
           "edits": ["/repo/src/routes/home.tsx"]
         },
         {
           "id": "skill-no-edits",
           "check": "parity",
-          "featured": true,
+          "featured": false,
           "label": "reviewed with agent-browser, touched nothing",
-          "session": { "touchedFiles": [], "usedSkills": ["agent-browser"] },
+          "session": { "touchedFiles": [], "usedSkills": ["agent-browser"], "repoRoot": "/repo" },
           "edits": [],
           "skills": ["agent-browser"]
         }

@@ -1,5 +1,6 @@
 // A WAI-ARIA combobox over the widget's cases: substring filter, ArrowUp/Down + Enter, Escape
-// closes, opens on focus or chevron. Free-typed text still flows to onType for live command eval.
+// closes, opens on focus or chevron. Free-typed text still flows to onType for live command eval,
+// and a readOnly combobox is a picker: no typing, no filtering, the chevron always lists them all.
 
 import { el } from "./dom";
 
@@ -12,6 +13,7 @@ export interface ComboboxOptions {
   items: ComboboxItem[];
   placeholder: string;
   ariaLabel: string;
+  readOnly?: boolean;
   onSelect: (index: number) => void;
   onType?: (text: string) => void;
 }
@@ -30,6 +32,7 @@ export function createCombobox(opts: ComboboxOptions): Combobox {
   const input = el("input", "ch-widget-input");
   input.type = "text";
   input.spellcheck = false;
+  input.readOnly = opts.readOnly ?? false;
   input.placeholder = opts.placeholder;
   input.setAttribute("role", "combobox");
   input.setAttribute("aria-label", opts.ariaLabel);
@@ -74,7 +77,7 @@ export function createCombobox(opts: ComboboxOptions): Combobox {
   };
 
   const paint = (query: string) => {
-    const needle = query.trim().toLowerCase();
+    const needle = input.readOnly ? "" : query.trim().toLowerCase();
     filtered = needle
       ? opts.items.filter((it) => it.label.toLowerCase().includes(needle))
       : opts.items.slice();
@@ -142,8 +145,11 @@ export function createCombobox(opts: ComboboxOptions): Combobox {
   input.addEventListener("blur", () => setOpen(false));
   toggle.addEventListener("mousedown", (e) => e.preventDefault());
   toggle.addEventListener("click", () => {
-    open ? setOpen(false) : paint(input.value);
+    // Focus first: the focus handler repaints with the input's own value, so the arrow's
+    // unfiltered open has to land after it or a non-matching value reopens the list empty.
+    const wasOpen = open;
     input.focus();
+    wasOpen ? setOpen(false) : paint("");
   });
 
   root.append(input, toggle, listbox);

@@ -67,10 +67,15 @@ export function validate(tree: Tree, source: string): void {
   const cursor = tree.cursor();
   do {
     if (cursor.type.isError) {
-      throw new CompileError(`syntax error near "${snippet(source, cursor.from, cursor.to)}"`, {
-        from: cursor.from,
-        to: cursor.to,
-      });
+      const text = snippet(source, cursor.from, cursor.to);
+      if (!text && cursor.to >= source.length) {
+        const end = source.trimEnd().length;
+        throw new CompileError("syntax error: unexpected end of file (missing a closing paren?)", {
+          from: Math.max(0, end - 1),
+          to: end,
+        });
+      }
+      throw new CompileError(`syntax error near "${text}"`, { from: cursor.from, to: cursor.to });
     }
     const construct = REFUSED_CONSTRUCT[cursor.name];
     if (construct) {

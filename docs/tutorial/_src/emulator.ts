@@ -5,11 +5,14 @@ import { mountAll } from "./dom";
 
 export { caseLabel, selectChips } from "./dom";
 export { evaluateRmWorld } from "./rm_world";
+export { parseRanCommand } from "./tokenizer";
 import {
   ADVISORY_SEPARATOR,
   Condition,
   EventInput,
   HONESTY_MESSAGE,
+  HookReason,
+  relativePath,
   SerializedHook,
   Verdict,
 } from "./specs";
@@ -145,6 +148,74 @@ function checkCondition(cond: Condition, ev: EventInput, cl: CommandLine | null)
   }
 }
 
+function describeMatch(cond: Condition, ev: EventInput): string {
+  switch (cond.kind) {
+    case "TouchedFile": {
+      const hits = (ev.session?.touchedFiles ?? []).filter((f) => cond.patterns.some((p) => fnmatch(f, p)));
+      return `TouchedFile on ${hits.map((f) => relativePath(f, ev.session?.repoRoot)).join(", ")}`;
+    }
+    case "UsedSkill":
+      return `UsedSkill ${cond.names.join(", ")}`;
+    case "RanCommand":
+      return `RanCommand ${cond.argv.join(" ")}`;
+    case "Runs":
+      return `Runs ${cond.argv.join(" ")}`;
+    case "Tool":
+      return `Tool ${ev.tool}`;
+    case "Command":
+      return `Command ${cond.pattern}`;
+    case "Content":
+      return `Content ${cond.pattern}`;
+    case "FilePath":
+      return `FilePath ${ev.file}`;
+    default:
+      return cond.kind;
+  }
+}
+
+function describeUnmatched(cond: Condition): string {
+  switch (cond.kind) {
+    case "TouchedFile":
+      return `no touched file under ${cond.patterns.join(" or ")}`;
+    case "UsedSkill":
+      return `no ${cond.names.join(" or ")} skill used`;
+    case "RanCommand":
+      return `no ${cond.argv.join(" ")} command run`;
+    case "Waiting":
+      return "not waiting on the user";
+    default:
+      return `no ${cond.kind} match`;
+  }
+}
+
+// Mirrors matches_conditions: only_if stops at the first failure, skip_if at the first match, so a
+// condition the Python engine never reaches is never evaluated here either — and the reasons record
+// exactly the conditions that were.
+function hookReason(hook: SerializedHook, ev: EventInput, cl: CommandLine | null): HookReason {
+  const skipIfDeclared = hook.skip_if.length > 0;
+  const onlyIfMatched: string[] = [];
+  for (const c of hook.only_if) {
+    if (!checkCondition(c, ev, cl)) {
+      return {
+        outcome: "did not apply",
+        onlyIfMatched,
+        onlyIfUnmatched: describeUnmatched(c),
+        skipIfMatched: null,
+        skipIfDeclared,
+      };
+    }
+    onlyIfMatched.push(describeMatch(c, ev));
+  }
+  const skipped = hook.skip_if.find((c) => checkCondition(c, ev, cl));
+  return {
+    outcome: skipped ? "stood down" : hook.block ? "blocked" : "warned",
+    onlyIfMatched,
+    onlyIfUnmatched: null,
+    skipIfMatched: skipped ? describeMatch(skipped, ev) : null,
+    skipIfDeclared,
+  };
+}
+
 function fire(hook: SerializedHook, command: string | null): Fired | null {
   if (hook.rewrite) {
     if (command === null) return null;
@@ -203,14 +274,16 @@ export function evaluate(hooks: SerializedHook[], input: EventInput): Verdict {
       return { action: "subset-exceeded", message: HONESTY_MESSAGE, rewritten: null };
     }
     const fired: Fired[] = [];
+    const reasons: HookReason[] = [];
     for (const hook of hooks) {
       if (!hook.events.includes(event)) continue;
-      if (!hook.only_if.every((c) => checkCondition(c, ev, cl))) continue;
-      if (hook.skip_if.some((c) => checkCondition(c, ev, cl))) continue;
+      const reason = hookReason(hook, ev, cl);
+      reasons.push(reason);
+      if (reason.onlyIfUnmatched !== null || reason.skipIfMatched !== null) continue;
       const result = fire(hook, command);
       if (result) fired.push(result);
     }
-    return combine(fired);
+    return { ...combine(fired), reasons };
   } catch (e) {
     if (e instanceof SubsetExceeded) return { action: "subset-exceeded", message: HONESTY_MESSAGE, rewritten: null };
     throw e;
