@@ -6,7 +6,7 @@ body-classes: "gd-homepage"
 
 Claude Code hooks are shell commands wired through JSON. I wanted them to be what every other guardrail in a Python repo already is: typed functions with tests. capt-hook gives you `block_command`, `gate`, and friends — one `init`, zero settings surgery.
 
-The longer argument, and how the session reviewer ends up writing your hooks for you, is in [Less prompts, more guardrails](https://yasyf.com/writing/less-prompts-more-guardrails).
+Check out the inspiration in [this blog post](https://yasyf.com/writing/less-prompts-more-guardrails).
 
 ```bash
 uvx capt-hook init
