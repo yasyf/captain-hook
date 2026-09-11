@@ -12,7 +12,11 @@ const (
 	helperSigningIdentifier       = "com.yasyf.capt-hook.helper"
 	helperClientSigningIdentifier = "com.yasyf.capt-hook.helper.bridge"
 	hostShutdownTimeout           = 30 * time.Second
-	hostConcurrency               = 64
+	// hostConcurrency bounds concurrent wire sessions, not dispatch. Every
+	// resident client holds one for its lifetime — an MCP server per Claude
+	// Code session, plus each in-flight hook — so it tracks the machine's
+	// session count rather than its cores.
+	hostConcurrency = 256
 )
 
 func hostRequirement() daemonkit.Requirement {

@@ -159,6 +159,9 @@ func (m *workerManager) dispatch(ctx context.Context, request EventRequest) (Eve
 		worker := entry.worker
 		response, err := worker.call(ctx, request)
 		if err != nil {
+			if !worker.broken() {
+				return EventResponse{}, err
+			}
 			m.retire(key.id, worker)
 			return EventResponse{}, errors.Join(err, m.settle(worker))
 		}

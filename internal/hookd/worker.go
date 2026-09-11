@@ -77,14 +77,28 @@ func (w *workerClient) call(ctx context.Context, request EventRequest) (EventRes
 
 	if err := w.write(ctx, workerFrame{Protocol: Schema, Op: "event", ID: id, Request: &request}); err != nil {
 		w.removePending(id)
+		if !errors.Is(err, ErrPayloadTooLarge) {
+			w.fail(err)
+		}
 		return EventResponse{}, err
 	}
 	select {
 	case received := <-result:
 		return received.response, received.err
 	case <-ctx.Done():
+		w.removePending(id)
 		return EventResponse{}, ctx.Err()
 	}
+}
+
+// broken reports whether the transport itself failed, which a caller's own
+// expired deadline and a hook's own error both produce a call error without.
+// Workers are shared across sessions, so retiring one on either of those takes
+// down every other session mid-call.
+func (w *workerClient) broken() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.closed
 }
 
 func (w *workerClient) write(ctx context.Context, frame workerFrame) error {
