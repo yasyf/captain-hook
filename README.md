@@ -112,5 +112,6 @@ The agent can't end the turn until a pytest run shows up in the transcript, and 
 - **Workflows** — multi-step Stop gates with artifact checks and checklists — [guide](https://yasyf.github.io/captain-hook/docs/guide/state.html#enforce-a-multi-step-workflow)
 - **Packs** — the shipped `general`, `python`, and `go` hook packs — [guide](https://yasyf.github.io/captain-hook/docs/guide/packs.html)
 - **Testing** — run `uvx capt-hook test --json` in CI so a regressed hook fails the build — [guide](https://yasyf.github.io/captain-hook/docs/guide/testing.html)
+- **Why hooks** — the argument for steering agents with tested hooks instead of prompts, and how the reviewer builds the harness for you — [blog post](https://yasyf.com/writing/less-prompts-more-guardrails)
 
 Read the [docs](https://yasyf.github.io/captain-hook/) for the full guide. Licensed under [PolyForm Noncommercial 1.0.0](https://github.com/yasyf/captain-hook/blob/main/LICENSE), free for noncommercial use.
