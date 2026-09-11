@@ -1,0 +1,95 @@
+{
+  "machine": {
+    "recorded": "2026-09-11T23:16:49Z",
+    "build": "12.26.0",
+    "os": "Darwin 25.6.0",
+    "arch": "arm64",
+    "endpoint_security_toll_us": 4.1
+  },
+  "records": [
+    {
+      "label": "chain-warm",
+      "execs": 2,
+      "exec_floor": 2,
+      "confirmations": 7,
+      "confidence": 0.9941,
+      "quiet_fraction": 0.0485,
+      "samples": 103,
+      "ms_min": 65.9,
+      "ms_median": 129.35,
+      "ms_p90": 501.18
+    },
+    {
+      "label": "chain-cold",
+      "execs": null,
+      "exec_floor": 41,
+      "confirmations": 1,
+      "confidence": 0.0,
+      "quiet_fraction": 0.0,
+      "samples": 24,
+      "ms_min": 675.46,
+      "ms_median": 843.83,
+      "ms_p90": 2258.77
+    },
+    {
+      "label": "host-warm",
+      "execs": 1,
+      "exec_floor": 1,
+      "confirmations": 5,
+      "confidence": 0.995,
+      "quiet_fraction": 0.1111,
+      "samples": 45,
+      "ms_min": 32.0,
+      "ms_median": 42.83,
+      "ms_p90": 88.28
+    },
+    {
+      "label": "host-cold",
+      "execs": null,
+      "exec_floor": 14,
+      "confirmations": 1,
+      "confidence": 0.0,
+      "quiet_fraction": 0.0,
+      "samples": 19,
+      "ms_min": 632.99,
+      "ms_median": 913.2,
+      "ms_p90": 5310.94
+    },
+    {
+      "label": "interpreter-bare",
+      "execs": 1,
+      "exec_floor": 1,
+      "confirmations": 4,
+      "confidence": 0.9937,
+      "quiet_fraction": 0.0255,
+      "samples": 196,
+      "ms_min": 22.9,
+      "ms_median": 230.11,
+      "ms_p90": 343.23
+    },
+    {
+      "label": "interpreter-client",
+      "execs": 1,
+      "exec_floor": 1,
+      "confirmations": 3,
+      "confidence": 1.0,
+      "quiet_fraction": 0.0109,
+      "samples": 916,
+      "ms_min": 40.52,
+      "ms_median": 87.54,
+      "ms_p90": 254.5
+    },
+    {
+      "label": "host-version",
+      "execs": 1,
+      "exec_floor": 1,
+      "confirmations": 8,
+      "confidence": 0.9953,
+      "quiet_fraction": 0.1282,
+      "samples": 39,
+      "ms_min": 5.35,
+      "ms_median": 6.78,
+      "ms_p90": 8.51
+    }
+  ]
+}
