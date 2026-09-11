@@ -11,11 +11,16 @@ nothing.
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from bench.measure import Command, Measurement, Window, measure
 
 BUDGET_S = 60.0
+
+# The counter is a Darwin sysctl; there is no unprivileged equivalent to fall back to.
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="macOS exec counter")
 
 
 @pytest.mark.parametrize(
