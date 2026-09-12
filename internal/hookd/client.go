@@ -46,13 +46,14 @@ func (c *Client) EnsureCurrent(ctx context.Context) error {
 	return health.exact()
 }
 
-// probeFailure names what the probe actually met, because the five outcomes
-// have five different next steps. ErrNotReady, ErrDraining, and ErrPeerGone are
-// one runtime mid-transition and answer again on the next event; a deadline is
-// a host that is there and slow; ErrUntrusted is a live peer that failed the
-// signed-host requirement, which reinstalling fixes and waiting does not; and
-// ErrNoVerifier is a machine that cannot answer the question at all. Only what
-// is left is a host that is not installed.
+// probeFailure names what the probe actually met, because the outcomes have
+// different next steps. ErrNotReady, ErrDraining, and ErrPeerGone are one
+// runtime mid-transition and answer again on the next event; ErrSessionCapacity
+// is a healthy host with every session slot taken, which waiting also fixes; a
+// deadline is a host that is there and slow; ErrUntrusted is a live peer that
+// failed the signed-host requirement, which reinstalling fixes and waiting does
+// not; and ErrNoVerifier is a machine that cannot answer the question at all.
+// Only what is left is a host that is not installed.
 func probeFailure(err error) error {
 	switch {
 	case errors.Is(err, daemonkit.ErrNotReady), errors.Is(err, daemonkit.ErrDraining),
@@ -60,6 +61,11 @@ func probeFailure(err error) error {
 		return fmt.Errorf(
 			"captain: signed host is between generations — starting, draining, or restarting — "+
 				"and hooks retry on the next event: %w", err,
+		)
+	case errors.Is(err, daemonkit.ErrSessionCapacity):
+		return fmt.Errorf(
+			"captain: signed host is serving its session ceiling and has no slot for this hook; "+
+				"it is installed and healthy, and hooks retry on the next event: %w", err,
 		)
 	case errors.Is(err, os.ErrDeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
 		return fmt.Errorf(
