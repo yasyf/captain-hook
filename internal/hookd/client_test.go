@@ -55,6 +55,11 @@ func TestProbeFailureNamesTheOutcomeItMet(t *testing.T) {
 			transition, []string{absentMessage, installRemedy, "machine load"},
 		},
 		{
+			"every session slot taken", fmt.Errorf("captain: attach: %w", daemonkit.ErrSessionCapacity),
+			[]string{"session ceiling", "installed and healthy", "retry on the next event"},
+			[]string{absentMessage, installRemedy, "machine load"},
+		},
+		{
 			"untrusted server", fmt.Errorf("captain: attach: %w", daemonkit.ErrUntrusted),
 			[]string{"is not the signed capt-hookd", "reinstall the helper"},
 			[]string{absentMessage, "retry on the next event", "machine load"},

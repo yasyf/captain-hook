@@ -9,6 +9,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/yasyf/daemonkit v0.23.0 h1:3ov00O4cEIbXAfj9h6uBpf8PMluGJcGGRvB5IVZhHXY=
 github.com/yasyf/daemonkit v0.23.0/go.mod h1:mnfLEwDeeyEmq7Dj+4/lJZ60sBcdI7GlWXLLuBSapyw=
+github.com/yasyf/daemonkit v0.25.0 h1:4akKBLvz/pzwiHmGVXrKfk2+nSelb9SDsw0Y0f0aWE8=
+github.com/yasyf/daemonkit v0.25.0/go.mod h1:3qcpiMyByFCbb9WcrzMYLcES/u/iUmE9UWBQb644ubo=
 go.etcd.io/bbolt v1.5.0 h1:S7GAl7Fxv12yohbwFfIbQCGDWbQbtDGPET4P/bD4lxU=
 go.etcd.io/bbolt v1.5.0/go.mod h1:mkltfYE5aUHQxUct9N9V+Kp7aSjFqjgrhcXIS70Lrdk=
 golang.org/x/sync v0.20.0 h1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4=
