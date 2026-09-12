@@ -58,6 +58,13 @@ const (
 	opHelperNext     = "captain.helper.next.v1"
 )
 
+const (
+	opWorkerHello  = "hello"
+	opWorkerEvent  = "event"
+	opWorkerResult = "result"
+	opWorkerError  = "error"
+)
+
 // hostSchema is the stable v1 application protocol shared across runtime releases.
 const hostSchema daemonkit.Schema = "captain-hook.host.v1"
 
