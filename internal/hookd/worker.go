@@ -40,14 +40,14 @@ func handshakeWorker(ctx context.Context, conn net.Conn, build string) (*workerC
 			return nil, err
 		}
 	}
-	if err := encodeWorkerFrame(conn, workerFrame{Protocol: Schema, Op: "hello", Build: build}); err != nil {
+	if err := encodeWorkerFrame(conn, workerFrame{Protocol: Schema, Op: opWorkerHello, Build: build}); err != nil {
 		return nil, err
 	}
 	response, err := decodeWorkerFrame(conn)
 	if err != nil {
 		return nil, err
 	}
-	if response.Op != "hello" || response.ID != 0 || response.Build != build || response.Request != nil ||
+	if response.Op != opWorkerHello || response.ID != 0 || response.Build != build || response.Request != nil ||
 		response.Response != nil || response.Error != "" {
 		return nil, errors.New("captain: Python worker rejected the exact build handshake")
 	}
@@ -75,7 +75,7 @@ func (w *workerClient) call(ctx context.Context, request EventRequest) (EventRes
 	w.pending[id] = result
 	w.mu.Unlock()
 
-	if err := w.write(ctx, workerFrame{Protocol: Schema, Op: "event", ID: id, Request: &request}); err != nil {
+	if err := w.write(ctx, workerFrame{Protocol: Schema, Op: opWorkerEvent, ID: id, Request: &request}); err != nil {
 		w.removePending(id)
 		if !errors.Is(err, ErrPayloadTooLarge) {
 			w.fail(err)
@@ -120,7 +120,7 @@ func (w *workerClient) readLoop() {
 			w.fail(err)
 			return
 		}
-		if frame.ID == 0 || (frame.Op != "result" && frame.Op != "error") || frame.Request != nil {
+		if frame.ID == 0 || (frame.Op != opWorkerResult && frame.Op != opWorkerError) || frame.Request != nil {
 			w.fail(errors.New("captain: invalid Python worker response frame"))
 			return
 		}
@@ -132,7 +132,7 @@ func (w *workerClient) readLoop() {
 			w.fail(fmt.Errorf("captain: Python worker returned unknown request id %d", frame.ID))
 			return
 		}
-		if frame.Op == "error" {
+		if frame.Op == opWorkerError {
 			if frame.Error == "" || frame.Response != nil {
 				w.fail(errors.New("captain: invalid Python worker error frame"))
 				return
