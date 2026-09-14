@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.30.3] - 2026-09-14
+
 ### Fixed
 
 - **Deep conditions stop holding every subagent transcript.** A worker serving
