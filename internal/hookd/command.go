@@ -1,18 +1,23 @@
 package hookd
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/yasyf/captain-hook/internal/wireproto"
+	"github.com/yasyf/daemonkit/artifact"
 )
 
 const (
@@ -33,13 +38,16 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: capt-hookd version|serve|run|status|restart-workers|package-install|package-uninstall")
 		return 2
 	}
+	if args[0] == "--root" || strings.HasPrefix(args[0], "--root=") {
+		return runCommand(args, stdin, stdout, stderr)
+	}
 	switch args[0] {
 	case "version":
 		return versionCommand(args[1:], stdout, stderr)
 	case "serve":
 		return serveCommand(args[1:], stderr)
 	case "run":
-		return runCommand(args[1:], stdin, stdout, stderr)
+		return runCommand(args, stdin, stdout, stderr)
 	case "status":
 		return statusCommand(args[1:], stdout, stderr)
 	case "restart-workers":
@@ -86,50 +94,11 @@ func serveCommand(args []string, stderr io.Writer) int {
 }
 
 func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	flags := flag.NewFlagSet("run", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	event := flags.String("event", "", "hook event")
-	root := flags.String("root", "", "project root")
-	cwd := flags.String("cwd", "", "request working directory")
-	python := flags.String("python", "", "exact Python executable")
-	build := flags.String("build", "", "exact Python product build")
-	async := flags.Bool("async", false, "dispatch async hooks")
-	timeout := flags.Duration(
-		"timeout", durationFromEnvironment("CAPT_HOOK_CLIENT_TIMEOUT", defaultRequestTimeout), "request deadline",
-	)
-	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
-		return 2
+	request, timeout, code := eventRequest(args, stdin, stderr)
+	if code != 0 {
+		return code
 	}
-	if *timeout <= 0 {
-		fmt.Fprintf(stderr, "capt-hookd: request timeout %s must be positive\n", *timeout)
-		return 2
-	}
-	if *cwd == "" {
-		*cwd, _ = os.Getwd()
-	}
-	payload, err := io.ReadAll(io.LimitReader(stdin, wireproto.MaxEventInput+1))
-	if err != nil {
-		fmt.Fprintf(stderr, "capt-hookd: read event: %v\n", err)
-		return 1
-	}
-	if len(payload) > wireproto.MaxEventInput {
-		fmt.Fprintf(stderr, "capt-hookd: event input exceeds %d bytes\n", wireproto.MaxEventInput)
-		return 1
-	}
-	request := wireproto.EventRequest{
-		Schema: wireproto.Schema, Event: *event, Async: *async, Root: *root, CWD: *cwd,
-		Env: requestEnvironment(os.Environ()), PayloadRaw: string(payload),
-		Python: *python, Build: *build, ClientPID: os.Getpid(), ClientPPID: os.Getppid(),
-	}
-	if err := request.Validate(); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
-	if request.Build != Build {
-		fmt.Fprintf(stderr, "capt-hookd: Python build %q does not match signed host build %q\n", request.Build, Build)
-		return 1
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	client, err := NewClient()
 	if err == nil {
@@ -155,6 +124,139 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return response.Exit
+}
+
+func eventRequest(args []string, stdin io.Reader, stderr io.Writer) (wireproto.EventRequest, time.Duration, int) {
+	var event, root, cwd, python, build string
+	var async bool
+	timeout := durationFromEnvironment("CAPT_HOOK_CLIENT_TIMEOUT", defaultRequestTimeout)
+	if len(args) > 1 && args[0] == "run" && args[1] == "--event" {
+		flags := flag.NewFlagSet("run", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		flags.StringVar(&event, "event", "", "hook event")
+		flags.StringVar(&root, "root", "", "project root")
+		flags.StringVar(&cwd, "cwd", "", "request working directory")
+		flags.StringVar(&python, "python", "", "exact Python executable")
+		flags.StringVar(&build, "build", "", "exact Python product build")
+		flags.BoolVar(&async, "async", false, "dispatch async hooks")
+		flags.DurationVar(&timeout, "timeout", timeout, "request deadline")
+		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
+			return wireproto.EventRequest{}, 0, 2
+		}
+	} else {
+		var ok bool
+		if root, event, async, ok = parseHookRun(args); !ok {
+			fmt.Fprintln(stderr, "usage: hook [--root ROOT] run EVENT [--async]")
+			return wireproto.EventRequest{}, 0, 1
+		}
+	}
+	if timeout <= 0 {
+		fmt.Fprintf(stderr, "capt-hookd: request timeout %s must be positive\n", timeout)
+		return wireproto.EventRequest{}, 0, 2
+	}
+	if cwd == "" {
+		var err error
+		if cwd, err = requestCWD(); err != nil {
+			fmt.Fprintf(stderr, "capt-hookd: resolve cwd: %v\n", err)
+			return wireproto.EventRequest{}, 0, 1
+		}
+	}
+	root = cmp.Or(root, os.Getenv("CLAUDE_PROJECT_DIR"), os.Getenv("FACTORY_PROJECT_DIR"), cwd)
+	build = cmp.Or(build, Build)
+	if python == "" {
+		var err error
+		if python, err = productPython(); err != nil {
+			fmt.Fprintf(stderr, "capt-hookd: resolve Python product %s: %v\n", Build, err)
+			return wireproto.EventRequest{}, 0, 1
+		}
+	}
+	payload, err := io.ReadAll(io.LimitReader(stdin, wireproto.MaxEventInput+1))
+	if err != nil {
+		fmt.Fprintf(stderr, "capt-hookd: read event: %v\n", err)
+		return wireproto.EventRequest{}, 0, 1
+	}
+	if len(payload) > wireproto.MaxEventInput {
+		fmt.Fprintf(stderr, "capt-hookd: event input exceeds %d bytes\n", wireproto.MaxEventInput)
+		return wireproto.EventRequest{}, 0, 1
+	}
+	request := wireproto.EventRequest{
+		Schema: wireproto.Schema, Event: event, Async: async, Root: root, CWD: cwd,
+		Env: requestEnvironment(os.Environ()), PayloadRaw: string(payload),
+		Python: python, Build: build, ClientPID: os.Getpid(), ClientPPID: os.Getppid(),
+	}
+	if err := request.Validate(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return wireproto.EventRequest{}, 0, 2
+	}
+	if request.Build != Build {
+		fmt.Fprintf(stderr, "capt-hookd: Python build %q does not match signed host build %q\n", request.Build, Build)
+		return wireproto.EventRequest{}, 0, 1
+	}
+	return request, timeout, 0
+}
+
+func parseHookRun(args []string) (root, event string, async, ok bool) {
+	index := 0
+	if len(args) >= 2 && args[0] == "--root" {
+		root, index = args[1], 2
+	} else if len(args) > 0 && strings.HasPrefix(args[0], "--root=") {
+		root, index = strings.TrimPrefix(args[0], "--root="), 1
+	}
+	tail := args[index:]
+	if len(tail) != 2 && len(tail) != 3 || tail[0] != "run" || tail[1] == "" || strings.HasPrefix(tail[1], "-") {
+		return "", "", false, false
+	}
+	if len(tail) == 3 && tail[2] != "--async" {
+		return "", "", false, false
+	}
+	return root, tail[1], len(tail) == 3, true
+}
+
+// requestCWD answers what Python's os.getcwd does. os.Getwd prefers PWD's
+// symlinked spelling, and on darwin syscall.Getwd still names a directory that
+// is gone, even one recreated at that path, where libc's getcwd fails ENOENT;
+// the identity check restores that failure. PWD is the fallback only then,
+// since "/" as a root would walk the whole machine.
+func requestCWD() (string, error) {
+	cwd, err := syscall.Getwd()
+	if err == nil {
+		err = isWorkingDirectory(cwd)
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return cmp.Or(os.Getenv("PWD"), "/"), nil
+	}
+	return cwd, err
+}
+
+func isWorkingDirectory(path string) error {
+	named, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	here, err := os.Stat(".")
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(named, here) {
+		return fs.ErrNotExist
+	}
+	return nil
+}
+
+func productPython() (string, error) {
+	store, err := artifact.DefaultStore()
+	if err != nil {
+		return "", err
+	}
+	entrypoint, err := store.Resolve(context.Background(), &artifact.Descriptor{
+		Schema: 1, Name: "capt-hook", Kind: artifact.PythonTool,
+		Version: artifact.VersionSource{Static: Build},
+		Tool:    &artifact.ToolSpec{Dist: "capt-hook", Entrypoint: "hook"},
+	})
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(entrypoint), "python"), nil
 }
 
 func statusCommand(args []string, stdout, stderr io.Writer) int {
