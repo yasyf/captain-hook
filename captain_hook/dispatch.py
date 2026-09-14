@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
 
 ADVISORY_SEPARATOR = "Additional advisories (not the reason for the deny):"
+SYNC_DEADLINE_MARGIN_SECONDS = 5.0
 
 
 def run_declarative(spec: HookSpec, evt: BaseHookEvent) -> HookResult | None:
@@ -189,8 +190,8 @@ def dispatch(
     for entry in matching:
         if blocked and entry.handler is not None and not entry.spec.advisory_on_deny:
             continue
-        if reqenv.deadline_passed():
-            logger.bind(hook=entry.name).warning("caller deadline passed; skipping this and the remaining hooks")
+        if reqenv.deadline_within(0 if async_ else SYNC_DEADLINE_MARGIN_SECONDS):
+            logger.bind(hook=entry.name).warning("caller deadline is near; skipping this and the remaining hooks")
             break
         match execute_hook(entry, evt, session_dir):
             case HookResult(action=Action.block, message=msg):

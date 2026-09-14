@@ -20,8 +20,8 @@ from loguru import logger
 
 from captain_hook import faults
 from captain_hook.app import LoadError, _state, load_gitignore, reset
-from captain_hook.dispatch import dispatch
 from captain_hook.desktop.cli import helper
+from captain_hook.dispatch import dispatch
 from captain_hook.loader import (
     CONF_MODULE,
     discover_hooks,
@@ -314,9 +314,7 @@ def dispatch_event(
     )
     evt = event.event_class(_raw=raw, ctx=ctx)
     result = dispatch(event, evt, session_dir=session_dir, async_=async_)
-    # Every session runs a sync SessionStart, so it is the reaping point for long-dead session dirs
-    # on the one codepath shared by the cold CLI and the daemon. Fail-soft, never touch the live one.
-    if not async_ and event is Event.SessionStart:
+    if async_ and event is Event.SessionStart:
         try:
             cleanup_stale(exclude=SessionId(sid) if (sid := raw.get("session_id")) else None)
         except Exception:

@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A slow session start returns what it has instead of timing out.** On a
+  loaded machine, a cold `SessionStart` ran worker startup, discovery, the PR
+  and fault announcements, and session-dir reaping in series, and passed the
+  client's 30 s deadline. Claude Code then reported `context deadline exceeded`
+  and dropped the whole reply, preload context included. A sync dispatch now
+  stops starting hooks once 5 s or less remain before the caller's deadline
+  and replies with what the hooks that ran produced. A skipped announcement
+  stays pending and surfaces at the next session start. Reaping stale session
+  dirs moves to the async `SessionStart`, off the path Claude Code waits on.
+
 ## [12.30.0] - 2026-09-14
 
 ### Changed
