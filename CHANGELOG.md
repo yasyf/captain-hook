@@ -6,6 +6,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.27.1] - 2026-09-14
+
+### Added
+
+- **Conformance tests check the Go and Python worker protocol together.**
+  `tests/test_protocol_conformance.py` and
+  `internal/wireproto/conformance_test.go` compare protocol constants, JSON
+  fields, accepted and rejected frames, and round trips between languages.
+  The Go wire contract moves from `internal/hookd` to `internal/wireproto`,
+  which imports only the standard library so the Linux CI job can run it.
+  The tests caught Python's stale 64 MiB frame limit;
+  `captain_hook/worker/protocol.py` now derives `MAX_FRAME` as
+  `MAX_HOST_PAYLOAD + 4 * 1024`, matching Go's 68,161,536-byte ceiling.
+
+### Changed
+
+- **The internal Python notification package is now `captain_hook.desktop`.**
+  `captain_hook.helper` moves to `captain_hook/desktop/`, with imports updated
+  in `captain_hook/cli.py`, the review modules, and
+  `captain_hook/update/updater.py`. Its tests move to
+  `tests/test_desktop_cli.py` and `tests/test_desktop_client.py`. The
+  `capt-hook helper` command and its behavior are unchanged.
+
+- **The repository layout docs cover every component, with `make` as the
+  local build and test entrypoint.** The development guide fragment at
+  `.claude/fragments/AGENTS.md/captain-hook-development-guide.fragment.md`
+  now lists the client, Go daemon, `internal/wireproto`, Swift helper,
+  stress and benchmark harnesses, and tutorial sources. The `structure-check`
+  job in `.github/workflows/ci.yml` rejects undocumented top-level directories.
+  The root `Makefile` replaces separate build and test invocations with
+  `make`, covering Python, Go, Swift, and the tutorial's TypeScript bundles.
+  `make python-test`, `make go-test`, and `make helper-test` run individual
+  suites; a failed build or test returns a nonzero exit status.
+
+### Fixed
+
+- **A hook's timeout no longer cancels worker startup for other sessions.**
+  `workerManager.startEntry` in `internal/hookd/manager.go` starts Python
+  workers on the daemon's lifetime, bounded by `workerReadinessTimeout`.
+  Previously, a hook with a short timeout arriving first at a fresh root
+  tore down the startup that other sessions' hooks were waiting on, failing
+  them with `captain: handshake Python product worker captain: read worker
+  frame header: read |0: file already closed`. Every caller of
+  `workerManager.acquire`, including the first, now waits under its own
+  timeout. If all callers leave, startup still finishes and caches the worker
+  idle, or retires it immediately for a temporary root. A worker whose child
+  dies before publication is never cached; the next request can start a new
+  one. `internal/hookd/worker_start_test.go` covers these startup races.
+
 ## [12.27.0] - 2026-09-14
 
 ### Added
