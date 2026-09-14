@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deadline, which starts only after the directory is known. The client now
   names its directory with `F_GETPATH` and falls back to `$PWD` when that
   directory is gone, as before.
+- **Deep conditions stop holding every subagent transcript.** A worker serving
+  two busy lead sessions reached 4.4-4.8 GiB RSS as their subagent trees
+  exceeded the cache budget and evicted each other's sessions. cc-transcript
+  14.17.0 answers conditions from small per-file inputs; Captain Hook's own
+  tree-walking conditions now use those inputs too. Errored calls stay hidden,
+  and matching rules are unchanged. Direct checks over both live trees with
+  the packs' 11 `RanCommand` argument lists took 52-287 ms per lead per warm
+  event, down from about 1.76 s. With both main transcripts loaded and both
+  trees answered, resident memory was 973 MiB, down from 3.35 GiB.
 
 ## [12.30.1] - 2026-09-14
 
