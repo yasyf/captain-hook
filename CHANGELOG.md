@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Deep transcript conditions stop reparsing every sidechain on every event.**
+  `RanCommand`, `UsedSkill`, `UsedTool` and `ReadFile` walk the whole sidechain
+  tree by default. cc-transcript held lifted sidechains only up to
+  64 MiB, admitted in first-come order and never evicted, so a worker serving a
+  large lead reparsed everything outside that budget for each condition. One
+  lead with 1,215 sidechain files and 872 MB cost about 16 s of CPU per
+  `PostToolUse` dispatch. The cc-transcript pin is now exactly `14.16.1`, whose
+  hold is a least-recently-used cache of 1 GiB of source bytes. A synthetic
+  1,000-sidechain tree now costs 0.27 s per warm event, down from 2.6 s.
 - **Hooks reuse repo language scans and transcript waiting checks.** Each
   event re-walked the repo, and each waiting check re-read the whole
   transcript. Hooks now cache those results and default each worker's
