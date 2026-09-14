@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The host stops its workers all at once.** `restart-workers` and the host's
+  shutdown stopped the cached Python interpreters one after another on a
+  single shared deadline, so each settlement spent what the next had left and
+  the tail of a long list was demanded on a deadline already gone. daemonkit
+  then published those workers unproven the instant SIGKILL went out, kept
+  their records, and the next host shutdown faulted its children stage over
+  processes that had died a millisecond later — `child N: process did not
+  provably exit`, six at a time in the host log — and parked holding the
+  flock until launchd's timeout. Every worker is now stopped concurrently on
+  the whole budget.
+
 ## [12.28.1] - 2026-09-14
 
 ### Fixed

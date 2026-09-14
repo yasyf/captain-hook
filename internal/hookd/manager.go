@@ -433,6 +433,23 @@ func (m *workerManager) settle(worker *workerClient) error {
 	return worker.stop(stopCtx)
 }
 
+// stopAll terminates every worker at once on one shared budget. Stopped one
+// after another, each settlement spent what the next one had left, and the
+// tail of a long list was demanded on a deadline already gone.
+func (m *workerManager) stopAll(ctx context.Context, workers []*workerClient) error {
+	errs := make([]error, len(workers))
+	var wg sync.WaitGroup
+	for i, worker := range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = worker.stop(ctx)
+		}()
+	}
+	wg.Wait()
+	return errors.Join(errs...)
+}
+
 func (m *workerManager) stopChild(child *daemonkit.Child, message, cause error) error {
 	stopCtx, cancel := context.WithTimeout(context.Background(), workerSettlementTimeout)
 	defer cancel()
@@ -494,11 +511,7 @@ func (m *workerManager) restart(ctx context.Context) error {
 	m.mu.Unlock()
 	stopCtx, cancel := context.WithTimeout(ctx, workerSettlementTimeout)
 	defer cancel()
-	var errs []error
-	for _, worker := range workers {
-		errs = append(errs, worker.stop(stopCtx))
-	}
-	return errors.Join(errs...)
+	return m.stopAll(stopCtx, workers)
 }
 
 func (m *workerManager) Close(ctx context.Context) (bool, error) {
@@ -515,17 +528,14 @@ func (m *workerManager) Close(ctx context.Context) (bool, error) {
 	}
 	m.entries = make(map[string]*workerEntry)
 	m.mu.Unlock()
-	var errs []error
-	for _, worker := range workers {
-		errs = append(errs, worker.stop(ctx))
-	}
+	stopErr := m.stopAll(ctx, workers)
 	done := make(chan struct{})
 	go func() { m.wg.Wait(); close(done) }()
 	select {
 	case <-done:
-		return true, errors.Join(errs...)
+		return true, stopErr
 	case <-ctx.Done():
-		return false, errors.Join(append(errs, ctx.Err())...)
+		return false, errors.Join(stopErr, ctx.Err())
 	}
 }
 
