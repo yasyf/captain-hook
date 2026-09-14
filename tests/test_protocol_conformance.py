@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 ROOT = Path(__file__).parents[1]
 GO = shutil.which("go")
-PACKAGE = "./internal/hookd"
+PACKAGE = "./internal/wireproto"
 
 
 def python_descriptor() -> dict[str, object]:

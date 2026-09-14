@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/yasyf/captain-hook/internal/wireproto"
 	"github.com/yasyf/daemonkit"
 	"github.com/yasyf/daemonkit/launchd"
 )
@@ -101,7 +102,7 @@ func TestProbeFailureNamesTheOutcomeItMet(t *testing.T) {
 func TestRuntimeHealthRequiresExactIdentity(t *testing.T) {
 	t.Parallel()
 	current := runtimeHealthResponse{
-		Schema: Schema, RuntimeBuild: Build, RuntimeProtocol: Schema, PID: 42,
+		Schema: wireproto.Schema, RuntimeBuild: Build, RuntimeProtocol: wireproto.Schema, PID: 42,
 	}
 	if err := current.exact(); err != nil {
 		t.Fatalf("exact health refused: %v", err)

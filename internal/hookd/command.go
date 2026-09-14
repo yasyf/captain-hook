@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/yasyf/captain-hook/internal/wireproto"
 )
 
 const (
@@ -60,7 +62,7 @@ func versionCommand(args []string, stdout, stderr io.Writer) int {
 	if err := json.NewEncoder(stdout).Encode(struct {
 		Schema int    `json:"schema"`
 		Build  string `json:"build"`
-	}{Schema: Schema, Build: Build}); err != nil {
+	}{Schema: wireproto.Schema, Build: Build}); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -105,21 +107,21 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if *cwd == "" {
 		*cwd, _ = os.Getwd()
 	}
-	payload, err := io.ReadAll(io.LimitReader(stdin, maxEventInput+1))
+	payload, err := io.ReadAll(io.LimitReader(stdin, wireproto.MaxEventInput+1))
 	if err != nil {
 		fmt.Fprintf(stderr, "capt-hookd: read event: %v\n", err)
 		return 1
 	}
-	if len(payload) > maxEventInput {
-		fmt.Fprintf(stderr, "capt-hookd: event input exceeds %d bytes\n", maxEventInput)
+	if len(payload) > wireproto.MaxEventInput {
+		fmt.Fprintf(stderr, "capt-hookd: event input exceeds %d bytes\n", wireproto.MaxEventInput)
 		return 1
 	}
-	request := EventRequest{
-		Schema: Schema, Event: *event, Async: *async, Root: *root, CWD: *cwd,
+	request := wireproto.EventRequest{
+		Schema: wireproto.Schema, Event: *event, Async: *async, Root: *root, CWD: *cwd,
 		Env: requestEnvironment(os.Environ()), PayloadRaw: string(payload),
 		Python: *python, Build: *build, ClientPID: os.Getpid(), ClientPPID: os.Getppid(),
 	}
-	if err := validateEventRequest(request); err != nil {
+	if err := request.Validate(); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
@@ -134,7 +136,7 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		defer client.Close()
 		err = client.EnsureCurrent(ctx)
 	}
-	var response EventResponse
+	var response wireproto.EventResponse
 	if err == nil {
 		response, err = client.Event(ctx, request)
 	}

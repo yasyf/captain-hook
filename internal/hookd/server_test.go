@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yasyf/captain-hook/internal/wireproto"
 	"github.com/yasyf/daemonkit"
 )
 
@@ -64,8 +65,8 @@ func TestHostProductHandleDispatchesEveryOpAndRefusesTheRest(t *testing.T) {
 	if err := decodeStrict(health.Body, &identity); err != nil {
 		t.Fatal(err)
 	}
-	if identity.Schema != Schema || identity.RuntimeBuild != Build ||
-		identity.RuntimeProtocol != Schema || identity.PID != os.Getpid() {
+	if identity.Schema != wireproto.Schema || identity.RuntimeBuild != Build ||
+		identity.RuntimeProtocol != wireproto.Schema || identity.PID != os.Getpid() {
 		t.Fatalf("runtime health = %#v", identity)
 	}
 
@@ -77,12 +78,12 @@ func TestHostProductHandleDispatchesEveryOpAndRefusesTheRest(t *testing.T) {
 	if err := decodeStrict(status.Body, &reported); err != nil {
 		t.Fatal(err)
 	}
-	if reported.Schema != Schema || reported.Build != Build || reported.PID != os.Getpid() ||
+	if reported.Schema != wireproto.Schema || reported.Build != Build || reported.PID != os.Getpid() ||
 		len(reported.Workers) != 0 {
 		t.Fatalf("status = %#v", reported)
 	}
 
-	stale, err := json.Marshal(restartWorkersRequest{Schema: Schema, Build: Build + "-stale"})
+	stale, err := json.Marshal(restartWorkersRequest{Schema: wireproto.Schema, Build: Build + "-stale"})
 	if err != nil {
 		t.Fatal(err)
 	}

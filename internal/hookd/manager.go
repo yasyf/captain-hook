@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yasyf/captain-hook/internal/wireproto"
 	"github.com/yasyf/daemonkit"
 )
 
@@ -137,33 +138,33 @@ func parallelCeiling(override string) (int, error) {
 	return parsed, nil
 }
 
-func (m *workerManager) dispatch(ctx context.Context, request EventRequest) (EventResponse, error) {
-	if err := validateEventRequest(request); err != nil {
-		return EventResponse{}, err
+func (m *workerManager) dispatch(ctx context.Context, request wireproto.EventRequest) (wireproto.EventResponse, error) {
+	if err := request.Validate(); err != nil {
+		return wireproto.EventResponse{}, err
 	}
 	key, err := makeWorkerKey(request)
 	if err != nil {
-		return EventResponse{}, err
+		return wireproto.EventResponse{}, err
 	}
 	session := sessionID(request.PayloadRaw)
 	if session == "" {
 		session = fmt.Sprintf("pid:%d", request.ClientPID)
 	}
 	laneKey := key.id + "\x00" + session + "\x00" + strconv.FormatBool(request.Async)
-	return m.scheduler.run(ctx, laneKey, request.Async, func() (EventResponse, error) {
+	return m.scheduler.run(ctx, laneKey, request.Async, func() (wireproto.EventResponse, error) {
 		entry, err := m.acquire(ctx, key)
 		if err != nil {
-			return EventResponse{}, err
+			return wireproto.EventResponse{}, err
 		}
 		defer m.release(entry)
 		worker := entry.worker
 		response, err := worker.call(ctx, request)
 		if err != nil {
 			if !worker.broken() {
-				return EventResponse{}, err
+				return wireproto.EventResponse{}, err
 			}
 			m.retire(key.id, worker)
-			return EventResponse{}, errors.Join(err, m.settle(worker))
+			return wireproto.EventResponse{}, errors.Join(err, m.settle(worker))
 		}
 		return response, nil
 	})
@@ -502,7 +503,7 @@ func (m *workerManager) Close(ctx context.Context) (bool, error) {
 	}
 }
 
-func makeWorkerKey(request EventRequest) (workerKey, error) {
+func makeWorkerKey(request wireproto.EventRequest) (workerKey, error) {
 	root, err := filepath.Abs(request.Root)
 	if err != nil {
 		return workerKey{}, fmt.Errorf("captain: resolve root: %w", err)

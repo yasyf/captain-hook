@@ -3,6 +3,8 @@ package hookd
 import (
 	"context"
 	"sync"
+
+	"github.com/yasyf/captain-hook/internal/wireproto"
 )
 
 type lane struct {
@@ -35,17 +37,17 @@ func newScheduler(floor, ceiling, asyncCap int) *scheduler {
 	}
 }
 
-func (s *scheduler) run(ctx context.Context, key string, async bool, execute func() (EventResponse, error)) (EventResponse, error) {
+func (s *scheduler) run(ctx context.Context, key string, async bool, execute func() (wireproto.EventResponse, error)) (wireproto.EventResponse, error) {
 	l := s.acquireLane(key, async)
 	defer s.releaseLane(key, async, l)
 	select {
 	case l.gate <- struct{}{}:
 		defer func() { <-l.gate }()
 	case <-ctx.Done():
-		return EventResponse{}, ctx.Err()
+		return wireproto.EventResponse{}, ctx.Err()
 	}
 	if err := s.acquireSlot(ctx, async); err != nil {
-		return EventResponse{}, err
+		return wireproto.EventResponse{}, err
 	}
 	defer s.releaseSlot(async)
 	return execute()

@@ -9,11 +9,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yasyf/captain-hook/internal/wireproto"
 	"github.com/yasyf/daemonkit"
 )
 
 type workerResult struct {
-	response EventResponse
+	response wireproto.EventResponse
 	err      error
 }
 
@@ -40,14 +41,14 @@ func handshakeWorker(ctx context.Context, conn net.Conn, build string) (*workerC
 			return nil, err
 		}
 	}
-	if err := encodeWorkerFrame(conn, workerFrame{Protocol: Schema, Op: opWorkerHello, Build: build}); err != nil {
+	if err := wireproto.EncodeFrame(conn, wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpHello, Build: build}); err != nil {
 		return nil, err
 	}
-	response, err := decodeWorkerFrame(conn)
+	response, err := wireproto.DecodeFrame(conn)
 	if err != nil {
 		return nil, err
 	}
-	if response.Op != opWorkerHello || response.ID != 0 || response.Build != build || response.Request != nil ||
+	if response.Op != wireproto.OpHello || response.ID != 0 || response.Build != build || response.Request != nil ||
 		response.Response != nil || response.Error != "" {
 		return nil, errors.New("captain: Python worker rejected the exact build handshake")
 	}
@@ -59,7 +60,7 @@ func handshakeWorker(ctx context.Context, conn net.Conn, build string) (*workerC
 	return w, nil
 }
 
-func (w *workerClient) call(ctx context.Context, request EventRequest) (EventResponse, error) {
+func (w *workerClient) call(ctx context.Context, request wireproto.EventRequest) (wireproto.EventResponse, error) {
 	w.mu.Lock()
 	if w.closed {
 		err := w.err
@@ -67,7 +68,7 @@ func (w *workerClient) call(ctx context.Context, request EventRequest) (EventRes
 		if err == nil {
 			err = net.ErrClosed
 		}
-		return EventResponse{}, err
+		return wireproto.EventResponse{}, err
 	}
 	w.nextID++
 	id := w.nextID
@@ -75,19 +76,19 @@ func (w *workerClient) call(ctx context.Context, request EventRequest) (EventRes
 	w.pending[id] = result
 	w.mu.Unlock()
 
-	if err := w.write(ctx, workerFrame{Protocol: Schema, Op: opWorkerEvent, ID: id, Request: &request}); err != nil {
+	if err := w.write(ctx, wireproto.Frame{Protocol: wireproto.Schema, Op: wireproto.OpEvent, ID: id, Request: &request}); err != nil {
 		w.removePending(id)
-		if !errors.Is(err, ErrPayloadTooLarge) {
+		if !errors.Is(err, wireproto.ErrPayloadTooLarge) {
 			w.fail(err)
 		}
-		return EventResponse{}, err
+		return wireproto.EventResponse{}, err
 	}
 	select {
 	case received := <-result:
 		return received.response, received.err
 	case <-ctx.Done():
 		w.removePending(id)
-		return EventResponse{}, ctx.Err()
+		return wireproto.EventResponse{}, ctx.Err()
 	}
 }
 
@@ -101,7 +102,7 @@ func (w *workerClient) broken() bool {
 	return w.closed
 }
 
-func (w *workerClient) write(ctx context.Context, frame workerFrame) error {
+func (w *workerClient) write(ctx context.Context, frame wireproto.Frame) error {
 	w.writeMu.Lock()
 	defer w.writeMu.Unlock()
 	if deadline, ok := ctx.Deadline(); ok {
@@ -110,17 +111,17 @@ func (w *workerClient) write(ctx context.Context, frame workerFrame) error {
 		}
 		defer w.conn.SetWriteDeadline(time.Time{}) //nolint:errcheck
 	}
-	return encodeWorkerFrame(w.conn, frame)
+	return wireproto.EncodeFrame(w.conn, frame)
 }
 
 func (w *workerClient) readLoop() {
 	for {
-		frame, err := decodeWorkerFrame(w.conn)
+		frame, err := wireproto.DecodeFrame(w.conn)
 		if err != nil {
 			w.fail(err)
 			return
 		}
-		if frame.ID == 0 || (frame.Op != opWorkerResult && frame.Op != opWorkerError) || frame.Request != nil {
+		if frame.ID == 0 || (frame.Op != wireproto.OpResult && frame.Op != wireproto.OpError) || frame.Request != nil {
 			w.fail(errors.New("captain: invalid Python worker response frame"))
 			return
 		}
@@ -132,7 +133,7 @@ func (w *workerClient) readLoop() {
 			w.fail(fmt.Errorf("captain: Python worker returned unknown request id %d", frame.ID))
 			return
 		}
-		if frame.Op == opWorkerError {
+		if frame.Op == wireproto.OpError {
 			if frame.Error == "" || frame.Response != nil {
 				w.fail(errors.New("captain: invalid Python worker error frame"))
 				return
@@ -144,7 +145,7 @@ func (w *workerClient) readLoop() {
 			w.fail(errors.New("captain: invalid Python worker result frame"))
 			return
 		}
-		if err := validateEventResponse(*frame.Response); err != nil {
+		if err := frame.Response.Validate(); err != nil {
 			w.fail(err)
 			return
 		}

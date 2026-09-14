@@ -1,4 +1,4 @@
-package hookd
+package wireproto
 
 import (
 	"bytes"
@@ -32,19 +32,19 @@ func describeProtocol() protocolDescriptor {
 	return protocolDescriptor{
 		Protocol: Schema,
 		Limits: map[string]int{
-			"event_input":    maxEventInput,
-			"event_envelope": maxEventEnvelope,
-			"host_payload":   maxHostPayload,
-			"worker_frame":   maxWorkerFrame,
+			"event_input":    MaxEventInput,
+			"event_envelope": MaxEventEnvelope,
+			"host_payload":   MaxHostPayload,
+			"worker_frame":   MaxWorkerFrame,
 		},
 		Ops: map[string]string{
-			"hello":  opWorkerHello,
-			"event":  opWorkerEvent,
-			"result": opWorkerResult,
-			"error":  opWorkerError,
+			"hello":  OpHello,
+			"event":  OpEvent,
+			"result": OpResult,
+			"error":  OpError,
 		},
 		Fields: map[string][]string{
-			"worker_frame":   wireFields(workerFrame{}),
+			"worker_frame":   wireFields(Frame{}),
 			"event_request":  wireFields(EventRequest{}),
 			"event_response": wireFields(EventResponse{}),
 		},
@@ -62,16 +62,16 @@ func wireFields(value any) []string {
 }
 
 // admitWorkerFrame is the whole Go-side admission of one decoded frame: the
-// payload validators worker.go runs once decodeWorkerFrame has accepted the
-// envelope.
-func admitWorkerFrame(frame workerFrame) error {
+// payload validators internal/hookd/worker.go runs once DecodeFrame has
+// accepted the envelope.
+func admitWorkerFrame(frame Frame) error {
 	if frame.Request != nil {
-		if err := validateEventRequest(*frame.Request); err != nil {
+		if err := frame.Request.Validate(); err != nil {
 			return err
 		}
 	}
 	if frame.Response != nil {
-		return validateEventResponse(*frame.Response)
+		return frame.Response.Validate()
 	}
 	return nil
 }
@@ -97,41 +97,41 @@ func declaredLength(size uint32, payload []byte) []byte {
 	return append(header[:], payload...)
 }
 
-func encodedFrame(t *testing.T, frame workerFrame) []byte {
+func encodedFrame(t *testing.T, frame Frame) []byte {
 	t.Helper()
 	var buffer bytes.Buffer
-	if err := encodeWorkerFrame(&buffer, frame); err != nil {
-		t.Fatalf("encodeWorkerFrame: %v", err)
+	if err := EncodeFrame(&buffer, frame); err != nil {
+		t.Fatalf("EncodeFrame: %v", err)
 	}
 	return buffer.Bytes()
 }
 
 // maxReachableEvent is the largest event the host can actually put on the
-// worker pipe: maxEventInput raw bytes of the one character JSON escaping
-// doubles, which is what makes the serialized body approach maxHostPayload.
+// worker pipe: MaxEventInput raw bytes of the one character JSON escaping
+// doubles, which is what makes the serialized body approach MaxHostPayload.
 func maxReachableEvent(t *testing.T) []byte {
 	t.Helper()
 	request := sampleEventRequest()
-	request.PayloadRaw = strings.Repeat(`"`, maxEventInput)
-	return encodedFrame(t, workerFrame{Protocol: Schema, Op: opWorkerEvent, ID: 3, Request: &request})
+	request.PayloadRaw = strings.Repeat(`"`, MaxEventInput)
+	return encodedFrame(t, Frame{Protocol: Schema, Op: OpEvent, ID: 3, Request: &request})
 }
 
 func rawEventFrame(t *testing.T, mutate func(frame map[string]any, request map[string]any)) []byte {
 	t.Helper()
 	request := sampleEventRequest()
-	body, err := marshalHostJSON(request)
+	body, err := Marshal(request)
 	if err != nil {
-		t.Fatalf("marshalHostJSON: %v", err)
+		t.Fatalf("Marshal: %v", err)
 	}
 	var requestMap map[string]any
 	if err := json.Unmarshal(body, &requestMap); err != nil {
 		t.Fatalf("unmarshal request: %v", err)
 	}
-	frameMap := map[string]any{"protocol": Schema, "op": opWorkerEvent, "id": 1, "request": requestMap}
+	frameMap := map[string]any{"protocol": Schema, "op": OpEvent, "id": 1, "request": requestMap}
 	mutate(frameMap, requestMap)
-	payload, err := marshalHostJSON(frameMap)
+	payload, err := Marshal(frameMap)
 	if err != nil {
-		t.Fatalf("marshalHostJSON frame: %v", err)
+		t.Fatalf("Marshal frame: %v", err)
 	}
 	return framed(payload)
 }
@@ -147,9 +147,9 @@ func goCorpus(t *testing.T) []struct {
 		bytes []byte
 	}{
 		{corpusFrame{"hello", "accept"},
-			encodedFrame(t, workerFrame{Protocol: Schema, Op: opWorkerHello, Build: "12.9.1"})},
+			encodedFrame(t, Frame{Protocol: Schema, Op: OpHello, Build: "12.9.1"})},
 		{corpusFrame{"event_minimal", "accept"},
-			encodedFrame(t, workerFrame{Protocol: Schema, Op: opWorkerEvent, ID: 1, Request: &request})},
+			encodedFrame(t, Frame{Protocol: Schema, Op: OpEvent, ID: 1, Request: &request})},
 		{corpusFrame{"event_at_max_size", "accept"}, maxReachableEvent(t)},
 		{corpusFrame{"frame_unknown_field", "reject"},
 			rawEventFrame(t, func(frame map[string]any, _ map[string]any) { frame["legacy"] = true })},
@@ -160,27 +160,27 @@ func goCorpus(t *testing.T) []struct {
 		{corpusFrame{"request_wrong_schema", "reject"},
 			rawEventFrame(t, func(_ map[string]any, request map[string]any) { request["schema"] = Schema + 1 })},
 		{corpusFrame{"frame_trailing_json", "reject"}, func() []byte {
-			payload, err := marshalHostJSON(map[string]any{"protocol": Schema, "op": opWorkerHello, "build": "12.9.1"})
+			payload, err := Marshal(map[string]any{"protocol": Schema, "op": OpHello, "build": "12.9.1"})
 			if err != nil {
-				t.Fatalf("marshalHostJSON: %v", err)
+				t.Fatalf("Marshal: %v", err)
 			}
 			return framed(append(payload, []byte(`{"protocol":1}`)...))
 		}()},
 		{corpusFrame{"frame_length_zero", "reject"}, declaredLength(0, nil)},
-		{corpusFrame{"frame_over_cap", "reject"}, declaredLength(maxWorkerFrame+1, []byte("{}"))},
+		{corpusFrame{"frame_over_cap", "reject"}, declaredLength(MaxWorkerFrame+1, []byte("{}"))},
 		{corpusFrame{"event_over_input_cap", "reject"}, func() []byte {
 			oversize := sampleEventRequest()
-			oversize.PayloadRaw = strings.Repeat("x", maxEventInput+1)
-			return encodedFrame(t, workerFrame{Protocol: Schema, Op: opWorkerEvent, ID: 2, Request: &oversize})
+			oversize.PayloadRaw = strings.Repeat("x", MaxEventInput+1)
+			return encodedFrame(t, Frame{Protocol: Schema, Op: OpEvent, ID: 2, Request: &oversize})
 		}()},
 	}
 }
 
-func canonicalDigest(t *testing.T, frame workerFrame) string {
+func canonicalDigest(t *testing.T, frame Frame) string {
 	t.Helper()
-	payload, err := marshalHostJSON(frame)
+	payload, err := Marshal(frame)
 	if err != nil {
-		t.Fatalf("marshalHostJSON: %v", err)
+		t.Fatalf("Marshal: %v", err)
 	}
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
@@ -238,7 +238,7 @@ func TestConformanceEmit(t *testing.T) {
 		if entry.frame.Verdict != "accept" {
 			continue
 		}
-		frame, err := decodeWorkerFrame(bytes.NewReader(entry.bytes))
+		frame, err := DecodeFrame(bytes.NewReader(entry.bytes))
 		if err != nil {
 			t.Fatalf("%s: Go refused its own accepted frame: %v", entry.frame.Name, err)
 		}
@@ -264,7 +264,7 @@ func TestConformanceVerify(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
-		frame, err := decodeWorkerFrame(bytes.NewReader(payload))
+		frame, err := DecodeFrame(bytes.NewReader(payload))
 		if err != nil {
 			t.Fatalf("%s: Go refused Python's re-encoding: %v", name, err)
 		}
@@ -288,7 +288,7 @@ func TestConformanceVerify(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", entry.Name, err)
 		}
-		frame, err := decodeWorkerFrame(bytes.NewReader(payload))
+		frame, err := DecodeFrame(bytes.NewReader(payload))
 		if err == nil {
 			err = admitWorkerFrame(frame)
 		}
@@ -303,7 +303,7 @@ func TestConformanceVerify(t *testing.T) {
 			continue
 		}
 		var reencoded bytes.Buffer
-		if err := encodeWorkerFrame(&reencoded, frame); err != nil {
+		if err := EncodeFrame(&reencoded, frame); err != nil {
 			t.Fatalf("%s: re-encode: %v", entry.Name, err)
 		}
 		if err := os.WriteFile(filepath.Join(back, entry.Name+".bin"), reencoded.Bytes(), 0o644); err != nil {
