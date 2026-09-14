@@ -59,6 +59,92 @@ func TestCallerTimeoutLeavesTheWorkerUsable(t *testing.T) {
 	}
 }
 
+func lateReplyLeavesTheWorkerUsable(t *testing.T, late func(id uint64) wireproto.Frame) {
+	t.Helper()
+	worker, serverConn := silentWorker(t)
+	go func() {
+		abandoned, err := wireproto.DecodeFrame(serverConn)
+		if err != nil {
+			return
+		}
+		second, err := wireproto.DecodeFrame(serverConn)
+		if err != nil {
+			return
+		}
+		_ = wireproto.EncodeFrame(serverConn, late(abandoned.ID))
+		_ = wireproto.EncodeFrame(serverConn, wireproto.Frame{
+			Protocol: wireproto.Schema, Op: "result", ID: second.ID,
+			Response: &wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Stdout: "second"},
+		})
+	}()
+
+	timedOut, cancelTimedOut := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelTimedOut()
+	if _, err := worker.call(timedOut, testEventRequest("PreToolUse")); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("call against a worker that answers late = %v, want DeadlineExceeded", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	response, err := worker.call(ctx, testEventRequest("PostToolUse"))
+	if err != nil {
+		t.Fatalf("call concurrent with a late reply for an abandoned id = %v, want success", err)
+	}
+	if response.Stdout != "second" {
+		t.Fatalf("Stdout = %q, want %q", response.Stdout, "second")
+	}
+	if worker.broken() {
+		t.Fatal("a late reply for an id one caller abandoned broke the worker every other session shares")
+	}
+	worker.mu.Lock()
+	pending, abandoned := len(worker.pending), len(worker.abandoned)
+	worker.mu.Unlock()
+	if pending != 0 || abandoned != 0 {
+		t.Fatalf("pending, abandoned after the late reply = %d, %d; want 0, 0", pending, abandoned)
+	}
+}
+
+func TestLateResultForAnAbandonedIDLeavesTheWorkerUsable(t *testing.T) {
+	t.Parallel()
+	lateReplyLeavesTheWorkerUsable(t, func(id uint64) wireproto.Frame {
+		return wireproto.Frame{
+			Protocol: wireproto.Schema, Op: "result", ID: id,
+			Response: &wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Stdout: "late"},
+		}
+	})
+}
+
+func TestLateErrorForAnAbandonedIDLeavesTheWorkerUsable(t *testing.T) {
+	t.Parallel()
+	lateReplyLeavesTheWorkerUsable(t, func(id uint64) wireproto.Frame {
+		return wireproto.Frame{Protocol: wireproto.Schema, Op: "error", ID: id, Error: "a hook raised late"}
+	})
+}
+
+func TestReplyForANeverIssuedIDMarksTheWorkerBroken(t *testing.T) {
+	t.Parallel()
+	worker, serverConn := silentWorker(t)
+	go func() {
+		request, err := wireproto.DecodeFrame(serverConn)
+		if err != nil {
+			return
+		}
+		_ = wireproto.EncodeFrame(serverConn, wireproto.Frame{
+			Protocol: wireproto.Schema, Op: "result", ID: request.ID + 1,
+			Response: &wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok"},
+		})
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := worker.call(ctx, testEventRequest("PreToolUse")); err == nil {
+		t.Fatal("call succeeded after a reply for an id this client never issued")
+	}
+	if !worker.broken() {
+		t.Fatal("a reply for a never-issued id left the worker reading as usable")
+	}
+}
+
 func TestProductErrorLeavesTheWorkerUsable(t *testing.T) {
 	t.Parallel()
 	clientConn, serverConn := net.Pipe()
