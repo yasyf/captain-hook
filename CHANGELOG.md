@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SessionStart` keeps running through the Python shim, so the updater still
   runs on a machine whose app is too old to dispatch.
 
+### Fixed
+
+- **An upgrade no longer parks the old host over a worker that already left.**
+  The host's shutdown gave a worker's surviving children a 5 s clock of their
+  own after the worker exited, so a worker session that settled at 5.7 s
+  under a 4.5 s budget was reported unproven and the old host parked holding
+  its lock until launchd gave up. daemonkit 0.28.1 proves the whole session
+  inside the shutdown stage's own deadline.
+
 ## [12.29.0] - 2026-09-14
 
 ### Added
