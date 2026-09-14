@@ -166,4 +166,4 @@ jobs:
         env:
           GOSUMDB: "off"
           GOPROXY: direct
-        run: go run github.com/yasyf/binrun/cmd/binrun@v0.5.0 -- parse captain_hook/bin/hook.binrun
+        run: go run github.com/yasyf/binrun/cmd/binrun@v0.5.1 -- parse captain_hook/bin/hook.binrun
