@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Tracebacks stop rendering frame locals.** Logging a failed llm nudge
+  rendered variables holding a 124 MiB transcript separately for each of the
+  worker's three loguru handlers. In a replay with the nudge's signal gate
+  forced, peak resident memory fell from 8,418 MiB on 12.30.3 to 1,477 MiB.
+  All five loguru handlers now disable `diagnose`. Tracebacks keep the file,
+  line, source and exception, and stop writing prompt and transcript content
+  into logs through variable values. Transcript re-reading and `call_llm`'s
+  transcript rendering still cause transient allocations.
+
 ## [12.30.3] - 2026-09-14
 
 ### Fixed
