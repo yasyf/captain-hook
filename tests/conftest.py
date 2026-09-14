@@ -78,13 +78,13 @@ def clear_global_caches():
 def stub_helper_notify(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
     """Stub the desktop-notify seam so the suite never fires a real banner or launches the app.
 
-    ``transition`` and the spawn recorder both dispatch through ``helper.client.notify``; without
-    this, a store move on a dev Mac would launch ``Captain Hook.app``. The helper-client tests
+    ``transition`` and the spawn recorder both dispatch through ``desktop.client.notify``; without
+    this, a store move on a dev Mac would launch ``Captain Hook.app``. The desktop-client tests
     exercise the real client, so they opt out and drive the socket in-process instead.
     """
-    from captain_hook.helper import client
+    from captain_hook.desktop import client
 
-    if request.module.__name__.endswith("test_helper_client"):
+    if request.module.__name__.endswith("test_desktop_client"):
         return
     monkeypatch.setattr(client, "notify", lambda **_: client.NotifyOutcome(client.Lane.dropped, False, "stubbed"))
 

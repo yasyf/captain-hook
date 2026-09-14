@@ -21,7 +21,7 @@ from loguru import logger
 from captain_hook import faults
 from captain_hook.app import LoadError, _state, load_gitignore, reset
 from captain_hook.dispatch import dispatch
-from captain_hook.helper.cli import helper
+from captain_hook.desktop.cli import helper
 from captain_hook.loader import (
     CONF_MODULE,
     discover_hooks,

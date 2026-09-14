@@ -19,7 +19,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from captain_hook.helper.client import status_path
+from captain_hook.desktop.client import status_path
 from captain_hook.review import dashboard
 from captain_hook.review.dashboard import Stage
 from captain_hook.review.repo import RepoKey

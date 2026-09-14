@@ -33,7 +33,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from captain_hook.helper import FORMULA, client
+from captain_hook.desktop import FORMULA, client
 from captain_hook.review.pipeline import SPAWNED_ENV, _claim_stamp
 from captain_hook.settings import resolve_state_dir
 from captain_hook.update.settings import UpdateSettings
