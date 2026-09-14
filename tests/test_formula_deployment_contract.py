@@ -1,11 +1,10 @@
+import json
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 FORMULA = ROOT / ".github/formula/captain-hook.rb.tmpl"
-SYSTEM_APPLICATION_GREP = (
-    r"(^|[^$~[:alnum:]_])/Applications/Captain Hook\.app"
-)
+SYSTEM_APPLICATION_GREP = r"(^|[^$~[:alnum:]_])/Applications/Captain Hook\.app"
 
 
 def _render_formula() -> str:
@@ -14,8 +13,7 @@ def _render_formula() -> str:
         .replace("__VERSION__", "12.20.2")
         .replace(
             "__ASSET_URL__",
-            "https://github.com/yasyf/captain-hook/releases/download/"
-            "v12.20.2/captain-hook-v12.20.2-darwin.zip",
+            "https://github.com/yasyf/captain-hook/releases/download/v12.20.2/captain-hook-v12.20.2-darwin.zip",
         )
         .replace("__SHA_APP__", "a" * 64)
     )
@@ -37,7 +35,7 @@ def test_formula_bundles_and_applies_the_exact_signed_application() -> None:
     assert 'libexec.install "Captain Hook.app"' in formula
     assert '"package-install"' not in formula
     assert "capt-hook helper install" in formula
-    assert '$HOME/Applications/Captain Hook.app' in formula
+    assert "$HOME/Applications/Captain Hook.app" in formula
     assert "--cask" not in formula
     user_scoped = formula.replace("$HOME/Applications/Captain Hook.app", "").replace(
         "~/Applications/Captain Hook.app", ""
@@ -89,3 +87,23 @@ def test_binrun_version_reads_the_stable_signed_host_without_spawning_it() -> No
 
 def test_formula_never_runs_stapler_inside_the_homebrew_sandbox() -> None:
     assert "stapler" not in FORMULA.read_text()
+
+
+def test_hook_dispatch_resolves_the_signed_host_not_python() -> None:
+    """PIN: a hook event execs the signed host directly, with no Python interpreter in the chain.
+
+    The ``capt_hook_client`` shim cost one execve per event; capt-hookd now spells Claude Code's
+    ``run EVENT [--async]`` argv itself. Only dispatch moves: ``capt-hook`` is the full Python CLI.
+    """
+    hook = json.loads((ROOT / "captain_hook/bin/hook.binrun").read_text().split("\n", 1)[1])
+    assert hook["kind"] == "signed-app"
+    assert "tool" not in hook
+    assert hook["app"] == {
+        "dir": "~/Applications",
+        "app_name": "Captain Hook",
+        "exec": "Contents/Helpers/capt-hookd",
+        "formula": "yasyf/tap/captain-hook",
+    }
+    cli = json.loads((ROOT / "captain_hook/bin/capt-hook.binrun").read_text().split("\n", 1)[1])
+    assert cli["kind"] == "python-tool"
+    assert cli["tool"] == {"dist": "capt-hook", "entrypoint": "capt-hook"}
