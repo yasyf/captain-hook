@@ -5,11 +5,10 @@ from __future__ import annotations
 import re
 import threading
 from collections.abc import Sequence
-from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from cc_transcript.tools import SkillCall, TaskCall, WorkflowCall, tool_name_matches
+from cc_transcript.tools import TaskCall, WorkflowCall, tool_name_matches
 
 from captain_hook.types import (
     Agent,
@@ -164,8 +163,8 @@ def coerce_tool_input(value: object) -> str | None:
 
 
 def has_read_glob(t: Session, *globs: str, subagents: bool = True) -> bool:
-    sessions = chain((t,), (d.session for d in t.walk())) if subagents else (t,)
-    return any(f.matches(*globs) for s in sessions for f in s.tool_calls.named("Read").files())
+    inputs = t.deep_inputs() if subagents else (t.predicate_inputs,)
+    return any(f.matches(*globs) for window in inputs for f in window.files("Read"))
 
 
 def skill_name_matches(skill: str, names: tuple[str, ...]) -> bool:
@@ -173,12 +172,8 @@ def skill_name_matches(skill: str, names: tuple[str, ...]) -> bool:
 
 
 def has_used_skill(t: Session, names: tuple[str, ...], *, subagents: bool = True) -> bool:
-    sessions = chain((t,), (d.session for d in t.walk())) if subagents else (t,)
-    return any(
-        isinstance(call := use.call, SkillCall) and skill_name_matches(call.skill, names)
-        for s in sessions
-        for use in s.tool_calls.named("Skill")
-    )
+    inputs = t.deep_inputs() if subagents else (t.predicate_inputs,)
+    return any(skill_name_matches(skill, names) for window in inputs for skill in window.skills)
 
 
 def is_project_path(path: str | Path, root: Path | None) -> bool:
@@ -365,7 +360,8 @@ class EditedSource(CustomCondition):
             and f.suffix not in self.exclude_suffixes
             and not f.under("docs", ".claude", ".github")
             and is_project_path(f.path, root)
-            for f in evt.ctx.t.deep.tool_calls.named("Edit|Write").files()
+            for window in evt.ctx.t.deep_inputs()
+            for f in window.files("Edit|Write")
         )
 
 

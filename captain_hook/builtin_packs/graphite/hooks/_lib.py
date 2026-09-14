@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from itertools import chain
 from typing import TYPE_CHECKING
-
-from cc_transcript.tools import SkillCall
 
 from captain_hook import BaseHookEvent, CustomCommandLineCondition, CustomCondition
 from captain_hook.util.vcs import graphite_lane
@@ -120,8 +117,6 @@ class ReviewPassRan(CustomCondition):
 
     def check(self, evt: BaseHookEvent) -> bool:
         t = evt.ctx.transcript
-        return any(
-            isinstance(call := use.call, SkillCall) and is_review_skill(call.skill)
-            for s in chain((t,), (d.session for d in t.walk()))
-            for use in s.tool_calls.named("Skill")
-        ) or any(REVIEW_COMMAND.search(turn.prompt) for turn in t.turns if turn.prompt)
+        return any(is_review_skill(skill) for window in t.deep_inputs() for skill in window.skills) or any(
+            REVIEW_COMMAND.search(turn.prompt) for turn in t.turns if turn.prompt
+        )

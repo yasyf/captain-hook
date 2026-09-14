@@ -8,6 +8,7 @@ from typing import Any, get_args
 
 import pytest
 from cc_transcript.activity_probe import SessionActivityProbe, session_activity_probe
+from cc_transcript.query import DEEP_LIFTS
 
 from captain_hook import EditedSource, T, cli
 from captain_hook.app import on
@@ -1748,9 +1749,11 @@ class TestSubagentFlags:
         default_expected: bool,
         explicit_expected: bool,
     ) -> None:
+        DEEP_LIFTS.clear()
         evt = event_with_subagent_tool_use(tool_use)
         assert check_condition(default_cond, evt) is default_expected
         assert check_condition(explicit_cond, evt) is explicit_expected
+        assert len(DEEP_LIFTS) == 0
 
 
 class TestCustomConditionFilesystem:
