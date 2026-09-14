@@ -10,6 +10,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  structure-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify every top-level directory is documented
+        run: |
+          set -euo pipefail
+          fragment=.claude/fragments/AGENTS.md/captain-hook-development-guide.fragment.md
+          missing=()
+          while IFS= read -r dir; do
+            grep -Fq "$dir/" "$fragment" || missing+=("$dir")
+          done < <(git ls-files | awk -F/ 'NF>1 {print $1}' | sort -u)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf '::error::undocumented top-level directory: %s\n' "${missing[@]}"
+            exit 1
+          fi
+
   go-test:
     runs-on: macos-15
     steps:
