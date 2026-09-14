@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/yasyf/captain-hook/internal/wireproto"
 )
 
 type blockingRun struct {
@@ -24,7 +26,7 @@ func newBlockingRun(s *scheduler) *blockingRun {
 
 func (b *blockingRun) start(key string, async bool) {
 	go func() {
-		_, _ = b.scheduler.run(context.Background(), key, async, func() (EventResponse, error) {
+		_, _ = b.scheduler.run(context.Background(), key, async, func() (wireproto.EventResponse, error) {
 			b.entered.Add(1)
 			current := b.active.Add(1)
 			for {
@@ -35,7 +37,7 @@ func (b *blockingRun) start(key string, async bool) {
 			}
 			<-b.release
 			b.active.Add(-1)
-			return EventResponse{}, nil
+			return wireproto.EventResponse{}, nil
 		})
 		b.done <- struct{}{}
 	}()
@@ -74,25 +76,25 @@ func TestSchedulerSerializesOneSessionWithoutBlockingAnother(t *testing.T) {
 	results := make(chan error, 3)
 
 	go func() {
-		_, err := scheduler.run(context.Background(), "session-a", false, func() (EventResponse, error) {
+		_, err := scheduler.run(context.Background(), "session-a", false, func() (wireproto.EventResponse, error) {
 			close(firstEntered)
 			<-releaseFirst
-			return EventResponse{}, nil
+			return wireproto.EventResponse{}, nil
 		})
 		results <- err
 	}()
 	<-firstEntered
 	go func() {
-		_, err := scheduler.run(context.Background(), "session-a", false, func() (EventResponse, error) {
+		_, err := scheduler.run(context.Background(), "session-a", false, func() (wireproto.EventResponse, error) {
 			close(secondSameEntered)
-			return EventResponse{}, nil
+			return wireproto.EventResponse{}, nil
 		})
 		results <- err
 	}()
 	go func() {
-		_, err := scheduler.run(context.Background(), "session-b", false, func() (EventResponse, error) {
+		_, err := scheduler.run(context.Background(), "session-b", false, func() (wireproto.EventResponse, error) {
 			close(differentEntered)
-			return EventResponse{}, nil
+			return wireproto.EventResponse{}, nil
 		})
 		results <- err
 	}()
@@ -184,8 +186,8 @@ func TestSchedulerReleasesSlotWhenQueuedCallerCancels(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	queued := make(chan error, 1)
 	go func() {
-		_, err := scheduler.run(ctx, "session-b", false, func() (EventResponse, error) {
-			return EventResponse{}, nil
+		_, err := scheduler.run(ctx, "session-b", false, func() (wireproto.EventResponse, error) {
+			return wireproto.EventResponse{}, nil
 		})
 		queued <- err
 	}()
@@ -203,9 +205,9 @@ func TestSchedulerReleasesSlotWhenQueuedCallerCancels(t *testing.T) {
 
 	admitted := make(chan struct{})
 	go func() {
-		_, _ = scheduler.run(context.Background(), "session-c", false, func() (EventResponse, error) {
+		_, _ = scheduler.run(context.Background(), "session-c", false, func() (wireproto.EventResponse, error) {
 			close(admitted)
-			return EventResponse{}, nil
+			return wireproto.EventResponse{}, nil
 		})
 	}()
 	select {
@@ -240,9 +242,9 @@ func TestSchedulerBackgroundSaturationLeavesBlockingLaneFree(t *testing.T) {
 
 	blocking := make(chan struct{})
 	go func() {
-		_, _ = scheduler.run(context.Background(), "session-a", false, func() (EventResponse, error) {
+		_, _ = scheduler.run(context.Background(), "session-a", false, func() (wireproto.EventResponse, error) {
 			close(blocking)
-			return EventResponse{}, nil
+			return wireproto.EventResponse{}, nil
 		})
 	}()
 	select {
@@ -259,19 +261,19 @@ func TestSchedulerSeparatesOneSessionsBlockingAndBackgroundLanes(t *testing.T) {
 	held := make(chan struct{})
 	release := make(chan struct{})
 	go func() {
-		_, _ = scheduler.run(context.Background(), "session-a\x00true", true, func() (EventResponse, error) {
+		_, _ = scheduler.run(context.Background(), "session-a\x00true", true, func() (wireproto.EventResponse, error) {
 			close(held)
 			<-release
-			return EventResponse{}, nil
+			return wireproto.EventResponse{}, nil
 		})
 	}()
 	<-held
 
 	ran := make(chan struct{})
 	go func() {
-		_, _ = scheduler.run(context.Background(), "session-a\x00false", false, func() (EventResponse, error) {
+		_, _ = scheduler.run(context.Background(), "session-a\x00false", false, func() (wireproto.EventResponse, error) {
 			close(ran)
-			return EventResponse{}, nil
+			return wireproto.EventResponse{}, nil
 		})
 	}()
 	select {

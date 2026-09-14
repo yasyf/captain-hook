@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yasyf/captain-hook/internal/wireproto"
 )
 
 func silentWorker(t *testing.T) (*workerClient, net.Conn) {
@@ -14,11 +16,11 @@ func silentWorker(t *testing.T) (*workerClient, net.Conn) {
 	clientConn, serverConn := net.Pipe()
 	t.Cleanup(func() { _ = serverConn.Close() })
 	go func() {
-		hello, err := decodeWorkerFrame(serverConn)
+		hello, err := wireproto.DecodeFrame(serverConn)
 		if err != nil {
 			return
 		}
-		_ = encodeWorkerFrame(serverConn, workerFrame{Protocol: Schema, Op: "hello", Build: hello.Build})
+		_ = wireproto.EncodeFrame(serverConn, wireproto.Frame{Protocol: wireproto.Schema, Op: "hello", Build: hello.Build})
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -34,7 +36,7 @@ func TestCallerTimeoutLeavesTheWorkerUsable(t *testing.T) {
 	worker, serverConn := silentWorker(t)
 	go func() {
 		for {
-			if _, err := decodeWorkerFrame(serverConn); err != nil {
+			if _, err := wireproto.DecodeFrame(serverConn); err != nil {
 				return
 			}
 		}
@@ -62,25 +64,25 @@ func TestProductErrorLeavesTheWorkerUsable(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	t.Cleanup(func() { _ = serverConn.Close() })
 	go func() {
-		hello, err := decodeWorkerFrame(serverConn)
+		hello, err := wireproto.DecodeFrame(serverConn)
 		if err != nil {
 			return
 		}
-		_ = encodeWorkerFrame(serverConn, workerFrame{Protocol: Schema, Op: "hello", Build: hello.Build})
-		first, err := decodeWorkerFrame(serverConn)
+		_ = wireproto.EncodeFrame(serverConn, wireproto.Frame{Protocol: wireproto.Schema, Op: "hello", Build: hello.Build})
+		first, err := wireproto.DecodeFrame(serverConn)
 		if err != nil {
 			return
 		}
-		_ = encodeWorkerFrame(serverConn, workerFrame{
-			Protocol: Schema, Op: "error", ID: first.ID, Error: "a hook raised",
+		_ = wireproto.EncodeFrame(serverConn, wireproto.Frame{
+			Protocol: wireproto.Schema, Op: "error", ID: first.ID, Error: "a hook raised",
 		})
-		second, err := decodeWorkerFrame(serverConn)
+		second, err := wireproto.DecodeFrame(serverConn)
 		if err != nil {
 			return
 		}
-		_ = encodeWorkerFrame(serverConn, workerFrame{
-			Protocol: Schema, Op: "result", ID: second.ID,
-			Response: &EventResponse{Schema: Schema, Status: "ok", Stdout: "second"},
+		_ = wireproto.EncodeFrame(serverConn, wireproto.Frame{
+			Protocol: wireproto.Schema, Op: "result", ID: second.ID,
+			Response: &wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Stdout: "second"},
 		})
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -111,7 +113,7 @@ func TestOversizePayloadLeavesTheWorkerUsable(t *testing.T) {
 	worker, serverConn := silentWorker(t)
 	go func() {
 		for {
-			if _, err := decodeWorkerFrame(serverConn); err != nil {
+			if _, err := wireproto.DecodeFrame(serverConn); err != nil {
 				return
 			}
 		}
@@ -120,8 +122,8 @@ func TestOversizePayloadLeavesTheWorkerUsable(t *testing.T) {
 	defer cancel()
 
 	oversize := testEventRequest("PreToolUse")
-	oversize.PayloadRaw = strings.Repeat("x", maxWorkerFrame+1)
-	if _, err := worker.call(ctx, oversize); !errors.Is(err, ErrPayloadTooLarge) {
+	oversize.PayloadRaw = strings.Repeat("x", wireproto.MaxWorkerFrame+1)
+	if _, err := worker.call(ctx, oversize); !errors.Is(err, wireproto.ErrPayloadTooLarge) {
 		t.Fatalf("call with an oversize payload = %v, want ErrPayloadTooLarge", err)
 	}
 	if worker.broken() {

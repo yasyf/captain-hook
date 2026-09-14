@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/yasyf/captain-hook/internal/wireproto"
 	"github.com/yasyf/daemonkit"
 )
 
@@ -97,15 +98,15 @@ func (c *Client) RuntimeHealth(ctx context.Context) (runtimeHealthResponse, erro
 	if err := decodeStrict(result, &health); err != nil {
 		return runtimeHealthResponse{}, fmt.Errorf("captain: decode runtime health: %w", err)
 	}
-	if health.Schema != Schema || health.RuntimeBuild == "" || health.RuntimeProtocol <= 0 || health.PID <= 1 {
+	if health.Schema != wireproto.Schema || health.RuntimeBuild == "" || health.RuntimeProtocol <= 0 || health.PID <= 1 {
 		return runtimeHealthResponse{}, errors.New("captain: runtime health identity is incomplete")
 	}
 	return health, nil
 }
 
 func (h runtimeHealthResponse) exact() error {
-	if h.RuntimeProtocol != Schema {
-		return fmt.Errorf("captain: runtime protocol %d is not exact v%d", h.RuntimeProtocol, Schema)
+	if h.RuntimeProtocol != wireproto.Schema {
+		return fmt.Errorf("captain: runtime protocol %d is not exact v%d", h.RuntimeProtocol, wireproto.Schema)
 	}
 	if h.RuntimeBuild != Build {
 		return fmt.Errorf("captain: runtime build %q is not exact build %q", h.RuntimeBuild, Build)
@@ -114,21 +115,21 @@ func (h runtimeHealthResponse) exact() error {
 }
 
 // Event dispatches exactly once. No transport outcome is replayed.
-func (c *Client) Event(ctx context.Context, request EventRequest) (EventResponse, error) {
-	payload, err := marshalEventRequest(request)
+func (c *Client) Event(ctx context.Context, request wireproto.EventRequest) (wireproto.EventResponse, error) {
+	payload, err := wireproto.MarshalEventRequest(request)
 	if err != nil {
-		return EventResponse{}, err
+		return wireproto.EventResponse{}, err
 	}
 	result, err := c.call(ctx, opEvent, payload)
 	if err != nil {
-		return EventResponse{}, err
+		return wireproto.EventResponse{}, err
 	}
-	var response EventResponse
+	var response wireproto.EventResponse
 	if err := decodeStrict(result, &response); err != nil {
-		return EventResponse{}, fmt.Errorf("captain: decode event response: %w", err)
+		return wireproto.EventResponse{}, fmt.Errorf("captain: decode event response: %w", err)
 	}
-	if err := validateEventResponse(response); err != nil {
-		return EventResponse{}, err
+	if err := response.Validate(); err != nil {
+		return wireproto.EventResponse{}, err
 	}
 	return response, nil
 }
@@ -148,7 +149,7 @@ func (c *Client) Status(ctx context.Context) (statusResponse, error) {
 
 // RestartWorkers kills and reaps every product worker generation.
 func (c *Client) RestartWorkers(ctx context.Context) error {
-	payload, err := marshalHostJSON(restartWorkersRequest{Schema: Schema, Build: Build})
+	payload, err := wireproto.Marshal(restartWorkersRequest{Schema: wireproto.Schema, Build: Build})
 	if err != nil {
 		return err
 	}

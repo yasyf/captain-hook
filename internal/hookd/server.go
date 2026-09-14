@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/yasyf/captain-hook/internal/wireproto"
 	"github.com/yasyf/daemonkit"
 )
 
@@ -63,7 +64,7 @@ type hostProduct struct {
 func (p *hostProduct) Handle(ctx context.Context, req daemonkit.Request) (daemonkit.Reply, error) {
 	switch req.Op {
 	case opEvent:
-		var event EventRequest
+		var event wireproto.EventRequest
 		if err := decodeStrict(req.Body, &event); err != nil {
 			return daemonkit.Reply{}, fmt.Errorf("captain: decode event request: %w", err)
 		}
@@ -85,21 +86,21 @@ func (p *hostProduct) Handle(ctx context.Context, req daemonkit.Request) (daemon
 			return daemonkit.Reply{}, errors.New("captain: status request must be empty")
 		}
 		return encodeReply(statusResponse{
-			Schema: Schema, Build: Build, PID: os.Getpid(), Workers: p.manager.status(),
+			Schema: wireproto.Schema, Build: Build, PID: os.Getpid(), Workers: p.manager.status(),
 		})
 	case opRuntimeHealth:
 		if len(req.Body) != 0 {
 			return daemonkit.Reply{}, errors.New("captain: runtime health request must be empty")
 		}
 		return encodeReply(runtimeHealthResponse{
-			Schema: Schema, RuntimeBuild: Build, RuntimeProtocol: Schema, PID: os.Getpid(),
+			Schema: wireproto.Schema, RuntimeBuild: Build, RuntimeProtocol: wireproto.Schema, PID: os.Getpid(),
 		})
 	case opRestartWorkers:
 		var restart restartWorkersRequest
 		if err := decodeStrict(req.Body, &restart); err != nil {
 			return daemonkit.Reply{}, fmt.Errorf("captain: decode restart-workers request: %w", err)
 		}
-		if restart.Schema != Schema || restart.Build != Build {
+		if restart.Schema != wireproto.Schema || restart.Build != Build {
 			return daemonkit.Reply{}, errors.New("captain: restart-workers requires the exact runtime build")
 		}
 		if err := p.manager.restart(ctx); err != nil {
@@ -107,7 +108,7 @@ func (p *hostProduct) Handle(ctx context.Context, req daemonkit.Request) (daemon
 		}
 		return encodeReply(struct {
 			Schema int `json:"schema"`
-		}{Schema: Schema})
+		}{Schema: wireproto.Schema})
 	case opHelperPing:
 		if len(req.Body) != 0 {
 			return daemonkit.Reply{}, errors.New("captain: helper ping request must be empty")
@@ -149,7 +150,7 @@ func (p *hostProduct) Close(budget daemonkit.Budget) error {
 }
 
 func encodeReply(value any) (daemonkit.Reply, error) {
-	payload, err := marshalHostJSON(value)
+	payload, err := wireproto.Marshal(value)
 	if err != nil {
 		return daemonkit.Reply{}, fmt.Errorf("captain: encode reply: %w", err)
 	}
