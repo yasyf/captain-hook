@@ -12,7 +12,8 @@ captain-hook/
 │   └── skills/         # Bundled Claude Code skills — single source for wheel + plugin
 ├── capt_hook_client/   # Stdlib-only client the signed helper execs into; must not import captain_hook
 ├── cmd/capt-hookd/     # Go entrypoint for the capt-hookd daemon binary
-├── internal/hookd/     # Go daemon implementation — scheduling, worker pool, wire protocol
+├── internal/hookd/     # Go daemon implementation — scheduling, worker pool, host sessions
+├── internal/wireproto/ # Worker wire protocol, Go half; stdlib-only so it builds on Linux
 ├── helper/             # Swift app (XcodeGen project) — the signed macOS helper and its widget
 ├── stress/             # Adversarial stress-test scenarios and drivers; excluded from release artifacts
 ├── bench/              # Dispatch-latency and execve-count benchmark harness
