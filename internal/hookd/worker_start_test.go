@@ -183,6 +183,33 @@ func TestStartFailureReachesEveryWaiterAndFreesTheKey(t *testing.T) {
 	}
 }
 
+// TestStartThatLandsBrokenIsNotCached pins the gap between startWorker
+// returning and startEntry publishing: a child dying there is invisible to
+// watch, so the landing itself must refuse to cache a dead worker.
+func TestStartThatLandsBrokenIsNotCached(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	worker, serverConn := silentWorker(t)
+	started, release := stallStart(manager, worker, nil)
+	key := workerKey{id: "dead-on-arrival", root: "/live"}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	result := acquireAsync(manager, ctx, key)
+	<-started
+	cancel()
+	<-result
+	_ = serverConn.Close()
+	for !worker.broken() {
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	manager.wg.Wait()
+
+	if cachedEntry(manager, key.id) != nil {
+		t.Fatal("a worker whose child died before it was published stayed cached for the next requester")
+	}
+}
+
 // TestCloseSettlesAWorkerThatFinishedStartingUnderIt pins the shutdown edge: a
 // spawn that lands after Close snapshotted the cache is still settled before
 // Close reports the product joined, and the requester waiting on it is told

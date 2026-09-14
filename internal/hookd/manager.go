@@ -235,8 +235,9 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 }
 
 // startEntry runs one entry's startup on the manager's lifetime, holding the
-// entry until the result lands. A failed start frees the key for a retry; a
-// worker landing after Close is settled here, since the cache has let go of it.
+// entry until the result lands. A failed start, or a worker whose child died
+// before watch could see the entry, frees the key for a retry; a worker
+// landing after Close is settled here, since the cache has let go of it.
 func (m *workerManager) startEntry(entry *workerEntry) {
 	defer m.wg.Done()
 	ctx, cancel := context.WithTimeout(m.lifetime, workerReadinessTimeout)
@@ -250,7 +251,7 @@ func (m *workerManager) startEntry(entry *workerEntry) {
 		entry.worker = worker
 	}
 	entry.err = err
-	if err != nil && m.entries[entry.key.id] == entry {
+	if (err != nil || worker.broken()) && m.entries[entry.key.id] == entry {
 		delete(m.entries, entry.key.id)
 	}
 	close(entry.ready)
