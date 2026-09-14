@@ -6,8 +6,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.29.0] - 2026-09-14
+
+### Added
+
+- **`capt-hookd run` accepts Claude Code's hook argv directly.** It takes
+  `[--root ROOT] run EVENT [--async]` and builds the same request the Python
+  `capt_hook_client` shim builds: the root comes from `--root`, then
+  `CLAUDE_PROJECT_DIR`, then `FACTORY_PROJECT_DIR`, then the working directory,
+  and a deleted working directory falls back to `$PWD`, then `/`. The shim's
+  `run --event` form still works. Nothing dispatches through the new form yet;
+  a later release points hooks at the signed host and drops one Python exec,
+  about 34 ms, from every hook event.
+
 ### Fixed
 
+- **A new release installs even when uv's package index cache is stale.** The
+  host installs its Python tool with `uv tool install --refresh-package
+  capt-hook`. uv used to answer from a cached PyPI index written before the
+  release, so hooks failed with `no version of capt-hook==<version>`, which is
+  what took hooks down on 12.28.0.
+- **An upgrade leaves hooks down for less time.** `package-install` signals an
+  old host that will not leave once its 30 s shutdown grace plus a quarter has
+  passed, at 37.5 s, where it used to wait out half its three-minute budget
+  first. The host's request drain also waits for the handlers it cancels to
+  return, so it no longer parks holding its lock while they finish.
 - **Deep transcript conditions stop reparsing every sidechain on every event.**
   `RanCommand`, `UsedSkill`, `UsedTool` and `ReadFile` walk the whole sidechain
   tree by default. cc-transcript held lifted sidechains only up to
