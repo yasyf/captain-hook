@@ -293,7 +293,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "spacy", specifier = ">=3.7" },
-    { name = "spawnllm", specifier = ">=0.13.1,<0.14" },
+    { name = "spawnllm", specifier = ">=0.13.2,<0.14" },
     { name = "wn", specifier = ">=1.1.0" },
 ]
 provides-extras = ["dev"]
@@ -2416,7 +2416,7 @@ wheels = [
 
 [[package]]
 name = "spawnllm"
-version = "0.13.1"
+version = "0.13.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -2425,10 +2425,10 @@ dependencies = [
     { name = "pydantic" },
     { name = "wasmtime" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bc/2d/5812bf928b4bc3e2837c1d58d3b34f0d767757a3ca0c41725492e308666a/spawnllm-0.13.1.tar.gz", hash = "sha256:ac45632d26c23d64963a2c8d9336a8ed2743a5fedfa8328541819384e7794cb6", size = 212636, upload-time = "2026-09-14T10:27:26.691Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/1e/f3debb81fd4fcc5d291483b5dabca7ce3e7b8958e5539d1052495b63792b/spawnllm-0.13.2.tar.gz", hash = "sha256:ba23da0e48546f989cec4d2375c3043977770c9a95f141c73002bcba885c7fb3", size = 212644, upload-time = "2026-09-14T22:01:01.329Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3a/a6/7d1cbd46d306bbe56349a7416d5e008d46f9bbb4a79055b5d66c08f1aa35/spawnllm-0.13.1-py3-none-any.whl", hash = "sha256:61034f49c06c15917d59790d2c8050817fafd942fe97c8107a40046ca6e60179", size = 225284, upload-time = "2026-09-14T10:27:23.16Z" },
-    { url = "https://files.pythonhosted.org/packages/90/69/93941b25cfbb83fa1e91774c3e11c788d3e3f8f1322fda7a56e1ba4cbf33/spawnllm-0.13.1-py3-none-macosx_26_0_arm64.whl", hash = "sha256:5cfa03a7a37c0b7f156de1cb3ff34f706674fe2b6bd39d87843cc75d47f73e70", size = 312504, upload-time = "2026-09-14T10:27:24.89Z" },
+    { url = "https://files.pythonhosted.org/packages/01/f2/5877b19194d3bf70dbc99019352f3e767b5f612adfc9025df9e61506f2c5/spawnllm-0.13.2-py3-none-any.whl", hash = "sha256:7f75cec516661628936288442fc76b715487b30e5d48c37ff43e00fbf681a835", size = 225285, upload-time = "2026-09-14T22:00:58.663Z" },
+    { url = "https://files.pythonhosted.org/packages/41/c5/e60728b94a44d360233fa4a788dcc02522e8e817df81672db40e1ded0da7/spawnllm-0.13.2-py3-none-macosx_26_0_arm64.whl", hash = "sha256:d1659c96873b254d956f706daee2c0911c1d310d009664219e8063741a2cd31b", size = 312509, upload-time = "2026-09-14T22:01:00.101Z" },
 ]
 
 [[package]]
