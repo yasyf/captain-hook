@@ -81,21 +81,28 @@ func (s *scheduler) run(ctx context.Context, key string, async bool, execute fun
 	}
 	started := time.Now()
 	response, err := execute()
-	release := func() {
-		s.finish(l, async, time.Since(started))
-		<-l.gate
-		s.releaseLane(key, async, l)
-	}
 	var late *abandonedCall
 	if errors.As(err, &late) {
 		go func() {
 			<-late.settled
-			release()
+			s.complete(key, async, l, time.Since(started))
 		}()
 		return response, err
 	}
-	release()
+	s.complete(key, async, l, time.Since(started))
 	return response, err
+}
+
+// complete releases a finished dispatch's slot, gate, and lane hold in one
+// critical section, so no arrival counts it as still ahead and sheds on it.
+func (s *scheduler) complete(key string, async bool, l *lane, elapsed time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, _ := s.poolLocked(async)
+	p.service, l.service = elapsed, elapsed
+	s.releaseSlotLocked(async)
+	<-l.gate
+	s.releaseLaneLocked(key, async, l)
 }
 
 func (s *scheduler) acquireLane(ctx context.Context, key string, async bool) (*lane, error) {
@@ -121,6 +128,10 @@ func (s *scheduler) acquireLane(ctx context.Context, key string, async bool) (*l
 func (s *scheduler) releaseLane(key string, async bool, l *lane) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.releaseLaneLocked(key, async, l)
+}
+
+func (s *scheduler) releaseLaneLocked(key string, async bool, l *lane) {
 	l.refs--
 	if l.refs == 0 {
 		delete(s.lanes, key)
@@ -201,14 +212,6 @@ func shed(ctx context.Context, ahead int, service time.Duration, queue string) e
 		))
 	}
 	return nil
-}
-
-func (s *scheduler) finish(l *lane, async bool, elapsed time.Duration) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p, _ := s.poolLocked(async)
-	p.service, l.service = elapsed, elapsed
-	s.releaseSlotLocked(async)
 }
 
 func (s *scheduler) releaseSlot(async bool) {
