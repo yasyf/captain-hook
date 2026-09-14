@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.28.0] - 2026-09-14
+
+### Fixed
+
+- **An upgrade no longer leaves hooks down when the old host will not leave.**
+  `go.mod` upgrades daemonkit to v0.26.0, whose deploy runs inside the incoming
+  `capt-hookd package-install`. An incumbent parked over abandoned shutdown
+  stages (no socket, no children, flock held) made the install wait out its
+  3-minute deadline and fail with `process did not provably exit`; it is now
+  sent SIGTERM, then SIGKILL, and proven gone. A process still running from the
+  installed bundle, such as the `CaptainHookWidget.appex` extension macOS
+  relaunches, failed the install with `live processes remain on the
+  deployment's executables` after the host was already stopped; it is now
+  terminated during quiesce. The candidate app is validated before anything
+  stops, and any abort before the swap commits restarts the incumbent's
+  services and proves its host ready again.
+
 ## [12.27.1] - 2026-09-14
 
 ### Added
