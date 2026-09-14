@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Hooks dispatch straight to the signed host, one Python exec fewer per
+  event.** `bin/hook` now runs `capt-hookd` inside the installed Captain Hook
+  app instead of the Python `capt_hook_client` shim, which saves about 34 ms on
+  every hook event. An app older than 12.29.0 is refused with `brew upgrade
+  yasyf/tap/captain-hook` rather than handed an argv it cannot parse.
+  `SessionStart` keeps running through the Python shim, so the updater still
+  runs on a machine whose app is too old to dispatch.
+
 ## [12.29.0] - 2026-09-14
 
 ### Added

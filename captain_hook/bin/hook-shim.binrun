@@ -1,0 +1,14 @@
+#!/usr/bin/env binrun
+{
+  "schema": 1,
+  "name": "capt-hook",
+  "kind": "python-tool",
+  "version": {
+    "file": "~/Applications/Captain Hook.app/Contents/Info.plist",
+    "plist_key": "CFBundleShortVersionString"
+  },
+  "tool": {
+    "dist": "capt-hook",
+    "entrypoint": "hook"
+  }
+}

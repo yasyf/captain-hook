@@ -2,13 +2,16 @@
 {
   "schema": 1,
   "name": "capt-hook",
-  "kind": "python-tool",
+  "kind": "signed-app",
   "version": {
     "file": "~/Applications/Captain Hook.app/Contents/Info.plist",
     "plist_key": "CFBundleShortVersionString"
   },
-  "tool": {
-    "dist": "capt-hook",
-    "entrypoint": "hook"
+  "app": {
+    "dir": "~/Applications",
+    "app_name": "Captain Hook",
+    "exec": "Contents/Helpers/capt-hookd",
+    "formula": "yasyf/tap/captain-hook",
+    "min_version": "12.29.0"
   }
 }
