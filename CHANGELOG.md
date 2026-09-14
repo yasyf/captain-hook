@@ -6,6 +6,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.27.0] - 2026-09-14
+
+### Added
+
+- **Dispatch latency and `execve` counts have a repeatable benchmark.**
+  `uv run python -m bench.cli run` measures cold and warm dispatch through the
+  client and the Go host, with `--record` writing `bench/baseline.json`.
+  `bench/counter.py` reads the macOS system-wide exec counter without root;
+  `bench/measure.py` pairs command and idle windows and reports `execs: null`
+  when background activity prevents a confirmed count. `tests/test_bench.py`
+  checks that the measurements detect both an extra exec and added latency.
+
+### Changed
+
+- **Go CI runs the test suite with the race detector.** The `go-test` job in
+  `.github/workflows/ci.yml` runs `go test -race -count=1 ./...` on macOS.
+  Previously, CI compiled `capt-hookd` in `helper-test` without running its
+  Go tests; test failures and data races now fail CI, and `-count=1` prevents
+  a cached pass from standing in for a new run.
+
+- **The host admits 256 concurrent wire sessions, up from 64.**
+  `hostConcurrency` in `internal/hookd/daemon.go` caps wire sessions, which
+  resident clients hold for their lifetime. The higher ceiling gives
+  those clients and in-flight hooks more session slots; dispatch concurrency
+  remains governed by the scheduler.
+
+### Fixed
+
+- **One session's timeout or hook error no longer retires the shared worker.**
+  On 12.26.0, `workerManager.dispatch` in `internal/hookd/manager.go` retired
+  a cached Python worker on any call error, failing unrelated sessions with
+  `use of closed network connection`. It now checks `workerClient.broken()`
+  in `internal/hookd/worker.go` before retiring the interpreter. Caller
+  deadlines and Python error frames leave the worker usable, timed-out calls
+  remove their pending entries, and an oversized frame refused before a
+  write leaves other callers alone. Transport failures still retire the
+  worker.
+
+- **Idle wire sessions release their slots after 15 minutes.** `go.mod`
+  upgrades daemonkit to v0.25.0 and adopts the `Daemon.Idle` default. The idle
+  timer runs only between requests, so in-flight hooks keep their slots.
+  Suspended or disconnected peers previously held slots until a daemon restart,
+  eventually preventing new hooks from attaching. An attach that meets a
+  full session table now retries with a short backoff within its bounded
+  attempt budget.
+
+- **Session-capacity exhaustion no longer tells operators to reinstall a
+  healthy host.** `probeFailure` in `internal/hookd/client.go` handles
+  `daemonkit.ErrSessionCapacity` explicitly. The error now says the signed
+  host is `serving its session ceiling` and `installed and healthy`, with
+  hooks retrying on the next event. Previously, `wire: session capacity
+  exhausted` was reported as "signed host is not installed and ready" and
+  prescribed `capt-hook helper install`, which did not free a session slot.
+
 ## [12.24.0] - 2026-09-02
 
 ### Added
