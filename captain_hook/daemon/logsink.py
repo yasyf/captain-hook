@@ -124,7 +124,13 @@ def configure_daemon_logging(key: str) -> SessionFileRouter:
     logger.configure(
         patcher=truncate_daemon_bound_values,
         handlers=[
-            {"sink": router, "level": "DEBUG", "format": daemon_format(FILE_FORMAT), "enqueue": False},
+            {
+                "sink": router,
+                "level": "DEBUG",
+                "format": daemon_format(FILE_FORMAT),
+                "enqueue": False,
+                "diagnose": False,
+            },
             {
                 "sink": str(daemon_log),
                 "level": "DEBUG",
@@ -135,8 +141,15 @@ def configure_daemon_logging(key: str) -> SessionFileRouter:
                 "encoding": "utf-8",
                 "enqueue": False,
                 "opener": private_log_opener,
+                "diagnose": False,
             },
-            {"sink": RequestStderrTee(), "level": "WARNING", "format": daemon_format(STDERR_FORMAT), "enqueue": False},
+            {
+                "sink": RequestStderrTee(),
+                "level": "WARNING",
+                "format": daemon_format(STDERR_FORMAT),
+                "enqueue": False,
+                "diagnose": False,
+            },
         ],
     )
     return router

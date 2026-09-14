@@ -48,6 +48,13 @@ def restore_loguru(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 class TestConfigureDaemonLogging:
+    def test_exception_tracebacks_never_repr_frame_locals(self, tmp_path: Path) -> None:
+        from tests.test_logging import assert_tracebacks_skip_local_reprs
+
+        configure_daemon_logging(KEY)
+        with request_scope(make_request(tmp_path / "logs"), "sess-no-diagnose"):
+            assert_tracebacks_skip_local_reprs()
+
     def test_session_file_format_matches_cold(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         logs = tmp_path / "logs"
         configure_daemon_logging(KEY)

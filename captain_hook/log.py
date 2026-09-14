@@ -56,7 +56,8 @@ def setup_logging(session_id: str | None) -> None:
                 "level": "DEBUG",
                 "format": make_format(FILE_FORMAT),
                 "encoding": "utf-8",
+                "diagnose": False,
             },
-            {"sink": sys.stderr, "level": "WARNING", "format": make_format(STDERR_FORMAT)},
+            {"sink": sys.stderr, "level": "WARNING", "format": make_format(STDERR_FORMAT), "diagnose": False},
         ],
     )

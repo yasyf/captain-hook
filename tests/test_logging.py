@@ -17,6 +17,25 @@ from tests.helpers import make_ctx, make_pre_tool_event
 WARNING_NO = logger.level("WARNING").no
 
 
+class ReprCounter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __repr__(self) -> str:
+        self.calls += 1
+        return "ReprCounter()"
+
+
+def assert_tracebacks_skip_local_reprs() -> None:
+    transcript = ReprCounter()
+    try:
+        raise RuntimeError(f"llm call over {type(transcript).__name__} failed")
+    except RuntimeError:
+        logger.opt(exception=True).warning("llm primitive failed")
+    logger.complete()
+    assert transcript.calls == 0
+
+
 @pytest.fixture(autouse=True)
 def isolate_failure_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
@@ -37,6 +56,18 @@ class TestSetupLogging:
             assert "sink check" in text
             assert "xyz123" in text
             assert "WARNING" in text
+        finally:
+            logger.remove()
+
+    def test_exception_tracebacks_never_repr_frame_locals(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from captain_hook.log import setup_logging
+
+        monkeypatch.setenv("CAPTAIN_HOOK_LOG_DIR", str(tmp_path / "logs"))
+        setup_logging("sess-no-diagnose")
+        try:
+            assert_tracebacks_skip_local_reprs()
         finally:
             logger.remove()
 
