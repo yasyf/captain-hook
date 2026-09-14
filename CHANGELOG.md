@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A hook started from a deleted directory no longer hangs.** `capt-hookd run`
+  resolved its working directory with libc's `getcwd`, which scans the former
+  parent once the directory is gone. Claude Code sessions that tools such as
+  slop-cop run in `$TMPDIR` delete their directory before `SessionEnd` fires,
+  and against a `$TMPDIR` of 43,000 entries that other processes keep changing,
+  those `SessionEnd` clients ran for over 30 minutes, past the 30 s request
+  deadline, which starts only after the directory is known. The client now
+  names its directory with `F_GETPATH` and falls back to `$PWD` when that
+  directory is gone, as before.
+
 ## [12.30.1] - 2026-09-14
 
 ### Fixed
