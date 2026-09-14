@@ -17,6 +17,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PostToolUse` dispatch. The cc-transcript pin is now exactly `14.16.1`, whose
   hold is a least-recently-used cache of 1 GiB of source bytes. A synthetic
   1,000-sidechain tree now costs 0.27 s per warm event, down from 2.6 s.
+- **The host no longer collapses under a burst of hook events.** A 30-second
+  caller timeout abandoned the request on the host side and released its lane
+  and pool slot at once, so the host kept sending the Python worker more
+  events while it was still running the ones their callers had given up on;
+  the worker ran every one of them to completion on its 16 threads, and the
+  request carried no deadline for it to check. Under a team of subagents this
+  fed back into 70 to 140 clients queued behind one interpreter, every one
+  timing out at 30 seconds. Three changes close the loop. The event request
+  now carries `deadline_unix_ms`, which the worker checks when a thread picks
+  the event up (an expired one is answered `deadline passed before dispatch`
+  without running a hook) and again between hooks, so a dispatch stops once
+  its caller is gone. An abandoned request keeps its lane and slot held until
+  the worker actually answers it or dies, so what is in flight on the
+  interpreter never exceeds the scheduler's ceiling. And a dispatch whose wait
+  is already lost — the queue ahead of it at the last observed service time
+  outlasts what is left of its deadline — is refused at once with `captain:
+  host overloaded; hook skipped` instead of holding the tool call for the
+  whole deadline; one that can still make its deadline queues, since a shed
+  sync hook is a guard skipped. Known issue, left as it runs: the lane key
+  decodes the payload strictly, so every real Claude Code event falls back to
+  the client pid and no session has ever been serialized in production.
 - **Hooks reuse repo language scans and transcript waiting checks.** Each
   event re-walked the repo, and each waiting check re-read the whole
   transcript. Hooks now cache those results and default each worker's

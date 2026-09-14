@@ -36,6 +36,7 @@ class _ScopedRequest:
     env: dict[str, str]
     cwd: str
     client: _Client
+    deadline_unix_ms: int
 
 
 class ProductRuntime:
@@ -73,7 +74,12 @@ class ProductRuntime:
         raw_dict = cast(dict[str, Any], raw) if isinstance(raw, dict) else None
         session_id = raw_dict.get("session_id") if raw_dict is not None else None
         session_id = session_id if isinstance(session_id, str) else None
-        scoped = _ScopedRequest(env=request.env, cwd=request.cwd, client=_Client(request.client_ppid))
+        scoped = _ScopedRequest(
+            env=request.env,
+            cwd=request.cwd,
+            client=_Client(request.client_ppid),
+            deadline_unix_ms=request.deadline_unix_ms,
+        )
         with request_scope(scoped, session_id) as buffers:
             if parse_error is not None:
                 buffers.stderr.write(f"Malformed stdin: {parse_error}\n")

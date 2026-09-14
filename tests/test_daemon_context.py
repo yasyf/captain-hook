@@ -22,6 +22,7 @@ class Request:
     client: ClientInfo
     cwd: str
     env: dict[str, str]
+    deadline_unix_ms: int = 0
 
 
 def make_request(*, env: dict[str, str] | None = None, cwd: str = "/tmp/proj") -> Request:

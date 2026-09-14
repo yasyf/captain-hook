@@ -12,6 +12,7 @@ from captain_hook.app import get_matching_hooks
 from captain_hook.session import SessionStore
 from captain_hook.state import HookState
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
+from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
     from captain_hook.events import BaseHookEvent
@@ -188,6 +189,9 @@ def dispatch(
     for entry in matching:
         if blocked and entry.handler is not None and not entry.spec.advisory_on_deny:
             continue
+        if reqenv.deadline_passed():
+            logger.bind(hook=entry.name).warning("caller deadline passed; skipping this and the remaining hooks")
+            break
         match execute_hook(entry, evt, session_dir):
             case HookResult(action=Action.block, message=msg):
                 blocked = True

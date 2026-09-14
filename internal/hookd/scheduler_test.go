@@ -284,6 +284,136 @@ func TestSchedulerSeparatesOneSessionsBlockingAndBackgroundLanes(t *testing.T) {
 	close(release)
 }
 
+// TestSchedulerHoldsAdmissionUntilAbandonedWorkSettles pins the collapse fix:
+// a caller whose deadline ends mid-call returns at once, but its lane and its
+// pool slot stay held until the worker is done with the request it left
+// behind. Releasing on return let the host send the interpreter more work than
+// it had threads for.
+func TestSchedulerHoldsAdmissionUntilAbandonedWorkSettles(t *testing.T) {
+	t.Parallel()
+	scheduler := newScheduler(1, 1, 2)
+	settled := make(chan struct{})
+	abandoned := make(chan error, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	go func() {
+		_, err := scheduler.run(ctx, "session-a", false, func() (wireproto.EventResponse, error) {
+			<-ctx.Done()
+			return wireproto.EventResponse{}, &abandonedCall{cause: ctx.Err(), settled: settled}
+		})
+		abandoned <- err
+	}()
+	if err := <-abandoned; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("abandoning caller = %v, want DeadlineExceeded", err)
+	}
+
+	entered := make(chan string, 2)
+	for _, key := range []string{"session-a", "session-b"} {
+		go func() {
+			_, _ = scheduler.run(context.Background(), key, false, func() (wireproto.EventResponse, error) {
+				entered <- key
+				return wireproto.EventResponse{}, nil
+			})
+		}()
+	}
+	select {
+	case key := <-entered:
+		t.Fatalf("%s started while the abandoned request was still on the worker", key)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(settled)
+	for range 2 {
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("admission never released after the abandoned request settled")
+		}
+	}
+}
+
+// TestSchedulerQueuesWhileTheDeadlineCanStillBeMet pins shedding as a last
+// resort: a shed sync hook is a guard skipped, so a dispatch that can still
+// make its deadline waits its turn however deep the queue is.
+func TestSchedulerQueuesWhileTheDeadlineCanStillBeMet(t *testing.T) {
+	t.Parallel()
+	scheduler := newScheduler(1, 1, 2)
+	warmService(t, scheduler, "session-a", 10*time.Millisecond)
+	run := newBlockingRun(scheduler)
+	for i := range 12 {
+		run.start(fmt.Sprintf("session-%d", i), false)
+	}
+	run.awaitEntered(t, 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	queued := make(chan error, 1)
+	go func() {
+		_, err := scheduler.run(ctx, "session-late", false, func() (wireproto.EventResponse, error) {
+			return wireproto.EventResponse{}, nil
+		})
+		queued <- err
+	}()
+	select {
+	case err := <-queued:
+		t.Fatalf("a dispatch that could still make its deadline was answered early: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	run.finish(t, 12)
+	if err := <-queued; err != nil {
+		t.Fatalf("queued dispatch = %v, want success once the queue drained", err)
+	}
+}
+
+func warmService(t *testing.T, scheduler *scheduler, key string, service time.Duration) {
+	t.Helper()
+	if _, err := scheduler.run(context.Background(), key, false, func() (wireproto.EventResponse, error) {
+		time.Sleep(service)
+		return wireproto.EventResponse{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func shedBeforeItsDeadline(t *testing.T, scheduler *scheduler, key string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := scheduler.run(ctx, key, false, func() (wireproto.EventResponse, error) {
+		t.Error("a shed dispatch executed")
+		return wireproto.EventResponse{}, nil
+	})
+	if !isOverloaded(err) {
+		t.Fatalf("dispatch whose wait outlasts its deadline = %v, want the overload refusal", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("the overload refusal came only once the deadline had passed")
+	}
+}
+
+func TestSchedulerShedsWhenTheLaneWaitOutlastsTheDeadline(t *testing.T) {
+	t.Parallel()
+	scheduler := newScheduler(1, 16, 2)
+	warmService(t, scheduler, "session-a", 100*time.Millisecond)
+	run := newBlockingRun(scheduler)
+	run.start("session-a", false)
+	run.awaitEntered(t, 1)
+
+	shedBeforeItsDeadline(t, scheduler, "session-a")
+	run.finish(t, 1)
+}
+
+func TestSchedulerShedsWhenThePoolWaitOutlastsTheDeadline(t *testing.T) {
+	t.Parallel()
+	scheduler := newScheduler(1, 1, 2)
+	warmService(t, scheduler, "session-a", 100*time.Millisecond)
+	run := newBlockingRun(scheduler)
+	run.start("session-b", false)
+	run.awaitEntered(t, 1)
+
+	shedBeforeItsDeadline(t, scheduler, "session-c")
+	run.finish(t, 1)
+}
+
 func TestParallelCeilingReadsOverride(t *testing.T) {
 	t.Parallel()
 	for _, testCase := range []struct {

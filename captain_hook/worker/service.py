@@ -72,6 +72,9 @@ class WorkerService:
         future.add_done_callback(self._done)
 
     def _serve(self, request: EventRequest) -> None:
+        if request.deadline_passed():
+            self._write(error_response(request.id, "deadline passed before dispatch"))
+            return
         start = time.perf_counter()
         try:
             response = self._dispatch(request)

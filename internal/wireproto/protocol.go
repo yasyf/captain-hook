@@ -50,18 +50,22 @@ const (
 )
 
 // EventRequest is one exact hook dispatch admitted by the Go host.
+// DeadlineUnixMS is the caller's deadline as Unix milliseconds, zero when it
+// set none; the worker refuses to start a dispatch whose deadline has passed
+// and stops between hooks once it does.
 type EventRequest struct {
-	Schema     int               `json:"schema"`
-	Event      string            `json:"event"`
-	Async      bool              `json:"async"`
-	Root       string            `json:"root"`
-	CWD        string            `json:"cwd"`
-	Env        map[string]string `json:"env"`
-	PayloadRaw string            `json:"payload_raw"`
-	Python     string            `json:"python"`
-	Build      string            `json:"build"`
-	ClientPID  int               `json:"client_pid"`
-	ClientPPID int               `json:"client_ppid"`
+	Schema         int               `json:"schema"`
+	Event          string            `json:"event"`
+	Async          bool              `json:"async"`
+	Root           string            `json:"root"`
+	CWD            string            `json:"cwd"`
+	Env            map[string]string `json:"env"`
+	PayloadRaw     string            `json:"payload_raw"`
+	Python         string            `json:"python"`
+	Build          string            `json:"build"`
+	ClientPID      int               `json:"client_pid"`
+	ClientPPID     int               `json:"client_ppid"`
+	DeadlineUnixMS int64             `json:"deadline_unix_ms"`
 }
 
 // EventResponse is the byte-shaped product result returned by the Python worker.
@@ -102,6 +106,8 @@ func (request EventRequest) Validate() error {
 		return errors.New("captain: product build is required")
 	case request.ClientPID <= 1 || request.ClientPPID <= 0:
 		return errors.New("captain: client process identity is required")
+	case request.DeadlineUnixMS < 0:
+		return fmt.Errorf("captain: deadline %d is before the epoch", request.DeadlineUnixMS)
 	}
 	if request.Env == nil {
 		return errors.New("captain: request environment is required")

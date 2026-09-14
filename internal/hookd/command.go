@@ -110,7 +110,7 @@ func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		response, err = client.Event(ctx, request)
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		fmt.Fprintln(stderr, eventFailure(err))
 		return 1
 	}
 	_, stdoutErr := io.WriteString(stdout, response.Stdout)

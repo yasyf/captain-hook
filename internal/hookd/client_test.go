@@ -99,6 +99,27 @@ func TestProbeFailureNamesTheOutcomeItMet(t *testing.T) {
 	}
 }
 
+// TestEventFailureNamesSheddingAsHealthy pins the client's reading of an
+// overload refusal: the code crosses the wire as a ProductError, the message
+// stays calm, and every other failure passes through untouched.
+func TestEventFailureNamesSheddingAsHealthy(t *testing.T) {
+	t.Parallel()
+	shed := fmt.Errorf("captain: call: %w", overloaded("9 hooks already queued on this session's lane"))
+	got := eventFailure(shed)
+	if !errors.Is(got, shed) {
+		t.Fatalf("eventFailure dropped its cause: %v", got)
+	}
+	for _, want := range []string{"host overloaded", "hook skipped", "9 hooks already queued", "host is healthy"} {
+		if !strings.Contains(got.Error(), want) {
+			t.Fatalf("message is missing %q: %s", want, got)
+		}
+	}
+	other := errors.New("captain: Python worker exited with status 1")
+	if eventFailure(other) != other {
+		t.Fatalf("a worker failure was reworded: %v", eventFailure(other))
+	}
+}
+
 func TestRuntimeHealthRequiresExactIdentity(t *testing.T) {
 	t.Parallel()
 	current := runtimeHealthResponse{
