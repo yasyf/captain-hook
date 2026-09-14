@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/yasyf/captain-hook/internal/wireproto"
 	"github.com/yasyf/daemonkit"
 )
 
@@ -55,6 +57,44 @@ func TestSessionIDFallsBackWithoutInventingIdentity(t *testing.T) {
 	}
 	if got := sessionID(`not-json`); got != "" {
 		t.Fatalf("malformed sessionID = %q", got)
+	}
+}
+
+// scriptedWorker hands the manager a handshaken worker whose far end the test
+// serves, so dispatch spawns nothing.
+func scriptedWorker(t *testing.T, manager *workerManager, serve func(conn net.Conn)) {
+	t.Helper()
+	worker, serverConn := silentWorker(t)
+	go serve(serverConn)
+	manager.start = func(context.Context, workerKey) (*workerClient, error) { return worker, nil }
+}
+
+func TestDispatchCarriesTheCallerDeadlineToTheWorker(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	frames := make(chan wireproto.Frame, 1)
+	scriptedWorker(t, manager, func(conn net.Conn) {
+		frame, err := wireproto.DecodeFrame(conn)
+		if err != nil {
+			return
+		}
+		frames <- frame
+		_ = wireproto.EncodeFrame(conn, wireproto.Frame{
+			Protocol: wireproto.Schema, Op: wireproto.OpResult, ID: frame.ID,
+			Response: &wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok"},
+		})
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	request := testEventRequest("PreToolUse")
+	request.Root = "/live"
+	if _, err := manager.dispatch(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	deadline, _ := ctx.Deadline()
+	if got := (<-frames).Request.DeadlineUnixMS; got != deadline.UnixMilli() {
+		t.Fatalf("frame deadline = %d, want the caller's %d", got, deadline.UnixMilli())
 	}
 }
 

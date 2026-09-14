@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ class RequestOverrides:
     cwd: str
     client_ppid: int
     session_id: str
+    deadline_unix_ms: int = 0
 
 
 _OVERRIDES: ContextVar[RequestOverrides | None] = ContextVar("captain_hook_request", default=None)
@@ -56,6 +58,11 @@ def env_map() -> Mapping[str, str]:
 
 def cwd() -> Path:
     return Path.cwd() if (ov := _OVERRIDES.get()) is None else Path(ov.cwd)
+
+
+def deadline_passed() -> bool:
+    """True once the bound request's caller deadline is behind us; never for the cold CLI or an unbounded request."""
+    return (ov := _OVERRIDES.get()) is not None and 0 < ov.deadline_unix_ms <= time.time() * 1000
 
 
 def is_headless() -> bool:

@@ -34,7 +34,9 @@ def hello(build: str = "12.9.1") -> dict[str, object]:
     return {"protocol": 1, "op": "hello", "build": build}
 
 
-def event(request_id: int, *, build: str = "12.9.1", payload_raw: str | None = None) -> dict[str, object]:
+def event(
+    request_id: int, *, build: str = "12.9.1", payload_raw: str | None = None, deadline_unix_ms: int = 0
+) -> dict[str, object]:
     return {
         "protocol": 1,
         "op": "event",
@@ -51,6 +53,7 @@ def event(request_id: int, *, build: str = "12.9.1", payload_raw: str | None = N
             "build": build,
             "client_pid": 100,
             "client_ppid": 99,
+            "deadline_unix_ms": deadline_unix_ms,
         },
     }
 
@@ -84,6 +87,7 @@ def test_event_frame_decodes_exact_go_envelope() -> None:
         build="12.9.1",
         client_pid=100,
         client_ppid=99,
+        deadline_unix_ms=0,
     )
 
 
@@ -198,6 +202,24 @@ def test_dispatch_failure_is_top_level_error_with_same_id() -> None:
     assert isinstance(response["error"], str)
     assert "RuntimeError: boom" in response["error"]
     assert "response" not in response
+
+
+def test_expired_deadline_is_refused_without_dispatch() -> None:
+    input_stream = io.BytesIO(frame(hello()) + frame(event(3, deadline_unix_ms=1)) + frame(event(4)))
+    output_stream = io.BytesIO()
+    served: list[int] = []
+
+    def dispatch(request: EventRequest) -> EventResponse:
+        served.append(request.id)
+        return EventResponse()
+
+    WorkerService(input_stream, output_stream, build="12.9.1", dispatch=dispatch).run()
+
+    assert served == [4]
+    by_id = {message["id"]: message for message in responses(output_stream.getvalue())[1:]}
+    assert by_id[3]["op"] == "error"
+    assert by_id[3]["error"] == "deadline passed before dispatch"
+    assert by_id[4]["op"] == "result"
 
 
 def test_build_mismatch_fails_before_event_admission() -> None:

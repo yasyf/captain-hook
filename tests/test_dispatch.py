@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -15,6 +16,7 @@ from captain_hook.dispatch import ADVISORY_SEPARATOR, dispatch, execute_hook, fo
 from captain_hook.events import PermissionRequestEvent
 from captain_hook.primitives.nudge import nudge
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
+from captain_hook.util import reqenv
 from tests.helpers import (
     make_ctx,
     make_post_tool_event,
@@ -767,6 +769,30 @@ class TestDispatch:
 
         r2 = dispatch(Event.PreToolUse, make_pre_tool_event(), session_dir=tmp_path)
         assert r2 is None
+
+    def test_remaining_hooks_stop_once_the_caller_deadline_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        clock = {"now": 0.0}
+        monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: clock["now"]))
+        ran: list[str] = []
+
+        @on(Event.PreToolUse)
+        def slow(evt: Any) -> HookResult:
+            ran.append("slow")
+            clock["now"] = 10.0
+            return HookResult(action=Action.warn, message="from slow")
+
+        @on(Event.PreToolUse)
+        def late(evt: Any) -> HookResult:
+            ran.append("late")
+            return HookResult(action=Action.block, message="never reached")
+
+        overrides = reqenv.RequestOverrides(env={}, cwd="/w", client_ppid=1, session_id="s", deadline_unix_ms=5_000)
+        with reqenv.use_request(overrides):
+            result = dispatch(Event.PreToolUse, make_pre_tool_event())
+
+        assert ran == ["slow"]
+        assert result is not None
+        assert result["hookSpecificOutput"]["additionalContext"] == "from slow"
 
     def test_stop_warn_combined(self) -> None:
         register_hook(Event.Stop, message="warn stop")

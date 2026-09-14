@@ -164,6 +164,9 @@ func (m *workerManager) dispatch(ctx context.Context, request wireproto.EventReq
 		session = fmt.Sprintf("pid:%d", request.ClientPID)
 	}
 	laneKey := key.id + "\x00" + session + "\x00" + strconv.FormatBool(request.Async)
+	if deadline, ok := ctx.Deadline(); ok {
+		request.DeadlineUnixMS = deadline.UnixMilli()
+	}
 	return m.scheduler.run(ctx, laneKey, request.Async, func() (wireproto.EventResponse, error) {
 		entry, err := m.acquire(ctx, key)
 		if err != nil {

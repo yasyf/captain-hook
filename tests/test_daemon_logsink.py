@@ -29,6 +29,7 @@ class Request:
     client: ClientInfo
     cwd: str
     env: dict[str, str]
+    deadline_unix_ms: int = 0
 
 
 def make_request(log_dir: Path) -> Request:

@@ -44,6 +44,9 @@ class RequestContext(Protocol):
     @property
     def client(self) -> _ClientRequest: ...
 
+    @property
+    def deadline_unix_ms(self) -> int: ...
+
 
 @dataclass(slots=True)
 class RequestBuffers:
@@ -66,6 +69,7 @@ def request_scope(req: RequestContext, session_id: str | None) -> Generator[Requ
         cwd=req.cwd or os.getcwd(),
         client_ppid=req.client.ppid,
         session_id=sid,
+        deadline_unix_ms=req.deadline_unix_ms,
     )
     with reqenv.use_request(overrides):
         session_log_path = str(resolve_log_dir() / f"{sid}.log")

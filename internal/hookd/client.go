@@ -88,6 +88,16 @@ func probeFailure(err error) error {
 	}
 }
 
+// eventFailure names the one dispatch refusal that is not a fault: a host
+// shedding this hook under load answered at once instead of holding the tool
+// call for its whole deadline, and the next event is admitted on its own.
+func eventFailure(err error) error {
+	if isOverloaded(err) {
+		return fmt.Errorf("%w; the host is healthy and admits hooks again as it catches up", err)
+	}
+	return err
+}
+
 // RuntimeHealth observes the exact product runtime without mutating it.
 func (c *Client) RuntimeHealth(ctx context.Context) (runtimeHealthResponse, error) {
 	result, err := c.call(ctx, opRuntimeHealth, nil)

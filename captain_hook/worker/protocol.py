@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import struct
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -34,6 +35,7 @@ EVENT_REQUEST_KEYS = frozenset(
         "build",
         "client_pid",
         "client_ppid",
+        "deadline_unix_ms",
     }
 )
 
@@ -60,6 +62,10 @@ class EventRequest:
     build: str
     client_pid: int
     client_ppid: int
+    deadline_unix_ms: int
+
+    def deadline_passed(self) -> bool:
+        return 0 < self.deadline_unix_ms <= time.time() * 1000
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +166,8 @@ def decode_event(message: dict[str, Any]) -> EventRequest:
         or request["client_pid"] <= 1
         or type(request["client_ppid"]) is not int
         or request["client_ppid"] <= 0
+        or type(request["deadline_unix_ms"]) is not int
+        or request["deadline_unix_ms"] < 0
     ):
         raise ProtocolError(f"invalid event request: {request!r}")
     return EventRequest(
@@ -174,6 +182,7 @@ def decode_event(message: dict[str, Any]) -> EventRequest:
         build=request["build"],
         client_pid=request["client_pid"],
         client_ppid=request["client_ppid"],
+        deadline_unix_ms=request["deadline_unix_ms"],
     )
 
 

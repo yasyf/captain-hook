@@ -100,6 +100,7 @@ def event_frame(request: EventRequest) -> dict[str, object]:
             "build": request.build,
             "client_pid": request.client_pid,
             "client_ppid": request.client_ppid,
+            "deadline_unix_ms": request.deadline_unix_ms,
         },
     }
 
@@ -284,6 +285,7 @@ def test_frame_ceiling_admits_every_event_the_host_can_produce() -> None:
                 build="12.9.1",
                 client_pid=100,
                 client_ppid=99,
+                deadline_unix_ms=0,
             )
         )
     )

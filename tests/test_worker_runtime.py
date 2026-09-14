@@ -45,6 +45,7 @@ def request(*, request_id: int = 1, event: str = "PreToolUse", payload_raw: str 
         build="12.9.1",
         client_pid=100,
         client_ppid=99,
+        deadline_unix_ms=1_700_000_000_000,
     )
 
 
@@ -86,6 +87,7 @@ def test_dispatch_binds_request_scope_and_replays_cached_discovery() -> None:
     }
     assert seen["overrides"].cwd == "/project/subdir"
     assert seen["overrides"].client_ppid == 99
+    assert seen["overrides"].deadline_unix_ms == 1_700_000_000_000
     assert reqenv.current() is None
 
 
