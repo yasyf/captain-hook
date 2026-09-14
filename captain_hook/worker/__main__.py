@@ -12,6 +12,18 @@ from captain_hook.daemon.logsink import configure_daemon_logging
 from captain_hook.worker.runtime import ProductRuntime
 from captain_hook.worker.service import WorkerService
 
+TRANSCRIPT_PARSE_THREADS = 4
+
+
+def bound_transcript_parse_pool() -> None:
+    """Cap cc-transcript's native parse pool before its first parse sizes it.
+
+    The pool defaults to twice the CPU count, up to 32 threads, in every process; the host runs
+    one worker per project root, so uncapped workers oversubscribe the machine together. A value
+    already in the environment wins.
+    """
+    os.environ.setdefault("CC_TRANSCRIPT_PARSE_THREADS", str(TRANSCRIPT_PARSE_THREADS))
+
 
 def adopt_user_path() -> None:
     """Replace launchd's ``PATH`` with the user's own before anything discovers a command.
@@ -53,6 +65,7 @@ def worker_log_key(build: str) -> str:
 
 
 def main() -> None:
+    bound_transcript_parse_pool()
     build = importlib.metadata.version("capt-hook")
     router = configure_daemon_logging(worker_log_key(build))
     adopt_user_path()

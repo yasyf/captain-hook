@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 import subprocess
+import threading
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -22,6 +24,44 @@ if TYPE_CHECKING:
 
 
 RECENT_WINDOW = 15
+UNSUPPORTED_MODEL = re.compile(r'(?:^|\s)ERROR: \{.*"status":\s*400\b.*\bmodel\b.*\bnot supported\b')
+UNSUPPORTED_MODELS: dict[tuple[str, str], ModelRejection] = {}
+UNSUPPORTED_MODELS_LOCK = threading.Lock()
+
+
+@dataclass(frozen=True, slots=True)
+class ModelRejection:
+    provider: str
+    model: str
+    message: str
+
+
+def last_error_line(exc: BaseException) -> str:
+    return str(exc).rstrip().rpartition("\n")[2]
+
+
+def is_unsupported_model(exc: BaseException) -> bool:
+    """Whether ``exc`` is a backend's HTTP 400 rejecting the requested model, which no retry can fix.
+
+    Only the message's last line counts: codex echoes the prompt into the stderr the message
+    carries, so a prompt quoting such a rejection must not pass for one.
+    """
+    from spawnllm import BackendCallError
+
+    return isinstance(exc, BackendCallError) and UNSUPPORTED_MODEL.search(last_error_line(exc)) is not None
+
+
+def remember_model_rejection(specialty: str, model: str, exc: BaseException) -> None:
+    from spawnllm import BackendUnavailable, select_backend
+
+    try:
+        backend = select_backend(specialty=specialty, model=model)
+    except BackendUnavailable:
+        return
+    resolved = backend.resolve_model(model)
+    if resolved.partition(":")[0] in last_error_line(exc):
+        with UNSUPPORTED_MODELS_LOCK:
+            UNSUPPORTED_MODELS[(specialty, model)] = ModelRejection(backend.provider, resolved, str(exc))
 
 
 def transcript_window(transcript: bool | int | Literal["recent", "full"]) -> int | None:
@@ -261,16 +301,29 @@ class HookContext:
         response_model: type[BaseModel] | None = None,
         **kwargs: Any,
     ) -> str | BaseModel:
-        from spawnllm import call_sync, extract_sync
+        from spawnllm import BackendCallError, call_sync, extract_sync, select_backend
 
+        with UNSUPPORTED_MODELS_LOCK:
+            rejection = UNSUPPORTED_MODELS.get((specialty, model))
+        if rejection is not None:
+            backend = select_backend(specialty=specialty, model=model)
+            if (backend.provider, backend.resolve_model(model)) == (rejection.provider, rejection.model):
+                raise BackendCallError(rejection.message)
+            with UNSUPPORTED_MODELS_LOCK:
+                UNSUPPORTED_MODELS.pop((specialty, model), None)
         diff_text = self.diff("uncommitted" if diff is True else diff) if diff else None
         prompt = self.assemble_prompt(template, args, kwargs, transcript=transcript, diff_text=diff_text)
         cwd = resolve_project_dir()
-        if response_model is not None:
-            return extract_sync(
-                prompt, response_model, specialty=specialty, model=model, agent=agent, cwd=cwd, timeout=timeout
-            )
-        return call_sync(prompt, specialty=specialty, model=model, agent=agent, cwd=cwd, timeout=timeout)
+        try:
+            if response_model is not None:
+                return extract_sync(
+                    prompt, response_model, specialty=specialty, model=model, agent=agent, cwd=cwd, timeout=timeout
+                )
+            return call_sync(prompt, specialty=specialty, model=model, agent=agent, cwd=cwd, timeout=timeout)
+        except BackendCallError as exc:
+            if is_unsupported_model(exc):
+                remember_model_rejection(specialty, model, exc)
+            raise
 
     def assemble_prompt(
         self,

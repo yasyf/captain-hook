@@ -331,7 +331,70 @@ class TestCallCli:
         assert result.strip() == str(tmp_path)
 
 
+MODEL_REJECTION = (
+    'codex exited 1: ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error",'
+    '"message":"The \'gpt-5.4-mini\' model is not supported when using Codex with a ChatGPT account."}}'
+)
+CODEX = MagicMock(provider="codex", resolve_model=lambda model: {"small": "gpt-5.4-mini:low"}.get(model, model))
+CLAUDE = MagicMock(provider="claude", resolve_model=lambda model: {"small": "claude-haiku-4-5"}.get(model, model))
+
+
 class TestCallLlm:
+    def test_rejected_model_fails_fast_while_the_same_backend_serves_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from spawnllm import BackendCallError
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        selected = [CODEX]
+
+        with (
+            patch("spawnllm.select_backend", side_effect=lambda **_: selected[0]),
+            patch("spawnllm.call_sync", side_effect=BackendCallError(MODEL_REJECTION)) as rejected,
+        ):
+            for _ in range(3):
+                with pytest.raises(BackendCallError, match="not supported"):
+                    ctx.call_llm("test prompt", model="small")
+            assert rejected.call_count == 1
+
+        with (
+            patch("spawnllm.select_backend", side_effect=lambda **_: selected[0]),
+            patch("spawnllm.call_sync", return_value="ok") as served,
+        ):
+            assert ctx.call_llm("test prompt", model="large") == "ok"
+            selected[0] = CLAUDE
+            assert ctx.call_llm("test prompt", model="small") == "ok"
+        assert served.call_count == 2
+
+    def test_a_rejection_quoted_in_the_prompt_echo_is_not_remembered(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from spawnllm import BackendCallError
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        echoed = BackendCallError(
+            f"codex exited 1: <task>\n{MODEL_REJECTION.partition(': ')[2]}\n</task>\nstream disconnected"
+        )
+
+        with (
+            patch("spawnllm.select_backend", return_value=CODEX),
+            patch("spawnllm.call_sync", side_effect=echoed),
+            pytest.raises(BackendCallError),
+        ):
+            ctx.call_llm("test prompt")
+        with patch("spawnllm.call_sync", return_value="ok"):
+            assert ctx.call_llm("test prompt") == "ok"
+
+    def test_transient_failure_is_not_remembered(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from spawnllm import BackendCallError
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+
+        with patch("spawnllm.call_sync", side_effect=BackendCallError('codex exited 1: {"status":503}')):
+            with pytest.raises(BackendCallError):
+                ctx.call_llm("test prompt")
+        with patch("spawnllm.call_sync", return_value="ok"):
+            assert ctx.call_llm("test prompt") == "ok"
+
     def test_dispatch_forwards_specialty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)

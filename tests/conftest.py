@@ -12,6 +12,9 @@ from loguru import logger
 
 from captain_hook import decisions, heartbeat
 from captain_hook.app import reset
+from captain_hook.conditions import ACTIVITY_PROBES
+from captain_hook.context import UNSUPPORTED_MODELS
+from captain_hook.daemon.registry import MARKER_WALKS
 from captain_hook.durable import DurableStore
 from captain_hook.review.repo import resolve_repo_key
 from captain_hook.session import SessionStore
@@ -62,14 +65,18 @@ def clear_global_caches():
         model_sha256,
         resolve_repo_key,
         _cold_skip_permissions,
+        MARKER_WALKS,
+        ACTIVITY_PROBES,
     )
     for cached in caches:
         cached.cache_clear()
+    UNSUPPORTED_MODELS.clear()
     decisions.reset_cached_log()
     heartbeat.reset_cached_log()
     yield
     for cached in caches:
         cached.cache_clear()
+    UNSUPPORTED_MODELS.clear()
     decisions.reset_cached_log()
     heartbeat.reset_cached_log()
 

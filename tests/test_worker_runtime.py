@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import io
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from captain_hook import app
 from captain_hook.daemon.context import ContextIO
@@ -222,3 +225,15 @@ def test_worker_survives_a_root_deleted_under_it(tmp_path: Path) -> None:
 
     assert worker.returncode == 0, worker.stderr.decode()
     assert len(list(logs.glob("daemon-*.log"))) == 1
+
+
+def test_worker_bounds_the_transcript_parse_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    from captain_hook.worker.__main__ import TRANSCRIPT_PARSE_THREADS, bound_transcript_parse_pool
+
+    monkeypatch.delenv("CC_TRANSCRIPT_PARSE_THREADS", raising=False)
+    bound_transcript_parse_pool()
+    assert os.environ["CC_TRANSCRIPT_PARSE_THREADS"] == str(TRANSCRIPT_PARSE_THREADS)
+
+    monkeypatch.setenv("CC_TRANSCRIPT_PARSE_THREADS", "2")
+    bound_transcript_parse_pool()
+    assert os.environ["CC_TRANSCRIPT_PARSE_THREADS"] == "2"

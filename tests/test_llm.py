@@ -25,6 +25,11 @@ from tests.helpers import (
     make_stop_event,
 )
 
+MODEL_REJECTION = (
+    'codex exited 1: ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error",'
+    '"message":"The \'gpt-5.4-mini\' model is not supported when using Codex with a ChatGPT account."}}'
+)
+
 
 def register_llm_gate(
     prompt: str,
@@ -1413,6 +1418,20 @@ class TestEvtLlm:
         evt = self._evt(tmp_path, fake, monkeypatch)
         with pytest.raises(RuntimeError):
             evt.llm("Is this throwaway?", bool, retries=0)
+        assert len(calls) == 1
+
+    def test_model_rejection_is_not_retried(self, tmp_path: Path, monkeypatch: Any) -> None:
+        from spawnllm import BackendCallError
+
+        calls: list[Any] = []
+
+        def fake(prompt: Any, **kwargs: Any) -> None:
+            calls.append(prompt)
+            raise BackendCallError(MODEL_REJECTION)
+
+        evt = self._evt(tmp_path, fake, monkeypatch)
+        with pytest.raises(BackendCallError):
+            evt.llm("Is this throwaway?", bool)
         assert len(calls) == 1
 
 

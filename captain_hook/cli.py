@@ -134,6 +134,7 @@ ToolReg = tuple[str, dict[str, str] | None]
 # against this per-name (behaves_like, span_edit) map under _registry_lock so no live spec drops.
 _registered_tools: dict[str, ToolReg] = {}
 _registry_lock = threading.Lock()
+tools_generation = 0
 
 
 def pack_tool_specs(packs: Sequence[manager.ResolvedPack]) -> dict[str, ToolReg]:
@@ -157,8 +158,11 @@ def reconcile_pack_tools(desired: Mapping[str, ToolReg]) -> None:
     """Reconcile cc-transcript's tool registry to ``desired``, touching only added, removed, or changed
     tools so an unchanged spec is never re-registered and no window opens for a live tool. A strict
     no-op when ``desired`` already matches the registered set."""
-    global _registered_tools
+    global _registered_tools, tools_generation
     with _registry_lock:
+        if _registered_tools == desired:
+            return
+        tools_generation += 1
         for name in _registered_tools.keys() - desired.keys():
             unregister_mcp_tool(name)
         for name, (behaves_like, span_edit) in desired.items():
