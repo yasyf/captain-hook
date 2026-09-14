@@ -17,7 +17,6 @@ class CaptainHook < Formula
   def install
     system "/usr/bin/ditto", "-x", "-k", cached_download, "."
     system "/usr/bin/codesign", "--verify", "--deep", "--strict", "--verbose=2", "Captain Hook.app"
-    system "/usr/bin/xcrun", "stapler", "validate", "Captain Hook.app"
     libexec.install "Captain Hook.app"
     # bash, not sh: binrun runs this wrapper as the descriptor's version command on
     # every resolve, and an endpoint-security agent that deep-inspects /bin/sh can
@@ -41,6 +40,5 @@ class CaptainHook < Formula
   test do
     assert_match version.to_s, shell_output("#{bin}/capt-hook-host version")
     system "/usr/bin/codesign", "--verify", "--deep", "--strict", "--verbose=2", libexec/"Captain Hook.app"
-    system "/usr/bin/xcrun", "stapler", "validate", libexec/"Captain Hook.app"
   end
 end

@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.28.1] - 2026-09-14
+
+### Fixed
+
+- **`brew upgrade` installs Captain Hook again under Homebrew 7.** Homebrew's
+  macOS build sandbox now denies mach-lookup outside a short allowlist, and
+  `xcrun stapler validate` needs LaunchServices, so the formula's `install`
+  step failed with `kLSDataUnavailableErr` and every install or upgrade of the
+  `captain-hook` formula aborted, including the self-updater's. The formula
+  template no longer runs `stapler` inside the sandbox; `codesign --verify
+  --deep --strict` still runs there, and the release pipeline's `smoke-draft`
+  job validates the staple on a fresh runner before anything publishes.
+
 ## [12.28.0] - 2026-09-14
 
 ### Fixed

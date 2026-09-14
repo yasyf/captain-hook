@@ -85,3 +85,7 @@ def test_binrun_version_reads_the_stable_signed_host_without_spawning_it() -> No
         assert '"plist_key": "CFBundleShortVersionString"' in descriptor
         assert '"command"' not in descriptor
         assert "capt-hook-host" not in descriptor
+
+
+def test_formula_never_runs_stapler_inside_the_homebrew_sandbox() -> None:
+    assert "stapler" not in FORMULA.read_text()
