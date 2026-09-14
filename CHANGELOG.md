@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.30.1] - 2026-09-14
+
 ### Fixed
 
 - **A slow session start returns what it has instead of timing out.** On a
