@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from collections.abc import Sequence
 from itertools import chain
 from pathlib import Path
@@ -40,6 +41,7 @@ from captain_hook.types import (
     WorkflowScript,
 )
 from captain_hook.util import reqenv
+from captain_hook.util.caching import LRUDict
 from captain_hook.util.scratch import is_scratch_path
 
 if TYPE_CHECKING:
@@ -64,6 +66,9 @@ NON_SOURCE_SUFFIXES = (
     ".cfg",
     ".lock",
 )
+MAX_ACTIVITY_PROBES = 32
+ACTIVITY_PROBES: LRUDict[tuple[Path, int, int, int, frozenset[str], int], bool] = LRUDict(MAX_ACTIVITY_PROBES)
+ACTIVITY_PROBE_LOCK = threading.Lock()
 
 
 def waiting_tool_names(evt: BaseHookEvent) -> frozenset[str]:
@@ -72,14 +77,29 @@ def waiting_tool_names(evt: BaseHookEvent) -> frozenset[str]:
     return frozenset(settings.waiting_tools if (settings := evt.ctx.settings) else DEFAULT_WAITING_TOOLS)
 
 
-def is_waiting(evt: BaseHookEvent) -> bool:
+def probed_waiting(path: Path, waiting_tools: frozenset[str]) -> bool:
     from cc_transcript.activity_probe import session_activity_probe
 
+    from captain_hook import cli
+
+    st = path.stat()
+    key = (path, st.st_size, st.st_mtime_ns, st.st_ctime_ns, waiting_tools, cli.tools_generation)
+    with ACTIVITY_PROBE_LOCK:
+        cached = ACTIVITY_PROBES.get(key)
+    if cached is not None:
+        return cached
+    waiting = session_activity_probe(path, waiting_tools=waiting_tools).is_waiting
+    with ACTIVITY_PROBE_LOCK:
+        ACTIVITY_PROBES[key] = waiting
+    return waiting
+
+
+def is_waiting(evt: BaseHookEvent) -> bool:
     if evt.background_tasks or evt.session_crons:
         return True
     if not (t := evt.ctx.transcript) or t.path is None:
         return False
-    return session_activity_probe(t.path, waiting_tools=waiting_tool_names(evt)).is_waiting
+    return probed_waiting(t.path, waiting_tool_names(evt))
 
 
 def workflow_script_source(evt: BaseHookEvent) -> str | None:

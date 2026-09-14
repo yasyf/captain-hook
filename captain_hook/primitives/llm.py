@@ -11,6 +11,7 @@ from loguru import logger
 from pydantic import BaseModel, ValidationError
 
 from captain_hook.app import on
+from captain_hook.context import is_unsupported_model
 from captain_hook.contexts import apply_contexts, with_defaults
 from captain_hook.primitives.nudge import DEFAULT_FIRES
 from captain_hook.prompt import Prompt, render_template
@@ -91,7 +92,8 @@ def llm_evaluate[M: BaseModel](
     Applies signals/when gating, renders ``contexts`` (a ``required`` context with no content skips
     the call), attaches the transcript window and optional diff, then calls the backend — retrying up
     to ``retries`` times, feeding a schema validation failure back to the model on re-ask. Returns
-    ``None`` on a skip; raises when the call still fails after the final retry.
+    ``None`` on a skip; raises when the call still fails after the final retry, and at once when the
+    backend rejects the model itself.
     """
     from cc_transcript.render import clip
 
@@ -147,8 +149,8 @@ def llm_evaluate[M: BaseModel](
                 f"{e}\nYour previous reply failed validation; answer again conforming to the schema.",
             )
             logger.bind(attempt=attempt).opt(exception=True).warning("llm output failed validation; retrying")
-        except Exception:
-            if attempt >= retries:
+        except Exception as e:
+            if attempt >= retries or is_unsupported_model(e):
                 raise
             logger.bind(attempt=attempt).opt(exception=True).warning("llm call failed; retrying")
 

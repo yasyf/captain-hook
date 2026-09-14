@@ -103,6 +103,41 @@ def test_language_marker_change_changes_fingerprint(project: CliState) -> None:
     assert fp(project) != before
 
 
+def test_unchanged_root_walks_for_language_markers_once(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
+    walks: list[Path] = []
+    real = manager.detect_languages
+    monkeypatch.setattr(manager, "detect_languages", lambda root: (walks.append(root), real(root))[1])
+    reg = Registry(project)
+    reg.get()
+    walks.clear()
+    reg.get()
+    reg.get()
+    assert walks == []
+
+
+def test_nested_language_marker_lands_within_the_ttl(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
+    (nested := project.root / "services" / "api").mkdir(parents=True)
+    before = fp(project)
+    (nested / "go.mod").write_text("module x\n")
+    assert fp(project) == before
+    monkeypatch.setattr(registry, "MARKER_TTL", 0.0)
+    assert fp(project) != before
+
+
+def test_a_build_is_keyed_by_the_languages_its_discovery_saw(
+    project: CliState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (nested := project.root / "services" / "api").mkdir(parents=True)
+    reg = Registry(project)
+    assert "go" not in {p.name for p in reg.get().resolved}
+    (marker := nested / "go.mod").write_text("module x\n")
+    (Path(project.hooks) / "h.py").write_text(HOOK.replace("message='m'", "message='edited'"))
+    assert "go" in {p.name for p in reg.get().resolved}
+    marker.unlink()
+    monkeypatch.setattr(registry, "MARKER_TTL", 0.0)
+    assert "go" not in {p.name for p in reg.get().resolved}
+
+
 def test_gitignore_change_changes_fingerprint(project: CliState) -> None:
     before = fp(project)
     (project.root / ".gitignore").write_text("*.log\n*.tmp\nbuild/\n")

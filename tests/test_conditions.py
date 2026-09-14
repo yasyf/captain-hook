@@ -9,7 +9,7 @@ from typing import Any, get_args
 import pytest
 from cc_transcript.activity_probe import SessionActivityProbe, session_activity_probe
 
-from captain_hook import EditedSource, T
+from captain_hook import EditedSource, T, cli
 from captain_hook.app import on
 from captain_hook.conditions import UserSaid, check_condition, is_project_path, matches_conditions, workflow_opt_matches
 from captain_hook.events import (
@@ -1401,6 +1401,33 @@ class TestWaitingCondition:
         result = check_condition(Waiting(), StopEvent(_raw={}, ctx=ctx))
         assert len(probes) == 1
         assert result is probes[0].is_waiting is False
+
+    def test_probe_reruns_only_when_the_transcript_stamp_or_tool_registry_moves(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = tmp_path / "session.jsonl"
+        path.write_bytes((Path(__file__).parent / "fixtures" / "hook_fires" / "fire-stop.jsonl").read_bytes())
+        ctx = build_ctx(transcript=load_transcript(path))
+        probes: list[Path] = []
+
+        def spy_probe(probed: Path, **kwargs: Any) -> SessionActivityProbe:
+            probes.append(probed)
+            return session_activity_probe(probed, **kwargs)
+
+        monkeypatch.setattr("cc_transcript.activity_probe.session_activity_probe", spy_probe)
+        assert check_condition(Waiting(), StopEvent(_raw={}, ctx=ctx)) is False
+        assert check_condition(Waiting(), StopEvent(_raw={}, ctx=ctx)) is False
+        assert len(probes) == 1
+        with path.open("ab") as fh:
+            fh.write(b"\n")
+        assert check_condition(Waiting(), StopEvent(_raw={}, ctx=ctx)) is False
+        assert len(probes) == 2
+        cli.reconcile_pack_tools({"review_wait": ("Monitor", None)})
+        try:
+            assert check_condition(Waiting(), StopEvent(_raw={}, ctx=ctx)) is False
+        finally:
+            cli.reconcile_pack_tools({})
+        assert len(probes) == 3
 
 
 class TestFromSubagentCondition:

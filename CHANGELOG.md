@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Hooks reuse repo language scans and transcript waiting checks.** Each
+  event re-walked the repo, and each waiting check re-read the whole
+  transcript. Hooks now cache those results and default each worker's
+  transcript parser to four threads, honoring an existing thread setting.
+  Root-level marker changes and root `.gitignore` edits take effect on the
+  next event; nested changes take effect within 30 s. Transcript changes
+  trigger a new waiting probe. In a 360-dispatch replay, median `PreToolUse`,
+  `PostToolUse`, and async `PostToolUse` latency fell from 222, 212, and
+  167 ms to 76, 37, and 14 ms, respectively.
+- **A nudge whose model codex rejects fails once.** A codex ChatGPT-account
+  sign-in rejecting a nudge's model caused three attempts per call, holding
+  the session lane for about 9 s. Captain Hook now attempts once and
+  remembers the rejection per specialty and model for the worker's lifetime.
 - **The host stops its workers all at once.** `restart-workers` and the host's
   shutdown stopped the cached Python interpreters one after another on a
   single shared deadline, so each settlement spent what the next had left and

@@ -11,9 +11,12 @@ a plugin pack — misses and rebuilds. Snapshots are built under one lock so con
 race ``sys.modules``. The plugin roster is read from the discovery snapshot as-is: the fingerprint
 path never spawns ``claude plugin list`` — only :meth:`CliState.discover` refreshes it.
 
-The language-marker input walks the repo once per fingerprint; the walk prunes VCS and gitignored
-dirs and short-circuits per language, so it stays far cheaper than the module imports and plugin CLI
-subprocess the daemon exists to skip (see :func:`captain_hook.packs.manager.detect_languages`).
+The language-marker input walks the repo (see :func:`captain_hook.packs.manager.detect_languages`),
+which costs over 100ms on a large monorepo, so the fingerprint reuses the last walk per root while
+that root's stamp holds: the root directory's own stat plus its ``.gitignore``'s. A marker created,
+removed, or renamed directly under the root, or a root ``.gitignore`` edit, moves the stamp and
+re-walks on the next event; a change deeper in the tree lands within :data:`MARKER_TTL` seconds. A
+build always re-walks, so a snapshot is stored under the language set its own discovery saw.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -36,10 +40,22 @@ if TYPE_CHECKING:
 
 MAX_SNAPSHOTS = 8
 BUILD_RETRIES = 3
+MARKER_TTL = 30.0
+MAX_MARKER_ROOTS = 32
+MARKER_WALKS: LRUDict[Path, MarkerWalk] = LRUDict(MAX_MARKER_ROOTS)
+MARKER_LOCK = threading.Lock()
 
 StatEntry = tuple[int, int, int]
 HookEntry = tuple[str, int, int, int]
 PluginTree = tuple[str, tuple[HookEntry, ...]]
+MarkerStamp = tuple[StatEntry | None, StatEntry | None]
+
+
+@dataclass(frozen=True, slots=True)
+class MarkerWalk:
+    stamp: MarkerStamp
+    walked_at: float
+    markers: tuple[str, ...]
 
 
 def _stat_entry(path: Path) -> StatEntry | None:
@@ -73,9 +89,17 @@ def _hooks_tree(hooks: str) -> tuple[HookEntry, ...]:
     return tuple(sorted(_iter_tree(root, root))) if (root := Path(hooks)).is_dir() else ()
 
 
-def _language_markers(root: Path) -> tuple[str, ...]:
-    # The recursive, non-ignored markers driving go/python activation; a new or removed one flips it.
-    return tuple(sorted(manager.detect_languages(root)))
+def _language_markers(root: Path, *, fresh: bool) -> tuple[str, ...]:
+    stamp = (_stat_entry(root), _stat_entry(root / ".gitignore"))
+    with MARKER_LOCK:
+        cached = MARKER_WALKS.get(root)
+    if not fresh and cached is not None and cached.stamp == stamp and time.monotonic() - cached.walked_at < MARKER_TTL:
+        return cached.markers
+    walked_at = time.monotonic()
+    markers = tuple(sorted(manager.detect_languages(root)))
+    with MARKER_LOCK:
+        MARKER_WALKS[root] = MarkerWalk(stamp, walked_at, markers)
+    return markers
 
 
 def _claude_stats(root: Path) -> tuple[plugins.FingerprintRecord, ...]:
@@ -106,12 +130,12 @@ class Fingerprint:
     digest: str
 
     @classmethod
-    def _inputs(cls, cli_state: CliState) -> tuple[tuple[object, ...], tuple[str, ...]]:
+    def _inputs(cls, cli_state: CliState, *, fresh: bool) -> tuple[tuple[object, ...], tuple[str, ...]]:
         # ``brackets`` holds the plugin roster snapshot — the one sidecar discovery writes — so a build
         # can bracket its own refresh without the write skewing before/after stable digests.
         root = cli_state.root
         stable = (
-            _language_markers(root),
+            _language_markers(root, fresh=fresh),
             _hooks_tree(cli_state.hooks_dir),
             _stat_entry(root / ".gitignore"),
             _claude_stats(root),
@@ -121,13 +145,13 @@ class Fingerprint:
         return stable, brackets
 
     @classmethod
-    def compute(cls, cli_state: CliState) -> Fingerprint:
-        stable, brackets = cls._inputs(cli_state)
+    def compute(cls, cli_state: CliState, *, fresh: bool = False) -> Fingerprint:
+        stable, brackets = cls._inputs(cli_state, fresh=fresh)
         return cls(digest=hashlib.sha256(repr((stable, brackets)).encode()).hexdigest())
 
     @classmethod
     def stable_digest(cls, cli_state: CliState) -> str:
-        stable, _brackets = cls._inputs(cli_state)
+        stable, _brackets = cls._inputs(cli_state, fresh=True)
         return hashlib.sha256(repr(stable).encode()).hexdigest()
 
 
@@ -196,7 +220,7 @@ class Registry:
         # Fingerprint after discover: it may have refreshed the plugin snapshot, so this stores the
         # snapshot under the post-write inputs the next request sees.
         return RegistrySnapshot(
-            fingerprint=Fingerprint.compute(self._cli_state),
+            fingerprint=Fingerprint.compute(self._cli_state, fresh=True),
             state=state,
             resolved=resolved,
             tools=pack_tool_specs(resolved),
