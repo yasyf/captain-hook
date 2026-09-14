@@ -1,6 +1,11 @@
 import json
+import os
+import plistlib
+import re
 import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).parents[1]
 FORMULA = ROOT / ".github/formula/captain-hook.rb.tmpl"
@@ -103,6 +108,7 @@ def test_hook_dispatch_resolves_the_signed_host_not_python() -> None:
         "app_name": "Captain Hook",
         "exec": "Contents/Helpers/capt-hookd",
         "formula": "yasyf/tap/captain-hook",
+        "min_version": "12.29.0",
     }
     cli = json.loads((ROOT / "captain_hook/bin/capt-hook.binrun").read_text().split("\n", 1)[1])
     assert cli["kind"] == "python-tool"
@@ -110,6 +116,45 @@ def test_hook_dispatch_resolves_the_signed_host_not_python() -> None:
     shim = json.loads((ROOT / "captain_hook/bin/hook-shim.binrun").read_text().split("\n", 1)[1])
     assert shim["kind"] == "python-tool"
     assert shim["tool"] == {"dist": "capt-hook", "entrypoint": "hook"}
-    assert (ROOT / "captain_hook/bin/hook-shim").resolve() == (
-        ROOT / "captain_hook/scripts/install-hook-shim.sh"
-    ).resolve()
+    assert (ROOT / "captain_hook/bin/hook-shim").readlink() == Path("../scripts/install-hook-shim.sh")
+
+
+@pytest.mark.parametrize(
+    ("installed", "code", "output"),
+    [
+        ("12.28.0", 1, "is version 12.28.0, want at least 12.29.0; run: brew upgrade yasyf/tap/captain-hook"),
+        ("12.29.0", 0, "host run PreToolUse"),
+        ("13.0.0", 0, "host run PreToolUse"),
+    ],
+)
+def test_hook_dispatch_below_the_minimum_app_fails_open_with_the_upgrade_hint(
+    installed: str, code: int, output: str, tmp_path: Path
+) -> None:
+    """PIN: an app older than the Go hook grammar would exit 2 on ``run <Event>``, blocking every tool.
+
+    The descriptor's ``min_version`` stops binrun before that exec: exit 1 does not block, and its
+    stderr names the upgrade. An app at or past the minimum execs the host.
+    """
+    contents = tmp_path / "Applications" / "Captain Hook.app" / "Contents"
+    (contents / "Helpers").mkdir(parents=True)
+    plistlib.dump({"CFBundleShortVersionString": installed}, (contents / "Info.plist").open("wb"))
+    host = contents / "Helpers" / "capt-hookd"
+    host.write_text('#!/bin/sh\necho "host $*"\n')
+    host.chmod(0o755)
+    runner = Path.home() / ".daemonkit" / "bin"
+    pinned = re.search(r'^RUNNER_TAG="(.+)"$', (ROOT / "captain_hook/scripts/install-binary.sh").read_text(), re.M)
+    assert pinned is not None
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "DAEMONKIT_HOME": str(tmp_path)}
+    if (runner / ".binrun-tag").is_file() and (runner / ".binrun-tag").read_text().strip() == pinned[1]:
+        env["BINRUN_BIN"] = str(runner / "binrun")
+    result = subprocess.run(
+        [ROOT / "captain_hook/bin/hook", "run", "PreToolUse"],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+    assert result.returncode == code, result.stderr
+    assert output in (result.stdout if code == 0 else result.stderr)

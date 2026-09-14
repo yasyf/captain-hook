@@ -11,6 +11,7 @@
     "dir": "~/Applications",
     "app_name": "Captain Hook",
     "exec": "Contents/Helpers/capt-hookd",
-    "formula": "yasyf/tap/captain-hook"
+    "formula": "yasyf/tap/captain-hook",
+    "min_version": "12.29.0"
   }
 }
