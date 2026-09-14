@@ -12,7 +12,14 @@ from captain_hook.app import (
 from captain_hook.app import (
     on,
 )
-from captain_hook.dispatch import ADVISORY_SEPARATOR, dispatch, execute_hook, format_output, run_declarative
+from captain_hook.dispatch import (
+    ADVISORY_SEPARATOR,
+    SYNC_DEADLINE_MARGIN_SECONDS,
+    dispatch,
+    execute_hook,
+    format_output,
+    run_declarative,
+)
 from captain_hook.events import PermissionRequestEvent
 from captain_hook.primitives.nudge import nudge
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
@@ -778,7 +785,7 @@ class TestDispatch:
         @on(Event.PreToolUse)
         def slow(evt: Any) -> HookResult:
             ran.append("slow")
-            clock["now"] = 10.0
+            clock["now"] = 60.0
             return HookResult(action=Action.warn, message="from slow")
 
         @on(Event.PreToolUse)
@@ -786,13 +793,40 @@ class TestDispatch:
             ran.append("late")
             return HookResult(action=Action.block, message="never reached")
 
-        overrides = reqenv.RequestOverrides(env={}, cwd="/w", client_ppid=1, session_id="s", deadline_unix_ms=5_000)
+        overrides = reqenv.RequestOverrides(env={}, cwd="/w", client_ppid=1, session_id="s", deadline_unix_ms=60_000)
         with reqenv.use_request(overrides):
             result = dispatch(Event.PreToolUse, make_pre_tool_event())
 
         assert ran == ["slow"]
         assert result is not None
         assert result["hookSpecificOutput"]["additionalContext"] == "from slow"
+
+    @pytest.mark.parametrize(("async_", "expected"), [(False, ["first"]), (True, ["first", "second"])])
+    def test_sync_hooks_stop_inside_the_deadline_margin(
+        self, monkeypatch: pytest.MonkeyPatch, async_: bool, expected: list[str]
+    ) -> None:
+        clock = {"now": 0.0}
+        monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: clock["now"]))
+        ran: list[str] = []
+
+        @on(Event.PostToolUse, async_=async_)
+        def first(evt: Any) -> HookResult:
+            ran.append("first")
+            clock["now"] = 30.0 - SYNC_DEADLINE_MARGIN_SECONDS + 1
+            return HookResult(action=Action.warn, message="from first")
+
+        @on(Event.PostToolUse, async_=async_)
+        def second(evt: Any) -> HookResult:
+            ran.append("second")
+            return HookResult(action=Action.warn, message="from second")
+
+        overrides = reqenv.RequestOverrides(env={}, cwd="/w", client_ppid=1, session_id="s", deadline_unix_ms=30_000)
+        with reqenv.use_request(overrides):
+            result = dispatch(Event.PostToolUse, make_post_tool_event(), async_=async_)
+
+        assert ran == expected
+        assert result is not None
+        assert result["hookSpecificOutput"]["additionalContext"].startswith("from first")
 
     def test_stop_warn_combined(self) -> None:
         register_hook(Event.Stop, message="warn stop")
