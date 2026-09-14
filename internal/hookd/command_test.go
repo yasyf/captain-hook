@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -256,6 +257,31 @@ func TestRunDeletedCWDStillSpellsADispatch(t *testing.T) {
 				t.Fatalf("exit=%d stderr=%q cwd=%q root=%q, want %q", code, stderr, request.CWD, request.Root, tc.want)
 			}
 		})
+	}
+}
+
+func TestWorkingDirectoryPathNamesARemovedDirectory(t *testing.T) {
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(parent, "gone")
+	if err := os.Mkdir(gone, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(gone)
+	if got, err := workingDirectoryPath(); err != nil || got != gone {
+		t.Fatalf("live: path=%q err=%v, want %q", got, err, gone)
+	}
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	got, err := workingDirectoryPath()
+	if err != nil || got != gone {
+		t.Fatalf("removed: path=%q err=%v, want %q", got, err, gone)
+	}
+	if err := isWorkingDirectory(got); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("removed: identity err=%v, want ErrNotExist", err)
 	}
 }
 

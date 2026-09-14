@@ -1,6 +1,7 @@
 package hookd
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -13,11 +14,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/yasyf/captain-hook/internal/wireproto"
 	"github.com/yasyf/daemonkit/artifact"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -212,13 +214,16 @@ func parseHookRun(args []string) (root, event string, async, ok bool) {
 	return root, tail[1], len(tail) == 3, true
 }
 
-// requestCWD answers what Python's os.getcwd does. os.Getwd prefers PWD's
-// symlinked spelling, and on darwin syscall.Getwd still names a directory that
-// is gone, even one recreated at that path, where libc's getcwd fails ENOENT;
-// the identity check restores that failure. PWD is the fallback only then,
-// since "/" as a root would walk the whole machine.
+// requestCWD answers what Python's os.getcwd does without calling getcwd:
+// once the working directory is gone, libc's getcwd scans its former parent,
+// and against a $TMPDIR of tens of thousands of entries that other processes
+// keep changing, that scan ran for over half an hour before any deadline began.
+// F_GETPATH names the directory's vnode even after it is removed or recreated
+// at that path, and the identity check turns both into the ENOENT getcwd
+// reports. PWD is the fallback only then, since "/" as a root would walk the
+// whole machine.
 func requestCWD() (string, error) {
-	cwd, err := syscall.Getwd()
+	cwd, err := workingDirectoryPath()
 	if err == nil {
 		err = isWorkingDirectory(cwd)
 	}
@@ -226,6 +231,19 @@ func requestCWD() (string, error) {
 		return cmp.Or(os.Getenv("PWD"), "/"), nil
 	}
 	return cwd, err
+}
+
+func workingDirectoryPath() (string, error) {
+	dir, err := os.Open(".")
+	if err != nil {
+		return "", err
+	}
+	defer dir.Close()
+	buf := make([]byte, unix.PathMax)
+	if _, _, errno := unix.Syscall(unix.SYS_FCNTL, dir.Fd(), unix.F_GETPATH, uintptr(unsafe.Pointer(&buf[0]))); errno != 0 {
+		return "", errno
+	}
+	return string(buf[:bytes.IndexByte(buf, 0)]), nil
 }
 
 func isWorkingDirectory(path string) error {
