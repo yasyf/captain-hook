@@ -23,12 +23,13 @@ type workerClient struct {
 	build string
 	child *daemonkit.Child
 
-	writeMu sync.Mutex
-	mu      sync.Mutex
-	nextID  uint64
-	pending map[uint64]chan workerResult
-	closed  bool
-	err     error
+	writeMu   sync.Mutex
+	mu        sync.Mutex
+	nextID    uint64
+	pending   map[uint64]chan workerResult
+	abandoned map[uint64]struct{}
+	closed    bool
+	err       error
 
 	stopMu  sync.Mutex
 	stopped bool
@@ -55,7 +56,7 @@ func handshakeWorker(ctx context.Context, conn net.Conn, build string) (*workerC
 	if err := conn.SetDeadline(time.Time{}); err != nil {
 		return nil, err
 	}
-	w := &workerClient{conn: conn, build: build, pending: make(map[uint64]chan workerResult)}
+	w := &workerClient{conn: conn, build: build, pending: make(map[uint64]chan workerResult), abandoned: make(map[uint64]struct{})}
 	go w.readLoop()
 	return w, nil
 }
@@ -87,7 +88,7 @@ func (w *workerClient) call(ctx context.Context, request wireproto.EventRequest)
 	case received := <-result:
 		return received.response, received.err
 	case <-ctx.Done():
-		w.removePending(id)
+		w.abandon(id)
 		return wireproto.EventResponse{}, ctx.Err()
 	}
 }
@@ -128,8 +129,13 @@ func (w *workerClient) readLoop() {
 		w.mu.Lock()
 		pending := w.pending[frame.ID]
 		delete(w.pending, frame.ID)
+		_, abandoned := w.abandoned[frame.ID]
+		delete(w.abandoned, frame.ID)
 		w.mu.Unlock()
 		if pending == nil {
+			if abandoned {
+				continue
+			}
 			w.fail(fmt.Errorf("captain: Python worker returned unknown request id %d", frame.ID))
 			return
 		}
@@ -159,6 +165,15 @@ func (w *workerClient) removePending(id uint64) {
 	w.mu.Unlock()
 }
 
+func (w *workerClient) abandon(id uint64) {
+	w.mu.Lock()
+	if _, ok := w.pending[id]; ok {
+		delete(w.pending, id)
+		w.abandoned[id] = struct{}{}
+	}
+	w.mu.Unlock()
+}
+
 func (w *workerClient) fail(err error) {
 	if err == nil {
 		err = io.EOF
@@ -172,6 +187,7 @@ func (w *workerClient) fail(err error) {
 	w.err = err
 	pending := w.pending
 	w.pending = make(map[uint64]chan workerResult)
+	w.abandoned = make(map[uint64]struct{})
 	w.mu.Unlock()
 	_ = w.conn.Close()
 	for _, waiter := range pending {
