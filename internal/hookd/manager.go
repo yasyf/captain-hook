@@ -57,6 +57,8 @@ const (
 // call that triggered it, and a hook that is told why does not.
 var ErrWorkerCapacity = errors.New("captain: live worker capacity is exhausted")
 
+var errWorkerManagerClosed = errors.New("captain: worker manager is closed")
+
 var workerEnvExact = map[string]struct{}{
 	"XDG_CACHE_HOME": {}, "CAPTAIN_HOOK_STATE_DIR": {}, "CAPTAIN_HOOK_LOG_DIR": {},
 	"CAPTAIN_HOOK_TASKS_DIR": {}, "CAPT_HOOK_DECISIONS_DB": {},
@@ -69,8 +71,10 @@ type workerEntry struct {
 	key    workerKey
 
 	// lastUsed and inflight are guarded by workerManager.mu. inflight counts
-	// dispatches holding this entry, so eviction never pulls an interpreter out
-	// from under a call in progress.
+	// the holds on this entry — every caller waiting or dispatching on it, and
+	// the startup until it lands — so eviction never pulls an interpreter out
+	// from under a call in progress, and the last hold to drop is the one that
+	// retires an entry the cache has let go of.
 	lastUsed  time.Time
 	inflight  int
 	ephemeral bool
@@ -101,8 +105,14 @@ type workerManager struct {
 	logWriter io.Writer
 	scheduler *scheduler
 
-	now  func() time.Time
-	done chan struct{}
+	now   func() time.Time
+	start func(ctx context.Context, key workerKey) (*workerClient, error)
+
+	// lifetime bounds every worker startup and the sweeper; end cancels it at
+	// Close, so no startup outlives the manager and none is ever bound to the
+	// requester that happened to ask first.
+	lifetime context.Context
+	end      context.CancelFunc
 
 	mu      sync.Mutex
 	closed  bool
@@ -115,13 +125,16 @@ func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) (*workerManager,
 	if err != nil {
 		return nil, err
 	}
-	return &workerManager{
+	lifetime, end := context.WithCancel(context.Background())
+	m := &workerManager{
 		owner: owner, logWriter: logWriter,
 		// A ceiling set below the floor is meant, so the floor follows it down.
 		scheduler: newScheduler(min(minParallelDispatch, ceiling), ceiling, asyncParallelDispatch),
 		entries:   make(map[string]*workerEntry),
-		now:       time.Now, done: make(chan struct{}),
-	}, nil
+		now:       time.Now, lifetime: lifetime, end: end,
+	}
+	m.start = m.startWorker
+	return m, nil
 }
 
 func parallelCeiling(override string) (int, error) {
@@ -171,80 +184,95 @@ func (m *workerManager) dispatch(ctx context.Context, request wireproto.EventReq
 }
 
 // acquire hands back the cached entry for key, starting its interpreter on
-// first use, and marks it in flight for the caller — release drops that hold. A
-// full cache evicts its least recently used idle entry rather than refusing
-// outright: admission is refused only when every live worker is busy, which is
-// real saturation rather than the accumulated residue of keys that never
-// repeat.
+// first use, and marks it in flight for the caller — release drops that hold.
+// Startup runs on the manager's lifetime; a requester leaving mid-start drops
+// only its own hold. A full cache evicts its least recently used idle entry
+// and refuses admission only when every worker is busy.
 func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntry, error) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		return nil, errors.New("captain: worker manager is closed")
-	}
-	if entry := m.entries[key.id]; entry != nil {
-		entry.lastUsed = m.now()
-		entry.inflight++
-		m.mu.Unlock()
-		select {
-		case <-entry.ready:
-		case <-ctx.Done():
-			m.release(entry)
-			return nil, ctx.Err()
-		}
-		if entry.err != nil {
-			m.release(entry)
-			return nil, entry.err
-		}
-		return entry, nil
+		return nil, errWorkerManagerClosed
 	}
 	var evicted *workerClient
-	if len(m.entries) >= maxLiveWorkers {
-		victim := m.evictIdleLocked()
-		if victim == nil {
-			live := len(m.entries)
-			m.mu.Unlock()
-			return nil, fmt.Errorf("%w: %d live workers, limit is %d", ErrWorkerCapacity, live, maxLiveWorkers)
+	entry := m.entries[key.id]
+	if entry == nil {
+		if len(m.entries) >= maxLiveWorkers {
+			victim := m.evictIdleLocked()
+			if victim == nil {
+				live := len(m.entries)
+				m.mu.Unlock()
+				return nil, fmt.Errorf("%w: %d live workers, limit is %d", ErrWorkerCapacity, live, maxLiveWorkers)
+			}
+			evicted = victim.worker
 		}
-		evicted = victim.worker
+		entry = &workerEntry{
+			ready: make(chan struct{}), key: key, inflight: 1, ephemeral: ephemeralRoot(key.root),
+		}
+		m.entries[key.id] = entry
+		m.wg.Add(1)
+		go m.startEntry(entry)
 	}
-	entry := &workerEntry{
-		ready: make(chan struct{}), key: key,
-		lastUsed: m.now(), inflight: 1, ephemeral: ephemeralRoot(key.root),
-	}
-	m.entries[key.id] = entry
+	entry.lastUsed = m.now()
+	entry.inflight++
 	m.mu.Unlock()
 
 	if evicted != nil {
 		_ = m.settle(evicted)
 	}
 
-	worker, err := m.start(ctx, key)
-	m.mu.Lock()
-	entry.worker, entry.err = worker, err
-	if err != nil {
-		delete(m.entries, key.id)
-	}
-	close(entry.ready)
-	m.mu.Unlock()
-	if err != nil {
+	select {
+	case <-entry.ready:
+	case <-ctx.Done():
 		m.release(entry)
-		return nil, err
+		return nil, ctx.Err()
+	}
+	if entry.err != nil {
+		m.release(entry)
+		return nil, entry.err
 	}
 	return entry, nil
 }
 
-// release drops the caller's hold on entry. An ephemeral entry — one keyed on a
-// scratch root that will never be revisited — retires the moment its last
-// dispatch finishes rather than waiting for the sweep to notice it.
+// startEntry runs one entry's startup on the manager's lifetime, holding the
+// entry until the result lands. A failed start, or a worker whose child died
+// before watch could see the entry, frees the key for a retry; a worker
+// landing after Close is settled here, since the cache has let go of it.
+func (m *workerManager) startEntry(entry *workerEntry) {
+	defer m.wg.Done()
+	ctx, cancel := context.WithTimeout(m.lifetime, workerReadinessTimeout)
+	defer cancel()
+	worker, err := m.start(ctx, entry.key)
+	m.mu.Lock()
+	stranded := err == nil && m.closed
+	if stranded {
+		err = errWorkerManagerClosed
+	} else {
+		entry.worker = worker
+	}
+	entry.err = err
+	if (err != nil || worker.broken()) && m.entries[entry.key.id] == entry {
+		delete(m.entries, entry.key.id)
+	}
+	close(entry.ready)
+	m.mu.Unlock()
+	if stranded {
+		_ = m.settle(worker)
+	}
+	m.release(entry)
+}
+
+// release drops the caller's hold on entry. The last hold to drop retires an
+// ephemeral entry — a scratch root never revisited — at once rather than at the
+// sweep, and settles an entry the cache has already let go of (restart, Close,
+// a dead child), so a worker still in use at that moment never leaks.
 func (m *workerManager) release(entry *workerEntry) {
 	m.mu.Lock()
 	entry.inflight--
-	retire := entry.ephemeral && entry.inflight == 0
-	if retire {
-		if cached := m.entries[entry.key.id]; cached == entry {
-			delete(m.entries, entry.key.id)
-		}
+	cached := m.entries[entry.key.id] == entry
+	retire := entry.inflight == 0 && (entry.ephemeral || !cached)
+	if retire && cached {
+		delete(m.entries, entry.key.id)
 	}
 	worker := entry.worker
 	m.mu.Unlock()
@@ -308,7 +336,7 @@ func (m *workerManager) startSweeper(interval time.Duration) {
 		defer ticker.Stop()
 		for {
 			select {
-			case <-m.done:
+			case <-m.lifetime.Done():
 				return
 			case <-ticker.C:
 				for _, worker := range m.sweep(m.now()) {
@@ -342,18 +370,16 @@ func ephemeralRoot(root string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// start spawns one Python worker on ChannelStdio: daemonkit joins the child's
+// startWorker spawns one Python worker on ChannelStdio: daemonkit joins the child's
 // stdin and stdout into one deadline-aware conn, drains its stderr into the
 // host log for the child's whole life, and records the process durably under
 // the daemon's own ownership scope before the child runs an instruction. The
 // exec posture is the named waiver — the executable is whatever interpreter
 // the requesting project points at. Session gives the worker its own session,
 // so settlement covers the hook subprocesses it spawns and not just the
-// interpreter.
-func (m *workerManager) start(ctx context.Context, key workerKey) (*workerClient, error) {
-	readyCtx, cancel := context.WithTimeout(ctx, workerReadinessTimeout)
-	defer cancel()
-	child, err := m.owner.Spawn(readyCtx, workerCmd(key), daemonkit.ChannelStdio, m.logWriter)
+// interpreter. ctx is the manager's readiness budget, never a requester's.
+func (m *workerManager) startWorker(ctx context.Context, key workerKey) (*workerClient, error) {
+	child, err := m.owner.Spawn(ctx, workerCmd(key), daemonkit.ChannelStdio, m.logWriter)
 	if err != nil {
 		return nil, fmt.Errorf("captain: spawn Python product worker: %w", err)
 	}
@@ -361,7 +387,7 @@ func (m *workerManager) start(ctx context.Context, key workerKey) (*workerClient
 	if err != nil {
 		return nil, m.stopChild(child, errors.New("captain: take Python worker channel"), err)
 	}
-	worker, err := handshakeWorker(readyCtx, conn, key.build)
+	worker, err := handshakeWorker(ctx, conn, key.build)
 	if err != nil {
 		_ = conn.Close()
 		return nil, m.stopChild(child, errors.New("captain: handshake Python product worker"), err)
@@ -479,7 +505,7 @@ func (m *workerManager) Close(ctx context.Context) (bool, error) {
 	m.mu.Lock()
 	if !m.closed {
 		m.closed = true
-		close(m.done)
+		m.end()
 	}
 	workers := make([]*workerClient, 0, len(m.entries))
 	for _, entry := range m.entries {
