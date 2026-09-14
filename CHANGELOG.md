@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.30.5] - 2026-09-14
+
+### Fixed
+
+- **Codex-backed nudges run again under a ChatGPT sign-in.** spawnllm 0.13.2
+  resolves the codex `small` and `medium` tiers to `gpt-5.6-luna` instead of
+  `gpt-5.4-mini`, which codex rejects with a 400 for ChatGPT accounts. Every
+  `llm_nudge` routed to those tiers had failed on each call since the switch.
+
 ## [12.30.4] - 2026-09-14
 
 ### Fixed
