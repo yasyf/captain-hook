@@ -83,8 +83,8 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SessionStart" },
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SessionStart --async", "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook-shim\" run SessionStart" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook-shim\" run SessionStart --async", "async": true }
         ]
       }
     ],

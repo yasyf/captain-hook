@@ -77,7 +77,7 @@ def test_binrun_version_reads_the_stable_signed_host_without_spawning_it() -> No
     to read a string the bundle already publishes, which on a machine whose endpoint
     security inspects every exec dominated the whole dispatch.
     """
-    for name in ("capt-hook.binrun", "hook.binrun"):
+    for name in ("capt-hook.binrun", "hook.binrun", "hook-shim.binrun"):
         descriptor = (ROOT / "captain_hook/bin" / name).read_text()
         assert '"file": "~/Applications/Captain Hook.app/Contents/Info.plist"' in descriptor
         assert '"plist_key": "CFBundleShortVersionString"' in descriptor
@@ -107,3 +107,9 @@ def test_hook_dispatch_resolves_the_signed_host_not_python() -> None:
     cli = json.loads((ROOT / "captain_hook/bin/capt-hook.binrun").read_text().split("\n", 1)[1])
     assert cli["kind"] == "python-tool"
     assert cli["tool"] == {"dist": "capt-hook", "entrypoint": "capt-hook"}
+    shim = json.loads((ROOT / "captain_hook/bin/hook-shim.binrun").read_text().split("\n", 1)[1])
+    assert shim["kind"] == "python-tool"
+    assert shim["tool"] == {"dist": "capt-hook", "entrypoint": "hook"}
+    assert (ROOT / "captain_hook/bin/hook-shim").resolve() == (
+        ROOT / "captain_hook/scripts/install-hook-shim.sh"
+    ).resolve()
