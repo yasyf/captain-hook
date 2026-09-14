@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.30.4] - 2026-09-14
+
 ### Fixed
 
 - **Tracebacks stop rendering frame locals.** Logging a failed llm nudge
