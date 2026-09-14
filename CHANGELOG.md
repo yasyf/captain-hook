@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.30.0] - 2026-09-14
+
 ### Changed
 
 - **Hooks dispatch straight to the signed host, one Python exec fewer per
