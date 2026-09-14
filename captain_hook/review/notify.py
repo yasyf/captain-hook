@@ -1,7 +1,7 @@
 """Desktop notifications for review lifecycle events — the single bridge to the helper.
 
 A candidate's PR opening or merging, and a failing reviewer streak, each become a native
-banner via :mod:`captain_hook.helper.client`. :func:`notify_transition` is the seam
+banner via :mod:`captain_hook.desktop.client`. :func:`notify_transition` is the seam
 :meth:`ReviewStore.transition` fires on a real status write (its ``rowcount == 1`` branch, so
 a converged compare-and-swap loser never double-fires); :func:`maybe_notify_failures` fires
 once per failing streak from the spawn recorder.
@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from captain_hook.helper import client
+from captain_hook.desktop import client
 from captain_hook.review.status import CandidateStatus
 
 if TYPE_CHECKING:

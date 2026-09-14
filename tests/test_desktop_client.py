@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from captain_hook.helper import client
-from captain_hook.helper.client import Lane, NotifyOutcome
+from captain_hook.desktop import client
+from captain_hook.desktop.client import Lane, NotifyOutcome
 
 NOTIFY_FIELDS = {
     "title": "Block force-pushes",

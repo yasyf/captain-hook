@@ -2,7 +2,7 @@
 
 These are the user-facing surface for ``Captain Hook.app``: ``install`` converges the formula-owned
 signed deployment, ``status`` pings the running helper, and ``notify`` fires a test banner through
-:mod:`captain_hook.helper.client`. Every side effect (brew or the signed bridge) runs only
+:mod:`captain_hook.desktop.client`. Every side effect (brew or the signed bridge) runs only
 when the command is invoked, never at import.
 """
 
@@ -12,7 +12,7 @@ import subprocess
 
 import click
 
-from captain_hook.helper import FORMULA, client
+from captain_hook.desktop import FORMULA, client
 from captain_hook.update.updater import brew, deploy, installed_version
 
 
@@ -22,7 +22,7 @@ def helper() -> None:
 
 
 def cellar_version() -> str:
-    """The version Homebrew holds in the Cellar for :data:`captain_hook.helper.FORMULA`."""
+    """The version Homebrew holds in the Cellar for :data:`captain_hook.desktop.FORMULA`."""
     listed = subprocess.run(["brew", "list", "--versions", FORMULA], capture_output=True, text=True, check=True)
     return listed.stdout.split()[-1]
 

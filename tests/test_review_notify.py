@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from captain_hook.helper import client
-from captain_hook.helper.client import Lane, NotifyOutcome
+from captain_hook.desktop import client
+from captain_hook.desktop.client import Lane, NotifyOutcome
 from captain_hook.review import notify
 from captain_hook.review.repo import RepoKey
 from captain_hook.review.store import CandidateKind, CandidateStatus

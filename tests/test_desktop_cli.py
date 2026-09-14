@@ -12,8 +12,8 @@ import pytest
 from click.testing import CliRunner
 
 from captain_hook.cli import cli
-from captain_hook.helper import FORMULA, client
-from captain_hook.helper.client import Lane, NotifyOutcome
+from captain_hook.desktop import FORMULA, client
+from captain_hook.desktop.client import Lane, NotifyOutcome
 from captain_hook.update import updater
 
 CELLAR = "/opt/homebrew/opt/captain-hook"
@@ -139,7 +139,7 @@ def test_install_and_the_updater_deploy_through_one_helper() -> None:
     ``package-install`` makes, which failed every ``brew`` lane on every host. Both callers run
     it outside that sandbox, and they must not drift into two copies of that step.
     """
-    from captain_hook.helper import cli as helper_cli
+    from captain_hook.desktop import cli as helper_cli
 
     assert helper_cli.deploy is updater.deploy
 

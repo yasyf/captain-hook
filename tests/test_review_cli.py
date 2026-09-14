@@ -11,7 +11,7 @@ from cc_transcript.mining.sourcekind import TRANSCRIPT_MESSAGE
 from click.testing import CliRunner
 
 from captain_hook.cli import cli
-from captain_hook.helper.client import status_path
+from captain_hook.desktop.client import status_path
 from captain_hook.review.cli import STATUS_CHOICES
 from captain_hook.review.fix import HOOK_COMPLAINT
 from captain_hook.review.repo import RepoKey
