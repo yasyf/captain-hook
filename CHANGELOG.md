@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A timed-out hook's late reply no longer kills the shared worker.** In
+  12.27.0, `workerClient.call` in `internal/hookd/worker.go` dropped a
+  timed-out request's id, so when the Python worker later answered it,
+  `readLoop` read an unknown request id, failed the worker, and failed every
+  other session's in-flight hooks with `captain: Python worker returned
+  unknown request id N`. A timed-out id now moves to an abandoned set whose
+  late reply is discarded; a reply for an id the host never issued still
+  fails the worker as a protocol violation.
+
 - **A hook's timeout no longer cancels worker startup for other sessions.**
   `workerManager.startEntry` in `internal/hookd/manager.go` starts Python
   workers on the daemon's lifetime, bounded by `workerReadinessTimeout`.
