@@ -343,7 +343,7 @@ jobs:
               )
           }
           actual = {}
-          for attempt in range(12):
+          for attempt in range(60):
               try:
                   with urllib.request.urlopen(f"https://pypi.org/pypi/capt-hook/{version}/json") as response:
                       urls = json.load(response)["urls"]
@@ -353,9 +353,9 @@ jobs:
               except urllib.error.HTTPError as error:
                   if error.code != 404:
                       raise
-              if attempt == 11:
+              if attempt == 59:
                   raise SystemExit(f"::error::PyPI assets differ: expected {expected}, got {actual}")
-              time.sleep(5)
+              time.sleep(10)
           PY
 
   publish-github:
