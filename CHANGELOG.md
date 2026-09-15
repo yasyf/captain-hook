@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The general pack blocks prose questions to the user at Stop.** The
+  `prose_question_to_user` gate fires when a turn ends by putting a decision
+  to the user as text ("one decision for you", "let me know which", "should
+  I …?") without an `AskUserQuestion` or `ExitPlanMode` call, and tells the
+  agent to ask through `AskUserQuestion` in the same turn.
+
 ## [12.31.0] - 2026-09-15
 
 ### Changed
