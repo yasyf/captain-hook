@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.32.0] - 2026-09-15
+
 ### Added
 
 - **The `plain_english` builtin pack rewrites replies into plain English.** It
