@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 
 _WRITER: Callable[[Decision], None] | None = None
 _CACHED_LOG: DecisionLog | None = None
+OPEN_GUARD = threading.Lock()
 
 
 def decisions_db_path() -> Path | None:
@@ -32,11 +34,13 @@ async def open_decision_log(path: Path | None) -> DecisionLog:
 
 async def _append(decision: Decision) -> None:
     # One handle per cold process, reused across successive asyncio.run bridges (the actor captures
-    # the running loop per call); never closed per-call, so N firing hooks open one ledger, not N.
+    # the running loop per call); a thread lock, since an event's hooks each bridge their own run.
     global _CACHED_LOG
-    if _CACHED_LOG is None:
-        _CACHED_LOG = await open_decision_log(decisions_db_path())
-    await _CACHED_LOG.append(decision)
+    with OPEN_GUARD:
+        if _CACHED_LOG is None:
+            _CACHED_LOG = await open_decision_log(decisions_db_path())
+        log = _CACHED_LOG
+    await log.append(decision)
 
 
 def reset_cached_log() -> None:

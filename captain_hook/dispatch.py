@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor, wait
+from contextvars import copy_context
 from dataclasses import replace
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,11 +19,27 @@ from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHo
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from captain_hook.events import BaseHookEvent
 
 ADVISORY_SEPARATOR = "Additional advisories (not the reason for the deny):"
 SYNC_DEADLINE_MARGIN_SECONDS = 5.0
 ASYNC_HOOK_TIMEOUT_SECONDS = 180.0
+HOOK_FANOUT_THREADS = 16
+
+
+@cache
+def hook_pool() -> ThreadPoolExecutor:
+    """The one process-wide pool every event's hooks fan out onto.
+
+    Shared rather than per-event: the worker serves up to
+    :data:`captain_hook.worker.service.REQUEST_THREADS` events at once, so a pool per event would
+    multiply by that burst, while one pool of the same width caps the whole fan-out at the worker's
+    own thread budget however many events land together. Built on the first event that has hooks to
+    run, and its threads on the first submit, so a process that never dispatches never pays for it.
+    """
+    return ThreadPoolExecutor(max_workers=HOOK_FANOUT_THREADS, thread_name_prefix="capt-hook-hook")
 
 
 def run_declarative(spec: HookSpec, evt: BaseHookEvent) -> HookResult | None:
@@ -95,6 +115,75 @@ def execute_hook(
                 hook_state.fire_count -= 1
 
 
+def doomed_by_block(entry: RegisteredHook, blocked: threading.Event) -> bool:
+    """Whether a block already fired makes *entry* a wasted call — the deny is set, and it cannot ride along."""
+    return blocked.is_set() and entry.handler is not None and not entry.spec.advisory_on_deny
+
+
+def run_scheduled(
+    entry: RegisteredHook,
+    evt: BaseHookEvent,
+    session_dir: Path | None,
+    margin: float,
+    blocked: threading.Event,
+) -> HookResult | None:
+    """Run one hook on a pool thread, re-checking at its own start what the caller checked at submit."""
+    if doomed_by_block(entry, blocked):
+        return None
+    if reqenv.deadline_within(margin):
+        logger.bind(hook=entry.name).warning("caller deadline is near; skipping this hook")
+        return None
+    result = execute_hook(entry, evt, session_dir)
+    if result is not None and result.action is Action.block:
+        blocked.set()
+    return result
+
+
+def start_hooks(
+    entries: Sequence[RegisteredHook],
+    evt: BaseHookEvent,
+    session_dir: Path | None,
+    margin: float,
+    blocked: threading.Event,
+) -> list[tuple[RegisteredHook, Future[HookResult | None]]]:
+    """Submit every matching hook at once, each carrying a copy of the request's contextvars."""
+    pool = hook_pool()
+    started: list[tuple[RegisteredHook, Future[HookResult | None]]] = []
+    for entry in entries:
+        if reqenv.deadline_within(margin):
+            logger.bind(hook=entry.name).warning("caller deadline is near; skipping this and the remaining hooks")
+            break
+        task = copy_context().run
+        started.append((entry, pool.submit(task, run_scheduled, entry, evt, session_dir, margin, blocked)))
+    return started
+
+
+def collect_budget(margin: float) -> float | None:
+    """Seconds to wait on the running hooks: the caller's deadline less *margin*, unbounded for the cold CLI."""
+    return None if (left := reqenv.seconds_left()) is None else max(0.0, left - margin)
+
+
+def collect_hooks(
+    started: Sequence[tuple[RegisteredHook, Future[HookResult | None]]],
+    margin: float,
+) -> list[tuple[RegisteredHook, HookResult | None]]:
+    """Wait out the running hooks within the caller's deadline and pair each finisher with its entry.
+
+    The wait is one budget for the whole fan-out, not one per hook, so the reply is written in time
+    however the hooks stack up. A hook still running when the budget runs out is abandoned: it keeps
+    going on its pool thread, but its verdict misses this reply.
+    """
+    if started:
+        wait([future for _, future in started], timeout=collect_budget(margin))
+    collected: list[tuple[RegisteredHook, HookResult | None]] = []
+    for entry, future in started:
+        if not future.done():
+            logger.bind(hook=entry.name).warning("caller deadline reached; abandoning this hook's verdict")
+            continue
+        collected.append((entry, future.result()))
+    return collected
+
+
 def format_permission_decision(result: HookResult) -> dict[str, Any] | None:
     match result.action:
         case Action.allow:
@@ -157,22 +246,21 @@ def format_output(event: Event, result: HookResult) -> dict[str, Any] | None:
             }
 
 
-def dispatch(
+def combine(
     event: Event,
-    evt: BaseHookEvent,
-    session_dir: Path | None = None,
+    collected: Sequence[tuple[RegisteredHook, HookResult | None]],
 ) -> dict[str, Any] | None:
-    """Dispatch an event to all matching hooks and combine their results, deny-wins.
+    """Fold the finished hooks' results into one envelope in registration order, deny-wins.
 
     Follows Claude Code's own ``deny > ask > allow`` precedence: a ``block`` from any matching hook
     beats an ``allow``/``rewrite``, so one hook's approval can never short-circuit another hook's
     block. ``warn`` messages registered with ``advisory_on_deny=True`` ride along on the deny — when
     any block fired the result is one block whose message joins the block messages, an advisory
-    separator, then the opted-in warn messages (encounter order, ``"\n\n"``-separated). Once a block
-    has fired, remaining *handler-backed* hooks are skipped unless they opt into the deny advisory;
-    those handlers run regardless of registration order, while the rest avoid doomed API cost and
-    ``max_fires`` budget. Message-only declarative hooks still run, but only opted-in warnings join
-    the deny. Absent a block, a ``rewrite`` beats a plain ``allow`` — a rewrite *is* an allow carrying
+    separator, then the opted-in warn messages (registration order, ``"\n\n"``-separated). Once a
+    block has fired, a later *handler-backed* hook's result is dropped unless it opted into the deny
+    advisory, so a block earlier in registration order renders the same envelope however the hooks
+    interleaved. Message-only declarative hooks always count, but only opted-in warnings join the
+    deny. Absent a block, a ``rewrite`` beats a plain ``allow`` — a rewrite *is* an allow carrying
     corrected input, so a broad approval must not drop another hook's rewrite; among rewrites the
     first wins, else the first allow, else the accumulated warns surface alone. Warns are never lost
     to a winner either: they ride along on the winning allow/rewrite as its advisory context
@@ -183,8 +271,6 @@ def dispatch(
     e.g. ``evt.context``) stays rider-free while a warn+context merge keeps the ``PreToolUse``
     ``permissionDecision: allow`` rider. The block/allow/rewrite winners carry their own decision.
     """
-    matching = [h for h in get_matching_hooks(evt) if not h.spec.async_]
-
     approval: HookResult | None = None
     rewrite: HookResult | None = None
     blocked = False
@@ -192,13 +278,10 @@ def dispatch(
     warns: list[str] = []
     deny_advisories: list[str] = []
     warn_approve = False
-    for entry in matching:
+    for entry, result in collected:
         if blocked and entry.handler is not None and not entry.spec.advisory_on_deny:
             continue
-        if reqenv.deadline_within(SYNC_DEADLINE_MARGIN_SECONDS):
-            logger.bind(hook=entry.name).warning("caller deadline is near; skipping this and the remaining hooks")
-            break
-        match execute_hook(entry, evt, session_dir):
+        match result:
             case HookResult(action=Action.block, message=msg):
                 blocked = True
                 if msg:
@@ -235,12 +318,47 @@ def dispatch(
     return None
 
 
+def dispatch(
+    event: Event,
+    evt: BaseHookEvent,
+    session_dir: Path | None = None,
+) -> dict[str, Any] | None:
+    """Dispatch an event to all matching hooks at once and combine their results, deny-wins.
+
+    The event's hooks are independent, so they all start together on :func:`hook_pool` and the
+    event costs the slowest hook rather than the sum: five listeners on one ``PostToolUse`` no
+    longer serialize behind each other. Only the *starting* is concurrent — :func:`combine` folds
+    what comes back in registration order, so the envelope is the one sequential dispatch would
+    have rendered whatever order the hooks finished in.
+
+    The caller's deadline bounds both ends: a hook is not started once the deadline is inside
+    :data:`SYNC_DEADLINE_MARGIN_SECONDS` (at submit, and again at its own start, which differ once
+    the pool is saturated), and a hook still running when the budget runs out has its verdict
+    abandoned rather than holding the reply.
+    """
+    matching = [h for h in get_matching_hooks(evt) if not h.spec.async_]
+    blocked = threading.Event()
+    started = start_hooks(matching, evt, session_dir, SYNC_DEADLINE_MARGIN_SECONDS, blocked)
+    return combine(event, collect_hooks(started, SYNC_DEADLINE_MARGIN_SECONDS))
+
+
 def dispatch_async(evt: BaseHookEvent, session_dir: Path | None = None) -> None:
-    """Run the event's ``async_=True`` hooks one after another, each under its own deadline.
+    """Run the event's ``async_=True`` hooks concurrently, each under its own deadline.
 
     Claude Code never reads an async hook's output, so results are recorded but not rendered.
+    Each hook's :data:`ASYNC_HOOK_TIMEOUT_SECONDS` budget runs from its own start, so a slow
+    background hook no longer eats the next one's.
     """
-    for entry in get_matching_hooks(evt):
-        if entry.spec.async_:
-            with reqenv.deadline_in(ASYNC_HOOK_TIMEOUT_SECONDS):
-                execute_hook(entry, evt, session_dir)
+    pool = hook_pool()
+    futures = [
+        pool.submit(copy_context().run, run_background, entry, evt, session_dir)
+        for entry in get_matching_hooks(evt)
+        if entry.spec.async_
+    ]
+    for future in futures:
+        future.result()
+
+
+def run_background(entry: RegisteredHook, evt: BaseHookEvent, session_dir: Path | None) -> None:
+    with reqenv.deadline_in(ASYNC_HOOK_TIMEOUT_SECONDS):
+        execute_hook(entry, evt, session_dir)

@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+import threading
+import time
+from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from captain_hook import dispatch as dispatch_module
 from captain_hook.app import (
-    hook as register_hook,
+    HookHandler,
+    on,
 )
 from captain_hook.app import (
-    on,
+    hook as register_hook,
 )
 from captain_hook.dispatch import (
     ADVISORY_SEPARATOR,
@@ -24,6 +31,7 @@ from captain_hook.dispatch import (
 )
 from captain_hook.events import MessageDisplayEvent, PermissionRequestEvent
 from captain_hook.primitives.nudge import nudge
+from captain_hook.session import SessionStore
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
 from tests.helpers import (
@@ -34,6 +42,8 @@ from tests.helpers import (
     make_subagent_stop_event,
 )
 
+HOOK_SLEEP_SECONDS = 0.3
+
 
 def make_permission_request_event() -> PermissionRequestEvent:
     return PermissionRequestEvent(_raw={"tool_name": "Bash", "tool_input": {"command": "ls"}}, ctx=make_ctx())
@@ -43,6 +53,17 @@ def make_message_display_event() -> MessageDisplayEvent:
     return MessageDisplayEvent(
         _raw={"message_id": "msg_1", "index": 0, "final": False, "delta": "Refactored the parser."}, ctx=make_ctx()
     )
+
+
+@contextmanager
+def pinch_pool(monkeypatch: pytest.MonkeyPatch, width: int) -> Generator[None]:
+    """Run the fan-out on a pool of exactly ``width`` threads, so queueing order is deterministic."""
+    pool = ThreadPoolExecutor(max_workers=width)
+    monkeypatch.setattr(dispatch_module, "hook_pool", lambda: pool)
+    try:
+        yield
+    finally:
+        pool.shutdown(wait=True)
 
 
 class TestRunDeclarative:
@@ -715,9 +736,24 @@ class TestDispatch:
         assert result["hookSpecificOutput"]["permissionDecisionReason"] == "denied"
         assert call_count == 1
 
-    def test_handler_backed_hook_skipped_after_block(self) -> None:
-        # Once a block fires, a later handler-backed hook (an LLM nudge, an async handler) is not
-        # invoked — it would burn API cost and max_fires on a doomed call.
+    def test_handler_backed_hook_after_block_is_dropped(self) -> None:
+        # A block earlier in registration order suppresses a later handler-backed hook: its verdict
+        # never reaches the envelope, whether it was skipped before it started or folded away after.
+
+        register_hook(Event.PreToolUse, message="stop here", block=True)
+
+        @on(Event.PreToolUse)
+        def second_blocker(evt: Any) -> HookResult:
+            return HookResult(action=Action.block, message="also denied")
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert result["hookSpecificOutput"]["permissionDecisionReason"] == "stop here"
+
+    def test_handler_backed_hook_queued_behind_a_block_never_runs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A hook still queued when the block fires is not invoked at all — it would burn API cost
+        # and max_fires on a doomed call.
         counter = 0
 
         register_hook(Event.PreToolUse, message="stop here", block=True)
@@ -728,9 +764,9 @@ class TestDispatch:
             counter += 1
             return HookResult(action=Action.warn, message="counted")
 
-        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        with pinch_pool(monkeypatch, 1):
+            result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert result["hookSpecificOutput"]["permissionDecisionReason"] == "stop here"
         assert counter == 0
 
@@ -788,7 +824,7 @@ class TestDispatch:
         on(Event.PostToolUse, async_=True)(observe)
 
         overrides = reqenv.RequestOverrides(env={}, cwd="/w", client_ppid=1, session_id="s", deadline_unix_ms=101_000)
-        with reqenv.use_request(overrides):
+        with pinch_pool(monkeypatch, 1), reqenv.use_request(overrides):
             dispatch_async(make_post_tool_event())
 
         assert deadlines == [
@@ -830,7 +866,7 @@ class TestDispatch:
         r2 = dispatch(Event.PreToolUse, make_pre_tool_event(), session_dir=tmp_path)
         assert r2 is None
 
-    def test_remaining_hooks_stop_once_the_caller_deadline_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_queued_hooks_stop_once_the_caller_deadline_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         clock = {"now": 0.0}
         monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: clock["now"]))
         ran: list[str] = []
@@ -847,14 +883,14 @@ class TestDispatch:
             return HookResult(action=Action.block, message="never reached")
 
         overrides = reqenv.RequestOverrides(env={}, cwd="/w", client_ppid=1, session_id="s", deadline_unix_ms=60_000)
-        with reqenv.use_request(overrides):
+        with pinch_pool(monkeypatch, 1), reqenv.use_request(overrides):
             result = dispatch(Event.PreToolUse, make_pre_tool_event())
 
         assert ran == ["slow"]
         assert result is not None
         assert result["hookSpecificOutput"]["additionalContext"] == "from slow"
 
-    def test_sync_hooks_stop_inside_the_deadline_margin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_queued_hooks_stop_inside_the_deadline_margin(self, monkeypatch: pytest.MonkeyPatch) -> None:
         clock = {"now": 0.0}
         monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: clock["now"]))
         ran: list[str] = []
@@ -871,12 +907,34 @@ class TestDispatch:
             return HookResult(action=Action.warn, message="from second")
 
         overrides = reqenv.RequestOverrides(env={}, cwd="/w", client_ppid=1, session_id="s", deadline_unix_ms=30_000)
-        with reqenv.use_request(overrides):
+        with pinch_pool(monkeypatch, 1), reqenv.use_request(overrides):
             result = dispatch(Event.PostToolUse, make_post_tool_event())
 
         assert ran == ["first"]
         assert result is not None
         assert result["hookSpecificOutput"]["additionalContext"].startswith("from first")
+
+    def test_no_hook_starts_inside_the_deadline_margin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: 0.0))
+        ran: list[str] = []
+
+        def recorder(name: str) -> HookHandler:
+            def observer(evt: Any) -> HookResult:
+                ran.append(name)
+                return HookResult(action=Action.warn, message=name)
+
+            return observer
+
+        for name in ("first", "second", "third"):
+            on(Event.PostToolUse)(recorder(name))
+
+        margin_ms = int(SYNC_DEADLINE_MARGIN_SECONDS * 1000)
+        overrides = reqenv.RequestOverrides(env={}, cwd="/w", client_ppid=1, session_id="s", deadline_unix_ms=margin_ms)
+        with reqenv.use_request(overrides):
+            result = dispatch(Event.PostToolUse, make_post_tool_event())
+
+        assert ran == []
+        assert result is None
 
     def test_stop_warn_combined(self) -> None:
         register_hook(Event.Stop, message="warn stop")
@@ -912,3 +970,164 @@ class TestDispatch:
         register_hook(Event.PreToolUse, message="test")
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is not None
+
+
+class TestConcurrentDispatch:
+    def test_hooks_of_one_event_run_concurrently(self) -> None:
+        def sleeper(name: str) -> HookHandler:
+            def handler(evt: Any) -> HookResult:
+                time.sleep(HOOK_SLEEP_SECONDS)
+                return HookResult(action=Action.warn, message=name)
+
+            return handler
+
+        for name in ("a", "b", "c", "d", "e"):
+            on(Event.PostToolUse)(sleeper(name))
+
+        start = time.perf_counter()
+        result = dispatch(Event.PostToolUse, make_post_tool_event())
+        elapsed = time.perf_counter() - start
+
+        assert result is not None
+        assert result["hookSpecificOutput"]["additionalContext"] == "a\n\nb\n\nc\n\nd\n\ne"
+        assert elapsed < HOOK_SLEEP_SECONDS * 2.5, f"five {HOOK_SLEEP_SECONDS}s hooks took {elapsed:.2f}s"
+
+    def test_messages_join_in_registration_order_not_completion_order(self) -> None:
+        @on(Event.PostToolUse)
+        def slowest(evt: Any) -> HookResult:
+            time.sleep(HOOK_SLEEP_SECONDS)
+            return HookResult(action=Action.warn, message="registered first")
+
+        @on(Event.PostToolUse)
+        def fastest(evt: Any) -> HookResult:
+            return HookResult(action=Action.warn, message="registered second")
+
+        result = dispatch(Event.PostToolUse, make_post_tool_event())
+        assert result is not None
+        assert result["hookSpecificOutput"]["additionalContext"] == "registered first\n\nregistered second"
+
+    def test_block_wins_when_the_blocker_finishes_last(self) -> None:
+        @on(Event.PreToolUse)
+        def allower(evt: Any) -> HookResult:
+            return HookResult(action=Action.allow)
+
+        @on(Event.PreToolUse)
+        def blocker(evt: Any) -> HookResult:
+            time.sleep(HOOK_SLEEP_SECONDS)
+            return HookResult(action=Action.block, message="denied late")
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert result["hookSpecificOutput"]["permissionDecisionReason"] == "denied late"
+
+    def test_advisory_warn_rides_along_on_a_block_that_finished_first(self) -> None:
+        register_hook(Event.PreToolUse, message="stop here", block=True)
+
+        @on(Event.PreToolUse, advisory_on_deny=True)
+        def advisor(evt: Any) -> HookResult:
+            time.sleep(HOOK_SLEEP_SECONDS)
+            return HookResult(action=Action.warn, message="advisory note")
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        assert (
+            result["hookSpecificOutput"]["permissionDecisionReason"]
+            == f"stop here\n\n{ADVISORY_SEPARATOR}\n\nadvisory note"
+        )
+
+    def test_a_straggler_is_abandoned_and_the_reply_still_lands(self) -> None:
+        release = threading.Event()
+
+        @on(Event.PostToolUse)
+        def prompt(evt: Any) -> HookResult:
+            return HookResult(action=Action.warn, message="in time")
+
+        @on(Event.PostToolUse)
+        def straggler(evt: Any) -> HookResult:
+            release.wait(30)
+            return HookResult(action=Action.warn, message="too late")
+
+        deadline_ms = int((time.time() + SYNC_DEADLINE_MARGIN_SECONDS + HOOK_SLEEP_SECONDS) * 1000)
+        overrides = reqenv.RequestOverrides(
+            env={}, cwd="/w", client_ppid=1, session_id="s", deadline_unix_ms=deadline_ms
+        )
+        try:
+            start = time.perf_counter()
+            with reqenv.use_request(overrides):
+                result = dispatch(Event.PostToolUse, make_post_tool_event())
+            elapsed = time.perf_counter() - start
+        finally:
+            release.set()
+
+        assert result is not None
+        assert result["hookSpecificOutput"]["additionalContext"] == "in time"
+        assert elapsed < HOOK_SLEEP_SECONDS * 5, f"the reply waited {elapsed:.2f}s on an abandoned hook"
+
+    def test_concurrent_hooks_share_session_state_without_losing_writes(self, tmp_path: Path) -> None:
+        from captain_hook.state import SeenKeys
+
+        def marker(name: str) -> HookHandler:
+            def handler(evt: Any) -> None:
+                evt.ctx.session.once(name, scope="shared")
+
+            return handler
+
+        for name in ("a", "b", "c", "d", "e"):
+            on(Event.PostToolUse)(marker(name))
+
+        dispatch(Event.PostToolUse, make_post_tool_event(ctx=make_ctx(tmp_path)), session_dir=tmp_path)
+
+        assert sorted(SessionStore(tmp_path).load(SeenKeys).seen["shared"]) == ["a", "b", "c", "d", "e"]
+
+    def test_max_fires_holds_across_concurrent_registrations_of_one_hook(self, tmp_path: Path) -> None:
+        fired = 0
+        guard = threading.Lock()
+
+        def capped(evt: Any) -> HookResult:
+            nonlocal fired
+            with guard:
+                fired += 1
+            return HookResult(action=Action.warn, message="fired")
+
+        for _ in range(10):
+            on(Event.PostToolUse, max_fires=3)(capped)
+
+        result = dispatch(Event.PostToolUse, make_post_tool_event(), session_dir=tmp_path)
+
+        assert fired == 3, f"a capped hook fired {fired} times, expected 3"
+        assert result is not None
+        assert result["hookSpecificOutput"]["additionalContext"] == "fired\n\nfired\n\nfired"
+
+    def test_each_hook_carries_the_request_context(self) -> None:
+        seen: list[tuple[str, str]] = []
+        guard = threading.Lock()
+
+        for _ in range(5):
+
+            @on(Event.PostToolUse)
+            def observer(evt: Any) -> None:
+                assert (current := reqenv.current()) is not None
+                with guard:
+                    seen.append((current.session_id, str(reqenv.cwd())))
+
+        overrides = reqenv.RequestOverrides(
+            env={}, cwd="/scoped", client_ppid=1, session_id="scoped-session", deadline_unix_ms=0
+        )
+        with reqenv.use_request(overrides):
+            dispatch(Event.PostToolUse, make_post_tool_event())
+
+        assert seen == [("scoped-session", "/scoped")] * 5
+
+    def test_async_hooks_run_concurrently(self) -> None:
+        for _ in range(5):
+
+            @on(Event.PostToolUse, async_=True)
+            def sleeper(evt: Any) -> None:
+                time.sleep(HOOK_SLEEP_SECONDS)
+
+        start = time.perf_counter()
+        dispatch_async(make_post_tool_event())
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < HOOK_SLEEP_SECONDS * 2.5, f"five {HOOK_SLEEP_SECONDS}s async hooks took {elapsed:.2f}s"

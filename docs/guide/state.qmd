@@ -93,7 +93,7 @@ Three handlers, one model, one stored file. Prefer `@workflow_state` over a loos
 
 ### Serialize racing writers with `mutate()`
 
-`load`, modify, `save` is last-writer-wins. Within one session that bites when several hooks race the same record — a batch of parallel tool calls can all read the same pre-increment value and clobber each other's writes. `WorkflowState.mutate(evt)` is a context manager that loads, yields, and saves under an exclusive file lock, so racing writers serialize instead:
+`load`, modify, `save` is last-writer-wins. Within one session that bites when several hooks race the same record — a batch of parallel tool calls can all read the same pre-increment value and clobber each other's writes, and so can two hooks of a single event, since an event's hooks run concurrently. `WorkflowState.mutate(evt)` is a context manager that loads, yields, and saves under an exclusive file lock, so racing writers serialize instead:
 
 ```python
 with ReviewState.mutate(evt) as state:

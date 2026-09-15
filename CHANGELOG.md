@@ -44,6 +44,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An event's hooks run concurrently.** The matching hooks of a single event
+  all start at once on one process-wide 16-thread pool, so an event costs its
+  slowest hook rather than the sum of them: five listeners each sleeping 100 ms
+  finish in 107 ms where they took 524 ms. Only the starting is concurrent —
+  the verdicts fold in registration order, so a block still wins wherever it
+  landed, messages still join in the order the hooks were registered, and the
+  envelope is the one a hook-at-a-time dispatch would have rendered. The
+  caller's deadline still gates both ends: a hook is not started once the
+  deadline is inside the margin, and a hook still running when the budget runs
+  out is abandoned so the reply lands in time. A hook already running when
+  another blocks is no longer cancelled — its verdict is dropped, but it has
+  spent its `max_fires` slot. `async_=True` hooks fan out the same way, each
+  with its own timeout measured from its own start.
 - **Every hook is one plain `capt-hookd run <Event>` command.** The plugin
   registers `~/.daemonkit/bin/capt-hookd run <Event>` once per event through
   shell builtins, with no `--async` twin, no bash wrapper, no binrun, and no
