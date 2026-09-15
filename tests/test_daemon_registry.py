@@ -15,23 +15,11 @@ from captain_hook.cli import CliState
 from captain_hook.daemon import registry
 from captain_hook.daemon.registry import Fingerprint, Registry
 from captain_hook.packs import manager, plugins
-from captain_hook.util.paths import resolve_claude_config_dir
 from tests.helpers import make_project as scaffold
+from tests.helpers import plant_roster
 
 HOOK = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 PLUGIN_HOOK = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='pp')\n"
-
-
-def write_snapshot(root: Path, roster: list[tuple[str, str]]) -> Path:
-    # Plant the discovery snapshot directly: the fingerprint reads it as-is (never refreshing via the
-    # CLI), so no fake `claude` is needed — a roster is a list of (plugin_id, plugin_root) pairs.
-    path = plugins.snapshot_path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    plugins.PluginSnapshot(
-        stat=plugins.fingerprint(root),
-        plugins=tuple(plugins.EnabledPlugin(id=pid, version="1.0.0", root=proot) for pid, proot in roster),
-    ).write(path)
-    return path
 
 
 def make_plugin_pack(pack_root: Path, *, hook_body: str = PLUGIN_HOOK, descriptor: str = "resources = []\n") -> Path:
@@ -46,9 +34,6 @@ def make_plugin_pack(pack_root: Path, *, hook_body: str = PLUGIN_HOOK, descripto
 def isolate_cache(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, isolate_modules: None
 ) -> Iterator[None]:
-    # discover() writes the resolve fastpath sidecar (and the plugin snapshot) under resolve_cache_dir();
-    # keep it off the real ~/.cache. isolate_modules drops the per-test `hooks.*` imports so a later
-    # project's discover can't reload a prior one's module from its stale spec under random ordering.
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("cache")))
     yield
     cli.register_pack_tools([])  # drop any tools this test registered into the process-global registry
@@ -144,21 +129,28 @@ def test_gitignore_change_changes_fingerprint(project: CliState) -> None:
     assert fp(project) != before
 
 
-def test_snapshot_roster_change_changes_fingerprint(project: CliState) -> None:
-    # A plugin enable/disable rewrites the discovery snapshot's roster; the fingerprint reads that
-    # snapshot, so a roster change must miss the cache even when no watched settings file moved.
-    write_snapshot(project.root, [("acme/one", "/nope")])
+def test_roster_change_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
+    (one := tmp_path / "one").mkdir()
+    (two := tmp_path / "two").mkdir()
+    plant_roster([("acme/one", one)])
     before = fp(project)
-    write_snapshot(project.root, [("acme/one", "/nope"), ("acme/two", "/nowhere")])
+    plant_roster([("acme/one", one), ("acme/two", two)])
+    assert fp(project) != before
+
+
+def test_project_disable_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
+    plugin_root = tmp_path / "plug"
+    make_plugin_pack(plugin_root)
+    plant_roster([("acme/pp", plugin_root)])
+    before = fp(project)
+    (project.root / ".claude" / "settings.local.json").write_text(json.dumps({"enabledPlugins": {"acme/pp": False}}))
     assert fp(project) != before
 
 
 def test_plugin_pack_hook_edit_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
-    # The roster is unchanged, but editing a hook file inside a discovered plugin pack must miss the
-    # cache — the fingerprint digests each plugin pack's resolved hook tree, not just the snapshot roster.
     plugin_root = tmp_path / "plug"
     conf = make_plugin_pack(plugin_root)
-    write_snapshot(project.root, [("acme/pp", str(plugin_root))])
+    plant_roster([("acme/pp", plugin_root)])
     before = fp(project)
     conf.write_text(PLUGIN_HOOK.replace("message='pp'", "message='pp-edited-and-much-longer'"))
     assert fp(project) != before
@@ -169,7 +161,7 @@ def test_plugin_pack_descriptor_edit_changes_fingerprint(project: CliState, tmp_
     # cache — the fingerprint digests each plugin pack's pack.toml stat, not just its hook tree.
     plugin_root = tmp_path / "plug"
     make_plugin_pack(plugin_root)
-    write_snapshot(project.root, [("acme/pp", str(plugin_root))])
+    plant_roster([("acme/pp", plugin_root)])
     before = fp(project)
     (plugin_root / manager.PLUGIN_PACK_DIRNAME / manager.PACK_DESCRIPTOR).write_text(
         'resources = ["spacy:en_core_web_sm"]\n'
@@ -182,7 +174,7 @@ def test_malformed_plugin_pack_changes_fingerprint(project: CliState, tmp_path: 
     # fingerprint must digest the whole dir too, or warm silently ignores a pack cold crashes on.
     plugin_root = tmp_path / "plug"
     plugin_root.mkdir()  # an enabled plugin with no capt-hook/ yet — ships no pack
-    write_snapshot(project.root, [("acme/pp", str(plugin_root))])
+    plant_roster([("acme/pp", plugin_root)])
     before = fp(project)
     (pack := plugin_root / manager.PLUGIN_PACK_DIRNAME).mkdir()
     (pack / manager.PACK_DESCRIPTOR).write_text("resources = []\n")  # pack.toml but no hooks/ — malformed
@@ -198,36 +190,17 @@ def test_plugin_tree_skips_a_plugin_whose_hooks_dir_vanishes(
     good_root, bad_root = tmp_path / "good", tmp_path / "bad"
     make_plugin_pack(good_root)
     make_plugin_pack(bad_root)
-    write_snapshot(project.root, [("acme/good", str(good_root)), ("acme/bad", str(bad_root))])
+    plant_roster([("acme/good", good_root), ("acme/bad", bad_root)])
     real = registry._hooks_tree
 
     def flaky_tree(hooks: str) -> tuple[registry.HookEntry, ...]:
         if str(bad_root) in hooks:
-            raise FileNotFoundError(hooks)  # the plugin dir vanished between the roster snapshot and the walk
+            raise FileNotFoundError(hooks)
         return real(hooks)
 
     monkeypatch.setattr(registry, "_hooks_tree", flaky_tree)
     assert [pid for pid, *_ in registry._plugin_trees(project.root)] == ["acme/good"]  # raising plugin skipped
     assert fp(project).digest  # compute did not raise
-
-
-@pytest.mark.parametrize("idx", range(len(plugins.watched_paths(Path("/x")))))
-def test_watched_file_mtime_bump_changes_fingerprint(project: CliState, idx: int) -> None:
-    # A change to any watched roster input misses the cache — an mtime bump on the installed-plugin
-    # roster, an enablement edit on a settings file. The absolute managed-settings system paths
-    # (/Library, /etc) aren't sandbox-writable, so skip those slots.
-    path = plugins.watched_paths(project.root)[idx]
-    if not (path.is_relative_to(project.root) or path.is_relative_to(resolve_claude_config_dir())):
-        pytest.skip(f"{path} is an absolute managed-settings system path — not sandbox-writable")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{}\n")
-    before = fp(project)
-    if path == plugins.installed_plugins_path():
-        st = path.stat()
-        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
-    else:
-        path.write_text(json.dumps({"enabledPlugins": {"marker@mkt": True}}))
-    assert fp(project) != before
 
 
 def test_gitignore_preserved_mtime_rewrite_changes_fingerprint(project: CliState) -> None:
@@ -243,10 +216,7 @@ def test_gitignore_preserved_mtime_rewrite_changes_fingerprint(project: CliState
     assert fp(project) != before
 
 
-def test_pycache_fastpath_and_snapshot_do_not_invalidate(project: CliState) -> None:
-    # A build writes __pycache__ into the hooks dir and a resolve sidecar into the cache; the
-    # fingerprint must ignore the former and fold in the latter (and the plugin snapshot bracket) so
-    # the very next call still hits.
+def test_a_build_does_not_invalidate_its_own_fingerprint(project: CliState) -> None:
     reg = Registry(project)
     first = reg.get()
     assert (Path(project.hooks) / "__pycache__").is_dir()
@@ -335,11 +305,11 @@ def test_build_never_serves_a_torn_discovery(project: CliState, monkeypatch: pyt
 def test_build_is_bounded_when_the_tree_keeps_moving(project: CliState, monkeypatch: pytest.MonkeyPatch) -> None:
     # R4: an endlessly-churning tree must not spin forever — retries cap at BUILD_RETRIES.
     digests = iter(str(n) for n in range(1000))
-    monkeypatch.setattr(Fingerprint, "stable_digest", classmethod(lambda cls, cli: next(digests)))
+    monkeypatch.setattr(Fingerprint, "compute", classmethod(lambda cls, cli, *, fresh=False: cls(next(digests))))
     reg = Registry(project)
     calls: list[int] = []
     real_discover = reg._discover_once
-    monkeypatch.setattr(reg, "_discover_once", lambda: (calls.append(1), real_discover())[1])
+    monkeypatch.setattr(reg, "_discover_once", lambda fingerprint: (calls.append(1), real_discover(fingerprint))[1])
     result = reg._build()
     assert len(calls) == registry.BUILD_RETRIES, "the build was not bounded"
     assert result.state is not None
@@ -353,7 +323,9 @@ def test_get_does_not_cache_a_non_cacheable_snapshot(project: CliState, monkeypa
     reg = Registry(project)
     builds: list[int] = []
     real = reg._discover_once
-    monkeypatch.setattr(reg, "_discover_once", lambda: (builds.append(1), replace(real(), cacheable=False))[1])
+    monkeypatch.setattr(
+        reg, "_discover_once", lambda fingerprint: (builds.append(1), replace(real(fingerprint), cacheable=False))[1]
+    )
     first = reg.get()
     reg.get()
     assert first.cacheable is False
@@ -399,7 +371,7 @@ def test_a_roster_that_would_not_enumerate_is_served_but_never_cached(
     def flaky(root: Path) -> list[manager.ResolvedPack]:
         calls.append(1)
         if len(calls) == 1:
-            raise plugins.PluginListError("claude plugin list exited 1")
+            raise plugins.PluginListError("plugin roster unreadable")
         return real(root)
 
     monkeypatch.setattr(plugins, "resolve_plugin_packs", flaky)

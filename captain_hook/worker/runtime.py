@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import json
 import threading
 import traceback
@@ -7,10 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from loguru import logger
+
 from captain_hook import app
 from captain_hook.cli import EVENT_NAMES, dispatch_event
 from captain_hook.daemon import decision_writer, transcache
-from captain_hook.daemon.context import RequestBuffers, request_scope
+from captain_hook.daemon.context import RequestBuffers, capture_output, request_scope
 from captain_hook.daemon.registry import Registry
 from captain_hook.session import ensure_session
 from captain_hook.types import Event
@@ -19,6 +22,8 @@ from captain_hook.worker.protocol import EventRequest, EventResponse
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Protocol
+
+    type Background = Callable[[], None]
 
     from captain_hook.cli import CliState
 
@@ -44,7 +49,7 @@ class ProductRuntime:
         self,
         *,
         registry_factory: Callable[[CliState], RegistryLike] = Registry,
-        dispatcher: Callable[..., dict[str, Any] | None] = dispatch_event,
+        dispatcher: Callable[..., tuple[dict[str, Any] | None, Background]] = dispatch_event,
         transcript_loader: Callable[..., Any] = transcache.load,
         install_writer: bool = True,
     ) -> None:
@@ -55,16 +60,16 @@ class ProductRuntime:
         self._registries_guard = threading.Lock()
         self._writer = decision_writer.install() if install_writer else None
 
-    def dispatch(self, request: EventRequest) -> EventResponse:
+    def dispatch(self, request: EventRequest) -> tuple[EventResponse, Background | None]:
         try:
             event = Event[request.event]
         except KeyError:
             return EventResponse(
                 stderr=f"Invalid event type: {request.event!r}. Valid event names are: {EVENT_NAMES}\n",
                 exit=1,
-            )
+            ), None
         if not request.payload_raw.strip():
-            return EventResponse()
+            return EventResponse(), None
         try:
             raw = cast(object, json.loads(request.payload_raw))
             parse_error = None
@@ -83,15 +88,15 @@ class ProductRuntime:
         with request_scope(scoped, session_id) as buffers:
             if parse_error is not None:
                 buffers.stderr.write(f"Malformed stdin: {parse_error}\n")
-                return self._response(buffers)
+                return self._response(buffers), None
             try:
-                self._dispatch(request, event, raw, session_id, buffers)
+                background = self._dispatch(request, event, raw, session_id, buffers)
             except SystemExit as exc:
-                return self._response(buffers, exit_code=_exit_code(exc.code))
+                return self._response(buffers, exit_code=_exit_code(exc.code)), None
             except Exception:
                 buffers.stderr.write(traceback.format_exc())
-                return self._response(buffers, status="error", exit_code=1)
-            return self._response(buffers)
+                return self._response(buffers, status="error", exit_code=1), None
+            return self._response(buffers), background
 
     def close(self) -> None:
         if self._writer is None:
@@ -106,22 +111,23 @@ class ProductRuntime:
         raw: Any,
         session_id: str | None,
         buffers: RequestBuffers,
-    ) -> None:
+    ) -> Background:
         session_dir = ensure_session(_session(session_id)) if session_id else None
         snapshot = self._registry(request.root).get()
         buffers.stdout.write(snapshot.discovery_stdout)
         buffers.stderr.write(snapshot.discovery_stderr)
         with app.use_state(snapshot.state):
-            output = self._dispatcher(
+            output, background = self._dispatcher(
                 Path(request.root),
                 event,
                 raw,
                 session_dir=session_dir,
-                async_=False,
                 transcript_loader=self._transcript_loader,
             )
+            context = contextvars.copy_context()
         if output:
             buffers.stdout.write(json.dumps(output) + "\n")
+        return lambda: context.run(_run_detached, background)
 
     def _registry(self, root: str) -> RegistryLike:
         with self._registries_guard:
@@ -145,6 +151,14 @@ class ProductRuntime:
             stderr=buffers.stderr.getvalue(),
             exit=exit_code,
         )
+
+
+def _run_detached(background: Background) -> None:
+    with capture_output():
+        try:
+            background()
+        except Exception:
+            logger.exception("post-reply dispatch failed")
 
 
 def _session(session_id: str):

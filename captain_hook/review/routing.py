@@ -84,9 +84,9 @@ class PackIndex:
     def load(cls, root: Path | None) -> PackIndex:
         """Builds the index for the project at ``root`` (builtins only when ``root`` is ``None``).
 
-        Plugin packs come from the read-only ``.plugins`` snapshot (no CLI refresh, no subprocess),
-        each probed for the fixed ``capt-hook/hooks/`` dir. A half-installed plugin dir is fail-soft:
-        an unreadable roster yields no plugin routes rather than crashing the scan.
+        Plugin packs come from the enabled plugin roster, each probed for the fixed
+        ``capt-hook/hooks/`` dir. An unreadable roster yields no plugin routes rather than crashing
+        the scan.
         """
         from captain_hook.packs import manager
         from captain_hook.packs import plugins as plugin_discovery
@@ -94,10 +94,13 @@ class PackIndex:
         builtins = {name: manager.resolve_builtin(name).path for name in manager.builtin_names()}
         if root is None:
             return cls(builtins=builtins)
-        snapshot = plugin_discovery.PluginSnapshot.load(plugin_discovery.snapshot_path(root))
+        try:
+            roster = plugin_discovery.enabled_plugins(root)
+        except plugin_discovery.PluginListError:
+            roster = ()
         prefixes: dict[str, PluginRoute] = {}
         dirs: dict[str, PluginRoute] = {}
-        for plugin in snapshot.plugins if snapshot else ():
+        for plugin in roster:
             if not plugin_discovery.has_plugin_pack(plugin):
                 continue
             repository = plugin_discovery.plugin_repository(plugin)

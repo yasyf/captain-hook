@@ -14,8 +14,10 @@ from captain_hook.app import (
 )
 from captain_hook.dispatch import (
     ADVISORY_SEPARATOR,
+    ASYNC_HOOK_TIMEOUT_SECONDS,
     SYNC_DEADLINE_MARGIN_SECONDS,
     dispatch,
+    dispatch_async,
     execute_hook,
     format_output,
     run_declarative,
@@ -729,19 +731,45 @@ class TestDispatch:
         result = dispatch(Event.PreToolUse, make_pre_tool_event())
         assert result is None
 
-    def test_async_flag_filters_hooks(self) -> None:
-        # PostToolUse (not a decision event) so async_=True is a legal registration; the
-        # async-flag filtering under test is independent of the event.
-        register_hook(Event.PostToolUse, message="sync warning", async_=False)
-        register_hook(Event.PostToolUse, message="async warning", async_=True)
+    def test_dispatch_runs_sync_hooks_and_dispatch_async_runs_the_rest(self) -> None:
+        ran: list[str] = []
+        register_hook(Event.PostToolUse, message="sync warning")
 
-        sync_result = dispatch(Event.PostToolUse, make_post_tool_event(), async_=False)
+        @on(Event.PostToolUse, async_=True)
+        def background(evt: Any) -> HookResult:
+            ran.append("async")
+            return HookResult(action=Action.warn, message="async warning")
+
+        evt = make_post_tool_event()
+        sync_result = dispatch(Event.PostToolUse, evt)
         assert sync_result is not None
         assert sync_result["hookSpecificOutput"]["additionalContext"] == "sync warning"
+        assert ran == []
 
-        async_result = dispatch(Event.PostToolUse, make_post_tool_event(), async_=True)
-        assert async_result is not None
-        assert async_result["hookSpecificOutput"]["additionalContext"] == "async warning"
+        dispatch_async(evt)
+        assert ran == ["async"]
+
+    def test_each_async_hook_gets_its_own_deadline(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        clock = {"now": 100.0}
+        monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: clock["now"]))
+        deadlines: list[int] = []
+
+        def observe(evt: Any) -> None:
+            assert (current := reqenv.current()) is not None
+            deadlines.append(current.deadline_unix_ms)
+            clock["now"] += 60.0
+
+        on(Event.PostToolUse, async_=True)(observe)
+        on(Event.PostToolUse, async_=True)(observe)
+
+        overrides = reqenv.RequestOverrides(env={}, cwd="/w", client_ppid=1, session_id="s", deadline_unix_ms=101_000)
+        with reqenv.use_request(overrides):
+            dispatch_async(make_post_tool_event())
+
+        assert deadlines == [
+            int((100.0 + ASYNC_HOOK_TIMEOUT_SECONDS) * 1000),
+            int((160.0 + ASYNC_HOOK_TIMEOUT_SECONDS) * 1000),
+        ]
 
     def test_stop_event_format(self) -> None:
         register_hook(Event.Stop, message="cannot stop", block=True)
@@ -801,30 +829,27 @@ class TestDispatch:
         assert result is not None
         assert result["hookSpecificOutput"]["additionalContext"] == "from slow"
 
-    @pytest.mark.parametrize(("async_", "expected"), [(False, ["first"]), (True, ["first", "second"])])
-    def test_sync_hooks_stop_inside_the_deadline_margin(
-        self, monkeypatch: pytest.MonkeyPatch, async_: bool, expected: list[str]
-    ) -> None:
+    def test_sync_hooks_stop_inside_the_deadline_margin(self, monkeypatch: pytest.MonkeyPatch) -> None:
         clock = {"now": 0.0}
         monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: clock["now"]))
         ran: list[str] = []
 
-        @on(Event.PostToolUse, async_=async_)
+        @on(Event.PostToolUse)
         def first(evt: Any) -> HookResult:
             ran.append("first")
             clock["now"] = 30.0 - SYNC_DEADLINE_MARGIN_SECONDS + 1
             return HookResult(action=Action.warn, message="from first")
 
-        @on(Event.PostToolUse, async_=async_)
+        @on(Event.PostToolUse)
         def second(evt: Any) -> HookResult:
             ran.append("second")
             return HookResult(action=Action.warn, message="from second")
 
         overrides = reqenv.RequestOverrides(env={}, cwd="/w", client_ppid=1, session_id="s", deadline_unix_ms=30_000)
         with reqenv.use_request(overrides):
-            result = dispatch(Event.PostToolUse, make_post_tool_event(), async_=async_)
+            result = dispatch(Event.PostToolUse, make_post_tool_event())
 
-        assert ran == expected
+        assert ran == ["first"]
         assert result is not None
         assert result["hookSpecificOutput"]["additionalContext"].startswith("from first")
 

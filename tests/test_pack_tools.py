@@ -11,11 +11,12 @@ from captain_hook import cli
 from captain_hook.builtin_packs.general.hooks.comments import VerboseComment
 from captain_hook.cli import CliState
 from captain_hook.events import PostToolUseEvent, PreToolUseEvent
-from captain_hook.packs import manager, plugins
+from captain_hook.packs import manager
 from tests.helpers import make_project as scaffold
+from tests.helpers import plant_roster
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Iterator
 
 SYN_SPAN_EDIT = "syn_span_edit"
 SYN_GATE = "syn_gate"
@@ -109,19 +110,6 @@ class TestManifestTools:
         assert "must be a table of tool entries" in str(exc.value)
 
 
-def plant_installed() -> None:
-    (path := plugins.installed_plugins_path()).parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{}")
-
-
-def write_snapshot(root: Path, roster: Sequence[tuple[str, Path]]) -> None:
-    (path := plugins.snapshot_path(root)).parent.mkdir(parents=True, exist_ok=True)
-    plugins.PluginSnapshot(
-        stat=plugins.fingerprint(root),
-        plugins=tuple(plugins.EnabledPlugin(id=pid, version="1.0.0", root=str(proot)) for pid, proot in roster),
-    ).write(path)
-
-
 def make_project(root: Path) -> CliState:
     scaffold(root, "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n")
     return CliState(root=root, hooks=str(root / ".claude" / "hooks"))
@@ -136,10 +124,9 @@ def write_plugin_pack(pack_root: Path, tools_body: str) -> None:
 
 def enable_plugin_pack(tmp_path: Path, tools_body: str) -> CliState:
     """A project whose one enabled plugin ships a ``[tools]`` manifest, discoverable with no live claude."""
-    state = make_project(root := tmp_path / "proj")
+    state = make_project(tmp_path / "proj")
     write_plugin_pack(pack_root := tmp_path / "plug", tools_body)
-    plant_installed()
-    write_snapshot(root, [("acme/synpack", pack_root)])
+    plant_roster([("acme/synpack", pack_root)])
     return state
 
 
@@ -151,7 +138,6 @@ def test_discover_registers_and_unregisters_pack_tools(tmp_path: Path) -> None:
     assert SYN_GATE in expand_tool_names("Write")
 
     write_plugin_pack(tmp_path / "plug", SPAN_EDIT_ONLY)
-    write_snapshot(tmp_path / "proj", [("acme/synpack", tmp_path / "plug")])
     state.discover()
     assert SYN_SPAN_EDIT in expand_tool_names("Edit")
     assert SYN_GATE not in expand_tool_names("Write")

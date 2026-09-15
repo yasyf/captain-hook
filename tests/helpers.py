@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from unittest.mock import MagicMock
 
 from captain_hook.context import HookContext
 from captain_hook.dispatch import dispatch as _dispatch
+from captain_hook.dispatch import dispatch_async
 from captain_hook.events import PostToolUseEvent, PreToolUseEvent, StopEvent, SubagentStopEvent
 from captain_hook.session import SessionStore
 from captain_hook.testing.fixtures import T
@@ -56,6 +58,8 @@ from captain_hook.testing.helpers import (
 from captain_hook.types import Event
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from cc_transcript.query import Session
 
 PKG_DIR = Path(__file__).resolve().parents[3]
@@ -74,12 +78,25 @@ def dispatch_test(
     transcript: Session | None = None,
     async_: bool = False,
 ) -> dict[str, Any] | None:
-    return _dispatch(
-        Event[event] if isinstance(event, str) else event,
-        mock_event(
-            event, tool=tool, command=command, file=file, content=content, old=old, prompt=prompt, transcript=transcript
-        ),
-        async_=async_,
+    evt = mock_event(
+        event, tool=tool, command=command, file=file, content=content, old=old, prompt=prompt, transcript=transcript
+    )
+    if async_:
+        dispatch_async(evt)
+        return None
+    return _dispatch(Event[event] if isinstance(event, str) else event, evt)
+
+
+def plant_roster(roster: Sequence[tuple[str, Path | str]]) -> None:
+    """Write ``installed_plugins.json`` and user ``enabledPlugins`` for ``(plugin_id, install_root)`` pairs."""
+    from captain_hook.packs.plugins import installed_plugins_path
+    from captain_hook.util.paths import resolve_claude_config_dir
+
+    installs = {pid: [{"scope": "user", "installPath": str(root)}] for pid, root in roster}
+    (path := installed_plugins_path()).parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": 2, "plugins": installs}))
+    (resolve_claude_config_dir() / "settings.json").write_text(
+        json.dumps({"enabledPlugins": dict.fromkeys(installs, True)})
     )
 
 

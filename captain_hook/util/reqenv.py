@@ -4,7 +4,7 @@ import os
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -60,9 +60,31 @@ def cwd() -> Path:
     return Path.cwd() if (ov := _OVERRIDES.get()) is None else Path(ov.cwd)
 
 
+def seconds_left() -> float | None:
+    """Seconds until the caller deadline; ``None`` for the cold CLI or an unbounded request."""
+    if (ov := _OVERRIDES.get()) is None or ov.deadline_unix_ms == 0:
+        return None
+    return ov.deadline_unix_ms / 1000 - time.time()
+
+
 def deadline_within(seconds: float) -> bool:
     """True once the caller deadline is *seconds* away or closer; never for the cold CLI or an unbounded request."""
-    return (ov := _OVERRIDES.get()) is not None and 0 < ov.deadline_unix_ms <= (time.time() + seconds) * 1000
+    return (left := seconds_left()) is not None and left <= seconds
+
+
+def clamp_timeout(timeout: int) -> int:
+    """*timeout* cut down to the whole seconds left before the caller deadline, never below one."""
+    return timeout if (left := seconds_left()) is None else max(1, min(timeout, int(left)))
+
+
+@contextmanager
+def deadline_in(seconds: float) -> Generator[None]:
+    """Rebind the current request's deadline to *seconds* from now; the cold CLI stays unbounded."""
+    if (ov := _OVERRIDES.get()) is None:
+        yield
+        return
+    with use_request(replace(ov, deadline_unix_ms=int((time.time() + seconds) * 1000))):
+        yield
 
 
 def is_headless() -> bool:

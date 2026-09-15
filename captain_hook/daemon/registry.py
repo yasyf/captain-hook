@@ -3,13 +3,11 @@
 Cold dispatch re-runs :meth:`CliState.discover` on every event — the ~50ms the resident daemon
 exists to delete. This module caches the discovered :class:`~captain_hook.app.State` keyed by a
 cheap :class:`Fingerprint` over everything discovery reads: the local hook tree, the recursive
-language markers that drive builtin activation, ``.gitignore``, the stat tuple of the files that
-shape plugin discovery (Claude Code's ``installed_plugins.json`` and the settings stack), and the
-fixed ``capt-hook/`` pack tree of every enabled Claude Code plugin. An unchanged tree hits; any edit,
-add, or removal — a new ``go.mod``/``pyproject.toml``, a plugin enable/disable, or a hook edit inside
-a plugin pack — misses and rebuilds. Snapshots are built under one lock so concurrent requests never
-race ``sys.modules``. The plugin roster is read from the discovery snapshot as-is: the fingerprint
-path never spawns ``claude plugin list`` — only :meth:`CliState.discover` refreshes it.
+language markers that drive builtin activation, ``.gitignore``, and the enabled plugin roster with
+the fixed ``capt-hook/`` pack tree of each plugin, read from Claude Code's files. An unchanged tree
+hits; any edit, add, or removal — a new ``go.mod``/``pyproject.toml``, a plugin enable/disable, or a
+hook edit inside a plugin pack — misses and rebuilds. Snapshots are built under one lock so
+concurrent requests never race ``sys.modules``.
 
 The language-marker input walks the repo (see :func:`captain_hook.packs.manager.detect_languages`),
 which costs over 100ms on a large monorepo, so the fingerprint reuses the last walk per root while
@@ -47,7 +45,7 @@ MARKER_LOCK = threading.Lock()
 
 StatEntry = tuple[int, int, int]
 HookEntry = tuple[str, int, int, int]
-PluginTree = tuple[str, tuple[HookEntry, ...]]
+PluginTree = tuple[str, str, tuple[HookEntry, ...]]
 MarkerStamp = tuple[StatEntry | None, StatEntry | None]
 
 
@@ -102,24 +100,16 @@ def _language_markers(root: Path, *, fresh: bool) -> tuple[str, ...]:
     return markers
 
 
-def _claude_stats(root: Path) -> tuple[plugins.FingerprintRecord, ...]:
-    # The fingerprint whose change means a plugin was installed, enabled, or disabled — discovery then
-    # re-runs the CLI and rewrites the roster snapshot the next fingerprint reads.
-    return plugins.fingerprint(root)
-
-
-def _plugin_trees(root: Path) -> tuple[PluginTree, ...]:
-    # Each plugin's capt-hook/ pack digested WHOLE (pack.toml + hooks/), in plugin-id order: the loader
-    # keys on the whole dir, so watching only hooks/ would let warm ignore a fatal hooks-less pack.
-    if (snapshot := plugins.PluginSnapshot.load(plugins.snapshot_path(root))) is None:
-        return ()
+def _plugin_trees(root: Path) -> tuple[PluginTree, ...] | str:
+    try:
+        roster = plugins.enabled_plugins(root)
+    except plugins.PluginListError as exc:
+        return str(exc)
     trees: list[PluginTree] = []
-    for plugin in sorted(snapshot.plugins, key=lambda p: p.id):
+    for plugin in roster:
         pack_root = plugins.plugin_pack_root(plugin)
-        if not pack_root.is_dir():  # no capt-hook/ dir = no pack; a dir vanishing mid-walk skips below
-            continue
         try:
-            trees.append((plugin.id, _hooks_tree(str(pack_root))))
+            trees.append((plugin.id, plugin.root, _hooks_tree(str(pack_root))))
         except OSError:
             continue
     return tuple(trees)
@@ -130,29 +120,15 @@ class Fingerprint:
     digest: str
 
     @classmethod
-    def _inputs(cls, cli_state: CliState, *, fresh: bool) -> tuple[tuple[object, ...], tuple[str, ...]]:
-        # ``brackets`` holds the plugin roster snapshot — the one sidecar discovery writes — so a build
-        # can bracket its own refresh without the write skewing before/after stable digests.
+    def compute(cls, cli_state: CliState, *, fresh: bool = False) -> Fingerprint:
         root = cli_state.root
-        stable = (
+        inputs = (
             _language_markers(root, fresh=fresh),
             _hooks_tree(cli_state.hooks_dir),
             _stat_entry(root / ".gitignore"),
-            _claude_stats(root),
             _plugin_trees(root),
         )
-        brackets = (_read_text(plugins.snapshot_path(root)),)
-        return stable, brackets
-
-    @classmethod
-    def compute(cls, cli_state: CliState, *, fresh: bool = False) -> Fingerprint:
-        stable, brackets = cls._inputs(cli_state, fresh=fresh)
-        return cls(digest=hashlib.sha256(repr((stable, brackets)).encode()).hexdigest())
-
-    @classmethod
-    def stable_digest(cls, cli_state: CliState) -> str:
-        stable, _brackets = cls._inputs(cli_state, fresh=True)
-        return hashlib.sha256(repr(stable).encode()).hexdigest()
+        return cls(digest=hashlib.sha256(repr(inputs).encode()).hexdigest())
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,8 +153,6 @@ class Registry:
             self._reconcile_tools(hit)
             return hit
         with self._build_lock:
-            # Re-fingerprint inside the lock: a peer's build may have written the roster snapshot, so
-            # the pre-lock fingerprint is stale — recomputing lets us hit its work.
             if (hit := self._cache.get(Fingerprint.compute(self._cli_state))) is not None:
                 self._reconcile_tools(hit)
                 return hit
@@ -200,15 +174,15 @@ class Registry:
     def _build(self) -> RegistrySnapshot:
         # Retry a discovery whose stable inputs moved under it (a torn mid-rewrite read); serve the latest.
         for _ in range(BUILD_RETRIES):
-            before = Fingerprint.stable_digest(self._cli_state)
-            latest = self._discover_once()
-            if Fingerprint.stable_digest(self._cli_state) == before:
+            before = Fingerprint.compute(self._cli_state, fresh=True)
+            latest = self._discover_once(before)
+            if Fingerprint.compute(self._cli_state, fresh=True) == before:
                 return latest
         # Every retry churned: serve the freshest attempt but mark it non-cacheable so a possibly-torn
         # snapshot cannot poison the next request.
         return replace(latest, cacheable=False)
 
-    def _discover_once(self) -> RegistrySnapshot:
+    def _discover_once(self, fingerprint: Fingerprint) -> RegistrySnapshot:
         from captain_hook.cli import PLUGIN_ROSTER_SOURCE, pack_tool_specs
         from captain_hook.daemon.context import capture_output
 
@@ -217,10 +191,8 @@ class Registry:
         # server replays it per request so warm mirrors cold's per-invocation print.
         with capture_output() as captured, app.use_state(state):
             resolved = self._cli_state.discover()
-        # Fingerprint after discover: it may have refreshed the plugin snapshot, so this stores the
-        # snapshot under the post-write inputs the next request sees.
         return RegistrySnapshot(
-            fingerprint=Fingerprint.compute(self._cli_state, fresh=True),
+            fingerprint=fingerprint,
             state=state,
             resolved=resolved,
             tools=pack_tool_specs(resolved),

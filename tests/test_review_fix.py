@@ -34,6 +34,7 @@ from captain_hook.review.routing import CAPTAIN_HOOK_REPO, PackIndex, PluginRout
 from captain_hook.review.scan import ScanReport, scan_transcript
 from captain_hook.review.settings import ReviewSettings
 from captain_hook.review.store import ReviewStore
+from tests.helpers import plant_roster
 from tests.review_helpers import (
     assistant_text,
     assistant_tool_use,
@@ -80,18 +81,15 @@ NOTIFY_ROUTE = PluginRoute(NOTIFY_REPO, NOTIFY_ROOT)
 
 def plant_plugin_pack(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    root: Path,
     *,
     name: str = "notify",
     plugin_id: str = NOTIFY_PLUGIN_ID,
     repository: str | None = "https://github.com/acme/notify-hooks",
 ) -> Path:
-    """Plant a discovered plugin pack for ``root``: a fixed ``capt-hook/`` pack plus a snapshot naming it.
+    """Plant a discovered plugin pack: a fixed ``capt-hook/`` pack plus a roster enabling it.
 
     Returns the plugin install root; its pack is at ``<root>/capt-hook/{pack.toml, hooks/}``.
     """
-    monkeypatch.setattr(plugins, "snapshot_cache_root", lambda: tmp_path / "cache")
     plugin_dir = tmp_path / "plugins" / name
     (hooks := plugin_dir / manager.PLUGIN_PACK_DIRNAME / manager.HOOKS_DIRNAME).mkdir(parents=True)
     (plugin_dir / manager.PLUGIN_PACK_DIRNAME / manager.PACK_DESCRIPTOR).write_text("resources = []\n")
@@ -100,9 +98,7 @@ def plant_plugin_pack(
     (plugin_dir / ".claude-plugin" / "plugin.json").write_text(
         json.dumps({"name": name} | ({"repository": repository} if repository else {}))
     )
-    plugins.PluginSnapshot(
-        stat=(), plugins=(plugins.EnabledPlugin(id=plugin_id, version="1.0.0", root=str(plugin_dir)),)
-    ).write(plugins.snapshot_path(root))
+    plant_roster([(plugin_id, plugin_dir)])
     return plugin_dir
 
 
@@ -463,38 +459,28 @@ class TestPackIndex:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         root = tmp_path / "proj"
-        plugin_dir = plant_plugin_pack(tmp_path, monkeypatch, root, plugin_id="ccx@rel")
+        plugin_dir = plant_plugin_pack(tmp_path, plugin_id="ccx@rel")
         prefix = manager.pack_module_name("ccx@rel")
         assert PackIndex.load(root).plugin_prefixes == {prefix: PluginRoute(NOTIFY_REPO, str(plugin_dir))}
 
     def test_load_records_plugin_dirs_for_the_source_arm(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # The source arm needs each plugin pack's hooks dir; PackIndex.load records them mapped to the route.
         root = tmp_path / "proj"
-        plugin_dir = plant_plugin_pack(tmp_path, monkeypatch, root)
+        plugin_dir = plant_plugin_pack(tmp_path)
         hooks = str(plugin_dir / manager.PLUGIN_PACK_DIRNAME / manager.HOOKS_DIRNAME)
         assert PackIndex.load(root).plugin_dirs == {hooks: PluginRoute(NOTIFY_REPO, str(plugin_dir))}
 
     def test_route_repo_none_without_repository(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = tmp_path / "proj"
-        plant_plugin_pack(tmp_path, monkeypatch, root, repository=None)
+        plant_plugin_pack(tmp_path, repository=None)
         (route,) = PackIndex.load(root).plugin_prefixes.values()
         assert route.repo is None
 
-    def test_load_reads_the_snapshot_without_a_subprocess(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Discovery must never spawn `claude plugin list` on the scan path; PackIndex.load reads the
-        # snapshot as-is, so stubbing the CLI boundary to explode proves it is never reached.
-        def boom(_root: Path) -> tuple[plugins.EnabledPlugin, ...]:
-            raise AssertionError("PackIndex.load must not run the plugin-list subprocess")
+    def test_load_has_no_plugins_without_a_roster(self, tmp_path: Path) -> None:
+        assert PackIndex.load(tmp_path / "proj").plugin_prefixes == {}
 
-        monkeypatch.setattr(plugins, "list_plugins_cli", boom)
-        root = tmp_path / "proj"
-        plant_plugin_pack(tmp_path, monkeypatch, root)
-        assert set(PackIndex.load(root).plugin_prefixes) == {NOTIFY_PREFIX}
-
-    def test_load_has_no_plugins_without_a_snapshot(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(plugins, "snapshot_cache_root", lambda: tmp_path / "cache")
+    def test_load_has_no_plugins_when_the_roster_is_unreadable(self, tmp_path: Path) -> None:
+        plugins.installed_plugins_path().write_text("not json {")
         assert PackIndex.load(tmp_path / "proj").plugin_prefixes == {}
 
     def test_load_none_has_no_plugins(self) -> None:
@@ -859,7 +845,7 @@ class TestPackTargetRouting:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         root = tmp_path / "proj"
-        plugin_dir = plant_plugin_pack(tmp_path, monkeypatch, root)
+        plugin_dir = plant_plugin_pack(tmp_path)
         entries = [
             user_text("run a status check, then commit", cwd=str(root)),
             assistant_tool_use("t1", "Bash", {"command": "git status"}, cwd=str(root)),

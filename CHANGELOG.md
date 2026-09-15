@@ -44,11 +44,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   console script execs `~/.daemonkit/bin/capt-hookd run <Event>` and exits 0
   on `--async`, so `.venv/bin/hook` dispatches to the installed app's tool env
   rather than the checkout's `.venv`.
+- **One request per event runs both kinds of hook.** The worker runs an
+  event's synchronous hooks, sends the reply, then runs its `async_=True`
+  hooks on a small background pool, each with its own 180-second deadline.
+  The reviewer and updater dispatch and stale-session cleanup run once per
+  event on the same pool. `capt-hook run`
+  no longer accepts `--async`. Hook packs need no changes.
+- **The plugin roster is read from Claude Code's files.** Discovery reads
+  `installed_plugins.json` and the `enabledPlugins` maps of the user,
+  project, local, and managed settings files on every discovery. It no
+  longer spawns `claude plugin list`, and the roster snapshot, failure and
+  outage records, spawn gate, and background refresh are gone. Installs whose
+  directory no longer exists are skipped. In a git worktree the local settings
+  file comes from the main checkout's root, over any older copy in the worktree,
+  as Claude Code reads it. A plugin enabled only through an MDM profile or a
+  remote managed policy is not seen.
+- **The worker answers the host's hello before importing the runtime.** Logging
+  setup, the login-shell `PATH` probe, and the runtime import now run after the
+  handshake and before the first event is read, so a cold start no longer
+  spends the handshake's readiness budget.
+- **Reviewer passes over one repo take turns on a per-repo lock.** `review
+  spawn` locks on the repo's origin. A `SessionEnd` review waits for the
+  current holder, and a `Stop` sweep exits when the lock is taken. The
+  60-second review-run dedupe stamp is gone.
 
 ### Removed
 
 - The pre-v0.21 host stop and the restored-abort retry in `package-install`,
   and the vendored bundle digest, now `deploy.BundleDigest`.
+
+### Fixed
+
+- **An LLM call no longer outlives the request that started it.**
+  `ctx.call_llm`, and `prompt_check` through it, cut their timeout to the
+  seconds left before the caller's deadline.
+- **A signal-gated `llm_nudge` or `llm_gate` stops re-judging text it already
+  cleared.** A verdict that does not fire now marks the signal text it scored,
+  so the same transcript text is not sent to the model again on later tool
+  calls.
 
 ### Upgrading
 
@@ -2107,7 +2140,6 @@ exist. Migration is mechanical but manual — there is no compatibility shim.
   19,999/20,000 entries (with the anchor pinned) instead of monkeypatching a
   since-removed constant.
 
-||||||| fec5f526
 ## [9.25.0] - 2026-07-16
 
 ### Added

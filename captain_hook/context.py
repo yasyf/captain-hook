@@ -314,6 +314,7 @@ class HookContext:
         diff_text = self.diff("uncommitted" if diff is True else diff) if diff else None
         prompt = self.assemble_prompt(template, args, kwargs, transcript=transcript, diff_text=diff_text)
         cwd = resolve_project_dir()
+        timeout = reqenv.clamp_timeout(timeout)
         try:
             if response_model is not None:
                 return extract_sync(

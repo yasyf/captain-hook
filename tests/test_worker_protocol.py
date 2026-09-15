@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Buffer
+from collections.abc import Buffer, Callable
 
 import pytest
 
@@ -22,7 +22,7 @@ from captain_hook.worker.protocol import (
     read_message,
     write_message,
 )
-from captain_hook.worker.service import WorkerService
+from captain_hook.worker.service import WorkerService, handshake
 
 
 def frame(message: dict[str, object]) -> bytes:
@@ -134,21 +134,31 @@ def test_decoders_reject_extra_fields_and_wrong_schema() -> None:
         decode_event(wrong)
 
 
-def test_service_handshake_nested_result_and_graceful_eof() -> None:
-    input_stream = io.BytesIO(frame(hello()) + frame(event(1)))
+def served(
+    response: EventResponse, background: Callable[[], None] | None = None
+) -> tuple[EventResponse, Callable[[], None] | None]:
+    return response, background
+
+
+def test_handshake_answers_hello_and_graceful_eof() -> None:
+    output_stream = io.BytesIO()
+    assert handshake(io.BytesIO(frame(hello())), output_stream, build="12.9.1")
+    assert responses(output_stream.getvalue()) == [{"protocol": 1, "op": "hello", "build": "12.9.1"}]
+    assert not handshake(io.BytesIO(b""), io.BytesIO(), build="12.9.1")
+
+
+def test_service_nested_result_and_graceful_eof() -> None:
     output_stream = io.BytesIO()
 
-    def dispatch(_: EventRequest) -> EventResponse:
-        return EventResponse(stdout="ok\n")
+    WorkerService(
+        io.BytesIO(frame(event(1))), output_stream, dispatch=lambda _: served(EventResponse(stdout="ok\n"))
+    ).run()
 
-    WorkerService(input_stream, output_stream, build="12.9.1", dispatch=dispatch).run()
-
-    received = responses(output_stream.getvalue())
-    assert received[0] == {"protocol": 1, "op": "hello", "build": "12.9.1"}
-    assert received[1]["protocol"] == 1
-    assert received[1]["op"] == "result"
-    assert received[1]["id"] == 1
-    nested = received[1]["response"]
+    (received,) = responses(output_stream.getvalue())
+    assert received["protocol"] == 1
+    assert received["op"] == "result"
+    assert received["id"] == 1
+    nested = received["response"]
     assert isinstance(nested, dict)
     assert nested["schema"] == 1
     assert nested["status"] == "ok"
@@ -156,15 +166,69 @@ def test_service_handshake_nested_result_and_graceful_eof() -> None:
     assert isinstance(nested["elapsed_ms"], float)
 
 
+def test_background_work_runs_after_the_reply_is_written() -> None:
+    class RecordingOutput(io.BytesIO):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: list[str] = []
+
+        def write(self, data: Buffer, /) -> int:
+            self.events.append("reply")
+            return super().write(data)
+
+    output_stream = RecordingOutput()
+    ran = threading.Event()
+
+    def background() -> None:
+        output_stream.events.append("background")
+        ran.set()
+
+    WorkerService(
+        io.BytesIO(frame(event(1))), output_stream, dispatch=lambda _: served(EventResponse(), background)
+    ).run()
+
+    assert ran.is_set()
+    assert output_stream.events[-1] == "background"
+    assert "reply" in output_stream.events[:-1]
+
+
+def test_slow_background_work_does_not_hold_the_reply() -> None:
+    release = threading.Event()
+    replied = threading.Event()
+
+    class Output(io.BytesIO):
+        def write(self, data: Buffer, /) -> int:
+            written = super().write(data)
+            replied.set()
+            return written
+
+    output_stream = Output()
+
+    def background() -> None:
+        assert replied.wait(timeout=5)
+        release.wait(timeout=5)
+
+    service = WorkerService(
+        io.BytesIO(frame(event(1))), output_stream, dispatch=lambda _: served(EventResponse(), background)
+    )
+    runner = threading.Thread(target=service.run)
+    runner.start()
+    assert replied.wait(timeout=5)
+    assert responses(output_stream.getvalue())[0]["id"] == 1
+    release.set()
+    runner.join(timeout=5)
+    assert not runner.is_alive()
+
+
 def test_requests_dispatch_concurrently() -> None:
-    input_stream = io.BytesIO(frame(hello()) + frame(event(1)) + frame(event(2)))
+    input_stream = io.BytesIO(frame(event(1)) + frame(event(2)))
     output_stream = io.BytesIO()
     barrier = threading.Barrier(2)
     guard = threading.Lock()
     active = 0
     peak = 0
 
-    def dispatch(_: EventRequest) -> EventResponse:
+    def dispatch(_: EventRequest) -> tuple[EventResponse, None]:
         nonlocal active, peak
         with guard:
             active += 1
@@ -172,23 +236,22 @@ def test_requests_dispatch_concurrently() -> None:
         barrier.wait(timeout=2)
         with guard:
             active -= 1
-        return EventResponse()
+        return EventResponse(), None
 
-    WorkerService(input_stream, output_stream, build="12.9.1", dispatch=dispatch, max_workers=2).run()
+    WorkerService(input_stream, output_stream, dispatch=dispatch, max_workers=2).run()
 
     assert peak == 2
-    assert {message["id"] for message in responses(output_stream.getvalue())[1:]} == {1, 2}
+    assert {message["id"] for message in responses(output_stream.getvalue())} == {1, 2}
 
 
 def test_dispatch_failure_is_top_level_error_with_same_id() -> None:
-    input_stream = io.BytesIO(frame(hello()) + frame(event(7)))
     output_stream = io.BytesIO()
 
-    def dispatch(_: EventRequest) -> EventResponse:
+    def dispatch(_: EventRequest) -> tuple[EventResponse, None]:
         raise RuntimeError("boom")
 
-    WorkerService(input_stream, output_stream, build="12.9.1", dispatch=dispatch).run()
-    response = responses(output_stream.getvalue())[1]
+    WorkerService(io.BytesIO(frame(event(7))), output_stream, dispatch=dispatch).run()
+    (response,) = responses(output_stream.getvalue())
     assert response["op"] == "error"
     assert response["id"] == 7
     assert isinstance(response["error"], str)
@@ -197,50 +260,45 @@ def test_dispatch_failure_is_top_level_error_with_same_id() -> None:
 
 
 def test_expired_deadline_is_refused_without_dispatch() -> None:
-    input_stream = io.BytesIO(frame(hello()) + frame(event(3, deadline_unix_ms=1)) + frame(event(4)))
+    input_stream = io.BytesIO(frame(event(3, deadline_unix_ms=1)) + frame(event(4)))
     output_stream = io.BytesIO()
-    served: list[int] = []
+    served_ids: list[int] = []
 
-    def dispatch(request: EventRequest) -> EventResponse:
-        served.append(request.id)
-        return EventResponse()
+    def dispatch(request: EventRequest) -> tuple[EventResponse, None]:
+        served_ids.append(request.id)
+        return EventResponse(), None
 
-    WorkerService(input_stream, output_stream, build="12.9.1", dispatch=dispatch).run()
+    WorkerService(input_stream, output_stream, dispatch=dispatch).run()
 
-    assert served == [4]
-    by_id = {message["id"]: message for message in responses(output_stream.getvalue())[1:]}
+    assert served_ids == [4]
+    by_id = {message["id"]: message for message in responses(output_stream.getvalue())}
     assert by_id[3]["op"] == "error"
     assert by_id[3]["error"] == "deadline passed before dispatch"
     assert by_id[4]["op"] == "result"
 
 
-def test_build_mismatch_fails_before_event_admission() -> None:
+def test_build_mismatch_fails_the_handshake() -> None:
     output_stream = io.BytesIO()
     with pytest.raises(ProtocolError, match="does not match host build"):
-        WorkerService(
-            io.BytesIO(frame(hello("old"))),
-            output_stream,
-            build="12.9.1",
-            dispatch=lambda _: EventResponse(),
-        ).run()
+        handshake(io.BytesIO(frame(hello("old"))), output_stream, build="12.9.1")
     assert output_stream.getvalue() == b""
 
 
 def test_protocol_failure_drains_already_accepted_work() -> None:
-    input_stream = io.BytesIO(frame(hello()) + frame(event(1)) + frame({"bad": True}))
+    input_stream = io.BytesIO(frame(event(1)) + frame({"bad": True}))
     output_stream = io.BytesIO()
-    served: list[int] = []
+    served_ids: list[int] = []
 
-    def dispatch(request: EventRequest) -> EventResponse:
+    def dispatch(request: EventRequest) -> tuple[EventResponse, None]:
         time.sleep(0.01)
-        served.append(request.id)
-        return EventResponse()
+        served_ids.append(request.id)
+        return EventResponse(), None
 
     with pytest.raises(ProtocolError, match="invalid event frame"):
-        WorkerService(input_stream, output_stream, build="12.9.1", dispatch=dispatch).run()
+        WorkerService(input_stream, output_stream, dispatch=dispatch).run()
 
-    assert served == [1]
-    assert responses(output_stream.getvalue())[1]["id"] == 1
+    assert served_ids == [1]
+    assert responses(output_stream.getvalue())[0]["id"] == 1
 
 
 def test_module_entrypoint_reserves_stdout_for_protocol() -> None:
@@ -255,3 +313,14 @@ def test_module_entrypoint_reserves_stdout_for_protocol() -> None:
 
     response = responses(completed.stdout)
     assert response == [{"protocol": 1, "op": "hello", "build": build}]
+
+
+def test_module_entrypoint_imports_the_runtime_only_after_the_handshake() -> None:
+    probe = (
+        "import runpy, sys\n"
+        "runpy.run_module('captain_hook.worker', run_name='__main__')\n"
+        "print(sorted(m for m in ('captain_hook.cli', 'captain_hook.worker.runtime', 'loguru') if m in sys.modules))\n"
+    )
+    completed = subprocess.run([sys.executable, "-c", probe], input=b"", capture_output=True, check=True, timeout=30)
+
+    assert completed.stderr.decode().strip().splitlines()[-1] == "[]"

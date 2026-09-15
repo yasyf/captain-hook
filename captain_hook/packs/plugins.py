@@ -1,383 +1,113 @@
 """Discovery of the pack shipped on each enabled Claude Code plugin of a project.
 
 A pack-shipping Claude plugin carries its pack at the fixed path ``capt-hook/{pack.toml, hooks/}``
-under the plugin root; the dispatcher loads every enabled plugin whose root ships one. Enabled
-plugins come from ``claude plugin list --json`` — the sanctioned interface, which resolves
-``enabled`` against the project's settings stack — but that CLI spawns Node (~1s), far too slow
-for the ~3ms dispatch hot path. So the roster is cached per project in a ``<key>.plugins``
-snapshot, invalidated by a fingerprint over the files that shape it: Claude Code's
-``installed_plugins.json`` by stat (undocumented, never parsed) and every settings file by a digest
-of the keys that decide enablement, so a session rewriting its settings for unrelated reasons no
-longer costs every root a spawn. An invalidation re-runs the CLI once; every other event reads the
-snapshot, and a snapshot that has merely gone stale is served while the re-run happens behind it.
-The fixed-path probe itself runs live per discovery (cheap stats), so a pack edit inside a plugin
-dir needs no snapshot invalidation.
+under the plugin root; the dispatcher loads every enabled plugin whose root ships one. The roster is
+read straight from Claude Code's files on every discovery: ``installed_plugins.json`` names each
+install (``plugins.<id>[].installPath`` with its ``scope`` and, for a ``project`` or ``local``
+install, the ``projectPath`` it belongs to), and the ``enabledPlugins`` maps of the settings stack
+decide which ids are on for the discovering root.
 
 Pack load is all-or-nothing: a plugin advertising ``capt-hook/`` with a missing descriptor or hooks
-dir raises rather than silently dropping guards. The CLI's roster is machine-wide — a ``project`` or
-``local`` entry names the ``projectPath`` it was installed under, and one plugin id is legitimately
-installed at the same scope in many projects — so the roster is first scoped to the discovering root
-and then deduped to one entry per full plugin id by scope precedence (``local`` > ``project`` >
-``user``); two install paths at the same scope *within one project* is a corrupt roster.
-
-A roster that cannot be enumerated raises :class:`PluginListError` and caches nothing. An empty
-roster means "this project enables no pack-shipping plugin" and must never also mean "the roster
-could not be read": :meth:`~captain_hook.cli.CliState.plugin_packs` is the one seam that catches the
-failure, and it records it where a person looks instead of discarding the whole pack layer silently.
+dir raises rather than silently dropping guards. One plugin id may be installed at several scopes; the
+highest-precedence scope governing the root wins (``local`` > ``project`` > ``user``), and two install
+paths at the same scope of one project is a corrupt roster that raises :class:`PluginListError`.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import threading
-import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from hashlib import sha256
 from pathlib import Path
-from shutil import which
 
-from filelock import FileLock, Timeout
 from loguru import logger
 
 from captain_hook.packs import manager
-from captain_hook.util.fs import atomic_write, read_json
-from captain_hook.util.paths import resolve_cache_dir, resolve_claude_config_dir
+from captain_hook.util.fs import read_json
+from captain_hook.util.paths import resolve_claude_config_dir
 
-CLI_TIMEOUT_SECONDS = 60
-FAILURE_TTL = timedelta(seconds=15)
-GATE_TIMEOUT_SECONDS = 10
-GATE_WIDTH = 4
-GATE_POLL_SECONDS = 0.05
-# Bumped whenever a snapshot's meaning changes, so every older one is recomputed instead of served.
-SNAPSHOT_VERSION = 3
-# The settings keys a roster answer turns on. Marketplaces cannot move it alone, but are digested
-# anyway: a key wrongly left out serves a stale roster as a fresh one.
-PLUGIN_SETTINGS_KEYS = ("enabledPlugins", "extraKnownMarketplaces")
-REFRESHING: set[str] = set()
-REFRESHING_GUARD = threading.Lock()
-# Claude Code layers plugin scopes; when one id resolves at more than one scope the earlier entry here
-# outranks the later, mirroring settings precedence. An unknown scope ranks lowest.
 SCOPE_PRECEDENCE = ("local", "project", "user")
-# Enterprise managed settings can enable/disable plugins; Claude Code reads them from fixed OS
-# locations (macOS/Linux) plus the config dir, each with a sibling managed-settings.d drop-in dir.
 MANAGED_SETTINGS_DIRS = (
     Path("/Library/Application Support/ClaudeCode"),
     Path("/etc/claude-code"),
 )
 
-type StatRecord = tuple[str, int, int, int] | tuple[str, None]
-type SettingsRecord = tuple[str, str]
-type FingerprintRecord = StatRecord | SettingsRecord
-
-
-def managed_settings_dirs(config: Path) -> tuple[Path, ...]:
-    return (config, *MANAGED_SETTINGS_DIRS)
-
 
 class PluginListError(Exception):
-    """``claude plugin list --json`` exited nonzero or returned unusable output."""
+    """Claude Code's plugin roster is unreadable or contradicts itself."""
 
 
-class RosterUnavailable(PluginListError):
-    """The CLI could not be run at all, rather than running and answering unusably.
-
-    The one failure that says nothing about the project: a machine out of fork capacity fails it for
-    every root at once. It is recorded machine-wide so the roots queued behind the gate are told
-    rather than each re-spawning, which is what turns a fork shortage into a sustained storm.
-    """
+@dataclass(frozen=True, slots=True)
+class EnabledPlugin:
+    id: str
+    root: str
+    scope: str | None = None
+    project_path: str | None = None
 
 
 def installed_plugins_path() -> Path:
     return resolve_claude_config_dir() / "plugins" / "installed_plugins.json"
 
 
-def watched_paths(root: Path) -> tuple[Path, ...]:
+def local_settings_root(root: Path) -> Path:
+    """The directory whose ``.claude/settings.local.json`` Claude Code uses for ``root``.
+
+    Inside a git repository that is the repository root, and for a linked worktree the main
+    checkout's root, found through the worktree's ``gitdir`` and its ``commondir`` without running
+    git. Outside a repository, or when the repository root is the home directory, it is ``root``.
+    """
+    for base in (root, *root.parents):
+        if (dotgit := base / ".git").is_dir():
+            repo = base
+            break
+        if dotgit.is_file():
+            gitdir = base / dotgit.read_text().removeprefix("gitdir:").strip()
+            commondir = gitdir / "commondir"
+            repo = (gitdir / commondir.read_text().strip()).resolve().parent if commondir.is_file() else base
+            break
+    else:
+        return root
+    return root if repo == Path.home() else repo
+
+
+def settings_stack(root: Path) -> tuple[Path, ...]:
+    """The settings files that decide enablement for ``root``, lowest precedence first.
+
+    A ``settings.local.json`` an older Claude Code left in ``root`` is still read, beneath the one
+    at :func:`local_settings_root`.
+    """
     config = resolve_claude_config_dir()
+    managed = (config, *MANAGED_SETTINGS_DIRS)
     return (
-        installed_plugins_path(),
         config / "settings.json",
-        *(d / "managed-settings.json" for d in managed_settings_dirs(config)),
         root / ".claude" / "settings.json",
-        root / ".claude" / "settings.local.json",
+        *dict.fromkeys(
+            (root / ".claude" / "settings.local.json", local_settings_root(root) / ".claude" / "settings.local.json")
+        ),
+        *(d / "managed-settings.json" for d in managed),
+        *(p for d in managed for p in sorted((d / "managed-settings.d").glob("*.json"))),
     )
 
 
-def stat_record(path: Path) -> StatRecord:
-    abs_path = os.path.abspath(path)
-    try:
-        st = path.stat()
-    except OSError:
-        return (abs_path, None)
-    # ctime is folded in alongside mtime+size: a same-size, mtime-restored rewrite moves only ctime,
-    # and without it the roster snapshot would stay "fresh" across such an edit.
-    return (abs_path, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+def enablement(root: Path) -> dict[str, bool]:
+    """Each plugin id's ``enabledPlugins`` value for ``root``, the highest-precedence settings file winning."""
+    merged: dict[str, bool] = {}
+    for path in settings_stack(root):
+        if isinstance(data := read_json(path), dict) and isinstance(enabled := data.get("enabledPlugins"), dict):
+            merged.update((pid, value) for pid, value in enabled.items() if isinstance(value, bool))
+    return merged
 
 
-def settings_record(path: Path) -> FingerprintRecord:
-    """A settings file digested down to the keys that decide a roster, or its stat when it has none.
-
-    An unparseable or non-object file falls back to :func:`stat_record`, so a corrupt settings file
-    keeps the coarse behaviour rather than reading as "declares no plugins" — the digest may only ever
-    make invalidation rarer for files it actually understands.
-    """
-    if not isinstance(data := read_json(path), dict):
-        return stat_record(path)
-    payload = json.dumps({k: data[k] for k in PLUGIN_SETTINGS_KEYS if k in data}, sort_keys=True)
-    return (os.path.abspath(path), sha256(payload.encode()).hexdigest()[:16])
-
-
-def fingerprint_record(path: Path) -> FingerprintRecord:
-    """One watched path's contribution to the fingerprint.
-
-    ``installed_plugins.json`` stays a stat rather than a digest: Claude Code's format for it is
-    undocumented and this module has never parsed it, so a digest could silently miss a field that
-    moves the roster. It changes only when a plugin is installed, updated, or removed — rare enough
-    that invalidating every root on it costs little, unlike the settings files a session rewrites for
-    reasons that have nothing to do with plugins.
-    """
-    return stat_record(path) if path == installed_plugins_path() else settings_record(path)
-
-
-def dropin_records(dropin_dir: Path) -> tuple[FingerprintRecord, ...]:
-    """A ``managed-settings.d`` dir's own stat plus one digest per contained ``*.json`` (sorted); a
-    lone ``(path, None)`` when the dir is absent. The dir stat catches drop-in adds/removes, the
-    per-file records catch edits."""
-    if not dropin_dir.is_dir():
-        return (stat_record(dropin_dir),)
-    return (stat_record(dropin_dir), *(settings_record(p) for p in sorted(dropin_dir.glob("*.json"))))
-
-
-def fingerprint(root: Path) -> tuple[FingerprintRecord, ...]:
-    config = resolve_claude_config_dir()
-    dropins = tuple(rec for d in managed_settings_dirs(config) for rec in dropin_records(d / "managed-settings.d"))
-    return tuple(fingerprint_record(p) for p in watched_paths(root)) + dropins
-
-
-def snapshot_cache_root() -> Path:
-    return resolve_cache_dir() / "packs"
-
-
-def snapshot_path(root: Path) -> Path:
-    return snapshot_cache_root() / f"{sha256(str(root.resolve()).encode()).hexdigest()[:16]}.plugins"
-
-
-def failure_path(root: Path) -> Path:
-    return snapshot_path(root).with_suffix(".failure")
-
-
-def gate_path(slot: int) -> Path:
-    return snapshot_cache_root() / f"roster.gate.{slot}"
-
-
-def outage_path() -> Path:
-    return snapshot_cache_root() / "roster.outage"
-
-
-@contextmanager
-def roster_gate() -> Iterator[None]:
-    """Admit at most :data:`GATE_WIDTH` roster CLI spawns machine-wide, degrading rather than failing.
-
-    A watched file is machine-wide, so one change invalidates every root's snapshot at once and every
-    session spawns Node together — the stampede that exhausts fork capacity. Holding a slot while
-    spawning bounds that instead. A slot is one ``flock``, which the kernel drops when its holder
-    dies, so a crashed session cannot wedge the machine; a machine still busy past
-    :data:`GATE_TIMEOUT_SECONDS` is overtaken rather than waited on.
-    """
-    deadline = time.monotonic() + GATE_TIMEOUT_SECONDS
-    while True:
-        for slot in range(GATE_WIDTH):
-            lock = FileLock(str(gate_path(slot)), timeout=0)
-            try:
-                lock.acquire()
-            except Timeout:
-                continue
-            try:
-                yield
-            finally:
-                lock.release()
-            return
-        if time.monotonic() >= deadline:
-            yield
-            return
-        time.sleep(GATE_POLL_SECONDS)
-
-
-@dataclass(frozen=True, slots=True)
-class EnabledPlugin:
-    id: str
-    version: str
-    root: str
-    scope: str | None = None
-    project_path: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class PluginSnapshot:
-    stat: tuple[FingerprintRecord, ...]
-    plugins: tuple[EnabledPlugin, ...]
-
-    @classmethod
-    def load(cls, path: Path) -> PluginSnapshot | None:
-        """The snapshot at ``path``, or ``None`` when it is absent, unreadable, or an older format.
-
-        The version gate is load-bearing rather than housekeeping: a snapshot written before the
-        roster was scoped per project holds entries this root may not own, and a snapshot written by
-        the discarded warning-and-empty path holds a failure posing as an answer. Neither may be
-        served, and neither moves the stat tuple that would otherwise invalidate it.
-        """
-        if (data := read_json(path)) is None or data.get("version") != SNAPSHOT_VERSION:
-            return None
-        try:
-            return cls(
-                stat=tuple(tuple(rec) for rec in data["stat"]),
-                plugins=tuple(
-                    EnabledPlugin(
-                        id=p["id"],
-                        version=p["version"],
-                        root=p["root"],
-                        scope=p.get("scope"),
-                        project_path=p["project_path"],
-                    )
-                    for p in data["plugins"]
-                ),
-            )
-        except (KeyError, TypeError):
-            return None
-
-    def write(self, path: Path) -> None:
-        atomic_write(
-            path,
-            json.dumps(
-                {
-                    "version": SNAPSHOT_VERSION,
-                    "stat": [list(rec) for rec in self.stat],
-                    "plugins": [
-                        {
-                            "id": p.id,
-                            "version": p.version,
-                            "root": p.root,
-                            "scope": p.scope,
-                            "project_path": p.project_path,
-                        }
-                        for p in self.plugins
-                    ],
-                }
-            ),
-        )
-
-    def fresh(self, records: tuple[FingerprintRecord, ...]) -> bool:
-        return self.stat == records
-
-
-@dataclass(frozen=True, slots=True)
-class RosterFailure:
-    """A recorded enumeration failure, so an unreadable roster costs one CLI spawn per TTL.
-
-    This is the negative half of the cache and never a roster: :func:`enabled_plugins` re-raises from
-    it rather than serving anything, so a failure stays a failure. "This project enables no
-    pack-shipping plugin" is a different fact and reaches disk only as a :class:`PluginSnapshot` — an
-    empty roster is never recorded here, and a failure is never recorded there.
-
-    Freshness is bounded twice. The stat tuple retires the record the moment a watched file moves, so
-    a fixed roster is picked up at once rather than after the timer; :data:`FAILURE_TTL` retires it
-    otherwise, so a transient failure — the fork exhaustion this exists for — recovers on its own.
-    """
-
-    stat: tuple[FingerprintRecord, ...]
-    at: datetime
-    message: str
-
-    @classmethod
-    def load(cls, path: Path) -> RosterFailure | None:
-        if (data := read_json(path)) is None or data.get("version") != SNAPSHOT_VERSION:
-            return None
-        try:
-            return cls(
-                stat=tuple(tuple(rec) for rec in data["stat"]),
-                at=datetime.fromisoformat(data["at"]),
-                message=str(data["message"]),
-            )
-        except (KeyError, TypeError, ValueError):
-            return None
-
-    def write(self, path: Path) -> None:
-        atomic_write(
-            path,
-            json.dumps(
-                {
-                    "version": SNAPSHOT_VERSION,
-                    "stat": [list(rec) for rec in self.stat],
-                    "at": self.at.isoformat(),
-                    "message": self.message,
-                }
-            ),
-        )
-
-    def fresh(self, records: tuple[FingerprintRecord, ...], now: datetime) -> bool:
-        return self.stat == records and now - self.at < FAILURE_TTL
-
-
-@dataclass(frozen=True, slots=True)
-class RosterOutage:
-    """A machine-wide record that the CLI could not be spawned, bounded by :data:`FAILURE_TTL`.
-
-    Carries no roster and no stat tuple, because it records a condition of the machine rather than of
-    any project — so it never stands in for a root's answer. Enablement is resolved against the
-    project's settings stack and differs between roots, so it stays per root in
-    :class:`PluginSnapshot`; only the inability to ask at all is shared.
-    """
-
-    at: datetime
-    message: str
-
-    @classmethod
-    def load(cls, path: Path) -> RosterOutage | None:
-        if (data := read_json(path)) is None or data.get("version") != SNAPSHOT_VERSION:
-            return None
-        try:
-            return cls(at=datetime.fromisoformat(data["at"]), message=str(data["message"]))
-        except (KeyError, TypeError, ValueError):
-            return None
-
-    def write(self, path: Path) -> None:
-        atomic_write(
-            path, json.dumps({"version": SNAPSHOT_VERSION, "at": self.at.isoformat(), "message": self.message})
-        )
-
-    def fresh(self, now: datetime) -> bool:
-        return now - self.at < FAILURE_TTL
-
-
-def parse_plugin_entry(entry: object) -> EnabledPlugin | None:
-    """One roster entry → an :class:`EnabledPlugin`, or ``None`` to skip it (unusable, not enabled).
-
-    A non-object entry, or one whose ``id``/``installPath`` is missing or not a string, is skipped with
-    a debug line so a single malformed sibling never suppresses the valid ones; an entry Claude Code did
-    not report ``enabled`` with an install path is skipped silently (the ordinary not-enabled case).
-    ``projectPath`` is the project a ``project``/``local`` entry belongs to; a ``user``-scope entry
-    carries none.
-    """
-    if not isinstance(entry, dict):
-        logger.debug(f"skipping non-object plugin roster entry {entry!r}")
+def parse_install(pid: str, entry: object) -> EnabledPlugin | None:
+    """One ``installed_plugins.json`` install record, or ``None`` when it names no install directory."""
+    if not isinstance(entry, dict) or not isinstance(path := entry.get("installPath"), str) or not path:
+        logger.bind(id=pid).debug(f"skipping plugin install record without an installPath: {entry!r}")
         return None
-    if entry.get("enabled") is not True or not entry.get("installPath"):
+    if not Path(path).is_dir():
         return None
-    if not (isinstance(pid := entry.get("id"), str) and pid and isinstance(path := entry.get("installPath"), str)):
-        logger.bind(id=entry.get("id"), installPath=entry.get("installPath")).debug(
-            "skipping plugin roster entry lacking a string id/installPath"
-        )
-        return None
-    version = entry.get("version", "")
     scope = entry.get("scope")
     project = entry.get("projectPath")
     return EnabledPlugin(
         id=pid,
-        version=version if isinstance(version, str) else "",
         root=path,
         scope=scope if isinstance(scope, str) else None,
         project_path=project if isinstance(project, str) and project else None,
@@ -389,24 +119,12 @@ def scope_rank(scope: str | None) -> int:
 
 
 def governs(plugin: EnabledPlugin, root: Path) -> bool:
-    """Whether a roster entry governs ``root``.
-
-    ``claude plugin list`` answers machine-wide whatever directory it runs in: a ``project`` or
-    ``local`` entry carries the ``projectPath`` it was installed under and governs that project
-    alone, while a ``user``-scope entry carries none and governs every root. Without this the same
-    plugin installed at ``local`` scope in six projects reads as six competing installs of one id.
-    """
+    """Whether an install governs ``root``: a ``user`` install governs every root, a scoped one only its project."""
     return plugin.project_path is None or Path(plugin.project_path).resolve() == root
 
 
 def pick_scoped(pid: str, entries: list[EnabledPlugin]) -> EnabledPlugin:
-    """The single :class:`EnabledPlugin` a plugin id resolves to across its scope-layered roster entries.
-
-    Entries sharing an install path collapse. Across differing install paths the highest-precedence scope
-    wins (``local`` > ``project`` > ``user``), mirroring Claude Code's own settings layering. Two distinct
-    install paths at the *same* scope of the *same* project is a corrupt roster and raises
-    :class:`PluginListError`.
-    """
+    """The install a plugin id resolves to: the highest-precedence scope, raising on a same-scope conflict."""
     roots_by_scope: dict[str | None, set[str]] = {}
     for plugin in entries:
         roots_by_scope.setdefault(plugin.scope, set()).add(plugin.root)
@@ -416,157 +134,32 @@ def pick_scoped(pid: str, entries: list[EnabledPlugin]) -> EnabledPlugin:
     return min(entries, key=lambda p: scope_rank(p.scope))
 
 
-def dedupe_scoped_roster(parsed: list[EnabledPlugin], root: Path) -> tuple[EnabledPlugin, ...]:
-    """Collapse Claude Code's machine-wide roster to one :class:`EnabledPlugin` per plugin id for ``root``.
-
-    Entries belonging to another project are dropped by :func:`governs`; Claude re-lists what remains
-    once per scope (``local``/``project``/``user``) it resolves through, so grouping by id and resolving
-    each group with :func:`pick_scoped` yields one deterministic entry per id.
-    """
-    resolved = root.resolve()
-    by_id: dict[str, list[EnabledPlugin]] = {}
-    for plugin in parsed:
-        if governs(plugin, resolved):
-            by_id.setdefault(plugin.id, []).append(plugin)
-    return tuple(pick_scoped(pid, entries) for pid, entries in by_id.items())
-
-
-def list_plugins_cli(root: Path, executable: str) -> tuple[EnabledPlugin, ...]:
-    """Run ``claude plugin list --json`` in ``root``, or its nearest surviving ancestor, and return its enabled plugins.
-
-    The single subprocess boundary of discovery. Keeps only entries Claude Code reports as ``enabled``
-    with a string ``installPath``. Every failure is one :class:`PluginListError` — a nonzero exit, a
-    timeout, an ``OSError`` that keeps the CLI from executing (a ``claude`` on PATH with a dead shebang
-    passes ``shutil.which`` but fails ``exec``), and any roster shape it cannot use: a non-array top
-    level, unparseable JSON, or an entry that trips the parser.
-    """
-    try:
-        result = subprocess.run(
-            [executable, "plugin", "list", "--json"],
-            cwd=next(directory for directory in (root, *root.parents) if directory.is_dir()),
-            capture_output=True,
-            text=True,
-            timeout=CLI_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as e:
-        raise RosterUnavailable(f"claude plugin list timed out after {CLI_TIMEOUT_SECONDS}s") from e
-    except OSError as e:
-        raise RosterUnavailable(f"claude plugin list could not be executed: {e}") from e
-    if result.returncode != 0:
-        raise PluginListError(f"claude plugin list exited {result.returncode}: {result.stderr.strip()}")
-    try:
-        roster = json.loads(result.stdout)
-    except json.JSONDecodeError as e:
-        raise PluginListError(f"claude plugin list returned unparseable JSON: {e}") from e
-    if not isinstance(roster, list):
-        raise PluginListError(f"claude plugin list returned {type(roster).__name__}, expected a JSON array")
-    try:
-        parsed = [plugin for entry in roster if (plugin := parse_plugin_entry(entry)) is not None]
-    except (TypeError, AttributeError, KeyError) as e:
-        raise PluginListError(f"claude plugin list returned an unusable roster shape: {e!r}") from e
-    # The roster is machine-wide and scope-layered; scope it to this root and collapse to one per id.
-    return dedupe_scoped_roster(parsed, root)
-
-
-def refresh_behind(root: Path) -> None:
-    """Re-resolve ``root``'s roster on a background thread, at most one in flight per root.
-
-    The stale snapshot has already been served by the time this runs, so the CLI's Node start — 3.3s
-    on a loaded machine — stops sitting on the dispatch a session is waiting for. A refresh that
-    fails records through the same :class:`RosterFailure` and :class:`RosterOutage` path as any other
-    spawn, which is also what stops it retrying: the next attempt reads that record and returns
-    without spawning until it expires.
-    """
-    key = str(root.resolve())
-    with REFRESHING_GUARD:
-        if key in REFRESHING:
-            return
-        REFRESHING.add(key)
-    threading.Thread(target=run_refresh, args=(root, key), daemon=True).start()
-
-
-def run_refresh(root: Path, key: str) -> None:
-    try:
-        resolve_roster(root, fingerprint(root))
-    except PluginListError:
-        logger.opt(exception=True).debug("background roster refresh failed")
-    finally:
-        with REFRESHING_GUARD:
-            REFRESHING.discard(key)
-
-
 def enabled_plugins(root: Path) -> tuple[EnabledPlugin, ...]:
-    """The plugins Claude Code has enabled for ``root``, cached per project with stat invalidation.
+    """The plugins Claude Code has installed and enabled for ``root``, one per plugin id, in id order.
 
-    Returns ``()`` without spawning the CLI only when Claude Code has no ``installed_plugins.json`` —
-    the existence gate that keeps discovery, and every test, hermetic, and the one state where "no
-    plugins" is the truth. A fresh snapshot is served directly; otherwise the CLI re-runs once under a
-    file lock with a re-stat double-check inside it, so a burst of concurrent events pays a single
-    spawn.
-
-    Raises :class:`PluginListError` when the roster cannot be read at all, ``claude`` missing from a
-    daemon's minimal ``PATH`` included, and never caches that as a roster: an unreadable roster cached
-    as an empty one would make a broken pack layer indistinguishable from a project that enables no
-    packs, which is how every plugin-shipped pack on a machine went dead behind one warning line. The
-    failure is instead recorded as a :class:`RosterFailure` and re-raised from for
-    :data:`FAILURE_TTL`, which keeps that distinction while bounding what a broken roster costs — the
-    CLI spawns Node, and re-running it per event is what lets a machine out of fork capacity fail the
-    spawn, cache nothing, and immediately spawn again.
-
-    The spawn itself runs under :func:`roster_gate`, which staggers the roots a machine-wide
-    invalidation would otherwise stampede, and a spawn that fails outright is recorded as a
-    :class:`RosterOutage` so the roots queued behind the gate are told rather than each re-spawning.
-    Only that inability is shared: enablement resolves against each project's settings stack, so a
-    root's roster is never served to another.
+    Returns ``()`` when Claude Code has no ``installed_plugins.json``. Raises :class:`PluginListError`
+    when the file is not a JSON object with a ``plugins`` object, or when one id has two install paths
+    at the same scope of this project.
     """
-    if not installed_plugins_path().is_file():
+    if not (path := installed_plugins_path()).is_file():
         return ()
-    records = fingerprint(root)
-    if snap := PluginSnapshot.load(snapshot_path(root)):
-        if not snap.fresh(records):
-            refresh_behind(root)
-        return snap.plugins
-    return resolve_roster(root, records)
-
-
-def resolve_roster(root: Path, records: tuple[FingerprintRecord, ...]) -> tuple[EnabledPlugin, ...]:
-    """Re-run the CLI for ``root`` and rewrite its snapshot, blocking until it answers.
-
-    The one path that spawns. :func:`enabled_plugins` reaches it only for a root with no snapshot at
-    all, where there is nothing to serve and guessing an empty roster would be the very collapse
-    :class:`RosterFailure` exists to prevent; every refresh of an existing snapshot comes through
-    :func:`refresh_behind` instead.
-    """
-    path, failure = snapshot_path(root), failure_path(root)
-    if (recorded := RosterFailure.load(failure)) and recorded.fresh(records, datetime.now(UTC)):
-        raise PluginListError(recorded.message)
-    if (outage := RosterOutage.load(outage_path())) and outage.fresh(datetime.now(UTC)):
-        raise RosterUnavailable(outage.message)
-    if (executable := which("claude")) is None:
-        raise PluginListError("claude is not on PATH, so the plugin roster cannot be enumerated")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with FileLock(str(path.with_name(path.name + ".lock"))):
-        records = fingerprint(root)
-        if (snap := PluginSnapshot.load(path)) and snap.fresh(records):
-            return snap.plugins
-        if (recorded := RosterFailure.load(failure)) and recorded.fresh(records, datetime.now(UTC)):
-            raise PluginListError(recorded.message)
-        with roster_gate():
-            if (outage := RosterOutage.load(outage_path())) and outage.fresh(datetime.now(UTC)):
-                raise RosterUnavailable(outage.message)
-            try:
-                plugins = list_plugins_cli(root, executable)
-            except RosterUnavailable as exc:
-                RosterOutage(at=datetime.now(UTC), message=str(exc)).write(outage_path())
-                RosterFailure(stat=records, at=datetime.now(UTC), message=str(exc)).write(failure)
-                raise
-            except PluginListError as exc:
-                RosterFailure(stat=records, at=datetime.now(UTC), message=str(exc)).write(failure)
-                raise
-            PluginSnapshot(stat=records, plugins=plugins).write(path)
-            failure.unlink(missing_ok=True)
-            outage_path().unlink(missing_ok=True)
-            return plugins
+    data = read_json(path)
+    if not isinstance(data, dict) or not isinstance(installs := data.get("plugins"), dict):
+        raise PluginListError(f"{path} is not a Claude Code plugin roster")
+    resolved = root.resolve()
+    enabled = enablement(root)
+    plugins: list[EnabledPlugin] = []
+    for pid, entries in sorted(installs.items()):
+        if not enabled.get(pid) or not isinstance(entries, list):
+            continue
+        governing = [
+            plugin
+            for entry in entries
+            if (plugin := parse_install(pid, entry)) is not None and governs(plugin, resolved)
+        ]
+        if governing:
+            plugins.append(pick_scoped(pid, governing))
+    return tuple(plugins)
 
 
 def plugin_pack_root(plugin: EnabledPlugin) -> Path:
@@ -622,11 +215,6 @@ def resolve_plugin_packs(root: Path) -> list[manager.ResolvedPack]:
     """Resolve the pack each of ``root``'s enabled plugins ships, in plugin-id order.
 
     A plugin with no ``capt-hook/`` dir merely consumes packs and is skipped. A plugin advertising a
-    malformed one raises (all-or-nothing). The roster is deduped by full plugin id in
-    :func:`list_plugins_cli`, so one plugin id yields one pack.
+    malformed one raises (all-or-nothing).
     """
-    return [
-        resolve_plugin_pack(plugin)
-        for plugin in sorted(enabled_plugins(root), key=lambda p: p.id)
-        if has_plugin_pack(plugin)
-    ]
+    return [resolve_plugin_pack(plugin) for plugin in enabled_plugins(root) if has_plugin_pack(plugin)]

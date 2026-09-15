@@ -225,6 +225,7 @@ def llm_primitive[M: BaseModel](
         if not result:
             return None
         if not verdict(result):
+            consume_signals(evt, sig, name)
             return None
         if sig and consume_signals(evt, sig, name) is None:
             return None

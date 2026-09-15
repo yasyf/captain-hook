@@ -206,28 +206,24 @@ as a side effect. From then on the dependency resolves and Claude Code installs 
 
 ### How discovery works
 
-Dispatch enumerates the project's enabled plugins via `claude plugin list --json` and checks each one's
-install root for the fixed `capt-hook/` path. That CLI spawns Node and takes about a second, far too
-slow for the ~3ms dispatch hot path, so the roster is cached per project and invalidated by stat changes
-to the files that shape it: Claude Code's `installed_plugins.json`, the user, project, and local
-`settings.json`, and the `managed-settings.json` locations along with their `managed-settings.d/`
-drop-in directories. Installing, enabling, or disabling a plugin re-runs the CLI once; every other event
-reads the snapshot. The fixed-path probe itself runs live, so editing a hook file inside a plugin needs
-no invalidation.
+Dispatch reads the project's plugin roster from Claude Code's own files on every discovery, with no
+subprocess. `~/.claude/plugins/installed_plugins.json` lists each install's path, scope, and, for a
+project or local install, the project it belongs to. The `enabledPlugins` maps in the user, project,
+local, and managed settings files decide which plugins are on, with the higher-precedence file
+winning. In a git worktree the local settings file is the one at the main checkout's root, as in
+Claude Code. Discovery then checks each enabled install's root for the fixed `capt-hook/` path. Installing,
+enabling, or disabling a plugin takes effect on the next event, and so does editing a hook file inside
+a plugin.
 
-Claude Code re-lists an enabled plugin once per settings scope it's enabled in, so the same plugin id
-can appear several times in the roster. Discovery collapses identical entries and, when scopes pin
-different installs, follows Claude Code's own precedence — local over project over user — so the pack
-loads from the same install Claude runs. Two different installs at the same scope mean a corrupt
-roster; discovery refuses it (one warning, zero plugin packs) rather than guessing.
+A plugin can be installed at more than one scope. Discovery ignores installs that belong to another
+project, skips install paths that no longer exist, and follows Claude Code's precedence among the rest:
+local over project over user. Two different install paths at the same scope of one project mean a
+corrupt roster, and so does an `installed_plugins.json` that isn't a roster object. Either way
+discovery loads zero plugin packs and records the error where `capt-hook status` and the next session
+start show it.
 
-The stat tuple can only watch files. Policy that arrives another way — an MDM plist, a remote managed
-policy, or per-session flags like `--plugin-dir` and `--settings` — changes what `claude plugin list`
-would report without moving any watched stat, and the roster stays stale until one does. When that
-bites, force a refresh: touch any settings file, or delete the project's `.plugins` snapshot under the
-capt-hook cache. A missing `claude` CLI, a failing invocation, or roster output discovery can't use all
-degrade to an empty plugin roster — one warning, cached against the same stat tuple, so the failure
-never becomes a per-event cost.
+Policy that arrives outside these files, such as an MDM plist, a remote managed policy, or per-session
+flags like `--plugin-dir` and `--settings`, is not visible to discovery.
 
 Discovered packs are first-class: they show in `uvx capt-hook pack list` as kind `plugin`. Their inline
 tests run from the plugin's own repo with `pack test`, not from a consuming project's `capt-hook test`.
