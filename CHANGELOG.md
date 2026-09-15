@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An install no longer fails because the app it just quit is still being
+  reaped.** `capt-hook package install` stops the installed app generation
+  before it supersedes the bundle, and read a generation that had already
+  exited as a foreign one running from an unexpected path: LaunchServices goes
+  on publishing an application for another 2-47 ms after its process exits,
+  tearing the record's `bundleURL` down before it flips `isTerminated`, and the
+  identity check treated that empty URL as a mismatch. The stop polls every
+  50 ms, so any poll landing in that window failed the install. A generation
+  whose process is gone is now absent, which is what the stop set out to prove;
+  only a live process can be a foreign generation. The failure aborted before
+  anything was written, leaving the app and `~/.daemonkit/bin/capt-hookd` on the
+  previous build while brew and the plugin had already moved on, so hooks went
+  dark until someone re-ran the install.
+- **A failed stop or broker ping now says what the child reported.** Both wrap
+  the child's exit status together with its stderr, which was previously read
+  only on success and discarded on the failure that needed it. An install that
+  cannot quiesce the installed app also reports that nothing was applied and
+  which path still serves the previous generation.
+
 ## [12.31.0] - 2026-09-15
 
 ### Changed
