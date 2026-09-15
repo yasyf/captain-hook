@@ -198,7 +198,7 @@ func applyPackagedApplication(ctx context.Context) error {
 	if _, err := os.Lstat(targetPath); err == nil {
 		land = deployment.Supersede
 		if err := quiesceInstalledApplication(ctx, source, targetPath); err != nil {
-			return err
+			return fmt.Errorf("%w; nothing was applied and %s still serves the previous generation", err, targetPath)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("captain package: inspect %q: %w", targetPath, err)
@@ -366,7 +366,10 @@ func quiesceInstalledApplication(ctx context.Context, controllerApp, installedAp
 		Exec: daemonkit.ServingSigned(helperApplicationRequirement()), MaxOutput: 4 << 10,
 	})
 	if err != nil {
-		return fmt.Errorf("captain package: stop installed app generation: %w", err)
+		return fmt.Errorf(
+			"captain package: stop installed app generation: %w: controller stderr %q",
+			err, bytes.TrimSpace(result.Stderr),
+		)
 	}
 	if len(result.Stderr) != 0 {
 		return fmt.Errorf("captain package: stopping the installed app wrote stderr: %q", string(result.Stderr))
@@ -417,7 +420,7 @@ func pingBridge(ctx context.Context, appPath string) (err error) {
 		Exec: daemonkit.ServingSigned(helperClientRequirement()), MaxOutput: 4 << 10,
 	})
 	if err != nil {
-		return fmt.Errorf("captain package: broker ping: %w", err)
+		return fmt.Errorf("captain package: broker ping: %w: bridge stderr %q", err, bytes.TrimSpace(result.Stderr))
 	}
 	if len(result.Stderr) != 0 {
 		return fmt.Errorf("captain package: broker ping wrote stderr: %q", string(result.Stderr))

@@ -150,6 +150,7 @@ targets:
         excludes:
           - HelperPaths.swift
       - path: Sources/App/NotifyPayload.swift
+      - path: Sources/App/ExactInstalledAppStop.swift
       - path: ../tests/fixtures/status-json-v1.golden.json
         buildPhase: resources
     settings:
