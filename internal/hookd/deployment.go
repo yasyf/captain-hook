@@ -161,6 +161,14 @@ func openDeployment(appPath string) (*deploy.Deployment, error) {
 	})
 }
 
+func retryRestoredAbort(ctx context.Context, apply func(context.Context) error) error {
+	err := apply(ctx)
+	if errors.Is(err, daemonkit.ErrUnsettled) && errors.Is(err, deploy.ErrRestored) {
+		return apply(ctx)
+	}
+	return err
+}
+
 func applyPackagedApplication(ctx context.Context) error {
 	source, err := packagedApplicationPath()
 	if err != nil {

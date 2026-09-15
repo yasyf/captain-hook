@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`package-install` retries once after an upgrade the incumbent outlived.**
+  The first install of 12.30.1 aborted after 50 s because the old `capt-hookd`
+  was still in the process table at the kill's settlement deadline. daemonkit
+  put the prior generation back in service, and a manual retry a minute later
+  installed in 8 s. When daemonkit reports that kind of abort with the prior
+  generation proved serving again, the install now runs once more from the
+  top, inside the same three-minute budget. Any other failure, or a second
+  such abort, still exits 1.
+
 ## [12.30.6] - 2026-09-14
 
 ### Fixed
