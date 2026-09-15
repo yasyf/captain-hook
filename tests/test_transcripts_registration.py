@@ -369,6 +369,5 @@ def test_dispatch_folds_registered_rollout_into_deep_gate(tmp_path: Path) -> Non
         Event.Stop,
         {"session_id": "s-e2e", "transcript_path": str(main)},
         session_dir=ensure_session(SessionId("s-e2e")),
-        async_=False,
     )
     assert fired == ["deep"]

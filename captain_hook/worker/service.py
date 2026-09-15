@@ -8,7 +8,6 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from captain_hook.worker.protocol import (
-    WORKER_THREADS,
     EventRequest,
     EventResponse,
     ProtocolError,
@@ -25,6 +24,22 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import BinaryIO
 
+    type Background = Callable[[], None]
+    type Dispatch = Callable[[EventRequest], tuple[EventResponse, Background | None]]
+
+REQUEST_THREADS = 16
+BACKGROUND_THREADS = 4
+
+
+def handshake(input_stream: BinaryIO, output_stream: BinaryIO, *, build: str) -> bool:
+    if (first := read_message(input_stream)) is None:
+        return False
+    hello = decode_hello(first)
+    if hello.build != build:
+        raise ProtocolError(f"worker build {build!r} does not match host build {hello.build!r}")
+    write_message(output_stream, hello_response(build))
+    return True
+
 
 class WorkerService:
     def __init__(
@@ -32,15 +47,14 @@ class WorkerService:
         input_stream: BinaryIO,
         output_stream: BinaryIO,
         *,
-        build: str,
-        dispatch: Callable[[EventRequest], EventResponse],
-        max_workers: int = WORKER_THREADS,
+        dispatch: Dispatch,
+        max_workers: int = REQUEST_THREADS,
     ) -> None:
         self._input = input_stream
         self._output = output_stream
-        self._build = build
         self._dispatch = dispatch
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="capt-hook-worker")
+        self._background = ThreadPoolExecutor(max_workers=BACKGROUND_THREADS, thread_name_prefix="capt-hook-async")
         self._write_guard = threading.Lock()
         self._guard = threading.Condition()
         self._outstanding = 0
@@ -48,18 +62,12 @@ class WorkerService:
 
     def run(self) -> None:
         try:
-            first = read_message(self._input)
-            if first is None:
-                return
-            hello = decode_hello(first)
-            if hello.build != self._build:
-                raise ProtocolError(f"worker build {self._build!r} does not match host build {hello.build!r}")
-            self._write(hello_response(self._build))
             while (message := read_message(self._input)) is not None:
                 self._submit(decode_event(message))
         finally:
             self._drain()
             self._executor.shutdown()
+            self._background.shutdown()
         if self._failure is not None:
             raise self._failure
 
@@ -75,12 +83,14 @@ class WorkerService:
             return
         start = time.perf_counter()
         try:
-            response = self._dispatch(request)
+            response, background = self._dispatch(request)
         except Exception:
             self._write(error_response(request.id, traceback.format_exc()))
             return
         elapsed_ms = (time.perf_counter() - start) * 1000
         self._write(result_response(request.id, replace(response, elapsed_ms=elapsed_ms)))
+        if background is not None:
+            self._background.submit(background)
 
     def _done(self, future: Future[None]) -> None:
         with self._guard:

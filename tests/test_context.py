@@ -118,7 +118,7 @@ class TestSessionManagement:
         ]
         assert sites, "cleanup_stale must be called from production code, not only tests"
 
-    def test_dispatch_event_reaps_stale_on_async_session_start(
+    def test_dispatch_event_reaps_stale_on_session_start_after_the_reply(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from captain_hook.cli import dispatch_event
@@ -126,21 +126,23 @@ class TestSessionManagement:
 
         monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
         monkeypatch.setattr("cc_transcript.discovery.resolve", lambda session_id, *, root=None: None)
+        monkeypatch.setattr("captain_hook.cli.dispatch_update", lambda: None)
 
         current = ensure_session(SessionId(SESSION_ID))
         foreign = ensure_session(SessionId("99999999-8888-7777-6666-555555555555"))
         age_dir(current, seconds=STALE_AGE_SECONDS + 60)
         age_dir(foreign, seconds=STALE_AGE_SECONDS + 60)
 
-        dispatch_event(
+        _, background = dispatch_event(
             tmp_path,
             Event.SessionStart,
             {"session_id": SESSION_ID, "source": "startup"},
             session_dir=current,
-            async_=True,
         )
+        assert foreign.is_dir()
+        background()
         assert current.is_dir()
-        assert not foreign.exists()  # the stale foreign session dir is reaped
+        assert not foreign.exists()
 
     def test_dispatch_event_skips_reaping_on_non_session_start(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -154,34 +156,13 @@ class TestSessionManagement:
         foreign = ensure_session(SessionId("99999999-8888-7777-6666-555555555555"))
         age_dir(foreign, seconds=STALE_AGE_SECONDS + 60)
 
-        dispatch_event(
+        _, background = dispatch_event(
             tmp_path,
             Event.PreToolUse,
             tool_payload("Bash", session_id=SESSION_ID, command="echo hi"),
             session_dir=None,
-            async_=False,
         )
-        assert foreign.is_dir()
-
-    def test_dispatch_event_skips_reaping_on_sync_session_start(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from captain_hook.cli import dispatch_event
-        from captain_hook.types import Event
-
-        monkeypatch.setenv("CAPTAIN_HOOK_STATE_DIR", str(tmp_path))
-        monkeypatch.setattr("cc_transcript.discovery.resolve", lambda session_id, *, root=None: None)
-
-        foreign = ensure_session(SessionId("99999999-8888-7777-6666-555555555555"))
-        age_dir(foreign, seconds=STALE_AGE_SECONDS + 60)
-
-        dispatch_event(
-            tmp_path,
-            Event.SessionStart,
-            {"session_id": SESSION_ID, "source": "startup"},
-            session_dir=None,
-            async_=False,
-        )
+        background()
         assert foreign.is_dir()
 
     def test_atomic_write_produces_valid_json(self, tmp_path: Path) -> None:
@@ -421,6 +402,33 @@ class TestCallLlm:
         assert result == "mocked response"
         assert mock_call.call_args.kwargs["specialty"] == "review"
         assert mock_call.call_args.kwargs["cwd"] == "/tmp"
+
+    @pytest.mark.parametrize(
+        ("deadline_unix_ms", "expected"),
+        [
+            pytest.param(0, 180, id="unbounded"),
+            pytest.param(1_012_500, 12, id="clamped-to-deadline"),
+            pytest.param(999_000, 1, id="deadline-passed"),
+            pytest.param(1_900_000, 180, id="deadline-beyond-timeout"),
+        ],
+    )
+    def test_timeout_is_clamped_to_the_request_deadline(
+        self, monkeypatch: pytest.MonkeyPatch, deadline_unix_ms: int, expected: int
+    ) -> None:
+        from types import SimpleNamespace
+
+        from captain_hook.util import reqenv
+
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: 1_000.0))
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+        overrides = reqenv.RequestOverrides(
+            env={}, cwd="/tmp", client_ppid=1, session_id="s", deadline_unix_ms=deadline_unix_ms
+        )
+
+        with reqenv.use_request(overrides), patch("spawnllm.call_sync", return_value="ok") as mock_call:
+            ctx.call_llm("test prompt")
+        assert mock_call.call_args.kwargs["timeout"] == expected
 
     def test_general_forwards_specialty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")

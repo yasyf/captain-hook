@@ -22,7 +22,7 @@ import json
 import os
 import subprocess
 import sys
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -45,10 +45,7 @@ if TYPE_CHECKING:
 SPAWNED_ENV = "CAPT_HOOK_SPAWNED"
 BRAIN_TIER: TModel = "medium"
 BRAIN_ALLOWED_TOOLS = ("Read", "Grep", "Glob", "Write", "Edit", "Bash", "Skill", "Agent")
-# The events whose native `run <Event>` dispatch fires the reviewer/sweep.
 DISPATCH_EVENTS = frozenset({Event.SessionStart, Event.SessionEnd, Event.Stop})
-# Window collapsing a stale plugin's raw `review run` racing native dispatch to one reviewer child.
-REVIEW_RUN_DEDUP = timedelta(seconds=60)
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,13 +200,6 @@ def detach(argv: list[str], *, spawned: str) -> None:
     breadcrumb(spawned)
 
 
-def payload_event(raw: bytes) -> str:
-    """The payload's ``hook_event_name`` (``""`` when absent) — the review-run dedup discriminator."""
-    payload = parse_payload(raw)
-    name = payload.get("hook_event_name") if payload else None
-    return name if isinstance(name, str) else ""
-
-
 def enrolled(cwd: str | None) -> bool:
     """Whether the repo at *cwd* is watched — the native-dispatch review gate.
 
@@ -262,22 +252,6 @@ def _claim_stamp(stamp: Path, window: timedelta) -> bool:
     return False
 
 
-def claim_review_run(cwd: str | None, event_name: str) -> bool:
-    """Claim the short review-run dedup stamp for (*cwd*, *event_name*); ``True`` if the caller may spawn.
-
-    Keyed like :func:`guard_and_sweep`'s throttle but per (cwd, event) and over :data:`REVIEW_RUN_DEDUP`,
-    it collapses the version-skew double-fire and any concurrent same-repo passes (the whole-directory
-    scan already covers those) via the atomic :func:`_claim_stamp`. Fails open on ``OSError`` — a broken
-    state dir loses the reviewer's log either way, so prefer running over silently dropping the review.
-    """
-    key = hashlib.sha256(f"{cwd or ''}\0{event_name}".encode()).hexdigest()[:12]
-    try:
-        (stamps := sweep_dir()).mkdir(parents=True, exist_ok=True)
-        return _claim_stamp(stamps / f"{key}.run", REVIEW_RUN_DEDUP)
-    except OSError:
-        return True
-
-
 def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False) -> None:
     """Parses the SessionStart/SessionEnd hook payload and detaches the reviewer child.
 
@@ -285,17 +259,14 @@ def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False) -> None:
     ``CAPT_HOOK_SPAWNED`` (the reviewer's own spawned sessions), a headless
     ``claude -p`` / SDK session (``CLAUDE_CODE_ENTRYPOINT`` in the ``sdk-*``
     family; an interactive quit is ``cli``), malformed stdin, a missing
-    transcript, a throttled duplicate, and a failed spawn all fall through
-    silently, each leaving a breadcrumb line on :func:`review_log_path`. The
-    child runs with ``CAPT_HOOK_SPAWNED=1`` and its output appended to the same
-    log.
+    transcript, and a failed spawn all fall through silently, each leaving a
+    breadcrumb line on :func:`review_log_path`. The child runs with
+    ``CAPT_HOOK_SPAWNED=1`` and its output appended to the same log; concurrent
+    children for one repo collapse on :func:`repo_lock` inside the child.
 
-    The :func:`claim_review_run` throttle runs on every caller so native ``run
-    <Event>`` dispatch and a stale plugin's raw ``review run`` entry collapse to
-    one spawn. ``gate_enrollment`` (set only by native dispatch) additionally
-    skips a non-watched repo — checked *before* the claim, so a gated skip never
-    burns the stamp the raw fallback needs; the raw CLI entry leaves it off, so
-    the detached child stays the authoritative enrollment gate for that path.
+    ``gate_enrollment`` (set only by native dispatch) skips a non-watched repo;
+    the raw CLI entry leaves it off, so the detached child stays the
+    authoritative enrollment gate for that path.
 
     Args:
         raw: The hook's stdin bytes, holding the SessionStart/SessionEnd JSON payload.
@@ -313,9 +284,6 @@ def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False) -> None:
     transcript, cwd = parsed
     if gate_enrollment and not enrolled(cwd):
         breadcrumb("review-run skip: not watching")
-        return
-    if not claim_review_run(cwd, payload_event(raw)):
-        breadcrumb("review-run skip: throttled")
         return
     detach(spawn_argv(transcript, cwd), spawned=f"spawned {transcript}")
 
@@ -486,6 +454,33 @@ async def watching_ids(store: ReviewStore, repo: RepoKey) -> set[int]:
 
 
 @contextmanager
+def nonblocking_flock(path: Path) -> Iterator[bool]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def repo_lock(settings: ReviewSettings, cwd: str) -> AbstractContextManager[bool]:
+    """Claims the per-repo reviewer lock non-blockingly, yielding whether it was acquired.
+
+    Keyed on the repo's origin, or on *cwd* outside a repo, so two worktrees of one repo share it.
+    """
+    key = hashlib.sha256((resolve_repo_key(cwd) or cwd).encode()).hexdigest()[:16]
+    return nonblocking_flock(settings.db_path.parent / "locks" / f"repo-{key}.lock")
+
+
+@contextmanager
 def brain_lock(settings: ReviewSettings) -> Iterator[bool]:
     """Claims the machine-wide brain lock non-blockingly, yielding whether it was acquired.
 
@@ -500,20 +495,8 @@ def brain_lock(settings: ReviewSettings) -> Iterator[bool]:
     non-blocking: a second concurrent pass yields ``False`` and skips the brain instead of
     queueing behind the first.
     """
-    (path := settings.db_path.parent / "locks" / "brain.lock").parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            yield False
-            return
-        try:
-            yield True
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
+    with nonblocking_flock(settings.db_path.parent / "locks" / "brain.lock") as claimed:
+        yield claimed
 
 
 async def review_session(transcript: Path, *, cwd: str, settings: ReviewSettings, sweep: bool = False) -> SpawnReport:
@@ -626,7 +609,8 @@ async def spawn_session(
     locked database can't hang the record too. A crash records ``ok=0`` and re-raises, so the traceback
     still lands in the spawn log; the catch is ``BaseException`` because
     ``asyncio.CancelledError`` is not an ``Exception``. When settings construction itself
-    is the crash, the row lands at the default db path.
+    is the crash, the row lands at the default db path. A pass that finds :func:`repo_lock`
+    held by a concurrent pass over the same repo returns at once and records nothing.
 
     Args:
         transcript: The ended session's transcript file.
@@ -647,8 +631,12 @@ async def spawn_session(
     started = datetime.now(UTC)
     try:
         settings = settings or ReviewSettings()
-        async with asyncio.timeout(settings.spawn_deadline_seconds):
-            report = await review_session(transcript, cwd=cwd, settings=settings, sweep=sweep)
+        with repo_lock(settings, cwd) as claimed:
+            if not claimed:
+                logger.info(f"review spawn skipped: another pass holds the lock for cwd={cwd}")
+                return SpawnReport(repo=None, sweep=sweep)
+            async with asyncio.timeout(settings.spawn_deadline_seconds):
+                report = await review_session(transcript, cwd=cwd, settings=settings, sweep=sweep)
     except BaseException as exc:
         from captain_hook.review.notify import maybe_notify_failures
         from captain_hook.review.snapshot import write_status

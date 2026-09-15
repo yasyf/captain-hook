@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata
 import io
 import os
 import sys
@@ -10,10 +11,11 @@ from typing import Any
 import pytest
 
 from captain_hook import app
-from captain_hook.daemon.context import ContextIO
+from captain_hook.daemon.context import ContextIO, bound_buffers
 from captain_hook.util import reqenv
 from captain_hook.worker.protocol import EventRequest
 from captain_hook.worker.runtime import ProductRuntime
+from tests.test_worker_protocol import frame, hello
 
 
 @dataclass(slots=True)
@@ -53,15 +55,20 @@ def test_dispatch_binds_request_scope_and_replays_cached_discovery() -> None:
     def transcript_loader(_: object) -> None:
         return None
 
-    def dispatch(root: object, event: object, raw: object, **kwargs: object) -> dict[str, str]:
+    def background() -> None:
+        seen["background"] = reqenv.current()
+        seen["background_buffers"] = bound_buffers()
+
+    def dispatch(root: object, event: object, raw: object, **kwargs: object) -> tuple[dict[str, str], object]:
         seen.update(
             root=root,
             event=event,
             raw=raw,
             kwargs=kwargs,
             overrides=reqenv.current(),
+            request_buffers=bound_buffers(),
         )
-        return {"decision": "allow"}
+        return {"decision": "allow"}, background
 
     runtime = ProductRuntime(
         registry_factory=lambda _: registry,
@@ -69,7 +76,7 @@ def test_dispatch_binds_request_scope_and_replays_cached_discovery() -> None:
         transcript_loader=transcript_loader,
         install_writer=False,
     )
-    response = runtime.dispatch(request())
+    response, after = runtime.dispatch(request())
 
     assert response.status == "ok"
     assert response.exit == 0
@@ -79,12 +86,17 @@ def test_dispatch_binds_request_scope_and_replays_cached_discovery() -> None:
     assert seen["event"].name == "PreToolUse"
     assert seen["kwargs"] == {
         "session_dir": None,
-        "async_": False,
         "transcript_loader": transcript_loader,
     }
     assert seen["overrides"].cwd == "/project/subdir"
     assert seen["overrides"].client_ppid == 99
     assert seen["overrides"].deadline_unix_ms == 1_700_000_000_000
+    assert reqenv.current() is None
+    assert after is not None
+    after()
+    assert seen["background"].deadline_unix_ms == 1_700_000_000_000
+    assert seen["background_buffers"] is not None
+    assert seen["background_buffers"] is not seen["request_buffers"]
     assert reqenv.current() is None
 
 
@@ -97,7 +109,9 @@ def test_registry_is_reused_for_the_same_root() -> None:
         factories += 1
         return registry
 
-    runtime = ProductRuntime(registry_factory=factory, dispatcher=lambda *_, **__: None, install_writer=False)
+    runtime = ProductRuntime(
+        registry_factory=factory, dispatcher=lambda *_, **__: (None, lambda: None), install_writer=False
+    )
     runtime.dispatch(request(request_id=1))
     runtime.dispatch(request(request_id=2))
 
@@ -108,39 +122,42 @@ def test_registry_is_reused_for_the_same_root() -> None:
 def test_invalid_event_is_a_result_error_without_dispatch() -> None:
     runtime = ProductRuntime(
         registry_factory=lambda _: FakeRegistry(),
-        dispatcher=lambda *_, **__: None,
+        dispatcher=lambda *_, **__: (None, lambda: None),
         install_writer=False,
     )
-    response = runtime.dispatch(request(event="NoSuchEvent"))
+    response, after = runtime.dispatch(request(event="NoSuchEvent"))
 
     assert response.status == "ok"
     assert response.exit == 1
     assert "Invalid event type: 'NoSuchEvent'" in response.stderr
+    assert after is None
 
 
 def test_dispatch_exception_returns_traceback_error() -> None:
-    def fail(*_: object, **__: object) -> None:
+    def fail(*_: object, **__: object) -> tuple[None, object]:
         raise ValueError("broken hook")
 
     runtime = ProductRuntime(registry_factory=lambda _: FakeRegistry(), dispatcher=fail, install_writer=False)
-    response = runtime.dispatch(request())
+    response, after = runtime.dispatch(request())
 
+    assert after is None
     assert response.status == "error"
     assert response.exit == 1
     assert "ValueError: broken hook" in response.stderr
 
 
 def test_hook_writes_are_captured_inside_the_product_response() -> None:
-    def dispatch(*_: object, **__: object) -> None:
+    def dispatch(*_: object, **__: object) -> tuple[None, object]:
         print("hook stdout")
         print("hook stderr", file=sys.stderr)
+        return None, lambda: None
 
     runtime = ProductRuntime(registry_factory=lambda _: FakeRegistry(), dispatcher=dispatch, install_writer=False)
     original_stdout, original_stderr = sys.stdout, sys.stderr
     sys.stdout = ContextIO("stdout", io.StringIO())
     sys.stderr = ContextIO("stderr", io.StringIO())
     try:
-        response = runtime.dispatch(request())
+        response, _ = runtime.dispatch(request())
     finally:
         sys.stdout, sys.stderr = original_stdout, original_stderr
 
@@ -155,8 +172,6 @@ def test_worker_entrypoint_installs_the_daemon_log_sinks(tmp_path: Path) -> None
     never did — ``request_scope`` kept binding ``session_log_path`` with no sink consuming it,
     so every per-session log stopped being written on 2026-07-21.
     """
-    import importlib.metadata
-    import os
     import subprocess
 
     from captain_hook.worker.__main__ import worker_log_key
@@ -164,7 +179,7 @@ def test_worker_entrypoint_installs_the_daemon_log_sinks(tmp_path: Path) -> None
     logs = tmp_path / "logs"
     worker = subprocess.run(
         [sys.executable, "-m", "captain_hook.worker"],
-        input=b"",
+        input=frame(hello(importlib.metadata.version("capt-hook"))),
         capture_output=True,
         env={**os.environ, "CAPTAIN_HOOK_LOG_DIR": str(logs)},
         timeout=180,
@@ -189,7 +204,7 @@ def test_workers_in_different_roots_write_different_daemon_logs(tmp_path: Path) 
         root.mkdir()
         worker = subprocess.run(
             [sys.executable, "-m", "captain_hook.worker"],
-            input=b"",
+            input=frame(hello(importlib.metadata.version("capt-hook"))),
             capture_output=True,
             cwd=root,
             env={**os.environ, "CAPTAIN_HOOK_LOG_DIR": str(logs)},
@@ -216,7 +231,7 @@ def test_worker_survives_a_root_deleted_under_it(tmp_path: Path) -> None:
     logs = tmp_path / "logs"
     worker = subprocess.run(
         ["/bin/sh", "-c", 'cd "$1" && rmdir "$1" && exec "$0" -m captain_hook.worker', sys.executable, str(root)],
-        input=b"",
+        input=frame(hello(importlib.metadata.version("capt-hook"))),
         capture_output=True,
         env={**os.environ, "CAPTAIN_HOOK_LOG_DIR": str(logs)},
         timeout=180,

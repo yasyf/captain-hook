@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import subprocess
@@ -41,7 +40,6 @@ from captain_hook.review.judge import (
 from captain_hook.review.pipeline import (
     BRAIN_ALLOWED_TOOLS,
     DISPATCH_EVENTS,
-    REVIEW_RUN_DEDUP,
     SPAWNED_ENV,
     BrainOutcome,
     SpawnReport,
@@ -52,12 +50,12 @@ from captain_hook.review.pipeline import (
     enrolled,
     guard_and_spawn,
     guard_and_sweep,
+    repo_lock,
     review_log_path,
     review_session,
     spawn_argv,
     spawn_brain,
     spawn_session,
-    sweep_dir,
     sweep_key,
 )
 from captain_hook.review.repo import RepoKey
@@ -85,7 +83,7 @@ from tests.review_helpers import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from cc_transcript.mining.confidence import CandidateSignal
 
@@ -471,41 +469,6 @@ class TestSweepGuard:
         assert "sweep skip: missing transcript file" in review_log_path().read_text()
 
 
-class TestReviewRunThrottle:
-    def payload(self, tmp_path: Path, event: str = "SessionEnd") -> bytes:
-        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
-        return json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path), "hook_event_name": event}).encode()
-
-    def run_stamp(self, cwd: str, event: str) -> Path:
-        return sweep_dir() / f"{hashlib.sha256(f'{cwd}\x00{event}'.encode()).hexdigest()[:12]}.run"
-
-    def test_second_run_within_window_throttled(
-        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
-    ) -> None:
-        payload = self.payload(tmp_path)
-        guard_and_spawn(payload)
-        guard_and_spawn(payload)
-        assert len(popen_calls) == 1  # skew double-fire collapses to one reviewer child
-        assert "review-run skip: throttled" in review_log_path().read_text()
-
-    def test_run_spawns_again_after_window(
-        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
-    ) -> None:
-        payload = self.payload(tmp_path)
-        guard_and_spawn(payload)
-        aged = (datetime.now(UTC) - REVIEW_RUN_DEDUP - timedelta(seconds=1)).timestamp()
-        os.utime(self.run_stamp(str(tmp_path), "SessionEnd"), (aged, aged))
-        guard_and_spawn(payload)
-        assert len(popen_calls) == 2
-
-    def test_distinct_events_do_not_share_a_stamp(
-        self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
-    ) -> None:
-        guard_and_spawn(self.payload(tmp_path, "SessionStart"))
-        guard_and_spawn(self.payload(tmp_path, "SessionEnd"))
-        assert len(popen_calls) == 2  # SessionStart and SessionEnd key independently
-
-
 class TestEnrollmentGate:
     def payload(self, tmp_path: Path, *, sweep: bool = False) -> bytes:
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
@@ -672,29 +635,26 @@ class TestNativeReviewWiring:
         monkeypatch.setattr("captain_hook.heartbeat.record_heartbeat", lambda event, raw: None)
         return calls
 
-    def dispatch(self, event: Event, *, async_: bool, tmp_path: Path) -> None:
+    def dispatch(self, event: Event, *, tmp_path: Path) -> Callable[[], None]:
         from captain_hook.cli import dispatch_event
 
         raw = {"transcript_path": "/t", "cwd": str(tmp_path), "hook_event_name": event.name}
-        dispatch_event(tmp_path, event, raw, session_dir=None, async_=async_)
+        return dispatch_event(tmp_path, event, raw, session_dir=None)[1]
 
     def test_dispatch_events_are_typed(self) -> None:
         assert DISPATCH_EVENTS == frozenset({Event.SessionStart, Event.SessionEnd, Event.Stop})
 
-    def test_async_review_event_fires(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_review_event_fires_once_after_the_reply(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         calls = self.install(monkeypatch)
-        self.dispatch(Event.SessionEnd, async_=True, tmp_path=tmp_path)
+        background = self.dispatch(Event.SessionEnd, tmp_path=tmp_path)
+        assert calls == []
+        background()
         expected = {"transcript_path": "/t", "cwd": str(tmp_path), "hook_event_name": "SessionEnd"}
         assert calls == [("SessionEnd", expected)]
 
-    def test_sync_review_event_does_not_fire(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_non_review_event_does_not_fire(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         calls = self.install(monkeypatch)
-        self.dispatch(Event.SessionEnd, async_=False, tmp_path=tmp_path)
-        assert calls == []
-
-    def test_async_non_review_event_does_not_fire(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        calls = self.install(monkeypatch)
-        self.dispatch(Event.PreToolUse, async_=True, tmp_path=tmp_path)
+        self.dispatch(Event.PreToolUse, tmp_path=tmp_path)()
         assert calls == []
 
 
@@ -1235,6 +1195,28 @@ class TestSpawnSession:
         assert health.last["ok"] == 0
         assert str(health.last["error"]).startswith("ValidationError:")
         assert "judge_concurrency" in str(health.last["error"])
+
+    async def test_concurrent_pass_over_the_same_repo_skips_without_recording(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        passes: list[str] = []
+
+        async def record(transcript: Path, *, cwd: str, settings: ReviewSettings, sweep: bool = False) -> SpawnReport:
+            passes.append(cwd)
+            return SpawnReport(repo=None)
+
+        monkeypatch.setattr("captain_hook.review.pipeline.review_session", record)
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        with repo_lock(settings, str(tmp_path)) as claimed:
+            assert claimed
+            assert await spawn_session(transcript, cwd=str(tmp_path), settings=settings) == SpawnReport(repo=None)
+        assert passes == []
+        async with await ReviewStore.open(settings.db_path) as store:
+            assert (await store.spawn_health()).last is None
+
+        await spawn_session(transcript, cwd=str(tmp_path), settings=settings)
+        assert passes == [str(tmp_path)]
 
     async def test_spawn_session_deadline_records_failed_run(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

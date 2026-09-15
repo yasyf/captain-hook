@@ -20,8 +20,9 @@ The reviewer runs entirely on your machine, riding captain-hook's own event disp
 
 1. The plugin's hook wiring runs `capt-hookd run <Event>` for every
    lifecycle event, and the
-   **reviewer rides that dispatch natively** — the async `SessionStart` and `SessionEnd` passes
-   fire the enrollment-gated reviewer, and the throttled sweep rides `Stop`. There is no dedicated
+   **reviewer rides that dispatch natively** — once `SessionStart` or `SessionEnd` is answered,
+   the dispatcher fires the enrollment-gated reviewer, and the throttled sweep rides `Stop`. One
+   pass runs per repo at a time; a pass that starts while another holds the repo's lock exits. There is no dedicated
    reviewer hook entry to wire or break. The pass detaches into the background and returns
    immediately, so a utility command like `claude update` never blocks on it, and a
    non-interactive `claude -p` session end is skipped — it carries no corrections worth mining.

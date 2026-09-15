@@ -10,6 +10,7 @@ import sys
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -21,7 +22,7 @@ from loguru import logger
 from captain_hook import faults
 from captain_hook.app import LoadError, _state, load_gitignore, reset
 from captain_hook.desktop.cli import helper
-from captain_hook.dispatch import dispatch
+from captain_hook.dispatch import dispatch, dispatch_async
 from captain_hook.loader import (
     CONF_MODULE,
     discover_hooks,
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
 
     from cc_transcript.query import Session
 
+    from captain_hook.events import BaseHookEvent
     from captain_hook.types import RegisteredHook
 
 # capt-hook plugin/marketplace identity, rehomed from the deleted packs.contract module.
@@ -73,7 +75,7 @@ def search_upward(start: Path, *rel: str, stop: Path | None = None) -> Path | No
 
 EVENT_NAMES = ", ".join(n for e in Event if (n := e.name))
 
-PLUGIN_ROSTER_SOURCE = "claude plugin list"
+PLUGIN_ROSTER_SOURCE = "plugin roster"
 
 DECISION_EVENTS = frozenset({Event.PreToolUse, Event.Stop, Event.SubagentStop, Event.PermissionRequest})
 
@@ -92,8 +94,8 @@ class CliState:
     def plugin_packs(self) -> list[manager.ResolvedPack]:
         """The pack each of this root's enabled plugins ships, or ``[]`` with the failure on the record.
 
-        A roster that cannot be enumerated is not a machine without plugin packs. Hard-failing here
-        would take every Claude Code session on the machine down over one broken CLI, so the failure
+        A roster that cannot be read is not a machine without plugin packs. Hard-failing here
+        would take every Claude Code session on the machine down over one corrupt file, so the failure
         is instead logged at ERROR, recorded as a :class:`~captain_hook.app.LoadError` that
         ``capt-hook status`` and ``capt-hook pack list`` print, and recorded as a fault that the next
         session start tells the user about — three places a person looks, none of them silent.
@@ -238,10 +240,6 @@ def maybe_launch_bootstrap(root: Path) -> bool:
     return True
 
 
-def run_command(event: str, *, async_: bool) -> str:
-    return f"{DEFAULT_PREFIX} run {event}{' --async' if async_ else ''}"
-
-
 def write_settings(settings_path: Path, data: dict[str, Any]) -> None:
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = settings_path.with_suffix(f"{settings_path.suffix}.tmp")
@@ -271,34 +269,21 @@ def dispatch_event(
     raw: dict[str, Any],
     *,
     session_dir: Path | None,
-    async_: bool,
     transcript_loader: Callable[[str | Path | None], Session] | None = None,
-) -> dict[str, Any] | None:
-    """Build the event's context and dispatch it, returning the response envelope or None.
+) -> tuple[dict[str, Any] | None, Callable[[], None]]:
+    """Build the event's context, run its synchronous hooks, and return the envelope plus the work that follows it.
 
     The one dispatch codepath shared by the cold CLI and the resident daemon: no printing,
     logging setup, or discovery — those are the front door's job. ``transcript_loader`` overrides
-    the default parse (the daemon supplies a cache-backed one).
+    the default parse (the daemon supplies a cache-backed one). The returned callable runs the
+    event's reviewer and updater dispatch, stale-session cleanup, and ``async_=True`` hooks; the
+    caller invokes it once the envelope has been delivered.
     """
     from captain_hook.context import HookContext
     from captain_hook.heartbeat import record_heartbeat
     from captain_hook.transcripts import lane_transcript_path, lazy_transcript, registered_paths
 
-    if not async_:
-        record_heartbeat(event, raw)
-    elif event in DISPATCH_EVENTS:
-        try:
-            dispatch_review(event.name, raw)
-        except Exception as exc:
-            logger.exception("native review dispatch failed")
-            faults.record("async review dispatch", exc, raw.get("cwd"))
-        if event is Event.SessionStart:
-            try:
-                dispatch_update()
-            except Exception as exc:
-                logger.exception("native update dispatch failed")
-                faults.record("async update dispatch", exc, raw.get("cwd"))
-
+    record_heartbeat(event, raw)
     resolved_path = raw.get("agent_transcript_path") or (
         lane_transcript_path(parent, agent_id)
         if event in TOOL_EVENTS and (parent := raw.get("transcript_path")) and (agent_id := raw.get("agent_id"))
@@ -313,16 +298,30 @@ def dispatch_event(
         project_root=root,
     )
     evt = event.event_class(_raw=raw, ctx=ctx)
-    result = dispatch(event, evt, session_dir=session_dir, async_=async_)
-    if async_ and event is Event.SessionStart:
+    return dispatch(event, evt, session_dir=session_dir), partial(after_reply, event, evt, raw, session_dir)
+
+
+def after_reply(event: Event, evt: BaseHookEvent, raw: dict[str, Any], session_dir: Path | None) -> None:
+    if event in DISPATCH_EVENTS:
+        try:
+            dispatch_review(event.name, raw)
+        except Exception as exc:
+            logger.exception("native review dispatch failed")
+            faults.record("review dispatch", exc, raw.get("cwd"))
+    if event is Event.SessionStart:
+        try:
+            dispatch_update()
+        except Exception as exc:
+            logger.exception("native update dispatch failed")
+            faults.record("update dispatch", exc, raw.get("cwd"))
         try:
             cleanup_stale(exclude=SessionId(sid) if (sid := raw.get("session_id")) else None)
         except Exception:
             logger.opt(exception=True).debug("stale-session cleanup on SessionStart failed")
-    return result
+    dispatch_async(evt, session_dir)
 
 
-def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None:
+def run_event(state: CliState, event_name: str) -> None:
     try:
         event = Event[event_name]
     except KeyError:
@@ -348,8 +347,10 @@ def run_event(state: CliState, event_name: str, *, async_: bool = False) -> None
 
     session_dir = ensure_session(SessionId(session_id)) if session_id else None
     state.discover()
-    if output := dispatch_event(state.root, event, raw, session_dir=session_dir, async_=async_):
-        print(json.dumps(output))
+    output, background = dispatch_event(state.root, event, raw, session_dir=session_dir)
+    if output:
+        print(json.dumps(output), flush=True)
+    background()
 
 
 def init_project(root: Path, *, review: bool = True) -> None:
@@ -537,10 +538,9 @@ def cli(ctx: click.Context, hooks: str | None, root_path: str | None) -> None:
     help=(f"Dispatch a hook event (reads JSON from stdin, writes JSON to stdout).\n\nEVENT is one of: {EVENT_NAMES}."),
 )
 @click.argument("event")
-@click.option("--async", "async_", is_flag=True, default=False, help="Run async hooks only")
 @click.pass_obj
-def run(state: CliState, event: str, async_: bool) -> None:
-    run_event(state, event, async_=async_)
+def run(state: CliState, event: str) -> None:
+    run_event(state, event)
 
 
 @cli.command()

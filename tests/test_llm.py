@@ -14,7 +14,7 @@ from captain_hook.app import (
     reset,
 )
 from captain_hook.builtin_packs.general.hooks.tombstones import TombstoneComments, is_marker, is_tombstone
-from captain_hook.dispatch import dispatch
+from captain_hook.dispatch import dispatch, dispatch_async
 from captain_hook.testing.helpers import fixture_session, mock_subagent_stop_event
 from captain_hook.types import Action, Event, RanCommand, Signal, Signals, Tool, Waiting
 from tests.helpers import (
@@ -275,17 +275,23 @@ class TestLlmNudgeAsyncSkippedInSync:
             async_=True,
         )
         evt = make_post_tool_event(ctx=ctx)
-        result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path, async_=False)
+        result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
 
         assert result is None
 
 
 class TestLlmNudgeAsyncDispatched:
-    def test_llm_nudge_async_dispatched_in_async_mode(self, tmp_path: Path) -> None:
+    def test_llm_nudge_async_dispatched_after_the_reply(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import NudgeVerdict
 
-        ctx = make_ctx(tmp_path, texts=["some context"], call_llm_return=NudgeVerdict(fire=True, reasoning="issue"))
+        calls: list[object] = []
+        ctx = make_ctx(tmp_path, texts=["some context"])
 
+        def verdict(*args: Any, **kwargs: Any) -> NudgeVerdict:
+            calls.append(args)
+            return NudgeVerdict(fire=True, reasoning="issue")
+
+        ctx.call_llm = verdict
         register_llm_nudge(
             "Check this",
             message="WARNING",
@@ -293,10 +299,9 @@ class TestLlmNudgeAsyncDispatched:
             async_=True,
         )
         evt = make_post_tool_event(ctx=ctx)
-        result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path, async_=True)
+        dispatch_async(evt, session_dir=tmp_path)
 
-        assert result is not None
-        assert "additionalContext" in result["hookSpecificOutput"]
+        assert len(calls) == 1
 
 
 class TestLlmGateDefaultEvents:
@@ -771,14 +776,18 @@ class TestSignalConsumptionNotSuppressLaterHooks:
         assert result is not None, "Second nudge should have warned"
         assert "NUDGE2" in result["hookSpecificOutput"]["additionalContext"]
 
-    def test_llm_gate_no_action_does_not_consume_hashes(self, tmp_path: Path) -> None:
+    def test_no_action_verdict_is_not_re_judged_on_identical_text(self, tmp_path: Path) -> None:
         from captain_hook.primitives.llm import GateVerdict
-        from captain_hook.state import PrimitiveState
 
-        ctx = make_ctx(
-            tmp_path, texts=["critical error found"], call_llm_return=GateVerdict(block=False, reasoning="ok")
-        )
+        calls = 0
 
+        def judge(*args: Any, **kwargs: Any) -> GateVerdict:
+            nonlocal calls
+            calls += 1
+            return GateVerdict(block=False, reasoning="ok")
+
+        ctx = make_ctx(tmp_path, texts=["critical error found"])
+        ctx.call_llm = judge
         register_llm_gate(
             "Gate check",
             message="BLOCKED",
@@ -786,12 +795,9 @@ class TestSignalConsumptionNotSuppressLaterHooks:
             max_fires=5,
         )
 
-        evt = make_stop_event(ctx=ctx)
-        dispatch(Event.Stop, evt, session_dir=tmp_path)
-
-        ps = ctx.s[PrimitiveState].get()
-        consumed = ps.consumed if ps else set()
-        assert len(consumed) == 0, f"Consumed hashes should be empty after no-action verdict, got {consumed}"
+        assert dispatch(Event.Stop, make_stop_event(ctx=ctx), session_dir=tmp_path) is None
+        assert dispatch(Event.Stop, make_stop_event(ctx=ctx), session_dir=tmp_path) is None
+        assert calls == 1
 
 
 class TestLlmDoubleFireRace:
@@ -899,11 +905,7 @@ class TestLlmPrimitiveHelper:
         assert _state.hooks[-1].spec.async_ is True
 
         evt = make_post_tool_event(ctx=ctx)
-        sync_result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path, async_=False)
-        assert sync_result is None
-
-        async_result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path, async_=True)
-        assert async_result is not None
+        assert dispatch(Event.PostToolUse, evt, session_dir=tmp_path) is None
 
 
 class TestDefaultAgentTranscript:

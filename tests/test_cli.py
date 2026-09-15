@@ -48,29 +48,32 @@ class TestRunSubcommand:
         result = run_cli("run", "PreToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
         assert result.returncode == 0
 
-    def test_cli_002_run_with_async_flag(self, hooks_dir: Path) -> None:
-        # PostToolUse is not a decision event, so both async_=False and async_=True register
-        # cleanly (async_=True on a decision event now raises) and each variant's pass emits its own hook.
+    def test_cli_002_run_replies_with_sync_hooks_and_runs_async_hooks_after(
+        self, hooks_dir: Path, tmp_path: Path
+    ) -> None:
+        marker = tmp_path / "async-ran"
         (hooks_dir / "conf.py").write_text("")
         write_hook(
             hooks_dir,
-            """\
+            f"""\
+            from pathlib import Path
+
             from captain_hook.app import hook, on
             from captain_hook.types import Event
 
-            hook(Event.PostToolUse, message="sync hook", async_=False)
-            hook(Event.PostToolUse, message="async hook", async_=True)
+            hook(Event.PostToolUse, message="sync hook")
+
+            @on(Event.PostToolUse, async_=True)
+            def background(evt):
+                Path({str(marker)!r}).write_text("ran")
         """,
         )
 
         stdin = stdin_json(tool_name="Bash", tool_input={"command": "echo hi"})
-        result_sync = run_cli("run", "PostToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
-        assert result_sync.returncode == 0
-        assert "sync hook" in json.dumps(json.loads(result_sync.stdout))
-
-        result_async = run_cli("run", "PostToolUse", "--async", hooks_dir=str(hooks_dir), stdin_data=stdin)
-        assert result_async.returncode == 0
-        assert "async hook" in json.dumps(json.loads(result_async.stdout))
+        result = run_cli("run", "PostToolUse", hooks_dir=str(hooks_dir), stdin_data=stdin)
+        assert result.returncode == 0
+        assert "sync hook" in json.dumps(json.loads(result.stdout))
+        assert marker.read_text() == "ran"
 
     def test_cli_011_invalid_event_type(self, hooks_dir: Path) -> None:
         result = run_cli("run", "InvalidEvent", hooks_dir=str(hooks_dir), stdin_data="{}")

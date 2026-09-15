@@ -58,11 +58,10 @@ def test_distinct_events_beat_separately(hb_db: Path) -> None:
     assert {beat.event for beat in beats(hb_db, "s1")} == {"UserPromptSubmit", "PreToolUse", "Stop"}
 
 
-def test_dispatch_event_beats_on_sync_not_async(hb_db: Path, tmp_path: Path) -> None:
+def test_dispatch_event_beats_once_across_its_reply_and_background(hb_db: Path, tmp_path: Path) -> None:
     raw = tool_payload("Bash", command="ls")
-    dispatch_event(tmp_path, Event.PreToolUse, raw, session_dir=None, async_=True)
-    assert beats(hb_db, "s1") == ()  # async process must not double-beat
-    dispatch_event(tmp_path, Event.PreToolUse, raw, session_dir=None, async_=False)
+    _, background = dispatch_event(tmp_path, Event.PreToolUse, raw, session_dir=None)
+    background()
     (beat,) = beats(hb_db, "s1")
     assert beat.event == "PreToolUse"
     assert beat.count == 1

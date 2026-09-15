@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 ADVISORY_SEPARATOR = "Additional advisories (not the reason for the deny):"
 SYNC_DEADLINE_MARGIN_SECONDS = 5.0
+ASYNC_HOOK_TIMEOUT_SECONDS = 180.0
 
 
 def run_declarative(spec: HookSpec, evt: BaseHookEvent) -> HookResult | None:
@@ -154,8 +155,6 @@ def dispatch(
     event: Event,
     evt: BaseHookEvent,
     session_dir: Path | None = None,
-    *,
-    async_: bool = False,
 ) -> dict[str, Any] | None:
     """Dispatch an event to all matching hooks and combine their results, deny-wins.
 
@@ -178,7 +177,7 @@ def dispatch(
     e.g. ``evt.context``) stays rider-free while a warn+context merge keeps the ``PreToolUse``
     ``permissionDecision: allow`` rider. The block/allow/rewrite winners carry their own decision.
     """
-    matching = [h for h in get_matching_hooks(evt) if h.spec.async_ == async_]
+    matching = [h for h in get_matching_hooks(evt) if not h.spec.async_]
 
     approval: HookResult | None = None
     rewrite: HookResult | None = None
@@ -190,7 +189,7 @@ def dispatch(
     for entry in matching:
         if blocked and entry.handler is not None and not entry.spec.advisory_on_deny:
             continue
-        if reqenv.deadline_within(0 if async_ else SYNC_DEADLINE_MARGIN_SECONDS):
+        if reqenv.deadline_within(SYNC_DEADLINE_MARGIN_SECONDS):
             logger.bind(hook=entry.name).warning("caller deadline is near; skipping this and the remaining hooks")
             break
         match execute_hook(entry, evt, session_dir):
@@ -228,3 +227,14 @@ def dispatch(
         return format_output(event, HookResult(action=Action.warn, message="\n\n".join(warns), approve=warn_approve))
 
     return None
+
+
+def dispatch_async(evt: BaseHookEvent, session_dir: Path | None = None) -> None:
+    """Run the event's ``async_=True`` hooks one after another, each under its own deadline.
+
+    Claude Code never reads an async hook's output, so results are recorded but not rendered.
+    """
+    for entry in get_matching_hooks(evt):
+        if entry.spec.async_:
+            with reqenv.deadline_in(ASYNC_HOOK_TIMEOUT_SECONDS):
+                execute_hook(entry, evt, session_dir)
