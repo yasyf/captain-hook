@@ -18,6 +18,7 @@ import (
 
 const (
 	defaultRequestTimeout = 30 * time.Second
+	installClientTimeout  = 30 * time.Second
 
 	// packageLifecycleTimeout is one install or uninstall end to end: stopping
 	// the installed app generation, draining a serving host through the grace
@@ -30,7 +31,7 @@ const (
 // Main executes one capt-hookd client or host command and returns its exit code.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: capt-hookd version|serve|hook|status|restart-workers|install-client|package-install|package-uninstall")
+		fmt.Fprintln(stderr, "usage: capt-hookd version|serve|run|status|restart-workers|install-client|package-install|package-uninstall")
 		return 2
 	}
 	switch args[0] {
@@ -38,10 +39,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return versionCommand(args[1:], stdout, stderr)
 	case "serve":
 		return serveCommand(args[1:], stderr)
-	case "hook":
-		return hookCommand(args[1:], stdin, stdout, stderr)
 	case "run":
-		return runAlias(args[1:], stdin, stdout, stderr)
+		return runCommand(args[1:], stdin, stdout, stderr)
 	case "status":
 		return statusCommand(args[1:], stdout, stderr)
 	case "restart-workers":
@@ -89,9 +88,12 @@ func serveCommand(args []string, stderr io.Writer) int {
 	return 0
 }
 
-func hookCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+func runCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 2 && args[1] == "--async" {
+		return 0
+	}
 	if len(args) != 1 || args[0] == "" || strings.HasPrefix(args[0], "-") {
-		fmt.Fprintln(stderr, "usage: capt-hookd hook EVENT")
+		fmt.Fprintln(stderr, "usage: capt-hookd run EVENT")
 		return 1
 	}
 	timeout := durationFromEnvironment("CAPT_HOOK_CLIENT_TIMEOUT", defaultRequestTimeout)
@@ -127,14 +129,6 @@ func hookCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return response.Exit
-}
-
-// TODO: delete the run alias in 12.32
-func runAlias(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	if len(args) == 2 && args[1] == "--async" {
-		return 0
-	}
-	return hookCommand(args, stdin, stdout, stderr)
 }
 
 func eventRequest(event string, stdin io.Reader) (wireproto.EventRequest, error) {
@@ -222,9 +216,11 @@ func installClientCommand(args []string, stderr io.Writer) int {
 	if len(args) != 0 {
 		return 2
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), installClientTimeout)
+	defer cancel()
 	app, err := packagedApplicationPath()
 	if err == nil {
-		err = installClient(app)
+		err = installClient(ctx, app)
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)

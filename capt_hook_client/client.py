@@ -27,7 +27,7 @@ def main() -> NoReturn:
         raise SystemExit(0)
     if root:
         os.environ["CLAUDE_PROJECT_DIR"] = root
-    _exec(CLIENT, [CLIENT, "hook", event])
+    _exec(CLIENT, [CLIENT, "run", event])
 
 
 def ops_main() -> NoReturn:

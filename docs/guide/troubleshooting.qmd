@@ -88,8 +88,8 @@ brew upgrade --formula yasyf/tap/captain-hook
 uvx capt-hook helper install
 ```
 
-Legacy dispatch entries. The only consumer command is `"$HOME/.daemonkit/bin/capt-hookd" hook
-<Event>` from the captain-hook plugin. A surviving `uvx --isolated --from capt-hook hook run
+Legacy dispatch entries. The only consumer command is `capt-hookd run <Event>` from the
+captain-hook plugin. A surviving `uvx --isolated --from capt-hook hook run
 <Event>` line — an old plugin release, or a hand-copied settings entry — is a second registration: Claude Code dedupes hook commands per registering source, not
 globally, so every hook on that event can run twice. The tell is doubled output: two permission
 prompts for one tool call, the same block message landing twice, or a side-effecting hook

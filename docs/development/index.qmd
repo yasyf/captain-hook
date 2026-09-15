@@ -71,7 +71,7 @@ uv run --project path/to/captain-hook capt-hook test
 ## Live hooks in this checkout
 
 This repo dispatches its own hooks through `"$CLAUDE_PROJECT_DIR"/.venv/bin/hook`, wired by the
-committed `.claude/settings.json`. The shim execs `~/.daemonkit/bin/capt-hookd hook <Event>`, so
+committed `.claude/settings.json`. The shim execs `~/.daemonkit/bin/capt-hookd run <Event>`, so
 those hooks run on the installed app's wheel, not this checkout's `.venv`. To exercise checkout
 code live, build and install the app from it.
 

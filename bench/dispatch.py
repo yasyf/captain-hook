@@ -94,7 +94,7 @@ def chain(deployed: Deployment, root: Path) -> Command:
 
 
 def host(root: Path) -> Command:
-    return Command((CLIENT, "hook", EVENT), payload(root), {**os.environ, "CLAUDE_PROJECT_DIR": str(root)})
+    return Command((CLIENT, "run", EVENT), payload(root), {**os.environ, "CLAUDE_PROJECT_DIR": str(root)})
 
 
 @contextmanager

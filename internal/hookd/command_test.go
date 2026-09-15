@@ -31,7 +31,7 @@ func TestVersionReportsExactSchemaAndBuild(t *testing.T) {
 	}
 }
 
-func TestHookSpellsTheRequestFromThePayload(t *testing.T) {
+func TestRunSpellsTheRequestFromThePayload(t *testing.T) {
 	cwd := "/payload/cwd"
 	payload := `{"session_id":"abc","cwd":"` + cwd + `"}`
 	for _, tc := range []struct {
@@ -56,15 +56,15 @@ func TestHookSpellsTheRequestFromThePayload(t *testing.T) {
 	}
 }
 
-func TestHookRefusesWhatItCannotDispatchWithoutBlocking(t *testing.T) {
+func TestRunRefusesWhatItCannotDispatchWithoutBlocking(t *testing.T) {
 	for _, tc := range []struct {
 		name, input, want string
 		args              []string
 		timeout           string
 	}{
-		{"no event", `{"cwd":"/r"}`, "usage: capt-hookd hook EVENT", nil, ""},
-		{"flag for an event", `{"cwd":"/r"}`, "usage: capt-hookd hook EVENT", []string{"--event"}, ""},
-		{"extra argument", `{"cwd":"/r"}`, "usage: capt-hookd hook EVENT", []string{"Stop", "--async"}, ""},
+		{"no event", `{"cwd":"/r"}`, "usage: capt-hookd run EVENT", nil, ""},
+		{"flag for an event", `{"cwd":"/r"}`, "usage: capt-hookd run EVENT", []string{"--event"}, ""},
+		{"extra argument", `{"cwd":"/r"}`, "usage: capt-hookd run EVENT", []string{"Stop", "--sync"}, ""},
 		{"non-positive timeout", `{"cwd":"/r"}`, "must be positive", []string{"Stop"}, "0"},
 		{"payload is not JSON", `not-json`, "decode event", []string{"Stop"}, ""},
 		{"payload names no cwd", `{"session_id":"abc"}`, "cwd is required", []string{"Stop"}, ""},
@@ -73,7 +73,7 @@ func TestHookRefusesWhatItCannotDispatchWithoutBlocking(t *testing.T) {
 			t.Setenv("CAPT_HOOK_CLIENT_TIMEOUT", tc.timeout)
 			t.Setenv("CLAUDE_PROJECT_DIR", "/project")
 			var stdout, stderr bytes.Buffer
-			code := Main(append([]string{"hook"}, tc.args...), strings.NewReader(tc.input), &stdout, &stderr)
+			code := Main(append([]string{"run"}, tc.args...), strings.NewReader(tc.input), &stdout, &stderr)
 			if code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), tc.want) {
 				t.Fatalf("exit=%d stdout=%q stderr=%q, want exit 1 naming %q", code, stdout.String(), stderr.String(), tc.want)
 			}
@@ -81,7 +81,7 @@ func TestHookRefusesWhatItCannotDispatchWithoutBlocking(t *testing.T) {
 	}
 }
 
-func TestRunAliasAsyncExitsWithoutDispatch(t *testing.T) {
+func TestRunAsyncExitsWithoutDispatch(t *testing.T) {
 	t.Parallel()
 	var stdout, stderr bytes.Buffer
 	if code := Main([]string{"run", "PreToolUse", "--async"}, strings.NewReader("not-json"), &stdout, &stderr); code != 0 ||

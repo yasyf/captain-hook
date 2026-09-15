@@ -27,3 +27,15 @@ def test_skips_a_machine_without_the_app(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: calls.append(args))
     mcp_server.place_client()
     assert calls == []
+
+
+def test_a_failed_exec_never_aborts_mcp_startup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    host = tmp_path / "capt-hookd"
+    host.touch()
+    monkeypatch.setattr(mcp_server, "INSTALLED_HOST", host)
+
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(subprocess, "run", refuse)
+    mcp_server.place_client()

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import importlib.resources
 import json
+import subprocess
+from pathlib import Path
 from typing import Any
 
 from captain_hook.types import Event
 
-CLIENT = '"$HOME/.daemonkit/bin/capt-hookd"'
+CLIENT = 'c="$HOME/.daemonkit/bin/capt-hookd"; '
+BUNDLE_HOST = '"$HOME/Applications/Captain Hook.app/Contents/Helpers/capt-hookd"'
 MCP_SERVER_NAME = "capt-hook"
 MCP_COMMAND = "${CLAUDE_PLUGIN_ROOT}/bin/capt-hook"
 MCP_ARGS = ["mcp"]
@@ -25,7 +28,9 @@ def load_mcp_config() -> dict[str, Any]:
 
 
 def expected_command(name: str) -> str:
-    return f"{CLIENT} hook {name}"
+    if name == Event.SessionStart.name:
+        return f'{CLIENT}[ -x "$c" ] && exec "$c" run SessionStart; exec {BUNDLE_HOST} run SessionStart --async'
+    return f'{CLIENT}[ -x "$c" ] || exit 0; exec "$c" run {name}'
 
 
 class TestPluginHooksJson:
@@ -72,3 +77,36 @@ class TestMcpJson:
         server = load_mcp_config()["mcpServers"][MCP_SERVER_NAME]
         assert server["command"] == "${CLAUDE_PLUGIN_ROOT}/bin/capt-hook"
         assert "uvx" not in {server["command"], *server["args"]}
+
+
+def run_hook_command(name: str, home: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["/bin/sh", "-c", expected_command(name)],
+        env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def fake_executable(path: Path, label: str) -> None:
+    path.parent.mkdir(parents=True)
+    path.write_text(f'#!/bin/sh\necho "{label} $*"\n')
+    path.chmod(0o755)
+
+
+class TestHookCommandShell:
+    def test_runs_the_installed_client(self, tmp_path: Path) -> None:
+        fake_executable(tmp_path / ".daemonkit/bin/capt-hookd", "client")
+        assert run_hook_command("PreToolUse", tmp_path).stdout == "client run PreToolUse\n"
+        assert run_hook_command("SessionStart", tmp_path).stdout == "client run SessionStart\n"
+
+    def test_a_missing_client_skips_the_event_without_blocking(self, tmp_path: Path) -> None:
+        fake_executable(tmp_path / "Applications/Captain Hook.app/Contents/Helpers/capt-hookd", "bundle")
+        result = run_hook_command("PreToolUse", tmp_path)
+        assert (result.returncode, result.stdout) == (0, "")
+
+    def test_session_start_without_a_client_runs_the_bundles_async_pass(self, tmp_path: Path) -> None:
+        fake_executable(tmp_path / "Applications/Captain Hook.app/Contents/Helpers/capt-hookd", "bundle")
+        assert run_hook_command("SessionStart", tmp_path).stdout == "bundle run SessionStart --async\n"

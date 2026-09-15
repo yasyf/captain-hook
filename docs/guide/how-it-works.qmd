@@ -160,7 +160,7 @@ Same rule, same verdict. The event target, the conditions, and the verdict are n
 
 **You can test a hook before it ships.** Each primitive carries inline `tests`, and `uvx capt-hook test` runs every case, exiting non-zero on the first failure — so a broken matcher fails in your terminal or in CI instead of in a live session. A native `settings.json` hook has nowhere to put this: you discover a regex mistake when the hook either blocks the wrong command or stays silent on the right one, mid-conversation, with no record of why.
 
-**The wiring is mechanical.** You never hand-edit a matcher block in `settings.json` — it carries no hook wiring at all. The captain-hook plugin ships a static `hooks.json` that registers every Claude Code event once, globally, with the same `"$HOME/.daemonkit/bin/capt-hookd" hook <Event>` command on every machine. That client dispatches to the one signed host, which runs the wheel at its own build; it cannot start a project-local daemon or substitute the Python CLI. Which hooks actually fire in a repo is decided by the wheel builtins (fixes/general/steering/performance always, go/python by detected build manifests) plus any pack an enabled Claude Code plugin ships, and an event no pack subscribes to dispatches as a clean no-op.
+**The wiring is mechanical.** You never hand-edit a matcher block in `settings.json` — it carries no hook wiring at all. The captain-hook plugin ships a static `hooks.json` that registers every Claude Code event once, globally, with the same `capt-hookd run <Event>` command on every machine. That client dispatches to the one signed host, which runs the wheel at its own build; it cannot start a project-local daemon or substitute the Python CLI. Which hooks actually fire in a repo is decided by the wheel builtins (fixes/general/steering/performance always, go/python by detected build manifests) plus any pack an enabled Claude Code plugin ships, and an event no pack subscribes to dispatches as a clean no-op.
 
 As a directory of native string-hooks grows, the cost of each compounds, because none of them composes, none carries a test, and none fails loudly when it breaks. captain-hook spends a dependency and a Python file to buy back that visibility. For a directory you maintain over months, that is the trade worth making.
 
@@ -234,8 +234,12 @@ binary, signs it as nested code, and ships it with the wheel and plugin at the s
 The plugin registers one command for every event:
 
 ```bash
-"$HOME/.daemonkit/bin/capt-hookd" hook PreToolUse
+c="$HOME/.daemonkit/bin/capt-hookd"; [ -x "$c" ] || exit 0; exec "$c" run PreToolUse
 ```
+
+A machine without the client skips the event. `SessionStart` instead falls back to the bundle's
+own `capt-hookd run SessionStart --async`, which runs the updater, so a plugin that updated ahead
+of the app brings the app forward.
 
 `capt-hook helper install` copies the bundle's `capt-hookd` to `~/.daemonkit/bin/capt-hookd`
 after each deploy, so a running hook never executes out of the bundle a deploy replaces. The
@@ -268,8 +272,10 @@ product semantics: `XDG_CACHE_HOME`,
 those facts share a worker. Session, Claude, and Factory variables stay request-scoped and cannot
 leak from the first client into the worker's base environment.
 
-The host hands every event to its worker as it arrives, with no queue or ordering between events.
-A worker serves concurrent events over one framed channel; response IDs keep their output and exit
+The host hands every event to its worker as it arrives, with no ordering between events. A worker
+holds at most 64 outstanding events, counting ones whose caller already gave up; a further event
+waits for a reply to free a slot, up to its own deadline. A worker serves concurrent events over
+one framed channel; response IDs keep their output and exit
 codes separate. The worker refuses an event whose deadline has already passed.
 
 ### Failure is terminal for that dispatch

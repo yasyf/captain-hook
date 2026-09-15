@@ -13,6 +13,8 @@ import (
 	"github.com/yasyf/daemonkit"
 )
 
+const workerSlots = 64
+
 type workerResult struct {
 	response wireproto.EventResponse
 	err      error
@@ -24,6 +26,7 @@ type workerClient struct {
 	python string
 	child  *daemonkit.Child
 
+	slots     chan struct{}
 	writeMu   sync.Mutex
 	mu        sync.Mutex
 	nextID    uint64
@@ -57,16 +60,22 @@ func handshakeWorker(ctx context.Context, conn net.Conn, build string) (*workerC
 	if err := conn.SetDeadline(time.Time{}); err != nil {
 		return nil, err
 	}
-	w := &workerClient{conn: conn, build: build, pending: make(map[uint64]chan workerResult), abandoned: make(map[uint64]struct{})}
+	w := &workerClient{conn: conn, build: build, slots: make(chan struct{}, workerSlots), pending: make(map[uint64]chan workerResult), abandoned: make(map[uint64]struct{})}
 	go w.readLoop()
 	return w, nil
 }
 
 func (w *workerClient) call(ctx context.Context, request wireproto.EventRequest) (wireproto.EventResponse, error) {
+	select {
+	case w.slots <- struct{}{}:
+	case <-ctx.Done():
+		return wireproto.EventResponse{}, ctx.Err()
+	}
 	w.mu.Lock()
 	if w.closed {
 		err := w.err
 		w.mu.Unlock()
+		w.release(1)
 		if err == nil {
 			err = net.ErrClosed
 		}
@@ -133,6 +142,9 @@ func (w *workerClient) readLoop() {
 		_, abandoned := w.abandoned[frame.ID]
 		delete(w.abandoned, frame.ID)
 		w.mu.Unlock()
+		if pending != nil || abandoned {
+			w.release(1)
+		}
 		if pending == nil {
 			if abandoned {
 				continue
@@ -162,8 +174,18 @@ func (w *workerClient) readLoop() {
 
 func (w *workerClient) removePending(id uint64) {
 	w.mu.Lock()
+	_, ok := w.pending[id]
 	delete(w.pending, id)
 	w.mu.Unlock()
+	if ok {
+		w.release(1)
+	}
+}
+
+func (w *workerClient) release(n int) {
+	for range n {
+		<-w.slots
+	}
 }
 
 func (w *workerClient) abandon(id uint64) {
@@ -186,11 +208,12 @@ func (w *workerClient) fail(err error) {
 	}
 	w.closed = true
 	w.err = err
-	pending := w.pending
+	pending, abandoned := w.pending, len(w.abandoned)
 	w.pending = make(map[uint64]chan workerResult)
 	w.abandoned = make(map[uint64]struct{})
 	w.mu.Unlock()
 	_ = w.conn.Close()
+	w.release(len(pending) + abandoned)
 	for _, waiter := range pending {
 		waiter <- workerResult{err: err}
 	}

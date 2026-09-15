@@ -231,3 +231,78 @@ func TestTransportFailureMarksTheWorkerBroken(t *testing.T) {
 		t.Fatal("a severed transport left the worker reading as usable")
 	}
 }
+
+func TestWorkerSlotsBoundOutstandingCallsUntilRepliesArrive(t *testing.T) {
+	t.Parallel()
+	worker, serverConn := silentWorker(t)
+	frames := make(chan wireproto.Frame, workerSlots+1)
+	go func() {
+		for {
+			frame, err := wireproto.DecodeFrame(serverConn)
+			if err != nil {
+				return
+			}
+			frames <- frame
+		}
+	}()
+
+	holding, release := context.WithCancel(t.Context())
+	done := make(chan error, workerSlots)
+	for range workerSlots {
+		go func() {
+			_, err := worker.call(holding, testEventRequest("PreToolUse"))
+			done <- err
+		}()
+	}
+	held := make([]wireproto.Frame, 0, workerSlots)
+	for range workerSlots {
+		held = append(held, <-frames)
+	}
+	release()
+	for range workerSlots {
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("holding call = %v, want %v", err, context.Canceled)
+		}
+	}
+
+	waiting, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := worker.call(waiting, testEventRequest("PreToolUse")); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("call with every slot held = %v, want %v", err, context.DeadlineExceeded)
+	}
+	select {
+	case frame := <-frames:
+		t.Fatalf("call wrote frame %d with every slot held", frame.ID)
+	default:
+	}
+	if worker.broken() {
+		t.Fatal("waiting for a slot broke the worker")
+	}
+
+	if err := wireproto.EncodeFrame(serverConn, wireproto.Frame{
+		Protocol: wireproto.Schema, Op: wireproto.OpResult, ID: held[0].ID,
+		Response: &wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancelServed := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelServed()
+	served := make(chan error, 1)
+	go func() {
+		response, err := worker.call(ctx, testEventRequest("PostToolUse"))
+		if err == nil && response.Stdout != "freed" {
+			err = errors.New("unexpected response " + response.Stdout)
+		}
+		served <- err
+	}()
+	frame := <-frames
+	if err := wireproto.EncodeFrame(serverConn, wireproto.Frame{
+		Protocol: wireproto.Schema, Op: wireproto.OpResult, ID: frame.ID,
+		Response: &wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok", Stdout: "freed"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-served; err != nil {
+		t.Fatalf("call after a late reply freed a slot = %v", err)
+	}
+}
