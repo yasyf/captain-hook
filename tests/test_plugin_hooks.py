@@ -49,7 +49,8 @@ class TestPluginHooksJson:
         hooks = load_plugin_hooks()["hooks"]
         for name in (n for e in Event if (n := e.name)):
             [group] = hooks[name]
-            assert group["hooks"] == [{"type": "command", "command": expected_command(name)}]
+            timeout = {"timeout": 60} if name == Event.MessageDisplay.name else {}
+            assert group["hooks"] == [{"type": "command", "command": expected_command(name)} | timeout]
 
     def test_ships_no_raw_review_or_sweep_entries(self) -> None:
         # The reviewer and sweep are native `run <Event>` dispatch now; no raw entry survives.

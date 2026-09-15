@@ -14,7 +14,7 @@ from cc_transcript.tools import FallbackCall
 from captain_hook.app import get_matching_hooks
 from captain_hook.decisions import parse_degraded, record_decision
 from captain_hook.dispatch import execute_hook
-from captain_hook.events import PreToolUseEvent, StopEvent
+from captain_hook.events import MessageDisplayEvent, PreToolUseEvent, StopEvent
 from captain_hook.primitives.nudge import nudge
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from tests.helpers import mock_tool_event
@@ -139,6 +139,14 @@ class TestRecordDecision:
 
     def test_missing_session_id_skips(self, db_path: Path) -> None:
         record_decision(entry(), stop_evt(session_id=None), HookResult(action=Action.warn, message="x"))
+        assert not db_path.exists()
+
+    def test_message_display_chunk_rewrite_skips(self, db_path: Path) -> None:
+        evt = MessageDisplayEvent(
+            _raw={"session_id": SESSION_ID, "message_id": "msg_1", "index": 0, "final": False, "delta": "hi"},
+            ctx=MagicMock(),
+        )
+        record_decision(entry(), evt, HookResult(action=Action.rewrite, message="hello"))
         assert not db_path.exists()
 
 

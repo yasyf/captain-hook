@@ -73,7 +73,7 @@
     "MessageDisplay": [
       {
         "hooks": [
-          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run MessageDisplay" }
+          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run MessageDisplay", "timeout": 60 }
         ]
       }
     ],
