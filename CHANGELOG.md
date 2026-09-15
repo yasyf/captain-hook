@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.31.0] - 2026-09-15
+
 ### Changed
 
 - **Every hook is one plain `capt-hookd run <Event>` command.** The plugin
