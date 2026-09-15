@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.30.11] - 2026-09-15
+
 ### Fixed
 
 - **A hook from a removed project directory no longer switches plugin packs off
