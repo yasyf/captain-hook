@@ -26,7 +26,7 @@ QUESTION_CHARS = 800
 FENCED_BLOCK = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
 WHITESPACE = re.compile(r"\s")
 WRAPPING_FENCE = re.compile(r"```[^\n]*\n((?:(?!```).)*)\n```", re.DOTALL)
-REWRITE_RULES = str(Prompt.load("rewrite_rules"))
+REWRITE_RULES = str(Prompt.load("plain_english_rules"))
 
 
 class PlainEnglishBuffer(BaseModel):

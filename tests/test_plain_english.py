@@ -10,7 +10,7 @@ import pytest
 from spawnllm import OpenAiEndpointBackend
 
 from captain_hook import Prompt, faults
-from captain_hook.builtin_packs.plain_english.hooks import rewrite
+from captain_hook.builtin_packs.general.hooks import plain_english
 from captain_hook.context import HookContext
 from captain_hook.dispatch import dispatch
 from captain_hook.events import MessageDisplayEvent
@@ -61,7 +61,7 @@ def ctx(session_dir: Path) -> CerebrasStub:
 @pytest.fixture(autouse=True)
 def registered(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CEREBRAS_API_KEY", "test-key")
-    importlib.reload(rewrite)
+    importlib.reload(plain_english)
 
 
 def shown(text: str) -> dict[str, Any]:
@@ -90,14 +90,14 @@ def test_no_api_key_leaves_chunks_displayed(ctx: CerebrasStub, monkeypatch: pyte
 
     assert chunk(ctx, 0, "partial") is None
     assert chunk(ctx, 1, PROSE, final=True) is None
-    assert ctx.session[rewrite.PlainEnglishBuffer].path is not None
-    assert not ctx.session[rewrite.PlainEnglishBuffer].path.exists()
+    assert ctx.session[plain_english.PlainEnglishBuffer].path is not None
+    assert not ctx.session[plain_english.PlainEnglishBuffer].path.exists()
     assert ctx.calls == []
 
 
 def test_non_final_chunk_is_blanked_and_buffered(ctx: CerebrasStub) -> None:
     assert chunk(ctx, 0, "I traced") == shown("")
-    assert ctx.session.load(rewrite.PlainEnglishBuffer).messages == {"msg_1": {0: "I traced"}}
+    assert ctx.session.load(plain_english.PlainEnglishBuffer).messages == {"msg_1": {0: "I traced"}}
 
 
 def test_streamed_message_is_rewritten_once(ctx: CerebrasStub) -> None:
@@ -106,7 +106,7 @@ def test_streamed_message_is_rewritten_once(ctx: CerebrasStub) -> None:
     ((prompt, kwargs),) = ctx.calls
     assert prompt == "\n\n".join(
         [
-            rewrite.REWRITE_RULES,
+            plain_english.REWRITE_RULES,
             f'For context, the user asked the assistant: "{QUESTION}". Use this only to understand the message. '
             "Do NOT rewrite, answer, or repeat the user's question — rewrite only the assistant's message that "
             "follows.",
@@ -121,7 +121,7 @@ def test_streamed_message_is_rewritten_once(ctx: CerebrasStub) -> None:
         "test-key",
     )
     assert kwargs["timeout"] == 20
-    assert ctx.session.load(rewrite.PlainEnglishBuffer).messages == {}
+    assert ctx.session.load(plain_english.PlainEnglishBuffer).messages == {}
 
 
 def test_long_question_is_truncated(ctx: CerebrasStub) -> None:
@@ -155,22 +155,22 @@ def test_final_chunk_waits_for_a_late_chunk(ctx: CerebrasStub) -> None:
 
 
 def test_final_chunk_joins_what_arrived_by_the_deadline(ctx: CerebrasStub, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(rewrite, "ASSEMBLY_DEADLINE_SECONDS", 0.1)
+    monkeypatch.setattr(plain_english, "ASSEMBLY_DEADLINE_SECONDS", 0.1)
     ctx.answer = ""
     chunk(ctx, 1, PROSE)
 
     assert chunk(ctx, 3, "!", final=True) == shown(f"{PROSE}!")
-    assert ctx.session.load(rewrite.PlainEnglishBuffer).messages == {}
+    assert ctx.session.load(plain_english.PlainEnglishBuffer).messages == {}
 
 
 def test_chunk_after_assembly_stays_displayed(ctx: CerebrasStub, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(rewrite, "ASSEMBLY_DEADLINE_SECONDS", 0.1)
+    monkeypatch.setattr(plain_english, "ASSEMBLY_DEADLINE_SECONDS", 0.1)
     ctx.answer = ""
     chunk(ctx, 0, PROSE)
     chunk(ctx, 2, "!", final=True)
 
     assert chunk(ctx, 1, " late") is None
-    assert ctx.session.load(rewrite.PlainEnglishBuffer).messages == {}
+    assert ctx.session.load(plain_english.PlainEnglishBuffer).messages == {}
 
 
 def test_without_session_storage_chunks_stay_displayed(ctx: CerebrasStub) -> None:
@@ -184,7 +184,7 @@ def test_without_session_storage_chunks_stay_displayed(ctx: CerebrasStub) -> Non
 def test_slow_rewrite_is_abandoned_before_the_caller_deadline(
     ctx: CerebrasStub, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(rewrite, "REWRITE_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(plain_english, "REWRITE_TIMEOUT_SECONDS", 0.2)
     ctx.delay = 2.0
 
     started = time.monotonic()
@@ -197,7 +197,7 @@ def test_slow_rewrite_is_abandoned_before_the_caller_deadline(
 def test_rewrite_budget_leaves_margin_before_the_caller_deadline(
     ctx: CerebrasStub, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(rewrite.reqenv, "seconds_left", lambda: 10.0)
+    monkeypatch.setattr(plain_english.reqenv, "seconds_left", lambda: 10.0)
 
     stream(ctx, PROSE)
 

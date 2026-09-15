@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The plain-English reply rewrite now lives in the `general` pack.** The
+  separate `plain_english` builtin pack is gone; its one `MessageDisplay` hook
+  is `general/hooks/plain_english.py`, with the same `CEREBRAS_API_KEY`
+  activation and behavior, and `capt-hook pack list` no longer shows a
+  `builtin:plain_english` row.
+
 ## [12.33.0] - 2026-09-15
 
 ### Changed
