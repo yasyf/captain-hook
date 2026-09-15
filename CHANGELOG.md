@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A hook client whose working directory was removed leaves it for `/`
+  before Go's own startup calls `getcwd`.** Orphaned `capt-hookd run
+  SessionEnd` clients sat for over ten minutes at 50 s of CPU each, before
+  `main` ran, in `$TMPDIR/slop-cop-llm-*` directories slop-cop had already
+  removed: package `os` evaluates `initCwd, initCwdErr = Getwd()` at init on
+  macOS, and libc's `getcwd` scans the former parent, a `$TMPDIR` of 69,500
+  entries, restarting as it changes. `requestCWD` had stopped calling `getcwd`
+  in 12.30.1, but nothing of ours runs before the runtime's call. A new
+  `cwdguard` package, importing only `syscall` so it initializes ahead of `os`,
+  checks the working directory through `F_GETPATH` and an identity stat, moves
+  a removed one to `/`, and `requestCWD` then reports `$PWD` as before. A test
+  runs the client from a removed directory under `GODEBUG=inittrace=1` and
+  fails if `os` ever initializes first.
+
 ## [12.30.8] - 2026-09-14
 
 ### Fixed

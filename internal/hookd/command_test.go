@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yasyf/captain-hook/internal/cwdguard"
 	"github.com/yasyf/captain-hook/internal/wireproto"
 )
 
@@ -562,5 +563,54 @@ func TestRunSpellsTheRequestTheShimDoes(t *testing.T) {
 				t.Fatalf("raw argv spells %+v\nshim argv spells %+v (exit %d, stderr %q)", raw.Request, shim.Request, shim.Code, shim.Stderr)
 			}
 		})
+	}
+}
+
+func TestRequestCWDAfterTheGuardDepartedIsPWD(t *testing.T) {
+	cwdguard.Departed = true
+	t.Cleanup(func() { cwdguard.Departed = false })
+	for _, tc := range []struct{ pwd, want string }{
+		{"/deleted/workspace", "/deleted/workspace"},
+		{"", "/"},
+	} {
+		t.Setenv("PWD", tc.pwd)
+		if got, err := requestCWD(); err != nil || got != tc.want {
+			t.Fatalf("PWD=%q: cwd=%q err=%v, want %q", tc.pwd, got, err, tc.want)
+		}
+	}
+}
+
+func TestHelperRequestCWD(t *testing.T) {
+	if os.Getenv("HOOKD_HELPER_REQUEST_CWD") == "" {
+		t.Skip("subprocess helper")
+	}
+	cwd, err := requestCWD()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("cwd=%s wd=%s\n", cwd, wd)
+}
+
+func TestRunFromARemovedCWDReportsPWDWithoutGetcwd(t *testing.T) {
+	gone := filepath.Join(t.TempDir(), "gone")
+	if err := os.Mkdir(gone, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(gone)
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperRequestCWD$")
+	cmd.Env = append(os.Environ(), "HOOKD_HELPER_REQUEST_CWD=1", "PWD=/deleted/workspace")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("helper: %v\n%s", err, out)
+	}
+	if want := "cwd=/deleted/workspace wd=/\n"; !strings.Contains(string(out), want) {
+		t.Fatalf("helper reported %q, want %q", out, want)
 	}
 }
