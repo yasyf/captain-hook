@@ -915,6 +915,20 @@ def test_spawn_outage_is_recorded_machine_wide_and_spares_queued_roots(
     assert plugins.outage_path().exists()
 
 
+def test_removed_root_reads_its_roster_from_the_nearest_directory_left(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A session outlives its scratch workspace; spawning the CLI into the removed cwd is not an outage.
+    plant_installed()
+    (removed := tmp_path / "scratch" / "gone").mkdir(parents=True)
+    removed.rmdir()
+    plugin = write_plugin_pack(tmp_path, "show")
+    install_claude(tmp_path, monkeypatch, calls=tmp_path / "calls", roster=[roster_entry("mkt/show", plugin)])
+
+    assert len(plugins.enabled_plugins(removed)) == 1
+    assert not plugins.outage_path().exists()
+
+
 def test_roster_shape_failure_stays_local_to_its_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Only an unspawnable CLI is a machine condition; an unusable answer is about that root alone.
     plant_installed()
