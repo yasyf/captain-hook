@@ -5,9 +5,9 @@
 # This renders to plugin scripts/install-binary.sh — the successor to the
 # provision-a-symlink installer. bin/capt-hook is a committed symlink to it, so
 # hooks, MCP servers, and the CLI reach this script with the tool's own
-# arguments. Its whole job is to find binrun — named in BINRUN_BIN, stamped at
-# the pinned tag in ~/.daemonkit/bin, on PATH, or bootstrapped once from the
-# pinned release — and hand off to "binrun <descriptor> $@", which
+# arguments. Its whole job is to find binrun — named in BINRUN_BIN, installed at
+# the pinned tag under ~/.daemonkit/binrun/<tag>, on PATH, or bootstrapped once
+# from the pinned release — and hand off to "binrun <descriptor> $@", which
 # resolves and execs the version-exact artifact the sidecar bin/capt-hook.binrun
 # descriptor pins. Every failure here exits 1: exit 2 is reserved for a real
 # hook verdict, and the only other codes come from the exec'd artifact itself.
@@ -22,11 +22,11 @@ set -eu
 # and its checksums.txt sha256 values for binrun_<version>_<os>_<arch>.tar.gz.
 # Bump all five together when adopting a newer binrun.
 RUNNER_REPO="yasyf/binrun"
-RUNNER_TAG="v0.6.0"
-RUNNER_SHA_darwin_arm64="c725e8f7ab263517aeb77e70e842b3282f7953fe84437c59f22d5593d0ae79f5"
-RUNNER_SHA_darwin_amd64="36659d1beb73b2151c9008fedea072943c4d7a55cdf396a9a4cbcd3473539ce2"
-RUNNER_SHA_linux_amd64="6259d28fa39851fef70086374fe7873ed6175214647029cfa11bf0062cb680bf"
-RUNNER_SHA_linux_arm64="83b7777fdc70244fef513569bdbdf5bef12645e6f1f1533833d0867564fe25ef"
+RUNNER_TAG="v0.6.1"
+RUNNER_SHA_darwin_arm64="901fdf1238210c2d075e37164903e58e6bfb80a9ecb32035e491603590dca8de"
+RUNNER_SHA_darwin_amd64="fa8f625d88df48244eabcd631d8452c6c0f790ddddf4dabd46ae64f8a6bd6784"
+RUNNER_SHA_linux_amd64="6281df77ae7aba06ac2e1e40bd8f4c56fe1f13191c37292f5e7188a0ff0fc7a5"
+RUNNER_SHA_linux_arm64="d35692515180f98a9624dac1e3c3c8dc1a281b2a17bc75f2e02f64516db8ae4c"
 # ------------------------------------------------------------------------------
 
 # ${0%/*}, not dirname: skips an exec an endpoint-security agent can serialize fleet-wide.
@@ -38,7 +38,8 @@ DESCRIPTOR="$ROOT/bin/capt-hook.binrun"
 # that overrides its embedded copies with plugin-root files reads this first.
 export BINRUN_PLUGIN_ROOT="$ROOT"
 RUNNER_HOME="${DAEMONKIT_HOME:-$HOME/.daemonkit}"
-RUNNER_BIN="$RUNNER_HOME/bin/binrun"
+RUNNER_DIR="$RUNNER_HOME/binrun/$RUNNER_TAG"
+RUNNER_BIN="$RUNNER_DIR/binrun"
 
 fail() {
   echo "capt-hook: $1" >&2
@@ -50,12 +51,9 @@ if [ -n "${BINRUN_BIN:-}" ]; then
   exec "$BINRUN_BIN" "$DESCRIPTOR" "$@"
 fi
 
-# Arm 2: the runner a previous bootstrap installed, at the pinned tag. The stamp
-# is read by the shell builtin — an exec here would outcost the pin it checks.
-RUNNER_STAMP="$RUNNER_HOME/bin/.binrun-tag"
-stamp=""
-[ -r "$RUNNER_STAMP" ] && read -r stamp < "$RUNNER_STAMP"
-if [ -x "$RUNNER_BIN" ] && [ "$stamp" = "$RUNNER_TAG" ]; then
+# Arm 2: the runner a previous bootstrap installed at the pinned tag, in a
+# directory of its own so plugins pinning different tags never replace it.
+if [ -x "$RUNNER_BIN" ]; then
   exec "$RUNNER_BIN" "$DESCRIPTOR" "$@"
 fi
 
@@ -101,13 +99,13 @@ sha256_of() {
 asset="binrun_${RUNNER_TAG#v}_${os}_${arch}.tar.gz"
 url="https://github.com/$RUNNER_REPO/releases/download/$RUNNER_TAG/$asset"
 
-mkdir -p "$RUNNER_HOME/bin"
+mkdir -p "$RUNNER_DIR"
 # Stage on the destination filesystem and rename into place: an interrupted
 # bootstrap never leaves a half-written runner, the rename is atomic, and
-# concurrent bootstraps converge on a single copy without a lock. Renaming over
-# a running binrun keeps its inode alive (unlike an in-place write, which fails
-# ETXTBSY on Linux).
-tmpd="$(mktemp -d "$RUNNER_HOME/bin/.binrun.XXXXXX")"
+# concurrent bootstraps of one tag converge on identical bytes without a lock.
+# Renaming over a running binrun keeps its inode alive (unlike an in-place
+# write, which fails ETXTBSY on Linux).
+tmpd="$(mktemp -d "$RUNNER_DIR/.binrun.XXXXXX")"
 trap 'rm -rf "$tmpd"' EXIT
 curl -fsSL --retry 2 --connect-timeout 10 --max-time 300 -o "$tmpd/$asset" "$url" \
   || fail "could not download the pinned binrun runner ($url)"
@@ -119,7 +117,6 @@ tar -xzf "$tmpd/$asset" -C "$tmpd" \
 [ -x "$tmpd/binrun" ] \
   || fail "$asset did not contain a binrun executable"
 mv -f "$tmpd/binrun" "$RUNNER_BIN"
-printf '%s\n' "$RUNNER_TAG" > "$tmpd/tag" && mv -f "$tmpd/tag" "$RUNNER_STAMP"
 rm -rf "$tmpd"
 trap - EXIT
 exec "$RUNNER_BIN" "$DESCRIPTOR" "$@"
