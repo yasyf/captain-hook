@@ -38,6 +38,10 @@ const (
 	// cannot be the payload ceiling itself without refusing a request the host
 	// already admitted.
 	MaxWorkerFrame = MaxHostPayload + 4<<10
+
+	// WorkerThreads is the thread pool one Python worker dispatches on, and so
+	// the most events the host has in flight on it at once.
+	WorkerThreads = 16
 )
 
 // OpHello, OpEvent, OpResult, and OpError name the frames the host and a

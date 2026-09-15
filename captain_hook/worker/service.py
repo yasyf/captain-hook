@@ -8,6 +8,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from captain_hook.worker.protocol import (
+    WORKER_THREADS,
     EventRequest,
     EventResponse,
     ProtocolError,
@@ -33,7 +34,7 @@ class WorkerService:
         *,
         build: str,
         dispatch: Callable[[EventRequest], EventResponse],
-        max_workers: int = 16,
+        max_workers: int = WORKER_THREADS,
     ) -> None:
         self._input = input_stream
         self._output = output_stream

@@ -41,29 +41,32 @@ type scheduler struct {
 	mu        sync.Mutex
 	lanes     map[string]*lane
 	syncLanes int
+	workers   map[string]*pool
 
 	sync  pool
 	async pool
 
-	floor    int
-	ceiling  int
-	asyncCap int
+	floor         int
+	ceiling       int
+	asyncCap      int
+	workerThreads int
 }
 
 func newScheduler(floor, ceiling, asyncCap int) *scheduler {
 	return &scheduler{
-		lanes: make(map[string]*lane),
-		floor: floor, ceiling: ceiling, asyncCap: asyncCap,
+		lanes:   make(map[string]*lane),
+		workers: make(map[string]*pool),
+		floor:   floor, ceiling: ceiling, asyncCap: asyncCap,
+		workerThreads: wireproto.WorkerThreads,
 	}
 }
 
-// run admits one dispatch through its lane and pool and holds both until the
-// worker is done with it. An execute that returns abandonedCall has left its
-// request on the worker, so the admission is released only when that settles;
-// releasing it on return would let the host send more work than the
-// interpreter has threads for, which is the collapse the ceiling exists to
-// prevent.
-func (s *scheduler) run(ctx context.Context, key string, async bool, execute func() (wireproto.EventResponse, error)) (wireproto.EventResponse, error) {
+// run admits one dispatch through its lane, the host pool, then its worker's
+// pool, and holds all three until the worker is done with it. An execute that
+// returns abandonedCall has left its request on the worker, so the admission
+// is released only when that settles; releasing on return would let the host
+// send more work than the interpreter has threads for.
+func (s *scheduler) run(ctx context.Context, worker, key string, async bool, execute func() (wireproto.EventResponse, error)) (wireproto.EventResponse, error) {
 	l, err := s.acquireLane(ctx, key, async)
 	if err != nil {
 		return wireproto.EventResponse{}, err
@@ -79,27 +82,36 @@ func (s *scheduler) run(ctx context.Context, key string, async bool, execute fun
 		s.releaseLane(key, async, l)
 		return wireproto.EventResponse{}, err
 	}
+	if err := s.acquireWorker(ctx, worker, async); err != nil {
+		s.releaseSlot(async)
+		<-l.gate
+		s.releaseLane(key, async, l)
+		return wireproto.EventResponse{}, err
+	}
 	started := time.Now()
 	response, err := execute()
 	var late *abandonedCall
 	if errors.As(err, &late) {
 		go func() {
 			<-late.settled
-			s.complete(key, async, l, time.Since(started))
+			s.complete(worker, key, async, l, time.Since(started))
 		}()
 		return response, err
 	}
-	s.complete(key, async, l, time.Since(started))
+	s.complete(worker, key, async, l, time.Since(started))
 	return response, err
 }
 
-// complete releases a finished dispatch's slot, gate, and lane hold in one
-// critical section, so no arrival counts it as still ahead and sheds on it.
-func (s *scheduler) complete(key string, async bool, l *lane, elapsed time.Duration) {
+// complete releases a finished dispatch's worker slot, host slot, gate, and
+// lane hold in one critical section, so no arrival counts it as still ahead
+// and sheds on it.
+func (s *scheduler) complete(worker, key string, async bool, l *lane, elapsed time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, _ := s.poolLocked(async)
-	p.service, l.service = elapsed, elapsed
+	w := s.workers[worker]
+	p.service, w.service, l.service = elapsed, elapsed, elapsed
+	s.releaseWorkerLocked(worker)
 	s.releaseSlotLocked(async)
 	<-l.gate
 	s.releaseLaneLocked(key, async, l)
@@ -164,15 +176,45 @@ func (s *scheduler) poolLocked(async bool) (*pool, int) {
 	return &s.sync, s.syncLimitLocked()
 }
 
+func (s *scheduler) workerPoolLocked(worker string) *pool {
+	w := s.workers[worker]
+	if w == nil {
+		w = &pool{}
+		s.workers[worker] = w
+	}
+	return w
+}
+
 func (s *scheduler) acquireSlot(ctx context.Context, async bool) error {
+	return s.acquire(ctx, "the host",
+		func() (*pool, int, time.Duration) {
+			p, limit := s.poolLocked(async)
+			return p, limit, p.service
+		},
+		func() { s.releaseSlotLocked(async) },
+	)
+}
+
+func (s *scheduler) acquireWorker(ctx context.Context, worker string, async bool) error {
+	return s.acquire(ctx, "this project's worker",
+		func() (*pool, int, time.Duration) {
+			w := s.workerPoolLocked(worker)
+			p, _ := s.poolLocked(async)
+			return w, s.workerThreads, cmp.Or(w.service, p.service)
+		},
+		func() { s.releaseWorkerLocked(worker) },
+	)
+}
+
+func (s *scheduler) acquire(ctx context.Context, queue string, resolve func() (*pool, int, time.Duration), release func()) error {
 	s.mu.Lock()
-	p, limit := s.poolLocked(async)
+	p, limit, service := resolve()
 	if p.holders < limit {
 		p.holders++
 		s.mu.Unlock()
 		return nil
 	}
-	if err := shed(ctx, len(p.waiters)/limit+1, p.service, "the host"); err != nil {
+	if err := shed(ctx, len(p.waiters)/limit+1, service, queue); err != nil {
 		s.mu.Unlock()
 		return err
 	}
@@ -185,12 +227,11 @@ func (s *scheduler) acquireSlot(ctx context.Context, async bool) error {
 		return nil
 	case <-ctx.Done():
 		s.mu.Lock()
-		p, _ := s.poolLocked(async)
-		withdrawn := withdrawWaiter(p, granted)
-		s.mu.Unlock()
-		if !withdrawn {
-			s.releaseSlot(async)
+		p, _, _ := resolve()
+		if !withdrawWaiter(p, granted) {
+			release()
 		}
+		s.mu.Unlock()
 		return ctx.Err()
 	}
 }
@@ -224,6 +265,15 @@ func (s *scheduler) releaseSlotLocked(async bool) {
 	p, limit := s.poolLocked(async)
 	p.holders--
 	s.promoteLocked(p, limit)
+}
+
+func (s *scheduler) releaseWorkerLocked(worker string) {
+	w := s.workers[worker]
+	w.holders--
+	s.promoteLocked(w, s.workerThreads)
+	if w.holders == 0 && len(w.waiters) == 0 {
+		delete(s.workers, worker)
+	}
 }
 
 func (s *scheduler) promoteLocked(p *pool, limit int) {

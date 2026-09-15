@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Events from one agent run one at a time, and no worker is sent more than
+  it can run.** The host's lane key read `session_id` with a strict decoder
+  that refused every real Claude Code payload, so each hook invocation got its
+  own lane and nothing was ever serialized; the lane count then widened the
+  host's global admission to 64 while a worker runs 16 threads, so up to 48
+  admitted events queued inside the interpreter where load shedding could not
+  see them. Lanes are now keyed by `session_id` and `agent_id`, so a lead
+  session and each of its subagents serialize their own events and overlap
+  with each other, and the host holds at most `WorkerThreads` (16) events in
+  flight per worker, shedding a dispatch whose wait there would outlast its
+  deadline.
+
 ## [12.30.5] - 2026-09-14
 
 ### Fixed

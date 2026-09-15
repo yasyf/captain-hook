@@ -272,9 +272,12 @@ and the environment values that change product semantics: `XDG_CACHE_HOME`,
 those facts share a worker. Session, Claude, and Factory variables stay request-scoped and cannot
 leak from the first client into the worker's base environment.
 
-The host serializes events from the same session while allowing different sessions to overlap,
-with a global maximum of 16 product dispatches. A worker can serve concurrent sessions over one
-framed channel; response IDs keep their output and exit codes separate.
+The host serializes events from the same agent, keyed by the payload's `session_id` and
+`agent_id`, so a lead session and each of its subagents run in their own lane and overlap with
+each other. A worker can serve concurrent lanes over one framed channel; response IDs keep their
+output and exit codes separate. The host keeps at most 16 events in flight on any one worker, the
+size of its thread pool, and queues the rest on the host side where it can shed a dispatch whose
+wait would outlast its deadline.
 
 ### Failure is terminal for that dispatch
 
