@@ -15,7 +15,7 @@ A pack's version, description, and repository derive from the wheel or the enabl
 NLP/tool ``resources`` and declarative ``[tools]`` gate semantics.
 
 Builtin activation is fixed policy, not per-repo config: ``fixes``/``general``/``graphite``/
-``performance``/``plain_english``/``steering`` are unconditional, and ``go``/``python`` activate when a recursive,
+``performance``/``steering`` are unconditional, and ``go``/``python`` activate when a recursive,
 non-ignored build manifest (``go.mod``/``go.work``, ``pyproject.toml``) exists. There is no
 ``.claude/capt-hook.toml``.
 """
@@ -38,7 +38,7 @@ PLUGIN_PACK_DIRNAME = "capt-hook"
 BUILTIN_PACKS_PACKAGE = "captain_hook.builtin_packs"
 
 # Builtins active in every repo, no detection.
-UNCONDITIONAL_BUILTINS = ("fixes", "general", "graphite", "performance", "plain_english", "steering")
+UNCONDITIONAL_BUILTINS = ("fixes", "general", "graphite", "performance", "steering")
 # Language builtins activate when a recursive, non-ignored build manifest exists anywhere in the repo.
 LANGUAGE_MARKERS: dict[str, tuple[str, ...]] = {
     "go": ("go.mod", "go.work"),
