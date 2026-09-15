@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.30.10] - 2026-09-15
+
 ### Fixed
 
 - **A hook whose project directory is gone spawns its worker again.** The
