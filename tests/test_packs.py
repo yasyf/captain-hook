@@ -18,8 +18,8 @@ from captain_hook.testing.types import Input
 from captain_hook.types import Event
 
 BUILTIN_PACKS_DIR = Path(captain_hook.__file__).parent / "builtin_packs"
-EXPECTED_BUILTINS = {"general", "python", "go", "steering", "fixes", "performance", "graphite"}
-UNCONDITIONAL = {"fixes", "general", "steering", "performance", "graphite"}
+EXPECTED_BUILTINS = {"general", "python", "go", "steering", "fixes", "performance", "graphite", "plain_english"}
+UNCONDITIONAL = {"fixes", "general", "steering", "performance", "graphite", "plain_english"}
 GENERAL_HOOKS = {
     "commands",
     "comments",
@@ -40,6 +40,7 @@ STEERING_HOOKS = {"steering", "teammates", "workarounds"}
 FIXES_HOOKS = {"teammate_permissions", "scratch_writes"}
 PERFORMANCE_HOOKS = {"pipelining"}
 GRAPHITE_HOOKS = {"vcs"}
+PLAIN_ENGLISH_HOOKS = {"rewrite"}
 HOOK_SRC = "from captain_hook import Event, hook\n\nhook(Event.PreToolUse, message='m')\n"
 SRC_USES_FILE = (
     "from pathlib import Path\n"
@@ -69,8 +70,9 @@ def test_expected_builtin_packs_present() -> None:
         ("fixes", FIXES_HOOKS),
         ("performance", PERFORMANCE_HOOKS),
         ("graphite", GRAPHITE_HOOKS),
+        ("plain_english", PLAIN_ENGLISH_HOOKS),
     ],
-    ids=["general", "python", "go", "steering", "fixes", "performance", "graphite"],
+    ids=["general", "python", "go", "steering", "fixes", "performance", "graphite", "plain_english"],
 )
 def test_builtin_pack_layout(name: str, hook_stems: set[str]) -> None:
     resolved = manager.resolve_builtin(name)
@@ -88,7 +90,7 @@ def test_nlp_builtins_declare_resources(name: str) -> None:
     assert manager.resolve_builtin(name).descriptor.resources == ("spacy:en_core_web_sm", "wordnet:oewn:2025")
 
 
-@pytest.mark.parametrize("name", ["fixes", "go", "python", "performance", "graphite"])
+@pytest.mark.parametrize("name", ["fixes", "go", "python", "performance", "graphite", "plain_english"])
 def test_plain_builtins_have_empty_descriptor(name: str) -> None:
     descriptor = manager.resolve_builtin(name).descriptor
     assert descriptor == manager.PackDescriptor()

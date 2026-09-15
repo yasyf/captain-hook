@@ -22,6 +22,7 @@ class TestWhitelist:
             "CLAUDE_PROJECT_DIR",
             "FACTORY_A",
             "XDG_CACHE_HOME",
+            "CEREBRAS_API_KEY",
         ],
     )
     def test_prefixed_and_exact_keys_are_whitelisted(self, key: str) -> None:
