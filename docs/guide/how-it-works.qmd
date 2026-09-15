@@ -277,7 +277,10 @@ The host serializes events from the same agent, keyed by the payload's `session_
 each other. A worker can serve concurrent lanes over one framed channel; response IDs keep their
 output and exit codes separate. The host keeps at most 16 events in flight on any one worker, the
 size of its thread pool, and queues the rest on the host side where it can shed a dispatch whose
-wait would outlast its deadline.
+wait would outlast its deadline. That wait is the sum of the estimates for the dispatches already
+queued ahead, each a smoothed average of how long its own hook event has taken; a running hook
+counts only for what its estimate has left, and an event the host has not yet timed always
+queues rather than being shed on another event's record.
 
 ### Failure is terminal for that dispatch
 
