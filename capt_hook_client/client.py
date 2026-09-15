@@ -1,8 +1,7 @@
-"""Strict stdlib exec shim for the fixed signed captain-hook host."""
+"""Strict stdlib exec shim for the plain captain-hook client."""
 
 from __future__ import annotations
 
-import importlib.metadata
 import os
 import sys
 from typing import NoReturn
@@ -15,52 +14,25 @@ HOST = os.path.join(
     "Helpers",
     "capt-hookd",
 )
-DIST_NAME = "capt-hook"
-
-
-def _cwd() -> str:
-    """The invocation's directory, named by the shell once the directory itself is gone.
-
-    A workspace deleted under a live session leaves every later hook with an unresolvable
-    cwd, and ``os.getcwd()`` raises there — failing the dispatch before it is even spelled.
-    ``PWD`` still carries the path, which keeps the dispatch truthful and inert: a root that
-    does not exist walks to nothing, where the filesystem root would walk the whole machine.
-    """
-    try:
-        return os.getcwd()
-    except FileNotFoundError:
-        return os.environ.get("PWD") or os.path.sep
+CLIENT = os.path.join(os.path.expanduser("~"), ".daemonkit", "bin", "capt-hookd")
 
 
 def main() -> NoReturn:
-    """Translate the one hook-event grammar and exec the fixed Go client."""
+    """Translate the one hook-event grammar and exec the plain Go client."""
     parsed = _parse_run(sys.argv[1:])
     if parsed is None:
         _die("usage: hook [--root ROOT] run EVENT [--async]")
     root, event, async_ = parsed
-    cwd = _cwd()
-    argv = [
-        HOST,
-        "run",
-        "--event",
-        event,
-        "--root",
-        root or os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("FACTORY_PROJECT_DIR") or cwd,
-        "--cwd",
-        cwd,
-        "--python",
-        sys.executable,
-        "--build",
-        importlib.metadata.version(DIST_NAME),
-    ]
     if async_:
-        argv.append("--async")
-    _exec(argv)
+        raise SystemExit(0)
+    if root:
+        os.environ["CLAUDE_PROJECT_DIR"] = root
+    _exec(CLIENT, [CLIENT, "run", event])
 
 
 def ops_main() -> NoReturn:
     """Exec the fixed Go operations surface without translating arguments."""
-    _exec([HOST, *sys.argv[1:]])
+    _exec(HOST, [HOST, *sys.argv[1:]])
 
 
 def _parse_run(argv: list[str]) -> tuple[str | None, str, bool] | None:
@@ -78,11 +50,11 @@ def _parse_run(argv: list[str]) -> tuple[str | None, str, bool] | None:
     return root, tail[1], len(tail) == 3
 
 
-def _exec(argv: list[str]) -> NoReturn:
+def _exec(path: str, argv: list[str]) -> NoReturn:
     try:
-        os.execv(HOST, argv)
+        os.execv(path, argv)
     except OSError as exc:
-        _die(f"captain-hook signed host unavailable at {HOST}: {exc}", code=1)
+        _die(f"captain-hook client unavailable at {path}: {exc}", code=1)
 
 
 def _die(message: str, *, code: int = 1) -> NoReturn:

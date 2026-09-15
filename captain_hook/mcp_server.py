@@ -1,11 +1,28 @@
 from __future__ import annotations
 
+import subprocess
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
+from captain_hook.desktop.client import APP_PATH
 from captain_hook.transcripts import register_transcript
 
 if TYPE_CHECKING:
     from mcp.server.mcpserver import MCPServer
+
+INSTALLED_HOST = APP_PATH / "Contents" / "Helpers" / "capt-hookd"
+
+
+def place_client() -> None:
+    if not INSTALLED_HOST.exists():
+        return
+    try:
+        subprocess.run(
+            [INSTALLED_HOST, "install-client"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, check=False
+        )
+    except OSError as exc:
+        logger.warning("capt-hookd install-client failed: {}", exc)
 
 
 def build_mcp_server() -> MCPServer:

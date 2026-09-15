@@ -50,27 +50,6 @@ func TestWorkerKeyExcludesSessionAndAccountEnvironment(t *testing.T) {
 	}
 }
 
-func TestLaneIdentityNamesTheAgentWithoutInventingOne(t *testing.T) {
-	t.Parallel()
-	for _, testCase := range []struct {
-		name    string
-		payload string
-		want    string
-	}{
-		{name: "lead event", payload: hookPayload("session-a", ""), want: "session-a\x00main"},
-		{name: "subagent event", payload: hookPayload("session-a", "agent-1"), want: "session-a\x00agent-1"},
-		{name: "no session", payload: `{"hook_event_name":"PreToolUse","tool_name":"Bash"}`, want: ""},
-		{name: "malformed", payload: `not-json`, want: ""},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			if got := laneIdentity(testCase.payload); got != testCase.want {
-				t.Fatalf("laneIdentity = %q, want %q", got, testCase.want)
-			}
-		})
-	}
-}
-
 // scriptedWorker hands the manager a handshaken worker whose far end the test
 // serves, so dispatch spawns nothing.
 func scriptedWorker(t *testing.T, manager *workerManager, serve func(conn net.Conn)) {
@@ -145,9 +124,8 @@ func TestWorkerCmdOwnsTheWholeWorkerSession(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	cmd := workerCmd(workerKey{
-		id: "abc", root: root, python: "/usr/bin/python3", build: "12.9.1",
-		env: map[string]string{"HOOKS_PROFILE": "strict"},
-	})
+		id: "abc", root: root, env: map[string]string{"HOOKS_PROFILE": "strict"},
+	}, "/usr/bin/python3")
 	if !cmd.Session {
 		t.Fatal("worker spawn does not own its descendants")
 	}
@@ -175,7 +153,7 @@ func TestWorkerCmdSurvivesARootDeletedUnderTheSession(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp+"/")
 	root := filepath.Join(tmp, "reaped")
-	cmd := workerCmd(workerKey{id: "abc", root: root, python: "/usr/bin/python3", build: "12.9.1"})
+	cmd := workerCmd(workerKey{id: "abc", root: root}, "/usr/bin/python3")
 	if cmd.Dir != tmp {
 		t.Fatalf("worker spawn Dir = %q, want the clean temp dir %q for a missing root", cmd.Dir, tmp)
 	}
@@ -325,9 +303,83 @@ func TestWorkerManagerCloseReportsJoinedProductGraph(t *testing.T) {
 
 func mustWorkerManager(t *testing.T) *workerManager {
 	t.Helper()
-	manager, err := newWorkerManager(daemonkit.Ctx{}, io.Discard)
+	return newWorkerManager(daemonkit.Ctx{}, io.Discard)
+}
+
+func TestDispatchRunsOneAgentsEventsConcurrently(t *testing.T) {
+	t.Parallel()
+	const events = 7
+	manager := mustWorkerManager(t)
+	scriptedWorker(t, manager, func(conn net.Conn) {
+		ids := make([]uint64, 0, events)
+		for range events {
+			frame, err := wireproto.DecodeFrame(conn)
+			if err != nil {
+				return
+			}
+			ids = append(ids, frame.ID)
+		}
+		for _, id := range ids {
+			_ = wireproto.EncodeFrame(conn, wireproto.Frame{
+				Protocol: wireproto.Schema, Op: wireproto.OpResult, ID: id,
+				Response: &wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok"},
+			})
+		}
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	errs := make(chan error, events)
+	for range events {
+		go func() {
+			request := testEventRequest("PostToolUse")
+			request.Root = "/live"
+			request.PayloadRaw = `{"session_id":"session-a","agent_id":"agent-1"}`
+			_, err := manager.dispatch(ctx, request)
+			errs <- err
+		}()
+	}
+	for range events {
+		if err := <-errs; err != nil {
+			t.Fatalf("dispatch = %v; the worker answers only once all %d events are in flight together", err, events)
+		}
+	}
+}
+
+func TestInstalledPythonOnlyLooksUpTheToolEnv(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return manager
+	t.Setenv("DAEMONKIT_HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	if _, err := installedPython(); err == nil || !strings.Contains(err.Error(), "run `capt-hook helper install`") {
+		t.Fatalf("installedPython without a tool env = %v, want the helper install remedy", err)
+	}
+
+	toolDir := filepath.Join(home, ".daemonkit", "tools", "capt-hook", Build)
+	venvBin := filepath.Join(toolDir, "capt-hook", "bin")
+	for _, dir := range []string{venvBin, filepath.Join(toolDir, "bin")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range []string{filepath.Join(venvBin, "hook"), filepath.Join(venvBin, "python")} {
+		if err := os.WriteFile(file, nil, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(venvBin, "hook"), filepath.Join(toolDir, "bin", "hook")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installedPython(); err == nil {
+		t.Fatal("installedPython accepted a tool env with no install marker")
+	}
+	if err := os.WriteFile(filepath.Join(toolDir, ".installed"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	python, err := installedPython()
+	if err != nil || python != filepath.Join(venvBin, "python") {
+		t.Fatalf("installedPython = %q, %v; want %q", python, err, filepath.Join(venvBin, "python"))
+	}
 }

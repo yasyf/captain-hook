@@ -40,10 +40,7 @@ func (s *Server) Run(ctx context.Context) error {
 		return fmt.Errorf("captain: open host log: %w", err)
 	}
 	_, err = daemonkit.Serve(ctx, s.daemon, func(hostCtx daemonkit.Ctx) (daemonkit.Product, error) {
-		manager, err := newWorkerManager(hostCtx, logFile)
-		if err != nil {
-			return nil, err
-		}
+		manager := newWorkerManager(hostCtx, logFile)
 		manager.startSweeper(workerSweepInterval)
 		return &hostProduct{
 			manager: manager,
@@ -67,11 +64,6 @@ func (p *hostProduct) Handle(ctx context.Context, req daemonkit.Request) (daemon
 		var event wireproto.EventRequest
 		if err := decodeStrict(req.Body, &event); err != nil {
 			return daemonkit.Reply{}, fmt.Errorf("captain: decode event request: %w", err)
-		}
-		if event.Build != Build {
-			return daemonkit.Reply{}, fmt.Errorf(
-				"captain: Python build %q does not match signed host build %q", event.Build, Build,
-			)
 		}
 		if event.ClientPID != req.Caller.PID {
 			return daemonkit.Reply{}, errors.New("captain: event client pid does not match authenticated peer")

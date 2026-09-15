@@ -117,7 +117,7 @@ class ProductRuntime:
                 event,
                 raw,
                 session_dir=session_dir,
-                async_=request.async_,
+                async_=False,
                 transcript_loader=self._transcript_loader,
             )
         if output:

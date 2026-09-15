@@ -1,6 +1,6 @@
 """The dispatch chain under test, and the roots that make a dispatch cold or warm.
 
-The daemon caches one Python worker per ``{root, python, build, environment}`` tuple
+The daemon caches one Python worker per ``{root, environment}`` pair
 and retires the entry the moment its dispatch finishes when the root lives under the
 system temp directory (``ephemeralRoot``, ``internal/hookd/manager.go``). A scratch
 root there is therefore cold on every dispatch and a root outside it is warm from the
@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from bench.measure import Command
-from capt_hook_client.client import HOST
+from capt_hook_client.client import CLIENT, HOST
 
 BENCH_ROOT = Path.home() / ".cache" / "capt-hook-bench"
 COLD_BUDGET_S = 60.0
@@ -93,24 +93,8 @@ def chain(deployed: Deployment, root: Path) -> Command:
     return Command((str(deployed.client), "--root", str(root), "run", EVENT), payload(root))
 
 
-def host(deployed: Deployment, root: Path) -> Command:
-    return Command(
-        (
-            HOST,
-            "run",
-            "--event",
-            EVENT,
-            "--root",
-            str(root),
-            "--cwd",
-            os.getcwd(),
-            "--python",
-            str(deployed.interpreter),
-            "--build",
-            deployed.build,
-        ),
-        payload(root),
-    )
+def host(root: Path) -> Command:
+    return Command((CLIENT, "run", EVENT), payload(root), {**os.environ, "CLAUDE_PROJECT_DIR": str(root)})
 
 
 @contextmanager
@@ -126,8 +110,8 @@ def scenarios(deployed: Deployment, warm: Path, cold: Path, *, budget_s: float) 
     return (
         Scenario("chain-warm", chain(deployed, warm), budget_s, 30),
         Scenario("chain-cold", chain(deployed, cold), min(budget_s, COLD_BUDGET_S), 10),
-        Scenario("host-warm", host(deployed, warm), budget_s, 30),
-        Scenario("host-cold", host(deployed, cold), min(budget_s, COLD_BUDGET_S), 10),
+        Scenario("host-warm", host(warm), budget_s, 30),
+        Scenario("host-cold", host(cold), min(budget_s, COLD_BUDGET_S), 10),
         Scenario("interpreter-bare", Command((interpreter, "-c", "pass")), budget_s, 30),
         Scenario("interpreter-client", Command((interpreter, "-c", "import capt_hook_client.client")), budget_s, 30),
         Scenario("host-version", Command((HOST, "version")), budget_s, 30),

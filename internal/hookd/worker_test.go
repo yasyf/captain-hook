@@ -109,7 +109,7 @@ func TestWorkerProtocolViolationFailsEveryPendingCall(t *testing.T) {
 func testEventRequest(event string) wireproto.EventRequest {
 	return wireproto.EventRequest{
 		Schema: wireproto.Schema, Event: event, Root: "/tmp/repo", CWD: "/tmp/repo",
-		Env: map[string]string{}, Python: "/usr/bin/python3", Build: "12.9.1",
+		Env:       map[string]string{},
 		ClientPID: 10, ClientPPID: 9,
 	}
 }

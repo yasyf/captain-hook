@@ -56,10 +56,7 @@ class WorkerService:
                 raise ProtocolError(f"worker build {self._build!r} does not match host build {hello.build!r}")
             self._write(hello_response(self._build))
             while (message := read_message(self._input)) is not None:
-                request = decode_event(message)
-                if request.build != self._build:
-                    raise ProtocolError(f"event build {request.build!r} does not match worker build {self._build!r}")
-                self._submit(request)
+                self._submit(decode_event(message))
         finally:
             self._drain()
             self._executor.shutdown()

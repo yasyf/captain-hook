@@ -11,27 +11,14 @@ import (
 	"github.com/yasyf/daemonkit"
 )
 
-// TestHostTrustFoldsSevenPeerClassesOntoThreeLanes pins the collapse: the
-// control lane admits the signed host alone, and the business lane is the
-// disjunction over every identity that speaks the product protocol. Nothing
-// below the lane distinguishes peers any more.
-func TestHostTrustFoldsSevenPeerClassesOntoThreeLanes(t *testing.T) {
+func TestHostTrustSignsControlAndAdmitsTheSameUserToBusiness(t *testing.T) {
 	t.Parallel()
 	trust := hostTrust()
 	if trust.Control == nil || trust.Control.Digest() != hostRequirement().Digest() {
 		t.Fatalf("control lane requirement = %#v", trust.Control)
 	}
-	want := daemonkit.Requirements{hostRequirement(), helperRequirement(), helperClientRequirement()}
-	if len(trust.Business) != len(want) {
-		t.Fatalf("business lane = %#v", trust.Business)
-	}
-	for i, requirement := range want {
-		if trust.Business[i].Digest() != requirement.Digest() {
-			t.Fatalf("business lane[%d] = %#v, want %#v", i, trust.Business[i], requirement)
-		}
-	}
-	if trust.Business.Digest() == (daemonkit.Requirements{*trust.Control}).Digest() {
-		t.Fatal("business disjunction digests as the single control requirement")
+	if trust.Business != nil {
+		t.Fatalf("business lane = %#v, want the same-user floor alone", trust.Business)
 	}
 }
 
@@ -92,7 +79,6 @@ func TestHostProductHandleDispatchesEveryOpAndRefusesTheRest(t *testing.T) {
 	}
 
 	request := testEventRequest("PreToolUse")
-	request.Build = Build
 	event, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)

@@ -27,13 +27,10 @@ EVENT_REQUEST_KEYS = frozenset(
     {
         "schema",
         "event",
-        "async",
         "root",
         "cwd",
         "env",
         "payload_raw",
-        "python",
-        "build",
         "client_pid",
         "client_ppid",
         "deadline_unix_ms",
@@ -54,13 +51,10 @@ class Hello:
 class EventRequest:
     id: int
     event: str
-    async_: bool
     root: str
     cwd: str
     env: dict[str, str]
     payload_raw: str
-    python: str
-    build: str
     client_pid: int
     client_ppid: int
     deadline_unix_ms: int
@@ -150,7 +144,6 @@ def decode_event(message: dict[str, Any]) -> EventRequest:
         or request["schema"] != PROTOCOL
         or type(request["event"]) is not str
         or request["event"] == ""
-        or type(request["async"]) is not bool
         or type(request["root"]) is not str
         or request["root"] == ""
         or type(request["cwd"]) is not str
@@ -159,10 +152,6 @@ def decode_event(message: dict[str, Any]) -> EventRequest:
         or not all(type(key) is str and type(value) is str for key, value in cast(dict[object, object], env).items())
         or type(request["payload_raw"]) is not str
         or len(request["payload_raw"].encode()) > MAX_EVENT_INPUT
-        or type(request["python"]) is not str
-        or request["python"] == ""
-        or type(request["build"]) is not str
-        or request["build"] == ""
         or type(request["client_pid"]) is not int
         or request["client_pid"] <= 1
         or type(request["client_ppid"]) is not int
@@ -174,13 +163,10 @@ def decode_event(message: dict[str, Any]) -> EventRequest:
     return EventRequest(
         id=message["id"],
         event=request["event"],
-        async_=request["async"],
         root=request["root"],
         cwd=request["cwd"],
         env=cast(dict[str, str], env),
         payload_raw=request["payload_raw"],
-        python=request["python"],
-        build=request["build"],
         client_pid=request["client_pid"],
         client_ppid=request["client_ppid"],
         deadline_unix_ms=request["deadline_unix_ms"],

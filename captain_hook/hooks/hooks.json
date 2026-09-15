@@ -3,96 +3,84 @@
     "PreToolUse": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PreToolUse" },
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PreToolUse --async", "async": true }
+          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run PreToolUse" }
         ]
       }
     ],
     "PostToolUse": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PostToolUse" },
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PostToolUse --async", "async": true }
+          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run PostToolUse" }
         ]
       }
     ],
     "PostToolUseFailure": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PostToolUseFailure" },
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PostToolUseFailure --async", "async": true }
+          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run PostToolUseFailure" }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run UserPromptSubmit" },
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run UserPromptSubmit --async", "async": true }
+          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run UserPromptSubmit" }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run Stop" },
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run Stop --async", "async": true }
+          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run Stop" }
         ]
       }
     ],
     "SubagentStop": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SubagentStop" },
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SubagentStop --async", "async": true }
+          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run SubagentStop" }
         ]
       }
     ],
     "SubagentStart": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SubagentStart" },
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SubagentStart --async", "async": true }
+          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run SubagentStart" }
         ]
       }
     ],
     "PreCompact": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PreCompact" },
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PreCompact --async", "async": true }
+          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run PreCompact" }
         ]
       }
     ],
     "Notification": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run Notification" },
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run Notification --async", "async": true }
+          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run Notification" }
         ]
       }
     ],
     "PermissionRequest": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PermissionRequest" },
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PermissionRequest --async", "async": true }
+          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run PermissionRequest" }
         ]
       }
     ],
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook-shim\" run SessionStart" },
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook-shim\" run SessionStart --async", "async": true }
+          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] && exec \"$c\" run SessionStart; exec \"$HOME/Applications/Captain Hook.app/Contents/Helpers/capt-hookd\" run SessionStart --async" }
         ]
       }
     ],
     "SessionEnd": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SessionEnd" },
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SessionEnd --async", "async": true }
+          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run SessionEnd" }
         ]
       }
     ]
