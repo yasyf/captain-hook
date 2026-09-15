@@ -27,12 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The host runs every event as it arrives.** The per-agent lanes, the
   adaptive pool, the async cap, and deadline shedding are gone, and with them
   the `overloaded` refusal and `CAPT_HOOK_MAX_PARALLEL`. Seven events from one
-  agent now run side by side on the worker instead of in series.
+  agent now run side by side on the worker instead of in series. Each worker
+  holds at most 64 outstanding events, abandoned ones included; the next
+  event waits for a reply, up to its own deadline.
 - **The host looks up its own Python.** Events no longer carry the
   interpreter, the build, or an async flag. `capt-hook helper install`
-  installs the `capt-hook` tool env for the app's build, and the host only
-  looks that env up, failing worker start with the install command when it is
-  missing.
+  installs the `capt-hook` tool env for the app's build before it touches the
+  installed app, aborting with the old host running when that install fails.
+  The host only looks that env up, failing worker start with the install
+  command when it is missing. Publishing `~/.daemonkit/bin/capt-hookd` takes a
+  lock and never replaces a newer build with an older one.
 - **Any process running as your user may send the host events.** The business
   lane admits the same user instead of three signed identities; only the
   signed host may drain it.
