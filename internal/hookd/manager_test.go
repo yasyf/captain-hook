@@ -116,6 +116,17 @@ func TestWorkerBaseEnvironmentSeedsDiscoveryWithoutLeakingFirstClientScope(t *te
 	}
 }
 
+func TestCerebrasKeyReachesHooksOnlyPerRequest(t *testing.T) {
+	t.Parallel()
+	base := workerBaseEnvironment([]string{"PATH=/bin", "CEREBRAS_API_KEY=csk-host"})
+	if len(base) != 2 || base[0] != "PATH=/bin" || base[1] != "LANG=C" {
+		t.Fatalf("base environment = %v", base)
+	}
+	if semantic := semanticWorkerEnvironment(map[string]string{"CEREBRAS_API_KEY": "csk-test"}); len(semantic) != 0 {
+		t.Fatalf("semantic worker environment = %v", semantic)
+	}
+}
+
 // TestWorkerCmdOwnsTheWholeWorkerSession pins the posture a worker is spawned
 // under: hook subprocesses live inside the worker's own session, so settlement
 // covers them at restart, timeout, crash, and upgrade instead of leaving them

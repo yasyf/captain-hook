@@ -103,6 +103,14 @@ func TestRequestEnvironmentHasExactScope(t *testing.T) {
 	}
 }
 
+func TestRequestEnvironmentCarriesTheCerebrasKey(t *testing.T) {
+	t.Parallel()
+	got := requestEnvironment([]string{"CEREBRAS_API_KEY=csk-test", "OPENAI_API_KEY=sk-test"})
+	if len(got) != 1 || got["CEREBRAS_API_KEY"] != "csk-test" {
+		t.Fatalf("request environment = %v", got)
+	}
+}
+
 func TestDurationEnvironmentUsesSeconds(t *testing.T) {
 	t.Setenv("CAPT_HOOK_CLIENT_TIMEOUT", "1.25")
 	if got := durationFromEnvironment("CAPT_HOOK_CLIENT_TIMEOUT", time.Second); got != 1250*time.Millisecond {

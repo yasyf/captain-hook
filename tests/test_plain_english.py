@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import threading
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -10,10 +11,11 @@ from spawnllm import OpenAiEndpointBackend
 from captain_hook import Prompt, faults
 from captain_hook.builtin_packs.plain_english.hooks import rewrite
 from captain_hook.context import HookContext
+from captain_hook.dispatch import dispatch
 from captain_hook.events import MessageDisplayEvent
 from captain_hook.session import SessionStore
 from captain_hook.testing.helpers import fixture_session
-from captain_hook.types import Action, HookResult
+from captain_hook.types import Event
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -54,23 +56,29 @@ def ctx(session_dir: Path) -> CerebrasStub:
 
 
 @pytest.fixture(autouse=True)
-def api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+def registered(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CEREBRAS_API_KEY", "test-key")
+    importlib.reload(rewrite)
 
 
-def chunk(ctx: HookContext, index: int, delta: str, *, final: bool = False) -> HookResult | None:
-    return rewrite.rewrite_plain_english(
+def shown(text: str) -> dict[str, Any]:
+    return {"hookSpecificOutput": {"hookEventName": "MessageDisplay", "displayContent": text}}
+
+
+def chunk(ctx: HookContext, index: int, delta: str, *, final: bool = False) -> dict[str, Any] | None:
+    return dispatch(
+        Event.MessageDisplay,
         MessageDisplayEvent(
             _raw={"message_id": "msg_1", "index": index, "final": final, "delta": delta, "session_id": "s"},
             ctx=ctx,
-        )
+        ),
     )
 
 
-def stream(ctx: HookContext, text: str, *, size: int = 60) -> HookResult | None:
+def stream(ctx: HookContext, text: str, *, size: int = 60) -> dict[str, Any] | None:
     parts = [text[i : i + size] for i in range(0, len(text), size)]
     results = [chunk(ctx, i, part, final=i == len(parts) - 1) for i, part in enumerate(parts)]
-    assert results[:-1] == [HookResult(action=Action.rewrite, message="")] * (len(parts) - 1)
+    assert results[:-1] == [shown("")] * (len(parts) - 1)
     return results[-1]
 
 
@@ -85,12 +93,12 @@ def test_no_api_key_leaves_chunks_displayed(ctx: CerebrasStub, monkeypatch: pyte
 
 
 def test_non_final_chunk_is_blanked_and_buffered(ctx: CerebrasStub) -> None:
-    assert chunk(ctx, 0, "I traced") == HookResult(action=Action.rewrite, message="")
+    assert chunk(ctx, 0, "I traced") == shown("")
     assert ctx.session.load(rewrite.PlainEnglishBuffer).messages == {"msg_1": {0: "I traced"}}
 
 
 def test_streamed_message_is_rewritten_once(ctx: CerebrasStub) -> None:
-    assert stream(ctx, PROSE + BRACED) == HookResult(action=Action.rewrite, message="Plain rewrite.")
+    assert stream(ctx, PROSE + BRACED) == shown("Plain rewrite.")
 
     ((prompt, kwargs),) = ctx.calls
     assert prompt == "\n\n".join(
@@ -109,7 +117,7 @@ def test_streamed_message_is_rewritten_once(ctx: CerebrasStub) -> None:
         "qwen-3.8-27b",
         "test-key",
     )
-    assert kwargs["timeout"] == 45
+    assert kwargs["timeout"] == 20
     assert ctx.session.load(rewrite.PlainEnglishBuffer).messages == {}
 
 
@@ -136,7 +144,7 @@ def test_final_chunk_waits_for_a_late_chunk(ctx: CerebrasStub) -> None:
     late = threading.Timer(0.2, chunk, args=(ctx, 0, PROSE[:40]))
     late.start()
 
-    assert chunk(ctx, 2, "!", final=True) == HookResult(action=Action.rewrite, message="Plain rewrite.")
+    assert chunk(ctx, 2, "!", final=True) == shown("Plain rewrite.")
     late.join()
 
     ((prompt, _),) = ctx.calls
@@ -148,7 +156,7 @@ def test_final_chunk_joins_what_arrived_by_the_deadline(ctx: CerebrasStub, monke
     ctx.answer = ""
     chunk(ctx, 1, PROSE)
 
-    assert chunk(ctx, 3, "!", final=True) == HookResult(action=Action.rewrite, message=f"{PROSE}!")
+    assert chunk(ctx, 3, "!", final=True) == shown(f"{PROSE}!")
     assert ctx.session.load(rewrite.PlainEnglishBuffer).messages == {}
 
 
@@ -160,26 +168,27 @@ def test_final_chunk_joins_what_arrived_by_the_deadline(ctx: CerebrasStub, monke
     ],
 )
 def test_message_with_little_prose_shows_the_original(ctx: CerebrasStub, text: str) -> None:
-    assert stream(ctx, text) == HookResult(action=Action.rewrite, message=text)
+    assert stream(ctx, text) == shown(text)
     assert ctx.calls == []
 
 
 def test_llm_failure_shows_the_original_and_records_a_fault(ctx: CerebrasStub) -> None:
     ctx.answer = RuntimeError("cerebras 503")
 
-    assert stream(ctx, PROSE) == HookResult(action=Action.rewrite, message=PROSE)
+    assert stream(ctx, PROSE) == shown(PROSE)
     (line,) = faults.drain()
     assert "plain_english rewrite" in line
     assert "RuntimeError: cerebras 503" in line
 
 
 @pytest.mark.parametrize(
-    ("answer", "shown"),
+    ("answer", "display"),
     [
         pytest.param(
             "<think>Split the sentences.</think>\n\nShort one. Short two.", "Short one. Short two.", id="think"
         ),
         pytest.param("Split them.</think>Short one.", "Short one.", id="unopened-think"),
+        pytest.param("\n\nShort one. Short two.\n", "Short one. Short two.", id="surrounding-whitespace"),
         pytest.param("```markdown\nShort one.\n\nShort two.\n```", "Short one.\n\nShort two.", id="wrapping-fence"),
         pytest.param(
             "```sh\nls\n```\nShort one.\n```sh\npwd\n```",
@@ -189,7 +198,7 @@ def test_llm_failure_shows_the_original_and_records_a_fault(ctx: CerebrasStub) -
         pytest.param("<think>nothing to say</think>\n", PROSE, id="empty-falls-back"),
     ],
 )
-def test_answer_is_cleaned_before_display(ctx: CerebrasStub, answer: str, shown: str) -> None:
+def test_answer_is_cleaned_before_display(ctx: CerebrasStub, answer: str, display: str) -> None:
     ctx.answer = answer
 
-    assert stream(ctx, PROSE) == HookResult(action=Action.rewrite, message=shown)
+    assert stream(ctx, PROSE) == shown(display)

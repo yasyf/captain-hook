@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 ENV_PREFIXES = ("CAPT_HOOK_", "CAPTAIN_HOOK_", "HOOKS_", "CLAUDE_", "FACTORY_")
-ENV_EXACT = frozenset({"XDG_CACHE_HOME"})
+ENV_EXACT = frozenset({"XDG_CACHE_HOME", "CEREBRAS_API_KEY"})
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Mapping
