@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A hook from a removed project directory no longer switches plugin packs off
+  machine-wide.** Discovery ran `claude plugin list` with the removed directory
+  as its working directory, so the spawn failed with `FileNotFoundError`, which
+  was recorded as a machine-wide roster outage. For the next 15 seconds every
+  project served only built-in packs, and scratch sessions whose temp directory
+  is removed at `SessionEnd` kept renewing it. The roster is now read from the
+  nearest ancestor that still exists.
+
 ## [12.30.10] - 2026-09-15
 
 ### Fixed

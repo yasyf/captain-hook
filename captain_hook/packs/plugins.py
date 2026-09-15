@@ -432,7 +432,7 @@ def dedupe_scoped_roster(parsed: list[EnabledPlugin], root: Path) -> tuple[Enabl
 
 
 def list_plugins_cli(root: Path, executable: str) -> tuple[EnabledPlugin, ...]:
-    """Run ``claude plugin list --json`` in ``root`` and return its enabled, installed plugins.
+    """Run ``claude plugin list --json`` in ``root``, or its nearest surviving ancestor, and return its enabled plugins.
 
     The single subprocess boundary of discovery. Keeps only entries Claude Code reports as ``enabled``
     with a string ``installPath``. Every failure is one :class:`PluginListError` — a nonzero exit, a
@@ -443,7 +443,7 @@ def list_plugins_cli(root: Path, executable: str) -> tuple[EnabledPlugin, ...]:
     try:
         result = subprocess.run(
             [executable, "plugin", "list", "--json"],
-            cwd=root,
+            cwd=next(directory for directory in (root, *root.parents) if directory.is_dir()),
             capture_output=True,
             text=True,
             timeout=CLI_TIMEOUT_SECONDS,
