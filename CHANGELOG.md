@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.30.9] - 2026-09-14
+
 ### Fixed
 
 - **A hook client whose working directory was removed leaves it for `/`
