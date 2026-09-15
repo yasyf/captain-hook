@@ -22,7 +22,7 @@ from captain_hook.dispatch import (
     format_output,
     run_declarative,
 )
-from captain_hook.events import PermissionRequestEvent
+from captain_hook.events import MessageDisplayEvent, PermissionRequestEvent
 from captain_hook.primitives.nudge import nudge
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
@@ -37,6 +37,12 @@ from tests.helpers import (
 
 def make_permission_request_event() -> PermissionRequestEvent:
     return PermissionRequestEvent(_raw={"tool_name": "Bash", "tool_input": {"command": "ls"}}, ctx=make_ctx())
+
+
+def make_message_display_event() -> MessageDisplayEvent:
+    return MessageDisplayEvent(
+        _raw={"message_id": "msg_1", "index": 0, "final": False, "delta": "Refactored the parser."}, ctx=make_ctx()
+    )
 
 
 class TestRunDeclarative:
@@ -213,6 +219,25 @@ class TestFormatOutput:
 
     def test_permission_request_warn_returns_none_so_dialog_shows(self) -> None:
         assert format_output(Event.PermissionRequest, HookResult(action=Action.warn, message="careful")) is None
+
+    @pytest.mark.parametrize(
+        "message",
+        [pytest.param("Fixed the parser.", id="replacement"), pytest.param("", id="blanked-chunk")],
+    )
+    def test_message_display_rewrite_emits_display_content(self, message: str) -> None:
+        output = format_output(Event.MessageDisplay, HookResult(action=Action.rewrite, message=message))
+        assert output == {"hookSpecificOutput": {"hookEventName": "MessageDisplay", "displayContent": message}}
+
+    @pytest.mark.parametrize(
+        "result",
+        [
+            pytest.param(HookResult(action=Action.allow), id="allow"),
+            pytest.param(HookResult(action=Action.warn, message="careful"), id="warn"),
+            pytest.param(HookResult(action=Action.block, message="no"), id="block"),
+        ],
+    )
+    def test_message_display_non_rewrite_leaves_the_chunk_displayed(self, result: HookResult) -> None:
+        assert format_output(Event.MessageDisplay, result) is None
 
 
 class TestExecuteHook:
@@ -868,6 +893,15 @@ class TestDispatch:
         assert result == {
             "hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow"}}
         }
+
+    def test_message_display_dispatch_keeps_an_empty_rewrite(self) -> None:
+
+        @on(Event.MessageDisplay)
+        def blanker(evt: Any) -> HookResult:
+            return HookResult.of(Action.rewrite, "")
+
+        result = dispatch(Event.MessageDisplay, make_message_display_event())
+        assert result == {"hookSpecificOutput": {"hookEventName": "MessageDisplay", "displayContent": ""}}
 
     def test_subagent_stop_block(self) -> None:
         register_hook(Event.SubagentStop, message="stay", block=True)

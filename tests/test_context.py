@@ -430,6 +430,14 @@ class TestCallLlm:
             ctx.call_llm("test prompt")
         assert mock_call.call_args.kwargs["timeout"] == expected
 
+    def test_forwards_an_explicit_backend(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
+        ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)
+
+        with patch("spawnllm.call_sync", return_value="ok") as mock_call:
+            ctx.call_llm("test prompt", backend=CODEX)
+        assert mock_call.call_args.kwargs["backend"] is CODEX
+
     def test_general_forwards_specialty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp")
         ctx = HookContext(session=SessionStore(None), transcript=MagicMock(), settings=None)

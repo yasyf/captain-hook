@@ -65,6 +65,7 @@ EXPORTS: dict[str, str] = {
     "DurableStore": "captain_hook.durable",
     "BackgroundTask": "captain_hook.events",
     "BaseHookEvent": "captain_hook.events",
+    "MessageDisplayEvent": "captain_hook.events",
     "NotificationEvent": "captain_hook.events",
     "PermissionRequestEvent": "captain_hook.events",
     "PostToolUseEvent": "captain_hook.events",

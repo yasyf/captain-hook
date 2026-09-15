@@ -822,6 +822,33 @@ class NotificationEvent(BaseHookEvent):
 
 
 @dataclass
+class MessageDisplayEvent(BaseHookEvent):
+    """Fires once per streamed chunk of an assistant message; a ``rewrite`` replaces the chunk's displayed text.
+
+    ``message_id`` groups the chunks of one message, ``index`` orders them from ``0``, ``final`` marks the
+    last chunk, and ``delta`` is this chunk's text fragment, not the cumulative message.
+    """
+
+    event_name: ClassVar[Event] = Event.MessageDisplay
+
+    @property
+    def message_id(self) -> str:
+        return self._raw["message_id"]
+
+    @property
+    def index(self) -> int:
+        return self._raw["index"]
+
+    @property
+    def final(self) -> bool:
+        return self._raw["final"]
+
+    @property
+    def delta(self) -> str:
+        return self._raw["delta"]
+
+
+@dataclass
 class SessionStartEvent(BaseHookEvent):
     """Fires when a session starts, providing what triggered it. Warns inject context; it cannot block.
 

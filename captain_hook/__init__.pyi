@@ -61,6 +61,7 @@ from captain_hook.durable import DurableState as DurableState
 from captain_hook.durable import DurableStore as DurableStore
 from captain_hook.events import BackgroundTask as BackgroundTask
 from captain_hook.events import BaseHookEvent as BaseHookEvent
+from captain_hook.events import MessageDisplayEvent as MessageDisplayEvent
 from captain_hook.events import NotificationEvent as NotificationEvent
 from captain_hook.events import PermissionRequestEvent as PermissionRequestEvent
 from captain_hook.events import PostToolUseEvent as PostToolUseEvent

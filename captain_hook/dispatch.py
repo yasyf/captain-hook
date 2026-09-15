@@ -114,6 +114,12 @@ def format_output(event: Event, result: HookResult) -> dict[str, Any] | None:
         return {"decision": "block", "reason": result.message} if result.action is not Action.allow else None
     if event is Event.PermissionRequest:
         return format_permission_decision(result)
+    if event is Event.MessageDisplay:
+        return (
+            {"hookSpecificOutput": {"hookEventName": event.name, "displayContent": result.message}}
+            if result.action is Action.rewrite
+            else None
+        )
 
     match result.action:
         case Action.block:
