@@ -171,6 +171,7 @@ reference:
       - SessionCron
       - PreCompactEvent
       - NotificationEvent
+      - MessageDisplayEvent
       - SessionStartEvent
       - SessionEndEvent
       - HookContext
