@@ -641,9 +641,6 @@ func parentPath(environ []string) string {
 	return "/usr/bin:/bin:/usr/sbin:/sbin"
 }
 
-// laneIdentity names the agent a hook payload belongs to: a subagent's events
-// carry the lead's session_id beside its own agent_id, and the lead's carry
-// none. Empty when the payload names no session.
 func laneIdentity(payload string) string {
 	var value struct {
 		SessionID string `json:"session_id"`

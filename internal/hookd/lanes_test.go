@@ -11,9 +11,6 @@ import (
 	"github.com/yasyf/captain-hook/internal/wireproto"
 )
 
-// hookPayload is the shape Claude Code writes to a hook's stdin: the lead's
-// session_id beside the fields every event carries, plus agent_id on a
-// subagent's events.
 func hookPayload(sessionID, agentID string) string {
 	payload := map[string]any{
 		"session_id": sessionID, "transcript_path": "/tmp/transcripts/" + sessionID + ".jsonl",
@@ -30,8 +27,6 @@ func hookPayload(sessionID, agentID string) string {
 	return string(encoded)
 }
 
-// heldWorker reports each request the manager puts on the worker pipe and
-// answers it only when the test releases its id.
 type heldWorker struct {
 	arrived chan wireproto.Frame
 	release chan uint64
@@ -89,9 +84,6 @@ func agentEvent(pid int, sessionID, agentID string) wireproto.EventRequest {
 	return request
 }
 
-// TestDispatchSerializesOneAgentAndOverlapsItsPeers pins the lane key: two
-// events from one agent run one at a time, while the lead and its subagents,
-// which share a session_id, run beside each other.
 func TestDispatchSerializesOneAgentAndOverlapsItsPeers(t *testing.T) {
 	t.Parallel()
 	manager := mustWorkerManager(t)

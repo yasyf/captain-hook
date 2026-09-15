@@ -195,9 +195,6 @@ func (s *scheduler) acquireSlot(ctx context.Context, async bool) error {
 	)
 }
 
-// acquireWorker bounds what is in flight on one interpreter to its threads. An
-// emptied worker pool is dropped with its observation, so a fresh one borrows
-// the host pool's last service time.
 func (s *scheduler) acquireWorker(ctx context.Context, worker string, async bool) error {
 	return s.acquire(ctx, "this project's worker",
 		func() (*pool, int, time.Duration) {
