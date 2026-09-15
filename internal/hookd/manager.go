@@ -1,11 +1,9 @@
 package hookd
 
 import (
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,13 +11,13 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/yasyf/captain-hook/internal/wireproto"
 	"github.com/yasyf/daemonkit"
+	"github.com/yasyf/daemonkit/artifact"
 )
 
 const (
@@ -36,21 +34,11 @@ const (
 	workerIdleTTL = 30 * time.Minute
 
 	workerSweepInterval = 5 * time.Minute
-
-	minParallelDispatch = 16
-
-	// No wider budget can reach more interpreters than the worker cache holds.
-	maxParallelDispatch = maxLiveWorkers
-
-	// Nothing awaits a background dispatch, so it never competes for the blocking budget.
-	asyncParallelDispatch = 4
-
-	parallelCeilingVar = "CAPT_HOOK_MAX_PARALLEL"
 )
 
 // ErrWorkerCapacity refuses a dispatch that can neither start a worker nor
-// reuse one. One worker is cached per distinct {root, python, build, semantic
-// environment} tuple, so the natural population is the number of projects a
+// reuse one. One worker is cached per distinct {root, semantic environment}
+// pair, so the natural population is the number of projects a
 // machine runs hooks in at once. A full cache is normally resolved by evicting
 // its least recently used idle interpreter — a machine whose roots churn fills
 // every slot with keys no dispatch will ask for again — so this is reached only
@@ -95,17 +83,14 @@ func (e *workerEntry) idle() bool {
 }
 
 type workerKey struct {
-	id     string
-	root   string
-	python string
-	build  string
-	env    map[string]string
+	id   string
+	root string
+	env  map[string]string
 }
 
 type workerManager struct {
 	owner     daemonkit.Ctx
 	logWriter io.Writer
-	scheduler *scheduler
 
 	now   func() time.Time
 	start func(ctx context.Context, key workerKey) (*workerClient, error)
@@ -122,35 +107,15 @@ type workerManager struct {
 	wg      sync.WaitGroup
 }
 
-func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) (*workerManager, error) {
-	ceiling, err := parallelCeiling(os.Getenv(parallelCeilingVar))
-	if err != nil {
-		return nil, err
-	}
+func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) *workerManager {
 	lifetime, end := context.WithCancel(context.Background())
 	m := &workerManager{
 		owner: owner, logWriter: logWriter,
-		// A ceiling set below the floor is meant, so the floor follows it down.
-		scheduler: newScheduler(min(minParallelDispatch, ceiling), ceiling, asyncParallelDispatch),
-		entries:   make(map[string]*workerEntry),
-		now:       time.Now, lifetime: lifetime, end: end,
+		entries: make(map[string]*workerEntry),
+		now:     time.Now, lifetime: lifetime, end: end,
 	}
 	m.start = m.startWorker
-	return m, nil
-}
-
-func parallelCeiling(override string) (int, error) {
-	if strings.TrimSpace(override) == "" {
-		return maxParallelDispatch, nil
-	}
-	parsed, err := strconv.Atoi(strings.TrimSpace(override))
-	if err != nil {
-		return 0, fmt.Errorf("captain: %s must be a positive integer, got %q", parallelCeilingVar, override)
-	}
-	if parsed <= 0 {
-		return 0, fmt.Errorf("captain: %s must be positive, got %d", parallelCeilingVar, parsed)
-	}
-	return parsed, nil
+	return m
 }
 
 func (m *workerManager) dispatch(ctx context.Context, request wireproto.EventRequest) (wireproto.EventResponse, error) {
@@ -161,31 +126,24 @@ func (m *workerManager) dispatch(ctx context.Context, request wireproto.EventReq
 	if err != nil {
 		return wireproto.EventResponse{}, err
 	}
-	identity := laneIdentity(request.PayloadRaw)
-	if identity == "" {
-		identity = fmt.Sprintf("pid:%d", request.ClientPID)
-	}
-	laneKey := key.id + "\x00" + identity + "\x00" + strconv.FormatBool(request.Async)
 	if deadline, ok := ctx.Deadline(); ok {
 		request.DeadlineUnixMS = deadline.UnixMilli()
 	}
-	return m.scheduler.run(ctx, key.id, laneKey, request.Event, request.Async, func() (wireproto.EventResponse, error) {
-		entry, err := m.acquire(ctx, key)
-		if err != nil {
+	entry, err := m.acquire(ctx, key)
+	if err != nil {
+		return wireproto.EventResponse{}, err
+	}
+	defer m.release(entry)
+	worker := entry.worker
+	response, err := worker.call(ctx, request)
+	if err != nil {
+		if !worker.broken() {
 			return wireproto.EventResponse{}, err
 		}
-		defer m.release(entry)
-		worker := entry.worker
-		response, err := worker.call(ctx, request)
-		if err != nil {
-			if !worker.broken() {
-				return wireproto.EventResponse{}, err
-			}
-			m.retire(key.id, worker)
-			return wireproto.EventResponse{}, errors.Join(err, m.settle(worker))
-		}
-		return response, nil
-	})
+		m.retire(key.id, worker)
+		return wireproto.EventResponse{}, errors.Join(err, m.settle(worker))
+	}
+	return response, nil
 }
 
 // acquire hands back the cached entry for key, starting its interpreter on
@@ -245,9 +203,7 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 // landing after Close is settled here, since the cache has let go of it.
 func (m *workerManager) startEntry(entry *workerEntry) {
 	defer m.wg.Done()
-	ctx, cancel := context.WithTimeout(m.lifetime, workerReadinessTimeout)
-	defer cancel()
-	worker, err := m.start(ctx, entry.key)
+	worker, err := m.start(m.lifetime, entry.key)
 	m.mu.Lock()
 	stranded := err == nil && m.closed
 	if stranded {
@@ -378,13 +334,17 @@ func ephemeralRoot(root string) bool {
 // startWorker spawns one Python worker on ChannelStdio: daemonkit joins the child's
 // stdin and stdout into one deadline-aware conn, drains its stderr into the
 // host log for the child's whole life, and records the process durably under
-// the daemon's own ownership scope before the child runs an instruction. The
-// exec posture is the named waiver — the executable is whatever interpreter
-// the requesting project points at. Session gives the worker its own session,
-// so settlement covers the hook subprocesses it spawns and not just the
-// interpreter. ctx is the manager's readiness budget, never a requester's.
+// the daemon's own ownership scope before the child runs an instruction.
+// Session gives the worker its own session, so settlement covers the hook
+// subprocesses it spawns and not just the interpreter.
 func (m *workerManager) startWorker(ctx context.Context, key workerKey) (*workerClient, error) {
-	child, err := m.owner.Spawn(ctx, workerCmd(key), daemonkit.ChannelStdio, m.logWriter)
+	python, err := productPython(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("captain: resolve Python product %s: %w", Build, err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, workerReadinessTimeout)
+	defer cancel()
+	child, err := m.owner.Spawn(ctx, workerCmd(key, python), daemonkit.ChannelStdio, m.logWriter)
 	if err != nil {
 		return nil, fmt.Errorf("captain: spawn Python product worker: %w", err)
 	}
@@ -392,12 +352,12 @@ func (m *workerManager) startWorker(ctx context.Context, key workerKey) (*worker
 	if err != nil {
 		return nil, m.stopChild(child, errors.New("captain: take Python worker channel"), err)
 	}
-	worker, err := handshakeWorker(ctx, conn, key.build)
+	worker, err := handshakeWorker(ctx, conn, Build)
 	if err != nil {
 		_ = conn.Close()
 		return nil, m.stopChild(child, errors.New("captain: handshake Python product worker"), err)
 	}
-	worker.child = child
+	worker.child, worker.python = child, python
 	m.wg.Add(1)
 	go m.watch(key.id, worker, child)
 	return worker, nil
@@ -407,9 +367,9 @@ func (m *workerManager) startWorker(ctx context.Context, key workerKey) (*worker
 // stays off sys.path: a directory there sharing an installed dependency's name
 // otherwise shadows it, failing the import inside the worker thread where no
 // hook response can carry it.
-func workerCmd(key workerKey) daemonkit.Cmd {
+func workerCmd(key workerKey, python string) daemonkit.Cmd {
 	return daemonkit.Cmd{
-		Path: key.python, Args: []string{"-P", "-m", "captain_hook.worker"}, Dir: workerDir(key.root),
+		Path: python, Args: []string{"-P", "-m", "captain_hook.worker"}, Dir: workerDir(key.root),
 		Env:     mergeEnvironment(workerBaseEnvironment(os.Environ()), key.env),
 		Session: true,
 		Exec:    daemonkit.ServingSameUser(),
@@ -496,8 +456,8 @@ func (m *workerManager) status() []workerStatus {
 			continue
 		}
 		result = append(result, workerStatus{
-			Key: entry.key.id, Root: entry.key.root, Build: entry.key.build,
-			Python: entry.key.python, PID: entry.worker.child.PID(),
+			Key: entry.key.id, Root: entry.key.root, Build: Build,
+			Python: entry.worker.python, PID: entry.worker.child.PID(),
 		})
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Key < result[j].Key })
@@ -552,25 +512,18 @@ func makeWorkerKey(request wireproto.EventRequest) (workerKey, error) {
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolved
 	}
-	python, err := filepath.Abs(request.Python)
-	if err != nil {
-		return workerKey{}, fmt.Errorf("captain: resolve Python: %w", err)
-	}
 	env := semanticWorkerEnvironment(request.Env)
 	keys := make([]string, 0, len(env))
 	for name := range env {
 		keys = append(keys, name)
 	}
 	sort.Strings(keys)
-	parts := []string{root, python, request.Build}
+	parts := []string{root}
 	for _, name := range keys {
 		parts = append(parts, name+"="+env[name])
 	}
 	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return workerKey{
-		id: hex.EncodeToString(digest[:8]), root: root, python: python,
-		build: request.Build, env: env,
-	}, nil
+	return workerKey{id: hex.EncodeToString(digest[:8]), root: root, env: env}, nil
 }
 
 func semanticWorkerEnvironment(env map[string]string) map[string]string {
@@ -641,13 +594,18 @@ func parentPath(environ []string) string {
 	return "/usr/bin:/bin:/usr/sbin:/sbin"
 }
 
-func laneIdentity(payload string) string {
-	var value struct {
-		SessionID string `json:"session_id"`
-		AgentID   string `json:"agent_id"`
+func productPython(ctx context.Context) (string, error) {
+	store, err := artifact.DefaultStore()
+	if err != nil {
+		return "", err
 	}
-	if err := json.Unmarshal([]byte(payload), &value); err != nil || value.SessionID == "" {
-		return ""
+	entrypoint, err := store.Resolve(ctx, &artifact.Descriptor{
+		Schema: 1, Name: "capt-hook", Kind: artifact.PythonTool,
+		Version: artifact.VersionSource{Static: Build},
+		Tool:    &artifact.ToolSpec{Dist: "capt-hook", Entrypoint: "hook"},
+	})
+	if err != nil {
+		return "", err
 	}
-	return value.SessionID + "\x00" + cmp.Or(value.AgentID, "main")
+	return filepath.Join(filepath.Dir(entrypoint), "python"), nil
 }

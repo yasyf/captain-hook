@@ -18,29 +18,17 @@ type workerResult struct {
 	err      error
 }
 
-// abandonedCall is the error a call returns once its caller's context ended
-// with the request still on the worker. settled closes when the worker is
-// done with it — the late reply arrives, or the worker fails — and only then
-// is the interpreter free of the work the caller walked away from.
-type abandonedCall struct {
-	cause   error
-	settled <-chan struct{}
-}
-
-func (e *abandonedCall) Error() string { return e.cause.Error() }
-
-func (e *abandonedCall) Unwrap() error { return e.cause }
-
 type workerClient struct {
-	conn  net.Conn
-	build string
-	child *daemonkit.Child
+	conn   net.Conn
+	build  string
+	python string
+	child  *daemonkit.Child
 
 	writeMu   sync.Mutex
 	mu        sync.Mutex
 	nextID    uint64
 	pending   map[uint64]chan workerResult
-	abandoned map[uint64]chan struct{}
+	abandoned map[uint64]struct{}
 	closed    bool
 	err       error
 
@@ -69,7 +57,7 @@ func handshakeWorker(ctx context.Context, conn net.Conn, build string) (*workerC
 	if err := conn.SetDeadline(time.Time{}); err != nil {
 		return nil, err
 	}
-	w := &workerClient{conn: conn, build: build, pending: make(map[uint64]chan workerResult), abandoned: make(map[uint64]chan struct{})}
+	w := &workerClient{conn: conn, build: build, pending: make(map[uint64]chan workerResult), abandoned: make(map[uint64]struct{})}
 	go w.readLoop()
 	return w, nil
 }
@@ -101,7 +89,8 @@ func (w *workerClient) call(ctx context.Context, request wireproto.EventRequest)
 	case received := <-result:
 		return received.response, received.err
 	case <-ctx.Done():
-		return wireproto.EventResponse{}, &abandonedCall{cause: ctx.Err(), settled: w.abandon(id)}
+		w.abandon(id)
+		return wireproto.EventResponse{}, ctx.Err()
 	}
 }
 
@@ -141,12 +130,11 @@ func (w *workerClient) readLoop() {
 		w.mu.Lock()
 		pending := w.pending[frame.ID]
 		delete(w.pending, frame.ID)
-		settled, abandoned := w.abandoned[frame.ID]
+		_, abandoned := w.abandoned[frame.ID]
 		delete(w.abandoned, frame.ID)
 		w.mu.Unlock()
 		if pending == nil {
 			if abandoned {
-				close(settled)
 				continue
 			}
 			w.fail(fmt.Errorf("captain: Python worker returned unknown request id %d", frame.ID))
@@ -178,20 +166,13 @@ func (w *workerClient) removePending(id uint64) {
 	w.mu.Unlock()
 }
 
-// abandon stops waiting on id and returns the channel that closes once the
-// worker is done with it. An id the worker already answered, or that a failure
-// already swept, is settled at once.
-func (w *workerClient) abandon(id uint64) <-chan struct{} {
-	settled := make(chan struct{})
+func (w *workerClient) abandon(id uint64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if _, ok := w.pending[id]; !ok {
-		close(settled)
-		return settled
+	if _, ok := w.pending[id]; ok {
+		delete(w.pending, id)
+		w.abandoned[id] = struct{}{}
 	}
-	delete(w.pending, id)
-	w.abandoned[id] = settled
-	return settled
 }
 
 func (w *workerClient) fail(err error) {
@@ -205,16 +186,13 @@ func (w *workerClient) fail(err error) {
 	}
 	w.closed = true
 	w.err = err
-	pending, abandoned := w.pending, w.abandoned
+	pending := w.pending
 	w.pending = make(map[uint64]chan workerResult)
-	w.abandoned = make(map[uint64]chan struct{})
+	w.abandoned = make(map[uint64]struct{})
 	w.mu.Unlock()
 	_ = w.conn.Close()
 	for _, waiter := range pending {
 		waiter <- workerResult{err: err}
-	}
-	for _, settled := range abandoned {
-		close(settled)
 	}
 }
 

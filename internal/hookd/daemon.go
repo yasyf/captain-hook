@@ -9,7 +9,6 @@ import (
 const (
 	hostTeamID                    = "SXKCTF23Q2"
 	hostSigningIdentifier         = "capt-hookd"
-	helperSigningIdentifier       = "com.yasyf.capt-hook.helper"
 	helperClientSigningIdentifier = "com.yasyf.capt-hook.helper.bridge"
 	hostShutdownTimeout           = 30 * time.Second
 	// hostConcurrency bounds concurrent wire sessions, not dispatch. Every
@@ -23,25 +22,17 @@ func hostRequirement() daemonkit.Requirement {
 	return daemonkit.Requirement{TeamID: hostTeamID, SigningIdentifier: hostSigningIdentifier}
 }
 
-func helperRequirement() daemonkit.Requirement {
-	return daemonkit.Requirement{TeamID: hostTeamID, SigningIdentifier: helperSigningIdentifier}
-}
-
 func helperClientRequirement() daemonkit.Requirement {
 	return daemonkit.Requirement{TeamID: hostTeamID, SigningIdentifier: helperClientSigningIdentifier}
 }
 
-// hostTrust folds captain-hook's peer classes onto daemonkit's three lanes.
-// The control lane admits the signed host alone, so only capt-hookd may drain
-// the runtime. The business lane is a disjunction over the three signed
-// identities that speak the product protocol — host, helper app, and helper
-// bridge — and any one of them may invoke every op the product serves.
+// hostTrust admits only the signed host to the control lane, so only capt-hookd
+// may drain the runtime. The business lane is daemonkit's same-user floor.
 func hostTrust() daemonkit.Trust {
 	control := hostRequirement()
 	return daemonkit.Trust{
-		Control:  &control,
-		Business: daemonkit.Requirements{control, helperRequirement(), helperClientRequirement()},
-		Serving:  daemonkit.ServingSigned(control),
+		Control: &control,
+		Serving: daemonkit.ServingSigned(control),
 	}
 }
 

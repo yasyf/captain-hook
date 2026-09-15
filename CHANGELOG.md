@@ -6,6 +6,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Every hook is one plain `capt-hookd hook <Event>` command.** The plugin
+  registers `"$HOME/.daemonkit/bin/capt-hookd" hook <Event>` once per event,
+  with no `--async` twin, no bash wrapper, no binrun, and no Python shim for
+  `SessionStart`. `capt-hook helper install` copies the deployed bundle's
+  `capt-hookd` to `~/.daemonkit/bin` after activation, so a running hook never
+  executes out of the bundle a deploy replaces. The client reads the event,
+  sends one request, and prints the reply. When no host is listening, or the
+  host is starting or draining, it waits for a ready host within its own
+  deadline and sends once, so a deploy shows up as hook latency rather than a
+  `not installed` error.
+- **The host runs every event as it arrives.** The per-agent lanes, the
+  adaptive pool, the async cap, and deadline shedding are gone, and with them
+  the `overloaded` refusal and `CAPT_HOOK_MAX_PARALLEL`. Seven events from one
+  agent now run side by side on the worker instead of in series.
+- **The host resolves its own Python.** Events no longer carry the
+  interpreter, the build, or an async flag. The host runs workers from the
+  `capt-hook` tool env of its own build and accepts any schema v1 event.
+- **Any process running as your user may send the host events.** The business
+  lane admits the same user instead of three signed identities; only the
+  signed host may drain it.
+- **Hooks in a development checkout run the installed wheel.** The `hook`
+  console script execs `~/.daemonkit/bin/capt-hookd hook <Event>` and exits 0
+  on `--async`, so `.venv/bin/hook` dispatches to the installed app's tool env
+  rather than the checkout's `.venv`.
+
+### Removed
+
+- The pre-v0.21 host stop and the restored-abort retry in `package-install`,
+  and the vendored bundle digest, now `deploy.BundleDigest`.
+
+### Upgrading
+
+- Sessions on plugin 12.28 or older fail every hook until they restart, since
+  the client no longer accepts the `run --event … --python … --build …` flag
+  form. Sessions on 12.29 through 12.30 keep working through a `run <Event>`
+  alias until 12.32, but still run the bundle binary, so a deploy can stop
+  their hooks until they restart.
+
 ## [12.30.11] - 2026-09-15
 
 ### Fixed

@@ -71,14 +71,9 @@ uv run --project path/to/captain-hook capt-hook test
 ## Live hooks in this checkout
 
 This repo dispatches its own hooks through `"$CLAUDE_PROJECT_DIR"/.venv/bin/hook`, wired by the
-committed `.claude/settings.json` — not through the plugin's `bin/hook` wrapper that consumer
-repos get. The shim execs the fixed signed app, and the app fences dispatch on the exact wheel
-build, so a checkout whose `.venv` doesn't match the installed app is rejected. That fence is
-deliberate: after a dependency change, run `uv sync --extra dev` and rebuild and install the
-same-version app, or live dispatch in this repo stays fenced off.
-
-The plugin's dispatch surface is the committed `captain_hook/bin/hook` symlink plus its
-`hook.binrun` descriptor; CI parse-validates the descriptor.
+committed `.claude/settings.json`. The shim execs `~/.daemonkit/bin/capt-hookd hook <Event>`, so
+those hooks run on the installed app's wheel, not this checkout's `.venv`. To exercise checkout
+code live, build and install the app from it.
 
 ## Releasing
 

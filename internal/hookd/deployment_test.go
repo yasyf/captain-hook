@@ -1,93 +1,99 @@
 package hookd
 
 import (
-	"context"
-	"errors"
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/yasyf/daemonkit"
-	"github.com/yasyf/daemonkit/deploy"
+	"github.com/yasyf/daemonkit/launchd"
 )
 
-// TestHostRecordAbsentPartitionsTheEras pins both arms of the gate that decides
-// whether an upgrade stops the incumbent itself. A record present is a v0.21
-// host, which deploy's own quiesce drains — stopping it here would take its
-// agent down ahead of a Supersede that could still fail. A record absent is a
-// pre-v0.21 host, invisible to that quiesce and fatal to the inventory after
-// it, so the upgrade has to stop that one itself.
-func TestHostRecordAbsentPartitionsTheEras(t *testing.T) {
+func TestExactAgentsPinSignedBundleFailureRestartsDrainBudgetAndUnrestrictedSession(t *testing.T) {
 	t.Parallel()
-	present := filepath.Join(t.TempDir(), "daemon.records")
-	if err := os.WriteFile(present, []byte("{}"), 0o600); err != nil {
+	root, err := os.MkdirTemp("/private/tmp", "captain-hook-plan-")
+	if err != nil {
 		t.Fatal(err)
 	}
-	absent := filepath.Join(t.TempDir(), "daemon.records")
-
-	for name, tt := range map[string]struct {
-		path string
-		want bool
-	}{
-		"record present is the v0.21 era": {present, false},
-		"record absent is the legacy era": {absent, true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			got, err := hostRecordAbsent(tt.path)
-			if err != nil {
-				t.Fatalf("hostRecordAbsent: %v", err)
-			}
-			if got != tt.want {
-				t.Fatalf("hostRecordAbsent(%q) = %t, want %t", tt.path, got, tt.want)
-			}
-		})
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	app := filepath.Join(root, helperApplicationLeaf)
+	agents, err := exactAgents(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 2 {
+		t.Fatalf("agents = %#v", agents)
+	}
+	var host, helper launchd.Agent
+	for _, agent := range agents {
+		switch agent.Label {
+		case hostServiceLabel:
+			host = agent
+		case helperServiceLabel:
+			helper = agent
+		}
+	}
+	if host.RestartPolicy != launchd.RestartOnFailure || host.Program != hostExecutablePath(app) ||
+		len(host.Args) != 1 || host.Args[0] != "serve" || host.ExitTimeOut != hostShutdownTimeout ||
+		len(host.AssociatedBundleIdentifiers) != 1 || host.AssociatedBundleIdentifiers[0] != helperBundleID {
+		t.Fatalf("host agent = %#v", host)
+	}
+	if helper.RestartPolicy != launchd.RestartOnFailure || helper.Program != appExecutablePath(app) ||
+		len(helper.Args) != 0 || len(helper.AssociatedBundleIdentifiers) != 1 ||
+		helper.AssociatedBundleIdentifiers[0] != helperBundleID {
+		t.Fatalf("helper agent = %#v", helper)
+	}
+	for _, agent := range agents {
+		body, err := agent.Plist()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), "LimitLoadToSessionType") {
+			t.Fatalf(
+				"agent %q pins a launchd session type; launchctl bootstrap refuses it with EIO:\n%s",
+				agent.Label, body,
+			)
+		}
 	}
 }
 
-// TestHostStopDaemonNamesNoProgram is the whole reason one Stop call serves
-// both eras. Stop's inventory gate holds vacuously over a Daemon naming no
-// program, so a legacy host with no record and no v0.21 socket is carried to
-// the agent removal whose bootout takes it down. Naming a program would invert
-// that: the gate would find the live legacy host and refuse with ErrUnsettled.
-func TestHostStopDaemonNamesNoProgram(t *testing.T) {
-	t.Parallel()
-	daemon := hostDaemon()
-	if daemon.Program != (daemonkit.Program{}) {
-		t.Fatal("host daemon names a program; Stop would refuse a live legacy host instead of removing it")
+func TestInstallClientPublishesTheBundleHostAtTheStablePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	app := filepath.Join(t.TempDir(), helperApplicationLeaf)
+	host := hostExecutablePath(app)
+	if err := os.MkdirAll(filepath.Dir(host), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := daemonkit.Open(daemon); err != nil {
-		t.Fatalf("host daemon is not openable as a client: %v", err)
-	}
-}
-
-func TestRetryRestoredAbort(t *testing.T) {
-	t.Parallel()
-	restoredAbort := errors.Join(daemonkit.ErrUnsettled, deploy.ErrRestored)
-	unrestoredAbort := daemonkit.ErrUnsettled
-	other := errors.New("captain package: activate installed app")
-
-	for name, tt := range map[string]struct {
-		results   []error
-		wantErr   error
-		wantCalls int
-	}{
-		"restored abort once then success retries": {[]error{restoredAbort, nil}, nil, 2},
-		"restored abort twice fails":               {[]error{restoredAbort, restoredAbort}, deploy.ErrRestored, 2},
-		"unrestored abort is not retried":          {[]error{unrestoredAbort}, daemonkit.ErrUnsettled, 1},
-		"other failure is not retried":             {[]error{other}, other, 1},
-	} {
-		t.Run(name, func(t *testing.T) {
-			calls := 0
-			err := retryRestoredAbort(t.Context(), func(context.Context) error {
-				calls++
-				return tt.results[calls-1]
-			})
-			if calls != tt.wantCalls {
-				t.Fatalf("apply ran %d times, want %d", calls, tt.wantCalls)
-			}
-			if !errors.Is(err, tt.wantErr) {
-				t.Fatalf("retryRestoredAbort = %v, want %v", err, tt.wantErr)
-			}
-		})
+	for _, build := range []string{"first", "second"} {
+		if err := os.WriteFile(host, []byte(build), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := installClient(app); err != nil {
+			t.Fatalf("installClient: %v", err)
+		}
+		client := filepath.Join(home, ".daemonkit", "bin", "capt-hookd")
+		body, err := os.ReadFile(client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(body, []byte(build)) {
+			t.Fatalf("client = %q, want %q", body, build)
+		}
+		info, err := os.Stat(client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o755 {
+			t.Fatalf("client mode = %v, want 0755", info.Mode().Perm())
+		}
+		entries, err := os.ReadDir(filepath.Dir(client))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("client directory holds %d entries, want only the client", len(entries))
+		}
 	}
 }

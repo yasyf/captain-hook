@@ -36,13 +36,10 @@ def request(*, request_id: int = 1, event: str = "PreToolUse", payload_raw: str 
     return EventRequest(
         id=request_id,
         event=event,
-        async_=True,
         root="/project",
         cwd="/project/subdir",
         env={"CLAUDE_PROJECT_DIR": "/project"},
         payload_raw=payload_raw,
-        python="/usr/bin/python3",
-        build="12.9.1",
         client_pid=100,
         client_ppid=99,
         deadline_unix_ms=1_700_000_000_000,
@@ -82,7 +79,7 @@ def test_dispatch_binds_request_scope_and_replays_cached_discovery() -> None:
     assert seen["event"].name == "PreToolUse"
     assert seen["kwargs"] == {
         "session_dir": None,
-        "async_": True,
+        "async_": False,
         "transcript_loader": transcript_loader,
     }
     assert seen["overrides"].cwd == "/project/subdir"

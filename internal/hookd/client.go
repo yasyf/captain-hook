@@ -4,15 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/yasyf/captain-hook/internal/wireproto"
 	"github.com/yasyf/daemonkit"
 )
-
-// ErrDaemonUnavailable means the exact signed host cannot be reached.
-var ErrDaemonUnavailable = errors.New("captain: daemon unavailable")
 
 const closeTimeout = 5 * time.Second
 
@@ -24,7 +20,11 @@ type Client struct {
 
 // NewClient returns a lazy client for the only host schema and build.
 func NewClient() (*Client, error) {
-	daemon, err := daemonkit.Open(hostDaemon())
+	return openClient(hostDaemon())
+}
+
+func openClient(d daemonkit.Daemon) (*Client, error) {
+	daemon, err := daemonkit.Open(d)
 	if err != nil {
 		return nil, fmt.Errorf("captain: open signed host: %w", err)
 	}
@@ -33,104 +33,33 @@ func NewClient() (*Client, error) {
 
 // Close settles the product session.
 func (c *Client) Close() error {
+	return closeLane(c.business)
+}
+
+func closeLane(lane *daemonkit.Business) error {
 	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 	defer cancel()
-	return c.business.Close(ctx)
+	return lane.Close(ctx)
 }
 
-// EnsureCurrent requires the exact deployment-owned host build.
-func (c *Client) EnsureCurrent(ctx context.Context) error {
-	health, err := c.RuntimeHealth(ctx)
-	if err != nil {
-		return probeFailure(err)
-	}
-	return health.exact()
-}
-
-// probeFailure names what the probe actually met, because the outcomes have
-// different next steps. ErrNotReady, ErrDraining, and ErrPeerGone are one
-// runtime mid-transition and answer again on the next event; ErrSessionCapacity
-// is a healthy host with every session slot taken, which waiting also fixes; a
-// deadline is a host that is there and slow; ErrUntrusted is a live peer that
-// failed the signed-host requirement, which reinstalling fixes and waiting does
-// not; and ErrNoVerifier is a machine that cannot answer the question at all.
-// Only what is left is a host that is not installed.
-func probeFailure(err error) error {
-	switch {
-	case errors.Is(err, daemonkit.ErrNotReady), errors.Is(err, daemonkit.ErrDraining),
-		errors.Is(err, daemonkit.ErrPeerGone):
-		return fmt.Errorf(
-			"captain: signed host is between generations — starting, draining, or restarting — "+
-				"and hooks retry on the next event: %w", err,
-		)
-	case errors.Is(err, daemonkit.ErrSessionCapacity):
-		return fmt.Errorf(
-			"captain: signed host is serving its session ceiling and has no slot for this hook; "+
-				"it is installed and healthy, and hooks retry on the next event: %w", err,
-		)
-	case errors.Is(err, os.ErrDeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
-		return fmt.Errorf(
-			"captain: signed host did not answer the readiness probe in time; it is running but slow, "+
-				"most likely under machine load, and hooks retry on the next event: %w", err,
-		)
-	case errors.Is(err, daemonkit.ErrUntrusted):
-		return fmt.Errorf(
-			"captain: the process serving the host socket is not the signed capt-hookd; "+
-				"reinstall the helper with `capt-hook helper install`: %w", err,
-		)
-	case errors.Is(err, daemonkit.ErrNoVerifier):
-		return fmt.Errorf(
-			"captain: this machine offers no code-signing verifier, so the signed host cannot be "+
-				"trusted and hooks stay unserved: %w", err,
-		)
-	default:
-		return fmt.Errorf("captain: signed host is not installed and ready; run `capt-hook helper install`: %w", err)
-	}
-}
-
-// eventFailure names the one dispatch refusal that is not a fault: a host
-// shedding this hook under load answered at once instead of holding the tool
-// call for its whole deadline, and the next event is admitted on its own.
-func eventFailure(err error) error {
-	if isOverloaded(err) {
-		return fmt.Errorf("%w; the host is healthy and admits hooks again as it catches up", err)
-	}
-	return err
-}
-
-// RuntimeHealth observes the exact product runtime without mutating it.
-func (c *Client) RuntimeHealth(ctx context.Context) (runtimeHealthResponse, error) {
-	result, err := c.call(ctx, opRuntimeHealth, nil)
-	if err != nil {
-		return runtimeHealthResponse{}, err
-	}
-	var health runtimeHealthResponse
-	if err := decodeStrict(result, &health); err != nil {
-		return runtimeHealthResponse{}, fmt.Errorf("captain: decode runtime health: %w", err)
-	}
-	if health.Schema != wireproto.Schema || health.RuntimeBuild == "" || health.RuntimeProtocol <= 0 || health.PID <= 1 {
-		return runtimeHealthResponse{}, errors.New("captain: runtime health identity is incomplete")
-	}
-	return health, nil
-}
-
-func (h runtimeHealthResponse) exact() error {
-	if h.RuntimeProtocol != wireproto.Schema {
-		return fmt.Errorf("captain: runtime protocol %d is not exact v%d", h.RuntimeProtocol, wireproto.Schema)
-	}
-	if h.RuntimeBuild != Build {
-		return fmt.Errorf("captain: runtime build %q is not exact build %q", h.RuntimeBuild, Build)
-	}
-	return nil
-}
-
-// Event dispatches exactly once. No transport outcome is replayed.
+// Event dispatches exactly once. A host that is absent, starting, or draining
+// refused the event before dispatch, so it is sent once more, on a fresh
+// session, after a host is ready within the same deadline.
 func (c *Client) Event(ctx context.Context, request wireproto.EventRequest) (wireproto.EventResponse, error) {
 	payload, err := wireproto.MarshalEventRequest(request)
 	if err != nil {
 		return wireproto.EventResponse{}, err
 	}
 	result, err := c.call(ctx, opEvent, payload)
+	if betweenGenerations(err) {
+		if _, waitErr := c.daemon.WaitReady(ctx); waitErr != nil {
+			return wireproto.EventResponse{}, errors.Join(err, waitErr)
+		}
+		stale := c.business
+		c.business = c.daemon.Business()
+		result, err = c.call(ctx, opEvent, payload)
+		_ = closeLane(stale)
+	}
 	if err != nil {
 		return wireproto.EventResponse{}, err
 	}
@@ -167,11 +96,13 @@ func (c *Client) RestartWorkers(ctx context.Context) error {
 	return err
 }
 
+func betweenGenerations(err error) bool {
+	return daemonkit.Undispatched(err) && (errors.Is(err, daemonkit.ErrAbsent) ||
+		errors.Is(err, daemonkit.ErrDraining) || errors.Is(err, daemonkit.ErrNotReady))
+}
+
 func (c *Client) call(ctx context.Context, op string, payload []byte) ([]byte, error) {
 	reply, err := c.business.Call(ctx, op, payload)
-	if errors.Is(err, daemonkit.ErrAbsent) {
-		return nil, errors.Join(ErrDaemonUnavailable, err)
-	}
 	if err != nil {
 		return nil, err
 	}

@@ -13,7 +13,7 @@ func TestWorkerFrameRoundTrip(t *testing.T) {
 		Protocol: Schema, Op: "event", ID: 7,
 		Request: &EventRequest{
 			Schema: Schema, Event: "PreToolUse", Root: "/tmp/repo", CWD: "/tmp/repo",
-			Env: map[string]string{}, Python: "/usr/bin/python3", Build: "12.9.1",
+			Env:       map[string]string{},
 			ClientPID: 10, ClientPPID: 9,
 		},
 	}

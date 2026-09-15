@@ -34,9 +34,7 @@ def hello(build: str = "12.9.1") -> dict[str, object]:
     return {"protocol": 1, "op": "hello", "build": build}
 
 
-def event(
-    request_id: int, *, build: str = "12.9.1", payload_raw: str | None = None, deadline_unix_ms: int = 0
-) -> dict[str, object]:
+def event(request_id: int, *, payload_raw: str | None = None, deadline_unix_ms: int = 0) -> dict[str, object]:
     return {
         "protocol": 1,
         "op": "event",
@@ -44,13 +42,10 @@ def event(
         "request": {
             "schema": 1,
             "event": "PreToolUse",
-            "async": False,
             "root": "/project",
             "cwd": "/project/subdir",
             "env": {"CLAUDE_PROJECT_DIR": "/project"},
             "payload_raw": payload_raw or '{"session_id":"session-1"}',
-            "python": "/usr/bin/python3",
-            "build": build,
             "client_pid": 100,
             "client_ppid": 99,
             "deadline_unix_ms": deadline_unix_ms,
@@ -78,13 +73,10 @@ def test_event_frame_decodes_exact_go_envelope() -> None:
     assert request == EventRequest(
         id=7,
         event="PreToolUse",
-        async_=False,
         root="/project",
         cwd="/project/subdir",
         env={"CLAUDE_PROJECT_DIR": "/project"},
         payload_raw='{"session_id":"session-1"}',
-        python="/usr/bin/python3",
-        build="12.9.1",
         client_pid=100,
         client_ppid=99,
         deadline_unix_ms=0,

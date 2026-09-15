@@ -6,8 +6,7 @@ from typing import Any
 
 from captain_hook.types import Event
 
-PLUGIN_PREFIX = '"${CLAUDE_PLUGIN_ROOT}/bin/hook"'
-SHIM_PREFIX = '"${CLAUDE_PLUGIN_ROOT}/bin/hook-shim"'
+CLIENT = '"$HOME/.daemonkit/bin/capt-hookd"'
 MCP_SERVER_NAME = "capt-hook"
 MCP_COMMAND = "${CLAUDE_PLUGIN_ROOT}/bin/capt-hook"
 MCP_ARGS = ["mcp"]
@@ -25,19 +24,8 @@ def load_mcp_config() -> dict[str, Any]:
     return json.loads(resource.read_text())
 
 
-def prefix_for(name: str) -> str:
-    return SHIM_PREFIX if name == Event.SessionStart.name else PLUGIN_PREFIX
-
-
-def expected_command_set(name: str) -> set[str]:
-    """The commands the shipped hooks.json must register for ``name`` — derived, not hardcoded.
-
-    Every event registers both dispatch variants (sync + async) and nothing else: the reviewer and
-    the throttled sweep now ride the async ``run <Event>`` dispatch natively, so no ``review run`` or
-    ``review sweep`` entry is wired. SessionStart enters the Python shim, every other event the signed host.
-    """
-    command = f"{prefix_for(name)} run {name}"
-    return {command, f"{command} --async"}
+def expected_command(name: str) -> str:
+    return f"{CLIENT} hook {name}"
 
 
 class TestPluginHooksJson:
@@ -52,21 +40,11 @@ class TestPluginHooksJson:
     def test_covers_every_event_enum_member(self) -> None:
         assert set(load_plugin_hooks()["hooks"]) == {name for e in Event if (name := e.name)}
 
-    def test_every_command_is_canonical(self) -> None:
-        # Drive off the Event enum, not the file's keys, so the shipped set must MATCH the
-        # derivation (a dropped event fails here as well as in test_covers_every_event_enum_member).
+    def test_every_event_registers_exactly_the_plain_client(self) -> None:
         hooks = load_plugin_hooks()["hooks"]
         for name in (n for e in Event if (n := e.name)):
             [group] = hooks[name]
-            entries = group["hooks"]
-            assert all(entry["type"] == "command" for entry in entries)
-            by_command = {entry["command"]: entry for entry in entries}
-            sync_command = f"{prefix_for(name)} run {name}"
-            async_command = f"{sync_command} --async"
-            assert set(by_command) == expected_command_set(name)
-            # Sync dispatcher foreground (restores additionalContext hooks); async is background.
-            assert "async" not in by_command[sync_command]
-            assert by_command[async_command]["async"] is True
+            assert group["hooks"] == [{"type": "command", "command": expected_command(name)}]
 
     def test_ships_no_raw_review_or_sweep_entries(self) -> None:
         # The reviewer and sweep are native `run <Event>` dispatch now; no raw entry survives.
@@ -76,31 +54,6 @@ class TestPluginHooksJson:
             for entry in group["hooks"]
         ]
         assert not any("review run" in c or "review sweep" in c for c in commands)
-
-    def test_session_start_dispatches_through_the_python_shim(self) -> None:
-        """PIN: SessionStart carries the auto-updater, so it must dispatch on an app of any version.
-
-        An app older than the Go hook grammar exits 2 on ``run <Event>``; the shim spells the flag
-        grammar every app accepts, so the updater still runs and brings the app forward.
-        """
-        hooks = load_plugin_hooks()["hooks"]
-        commands = {entry["command"] for group in hooks["SessionStart"] for entry in group["hooks"]}
-        assert commands == {f"{SHIM_PREFIX} run SessionStart", f"{SHIM_PREFIX} run SessionStart --async"}
-        others = {
-            entry["command"]
-            for name, groups in hooks.items()
-            if name != "SessionStart"
-            for group in groups
-            for entry in group["hooks"]
-        }
-        assert all(command.startswith(f"{PLUGIN_PREFIX} run ") for command in others)
-
-    def test_canonical_prefix_enters_the_signed_host_shim(self) -> None:
-        assert PLUGIN_PREFIX == '"${CLAUDE_PLUGIN_ROOT}/bin/hook"'
-        assert expected_command_set("PreToolUse") == {
-            '"${CLAUDE_PLUGIN_ROOT}/bin/hook" run PreToolUse',
-            '"${CLAUDE_PLUGIN_ROOT}/bin/hook" run PreToolUse --async',
-        }
 
 
 class TestMcpJson:

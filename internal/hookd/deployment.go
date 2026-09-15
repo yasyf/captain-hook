@@ -2,12 +2,8 @@ package hookd
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,6 +12,7 @@ import (
 
 	"github.com/yasyf/daemonkit"
 	"github.com/yasyf/daemonkit/deploy"
+	"github.com/yasyf/daemonkit/durable"
 	"github.com/yasyf/daemonkit/launchd"
 )
 
@@ -161,14 +158,6 @@ func openDeployment(appPath string) (*deploy.Deployment, error) {
 	})
 }
 
-func retryRestoredAbort(ctx context.Context, apply func(context.Context) error) error {
-	err := apply(ctx)
-	if errors.Is(err, daemonkit.ErrUnsettled) && errors.Is(err, deploy.ErrRestored) {
-		return apply(ctx)
-	}
-	return err
-}
-
 func applyPackagedApplication(ctx context.Context) error {
 	source, err := packagedApplicationPath()
 	if err != nil {
@@ -185,7 +174,7 @@ func applyPackagedApplication(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	digest, err := bundleTreeDigest(source)
+	digest, err := deploy.BundleDigest(source)
 	if err != nil {
 		return err
 	}
@@ -200,21 +189,6 @@ func applyPackagedApplication(ctx context.Context) error {
 		if err := quiesceInstalledApplication(ctx, source, targetPath); err != nil {
 			return err
 		}
-		// A pre-v0.21 incumbent is stopped here because nothing downstream will:
-		// deploy's quiesce reads an unrecorded daemon as already absent, and its
-		// executable inventory then meets the still-live legacy host and refuses
-		// the whole upgrade. A recorded one is left alone — that quiesce drains
-		// it properly, and taking its agent down ahead of a Supersede that could
-		// still fail would leave the machine with no agent at all.
-		legacy, err := hostRecordAbsent(hostDaemon().RecordPath())
-		if err != nil {
-			return err
-		}
-		if legacy {
-			if err := stopInstalledHost(ctx); err != nil {
-				return err
-			}
-		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("captain package: inspect %q: %w", targetPath, err)
 	}
@@ -228,7 +202,45 @@ func applyPackagedApplication(ctx context.Context) error {
 	if err := validateActivation(activation, targetPath, version); err != nil {
 		return err
 	}
+	if err := installClient(targetPath); err != nil {
+		return err
+	}
 	return pingBridge(ctx, targetPath)
+}
+
+func clientPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("captain package: resolve user home: %w", err)
+	}
+	return filepath.Join(home, ".daemonkit", "bin", "capt-hookd"), nil
+}
+
+func installClient(appPath string) error {
+	target, err := clientPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return fmt.Errorf("captain package: create client directory: %w", err)
+	}
+	source, err := os.Open(hostExecutablePath(appPath))
+	if err != nil {
+		return fmt.Errorf("captain package: open packaged client: %w", err)
+	}
+	defer source.Close()
+	staged, err := durable.Create(target, 0o755)
+	if err != nil {
+		return fmt.Errorf("captain package: stage client: %w", err)
+	}
+	defer staged.Close()
+	if _, err := io.Copy(staged, source); err != nil {
+		return fmt.Errorf("captain package: copy client: %w", err)
+	}
+	if err := staged.Commit(); err != nil {
+		return fmt.Errorf("captain package: publish client: %w", err)
+	}
+	return nil
 }
 
 func uninstallPackagedApplication(ctx context.Context) error {
@@ -331,14 +343,7 @@ func quiesceInstalledApplication(ctx context.Context, controllerApp, installedAp
 }
 
 // stopInstalledHost makes nothing serve the host label and takes its agent
-// down. One call covers both eras, which is why the daemon it stops is
-// hostDaemon itself, Program and all left as the launcher declares them: a
-// v0.21 incumbent has an owner record and is drained through the control lane,
-// while a pre-v0.21 one has neither record nor v0.21 socket, so Stop's
-// inventory gate holds vacuously over a Daemon naming no program and the
-// removal's own bootout is what takes the legacy job down. Naming a program
-// here would invert that — the gate would find the live legacy host and refuse
-// with ErrUnsettled rather than remove anything.
+// down, draining the incumbent through the control lane.
 func stopInstalledHost(ctx context.Context) error {
 	client, err := daemonkit.Open(hostDaemon())
 	if err != nil {
@@ -350,22 +355,6 @@ func stopInstalledHost(ctx context.Context) error {
 		return fmt.Errorf("captain package: stop installed host: %w", err)
 	}
 	return nil
-}
-
-// hostRecordAbsent reports whether no v0.21 owner record sits at recordPath.
-// The record is the one artifact that separates the eras: Serve writes it
-// before it binds, so its absence means the incumbent predates v0.21 — and a
-// pre-v0.21 incumbent is invisible to deploy's own quiesce, whose session-less
-// arm reads an unrecorded daemon as already absent and leaves the executable
-// inventory to refuse the upgrade instead.
-func hostRecordAbsent(recordPath string) (bool, error) {
-	switch _, err := os.Stat(recordPath); {
-	case errors.Is(err, os.ErrNotExist):
-		return true, nil
-	case err != nil:
-		return false, fmt.Errorf("captain package: inspect host owner record: %w", err)
-	}
-	return false, nil
 }
 
 // pingBridge proves the signed broker in the activated bundle answers with
@@ -409,78 +398,4 @@ func pingBridge(ctx context.Context, appPath string) (err error) {
 		return errors.New("captain package: broker ping returned a different build")
 	}
 	return nil
-}
-
-// bundleTreeDigest reproduces the tree digest deploy hashes a candidate bundle
-// to, which deploy.Candidate requires and daemonkit v0.21.0 exports no way to
-// compute. It is a hint, never an authority: Install and Supersede re-derive
-// the digest themselves and refuse with deploy.ErrConflict on any
-// disagreement, so a drift here fails the install loudly instead of admitting
-// anything.
-//
-// TODO: delete this once daemonkit exports the digest (deploy.BundleDigest).
-func bundleTreeDigest(root string) (deploy.SHA256, error) {
-	digest := sha256.New()
-	handle, err := os.OpenRoot(root)
-	if err != nil {
-		return deploy.SHA256{}, fmt.Errorf("captain package: open bundle root: %w", err)
-	}
-	walkErr := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		writeDigestField(digest, filepath.ToSlash(relative))
-		writeDigestField(digest, fmt.Sprintf("%#o", uint32(info.Mode())))
-		switch {
-		case info.IsDir():
-			writeDigestField(digest, "directory")
-			return nil
-		case info.Mode().IsRegular():
-			writeDigestField(digest, "regular")
-			file, err := handle.Open(relative)
-			if err != nil {
-				return err
-			}
-			content := sha256.New()
-			size, copyErr := io.Copy(content, file)
-			closeErr := file.Close()
-			if err := errors.Join(copyErr, closeErr); err != nil {
-				return err
-			}
-			writeDigestField(digest, fmt.Sprintf("%d", size))
-			writeDigestField(digest, hex.EncodeToString(content.Sum(nil)))
-			return nil
-		case info.Mode()&os.ModeSymlink != 0:
-			writeDigestField(digest, "symlink")
-			target, err := handle.Readlink(relative)
-			if err != nil {
-				return err
-			}
-			writeDigestField(digest, target)
-			return nil
-		default:
-			return fmt.Errorf("captain package: bundle tree contains unsupported entry %q", path)
-		}
-	})
-	if err := errors.Join(walkErr, handle.Close()); err != nil {
-		return deploy.SHA256{}, fmt.Errorf("captain package: digest bundle tree: %w", err)
-	}
-	var result deploy.SHA256
-	copy(result[:], digest.Sum(nil))
-	return result, nil
-}
-
-func writeDigestField(digest hash.Hash, value string) {
-	var size [8]byte
-	binary.BigEndian.PutUint64(size[:], uint64(len(value)))
-	_, _ = digest.Write(size[:])
-	_, _ = digest.Write([]byte(value))
 }

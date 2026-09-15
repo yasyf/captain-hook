@@ -70,7 +70,7 @@ func boundaryEventRequest(t *testing.T) wireproto.EventRequest {
 	const unitCost = 7
 	request := wireproto.EventRequest{
 		Schema: wireproto.Schema, Event: "PreToolUse", Root: "/tmp/repo", CWD: "/tmp/repo",
-		Env: map[string]string{}, Python: "/usr/bin/python3", Build: Build,
+		Env:       map[string]string{},
 		ClientPID: 10, ClientPPID: 9,
 	}
 	empty, err := wireproto.Marshal(request)

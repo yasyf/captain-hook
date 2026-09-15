@@ -18,8 +18,8 @@ const (
 	MaxEventInput = 32 << 20
 
 	// MaxEventEnvelope is what an EventRequest spends outside PayloadRaw: the
-	// event name, both paths, the interpreter, the build, the client identity,
-	// and the semantic environment the worker key is cut from.
+	// event name, both paths, the client identity, and the semantic environment
+	// the worker key is cut from.
 	MaxEventEnvelope = 1 << 20
 
 	// MaxHostPayload is the ceiling on a serialized request or reply body, and
@@ -38,10 +38,6 @@ const (
 	// cannot be the payload ceiling itself without refusing a request the host
 	// already admitted.
 	MaxWorkerFrame = MaxHostPayload + 4<<10
-
-	// WorkerThreads is the thread pool one Python worker dispatches on, and so
-	// the most events the host has in flight on it at once.
-	WorkerThreads = 16
 )
 
 // OpHello, OpEvent, OpResult, and OpError name the frames the host and a
@@ -60,13 +56,10 @@ const (
 type EventRequest struct {
 	Schema         int               `json:"schema"`
 	Event          string            `json:"event"`
-	Async          bool              `json:"async"`
 	Root           string            `json:"root"`
 	CWD            string            `json:"cwd"`
 	Env            map[string]string `json:"env"`
 	PayloadRaw     string            `json:"payload_raw"`
-	Python         string            `json:"python"`
-	Build          string            `json:"build"`
 	ClientPID      int               `json:"client_pid"`
 	ClientPPID     int               `json:"client_ppid"`
 	DeadlineUnixMS int64             `json:"deadline_unix_ms"`
@@ -104,10 +97,6 @@ func (request EventRequest) Validate() error {
 		return errors.New("captain: root is required")
 	case request.CWD == "":
 		return errors.New("captain: cwd is required")
-	case request.Python == "":
-		return errors.New("captain: python executable is required")
-	case request.Build == "":
-		return errors.New("captain: product build is required")
 	case request.ClientPID <= 1 || request.ClientPPID <= 0:
 		return errors.New("captain: client process identity is required")
 	case request.DeadlineUnixMS < 0:

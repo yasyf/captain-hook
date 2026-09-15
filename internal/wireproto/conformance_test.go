@@ -36,7 +36,6 @@ func describeProtocol() protocolDescriptor {
 			"event_envelope": MaxEventEnvelope,
 			"host_payload":   MaxHostPayload,
 			"worker_frame":   MaxWorkerFrame,
-			"worker_threads": WorkerThreads,
 		},
 		Ops: map[string]string{
 			"hello":  OpHello,
@@ -81,8 +80,8 @@ func sampleEventRequest() EventRequest {
 	return EventRequest{
 		Schema: Schema, Event: "PreToolUse", Root: "/project", CWD: "/project/subdir",
 		Env:        map[string]string{"CLAUDE_PROJECT_DIR": "/project"},
-		PayloadRaw: `{"session_id":"session-1"}`, Python: "/usr/bin/python3", Build: "12.9.1",
-		ClientPID: 100, ClientPPID: 99,
+		PayloadRaw: `{"session_id":"session-1"}`,
+		ClientPID:  100, ClientPPID: 99,
 	}
 }
 
