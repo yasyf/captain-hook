@@ -172,11 +172,12 @@ func TestWorkerCmdOwnsTheWholeWorkerSession(t *testing.T) {
 // which killed every dispatch from a session whose workspace had been reaped
 // before it first needed a worker (observed 2026-09-02).
 func TestWorkerCmdSurvivesARootDeletedUnderTheSession(t *testing.T) {
-	t.Parallel()
-	root := filepath.Join(t.TempDir(), "reaped")
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp+"/")
+	root := filepath.Join(tmp, "reaped")
 	cmd := workerCmd(workerKey{id: "abc", root: root, python: "/usr/bin/python3", build: "12.9.1"})
-	if cmd.Dir != os.TempDir() {
-		t.Fatalf("worker spawn Dir = %q, want the temp dir for a missing root", cmd.Dir)
+	if cmd.Dir != tmp {
+		t.Fatalf("worker spawn Dir = %q, want the clean temp dir %q for a missing root", cmd.Dir, tmp)
 	}
 }
 

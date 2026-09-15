@@ -425,7 +425,7 @@ func workerDir(root string) string {
 	if info, err := os.Stat(root); err == nil && info.IsDir() {
 		return root
 	}
-	return os.TempDir()
+	return filepath.Clean(os.TempDir())
 }
 
 // settle terminates one retired worker on a budget of its own: the request

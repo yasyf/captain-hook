@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A hook whose project directory is gone spawns its worker again.** The
+  worker falls back to the system temp directory once its root is deleted,
+  but macOS spells `$TMPDIR` with a trailing slash and daemonkit refuses a
+  `Cmd.Dir` that is not clean, so the dispatch failed with `Cmd.Dir
+  "/var/folders/.../T/" is not absolute and clean`. The fallback is now
+  cleaned.
+
 ## [12.30.9] - 2026-09-14
 
 ### Fixed
