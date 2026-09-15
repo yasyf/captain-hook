@@ -169,7 +169,7 @@ func (m *workerManager) dispatch(ctx context.Context, request wireproto.EventReq
 	if deadline, ok := ctx.Deadline(); ok {
 		request.DeadlineUnixMS = deadline.UnixMilli()
 	}
-	return m.scheduler.run(ctx, key.id, laneKey, request.Async, func() (wireproto.EventResponse, error) {
+	return m.scheduler.run(ctx, key.id, laneKey, request.Event, request.Async, func() (wireproto.EventResponse, error) {
 		entry, err := m.acquire(ctx, key)
 		if err != nil {
 			return wireproto.EventResponse{}, err
