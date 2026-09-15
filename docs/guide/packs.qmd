@@ -8,7 +8,7 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 
 ## Builtin packs activate themselves
 
-`capt-hook` ships seven builtin packs. Five are always active in every repo:
+`capt-hook` ships eight builtin packs. Six are always active in every repo:
 
 - `general` — language-agnostic guards: git/jj command safety, doc and prompt nudges, task and
   plan discipline, model-routing nudges, a code-review gate, a docs-freshness gate, a detour
@@ -19,6 +19,12 @@ Packs bundle hooks you install once and get everywhere. Exactly two providers ex
 - `steering` — judgment nudges: prefer first-principles fixes over band-aids, don't dismiss a real
   pre-existing issue, don't chase trivial type noise, don't swap the requested fix for docs.
 - `performance` — wall-clock pipelining nudges that speculate a held fix while verification runs.
+- `plain_english` — rewrites each assistant reply into plain English through Cerebras
+  (`qwen-3.8-27b`), replacing the `claudish-to-english` plugin. It does nothing until
+  `CEREBRAS_API_KEY` is set. With the key set, it hides the reply's streamed chunks and shows the
+  rewrite in their place once the last chunk arrives. Code blocks, names, numbers, and commands carry
+  over unchanged. A reply with under 200 characters of prose outside code blocks shows as written, and
+  a failed or empty rewrite shows the original reply and records a fault.
 - `graphite` — Graphite (gt) workflow guards that stay inert outside a `gt repo init`'d repo
   (every hook checks for `.git/.graphite_repo_config`, worktree-aware, and honours `ccx.nogt`, the
   git-config key a repository sets to opt out of the gt lane — ccx declines the lane there, so a
@@ -53,6 +59,7 @@ uvx capt-hook pack list
   builtin:general                    builtin  12 hooks
   builtin:graphite                   builtin  4 hooks
   builtin:performance                builtin  1 hooks
+  builtin:plain_english              builtin  1 hooks
   builtin:python                     builtin  3 hooks
   builtin:steering                   builtin  3 hooks
   plugin:cc-context@cc-context       plugin   32 hooks

@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The `plain_english` builtin pack rewrites replies into plain English.** It
+  replaces the `claudish-to-english` plugin and is active in every repo once
+  `CEREBRAS_API_KEY` is set. On Claude Code's `MessageDisplay` event it hides
+  each streamed chunk of an assistant reply, then shows a rewrite of the whole
+  reply from Cerebras `qwen-3.8-27b` on the last chunk. The rewrite keeps code
+  blocks, names, and numbers, and breaks long sentences into short ones. A
+  reply with under 200 characters of prose outside code blocks shows as
+  written. A failed rewrite shows the original reply and records a fault.
+
 ### Fixed
 
 - **An install no longer fails because the app it just quit is still being
