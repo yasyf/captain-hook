@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -32,10 +33,12 @@ QUESTION = "why does test_state_race flake under xdist?"
 @dataclass
 class CerebrasStub(HookContext):
     answer: str | Exception = "Plain rewrite."
+    delay: float = 0.0
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
     def call_llm(self, template: str | Prompt, *args: Any, **kwargs: Any) -> str:
         self.calls.append((self.assemble_prompt(template, args, {}, transcript=False, diff_text=None), kwargs))
+        time.sleep(self.delay)
         if isinstance(self.answer, Exception):
             raise self.answer
         return self.answer
@@ -160,6 +163,48 @@ def test_final_chunk_joins_what_arrived_by_the_deadline(ctx: CerebrasStub, monke
     assert ctx.session.load(rewrite.PlainEnglishBuffer).messages == {}
 
 
+def test_chunk_after_assembly_stays_displayed(ctx: CerebrasStub, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(rewrite, "ASSEMBLY_DEADLINE_SECONDS", 0.1)
+    ctx.answer = ""
+    chunk(ctx, 0, PROSE)
+    chunk(ctx, 2, "!", final=True)
+
+    assert chunk(ctx, 1, " late") is None
+    assert ctx.session.load(rewrite.PlainEnglishBuffer).messages == {}
+
+
+def test_without_session_storage_chunks_stay_displayed(ctx: CerebrasStub) -> None:
+    ctx.session = SessionStore(None)
+
+    assert chunk(ctx, 0, "partial") is None
+    assert chunk(ctx, 1, PROSE, final=True) is None
+    assert ctx.calls == []
+
+
+def test_slow_rewrite_is_abandoned_before_the_caller_deadline(
+    ctx: CerebrasStub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(rewrite, "REWRITE_TIMEOUT_SECONDS", 0.2)
+    ctx.delay = 2.0
+
+    started = time.monotonic()
+    assert stream(ctx, PROSE) == shown(PROSE)
+    assert time.monotonic() - started < 1.0
+    (line,) = faults.drain()
+    assert "plain_english rewrite" in line
+
+
+def test_rewrite_budget_leaves_margin_before_the_caller_deadline(
+    ctx: CerebrasStub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(rewrite.reqenv, "seconds_left", lambda: 10.0)
+
+    stream(ctx, PROSE)
+
+    ((_, kwargs),) = ctx.calls
+    assert kwargs["timeout"] == 7
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -202,3 +247,10 @@ def test_answer_is_cleaned_before_display(ctx: CerebrasStub, answer: str, displa
     ctx.answer = answer
 
     assert stream(ctx, PROSE) == shown(display)
+
+
+def test_literal_think_tag_in_the_message_is_kept(ctx: CerebrasStub) -> None:
+    text = PROSE + '\n\n```python\nclosing_tag = "</think>"\n```\n'
+    ctx.answer = text
+
+    assert stream(ctx, text) == shown(text.strip())
