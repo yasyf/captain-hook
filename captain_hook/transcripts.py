@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -99,15 +100,23 @@ def lazy_transcript(
     view; it runs once, after the loader returns, on the one codepath the cold CLI and the daemon share.
     """
     resolve = loader or load_transcript
+    guard = threading.Lock()
+    memo: list[Session] = []
 
     def load() -> Session:
-        try:
-            session = resolve(path)
-        except Exception as e:
-            raise TranscriptLoadError(path) from e
-        if attach and (extra := tuple(attach())):
-            return dataclasses.replace(session, attachments=(*session.attachments, *extra))
-        return session
+        # An event's hooks run concurrently and share this proxy, whose first touch is unsynchronized:
+        # memoize under a lock so a race parses once and settles the proxy on one Session, not two.
+        with guard:
+            if memo:
+                return memo[0]
+            try:
+                session = resolve(path)
+            except Exception as e:
+                raise TranscriptLoadError(path) from e
+            if attach and (extra := tuple(attach())):
+                session = dataclasses.replace(session, attachments=(*session.attachments, *extra))
+            memo.append(session)
+            return session
 
     return cast("Session", Proxy(load))
 

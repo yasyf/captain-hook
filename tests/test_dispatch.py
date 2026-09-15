@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from itertools import count
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -23,8 +24,10 @@ from captain_hook.dispatch import (
     ADVISORY_SEPARATOR,
     ASYNC_HOOK_TIMEOUT_SECONDS,
     SYNC_DEADLINE_MARGIN_SECONDS,
+    FirstBlock,
     dispatch,
     dispatch_async,
+    doomed_by_block,
     execute_hook,
     format_output,
     run_declarative,
@@ -53,6 +56,16 @@ def make_message_display_event() -> MessageDisplayEvent:
     return MessageDisplayEvent(
         _raw={"message_id": "msg_1", "index": 0, "final": False, "delta": "Refactored the parser."}, ctx=make_ctx()
     )
+
+
+def distinct_hook(name: str, body: Callable[[str], HookResult | None]) -> HookHandler:
+    """A handler carrying its own ``__name__``, so each registration lands in its own state-key group."""
+
+    def handler(evt: Any) -> HookResult | None:
+        return body(name)
+
+    handler.__name__ = name
+    return handler
 
 
 @contextmanager
@@ -974,15 +987,12 @@ class TestDispatch:
 
 class TestConcurrentDispatch:
     def test_hooks_of_one_event_run_concurrently(self) -> None:
-        def sleeper(name: str) -> HookHandler:
-            def handler(evt: Any) -> HookResult:
-                time.sleep(HOOK_SLEEP_SECONDS)
-                return HookResult(action=Action.warn, message=name)
-
-            return handler
+        def sleep_then_warn(name: str) -> HookResult:
+            time.sleep(HOOK_SLEEP_SECONDS)
+            return HookResult(action=Action.warn, message=name)
 
         for name in ("a", "b", "c", "d", "e"):
-            on(Event.PostToolUse)(sleeper(name))
+            on(Event.PostToolUse)(distinct_hook(name, sleep_then_warn))
 
         start = time.perf_counter()
         result = dispatch(Event.PostToolUse, make_post_tool_event())
@@ -1067,16 +1077,15 @@ class TestConcurrentDispatch:
     def test_concurrent_hooks_share_session_state_without_losing_writes(self, tmp_path: Path) -> None:
         from captain_hook.state import SeenKeys
 
-        def marker(name: str) -> HookHandler:
-            def handler(evt: Any) -> None:
-                evt.ctx.session.once(name, scope="shared")
+        evt = make_post_tool_event(ctx=make_ctx(tmp_path))
 
-            return handler
+        def mark(name: str) -> None:
+            evt.ctx.session.once(name, scope="shared")
 
         for name in ("a", "b", "c", "d", "e"):
-            on(Event.PostToolUse)(marker(name))
+            on(Event.PostToolUse)(distinct_hook(name, mark))
 
-        dispatch(Event.PostToolUse, make_post_tool_event(ctx=make_ctx(tmp_path)), session_dir=tmp_path)
+        dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
 
         assert sorted(SessionStore(tmp_path).load(SeenKeys).seen["shared"]) == ["a", "b", "c", "d", "e"]
 
@@ -1119,12 +1128,81 @@ class TestConcurrentDispatch:
 
         assert seen == [("scoped-session", "/scoped")] * 5
 
-    def test_async_hooks_run_concurrently(self) -> None:
-        for _ in range(5):
+    def test_a_later_block_never_suppresses_an_earlier_hook(self) -> None:
+        blocked = FirstBlock()
+        blocked.record(3)
+        entry = RegisteredHook(spec=HookSpec(events=Event.PreToolUse), handler=lambda evt: None, name="h")
 
-            @on(Event.PostToolUse, async_=True)
-            def sleeper(evt: Any) -> None:
-                time.sleep(HOOK_SLEEP_SECONDS)
+        assert doomed_by_block(entry, 4, blocked)
+        assert not doomed_by_block(entry, 3, blocked)
+        assert not doomed_by_block(entry, 2, blocked)
+
+    def test_a_hook_suppressed_by_a_block_never_raises_into_the_reply(self) -> None:
+        from captain_hook.transcripts import TranscriptLoadError
+
+        register_hook(Event.PreToolUse, message="stop here", block=True)
+
+        @on(Event.PreToolUse)
+        def raiser(evt: Any) -> HookResult:
+            raise TranscriptLoadError(None)
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecisionReason"] == "stop here"
+
+    def test_registrations_sharing_a_state_key_run_in_registration_order(self, tmp_path: Path) -> None:
+        # A capped hook reserves its fire before running and releases it on a falsy result, so a
+        # sibling registration under the same state key must not read the count mid-reservation.
+        seen: list[int] = []
+        counter = count()
+
+        def capped(evt: Any) -> HookResult | None:
+            seen.append(nth := next(counter))
+            return None if nth == 0 else HookResult(action=Action.warn, message="fired")
+
+        for _ in range(2):
+            on(Event.PostToolUse, max_fires=1)(capped)
+
+        result = dispatch(Event.PostToolUse, make_post_tool_event(), session_dir=tmp_path)
+
+        assert seen == [0, 1]
+        assert result is not None
+        assert result["hookSpecificOutput"]["additionalContext"] == "fired"
+
+    def test_a_busy_background_pool_does_not_delay_a_synchronous_block(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        release = threading.Event()
+        pool = ThreadPoolExecutor(max_workers=1)
+        monkeypatch.setattr(dispatch_module, "background_pool", lambda: pool)
+
+        @on(Event.PostToolUse, async_=True)
+        def slow_background(evt: Any) -> None:
+            release.wait(30)
+
+        @on(Event.PreToolUse)
+        def gate(evt: Any) -> HookResult:
+            return HookResult(action=Action.block, message="denied")
+
+        occupier = threading.Thread(target=dispatch_async, args=(make_post_tool_event(),))
+        occupier.start()
+        try:
+            start = time.perf_counter()
+            result = dispatch(Event.PreToolUse, make_pre_tool_event())
+            elapsed = time.perf_counter() - start
+        finally:
+            release.set()
+            occupier.join(30)
+            pool.shutdown(wait=True)
+
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert elapsed < HOOK_SLEEP_SECONDS * 5, f"a blocking gate waited {elapsed:.2f}s on background work"
+
+    def test_async_hooks_run_concurrently(self) -> None:
+        def sleep_a_while(name: str) -> None:
+            time.sleep(HOOK_SLEEP_SECONDS)
+
+        for name in ("a", "b", "c", "d", "e"):
+            on(Event.PostToolUse, async_=True)(distinct_hook(name, sleep_a_while))
 
         start = time.perf_counter()
         dispatch_async(make_post_tool_event())
