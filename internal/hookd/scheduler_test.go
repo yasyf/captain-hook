@@ -25,8 +25,12 @@ func newBlockingRun(s *scheduler) *blockingRun {
 }
 
 func (b *blockingRun) start(key string, async bool) {
+	b.startOn("worker", key, async)
+}
+
+func (b *blockingRun) startOn(worker, key string, async bool) {
 	go func() {
-		_, _ = b.scheduler.run(context.Background(), key, async, func() (wireproto.EventResponse, error) {
+		_, _ = b.scheduler.run(context.Background(), worker, key, async, func() (wireproto.EventResponse, error) {
 			b.entered.Add(1)
 			current := b.active.Add(1)
 			for {
@@ -76,7 +80,7 @@ func TestSchedulerSerializesOneSessionWithoutBlockingAnother(t *testing.T) {
 	results := make(chan error, 3)
 
 	go func() {
-		_, err := scheduler.run(context.Background(), "session-a", false, func() (wireproto.EventResponse, error) {
+		_, err := scheduler.run(context.Background(), "worker", "session-a", false, func() (wireproto.EventResponse, error) {
 			close(firstEntered)
 			<-releaseFirst
 			return wireproto.EventResponse{}, nil
@@ -85,14 +89,14 @@ func TestSchedulerSerializesOneSessionWithoutBlockingAnother(t *testing.T) {
 	}()
 	<-firstEntered
 	go func() {
-		_, err := scheduler.run(context.Background(), "session-a", false, func() (wireproto.EventResponse, error) {
+		_, err := scheduler.run(context.Background(), "worker", "session-a", false, func() (wireproto.EventResponse, error) {
 			close(secondSameEntered)
 			return wireproto.EventResponse{}, nil
 		})
 		results <- err
 	}()
 	go func() {
-		_, err := scheduler.run(context.Background(), "session-b", false, func() (wireproto.EventResponse, error) {
+		_, err := scheduler.run(context.Background(), "worker", "session-b", false, func() (wireproto.EventResponse, error) {
 			close(differentEntered)
 			return wireproto.EventResponse{}, nil
 		})
@@ -186,7 +190,7 @@ func TestSchedulerReleasesSlotWhenQueuedCallerCancels(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	queued := make(chan error, 1)
 	go func() {
-		_, err := scheduler.run(ctx, "session-b", false, func() (wireproto.EventResponse, error) {
+		_, err := scheduler.run(ctx, "worker", "session-b", false, func() (wireproto.EventResponse, error) {
 			return wireproto.EventResponse{}, nil
 		})
 		queued <- err
@@ -205,7 +209,7 @@ func TestSchedulerReleasesSlotWhenQueuedCallerCancels(t *testing.T) {
 
 	admitted := make(chan struct{})
 	go func() {
-		_, _ = scheduler.run(context.Background(), "session-c", false, func() (wireproto.EventResponse, error) {
+		_, _ = scheduler.run(context.Background(), "worker", "session-c", false, func() (wireproto.EventResponse, error) {
 			close(admitted)
 			return wireproto.EventResponse{}, nil
 		})
@@ -242,7 +246,7 @@ func TestSchedulerBackgroundSaturationLeavesBlockingLaneFree(t *testing.T) {
 
 	blocking := make(chan struct{})
 	go func() {
-		_, _ = scheduler.run(context.Background(), "session-a", false, func() (wireproto.EventResponse, error) {
+		_, _ = scheduler.run(context.Background(), "worker", "session-a", false, func() (wireproto.EventResponse, error) {
 			close(blocking)
 			return wireproto.EventResponse{}, nil
 		})
@@ -261,7 +265,7 @@ func TestSchedulerSeparatesOneSessionsBlockingAndBackgroundLanes(t *testing.T) {
 	held := make(chan struct{})
 	release := make(chan struct{})
 	go func() {
-		_, _ = scheduler.run(context.Background(), "session-a\x00true", true, func() (wireproto.EventResponse, error) {
+		_, _ = scheduler.run(context.Background(), "worker", "session-a\x00true", true, func() (wireproto.EventResponse, error) {
 			close(held)
 			<-release
 			return wireproto.EventResponse{}, nil
@@ -271,7 +275,7 @@ func TestSchedulerSeparatesOneSessionsBlockingAndBackgroundLanes(t *testing.T) {
 
 	ran := make(chan struct{})
 	go func() {
-		_, _ = scheduler.run(context.Background(), "session-a\x00false", false, func() (wireproto.EventResponse, error) {
+		_, _ = scheduler.run(context.Background(), "worker", "session-a\x00false", false, func() (wireproto.EventResponse, error) {
 			close(ran)
 			return wireproto.EventResponse{}, nil
 		})
@@ -297,7 +301,7 @@ func TestSchedulerHoldsAdmissionUntilAbandonedWorkSettles(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	go func() {
-		_, err := scheduler.run(ctx, "session-a", false, func() (wireproto.EventResponse, error) {
+		_, err := scheduler.run(ctx, "worker", "session-a", false, func() (wireproto.EventResponse, error) {
 			<-ctx.Done()
 			return wireproto.EventResponse{}, &abandonedCall{cause: ctx.Err(), settled: settled}
 		})
@@ -310,7 +314,7 @@ func TestSchedulerHoldsAdmissionUntilAbandonedWorkSettles(t *testing.T) {
 	entered := make(chan string, 2)
 	for _, key := range []string{"session-a", "session-b"} {
 		go func() {
-			_, _ = scheduler.run(context.Background(), key, false, func() (wireproto.EventResponse, error) {
+			_, _ = scheduler.run(context.Background(), "worker", key, false, func() (wireproto.EventResponse, error) {
 				entered <- key
 				return wireproto.EventResponse{}, nil
 			})
@@ -348,7 +352,7 @@ func TestSchedulerQueuesWhileTheDeadlineCanStillBeMet(t *testing.T) {
 	defer cancel()
 	queued := make(chan error, 1)
 	go func() {
-		_, err := scheduler.run(ctx, "session-late", false, func() (wireproto.EventResponse, error) {
+		_, err := scheduler.run(ctx, "worker", "session-late", false, func() (wireproto.EventResponse, error) {
 			return wireproto.EventResponse{}, nil
 		})
 		queued <- err
@@ -366,7 +370,7 @@ func TestSchedulerQueuesWhileTheDeadlineCanStillBeMet(t *testing.T) {
 
 func warmService(t *testing.T, scheduler *scheduler, key string, service time.Duration) {
 	t.Helper()
-	if _, err := scheduler.run(context.Background(), key, false, func() (wireproto.EventResponse, error) {
+	if _, err := scheduler.run(context.Background(), "worker", key, false, func() (wireproto.EventResponse, error) {
 		time.Sleep(service)
 		return wireproto.EventResponse{}, nil
 	}); err != nil {
@@ -378,7 +382,7 @@ func shedBeforeItsDeadline(t *testing.T, scheduler *scheduler, key string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	_, err := scheduler.run(ctx, key, false, func() (wireproto.EventResponse, error) {
+	_, err := scheduler.run(ctx, "worker", key, false, func() (wireproto.EventResponse, error) {
 		t.Error("a shed dispatch executed")
 		return wireproto.EventResponse{}, nil
 	})
@@ -412,6 +416,47 @@ func TestSchedulerShedsWhenThePoolWaitOutlastsTheDeadline(t *testing.T) {
 
 	shedBeforeItsDeadline(t, scheduler, "session-c")
 	run.finish(t, 1)
+}
+
+func TestSchedulerCapsOneWorkerAtItsThreadsWithoutBlockingAnother(t *testing.T) {
+	t.Parallel()
+	run := newBlockingRun(newScheduler(1, 64, 2))
+	for i := range wireproto.WorkerThreads + 4 {
+		run.startOn("worker-a", fmt.Sprintf("session-%d", i), false)
+	}
+	run.awaitEntered(t, wireproto.WorkerThreads)
+	time.Sleep(25 * time.Millisecond)
+	if got := run.maximum.Load(); got != wireproto.WorkerThreads {
+		t.Fatalf("maximum executions on one worker = %d, want %d", got, wireproto.WorkerThreads)
+	}
+	run.startOn("worker-b", "session-elsewhere", false)
+	run.awaitEntered(t, wireproto.WorkerThreads+1)
+	run.finish(t, wireproto.WorkerThreads+5)
+}
+
+func TestSchedulerShedsWhenTheWorkerWaitOutlastsTheDeadline(t *testing.T) {
+	t.Parallel()
+	scheduler := newScheduler(1, 64, 2)
+	warmService(t, scheduler, "session-a", 100*time.Millisecond)
+	run := newBlockingRun(scheduler)
+	for i := range wireproto.WorkerThreads {
+		run.start(fmt.Sprintf("session-%d", i), false)
+	}
+	run.awaitEntered(t, wireproto.WorkerThreads)
+
+	shedBeforeItsDeadline(t, scheduler, "session-late")
+	run.finish(t, wireproto.WorkerThreads)
+}
+
+func TestSchedulerDropsAnIdleWorkerPool(t *testing.T) {
+	t.Parallel()
+	scheduler := newScheduler(1, 64, 2)
+	warmService(t, scheduler, "session-a", time.Millisecond)
+	scheduler.mu.Lock()
+	defer scheduler.mu.Unlock()
+	if len(scheduler.workers) != 0 {
+		t.Fatalf("worker pools after every dispatch finished = %d, want 0", len(scheduler.workers))
+	}
 }
 
 func TestParallelCeilingReadsOverride(t *testing.T) {

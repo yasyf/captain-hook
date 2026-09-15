@@ -1,9 +1,11 @@
 package hookd
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -159,15 +161,15 @@ func (m *workerManager) dispatch(ctx context.Context, request wireproto.EventReq
 	if err != nil {
 		return wireproto.EventResponse{}, err
 	}
-	session := sessionID(request.PayloadRaw)
-	if session == "" {
-		session = fmt.Sprintf("pid:%d", request.ClientPID)
+	identity := laneIdentity(request.PayloadRaw)
+	if identity == "" {
+		identity = fmt.Sprintf("pid:%d", request.ClientPID)
 	}
-	laneKey := key.id + "\x00" + session + "\x00" + strconv.FormatBool(request.Async)
+	laneKey := key.id + "\x00" + identity + "\x00" + strconv.FormatBool(request.Async)
 	if deadline, ok := ctx.Deadline(); ok {
 		request.DeadlineUnixMS = deadline.UnixMilli()
 	}
-	return m.scheduler.run(ctx, laneKey, request.Async, func() (wireproto.EventResponse, error) {
+	return m.scheduler.run(ctx, key.id, laneKey, request.Async, func() (wireproto.EventResponse, error) {
 		entry, err := m.acquire(ctx, key)
 		if err != nil {
 			return wireproto.EventResponse{}, err
@@ -639,12 +641,16 @@ func parentPath(environ []string) string {
 	return "/usr/bin:/bin:/usr/sbin:/sbin"
 }
 
-func sessionID(payload string) string {
+// laneIdentity names the agent a hook payload belongs to: a subagent's events
+// carry the lead's session_id beside its own agent_id, and the lead's carry
+// none. Empty when the payload names no session.
+func laneIdentity(payload string) string {
 	var value struct {
 		SessionID string `json:"session_id"`
+		AgentID   string `json:"agent_id"`
 	}
-	if jsonErr := decodeStrict([]byte(payload), &value); jsonErr == nil && value.SessionID != "" {
-		return value.SessionID
+	if err := json.Unmarshal([]byte(payload), &value); err != nil || value.SessionID == "" {
+		return ""
 	}
-	return ""
+	return value.SessionID + "\x00" + cmp.Or(value.AgentID, "main")
 }

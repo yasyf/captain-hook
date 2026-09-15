@@ -26,6 +26,7 @@ from captain_hook.worker.protocol import (
     OP_HELLO,
     OP_RESULT,
     PROTOCOL,
+    WORKER_THREADS,
     EventRequest,
     EventResponse,
     ProtocolError,
@@ -54,6 +55,7 @@ def python_descriptor() -> dict[str, object]:
             "event_envelope": MAX_EVENT_ENVELOPE,
             "host_payload": MAX_HOST_PAYLOAD,
             "worker_frame": MAX_FRAME,
+            "worker_threads": WORKER_THREADS,
         },
         "ops": {"hello": OP_HELLO, "event": OP_EVENT, "result": OP_RESULT, "error": OP_ERROR},
         "fields": {

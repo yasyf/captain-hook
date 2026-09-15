@@ -50,13 +50,24 @@ func TestWorkerKeyExcludesSessionAndAccountEnvironment(t *testing.T) {
 	}
 }
 
-func TestSessionIDFallsBackWithoutInventingIdentity(t *testing.T) {
+func TestLaneIdentityNamesTheAgentWithoutInventingOne(t *testing.T) {
 	t.Parallel()
-	if got := sessionID(`{"session_id":"abc"}`); got != "abc" {
-		t.Fatalf("sessionID = %q", got)
-	}
-	if got := sessionID(`not-json`); got != "" {
-		t.Fatalf("malformed sessionID = %q", got)
+	for _, testCase := range []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{name: "lead event", payload: hookPayload("session-a", ""), want: "session-a\x00main"},
+		{name: "subagent event", payload: hookPayload("session-a", "agent-1"), want: "session-a\x00agent-1"},
+		{name: "no session", payload: `{"hook_event_name":"PreToolUse","tool_name":"Bash"}`, want: ""},
+		{name: "malformed", payload: `not-json`, want: ""},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := laneIdentity(testCase.payload); got != testCase.want {
+				t.Fatalf("laneIdentity = %q, want %q", got, testCase.want)
+			}
+		})
 	}
 }
 

@@ -36,6 +36,7 @@ func describeProtocol() protocolDescriptor {
 			"event_envelope": MaxEventEnvelope,
 			"host_payload":   MaxHostPayload,
 			"worker_frame":   MaxWorkerFrame,
+			"worker_threads": WorkerThreads,
 		},
 		Ops: map[string]string{
 			"hello":  OpHello,
