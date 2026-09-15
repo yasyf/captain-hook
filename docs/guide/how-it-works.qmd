@@ -80,7 +80,7 @@ flowchart TD
 
 Four of these events let a hook change the agent's course. `PreToolUse` denies a tool call so Claude Code skips it. `PermissionRequest` fires when a permission dialog would appear, and a hook answers it by approving, denying, or rewriting the call so the user never sees the dialog; no verdict means the dialog shows as usual. `Stop` and `SubagentStop` run the loop the other way, forcing the agent to keep going when it tries to finish early. Every other event is advisory. The hook injects a message into Claude's context but cannot block.
 
-Claude Code fires twelve events in total. For when each one fires, the event class it carries, and whether it can block, see [the events reference](../reference/events.qmd).
+Claude Code fires thirteen events in total. For when each one fires, the event class it carries, and whether it can block, see [the events reference](../reference/events.qmd).
 
 ## The dispatch pipeline
 

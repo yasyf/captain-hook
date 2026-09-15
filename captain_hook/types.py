@@ -61,10 +61,12 @@ class Event(Flag):
     SessionStart = auto()
     SessionEnd = auto()
     PermissionRequest = auto()
+    MessageDisplay = auto()
 
     @property
     def event_class(self) -> type[BaseHookEvent]:
         from captain_hook.events import (
+            MessageDisplayEvent,
             NotificationEvent,
             PermissionRequestEvent,
             PostToolUseEvent,
@@ -92,6 +94,7 @@ class Event(Flag):
             Event.SessionStart: SessionStartEvent,
             Event.SessionEnd: SessionEndEvent,
             Event.PermissionRequest: PermissionRequestEvent,
+            Event.MessageDisplay: MessageDisplayEvent,
         }
         if cls := mapping.get(self):
             return cls
@@ -108,7 +111,8 @@ class Action(StrEnum):
     - ``block``: Prevents the tool use or stops the agent.
     - ``warn``: Adds advisory context without blocking.
     - ``allow``: Explicitly permits the action.
-    - ``rewrite``: Replaces a ``PreToolUse`` tool's input with ``updated_input`` and allows it.
+    - ``rewrite``: Replaces a ``PreToolUse`` tool's input with ``updated_input`` and allows it, or a
+      ``MessageDisplay`` chunk's displayed text with ``message``.
     """
 
     block = "block"

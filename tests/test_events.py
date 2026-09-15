@@ -8,6 +8,7 @@ import pytest
 
 from captain_hook.events import (
     BaseHookEvent,
+    MessageDisplayEvent,
     NotificationEvent,
     PermissionRequestEvent,
     PostToolUseEvent,
@@ -47,6 +48,7 @@ class TestEventClassVar:
             SessionStartEvent: Event.SessionStart,
             SessionEndEvent: Event.SessionEnd,
             PermissionRequestEvent: Event.PermissionRequest,
+            MessageDisplayEvent: Event.MessageDisplay,
         }
         for cls, expected_event in mapping.items():
             assert cls.event_name is expected_event
@@ -479,6 +481,18 @@ class TestNotificationEvent:
         assert evt.message is None
         assert evt.title is None
         assert evt.notification_type is None
+
+
+class TestMessageDisplayEvent:
+    def test_chunk_accessors(self) -> None:
+        evt = MessageDisplayEvent(
+            _raw={"message_id": "msg_1", "index": 2, "final": True, "delta": " the parser."},
+            ctx=make_ctx(),
+        )
+        assert evt.message_id == "msg_1"
+        assert evt.index == 2
+        assert evt.final is True
+        assert evt.delta == " the parser."
 
 
 class TestSessionStartEvent:

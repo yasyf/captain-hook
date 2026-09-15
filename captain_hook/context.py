@@ -16,7 +16,7 @@ from captain_hook.util.paths import resolve_project_dir
 if TYPE_CHECKING:
     from cc_transcript.query import Session
     from pydantic import BaseModel
-    from spawnllm import TModel, TSpecialty
+    from spawnllm import LlmBackend, TModel, TSpecialty
 
     from captain_hook.settings import HooksSettings
     from captain_hook.signals.nlp import Clause
@@ -51,17 +51,17 @@ def is_unsupported_model(exc: BaseException) -> bool:
     return isinstance(exc, BackendCallError) and UNSUPPORTED_MODEL.search(last_error_line(exc)) is not None
 
 
-def remember_model_rejection(specialty: str, model: str, exc: BaseException) -> None:
+def remember_model_rejection(specialty: str, model: str, exc: BaseException, backend: LlmBackend | None) -> None:
     from spawnllm import BackendUnavailable, select_backend
 
     try:
-        backend = select_backend(specialty=specialty, model=model)
+        serving = backend or select_backend(specialty=specialty, model=model)
     except BackendUnavailable:
         return
-    resolved = backend.resolve_model(model)
+    resolved = serving.resolve_model(model)
     if resolved.partition(":")[0] in last_error_line(exc):
         with UNSUPPORTED_MODELS_LOCK:
-            UNSUPPORTED_MODELS[(specialty, model)] = ModelRejection(backend.provider, resolved, str(exc))
+            UNSUPPORTED_MODELS[(specialty, model)] = ModelRejection(serving.provider, resolved, str(exc))
 
 
 def transcript_window(transcript: bool | int | Literal["recent", "full"]) -> int | None:
@@ -269,6 +269,7 @@ class HookContext:
         transcript: bool | int | Literal["recent", "full"] = False,
         diff: bool | str = False,
         agent: bool = False,
+        backend: LlmBackend | None = None,
         response_model: type[M],
         **kwargs: Any,
     ) -> M: ...
@@ -284,6 +285,7 @@ class HookContext:
         transcript: bool | int | Literal["recent", "full"] = False,
         diff: bool | str = False,
         agent: bool = False,
+        backend: LlmBackend | None = None,
         response_model: None = None,
         **kwargs: Any,
     ) -> str: ...
@@ -298,6 +300,7 @@ class HookContext:
         transcript: bool | int | Literal["recent", "full"] = False,
         diff: bool | str = False,
         agent: bool = False,
+        backend: LlmBackend | None = None,
         response_model: type[BaseModel] | None = None,
         **kwargs: Any,
     ) -> str | BaseModel:
@@ -306,8 +309,8 @@ class HookContext:
         with UNSUPPORTED_MODELS_LOCK:
             rejection = UNSUPPORTED_MODELS.get((specialty, model))
         if rejection is not None:
-            backend = select_backend(specialty=specialty, model=model)
-            if (backend.provider, backend.resolve_model(model)) == (rejection.provider, rejection.model):
+            serving = backend or select_backend(specialty=specialty, model=model)
+            if (serving.provider, serving.resolve_model(model)) == (rejection.provider, rejection.model):
                 raise BackendCallError(rejection.message)
             with UNSUPPORTED_MODELS_LOCK:
                 UNSUPPORTED_MODELS.pop((specialty, model), None)
@@ -318,12 +321,21 @@ class HookContext:
         try:
             if response_model is not None:
                 return extract_sync(
-                    prompt, response_model, specialty=specialty, model=model, agent=agent, cwd=cwd, timeout=timeout
+                    prompt,
+                    response_model,
+                    backend=backend,
+                    specialty=specialty,
+                    model=model,
+                    agent=agent,
+                    cwd=cwd,
+                    timeout=timeout,
                 )
-            return call_sync(prompt, specialty=specialty, model=model, agent=agent, cwd=cwd, timeout=timeout)
+            return call_sync(
+                prompt, backend=backend, specialty=specialty, model=model, agent=agent, cwd=cwd, timeout=timeout
+            )
         except BackendCallError as exc:
             if is_unsupported_model(exc):
-                remember_model_rejection(specialty, model, exc)
+                remember_model_rejection(specialty, model, exc, backend)
             raise
 
     def assemble_prompt(

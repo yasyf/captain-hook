@@ -53,6 +53,7 @@ the `CommandCondition` alias to keep the two apart.
 | `SessionStart` | Session starts, resumes, clears, or compacts (`evt.source`) | Provision resources, prime state |
 | `SessionEnd` | Session ends | Cleanup, audit logging |
 | `PermissionRequest` | A permission dialog would be shown | Auto-answer dialogs (allow/deny/rewrite); no decision means the dialog shows |
+| `MessageDisplay` | Each streamed chunk of an assistant reply | Rewrite the displayed text (`displayContent`); no rewrite shows the chunk as-is |
 <!-- /gen:events -->
 
 ## Registration

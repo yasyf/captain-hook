@@ -36,6 +36,10 @@ EVENT_DESCRIPTIONS: dict[Event, tuple[str, str]] = {
         "Provision resources, prime state",
     ),
     Event.SessionEnd: ("Session ends", "Cleanup, audit logging"),
+    Event.MessageDisplay: (
+        "Each streamed chunk of an assistant reply",
+        "Rewrite the displayed text (`displayContent`); no rewrite shows the chunk as-is",
+    ),
 }
 
 PRIMITIVES: dict[str, Callable[..., object]] = {
