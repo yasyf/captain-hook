@@ -67,7 +67,7 @@ class WorkerService:
         finally:
             self._drain()
             self._executor.shutdown()
-            self._background.shutdown()
+            self._background.shutdown(wait=False, cancel_futures=True)
         if self._failure is not None:
             raise self._failure
 

@@ -143,6 +143,47 @@ def test_enablement_follows_the_settings_stack(tmp_path: Path, layers: dict[str,
     assert bool(plugins.enabled_plugins(root)) is enabled
 
 
+def linked_worktree(tmp_path: Path) -> tuple[Path, Path]:
+    (main := tmp_path / "main").mkdir()
+    (gitdir := main / ".git" / "worktrees" / "lane").mkdir(parents=True)
+    (gitdir / "commondir").write_text("../..\n")
+    (worktree := tmp_path / "lanes" / "lane").mkdir(parents=True)
+    (worktree / ".git").write_text(f"gitdir: {gitdir}\n")
+    return main, worktree
+
+
+@pytest.mark.parametrize(
+    ("main_local", "worktree_local", "enabled"),
+    [
+        pytest.param(True, None, True, id="main-checkout-local-file-applies-to-the-worktree"),
+        pytest.param(None, True, True, id="legacy-worktree-local-file-still-read"),
+        pytest.param(False, True, False, id="main-checkout-wins-over-legacy-worktree-file"),
+        pytest.param(True, False, True, id="main-checkout-wins-either-way"),
+    ],
+)
+def test_worktree_reads_the_main_checkouts_local_settings(
+    tmp_path: Path, main_local: bool | None, worktree_local: bool | None, enabled: bool
+) -> None:
+    main, worktree = linked_worktree(tmp_path)
+    write_installed({"show@show": [install_record(write_plugin_pack(tmp_path, "show"))]})
+    write_enabled(user_settings(), {"show@show": not enabled})
+    if main_local is not None:
+        write_enabled(main / ".claude" / "settings.local.json", {"show@show": main_local})
+    if worktree_local is not None:
+        write_enabled(worktree / ".claude" / "settings.local.json", {"show@show": worktree_local})
+
+    assert plugins.local_settings_root(worktree) == main.resolve()
+    assert bool(plugins.enabled_plugins(worktree)) is enabled
+
+
+def test_local_settings_root_is_the_repo_root_for_a_subdirectory(tmp_path: Path) -> None:
+    (repo := tmp_path / "repo" / ".git").mkdir(parents=True)
+    (sub := tmp_path / "repo" / "pkg").mkdir()
+    (outside := tmp_path / "outside").mkdir()
+    assert plugins.local_settings_root(sub) == repo.parent
+    assert plugins.local_settings_root(outside) == outside
+
+
 def test_plugin_without_pack_dir_skipped(tmp_path: Path) -> None:
     (root := tmp_path / "proj").mkdir()
     (consumer := tmp_path / "install" / "consumer" / "1.0.0").mkdir(parents=True)

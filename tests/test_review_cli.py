@@ -269,6 +269,7 @@ class TestUpdateAndSyncPrs:
             "update", "1", "pr_open", "--pr-url", url, "--pr-title", "Block force-pushes", root=scanned_repo
         )
         assert result.exit_code == 0, result.output
+
         async def title_of() -> object:
             async with await ReviewStore.open(db_path()) as store:
                 return (await store.candidate(1))["pr_title"]

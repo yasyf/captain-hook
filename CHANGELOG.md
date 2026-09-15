@@ -55,14 +55,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   project, local, and managed settings files on every discovery. It no
   longer spawns `claude plugin list`, and the roster snapshot, failure and
   outage records, spawn gate, and background refresh are gone. Installs whose
-  directory no longer exists are skipped.
+  directory no longer exists are skipped. In a git worktree the local settings
+  file comes from the main checkout's root, over any older copy in the worktree,
+  as Claude Code reads it. A plugin enabled only through an MDM profile or a
+  remote managed policy is not seen.
 - **The worker answers the host's hello before importing the runtime.** Logging
   setup, the login-shell `PATH` probe, and the runtime import now run after the
   handshake and before the first event is read, so a cold start no longer
   spends the handshake's readiness budget.
-- **Reviewer passes collapse on a per-repo lock.** `review spawn` takes a
-  non-blocking lock keyed on the repo's origin and exits when another pass
-  holds it. The 60-second review-run dedupe stamp is gone.
+- **Reviewer passes over one repo take turns on a per-repo lock.** `review
+  spawn` locks on the repo's origin. A `SessionEnd` review waits for the
+  current holder, and a `Stop` sweep exits when the lock is taken. The
+  60-second review-run dedupe stamp is gone.
 
 ### Removed
 

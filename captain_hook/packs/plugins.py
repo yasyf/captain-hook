@@ -48,14 +48,41 @@ def installed_plugins_path() -> Path:
     return resolve_claude_config_dir() / "plugins" / "installed_plugins.json"
 
 
+def local_settings_root(root: Path) -> Path:
+    """The directory whose ``.claude/settings.local.json`` Claude Code uses for ``root``.
+
+    Inside a git repository that is the repository root, and for a linked worktree the main
+    checkout's root, found through the worktree's ``gitdir`` and its ``commondir`` without running
+    git. Outside a repository, or when the repository root is the home directory, it is ``root``.
+    """
+    for base in (root, *root.parents):
+        if (dotgit := base / ".git").is_dir():
+            repo = base
+            break
+        if dotgit.is_file():
+            gitdir = base / dotgit.read_text().removeprefix("gitdir:").strip()
+            commondir = gitdir / "commondir"
+            repo = (gitdir / commondir.read_text().strip()).resolve().parent if commondir.is_file() else base
+            break
+    else:
+        return root
+    return root if repo == Path.home() else repo
+
+
 def settings_stack(root: Path) -> tuple[Path, ...]:
-    """The settings files that decide enablement for ``root``, lowest precedence first."""
+    """The settings files that decide enablement for ``root``, lowest precedence first.
+
+    A ``settings.local.json`` an older Claude Code left in ``root`` is still read, beneath the one
+    at :func:`local_settings_root`.
+    """
     config = resolve_claude_config_dir()
     managed = (config, *MANAGED_SETTINGS_DIRS)
     return (
         config / "settings.json",
         root / ".claude" / "settings.json",
-        root / ".claude" / "settings.local.json",
+        *dict.fromkeys(
+            (root / ".claude" / "settings.local.json", local_settings_root(root) / ".claude" / "settings.local.json")
+        ),
         *(d / "managed-settings.json" for d in managed),
         *(p for d in managed for p in sorted((d / "managed-settings.d").glob("*.json"))),
     )

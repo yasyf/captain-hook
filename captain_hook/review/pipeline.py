@@ -262,7 +262,7 @@ def guard_and_spawn(raw: bytes, *, gate_enrollment: bool = False) -> None:
     transcript, and a failed spawn all fall through silently, each leaving a
     breadcrumb line on :func:`review_log_path`. The child runs with
     ``CAPT_HOOK_SPAWNED=1`` and its output appended to the same log; concurrent
-    children for one repo collapse on :func:`repo_lock` inside the child.
+    children for one repo serialize on :func:`repo_lock` inside the child.
 
     ``gate_enrollment`` (set only by native dispatch) skips a non-watched repo;
     the raw CLI entry leaves it off, so the detached child stays the
@@ -454,12 +454,12 @@ async def watching_ids(store: ReviewStore, repo: RepoKey) -> set[int]:
 
 
 @contextmanager
-def nonblocking_flock(path: Path) -> Iterator[bool]:
+def exclusive_flock(path: Path, *, wait: bool) -> Iterator[bool]:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
     try:
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, fcntl.LOCK_EX if wait else fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             yield False
             return
@@ -471,13 +471,14 @@ def nonblocking_flock(path: Path) -> Iterator[bool]:
         os.close(fd)
 
 
-def repo_lock(settings: ReviewSettings, cwd: str) -> AbstractContextManager[bool]:
-    """Claims the per-repo reviewer lock non-blockingly, yielding whether it was acquired.
+def repo_lock(settings: ReviewSettings, cwd: str, *, wait: bool) -> AbstractContextManager[bool]:
+    """Claims the per-repo reviewer lock, yielding whether it was acquired.
 
     Keyed on the repo's origin, or on *cwd* outside a repo, so two worktrees of one repo share it.
+    With *wait* the claim blocks until the holder releases it and always yields ``True``.
     """
     key = hashlib.sha256((resolve_repo_key(cwd) or cwd).encode()).hexdigest()[:16]
-    return nonblocking_flock(settings.db_path.parent / "locks" / f"repo-{key}.lock")
+    return exclusive_flock(settings.db_path.parent / "locks" / f"repo-{key}.lock", wait=wait)
 
 
 @contextmanager
@@ -495,7 +496,7 @@ def brain_lock(settings: ReviewSettings) -> Iterator[bool]:
     non-blocking: a second concurrent pass yields ``False`` and skips the brain instead of
     queueing behind the first.
     """
-    with nonblocking_flock(settings.db_path.parent / "locks" / "brain.lock") as claimed:
+    with exclusive_flock(settings.db_path.parent / "locks" / "brain.lock", wait=False) as claimed:
         yield claimed
 
 
@@ -609,8 +610,9 @@ async def spawn_session(
     locked database can't hang the record too. A crash records ``ok=0`` and re-raises, so the traceback
     still lands in the spawn log; the catch is ``BaseException`` because
     ``asyncio.CancelledError`` is not an ``Exception``. When settings construction itself
-    is the crash, the row lands at the default db path. A pass that finds :func:`repo_lock`
-    held by a concurrent pass over the same repo returns at once and records nothing.
+    is the crash, the row lands at the default db path. Passes over one repo serialize on
+    :func:`repo_lock`: a full review waits for the holder, while a sweep that finds the lock
+    held returns at once and records nothing.
 
     Args:
         transcript: The ended session's transcript file.
@@ -631,7 +633,7 @@ async def spawn_session(
     started = datetime.now(UTC)
     try:
         settings = settings or ReviewSettings()
-        with repo_lock(settings, cwd) as claimed:
+        with repo_lock(settings, cwd, wait=not sweep) as claimed:
             if not claimed:
                 logger.info(f"review spawn skipped: another pass holds the lock for cwd={cwd}")
                 return SpawnReport(repo=None, sweep=sweep)

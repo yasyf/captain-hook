@@ -1196,27 +1196,60 @@ class TestSpawnSession:
         assert str(health.last["error"]).startswith("ValidationError:")
         assert "judge_concurrency" in str(health.last["error"])
 
-    async def test_concurrent_pass_over_the_same_repo_skips_without_recording(
+    async def test_sweep_skips_without_recording_while_the_repo_lock_is_held(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         settings = ReviewSettings(db_path=tmp_path / "review.db")
-        passes: list[str] = []
+        passes: list[bool] = []
 
         async def record(transcript: Path, *, cwd: str, settings: ReviewSettings, sweep: bool = False) -> SpawnReport:
-            passes.append(cwd)
-            return SpawnReport(repo=None)
+            passes.append(sweep)
+            return SpawnReport(repo=None, sweep=sweep)
 
         monkeypatch.setattr("captain_hook.review.pipeline.review_session", record)
         transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
-        with repo_lock(settings, str(tmp_path)) as claimed:
+        with repo_lock(settings, str(tmp_path), wait=False) as claimed:
             assert claimed
-            assert await spawn_session(transcript, cwd=str(tmp_path), settings=settings) == SpawnReport(repo=None)
+            skipped = await spawn_session(transcript, cwd=str(tmp_path), settings=settings, sweep=True)
+        assert skipped == SpawnReport(repo=None, sweep=True)
         assert passes == []
         async with await ReviewStore.open(settings.db_path) as store:
             assert (await store.spawn_health()).last is None
 
-        await spawn_session(transcript, cwd=str(tmp_path), settings=settings)
-        assert passes == [str(tmp_path)]
+        await spawn_session(transcript, cwd=str(tmp_path), settings=settings, sweep=True)
+        assert passes == [True]
+
+    async def test_full_review_waits_for_a_sweep_holding_the_repo_lock(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = ReviewSettings(db_path=tmp_path / "review.db")
+        passes: list[bool] = []
+
+        async def record(transcript: Path, *, cwd: str, settings: ReviewSettings, sweep: bool = False) -> SpawnReport:
+            passes.append(sweep)
+            return SpawnReport(repo=None, sweep=sweep)
+
+        monkeypatch.setattr("captain_hook.review.pipeline.review_session", record)
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+        held = threading.Event()
+        release = threading.Event()
+
+        def sweep_holds_the_lock() -> None:
+            with repo_lock(settings, str(tmp_path), wait=False) as claimed:
+                assert claimed
+                held.set()
+                release.wait(timeout=10)
+
+        holder = threading.Thread(target=sweep_holds_the_lock)
+        holder.start()
+        assert held.wait(timeout=10)
+        threading.Timer(0.3, release.set).start()
+        report = await spawn_session(transcript, cwd=str(tmp_path), settings=settings)
+        holder.join(timeout=10)
+
+        assert release.is_set()
+        assert report == SpawnReport(repo=None)
+        assert passes == [False]
 
     async def test_spawn_session_deadline_records_failed_run(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
