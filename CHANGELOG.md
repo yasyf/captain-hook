@@ -2140,7 +2140,6 @@ exist. Migration is mechanical but manual — there is no compatibility shim.
   19,999/20,000 entries (with the anchor pinned) instead of monkeypatching a
   since-removed constant.
 
-||||||| fec5f526
 ## [9.25.0] - 2026-07-16
 
 ### Added

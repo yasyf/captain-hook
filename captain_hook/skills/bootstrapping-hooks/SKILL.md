@@ -8,8 +8,8 @@ allowed-tools: Read, Grep, Glob, AskUserQuestion, Write, Edit, Bash(uvx capt-hoo
 # Bootstrapping capt-hook Guardrails
 
 capt-hook is a declarative hook framework for Claude Code. Hooks are Python files in
-`.claude/hooks/`, dispatched by the `uvx --isolated --from capt-hook hook run <Event>` entries the
-captain-hook plugin registers for every event. Each hook carries inline tests —
+`.claude/hooks/`, dispatched by the `capt-hookd run <Event>` entries the captain-hook plugin
+registers for every event. Each hook carries inline tests —
 `tests={Input(...): Block() | Warn() | Allow()}` — run with `uvx --isolated capt-hook test`. Hooks are
 always Python regardless of the target repo's language: conditions like `Command` and
 `FilePath` are language-agnostic; only AST `lint` rules are Python-specific. The full
