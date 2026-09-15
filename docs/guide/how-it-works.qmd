@@ -84,12 +84,13 @@ Claude Code fires thirteen events in total. For when each one fires, the event c
 
 ## The dispatch pipeline
 
-One captain-hook process handles every event the same way, in four stages.
+One captain-hook process handles every event the same way, in five stages.
 
 1. **Parse the event.** Claude Code writes a JSON payload to stdin. The CLI reads it and builds a typed event object, so a `PreToolUse` payload becomes a `PreToolUseEvent` with accessors like `tool_name` and the parsed `command`.
 2. **Match conditions.** Each registered hook is checked against the event. The event must be in the hook's event set, every `only_if` condition must pass, and no `skip_if` condition may pass. Hooks whose conditions all hold are matched. Conditions are covered in [the conditions reference](../reference/conditions.qmd).
-3. **Execute matching hooks.** Each matched hook produces a verdict. A handler hook runs its function; a declarative hook returns its configured message. Every matched hook runs, and a block from any of them beats an allow — deny wins, mirroring Claude Code's own `deny > ask > allow` precedence. Among approvals the first still wins, and warnings from every hook accumulate.
-4. **Format the verdict.** The winning verdict is rendered as the JSON envelope Claude Code expects and written to stdout. A block becomes a deny, a warning becomes injected context, and no verdict means an empty response that leaves the action untouched.
+3. **Execute matching hooks.** Each matched hook produces a verdict. A handler hook runs its function; a declarative hook returns its configured message. The matched hooks are independent, so they all start at once on a shared, bounded thread pool and the event costs the slowest hook rather than the sum — five packs listening on one `PostToolUse` no longer queue behind each other. Registrations that share a state key are the exception: one `max_fires` counter and one state directory sit behind them, so they run in registration order within their group while the groups run side by side. Every matched hook runs, and a block from any of them beats an allow — deny wins, mirroring Claude Code's own `deny > ask > allow` precedence. Among approvals the first still wins, and warnings from every hook accumulate.
+4. **Combine the verdicts.** Only the starting is concurrent. The verdicts are folded in registration order, never completion order, so the envelope is the one a hook-at-a-time dispatch would have produced however the hooks interleaved: a blocking verdict wins wherever it landed, and messages join in the order the hooks were registered. Two consequences of running them together are worth knowing. A hook still queued when a hook ahead of it blocks is skipped as before, but one already running is left to finish and its verdict dropped. And a hook still running when the caller's deadline arrives is abandoned, so the reply lands in time.
+5. **Format the verdict.** The winning verdict is rendered as the JSON envelope Claude Code expects and written to stdout. A block becomes a deny, a warning becomes injected context, and no verdict means an empty response that leaves the action untouched.
 
 ## Tracing a blocked `git stash`
 
@@ -113,7 +114,7 @@ hook(
 
 **Match conditions.** `Event.PreToolUse` is in the hook's event set, so the event qualifies, and the `only_if` conditions then run against it. `Tool("Bash")` reads `evt.tool_name` and matches, while `Command(r"git\s+stash")` searches the command's raw text and each parsed command's argv join, and matches. No `skip_if` is registered, so with every condition holding, the hook is matched.
 
-**Run the action.** This hook has no handler function, so it returns its configured message as a blocking verdict, `HookResult(action=Action.block, message="git stash is not allowed; use jj shelve")`. A block is final. The pipeline stops checking further hooks and carries the verdict forward.
+**Run the action.** This hook has no handler function, so it returns its configured message as a blocking verdict, `HookResult(action=Action.block, message="git stash is not allowed; use jj shelve")`. A block is final. Any handler-backed hook still waiting for a thread is skipped, and the fold carries the deny forward whatever else came back.
 
 **Format the verdict.** The block renders as a `PreToolUse` deny envelope on stdout, `permissionDecision: "deny"` with the message as `permissionDecisionReason`. Claude Code reads the deny and skips the tool call. Claude sees the reason and reaches for `jj shelve`.
 

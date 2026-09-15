@@ -6,6 +6,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **An event's hooks run concurrently.** The matching hooks of a single event
+  all start at once on one process-wide 16-thread pool, so an event costs its
+  slowest hook rather than the sum of them: five listeners each sleeping 100 ms
+  finish in 107 ms where they took 524 ms. Only the starting is concurrent —
+  the verdicts fold in registration order, so a block still wins wherever it
+  landed, messages still join in the order the hooks were registered, and the
+  envelope is the one a hook-at-a-time dispatch would have rendered. A hook is
+  suppressed only by a block from a hook registered *ahead* of it, never by
+  whichever hook happened to finish first. Registrations that share a state key
+  share one `max_fires` counter and one `PrimitiveState`, so they run in
+  registration order within their group while the groups run side by side. The
+  caller's deadline still gates both ends: a hook does not start once the
+  deadline is inside the margin, and a hook still running when the budget runs
+  out is abandoned so the reply lands in time. A hook already running when
+  another blocks is no longer cancelled — the fold drops its verdict, but it
+  has spent its `max_fires` slot. `async_=True` hooks fan out the same way,
+  each with its own timeout measured from its own start, on a pool of their
+  own so three-minute background work cannot hold the threads a blocking gate
+  needs.
+
 ## [12.32.0] - 2026-09-15
 
 ### Added

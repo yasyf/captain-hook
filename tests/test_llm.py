@@ -708,14 +708,15 @@ class TestSignalConsumptionNotSuppressLaterHooks:
 
         ctx = make_ctx(tmp_path, texts=["critical error found in module"])
 
-        call_count = 0
+        asked: list[str] = []
+        guard = threading.Lock()
 
-        def mock_llm(*args: Any, **kwargs: Any) -> GateVerdict:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return GateVerdict(block=False, reasoning="not a real issue")
-            return GateVerdict(block=True, reasoning="actual problem")
+        def mock_llm(prompt: Any, *args: Any, **kwargs: Any) -> GateVerdict:
+            with guard:
+                asked.append(str(prompt))
+            if "Second gate check" in str(prompt):
+                return GateVerdict(block=True, reasoning="actual problem")
+            return GateVerdict(block=False, reasoning="not a real issue")
 
         ctx.call_llm = mock_llm
 
@@ -735,7 +736,7 @@ class TestSignalConsumptionNotSuppressLaterHooks:
         evt = make_stop_event(ctx=ctx)
         result = dispatch(Event.Stop, evt, session_dir=tmp_path)
 
-        assert call_count == 2, f"Expected both LLM hooks to be called, but only {call_count} were"
+        assert len(asked) == 2, f"Expected both LLM hooks to be called, but only {len(asked)} were"
         assert result is not None, "Second gate should have blocked"
         assert result["decision"] == "block"
         assert "GATE2" in result["reason"]
@@ -745,14 +746,15 @@ class TestSignalConsumptionNotSuppressLaterHooks:
 
         ctx = make_ctx(tmp_path, texts=["critical error found in module"])
 
-        call_count = 0
+        asked: list[str] = []
+        guard = threading.Lock()
 
-        def mock_llm(*args: Any, **kwargs: Any) -> NudgeVerdict:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return NudgeVerdict(fire=False, reasoning="not relevant")
-            return NudgeVerdict(fire=True, reasoning="needs attention")
+        def mock_llm(prompt: Any, *args: Any, **kwargs: Any) -> NudgeVerdict:
+            with guard:
+                asked.append(str(prompt))
+            if "Second nudge check" in str(prompt):
+                return NudgeVerdict(fire=True, reasoning="needs attention")
+            return NudgeVerdict(fire=False, reasoning="not relevant")
 
         ctx.call_llm = mock_llm
 
@@ -772,7 +774,7 @@ class TestSignalConsumptionNotSuppressLaterHooks:
         evt = make_post_tool_event(ctx=ctx)
         result = dispatch(Event.PostToolUse, evt, session_dir=tmp_path)
 
-        assert call_count == 2, f"Expected both LLM hooks to be called, but only {call_count} were"
+        assert len(asked) == 2, f"Expected both LLM hooks to be called, but only {len(asked)} were"
         assert result is not None, "Second nudge should have warned"
         assert "NUDGE2" in result["hookSpecificOutput"]["additionalContext"]
 
