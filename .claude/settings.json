@@ -90,6 +90,11 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run Notification"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run Notification --async",
+            "async": true
           }
         ]
       }
@@ -100,6 +105,11 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run PermissionRequest"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run PermissionRequest --async",
+            "async": true
           }
         ]
       }
@@ -110,6 +120,11 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run PostToolUse"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run PostToolUse --async",
+            "async": true
           }
         ]
       }
@@ -120,6 +135,11 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run PostToolUseFailure"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run PostToolUseFailure --async",
+            "async": true
           }
         ]
       }
@@ -130,6 +150,11 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run PreCompact"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run PreCompact --async",
+            "async": true
           }
         ]
       }
@@ -140,6 +165,11 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run PreToolUse"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run PreToolUse --async",
+            "async": true
           }
         ]
       }
@@ -150,6 +180,11 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run SessionEnd"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run SessionEnd --async",
+            "async": true
           }
         ]
       }
@@ -160,6 +195,11 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run SessionStart"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run SessionStart --async",
+            "async": true
           }
         ]
       }
@@ -170,6 +210,11 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run Stop"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run Stop --async",
+            "async": true
           }
         ]
       }
@@ -180,6 +225,11 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run SubagentStart"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run SubagentStart --async",
+            "async": true
           }
         ]
       }
@@ -190,6 +240,11 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run SubagentStop"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run SubagentStop --async",
+            "async": true
           }
         ]
       }
@@ -200,6 +255,11 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run UserPromptSubmit"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/hook run UserPromptSubmit --async",
+            "async": true
           }
         ]
       }
