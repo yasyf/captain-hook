@@ -141,12 +141,12 @@ def test_hook_dispatch_below_the_minimum_app_fails_open_with_the_upgrade_hint(
     host = contents / "Helpers" / "capt-hookd"
     host.write_text('#!/bin/sh\necho "host $*"\n')
     host.chmod(0o755)
-    runner = Path.home() / ".daemonkit" / "bin"
     pinned = re.search(r'^RUNNER_TAG="(.+)"$', (ROOT / "captain_hook/scripts/install-binary.sh").read_text(), re.M)
     assert pinned is not None
+    runner = Path.home() / ".daemonkit" / "binrun" / pinned[1] / "binrun"
     env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "DAEMONKIT_HOME": str(tmp_path)}
-    if (runner / ".binrun-tag").is_file() and (runner / ".binrun-tag").read_text().strip() == pinned[1]:
-        env["BINRUN_BIN"] = str(runner / "binrun")
+    if runner.is_file():
+        env["BINRUN_BIN"] = str(runner)
     result = subprocess.run(
         [ROOT / "captain_hook/bin/hook", "run", "PreToolUse"],
         env=env,
