@@ -1,11 +1,14 @@
 package hookd
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/yasyf/daemonkit"
+	"github.com/yasyf/daemonkit/deploy"
 )
 
 // TestHostRecordAbsentPartitionsTheEras pins both arms of the gate that decides
@@ -54,5 +57,37 @@ func TestHostStopDaemonNamesNoProgram(t *testing.T) {
 	}
 	if _, err := daemonkit.Open(daemon); err != nil {
 		t.Fatalf("host daemon is not openable as a client: %v", err)
+	}
+}
+
+func TestRetryRestoredAbort(t *testing.T) {
+	t.Parallel()
+	restoredAbort := errors.Join(daemonkit.ErrUnsettled, deploy.ErrRestored)
+	unrestoredAbort := daemonkit.ErrUnsettled
+	other := errors.New("captain package: activate installed app")
+
+	for name, tt := range map[string]struct {
+		results   []error
+		wantErr   error
+		wantCalls int
+	}{
+		"restored abort once then success retries": {[]error{restoredAbort, nil}, nil, 2},
+		"restored abort twice fails":               {[]error{restoredAbort, restoredAbort}, deploy.ErrRestored, 2},
+		"unrestored abort is not retried":          {[]error{unrestoredAbort}, daemonkit.ErrUnsettled, 1},
+		"other failure is not retried":             {[]error{other}, other, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			err := retryRestoredAbort(t.Context(), func(context.Context) error {
+				calls++
+				return tt.results[calls-1]
+			})
+			if calls != tt.wantCalls {
+				t.Fatalf("apply ran %d times, want %d", calls, tt.wantCalls)
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("retryRestoredAbort = %v, want %v", err, tt.wantErr)
+			}
+		})
 	}
 }

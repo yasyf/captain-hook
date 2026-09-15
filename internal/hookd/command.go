@@ -328,7 +328,7 @@ func packageInstallCommand(args []string, stderr io.Writer) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), packageLifecycleTimeout)
 	defer cancel()
-	if err := applyPackagedApplication(ctx); err != nil {
+	if err := retryRestoredAbort(ctx, applyPackagedApplication); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
