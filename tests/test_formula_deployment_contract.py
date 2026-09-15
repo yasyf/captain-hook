@@ -1,6 +1,11 @@
 import json
+import os
+import plistlib
+import re
 import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).parents[1]
 FORMULA = ROOT / ".github/formula/captain-hook.rb.tmpl"
@@ -77,19 +82,76 @@ def test_binrun_version_reads_the_stable_signed_host_without_spawning_it() -> No
     to read a string the bundle already publishes, which on a machine whose endpoint
     security inspects every exec dominated the whole dispatch.
     """
-    descriptor = (ROOT / "captain_hook/bin/capt-hook.binrun").read_text()
-    assert '"file": "~/Applications/Captain Hook.app/Contents/Info.plist"' in descriptor
-    assert '"plist_key": "CFBundleShortVersionString"' in descriptor
-    assert '"command"' not in descriptor
-    assert "capt-hook-host" not in descriptor
+    for name in ("capt-hook.binrun", "hook.binrun"):
+        descriptor = (ROOT / "captain_hook/bin" / name).read_text()
+        assert '"file": "~/Applications/Captain Hook.app/Contents/Info.plist"' in descriptor
+        assert '"plist_key": "CFBundleShortVersionString"' in descriptor
+        assert '"command"' not in descriptor
+        assert "capt-hook-host" not in descriptor
 
 
 def test_formula_never_runs_stapler_inside_the_homebrew_sandbox() -> None:
     assert "stapler" not in FORMULA.read_text()
 
 
-def test_plugin_bin_ships_only_the_cli_wrapper() -> None:
-    assert sorted(path.name for path in (ROOT / "captain_hook/bin").iterdir()) == ["capt-hook", "capt-hook.binrun"]
+def test_hook_dispatch_resolves_the_signed_host_not_python() -> None:
+    """PIN: a hook event execs the signed host directly, with no Python interpreter in the chain.
+
+    The ``capt_hook_client`` shim cost one execve per event; capt-hookd now spells Claude Code's
+    ``run EVENT [--async]`` argv itself. Only dispatch moves: ``capt-hook`` is the full Python CLI.
+    """
+    hook = json.loads((ROOT / "captain_hook/bin/hook.binrun").read_text().split("\n", 1)[1])
+    assert hook["kind"] == "signed-app"
+    assert "tool" not in hook
+    assert hook["app"] == {
+        "dir": "~/Applications",
+        "app_name": "Captain Hook",
+        "exec": "Contents/Helpers/capt-hookd",
+        "copy_exec": True,
+        "formula": "yasyf/tap/captain-hook",
+        "min_version": "12.31.0",
+    }
     cli = json.loads((ROOT / "captain_hook/bin/capt-hook.binrun").read_text().split("\n", 1)[1])
     assert cli["kind"] == "python-tool"
     assert cli["tool"] == {"dist": "capt-hook", "entrypoint": "capt-hook"}
+
+
+@pytest.mark.parametrize(
+    ("installed", "code", "output"),
+    [
+        ("12.30.11", 1, "is version 12.30.11, want at least 12.31.0; run: brew upgrade yasyf/tap/captain-hook"),
+        ("12.31.0", 0, "host run PreToolUse"),
+        ("13.0.0", 0, "host run PreToolUse"),
+    ],
+)
+def test_hook_dispatch_below_the_minimum_app_fails_open_with_the_upgrade_hint(
+    installed: str, code: int, output: str, tmp_path: Path
+) -> None:
+    """PIN: an app older than the scheduler-free host is refused by binrun with the upgrade hint.
+
+    Exit 1 does not block a tool call, and its stderr names the upgrade. An app at or past the
+    minimum execs the host.
+    """
+    contents = tmp_path / "Applications" / "Captain Hook.app" / "Contents"
+    (contents / "Helpers").mkdir(parents=True)
+    plistlib.dump({"CFBundleShortVersionString": installed}, (contents / "Info.plist").open("wb"))
+    host = contents / "Helpers" / "capt-hookd"
+    host.write_text('#!/bin/sh\necho "host $*"\n')
+    host.chmod(0o755)
+    pinned = re.search(r'^RUNNER_TAG="(.+)"$', (ROOT / "captain_hook/scripts/install-binary.sh").read_text(), re.M)
+    assert pinned is not None
+    runner = Path.home() / ".daemonkit" / "binrun" / pinned[1] / "binrun"
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "DAEMONKIT_HOME": str(tmp_path)}
+    if runner.is_file():
+        env["BINRUN_BIN"] = str(runner)
+    result = subprocess.run(
+        [ROOT / "captain_hook/bin/hook", "run", "PreToolUse"],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+    assert result.returncode == code, result.stderr
+    assert output in (result.stdout if code == 0 else result.stderr)

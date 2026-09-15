@@ -67,8 +67,8 @@ Session not fresh. Claude Code loads plugin hooks at session start. A hook on a 
 
 ## The signed host is missing or dispatch fails
 
-Every event runs `~/.daemonkit/bin/capt-hookd`, which `capt-hook helper install` copies out of
-`~/Applications/Captain Hook.app`. If that client or the app is missing, dispatch exits non-zero
+Every event runs the plugin's `bin/hook`, which binrun resolves to the `capt-hookd` inside
+`~/Applications/Captain Hook.app`. If the app is missing or older than the plugin needs, dispatch exits non-zero
 instead of falling back to an unfenced wheel. Install or repair
 the application:
 
@@ -88,7 +88,7 @@ brew upgrade --formula yasyf/tap/captain-hook
 uvx capt-hook helper install
 ```
 
-Legacy dispatch entries. The only consumer command is `capt-hookd run <Event>` from the
+Legacy dispatch entries. The only consumer command is `"${CLAUDE_PLUGIN_ROOT}/bin/hook" run <Event>` from the
 captain-hook plugin. A surviving `uvx --isolated --from capt-hook hook run
 <Event>` line — an old plugin release, or a hand-copied settings entry — is a second registration: Claude Code dedupes hook commands per registering source, not
 globally, so every hook on that event can run twice. The tell is doubled output: two permission

@@ -1,13 +1,10 @@
 package hookd
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"time"
@@ -15,9 +12,7 @@ import (
 	"github.com/yasyf/daemonkit"
 	"github.com/yasyf/daemonkit/artifact"
 	"github.com/yasyf/daemonkit/deploy"
-	"github.com/yasyf/daemonkit/durable"
 	"github.com/yasyf/daemonkit/launchd"
-	"github.com/yasyf/daemonkit/version"
 )
 
 const (
@@ -213,66 +208,7 @@ func applyPackagedApplication(ctx context.Context) error {
 	if err := validateActivation(activation, targetPath, version); err != nil {
 		return err
 	}
-	if err := installClient(ctx, targetPath); err != nil {
-		return err
-	}
 	return pingBridge(ctx, targetPath)
-}
-
-func clientPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("captain package: resolve user home: %w", err)
-	}
-	return filepath.Join(home, ".daemonkit", "bin", "capt-hookd"), nil
-}
-
-func installClient(ctx context.Context, appPath string) error {
-	target, err := clientPath()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return fmt.Errorf("captain package: create client directory: %w", err)
-	}
-	lock, err := durable.AcquireLock(ctx, filepath.Join(filepath.Dir(target), ".capt-hookd.lock"))
-	if err != nil {
-		return fmt.Errorf("captain package: lock client: %w", err)
-	}
-	defer lock.Close()
-	body, err := os.ReadFile(hostExecutablePath(appPath))
-	if err != nil {
-		return fmt.Errorf("captain package: read packaged client: %w", err)
-	}
-	switch installed, err := os.ReadFile(target); {
-	case errors.Is(err, os.ErrNotExist):
-	case err != nil:
-		return fmt.Errorf("captain package: read installed client: %w", err)
-	case bytes.Equal(installed, body):
-		return nil
-	default:
-		if build, err := clientBuild(ctx, target); err == nil && version.Newer(build, Build) {
-			return nil
-		}
-	}
-	if err := durable.WriteFile(target, body, 0o755); err != nil {
-		return fmt.Errorf("captain package: publish client: %w", err)
-	}
-	return nil
-}
-
-func clientBuild(ctx context.Context, client string) (string, error) {
-	output, err := exec.CommandContext(ctx, client, "version").Output()
-	if err != nil {
-		return "", err
-	}
-	var reported struct {
-		Build string `json:"build"`
-	}
-	if err := json.Unmarshal(output, &reported); err != nil {
-		return "", err
-	}
-	return reported.Build, nil
 }
 
 func uninstallPackagedApplication(ctx context.Context) error {

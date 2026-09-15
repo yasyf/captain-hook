@@ -8,22 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Every hook is one plain `capt-hookd run <Event>` command.** The plugin
-  registers `~/.daemonkit/bin/capt-hookd run <Event>` once per event through
-  shell builtins, with no `--async` twin, no bash wrapper, no binrun, and no
-  Python shim. When that client is missing, every event but `SessionStart`
-  exits 0, so hooks go dark between a plugin update and the app upgrade. For
-  `SessionStart` the plugin falls back to the bundle's
-  `capt-hookd run SessionStart --async`, which runs the updater that brings
-  the app forward. `capt-hook helper install` copies the deployed bundle's
-  `capt-hookd` to `~/.daemonkit/bin` after activation, so a running hook never
-  executes out of the bundle a deploy replaces. The client reads the event,
-  sends one request, and prints the reply. While the host refuses the event
-  before dispatch (not listening, starting, draining, or out of session
-  slots), the client resends it every 100 ms within its own deadline, so a
-  deploy shows up as hook latency instead of a `not installed` error. The
-  `capt-hook` MCP server also runs `capt-hookd install-client` at startup, so a
-  plugin that updates ahead of a deploy still finds the client.
+- **Every hook is one `bin/hook run <Event>` command.** The plugin registers
+  `"${CLAUDE_PLUGIN_ROOT}/bin/hook" run <Event>` once per event, with no
+  `--async` twin and no Python shim for `SessionStart`. `bin/hook` hands off to
+  binrun, whose signed-app descriptor sets `copy_exec`, so the hook runs a
+  cached copy of `capt-hookd` outside the bundle a deploy replaces. The
+  descriptor requires app 12.31.0, so a new plugin on an older app gets
+  binrun's `brew upgrade` error instead of a host that cannot serve it. The
+  client reads the event, sends one request, and prints the reply. While the
+  host refuses the event before dispatch (not listening, starting, draining,
+  or out of session slots), the client resends it every 100 ms within its own
+  deadline, so a deploy shows up as hook latency instead of a
+  `not installed` error.
 - **The host runs every event as it arrives.** The per-agent lanes, the
   adaptive pool, the async cap, and deadline shedding are gone, and with them
   the `overloaded` refusal and `CAPT_HOOK_MAX_PARALLEL`. Seven events from one
@@ -35,13 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installs the `capt-hook` tool env for the app's build before it touches the
   installed app, aborting with the old host running when that install fails.
   The host only looks that env up, failing worker start with the install
-  command when it is missing. Publishing `~/.daemonkit/bin/capt-hookd` takes a
-  lock and never replaces a newer build with an older one.
+  command when it is missing.
 - **Any process running as your user may send the host events.** The business
   lane admits the same user instead of three signed identities; only the
   signed host may drain it.
 - **Hooks in a development checkout run the installed wheel.** The `hook`
-  console script execs `~/.daemonkit/bin/capt-hookd run <Event>` and exits 0
+  console script execs the app's `capt-hookd run <Event>` and exits 0
   on `--async`, so `.venv/bin/hook` dispatches to the installed app's tool env
   rather than the checkout's `.venv`.
 - **One request per event runs both kinds of hook.** The worker runs an
@@ -88,8 +83,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sessions on plugin 12.28 or older fail every hook until they restart, since
   the client no longer accepts the `run --event … --python … --build …` flag
   form. Sessions on 12.29 through 12.30 keep working, since `run <Event>` is
-  still the command, but still run the bundle binary, so a deploy can stop
-  their hooks until they restart.
+  still the command, but run the bundle binary without `copy_exec`, so a
+  deploy can stop their hooks until they restart.
 
 ## [12.30.11] - 2026-09-15
 
