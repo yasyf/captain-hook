@@ -26,7 +26,7 @@ def test_run_execs_the_plain_client(monkeypatch: pytest.MonkeyPatch) -> None:
     captured = capture_exec(monkeypatch)
     with pytest.raises(RuntimeError, match="exec"):
         client.main()
-    assert captured == [client.CLIENT, [client.CLIENT, "run", "PreToolUse"]]
+    assert captured == [client.HOST, [client.HOST, "run", "PreToolUse"]]
     assert os.environ["CLAUDE_PROJECT_DIR"] == "/session/project"
 
 

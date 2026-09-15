@@ -1,4 +1,4 @@
-"""Strict stdlib exec shim for the plain captain-hook client."""
+"""Strict stdlib exec shim for the signed captain-hook client."""
 
 from __future__ import annotations
 
@@ -14,14 +14,13 @@ HOST = os.path.join(
     "Helpers",
     "capt-hookd",
 )
-CLIENT = os.path.join(os.path.expanduser("~"), ".daemonkit", "bin", "capt-hookd")
 
 
 def main() -> NoReturn:
-    """Exec the plain Go client for ``run EVENT``."""
+    """Exec the signed Go client for ``run EVENT``."""
     match sys.argv[1:]:
         case ["run", event] if event and not event.startswith("-"):
-            _exec(CLIENT, [CLIENT, "run", event])
+            _exec(HOST, [HOST, "run", event])
         # TODO: delete with the Go `run EVENT --async` alias in 12.32; plugin 12.29 sessions still exec this twin.
         case ["run", event, "--async"] if event and not event.startswith("-"):
             raise SystemExit(0)

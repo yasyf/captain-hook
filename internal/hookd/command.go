@@ -18,7 +18,6 @@ import (
 
 const (
 	defaultRequestTimeout = 30 * time.Second
-	installClientTimeout  = 30 * time.Second
 
 	// packageLifecycleTimeout is one install or uninstall end to end: stopping
 	// the installed app generation, draining a serving host through the grace
@@ -31,7 +30,7 @@ const (
 // Main executes one capt-hookd client or host command and returns its exit code.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: capt-hookd version|serve|run|status|restart-workers|install-client|package-install|package-uninstall")
+		fmt.Fprintln(stderr, "usage: capt-hookd version|serve|run|status|restart-workers|package-install|package-uninstall")
 		return 2
 	}
 	switch args[0] {
@@ -45,8 +44,6 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return statusCommand(args[1:], stdout, stderr)
 	case "restart-workers":
 		return restartWorkersCommand(args[1:], stderr)
-	case "install-client":
-		return installClientCommand(args[1:], stderr)
 	case "package-install":
 		return packageInstallCommand(args[1:], stderr)
 	case "package-uninstall":
@@ -206,23 +203,6 @@ func packageInstallCommand(args []string, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), packageLifecycleTimeout)
 	defer cancel()
 	if err := applyPackagedApplication(ctx); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	return 0
-}
-
-func installClientCommand(args []string, stderr io.Writer) int {
-	if len(args) != 0 {
-		return 2
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), installClientTimeout)
-	defer cancel()
-	app, err := packagedApplicationPath()
-	if err == nil {
-		err = installClient(ctx, app)
-	}
-	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
