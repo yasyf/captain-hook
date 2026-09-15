@@ -17,6 +17,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/yasyf/captain-hook/internal/cwdguard"
 	"github.com/yasyf/captain-hook/internal/wireproto"
 	"github.com/yasyf/daemonkit/artifact"
 	"golang.org/x/sys/unix"
@@ -218,11 +219,15 @@ func parseHookRun(args []string) (root, event string, async, ok bool) {
 // once the working directory is gone, libc's getcwd scans its former parent,
 // and against a $TMPDIR of tens of thousands of entries that other processes
 // keep changing, that scan ran for over half an hour before any deadline began.
-// F_GETPATH names the directory's vnode even after it is removed or recreated
-// at that path, and the identity check turns both into the ENOENT getcwd
-// reports. PWD is the fallback only then, since "/" as a root would walk the
-// whole machine.
+// cwdguard already left such a directory for "/" before package os could call
+// getcwd at init; otherwise F_GETPATH names the directory's vnode even after it
+// is removed or recreated at that path, and the identity check turns both into
+// the ENOENT getcwd reports. PWD is the fallback only then, since "/" as a root
+// would walk the whole machine.
 func requestCWD() (string, error) {
+	if cwdguard.Departed {
+		return cmp.Or(os.Getenv("PWD"), "/"), nil
+	}
 	cwd, err := workingDirectoryPath()
 	if err == nil {
 		err = isWorkingDirectory(cwd)
