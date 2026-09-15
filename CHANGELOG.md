@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.33.0] - 2026-09-15
+
 ### Changed
 
 - **An event's hooks run concurrently.** The matching hooks of a single event
