@@ -345,3 +345,41 @@ func TestDispatchRunsOneAgentsEventsConcurrently(t *testing.T) {
 		}
 	}
 }
+
+func TestInstalledPythonOnlyLooksUpTheToolEnv(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DAEMONKIT_HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	if _, err := installedPython(); err == nil || !strings.Contains(err.Error(), "run `capt-hook helper install`") {
+		t.Fatalf("installedPython without a tool env = %v, want the helper install remedy", err)
+	}
+
+	toolDir := filepath.Join(home, ".daemonkit", "tools", "capt-hook", Build)
+	venvBin := filepath.Join(toolDir, "capt-hook", "bin")
+	for _, dir := range []string{venvBin, filepath.Join(toolDir, "bin")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range []string{filepath.Join(venvBin, "hook"), filepath.Join(venvBin, "python")} {
+		if err := os.WriteFile(file, nil, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(venvBin, "hook"), filepath.Join(toolDir, "bin", "hook")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installedPython(); err == nil {
+		t.Fatal("installedPython accepted a tool env with no install marker")
+	}
+	if err := os.WriteFile(filepath.Join(toolDir, ".installed"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	python, err := installedPython()
+	if err != nil || python != filepath.Join(venvBin, "python") {
+		t.Fatalf("installedPython = %q, %v; want %q", python, err, filepath.Join(venvBin, "python"))
+	}
+}

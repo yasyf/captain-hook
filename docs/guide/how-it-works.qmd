@@ -199,7 +199,7 @@ The boundary, then, sits between the framework you install and the hooks you aut
 
 ### The app names the wheel
 
-Dispatch never resolves "latest". The host runs its Python workers from the `capt-hook` wheel at exactly its own build, in a dedicated per-version environment under `~/.daemonkit` that `uv` materializes on first use. The signed app is the single version authority, so the wheel and app cannot drift apart. A build needs the network once, when its environment is first materialized; after that, hooks fire offline.
+Dispatch never resolves "latest". The host runs its Python workers from the `capt-hook` wheel at exactly its own build, in a dedicated per-version environment under `~/.daemonkit` that `capt-hook helper install` materializes with `uv`. The signed app is the single version authority, so the wheel and app cannot drift apart. A build needs the network once, when its environment is first materialized; after that, hooks fire offline.
 
 That environment is separate from your project. The Python worker and its dependencies come from it, never from your repo: captain-hook never lands in your `pyproject.toml`, your lockfile, or your site-packages, so you can add a hook to any repository without changing a single dependency in it.
 
@@ -239,10 +239,12 @@ The plugin registers one command for every event:
 
 `capt-hook helper install` copies the bundle's `capt-hookd` to `~/.daemonkit/bin/capt-hookd`
 after each deploy, so a running hook never executes out of the bundle a deploy replaces. The
+`capt-hook` MCP server repeats that copy at session start when the two differ. The
 client reads the event from stdin, takes the project root from the first of
 `CLAUDE_PROJECT_DIR`, `FACTORY_PROJECT_DIR`, and the payload's `cwd`, and sends one request over daemonkit's
-length-framed persistent transport. When no host is listening, or the host is starting or
-draining, the client waits for a ready host within its own deadline and sends once. The client
+length-framed persistent transport. While the host refuses the event before dispatch, because
+nothing is listening or the host is starting, draining, or out of session slots, the client
+resends it within its own deadline. The client
 exits 1 on its own failures; exit 2 belongs to a hook's blocking verdict alone.
 
 The host selects a Python worker and exchanges multiplexed,
@@ -325,8 +327,8 @@ latest GitHub release is newer than the installed host. When it is, it detaches 
 posts a notification banner when the upgrade lands or fails. The check never blocks a hook and
 never touches a verdict; every failure becomes a log line, not an exit code.
 
-Because the host resolves the wheel from its own build, the upgrade is complete on its own: the
-next worker materializes the matching wheel automatically. Set
+The upgrade deploys the app, copies its client, and installs the matching wheel, so it is complete
+on its own. Set
 `HOOKS_UPDATE_ENABLED=false` to turn the check off, or `HOOKS_UPDATE_INTERVAL_MINUTES` to change
 the throttle window.
 

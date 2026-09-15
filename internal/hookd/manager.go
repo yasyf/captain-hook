@@ -338,9 +338,9 @@ func ephemeralRoot(root string) bool {
 // Session gives the worker its own session, so settlement covers the hook
 // subprocesses it spawns and not just the interpreter.
 func (m *workerManager) startWorker(ctx context.Context, key workerKey) (*workerClient, error) {
-	python, err := productPython(ctx)
+	python, err := installedPython()
 	if err != nil {
-		return nil, fmt.Errorf("captain: resolve Python product %s: %w", Build, err)
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, workerReadinessTimeout)
 	defer cancel()
@@ -594,18 +594,32 @@ func parentPath(environ []string) string {
 	return "/usr/bin:/bin:/usr/sbin:/sbin"
 }
 
-func productPython(ctx context.Context) (string, error) {
+func productToolDescriptor() *artifact.Descriptor {
+	return &artifact.Descriptor{
+		Schema: 1, Name: "capt-hook", Kind: artifact.PythonTool,
+		Version: artifact.VersionSource{Static: Build},
+		Tool:    &artifact.ToolSpec{Dist: "capt-hook", Entrypoint: "hook"},
+	}
+}
+
+func installedPython() (string, error) {
 	store, err := artifact.DefaultStore()
 	if err != nil {
 		return "", err
 	}
-	entrypoint, err := store.Resolve(ctx, &artifact.Descriptor{
-		Schema: 1, Name: "capt-hook", Kind: artifact.PythonTool,
-		Version: artifact.VersionSource{Static: Build},
-		Tool:    &artifact.ToolSpec{Dist: "capt-hook", Entrypoint: "hook"},
-	})
+	entries, err := store.ToolEntries()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(filepath.Dir(entrypoint), "python"), nil
+	for _, entry := range entries {
+		if entry.Dist != "capt-hook" || entry.Version != Build || entry.InstalledAt.IsZero() {
+			continue
+		}
+		entrypoint, err := filepath.EvalSymlinks(filepath.Join(entry.Dir, "bin", "hook"))
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(filepath.Dir(entrypoint), "python"), nil
+	}
+	return "", fmt.Errorf("captain: the capt-hook %s tool env is not installed; run `capt-hook helper install`", Build)
 }

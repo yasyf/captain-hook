@@ -1,16 +1,17 @@
 package hookd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"time"
 
 	"github.com/yasyf/daemonkit"
+	"github.com/yasyf/daemonkit/artifact"
 	"github.com/yasyf/daemonkit/deploy"
 	"github.com/yasyf/daemonkit/durable"
 	"github.com/yasyf/daemonkit/launchd"
@@ -205,6 +206,13 @@ func applyPackagedApplication(ctx context.Context) error {
 	if err := installClient(targetPath); err != nil {
 		return err
 	}
+	store, err := artifact.DefaultStore()
+	if err != nil {
+		return err
+	}
+	if _, err := store.Resolve(ctx, productToolDescriptor()); err != nil {
+		return fmt.Errorf("captain package: install the capt-hook %s tool env: %w", version, err)
+	}
 	return pingBridge(ctx, targetPath)
 }
 
@@ -221,23 +229,19 @@ func installClient(appPath string) error {
 	if err != nil {
 		return err
 	}
+	body, err := os.ReadFile(hostExecutablePath(appPath))
+	if err != nil {
+		return fmt.Errorf("captain package: read packaged client: %w", err)
+	}
+	if installed, err := os.ReadFile(target); err == nil && bytes.Equal(installed, body) {
+		return nil
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("captain package: read installed client: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return fmt.Errorf("captain package: create client directory: %w", err)
 	}
-	source, err := os.Open(hostExecutablePath(appPath))
-	if err != nil {
-		return fmt.Errorf("captain package: open packaged client: %w", err)
-	}
-	defer source.Close()
-	staged, err := durable.Create(target, 0o755)
-	if err != nil {
-		return fmt.Errorf("captain package: stage client: %w", err)
-	}
-	defer staged.Close()
-	if _, err := io.Copy(staged, source); err != nil {
-		return fmt.Errorf("captain package: copy client: %w", err)
-	}
-	if err := staged.Commit(); err != nil {
+	if err := durable.WriteFile(target, body, 0o755); err != nil {
 		return fmt.Errorf("captain package: publish client: %w", err)
 	}
 	return nil

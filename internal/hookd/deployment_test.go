@@ -97,3 +97,34 @@ func TestInstallClientPublishesTheBundleHostAtTheStablePath(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallClientLeavesAnIdenticalClientInPlace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	app := filepath.Join(t.TempDir(), helperApplicationLeaf)
+	host := hostExecutablePath(app)
+	if err := os.MkdirAll(filepath.Dir(host), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(host, []byte("build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := installClient(app); err != nil {
+		t.Fatal(err)
+	}
+	client := filepath.Join(home, ".daemonkit", "bin", "capt-hookd")
+	before, err := os.Stat(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := installClient(app); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("an identical client was replaced")
+	}
+}

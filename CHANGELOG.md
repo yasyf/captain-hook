@@ -14,17 +14,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SessionStart`. `capt-hook helper install` copies the deployed bundle's
   `capt-hookd` to `~/.daemonkit/bin` after activation, so a running hook never
   executes out of the bundle a deploy replaces. The client reads the event,
-  sends one request, and prints the reply. When no host is listening, or the
-  host is starting or draining, it waits for a ready host within its own
-  deadline and sends once, so a deploy shows up as hook latency rather than a
-  `not installed` error.
+  sends one request, and prints the reply. While the host refuses the event
+  before dispatch (not listening, starting, draining, or out of session
+  slots), the client resends it every 100 ms within its own deadline, so a
+  deploy shows up as hook latency instead of a `not installed` error. The
+  `capt-hook` MCP server also runs `capt-hookd install-client` at startup, so a
+  plugin that updates ahead of a deploy still finds the client.
 - **The host runs every event as it arrives.** The per-agent lanes, the
   adaptive pool, the async cap, and deadline shedding are gone, and with them
   the `overloaded` refusal and `CAPT_HOOK_MAX_PARALLEL`. Seven events from one
   agent now run side by side on the worker instead of in series.
-- **The host resolves its own Python.** Events no longer carry the
-  interpreter, the build, or an async flag. The host runs workers from the
-  `capt-hook` tool env of its own build and accepts any schema v1 event.
+- **The host looks up its own Python.** Events no longer carry the
+  interpreter, the build, or an async flag. `capt-hook helper install`
+  installs the `capt-hook` tool env for the app's build, and the host only
+  looks that env up, failing worker start with the install command when it is
+  missing.
 - **Any process running as your user may send the host events.** The business
   lane admits the same user instead of three signed identities; only the
   signed host may drain it.

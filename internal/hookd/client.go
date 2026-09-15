@@ -10,7 +10,10 @@ import (
 	"github.com/yasyf/daemonkit"
 )
 
-const closeTimeout = 5 * time.Second
+const (
+	closeTimeout         = 5 * time.Second
+	refusalRetryInterval = 100 * time.Millisecond
+)
 
 // Client owns one exact persistent product session.
 type Client struct {
@@ -42,23 +45,27 @@ func closeLane(lane *daemonkit.Business) error {
 	return lane.Close(ctx)
 }
 
-// Event dispatches exactly once. A host that is absent, starting, or draining
-// refused the event before dispatch, so it is sent once more, on a fresh
-// session, after a host is ready within the same deadline.
+// Event dispatches exactly once. A host that is absent, starting, draining,
+// or out of session slots refused the event before dispatch, so the event is
+// resent until a host takes it or the deadline ends.
 func (c *Client) Event(ctx context.Context, request wireproto.EventRequest) (wireproto.EventResponse, error) {
 	payload, err := wireproto.MarshalEventRequest(request)
 	if err != nil {
 		return wireproto.EventResponse{}, err
 	}
 	result, err := c.call(ctx, opEvent, payload)
-	if betweenGenerations(err) {
-		if _, waitErr := c.daemon.WaitReady(ctx); waitErr != nil {
-			return wireproto.EventResponse{}, errors.Join(err, waitErr)
+	for refusedBeforeDispatch(err) {
+		if errors.Is(err, daemonkit.ErrDraining) {
+			stale := c.business
+			c.business = c.daemon.Business()
+			_ = closeLane(stale)
 		}
-		stale := c.business
-		c.business = c.daemon.Business()
+		select {
+		case <-ctx.Done():
+			return wireproto.EventResponse{}, errors.Join(err, ctx.Err())
+		case <-time.After(refusalRetryInterval):
+		}
 		result, err = c.call(ctx, opEvent, payload)
-		_ = closeLane(stale)
 	}
 	if err != nil {
 		return wireproto.EventResponse{}, err
@@ -96,9 +103,10 @@ func (c *Client) RestartWorkers(ctx context.Context) error {
 	return err
 }
 
-func betweenGenerations(err error) bool {
+func refusedBeforeDispatch(err error) bool {
 	return daemonkit.Undispatched(err) && (errors.Is(err, daemonkit.ErrAbsent) ||
-		errors.Is(err, daemonkit.ErrDraining) || errors.Is(err, daemonkit.ErrNotReady))
+		errors.Is(err, daemonkit.ErrDraining) || errors.Is(err, daemonkit.ErrNotReady) ||
+		errors.Is(err, daemonkit.ErrSessionCapacity))
 }
 
 func (c *Client) call(ctx context.Context, op string, payload []byte) ([]byte, error) {

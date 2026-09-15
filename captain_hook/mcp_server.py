@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import subprocess
 from typing import TYPE_CHECKING, Any
 
+from captain_hook.desktop.client import APP_PATH
 from captain_hook.transcripts import register_transcript
 
 if TYPE_CHECKING:
     from mcp.server.mcpserver import MCPServer
+
+INSTALLED_HOST = APP_PATH / "Contents" / "Helpers" / "capt-hookd"
+
+
+def place_client() -> None:
+    if INSTALLED_HOST.exists():
+        subprocess.run(
+            [INSTALLED_HOST, "install-client"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, check=False
+        )
 
 
 def build_mcp_server() -> MCPServer:
