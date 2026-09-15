@@ -10,14 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Queue waits are estimated from each hook event's own smoothed service
   time.** A `PreCompact` hook was skipped during `/compact` as `2 hooks ahead
-  on this session's lane at 19.272s each outlast the 29.87s left`, though
-  nothing on that lane had ever taken 19 s: a lane's record is dropped with
-  the lane, so the check borrowed the host's last completed dispatch, one
-  slow hook from an unrelated session and event, and counted a nearly
-  finished holder as a full turn. The host now keeps an exponentially
-  weighted moving average of service time per event, weighs every queued
-  dispatch by its own event's estimate, counts a running hook only for what
-  its estimate has left, and never sheds an event it has not yet timed.
+  on this session's lane at 19.272s each outlast the 29.87s left`. A lane's
+  timing record was dropped with the lane, so the check fell back to the
+  host's last completed dispatch, whatever its session or event, and counted
+  a nearly finished holder as a full turn. The host now keeps an
+  exponentially weighted moving average of service time per event, sums the
+  estimates of the dispatches actually queued ahead, and counts a running
+  hook only for what its estimate has left.
 
 ## [12.30.7] - 2026-09-14
 
