@@ -44,6 +44,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   5 s hook margin left with the same no-verdict reply, instead of loading the
   session and transcript only to skip every hook. Nothing serializes: every
   admitted event still runs as it arrives on the member it was routed to.
+- **Warm events stop re-reading the plugin roster.** The daemon checks
+  whether its cached hook set is still current on every event, and that check
+  read Claude Code's plugin roster and walked each enabled plugin's
+  `capt-hook/` tree every time. It now reuses the last read while
+  `installed_plugins.json` and the settings files that decide enablement are
+  unchanged. Installing, updating, enabling, or disabling a plugin still takes
+  effect on the next event. An in-place edit inside an installed plugin's pack
+  takes effect within 30 seconds. Edits under `.claude/hooks` still take
+  effect on the next event. When the cache expires, concurrent events wait for
+  a single re-read or re-walk instead of each running their own, and this now
+  covers the language-marker walk too.
 
 ### Fixed
 

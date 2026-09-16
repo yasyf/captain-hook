@@ -1,15 +1,9 @@
-"""Small caching primitives the resident daemon needs beyond ``functools.cache``.
-
-``functools.cache`` never evicts and never expires — fine for a short-lived cold process, a
-leak in a long-lived daemon. ``LRUDict`` bounds an ad-hoc cache to its most-recent entries;
-``ttl_cache`` memoizes a callable's result for a fixed window. Both expose ``cache_clear`` so
-the daemon (and the test suite) can drop them on demand.
-"""
-
 from __future__ import annotations
 
+import threading
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from functools import wraps
 from typing import TYPE_CHECKING
 
@@ -65,3 +59,40 @@ def ttl_cache[**P, R](ttl: float) -> Callable[[Callable[P, R]], Callable[P, R]]:
         return wrapper
 
     return decorate
+
+
+@dataclass(frozen=True, slots=True)
+class Stamped[S, V]:
+    stamp: S
+    computed_at: float
+    value: V
+
+
+class StampedCache[K, S, V]:
+    def __init__(self, maxsize: int) -> None:
+        self._entries: LRUDict[K, Stamped[S, V]] = LRUDict(maxsize)
+        self._entries_lock = threading.Lock()
+        self._refill_lock = threading.Lock()
+
+    def get(self, key: K, stamp: S, ttl: float, compute: Callable[[], V], *, fresh: bool = False) -> V:
+        if not fresh and (hit := self._valid(key, stamp, ttl)) is not None:
+            return hit.value
+        with self._refill_lock:
+            if not fresh and (hit := self._valid(key, stamp, ttl)) is not None:
+                return hit.value
+            computed_at = time.monotonic()
+            value = compute()
+            with self._entries_lock:
+                self._entries[key] = Stamped(stamp, computed_at, value)
+            return value
+
+    def cache_clear(self) -> None:
+        with self._entries_lock:
+            self._entries.cache_clear()
+
+    def _valid(self, key: K, stamp: S, ttl: float) -> Stamped[S, V] | None:
+        with self._entries_lock:
+            entry = self._entries.get(key)
+        if entry is None or entry.stamp != stamp or time.monotonic() - entry.computed_at >= ttl:
+            return None
+        return entry
