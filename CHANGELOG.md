@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An upgrade no longer wedges on the staging slot an aborted install left
+  behind.** `package-install` stages the new app into a private slot beside the
+  installed one; an install that aborted after that copy but before committing
+  the swap left the slot occupied, and every later upgrade then failed with
+  `land delivered app: deploy: bundle version mismatch: got "12.34.0" want
+  "12.35.0"` — naming a version nobody had asked for, identically on every
+  retry, until the slot was deleted by hand. daemonkit v0.31.1 discards a slot
+  holding a generation the install is not landing, and keeps adopting one that
+  holds the generation it is, so an interrupted install still resumes without
+  copying the bundle again.
+
 ## [12.36.0] - 2026-09-16
 
 ### Added
