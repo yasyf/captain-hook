@@ -28,6 +28,8 @@ SYNC_DEADLINE_MARGIN_SECONDS = 5.0
 ASYNC_HOOK_TIMEOUT_SECONDS = 180.0
 HOOK_FANOUT_THREADS = 16
 BACKGROUND_FANOUT_THREADS = 8
+OFFLOAD_THREADS = 4
+OFFLOAD_POOL_GUARD = threading.Lock()
 
 
 @cache
@@ -52,6 +54,16 @@ def background_pool() -> ThreadPoolExecutor:
     hold every thread until a blocking gate's own deadline abandoned it.
     """
     return ThreadPoolExecutor(max_workers=BACKGROUND_FANOUT_THREADS, thread_name_prefix="capt-hook-async-hook")
+
+
+def offload_pool() -> ThreadPoolExecutor:
+    with OFFLOAD_POOL_GUARD:
+        return build_offload_pool()
+
+
+@cache
+def build_offload_pool() -> ThreadPoolExecutor:
+    return ThreadPoolExecutor(max_workers=OFFLOAD_THREADS, thread_name_prefix="capt-hook-offload")
 
 
 def run_declarative(spec: HookSpec, evt: BaseHookEvent) -> HookResult | None:

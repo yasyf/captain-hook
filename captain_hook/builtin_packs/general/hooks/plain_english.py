@@ -3,13 +3,12 @@ from __future__ import annotations
 import contextvars
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
-from functools import cache
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from captain_hook import Action, Event, HookResult, Prompt, faults, on
+from captain_hook.dispatch import offload_pool
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
@@ -18,7 +17,6 @@ if TYPE_CHECKING:
 CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
 CEREBRAS_MODEL = "qwen-3.8-27b"
 REWRITE_TIMEOUT_SECONDS = 20
-REWRITE_THREADS = 4
 DEADLINE_MARGIN_SECONDS = 3.0
 FINALIZED_KEPT = 64
 ASSEMBLY_DEADLINE_SECONDS = 2.0
@@ -47,11 +45,6 @@ def assembled(evt: MessageDisplayEvent) -> str:
                 buffer.finalized = [*buffer.finalized, evt.message_id][-FINALIZED_KEPT:]
                 return "".join(chunks[i] for i in sorted(chunks))
         time.sleep(ASSEMBLY_POLL_SECONDS)
-
-
-@cache
-def rewrite_pool() -> ThreadPoolExecutor:
-    return ThreadPoolExecutor(max_workers=REWRITE_THREADS, thread_name_prefix="capt-hook-plain-english")
 
 
 def is_prose(text: str) -> bool:
@@ -85,7 +78,7 @@ def plain_english(evt: MessageDisplayEvent, text: str, api_key: str) -> str:
     left = reqenv.seconds_left()
     budget = REWRITE_TIMEOUT_SECONDS if left is None else min(REWRITE_TIMEOUT_SECONDS, left - DEADLINE_MARGIN_SECONDS)
     try:
-        future = rewrite_pool().submit(
+        future = offload_pool().submit(
             contextvars.copy_context().run,
             evt.ctx.call_llm,
             rewrite_prompt(evt, text),
