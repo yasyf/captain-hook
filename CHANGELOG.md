@@ -100,6 +100,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in RSS, so eight large transcripts could pin gigabytes in one worker. The
   cache now evicts least-recently-used transcripts once their summed source
   size passes 128 MiB, always keeping the one just parsed.
+- **A transcript rewritten mid-read no longer splices old and new events.** The
+  worker took the transcript's size and timestamps once, before reading. A file
+  rewritten to equal or greater length in between counted as growth, so the
+  worker parsed the replacement's bytes after the old consumed offset and
+  appended them to the cached events. A growth now rechecks the open file's
+  inode, size and timestamps after reading and reparses in full on any
+  mismatch. A full reparse caches its result only when the file's stats before
+  and after the read agree.
 - **A timed-out plain-English rewrite no longer strands a thread.** Each
   finalized `MessageDisplay` built its own one-thread executor and released it
   without joining, so a rewrite that outlived its budget kept its thread alive

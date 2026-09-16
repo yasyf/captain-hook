@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass, field
 from operator import attrgetter
@@ -62,10 +63,15 @@ def _entry_for(path: Path) -> _Entry:
             return _store(path, entry)
         case _Entry(size=cached) if size > cached:
             try:
-                return _store(path, _grow(entry, path, _appended(path, entry.consumed, size), size, mtime_ns, ctime_ns))
+                return _store(path, _grow(entry, path, _appended(path, entry.consumed, st), size, mtime_ns, ctime_ns))
             except Exception:
                 pass
-    return _store(path, _full(path.read_bytes(), size, mtime_ns, ctime_ns))
+    with path.open("rb") as fh:
+        before = os.fstat(fh.fileno())
+        raw = fh.read(before.st_size)
+        settled = _stamp(os.fstat(fh.fileno())) == _stamp(before)
+    full = _full(raw, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    return _store(path, full) if settled else full
 
 
 def _lift(entry: _Entry, classifier: UserClassifier, path: Path) -> Session:
@@ -88,13 +94,21 @@ def _store(path: Path, entry: _Entry) -> _Entry:
     return entry
 
 
-def _appended(path: Path, offset: int, size: int) -> bytes:
+def _appended(path: Path, offset: int, st: os.stat_result) -> bytes:
     with path.open("rb") as fh:
         fh.seek(offset)
-        appended = fh.read(size - offset)
-    if len(appended) != size - offset:
-        raise EOFError(path)
+        appended = fh.read(st.st_size - offset)
+        if _stamp(os.fstat(fh.fileno())) != _stamp(st):
+            raise _ChangedUnderRead(path)
     return appended
+
+
+def _stamp(st: os.stat_result) -> tuple[int, int, int, int]:
+    return st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+
+
+class _ChangedUnderRead(Exception):
+    pass
 
 
 def _grow(entry: _Entry, path: Path, appended: bytes, size: int, mtime_ns: int, ctime_ns: int) -> _Entry:

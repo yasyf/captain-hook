@@ -345,6 +345,9 @@ class TestTailRead:
             def seek(self, offset: int) -> int:
                 return self.fh.seek(offset)
 
+            def fileno(self) -> int:
+                return self.fh.fileno()
+
             def read(self, size: int = -1) -> bytes:
                 chunk = self.fh.read(size)
                 read.append(len(chunk))
@@ -377,6 +380,62 @@ class TestTailRead:
         assert transcache._entry_for(target).events == parse_events_from_bytes(rewritten)
         assert transcache.load(target) == load_transcript(target)
         assert transcache._entry_for(target).events == parse_events_from_bytes(rewritten)
+
+    @pytest.mark.parametrize("longer", [False, True])
+    def test_a_file_rewritten_equal_or_longer_between_stat_and_read_never_splices(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, longer: bool
+    ) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:40]))
+        transcache.load(target)
+        grown = b"".join(lines[:50])
+        write(target, grown)
+        rewritten = b"".join(lines[1:50] + lines[:1] + (lines[50:] if longer else []))
+        assert (len(rewritten) > len(grown)) is longer and len(rewritten) >= len(grown)
+        opened = Path.open
+
+        def rewrite_then_open(self: Path, *args: object, **kwargs: object) -> BinaryIO:
+            monkeypatch.setattr(Path, "open", opened)
+            write(target, rewritten)
+            return opened(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", rewrite_then_open)
+        assert transcache._entry_for(target).events == parse_events_from_bytes(rewritten)
+        assert transcache.load(target) == load_transcript(target)
+
+    def test_a_full_reparse_torn_by_a_rewrite_is_not_cached(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:40]))
+        rewritten = b"".join(lines[1:40] + lines[:1] + lines[40:])
+        opened = Path.open
+
+        class RewrittenMidRead:
+            def __init__(self, fh: BinaryIO) -> None:
+                self.fh = fh
+
+            def __enter__(self) -> RewrittenMidRead:
+                return self
+
+            def __exit__(self, *exc: object) -> None:
+                self.fh.close()
+
+            def fileno(self) -> int:
+                return self.fh.fileno()
+
+            def read(self, size: int = -1) -> bytes:
+                chunk = self.fh.read(size // 2)
+                with opened(target, "wb") as out:
+                    out.write(rewritten)
+                return chunk + self.fh.read(size - len(chunk))
+
+        monkeypatch.setattr(Path, "open", lambda self, *args, **kwargs: RewrittenMidRead(opened(self, *args, **kwargs)))
+        transcache._entry_for(target)
+        assert target not in transcache._CACHE
+        monkeypatch.setattr(Path, "open", opened)
+        assert transcache._entry_for(target).events == parse_events_from_bytes(rewritten)
+        assert transcache.load(target) == load_transcript(target)
 
 
 class TestCursorOwnership:
