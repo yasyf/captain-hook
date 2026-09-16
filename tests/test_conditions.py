@@ -1756,6 +1756,61 @@ class TestSubagentFlags:
         assert len(DEEP_LIFTS) == 0
 
 
+PYRIGHT_IN_SUBAGENT = {"type": "tool_use", "name": "Bash", "input": {"command": "uvx pyright src"}, "id": "tu_p"}
+
+
+class TestRanCommandSpellings:
+    @pytest.mark.parametrize(
+        ("skip_if", "expected"),
+        [
+            pytest.param((RanCommand("uv", "run", "ty", "check"), RanCommand("uvx", "pyright")), False, id="later"),
+            pytest.param((RanCommand("uvx", "pyright"), RanCommand("uv", "run", "ty", "check")), False, id="first"),
+            pytest.param((RanCommand("uv", "run", "ty", "check"), RanCommand("prek", "run", "ty")), True, id="none"),
+            pytest.param(
+                (RanCommand("uvx", "pyright", subagents=False), RanCommand("uv", "run", "ty", "check")),
+                True,
+                id="main_only",
+            ),
+            pytest.param(
+                (RanCommand("uv", "run", "ty", "check", subagents=False), RanCommand("uvx", "pyright")),
+                False,
+                id="mixed_flags",
+            ),
+            pytest.param(
+                (Tool("Edit"), RanCommand("prek", "run", "ty"), RanCommand("uvx", "pyright")), False, id="mixed"
+            ),
+            pytest.param((Or(RanCommand("prek", "run", "ty"), RanCommand("uvx", "pyright")),), False, id="or"),
+        ],
+    )
+    def test_skip_if_spellings_match_one_by_one_evaluation(
+        self,
+        event_with_subagent_tool_use: Callable[[dict[str, Any]], BaseHookEvent],
+        skip_if: tuple[TCondition, ...],
+        expected: bool,
+    ) -> None:
+        evt = event_with_subagent_tool_use(PYRIGHT_IN_SUBAGENT)
+        assert matches_conditions(HookSpec(events=Event.PreToolUse, skip_if=skip_if), evt) is expected
+        assert (not any(check_condition(c, evt) for c in skip_if)) is expected
+
+    def test_spellings_share_one_deep_walk(
+        self,
+        event_with_subagent_tool_use: Callable[[dict[str, Any]], BaseHookEvent],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from cc_transcript.query import Session
+
+        evt = event_with_subagent_tool_use(PYRIGHT_IN_SUBAGENT)
+        walks: list[object] = []
+        deep_inputs = Session.deep_inputs
+        monkeypatch.setattr(Session, "deep_inputs", lambda self: walks.append(self) or deep_inputs(self))
+        spec = HookSpec(
+            events=Event.PreToolUse,
+            skip_if=(RanCommand("uv", "run", "ty", "check"), RanCommand("prek", "run", "ty"), RanCommand("uvx", "ty")),
+        )
+        assert matches_conditions(spec, evt) is True
+        assert len(walks) == 1
+
+
 class TestCustomConditionFilesystem:
     def test_settings_based_condition(self, tmp_path: Any) -> None:
         import json

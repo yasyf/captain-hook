@@ -92,6 +92,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   synchronous pass used to evaluate `only_if`/`skip_if` for `async_=True` hooks
   and then discard them, and the background pass did the same for synchronous
   hooks.
+- **A list of `RanCommand` spellings walks the transcript once.** In `skip_if`
+  or `Or(...)`, every `RanCommand` with the same `subagents` flag is answered in
+  one pass over the session, its sidechains, and its attachments, instead of one
+  pass per spelling. The steering pack's typing nudge lists seven spellings and
+  runs on every `PostToolUse`.
 
 - **The host and its Python workers run at default priority.** The host
   LaunchAgent declared no `ProcessType`, so launchd applied its resource

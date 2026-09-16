@@ -330,6 +330,18 @@ nudge(
         Input(transcript=[T.assistant("The wrong return type is the actual bug — let me fix it.")]): Allow(),
         Input(transcript=[T.assistant("I'll fix this real type error in the engine.")]): Allow(),
         Input(transcript=[T.assistant("Let me check git history for the auth refactor.")]): Allow(),
+        Input(
+            transcript=[
+                T.assistant(T.tool("Bash", command="uvx pyright src")),
+                T.assistant("Let me check the git history to see if these pyright warnings existed before my changes."),
+            ]
+        ): Allow(),
+        Input(
+            transcript=[
+                T.assistant(T.tool("Bash", command="uvx ruff check src")),
+                T.assistant("Let me check the git history to see if these pyright warnings existed before my changes."),
+            ]
+        ): Warn(),
     },
 )
 

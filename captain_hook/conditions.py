@@ -458,15 +458,35 @@ def check_condition(c: TCondition, evt: BaseHookEvent) -> bool:
         case Not(condition):
             return not check_condition(condition, evt)
         case Or(conditions):
-            return any(check_condition(sub, evt) for sub in conditions)
+            return any_condition(conditions, evt)
         case CustomCondition():
             return c.check(evt)
+    return False
+
+
+def ran_any_command(t: Session, argvs: Sequence[tuple[str, ...]], *, subagents: bool) -> bool:
+    from cc_transcript.query import any_inputs
+
+    return any_inputs(t, lambda inputs: any(inputs.has_command(argv) for argv in argvs), subagents=subagents)
+
+
+def any_condition(conditions: Sequence[TCondition], evt: BaseHookEvent) -> bool:
+    walked: set[bool] = set()
+    for c in conditions:
+        match c:
+            case RanCommand(subagents=subagents) if subagents in walked:
+                continue
+            case RanCommand(subagents=subagents):
+                walked.add(subagents)
+                argvs = [r.argv for r in conditions if isinstance(r, RanCommand) and r.subagents is subagents]
+                if ran_any_command(evt.ctx.transcript, argvs, subagents=subagents):
+                    return True
+            case _ if check_condition(c, evt):
+                return True
     return False
 
 
 def matches_conditions(spec: HookSpec, evt: BaseHookEvent) -> bool:
     if any(not check_condition(c, evt) for c in spec.only_if):
         return False
-    if any(check_condition(c, evt) for c in spec.skip_if):
-        return False
-    return True
+    return not any_condition(spec.skip_if, evt)
