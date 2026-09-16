@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import threading
 from collections.abc import Sequence
+from itertools import groupby
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -470,19 +471,19 @@ def ran_any_command(t: Session, argvs: Sequence[tuple[str, ...]], *, subagents: 
     return any_inputs(t, lambda inputs: any(inputs.has_command(argv) for argv in argvs), subagents=subagents)
 
 
+def ran_any_in_run(run: Sequence[RanCommand], evt: BaseHookEvent) -> bool:
+    return any(
+        ran_any_command(evt.ctx.transcript, [c.argv for c in run if c.subagents is subagents], subagents=subagents)
+        for subagents in dict.fromkeys(c.subagents for c in run)
+    )
+
+
 def any_condition(conditions: Sequence[TCondition], evt: BaseHookEvent) -> bool:
-    walked: set[bool] = set()
-    for c in conditions:
-        match c:
-            case RanCommand(subagents=subagents) if subagents in walked:
-                continue
-            case RanCommand(subagents=subagents):
-                walked.add(subagents)
-                argvs = [r.argv for r in conditions if isinstance(r, RanCommand) and r.subagents is subagents]
-                if ran_any_command(evt.ctx.transcript, argvs, subagents=subagents):
-                    return True
-            case _ if check_condition(c, evt):
-                return True
+    for _, group in groupby(conditions, key=lambda c: isinstance(c, RanCommand)):
+        run = list(group)
+        commands = [c for c in run if isinstance(c, RanCommand)]
+        if ran_any_in_run(commands, evt) if commands else any(check_condition(c, evt) for c in run):
+            return True
     return False
 
 

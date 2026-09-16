@@ -95,9 +95,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and then discard them, and the background pass did the same for synchronous
   hooks.
 - **A list of `RanCommand` spellings walks the transcript once.** In `skip_if`
-  or `Or(...)`, every `RanCommand` with the same `subagents` flag is answered in
-  one pass over the session, its sidechains, and its attachments, instead of one
-  pass per spelling. The steering pack's typing nudge lists seven spellings and
+  or `Or(...)`, each unbroken run of `RanCommand` conditions with the same
+  `subagents` flag is answered in one pass over the session, its sidechains, and
+  its attachments, instead of one pass per spelling. Conditions between runs
+  still evaluate in order, so a side-effecting condition such as `once` sees the
+  same calls it did before. The steering pack's typing nudge lists seven spellings and
   runs on every `PostToolUse`.
 - **The general pack's multi-request nudge no longer backtracks quadratically
   on a long prompt.** Its imperative-count signals used a leading lazy `.*?`,

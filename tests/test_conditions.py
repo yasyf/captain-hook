@@ -36,6 +36,7 @@ from captain_hook.types import (
     FromSubagent,
     HookSpec,
     InPlanMode,
+    LambdaCondition,
     Not,
     Or,
     Pattern,
@@ -1791,6 +1792,28 @@ class TestRanCommandSpellings:
         evt = event_with_subagent_tool_use(PYRIGHT_IN_SUBAGENT)
         assert matches_conditions(HookSpec(events=Event.PreToolUse, skip_if=skip_if), evt) is expected
         assert (not any(check_condition(c, evt) for c in skip_if)) is expected
+
+    @pytest.mark.parametrize("shape", ["skip_if", "or", "not_or"])
+    def test_condition_between_spellings_still_runs(
+        self,
+        tmp_path: Path,
+        event_with_subagent_tool_use: Callable[[dict[str, Any]], BaseHookEvent],
+        shape: str,
+    ) -> None:
+        from captain_hook.session import SessionStore
+
+        evt = event_with_subagent_tool_use(PYRIGHT_IN_SUBAGENT)
+        evt.ctx.session = SessionStore(tmp_path / "state")
+        once = LambdaCondition(lambda e: e.ctx.s.once("shared"))
+        clauses = (RanCommand("missing"), once, RanCommand("uvx", "pyright"))
+        match shape:
+            case "skip_if":
+                assert matches_conditions(HookSpec(events=Event.PreToolUse, skip_if=clauses), evt) is False
+            case "or":
+                assert check_condition(Or(*clauses), evt) is True
+            case "not_or":
+                assert check_condition(Not(Or(*clauses)), evt) is False
+        assert check_condition(once, evt) is False
 
     def test_spellings_share_one_deep_walk(
         self,
