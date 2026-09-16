@@ -267,3 +267,37 @@ class TestNlpLoadRace:
 
         assert loads == [resource]
         assert len({id(value) for value in seen}) == 1
+
+    def test_readers_during_a_warm_up_wait_for_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import spacy
+
+        from captain_hook.state import NlpResources
+        from captain_hook.util import model_cache
+
+        loads: list[str] = []
+
+        def slow_load(name: str) -> object:
+            loads.append(name)
+            time.sleep(0.05)
+            return object()
+
+        pipeline = object()
+        monkeypatch.setattr(spacy.util, "is_package", lambda _name: True)
+
+        def load_pipeline(_name: str) -> object:
+            slow_load("spacy")
+            return pipeline
+
+        monkeypatch.setattr(spacy, "load", load_pipeline)
+        monkeypatch.setattr(model_cache, "ensure_wn_lexicon", lambda: slow_load("wn"))
+
+        resources = NlpResources()
+        warm = threading.Thread(target=resources.warm)
+        warm.start()
+        time.sleep(0.01)
+        seen = [resources.spacy, resources.wn]
+        warm.join()
+
+        assert sorted(loads) == ["spacy", "wn"]
+        assert seen[0] is pipeline
+        assert seen[1] is resources.wn

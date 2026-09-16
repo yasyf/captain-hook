@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A worker loads spaCy and WordNet after its first reply.** The first
+  event a worker answers starts a background load of both, so a later hook
+  that reads them finds them loaded, or waits on the load already running,
+  instead of paying ~1.5s itself. The first reply is not slowed: the load
+  starts once it has been written.
+
 ### Fixed
 
 - **The host and its Python workers run at default priority.** The host

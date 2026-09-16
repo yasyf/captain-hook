@@ -70,6 +70,10 @@ class NlpResources:
                 self.__dict__["wn"] = wn
             return self.__dict__["wn"]
 
+    def warm(self) -> None:
+        self.wn
+        self.spacy
+
     def wn_lemmas(self, terms: tuple[str, ...], pos: str) -> frozenset[str]:
         # wn pools one process-global sqlite connection, and ensure_wn_lexicon sets
         # allow_multithreading, which only drops Python's same-thread assertion. Serialized sqlite
