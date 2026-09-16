@@ -93,6 +93,7 @@ class NlpResources:
 
 
 RESOURCES = NlpResources()
+LEMMA_SKIPPED_PIPES = ("parser", "ner")
 
 
 class HookState(BaseModel):
@@ -145,7 +146,7 @@ class PrimitiveState(BaseModel):
     def content_lemmas(text: str) -> set[str]:
         return {
             tok.lemma_.lower()
-            for tok in RESOURCES.spacy(text)
+            for tok in RESOURCES.spacy(text, disable=LEMMA_SKIPPED_PIPES)
             if tok.pos_ in {"NOUN", "VERB", "ADJ"} and not tok.is_stop and len(tok.lemma_) > 2
         }
 

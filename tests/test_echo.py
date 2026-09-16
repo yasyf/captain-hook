@@ -37,6 +37,23 @@ class TestContentLemmas:
     def test_empty_string_returns_empty_set(self) -> None:
         assert PrimitiveState.content_lemmas("") == set()
 
+    def test_matches_the_full_pipeline(self) -> None:
+        from captain_hook.state import RESOURCES
+
+        text = (
+            "Another Claude session sent a message: CHUNK A graded the questions on origin/dev. "
+            "I'll fix the flaky retry, then rename the broken producers and leave the tombstones.\n"
+            "1. Add a failing test for the uncached producer path\n"
+            "2. Refactor `SourceMap` identity so the Rust side stops re-deriving it\n"
+            "- Pre-existing warnings were already there before my changes; running pyright again."
+        )
+        full = {
+            tok.lemma_.lower()
+            for tok in RESOURCES.spacy(text)
+            if tok.pos_ in {"NOUN", "VERB", "ADJ"} and not tok.is_stop and len(tok.lemma_) > 2
+        }
+        assert PrimitiveState.content_lemmas(text) == full
+
 
 class TestIsEcho:
     @pytest.mark.parametrize(
