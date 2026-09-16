@@ -213,6 +213,12 @@ def no_prompts(event: UserEvent) -> bool:
     return False
 
 
+@dataclass
+class PromptsWithText:
+    def __call__(self, event: UserEvent) -> bool:
+        return bool(event.text.strip())
+
+
 def cuts(lines: list[bytes], step: str) -> Iterator[bytes]:
     for i, line in enumerate(lines):
         prefix = b"".join(lines[:i])
@@ -228,7 +234,7 @@ def cuts(lines: list[bytes], step: str) -> Iterator[bytes]:
 
 
 def cursor_of(target: Path, classifier: UserClassifier) -> object:
-    return transcache._CACHE[target].lifts[classifier]
+    return transcache._CACHE[target].lifts[id(classifier)]
 
 
 class TestIncrementalLift:
@@ -284,10 +290,10 @@ class TestIncrementalLift:
         target = write(tmp_path / "t.jsonl", b"".join(lines[:10]))
         entry = transcache._entry_for(target)
         transcache._lift(entry, native_user_classifier, target)
-        overfed = entry.lifts[native_user_classifier]
+        overfed = entry.lifts[id(native_user_classifier)]
         overfed.extend(entry.events[-1:])
         write(target, b"".join(lines))
-        assert native_user_classifier not in transcache._entry_for(target).lifts
+        assert id(native_user_classifier) not in transcache._entry_for(target).lifts
         assert transcache.load(target) == load_transcript(target)
 
     def test_a_session_id_learned_by_growth_starts_a_fresh_cursor(self, tmp_path: Path) -> None:
@@ -314,13 +320,28 @@ class TestIncrementalLift:
         entry = transcache._entry_for(target)
         transcache._lift(entry, native_user_classifier, target)
         transcache._lift(entry, no_prompts, target)
-        native, quiet = entry.lifts[native_user_classifier], entry.lifts[no_prompts]
+        native, quiet = entry.lifts[id(native_user_classifier)], entry.lifts[id(no_prompts)]
         assert native is not quiet
         write(target, b"".join(lines))
         grown = transcache._entry_for(target)
-        assert grown.lifts == {native_user_classifier: native, no_prompts: quiet}
+        assert grown.lifts == {id(native_user_classifier): native, id(no_prompts): quiet}
         for classifier in (native_user_classifier, no_prompts):
             assert transcache._lift(grown, classifier, target) == lift_classified(grown.events, classifier, path=target)
+
+    def test_an_unhashable_classifier_extends_its_own_cursor_through_growth(self, tmp_path: Path) -> None:
+        classifier = PromptsWithText()
+        with pytest.raises(TypeError):
+            hash(classifier)
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:20]))
+        entry = transcache._entry_for(target)
+        transcache._lift(entry, classifier, target)
+        cursor = entry.lifts[id(classifier)]
+        write(target, b"".join(lines))
+        grown = transcache._entry_for(target)
+        assert grown.lifts[id(classifier)] is cursor
+        assert cursor.user_classifier is classifier
+        assert transcache._lift(grown, classifier, target) == lift_classified(grown.events, classifier, path=target)
 
 
 class TestTailRead:
@@ -444,15 +465,15 @@ class TestCursorOwnership:
         target = write(tmp_path / "t.jsonl", b"".join(lines[:10]))
         stale = transcache._entry_for(target)
         transcache._lift(stale, native_user_classifier, target)
-        cursor = stale.lifts[native_user_classifier]
+        cursor = stale.lifts[id(native_user_classifier)]
         write(target, b"".join(lines[:30]))
         current = transcache._entry_for(target)
-        assert current.lifts[native_user_classifier] is cursor
+        assert current.lifts[id(native_user_classifier)] is cursor
         assert stale.lifts == {}
         assert transcache._lift(stale, native_user_classifier, target) == lift_classified(
             stale.events, native_user_classifier, path=target
         )
-        assert stale.lifts[native_user_classifier] is not cursor
+        assert stale.lifts[id(native_user_classifier)] is not cursor
 
     def test_a_second_growth_from_a_stale_entry_never_touches_the_current_cursor(self, tmp_path: Path) -> None:
         lines = split_lines(TOOL_HEAVY.read_bytes())
@@ -461,14 +482,14 @@ class TestCursorOwnership:
         transcache._lift(stale, native_user_classifier, target)
         write(target, b"".join(lines[:30]))
         current = transcache._entry_for(target)
-        taken = current.lifts[native_user_classifier].activity
+        taken = current.lifts[id(native_user_classifier)].activity
         write(target, b"".join(lines))
         st = target.stat()
         rival = transcache._grow(
             stale, target, target.read_bytes()[stale.consumed :], st.st_size, st.st_mtime_ns, st.st_ctime_ns
         )
         assert rival.lifts == {}
-        assert current.lifts[native_user_classifier].activity is taken
+        assert current.lifts[id(native_user_classifier)].activity is taken
         for entry in (current, rival):
             assert transcache._lift(entry, native_user_classifier, target) == lift_classified(
                 entry.events, native_user_classifier, path=target
@@ -479,7 +500,7 @@ class TestCursorOwnership:
         target = write(tmp_path / "t.jsonl", b"".join(lines[:10]))
         entry = transcache._entry_for(target)
         transcache._lift(entry, native_user_classifier, target)
-        cursor = entry.lifts[native_user_classifier]
+        cursor = entry.lifts[id(native_user_classifier)]
         write(target, b"".join(lines))
         growth = threading.Thread(target=transcache._entry_for, args=(target,))
 
@@ -494,7 +515,7 @@ class TestCursorOwnership:
             entry.events, native_user_classifier, path=target
         )
         growth.join()
-        assert transcache._CACHE[target].lifts[native_user_classifier] is cursor
+        assert transcache._CACHE[target].lifts[id(native_user_classifier)] is cursor
 
     def test_readers_racing_growth_see_exactly_their_entrys_lift(self, tmp_path: Path) -> None:
         lines = split_lines(TOOL_HEAVY.read_bytes())

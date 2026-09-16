@@ -26,7 +26,7 @@ class _Entry:
     consumed: int
     committed: list[TranscriptEvent]
     events: list[TranscriptEvent]
-    lifts: dict[UserClassifier, ActivityLift] = field(default_factory=dict)
+    lifts: dict[int, ActivityLift] = field(default_factory=dict)
     lifted: dict[int, tuple[UserClassifier, Session]] = field(default_factory=dict)
 
 
@@ -79,12 +79,12 @@ def _lift(entry: _Entry, classifier: UserClassifier, path: Path) -> Session:
     from cc_transcript.query import Session
 
     with _LOCK:
-        activity = None if (lift := entry.lifts.get(classifier)) is None else lift.activity
+        activity = None if (lift := entry.lifts.get(id(classifier))) is None else lift.activity
     if activity is None:
         lift = ActivityLift(transcript_session_id(entry.events, path=path), user_classifier=classifier)
         activity = lift.extend(entry.events)
         with _LOCK:
-            entry.lifts.setdefault(classifier, lift)
+            entry.lifts.setdefault(id(classifier), lift)
     return Session.from_activity(activity, path=path)
 
 
@@ -129,8 +129,8 @@ def _grow(entry: _Entry, path: Path, appended: bytes, size: int, mtime_ns: int, 
             lifts, entry.lifts = entry.lifts, {}
         session_id = transcript_session_id(grown.events, path=path)
         grown.lifts = {
-            classifier: lift
-            for classifier, lift in lifts.items()
+            key: lift
+            for key, lift in lifts.items()
             if lift.session_id == session_id and _fed(lift) == len(entry.events)
         }
         appended = grown.events[len(entry.events) :]
