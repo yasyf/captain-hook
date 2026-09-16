@@ -26,7 +26,8 @@ StatEntry = tuple[int, int, int]
 HookEntry = tuple[str, int, int, int]
 PluginTree = tuple[str, str, tuple[HookEntry, ...]]
 MarkerStamp = tuple[StatEntry | None, StatEntry | None]
-RosterStamp = tuple[tuple[Path, StatEntry | None], ...]
+RosterEntry = StatEntry | int | None
+RosterStamp = tuple[tuple[Path, RosterEntry], ...]
 
 MARKER_WALKS: StampedCache[Path, MarkerStamp, tuple[str, ...]] = StampedCache(MAX_WALK_ROOTS)
 PLUGIN_WALKS: StampedCache[Path, RosterStamp, tuple[PluginTree, ...] | str] = StampedCache(MAX_WALK_ROOTS)
@@ -76,9 +77,16 @@ def _plugin_trees(root: Path) -> tuple[PluginTree, ...] | str:
     return tuple(trees)
 
 
+def _roster_entry(path: Path) -> RosterEntry:
+    try:
+        return _stat_entry(path)
+    except OSError as exc:
+        return exc.errno
+
+
 def _roster_stamp(root: Path) -> RosterStamp:
     paths = (plugins.installed_plugins_path(), *plugins.settings_stack(root))
-    return tuple((path, _stat_entry(path)) for path in paths)
+    return tuple((path, _roster_entry(path)) for path in paths)
 
 
 def _plugin_inputs(root: Path, *, fresh: bool) -> tuple[PluginTree, ...] | str:

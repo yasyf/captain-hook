@@ -152,6 +152,27 @@ def test_install_dir_vanishing_behind_an_unchanged_roster_lands_within_the_ttl(
     assert fp(project) != before
 
 
+@pytest.mark.parametrize("policy", ["managed-settings.json", "managed-settings.d/policy.json"])
+def test_unreadable_managed_settings_count_as_absent_until_readable(
+    project: CliState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: str
+) -> None:
+    plugin_root = tmp_path / "plug"
+    make_plugin_pack(plugin_root)
+    plant_roster([("acme/pp", plugin_root)])
+    managed = tmp_path / "managed"
+    (policy_file := managed / policy).parent.mkdir(parents=True)
+    policy_file.write_text(json.dumps({"enabledPlugins": {"acme/pp": False}}))
+    monkeypatch.setattr(plugins, "MANAGED_SETTINGS_DIRS", (managed,))
+    policy_file.parent.chmod(0)
+    try:
+        unreadable = fp(project)
+        assert [pid for pid, *_ in registry._plugin_trees(project.root)] == ["acme/pp"]
+    finally:
+        policy_file.parent.chmod(0o700)
+    assert fp(project) != unreadable
+    assert registry._plugin_trees(project.root) == ()
+
+
 def test_project_disable_changes_fingerprint(project: CliState, tmp_path: Path) -> None:
     plugin_root = tmp_path / "plug"
     make_plugin_pack(plugin_root)
