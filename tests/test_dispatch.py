@@ -35,7 +35,7 @@ from captain_hook.dispatch import (
 from captain_hook.events import MessageDisplayEvent, PermissionRequestEvent
 from captain_hook.primitives.nudge import nudge
 from captain_hook.session import SessionStore
-from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
+from captain_hook.types import Action, CustomCondition, Event, HookResult, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
 from tests.helpers import (
     make_ctx,
@@ -857,6 +857,27 @@ class TestDispatch:
 
         dispatch_async(evt)
         assert ran == ["async"]
+
+    def test_each_pass_evaluates_only_its_own_hooks_conditions(self) -> None:
+        checked: list[str] = []
+
+        class Recorded(CustomCondition):
+            def __init__(self, label: str) -> None:
+                self.label = label
+
+            def check(self, evt: Any) -> bool:
+                checked.append(self.label)
+                return True
+
+        register_hook(Event.PostToolUse, message="sync warning", only_if=[Recorded("sync")])
+        register_hook(Event.PostToolUse, message="async warning", only_if=[Recorded("async")], async_=True)
+
+        evt = make_post_tool_event()
+        dispatch(Event.PostToolUse, evt)
+        assert checked == ["sync"]
+
+        dispatch_async(evt)
+        assert checked == ["sync", "async"]
 
     def test_each_async_hook_gets_its_own_deadline(self, monkeypatch: pytest.MonkeyPatch) -> None:
         clock = {"now": 100.0}
