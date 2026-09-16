@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The hook client comes from binrun again.** The plugin registers
+  `"${CLAUDE_PLUGIN_ROOT}/bin/hook" run <Event>` once per event, and `bin/hook`
+  hands off to binrun with a signed-app descriptor that sets `copy_exec`, so
+  the hook runs a cached copy of `capt-hookd` from outside the bundle a deploy
+  replaces. The descriptor requires app 12.31.0, so a new plugin on an older
+  app gets binrun's `brew upgrade` error rather than a host that cannot serve
+  it. Nothing places a client under `~/.daemonkit/bin` any more: the
+  `install-client` command, the copy `package-install` made, its publish lock
+  and version check, and the copy the MCP server made at startup are gone,
+  and so is the shell fallback each hook command carried.
+
+### Upgrading
+
+- A machine whose app is older than 12.31.0 gets binrun's upgrade error on
+  every hook until `brew upgrade yasyf/tap/captain-hook` runs. The error exits
+  1, so it never blocks a tool call.
+
 ## [12.34.0] - 2026-09-15
 
 ### Changed

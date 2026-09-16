@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from bench.measure import Command
-from capt_hook_client.client import CLIENT, HOST
+from capt_hook_client.client import HOST
 
 BENCH_ROOT = Path.home() / ".cache" / "capt-hook-bench"
 COLD_BUDGET_S = 60.0
@@ -94,7 +94,7 @@ def chain(deployed: Deployment, root: Path) -> Command:
 
 
 def host(root: Path) -> Command:
-    return Command((CLIENT, "run", EVENT), payload(root), {**os.environ, "CLAUDE_PROJECT_DIR": str(root)})
+    return Command((HOST, "run", EVENT), payload(root), {**os.environ, "CLAUDE_PROJECT_DIR": str(root)})
 
 
 @contextmanager

@@ -804,9 +804,8 @@ def transcripts_register(
 @cli.command()
 def mcp() -> None:
     """Serve the capt-hook MCP server over stdio, exposing the register_transcript tool."""
-    from captain_hook.mcp_server import build_mcp_server, place_client
+    from captain_hook.mcp_server import build_mcp_server
 
-    place_client()
     build_mcp_server().run()
 
 

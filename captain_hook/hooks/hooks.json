@@ -3,91 +3,91 @@
     "PreToolUse": [
       {
         "hooks": [
-          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run PreToolUse" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PreToolUse" }
         ]
       }
     ],
     "PostToolUse": [
       {
         "hooks": [
-          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run PostToolUse" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PostToolUse" }
         ]
       }
     ],
     "PostToolUseFailure": [
       {
         "hooks": [
-          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run PostToolUseFailure" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PostToolUseFailure" }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run UserPromptSubmit" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run UserPromptSubmit" }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run Stop" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run Stop" }
         ]
       }
     ],
     "SubagentStop": [
       {
         "hooks": [
-          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run SubagentStop" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SubagentStop" }
         ]
       }
     ],
     "SubagentStart": [
       {
         "hooks": [
-          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run SubagentStart" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SubagentStart" }
         ]
       }
     ],
     "PreCompact": [
       {
         "hooks": [
-          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run PreCompact" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PreCompact" }
         ]
       }
     ],
     "Notification": [
       {
         "hooks": [
-          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run Notification" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run Notification" }
         ]
       }
     ],
     "PermissionRequest": [
       {
         "hooks": [
-          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run PermissionRequest" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run PermissionRequest" }
         ]
       }
     ],
     "MessageDisplay": [
       {
         "hooks": [
-          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run MessageDisplay", "timeout": 60 }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run MessageDisplay", "timeout": 60 }
         ]
       }
     ],
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] && exec \"$c\" run SessionStart; exec \"$HOME/Applications/Captain Hook.app/Contents/Helpers/capt-hookd\" run SessionStart --async" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SessionStart" }
         ]
       }
     ],
     "SessionEnd": [
       {
         "hooks": [
-          { "type": "command", "command": "c=\"$HOME/.daemonkit/bin/capt-hookd\"; [ -x \"$c\" ] || exit 0; exec \"$c\" run SessionEnd" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/hook\" run SessionEnd" }
         ]
       }
     ]

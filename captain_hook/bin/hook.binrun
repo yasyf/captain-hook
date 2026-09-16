@@ -1,0 +1,18 @@
+#!/usr/bin/env binrun
+{
+  "schema": 1,
+  "name": "capt-hook",
+  "kind": "signed-app",
+  "version": {
+    "file": "~/Applications/Captain Hook.app/Contents/Info.plist",
+    "plist_key": "CFBundleShortVersionString"
+  },
+  "app": {
+    "dir": "~/Applications",
+    "app_name": "Captain Hook",
+    "exec": "Contents/Helpers/capt-hookd",
+    "copy_exec": true,
+    "formula": "yasyf/tap/captain-hook",
+    "min_version": "12.31.0"
+  }
+}

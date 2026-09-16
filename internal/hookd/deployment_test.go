@@ -1,16 +1,12 @@
 package hookd
 
 import (
-	"bytes"
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/yasyf/daemonkit/durable"
 	"github.com/yasyf/daemonkit/launchd"
 )
 
@@ -59,146 +55,6 @@ func TestExactAgentsPinSignedBundleFailureRestartsDrainBudgetAndUnrestrictedSess
 				agent.Label, body,
 			)
 		}
-	}
-}
-
-func TestInstallClientPublishesTheBundleHostAtTheStablePath(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	app := filepath.Join(t.TempDir(), helperApplicationLeaf)
-	host := hostExecutablePath(app)
-	if err := os.MkdirAll(filepath.Dir(host), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, build := range []string{"first", "second"} {
-		if err := os.WriteFile(host, []byte(build), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := installClient(testDeadline(t), app); err != nil {
-			t.Fatalf("installClient: %v", err)
-		}
-		client := filepath.Join(home, ".daemonkit", "bin", "capt-hookd")
-		body, err := os.ReadFile(client)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(body, []byte(build)) {
-			t.Fatalf("client = %q, want %q", body, build)
-		}
-		info, err := os.Stat(client)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if info.Mode().Perm() != 0o755 {
-			t.Fatalf("client mode = %v, want 0755", info.Mode().Perm())
-		}
-		entries, err := os.ReadDir(filepath.Dir(client))
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, entry := range entries {
-			if entry.Name() != "capt-hookd" && entry.Name() != ".capt-hookd.lock" {
-				t.Fatalf("client directory holds a stray %q", entry.Name())
-			}
-		}
-	}
-}
-
-func TestInstallClientLeavesAnIdenticalClientInPlace(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	app := filepath.Join(t.TempDir(), helperApplicationLeaf)
-	host := hostExecutablePath(app)
-	if err := os.MkdirAll(filepath.Dir(host), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(host, []byte("build"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := installClient(testDeadline(t), app); err != nil {
-		t.Fatal(err)
-	}
-	client := filepath.Join(home, ".daemonkit", "bin", "capt-hookd")
-	before, err := os.Stat(client)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := installClient(testDeadline(t), app); err != nil {
-		t.Fatal(err)
-	}
-	after, err := os.Stat(client)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !os.SameFile(before, after) {
-		t.Fatal("an identical client was replaced")
-	}
-}
-
-func testDeadline(t *testing.T) context.Context {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	t.Cleanup(cancel)
-	return ctx
-}
-
-func packagedHost(t *testing.T, body string) string {
-	t.Helper()
-	app := filepath.Join(t.TempDir(), helperApplicationLeaf)
-	host := hostExecutablePath(app)
-	if err := os.MkdirAll(filepath.Dir(host), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(host, []byte(body), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return app
-}
-
-func TestInstallClientNeverReplacesANewerBuild(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	client := filepath.Join(home, ".daemonkit", "bin", "capt-hookd")
-	if err := os.MkdirAll(filepath.Dir(client), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	newer := "#!/bin/sh\necho '{\"schema\":1,\"build\":\"99.0.0\"}'\n"
-	if err := os.WriteFile(client, []byte(newer), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := installClient(testDeadline(t), packagedHost(t, "older")); err != nil {
-		t.Fatal(err)
-	}
-	if body, err := os.ReadFile(client); err != nil || string(body) != newer {
-		t.Fatalf("client = %q, %v; an older build replaced a newer one", body, err)
-	}
-}
-
-func TestInstallClientWaitsForAConcurrentPublish(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	dir := filepath.Join(home, ".daemonkit", "bin")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	held, err := durable.AcquireLock(testDeadline(t), filepath.Join(dir, ".capt-hookd.lock"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	app := packagedHost(t, "build")
-	blocked, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
-	defer cancel()
-	if err := installClient(blocked, app); !errors.Is(err, durable.ErrLockBusy) {
-		t.Fatalf("installClient under a held lock = %v, want %v", err, durable.ErrLockBusy)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "capt-hookd")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("client published while another publish held the lock: %v", err)
-	}
-	if err := held.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := installClient(testDeadline(t), app); err != nil {
-		t.Fatalf("installClient after the lock freed = %v", err)
 	}
 }
 
