@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from cc_transcript.parser import parse_events_from_bytes
@@ -12,6 +14,9 @@ from captain_hook.daemon import transcache
 from captain_hook.transcripts import load_transcript
 from captain_hook.util import reqenv
 from captain_hook.util.reqenv import RequestOverrides
+
+if TYPE_CHECKING:
+    from cc_transcript.models import UserEvent
 
 FIXTURE = Path(__file__).parent / "fixtures" / "hook_fires" / "fire-stop.jsonl"
 
@@ -104,6 +109,12 @@ class TestEventsFor:
         assert transcache._entry_for(target).events is not first
 
 
+@dataclass
+class PromptClassifier:
+    def __call__(self, event: UserEvent) -> bool:
+        return bool(event.text.strip())
+
+
 def request(project_dir: str) -> RequestOverrides:
     return RequestOverrides(env={"CLAUDE_PROJECT_DIR": project_dir}, cwd=project_dir, client_ppid=1, session_id="s")
 
@@ -137,6 +148,13 @@ class TestLoad:
         assert len({id(conductor), id(native), id(silent)}) == 3
         (entry,) = transcache._CACHE.values()
         assert len(entry.lifted) == 3
+
+    def test_unhashable_classifier_lifts_like_the_cold_loader(self, tmp_path: Path) -> None:
+        target = write(tmp_path / "t.jsonl", FIXTURE.read_bytes())
+        with use_state(State(classifier=PromptClassifier())):
+            session = transcache.load(target)
+            assert transcache.load(target) is session
+            assert session.turns == load_transcript(target).turns
 
     def test_growth_lifts_a_fresh_session(self, tmp_path: Path, lines: list[bytes]) -> None:
         target = write(tmp_path / "t.jsonl", b"".join(lines[:10]))

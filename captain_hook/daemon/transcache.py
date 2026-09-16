@@ -25,7 +25,7 @@ class _Entry:
     consumed: int
     committed: list[TranscriptEvent]
     events: list[TranscriptEvent]
-    lifted: dict[UserClassifier, Session] = field(default_factory=dict)
+    lifted: dict[int, tuple[UserClassifier, Session]] = field(default_factory=dict)
 
 
 _CACHE: WeightedLRUDict[Path, _Entry] = WeightedLRUDict(MAX_SOURCE_BYTES, weigh=attrgetter("size"))
@@ -39,9 +39,9 @@ def load(path: str | Path | None) -> Session:
         return Session(())
     entry = _entry_for(resolved)
     classifier = user_classifier(entry.events, path=resolved)
-    if (session := entry.lifted.get(classifier)) is not None:
-        return session
-    return entry.lifted.setdefault(classifier, _lift(entry, classifier, resolved))
+    if (held := entry.lifted.get(id(classifier))) is not None:
+        return held[1]
+    return entry.lifted.setdefault(id(classifier), (classifier, _lift(entry, classifier, resolved)))[1]
 
 
 def cache_clear() -> None:
