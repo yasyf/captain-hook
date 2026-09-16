@@ -108,3 +108,20 @@ class StampedCache[K, S, V]:
         if entry is None or entry.stamp != stamp or time.monotonic() - entry.computed_at >= ttl:
             return None
         return entry
+
+
+def once[R](fn: Callable[[], R]) -> Callable[[], R]:
+    guard = threading.Lock()
+    held: list[R] = []
+
+    @wraps(fn)
+    def wrapper() -> R:
+        if held:
+            return held[0]
+        with guard:
+            if not held:
+                held.append(fn())
+            return held[0]
+
+    wrapper.cache_clear = held.clear
+    return wrapper

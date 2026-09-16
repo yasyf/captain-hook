@@ -6,7 +6,6 @@ import threading
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextvars import copy_context
 from dataclasses import replace
-from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +16,7 @@ from captain_hook.session import SessionStore
 from captain_hook.state import HookState
 from captain_hook.types import Action, Event, HookResult, HookSpec, RegisteredHook
 from captain_hook.util import reqenv
+from captain_hook.util.caching import once
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -29,10 +29,9 @@ ASYNC_HOOK_TIMEOUT_SECONDS = 180.0
 HOOK_FANOUT_THREADS = 16
 BACKGROUND_FANOUT_THREADS = 8
 OFFLOAD_THREADS = 4
-OFFLOAD_POOL_GUARD = threading.Lock()
 
 
-@cache
+@once
 def hook_pool() -> ThreadPoolExecutor:
     """The one process-wide pool every event's synchronous hooks fan out onto.
 
@@ -45,7 +44,7 @@ def hook_pool() -> ThreadPoolExecutor:
     return ThreadPoolExecutor(max_workers=HOOK_FANOUT_THREADS, thread_name_prefix="capt-hook-hook")
 
 
-@cache
+@once
 def background_pool() -> ThreadPoolExecutor:
     """The pool an event's ``async_=True`` hooks fan out onto, kept apart from the synchronous one.
 
@@ -56,13 +55,8 @@ def background_pool() -> ThreadPoolExecutor:
     return ThreadPoolExecutor(max_workers=BACKGROUND_FANOUT_THREADS, thread_name_prefix="capt-hook-async-hook")
 
 
+@once
 def offload_pool() -> ThreadPoolExecutor:
-    with OFFLOAD_POOL_GUARD:
-        return build_offload_pool()
-
-
-@cache
-def build_offload_pool() -> ThreadPoolExecutor:
     return ThreadPoolExecutor(max_workers=OFFLOAD_THREADS, thread_name_prefix="capt-hook-offload")
 
 

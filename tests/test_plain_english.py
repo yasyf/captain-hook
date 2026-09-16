@@ -15,7 +15,7 @@ from captain_hook import Prompt, faults
 from captain_hook.app import State, use_state
 from captain_hook.builtin_packs.general.hooks import plain_english
 from captain_hook.context import HookContext
-from captain_hook.dispatch import build_offload_pool, dispatch, offload_pool
+from captain_hook.dispatch import dispatch, offload_pool
 from captain_hook.events import MessageDisplayEvent
 from captain_hook.loader import import_pack_module
 from captain_hook.session import SessionStore
@@ -201,10 +201,10 @@ def test_slow_rewrite_is_abandoned_before_the_caller_deadline(
 @pytest.fixture
 def one_offload_thread(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr("captain_hook.dispatch.OFFLOAD_THREADS", 1)
-    build_offload_pool.cache_clear()
+    offload_pool.cache_clear()
     yield
     offload_pool().shutdown(wait=True)
-    build_offload_pool.cache_clear()
+    offload_pool.cache_clear()
 
 
 def final_event(ctx: CerebrasStub) -> MessageDisplayEvent:
