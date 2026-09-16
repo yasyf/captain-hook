@@ -71,6 +71,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   released, so a second thread woken in that gap loaded the pipeline again.
   The loaded value is now stored before the lock is released.
 
+- **The worker's transcript parse cache holds a byte budget, not eight
+  entries.** Parsed events take about three to four times their source bytes
+  in RSS, so eight large transcripts could pin gigabytes in one worker. The
+  cache now evicts least-recently-used transcripts once their summed source
+  size passes 128 MiB, always keeping the one just parsed.
 - **A timed-out plain-English rewrite no longer strands a thread.** Each
   finalized `MessageDisplay` built its own one-thread executor and released it
   without joining, so a rewrite that outlived its budget kept its thread alive

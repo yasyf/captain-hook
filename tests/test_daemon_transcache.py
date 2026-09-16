@@ -110,3 +110,35 @@ class TestLoad:
         target = write(tmp_path / "t.jsonl", FIXTURE.read_bytes())
         assert isinstance(transcache.load(target), Session)
         assert len(list(transcache.load(target).events)) == len(list(load_transcript(target).events))
+
+
+class TestSourceByteBudget:
+    def test_evicts_least_recent_transcripts_past_the_budget(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        raw = FIXTURE.read_bytes()
+        monkeypatch.setattr(transcache._CACHE, "maxsize", 2 * len(raw))
+        a, b, c = [write(tmp_path / f"{name}.jsonl", raw) for name in "abc"]
+        first = transcache._events_for(a)
+        transcache._events_for(b)
+        transcache._events_for(c)
+        assert list(transcache._CACHE) == [b, c]
+        again = transcache._events_for(a)
+        assert again is not first
+        assert again == parse_events_from_bytes(raw)
+        assert list(transcache._CACHE) == [c, a]
+
+    def test_growth_past_the_budget_evicts_others_and_matches_the_cold_parse(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lines: list[bytes]
+    ) -> None:
+        head, full = b"".join(lines[:10]), b"".join(lines)
+        monkeypatch.setattr(transcache._CACHE, "maxsize", 2 * len(head))
+        other = write(tmp_path / "other.jsonl", head)
+        target = write(tmp_path / "t.jsonl", head)
+        transcache._events_for(other)
+        before = transcache._events_for(target)
+        write(target, full)
+        after = transcache._events_for(target)
+        assert list(transcache._CACHE) == [target]
+        assert after == parse_events_from_bytes(full)
+        assert all(a is b for a, b in zip(before, after, strict=False))

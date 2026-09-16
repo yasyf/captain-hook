@@ -1,34 +1,19 @@
-"""Per-path transcript parse cache for the resident daemon.
-
-Cold, every event fully reparses its transcript. The daemon caches the parsed events keyed by the
-file's ``(size, mtime_ns, ctime_ns)`` and, when the file has only grown (Claude Code appends), parses
-just the newly-completed lines onto the previous parse instead of the whole file. A shrink, an
-in-place rewrite (even one preserving mtime — ctime still moves), or any parse error falls back to a
-full reparse — always byte-identical to the cold parse,
-which the daemon's transcript parity depends on. ``lift_session`` runs per request (the classifier
-and cwd are request-scoped), so only the parse is shared, never the lifted ``Session``.
-
-cc-transcript exposes a whole-file ``parse_events_from_bytes`` but no resume-from-offset parser, so
-the tail parse re-parses the appended byte slice, cut on a newline boundary. ``parse_events_from_bytes``
-guarantees line-boundary splits compose exactly — pinned by cc-transcript's ``tests/test_parser.py``
-line-boundary sweep — so ``parse(prefix) + parse(suffix) == parse(prefix + suffix)``.
-"""
-
 from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
+from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from captain_hook.transcripts import lift_session
-from captain_hook.util.caching import LRUDict
+from captain_hook.util.caching import WeightedLRUDict
 
 if TYPE_CHECKING:
     from cc_transcript.models import TranscriptEvent
     from cc_transcript.query import Session
 
-MAX_TRANSCRIPTS = 8
+MAX_SOURCE_BYTES = 128 * 1024 * 1024
 
 
 @dataclass(slots=True)
@@ -41,7 +26,7 @@ class _Entry:
     events: list[TranscriptEvent]
 
 
-_CACHE: LRUDict[Path, _Entry] = LRUDict(MAX_TRANSCRIPTS)
+_CACHE: WeightedLRUDict[Path, _Entry] = WeightedLRUDict(MAX_SOURCE_BYTES, weigh=attrgetter("size"))
 _LOCK = threading.Lock()
 
 
