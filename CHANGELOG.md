@@ -82,6 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A session with registered codex rollouts no longer rewalks `~/.codex/sessions`
+  on every event.** Each registered thread id used to resolve against the whole
+  sessions tree whenever an event read the transcript, at 9-14 ms apiece. A
+  session with 85 registrations spent about 300 ms of CPU per `PostToolUse`
+  there. A resolved rollout path is reused while the file exists, and an id
+  whose rollout is missing still resolves again on the next event.
+
 - **The host and its Python workers run at default priority.** The host
   LaunchAgent declared no `ProcessType`, so launchd applied its resource
   limits to capt-hookd and every worker it spawned, whose main threads ran at

@@ -12,6 +12,7 @@ from lazy_object_proxy import Proxy
 
 from captain_hook.session import SessionSlot, ensure_session
 from captain_hook.state import RegisteredTranscript, RegisteredTranscripts
+from captain_hook.util.caching import LRUDict
 from captain_hook.util.paths import resolve_project_dir
 
 if TYPE_CHECKING:
@@ -26,6 +27,9 @@ if TYPE_CHECKING:
 INVALID_SESSION_ID = re.compile(r"[/\\]|\x00|^\.\.?$")
 
 MAX_TRANSCRIPT_BYTES = 256 * 1024 * 1024
+MAX_RESOLVED_ROLLOUTS = 4096
+RESOLVED_ROLLOUTS: LRUDict[tuple[Path, SessionId], Path] = LRUDict(MAX_RESOLVED_ROLLOUTS)
+RESOLVED_ROLLOUTS_LOCK = threading.Lock()
 
 
 def user_classifier(events: Sequence[TranscriptEvent], *, path: Path | None = None) -> UserClassifier:
@@ -174,19 +178,31 @@ def readable_transcript(path: Path) -> bool:
     return path.is_file() and path.stat().st_size <= MAX_TRANSCRIPT_BYTES
 
 
+def resolve_rollout(thread_id: SessionId) -> Path | None:
+    from cc_transcript.codex import find_transcript, sessions_root
+
+    key = (sessions_root(), thread_id)
+    with RESOLVED_ROLLOUTS_LOCK:
+        cached = RESOLVED_ROLLOUTS.get(key)
+    if cached is not None and cached.exists():
+        return cached
+    if (resolved := find_transcript(thread_id)) is not None:
+        with RESOLVED_ROLLOUTS_LOCK:
+            RESOLVED_ROLLOUTS[key] = resolved
+    return resolved
+
+
 def registered_paths(session_dir: Path | None) -> tuple[Path, ...]:
     """The on-disk paths of every transcript registered against ``session_dir``, unsafe entries skipped.
 
     A path entry resolves to its stored absolute path; a thread-id entry resolves lazily via
-    :func:`cc_transcript.codex.find_transcript`. A pruned or unresolvable id, and any locator that no
-    longer points at a bounded regular file (a special file or oversized blob would hang or OOM the
-    deep view's whole-file parse), drops out silently.
+    :func:`resolve_rollout`. A pruned or unresolvable id, and any locator that no longer points at a
+    bounded regular file (a special file or oversized blob would hang or OOM the deep view's
+    whole-file parse), drops out silently.
     """
-    from cc_transcript.codex import find_transcript
-
     return tuple(
         resolved
         for entry in SessionSlot(session_dir, RegisteredTranscripts).get(RegisteredTranscripts()).entries
-        if (resolved := Path(entry.path) if entry.path else find_transcript(SessionId(entry.thread_id))) is not None
+        if (resolved := Path(entry.path) if entry.path else resolve_rollout(SessionId(entry.thread_id))) is not None
         and readable_transcript(resolved)
     )

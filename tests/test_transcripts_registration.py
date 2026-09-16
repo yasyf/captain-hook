@@ -264,6 +264,44 @@ class TestRegisteredPaths:
         (resolved,) = registered_paths(ensure_session(SessionId("s-res")))
         assert resolved.samefile(rollout)
 
+    def test_resolved_rollout_is_reused_without_rewalking(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from cc_transcript import codex
+
+        thread_id = "019f6800-3b4c-7d5e-9f60-0000000000ac"
+        rollout = write_apply_patch_rollout(
+            tmp_path / "codex" / "2026" / "07" / "16" / f"rollout-2026-07-16T16-44-00-{thread_id}.jsonl", thread_id
+        )
+        monkeypatch.setattr(codex, "SESSIONS_ROOT", tmp_path / "codex")
+        register_transcript("s-memo", provider="codex", thread_id=thread_id)
+        session_dir = ensure_session(SessionId("s-memo"))
+        (first,) = registered_paths(session_dir)
+
+        walks: list[object] = []
+        monkeypatch.setattr(codex, "find_transcript", lambda *args: walks.append(args))
+        (second,) = registered_paths(session_dir)
+        assert second == first
+        assert second.samefile(rollout)
+        assert walks == []
+
+    def test_pruned_rollout_resolves_afresh(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from cc_transcript import codex
+
+        thread_id = "019f6800-3b4c-7d5e-9f60-0000000000ad"
+        day = tmp_path / "codex" / "2026" / "07"
+        first = write_apply_patch_rollout(day / "16" / f"rollout-2026-07-16T16-44-00-{thread_id}.jsonl", thread_id)
+        monkeypatch.setattr(codex, "SESSIONS_ROOT", tmp_path / "codex")
+        register_transcript("s-moved", provider="codex", thread_id=thread_id)
+        session_dir = ensure_session(SessionId("s-moved"))
+        assert registered_paths(session_dir) == (first,)
+
+        first.unlink()
+        assert registered_paths(session_dir) == ()
+        moved = write_apply_patch_rollout(day / "17" / f"rollout-2026-07-17T09-00-00-{thread_id}.jsonl", thread_id)
+        (resolved,) = registered_paths(session_dir)
+        assert resolved.samefile(moved)
+
     def test_unresolvable_thread_id_is_skipped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from cc_transcript import codex
 
