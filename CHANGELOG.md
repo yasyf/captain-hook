@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.37.0] - 2026-09-16
+
 ### Fixed
 
 - **An upgrade no longer wedges on the staging slot an aborted install left
