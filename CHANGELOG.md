@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The host and its Python workers run at default priority.** The host
+  LaunchAgent declared no `ProcessType`, so launchd applied its resource
+  limits to capt-hookd and every worker it spawned, whose main threads ran at
+  utility QoS. Under a busy machine a worker's startup imports took 12s where
+  the same interpreter from a terminal took 1s. The agent now declares
+  `ProcessType` `Interactive`, which spawned workers inherit.
+
 - **A worker loads spaCy and WordNet once.** Two hooks reaching an unloaded
   NLP resource together could both load it: the loader checked for a stored
   value under its lock, but the value was only stored after the lock was

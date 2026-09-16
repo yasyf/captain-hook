@@ -140,6 +140,7 @@ func exactAgents(appPath string) ([]launchd.Agent, error) {
 			Label: hostServiceLabel, Program: hostExecutablePath(appPath), Args: []string{"serve"},
 			LogPath: resolved.log, RestartPolicy: launchd.RestartOnFailure,
 			ExitTimeOut:                 hostShutdownTimeout,
+			ProcessType:                 launchd.ProcessTypeInteractive,
 			AssociatedBundleIdentifiers: []string{helperBundleID},
 		},
 	}, nil
