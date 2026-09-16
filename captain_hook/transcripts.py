@@ -27,9 +27,6 @@ if TYPE_CHECKING:
 INVALID_SESSION_ID = re.compile(r"[/\\]|\x00|^\.\.?$")
 
 MAX_TRANSCRIPT_BYTES = 256 * 1024 * 1024
-MAX_RESOLVED_ROLLOUTS = 4096
-RESOLVED_ROLLOUTS: LRUDict[tuple[Path, SessionId], Path] = LRUDict(MAX_RESOLVED_ROLLOUTS)
-RESOLVED_ROLLOUTS_LOCK = threading.Lock()
 
 
 def user_classifier(events: Sequence[TranscriptEvent], *, path: Path | None = None) -> UserClassifier:
@@ -178,31 +175,58 @@ def readable_transcript(path: Path) -> bool:
     return path.is_file() and path.stat().st_size <= MAX_TRANSCRIPT_BYTES
 
 
-def resolve_rollout(thread_id: SessionId) -> Path | None:
-    from cc_transcript.codex import find_transcript, sessions_root
+MAX_RESOLVED_ROLLOUTS = 4096
+RESOLVED_ROLLOUTS: LRUDict[tuple[Path, SessionId], Path] = LRUDict(MAX_RESOLVED_ROLLOUTS)
+RESOLVED_ROLLOUTS_LOCK = threading.Lock()
 
-    key = (sessions_root(), thread_id)
+
+def find_rollouts(thread_ids: Sequence[SessionId], root: Path) -> dict[SessionId, Path]:
+    from cc_transcript.codex import discover, find_transcript
+
+    match thread_ids:
+        case []:
+            return {}
+        case [thread_id]:
+            return {thread_id: path} if (path := find_transcript(thread_id, root)) is not None else {}
+        case _:
+            wanted = set(thread_ids)
+            found: dict[SessionId, Path] = {}
+            for rollout in discover(root):
+                if not rollout.compressed and (thread_id := SessionId(rollout.session_id)) in wanted:
+                    found.setdefault(thread_id, rollout.path)
+            return found
+
+
+def resolve_rollouts(thread_ids: Sequence[SessionId]) -> dict[SessionId, Path]:
+    from cc_transcript.codex import sessions_root
+
+    root = sessions_root()
     with RESOLVED_ROLLOUTS_LOCK:
-        cached = RESOLVED_ROLLOUTS.get(key)
-    if cached is not None and cached.exists():
-        return cached
-    if (resolved := find_transcript(thread_id)) is not None:
-        with RESOLVED_ROLLOUTS_LOCK:
-            RESOLVED_ROLLOUTS[key] = resolved
-    return resolved
+        cached = {thread_id: RESOLVED_ROLLOUTS.get((root, thread_id)) for thread_id in thread_ids}
+    known = {thread_id: path for thread_id, path in cached.items() if path is not None and path.exists()}
+    found = find_rollouts([thread_id for thread_id in thread_ids if thread_id not in known], root)
+    with RESOLVED_ROLLOUTS_LOCK:
+        for thread_id, path in found.items():
+            RESOLVED_ROLLOUTS[(root, thread_id)] = path
+    return known | found
 
 
 def registered_paths(session_dir: Path | None) -> tuple[Path, ...]:
     """The on-disk paths of every transcript registered against ``session_dir``, unsafe entries skipped.
 
     A path entry resolves to its stored absolute path; a thread-id entry resolves lazily via
-    :func:`resolve_rollout`. A pruned or unresolvable id, and any locator that no longer points at a
-    bounded regular file (a special file or oversized blob would hang or OOM the deep view's
-    whole-file parse), drops out silently.
+    :func:`resolve_rollouts`, one scan of the codex sessions tree for every id not already found. A
+    pruned or unresolvable id, and any locator that no longer points at a bounded regular file (a
+    special file or oversized blob would hang or OOM the deep view's whole-file parse), drops out
+    silently.
     """
+    entries = SessionSlot(session_dir, RegisteredTranscripts).get(RegisteredTranscripts()).entries
+    rollouts = resolve_rollouts(
+        [SessionId(thread_id) for entry in entries if not entry.path and (thread_id := entry.thread_id)]
+    )
     return tuple(
         resolved
-        for entry in SessionSlot(session_dir, RegisteredTranscripts).get(RegisteredTranscripts()).entries
-        if (resolved := Path(entry.path) if entry.path else resolve_rollout(SessionId(entry.thread_id))) is not None
+        for entry in entries
+        if (resolved := Path(entry.path) if entry.path else rollouts.get(SessionId(entry.thread_id))) is not None
         and readable_transcript(resolved)
     )

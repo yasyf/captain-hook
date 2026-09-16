@@ -285,6 +285,33 @@ class TestRegisteredPaths:
         assert second.samefile(rollout)
         assert walks == []
 
+    def test_many_thread_ids_resolve_in_one_scan(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from cc_transcript import codex
+
+        root = tmp_path / "codex"
+        thread_ids = [f"019f6800-3b4c-7d5e-9f60-00000000010{n}" for n in range(3)]
+        rollouts = [
+            write_apply_patch_rollout(root / "2026" / "07" / "16" / f"rollout-2026-07-16T16-4{n}-00-{t}.jsonl", t)
+            for n, t in enumerate(thread_ids)
+        ]
+        newest = write_apply_patch_rollout(
+            root / "2026" / "07" / "17" / f"rollout-2026-07-17T08-00-00-{thread_ids[0]}.jsonl", thread_ids[0]
+        )
+        (root / "2026" / "07" / "18").mkdir(parents=True)
+        (root / "2026" / "07" / "18" / f"rollout-2026-07-18T08-00-00-{thread_ids[1]}.jsonl.zst").write_bytes(b"")
+        monkeypatch.setattr(codex, "SESSIONS_ROOT", root)
+        for thread_id in [*thread_ids, "019f6800-0000-0000-0000-000000000199"]:
+            register_transcript("s-batch", provider="codex", thread_id=thread_id)
+        expected = tuple(codex.find_transcript(SessionId(t)) for t in thread_ids)
+        assert expected == (newest, rollouts[1], rollouts[2])
+
+        scans: list[object] = []
+        discover = codex.discover
+        monkeypatch.setattr(codex, "discover", lambda *args: scans.append(args) or discover(*args))
+        monkeypatch.setattr(codex, "find_transcript", lambda *args: pytest.fail("resolved one id at a time"))
+        assert registered_paths(ensure_session(SessionId("s-batch"))) == expected
+        assert len(scans) == 1
+
     def test_pruned_rollout_resolves_afresh(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from cc_transcript import codex
 
