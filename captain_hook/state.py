@@ -93,7 +93,7 @@ class NlpResources:
 
 
 RESOURCES = NlpResources()
-LEMMA_SKIPPED_PIPES = ("parser", "ner")
+LEMMA_SKIPPED_PIPES = ("ner",)
 
 
 class HookState(BaseModel):

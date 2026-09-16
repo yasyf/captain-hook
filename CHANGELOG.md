@@ -107,10 +107,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only two imperatives took 46 s of CPU on each `UserPromptSubmit`. The
   signals now start at the first imperative. They match the same prompts, and
   the same prompt takes 10 ms.
-- **Echo damping skips the dependency parser and entity recognizer when it
-  collects content lemmas.** Lemmas and parts of speech come from the tagger,
-  attribute ruler, and lemmatizer, so the lemma sets are unchanged. On a 40 KB
-  prompt the pass drops from 1.1 s to 0.45 s of CPU.
+- **Echo damping skips the entity recognizer when it collects content
+  lemmas.** No lemma or part-of-speech rule reads entity types, so the lemma
+  sets are unchanged. On a 40 KB prompt the pass drops from 1.0 s to 0.64 s of
+  CPU.
 
 - **The host and its Python workers run at default priority.** The host
   LaunchAgent declared no `ProcessType`, so launchd applied its resource
