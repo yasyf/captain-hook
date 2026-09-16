@@ -49,12 +49,10 @@ class WorkerService:
         *,
         dispatch: Dispatch,
         max_workers: int = REQUEST_THREADS,
-        margin: float = 0.0,
     ) -> None:
         self._input = input_stream
         self._output = output_stream
         self._dispatch = dispatch
-        self._margin = margin
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="capt-hook-worker")
         self._background = ThreadPoolExecutor(max_workers=BACKGROUND_THREADS, thread_name_prefix="capt-hook-async")
         self._write_guard = threading.Lock()
@@ -80,8 +78,8 @@ class WorkerService:
         future.add_done_callback(self._done)
 
     def _serve(self, request: EventRequest) -> None:
-        if request.deadline_within(self._margin):
-            self._write(result_response(request.id, EventResponse(stderr=self._shed_note())))
+        if request.deadline_passed():
+            self._write(error_response(request.id, "deadline passed before dispatch"))
             return
         start = time.perf_counter()
         try:
@@ -93,9 +91,6 @@ class WorkerService:
         self._write(result_response(request.id, replace(response, elapsed_ms=elapsed_ms)))
         if background is not None:
             self._background.submit(background)
-
-    def _shed_note(self) -> str:
-        return f"capt-hook: the caller deadline is inside the {self._margin:g}s hook margin at dispatch; no verdict\n"
 
     def _done(self, future: Future[None]) -> None:
         with self._guard:

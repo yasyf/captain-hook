@@ -58,8 +58,8 @@ class EventRequest:
     client_ppid: int
     deadline_unix_ms: int
 
-    def deadline_within(self, seconds: float) -> bool:
-        return 0 < self.deadline_unix_ms <= (time.time() + seconds) * 1000
+    def deadline_passed(self) -> bool:
+        return 0 < self.deadline_unix_ms <= time.time() * 1000
 
 
 @dataclass(frozen=True, slots=True)

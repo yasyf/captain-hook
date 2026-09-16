@@ -61,14 +61,11 @@ def main() -> None:
     fallback = sys.stderr
     sys.stdout = ContextIO("stdout", fallback)
     sys.stderr = ContextIO("stderr", fallback)
-    from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS
     from captain_hook.worker.runtime import ProductRuntime
 
     runtime = ProductRuntime()
     try:
-        WorkerService(
-            sys.stdin.buffer, protocol_output, dispatch=runtime.dispatch, margin=SYNC_DEADLINE_MARGIN_SECONDS
-        ).run()
+        WorkerService(sys.stdin.buffer, protocol_output, dispatch=runtime.dispatch).run()
     finally:
         router.close()
         runtime.close()

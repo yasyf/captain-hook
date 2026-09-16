@@ -83,3 +83,67 @@ def test_cold_beats_reuse_one_handle(hb_db: Path) -> None:
     assert heartbeat_mod._CACHED_LOG is handle  # same object, not reopened
     assert threading.active_count() <= baseline + 1  # one actor thread across both beats, not two
     assert {b.event for b in beats(hb_db, "s1")} == {"PreToolUse", "Stop"}
+
+
+def test_within_margin_skips_sync_verdict_but_keeps_heartbeat_and_background(
+    hb_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+    from pathlib import Path as _Path
+
+    from captain_hook import cli
+    from captain_hook.util import reqenv
+
+    sync_ran = False
+
+    def fake_dispatch(event: Event, evt: object, *, session_dir: object = None) -> dict[str, object]:
+        nonlocal sync_ran
+        sync_ran = True
+        return {"decision": "block"}
+
+    monkeypatch.setattr(cli, "dispatch", fake_dispatch)
+    overrides = reqenv.RequestOverrides(
+        env={"CAPT_HOOK_DECISIONS_DB": str(hb_db)},
+        cwd=".",
+        client_ppid=1,
+        session_id="s1",
+        deadline_unix_ms=int((time.time() + 1) * 1000),
+    )
+    raw = {"session_id": "s1", "tool_name": "Bash", "tool_input": {"command": "echo hi"}}
+    with reqenv.use_request(overrides):
+        envelope, background = cli.dispatch_event(_Path("/x"), Event.PreToolUse, raw, session_dir=None)
+
+    assert envelope is None, "the synchronous verdict must be skipped inside the margin"
+    assert sync_ran is False, "no synchronous hook fan-out for a verdict that would be skipped"
+    (beat,) = beats(hb_db, "s1")
+    assert beat.event == "PreToolUse"
+    background()
+
+
+def test_outside_margin_runs_the_sync_verdict(hb_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+    from pathlib import Path as _Path
+
+    from captain_hook import cli
+    from captain_hook.util import reqenv
+
+    sync_ran = False
+
+    def fake_dispatch(event: Event, evt: object, *, session_dir: object = None) -> None:
+        nonlocal sync_ran
+        sync_ran = True
+        return None
+
+    monkeypatch.setattr(cli, "dispatch", fake_dispatch)
+    overrides = reqenv.RequestOverrides(
+        env={"CAPT_HOOK_DECISIONS_DB": str(hb_db)},
+        cwd=".",
+        client_ppid=1,
+        session_id="s2",
+        deadline_unix_ms=int((time.time() + 30) * 1000),
+    )
+    raw = {"session_id": "s2", "tool_name": "Bash", "tool_input": {"command": "echo hi"}}
+    with reqenv.use_request(overrides):
+        cli.dispatch_event(_Path("/x"), Event.PreToolUse, raw, session_dir=None)
+
+    assert sync_ran is True, "a request with budget to spare must run its synchronous hooks"
