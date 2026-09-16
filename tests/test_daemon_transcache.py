@@ -5,7 +5,7 @@ import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, BinaryIO
 
 import pytest
 from cc_transcript.activity import ActivityLift, native_user_classifier
@@ -323,6 +323,62 @@ class TestIncrementalLift:
             assert transcache._lift(grown, classifier, target) == lift_classified(grown.events, classifier, path=target)
 
 
+class TestTailRead:
+    def test_growth_reads_only_the_appended_bytes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:40]))
+        transcache.load(target)
+        write(target, b"".join(lines))
+        read: list[int] = []
+        opened = Path.open
+
+        class Counting:
+            def __init__(self, fh: BinaryIO) -> None:
+                self.fh = fh
+
+            def __enter__(self) -> Counting:
+                return self
+
+            def __exit__(self, *exc: object) -> None:
+                self.fh.close()
+
+            def seek(self, offset: int) -> int:
+                return self.fh.seek(offset)
+
+            def read(self, size: int = -1) -> bytes:
+                chunk = self.fh.read(size)
+                read.append(len(chunk))
+                return chunk
+
+        monkeypatch.setattr(Path, "open", lambda self, *args, **kwargs: Counting(opened(self, *args, **kwargs)))
+        assert transcache.load(target) == lift_classified(
+            parse_events_from_bytes(b"".join(lines)), native_user_classifier, path=target
+        )
+        assert read == [len(b"".join(lines[40:]))]
+
+    @pytest.mark.parametrize(("start", "end"), [(0, 5), (1, 46)])
+    def test_a_file_rewritten_shorter_between_stat_and_read_reparses_in_full(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, start: int, end: int
+    ) -> None:
+        lines = split_lines(TOOL_HEAVY.read_bytes())
+        target = write(tmp_path / "t.jsonl", b"".join(lines[:40]))
+        transcache.load(target)
+        write(target, b"".join(lines))
+        rewritten = b"".join(lines[start:end])
+        assert len(rewritten) < target.stat().st_size
+        opened = Path.open
+
+        def rewrite_then_open(self: Path, *args: object, **kwargs: object) -> BinaryIO:
+            monkeypatch.setattr(Path, "open", opened)
+            write(target, rewritten)
+            return opened(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", rewrite_then_open)
+        assert transcache._entry_for(target).events == parse_events_from_bytes(rewritten)
+        assert transcache.load(target) == load_transcript(target)
+        assert transcache._entry_for(target).events == parse_events_from_bytes(rewritten)
+
+
 class TestCursorOwnership:
     def test_a_stale_entry_hands_its_cursor_off_and_lifts_afresh(self, tmp_path: Path) -> None:
         lines = split_lines(TOOL_HEAVY.read_bytes())
@@ -349,7 +405,9 @@ class TestCursorOwnership:
         taken = current.lifts[native_user_classifier].activity
         write(target, b"".join(lines))
         st = target.stat()
-        rival = transcache._grow(stale, target, target.read_bytes(), st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        rival = transcache._grow(
+            stale, target, target.read_bytes()[stale.consumed :], st.st_size, st.st_mtime_ns, st.st_ctime_ns
+        )
         assert rival.lifts == {}
         assert current.lifts[native_user_classifier].activity is taken
         for entry in (current, rival):

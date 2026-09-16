@@ -62,7 +62,7 @@ def _entry_for(path: Path) -> _Entry:
             return _store(path, entry)
         case _Entry(size=cached) if size > cached:
             try:
-                return _store(path, _grow(entry, path, path.read_bytes(), size, mtime_ns, ctime_ns))
+                return _store(path, _grow(entry, path, _appended(path, entry.consumed, size), size, mtime_ns, ctime_ns))
             except Exception:
                 pass
     return _store(path, _full(path.read_bytes(), size, mtime_ns, ctime_ns))
@@ -88,12 +88,28 @@ def _store(path: Path, entry: _Entry) -> _Entry:
     return entry
 
 
-def _grow(entry: _Entry, path: Path, raw: bytes, size: int, mtime_ns: int, ctime_ns: int) -> _Entry:
+def _appended(path: Path, offset: int, size: int) -> bytes:
+    with path.open("rb") as fh:
+        fh.seek(offset)
+        appended = fh.read(size - offset)
+    if len(appended) != size - offset:
+        raise EOFError(path)
+    return appended
+
+
+def _grow(entry: _Entry, path: Path, appended: bytes, size: int, mtime_ns: int, ctime_ns: int) -> _Entry:
     from cc_transcript.parser import parse_events_from_bytes
 
-    consumed = raw.rfind(b"\n") + 1
-    committed = entry.committed + parse_events_from_bytes(raw[entry.consumed : consumed])
-    grown = _Entry(size, mtime_ns, ctime_ns, consumed, committed, committed + parse_events_from_bytes(raw[consumed:]))
+    cut = appended.rfind(b"\n") + 1
+    committed = entry.committed + parse_events_from_bytes(appended[:cut])
+    grown = _Entry(
+        size,
+        mtime_ns,
+        ctime_ns,
+        entry.consumed + cut,
+        committed,
+        committed + parse_events_from_bytes(appended[cut:]),
+    )
     if len(entry.events) == len(entry.committed):
         with _LOCK:
             lifts, entry.lifts = entry.lifts, {}

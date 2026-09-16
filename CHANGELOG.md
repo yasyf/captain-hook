@@ -72,6 +72,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of it reading the file and parsing the appended lines; the lift itself takes
   0.02 ms. A cursor adds only its tool-use and result indexes, 0.18 MB on that
   transcript, so the source-byte budget is unchanged.
+- **A growing transcript reads only its appended bytes.** A growth used to
+  read the whole file before parsing the new lines. It now seeks to the end of
+  the prior parse and reads only up to the size it checked. A read shorter
+  than that size, from a file truncated or rewritten in between, falls back to
+  a full reparse. The same 8-line append to a 63 MB transcript now loads in
+  0.7 ms, down from 9.8 ms.
 
 ### Fixed
 
