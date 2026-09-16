@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from captain_hook.transcripts import lift_session
+from captain_hook.transcripts import lift_classified, user_classifier
 from captain_hook.util.caching import WeightedLRUDict
 
 if TYPE_CHECKING:
+    from cc_transcript.activity import UserClassifier
     from cc_transcript.models import TranscriptEvent
     from cc_transcript.query import Session
 
@@ -24,6 +25,7 @@ class _Entry:
     consumed: int
     committed: list[TranscriptEvent]
     events: list[TranscriptEvent]
+    lifted: dict[UserClassifier, Session] = field(default_factory=dict)
 
 
 _CACHE: WeightedLRUDict[Path, _Entry] = WeightedLRUDict(MAX_SOURCE_BYTES, weigh=attrgetter("size"))
@@ -35,7 +37,11 @@ def load(path: str | Path | None) -> Session:
 
     if not path or not (resolved := Path(path)).exists():
         return Session(())
-    return lift_session(_events_for(resolved), path=resolved)
+    entry = _entry_for(resolved)
+    classifier = user_classifier(entry.events, path=resolved)
+    if (session := entry.lifted.get(classifier)) is not None:
+        return session
+    return entry.lifted.setdefault(classifier, _lift(entry, classifier, resolved))
 
 
 def cache_clear() -> None:
@@ -43,7 +49,7 @@ def cache_clear() -> None:
         _CACHE.cache_clear()
 
 
-def _events_for(path: Path) -> list[TranscriptEvent]:
+def _entry_for(path: Path) -> _Entry:
     st = path.stat()
     size, mtime_ns, ctime_ns = st.st_size, st.st_mtime_ns, st.st_ctime_ns
     with _LOCK:
@@ -61,10 +67,14 @@ def _events_for(path: Path) -> list[TranscriptEvent]:
     return _store(path, _full(path.read_bytes(), size, mtime_ns, ctime_ns))
 
 
-def _store(path: Path, entry: _Entry) -> list[TranscriptEvent]:
+def _lift(entry: _Entry, classifier: UserClassifier, path: Path) -> Session:
+    return lift_classified(entry.events, classifier, path=path)
+
+
+def _store(path: Path, entry: _Entry) -> _Entry:
     with _LOCK:
         _CACHE[path] = entry
-    return entry.events
+    return entry
 
 
 def _grow(entry: _Entry, raw: bytes, size: int, mtime_ns: int, ctime_ns: int) -> _Entry:

@@ -17,6 +17,7 @@ from captain_hook.util.paths import resolve_project_dir
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from cc_transcript.activity import UserClassifier
     from cc_transcript.models import TranscriptEvent
     from cc_transcript.query import Session
 
@@ -27,24 +28,27 @@ INVALID_SESSION_ID = re.compile(r"[/\\]|\x00|^\.\.?$")
 MAX_TRANSCRIPT_BYTES = 256 * 1024 * 1024
 
 
-def lift_session(events: Sequence[TranscriptEvent], *, path: Path | None = None) -> Session:
-    """Lift parsed transcript events into a query ``Session``, injecting the detected user classifier.
-
-    The activity lift parses every tool call with ``on_error='other'``, so a
-    Claude Code tool-shape change degrades to ``OtherCall`` — with a
-    still-correct digest — rather than crashing every hook fire.
-    """
-    from cc_transcript.activity import SessionActivity
-    from cc_transcript.query import Session
-
+def user_classifier(events: Sequence[TranscriptEvent], *, path: Path | None = None) -> UserClassifier:
     from captain_hook.app import _state
     from captain_hook.classifiers import detect
 
-    classifier = _state.classifier or detect(
+    return _state.classifier or detect(
         cwd=resolve_project_dir(),
         transcript_path=str(path) if path else None,
         events=events,
     )
+
+
+def lift_session(events: Sequence[TranscriptEvent], *, path: Path | None = None) -> Session:
+    return lift_classified(events, user_classifier(events, path=path), path=path)
+
+
+def lift_classified(
+    events: Sequence[TranscriptEvent], classifier: UserClassifier, *, path: Path | None = None
+) -> Session:
+    from cc_transcript.activity import SessionActivity
+    from cc_transcript.query import Session
+
     session_id = next(
         (meta.session_id for event in events if (meta := event_meta(event)) is not None),
         SessionId(path.stem if path else "unknown"),
