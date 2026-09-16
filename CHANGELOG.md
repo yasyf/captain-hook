@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A worker loads spaCy and WordNet once.** Two hooks reaching an unloaded
+  NLP resource together could both load it: the loader checked for a stored
+  value under its lock, but the value was only stored after the lock was
+  released, so a second thread woken in that gap loaded the pipeline again.
+  The loaded value is now stored before the lock is released.
+
 ## [12.37.0] - 2026-09-16
 
 ### Fixed

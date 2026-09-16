@@ -29,6 +29,23 @@ BUILTIN_PACKS_DIR = str(Path(FRAMEWORK_DIR) / "builtin_packs")
 PACK_PACKAGE_PREFIX = "captain_hook._packs"
 
 
+def load_spacy() -> spacy.language.Language:
+    import spacy
+
+    from captain_hook.util.model_cache import MODEL_NAME, cached_pipeline
+
+    if spacy.util.is_package(MODEL_NAME):
+        return spacy.load(MODEL_NAME)
+    if cached := cached_pipeline():
+        return spacy.load(cached)
+    raise RuntimeError(
+        f"spaCy model {MODEL_NAME!r} is not installed. "
+        "Run `uvx capt-hook init` to provision NLP resources, or install the model "
+        f"explicitly: `python -m spacy download {MODEL_NAME}` "
+        f'or `python -c "from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()"`.'
+    )
+
+
 class NlpResources:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -36,27 +53,10 @@ class NlpResources:
 
     @cached_property
     def spacy(self) -> spacy.language.Language:
-        import spacy
-
-        from captain_hook.util.model_cache import MODEL_NAME, cached_pipeline
-
         with self._lock:
-            if "spacy" in self.__dict__:
-                return self.__dict__["spacy"]
-            if spacy.util.is_package(MODEL_NAME):
-                return spacy.load(MODEL_NAME)
-            # We refuse to auto-download from a live hook: it's a silent fetch behind the
-            # agent's back (~13MB for spaCy; the oewn lexicon is the ~231MB heavyweight).
-            # If a previous run / explicit install already populated the cache, use that;
-            # otherwise, raise with an actionable install hint.
-            if cached := cached_pipeline():
-                return spacy.load(cached)
-            raise RuntimeError(
-                f"spaCy model {MODEL_NAME!r} is not installed. "
-                "Run `uvx capt-hook init` to provision NLP resources, or install the model "
-                f"explicitly: `python -m spacy download {MODEL_NAME}` "
-                f'or `python -c "from captain_hook.util.model_cache import ensure_spacy_model; ensure_spacy_model()"`.'
-            )
+            if "spacy" not in self.__dict__:
+                self.__dict__["spacy"] = load_spacy()
+            return self.__dict__["spacy"]
 
     @cached_property
     def wn(self) -> ModuleType:
@@ -65,10 +65,10 @@ class NlpResources:
         from captain_hook.util.model_cache import ensure_wn_lexicon
 
         with self._lock:
-            if "wn" in self.__dict__:
-                return self.__dict__["wn"]
-            ensure_wn_lexicon()
-            return wn
+            if "wn" not in self.__dict__:
+                ensure_wn_lexicon()
+                self.__dict__["wn"] = wn
+            return self.__dict__["wn"]
 
     def wn_lemmas(self, terms: tuple[str, ...], pos: str) -> frozenset[str]:
         # wn pools one process-global sqlite connection, and ensure_wn_lexicon sets
