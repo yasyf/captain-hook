@@ -30,6 +30,7 @@ GENERAL_HOOKS = {
     "plain_english",
     "plans",
     "prompts",
+    "questions",
     "review",
     "tasks",
     "tombstones",
