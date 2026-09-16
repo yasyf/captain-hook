@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.36.0] - 2026-09-16
+
 ### Added
 
 - **The general pack blocks prose questions to the user at Stop.** The
