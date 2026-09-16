@@ -71,7 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   append to a 63 MB transcript, a load took 32 ms and now takes 8.4 ms, most
   of it reading the file and parsing the appended lines; the lift itself takes
   0.02 ms. A cursor adds only its tool-use and result indexes, 0.18 MB on that
-  transcript, so the source-byte budget is unchanged.
+  transcript, so the source-byte budget is unchanged. The cc-transcript pin is
+  now exactly `14.18.0`, the first release with `ActivityLift`.
 - **A growing transcript reads only its appended bytes.** A growth used to
   read the whole file before parsing the new lines. It now seeks to the end of
   the prior parse and reads only up to the size it checked. A read shorter
