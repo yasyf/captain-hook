@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 import io
 import json
+import os
 import struct
 import subprocess
 import sys
@@ -272,8 +273,30 @@ def test_expired_deadline_is_refused_without_dispatch() -> None:
 
     assert served_ids == [4]
     by_id = {message["id"]: message for message in responses(output_stream.getvalue())}
-    assert by_id[3]["op"] == "error"
-    assert by_id[3]["error"] == "deadline passed before dispatch"
+    assert by_id[3]["op"] == "result"
+    assert by_id[3]["response"]["stdout"] == ""
+    assert by_id[3]["response"]["exit"] == 0
+    assert "no verdict" in by_id[3]["response"]["stderr"]
+    assert by_id[4]["op"] == "result"
+
+
+def test_deadline_inside_the_hook_margin_is_refused_without_dispatch() -> None:
+    soon = int((time.time() + 3) * 1000)
+    later = int((time.time() + 30) * 1000)
+    input_stream = io.BytesIO(frame(event(3, deadline_unix_ms=soon)) + frame(event(4, deadline_unix_ms=later)))
+    output_stream = io.BytesIO()
+    served_ids: list[int] = []
+
+    def dispatch(request: EventRequest) -> tuple[EventResponse, None]:
+        served_ids.append(request.id)
+        return EventResponse(), None
+
+    WorkerService(input_stream, output_stream, dispatch=dispatch, margin=5.0).run()
+
+    assert served_ids == [4]
+    by_id = {message["id"]: message for message in responses(output_stream.getvalue())}
+    assert by_id[3]["op"] == "result"
+    assert "5s hook margin" in by_id[3]["response"]["stderr"]
     assert by_id[4]["op"] == "result"
 
 
@@ -309,6 +332,7 @@ def test_module_entrypoint_reserves_stdout_for_protocol() -> None:
         capture_output=True,
         check=True,
         timeout=5,
+        env={**os.environ, "CAPT_HOOK_WORKER_SHARD": "0"},
     )
 
     response = responses(completed.stdout)

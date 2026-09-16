@@ -11,12 +11,6 @@ TRANSCRIPT_PARSE_THREADS = 4
 
 
 def bound_transcript_parse_pool() -> None:
-    """Cap cc-transcript's native parse pool before its first parse sizes it.
-
-    The pool defaults to twice the CPU count, up to 32 threads, in every process; the host runs
-    one worker per project root, so uncapped workers oversubscribe the machine together. A value
-    already in the environment wins.
-    """
     os.environ.setdefault("CC_TRANSCRIPT_PARSE_THREADS", str(TRANSCRIPT_PARSE_THREADS))
 
 
@@ -43,22 +37,12 @@ def adopt_user_path() -> None:
     os.environ["PATH"] = merged_path(os.environ.get("PATH", ""), login)
 
 
-def worker_log_key(build: str) -> str:
-    """The daemon-log key for this worker: the build plus a digest of the project root.
-
-    The host runs one worker per project root and sets that root as the worker's cwd, so
-    concurrent same-build workers keyed on the build alone would rotate one shared log file —
-    loguru's rotation is per-process, and one worker's rename strands the others' handles on
-    the unlinked inode.
-
-    A root deleted under a live session leaves the worker with an unresolvable cwd; the pid
-    stands in for it, keeping such workers on separate log files rather than killing dispatch.
-    """
+def worker_log_key(build: str, shard: str) -> str:
     try:
         root = os.path.realpath(os.getcwd())
     except FileNotFoundError:
         root = f"deleted-root-{os.getpid()}"
-    return f"{build}-{hashlib.sha256(root.encode('utf-8', 'surrogatepass')).hexdigest()[:16]}"
+    return f"{build}-{hashlib.sha256(root.encode('utf-8', 'surrogatepass')).hexdigest()[:16]}-{shard}"
 
 
 def main() -> None:
@@ -72,16 +56,19 @@ def main() -> None:
     from captain_hook.daemon.logsink import configure_daemon_logging
 
     bound_transcript_parse_pool()
-    router = configure_daemon_logging(worker_log_key(build))
+    router = configure_daemon_logging(worker_log_key(build, os.environ["CAPT_HOOK_WORKER_SHARD"]))
     adopt_user_path()
     fallback = sys.stderr
     sys.stdout = ContextIO("stdout", fallback)
     sys.stderr = ContextIO("stderr", fallback)
+    from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS
     from captain_hook.worker.runtime import ProductRuntime
 
     runtime = ProductRuntime()
     try:
-        WorkerService(sys.stdin.buffer, protocol_output, dispatch=runtime.dispatch).run()
+        WorkerService(
+            sys.stdin.buffer, protocol_output, dispatch=runtime.dispatch, margin=SYNC_DEADLINE_MARGIN_SECONDS
+        ).run()
     finally:
         router.close()
         runtime.close()

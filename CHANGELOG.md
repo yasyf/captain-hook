@@ -13,6 +13,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that reads them finds them loaded, or waits on the load already running,
   instead of paying ~1.5s itself. The first reply is not slowed: the load
   starts once it has been written.
+- **A busy root gets a pool of workers, not one.** The host keeps a pool of
+  Python workers per `{root, semantic environment}` key and sends each event to
+  the member with the fewest events in flight. A pool starts with one member;
+  while its least loaded member is busy and the pool has room, the host starts
+  one more in the background, one start at a time, and the event takes the
+  member that is already up. The pool bound is `CAPT_HOOK_WORKERS_PER_ROOT` in
+  the host's environment, else a quarter of the cores capped at 8, and growth
+  only ever takes a free slot under the 64 live workers the host allows across
+  every root. Each member is one interpreter, so a root whose sessions used to
+  share one core now spreads across the machine. Members idle for 30 minutes
+  retire as before; a quiet pool routes to its most recently used member on a
+  tie, so the rest go cold. Every session-scoped fact a hook reads —
+  `max_fires` counts, `PrimitiveState`, `once` keys, workflow state — already
+  lives on disk under a file lock, and the transcript parse cache and ledger
+  writers are per-process caches over the same files, so two members of one
+  root give the same answers one worker did. Each member writes its own
+  `daemon-<build>-<root>-<shard>.log`; the worker reads its shard from
+  `CAPT_HOOK_WORKER_SHARD`, which the host sets. `capt-hookd status` rows
+  carry a `shard`.
+- **An event the worker cannot answer in time is shed at once.** Each pool
+  member keeps a smoothed service time, one round trip divided by the events
+  sharing the interpreter when it was admitted. When the events already in
+  flight on the chosen member, at that service time, outlast what is left of
+  the caller's deadline, the host replies with an exit-0 no-verdict at once
+  and names the queue on stderr, instead of queueing the event to run after
+  the harness has given up on it. The same check runs again where the event
+  is dequeued: the host never writes an event whose caller has already gone,
+  and the worker answers an event that reaches its thread with less than the
+  5 s hook margin left with the same no-verdict reply, instead of loading the
+  session and transcript only to skip every hook. Nothing serializes: every
+  admitted event still runs as it arrives on the member it was routed to.
 
 ### Fixed
 

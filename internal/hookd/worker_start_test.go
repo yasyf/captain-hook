@@ -91,7 +91,7 @@ func TestFirstRequesterLeavingDoesNotFailTheStartOthersWaitOn(t *testing.T) {
 		t.Fatal("second requester did not get the worker the shared start produced")
 	}
 	manager.wg.Wait()
-	entry := cachedEntry(manager, key.id)
+	entry := cachedEntry(manager, key.member())
 	manager.mu.Lock()
 	holds := entry.inflight
 	manager.mu.Unlock()
@@ -134,7 +134,7 @@ func TestAbandonedStartStillLandsItsWorker(t *testing.T) {
 			close(release)
 			manager.wg.Wait()
 
-			entry := cachedEntry(manager, key.id)
+			entry := cachedEntry(manager, key.member())
 			if tc.name == "ephemeral" {
 				if entry != nil {
 					t.Fatal("an ephemeral worker nobody waited for stayed cached")
@@ -178,7 +178,7 @@ func TestStartFailureReachesEveryWaiterAndFreesTheKey(t *testing.T) {
 		}
 	}
 	manager.wg.Wait()
-	if cachedEntry(manager, key.id) != nil {
+	if cachedEntry(manager, key.member()) != nil {
 		t.Fatal("a failed start left its entry cached, so no later request can retry")
 	}
 }
@@ -205,7 +205,7 @@ func TestStartThatLandsBrokenIsNotCached(t *testing.T) {
 	close(release)
 	manager.wg.Wait()
 
-	if cachedEntry(manager, key.id) != nil {
+	if cachedEntry(manager, key.member()) != nil {
 		t.Fatal("a worker whose child died before it was published stayed cached for the next requester")
 	}
 }

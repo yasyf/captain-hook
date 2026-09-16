@@ -71,6 +71,10 @@ func (w *workerClient) call(ctx context.Context, request wireproto.EventRequest)
 	case <-ctx.Done():
 		return wireproto.EventResponse{}, ctx.Err()
 	}
+	if err := ctx.Err(); err != nil {
+		w.release(1)
+		return wireproto.EventResponse{}, err
+	}
 	w.mu.Lock()
 	if w.closed {
 		err := w.err
