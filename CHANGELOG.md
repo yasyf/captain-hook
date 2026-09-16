@@ -99,6 +99,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one pass over the session, its sidechains, and its attachments, instead of one
   pass per spelling. The steering pack's typing nudge lists seven spellings and
   runs on every `PostToolUse`.
+- **The general pack's multi-request nudge no longer backtracks quadratically
+  on a long prompt.** Its imperative-count signals used a leading lazy `.*?`,
+  which made every failed search retry from every offset. A 40 KB prompt with
+  only two imperatives took 46 s of CPU on each `UserPromptSubmit`. The
+  signals now start at the first imperative. They match the same prompts, and
+  the same prompt takes 10 ms.
 
 - **The host and its Python workers run at default priority.** The host
   LaunchAgent declared no `ProcessType`, so launchd applied its resource

@@ -110,8 +110,8 @@ nudge(
                 weight=1,
                 flags=re.I,
             ),
-            Signal(pattern=rf"(?s)(?:.*?{IMPERATIVES}){{3}}", weight=2, flags=re.I),
-            Signal(pattern=rf"(?s)(?:.*?{IMPERATIVES}){{2}}", weight=1, flags=re.I),
+            Signal(pattern=rf"(?s){IMPERATIVES}(?:.*?{IMPERATIVES}){{2}}", weight=2, flags=re.I),
+            Signal(pattern=rf"(?s){IMPERATIVES}.*?{IMPERATIVES}", weight=1, flags=re.I),
         ],
         threshold=2,
         window=0,
@@ -120,6 +120,10 @@ nudge(
     tests={
         Input(prompt="1. add foo\n2. fix bar\n3. update baz"): Warn(),
         Input(prompt="just fix the typo"): Allow(),
+        Input(prompt="fix the parser, then add a test for it\n\n" + "the logs are attached below. " * 400): Allow(),
+        Input(
+            prompt="the logs are attached below. " * 400 + "\nfix the parser, add a test, and update the docs"
+        ): Warn(),
         Input(prompt="1. add foo\n2. fix bar\n3. update baz", permission_mode="plan"): Allow(),
         Input(
             prompt="thanks, that works",
