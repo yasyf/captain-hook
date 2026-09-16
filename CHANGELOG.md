@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.35.0] - 2026-09-16
+
 ### Changed
 
 - **The hook client comes from binrun again.** The plugin registers
