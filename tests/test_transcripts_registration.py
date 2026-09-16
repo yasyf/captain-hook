@@ -264,7 +264,7 @@ class TestRegisteredPaths:
         (resolved,) = registered_paths(ensure_session(SessionId("s-res")))
         assert resolved.samefile(rollout)
 
-    def test_resolved_rollout_is_reused_without_rewalking(
+    def test_unchanged_tree_reuses_the_index_without_rescanning(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from cc_transcript import codex
@@ -278,12 +278,13 @@ class TestRegisteredPaths:
         session_dir = ensure_session(SessionId("s-memo"))
         (first,) = registered_paths(session_dir)
 
-        walks: list[object] = []
-        monkeypatch.setattr(codex, "find_transcript", lambda *args: walks.append(args))
+        with rollout.open("a") as appended:
+            appended.write("{}\n")
+        monkeypatch.setattr(codex, "discover", lambda *args: pytest.fail("rescanned an unchanged tree"))
+        monkeypatch.setattr(codex, "find_transcript", lambda *args: pytest.fail("resolved one id at a time"))
         (second,) = registered_paths(session_dir)
         assert second == first
         assert second.samefile(rollout)
-        assert walks == []
 
     def test_many_thread_ids_resolve_in_one_scan(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from cc_transcript import codex
@@ -311,6 +312,51 @@ class TestRegisteredPaths:
         monkeypatch.setattr(codex, "find_transcript", lambda *args: pytest.fail("resolved one id at a time"))
         assert registered_paths(ensure_session(SessionId("s-batch"))) == expected
         assert len(scans) == 1
+
+    @pytest.mark.parametrize(
+        "later",
+        [
+            pytest.param("2026/07/16/rollout-2026-07-16T18-00-00-{id}.jsonl", id="same_directory"),
+            pytest.param("2026/07/17/rollout-2026-07-17T09-00-00-{id}.jsonl", id="new_directory"),
+            pytest.param("2026/07/15/rollout-2026-07-17T09-00-00-{id}.jsonl", id="existing_other_directory"),
+        ],
+    )
+    def test_newer_duplicate_after_warming_wins(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, later: str
+    ) -> None:
+        from cc_transcript import codex
+
+        root = tmp_path / "codex"
+        thread_id = "019f6800-3b4c-7d5e-9f60-0000000000ae"
+        (root / "2026" / "07" / "15").mkdir(parents=True)
+        write_apply_patch_rollout(
+            root / "2026" / "07" / "16" / f"rollout-2026-07-16T16-44-00-{thread_id}.jsonl", thread_id
+        )
+        monkeypatch.setattr(codex, "SESSIONS_ROOT", root)
+        register_transcript("s-dup", provider="codex", thread_id=thread_id)
+        session_dir = ensure_session(SessionId("s-dup"))
+        assert registered_paths(session_dir) == (codex.find_transcript(SessionId(thread_id)),)
+
+        write_apply_patch_rollout(root / later.format(id=thread_id), thread_id)
+        (newest,) = registered_paths(session_dir)
+        assert newest == codex.find_transcript(SessionId(thread_id))
+        assert newest.name == Path(later.format(id=thread_id)).name
+
+    def test_rollout_written_after_warming_is_found(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from cc_transcript import codex
+
+        root = tmp_path / "codex"
+        early, late = "019f6800-3b4c-7d5e-9f60-0000000000af", "019f6800-3b4c-7d5e-9f60-0000000000b0"
+        day = root / "2026" / "07" / "16"
+        write_apply_patch_rollout(day / f"rollout-2026-07-16T16-44-00-{early}.jsonl", early)
+        monkeypatch.setattr(codex, "SESSIONS_ROOT", root)
+        register_transcript("s-late", provider="codex", thread_id=early)
+        register_transcript("s-late", provider="codex", thread_id=late)
+        session_dir = ensure_session(SessionId("s-late"))
+        assert len(registered_paths(session_dir)) == 1
+
+        write_apply_patch_rollout(day / f"rollout-2026-07-16T16-50-00-{late}.jsonl", late)
+        assert registered_paths(session_dir) == tuple(codex.find_transcript(SessionId(t)) for t in (early, late))
 
     def test_pruned_rollout_resolves_afresh(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from cc_transcript import codex

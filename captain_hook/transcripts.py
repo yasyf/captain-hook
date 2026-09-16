@@ -175,58 +175,89 @@ def readable_transcript(path: Path) -> bool:
     return path.is_file() and path.stat().st_size <= MAX_TRANSCRIPT_BYTES
 
 
-MAX_RESOLVED_ROLLOUTS = 4096
-RESOLVED_ROLLOUTS: LRUDict[tuple[Path, SessionId], Path] = LRUDict(MAX_RESOLVED_ROLLOUTS)
-RESOLVED_ROLLOUTS_LOCK = threading.Lock()
+MAX_ROLLOUT_INDEXES = 4
+ROLLOUT_INDEXES: LRUDict[Path, RolloutIndex] = LRUDict(MAX_ROLLOUT_INDEXES)
+ROLLOUT_INDEXES_LOCK = threading.Lock()
 
 
-def find_rollouts(thread_ids: Sequence[SessionId], root: Path) -> dict[SessionId, Path]:
-    from cc_transcript.codex import discover, find_transcript
-
-    match thread_ids:
-        case []:
-            return {}
-        case [thread_id]:
-            return {thread_id: path} if (path := find_transcript(thread_id, root)) is not None else {}
-        case _:
-            wanted = set(thread_ids)
-            found: dict[SessionId, Path] = {}
-            for rollout in discover(root):
-                if not rollout.compressed and (thread_id := SessionId(rollout.session_id)) in wanted:
-                    found.setdefault(thread_id, rollout.path)
-            return found
+def directory_mtime(path: Path) -> int | None:
+    try:
+        return path.lstat().st_mtime_ns
+    except FileNotFoundError:
+        return None
 
 
-def resolve_rollouts(thread_ids: Sequence[SessionId]) -> dict[SessionId, Path]:
+def rollout_tree_stamp(root: Path) -> dict[Path, int | None]:
+    try:
+        stamp: dict[Path, int | None] = {root: root.stat().st_mtime_ns}
+    except FileNotFoundError:
+        return {root: None}
+    for parent, dirnames, _ in root.walk():
+        stamp.update((parent / name, directory_mtime(parent / name)) for name in dirnames)
+    return stamp
+
+
+def rollout_tree_unchanged(stamp: dict[Path, int | None], root: Path) -> bool:
+    try:
+        root_mtime: int | None = root.stat().st_mtime_ns
+    except FileNotFoundError:
+        root_mtime = None
+    return stamp[root] == root_mtime and all(
+        directory_mtime(path) == mtime for path, mtime in stamp.items() if path != root
+    )
+
+
+@dataclasses.dataclass(slots=True)
+class RolloutIndex:
+    stamp: dict[Path, int | None]
+    newest: dict[SessionId, Path]
+    resolved: dict[SessionId, Path]
+
+    @classmethod
+    def build(cls, root: Path) -> RolloutIndex:
+        from cc_transcript.codex import discover
+
+        stamp = rollout_tree_stamp(root)
+        newest: dict[SessionId, Path] = {}
+        for rollout in discover(root):
+            if not rollout.compressed:
+                newest.setdefault(SessionId(rollout.session_id), rollout.path)
+        return cls(stamp, newest, {})
+
+    def lookup(self, thread_id: SessionId) -> Path | None:
+        if (path := self.resolved.get(thread_id)) is None and (found := self.newest.get(thread_id)) is not None:
+            path = self.resolved[thread_id] = found.resolve()
+        return path
+
+
+def rollout_index() -> RolloutIndex:
     from cc_transcript.codex import sessions_root
 
     root = sessions_root()
-    with RESOLVED_ROLLOUTS_LOCK:
-        cached = {thread_id: RESOLVED_ROLLOUTS.get((root, thread_id)) for thread_id in thread_ids}
-    known = {thread_id: path for thread_id, path in cached.items() if path is not None and path.exists()}
-    found = find_rollouts([thread_id for thread_id in thread_ids if thread_id not in known], root)
-    with RESOLVED_ROLLOUTS_LOCK:
-        for thread_id, path in found.items():
-            RESOLVED_ROLLOUTS[(root, thread_id)] = path
-    return known | found
+    with ROLLOUT_INDEXES_LOCK:
+        index = ROLLOUT_INDEXES.get(root)
+    if index is None or not rollout_tree_unchanged(index.stamp, root):
+        index = RolloutIndex.build(root)
+        with ROLLOUT_INDEXES_LOCK:
+            ROLLOUT_INDEXES[root] = index
+    return index
 
 
 def registered_paths(session_dir: Path | None) -> tuple[Path, ...]:
     """The on-disk paths of every transcript registered against ``session_dir``, unsafe entries skipped.
 
     A path entry resolves to its stored absolute path; a thread-id entry resolves lazily via
-    :func:`resolve_rollouts`, one scan of the codex sessions tree for every id not already found. A
-    pruned or unresolvable id, and any locator that no longer points at a bounded regular file (a
+    :func:`rollout_index`, which rescans the codex sessions tree only when a directory in it changed.
+    A pruned or unresolvable id, and any locator that no longer points at a bounded regular file (a
     special file or oversized blob would hang or OOM the deep view's whole-file parse), drops out
     silently.
     """
     entries = SessionSlot(session_dir, RegisteredTranscripts).get(RegisteredTranscripts()).entries
-    rollouts = resolve_rollouts(
-        [SessionId(thread_id) for entry in entries if not entry.path and (thread_id := entry.thread_id)]
-    )
+    rollouts = rollout_index() if any(entry.thread_id for entry in entries) else None
     return tuple(
         resolved
         for entry in entries
-        if (resolved := Path(entry.path) if entry.path else rollouts.get(SessionId(entry.thread_id))) is not None
+        if (resolved := Path(entry.path) if entry.path else rollouts and rollouts.lookup(SessionId(entry.thread_id)))
+        is not None
         and readable_transcript(resolved)
     )

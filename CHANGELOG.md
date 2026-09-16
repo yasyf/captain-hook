@@ -86,10 +86,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on every event.** Each registered thread id used to resolve against the whole
   sessions tree whenever an event read the transcript, at 9-14 ms apiece. A
   session with 85 registrations spent about 300 ms of CPU per `PostToolUse`
-  there. A resolved rollout path is reused while the file exists. Ids not yet
-  found resolve together in one scan of the tree, so a fresh worker's first
-  load costs one scan rather than one per registration, and an id whose rollout
-  is missing still resolves again on the next event.
+  there. The worker keeps one index of the newest uncompressed rollout per
+  thread id, stamped with the modification time of every directory in the tree.
+  An event checks the stamps, 34 directories here (under 1 ms), and rescans only
+  when a directory changed. The index resolves exactly
+  what a fresh lookup would, including a newer rollout for an id already seen.
 - **Each dispatch pass evaluates only its own hooks' conditions.** The
   synchronous pass used to evaluate `only_if`/`skip_if` for `async_=True` hooks
   and then discard them, and the background pass did the same for synchronous
