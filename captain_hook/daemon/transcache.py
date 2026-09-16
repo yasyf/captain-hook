@@ -6,11 +6,11 @@ from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from captain_hook.transcripts import lift_classified, user_classifier
+from captain_hook.transcripts import transcript_session_id, user_classifier
 from captain_hook.util.caching import WeightedLRUDict
 
 if TYPE_CHECKING:
-    from cc_transcript.activity import UserClassifier
+    from cc_transcript.activity import ActivityLift, UserClassifier
     from cc_transcript.models import TranscriptEvent
     from cc_transcript.query import Session
 
@@ -25,6 +25,7 @@ class _Entry:
     consumed: int
     committed: list[TranscriptEvent]
     events: list[TranscriptEvent]
+    lifts: dict[UserClassifier, ActivityLift] = field(default_factory=dict)
     lifted: dict[int, tuple[UserClassifier, Session]] = field(default_factory=dict)
 
 
@@ -61,14 +62,24 @@ def _entry_for(path: Path) -> _Entry:
             return _store(path, entry)
         case _Entry(size=cached) if size > cached:
             try:
-                return _store(path, _grow(entry, path.read_bytes(), size, mtime_ns, ctime_ns))
+                return _store(path, _grow(entry, path, path.read_bytes(), size, mtime_ns, ctime_ns))
             except Exception:
                 pass
     return _store(path, _full(path.read_bytes(), size, mtime_ns, ctime_ns))
 
 
 def _lift(entry: _Entry, classifier: UserClassifier, path: Path) -> Session:
-    return lift_classified(entry.events, classifier, path=path)
+    from cc_transcript.activity import ActivityLift
+    from cc_transcript.query import Session
+
+    with _LOCK:
+        activity = None if (lift := entry.lifts.get(classifier)) is None else lift.activity
+    if activity is None:
+        lift = ActivityLift(transcript_session_id(entry.events, path=path), user_classifier=classifier)
+        activity = lift.extend(entry.events)
+        with _LOCK:
+            entry.lifts.setdefault(classifier, lift)
+    return Session.from_activity(activity, path=path)
 
 
 def _store(path: Path, entry: _Entry) -> _Entry:
@@ -77,12 +88,29 @@ def _store(path: Path, entry: _Entry) -> _Entry:
     return entry
 
 
-def _grow(entry: _Entry, raw: bytes, size: int, mtime_ns: int, ctime_ns: int) -> _Entry:
+def _grow(entry: _Entry, path: Path, raw: bytes, size: int, mtime_ns: int, ctime_ns: int) -> _Entry:
     from cc_transcript.parser import parse_events_from_bytes
 
     consumed = raw.rfind(b"\n") + 1
     committed = entry.committed + parse_events_from_bytes(raw[entry.consumed : consumed])
-    return _Entry(size, mtime_ns, ctime_ns, consumed, committed, committed + parse_events_from_bytes(raw[consumed:]))
+    grown = _Entry(size, mtime_ns, ctime_ns, consumed, committed, committed + parse_events_from_bytes(raw[consumed:]))
+    if len(entry.events) == len(entry.committed):
+        with _LOCK:
+            lifts, entry.lifts = entry.lifts, {}
+        session_id = transcript_session_id(grown.events, path=path)
+        grown.lifts = {
+            classifier: lift
+            for classifier, lift in lifts.items()
+            if lift.session_id == session_id and _fed(lift) == len(entry.events)
+        }
+        appended = grown.events[len(entry.events) :]
+        for lift in grown.lifts.values():
+            lift.extend(appended)
+    return grown
+
+
+def _fed(lift: ActivityLift) -> int:
+    return sum(len(turn.events) for turn in lift.activity.turns)
 
 
 def _full(raw: bytes, size: int, mtime_ns: int, ctime_ns: int) -> _Entry:

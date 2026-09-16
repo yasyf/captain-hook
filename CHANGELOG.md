@@ -58,11 +58,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The worker reuses a lifted transcript `Session` while its file is
   unchanged.** Each cached parse now also holds the `Session` lifted from it,
   one per user classifier. Every request still resolves its own classifier, so
-  a request whose classifier differs lifts its own. Any change to the file
-  lifts afresh, and a lifted `Session` is evicted with its parse. On a 44 MB
-  transcript the lift took 97 ms and a reuse takes 0.03 ms. The lifted
-  `Session` adds about 0.4x the source size in RSS on top of the parse's
-  budgeted entry.
+  a request whose classifier differs lifts its own. A lifted `Session` is
+  evicted with its parse. On a 44 MB transcript the lift took 97 ms and a
+  reuse takes 0.03 ms. The lifted `Session` adds about 0.4x the source size in
+  RSS on top of the parse's budgeted entry.
+- **A growing transcript extends its lifted `Session` instead of relifting
+  it.** Claude Code appends to the transcript between almost every hook event,
+  and each append used to relift the whole session. Each cached parse now
+  keeps one cc-transcript `ActivityLift` cursor per user classifier, and a
+  growth extends those cursors by the appended events alone. A shrink, an
+  in-place rewrite, or a parse error still lifts afresh. After an 8-line
+  append to a 63 MB transcript, a load took 32 ms and now takes 8.4 ms, most
+  of it reading the file and parsing the appended lines; the lift itself takes
+  0.02 ms. A cursor adds only its tool-use and result indexes, 0.18 MB on that
+  transcript, so the source-byte budget is unchanged.
 
 ### Fixed
 
