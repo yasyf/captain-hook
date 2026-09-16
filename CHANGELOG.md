@@ -71,6 +71,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   released, so a second thread woken in that gap loaded the pipeline again.
   The loaded value is now stored before the lock is released.
 
+- **A timed-out plain-English rewrite no longer strands a thread.** Each
+  finalized `MessageDisplay` built its own one-thread executor and released it
+  without joining, so a rewrite that outlived its budget kept its thread alive
+  until the Cerebras call returned. Rewrites now share one pool of four
+  threads, and a rewrite still queued when its budget runs out is cancelled
+  instead of running later.
+
 ## [12.37.0] - 2026-09-16
 
 ### Fixed

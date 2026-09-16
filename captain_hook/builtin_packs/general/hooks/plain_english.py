@@ -4,6 +4,7 @@ import contextvars
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from functools import cache
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
 CEREBRAS_MODEL = "qwen-3.8-27b"
 REWRITE_TIMEOUT_SECONDS = 20
+REWRITE_THREADS = 4
 DEADLINE_MARGIN_SECONDS = 3.0
 FINALIZED_KEPT = 64
 ASSEMBLY_DEADLINE_SECONDS = 2.0
@@ -45,6 +47,11 @@ def assembled(evt: MessageDisplayEvent) -> str:
                 buffer.finalized = [*buffer.finalized, evt.message_id][-FINALIZED_KEPT:]
                 return "".join(chunks[i] for i in sorted(chunks))
         time.sleep(ASSEMBLY_POLL_SECONDS)
+
+
+@cache
+def rewrite_pool() -> ThreadPoolExecutor:
+    return ThreadPoolExecutor(max_workers=REWRITE_THREADS, thread_name_prefix="capt-hook-plain-english")
 
 
 def is_prose(text: str) -> bool:
@@ -77,21 +84,21 @@ def plain_english(evt: MessageDisplayEvent, text: str, api_key: str) -> str:
         return text
     left = reqenv.seconds_left()
     budget = REWRITE_TIMEOUT_SECONDS if left is None else min(REWRITE_TIMEOUT_SECONDS, left - DEADLINE_MARGIN_SECONDS)
-    pool = ThreadPoolExecutor(max_workers=1)
     try:
-        future = pool.submit(
+        future = rewrite_pool().submit(
             contextvars.copy_context().run,
             evt.ctx.call_llm,
             rewrite_prompt(evt, text),
             backend=OpenAiEndpointBackend(CEREBRAS_BASE_URL, CEREBRAS_MODEL, api_key=api_key),
             timeout=max(1, int(budget)),
         )
-        answer = future.result(timeout=max(0.0, budget))
+        try:
+            answer = future.result(timeout=max(0.0, budget))
+        finally:
+            future.cancel()
     except Exception as exc:
         faults.record("plain_english rewrite", exc, str(evt.cwd) if evt.cwd else None)
         return text
-    finally:
-        pool.shutdown(wait=False)
     return unwrapped(answer, text) or text
 
 

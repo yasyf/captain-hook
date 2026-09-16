@@ -194,6 +194,25 @@ def test_slow_rewrite_is_abandoned_before_the_caller_deadline(
     assert "plain_english rewrite" in line
 
 
+def test_rewrite_queued_behind_a_slow_one_is_cancelled_on_timeout(
+    ctx: CerebrasStub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(plain_english, "REWRITE_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(plain_english, "REWRITE_THREADS", 1)
+    ctx.delay = 1.0
+    evt = MessageDisplayEvent(
+        _raw={"message_id": "msg_1", "index": 0, "final": True, "delta": PROSE, "session_id": "s"}, ctx=ctx
+    )
+
+    assert plain_english.plain_english(evt, PROSE, "test-key") == PROSE
+    assert plain_english.plain_english(evt, PROSE, "test-key") == PROSE
+    plain_english.rewrite_pool().submit(time.sleep, 0).result()
+
+    assert len(ctx.calls) == 1
+    (line,) = faults.drain()
+    assert "TimeoutError" in line
+
+
 def test_rewrite_budget_leaves_margin_before_the_caller_deadline(
     ctx: CerebrasStub, monkeypatch: pytest.MonkeyPatch
 ) -> None:
