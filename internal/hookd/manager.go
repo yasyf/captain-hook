@@ -75,6 +75,7 @@ type workerEntry struct {
 	inflight  int
 	ephemeral bool
 
+	load    int
 	service time.Duration
 }
 
@@ -87,11 +88,8 @@ func (e *workerEntry) started() bool {
 	}
 }
 
-// idle reports whether the entry can be retired right now: it has finished
-// starting and no dispatch holds it. An entry mid-start is never evicted —
-// the caller waiting on ready would be left with a worker that is going away.
 func (e *workerEntry) idle() bool {
-	return e.started() && e.inflight == 0
+	return e.started() && e.inflight == 0 && e.load == 0
 }
 
 func (e *workerEntry) observe(concurrency int, elapsed time.Duration) {
@@ -134,8 +132,8 @@ func (m *workerManager) poolLocked(id string) pool {
 			view.starting = entry
 			continue
 		}
-		if view.ready == nil || entry.inflight < view.ready.inflight ||
-			entry.inflight == view.ready.inflight && entry.lastUsed.After(view.ready.lastUsed) {
+		if view.ready == nil || entry.load < view.ready.load ||
+			entry.load == view.ready.load && entry.lastUsed.After(view.ready.lastUsed) {
 			view.ready = entry
 		}
 	}
@@ -187,33 +185,47 @@ func (m *workerManager) dispatch(ctx context.Context, request wireproto.EventReq
 	if deadline, ok := ctx.Deadline(); ok {
 		request.DeadlineUnixMS = deadline.UnixMilli()
 	}
-	entry, err := m.acquire(ctx, key)
+	entry, adm, err := m.acquire(ctx, key)
 	if err != nil {
 		return wireproto.EventResponse{}, err
 	}
+	if adm.shed {
+		return shedResponse(adm.ahead, adm.wait, adm.remaining), nil
+	}
 	defer m.release(entry)
 	admitted := m.now()
-	ahead, wait := m.queued(entry)
-	if deadline, ok := ctx.Deadline(); ok && wait > deadline.Sub(admitted) {
-		return shedResponse(ahead, wait, deadline.Sub(admitted)), nil
-	}
 	worker := entry.worker
 	response, err := worker.call(ctx, request)
 	if err != nil && worker.broken() {
 		m.forget(worker)
 		return wireproto.EventResponse{}, errors.Join(err, m.settle(worker))
 	}
-	m.mu.Lock()
-	entry.observe(ahead+1, m.now().Sub(admitted))
-	m.mu.Unlock()
+	if err == nil {
+		m.mu.Lock()
+		entry.observe(adm.ahead+1, m.now().Sub(admitted))
+		m.mu.Unlock()
+	}
 	return response, err
 }
 
-func (m *workerManager) queued(entry *workerEntry) (int, time.Duration) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	ahead := entry.inflight - 1
-	return ahead, time.Duration(ahead) * entry.service
+type admission struct {
+	shed      bool
+	ahead     int
+	wait      time.Duration
+	remaining time.Duration
+}
+
+func (m *workerManager) reserveLocked(ctx context.Context, entry *workerEntry) admission {
+	ahead := entry.load
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := deadline.Sub(m.now())
+		if wait := time.Duration(ahead) * entry.service; wait > remaining {
+			return admission{shed: true, ahead: ahead, wait: wait, remaining: remaining}
+		}
+	}
+	entry.load++
+	entry.lastUsed = m.now()
+	return admission{ahead: ahead}
 }
 
 func shedResponse(ahead int, wait, remaining time.Duration) wireproto.EventResponse {
@@ -224,11 +236,11 @@ func shedResponse(ahead int, wait, remaining time.Duration) wireproto.EventRespo
 	}
 }
 
-func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntry, error) {
+func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntry, admission, error) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		return nil, errWorkerManagerClosed
+		return nil, admission{}, errWorkerManagerClosed
 	}
 	var evicted *workerClient
 	view := m.poolLocked(key.id)
@@ -242,40 +254,65 @@ func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntr
 			if victim == nil {
 				live := len(m.entries)
 				m.mu.Unlock()
-				return nil, fmt.Errorf("%w: %d live workers, limit is %d", ErrWorkerCapacity, live, maxLiveWorkers)
+				return nil, admission{}, fmt.Errorf("%w: %d live workers, limit is %d", ErrWorkerCapacity, live, maxLiveWorkers)
 			}
 			evicted = victim.worker
 		}
 		entry = m.startMemberLocked(key, view.shard)
-	case entry.inflight > 0 && !entry.ephemeral && view.starting == nil &&
+	case entry.load > 0 && !entry.ephemeral && view.starting == nil &&
 		view.size < m.poolSize && len(m.entries) < maxLiveWorkers:
 		m.startMemberLocked(key, view.shard)
 	}
 	entry.lastUsed = m.now()
 	entry.inflight++
+	ready := entry.started()
+	var adm admission
+	if ready {
+		adm = m.reserveLocked(ctx, entry)
+	}
 	m.mu.Unlock()
 
 	if evicted != nil {
 		_ = m.settle(evicted)
 	}
 
+	if ready {
+		if adm.shed {
+			m.release(entry)
+		}
+		return m.admitted(entry, adm)
+	}
+
 	select {
 	case <-entry.ready:
 	case <-ctx.Done():
 		m.release(entry)
-		return nil, ctx.Err()
+		return nil, admission{}, ctx.Err()
 	}
 	if entry.err != nil {
 		m.release(entry)
-		return nil, entry.err
+		return nil, admission{}, entry.err
 	}
-	return entry, nil
+	m.mu.Lock()
+	adm = m.reserveLocked(ctx, entry)
+	m.mu.Unlock()
+	if adm.shed {
+		m.release(entry)
+	}
+	return m.admitted(entry, adm)
+}
+
+func (m *workerManager) admitted(entry *workerEntry, adm admission) (*workerEntry, admission, error) {
+	if adm.shed {
+		return nil, adm, nil
+	}
+	return entry, adm, nil
 }
 
 func (m *workerManager) startMemberLocked(key workerKey, shard int) *workerEntry {
 	key.shard = shard
 	entry := &workerEntry{
-		ready: make(chan struct{}), key: key, inflight: 1, ephemeral: ephemeralRoot(key.root),
+		ready: make(chan struct{}), key: key, inflight: 1, ephemeral: ephemeralRoot(key.root), lastUsed: m.now(),
 	}
 	m.entries[key.member()] = entry
 	m.wg.Add(1)
@@ -286,6 +323,9 @@ func (m *workerManager) startMemberLocked(key workerKey, shard int) *workerEntry
 func (m *workerManager) startEntry(entry *workerEntry) {
 	defer m.wg.Done()
 	worker, err := m.start(m.lifetime, entry.key)
+	if worker != nil {
+		worker.setOnSettle(func() { m.settleLoad(entry) })
+	}
 	m.mu.Lock()
 	stranded := err == nil && m.closed
 	if stranded {
@@ -322,6 +362,12 @@ func (m *workerManager) release(entry *workerEntry) {
 	if retire && worker != nil {
 		_ = m.settle(worker)
 	}
+}
+
+func (m *workerManager) settleLoad(entry *workerEntry) {
+	m.mu.Lock()
+	entry.load--
+	m.mu.Unlock()
 }
 
 // evictIdleLocked removes the least recently used idle entry and returns it for

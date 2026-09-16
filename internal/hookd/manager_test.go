@@ -195,7 +195,7 @@ func TestWorkerManagerEvictsLeastRecentlyUsedAtTheBound(t *testing.T) {
 	manager := mustWorkerManager(t)
 	fillIdleWorkers(manager, time.Unix(0, 0), cached)
 
-	if _, err := manager.acquire(t.Context(), workerKey{id: "one-past-the-bound", root: "/fresh"}); errors.Is(err, ErrWorkerCapacity) {
+	if _, _, err := manager.acquire(t.Context(), workerKey{id: "one-past-the-bound", root: "/fresh"}); errors.Is(err, ErrWorkerCapacity) {
 		t.Fatal("a full cache of idle workers refused admission instead of evicting")
 	}
 	if _, live := manager.entries["live-0/0"]; live {
@@ -217,7 +217,7 @@ func TestWorkerManagerRefusesWhenEveryWorkerIsBusy(t *testing.T) {
 		entry.inflight = 1
 	}
 
-	_, err := manager.acquire(t.Context(), workerKey{id: "one-past-the-bound", root: "/fresh"})
+	_, _, err := manager.acquire(t.Context(), workerKey{id: "one-past-the-bound", root: "/fresh"})
 	if !errors.Is(err, ErrWorkerCapacity) {
 		t.Fatalf("acquire past a fully busy bound = %v, want %v", err, ErrWorkerCapacity)
 	}
@@ -395,10 +395,10 @@ func TestInstalledPythonOnlyLooksUpTheToolEnv(t *testing.T) {
 	}
 }
 
-func readyMember(t *testing.T, manager *workerManager, key workerKey, inflight int) *workerEntry {
+func readyMember(t *testing.T, manager *workerManager, key workerKey, load int) *workerEntry {
 	t.Helper()
 	worker, _ := silentWorker(t)
-	entry := &workerEntry{ready: make(chan struct{}), key: key, worker: worker, inflight: inflight}
+	entry := &workerEntry{ready: make(chan struct{}), key: key, worker: worker, load: load}
 	close(entry.ready)
 	manager.mu.Lock()
 	manager.entries[key.member()] = entry
@@ -413,12 +413,12 @@ func TestAcquireRoutesToTheLeastLoadedMember(t *testing.T) {
 	loaded := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 3)
 	spare := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 1}, 1)
 
-	entry, err := manager.acquire(t.Context(), workerKey{id: "pool", root: "/live"})
+	entry, _, err := manager.acquire(t.Context(), workerKey{id: "pool", root: "/live"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if entry != spare {
-		t.Fatalf("acquire routed to the member with %d in flight over the one with %d", loaded.inflight, spare.inflight)
+		t.Fatalf("acquire routed to the member with load %d over the one with load %d", loaded.load, spare.load)
 	}
 }
 
@@ -435,7 +435,7 @@ func TestBusyPoolGrowsOneMemberAtATime(t *testing.T) {
 	key := workerKey{id: "pool", root: "/live"}
 	first := readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 1)
 
-	entry, err := manager.acquire(t.Context(), key)
+	entry, _, err := manager.acquire(t.Context(), key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,9 +452,9 @@ func TestBusyPoolGrowsOneMemberAtATime(t *testing.T) {
 	}
 
 	manager.mu.Lock()
-	second.inflight = 1
+	second.load = 1
 	manager.mu.Unlock()
-	if _, err := manager.acquire(t.Context(), key); err != nil {
+	if _, _, err := manager.acquire(t.Context(), key); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -473,11 +473,11 @@ func TestAPoolMemberStillStartingHoldsGrowth(t *testing.T) {
 	defer close(release)
 	readyMember(t, manager, workerKey{id: "pool", root: "/live", shard: 0}, 1)
 
-	if _, err := manager.acquire(t.Context(), workerKey{id: "pool", root: "/live"}); err != nil {
+	if _, _, err := manager.acquire(t.Context(), workerKey{id: "pool", root: "/live"}); err != nil {
 		t.Fatal(err)
 	}
 	<-started
-	if _, err := manager.acquire(t.Context(), workerKey{id: "pool", root: "/live"}); err != nil {
+	if _, _, err := manager.acquire(t.Context(), workerKey{id: "pool", root: "/live"}); err != nil {
 		t.Fatal(err)
 	}
 	manager.mu.Lock()
@@ -501,7 +501,7 @@ func TestAnEphemeralPoolNeverGrows(t *testing.T) {
 	entry := readyMember(t, manager, key, 1)
 	entry.ephemeral = true
 
-	if _, err := manager.acquire(t.Context(), key); err != nil {
+	if _, _, err := manager.acquire(t.Context(), key); err != nil {
 		t.Fatal(err)
 	}
 	manager.wg.Wait()
@@ -566,7 +566,8 @@ func TestDispatchShedsWhenTheQueueOutlastsTheDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry := &workerEntry{ready: make(chan struct{}), key: key, worker: worker, inflight: 5, service: time.Second}
+	entry := &workerEntry{ready: make(chan struct{}), key: key, worker: worker, load: 5, service: time.Second}
+	worker.setOnSettle(func() { manager.settleLoad(entry) })
 	close(entry.ready)
 	manager.entries[key.member()] = entry
 
@@ -584,8 +585,11 @@ func TestDispatchShedsWhenTheQueueOutlastsTheDeadline(t *testing.T) {
 		t.Fatalf("a shed event reached the worker as frame %d", frame.ID)
 	default:
 	}
-	if got := entry.inflight; got != 5 {
-		t.Fatalf("inflight after a shed = %d, want the 5 the shed left alone", got)
+	manager.mu.Lock()
+	load := entry.load
+	manager.mu.Unlock()
+	if load != 5 {
+		t.Fatalf("load after a shed = %d, want the 5 the shed left alone", load)
 	}
 
 	long, cancelLong := context.WithTimeout(t.Context(), 10*time.Second)
@@ -595,4 +599,151 @@ func TestDispatchShedsWhenTheQueueOutlastsTheDeadline(t *testing.T) {
 		t.Fatalf("dispatch within budget = %+v, %v; want the worker's reply", served, err)
 	}
 	<-frames
+}
+
+func replyingWorker(t *testing.T, manager *workerManager, entry *workerEntry, hold <-chan struct{}) *workerClient {
+	t.Helper()
+	worker, serverConn := silentWorker(t)
+	worker.setOnSettle(func() { manager.settleLoad(entry) })
+	go func() {
+		for {
+			frame, err := wireproto.DecodeFrame(serverConn)
+			if err != nil {
+				return
+			}
+			if hold != nil {
+				<-hold
+			}
+			_ = wireproto.EncodeFrame(serverConn, wireproto.Frame{
+				Protocol: wireproto.Schema, Op: wireproto.OpResult, ID: frame.ID,
+				Response: &wireproto.EventResponse{Schema: wireproto.Schema, Status: "ok"},
+			})
+		}
+	}()
+	return worker
+}
+
+func TestTimedOutWorkStaysCountedForAdmission(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	worker, serverConn := silentWorker(t)
+	go func() {
+		for {
+			if _, err := wireproto.DecodeFrame(serverConn); err != nil {
+				return
+			}
+		}
+	}()
+	request := testEventRequest("PreToolUse")
+	request.Root = "/live"
+	key, err := makeWorkerKey(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := &workerEntry{ready: make(chan struct{}), key: key, worker: worker, service: 10 * time.Second}
+	worker.setOnSettle(func() { manager.settleLoad(entry) })
+	close(entry.ready)
+	manager.entries[key.member()] = entry
+
+	short, cancelShort := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancelShort()
+	if _, err := manager.dispatch(short, request); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first dispatch = %v, want a timeout while the worker holds the reply", err)
+	}
+
+	manager.mu.Lock()
+	load, inflight := entry.load, entry.inflight
+	manager.mu.Unlock()
+	if load != 1 {
+		t.Fatalf("load after a timed-out op = %d, want 1: its work still occupies the interpreter", load)
+	}
+	if inflight != 0 {
+		t.Fatalf("inflight after the caller left = %d, want 0", inflight)
+	}
+
+	medium, cancelMedium := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelMedium()
+	shed, err := manager.dispatch(medium, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(shed.Stderr, "no verdict") {
+		t.Fatalf("second dispatch = %+v, want a shed: the timed-out op still occupies the member", shed)
+	}
+}
+
+func TestConcurrentAdmissionsNeverShedAnEmptyWorker(t *testing.T) {
+	t.Parallel()
+	manager := mustWorkerManager(t)
+	request := testEventRequest("PreToolUse")
+	request.Root = "/live"
+	key, err := makeWorkerKey(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for round := range 50 {
+		entry := &workerEntry{ready: make(chan struct{}), key: key, service: 10 * time.Second}
+		entry.worker = replyingWorker(t, manager, entry, nil)
+		close(entry.ready)
+		manager.mu.Lock()
+		manager.entries[key.member()] = entry
+		manager.mu.Unlock()
+
+		const callers = 2
+		start := make(chan struct{})
+		served := make(chan bool, callers)
+		for range callers {
+			go func() {
+				<-start
+				ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+				defer cancel()
+				resp, err := manager.dispatch(ctx, request)
+				served <- err == nil && !strings.Contains(resp.Stderr, "no verdict")
+			}()
+		}
+		close(start)
+		count := 0
+		for range callers {
+			if <-served {
+				count++
+			}
+		}
+		if count == 0 {
+			t.Fatalf("round %d: both concurrent callers shed an empty worker", round)
+		}
+		manager.mu.Lock()
+		load := entry.load
+		delete(manager.entries, key.member())
+		manager.mu.Unlock()
+		if load != 0 {
+			t.Fatalf("round %d: load after every caller settled = %d, want 0", round, load)
+		}
+	}
+}
+
+func TestAGrownMemberSurvivesAnImmediateSweep(t *testing.T) {
+	t.Parallel()
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := mustWorkerManager(t)
+	worker, _ := silentWorker(t)
+	manager.start = func(context.Context, workerKey) (*workerClient, error) { return worker, nil }
+
+	manager.mu.Lock()
+	entry := manager.startMemberLocked(workerKey{id: "pool", root: root}, 0)
+	manager.mu.Unlock()
+	<-entry.ready
+	manager.wg.Wait()
+
+	if entry.lastUsed.IsZero() {
+		t.Fatal("startMemberLocked left lastUsed zero, so the sweep retires the member before its first request")
+	}
+	for _, w := range manager.sweep(time.Now()) {
+		_ = w
+	}
+	if cachedEntry(manager, entry.key.member()) == nil {
+		t.Fatal("the idle sweep retired a freshly grown member before its first request")
+	}
 }

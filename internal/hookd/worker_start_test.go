@@ -50,7 +50,7 @@ type acquired struct {
 func acquireAsync(manager *workerManager, ctx context.Context, key workerKey) <-chan acquired {
 	result := make(chan acquired, 1)
 	go func() {
-		entry, err := manager.acquire(ctx, key)
+		entry, _, err := manager.acquire(ctx, key)
 		result <- acquired{entry: entry, err: err}
 	}()
 	return result
