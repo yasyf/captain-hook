@@ -116,6 +116,20 @@ class TestCheckpoint:
                 reqenv.checkpoint()
         reqenv.checkpoint()
 
+    def test_an_abandoned_hook_stops_walking_a_tree(self, tmp_path: Path) -> None:
+        from captain_hook.util.globbing import walked_paths
+        from captain_hook.util.vcs import scanned_names
+
+        (tmp_path / "nested").mkdir()
+        flag = threading.Event()
+        flag.set()
+        with reqenv.abandonable(flag):
+            with pytest.raises(reqenv.Abandoned):
+                list(walked_paths(tmp_path))
+            with pytest.raises(reqenv.Abandoned):
+                list(scanned_names(tmp_path))
+        assert [path.name for path in walked_paths(tmp_path)] == ["nested"]
+
     def test_abandoned_escapes_a_handlers_broad_except(self) -> None:
         assert not issubclass(reqenv.Abandoned, Exception)
 

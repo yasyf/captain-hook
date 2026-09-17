@@ -69,11 +69,12 @@ def distinct_hook(name: str, body: Callable[[str], HookResult | None]) -> HookHa
 
 
 @contextmanager
-def pinch_pool(monkeypatch: pytest.MonkeyPatch, width: int) -> Generator[None]:
-    """Cap each event's fan-out at ``width`` threads, so queueing order is deterministic."""
+def pinch_pool(monkeypatch: pytest.MonkeyPatch, width: int) -> Generator[threading.BoundedSemaphore]:
+    """Cap the worker's fan-out budget at ``width`` permits, so queueing order is deterministic."""
+    budget = threading.BoundedSemaphore(width)
     with monkeypatch.context() as patch:
-        patch.setattr(dispatch_module, "HOOK_FANOUT_THREADS", width)
-        yield
+        patch.setattr(dispatch_module, "fanout_budget", lambda: budget)
+        yield budget
 
 
 def fanout_threads() -> list[threading.Thread]:
@@ -1180,6 +1181,73 @@ class TestConcurrentDispatch:
         assert prompt is not None
         assert prompt["hookSpecificOutput"]["additionalContext"] == "answered"
         assert elapsed < HOOK_SLEEP_SECONDS * 5, f"the next event waited {elapsed:.2f}s behind an abandoned hook"
+
+    @pytest.mark.usefixtures("frozen_clock")
+    def test_the_fanout_budget_is_shared_by_concurrent_events_and_returned_in_full(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        release = threading.Event()
+        running = threading.Semaphore(0)
+        in_flight = 0
+        peak = 0
+        guard = threading.Lock()
+
+        def hold(name: str) -> None:
+            nonlocal in_flight, peak
+            with guard:
+                in_flight += 1
+                peak = max(peak, in_flight)
+            running.release()
+            release.wait(30)
+            with guard:
+                in_flight -= 1
+
+        for name in ("a", "b", "c"):
+            on(Event.PostToolUse)(distinct_hook(name, hold))
+
+        def one_event() -> None:
+            with reqenv.use_request(bounded_request(30)):
+                dispatch(Event.PostToolUse, make_post_tool_event())
+
+        with pinch_pool(monkeypatch, 2) as budget:
+            events = [threading.Thread(target=one_event) for _ in range(2)]
+            for event in events:
+                event.start()
+            assert running.acquire(timeout=30)
+            assert running.acquire(timeout=30)
+            assert not running.acquire(timeout=HOOK_SLEEP_SECONDS), "a third group started past a two-permit budget"
+            release.set()
+            for event in events:
+                event.join(30)
+
+            assert peak == 2
+            assert budget.acquire(blocking=False)
+            assert budget.acquire(blocking=False)
+            assert not budget.acquire(blocking=False)
+
+    @pytest.mark.usefixtures("frozen_clock")
+    def test_a_group_the_budget_never_admits_is_skipped_and_the_reply_still_lands(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ran: list[str] = []
+
+        @on(Event.PostToolUse)
+        def starved(evt: Any) -> HookResult:
+            ran.append("starved")
+            return HookResult(action=Action.warn, message="never admitted")
+
+        with pinch_pool(monkeypatch, 1) as budget:
+            assert budget.acquire(blocking=False)
+            start = time.perf_counter()
+            with reqenv.use_request(overrides := bounded_request(HOOK_SLEEP_SECONDS)):
+                result = dispatch(Event.PostToolUse, make_post_tool_event())
+            elapsed = time.perf_counter() - start
+            budget.release()
+
+        assert result is None
+        assert ran == []
+        assert overrides.abandoned == []
+        assert elapsed < HOOK_SLEEP_SECONDS * 5, f"the reply waited {elapsed:.2f}s on a budget it never got"
 
     @pytest.mark.usefixtures("frozen_clock")
     def test_an_abandoned_hook_stops_at_its_next_checkpoint_and_frees_its_thread(self) -> None:
