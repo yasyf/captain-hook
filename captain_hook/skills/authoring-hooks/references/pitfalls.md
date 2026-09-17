@@ -1,6 +1,6 @@
 # Hook Authoring Pitfalls
 
-Each rule below is a shipped failure mode. Check the draft against all five before
+Each rule below is a shipped failure mode. Check the draft against these rules before
 running `capt-hook test`, and against #3-#4 again before calling the hook done.
 
 ## 1. `gate()` and `nudge()` are one-shot nudges, never enforcement
@@ -15,11 +15,11 @@ shape for invariants. An always-enforcing guard — anything protecting security
 correctness, or irreversible actions — must be:
 
 ```python
-hook(Event.PreToolUse, only_if=[Tool("Bash"), Command(r"git\s+push\s+--force(?!-)")],
-     message="...", block=True)          # fires every time, no cap
+hook(Event.PreToolUse, only_if=[Runs("terraform", "destroy")],
+     message="Shared infrastructure must not be destroyed.", block=True)
 ```
 
-or `block_command(...)`, which is the same thing with the message rendered for you.
+For textual conditions, `block_command(...)` also renders the block message for you.
 Never use `gate()` for security or correctness enforcement.
 
 ## 2. Bare defaults: `nudge` → PreToolUse, `gate` → Stop | SubagentStop
@@ -31,7 +31,7 @@ With no `events=`:
   a tool-call interceptor.
 
 A `gate` meant to intercept a command needs `events=Event.PreToolUse` plus
-`only_if=[Tool("Bash"), Command(...)]` explicitly; left on its default it fires only
+`only_if=[Runs(...)]` explicitly; left on its default it fires only
 when the agent tries to stop, long after the command ran.
 
 ## 3. A broken hook module blocks the user's session
@@ -71,10 +71,10 @@ Condition on the narrowest pattern that still captures the correction:
 
 - Match commands structurally: `Runs("git", "stash")` compares exact tokens against the
   argv prefix of every parsed command in the line, so `echo git stash` and a heredoc
-  body never fire (and `-pl` is not `-p`). A regex is for text no argv prefix names — a
-  flag's value, a substring.
-- When a regex is required, anchor it to tokens
-  (`r"git\s+push\s+--force(?!-)"`), not substrings (`"force"`).
+  body never fire, and `-pl` remains distinct from `-p`. Use a command schema when the rule depends
+  on option values or operand roles.
+- Reserve regexes for textual conditions. The list form of `block_command` or
+  `warn_command` still builds a regex; it does not provide structural matching.
 - Scope file rules with `FilePath(...)` / `SourceEdits(...)` and carve out the benign
   neighbor with `skip_if` (e.g. `TestFile()`).
 - If the rule only bites in one phase (stopping, pushing, editing source), pick the
@@ -82,3 +82,17 @@ Condition on the narrowest pattern that still captures the correction:
 
 The benign-neighbor `Allow()` test is the regression guard for this rule: make it the
 *closest* non-violating input, not an obviously unrelated one.
+
+## 6. Keep command parsing and path resolution in shared APIs
+
+Before adding a handler, look for an existing command schema, target API, or path
+predicate in the [API reference](capt-hook-api.md). Bind typed options and named
+operand roles through `CommandSchema`, then compose predicates over those targets.
+If the rule needs a missing operation, extend the shared schema or predicate and
+test it there; declare the policy in the hook.
+
+Hook-local loops over argv and string replacements for `$HOME` lose shell meaning.
+Preserve the parser's `Word` provenance so quoted literals, variable expansions,
+and paths relative to the command's working directory remain distinct. Parsing
+belongs in the shared binding layer; path normalization belongs in shared path
+predicates.

@@ -25,6 +25,9 @@ fired in) into **one new hook file** `.claude/hooks/<slug>.py`. Full API:
 - **Narrowest condition that captures the correction.** An over-broad condition
   re-fires on unrelated calls and erodes trust; misfire complaints get mined and turned
   into fix-PRs against your hook.
+- Compose shared predicates before writing a handler. Read the command and target
+  APIs in the [API reference](references/capt-hook-api.md). If an operation is missing,
+  extend the reusable schema or predicate; keep the hook as a declaration of the rule.
 - **Every deterministic hook ships inline tests** — one `Input` asserting the hook
   fires on the offending shape, one asserting it stays silent on a benign neighbor.
 - **`uvx --isolated capt-hook test` must be green before the hook goes live.** Every event is
@@ -65,8 +68,8 @@ has the full decision rules and defaults:
 
 | The rule is... | Primitive |
 |---|---|
-| A guard that must hold on **every** occurrence (safety, correctness) | `hook(..., block=True)`; for bash commands `hook(..., only_if=[Tool("Bash"), Runs(...)], block=True)` — `block_command` only when the match is textual (a flag's value, a substring no argv prefix names) |
-| A dangerous-command pattern, advisory | `warn_command` |
+| A guard that must hold on **every** occurrence (safety, correctness) | `hook(..., block=True)` with structural command and target predicates; `Runs(...)` matches an argv prefix. Use `block_command` for textual conditions. |
+| A command rule, advisory | `hook(Event.PostToolUse, only_if=[Runs(...)], ...)`; `warn_command` for textual conditions |
 | A done-criterion to check once at stop ("run tests before stopping") | `gate(only_if=[...], skip_if=[RanCommand(...)])` |
 | Advice worth surfacing once per session | `nudge` |
 | A code-content rule needing AST precision | `lint()` |
@@ -83,11 +86,16 @@ category into `safety.py`, `quality.py`, ... — append the registration there.)
 registration gets:
 
 - `from __future__ import annotations` at the top.
-- The narrowest condition that captures the correction: prefer
-  `Command(r"...")` with anchored tokens over substrings, `FilePath`/`TestFile`
-  scoping over bare `Tool`, and `skip_if` carve-outs for the benign neighbor.
-  Import gotcha: the `Command` regex *condition* is `from captain_hook.types import
-  Command` — top-level `captain_hook.Command` is the parsed-command class.
+- Structural conditions for commands: use `Runs(...)` for argv prefixes. For typed
+  options or named operand roles, use a `CommandSchema` and compose predicates over
+  its bound targets. Keep command grammar in the schema and policy in the hook.
+- Shared path predicates for command targets, preserving the parser's `Word`
+  provenance for quoting and expansion. Extend a missing shared operation instead
+  of looping over argv, parsing flags, or replacing `$HOME` strings inside a hook.
+- `FilePath`/`TestFile` scoping for file edits, with `skip_if` for the benign neighbor.
+  Reserve regexes for textual conditions. The regex condition is
+  `from captain_hook.types import Command`; top-level `captain_hook.Command` is the
+  parsed-command class.
 - The **verbatim correction quoted inside the message** with its source ("user
   feedback 2026-06-09: 'never force-push to main'") — the agent being blocked learns
   *why*.
@@ -121,17 +129,18 @@ this three times now"*, given right after `pip install requests` ran.
 
 - Rule: use uv, not pip. Offending shape: `pip install requests`. Benign neighbor:
   `uv add requests`. Slug: `uv_not_pip`. Primitive: repeated tool-substitution
-  correction, advisory → `warn_command`.
+  correction, advisory: `hook(Event.PostToolUse, only_if=[Runs(...)], ...)`.
 
 `.claude/hooks/uv_not_pip.py`:
 
 ```python
 from __future__ import annotations
 
-from captain_hook import Allow, Input, Warn, warn_command
+from captain_hook import Allow, Event, Input, Runs, Warn, hook
 
-warn_command(
-    ["pip", "install"],
+hook(
+    Event.PostToolUse,
+    only_if=[Runs("pip", "install")],
     message="User feedback: 'stop using pip -- this repo is uv-only'. Run `uv add <pkg>`.",
     tests={
         Input(command="pip install requests"): Warn(pattern="uv-only"),
@@ -172,7 +181,7 @@ In order of preference:
 
 | Misfire shape | Amendment |
 |---|---|
-| The condition matches calls outside the rule's intent | **Tighten the condition** — anchor the regex, scope with `FilePath`/`TestFile`, add a `skip_if` carve-out |
+| The condition matches calls outside the rule's intent | **Tighten the condition** — use structural command or target predicates, scope with `FilePath`/`TestFile`, add a `skip_if` carve-out |
 | The hook re-fires on content it already fired on (`max_fires` too high, no per-turn guard) | **Add a re-fire guard** — lower `max_fires`, or `skip_if` on the already-satisfied state |
 | The hook re-fires because it greps stale transcript text instead of live state | **Switch to live state** — read the event object (`evt.tasks`, `evt.ctx`) instead of transcript text |
 | The rule is real but blocking is disproportionate | **Demote `block=True` → `Warn`** (or `block_command` → `warn_command`) |

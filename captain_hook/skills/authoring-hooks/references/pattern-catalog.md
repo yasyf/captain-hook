@@ -29,36 +29,28 @@ from captain_hook import (
     Event,
     HookResult,
     Input,
+    Runs,
     Tool,
     Warn,
-    block_command,
+    hook,
     on,
-    warn_command,
 )
 
-block_command(
-    r"git\s+push\s+--force(?!-)",
-    reason="CONTRIBUTING.md: force-push rewrites remote history",
-    hint="Use --force-with-lease",
-    tests={
-        Input(command="git push --force origin main"): Block(pattern="force-push|history"),
-        Input(command="git push --force-with-lease"): Allow(),
-        Input(command="git push origin main"): Allow(),
-    },
-)
-
-block_command(
-    ["terraform", "destroy"],
-    reason="docs/ops.md: destroy tears down shared infrastructure",
-    hint="Open an ops ticket instead",
+hook(
+    Event.PreToolUse,
+    only_if=[Runs("terraform", "destroy")],
+    message="docs/ops.md: destroy tears down shared infrastructure. Open an ops ticket.",
+    block=True,
     tests={
         Input(command="terraform destroy -auto-approve"): Block(pattern="infrastructure"),
         Input(command="terraform plan"): Allow(),
+        Input(command="echo terraform destroy"): Allow(),
     },
 )
 
-warn_command(
-    ["pip", "install"],
+hook(
+    Event.PostToolUse,
+    only_if=[Runs("pip", "install")],
     message="README: this repo uses uv -- run `uv add <pkg>` instead of pip install",
     tests={
         Input(command="pip install requests"): Warn(pattern="uv add"),
@@ -89,14 +81,12 @@ def block_piped_curl_to_shell(evt: BaseHookEvent) -> HookResult | None:
 
 Adaptation notes:
 
-- Raw-regex form for negative lookaheads (`--force(?!-)` blocks `--force` but not
-  `--force-with-lease`); token-list form for plain sequences (`["terraform", "destroy"]`
-  becomes `r"terraform\s+destroy"`, `"*"` becomes `\S+`).
-- For compound lines (pipes, `&&`), match per-command with `evt.command.q` inside an
-  `@on` handler. Do not use `.q.runs(...)` for piped lines — it checks the *last* command
-  of a pipeline; use `.any_command(...)` as above.
-- `Block(pattern=...)` is regex-searched against the rendered message, which
-  `block_command` prefixes with `BLOCKED: {reason}.` — pick a word from your `reason`.
+- `Runs(...)` matches argv prefixes across parsed commands, including pipes and
+  `&&`. Text that mentions a command, such as `echo terraform destroy`, stays silent.
+- For rules involving options or operands, bind them with a command schema and
+  compose target predicates. See [pitfalls](pitfalls.md#6-keep-command-parsing-and-path-resolution-in-shared-apis).
+- `Block(pattern=...)` is regex-searched against the rendered message; pick a word
+  from the message.
 
 ## B — Code quality (`quality.py`)
 
@@ -171,6 +161,7 @@ llm_gate(
     "Does this diff add a print() that should be a logger call, where the surrounding "
     "module already imports a logger? Block only if the prod print is unambiguous.",
     message=lambda r: f"Replace print() with logger: {r.reasoning}",
+    events=Event.PostToolUse,
     only_if=[SourceEdits(lang="py"), Content(r"^\s*print\(")],
     skip_if=[TestFile()],
     max_fires=2,
@@ -289,23 +280,23 @@ from captain_hook import (
     Event,
     Input,
     RanCommand,
+    Runs,
     Step,
-    Tool,
     gate,
     text_matches,
     workflow,
 )
-from captain_hook.types import Command
 from pydantic import BaseModel
 
 gate(
     "CONTRIBUTING.md requires `make lint` before pushing.",
     events=Event.PreToolUse,
-    only_if=[Tool("Bash"), Command(r"git\s+push")],
+    only_if=[Runs("git", "push")],
     skip_if=[RanCommand("make", "lint")],
     tests={
         Input(command="git push origin main"): Block(pattern="make lint"),
         Input(command="git status"): Allow(),
+        Input(command="echo git push"): Allow(),
     },
 )
 
@@ -322,14 +313,12 @@ workflow(
         Step(
             name="run tests",
             check=text_matches(r"pytest.*passed"),
-            stopped_at="Stop: tests not run.",
-            next_step="Run the test suite with pytest.",
+            message="Tests have not run. Run the test suite with pytest.",
         ),
         Step(
             name="run linter",
             check=text_matches(r"ruff check.*passed|no issues found"),
-            stopped_at="Stop: linter not run.",
-            next_step="Run: ruff check .",
+            message="The linter has not run. Run: ruff check .",
         ),
     ],
     artifacts=[
@@ -349,7 +338,6 @@ Adaptation notes:
 - `workflow()` guards `SubagentStop`: the subagent is blocked until every `Step.check`
   matches its transcript and every `Artifact` parses and validates. Use it only when the
   repo defines an *ordered* done-ritual; a single ritual is just a `gate`.
-- Note the import: the `Command` condition comes from `captain_hook.types`.
 
 ## E — Styleguide rules — delegate, no code
 

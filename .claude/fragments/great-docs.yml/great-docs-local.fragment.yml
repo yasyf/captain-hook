@@ -191,6 +191,14 @@ reference:
       - util.fs.binary_supports
       - Cmd
       - Call
+      - CommandSchema
+      - Operand
+      - Option
+      - Arguments
+      - CommandMatches
+      - PathsMatch
+      - PathMatches
+      - OptionIs
       - Target
       - Targets
       - Expansion

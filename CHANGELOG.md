@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.41.0] - 2026-09-17
+
+### Added
+
+- Command schemas bind typed options and named operands from parsed shell commands.
+  Shared path predicates let hooks express rules over those roles; the authoring
+  skill and examples now teach this approach.
+
+### Fixed
+
+- The performance pack blocks unbounded `find` searches from filesystem roots,
+  home directories, and entire worktree pools. Scoped searches and verified
+  depth limits of zero to two remain allowed. Name filters and `head` pipelines
+  no longer let agents start these broad traversals.
+
 ## [12.40.0] - 2026-09-17
 
 ### Fixed
