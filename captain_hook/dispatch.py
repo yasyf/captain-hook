@@ -31,26 +31,23 @@ BACKGROUND_FANOUT_THREADS = 8
 OFFLOAD_THREADS = 4
 
 
-@once
-def hook_pool() -> ThreadPoolExecutor:
-    """The one process-wide pool every event's synchronous hooks fan out onto.
+def fanout_pool(groups: int) -> ThreadPoolExecutor:
+    """A pool for one event's synchronous hooks, wide enough to start every group at once.
 
-    Shared rather than per-event: the worker serves up to
-    :data:`captain_hook.worker.service.REQUEST_THREADS` events at once, so a pool per event would
-    multiply by that burst, while one pool of the same width caps the whole fan-out at the worker's
-    own thread budget however many events land together. Built on the first event that has hooks to
-    run, and its threads on the first submit, so a process that never dispatches never pays for it.
+    Per event rather than process-wide: a hook the caller's deadline abandoned keeps its thread
+    until it next reaches a :func:`captain_hook.util.reqenv.checkpoint`, and on a shared pool those
+    threads were the ones every other session's events queued behind. An event's pool dies with
+    it, so an abandoned hook holds a thread nobody else is waiting for.
     """
-    return ThreadPoolExecutor(max_workers=HOOK_FANOUT_THREADS, thread_name_prefix="capt-hook-hook")
+    return ThreadPoolExecutor(max_workers=min(groups, HOOK_FANOUT_THREADS), thread_name_prefix="capt-hook-hook")
 
 
 @once
 def background_pool() -> ThreadPoolExecutor:
-    """The pool an event's ``async_=True`` hooks fan out onto, kept apart from the synchronous one.
+    """The one process-wide pool every event's ``async_=True`` hooks fan out onto.
 
-    A background hook runs to :data:`ASYNC_HOOK_TIMEOUT_SECONDS`, three minutes, where a synchronous
-    one answers within the caller's deadline. Sharing one pool would let a burst of background work
-    hold every thread until a blocking gate's own deadline abandoned it.
+    A background hook runs to :data:`ASYNC_HOOK_TIMEOUT_SECONDS`, three minutes, and nothing waits
+    on its verdict, so its fan-out is capped for the whole worker rather than per event.
     """
     return ThreadPoolExecutor(max_workers=BACKGROUND_FANOUT_THREADS, thread_name_prefix="capt-hook-async-hook")
 
@@ -188,7 +185,12 @@ def run_scheduled(
     if reqenv.deadline_within(margin):
         logger.bind(hook=entry.name).warning("caller deadline is near; skipping this hook")
         return None
-    result = execute_hook(entry, evt, session_dir)
+    try:
+        reqenv.checkpoint()
+        result = execute_hook(entry, evt, session_dir)
+    except reqenv.Abandoned:
+        logger.bind(hook=entry.name).info("verdict no longer wanted; hook stopped at a checkpoint")
+        return None
     if result is not None and result.action is Action.block:
         blocked.record(index)
     return result
@@ -202,37 +204,43 @@ def run_group(
     session_dir: Path | None,
     margin: float,
     blocked: FirstBlock,
+    abandoned: threading.Event,
 ) -> None:
     """Run one state-key group's hooks in registration order, settling each entry's own future.
 
     A raising hook settles its own future and cancels the rest of its group, the way a sequential
     dispatch left the hooks behind an aborting one unrun.
     """
-    for position, index in enumerate(group):
-        future = futures[index]
-        if not future.set_running_or_notify_cancel():
-            continue
-        try:
-            future.set_result(run_scheduled(index, entries[index], evt, session_dir, margin, blocked))
-        except BaseException as exc:
-            future.set_exception(exc)
-            for later in group[position + 1 :]:
-                futures[later].cancel()
-            return
+    with reqenv.abandonable(abandoned):
+        for position, index in enumerate(group):
+            future = futures[index]
+            if not future.set_running_or_notify_cancel():
+                continue
+            try:
+                future.set_result(run_scheduled(index, entries[index], evt, session_dir, margin, blocked))
+            except BaseException as exc:
+                future.set_exception(exc)
+                for later in group[position + 1 :]:
+                    futures[later].cancel()
+                return
 
 
 def start_hooks(
     entries: Sequence[RegisteredHook],
+    groups: Sequence[Sequence[int]],
     evt: BaseHookEvent,
     session_dir: Path | None,
     margin: float,
     pool: ThreadPoolExecutor,
+    abandoned: threading.Event,
 ) -> list[Future[HookResult | None]]:
     """Start every group of matching hooks at once, each carrying a copy of the request's contextvars."""
     futures: list[Future[HookResult | None]] = [Future() for _ in entries]
     blocked = FirstBlock()
-    for group in hook_groups(entries):
-        pool.submit(copy_context().run, run_group, group, entries, futures, evt, session_dir, margin, blocked)
+    for group in groups:
+        pool.submit(
+            copy_context().run, run_group, group, entries, futures, evt, session_dir, margin, blocked, abandoned
+        )
     return futures
 
 
@@ -326,8 +334,8 @@ def combine(
     The fold drives the waiting: it reaches a hook, decides whether the verdicts so far leave it
     anything to say, and only then waits for it — so a hook a block already suppressed is never
     waited on, and its exception is never raised, exactly as a sequential dispatch never called it.
-    A hook whose future is still unsettled when the caller's deadline arrives is abandoned; it runs
-    on to completion on its pool thread, but its verdict misses this reply.
+    A hook whose future is still unsettled when the caller's deadline arrives is abandoned: its
+    verdict misses this reply, and its name joins :func:`captain_hook.util.reqenv.abandoned`.
 
     Follows Claude Code's own ``deny > ask > allow`` precedence: a ``block`` from any matching hook
     beats an ``allow``/``rewrite``, so one hook's approval can never short-circuit another hook's
@@ -362,6 +370,7 @@ def combine(
             continue
         if not settled(future, margin):
             logger.bind(hook=entry.name).warning("caller deadline reached; abandoning this hook's verdict")
+            reqenv.abandoned().append(entry.name)
             continue
         match future.result():
             case HookResult(action=Action.block, message=msg):
@@ -407,19 +416,29 @@ def dispatch(
 ) -> dict[str, Any] | None:
     """Dispatch an event to all matching hooks at once and combine their results, deny-wins.
 
-    The event's hooks are independent, so they all start together on :func:`hook_pool` and the
-    event costs the slowest hook rather than the sum: five listeners on one ``PostToolUse`` no
-    longer serialize behind each other. Only the *starting* is concurrent — :func:`combine` folds
-    what comes back in registration order, so the envelope is the one sequential dispatch would
-    have rendered whatever order the hooks finished in.
+    The event's hooks are independent, so they all start together on the event's own
+    :func:`fanout_pool` and the event costs the slowest hook rather than the sum: five listeners on
+    one ``PostToolUse`` no longer serialize behind each other. Only the *starting* is concurrent —
+    :func:`combine` folds what comes back in registration order, so the envelope is the one
+    sequential dispatch would have rendered whatever order the hooks finished in.
 
     The caller's deadline bounds both ends: a hook does not start once the deadline is inside
     :data:`SYNC_DEADLINE_MARGIN_SECONDS`, and a hook still running when the budget runs out has its
-    verdict abandoned rather than holding the reply.
+    verdict abandoned rather than holding the reply. Once the envelope is settled, every hook still
+    running — abandoned, or doomed by an earlier block — unwinds at its next
+    :func:`captain_hook.util.reqenv.checkpoint`, and whatever never started is cancelled.
     """
-    matching = get_matching_hooks(evt, async_=False)
-    futures = start_hooks(matching, evt, session_dir, SYNC_DEADLINE_MARGIN_SECONDS, hook_pool())
-    return combine(event, matching, futures, SYNC_DEADLINE_MARGIN_SECONDS)
+    if not (matching := get_matching_hooks(evt, async_=False)):
+        return None
+    groups = hook_groups(matching)
+    abandoned = threading.Event()
+    pool = fanout_pool(len(groups))
+    try:
+        futures = start_hooks(matching, groups, evt, session_dir, SYNC_DEADLINE_MARGIN_SECONDS, pool, abandoned)
+        return combine(event, matching, futures, SYNC_DEADLINE_MARGIN_SECONDS)
+    finally:
+        abandoned.set()
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def dispatch_async(evt: BaseHookEvent, session_dir: Path | None = None) -> None:

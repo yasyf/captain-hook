@@ -12,6 +12,7 @@ from lazy_object_proxy import Proxy
 
 from captain_hook.session import SessionSlot, ensure_session
 from captain_hook.state import RegisteredTranscript, RegisteredTranscripts
+from captain_hook.util import reqenv
 from captain_hook.util.caching import LRUDict
 from captain_hook.util.paths import resolve_project_dir
 
@@ -117,6 +118,7 @@ def lazy_transcript(
         with guard:
             if memo:
                 return memo[0]
+            reqenv.checkpoint()
             try:
                 session = resolve(path)
             except Exception as e:

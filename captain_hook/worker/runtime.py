@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextvars
 import json
 import threading
+import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ from captain_hook.daemon.registry import Registry
 from captain_hook.session import ensure_session
 from captain_hook.state import RESOURCES
 from captain_hook.types import Event
+from captain_hook.util import reqenv
 from captain_hook.worker.protocol import EventRequest, EventResponse
 
 if TYPE_CHECKING:
@@ -67,6 +69,21 @@ class ProductRuntime:
         self._nlp_warmup_guard = threading.Lock()
 
     def dispatch(self, request: EventRequest) -> tuple[EventResponse, Background | None]:
+        started = time.perf_counter()
+        abandoned: list[str] = []
+        try:
+            return self._respond(request, abandoned)
+        finally:
+            logger.bind(
+                event=request.event,
+                root=request.root,
+                client_pid=request.client_pid,
+                queue_ms=round((started - request.received) * 1000, 1),
+                elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
+                abandoned=abandoned,
+            ).info("dispatch")
+
+    def _respond(self, request: EventRequest, abandoned: list[str]) -> tuple[EventResponse, Background | None]:
         try:
             event = Event[request.event]
         except KeyError:
@@ -102,6 +119,8 @@ class ProductRuntime:
             except Exception:
                 buffers.stderr.write(traceback.format_exc())
                 return self._response(buffers, status="error", exit_code=1), None
+            finally:
+                abandoned.extend(reqenv.abandoned())
             return self._response(buffers), background
 
     def close(self) -> None:

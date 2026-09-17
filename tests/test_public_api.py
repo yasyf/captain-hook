@@ -512,3 +512,16 @@ def test_parse_is_deferred_until_first_touch(transcript_path: Path, monkeypatch:
     assert calls["n"] == 1, "first touch did not parse exactly once"
     assert len(proxy) == 2
     assert calls["n"] == 1, "a second touch re-parsed the transcript"
+
+
+def test_an_abandoned_hook_never_starts_the_parse(transcript_path: Path) -> None:
+    import threading
+
+    from captain_hook.util import reqenv
+
+    proxy = lazy_transcript(transcript_path)
+    flag = threading.Event()
+    flag.set()
+    with reqenv.abandonable(flag), pytest.raises(reqenv.Abandoned):
+        bool(proxy)
+    assert len(proxy) == 2

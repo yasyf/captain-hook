@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -100,3 +101,31 @@ class TestUseRequest:
         with reqenv.use_request(overrides({})) as bound:
             assert reqenv.current() is bound
         assert reqenv.current() is None
+
+
+class TestCheckpoint:
+    def test_is_a_no_op_outside_a_fan_out(self) -> None:
+        reqenv.checkpoint()
+
+    def test_passes_until_the_flag_is_set_then_raises(self) -> None:
+        flag = threading.Event()
+        with reqenv.abandonable(flag):
+            reqenv.checkpoint()
+            flag.set()
+            with pytest.raises(reqenv.Abandoned):
+                reqenv.checkpoint()
+        reqenv.checkpoint()
+
+    def test_abandoned_escapes_a_handlers_broad_except(self) -> None:
+        assert not issubclass(reqenv.Abandoned, Exception)
+
+
+class TestAbandoned:
+    def test_unbound_is_a_scratch_list(self) -> None:
+        reqenv.abandoned().append("hook")
+        assert reqenv.abandoned() == []
+
+    def test_bound_collects_on_the_request(self) -> None:
+        with reqenv.use_request(overrides({})) as bound:
+            reqenv.abandoned().append("hook")
+        assert bound.abandoned == ["hook"]

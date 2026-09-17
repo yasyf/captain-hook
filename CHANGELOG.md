@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A hook the caller's deadline abandoned no longer starves every other
+  event in its worker.** Synchronous hooks fanned out onto one 16-thread pool
+  per worker, and an abandoned hook kept its thread until it finished, so a few
+  slow LLM hooks left every other session's hooks queued until their own
+  deadlines passed: over three days one machine logged 53,168 `caller deadline
+  is near; skipping this hook` and 32,298 `abandoning this hook's verdict`
+  warnings, most of them on plain nudges that never got a thread. Each event
+  now fans out onto its own pool, which dies with the event. Once the envelope
+  is settled, a hook still running, whether abandoned or doomed by an earlier
+  block, stops at its next checkpoint: before an LLM call, a `call_cli`
+  subprocess, or a transcript parse.
+
+### Added
+
+- **One `dispatch` line per event in the worker's daemon log.** It carries
+  the event, root, client pid, `queue_ms` spent waiting for a request thread,
+  `elapsed_ms` in dispatch, and the names of the hooks whose verdicts were
+  abandoned, so a stall shows up as numbers rather than as a client timeout.
+
 ## [12.39.0] - 2026-09-17
 
 ### Changed
