@@ -25,15 +25,24 @@ func stallStart(manager *workerManager, worker *workerClient, err error) (starte
 	return started, release
 }
 
-// admissions ticks once per requester acquire admits, through the clock read
-// every admission makes under the lock.
-func admissions(manager *workerManager) <-chan struct{} {
-	ticks := make(chan struct{}, maxLiveWorkers)
-	manager.now = func() time.Time {
-		ticks <- struct{}{}
-		return time.Now()
+func awaitHolds(t *testing.T, manager *workerManager, member string, holds int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := -1
+		manager.mu.Lock()
+		if entry := manager.entries[member]; entry != nil {
+			got = entry.inflight
+		}
+		manager.mu.Unlock()
+		if got == holds {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("holds on %s = %d, want %d", member, got, holds)
+		}
+		time.Sleep(time.Millisecond)
 	}
-	return ticks
 }
 
 func cachedEntry(manager *workerManager, id string) *workerEntry {
@@ -50,7 +59,7 @@ type acquired struct {
 func acquireAsync(manager *workerManager, ctx context.Context, key workerKey) <-chan acquired {
 	result := make(chan acquired, 1)
 	go func() {
-		entry, err := manager.acquire(ctx, key)
+		entry, _, err := manager.acquire(ctx, key)
 		result <- acquired{entry: entry, err: err}
 	}()
 	return result
@@ -66,16 +75,15 @@ func TestFirstRequesterLeavingDoesNotFailTheStartOthersWaitOn(t *testing.T) {
 	manager := mustWorkerManager(t)
 	worker, _ := silentWorker(t)
 	started, release := stallStart(manager, worker, nil)
-	admitted := admissions(manager)
 	key := workerKey{id: "shared", root: "/live"}
 
 	firstCtx, cancelFirst := context.WithCancel(t.Context())
 	defer cancelFirst()
 	first := acquireAsync(manager, firstCtx, key)
 	<-started
-	<-admitted
+	awaitHolds(t, manager, key.member(), 2)
 	second := acquireAsync(manager, t.Context(), key)
-	<-admitted
+	awaitHolds(t, manager, key.member(), 3)
 
 	cancelFirst()
 	if got := <-first; !errors.Is(got.err, context.Canceled) {
@@ -91,7 +99,7 @@ func TestFirstRequesterLeavingDoesNotFailTheStartOthersWaitOn(t *testing.T) {
 		t.Fatal("second requester did not get the worker the shared start produced")
 	}
 	manager.wg.Wait()
-	entry := cachedEntry(manager, key.id)
+	entry := cachedEntry(manager, key.member())
 	manager.mu.Lock()
 	holds := entry.inflight
 	manager.mu.Unlock()
@@ -134,7 +142,7 @@ func TestAbandonedStartStillLandsItsWorker(t *testing.T) {
 			close(release)
 			manager.wg.Wait()
 
-			entry := cachedEntry(manager, key.id)
+			entry := cachedEntry(manager, key.member())
 			if tc.name == "ephemeral" {
 				if entry != nil {
 					t.Fatal("an ephemeral worker nobody waited for stayed cached")
@@ -162,14 +170,13 @@ func TestStartFailureReachesEveryWaiterAndFreesTheKey(t *testing.T) {
 	manager := mustWorkerManager(t)
 	spawnErr := errors.New("captain: spawn Python product worker: interpreter missing")
 	started, release := stallStart(manager, nil, spawnErr)
-	admitted := admissions(manager)
 	key := workerKey{id: "failing", root: "/live"}
 
 	first := acquireAsync(manager, t.Context(), key)
 	<-started
-	<-admitted
+	awaitHolds(t, manager, key.member(), 2)
 	second := acquireAsync(manager, t.Context(), key)
-	<-admitted
+	awaitHolds(t, manager, key.member(), 3)
 	close(release)
 
 	for _, result := range []<-chan acquired{first, second} {
@@ -178,7 +185,7 @@ func TestStartFailureReachesEveryWaiterAndFreesTheKey(t *testing.T) {
 		}
 	}
 	manager.wg.Wait()
-	if cachedEntry(manager, key.id) != nil {
+	if cachedEntry(manager, key.member()) != nil {
 		t.Fatal("a failed start left its entry cached, so no later request can retry")
 	}
 }
@@ -205,7 +212,7 @@ func TestStartThatLandsBrokenIsNotCached(t *testing.T) {
 	close(release)
 	manager.wg.Wait()
 
-	if cachedEntry(manager, key.id) != nil {
+	if cachedEntry(manager, key.member()) != nil {
 		t.Fatal("a worker whose child died before it was published stayed cached for the next requester")
 	}
 }

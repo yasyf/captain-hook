@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 import io
 import json
+import os
 import struct
 import subprocess
 import sys
@@ -309,6 +310,7 @@ def test_module_entrypoint_reserves_stdout_for_protocol() -> None:
         capture_output=True,
         check=True,
         timeout=5,
+        env={**os.environ, "CAPT_HOOK_WORKER_SHARD": "0"},
     )
 
     response = responses(completed.stdout)

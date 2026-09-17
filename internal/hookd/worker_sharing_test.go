@@ -306,3 +306,32 @@ func TestWorkerSlotsBoundOutstandingCallsUntilRepliesArrive(t *testing.T) {
 		t.Fatalf("call after a late reply freed a slot = %v", err)
 	}
 }
+
+func TestAnExpiredCallerNeverReachesTheWorker(t *testing.T) {
+	t.Parallel()
+	worker, serverConn := silentWorker(t)
+	frames := make(chan wireproto.Frame, 1)
+	go func() {
+		frame, err := wireproto.DecodeFrame(serverConn)
+		if err != nil {
+			return
+		}
+		frames <- frame
+	}()
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for range 64 {
+		if _, err := worker.call(expired, testEventRequest("PreToolUse")); !errors.Is(err, context.Canceled) {
+			t.Fatalf("call with an expired caller = %v, want %v", err, context.Canceled)
+		}
+	}
+	select {
+	case frame := <-frames:
+		t.Fatalf("an expired caller's event reached the worker as frame %d", frame.ID)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if len(worker.slots) != 0 {
+		t.Fatalf("expired calls left %d slots held", len(worker.slots))
+	}
+}

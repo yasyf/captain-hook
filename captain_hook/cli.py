@@ -22,7 +22,7 @@ from loguru import logger
 from captain_hook import faults
 from captain_hook.app import LoadError, _state, load_gitignore, reset
 from captain_hook.desktop.cli import helper
-from captain_hook.dispatch import dispatch, dispatch_async
+from captain_hook.dispatch import SYNC_DEADLINE_MARGIN_SECONDS, dispatch, dispatch_async
 from captain_hook.loader import (
     CONF_MODULE,
     discover_hooks,
@@ -282,6 +282,7 @@ def dispatch_event(
     from captain_hook.context import HookContext
     from captain_hook.heartbeat import record_heartbeat
     from captain_hook.transcripts import lane_transcript_path, lazy_transcript, registered_paths
+    from captain_hook.util import reqenv
 
     record_heartbeat(event, raw)
     resolved_path = raw.get("agent_transcript_path") or (
@@ -298,7 +299,9 @@ def dispatch_event(
         project_root=root,
     )
     evt = event.event_class(_raw=raw, ctx=ctx)
-    return dispatch(event, evt, session_dir=session_dir), partial(after_reply, event, evt, raw, session_dir)
+    within_margin = reqenv.deadline_within(SYNC_DEADLINE_MARGIN_SECONDS)
+    envelope = None if within_margin else dispatch(event, evt, session_dir=session_dir)
+    return envelope, partial(after_reply, event, evt, raw, session_dir)
 
 
 def after_reply(event: Event, evt: BaseHookEvent, raw: dict[str, Any], session_dir: Path | None) -> None:

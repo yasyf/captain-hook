@@ -220,38 +220,32 @@ def test_worker_entrypoint_installs_the_daemon_log_sinks(tmp_path: Path) -> None
         [sys.executable, "-m", "captain_hook.worker"],
         input=frame(hello(importlib.metadata.version("capt-hook"))),
         capture_output=True,
-        env={**os.environ, "CAPTAIN_HOOK_LOG_DIR": str(logs)},
+        env={**os.environ, "CAPTAIN_HOOK_LOG_DIR": str(logs), "CAPT_HOOK_WORKER_SHARD": "0"},
         timeout=180,
     )
 
     assert worker.returncode == 0, worker.stderr.decode()
-    assert (logs / f"daemon-{worker_log_key(importlib.metadata.version('capt-hook'))}.log").exists()
+    assert (logs / f"daemon-{worker_log_key(importlib.metadata.version('capt-hook'), '0')}.log").exists()
 
 
-def test_workers_in_different_roots_write_different_daemon_logs(tmp_path: Path) -> None:
-    """PIN: the host runs one worker per project root, all of the same build, concurrently.
-
-    A log keyed on the build alone made them share one file with independent loguru rotation
-    state — one process's rotation rename silently drops the others' lines into the unlinked
-    inode — so the key carries a digest of the root the host set as the worker's cwd.
-    """
+def test_workers_in_different_roots_or_shards_write_different_daemon_logs(tmp_path: Path) -> None:
     import os
     import subprocess
 
     logs = tmp_path / "logs"
-    for root in (tmp_path / "a", tmp_path / "b"):
-        root.mkdir()
+    for root, shard in ((tmp_path / "a", "0"), (tmp_path / "b", "0"), (tmp_path / "a", "1")):
+        root.mkdir(exist_ok=True)
         worker = subprocess.run(
             [sys.executable, "-m", "captain_hook.worker"],
             input=frame(hello(importlib.metadata.version("capt-hook"))),
             capture_output=True,
             cwd=root,
-            env={**os.environ, "CAPTAIN_HOOK_LOG_DIR": str(logs)},
+            env={**os.environ, "CAPTAIN_HOOK_LOG_DIR": str(logs), "CAPT_HOOK_WORKER_SHARD": shard},
             timeout=180,
         )
         assert worker.returncode == 0, worker.stderr.decode()
 
-    assert len(list(logs.glob("daemon-*.log"))) == 2
+    assert len(list(logs.glob("daemon-*.log"))) == 3
 
 
 def test_worker_survives_a_root_deleted_under_it(tmp_path: Path) -> None:
@@ -272,7 +266,7 @@ def test_worker_survives_a_root_deleted_under_it(tmp_path: Path) -> None:
         ["/bin/sh", "-c", 'cd "$1" && rmdir "$1" && exec "$0" -m captain_hook.worker', sys.executable, str(root)],
         input=frame(hello(importlib.metadata.version("capt-hook"))),
         capture_output=True,
-        env={**os.environ, "CAPTAIN_HOOK_LOG_DIR": str(logs)},
+        env={**os.environ, "CAPTAIN_HOOK_LOG_DIR": str(logs), "CAPT_HOOK_WORKER_SHARD": "0"},
         timeout=180,
     )
 

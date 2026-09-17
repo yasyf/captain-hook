@@ -57,6 +57,7 @@ type restartWorkersRequest struct {
 
 type workerStatus struct {
 	Key    string `json:"key"`
+	Shard  int    `json:"shard"`
 	Root   string `json:"root"`
 	Build  string `json:"build"`
 	Python string `json:"python"`

@@ -10,7 +10,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +28,10 @@ const (
 
 	maxLiveWorkers = 64
 
+	maxWorkersPerRoot = 8
+
+	serviceSmoothing = 4
+
 	// workerIdleTTL retires an interpreter no dispatch has wanted for this
 	// long. The cache is keyed on root, so a machine whose roots churn —
 	// per-invocation scratch checkouts, short-lived worktrees — mints keys that
@@ -36,16 +42,16 @@ const (
 	workerSweepInterval = 5 * time.Minute
 )
 
-// ErrWorkerCapacity refuses a dispatch that can neither start a worker nor
-// reuse one. One worker is cached per distinct {root, semantic environment}
-// pair, so the natural population is the number of projects a
-// machine runs hooks in at once. A full cache is normally resolved by evicting
-// its least recently used idle interpreter — a machine whose roots churn fills
-// every slot with keys no dispatch will ask for again — so this is reached only
-// when all maxLiveWorkers are in flight at once. Admission is then refused
-// rather than queued: a hook that waits behind a full cache stalls the tool
-// call that triggered it, and a hook that is told why does not.
 var ErrWorkerCapacity = errors.New("captain: live worker capacity is exhausted")
+
+func workersPerRoot() int {
+	if raw := os.Getenv("CAPT_HOOK_WORKERS_PER_ROOT"); raw != "" {
+		if configured, err := strconv.Atoi(raw); err == nil && configured > 0 {
+			return configured
+		}
+	}
+	return max(1, min(maxWorkersPerRoot, runtime.NumCPU()/4))
+}
 
 var errWorkerManagerClosed = errors.New("captain: worker manager is closed")
 
@@ -68,24 +74,73 @@ type workerEntry struct {
 	lastUsed  time.Time
 	inflight  int
 	ephemeral bool
+
+	load    int
+	service time.Duration
 }
 
-// idle reports whether the entry can be retired right now: it has finished
-// starting and no dispatch holds it. An entry mid-start is never evicted —
-// the caller waiting on ready would be left with a worker that is going away.
-func (e *workerEntry) idle() bool {
+func (e *workerEntry) started() bool {
 	select {
 	case <-e.ready:
+		return true
 	default:
 		return false
 	}
-	return e.inflight == 0
+}
+
+func (e *workerEntry) idle() bool {
+	return e.started() && e.inflight == 0 && e.load == 0
+}
+
+func (e *workerEntry) observe(concurrency int, elapsed time.Duration) {
+	sample := elapsed / time.Duration(concurrency)
+	if e.service == 0 {
+		e.service = sample
+		return
+	}
+	e.service += (sample - e.service) / serviceSmoothing
 }
 
 type workerKey struct {
-	id   string
-	root string
-	env  map[string]string
+	id    string
+	root  string
+	env   map[string]string
+	shard int
+}
+
+func (k workerKey) member() string {
+	return k.id + "/" + strconv.Itoa(k.shard)
+}
+
+type pool struct {
+	ready    *workerEntry
+	starting *workerEntry
+	size     int
+	shard    int
+}
+
+func (m *workerManager) poolLocked(id string) pool {
+	var view pool
+	held := make(map[int]bool)
+	for _, entry := range m.entries {
+		if entry.key.id != id {
+			continue
+		}
+		view.size++
+		held[entry.key.shard] = true
+		if !entry.started() {
+			view.starting = entry
+			continue
+		}
+		if view.ready == nil || entry.load < view.ready.load ||
+			entry.load == view.ready.load && entry.lastUsed.After(view.ready.lastUsed) {
+			view.ready = entry
+		}
+	}
+	for held[view.shard] {
+		view.shard++
+	}
+	return view
 }
 
 type workerManager struct {
@@ -101,18 +156,19 @@ type workerManager struct {
 	lifetime context.Context
 	end      context.CancelFunc
 
-	mu      sync.Mutex
-	closed  bool
-	entries map[string]*workerEntry
-	wg      sync.WaitGroup
+	mu       sync.Mutex
+	closed   bool
+	entries  map[string]*workerEntry
+	poolSize int
+	wg       sync.WaitGroup
 }
 
 func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) *workerManager {
 	lifetime, end := context.WithCancel(context.Background())
 	m := &workerManager{
 		owner: owner, logWriter: logWriter,
-		entries: make(map[string]*workerEntry),
-		now:     time.Now, lifetime: lifetime, end: end,
+		entries: make(map[string]*workerEntry), poolSize: workersPerRoot(),
+		now: time.Now, lifetime: lifetime, end: end,
 	}
 	m.start = m.startWorker
 	return m
@@ -129,81 +185,147 @@ func (m *workerManager) dispatch(ctx context.Context, request wireproto.EventReq
 	if deadline, ok := ctx.Deadline(); ok {
 		request.DeadlineUnixMS = deadline.UnixMilli()
 	}
-	entry, err := m.acquire(ctx, key)
+	entry, adm, err := m.acquire(ctx, key)
 	if err != nil {
 		return wireproto.EventResponse{}, err
 	}
+	if adm.shed {
+		return shedResponse(adm.ahead, adm.wait, adm.remaining), nil
+	}
 	defer m.release(entry)
+	admitted := m.now()
 	worker := entry.worker
 	response, err := worker.call(ctx, request)
-	if err != nil {
-		if !worker.broken() {
-			return wireproto.EventResponse{}, err
-		}
-		m.retire(key.id, worker)
+	if err != nil && worker.broken() {
+		m.forget(worker)
 		return wireproto.EventResponse{}, errors.Join(err, m.settle(worker))
 	}
-	return response, nil
+	if err == nil {
+		m.mu.Lock()
+		entry.observe(adm.ahead+1, m.now().Sub(admitted))
+		m.mu.Unlock()
+	}
+	return response, err
 }
 
-// acquire hands back the cached entry for key, starting its interpreter on
-// first use, and marks it in flight for the caller — release drops that hold.
-// Startup runs on the manager's lifetime; a requester leaving mid-start drops
-// only its own hold. A full cache evicts its least recently used idle entry
-// and refuses admission only when every worker is busy.
-func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntry, error) {
+type admission struct {
+	shed      bool
+	ahead     int
+	wait      time.Duration
+	remaining time.Duration
+}
+
+func (m *workerManager) reserveLocked(ctx context.Context, entry *workerEntry) admission {
+	ahead := entry.load
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := deadline.Sub(m.now())
+		if wait := time.Duration(ahead) * entry.service; wait > remaining {
+			return admission{shed: true, ahead: ahead, wait: wait, remaining: remaining}
+		}
+	}
+	entry.load++
+	entry.lastUsed = m.now()
+	return admission{ahead: ahead}
+}
+
+func shedResponse(ahead int, wait, remaining time.Duration) wireproto.EventResponse {
+	return wireproto.EventResponse{
+		Schema: wireproto.Schema, Status: "ok",
+		Stderr: fmt.Sprintf("capt-hook: %d events ahead on this worker take %s, past the %s left; no verdict\n",
+			ahead, wait.Round(time.Millisecond), remaining.Round(time.Millisecond)),
+	}
+}
+
+func (m *workerManager) acquire(ctx context.Context, key workerKey) (*workerEntry, admission, error) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		return nil, errWorkerManagerClosed
+		return nil, admission{}, errWorkerManagerClosed
 	}
 	var evicted *workerClient
-	entry := m.entries[key.id]
-	if entry == nil {
+	view := m.poolLocked(key.id)
+	entry := view.ready
+	switch {
+	case entry == nil && view.starting != nil:
+		entry = view.starting
+	case entry == nil:
 		if len(m.entries) >= maxLiveWorkers {
 			victim := m.evictIdleLocked()
 			if victim == nil {
 				live := len(m.entries)
 				m.mu.Unlock()
-				return nil, fmt.Errorf("%w: %d live workers, limit is %d", ErrWorkerCapacity, live, maxLiveWorkers)
+				return nil, admission{}, fmt.Errorf("%w: %d live workers, limit is %d", ErrWorkerCapacity, live, maxLiveWorkers)
 			}
 			evicted = victim.worker
 		}
-		entry = &workerEntry{
-			ready: make(chan struct{}), key: key, inflight: 1, ephemeral: ephemeralRoot(key.root),
-		}
-		m.entries[key.id] = entry
-		m.wg.Add(1)
-		go m.startEntry(entry)
+		entry = m.startMemberLocked(key, view.shard)
+	case entry.load > 0 && !entry.ephemeral && view.starting == nil &&
+		view.size < m.poolSize && len(m.entries) < maxLiveWorkers:
+		m.startMemberLocked(key, view.shard)
 	}
 	entry.lastUsed = m.now()
 	entry.inflight++
+	ready := entry.started()
+	var adm admission
+	if ready {
+		adm = m.reserveLocked(ctx, entry)
+	}
 	m.mu.Unlock()
 
 	if evicted != nil {
 		_ = m.settle(evicted)
 	}
 
+	if ready {
+		if adm.shed {
+			m.release(entry)
+		}
+		return m.admitted(entry, adm)
+	}
+
 	select {
 	case <-entry.ready:
 	case <-ctx.Done():
 		m.release(entry)
-		return nil, ctx.Err()
+		return nil, admission{}, ctx.Err()
 	}
 	if entry.err != nil {
 		m.release(entry)
-		return nil, entry.err
+		return nil, admission{}, entry.err
 	}
-	return entry, nil
+	m.mu.Lock()
+	adm = m.reserveLocked(ctx, entry)
+	m.mu.Unlock()
+	if adm.shed {
+		m.release(entry)
+	}
+	return m.admitted(entry, adm)
 }
 
-// startEntry runs one entry's startup on the manager's lifetime, holding the
-// entry until the result lands. A failed start, or a worker whose child died
-// before watch could see the entry, frees the key for a retry; a worker
-// landing after Close is settled here, since the cache has let go of it.
+func (m *workerManager) admitted(entry *workerEntry, adm admission) (*workerEntry, admission, error) {
+	if adm.shed {
+		return nil, adm, nil
+	}
+	return entry, adm, nil
+}
+
+func (m *workerManager) startMemberLocked(key workerKey, shard int) *workerEntry {
+	key.shard = shard
+	entry := &workerEntry{
+		ready: make(chan struct{}), key: key, inflight: 1, ephemeral: ephemeralRoot(key.root), lastUsed: m.now(),
+	}
+	m.entries[key.member()] = entry
+	m.wg.Add(1)
+	go m.startEntry(entry)
+	return entry
+}
+
 func (m *workerManager) startEntry(entry *workerEntry) {
 	defer m.wg.Done()
 	worker, err := m.start(m.lifetime, entry.key)
+	if worker != nil {
+		worker.setOnSettle(func() { m.settleLoad(entry) })
+	}
 	m.mu.Lock()
 	stranded := err == nil && m.closed
 	if stranded {
@@ -212,8 +334,8 @@ func (m *workerManager) startEntry(entry *workerEntry) {
 		entry.worker = worker
 	}
 	entry.err = err
-	if (err != nil || worker.broken()) && m.entries[entry.key.id] == entry {
-		delete(m.entries, entry.key.id)
+	if (err != nil || worker.broken()) && m.entries[entry.key.member()] == entry {
+		delete(m.entries, entry.key.member())
 	}
 	close(entry.ready)
 	m.mu.Unlock()
@@ -230,16 +352,22 @@ func (m *workerManager) startEntry(entry *workerEntry) {
 func (m *workerManager) release(entry *workerEntry) {
 	m.mu.Lock()
 	entry.inflight--
-	cached := m.entries[entry.key.id] == entry
+	cached := m.entries[entry.key.member()] == entry
 	retire := entry.inflight == 0 && (entry.ephemeral || !cached)
 	if retire && cached {
-		delete(m.entries, entry.key.id)
+		delete(m.entries, entry.key.member())
 	}
 	worker := entry.worker
 	m.mu.Unlock()
 	if retire && worker != nil {
 		_ = m.settle(worker)
 	}
+}
+
+func (m *workerManager) settleLoad(entry *workerEntry) {
+	m.mu.Lock()
+	entry.load--
+	m.mu.Unlock()
 }
 
 // evictIdleLocked removes the least recently used idle entry and returns it for
@@ -260,7 +388,7 @@ func (m *workerManager) evictIdleLocked() *workerEntry {
 	if victim == nil {
 		return nil
 	}
-	delete(m.entries, victim.key.id)
+	delete(m.entries, victim.key.member())
 	return victim
 }
 
@@ -359,18 +487,20 @@ func (m *workerManager) startWorker(ctx context.Context, key workerKey) (*worker
 	}
 	worker.child, worker.python = child, python
 	m.wg.Add(1)
-	go m.watch(key.id, worker, child)
+	go m.watch(worker, child)
 	return worker, nil
 }
 
 // workerCmd runs the worker with -P, so the session repo the worker's Dir names
 // stays off sys.path: a directory there sharing an installed dependency's name
 // otherwise shadows it, failing the import inside the worker thread where no
-// hook response can carry it.
+// hook response can carry it. CAPT_HOOK_WORKER_SHARD keys the worker's daemon
+// log apart from its pool peers', since loguru rotates per process.
 func workerCmd(key workerKey, python string) daemonkit.Cmd {
+	env := mergeEnvironment(workerBaseEnvironment(os.Environ()), key.env)
 	return daemonkit.Cmd{
 		Path: python, Args: []string{"-P", "-m", "captain_hook.worker"}, Dir: workerDir(key.root),
-		Env:     mergeEnvironment(workerBaseEnvironment(os.Environ()), key.env),
+		Env:     append(env, "CAPT_HOOK_WORKER_SHARD="+strconv.Itoa(key.shard)),
 		Session: true,
 		Exec:    daemonkit.ServingSameUser(),
 	}
@@ -422,7 +552,7 @@ func (m *workerManager) stopChild(child *daemonkit.Child, message, cause error) 
 	return errors.Join(message, cause, stopErr, child.StderrErr())
 }
 
-func (m *workerManager) watch(id string, worker *workerClient, child *daemonkit.Child) {
+func (m *workerManager) watch(worker *workerClient, child *daemonkit.Child) {
 	defer m.wg.Done()
 	exit := <-child.Done()
 	var exitErr error
@@ -432,17 +562,15 @@ func (m *workerManager) watch(id string, worker *workerClient, child *daemonkit.
 		exitErr = fmt.Errorf("captain: Python worker exited with status %d", exit.Code)
 	}
 	worker.fail(errors.Join(exitErr, child.StderrErr()))
-	m.mu.Lock()
-	if entry := m.entries[id]; entry != nil && entry.worker == worker {
-		delete(m.entries, id)
-	}
-	m.mu.Unlock()
+	m.forget(worker)
 }
 
-func (m *workerManager) retire(id string, worker *workerClient) {
+func (m *workerManager) forget(worker *workerClient) {
 	m.mu.Lock()
-	if entry := m.entries[id]; entry != nil && entry.worker == worker {
-		delete(m.entries, id)
+	for id, entry := range m.entries {
+		if entry.worker == worker {
+			delete(m.entries, id)
+		}
 	}
 	m.mu.Unlock()
 }
@@ -456,11 +584,16 @@ func (m *workerManager) status() []workerStatus {
 			continue
 		}
 		result = append(result, workerStatus{
-			Key: entry.key.id, Root: entry.key.root, Build: Build,
+			Key: entry.key.id, Shard: entry.key.shard, Root: entry.key.root, Build: Build,
 			Python: entry.worker.python, PID: entry.worker.child.PID(),
 		})
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Key < result[j].Key })
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Key != result[j].Key {
+			return result[i].Key < result[j].Key
+		}
+		return result[i].Shard < result[j].Shard
+	})
 	return result
 }
 

@@ -38,6 +38,29 @@ type workerClient struct {
 	stopMu  sync.Mutex
 	stopped bool
 	stopErr error
+
+	onSettle func()
+}
+
+func (w *workerClient) setOnSettle(fn func()) {
+	w.mu.Lock()
+	w.onSettle = fn
+	w.mu.Unlock()
+}
+
+func (w *workerClient) notifySettled(n int) {
+	if n <= 0 {
+		return
+	}
+	w.mu.Lock()
+	settle := w.onSettle
+	w.mu.Unlock()
+	if settle == nil {
+		return
+	}
+	for range n {
+		settle()
+	}
 }
 
 func handshakeWorker(ctx context.Context, conn net.Conn, build string) (*workerClient, error) {
@@ -69,7 +92,12 @@ func (w *workerClient) call(ctx context.Context, request wireproto.EventRequest)
 	select {
 	case w.slots <- struct{}{}:
 	case <-ctx.Done():
+		w.notifySettled(1)
 		return wireproto.EventResponse{}, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		w.release(1)
+		return wireproto.EventResponse{}, err
 	}
 	w.mu.Lock()
 	if w.closed {
@@ -186,6 +214,7 @@ func (w *workerClient) release(n int) {
 	for range n {
 		<-w.slots
 	}
+	w.notifySettled(n)
 }
 
 func (w *workerClient) abandon(id uint64) {
