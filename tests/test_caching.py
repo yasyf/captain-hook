@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from captain_hook.util import caching
-from captain_hook.util.caching import LRUDict, StampedCache, ttl_cache
+from captain_hook.util.caching import LRUDict, StampedCache, WeightedLRUDict, ttl_cache
 
 
 class TestLRUDict:
@@ -39,6 +39,37 @@ class TestLRUDict:
         d["a"], d["b"] = 1, 2
         d.cache_clear()
         assert len(d) == 0
+
+
+class TestWeightedLRUDict:
+    def test_evicts_least_recently_used_until_the_weight_fits(self) -> None:
+        d: WeightedLRUDict[str, int] = WeightedLRUDict(10, weigh=lambda v: v)
+        d["a"], d["b"], d["c"] = 4, 3, 2
+        d["d"] = 6
+        assert dict(d) == {"c": 2, "d": 6}
+
+    def test_read_marks_entry_most_recent(self) -> None:
+        d: WeightedLRUDict[str, int] = WeightedLRUDict(10, weigh=lambda v: v)
+        d["a"], d["b"] = 4, 4
+        assert d["a"] == 4
+        d["c"] = 4
+        assert dict(d) == {"a": 4, "c": 4}
+
+    def test_overwrite_reweighs_the_entry(self) -> None:
+        d: WeightedLRUDict[str, int] = WeightedLRUDict(10, weigh=lambda v: v)
+        d["a"], d["b"] = 2, 2
+        d["a"] = 8
+        assert dict(d) == {"b": 2, "a": 8}
+        d["a"] = 9
+        assert dict(d) == {"a": 9}
+
+    def test_value_heavier_than_the_budget_stays_until_the_next_write(self) -> None:
+        d: WeightedLRUDict[str, int] = WeightedLRUDict(10, weigh=lambda v: v)
+        d["a"] = 1
+        d["big"] = 50
+        assert dict(d) == {"big": 50}
+        d["b"] = 1
+        assert dict(d) == {"b": 1}
 
 
 class TestTtlCache:

@@ -30,11 +30,23 @@ class LRUDict[K, V](OrderedDict[K, V]):
     def __setitem__(self, key: K, value: V) -> None:
         super().__setitem__(key, value)
         self.move_to_end(key)
-        if len(self) > self.maxsize:
+        while self.overflowing():
             self.popitem(last=False)
+
+    def overflowing(self) -> bool:
+        return len(self) > self.maxsize
 
     def cache_clear(self) -> None:
         self.clear()
+
+
+class WeightedLRUDict[K, V](LRUDict[K, V]):
+    def __init__(self, maxweight: int, weigh: Callable[[V], int]) -> None:
+        super().__init__(maxweight)
+        self.weigh = weigh
+
+    def overflowing(self) -> bool:
+        return len(self) > 1 and sum(map(self.weigh, self.values())) > self.maxsize
 
 
 def ttl_cache[**P, R](ttl: float) -> Callable[[Callable[P, R]], Callable[P, R]]:
@@ -96,3 +108,20 @@ class StampedCache[K, S, V]:
         if entry is None or entry.stamp != stamp or time.monotonic() - entry.computed_at >= ttl:
             return None
         return entry
+
+
+def once[R](fn: Callable[[], R]) -> Callable[[], R]:
+    guard = threading.Lock()
+    held: list[R] = []
+
+    @wraps(fn)
+    def wrapper() -> R:
+        if held:
+            return held[0]
+        with guard:
+            if not held:
+                held.append(fn())
+            return held[0]
+
+    wrapper.cache_clear = held.clear
+    return wrapper

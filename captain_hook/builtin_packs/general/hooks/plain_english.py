@@ -3,12 +3,12 @@ from __future__ import annotations
 import contextvars
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from captain_hook import Action, Event, HookResult, Prompt, faults, on
+from captain_hook.dispatch import offload_pool
 from captain_hook.util import reqenv
 
 if TYPE_CHECKING:
@@ -77,21 +77,21 @@ def plain_english(evt: MessageDisplayEvent, text: str, api_key: str) -> str:
         return text
     left = reqenv.seconds_left()
     budget = REWRITE_TIMEOUT_SECONDS if left is None else min(REWRITE_TIMEOUT_SECONDS, left - DEADLINE_MARGIN_SECONDS)
-    pool = ThreadPoolExecutor(max_workers=1)
     try:
-        future = pool.submit(
+        future = offload_pool().submit(
             contextvars.copy_context().run,
             evt.ctx.call_llm,
             rewrite_prompt(evt, text),
             backend=OpenAiEndpointBackend(CEREBRAS_BASE_URL, CEREBRAS_MODEL, api_key=api_key),
             timeout=max(1, int(budget)),
         )
-        answer = future.result(timeout=max(0.0, budget))
+        try:
+            answer = future.result(timeout=max(0.0, budget))
+        finally:
+            future.cancel()
     except Exception as exc:
         faults.record("plain_english rewrite", exc, str(evt.cwd) if evt.cwd else None)
         return text
-    finally:
-        pool.shutdown(wait=False)
     return unwrapped(answer, text) or text
 
 

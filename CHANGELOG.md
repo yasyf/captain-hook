@@ -55,6 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   effect on the next event. When the cache expires, concurrent events wait for
   a single re-read or re-walk instead of each running their own, and this now
   covers the language-marker walk too.
+- **The worker reuses a lifted transcript `Session` while its file is
+  unchanged.** Each cached parse now also holds the `Session` lifted from it,
+  one per user classifier. Every request still resolves its own classifier, so
+  a request whose classifier differs lifts its own. Any change to the file
+  lifts afresh, and a lifted `Session` is evicted with its parse. On a 44 MB
+  transcript the lift took 97 ms and a reuse takes 0.03 ms. The lifted
+  `Session` adds about 0.4x the source size in RSS on top of the parse's
+  budgeted entry.
 
 ### Fixed
 
@@ -70,6 +78,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value under its lock, but the value was only stored after the lock was
   released, so a second thread woken in that gap loaded the pipeline again.
   The loaded value is now stored before the lock is released.
+
+- **The worker's transcript parse cache holds a byte budget, not eight
+  entries.** Parsed events take about three to four times their source bytes
+  in RSS, so eight large transcripts could pin gigabytes in one worker. The
+  cache now evicts least-recently-used transcripts once their summed source
+  size passes 128 MiB, always keeping the one just parsed.
+- **A timed-out plain-English rewrite no longer strands a thread.** Each
+  finalized `MessageDisplay` built its own one-thread executor and released it
+  without joining, so a rewrite that outlived its budget kept its thread alive
+  until the Cerebras call returned. Rewrites now share one pool of four
+  threads, and a rewrite still queued when its budget runs out is cancelled
+  instead of running later.
 
 ## [12.37.0] - 2026-09-16
 

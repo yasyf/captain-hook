@@ -79,6 +79,41 @@ def pinch_pool(monkeypatch: pytest.MonkeyPatch, width: int) -> Generator[None]:
         pool.shutdown(wait=True)
 
 
+class TestPools:
+    @pytest.mark.parametrize("getter", ["hook_pool", "background_pool", "offload_pool"])
+    def test_concurrent_first_calls_build_one_executor(self, monkeypatch: pytest.MonkeyPatch, getter: str) -> None:
+        pool_getter = getattr(dispatch_module, getter)
+        built: list[ThreadPoolExecutor] = []
+
+        def slow_executor(**kwargs: Any) -> ThreadPoolExecutor:
+            time.sleep(0.05)
+            built.append(executor := ThreadPoolExecutor(**kwargs))
+            return executor
+
+        monkeypatch.setattr(dispatch_module, "ThreadPoolExecutor", slow_executor)
+        pool_getter.cache_clear()
+        barrier = threading.Barrier(8)
+        seen: list[ThreadPoolExecutor] = []
+
+        def first_call() -> None:
+            barrier.wait()
+            seen.append(pool_getter())
+
+        callers = [threading.Thread(target=first_call) for _ in range(8)]
+        try:
+            for caller in callers:
+                caller.start()
+            for caller in callers:
+                caller.join()
+            assert len(built) == 1
+            assert len(seen) == 8
+            assert all(pool is built[0] for pool in seen)
+        finally:
+            pool_getter.cache_clear()
+            for executor in built:
+                executor.shutdown(wait=True)
+
+
 class TestRunDeclarative:
     def test_warn_message(self) -> None:
         spec = HookSpec(events=Event.PreToolUse, message="caution")

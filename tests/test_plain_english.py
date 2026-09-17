@@ -1,25 +1,29 @@
 from __future__ import annotations
 
 import importlib
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from spawnllm import OpenAiEndpointBackend
 
 from captain_hook import Prompt, faults
+from captain_hook.app import State, use_state
 from captain_hook.builtin_packs.general.hooks import plain_english
 from captain_hook.context import HookContext
-from captain_hook.dispatch import dispatch
+from captain_hook.dispatch import dispatch, offload_pool
 from captain_hook.events import MessageDisplayEvent
+from captain_hook.loader import import_pack_module
 from captain_hook.session import SessionStore
 from captain_hook.testing.helpers import fixture_session
 from captain_hook.types import Event
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import Iterator
 
 PROSE = (
     "I traced the flaky test to a race between the writer and the reader, which both open the same session "
@@ -192,6 +196,55 @@ def test_slow_rewrite_is_abandoned_before_the_caller_deadline(
     assert time.monotonic() - started < 1.0
     (line,) = faults.drain()
     assert "plain_english rewrite" in line
+
+
+@pytest.fixture
+def one_offload_thread(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr("captain_hook.dispatch.OFFLOAD_THREADS", 1)
+    offload_pool.cache_clear()
+    yield
+    offload_pool().shutdown(wait=True)
+    offload_pool.cache_clear()
+
+
+def final_event(ctx: CerebrasStub) -> MessageDisplayEvent:
+    return MessageDisplayEvent(
+        _raw={"message_id": "msg_1", "index": 0, "final": True, "delta": PROSE, "session_id": "s"}, ctx=ctx
+    )
+
+
+@pytest.mark.usefixtures("one_offload_thread")
+def test_rewrite_queued_behind_a_slow_one_is_cancelled_on_timeout(
+    ctx: CerebrasStub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(plain_english, "REWRITE_TIMEOUT_SECONDS", 0.2)
+    ctx.delay = 1.0
+
+    assert plain_english.plain_english(final_event(ctx), PROSE, "test-key") == PROSE
+    assert plain_english.plain_english(final_event(ctx), PROSE, "test-key") == PROSE
+    offload_pool().submit(time.sleep, 0).result()
+
+    assert len(ctx.calls) == 1
+    (line,) = faults.drain()
+    assert "TimeoutError" in line
+
+
+@pytest.mark.usefixtures("one_offload_thread")
+def test_rediscovered_hook_modules_share_the_bounded_pool(ctx: CerebrasStub, monkeypatch: pytest.MonkeyPatch) -> None:
+    fqn = "captain_hook._packs.general.plain_english"
+    monkeypatch.delitem(sys.modules, fqn, raising=False)
+    modules = []
+    for _ in range(2):
+        with use_state(State()):
+            modules.append(import_pack_module(fqn, Path(plain_english.__file__)))
+        monkeypatch.setattr(modules[-1], "REWRITE_TIMEOUT_SECONDS", 0.2)
+    ctx.delay = 1.0
+
+    assert [module.plain_english(final_event(ctx), PROSE, "test-key") for module in modules] == [PROSE, PROSE]
+    offload_pool().submit(time.sleep, 0).result()
+
+    assert modules[0].offload_pool is modules[1].offload_pool is offload_pool
+    assert len(ctx.calls) == 1
 
 
 def test_rewrite_budget_leaves_margin_before_the_caller_deadline(
