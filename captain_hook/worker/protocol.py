@@ -19,6 +19,7 @@ OP_HELLO = "hello"
 OP_EVENT = "event"
 OP_RESULT = "result"
 OP_ERROR = "error"
+OP_ADOPT = "adopt"
 
 HELLO_KEYS = frozenset({"protocol", "op", "build"})
 EVENT_FRAME_KEYS = frozenset({"protocol", "op", "id", "request"})
@@ -183,6 +184,10 @@ def result_response(request_id: int, response: EventResponse) -> dict[str, objec
 
 def error_response(request_id: int, error: str) -> dict[str, object]:
     return {"protocol": PROTOCOL, "op": OP_ERROR, "id": request_id, "error": error}
+
+
+def adopt_message(pid: int, lifetime_ms: int) -> dict[str, object]:
+    return {"protocol": PROTOCOL, "op": OP_ADOPT, "adopt": {"pid": pid, "lifetime_ms": lifetime_ms}}
 
 
 def _read_exact(stream: BinaryIO, length: int) -> bytes:

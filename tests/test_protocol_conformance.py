@@ -9,7 +9,7 @@ import struct
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -21,6 +21,7 @@ from captain_hook.worker.protocol import (
     MAX_EVENT_INPUT,
     MAX_FRAME,
     MAX_HOST_PAYLOAD,
+    OP_ADOPT,
     OP_ERROR,
     OP_EVENT,
     OP_HELLO,
@@ -29,6 +30,7 @@ from captain_hook.worker.protocol import (
     EventRequest,
     EventResponse,
     ProtocolError,
+    adopt_message,
     decode_event,
     decode_hello,
     error_response,
@@ -55,16 +57,18 @@ def python_descriptor() -> dict[str, object]:
             "host_payload": MAX_HOST_PAYLOAD,
             "worker_frame": MAX_FRAME,
         },
-        "ops": {"hello": OP_HELLO, "event": OP_EVENT, "result": OP_RESULT, "error": OP_ERROR},
+        "ops": {"hello": OP_HELLO, "event": OP_EVENT, "result": OP_RESULT, "error": OP_ERROR, "adopt": OP_ADOPT},
         "fields": {
             "worker_frame": sorted(
                 HELLO_KEYS
                 | EVENT_FRAME_KEYS
                 | set(result_response(1, EventResponse()))
                 | set(error_response(1, "boom"))
+                | set(adopt_message(4242, 1))
             ),
             "event_request": sorted(EVENT_REQUEST_KEYS),
             "event_response": sorted(EventResponse().message()),
+            "adopt_request": sorted(cast(dict[str, object], adopt_message(4242, 1)["adopt"])),
         },
     }
 
@@ -139,6 +143,13 @@ def python_corpus() -> dict[str, tuple[str, bytes]]:
         "hello_response": ("accept", framed(hello_response("12.9.1"))),
         "result_response": ("accept", framed(result_message())),
         "error_response": ("accept", framed(error_response(2, "RuntimeError: boom"))),
+        "adopt_request": ("accept", framed(adopt_message(4242, 7_500_000))),
+        "adopt_pid_of_init": ("reject", framed(adopt_message(1, 7_500_000))),
+        "adopt_without_a_lifetime": ("reject", framed(adopt_message(4242, 0))),
+        "adopt_unknown_field": (
+            "reject",
+            framed(adopt_message(4242, 1) | {"adopt": {"pid": 4242, "lifetime_ms": 1, "legacy": True}}),
+        ),
         "result_bad_status": ("reject", framed(result_message(status="bogus"))),
         "result_wrong_schema": ("reject", framed(result_message(schema=PROTOCOL + 1))),
         "result_unknown_response_field": ("reject", framed(result_message(legacy=True))),

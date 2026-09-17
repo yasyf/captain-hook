@@ -143,12 +143,20 @@ func (m *workerManager) poolLocked(id string) pool {
 	return view
 }
 
+// detachedProcess is a process a worker started outside its own session and
+// handed to the host: recorded durably under this generation, so the host's
+// shutdown settles it and the next generation reclaims whatever that missed.
+type detachedProcess interface {
+	Stop(ctx context.Context) (daemonkit.Reap, error)
+}
+
 type workerManager struct {
 	owner     daemonkit.Ctx
 	logWriter io.Writer
 
-	now   func() time.Time
-	start func(ctx context.Context, key workerKey) (*workerClient, error)
+	now          func() time.Time
+	start        func(ctx context.Context, key workerKey) (*workerClient, error)
+	adoptProcess func(ctx context.Context, pid int) (detachedProcess, error)
 
 	// lifetime bounds every worker startup and the sweeper; end cancels it at
 	// Close, so no startup outlives the manager and none is ever bound to the
@@ -171,6 +179,13 @@ func newWorkerManager(owner daemonkit.Ctx, logWriter io.Writer) *workerManager {
 		now: time.Now, lifetime: lifetime, end: end,
 	}
 	m.start = m.startWorker
+	m.adoptProcess = func(ctx context.Context, pid int) (detachedProcess, error) {
+		tracked, err := owner.Adopt(ctx, pid)
+		if err != nil {
+			return nil, err
+		}
+		return tracked, nil
+	}
 	return m
 }
 
@@ -325,6 +340,7 @@ func (m *workerManager) startEntry(entry *workerEntry) {
 	worker, err := m.start(m.lifetime, entry.key)
 	if worker != nil {
 		worker.setOnSettle(func() { m.settleLoad(entry) })
+		worker.setOnAdopt(m.adopt)
 	}
 	m.mu.Lock()
 	stranded := err == nil && m.closed
@@ -413,6 +429,64 @@ func (m *workerManager) sweep(now time.Time) []*workerClient {
 		}
 	}
 	return retired
+}
+
+// adopt takes ownership of a process a worker detached into its own session.
+// The worker's settlement stops at the worker's session, so without this a
+// detached reviewer outlives every generation that follows it. It returns at
+// once while the manager serves: the caller is the worker's read loop. Once
+// Close has begun nothing is left to hold a lifetime bound, so the record is
+// written inline and the ownership scope's settlement takes it from there.
+func (m *workerManager) adopt(request wireproto.AdoptRequest) {
+	m.mu.Lock()
+	closed := m.closed
+	if !closed {
+		m.wg.Add(1)
+	}
+	m.mu.Unlock()
+	if closed {
+		m.record(request)
+		return
+	}
+	go m.ownDetached(request)
+}
+
+// record writes the durable record on a budget of its own: an adoption the
+// host accepted must not be lost to a Close that cancels the manager's
+// lifetime first.
+func (m *workerManager) record(request wireproto.AdoptRequest) detachedProcess {
+	ctx, cancel := context.WithTimeout(context.Background(), workerSettlementTimeout)
+	defer cancel()
+	process, err := m.adoptProcess(ctx, request.PID)
+	if err != nil {
+		fmt.Fprintf(m.logWriter, "captain: adopt detached pid %d: %v\n", request.PID, err)
+		return nil
+	}
+	return process
+}
+
+// ownDetached records the process, then holds its one lifetime bound: the
+// session is terminated when the bound runs out, and a process that already
+// exited is proven absent and its record retired. Close cancels the wait and
+// leaves the record to the ownership scope's own settlement.
+func (m *workerManager) ownDetached(request wireproto.AdoptRequest) {
+	defer m.wg.Done()
+	process := m.record(request)
+	if process == nil {
+		return
+	}
+	bound := time.NewTimer(time.Duration(request.LifetimeMS) * time.Millisecond)
+	defer bound.Stop()
+	select {
+	case <-m.lifetime.Done():
+		return
+	case <-bound.C:
+	}
+	stopCtx, cancel := context.WithTimeout(context.Background(), workerSettlementTimeout)
+	defer cancel()
+	if _, err := process.Stop(stopCtx); err != nil {
+		fmt.Fprintf(m.logWriter, "captain: stop detached pid %d at its lifetime bound: %v\n", request.PID, err)
+	}
 }
 
 // startSweeper runs the idle sweep until Close. The daemon owns this loop; unit

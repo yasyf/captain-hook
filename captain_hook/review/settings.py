@@ -26,8 +26,9 @@ class ReviewSettings(HooksSettings):
     cap the headless PR-drafting agent and ``brain_deadline_seconds`` kills a
     brain subprocess that outlives its wall-clock bound. ``spawn_deadline_seconds``
     bounds one detached child's whole run so a hang records a failed spawn instead
-    of stalling, and ``sweep_interval_minutes`` throttles the Stop-triggered
-    repo-wide sweep.
+    of stalling; five minutes past it the resident host terminates the child's
+    whole session, which is the bound a blocking call cannot outlast.
+    ``sweep_interval_minutes`` throttles the Stop-triggered repo-wide sweep.
     """
 
     model_config = SettingsConfigDict(env_prefix="HOOKS_REVIEW_")

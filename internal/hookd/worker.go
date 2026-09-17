@@ -40,12 +40,38 @@ type workerClient struct {
 	stopErr error
 
 	onSettle func()
+	onAdopt  func(wireproto.AdoptRequest)
 }
 
 func (w *workerClient) setOnSettle(fn func()) {
 	w.mu.Lock()
 	w.onSettle = fn
 	w.mu.Unlock()
+}
+
+func (w *workerClient) setOnAdopt(fn func(wireproto.AdoptRequest)) {
+	w.mu.Lock()
+	w.onAdopt = fn
+	w.mu.Unlock()
+}
+
+// adopt hands a detached process the worker announced to whoever owns the
+// host's process scope. It runs on the read loop, so the handler must not
+// block: every session's replies queue behind it.
+func (w *workerClient) adopt(frame wireproto.Frame) error {
+	if frame.ID != 0 || frame.Adopt == nil || frame.Request != nil || frame.Response != nil || frame.Error != "" {
+		return errors.New("captain: invalid Python worker adopt frame")
+	}
+	if err := frame.Adopt.Validate(); err != nil {
+		return err
+	}
+	w.mu.Lock()
+	adopt := w.onAdopt
+	w.mu.Unlock()
+	if adopt != nil {
+		adopt(*frame.Adopt)
+	}
+	return nil
 }
 
 func (w *workerClient) notifySettled(n int) {
@@ -160,7 +186,15 @@ func (w *workerClient) readLoop() {
 			w.fail(err)
 			return
 		}
-		if frame.ID == 0 || (frame.Op != wireproto.OpResult && frame.Op != wireproto.OpError) || frame.Request != nil {
+		if frame.Op == wireproto.OpAdopt {
+			if err := w.adopt(frame); err != nil {
+				w.fail(err)
+				return
+			}
+			continue
+		}
+		if frame.ID == 0 || (frame.Op != wireproto.OpResult && frame.Op != wireproto.OpError) || frame.Request != nil ||
+			frame.Adopt != nil {
 			w.fail(errors.New("captain: invalid Python worker response frame"))
 			return
 		}

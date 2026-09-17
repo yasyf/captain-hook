@@ -167,6 +167,18 @@ def test_service_nested_result_and_graceful_eof() -> None:
     assert isinstance(nested["elapsed_ms"], float)
 
 
+def test_service_announces_an_adopted_process_in_one_exact_frame() -> None:
+    output_stream = io.BytesIO()
+    service = WorkerService(io.BytesIO(), output_stream, dispatch=lambda _: served(EventResponse()))
+
+    service.adopt(4242, 7_500_000)
+    service.run()
+
+    assert responses(output_stream.getvalue()) == [
+        {"protocol": 1, "op": "adopt", "adopt": {"pid": 4242, "lifetime_ms": 7_500_000}}
+    ]
+
+
 def test_background_work_runs_after_the_reply_is_written() -> None:
     class RecordingOutput(io.BytesIO):
         def __init__(self) -> None:

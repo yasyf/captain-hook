@@ -310,6 +310,41 @@ class TestGuardAndSpawn:
         assert Path(kwargs["stdout"].name) == state_dir() / "review" / "spawn.log"
         assert kwargs["stderr"] is kwargs["stdout"]
 
+    def test_hands_the_detached_child_to_an_installed_adopter(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from types import SimpleNamespace
+
+        from captain_hook.review import pipeline
+        from captain_hook.review.settings import ReviewSettings
+
+        adopted: list[tuple[int, int]] = []
+        monkeypatch.setattr(pipeline.subprocess, "Popen", lambda argv, **kwargs: SimpleNamespace(pid=4242))
+        monkeypatch.setattr(pipeline, "_ADOPTER", lambda pid, lifetime_ms: adopted.append((pid, lifetime_ms)))
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+
+        guard_and_spawn(json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path)}).encode())
+
+        bound = ReviewSettings().spawn_deadline_seconds + pipeline.LIFETIME_GRACE_SECONDS
+        assert adopted == [(4242, bound * 1000)]
+
+    def test_a_failed_detach_hands_nothing_to_the_adopter(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from captain_hook.review import pipeline
+
+        def refuse(argv: list[str], **kwargs: Any) -> None:
+            raise OSError("fork refused")
+
+        adopted: list[tuple[int, int]] = []
+        monkeypatch.setattr(pipeline.subprocess, "Popen", refuse)
+        monkeypatch.setattr(pipeline, "_ADOPTER", lambda pid, lifetime_ms: adopted.append((pid, lifetime_ms)))
+        transcript = write_transcript(tmp_path / "s.jsonl", correction_entries())
+
+        guard_and_spawn(json.dumps({"transcript_path": str(transcript), "cwd": str(tmp_path)}).encode())
+
+        assert adopted == []
+
     def test_omits_cwd_flag_when_payload_has_none(
         self, popen_calls: list[tuple[list[str], dict[str, Any]]], tmp_path: Path
     ) -> None:
