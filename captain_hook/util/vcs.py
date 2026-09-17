@@ -6,6 +6,7 @@ import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
+from captain_hook.util import reqenv
 from captain_hook.util.caching import ttl_cache
 
 GRAPHITE_MARKER = ".graphite_repo_config"
@@ -76,6 +77,7 @@ def is_repo_root(resolved: Path) -> bool:
 
 def scanned_names(anchor: Path) -> Iterator[str]:
     for _root, directories, files in os.walk(anchor, followlinks=False):
+        reqenv.checkpoint()
         yield from itertools.chain(directories, files)
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import struct
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
@@ -57,6 +57,7 @@ class EventRequest:
     client_pid: int
     client_ppid: int
     deadline_unix_ms: int
+    received: float = field(default_factory=time.perf_counter, compare=False)
 
     def deadline_passed(self) -> bool:
         return 0 < self.deadline_unix_ms <= time.time() * 1000

@@ -8,6 +8,8 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
+from captain_hook.util import reqenv
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
@@ -30,6 +32,7 @@ def static_prefix_dir(token: str, cwd: Path) -> Path:
 
 def walked_paths(anchor: Path) -> Iterator[Path]:
     for root, directories, files in os.walk(anchor, followlinks=False):
+        reqenv.checkpoint()
         directories[:] = [directory for directory in directories if not directory.startswith(".")]
         yield from (Path(root) / name for name in itertools.chain(directories, files) if not name.startswith("."))
 

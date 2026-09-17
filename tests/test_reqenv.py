@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -100,3 +101,45 @@ class TestUseRequest:
         with reqenv.use_request(overrides({})) as bound:
             assert reqenv.current() is bound
         assert reqenv.current() is None
+
+
+class TestCheckpoint:
+    def test_is_a_no_op_outside_a_fan_out(self) -> None:
+        reqenv.checkpoint()
+
+    def test_passes_until_the_flag_is_set_then_raises(self) -> None:
+        flag = threading.Event()
+        with reqenv.abandonable(flag):
+            reqenv.checkpoint()
+            flag.set()
+            with pytest.raises(reqenv.Abandoned):
+                reqenv.checkpoint()
+        reqenv.checkpoint()
+
+    def test_an_abandoned_hook_stops_walking_a_tree(self, tmp_path: Path) -> None:
+        from captain_hook.util.globbing import walked_paths
+        from captain_hook.util.vcs import scanned_names
+
+        (tmp_path / "nested").mkdir()
+        flag = threading.Event()
+        flag.set()
+        with reqenv.abandonable(flag):
+            with pytest.raises(reqenv.Abandoned):
+                list(walked_paths(tmp_path))
+            with pytest.raises(reqenv.Abandoned):
+                list(scanned_names(tmp_path))
+        assert [path.name for path in walked_paths(tmp_path)] == ["nested"]
+
+    def test_abandoned_escapes_a_handlers_broad_except(self) -> None:
+        assert not issubclass(reqenv.Abandoned, Exception)
+
+
+class TestAbandoned:
+    def test_unbound_is_a_scratch_list(self) -> None:
+        reqenv.abandoned().append("hook")
+        assert reqenv.abandoned() == []
+
+    def test_bound_collects_on_the_request(self) -> None:
+        with reqenv.use_request(overrides({})) as bound:
+            reqenv.abandoned().append("hook")
+        assert bound.abandoned == ["hook"]

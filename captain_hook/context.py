@@ -174,6 +174,7 @@ class HookContext:
     ) -> str | None:
         from spawnllm.proc import run_cli
 
+        reqenv.checkpoint()
         try:
             return run_cli(
                 args,
@@ -306,6 +307,7 @@ class HookContext:
     ) -> str | BaseModel:
         from spawnllm import BackendCallError, call_sync, extract_sync, select_backend
 
+        reqenv.checkpoint()
         with UNSUPPORTED_MODELS_LOCK:
             rejection = UNSUPPORTED_MODELS.get((specialty, model))
         if rejection is not None:

@@ -102,6 +102,31 @@ def test_dispatch_binds_request_scope_and_replays_cached_discovery() -> None:
     assert reqenv.current() is None
 
 
+def test_dispatch_logs_one_line_with_latency_and_abandoned_hooks(logcap: Any) -> None:
+    def dispatch(root: object, event: object, raw: object, **kwargs: object) -> tuple[None, object]:
+        reqenv.abandoned().append("straggler")
+        return None, lambda: None
+
+    runtime = ProductRuntime(
+        registry_factory=lambda _: FakeRegistry(),
+        dispatcher=dispatch,
+        install_writer=False,
+        nlp_warmer=lambda: None,
+    )
+    runtime.dispatch(request(payload_raw='{"session_id": "sess"}'))
+    runtime.dispatch(request(event="NotAnEvent"))
+
+    served, rejected = [record.message for record in logcap.records if record.message.startswith("dispatch ")]
+    assert "event='PreToolUse'" in served
+    assert "root='/project'" in served
+    assert "queue_ms=" in served
+    assert "elapsed_ms=" in served
+    assert "abandoned=['straggler']" in served
+    assert "session_log_path" not in served
+    assert "event='NotAnEvent'" in rejected
+    assert "abandoned=[]" in rejected
+
+
 def test_nlp_warms_once_after_the_first_reply_off_the_request_thread() -> None:
     release = threading.Event()
     warmed: list[str] = []

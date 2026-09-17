@@ -69,18 +69,39 @@ def distinct_hook(name: str, body: Callable[[str], HookResult | None]) -> HookHa
 
 
 @contextmanager
-def pinch_pool(monkeypatch: pytest.MonkeyPatch, width: int) -> Generator[None]:
-    """Run the fan-out on a pool of exactly ``width`` threads, so queueing order is deterministic."""
-    pool = ThreadPoolExecutor(max_workers=width)
-    monkeypatch.setattr(dispatch_module, "hook_pool", lambda: pool)
-    try:
-        yield
-    finally:
-        pool.shutdown(wait=True)
+def pinch_pool(monkeypatch: pytest.MonkeyPatch, width: int) -> Generator[threading.BoundedSemaphore]:
+    """Cap the worker's fan-out budget at ``width`` permits, so queueing order is deterministic."""
+    budget = threading.BoundedSemaphore(width)
+    with monkeypatch.context() as patch:
+        patch.setattr(dispatch_module, "fanout_budget", lambda: budget)
+        yield budget
+
+
+def fanout_threads() -> list[threading.Thread]:
+    return [thread for thread in threading.enumerate() if thread.name.startswith("capt-hook-hook")]
+
+
+FROZEN_NOW = 1_000.0
+
+
+@pytest.fixture
+def frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hold the deadline clock still, so a hook is abandoned after its collection wait and never skipped at its start.
+
+    Against the live clock a hook whose thread starts late on a loaded runner finds the deadline
+    already inside the margin and is skipped, and the test never sees the straggler it set up.
+    """
+    monkeypatch.setattr(reqenv, "time", SimpleNamespace(time=lambda: FROZEN_NOW))
+
+
+def bounded_request(seconds: float) -> reqenv.RequestOverrides:
+    """A request under :func:`frozen_clock` whose hooks' verdicts are each waited on for *seconds*."""
+    deadline_ms = int((FROZEN_NOW + SYNC_DEADLINE_MARGIN_SECONDS + seconds) * 1000)
+    return reqenv.RequestOverrides(env={}, cwd="/w", client_ppid=1, session_id="s", deadline_unix_ms=deadline_ms)
 
 
 class TestPools:
-    @pytest.mark.parametrize("getter", ["hook_pool", "background_pool", "offload_pool"])
+    @pytest.mark.parametrize("getter", ["background_pool", "offload_pool"])
     def test_concurrent_first_calls_build_one_executor(self, monkeypatch: pytest.MonkeyPatch, getter: str) -> None:
         pool_getter = getattr(dispatch_module, getter)
         built: list[ThreadPoolExecutor] = []
@@ -1129,6 +1150,174 @@ class TestConcurrentDispatch:
         assert result is not None
         assert result["hookSpecificOutput"]["additionalContext"] == "in time"
         assert elapsed < HOOK_SLEEP_SECONDS * 5, f"the reply waited {elapsed:.2f}s on an abandoned hook"
+
+    @pytest.mark.usefixtures("frozen_clock")
+    def test_an_abandoned_hook_does_not_delay_the_next_event(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        stragglers = count()
+
+        @on(Event.PostToolUse)
+        def straggler(evt: Any) -> HookResult:
+            if next(stragglers) == 0:
+                started.set()
+                release.wait(30)
+            return HookResult(action=Action.warn, message="answered")
+
+        try:
+            with pinch_pool(monkeypatch, 1):
+                with reqenv.use_request(overrides := bounded_request(HOOK_SLEEP_SECONDS)):
+                    abandoned = dispatch(Event.PostToolUse, make_post_tool_event())
+                assert started.wait(30)
+                start = time.perf_counter()
+                with reqenv.use_request(bounded_request(30)):
+                    prompt = dispatch(Event.PostToolUse, make_post_tool_event())
+                elapsed = time.perf_counter() - start
+        finally:
+            release.set()
+
+        assert abandoned is None
+        assert overrides.abandoned == ["straggler"]
+        assert prompt is not None
+        assert prompt["hookSpecificOutput"]["additionalContext"] == "answered"
+        assert elapsed < HOOK_SLEEP_SECONDS * 5, f"the next event waited {elapsed:.2f}s behind an abandoned hook"
+
+    @pytest.mark.usefixtures("frozen_clock")
+    def test_the_fanout_budget_is_shared_by_concurrent_events_and_returned_in_full(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        release = threading.Event()
+        running = threading.Semaphore(0)
+        in_flight = 0
+        peak = 0
+        guard = threading.Lock()
+
+        def hold(name: str) -> None:
+            nonlocal in_flight, peak
+            with guard:
+                in_flight += 1
+                peak = max(peak, in_flight)
+            running.release()
+            release.wait(30)
+            with guard:
+                in_flight -= 1
+
+        for name in ("a", "b", "c"):
+            on(Event.PostToolUse)(distinct_hook(name, hold))
+
+        def one_event() -> None:
+            with reqenv.use_request(bounded_request(30)):
+                dispatch(Event.PostToolUse, make_post_tool_event())
+
+        with pinch_pool(monkeypatch, 2) as budget:
+            events = [threading.Thread(target=one_event) for _ in range(2)]
+            for event in events:
+                event.start()
+            assert running.acquire(timeout=30)
+            assert running.acquire(timeout=30)
+            assert not running.acquire(timeout=HOOK_SLEEP_SECONDS), "a third group started past a two-permit budget"
+            release.set()
+            for event in events:
+                event.join(30)
+
+            assert peak == 2
+            assert budget.acquire(blocking=False)
+            assert budget.acquire(blocking=False)
+            assert not budget.acquire(blocking=False)
+
+    @pytest.mark.usefixtures("frozen_clock")
+    def test_a_group_the_budget_never_admits_is_skipped_and_the_reply_still_lands(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ran: list[str] = []
+
+        @on(Event.PostToolUse)
+        def starved(evt: Any) -> HookResult:
+            ran.append("starved")
+            return HookResult(action=Action.warn, message="never admitted")
+
+        with pinch_pool(monkeypatch, 1) as budget:
+            assert budget.acquire(blocking=False)
+            start = time.perf_counter()
+            with reqenv.use_request(overrides := bounded_request(HOOK_SLEEP_SECONDS)):
+                result = dispatch(Event.PostToolUse, make_post_tool_event())
+            elapsed = time.perf_counter() - start
+            budget.release()
+
+        assert result is None
+        assert ran == []
+        assert overrides.abandoned == []
+        assert elapsed < HOOK_SLEEP_SECONDS * 5, f"the reply waited {elapsed:.2f}s on a budget it never got"
+
+    @pytest.mark.usefixtures("frozen_clock")
+    def test_an_abandoned_hook_stops_at_its_next_checkpoint_and_frees_its_thread(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        stopped = threading.Event()
+        outlived: list[str] = []
+
+        @on(Event.PostToolUse)
+        def straggler(evt: Any) -> None:
+            started.set()
+            release.wait(30)
+            try:
+                reqenv.checkpoint()
+            except reqenv.Abandoned:
+                stopped.set()
+                raise
+            outlived.append("ran past its checkpoint")
+
+        with reqenv.use_request(bounded_request(HOOK_SLEEP_SECONDS)):
+            dispatch(Event.PostToolUse, make_post_tool_event())
+        assert started.wait(30)
+        release.set()
+
+        assert stopped.wait(30)
+        for thread in fanout_threads():
+            thread.join(30)
+        assert outlived == []
+        assert fanout_threads() == []
+
+    @pytest.mark.usefixtures("frozen_clock")
+    def test_a_hook_whose_verdict_was_collected_never_sees_a_checkpoint_raise(self) -> None:
+        @on(Event.PostToolUse)
+        def careful(evt: Any) -> HookResult:
+            reqenv.checkpoint()
+            return HookResult(action=Action.warn, message="collected")
+
+        with reqenv.use_request(bounded_request(30)):
+            result = dispatch(Event.PostToolUse, make_post_tool_event())
+
+        assert result is not None
+        assert result["hookSpecificOutput"]["additionalContext"] == "collected"
+
+    def test_a_hook_doomed_by_a_block_stops_at_its_next_checkpoint(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        stopped = threading.Event()
+
+        @on(Event.PreToolUse)
+        def blocker(evt: Any) -> HookResult:
+            started.wait(30)
+            return HookResult(action=Action.block, message="denied")
+
+        @on(Event.PreToolUse)
+        def doomed(evt: Any) -> HookResult:
+            started.set()
+            release.wait(30)
+            try:
+                reqenv.checkpoint()
+            except reqenv.Abandoned:
+                stopped.set()
+                raise
+            return HookResult(action=Action.warn, message="never delivered")
+
+        result = dispatch(Event.PreToolUse, make_pre_tool_event())
+        release.set()
+
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecisionReason"] == "denied"
+        assert stopped.wait(30)
 
     def test_concurrent_hooks_share_session_state_without_losing_writes(self, tmp_path: Path) -> None:
         from captain_hook.state import SeenKeys
